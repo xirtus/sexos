@@ -3,7 +3,28 @@ name = "sex-kernel"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[features]
+# Gates the AArch64 Phase-2 image bin (sex-kernel-arm64). x86 default
+# builds do NOT enable it, so the x86 target set is unchanged.
+arm64 = []
+# Phase 6: fail-closed halt if S1POE absent (default off: dev banner +
+# continue with isolation=none). x86 builds never enable it.
+arm64-require-poe = []
+
+# ── x86_64 reference binary (src/main.rs, auto-discovered) ─────────────────
+# ── AArch64 Phase-2 image (entry + PL011 serial only) ──────────────────────
+[[bin]]
+name = "sex-kernel-arm64"
+path = "src/arch/aarch64/main.rs"
+required-features = ["arm64"]
+
+# ── x86_64-only dependencies ───────────────────────────────────────────────
+# All current deps serve the x86_64 modules. The AArch64 Phase-2 build
+# (arch/aarch64 only) needs ZERO external crates; target-specific scoping
+# keeps x86 resolution identical while letting aarch64 compile without
+# x86-only crates (x86_64, raw-cpuid, x86, x2apic, uart_16550 contain
+# x86 assembly/intrinsics that cannot build for AArch64).
+[target.'cfg(target_arch = "x86_64")'.dependencies]
 limine = "0.6.3"
 x86_64 = { version = "0.15.2", default-features = false, features = ["instructions", "abi_x86_interrupt", "nightly"] }
 uart_16550 = { version = "0.3.0", default-features = false }
@@ -14,19 +35,8 @@ linked_list_allocator = { version = "0.10.5", default-features = false, features
 crossbeam-queue = { version = "0.3.8", default-features = false, features = ["alloc"] }
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
 aml = { version = "0.16.4", default-features = false }
-# smoltcp is a networking stack, likely not needed for bare-metal kernel init.
-# smoltcp = { version = "0.13.0", default-features = false, features = ["proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "log", "medium-ip", "medium-ethernet"] }
-# sha2, chacha20poly1305, ed25519-dalek, rustls, ring, getrandom are crypto/TLS related,
-# and likely pulled in by dependencies we want to avoid for no_std. Removing explicit mentions.
-# sha2 = { version = "0.10", default-features = false }
-# chacha20poly1305 = { version = "0.10", default-features = false }
-# ed25519-dalek = { version = "2.1", default-features = false }
-# rustls = { version = "0.23", default-features = false }
-# rustls-rustcrypto = "0.0.2-alpha"
 pci_types = "0.10"
 x2apic = "0.5"
-# pic8259 = { version = "0.10.1", default-features = false } # Removed for APIC parity
-
 # Explicitly disable default features for transitive deps (prevents build noise)
 bitflags = { version = "2.4.0", default-features = false }
 radium = { version = "0.7.0", default-features = false }

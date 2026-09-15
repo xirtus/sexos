@@ -1,18 +1,18 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-07-21T11:02:33+02:00
-- git commit: f905780a
-- log_path: /home/xirtus_arch/Projects/Sex/.gate_master/serial.log
+- date: 2026-07-22T14:15:10-07:00
+- git commit: 
+- log_path: /Users/xmacbookm5/Projects/Sex/.gate_master/serial.log
 - probe_seconds: 25
 - nvme_enabled: 1
-- nvme_img: /home/xirtus_arch/Projects/Sex/.gate_master/nvme.img
-- qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -drive if=none,id=nvm,file=/home/xirtus_arch/Projects/Sex/.gate_master/nvme.img,format=raw -device nvme,serial=sexos01,drive=nvm -serial file:$LOG -display none -no-reboot -no-shutdown
+- nvme_img: /Users/xmacbookm5/Projects/Sex/.gate_master/nvme.img
+- qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -drive if=none,id=nvm,file=/Users/xmacbookm5/Projects/Sex/.gate_master/nvme.img,format=raw -device nvme,serial=sexos01,drive=nvm -serial file:$LOG -display none -no-reboot -no-shutdown
 
 ## Gate Results
 
 | Gate | Status |
 |------|--------|
-| BUILD_GATE | SKIP |
+| BUILD_GATE | PASS |
 | SPAWN_GATE | PASS |
 | FAULT_GATE | PASS |
 | BOOTGRAPH_GATE | PASS |
@@ -28,7 +28,7 @@
 
 - Spawned PDs: 14
 - Clock ticks (silkbar.clock.send): 13
-- task.running total: 86
+- task.running total: 87
 - Fault/panic hits: 0
 
 ## PD Spawn Details
@@ -44,7 +44,7 @@
 
 - sexdisplay (PD 1): task.running 37x
 - sexdrive (PD 2): task.running 7x
-- silk-shell (PD 3): task.running 6x
+- silk-shell (PD 3): task.running 7x
 - sexinput (PD 4): task.running 6x
 - silkbar (PD 6): task.running 6x
 - linen (PD 7): task.running 6x
@@ -105,4 +105,4 @@ Advisory/non-scoring rows:
 - sexusb (PD 5) is also present and running but excluded from the 6-PD gate requirement.
 - purple-scanout module is loaded but is cosmetic/diagnostic only.
 - QEMU is run headless (-display none); no window appears unless --display is overridden.
-- Serial log is captured to /home/xirtus_arch/Projects/Sex/.gate_master/serial.log and preserved only with --keep-log.
+- Serial log is captured to /Users/xmacbookm5/Projects/Sex/.gate_master/serial.log and preserved only with --keep-log.

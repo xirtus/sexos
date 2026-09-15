@@ -1,0 +1,30 @@
+X86 PKU-ON RUNTIME BASELINE — LANE B LOG (2026-07-21)
+Host: Darwin arm64, macOS 26.5.2 (aarch64-apple-darwin)
+Toolchain: rustc 1.99.0-nightly (0e29c21d9 2026-07-21) LLVM 22.1.8 / cargo 1.99.0-nightly (3efb1f477 2026-07-17)
+QEMU: qemu-system-x86_64 ABSENT (PATH, /opt/homebrew/bin, /usr/local/bin, /opt/local/bin checked)
+
+CANONICAL PATH (from docs/handoff/MASTER_RUNTIME_GATE_V1.md):
+  build: canonical kernel build (cd kernel && cargo build) + ISO mint (sexos-v1.0.0.iso)
+  qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso
+        -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0
+        -drive if=none,id=nvm,file=<repo>/.gate_master/nvme.img,format=raw
+        -device nvme,serial=sexos01,drive=nvm -serial file:$LOG -display none
+        -no-reboot -no-shutdown
+  markers: 14 PDs spawned; sexdisplay/sexdrive/silk-shell/sexinput/silkbar/linen/sexfiles;
+           silkbar.clock.send >= 2; task.running continuing; fault/panic = 0
+  NOTE: last recorded master run was RED_MASTER (ORDER_GATE FAIL) — pre-existing
+        x86 state on the canonical Linux gate host, not caused by Arm work.
+  NOTE: sexos-v1.0.0.iso NOT present on this host (no *.iso at repo root).
+
+BUILD: canonical x86 build GREEN this session via gate (153 warnings,
+pinned toolchain above; 0 errors). No source changes. Not rebuilt —
+token discipline, no source change since gate run.
+
+RUN WITH PKU: NOT EXECUTED — qemu-system-x86_64 absent.
+-cpu max,+pku: untested on this host (no QEMU to accept/reject it).
+No CPU model substitution attempted (mission rule).
+
+PKU PROOF (CPUID/CR4.PKE/restricted ring-3 PKRU): none — no runtime.
+BASELINE PROOF (spawns/scheduler/clock/stability): none — no runtime.
+
+RESULT: X86_PKU_RUNTIME_SKIP_NO_QEMU

@@ -13,7 +13,7 @@
   "relocation-model": "static",
   "linker-flavor": "ld.lld",
   "linker": "rust-lld",
-  "rustc-abi": "x86-softfloat",
+  "rustc-abi": "softfloat",
   "features": "-mmx,-sse,-sse2,+soft-float",
   "disable-redzone": true,
   "panic-strategy": "abort",
