@@ -89,3 +89,12 @@ sex-packages/sexbuild/recipes/redox-os/
 /USER.md
 # --- end private/local agent files ---
 /claude_references/
+
+# Tracked build outputs removed from the current tree
+tools/sex-debug/target/
+tools/sex-debug/target_tools/
+target_debug/
+rust_output/
+.sync_*.db
+.sync_*.db-shm
+.sync_*.db-wal
