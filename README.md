@@ -44,6 +44,11 @@ What does not work / is not claimed:
 
 Download the latest experimental ISO from [Releases](https://github.com/xirtus/sexos/releases), verify it, and boot it:
 
+```
+SHA-256 (v0.1.0): 187acaf5fb4664f25751acbcf991f8c8c37c9fc9e1acc4fe3d39f2f90542b801
+```
+
+
 ```bash
 # v0.1.0 asset name
 qemu-system-x86_64 \
