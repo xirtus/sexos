@@ -78,11 +78,21 @@ fi
 # Assemble QEMU arguments.
 # QEMU_BIN override: use QEMU_BIN=/path/to/qemu-system-x86_64 to test different versions
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
+ISO="${SEXOS_ISO:-}"
+if [ -z "$ISO" ]; then
+    for candidate in sexos-v0.1.0.iso sexos-v1.0.0.iso; do
+        if [ -f "$candidate" ]; then ISO="$candidate"; break; fi
+    done
+fi
+if [ -z "$ISO" ] || [ ! -f "$ISO" ]; then
+    echo "error: no SexOS ISO found. Download one into the repo root or set SEXOS_ISO=/path/to.iso" >&2
+    exit 1
+fi
 QEMU_ARGS=(
     $MACHINE_ARG
     -m 512M
     -cpu max,+pku
-    -cdrom sexos-v1.0.0.iso
+    -cdrom "$ISO"
     -device nec-usb-xhci,id=xhci
     $USB_DEVICE_ARG
     $TRACE_ARGS
@@ -132,7 +142,7 @@ case "$CMD" in
       $MACHINE_ARG
       -m 512M
       -cpu max,+pku
-      -cdrom sexos-v1.0.0.iso
+      -cdrom "$ISO"
       -device nec-usb-xhci,id=xhci
       $USB_DEVICE_ARG
       $TRACE_ARGS

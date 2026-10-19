@@ -59,7 +59,7 @@ qemu-system-x86_64 \
 
 You should see the boot log and the `silkbar` loop. Press `Ctrl-C` to stop QEMU.
 
-For a graphical QEMU window:
+For a graphical QEMU window, put the ISO in the repo root as `sexos-v0.1.0.iso` (or set `SEXOS_ISO=/path/to.iso`):
 
 ```bash
 ./dev.sh run

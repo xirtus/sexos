@@ -3,8 +3,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-QEMU="/opt/homebrew/bin/qemu-system-x86_64"
-ISO="$ROOT_DIR/sexos-v1.0.0.iso"
+QEMU="${QEMU_BIN:-/opt/homebrew/bin/qemu-system-x86_64}"
+ISO="${SEXOS_ISO:-}"
+if [ -z "$ISO" ]; then
+    for candidate in "$ROOT_DIR/sexos-v0.1.0.iso" "$ROOT_DIR/sexos-v1.0.0.iso"; do
+        if [ -f "$candidate" ]; then ISO="$candidate"; break; fi
+    done
+fi
+if [ -z "$ISO" ] || [ ! -f "$ISO" ]; then
+    echo "error: no SexOS ISO found. Download one into the repo root or set SEXOS_ISO=/path/to.iso" >&2
+    exit 1
+fi
 
 echo "🧪 Booting SexOS on QEMU (M1 → x86_64 emulation)"
 echo "   ISO: $ISO"
