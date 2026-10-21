@@ -98,3 +98,7 @@ rust_output/
 .sync_*.db
 .sync_*.db-shm
 .sync_*.db-wal
+
+# Local patched QEMU checkout (not a tracked submodule)
+tools/qemu/
+*.bak.*

@@ -25,6 +25,8 @@ allowlist=(
   "limine-bios-cd.bin" "limine-bios-pxe.bin" "limine-bios.sys" "limine-uefi-cd.bin"
   "initrd.img" "sexos-v1.0.0.iso" "sexos-visible-checkpoint.iso" "sexos-x17r1-bundle.tar.gz"
   "dev.sh" "build_payload.sh"
+  "CONTRIBUTING.md" "HERMES.md" "README.md" "SECURITY.md"
+  "aarch64-sex.json" "boot_mac.sh" "skills-lock.json"
   "boot_phase20.sh" "bx.sh" "qemuX-autotest.sh" "qemuX-kbd-only.sh" "qemuX-kbd.sh" "qemuX-ps2.sh" "qemuX.sh" "run_qemu.sh" "sexos_final_boss.sh" "surgical_finality_v2.sh" "verify_fix.sh"
 )
 
