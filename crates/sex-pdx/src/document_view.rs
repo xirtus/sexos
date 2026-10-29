@@ -184,3 +184,22 @@ impl Delivery {
         }
     }
 }
+
+/// A read-only list invalidation on Quil's existing BOOT shell route. No object
+/// number or address is accepted; the shell independently rescans its own scope.
+pub const WORKSPACE_CHANGED: u64 = 0x279;
+pub struct WorkspaceRefresh { target:u32, task:u32, pending:bool, closed:bool }
+impl WorkspaceRefresh {
+    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!(matches!(target,9|16)&&task!=0)}}
+    pub fn changed(&mut self){if !self.closed{self.pending=true;}}
+    pub fn pending(&self)->bool{self.pending&&!self.closed}
+    pub fn close(&mut self){self.pending=false;self.closed=true;}
+    pub fn poll(&mut self,mut send:impl FnMut([u64;3])->Result<(),u64>){
+        if !self.pending(){return;}
+        match send([self.target as u64,self.task as u64,0]){
+            Ok(())=>self.pending=false,
+            Err(crate::ERR_SERVICE_NOT_READY)=>{},
+            Err(_)=>self.close(),
+        }
+    }
+}

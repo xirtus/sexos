@@ -1,6 +1,6 @@
 # Sustained alpha candidate and desktop continuation
 
-29 October 2026. Round 18 passes, and the first **25 of the requested 100 additional rounds** are complete: rounds 19–43. Continue at **44**, through 118; the [live ledger](ALPHA_100_ROUND_CONTINUATION_2026_10_29.md) remains active. These are substantive implementation/acceptance slices, not a count of test invocations. Preserve one GLOBAL_VAS, BOOT_DAG capability genesis, sex-pdx authority and terminal incarnation identities. One focused Astra review, with a short follow-up, found two text-lifetime defects that were fixed and tested. No Unix process or file-descriptor model was introduced.
+29 October 2026. Round 18 passes, and the first **26 of the requested 100 additional rounds** are complete: rounds 19–44. Continue at **45**, through 118; the [live ledger](ALPHA_100_ROUND_CONTINUATION_2026_10_29.md) remains active. These are substantive implementation/acceptance slices, not a count of test invocations. Preserve one GLOBAL_VAS, BOOT_DAG capability genesis, sex-pdx authority and terminal incarnation identities. One focused Astra review, with a short follow-up, found two text-lifetime defects that were fixed and tested. No Unix process or file-descriptor model was introduced.
 
 ## Round 18 passes on its exact historical image
 
@@ -60,9 +60,15 @@ See the [latest complete source/image/test/run binding](assets/sexos-alpha-r43-2
 
 The sustained pass above belongs to the historical round-30 image. The latest image's short rehearsals are explicitly `acceptance=false`; it still needs its own sustained session before a release claim. The strict checker was not relaxed. The source freezer verifies a sealed GREEN build, unchanged production inputs and exact ISO/kernel hashes, copies recorded production/checker/host-test sources, rejects outside-root symlinks and publishes its binding last. A failed build cannot boot an old ISO.
 
-## Continue at round 44
+## Round 44: automatic document-list freshness
 
-Run the latest candidate's sustained session while advancing the remaining 75 rounds. First close the visible document-refresh gap: after an actual successful Save, coalesce a read-only Linen refresh request over Quil's existing BOOT shell route, authenticate the exact live app/task, and retain invalidation while a snapshot is busy. Preserve selection and never turn a client-supplied object number into authority. The current desktop still needs an explicit refresh to show newly saved names.
+After a successful Save, Quil sends a bounded coalesced invalidation over its existing BOOT shell route. The shell validates the actual sender, catalog task and exact empty payload, then checks live lifecycle authority before requesting a read-only Linen rescan. Queue Full, transient kernel retry and an in-flight snapshot retain the work; terminal cleanup cancels it. The notice carries no object address or authority. Quil focus and Linen selection remain unchanged.
+
+Final image SHA-256: `5436e59028e7fa76495288e9ceb6140d021cb36265dc0b19f6c8c71505a07b6f`. BUILD PASS / GREEN_MASTER (90 seconds), 38 architectural gates, **615 Rust executions and 276 Python tests pass**. Both native resolutions pass Save and Save As with automatic counts six/seven and exact new-name glyphs before any manual rescan, followed by burst typing, pending Close, fresh successors and cleanup. These short runs are rehearsals, not sustained acceptance. See the [complete round-44 binding](assets/sexos-alpha-r44-2026-10-29-evidence.json), [wide list](assets/sexos-alpha-r44-wide-auto-list-2026-10-29.png) and [compact list](assets/sexos-alpha-r44-compact-auto-list-2026-10-29.png). Full immutable artifacts are retained under `.evidence/alpha-2026-10-29/r44-*`.
+
+## Continue at round 45
+
+The frozen round-43 image's sustained run remains in progress. Continue the remaining **74** substantive rounds.
 
 Then expand finite BOOT reserve through explicitly provisioned fresh identities, separate layout/backing, existing-family key policy, activation grants, catalogs, routes and aggregate table/slot/surface/page budgets. Test repeated cleanup and terminal exhaustion. A larger finite pool is not sustainable replenishment. Improve retained block completion progress and the remaining restore/menu latency before adding decorative surfaces.
 

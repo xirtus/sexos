@@ -80,6 +80,25 @@ rustc --edition=2021 --test tests/display_text_transaction.rs -o "$TEST_DIR/text
 "$TEST_DIR/text-transaction"
 rustc --edition=2021 --test tests/quil_view.rs -o "$TEST_DIR/quil-view"
 "$TEST_DIR/quil-view"
+python3 - "$TEST_DIR/workspace-refresh.rs" <<'PYWORKSPACE'
+from pathlib import Path
+import re,sys
+s=Path('servers/silk-shell/src/main.rs').read_text()
+parts=[]
+for name in ['workspace_refresh_receive','workspace_refresh_poll']:
+ f=re.findall(r'^unsafe fn '+name+r'\b.*?^}',s,re.M|re.S);assert len(f)==1
+ parts.append(f[0])
+Path(sys.argv[1]).write_text('\n'.join(parts))
+assert 'unsafe { workspace_refresh_poll(); shell_lifecycle_poll();' in s
+assert 'WORKSPACE_REFRESH_PENDING.iter().any(|p|*p)' in s
+assert 'if workspace_refresh_receive(&msg) { continue; }' in s
+q=Path('servers/quil/src/main.rs').read_text()
+assert q.index('DOCUMENT_WORKSPACE.changed();')>q.index('if event.outcome == document_exchange::Outcome::Saved {')
+assert 'DOCUMENT_WORKSPACE.close();DOCUMENT_IO.close();' in q
+assert 'DOCUMENT_WORKSPACE.pending()' in q and 'DOCUMENT_WORKSPACE.poll(' in q
+PYWORKSPACE
+WORKSPACE_REFRESH_SOURCE="$TEST_DIR/workspace-refresh.rs" rustc --edition=2021 --test tests/workspace_refresh.rs -o "$TEST_DIR/workspace-refresh"
+"$TEST_DIR/workspace-refresh"
 rustc --edition=2021 --test tests/boot_display.rs -o "$TEST_DIR/boot-display"
 "$TEST_DIR/boot-display"
 python3 - "$TEST_DIR/absolute.rs" <<'PYABS'
@@ -136,7 +155,7 @@ for name in ['flush_pending_cursor_send','send_cursor_checked']:
 Path(sys.argv[1]).write_text('\n'.join(parts))
 pdx=Path('crates/sex-pdx/src/lib.rs').read_text()
 Path(sys.argv[2]).write_text(next(line for line in pdx.splitlines()if line.startswith('pub const ERR_SERVICE_NOT_READY:'))+'\n')
-assert 'CURSOR_SEND_PENDING || linen_text_can_progress()' in s
+assert 'CURSOR_SEND_PENDING || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress()' in s
 PYCURSOR
 CURSOR_DELIVERY_SOURCE="$TEST_DIR/cursor.rs" CURSOR_STATUS_SOURCE="$TEST_DIR/cursor_status.rs" rustc --edition=2021 --test tests/desktop_cursor_delivery.rs -o "$TEST_DIR/cursor"
 "$TEST_DIR/cursor"

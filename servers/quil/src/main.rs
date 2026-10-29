@@ -184,6 +184,7 @@ fn document_save_start(create: bool) {
 fn document_event(event: document_exchange::Event) {
     unsafe {
         if event.outcome == document_exchange::Outcome::Saved {
+            DOCUMENT_WORKSPACE.changed();
             QUIL_DOC_ID = event.object as u64;
             QUIL_LAST_DOC_ID = QUIL_DOC_ID;
             QUIL_DOC_TITLE = DOCUMENT_IO.name;
@@ -668,6 +669,7 @@ unsafe fn quil_cursor_vertical(dir: i32) {
 static mut DOCUMENT_DISPLAY:display_delivery::Outbox=display_delivery::Outbox::new();
 static mut DOCUMENT_VIEW:sex_pdx::document_view::Layout=sex_pdx::document_view::Layout{w:640,h:480,scale:2,cols:51,rows:25,top:12,toolbar_rows:1};
 static mut DOCUMENT_OPEN:bool=false;
+static mut DOCUMENT_WORKSPACE:sex_pdx::document_view::WorkspaceRefresh=sex_pdx::document_view::WorkspaceRefresh::new(0,0);
 static mut DOCUMENT_VIEW_SEQUENCE:u64=0;static mut DOCUMENT_PAINT:u64=0;static mut DOCUMENT_ACTION_SEQUENCE:u64=0;
 fn document_draw(buf: &[u8], palette: Option<u8>) {
     unsafe {
@@ -2920,6 +2922,7 @@ unsafe fn check_physical_keyboard_proof(scancode: u64) {
 pub extern "C" fn _start() -> ! {
     let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("QUIL_SELF_AUTHORITY");
     assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(9,156)|(16,301)));
+    unsafe{DOCUMENT_WORKSPACE=sex_pdx::document_view::WorkspaceRefresh::new(catalog.target_pd,catalog.task_id);}
     QUIL_DOMAIN.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     QUIL_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
     QUIL_CONTENT_SURFACE.store(catalog.surface_id,core::sync::atomic::Ordering::Release);
@@ -3980,9 +3983,10 @@ pub extern "C" fn _start() -> ! {
         }
         if document_view_ready{if sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,catalog.target_pd as u64,catalog.task_id as u64,0).is_ok(){document_view_ready=false;}}
         unsafe{if DOCUMENT_OPEN{match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::OPEN_LINEN,catalog.target_pd as u64,catalog.task_id as u64,0){Ok(_)=>DOCUMENT_OPEN=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>DOCUMENT_OPEN=false}}}
+        unsafe{DOCUMENT_WORKSPACE.poll(|args|sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::WORKSPACE_CHANGED,args[0],args[1],args[2]).map(|_|()));}
         unsafe{DOCUMENT_DISPLAY.poll(quil_content_sid(),|op,sid,a,b|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op,sid,a,b).map(|_|()),|paint,bytes|sex_pdx::serial_record!("[quil.ui.admitted] paint={} bytes={} presentation=unconfirmed",paint,bytes));}
         unsafe{if let Some(event)=DOCUMENT_IO.step(|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::document::OP,r.header(),r.a,r.b).map(|_|())){document_event(event);}}
-        let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_OPEN} {
+        let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_WORKSPACE.pending()||DOCUMENT_OPEN} {
             match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sched_yield();continue}}
         }else{pdx_listen_raw(0)};
         if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && catalog.target_pd==16 {
@@ -3996,7 +4000,7 @@ pub extern "C" fn _start() -> ! {
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire)) {
             sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire));
-            unsafe{sex_pdx::serial_record!("[quil.document.close] pending={}",DOCUMENT_IO.busy()as u8);DOCUMENT_IO.close();DOCUMENT_DISPLAY.close();DOCUMENT_NEXT_LOAD=None;DOCUMENT_OPEN=false;}
+            unsafe{sex_pdx::serial_record!("[quil.document.close] pending={}",DOCUMENT_IO.busy()as u8);DOCUMENT_WORKSPACE.close();DOCUMENT_IO.close();DOCUMENT_DISPLAY.close();DOCUMENT_NEXT_LOAD=None;DOCUMENT_OPEN=false;}
             sex_pdx::task_finish(0);
         }
 

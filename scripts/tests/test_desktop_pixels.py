@@ -28,6 +28,13 @@ def image(log=LOG):
     return b'P6\n1280 800\n255\n'+pixels
 
 class PixelChecks(unittest.TestCase):
+    def test_explicit_compact_geometry_checks_real_glyphs_and_exact_framebuffer(self):
+        log=LOG.replace('x=640','x=0');raw=image(log).split(b'\n',3)[3]
+        pixels=b''.join(raw[y*1280*3:(y*1280+1024)*3]for y in range(768))
+        ppm=b'P6\n1024 768\n255\n'+pixels
+        self.assertEqual(checker.verify(log,ppm,FONT,resolution=(1024,768)),[])
+        self.assertTrue(checker.verify(log,ppm,FONT))
+        self.assertTrue(checker.verify(log,ppm,FONT,resolution=(1280,800)))
     def test_hide_requires_actual_text_ink_to_disappear(self):
         blank=b'P6\n1280 800\n255\n'+bytes(1280*800*3)
         self.assertEqual(checker.verify_hidden(LOG,blank),[])

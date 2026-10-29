@@ -5433,6 +5433,33 @@ unsafe fn linen_queue_open(object: u64, choice: u64) {
     let queued = LINEN_ASYNC.queue_open(object, choice);
     sex_pdx::serial_record!("[linen.open.queued] id={} accepted={}", object, queued as u8);
 }
+static mut WORKSPACE_REFRESH_PENDING:[bool;sex_pdx::app_lifecycle::SLOTS.len()]=[false;sex_pdx::app_lifecycle::SLOTS.len()];
+/// An invalidation carries no selected object authority. Bind its request to
+/// the immutable app/task catalog; actual liveness is checked before effects.
+unsafe fn workspace_refresh_receive(msg:&sex_pdx::PdxMessage)->bool {
+    if msg.type_id!=sex_pdx::document_view::WORKSPACE_CHANGED {return false;}
+    let Some(index)=APP_CUSTODY.iter().position(|entry|entry.as_ref().map_or(false,|e|e.target==msg.caller_pd && e.allows_operation(msg.type_id,[msg.arg0,msg.arg1,msg.arg2]))) else {return true;};
+    WORKSPACE_REFRESH_PENDING[index]=true;
+    workspace_refresh_poll();
+    true
+}
+/// At most one query per pending catalog member per turn. Transient custody
+/// contention retains the read-only invalidation; Close/death cancels it.
+unsafe fn workspace_refresh_poll() {
+    for index in 0..WORKSPACE_REFRESH_PENDING.len() {
+        if !WORKSPACE_REFRESH_PENDING[index]{continue;}
+        let Some(entry)=APP_CUSTODY[index].as_ref().filter(|e|!e.dead&&!e.close_pending) else {WORKSPACE_REFRESH_PENDING[index]=false;continue;};
+        match sex_pdx::app_lifecycle::info(entry.slot) {
+            Err(sex_pdx::app_lifecycle::LIVE)=>{
+                WORKSPACE_REFRESH_PENDING[index]=false;
+                LINEN_ASYNC.refresh(true);
+                sex_pdx::serial_record!("[linen.workspace.changed] target={} task={} refresh=queued read_only=1",entry.target,entry.task);
+            }
+            Err(sex_pdx::app_lifecycle::RETRY)=>{}
+            _=>WORKSPACE_REFRESH_PENDING[index]=false,
+        }
+    }
+}
 unsafe fn linen_async_poll() {
     if let Some(request) = LINEN_ASYNC.request() {
         if pdx_call_checked(sex_pdx::SLOT_LINEN, request.opcode, request.args[0], request.args[1], request.args[2]).is_ok() {
@@ -23827,7 +23854,7 @@ pub extern "C" fn _start() -> ! {
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
 
     loop {
-        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -24507,7 +24534,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24517,6 +24544,7 @@ pub extern "C" fn _start() -> ! {
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
+            if workspace_refresh_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
             if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {

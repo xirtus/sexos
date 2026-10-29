@@ -4,7 +4,7 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');a=p.parse_args()
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
@@ -75,12 +75,18 @@ def main():
   toolbar(1,r'\[quil.new.ok\] bytes=0');typing('first note')
   capture('edited','first note#')
   ctrl('s',r'\[quil.name.mode\] on=1');typing('uialpha',True)
+  automatic_lists=[]
+  initial_count=int(re.findall(r'\[linen.remote.snapshot.ok\] count=(\d+)',text())[-1]) if a.workspace_refresh else 0
   cold_start=time.monotonic();start=len(text());q.key('ret');m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',start);cold_first=time.monotonic()-cold_start
   first=dict(bytes=int(m[1]),hash=m[2],object=int(m[3]),name='uialpha',content='first note')
   wait(r'\[quil.document.saved\].*dirty=0',start);capture('saved','uialpha')
+  if a.workspace_refresh:
+   from workspace_refresh_probe import after_save
+   automatic_lists.append(after_save(locals(),start,initial_count+1,'uialpha'))
   typing('b');toolbar(4,r'\[quil.name.mode\] on=1 save_as=1');typing('uibeta',True)
   cold_start=time.monotonic();start=len(text());q.key('ret');m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',start);cold_second=time.monotonic()-cold_start;wait(r'\[quil.document.saved\].*dirty=0',start)
   second=dict(bytes=int(m[1]),hash=m[2],object=int(m[3]),name='uibeta',content='first noteb')
+  if a.workspace_refresh:automatic_lists.append(after_save(locals(),start,initial_count+2,'uibeta'))
   # Save and a following edit in one actual hardware event stream.
   start=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}for k,down in [('ctrl',True),('s',True),('s',False),('ctrl',False),('z',True),('z',False)]]})
   wait(r'\[quil.document.edit\].*pending=1',start);wait(r'\[quil.document.saved\].*dirty=1',start);capture('newer-edit','first notebz#')
@@ -116,7 +122,7 @@ def main():
    r=recover(disk.read_bytes(),expected['object'])
    if r.pop('payload')!=expected['content'].encode():raise RuntimeError('native saved bytes differ')
    checked.append(r)
-  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
+  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
   (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
  except Exception as e:
   (out/'result.json').write_text(json.dumps(dict(ok=False,error=str(e)))+'\n');raise

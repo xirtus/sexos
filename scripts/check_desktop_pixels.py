@@ -49,11 +49,12 @@ def final_view(text):
     return values,labels
 
 
-def verify(text,ppm,font):
+def verify(text,ppm,font,resolution=None):
     errors=[]
     try:
         view,labels=final_view(text)
-        width,height,pixels=ppm_rgb(ppm)
+        width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
+        if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
         if view['x']<0 or view['y']<50 or view['w']<=0 or view['h']<=0 or view['x']+view['w']>width or view['y']+view['h']>height:raise ValueError('view outside framebuffer')
         color=view['text_color'].to_bytes(3,'big');scale=view['scale']
         # Match the renderer's width-derived wrap bound. A correct prefix is
