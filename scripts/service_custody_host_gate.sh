@@ -23,7 +23,8 @@ import sys
 s=Path('apps/spindle/src/main.rs').read_text()
 Path(sys.argv[1]).write_text(s[s.index('const MAX_HISTORY:'):s.index('fn history_nav(')])
 assert 'msg.type_id==1 && msg.caller_pd==11' in s
-assert s.count('if unsafe{HISTORY_IO.blocked()}{')>=2
+assert 'spindle_storage_sync' not in s and 'spindle_storage_settle' not in s
+assert 'STORAGE_PROBE.step(' in s and 'STORAGE_PROBE.close()' in s
 assert 'HISTORY_IO.step_at(hist,sex_pdx::get_ticks(),' in s and 'HISTORY_IO.receive(msg.arg0,hist)' in s
 assert 'if !control{unsafe{HISTORY_IO.mark_dirty();}}' in s
 assert 'b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"' in s
@@ -62,4 +63,13 @@ SPINDLE_SCROLL_SOURCE="$TEST_DIR/scroll.rs" rustc --edition=2021 --test tests/sp
 "$TEST_DIR/scroll"
 rustc --edition=2021 --test tests/spindle_status.rs -o "$TEST_DIR/status"
 "$TEST_DIR/status"
+python3 - "$TEST_DIR/probe_parse.rs" <<'PYPARSE'
+import re,sys
+from pathlib import Path
+s=Path('apps/spindle/src/main.rs').read_text()
+f=re.findall(r'^fn parse_probe_job\b.*?^}',s,re.M|re.S);assert len(f)==1
+Path(sys.argv[1]).write_text(f[0])
+PYPARSE
+SPINDLE_PROBE_PARSE_SOURCE="$TEST_DIR/probe_parse.rs" rustc --edition=2021 --test tests/spindle_probe.rs -o "$TEST_DIR/probes"
+"$TEST_DIR/probes"
 echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_and_history_with_mock_transport_authority_and_host_locks'

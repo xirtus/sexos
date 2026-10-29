@@ -17,6 +17,7 @@ impl Client{
  pub fn busy(&self)->bool{!matches!(self.phase,Phase::Idle|Phase::Uncertain|Phase::Poison)||self.dirty}
  pub fn status(&self)->Status{match self.phase{Phase::Uncertain=>Status::NeedsRetry,Phase::Poison=>Status::Denied,Phase::Abort=>Status::Cancelling,Phase::Idle if self.dirty=>Status::Queued,Phase::Idle if self.retry_ready=>Status::RetryReady,Phase::Idle=>Status::Idle,Phase::OpenLoad|Phase::Stat|Phase::Read|Phase::CloseLoad=>Status::Loading,_=>Status::Saving}}
  pub fn retry(&mut self,h:&History)->bool{if self.phase!=Phase::Idle||self.dirty||!self.retry_ready{return false}let Some(action)=self.action else{return false};self.retry_ready=false;match action{Action::Save=>self.save(),Action::Load=>self.load(h)}}
+ pub fn fenced(&self)->bool{matches!(self.phase,Phase::Uncertain|Phase::Poison)}
  pub fn blocked(&self)->bool{self.busy()||matches!(self.phase,Phase::Uncertain|Phase::Poison)}
  pub fn mark_dirty(&mut self){if !matches!(self.phase,Phase::Abort|Phase::Uncertain|Phase::Poison){self.retry_ready=false;self.dirty=true}}
  pub fn save(&mut self)->bool{if matches!(self.phase,Phase::Abort|Phase::Uncertain|Phase::Poison){return false}self.retry_ready=false;self.dirty=true;true}

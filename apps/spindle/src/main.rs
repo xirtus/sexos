@@ -86,6 +86,8 @@ use sex_pdx::{
 };
 use sex_graphics::{WindowBuffer, font};
 mod history_persistence;
+mod storage_probe;
+static mut STORAGE_PROBE:storage_probe::Client=storage_probe::Client::new();
 mod viewport;
 mod scroll_view;
 mod display_delivery;
@@ -614,39 +616,6 @@ fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
 
 /// Dispatch a command line. Pushes output lines to scrollback.
 /// Returns true if the command was recognized, false for unknown.
-// SPINDLE_DISK_CMD_V1: bounded synchronous SLOT_STORAGE call. Waits for the
-// type=0x1 reply in-line; non-reply messages are acked, HID events arriving
-// during the wait are dropped with a budgeted marker (user just ran a disk
-// command — losing a keystroke mid-roundtrip is acceptable and bounded).
-// Caps at 64 messages so a dead storage PD cannot hang the terminal.
-const OP_DISKFS_STAT_SPINDLE: u64 = 0x3B;
-const OP_DISKFS_SELECT_SPINDLE: u64 = 0x3E;
-// DISKFS_V3 dynamic object ops (sexfiles messages.rs is canonical).
-const OP_DISKFS_CREATE_SPINDLE: u64 = 0x42;
-const OP_DISKFS_LIST_SPINDLE: u64 = 0x43;
-const OP_DISKFS_DELETE_SPINDLE: u64 = 0x47;
-const OP_DISKFS_RENAME_SPINDLE: u64 = 0x48;
-const DISKFS_V3_SLOTS_SPINDLE: u64 = 15;
-// LANE3: canonical-reply READ, fixes the OP_DISKFS_READ signbit ambiguity
-// (see messages.rs OP_DISKFS_READ_V2 doc comment). caller passes want_len
-// 1..=6 in arg1.
-const OP_DISKFS_READ_V2_SPINDLE: u64 = 0x4A;
-// DISKFS_V4: content ops, for filldoc/truncdoc/catdoc below.
-const OP_DISKFS_WRITE_SPINDLE: u64 = 0x38;
-const OP_DISKFS_READ_SPINDLE: u64 = 0x39;
-const OP_DISKFS_TRUNCATE_SPINDLE: u64 = 0x49;
-
-/// Pack up to 16 ASCII name bytes into (lo, hi) LE words.
-fn pack_doc_name(name: &[u8]) -> (u64, u64) {
-    let mut lo = 0u64;
-    let mut hi = 0u64;
-    for (i, &b) in name.iter().take(16).enumerate() {
-        if i < 8 { lo |= (b as u64) << (i * 8); }
-        else { hi |= (b as u64) << ((i - 8) * 8); }
-    }
-    (lo, hi)
-}
-
 /// Parse a decimal object id from args. None on empty/garbage.
 fn parse_doc_id(args: &[u8]) -> Option<u64> {
     let t = args.iter().position(|&b| b != b' ').map(|i| &args[i..])?;
@@ -655,91 +624,10 @@ fn parse_doc_id(args: &[u8]) -> Option<u64> {
     for &b in t {
         if b == b' ' { break; }
         if !(b'0'..=b'9').contains(&b) { return None; }
-        v = v * 10 + (b - b'0') as u64;
+        v = v.checked_mul(10)?.checked_add((b-b'0')as u64)?;
         any = true;
     }
     if any { Some(v) } else { None }
-}
-
-// Settle the message queue before a synchronous probe: fire-and-forget
-// storage calls issued earlier on this same Enter (history persist) have
-// replies still IN FLIGHT — a single empty poll proves nothing. Consume
-// messages until a sustained quiet streak, so no stale reply can be
-// matched to the probe's first request. Bounded both ways.
-fn spindle_storage_settle() {
-    if unsafe{HISTORY_IO.blocked()}{return}
-    let mut quiet = 0u32;
-    let mut total = 0u32;
-    let mut eaten = 0u32;
-    while quiet < 8_000 && total < 200_000 {
-        match sex_pdx::pdx_try_listen_raw(0) {
-            Some(msg) => {
-                quiet = 0;
-                eaten += 1;
-                if msg.type_id != 0x1 && msg.type_id != 0x202 {
-                    unsafe { sex_pdx::pdx_reply(msg.caller_pd, 0); }
-                }
-            }
-            None => quiet += 1,
-        }
-        total += 1;
-    }
-    serial_println!("[spindle.disk.settle] eaten={}", eaten);
-}
-
-fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> {
-    if unsafe{HISTORY_IO.blocked()}{return Err(-102)}
-    // Enqueue with bounded retry: the async slot can be momentarily busy
-    // right after a previous exchange (observed: SELECT for one path never
-    // reached sexfiles when issued back-to-back).
-    let mut tries = 0u32;
-    loop {
-        let (status, _) = unsafe { pdx_call(SLOT_STORAGE, op, a0, a1, a2) };
-        if status == 0 { break; }
-        tries += 1;
-        if tries >= 32 {
-            serial_println!("[spindle.disk.enqueue.fail] op={:#x} status={:#x}", op, status);
-            return Err(status as i64);
-        }
-        sex_pdx::sys_yield();
-    }
-    // Reply wait: poll (non-blocking) with a yield budget. A blocking listen
-    // here hangs the terminal forever when the request is lost under storage
-    // contention (observed: request enqueued ok, sexfiles never received it).
-    let mut msgs = 0u32;
-    let mut polls = 0u32;
-    loop {
-        let msg = match sex_pdx::pdx_try_listen_raw(0) {
-            Some(m) => m,
-            None => {
-                polls += 1;
-                if polls >= 300_000 {
-                    serial_println!("[spindle.disk.reply.timeout] op={:#x}", op);
-                    return Err(-101);
-                }
-                continue;
-            }
-        };
-        if msg.type_id == 0x1 {
-            let v = msg.arg0 as i64;
-            if v < 0 { return Err(v); }
-            return Ok(msg.arg0);
-        }
-        if msg.type_id == 0x202 {
-            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
-            unsafe {
-                static mut DISK_CMD_HID_DROP_BUDGET: u32 = 8;
-                if DISK_CMD_HID_DROP_BUDGET > 0 {
-                    DISK_CMD_HID_DROP_BUDGET -= 1;
-                    serial_println!("[spindle.disk.hid.drop] code={:#x}", msg.arg0);
-                }
-            }
-        } else {
-            unsafe { sex_pdx::pdx_reply(msg.caller_pd, 0); }
-        }
-        msgs += 1;
-        if msgs >= 64 { return Err(-100); }
-    }
 }
 
 static mut DISPLAY_IO:display_delivery::Outbox=display_delivery::Outbox::new(12);
@@ -1056,12 +944,12 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  Linen open      sync readback blocked (AsyncEnqueue)");
             sb.push(b"  Quil delivery   PROVEN (stash/replay done)");
             sb.push(b"  Pointer/mouse   USB slot2 deferred");
-            sb.push(b"  App launch      kernel spawn + SLOT_SHELL needed");
+            sb.push(b"  App relaunch    finite BOOT reserve");
             sb.push(b"  SilkBar name    no UpdateKind variant (ABI blocker)");
             sb.push(b"  SilkBar tint    no UpdateKind variant (ABI blocker)");
             sb.push(b"  History load    validated async receipts");
-            sb.push(b"  Sync list       OP_RAMFS_LIST async reply only");
-            sb.push(b"  Real HID input  spindle not kernel-spawned");
+            sb.push(b"  Object list     typed staged disk/ls snapshot");
+            sb.push(b"  Real HID input  active through BOOT shell route");
             sb.push(b"");
             sb.push(b"All blockers are documented in docs/handoff/.");
             sb.push(b"No blocking waits, no fake POSIX, no unbounded loops.");
@@ -1270,63 +1158,19 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             if unsafe{HISTORY_IO.load(hist)}{sb.push(b"History load queued; awaiting validation.");}else{sb.push(b"History I/O busy; try load after save.");}
             true
         }
-        b"ls" => {
-            // OP_RAMFS_LIST uses AsyncEnqueue edge — fire-and-forget only.
-            // Server reply arrives asynchronously in main loop.
-            // Synchronous listing unavailable without blocking on pdx_listen_raw.
-            // Fire the LIST opcode so the server logs it, but warn user.
-            let _ = unsafe {
-                pdx_call(SLOT_STORAGE, OP_RAMFS_LIST, 0, 0, 0)
-            };
-            sb.push(b"Listing request sent to SexFiles (async).");
-            sb.push(b"Synchronous listing unavailable: AsyncEnqueue edge.");
-            sb.push(b"Server reply arrives as type=0x1 in main listen loop.");
-            sb.push(b"Known objects (static):");
-            sb.push(b"  Private history snapshot: save / load");
-            sb.push(b"  BOOT recovery; no inherited private handles");
-            serial_println!("[spindle.files.command] name=ls ok=1 reason=async_limited_static_fallback");
-            true
+        b"ls"=>{let accepted=unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::List)};sb.push(if accepted{b"Object listing queued."}else{b"Object listing unavailable."});true}
+        b"probe-help"=>{sb.push(b"DISK/LS  DISK-STAT <ID>  MKDOC <NAME>");sb.push(b"FILLDOCX <ID> <BYTES>  CATDOCX <ID>");sb.push(b"TRUNCDOC <ID> <BYTES>  MVDOC <ID> <NAME>");sb.push(b"RMDOC <ID>  PROBE-STATUS/CANCEL/RETRY");sb.push(b"Mutations may be partial; retry reads only.");true},
+        b"probe-status"=>{let state=unsafe{STORAGE_PROBE.status()};sb.push(state.as_bytes());sex_pdx::serial_record!("[spindle.probe.status] target={} state={}",instance_pd(),state);true},
+        b"probe-cancel"=>{let accepted=unsafe{STORAGE_PROBE.cancel()};sb.push(if accepted{b"Probe cancel queued; no rollback is implied."}else{b"Probe cancel unavailable."});sex_pdx::serial_record!("[spindle.probe.control] target={} action=cancel accepted={}",instance_pd(),accepted as u8);true},
+        b"probe-retry"=>{let accepted=unsafe{STORAGE_PROBE.retry()};sb.push(if accepted{b"Read-only probe retry queued."}else{b"Cancel first; mutations require inspection and a new command."});sex_pdx::serial_record!("[spindle.probe.control] target={} action=retry accepted={}",instance_pd(),accepted as u8);true},
+        b"disk-stat"=>{
+            let id=parse_doc_id(args).filter(|&id|id<15);
+            let accepted=id.map_or(false,|id|unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::Stat(id as u8))});
+            sb.push(if accepted{b"Disk stat queued; awaiting receipt."}else{b"Disk stat unavailable; check id/history state."});true
         }
-        b"disk" => {
-            // DISKFS_V3: enumerate the dynamic object table — real names via
-            // OP_DISKFS_LIST (info word + up to 3 name chunks per slot).
-            sb.push(b"DISK OBJECTS:");
-            spindle_storage_settle();
-            let mut found = 0u64;
-            for pid in 0..DISKFS_V3_SLOTS_SPINDLE {
-                let info = match spindle_storage_sync(OP_DISKFS_LIST_SPINDLE, pid, 0xFF, 0) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                if (info >> 62) & 1 == 0 { continue; }
-                let mut line = [b' '; 30];
-                line[0] = b' ';
-                if pid >= 10 { line[1] = b'1'; line[2] = b'0' + (pid - 10) as u8; }
-                else { line[2] = b'0' + pid as u8; }
-                let mut ln = 4;
-                'chunks: for c in 0..3u64 {
-                    let w = match spindle_storage_sync(OP_DISKFS_LIST_SPINDLE, pid, c, 0) {
-                        Ok(v) => v,
-                        Err(_) => break 'chunks,
-                    };
-                    for k in 0..8 {
-                        let b = ((w >> (k * 8)) & 0xFF) as u8;
-                        if b == 0 { break 'chunks; }
-                        if ln < line.len() { line[ln] = b; ln += 1; }
-                    }
-                }
-                sb.push(&line[..ln]);
-                found += 1;
-                serial_println!(
-                    "[spindle.disk.entry] slot={} name={}",
-                    pid, core::str::from_utf8(&line[4..ln]).unwrap_or("?")
-                );
-            }
-            if found == 0 {
-                sb.push(b"  NONE (NO NVME?)");
-            }
-            serial_println!("[spindle.disk.command] found={} ok=1 reason=v3_enumerate", found);
-            true
+        b"disk"=>{
+            let accepted=unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::List)};
+            sb.push(if accepted{b"Disk listing queued; staging coherent snapshot."}else{b"Disk listing unavailable; check history/probe."});true
         }
         b"winreset" => {
             // WINDOW_LIFECYCLE_V1: full destroy → recreate cycle of this
@@ -1339,400 +1183,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.winreset] ok=1");
             true
         }
-        b"mkdoc" => {
-            // DISKFS_V3: create a named persistent object.
-            let name_end = args.iter().position(|&b| b == b' ').unwrap_or(args.len());
-            let name = &args[..name_end.min(16)];
-            if name.is_empty() {
-                sb.push(b"USAGE: MKDOC <NAME>");
-                serial_println!("[spindle.mkdoc] ok=0 reason=empty_name");
-                return true;
-            }
-            spindle_storage_settle();
-            let (lo, hi) = pack_doc_name(name);
-            match spindle_storage_sync(OP_DISKFS_CREATE_SPINDLE, 0, lo, hi) {
-                Ok(id) => {
-                    sb.push(b"CREATED:");
-                    let mut line = [b' '; 24];
-                    line[1] = b'0' + (id % 10) as u8;
-                    if id >= 10 { line[0] = b'1'; }
-                    let n = name.len().min(16);
-                    line[3..3 + n].copy_from_slice(&name[..n]);
-                    sb.push(&line[..3 + n]);
-                    serial_println!("[spindle.mkdoc] id={} ok=1", id);
-                }
-                Err(e) => {
-                    if e == -8 { sb.push(b"ERROR: NAME EXISTS"); }
-                    else if e == -5 { sb.push(b"ERROR: TABLE FULL"); }
-                    else { sb.push(b"ERROR: CREATE FAILED"); }
-                    serial_println!("[spindle.mkdoc] ok=0 err={}", e);
-                }
-            }
-            true
-        }
-        b"rmdoc" => {
-            // DISKFS_V3: delete an object by id (system slots protected).
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: RMDOC <ID>");
-                serial_println!("[spindle.rmdoc] ok=0 reason=bad_id");
-                return true;
-            };
-            spindle_storage_settle();
-            match spindle_storage_sync(OP_DISKFS_DELETE_SPINDLE, id, 0, 0) {
-                Ok(_) => {
-                    sb.push(b"DELETED.");
-                    serial_println!("[spindle.rmdoc] id={} ok=1", id);
-                }
-                Err(e) => {
-                    if e == -6 { sb.push(b"ERROR: SYSTEM OBJECT"); }
-                    else if e == -3 { sb.push(b"ERROR: NOT FOUND"); }
-                    else { sb.push(b"ERROR: DELETE FAILED"); }
-                    serial_println!("[spindle.rmdoc] id={} ok=0 err={}", id, e);
-                }
-            }
-            true
-        }
-        b"mvdoc" => {
-            // DISKFS_V3: rename — mvdoc <id> <name>.
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: MVDOC <ID> <NAME>");
-                serial_println!("[spindle.mvdoc] ok=0 reason=bad_id");
-                return true;
-            };
-            let rest = match args.iter().position(|&b| b == b' ') {
-                Some(i) => {
-                    let r = &args[i..];
-                    match r.iter().position(|&b| b != b' ') {
-                        Some(j) => &r[j..],
-                        None => &[][..],
-                    }
-                }
-                None => &[][..],
-            };
-            let name_end = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
-            let name = &rest[..name_end.min(16)];
-            if name.is_empty() {
-                sb.push(b"USAGE: MVDOC <ID> <NAME>");
-                serial_println!("[spindle.mvdoc] ok=0 reason=empty_name");
-                return true;
-            }
-            spindle_storage_settle();
-            let (lo, hi) = pack_doc_name(name);
-            match spindle_storage_sync(OP_DISKFS_RENAME_SPINDLE, id, lo, hi) {
-                Ok(_) => {
-                    sb.push(b"RENAMED.");
-                    serial_println!("[spindle.mvdoc] id={} ok=1", id);
-                }
-                Err(e) => {
-                    if e == -8 { sb.push(b"ERROR: NAME EXISTS"); }
-                    else if e == -6 { sb.push(b"ERROR: SYSTEM OBJECT"); }
-                    else if e == -3 { sb.push(b"ERROR: NOT FOUND"); }
-                    else { sb.push(b"ERROR: RENAME FAILED"); }
-                    serial_println!("[spindle.mvdoc] id={} ok=0 err={}", id, e);
-                }
-            }
-            true
-        }
-        b"filldoc" => {
-            // DISKFS_V4: filldoc <id> <bytes> — SELECT, then loop WRITE
-            // calls server-side with a deterministic pattern
-            // (byte[i] = (i*37+11) & 0x7F), then TRUNCATE to the exact
-            // length. Proves growth across multiple storage blocks without
-            // needing thousands of individual keystrokes.
-            // & 0x7F (not 0xFF): OP_DISKFS_READ packs raw data bytes into
-            // the reply value, and pdx_storage_call_bounded-style callers
-            // (here and in quil) treat any reply with bit 63 set as an
-            // error — a byte >= 0x80 in the final position of an 8-byte
-            // chunk gets misread as a negative status. Pre-existing
-            // protocol ambiguity (data and error share one channel with
-            // no discriminant), not something this test works around by
-            // accident — see DISKFS_V4_GROWTH_V1.md for the real fix.
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: FILLDOC <ID> <BYTES>");
-                serial_println!("[spindle.filldoc] ok=0 reason=bad_id");
-                return true;
-            };
-            let rest = match args.iter().position(|&b| b == b' ') { Some(i) => &args[i..], None => &[][..] };
-            let Some(n) = parse_doc_id(rest) else {
-                sb.push(b"USAGE: FILLDOC <ID> <BYTES>");
-                serial_println!("[spindle.filldoc] ok=0 reason=bad_len");
-                return true;
-            };
-            spindle_storage_settle();
-            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
-                sb.push(b"ERROR: SELECT FAILED");
-                serial_println!("[spindle.filldoc] id={} ok=0 stage=select err={}", id, e);
-                return true;
-            }
-            let mut off: u64 = 0;
-            let mut fail = false;
-            while off < n {
-                let mut lo = 0u64;
-                let mut hi = 0u64;
-                for i in 0..8u64 {
-                    let idx = off + i;
-                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0x7F } else { 0 };
-                    lo |= v << (i * 8);
-                }
-                for i in 8..16u64 {
-                    let idx = off + i;
-                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0x7F } else { 0 };
-                    hi |= v << ((i - 8) * 8);
-                }
-                if let Err(e) = spindle_storage_sync(OP_DISKFS_WRITE_SPINDLE, off, lo, hi) {
-                    sb.push(b"ERROR: WRITE FAILED");
-                    serial_println!("[spindle.filldoc] id={} off={} ok=0 err={}", id, off, e);
-                    fail = true;
-                    break;
-                }
-                off += 16;
-            }
-            if !fail {
-                match spindle_storage_sync(OP_DISKFS_TRUNCATE_SPINDLE, n, 0, 0) {
-                    Ok(_) => {
-                        sb.push(b"FILLED.");
-                        serial_println!("[spindle.filldoc] id={} bytes={} ok=1", id, n);
-                    }
-                    Err(e) => {
-                        sb.push(b"ERROR: TRUNCATE FAILED");
-                        serial_println!("[spindle.filldoc] id={} ok=0 stage=truncate err={}", id, e);
-                    }
-                }
-            }
-            true
-        }
-        b"truncdoc" => {
-            // DISKFS_V4: truncdoc <id> <bytes> — SELECT + TRUNCATE, for
-            // exercising shrink independent of a fill.
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: TRUNCDOC <ID> <BYTES>");
-                serial_println!("[spindle.truncdoc] ok=0 reason=bad_id");
-                return true;
-            };
-            let rest = match args.iter().position(|&b| b == b' ') { Some(i) => &args[i..], None => &[][..] };
-            let Some(n) = parse_doc_id(rest) else {
-                sb.push(b"USAGE: TRUNCDOC <ID> <BYTES>");
-                serial_println!("[spindle.truncdoc] ok=0 reason=bad_len");
-                return true;
-            };
-            spindle_storage_settle();
-            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
-                sb.push(b"ERROR: SELECT FAILED");
-                serial_println!("[spindle.truncdoc] id={} ok=0 stage=select err={}", id, e);
-                return true;
-            }
-            match spindle_storage_sync(OP_DISKFS_TRUNCATE_SPINDLE, n, 0, 0) {
-                Ok(newlen) => {
-                    sb.push(b"TRUNCATED.");
-                    serial_println!("[spindle.truncdoc] id={} new_len={} ok=1", id, newlen);
-                }
-                Err(e) => {
-                    sb.push(b"ERROR: TRUNCATE FAILED");
-                    serial_println!("[spindle.truncdoc] id={} ok=0 err={}", id, e);
-                }
-            }
-            true
-        }
-        b"catdoc" => {
-            // DISKFS_V4: catdoc <id> — SELECT + STAT, then read back every
-            // byte and verify it matches filldoc's deterministic pattern
-            // for its own current length (not just a hash match, an actual
-            // per-byte check), reporting an FNV-1a hash either way for
-            // gates to assert exact reproducibility across reboots.
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: CATDOC <ID>");
-                serial_println!("[spindle.catdoc] ok=0 reason=bad_id");
-                return true;
-            };
-            spindle_storage_settle();
-            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
-                sb.push(b"ERROR: SELECT FAILED");
-                serial_println!("[spindle.catdoc] id={} ok=0 stage=select err={}", id, e);
-                return true;
-            }
-            let size = match spindle_storage_sync(OP_DISKFS_STAT_SPINDLE, 0, 0, 0) {
-                Ok(v) => v & 0xFFFF_FFFF,
-                Err(e) => {
-                    sb.push(b"ERROR: STAT FAILED");
-                    serial_println!("[spindle.catdoc] id={} ok=0 stage=stat err={}", id, e);
-                    return true;
-                }
-            };
-            let mut off: u64 = 0;
-            let mut mismatch: i64 = -1;
-            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-            while off < size {
-                let want = (size - off).min(8);
-                let word = match spindle_storage_sync(OP_DISKFS_READ_SPINDLE, off, want, 0) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        sb.push(b"ERROR: READ FAILED");
-                        serial_println!("[spindle.catdoc] id={} off={} ok=0 err={}", id, off, e);
-                        return true;
-                    }
-                };
-                let bytes = word.to_le_bytes();
-                for i in 0..want {
-                    let idx = off + i;
-                    let got = bytes[i as usize];
-                    h ^= got as u64;
-                    h = h.wrapping_mul(0x100_0000_01b3);
-                    let expect = ((idx.wrapping_mul(37).wrapping_add(11)) & 0x7F) as u8;
-                    if got != expect && mismatch < 0 { mismatch = idx as i64; }
-                }
-                off += want;
-            }
-            if mismatch >= 0 {
-                sb.push(b"MISMATCH.");
-                serial_println!("[spindle.catdoc] id={} size={} ok=0 mismatch_at={}", id, size, mismatch);
-            } else {
-                sb.push(b"VERIFIED.");
-                serial_println!("[spindle.catdoc] id={} size={} hash={:#x} ok=1", id, size, h);
-            }
-            true
-        }
-        b"filldocx" => {
-            // LANE3_READ_SIGNBIT_REGRESSION: identical to filldoc, but with
-            // the FULL byte range (& 0xFF instead of & 0x7F) — deliberately
-            // reproduces the known OP_DISKFS_READ bug where a data byte
-            // >= 0x80 in the last position of an 8-byte reply gets
-            // misread as a negative status by pdx_storage_call_bounded-
-            // style callers. See catdocx and
-            // scripts/diskfs_v4_read_signbit_regression_gate.sh — this
-            // pair exists ONLY to give Lane 3 (streaming/chunked IPC,
-            // separate reply status from payload data) a reproducible
-            // starting failure. filldoc/catdoc stay on & 0x7F so the real
-            // DISKFS_V4 growth gate isn't tripped by this pre-existing,
-            // unrelated protocol bug.
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: FILLDOCX <ID> <BYTES>");
-                serial_println!("[spindle.filldocx] ok=0 reason=bad_id");
-                return true;
-            };
-            let rest = match args.iter().position(|&b| b == b' ') { Some(i) => &args[i..], None => &[][..] };
-            let Some(n) = parse_doc_id(rest) else {
-                sb.push(b"USAGE: FILLDOCX <ID> <BYTES>");
-                serial_println!("[spindle.filldocx] ok=0 reason=bad_len");
-                return true;
-            };
-            spindle_storage_settle();
-            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
-                sb.push(b"ERROR: SELECT FAILED");
-                serial_println!("[spindle.filldocx] id={} ok=0 stage=select err={}", id, e);
-                return true;
-            }
-            let mut off: u64 = 0;
-            let mut fail = false;
-            while off < n {
-                let mut lo = 0u64;
-                let mut hi = 0u64;
-                for i in 0..8u64 {
-                    let idx = off + i;
-                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0xFF } else { 0 };
-                    lo |= v << (i * 8);
-                }
-                for i in 8..16u64 {
-                    let idx = off + i;
-                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0xFF } else { 0 };
-                    hi |= v << ((i - 8) * 8);
-                }
-                if let Err(e) = spindle_storage_sync(OP_DISKFS_WRITE_SPINDLE, off, lo, hi) {
-                    sb.push(b"ERROR: WRITE FAILED");
-                    serial_println!("[spindle.filldocx] id={} off={} ok=0 err={}", id, off, e);
-                    fail = true;
-                    break;
-                }
-                off += 16;
-            }
-            if !fail {
-                match spindle_storage_sync(OP_DISKFS_TRUNCATE_SPINDLE, n, 0, 0) {
-                    Ok(_) => {
-                        sb.push(b"FILLED.");
-                        serial_println!("[spindle.filldocx] id={} bytes={} ok=1", id, n);
-                    }
-                    Err(e) => {
-                        sb.push(b"ERROR: TRUNCATE FAILED");
-                        serial_println!("[spindle.filldocx] id={} ok=0 stage=truncate err={}", id, e);
-                    }
-                }
-            }
-            true
-        }
-        b"catdocx" => {
-            // LANE3: was LANE3_READ_SIGNBIT_REGRESSION, reproducing the
-            // OP_DISKFS_READ signbit bug on purpose (byte 31 = 0x86 lands
-            // as the top byte of the 4th 8-byte reply). Now reads via
-            // OP_DISKFS_READ_V2 instead: status lives in bits 63..56,
-            // payload in bits 47..0, so a data byte >= 0x80 can never be
-            // misread as an error regardless of position. Kept the same
-            // command name/content pattern deliberately — this is the
-            // direct before/after proof that the fix closes the exact
-            // case that used to fail (see
-            // scripts/diskfs_v4_read_signbit_regression_gate.sh).
-            let Some(id) = parse_doc_id(args) else {
-                sb.push(b"USAGE: CATDOCX <ID>");
-                serial_println!("[spindle.catdocx] ok=0 reason=bad_id");
-                return true;
-            };
-            spindle_storage_settle();
-            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
-                sb.push(b"ERROR: SELECT FAILED");
-                serial_println!("[spindle.catdocx] id={} ok=0 stage=select err={}", id, e);
-                return true;
-            }
-            let size = match spindle_storage_sync(OP_DISKFS_STAT_SPINDLE, 0, 0, 0) {
-                Ok(v) => v & 0xFFFF_FFFF,
-                Err(e) => {
-                    sb.push(b"ERROR: STAT FAILED");
-                    serial_println!("[spindle.catdocx] id={} ok=0 stage=stat err={}", id, e);
-                    return true;
-                }
-            };
-            let mut off: u64 = 0;
-            let mut mismatch: i64 = -1;
-            while off < size {
-                let want = (size - off).min(sex_pdx::DISKFS_V2_MAX_READ as u64);
-                let reply = match spindle_storage_sync(OP_DISKFS_READ_V2_SPINDLE, off, want, 0) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        sb.push(b"ERROR: READ FAILED");
-                        serial_println!(
-                            "[spindle.catdocx] id={} off={} ok=0 err={}", id, off, e);
-                        return true;
-                    }
-                };
-                let status = sex_pdx::diskfs_v2_status(reply);
-                if status == sex_pdx::DISKFS_V2_STATUS_EOF {
-                    // EOF: offset reached size before this loop expected -
-                    // treat as a mismatch condition, not a crash.
-                    if mismatch < 0 { mismatch = off as i64; }
-                    break;
-                }
-                if status != sex_pdx::DISKFS_V2_STATUS_OK {
-                    sb.push(b"ERROR: READ FAILED");
-                    serial_println!(
-                        "[spindle.catdocx] id={} off={} ok=0 status={:#x}", id, off, status);
-                    return true;
-                }
-                let got_n = sex_pdx::diskfs_v2_len_field(reply);
-                let payload = sex_pdx::diskfs_v2_payload(reply);
-                for i in 0..want.min(got_n) {
-                    let idx = off + i;
-                    let got = payload[i as usize];
-                    let expect = ((idx.wrapping_mul(37).wrapping_add(11)) & 0xFF) as u8;
-                    if got != expect && mismatch < 0 { mismatch = idx as i64; }
-                }
-                if got_n < want && mismatch < 0 { mismatch = (off + got_n) as i64; }
-                off += want;
-            }
-            if mismatch >= 0 {
-                sb.push(b"MISMATCH.");
-                serial_println!("[spindle.catdocx] id={} size={} ok=0 mismatch_at={}", id, size, mismatch);
-            } else {
-                sb.push(b"VERIFIED.");
-                serial_println!("[spindle.catdocx] id={} size={} ok=1 reason=read_v2", id, size);
-            }
-            true
+        b"mkdoc"|b"rmdoc"|b"mvdoc"|b"filldoc"|b"filldocx"|b"truncdoc"|b"catdoc"|b"catdocx"=>{
+            let accepted=parse_probe_job(cmd,args).map_or(false,|job|unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(job)});
+            sb.push(if accepted{b"Disk job queued; input and Close remain active."}else{b"Disk job rejected: arguments or busy/history fence."});true
         }
         b"notify" => {
             // Send Bell notification via OP_BELL_NOTIFY (fire-and-forget, non-blocking).
@@ -2014,19 +1467,19 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  SilkBar app name    BLOCK  no UpdateKind variant (ABI)");
             sb.push(b"  SilkBar tint        BLOCK  no UpdateKind variant (ABI)");
             sb.push(b"  SilkBar palette     BLOCK  no palette variant yet");
-            sb.push(b"  App launch          BLOCK  kernel spawn + SLOT_SHELL needed");
+            sb.push(b"  App relaunch       FINITE  BOOT-reserved identities");
             sb.push(b"  History load       ACTIVE  validated own snapshot");
-            sb.push(b"  Sync list           BLOCK  OP_RAMFS_LIST async reply only");
-            sb.push(b"  Real HID input      BLOCK  spindle not kernel-spawned");
+            sb.push(b"  Object list        ACTIVE  typed disk/ls snapshot");
+            sb.push(b"  Real HID input     ACTIVE  BOOT shell route");
             summary_bytes += 400;
             serial_println!("[spindle.daily.blocker] name=pointer_precision reason=USB_slot2_mouse_deferred");
             serial_println!("[spindle.daily.blocker] name=silkbar_app_name reason=no_UpdateKind_variant_ABI");
             serial_println!("[spindle.daily.blocker] name=silkbar_tint reason=no_UpdateKind_variant_ABI");
             serial_println!("[spindle.daily.blocker] name=silkbar_palette_variants reason=deferred");
-            serial_println!("[spindle.daily.blocker] name=app_launch reason=kernel_spawn_SLOT_SHELL_needed");
+            serial_println!("[spindle.daily.item] name=app_relaunch status=FINITE reason=BOOT_reserved_identities");
             serial_println!("[spindle.daily.blocker] name=sync_load reason=pdx_call_READ_returns_zero");
-            serial_println!("[spindle.daily.blocker] name=sync_list reason=OP_RAMFS_LIST_async_reply_only");
-            serial_println!("[spindle.daily.blocker] name=real_HID_input reason=spindle_not_kernel_spawned");
+            serial_println!("[spindle.daily.item] name=object_list status=ACTIVE reason=typed_staged_snapshot");
+            serial_println!("[spindle.daily.item] name=real_HID_input status=ACTIVE reason=BOOT_shell_route");
             sb.push(b"");
             sb.push(b"-- Session --");
             sb.push(b"  PD 12, PKU 12, 20+ built-in commands");
@@ -2522,6 +1975,28 @@ fn history_status_state(status:history_persistence::Status)->sex_pdx::spindle_st
  use history_persistence::Status as H;use sex_pdx::spindle_status::State as S;
  match status{H::Idle=>S::Ready,H::Loading=>S::Loading,H::Saving=>S::Saving,H::Queued=>S::Queued,H::Cancelling=>S::Cancelling,H::NeedsRetry=>S::Uncertain,H::Denied=>S::Denied,H::RetryReady=>S::RetryReady}
 }
+fn desktop_storage_state(owner:u8)->sex_pdx::spindle_status::State{
+ use sex_pdx::spindle_status::State as S;
+ let h=unsafe{history_status_state(HISTORY_IO.status())};if unsafe{HISTORY_IO.fenced()}{return h}
+ match unsafe{STORAGE_PROBE.status()}{"uncertain"=>S::ProbeUncertain,"denied"=>S::ProbeDenied,"cancelling" if owner==2=>S::ProbeCancelling,"running" if owner==2=>S::ProbeRunning,"quiescent" if !unsafe{HISTORY_IO.busy()}=>S::ProbeReady,_=>h}
+}
+fn parse_probe_job(cmd:&[u8],args:&[u8])->Option<storage_probe::Job>{
+ use storage_probe::Job;let mut words=args.split(|&b|b==b' ').filter(|b|!b.is_empty());
+ fn number(b:&[u8])->Option<u32>{if b.is_empty(){return None}let mut v=0u32;for &c in b{if !c.is_ascii_digit(){return None}v=v.checked_mul(10)?.checked_add((c-b'0')as u32)?;}Some(v)}
+ fn name(b:&[u8])->Option<[u8;16]>{if b.is_empty()||b.len()>16{return None}let mut n=[0;16];n[..b.len()].copy_from_slice(b);Some(n)}
+ let first=words.next()?;let job=if cmd==b"mkdoc"{Job::Create(name(first)?)}else{let id=u8::try_from(number(first)?).ok()?;match cmd{
+ b"rmdoc"=>Job::Delete(id),b"mvdoc"=>Job::Rename(id,name(words.next()?)?),b"filldoc"|b"filldocx"=>Job::Fill(id,number(words.next()?)?,cmd==b"filldocx"),b"truncdoc"=>Job::Truncate(id,number(words.next()?)?),b"catdoc"|b"catdocx"=>Job::Verify(id,cmd==b"catdocx"),_=>return None}};
+ if words.next().is_some()||!job.valid(){return None}Some(job)
+}
+fn probe_event(event:storage_probe::Event,sb:&mut Scrollback){
+ let kind=match event.outcome{storage_probe::Outcome::Done=>"done",storage_probe::Outcome::Failed=>"failed",storage_probe::Outcome::Uncertain=>"uncertain",storage_probe::Outcome::Cancelled=>"cancelled"};
+ sex_pdx::serial_record!("[spindle.probe.result] target={} kind={} job={:?} value={} error={} hash={:#x}",instance_pd(),kind,event.job,event.value,event.error,event.hash);
+ if event.outcome==storage_probe::Outcome::Done&&event.job==storage_probe::Job::List{
+  sb.push(b"DISK OBJECTS / COHERENT SNAPSHOT:");
+  for slot in 0..15{if let Some(name)=unsafe{STORAGE_PROBE.entry(slot)}{let mut row=[0;28];let digits=if slot>=10{row[0]=b'1';row[1]=b'0'+(slot-10)as u8;2}else{row[0]=b'0'+slot as u8;1};row[digits]=b' ';row[digits+1..digits+1+name.len()].copy_from_slice(name);sb.push(&row[..digits+1+name.len()]);sex_pdx::serial_record!("[spindle.probe.entry] object={} name={}",slot,core::str::from_utf8(name).unwrap_or("?"));}}
+ }
+ let line=storage_probe::summary(&event);sb.push(&line.bytes[..line.len]);
+}
 fn history_event(event:history_persistence::Event,sb:&mut Scrollback){
  use history_persistence::Outcome;
  let kind=match event.outcome{Outcome::Saved=>"saved",Outcome::Loaded=>"loaded",Outcome::Missing=>"missing",Outcome::Conflict=>"conflict",Outcome::Failed=>"failed",Outcome::Uncertain=>"uncertain",Outcome::Aborted=>"aborted"};
@@ -2914,16 +2389,19 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[spindle.ready]");
     let mut registration_pending=catalog.target_pd==17;
     let mut presentation_pending=false;let mut presentation_sent=false;
+    let mut storage_owner=0u8;
     loop {
         let display_result=unsafe{DISPLAY_IO.poll(4,|op|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op.opcode,op.surface,op.a,op.b).map(|_|()),|r|sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes))};
         if let Err(error)=display_result{sex_pdx::serial_record!("[spindle.display.denied] target={} status={}",instance_pd(),error);sex_pdx::task_finish(3);}
         if registration_pending{
             match sex_pdx::pdx_call_checked(SLOT_SHELL,0xFA,catalog.surface_id,1,(catalog.target_pd as u64)<<8){Ok(_)=>registration_pending=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>sex_pdx::task_finish(3)}
         }
-        if let Some(event)=unsafe{HISTORY_IO.step_at(hist,sex_pdx::get_ticks(),|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_history::OP,r.header(),r.a,r.b).map(|_|()))}{history_event(event,sb);unsafe{content_render(&line,sb);}}
-        unsafe{HISTORY_STATUS.update(history_status_state(HISTORY_IO.status()));HISTORY_STATUS.poll(|n|{let a=n.args();sex_pdx::pdx_call_checked(SLOT_SHELL,sex_pdx::spindle_status::OP,a[0],a[1],a[2]).map(|_|())});}
+        if storage_owner==0{storage_owner=unsafe{storage_probe::choose_owner(HISTORY_IO.busy(),HISTORY_IO.fenced(),STORAGE_PROBE.busy(),STORAGE_PROBE.fenced())};}
+        if storage_owner==1{if let Some(event)=unsafe{HISTORY_IO.step_at(hist,sex_pdx::get_ticks(),|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_history::OP,r.header(),r.a,r.b).map(|_|()))}{storage_owner=0;history_event(event,sb);unsafe{content_render(&line,sb);}}}
+        if storage_owner==2{if let Some(e)=unsafe{STORAGE_PROBE.step(sex_pdx::get_ticks(),|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_probe::OP,r.header(),r.a,r.b).map(|_|()))}{storage_owner=0;probe_event(e,sb);unsafe{content_render(&line,sb);}}}
+        unsafe{HISTORY_STATUS.update(desktop_storage_state(storage_owner));HISTORY_STATUS.poll(|n|{let a=n.args();sex_pdx::pdx_call_checked(SLOT_SHELL,sex_pdx::spindle_status::OP,a[0],a[1],a[2]).map(|_|())});}
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
-        let msg=if registration_pending || presentation_pending || unsafe{DISPLAY_IO.pending() || HISTORY_IO.busy() || HISTORY_STATUS.pending()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         if msg.type_id==sex_pdx::spindle_view::OP {
@@ -2937,7 +2415,8 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if msg.type_id==1 && msg.caller_pd==11{
-            if let Some(event)=unsafe{HISTORY_IO.receive(msg.arg0,hist)}{history_event(event,sb);line.hist_nav=None;unsafe{content_render(&line,sb);}}
+            if let Some(e)=unsafe{STORAGE_PROBE.receive(msg.caller_pd,msg.arg0)}{storage_owner=0;probe_event(e,sb);unsafe{content_render(&line,sb);}}
+            if let Some(event)=unsafe{HISTORY_IO.receive(msg.arg0,hist)}{storage_owner=0;history_event(event,sb);line.hist_nav=None;unsafe{content_render(&line,sb);}}
             continue;
         }
         if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && catalog.target_pd==17{presentation_pending=true;continue}
@@ -2946,7 +2425,9 @@ pub extern "C" fn _start() -> ! {
         }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire)) {
-            let discarded=unsafe{HISTORY_STATUS.cancel();DISPLAY_IO.cancel()};
+            let was_pending=unsafe{STORAGE_PROBE.busy()};
+            sex_pdx::serial_record!("[spindle.probe.closed] target={} pending={} terminal=1",instance_pd(),was_pending as u8);
+            let discarded=unsafe{STORAGE_PROBE.close();HISTORY_STATUS.cancel();DISPLAY_IO.cancel()};
             sex_pdx::serial_record!("[spindle.display.cancelled] target={} panes={} pending=0",instance_pd(),discarded);
             sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire));
             sex_pdx::task_finish(0);
@@ -2965,6 +2446,7 @@ pub extern "C" fn _start() -> ! {
         }
         if msg.type_id == 0x202 {
             sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
+            sex_pdx::serial_record!("[spindle.probe.input] target={} pending={} key={} down={}",instance_pd(),unsafe{STORAGE_PROBE.busy()}as u8,msg.arg0,msg.arg1);
             let scancode = msg.arg0 as u8;
             let value = msg.arg1;
             unsafe {
@@ -2980,7 +2462,7 @@ pub extern "C" fn _start() -> ! {
             if scancode == 0x1C && line.len > 0 {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
-                let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry");
+                let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"|b"probe-status"|b"probe-cancel"|b"probe-retry");
                 if !control{let idx=hist.push(line.as_bytes());serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);

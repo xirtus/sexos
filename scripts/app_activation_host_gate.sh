@@ -43,7 +43,7 @@ from pathlib import Path
 import sys
 s=(Path(sys.argv[1])/'apps/spindle/src/main.rs').read_text()
 assert 'DISPLAY_IO.poll(4,' in s
-assert 'registration_pending || presentation_pending || unsafe{DISPLAY_IO.pending() || HISTORY_IO.busy() || HISTORY_STATUS.pending()}' in s
+assert 'registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending()}' in s
 assert 'if presentation_pending && !unsafe{DISPLAY_IO.pending()}' in s
 assert s.index('DISPLAY_IO.cancel()')<s.index('"[app.close.accepted]')
 assert 'spindle_display_call' not in s

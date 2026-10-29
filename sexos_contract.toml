@@ -372,3 +372,12 @@ abort = "fresh own-session sequence on existing storage edge; no supplied lease/
 notice = "bounded enum data on existing app-to-shell edge; exact actual sender, immutable domain/task/surface/coordinator catalog plus LIVE query and newer nonwrapping sequence"
 publication = "latest desired status retained on Full; no success claim on enqueue; verified shell viewport refreshes current state; task Close fences publication"
 presentation = "history state does not attest pixels; terminal launcher authority overrides late status; actual winning pixels from any exact catalog-owned Spindle child acknowledge the same group, including collapsed upper panes"
+
+[spindle_storage_probe]
+authority = "existing BOOT storage edges, exact live subjects12/task12 and17/task17; object numbers remain service data; no new mappings, capabilities or Unix descriptors"
+transport = "register-only requests; nonwrapping24bit sequence; distinct tagged32bit data/error receipts; one admitted exchange; bounded app turn and tick deadlines; no nested receive or HID drain"
+
+jobs = "coherent staged names; bounded binary pattern diagnostics; original caller retained; service-owned object/generation binding; nonwrapping request replay; real NVMe flush plus END receipt before mutation completion"
+coordination = "one complete history/probe job owns storage at a time; queued probes get next boundary; dirty history retained; uncertainty fences new work; no nested receive or HID discard"
+cancellation = "fresh own-session ABORT may supersede own pending receipt; ACK means quiescence, not rollback; only read-only retries after ACK; mutations require inspection and a new explicit command"
+desktop = "authenticated bounded probe state enum over existing shell edge; terminal launcher authority overrides status; Close fences local work before finish and service lease retirement precedes cleanup ACK"

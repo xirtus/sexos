@@ -6,6 +6,7 @@ extern crate spin;
 pub mod pdx;
 pub mod vfs;
 pub mod spindle_history;
+mod spindle_probe;
 pub mod history_journal;
 pub mod history_disk;
 pub mod messages;

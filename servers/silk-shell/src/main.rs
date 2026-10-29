@@ -5203,7 +5203,7 @@ unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str
  if !available||reason!="original_incarnation_live"{return fallback}
  let target=if spindle_activation_info(false).map_or(false,|i|i.state==2){17}else{12};
  use sex_pdx::spindle_status::State as S;
- match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY / FOCUS",Some(S::Saving|S::Queued)=>"SAVING HISTORY / FOCUS",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED / FOCUS",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY"}
+ match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY / FOCUS",Some(S::Saving|S::Queued)=>"SAVING HISTORY / FOCUS",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED / FOCUS",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
 }
 static mut SPINDLE_VIEWS:[sex_pdx::spindle_view::Delivery;2]=[sex_pdx::spindle_view::Delivery::new(),sex_pdx::spindle_view::Delivery::new()];
 static mut DISPLAY_FOCUS: linen_text_delivery::FocusDelivery = linen_text_delivery::FocusDelivery::new();

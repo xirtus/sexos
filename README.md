@@ -34,6 +34,8 @@ The [launcher follow-up](docs/handoff/INCARNATION_AUTHORITY_AND_LAUNCHER_2026_10
 
 The [eight-round Spindle desktop follow-up](docs/handoff/SPINDLE_DESKTOP_ROUNDS_2026_10_29.md) adds viewport-aware prompts, cursor editing and scrollback, bounded display delivery, history deadlines with explicit cancellation/retry, and authenticated launcher status. Each round records scoped host and native evidence while preserving the single address space and BOOT-only authority.
 
+The [five-round storage follow-up](docs/handoff/SPINDLE_STORAGE_ROUNDS_2026_10_29.md) replaces Spindle's inline disk waits with correlated jobs, coherent listings, bounded binary diagnostics and explicit cancellation/recovery. The [next-session alpha plan](docs/handoff/ALPHA_DAILY_DRIVER_NEXT_SESSION_2026_10_29.md) prioritizes responsive Quil documents, durable two-object recovery and a sustained native desktop session, with separate lifecycle, networking and hardware release gates.
+
 What works today:
 
 - x86_64 QEMU boot from the prebuilt ISO.

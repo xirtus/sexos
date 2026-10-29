@@ -1,7 +1,7 @@
 //! Presentation data on existing BOOT app/shell routes; grants no authority.
 pub const OP:u64=0x271;
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]#[repr(u64)]pub enum State{Ready=1,Loading=2,Saving=3,Queued=4,Cancelling=5,Uncertain=6,Denied=7,RetryReady=8}
-impl State{fn decode(v:u64)->Option<Self>{Some(match v{1=>Self::Ready,2=>Self::Loading,3=>Self::Saving,4=>Self::Queued,5=>Self::Cancelling,6=>Self::Uncertain,7=>Self::Denied,8=>Self::RetryReady,_=>return None})}}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]#[repr(u64)]pub enum State{Ready=1,Loading=2,Saving=3,Queued=4,Cancelling=5,Uncertain=6,Denied=7,RetryReady=8,ProbeRunning=9,ProbeCancelling=10,ProbeUncertain=11,ProbeReady=12,ProbeDenied=13}
+impl State{fn decode(v:u64)->Option<Self>{Some(match v{1=>Self::Ready,2=>Self::Loading,3=>Self::Saving,4=>Self::Queued,5=>Self::Cancelling,6=>Self::Uncertain,7=>Self::Denied,8=>Self::RetryReady,9=>Self::ProbeRunning,10=>Self::ProbeCancelling,11=>Self::ProbeUncertain,12=>Self::ProbeReady,13=>Self::ProbeDenied,_=>return None})}}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Notice{pub target:u32,pub task:u32,pub sequence:u64,pub state:State}
 impl Notice{pub fn args(self)->[u64;3]{[self.target as u64|((self.task as u64)<<32),self.sequence,self.state as u64]}}
 pub struct Publisher{target:u32,task:u32,sequence:u64,last:Option<State>,pending:Option<Notice>,closed:bool}

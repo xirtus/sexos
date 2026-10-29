@@ -13,6 +13,7 @@ mod backends;
 mod proof;
 mod sexobject;
 mod spindle_history;
+mod spindle_probe;
 mod history_journal;
 mod history_disk;
 

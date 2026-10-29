@@ -1766,3 +1766,36 @@ fn unpack_name(arg0: u64, arg1: u64, arg2: u64) -> alloc::vec::Vec<u8> {
     }
     name
 }
+
+/// Tagged Spindle diagnostics retain the existing bridge's BOOT route scope.
+/// No caller is substituted and no object number mints authority.
+pub struct SpindleProbeBackend;
+impl crate::spindle_probe::Backend for SpindleProbeBackend{
+ fn invoke(&mut self,caller:u32,r:sex_pdx::spindle_probe::Request)->Result<u32,u32>{
+  use sex_pdx::spindle_probe as w;
+
+  if r.object>=15||r.offset>w::MAX_BYTES{return Err(w::INVALID)}
+  let number=|v:u64|if(v as i64)<0{Err(w::IO)}else{u32::try_from(v).map_err(|_|w::INVALID)};
+  let select=|id:u8|if handle_diskfs_select(id as u64,caller)==0{Ok(())}else{Err(w::IO)};
+  match r.kind{
+   w::STAT|w::BEGIN=>{if r.offset!=0||r.a!=0||r.b!=0{return Err(w::INVALID)}select(r.object)?;let v=handle_diskfs_stat(caller);if(v as i64)<0{return Err(w::IO)}Ok(v as u32)},
+   w::GENERATION|w::INFO|w::NAME=>{
+    if r.a!=0||r.b!=0{return Err(w::INVALID)}
+    let query=match r.kind{w::GENERATION if r.object==0&&r.offset==0=>0xFE,w::INFO if r.offset==0=>0xFF,w::NAME if r.offset<6=>(r.offset/2)as u64,_=>return Err(w::INVALID)};
+    let v=handle_vfs_message(messages::OP_DISKFS_LIST,r.object as u64,query,0,caller);if(v as i64)<0{return Err(w::IO)}
+    match r.kind{w::GENERATION if v<u32::MAX as u64=>Ok(v as u32),w::INFO=>Ok(((v>>62)&1)as u32),w::NAME=>Ok((v>>((r.offset%2)*32))as u32),_=>Err(w::STALE)}
+   },
+   w::READ=>{if !(1..=4).contains(&r.a)||r.b!=0||r.offset as u64+r.a>w::MAX_BYTES as u64{return Err(w::INVALID)}select(r.object)?;let v=handle_diskfs_read_v2(r.offset as u64,r.a,caller);if sex_pdx::diskfs_v2_status(v)!=sex_pdx::DISKFS_V2_STATUS_OK||sex_pdx::diskfs_v2_len_field(v)!=r.a{return Err(w::IO)}let bytes=sex_pdx::diskfs_v2_payload(v);Ok(u32::from_le_bytes(bytes[..4].try_into().unwrap()))},
+   w::WRITE=>{if r.object<3||r.offset%16!=0||r.offset>w::MAX_BYTES-16{return Err(w::INVALID)}select(r.object)?;number(handle_diskfs_write(r.offset as u64,r.a,r.b,caller))},
+   w::TRUNCATE=>{if r.object<3||r.offset!=0||r.a>w::MAX_BYTES as u64||r.b!=0{return Err(w::INVALID)}select(r.object)?;number(handle_diskfs_truncate(r.a,caller))},
+   w::CREATE|w::RENAME=>{if r.offset!=0||r.kind==w::CREATE&&r.object!=0||r.kind==w::RENAME&&r.object<3{return Err(w::INVALID)}
+    let(name,n)=v4_unpack_name(r.a,r.b);let mut raw=[0u8;16];raw[..8].copy_from_slice(&r.a.to_le_bytes());raw[8..].copy_from_slice(&r.b.to_le_bytes());if n==0||name[..16]!=raw{return Err(w::INVALID)}
+    let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;
+    number(if r.kind==w::CREATE{handle_diskfs_create(r.a,r.b,va)}else{handle_diskfs_rename(r.object as u64,r.a,r.b,va)})
+   },
+   w::DELETE=>{if r.object<3||r.offset!=0||r.a!=0||r.b!=0{return Err(w::INVALID)}let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;number(handle_diskfs_delete(r.object as u64,va))},
+   w::SYNC=>{if r.offset!=0||r.a!=0||r.b!=0{return Err(w::INVALID)}number(crate::backends::diskfs::DiskFs::diskfs_block_sync())},
+   _=>Err(w::INVALID)
+  }
+ }
+}

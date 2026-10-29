@@ -8,8 +8,8 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "fc08e4f5ee81f3d21abc82f753495e7846dc0d3ee3d727e001ef036fffc03176"
-contract_sha256 = "133aed669f3d39fd15fc2e79e7ad77a70dc234400d46086be85f8a1b5f567e1d"
+abi_version_hash = "ec794deb417989ceab8cb31400ed638dff0d7cd44f11d08650d4f975249f37e4"
+contract_sha256 = "56f636e4183a412af084ce7487fc23e75761c1a5d3412a261e9f45a5678795a3"
 target = "x86_64-sex.json"
 
 [forbidden_env]

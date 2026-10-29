@@ -20,6 +20,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/spindle_view.rs
   crates/sex-pdx/src/spindle_status.rs
   crates/sex-pdx/src/spindle_history.rs
+  crates/sex-pdx/src/spindle_probe.rs
   crates/sex-pdx/src/history_recovery.rs
   kernel/src/paging_state.rs
   kernel/src/app_resource_state.rs
