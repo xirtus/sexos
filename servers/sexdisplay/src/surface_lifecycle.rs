@@ -94,7 +94,7 @@ struct Presentation { request: u64, phase: PresentPhase }
 impl Presentation { const EMPTY: Self = Self { request: 0, phase: PresentPhase::Idle }; }
 /// Fixed native content routes: no catalog scan in the per-pixel compositor.
 pub const fn native_pixel_bit(owner: u32, sid: u64) -> u8 {
-    match (owner, sid) { (9,156) => 1, (12,154) => 2, (15,300) => 4, (16,301) => 8, (17,302) => 16, _ => 0 }
+    match (owner, sid) { (9,156) => 1, (12,154|160|161|162) => 2, (15,300) => 4, (16,301) => 8, (17,302|303|304|305) => 16, _ => 0 }
 }
 pub struct Lifecycle { entries: [Option<Entry>; CATALOG_CAPACITY] }
 #[derive(Debug, Default, PartialEq, Eq)]

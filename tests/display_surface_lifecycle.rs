@@ -139,7 +139,7 @@ fn create(l:&Lifecycle,s:&mut[Surface],caller:u32,sid:u64)->bool {
 }
 #[test] fn native_pixel_bits_do_not_confuse_foreign_owners_or_shell_frame_aliases() {
     assert_eq!(native_pixel_bit(9,156),1);assert_eq!(native_pixel_bit(12,154),2);assert_eq!(native_pixel_bit(15,300),4);
-    for (pd,sid) in [(3,300),(15,156),(9,201),(12,153),(12,160),(15,205)] {assert_eq!(native_pixel_bit(pd,sid),0);}
+    for (pd,sid) in [(3,300),(15,156),(9,201),(12,153),(17,160),(15,205)] {assert_eq!(native_pixel_bit(pd,sid),0);}
 }
 #[test] fn simultaneous_native_requests_complete_only_the_visible_subject() {
     let mut l=state();l.register(catalog(39,9,156));l.register(catalog(40,12,154));
@@ -157,3 +157,5 @@ fn create(l:&Lifecycle,s:&mut[Surface],caller:u32,sid:u64)->bool {
  assert_eq!(l.prepare(1,17,0x8011,&mut surfaces,&mut refs),Some(5));
  for sid in [302,303,304,305,306]{assert!(!create(&l,&mut surfaces,3,sid));assert!(!create(&l,&mut surfaces,17,sid));}
 }
+
+#[test]fn collapsed_spindle_primary_can_present_only_via_its_exact_owned_group(){for sid in[154,160,161,162]{assert_eq!(native_pixel_bit(12,sid),2);assert_eq!(native_pixel_bit(17,sid),0);}for sid in[302,303,304,305]{assert_eq!(native_pixel_bit(17,sid),16);assert_eq!(native_pixel_bit(12,sid),0);}let mut l=Lifecycle::new();assert!(l.register(catalog(39,12,154)));assert!(l.request_present(12,154,7,0));l.pixels_presented(native_pixel_bit(12,161));assert_eq!(l.presentation_reply(0),Some((12,7<<8)));}

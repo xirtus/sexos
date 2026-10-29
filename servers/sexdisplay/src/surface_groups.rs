@@ -31,13 +31,9 @@ impl FrameGroups {
             let bw=frame.w.saturating_sub(16); let bh=frame.h.saturating_sub(44);
             for child in surfaces.iter_mut().filter(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)) {
                 if matches!(g.catalog.target_pd,12|17) {
-                    let col = matches!(child.surface_id,160|162|303|305) as u32;
-                    let row = matches!(child.surface_id,161|162|304|305) as u32;
-                    let cw=bw.saturating_sub(8)/2; let ch=bh.saturating_sub(8)/2;
-                    child.x=bx.saturating_add((col*(cw+8)) as i32);
-                    child.y=by.saturating_add((row*(ch+8)) as i32);
-                    child.w=if col==0 {cw} else {bw.saturating_sub(cw+8)};
-                    child.h=if row==0 {ch} else {bh.saturating_sub(ch+8)};
+                    let index=match child.surface_id {154|302=>0,160|303=>1,161|304=>2,_=>3};
+                    let p=sex_pdx::spindle_view::Layout::new(frame.w,frame.h).panes[index];
+                    child.x=frame.x.saturating_add(p.x as i32);child.y=frame.y.saturating_add(p.y as i32);child.w=p.w;child.h=p.h;
                 } else { child.x=bx;child.y=by;child.w=bw;child.h=bh; }
             }
         }

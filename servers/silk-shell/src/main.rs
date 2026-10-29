@@ -340,6 +340,7 @@ const fn is_spindle_text_key(scancode: u8) -> bool {
         || (scancode >= 0x33 && scancode <= 0x35)
         // History recall (Up/Down) + ghost-autosuggest accept (Right).
         || scancode == 0x48 || scancode == 0x50 || scancode == 0x4D
+        || scancode == 0x4B || scancode == 0x47 || scancode == 0x4F
         // SPINDLE_PAGING_V1: PageUp/PageDown page the terminal scrollback
         // while Spindle is focused. Shell keeps RestoreMinimized/ToggleBell
         // on these keys for every other focus. Filter is shared by BOTH
@@ -5184,12 +5185,40 @@ unsafe fn linen_render_static_ui() {
 }
 
 static mut LINEN_REPAINT_AFTER_CREATE: bool = false;
+static mut SPINDLE_HISTORY_STATUS:[sex_pdx::spindle_status::Receiver;2]=[sex_pdx::spindle_status::Receiver::new(12,12),sex_pdx::spindle_status::Receiver::new(17,17)];
+unsafe fn spindle_history_status_receive(msg:&sex_pdx::PdxMessage)->bool{
+ if msg.type_id!=sex_pdx::spindle_status::OP{return false}
+ let index=match msg.caller_pd{12=>0,17=>1,_=>return true};
+ let live=APP_CUSTODY.iter().flatten().find(|e|e.target==msg.caller_pd).map_or(false,|e|{
+  if e.dead||e.retired||e.close_pending{SPINDLE_HISTORY_STATUS[index].retire();return false}
+  matches!(sex_pdx::app_lifecycle::catalog(e.slot),Ok(c) if (c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(e.target,e.task,e.surface,3))
+    &&sex_pdx::app_lifecycle::info(e.slot)==Err(sex_pdx::app_lifecycle::LIVE)
+ });
+ if SPINDLE_HISTORY_STATUS[index].accept(msg.caller_pd,live,[msg.arg0,msg.arg1,msg.arg2]){
+  sex_pdx::serial_record!("[shell.spindle.status.accepted] target={} sequence={} state={} live=1",msg.caller_pd,msg.arg1,msg.arg2);
+  if COMMAND_PALETTE_OPEN{palette_render_list();}
+ }true
+}
+unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
+ if !available||reason!="original_incarnation_live"{return fallback}
+ let target=if spindle_activation_info(false).map_or(false,|i|i.state==2){17}else{12};
+ use sex_pdx::spindle_status::State as S;
+ match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY / FOCUS",Some(S::Saving|S::Queued)=>"SAVING HISTORY / FOCUS",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED / FOCUS",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY"}
+}
+static mut SPINDLE_VIEWS:[sex_pdx::spindle_view::Delivery;2]=[sex_pdx::spindle_view::Delivery::new(),sex_pdx::spindle_view::Delivery::new()];
+static mut DISPLAY_FOCUS: linen_text_delivery::FocusDelivery = linen_text_delivery::FocusDelivery::new();
 static mut DESKTOP_STATES: linen_text_delivery::DesktopStates = linen_text_delivery::DesktopStates::new();
 /// Preserve the syscall's real status while retaining only bounded desktop
 /// state operations that encountered display backpressure.
 fn pdx_call(slot:u64, opcode:u64, arg0:u64, arg1:u64, arg2:u64)->(u64,u64) {
     let slot=if slot==SLOT_QUIL {quil_route_slot()}else if slot==SLOT_SPINDLE {spindle_route_slot()}else{slot};
     let result=raw_pdx_call(slot,opcode,arg0,arg1,arg2);
+    if slot==SLOT_DISPLAY && opcode==0xED {
+        let admission=match result.0 {0=>linen_text_delivery::Admission::Accepted,
+            sex_pdx::ERR_SERVICE_NOT_READY=>linen_text_delivery::Admission::Full,
+            error=>linen_text_delivery::Admission::Rejected(error)};
+        unsafe{DISPLAY_FOCUS.observe(arg0,admission);}
+    }
     if slot==SLOT_DISPLAY && matches!(opcode,0xEC|0xEE|0xFD) && linen_text_delivery::DesktopStates::tracks(arg0) {
         let admission=match result.0 {0=>linen_text_delivery::Admission::Accepted,
             sex_pdx::ERR_SERVICE_NOT_READY=>linen_text_delivery::Admission::Full,
@@ -5235,6 +5264,29 @@ unsafe fn desktop_state_poll() {
             }
         }
     });
+    match DISPLAY_FOCUS.poll(FOCUSED_SURFACE_ID,
+        |sid|surface_is_alive(sid) && surface_is_lifecycle_focusable(sid) && !is_tombstoned(sid),
+        |sid|!DESKTOP_STATES.pending_surface(sid),
+        |op|match raw_pdx_call(SLOT_DISPLAY,op.opcode,op.surface,0,0).0 {
+            0=>linen_text_delivery::Admission::Accepted,
+            sex_pdx::ERR_SERVICE_NOT_READY=>linen_text_delivery::Admission::Full,
+            error=>linen_text_delivery::Admission::Rejected(error),
+        }) {
+        linen_text_delivery::LatestPoll::Applied(op)=>sex_pdx::serial_record!("[shell.desktop.focus.admitted] sid={} retry=1",op.surface),
+        linen_text_delivery::LatestPoll::Rejected(error)=>sex_pdx::serial_record!("[shell.desktop.focus.rejected] status={:#x}",error),
+        _=>{},
+    }
+}
+
+unsafe fn spindle_view_poll(){
+    for (i,(target,frame,slot)) in [(12,153,SLOT_SPINDLE),(17,306,52)].into_iter().enumerate(){
+        let live=APP_CUSTODY.iter().flatten().any(|e|e.target==target && !e.dead && !e.close_pending);
+        let ready=!DESKTOP_STATES.pending_surface(frame);
+        SPINDLE_VIEWS[i].poll(live,ready,|notice|{
+            let a=notice.args();let(status,_)=raw_pdx_call(slot,sex_pdx::spindle_view::OP,a[0],a[1],a[2]);
+            if status==0 {sex_pdx::serial_record!("[shell.spindle.view.admitted] target={} task={} sequence={} w={} h={}",notice.target,notice.task,notice.sequence,notice.w,notice.h);Ok(())}else{Err(status)}
+        });
+    }
 }
 
 static mut LINEN_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::new(SURFACE_ID_LINEN);
@@ -15373,6 +15425,7 @@ unsafe fn palette_render_list() {
     for (i,item) in COMMAND_LIST.iter().enumerate() {
         let (available,status,reason)=palette_item_status(item.command);
         let visible_status=match item.command {
+            Command::FocusSpindle=>spindle_history_label(status,available,reason),
             Command::FocusLinen=>"FILES / BROWSE",
             Command::FocusAtlas=>"DESKTOP OVERVIEW",
             Command::FocusBell=>"NOTIFICATIONS",
@@ -19656,10 +19709,15 @@ unsafe fn set_frame_top_bar(frame_id: u32, enabled: bool) {
 /// Geometry authority comes from the immutable boot catalog, never app input.
 unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
     if !APP_CUSTODY.iter().flatten().any(|e| !e.dead && !e.close_pending && e.shell_surface()==Some(frame)) {return;}
+    if matches!(frame,153|306){
+        if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead && !e.close_pending && e.shell_surface()==Some(frame)) {
+            SPINDLE_VIEWS[if frame==153{0}else{1}].queue(e.target,e.task,w,h);
+        }
+    }
     for child in desktop_content::children(frame,x,y,w,h).iter().flatten() {
-        pdx_call(SLOT_DISPLAY,0xEC,child.sid,
+        if child.w>0 && child.h>0 {pdx_call(SLOT_DISPLAY,0xEC,child.sid,
             ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
-            ((child.h as u64)<<32)|child.w as u64);
+            ((child.h as u64)<<32)|child.w as u64);}
         sex_pdx::serial_record!("[shell.app.viewport] target={} sid={} x={} y={} w={} h={}",if frame==201 {9}else if frame==306 {17}else{12},child.sid,child.x,child.y,child.w,child.h);
     }
 }
@@ -23644,7 +23702,7 @@ pub extern "C" fn _start() -> ! {
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
 
     loop {
-        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -24324,7 +24382,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24333,6 +24391,7 @@ pub extern "C" fn _start() -> ! {
         };
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if spindle_history_status_receive(&msg) {continue;}
             if linen_async_reply(&msg) { continue; }
             if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {
                 sex_pdx::serial_record!("[shell.app.stale] target={} opcode={:#x} rejected=1", msg.caller_pd, msg.type_id);

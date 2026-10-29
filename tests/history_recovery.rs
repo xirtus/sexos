@@ -1,0 +1,10 @@
+#![allow(dead_code)]
+mod ipc{pub const MAX_DOMAINS:usize=256;}
+#[path="../crates/sex-pdx/src/history_recovery.rs"]mod recovery;
+#[path="../kernel/src/capability_slot.rs"]mod capability_slot;
+mod capability{#[derive(Clone,Copy)]pub enum CapabilityData{HistoryRecovery(crate::recovery::Grant),Domain(u32)}pub struct Cap{pub data:CapabilityData}pub struct ProtectionDomain{pub id:u32,pub value:Option<CapabilityData>}impl ProtectionDomain{pub fn find_capability(&self,slot:u32)->Option<Cap>{if slot==53{self.value.map(|data|Cap{data})}else{None}}}}
+#[path="../kernel/src/history_recovery.rs"]mod production;
+fn grant()->recovery::Grant{recovery::Grant{holder:11,logical:12,original:12,original_task:12,successor:17,successor_task:17,base:1808,sectors:18}}
+#[test]fn exact_immutable_metadata_only_reaches_its_holder(){let pd=capability::ProtectionDomain{id:11,value:Some(capability::CapabilityData::HistoryRecovery(grant()))};assert_eq!(production::query(&pd,53,0),[0,12,12,12,11]);assert_eq!(production::query(&pd,53,1),[0,17,17,1808,18]);assert_eq!(production::query(&pd,53,2),[1,0,0,0,0]);}
+#[test]fn missing_wrong_kind_holder_and_full_width_slots_are_denied(){for id in[12,17,3]{let pd=capability::ProtectionDomain{id,value:Some(capability::CapabilityData::HistoryRecovery(grant()))};assert_eq!(production::query(&pd,53,0),[3,0,0,0,0]);}for value in[None,Some(capability::CapabilityData::Domain(11))]{let pd=capability::ProtectionDomain{id:11,value};assert_eq!(production::query(&pd,53,0),[1,0,0,0,0]);}let pd=capability::ProtectionDomain{id:11,value:Some(capability::CapabilityData::HistoryRecovery(grant()))};for slot in[0,1025,(1u64<<32)|53,u64::MAX]{assert_eq!(production::query(&pd,slot,0),[1,0,0,0,0]);}}
+#[test]fn task_identity_and_holder_are_required_never_hardware_key(){let g=grant();assert!(g.permits(11,12,12));assert!(g.permits(11,17,17));for(holder,pd,task)in[(11,17,12),(11,12,17),(12,17,17),(11,9,9),(0,17,17)]{assert!(!g.permits(holder,pd,task));}assert!(!recovery::Grant{base:u64::MAX,..g}.valid());}

@@ -482,6 +482,12 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rsi=reply[1]; regs.rdx=reply[2]; regs.r10=reply[3]; regs.r8=0; reply[0]
         },
 
+        67 => {
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::history_recovery::query(pd,rdi,rsi);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
+        },
+
         66 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             let reply=crate::app_resources::activation(pd,rdi,rsi);

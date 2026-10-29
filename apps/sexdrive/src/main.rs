@@ -1601,7 +1601,7 @@ fn nvme_flush() -> u64 {
     // Poll CQE (short timeout — if not supported, return honest error).
     let mut done = false;
     let mut dw3 = 0u32;
-    for _poll in 0..1000u32 {
+    for _poll in 0..1_000_000u32 {
         let cqe_ptr = unsafe {
             (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32
         };
@@ -3090,18 +3090,9 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 BLOCK_SYNC => {
-                    serial_println!(
-                        "[sexdrive.sync.recv] cmd={} honest=flush_not_emulated_by_qemu_nvme",
-                        cmd
-                    );
-                    // [sexdrive.nvme.flush] — NVMe FLUSH opcode 0x00 is wired in
-                    // nvme_flush() below, but the current QEMU NVMe emulation does
-                    // not post a CQE for FLUSH.  On a real NVMe controller that
-                    // supports FLUSH (ONCS bit 4), uncomment the call to nvme_flush()
-                    // below to get real durability guarantees.
-                    // let flush_status = nvme_flush();
-                    // if flush_status == 0 { ... }
-                    BLOCK_ERR_NO_DEVICE
+                    let status=nvme_flush();
+                    sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_nvme_flush=1",status);
+                    status
                 }
                 _ => {
                     serial_println!(

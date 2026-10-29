@@ -329,7 +329,46 @@ authority = "existing BOOT storage edge; caller-derived private name; real owner
 request = "arg0=nonwrapping24bitSequence|kind8<<24,reservedHigh32zero;arg1=handle32|offset16<<32|length16<<48;arg2=up-to4bytesLE"
 reply = "actualSexFiles11;tag8<<56|sequence24<<32|payload32;tag0x53success-or0xE3error;single-admitted-client-request"
 operations = "1-open-save,2-open-load,3-stage-write,4-commit,5-stat,6-read,7-close"
-commit = "4096byte-bounded-staging;validate-complete-SHI1-owner-count-length-hash-entries;atomic-owner-private-RamFS-replace;Saved-only-after-commit-and-close-receipts"
+commit = "4096byte-bounded-staging;validate-complete-SHI1-owner-count-length-hash-entries;prepare-owner-private-RamFS;durable-journal-commit;publish-RamFS;Saved-only-after-commit-and-close-receipts"
 load = "fresh-own-open-handle;complete-validated-staging;close-receipt-before-live-history-swap;newer-local-history-revision-cancels-swap"
-limits = "same-boot-RamFS-only;no-predecessor-history-transfer;newest-complete-entries-fit4096;128entries-max256bytes;no-cross-reboot-durability"
+limits = "durable-two-bank-journal;BOOT-grant53-sanctions-data-recovery12-to17-and-reboot17-to12;no-private-handle-or-capability-transfer;newest-complete-entries-fit4096;128entries-max256bytes;Saved-requires-real-NVMe-flush-and-readback"
 cleanup = "scrub-service-staging-and-drop-pending-reply-before-existing-RamFS-lease-retirement-and-files-ACK;retain-last-committed-bytes"
+
+[spindle_history.recovery]
+query_syscall = 67
+slot = 53
+holder = 11
+logical_object = 12
+subjects = "12:task12;17:task17;explicit-source-and-destination-recovery-relationship"
+base_lba = 1808
+sectors = 18
+banks = "two;each512byte-commit-header-plus4096byte-payload;no-overlap-with-V4-v0-or-driver-reservations"
+publication = "invalidate-inactive-header;flush;payload;flush;commit-header;flush;readback;old-bank-untouched"
+recovery = "validate-both-metadata-and-full-payload;highest-complete-generation;rewrite-owned-header-for-current-BOOT-subject;never-transfer-handles"
+limits = "fixed-object;no-online-replenishment;checksum-not-cryptographic;hardware-power-loss-guarantees-require-controller-validation"
+
+[spindle_viewport]
+opcode = "0x270"
+authority = "existing BOOT shell3-to-Spindle12/task12 or17/task17 edges; exact sender and incarnation; no runtime mint"
+request = "arg0=target32|task32<<32;arg1=frame_width32|frame_height32<<32;arg2=nonwrapping64bit-layout-sequence"
+delivery = "one latest desired layout per fixed BOOT subject; retain exact on Full; retire on subject death or permanent denial; wait for frame and chrome admission"
+render = "fixed four catalog-owned surfaces; collapse upper pair below two-row physical minimum; last visible logical row is prompt; up to20columns and6rows per pane; explicit-newline payload<=126bytes; retain source command/history/scrollback; cursor-following-window-with-presentation-only-caret-and-overflow-markers"
+
+[spindle_scrollback]
+selection = "retained chronological ring; page by visible output rows; prompt remains independent; clamp after eviction or resize"
+new_output = "live tail stays live; nonzero offset advances to preserve selected output; saturated lifetime counter does not freeze ring addressing"
+
+[spindle_display_delivery]
+queue = "fixed four BOOT-owned panes; immutable active plus latest desired text per pane; maximum four transport attempts per app turn; create before clear/chunks"
+backpressure = "Full preserves exact operation; main receive loop continues HID, storage receipts and Close; no nested listen or retry spin"
+completion = "whole batch admission only after its final chunk; actual pixel presentation remains separate; cancellation scrubs pending text and fences recreation"
+
+[spindle_history_liveness]
+deadline = "observed kernel ticks plus bounded cooperative app turns; progress resets stall budget but never total budget; frozen/regressing clock fails closed"
+uncertain = "timeout is neither success nor rollback; quarantine old sequence receipts; block saves, loads and synchronous storage probes"
+abort = "fresh own-session sequence on existing storage edge; no supplied lease/name; close service-known own handle, scrub staging and supersede own pending reply; ACK means quiescence, not durable rollback; stale abort never closes a newer lease"
+
+[spindle_desktop_status]
+notice = "bounded enum data on existing app-to-shell edge; exact actual sender, immutable domain/task/surface/coordinator catalog plus LIVE query and newer nonwrapping sequence"
+publication = "latest desired status retained on Full; no success claim on enqueue; verified shell viewport refreshes current state; task Close fences publication"
+presentation = "history state does not attest pixels; terminal launcher authority overrides late status; actual winning pixels from any exact catalog-owned Spindle child acknowledge the same group, including collapsed upper panes"

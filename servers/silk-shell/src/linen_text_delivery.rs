@@ -125,3 +125,22 @@ impl DesktopStates {
         }
     }
 }
+
+/// A full display queue cannot discard the latest shell focus. Retry only
+/// while it is still current/live, after its create/chrome FIFO admission.
+pub struct FocusDelivery { desired:Option<u64> }
+impl FocusDelivery {
+    pub const fn new()->Self {Self{desired:None}}
+    pub fn observe(&mut self,surface:u64,result:Admission) {self.desired=if result==Admission::Full {Some(surface)}else{None};}
+    pub fn poll(&mut self,current:u64,live:impl FnOnce(u64)->bool,ready:impl FnOnce(u64)->bool,send:impl FnOnce(Operation)->Admission)->LatestPoll {
+        let Some(surface)=self.desired else{return LatestPoll::Idle};
+        if surface!=current || (surface!=0 && !live(surface)) {self.desired=None;return LatestPoll::Idle;}
+        if !ready(surface) {return LatestPoll::Deferred;}
+        let op=Operation{opcode:0xED,surface,packed:0,control:0};
+        match send(op) {
+            Admission::Full=>LatestPoll::Deferred,
+            Admission::Accepted=>{self.desired=None;LatestPoll::Applied(op)},
+            Admission::Rejected(e)=>{self.desired=None;LatestPoll::Rejected(e)},
+        }
+    }
+}

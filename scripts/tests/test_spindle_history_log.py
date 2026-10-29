@@ -11,6 +11,11 @@ def fixture():
         if pd==17:lines.extend(['[files.history.open] target=17 handle=18 mode=load seq=12','[files.history.close] target=17 handle=18 seq=25 ok=1','[spindle.history.receipt] target=17 task=17 kind=loaded handle=18 bytes=40 count=1 hash=0xabc error=0'])
         lines.extend([f'[files.history.retire] target={pd} staged=0 pending=0 terminal=1',f'[app.service.ack] target={pd} role=4',f'[app.private.retired] target={pd}'])
     return '\n'.join(lines)
+def durable_fixture():
+    text=fixture().replace('[spindle.history.receipt] target=17 task=17 kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4','[files.history.recovered] logical=12 source=12 source_task=12 target=17 generation=1 bytes=40 source_hash=0xabc owned_hash=0xabc data_hash=0x123 boot_grant=53')
+    for generation,pd in enumerate([12,17],1):
+        text=text.replace(f'[files.history.commit] target={pd}',f'[files.history.durable] logical=12 target={pd} generation={generation} bytes=40 hash=0xabc barriers=3 readback=1\n[files.history.commit] target={pd}')
+    return '[boot.history.recovery] holder=11 slot=53 logical=12 original=12 task=12 successor=17 successor_task=17 base=1808 sectors=18 runtime_mint=0\n'+text
 class Check(unittest.TestCase):
     def test_complete_fixture(self):self.assertEqual(validate(fixture()),[])
     def test_enqueue_and_fake_completion_do_not_prove_commit(self):self.assertTrue(validate(fixture().replace('[files.history.commit]','[request.admitted]')))
@@ -23,4 +28,8 @@ class Check(unittest.TestCase):
     def test_late_terminal_commit_and_sequence_reversal_rejected(self):
         self.assertTrue(validate(fixture()+'\n[files.history.commit] target=17 handle=18 seq=26 bytes=40 hash=0xabc'))
         self.assertTrue(validate(fixture().replace('seq=10','seq=1')))
+    def test_durable_barriers_and_exact_boot_relationship(self):self.assertEqual(validate(durable_fixture(),durable=True),[])
+    def test_durable_evidence_requires_real_barriers_readback_and_grant(self):
+        for old,new in [('barriers=3','barriers=0'),('readback=1','readback=0'),('slot=53','slot=54'),('source_task=12','source_task=99'),('source_hash=0xabc','source_hash=0xdef'),('generation=2','generation=1')]:self.assertTrue(validate(durable_fixture().replace(old,new),durable=True),(old,new))
+    def test_volatile_fixture_cannot_prove_durability(self):self.assertTrue(validate(fixture(),durable=True))
 if __name__=='__main__':unittest.main()

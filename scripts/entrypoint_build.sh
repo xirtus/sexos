@@ -8,6 +8,8 @@ SPEC_PATH="$ROOT_DIR/sexos_build_spec.toml"
 ABI_INPUTS=(
   kernel/src/syscalls/mod.rs
   kernel/src/capability_slot.rs
+  kernel/src/capability.rs
+  kernel/src/history_recovery.rs
   crates/sex-pdx/src/lib.rs
   crates/sex-pdx/src/pagefault.rs
   crates/sex-pdx/src/display_ready.rs
@@ -15,7 +17,10 @@ ABI_INPUTS=(
   crates/sex-pdx/src/memory_region.rs
   crates/sex-pdx/src/paging.rs
   crates/sex-pdx/src/app_lifecycle.rs
+  crates/sex-pdx/src/spindle_view.rs
+  crates/sex-pdx/src/spindle_status.rs
   crates/sex-pdx/src/spindle_history.rs
+  crates/sex-pdx/src/history_recovery.rs
   kernel/src/paging_state.rs
   kernel/src/app_resource_state.rs
   kernel/src/app_resources.rs

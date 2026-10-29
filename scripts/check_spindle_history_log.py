@@ -1,13 +1,14 @@
 """Join real private-history completion to SexFiles commit/close records.
 Host tests establish hostile-input behavior; these joins establish one observed
-same-boot exchange, never cross-reboot durability or complete-system proof.
+exchange; durable mode additionally requires BOOT, barriers and readback.
+Cross-boot proof uses spindle_durable_reboot_gate.py; no complete-system claim.
 """
 import re
 
-def validate(text):
+def validate(text,durable=False):
     errors=[]
     rows=[]
-    for m in re.finditer(r'\[(files\.history\.(?:open|commit|close|retire)|spindle\.history\.receipt|app\.private\.retired|app\.service\.ack)\] ([^\r\n]*)',text):
+    for m in re.finditer(r'\[(files\.history\.(?:open|commit|close|retire|durable|recovered)|spindle\.history\.receipt|app\.private\.retired|app\.service\.ack|boot\.history\.recovery)\] ([^\r\n]*)',text):
         rows.append((m.start(),m[1],dict(re.findall(r'(\w+)=([^\s]+)',m[2]))))
     def find(tag,**wanted):return [(p,r)for p,t,r in rows if t==tag and all(r.get(k)==str(v)for k,v in wanted.items())]
     receipts=find('spindle.history.receipt')
@@ -26,9 +27,11 @@ def validate(text):
             if mode=='save':
                 commits=[(p,x)for p,x in find('files.history.commit',target=target,handle=handle,bytes=size,hash=r.get('hash'))if opens[0][0]<p<closes[0][0]]
                 if len(commits)!=1:errors.append(f'target{target}: save lacks matching atomic commit')
+                if durable and (not commits or not any(opens[0][0]<p<commits[0][0] for p,x in find('files.history.durable',target=target,bytes=size,hash=r.get('hash'),barriers=3,readback=1))):errors.append(f'target{target}: no completed durable barrier/readback before RAM publication')
             else:
                 matching=[x for p,x in completed if p<opens[0][0] and all(x.get(k)==r.get(k)for k in ['bytes','count','hash']) and x.get('handle')!=r.get('handle')]
-                if not matching:errors.append(f'target{target}: load did not recover exact saved snapshot through fresh handle')
+                recovered=[x for p,x in find('files.history.recovered',target=target,bytes=size,owned_hash=r.get('hash'),boot_grant=53) if p<opens[0][0]] if durable else []
+                if not matching and not recovered:errors.append(f'target{target}: load did not recover exact saved snapshot through fresh handle')
         observed=[int(r['seq'])for p,t,r in rows if t in {'files.history.open','files.history.commit','files.history.close'}and r.get('target')==str(target) and r.get('seq','').isdigit()]
         if observed!=sorted(set(observed)):errors.append(f'target{target}: duplicate or reversed service sequence')
         retired=find('app.private.retired',target=target)
@@ -40,7 +43,14 @@ def validate(text):
     old=find('app.private.retired',target=12)
     saved=find('spindle.history.receipt',target=17,kind='saved')
     loaded=find('spindle.history.receipt',target=17,kind='loaded')
-    if len(missing)!=1 or not old or not saved or not old[0][0]<missing[0][0]<saved[0][0]:errors.append('fresh successor did not establish its own initially missing history')
+    if durable:
+        grants=find('boot.history.recovery',holder=11,slot=53,logical=12,original=12,task=12,successor=17,successor_task=17,base=1808,sectors=18,runtime_mint=0)
+        recovery=find('files.history.recovered',logical=12,source=12,source_task=12,target=17,generation=1,boot_grant=53)
+        if len(grants)!=1 or len(recovery)!=1 or not old or not saved or not grants[0][0]<old[0][0]<recovery[0][0]<saved[0][0]:errors.append('missing exact BOOT-sanctioned successor data recovery')
+        if recovery and not find('files.history.durable',logical=12,target=12,generation=1,hash=recovery[0][1].get('source_hash'),bytes=recovery[0][1].get('bytes')):errors.append('recovery did not match predecessor durable generation')
+        generations=[int(r['generation']) for p,r in find('files.history.durable') if r.get('generation','').isdigit()]
+        if generations!=sorted(set(generations)):errors.append('durable generations duplicate or reverse')
+    elif len(missing)!=1 or not old or not saved or not old[0][0]<missing[0][0]<saved[0][0]:errors.append('fresh successor did not establish its own initially missing history')
     if not loaded:errors.append('successor never restored its private snapshot')
     if any(r.get('target') not in {'12','17'}for _,r in receipts):errors.append('history receipt used non-BOOT subject')
     return errors

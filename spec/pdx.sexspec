@@ -108,6 +108,14 @@
         {
           "path": "servers/sexfiles/src/spindle_history.rs",
           "anchor": "pub struct Service"
+        },
+        {
+          "path": "kernel/src/history_recovery.rs",
+          "anchor": "pub fn query"
+        },
+        {
+          "path": "servers/sexfiles/src/history_journal.rs",
+          "anchor": "pub trait SectorIo"
         }
       ],
       "checks": [
@@ -118,7 +126,7 @@
       ],
       "gaps": [
         "One BOOT-reserved successor each for Quil and Spindle; no reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Guest pixel/persistence evidence is required separately from host mocks.",
-        "History receipts cover incarnation-private same-boot RamFS snapshots only; no durable history transfer across identities or reboot, service-death timeout or complete epoch replay."
+        "History recovery uses one BOOT-bound fixed journal and real block barriers; host fault injection and real two-boot evidence are required separately. Hardware power-loss validation, service-death timeouts and complete epoch replay remain open."
       ],
       "depends_on": [
         "CAPABILITY_GENESIS",

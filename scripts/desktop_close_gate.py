@@ -124,7 +124,7 @@ def main():
                 # Spaces extend the editor but can leave a padded grid's
                 # pixels unchanged. Await the actual unbudgeted editor receipt;
                 # the final four-grid framebuffer remains mandatory below.
-                key(qcode,rf'\[spindle.input.recv\] key=printable ch={re.escape(char)} len={length}(?:\r|\n)|\[spindle.line.cursor\] pos={length} len={length}(?:\r|\n)')
+                key(qcode,rf'\[spindle.cursor.view\] target={target} sequence=\d+ pos={length} len={length}(?:\s|$)')
             key('ret',rf'\[spindle.instance.command\] target={target} task={target} name='+re.escape(command.split()[0])+r' ok=1',timeout=90)
         key('scroll_lock',r'\[shell.focus.set\] id=153')
         spindle_command('echo predecessor12',target=12)
@@ -135,7 +135,8 @@ def main():
         key('ret',r'\[shell.app.relaunch\] predecessor=12 successor=17 task=17 surface=302 receipt_replayed=1')
         wait(r'\[app.surface.presented\] target=17 surface=302 sequence=1 ok=1',timeout=180)
         wait(r'\[shell.focus.set\] id=306',timeout=60)
-        wait(r'\[spindle.history.receipt\] target=17 task=17 kind=missing handle=0 bytes=0 count=0 ',timeout=90)
+        recovered=wait(r'\[files.history.recovered\] logical=12 source=12 source_task=12 target=17 generation=1 bytes=44 source_hash=([^ ]+) owned_hash=([^ ]+) data_hash=([^ ]+) boot_grant=53',timeout=90).groups()
+        wait(r'\[spindle.history.receipt\] target=17 task=17 kind=loaded handle=\d+ bytes=44 count=1 ',timeout=90)
         spindle_command('linen-list')
         wait(r'\[linen.spindle.authority\] target=17 slot=50 op=66 status=5 allowed=1',timeout=60)
         bell_start=len(text())
@@ -143,7 +144,7 @@ def main():
         bell_recv=wait(r'\[bell.notify.recv\] caller_pd=17 category=0 requested=1',bell_start,timeout=60)
         wait(r'\[bell.notify.ok\] caller_pd=17 final_lane=\d+ event_id=\d+',bell_start+bell_recv.end(),timeout=60)
         spindle_command('echo spindle17')
-        wait(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=\d+ bytes=\d+ count=3 hash=0x[0-9a-f]+ error=0',timeout=90)
+        wait(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=\d+ bytes=\d+ count=4 hash=0x[0-9a-f]+ error=0',timeout=90)
         save_start=len(text())
         spindle_command('save')
         saved_history=wait(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=(\d+) bytes=(\d+) count=(\d+) hash=(0x[0-9a-f]+) error=0',save_start,timeout=90).groups()
@@ -153,16 +154,16 @@ def main():
         if saved_history[1:]!=loaded_history[1:] or saved_history[0]==loaded_history[0] or int(saved_history[0])==0 or int(loaded_history[0])==0:
             raise RuntimeError('history roundtrip did not use fresh own handles and exact saved bytes/count/hash')
         key('up',r'\[spindle.history.nav\] dir=up idx=0 len=14 ok=1')
-        (out/'spindle-history.json').write_text(json.dumps({'ok':True,'predecessor_saved':old_history,'successor_started_private_empty':True,'saved':saved_history,'loaded':loaded_history,'recall':'echo spindle17','scope':'same-boot owner-private RamFS; fresh handle receipts, exact snapshot fingerprint, real Up recall; no inherited predecessor history'},indent=2)+'\n')
+        (out/'spindle-history.json').write_text(json.dumps({'ok':True,'predecessor_saved':old_history,'boot_recovered_predecessor':recovered,'saved':saved_history,'loaded':loaded_history,'recall':'echo spindle17','scope':'BOOT-sanctioned durable data recovery; fresh private handles, exact own snapshot fingerprint and real Up recall; no inherited handles/capabilities'},indent=2)+'\n')
         spindle_errors=['not rendered'];deadline=time.monotonic()+90
         while time.monotonic()<deadline:
             q.cmd('screendump',{'filename':str(out/'spindle-successor.ppm')})
-            spindle_errors=spindle_pixels(text(),(out/'spindle-successor.ppm').read_bytes(),font)
+            spindle_errors=spindle_pixels(text(),(out/'spindle-successor.ppm').read_bytes(),font,require_prompt='> echo spindle17')
             if not spindle_errors:break
             time.sleep(.2)
         if spindle_errors:raise RuntimeError('Spindle grid pixels: '+'; '.join(spindle_errors))
         close(17,306)
-        history_failures=history_errors(text())
+        history_failures=history_errors(text(),durable=True)
         (out/'history-log.json').write_text(json.dumps({'ok':not history_failures,'errors':history_failures},indent=2)+'\n')
         if history_failures:raise RuntimeError('history receipt joins: '+'; '.join(history_failures))
         (out/'spindle-relaunch.json').write_text(json.dumps({'ok':True,'predecessor':12,'successor':17,'task':17,'frame':306,'content':[302,303,304,305],'pixel_errors':spindle_errors,'scope':'real activation, native presentation, Linen observer, Bell notification, command echo glyphs and five-role private cleanup'},indent=2)+'\n')

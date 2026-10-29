@@ -2,7 +2,7 @@
 //! SexFiles leases, never new kernel capabilities or inherited identities.
 pub const OP:u64=0x4B;
 pub const OPEN_SAVE:u8=1; pub const OPEN_LOAD:u8=2; pub const WRITE:u8=3;
-pub const COMMIT:u8=4; pub const STAT:u8=5; pub const READ:u8=6; pub const CLOSE:u8=7;
+pub const COMMIT:u8=4; pub const STAT:u8=5; pub const READ:u8=6; pub const CLOSE:u8=7; pub const ABORT:u8=8;
 pub const MAX:usize=4096; pub const HEADER:usize=24; pub const SEQ_MAX:u32=0xFF_FFFF;
 pub const INVALID:u32=1; pub const DENIED:u32=2; pub const STALE:u32=3; pub const MISSING:u32=4; pub const BUSY:u32=5; pub const CORRUPT:u32=6;
 const OK:u64=0x53;const ERROR:u64=0xE3;
@@ -10,7 +10,7 @@ const OK:u64=0x53;const ERROR:u64=0xE3;
 impl Request{
  pub fn header(self)->u64{self.seq as u64|((self.kind as u64)<<24)}
  pub fn decode(header:u64,a:u64,b:u64)->Option<Self>{let seq=(header&0xFF_FFFF)as u32;let kind=(header>>24)as u8;
-  if header>>32!=0||seq==0||!(OPEN_SAVE..=CLOSE).contains(&kind){return None}Some(Self{seq,kind,a,b})}
+  if header>>32!=0||seq==0||!(OPEN_SAVE..=ABORT).contains(&kind){return None}Some(Self{seq,kind,a,b})}
 }
 pub fn reply(seq:u32,result:Result<u32,u32>)->u64{let(tag,value)=match result{Ok(v)=>(OK,v),Err(e)=>(ERROR,e)};(tag<<56)|((seq as u64)<<32)|value as u64}
 pub fn decode_reply(value:u64,seq:u32)->Option<Result<u32,u32>>{

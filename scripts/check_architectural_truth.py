@@ -219,7 +219,7 @@ def main(argv=None):
         files.update(p.relative_to(args.root).as_posix() for p in (args.root / "scripts").glob("*.py"))
         for directory in ("kernel/src", "tests", "scripts/tests", "crates/sex-pdx/src", "servers/sexfiles/src",
                           "sex-rt/src", "apps/sexdrive/src", "servers/sexusb/src", "servers/sexnet/src",
-                          "servers/sext/src", "apps/kaleidoscope/src", "servers/sexbell/src",
+                          "servers/sext/src", "apps/kaleidoscope/src", "apps/spindle/src", "servers/sexbell/src",
                           "servers/silk-shell/src", "servers/linen/src", "servers/sexdisplay/src"):
             for path in (args.root / directory).rglob("*"):
                 if path.is_file() and path.suffix in (".rs", ".py"):

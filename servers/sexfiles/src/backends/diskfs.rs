@@ -310,7 +310,7 @@ impl DiskFs {
         // them — vanished-request root cause). Stash for the main loop.
         loop {
             let msg = pdx_listen_raw(0);
-            if msg.type_id == 0x1 {
+            if msg.type_id == 0x1 && msg.caller_pd==2 {
                 let reply_val = msg.arg0;
                 if hot_log() { serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val); }
                 if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
@@ -322,7 +322,7 @@ impl DiskFs {
                 }
                 return reply_val;
             }
-            if msg.type_id != 0 {
+            if msg.type_id != 0 && msg.type_id != 1 {
                 crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
             }
             sys_yield();
@@ -3804,6 +3804,7 @@ fn sexfs_v0_freemap_alloc_block_in_range(
     let bitmap_off = 32usize;
     let mut b = min_block;
     while b <= max_block_inclusive {
+        if sex_pdx::ranges_overlap(b as u64*8,8,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){b+=1;continue;}
         let word_idx = b / 64;
         let bit = b % 64;
         let bo = bitmap_off + word_idx * 8;
@@ -3827,6 +3828,7 @@ fn sexfs_v0_freemap_alloc_specific(
     fm: &mut [u8; 512],
     block: usize,
 ) -> Result<(), i64> {
+    if sex_pdx::ranges_overlap(block as u64*8,8,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){return Err(messages::ERR_OVERFLOW)}
     let bitmap_off = 32usize;
     let word_idx = block / 64;
     let bit = block % 64;
@@ -3859,6 +3861,7 @@ fn sexfs_v0_freemap_is_block_used(fm: &[u8; 512], block: usize) -> bool {
 
 /// Write 512-byte data sector to given sector LBA.
 fn sexfs_v0_write_data_sector(lba: u64, data: &[u8; 512]) -> Result<(), i64> {
+    if sex_pdx::ranges_overlap(lba,1,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){return Err(messages::ERR_PERM_DENIED)}
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         return Err(messages::ERR_NOT_FOUND);
@@ -3920,6 +3923,7 @@ fn sexfs_v0_validate_extent_bounds(p: &SexfsObjectEntryV0Parsed) -> Result<(), i
         return Err(messages::ERR_OVERFLOW);
     }
     if p.in_use && p.extent_count > 0 {
+        if sex_pdx::ranges_overlap(p.first_block,8,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){return Err(messages::ERR_OVERFLOW)}
         if p.first_block < SEXFS_V0_DATA_LBA_MIN || p.first_block > SEXFS_V0_DATA_LBA_MAX {
             return Err(messages::ERR_OVERFLOW);
         }
@@ -4158,6 +4162,7 @@ fn sexfs_v0_full_block_payload_hash() -> u64 {
 /// Write the deterministic 4KiB payload to the 8 sectors starting at alloc_lba.
 /// Builds each 512-byte sector on the stack and writes via BLOCK_WRITE.
 fn sexfs_v0_write_full_block(alloc_lba: u64) -> Result<(), i64> {
+    if sex_pdx::ranges_overlap(alloc_lba,8,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){return Err(messages::ERR_PERM_DENIED)}
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         return Err(messages::ERR_NOT_FOUND);

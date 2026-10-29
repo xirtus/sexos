@@ -59,15 +59,18 @@ const CAP_MAX_RECORDS: usize = 256;
 impl RamFs {
     /// Publish a complete owner-private snapshot in one service transition.
     /// Failed validation/allocation before the swap cannot expose a partial file.
-    pub fn replace_owned(&self,handle:u64,data:&[u8],caller:u32)->Result<(),i64>{
+    pub fn prepare_owned(&self,handle:u64,data:&[u8],caller:u32)->Result<Vec<u8>,i64>{
         if data.len()>messages::RAMFS_MAX_FILE_SIZE{return Err(messages::ERR_OVERFLOW)}
-        let mut files=self.files.write();
-        let entry=Self::find_active_by_handle_mut(&mut files,handle).ok_or(messages::ERR_INVALID_HANDLE)?;
-        if caller==0 || entry.owner_pd!=caller{return Err(messages::ERR_PERM_DENIED)}
-        let mut next=Vec::new();
-        next.try_reserve_exact(data.len()).map_err(|_|messages::ERR_FULL)?;
-        next.extend_from_slice(data);entry.data=next;Ok(())
+        let files=self.files.read();let entry=Self::find_active_by_handle(&files,handle).ok_or(messages::ERR_INVALID_HANDLE)?;
+        if caller==0||entry.owner_pd!=caller{return Err(messages::ERR_PERM_DENIED)}
+        let mut next=Vec::new();next.try_reserve_exact(data.len()).map_err(|_|messages::ERR_FULL)?;next.extend_from_slice(data);Ok(next)
     }
+    pub fn publish_owned(&self,handle:u64,next:Vec<u8>,caller:u32)->Result<(),i64>{
+        if next.len()>messages::RAMFS_MAX_FILE_SIZE{return Err(messages::ERR_OVERFLOW)}
+        let mut files=self.files.write();let entry=Self::find_active_by_handle_mut(&mut files,handle).ok_or(messages::ERR_INVALID_HANDLE)?;
+        if caller==0||entry.owner_pd!=caller{return Err(messages::ERR_PERM_DENIED)}entry.data=next;Ok(())
+    }
+    pub fn replace_owned(&self,handle:u64,data:&[u8],caller:u32)->Result<(),i64>{let next=self.prepare_owned(handle,data,caller)?;self.publish_owned(handle,next,caller)}
     pub const fn new() -> Self {
         Self {
             files: RwLock::new(Vec::new()),

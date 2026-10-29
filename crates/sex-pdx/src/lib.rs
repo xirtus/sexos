@@ -14,6 +14,9 @@ pub mod dma_pool;
 pub mod paging;
 pub mod app_lifecycle;
 pub mod spindle_history;
+pub mod spindle_view;
+pub mod spindle_status;
+pub mod history_recovery;
 pub use memory_region::MemoryRegionInfo;
 
 /// Opaque protection domain identifier. All inter-domain references use this type.
@@ -777,6 +780,15 @@ pub fn diskfs_v2_payload(reply: u64) -> [u8; DISKFS_V2_MAX_READ] {
     out.copy_from_slice(&bytes[..DISKFS_V2_MAX_READ]);
     out
 }
+
+/// Two crash-consistent private-history banks, each header + 8 payload sectors.
+pub const SPINDLE_HISTORY_BASE_LBA:u64=1808;
+pub const SPINDLE_HISTORY_SECTORS:u64=18;
+const _:()={
+ let regions=[(DISKFS_V4_POOL_BASE_LBA,DISKFS_V4_POOL_SECTORS),(DISKFS_V4_INDIRECT_BASE_LBA,DISKFS_V4_INDIRECT_SECTORS),(DISKFS_LEGACY_SLOTS_START_LBA,DISKFS_LEGACY_SLOTS_SECTORS),(DISKFS_MANIFEST_LBA,DISKFS_MANIFEST_SECTORS),(SEXDRIVE_AP3_WRITE_PROOF_LBA,SEXDRIVE_AP3_WRITE_PROOF_SECTORS),(SEXDRIVE_AP4_MULTI_BASE_LBA,SEXDRIVE_AP4_MULTI_SECTORS),(SEXDRIVE_AP5A_PERSIST_BASE_LBA,SEXDRIVE_AP5A_PERSIST_SECTORS),(SEXDRIVE_AP6_NEG_MISMATCH_LBA,SEXDRIVE_AP6_NEG_MISMATCH_SECTORS)];
+ let mut i=0;while i<regions.len(){assert!(!ranges_overlap(SPINDLE_HISTORY_BASE_LBA,SPINDLE_HISTORY_SECTORS,regions[i].0,regions[i].1));i+=1;}
+ assert!(SPINDLE_HISTORY_BASE_LBA>=128&&SPINDLE_HISTORY_BASE_LBA+SPINDLE_HISTORY_SECTORS<=2020);
+};
 
 // SexFS v0 allowed write envelope (apps/sexdrive write_guard_allows) — not
 // itself a reservation, the outer bound DiskFS's pool must stay inside.

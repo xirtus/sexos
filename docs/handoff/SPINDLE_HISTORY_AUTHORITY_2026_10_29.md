@@ -47,3 +47,7 @@ Host fixtures alone do not establish guest persistence or pixels. The architectu
 This is **same-boot RamFS persistence**, not cross-reboot durability or implicit history transfer to another incarnation. Saved bytes belonging to a terminal identity do not become another identity's authority. An admitted request whose service stops replying has no operation deadline; the app still receives input and Close, and exit cleanup fences its pending work. Sequence exhaustion fails closed rather than wrapping.
 
 The next persistence gain is a durable history object with an explicit BOOT-sanctioned recovery relationship and crash-tested publication. Pending registration/presentation progress and cancellation remain a separate desktop improvement. Both require concrete receipts and authority bindings; terminal identities, file handles and Sext frame journals are not substitutes for those grants.
+
+## Subsequent work
+
+This report preserves the same-boot checkpoint and its original evidence. That checkpoint was committed and pushed as `25dadc1766fbdb530e4b7182a32798a71e068b34`. The [durable recovery follow-up](SPINDLE_DURABLE_RECOVERY_2026_10_29.md) records the later BOOT-granted journal and separate reboot evidence.

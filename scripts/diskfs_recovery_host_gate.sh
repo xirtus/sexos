@@ -17,11 +17,12 @@ def unique(pattern, source):
         raise SystemExit(f'production extraction failed: {pattern}: {len(matches)} matches')
     return matches[0]
 parts = ['mod sex_pdx {']
-for name in ['DISKFS_V4_POOL_BASE_LBA', 'DISKFS_V4_BLOCK_SECTORS', 'DISKFS_V4_POOL_BLOCKS']:
+for name in ['DISKFS_V4_POOL_BASE_LBA', 'DISKFS_V4_BLOCK_SECTORS', 'DISKFS_V4_POOL_BLOCKS','SPINDLE_HISTORY_BASE_LBA','SPINDLE_HISTORY_SECTORS']:
     parts.append(unique(r'^pub const ' + name + r':[^\n]+;', pdx))
+parts.append(unique(r'^pub const fn ranges_overlap\b.*?^}', pdx))
 parts.append('}')
 parts.append('mod messages {')
-for name in ['ERR_FULL', 'ERR_BAD_CMD', 'ERR_EXISTS', 'ERR_PERM_DENIED', 'ERR_NOT_FOUND']:
+for name in ['ERR_FULL', 'ERR_BAD_CMD', 'ERR_EXISTS', 'ERR_PERM_DENIED', 'ERR_NOT_FOUND', 'ERR_OVERFLOW']:
     parts.append(unique(r'^pub const ' + name + r':[^\n]+;', messages))
 parts.append('}')
 for name in ['DISKFS_SLOTS', 'DISKFS_V3_NAME_MAX', 'DISKFS_V3_SYSTEM_SLOTS', 'DISKFS_V4_BLOCK_SECTORS',
@@ -33,6 +34,14 @@ for name in ['v4_in_use', 'v4_bitmap_test', 'v4_bitmap_set', 'v4_bitmap_clear',
              'v4_free_pool_only', 'v4_allocate', 'v4_bitmap_rebuild',
              'v4_unpack_name', 'handle_diskfs_create', 'handle_diskfs_delete']:
     parts.append(unique(r'^fn ' + name + r'\b.*?^\}', vfs))
+diskfs=(root/'servers/sexfiles/src/backends/diskfs.rs').read_text()
+parts.append('const SEXFS_V0_DATA_LBA_MIN:u64=128; const SEXFS_V0_DATA_LBA_MAX:u64=2019; const DISKFS_BLOCK_SIZE:usize=4096;')
+parts.append(unique(r'^struct SexfsObjectEntryV0Parsed \{[^}]+\}', diskfs))
+for name in ['sexfs_v0_recompute_freemap_checksum','sexfs_v0_freemap_alloc_block_in_range','sexfs_v0_freemap_alloc_specific','sexfs_v0_validate_extent_bounds']:
+    parts.append(unique(r'^fn '+name+r'\b.*?^\}',diskfs))
+for name in ['sexfs_v0_write_data_sector','sexfs_v0_write_full_block']:
+    body=unique(r'^fn '+name+r'\b.*?^\}',diskfs)
+    assert body.index('sex_pdx::ranges_overlap')<body.index('diskfs_bridge_get_buf_va')
 pathlib.Path(sys.argv[2]).write_text('\n\n'.join(parts))
 PY
 DISKFS_RECOVERY_SOURCE="$TEST_DIR/production.rs" rustc --edition=2021 --test \

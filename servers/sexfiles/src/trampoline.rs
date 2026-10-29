@@ -230,6 +230,7 @@ pub extern "C" fn trampoline_main() {
 
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     let mut history=crate::spindle_history::Service::new();
+    let mut durable_history=crate::history_disk::Durable::new();
     loop {
         history.poll(pdx_reply);
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
@@ -278,7 +279,7 @@ pub extern "C" fn trampoline_main() {
         ); }
 
         if msg.type_id==sex_pdx::spindle_history::OP {
-            if let Some(value)=history.handle(&vfs::RAMFS,caller,crate::spindle_history::live(caller),msg.arg0,msg.arg1,msg.arg2){pdx_reply(caller,value);}
+            if let Some(value)=history.handle(&vfs::RAMFS,caller,crate::spindle_history::live(caller),msg.arg0,msg.arg1,msg.arg2,&mut durable_history){pdx_reply(caller,value);}
             continue;
         }
 

@@ -861,6 +861,7 @@ fn v4_indirect_read(i: usize, buf_va: u64) -> Result<([V4Extent; DISKFS_V4_MAX_E
         let off = 12 + k * 4;
         let sb = u16::from_le_bytes(sector[off..off + 2].try_into().unwrap());
         let sc = u16::from_le_bytes(sector[off + 2..off + 4].try_into().unwrap());
+        if sex_pdx::ranges_overlap(sb as u64,sc as u64,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){return Err(())}
         extents[k] = V4Extent { start_lba: sb, sector_count: sc };
         for b in sector[off..off + 4].iter() { h ^= *b as u32; h = h.wrapping_mul(0x0100_0193); }
     }
@@ -1070,6 +1071,7 @@ fn v4_bitmap_rebuild(buf_va: u64) {
             if e.sector_count == 0 { ok = false; break; }
             let start = e.start_lba as u64;
             let end = start + e.sector_count as u64;
+            if sex_pdx::ranges_overlap(start,e.sector_count as u64,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS){ok=false;break;}
             if start >= DISKFS_V4_POOL_BASE_LBA && end <= pool_end_lba {
                 if (start - DISKFS_V4_POOL_BASE_LBA) % DISKFS_V4_BLOCK_SECTORS != 0
                     || e.sector_count as u64 % DISKFS_V4_BLOCK_SECTORS != 0
@@ -1185,7 +1187,8 @@ fn v4_persist(buf_va: u64) -> Result<(), u64> {
 /// "it's actually safe" turned out to be two different claims once before.
 fn v4_layout_selfcheck() {
     let pool_end = DISKFS_V4_POOL_BASE_LBA + DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS;
-    let reserved: [(&str, u64, u64); 6] = [
+    let reserved: [(&str, u64, u64); 7] = [
+        ("spindle_history",sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS),
         ("sexdrive_ap3", sex_pdx::SEXDRIVE_AP3_WRITE_PROOF_LBA, sex_pdx::SEXDRIVE_AP3_WRITE_PROOF_SECTORS),
         ("sexdrive_ap4", sex_pdx::SEXDRIVE_AP4_MULTI_BASE_LBA, sex_pdx::SEXDRIVE_AP4_MULTI_SECTORS),
         ("sexdrive_ap5a", sex_pdx::SEXDRIVE_AP5A_PERSIST_BASE_LBA, sex_pdx::SEXDRIVE_AP5A_PERSIST_SECTORS),

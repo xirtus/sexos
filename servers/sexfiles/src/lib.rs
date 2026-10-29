@@ -6,6 +6,8 @@ extern crate spin;
 pub mod pdx;
 pub mod vfs;
 pub mod spindle_history;
+pub mod history_journal;
+pub mod history_disk;
 pub mod messages;
 pub mod trampoline;
 pub mod backends;

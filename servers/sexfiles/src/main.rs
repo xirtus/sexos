@@ -13,6 +13,8 @@ mod backends;
 mod proof;
 mod sexobject;
 mod spindle_history;
+mod history_journal;
+mod history_disk;
 
 use crate::trampoline::trampoline_main;
 

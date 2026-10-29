@@ -93,6 +93,7 @@ pub enum CapabilityData {
     DemandRegion(crate::paging_state::DemandRegionGrant),
     AppLifecycle(crate::app_resource_state::LifecycleGrant),
     AppActivation(crate::app_resource_state::ActivationGrant),
+    HistoryRecovery(sex_pdx::history_recovery::Grant),
     InputRing, MessageQueue,
 }
 

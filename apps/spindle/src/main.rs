@@ -86,6 +86,10 @@ use sex_pdx::{
 };
 use sex_graphics::{WindowBuffer, font};
 mod history_persistence;
+mod viewport;
+mod scroll_view;
+mod display_delivery;
+static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
 // ── Local window create params (not yet in sex-pdx) ────────────────────────
@@ -463,7 +467,7 @@ const VISIBLE_ROWS: usize = 18;
 /// First row index for the output area.
 const OUTPUT_ROW_START: u32 = 5;
 /// Max scrollback lines in the ring buffer.
-const MAX_SCROLLBACK: usize = 1024;
+const MAX_SCROLLBACK: usize = scroll_view::CAPACITY;
 /// Max chars per scrollback line (matches COLS = 80).
 const MAX_LINE_BYTES: usize = 80;
 
@@ -500,11 +504,14 @@ impl Scrollback {
         }
         self.write_pos = (self.write_pos + 1) % MAX_SCROLLBACK;
         self.total_lines = self.total_lines.saturating_add(1);
-        // Reset scroll offset to show latest unless user is actively scrolling
+        // Keep the same retained output selected while actively scrolling
         if self.scroll_offset > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+            self.scroll_offset = scroll_view::after_push(self.scroll_offset,self.total_lines);
         }
     }
+
+    fn retained(&self)->usize{scroll_view::retained(self.total_lines)}
+    fn get_retained(&self,index:usize)->&[u8]{match scroll_view::index(self.write_pos,self.total_lines,index){Some(ring)=>self.get(ring),None=>b""}}
 
     /// Return the line at the given ring index. Clamps to valid bytes.
     fn get(&self, ring_idx: usize) -> &[u8] {
@@ -660,7 +667,7 @@ fn parse_doc_id(args: &[u8]) -> Option<u64> {
 // messages until a sustained quiet streak, so no stale reply can be
 // matched to the probe's first request. Bounded both ways.
 fn spindle_storage_settle() {
-    if unsafe{HISTORY_IO.busy()}{return}
+    if unsafe{HISTORY_IO.blocked()}{return}
     let mut quiet = 0u32;
     let mut total = 0u32;
     let mut eaten = 0u32;
@@ -681,7 +688,7 @@ fn spindle_storage_settle() {
 }
 
 fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> {
-    if unsafe{HISTORY_IO.busy()}{return Err(-102)}
+    if unsafe{HISTORY_IO.blocked()}{return Err(-102)}
     // Enqueue with bounded retry: the async slot can be momentarily busy
     // right after a previous exchange (observed: SELECT for one path never
     // reached sexfiles when issued back-to-back).
@@ -719,6 +726,7 @@ fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> 
             return Ok(msg.arg0);
         }
         if msg.type_id == 0x202 {
+            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
             unsafe {
                 static mut DISK_CMD_HID_DROP_BUDGET: u32 = 8;
                 if DISK_CMD_HID_DROP_BUDGET > 0 {
@@ -734,19 +742,7 @@ fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> 
     }
 }
 
-/// Preserve exact display operations under transient backpressure. Only this
-/// app yields; the shell and other native subjects continue processing input.
-/// A permanent denial is terminal, never a successful surface/text receipt.
-fn spindle_display_call(op:u64,a:u64,b:u64,c:u64)->(u64,u64){
-    if instance_pd()!=17{return pdx_call(SLOT_DISPLAY,op,a,b,c)}
-    loop{
-        match sex_pdx::pdx_call_checked(SLOT_DISPLAY,op,a,b,c){
-            Ok(value)=>return (0,value),
-            Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sex_pdx::sys_yield(),
-            Err(error)=>{sex_pdx::serial_record!("[spindle.display.denied] target=17 op={} status={}",op,error);sex_pdx::task_finish(3)}
-        }
-    }
-}
+static mut DISPLAY_IO:display_delivery::Outbox=display_delivery::Outbox::new(12);
 
 /// WINDOW_LIFECYCLE_V1: create (or re-create) the 2x2 surface grid.
 fn spindle_grid_create() {
@@ -754,12 +750,12 @@ fn spindle_grid_create() {
     while si < GRID_SURF_X * GRID_SURF_Y {
         let sx = GRID_X0 + (si % GRID_SURF_X) as i32 * SURF_W as i32;
         let sy = GRID_Y0 + (si / GRID_SURF_X) as i32 * SURF_H as i32;
-        let (create_status, _) = spindle_display_call(0xEC, grid_sids()[si],
+        unsafe { DISPLAY_IO.create(si,
             ((sy as u64) << 32) | (sx as u64 & 0xFFFF_FFFF),
-            ((SURF_H as u64) << 32) | SURF_W as u64);
-        serial_println!("[spindle.grid.surface.ok] sid={} idx={}", grid_sids()[si], si);
+            ((SURF_H as u64) << 32) | SURF_W as u64); }
+        serial_println!("[spindle.grid.surface.queued] sid={} idx={}", grid_sids()[si], si);
         if si == 0 {
-            serial_println!("[spindle.surface.create.ok] sid={} status={}", content_sid(), create_status);
+            serial_println!("[spindle.surface.create.queued] sid={} admitted=0", content_sid());
         }
         si += 1;
     }
@@ -770,10 +766,10 @@ fn spindle_grid_create() {
 fn spindle_grid_destroy() {
     let mut si = 0;
     while si < GRID_SURF_X * GRID_SURF_Y {
-        spindle_display_call(0xEE, grid_sids()[si], 0, 0);
+        unsafe { DISPLAY_IO.destroy(si); }
         si += 1;
     }
-    serial_println!("[spindle.grid.destroy.ok] surfaces={}", GRID_SURF_X * GRID_SURF_Y);
+    serial_println!("[spindle.grid.destroy.queued] surfaces={}", GRID_SURF_X * GRID_SURF_Y);
 }
 
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
@@ -1228,7 +1224,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"close" => {
             serial_println!("[spindle.lifecycle.close]");
             sb.push(b"Spindle session closing.");
-            sb.push(b"  state:      private same-boot RamFS history");
+            sb.push(b"  state:      private handles and durable history");
             sb.push(b"  surface:    WindowBuffer released on PD exit");
             sb.push(b"  history:    only completed save receipts persist");
             sb.push(b"  relaunch:   separate incarnation history");
@@ -1259,9 +1255,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                     }
                 }
                 sb.push(b"History is incarnation-private; save/load use receipts.");
+                sb.push(b"history-status / history-cancel / history-retry");
             }
             true
         }
+        b"history-status"=>{let status=unsafe{HISTORY_IO.status()};sb.push(status.label().as_bytes());sex_pdx::serial_record!("[spindle.history.status] target={} state={}",instance_pd(),status.name());true},
+        b"history-cancel"=>{let accepted=unsafe{HISTORY_IO.cancel()};sb.push(if accepted{b"History cancel queued; awaiting quiescence."}else{b"History cancel unavailable."});sex_pdx::serial_record!("[spindle.history.control] target={} action=cancel accepted={}",instance_pd(),accepted as u8);true},
+        b"history-retry"=>{let accepted=unsafe{HISTORY_IO.retry(hist)};sb.push(if accepted{b"History retry queued; fresh own lease."}else{b"Retry requires a completed history-cancel."});sex_pdx::serial_record!("[spindle.history.control] target={} action=retry accepted={}",instance_pd(),accepted as u8);true},
         b"save" => {
             if unsafe{persist_history(hist)}{sb.push(b"History save queued; awaiting receipt.");}else{sb.push(b"History save unavailable.");}
             true
@@ -1283,7 +1283,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"Server reply arrives as type=0x1 in main listen loop.");
             sb.push(b"Known objects (static):");
             sb.push(b"  Private history snapshot: save / load");
-            sb.push(b"  Same boot only; no inherited private handles");
+            sb.push(b"  BOOT recovery; no inherited private handles");
             serial_println!("[spindle.files.command] name=ls ok=1 reason=async_limited_static_fallback");
             true
         }
@@ -1334,7 +1334,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             // cycle would leak 4 slots if destroy didn't free them.
             spindle_grid_destroy();
             spindle_grid_create();
-            unsafe { GRID_PREV = [[0u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y]; }
+            unsafe { GRID_PREV = [None;4]; }
             sb.push(b"WINDOWS RECREATED.");
             serial_println!("[spindle.winreset] ok=1");
             true
@@ -2518,11 +2518,15 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
 // Incarnation-private persistence. Enqueue means queued, never saved.
 unsafe fn persist_history(_hist:&History)->bool{HISTORY_IO.save()}
 unsafe fn restore_history(hist:&mut History)->u32{HISTORY_IO.load(hist);0}
+fn history_status_state(status:history_persistence::Status)->sex_pdx::spindle_status::State{
+ use history_persistence::Status as H;use sex_pdx::spindle_status::State as S;
+ match status{H::Idle=>S::Ready,H::Loading=>S::Loading,H::Saving=>S::Saving,H::Queued=>S::Queued,H::Cancelling=>S::Cancelling,H::NeedsRetry=>S::Uncertain,H::Denied=>S::Denied,H::RetryReady=>S::RetryReady}
+}
 fn history_event(event:history_persistence::Event,sb:&mut Scrollback){
  use history_persistence::Outcome;
- let kind=match event.outcome{Outcome::Saved=>"saved",Outcome::Loaded=>"loaded",Outcome::Missing=>"missing",Outcome::Conflict=>"conflict",Outcome::Failed=>"failed"};
+ let kind=match event.outcome{Outcome::Saved=>"saved",Outcome::Loaded=>"loaded",Outcome::Missing=>"missing",Outcome::Conflict=>"conflict",Outcome::Failed=>"failed",Outcome::Uncertain=>"uncertain",Outcome::Aborted=>"aborted"};
  sex_pdx::serial_record!("[spindle.history.receipt] target={} task={} kind={} handle={} bytes={} count={} hash={:#x} error={}",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire),kind,event.handle,event.bytes,event.count,event.hash,event.error);
- match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>sb.push(b"History I/O failed; no success receipt.")}
+ match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>sb.push(b"History I/O failed; no success receipt."),Outcome::Uncertain=>sb.push(b"History uncertain: receipt timed out."),Outcome::Aborted=>sb.push(b"History session closed; commit may remain.")}
 }
 
 // ── Entry ──────────────────────────────────────────────────────────────────
@@ -2559,82 +2563,33 @@ const CONTENT_TEXT_COLOR: u64 = 0x00E8FFFF;
 /// Per-surface subgrid cache for dirty-diffing: a plain keystroke only
 /// reflushes the prompt-band surface it lands in; Enter/scroll reflushes
 /// all four. Zero-init (not 0x20) so the first render flushes everything.
-static mut GRID_PREV: [[u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y] =
-    [[0u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y];
+static mut GRID_PREV:[Option<viewport::Text>;4]=[None;4];
+static mut VIEW_SIZE:(u32,u32)=(288,212);
+static mut VIEW_SEQUENCE:u64=0;
+static mut VIEW_PAINT:u64=0;
 
 /// Push one surface's 6x20 text subgrid to sexdisplay. Chunks go highest
 /// offset first so text_len jumps past sexdisplay's <=32 per-draw
 /// diagnostic threshold on the very first write — zero per-frame serial
 /// output there.
-unsafe fn surf_flush(sid: u64, sub: &[u8; SURF_COLS * SURF_ROWS]) {
-    spindle_display_call(0xFA, sid, 0, 0);
-    let mut c = SURF_COLS * SURF_ROWS / 8;
-    while c > 0 {
-        c -= 1;
-        let off = c * 8;
-        let mut packed: u64 = 0;
-        let mut i = 0;
-        while i < 8 {
-            packed |= (sub[off + i] as u64) << (i * 8);
-            i += 1;
-        }
-        spindle_display_call(0xFB, sid, packed,
-            off as u64 | (8u64 << 8) | (CONTENT_TEXT_COLOR << 32));
-    }
-}
 
 /// Render scrollback tail (rows 0-10, bottom-aligned) plus the live prompt
 /// line (row 11) across the 2x2 surface grid. Only dirty surfaces flush.
-unsafe fn content_render(line: &CmdLine, sb: &Scrollback) {
-    let mut grid = [0x20u8; GRID_COLS * GRID_ROWS];
-    let total = sb.total_lines as usize;
-    let avail = total.min(GRID_ROWS - 1);
-    // SPINDLE_PAGING_V1: scroll_offset = lines back from newest. Window is
-    // [start, end) over the line index space; end==total means live tail.
-    let end = total.saturating_sub(sb.scroll_offset as usize).max(avail);
-    let start = end - avail;
-    let mut r = 0;
-    while r < avail {
-        let line_idx = start + r;
-        let src = sb.get(line_idx % MAX_SCROLLBACK);
-        let n = src.len().min(GRID_COLS);
-        let dst = (GRID_ROWS - 1 - avail + r) * GRID_COLS;
-        grid[dst..dst + n].copy_from_slice(&src[..n]);
-        r += 1;
-    }
-    let prow = (GRID_ROWS - 1) * GRID_COLS;
-    grid[prow] = b'>';
-    let lb = line.as_bytes();
-    let vis = lb.len().min(GRID_COLS - 2);
-    let start = lb.len() - vis;
-    grid[prow + 2..prow + 2 + vis].copy_from_slice(&lb[start..]);
-
-    let mut flushed = 0u32;
-    let mut s = 0;
-    while s < GRID_SURF_X * GRID_SURF_Y {
-        let band = s / GRID_SURF_X;
-        let half = s % GRID_SURF_X;
-        let mut sub = [0x20u8; SURF_COLS * SURF_ROWS];
-        let mut row = 0;
-        while row < SURF_ROWS {
-            let goff = (band * SURF_ROWS + row) * GRID_COLS + half * SURF_COLS;
-            sub[row * SURF_COLS..(row + 1) * SURF_COLS]
-                .copy_from_slice(&grid[goff..goff + SURF_COLS]);
-            row += 1;
+unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
+    let view=sex_pdx::spindle_view::Layout::new(VIEW_SIZE.0,VIEW_SIZE.1);
+    sb.scroll_offset=scroll_view::clamp(sb.scroll_offset,sb.total_lines,view.lines().saturating_sub(1));
+    let p=viewport::prompt(line.as_bytes(),line.cur,view.columns());
+    sex_pdx::serial_record!("[spindle.cursor.view] target={} sequence={} pos={} len={} start={} end={} caret={}",instance_pd(),VIEW_SEQUENCE,line.cur,line.len,p.start,p.end,p.caret.unwrap_or(0));
+    let texts=viewport::render_at(view,line.as_bytes(),line.cur,sb.retained(),sb.scroll_offset as usize,|index|sb.get_retained(index));
+    for (i,text) in texts.iter().enumerate(){if GRID_PREV[i]==Some(*text){continue}
+        VIEW_PAINT=VIEW_PAINT.checked_add(1).expect("SPINDLE_PAINT_EXHAUSTED");
+        sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={}",instance_pd(),grid_sids()[i],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len);
+        for (chunk,bytes) in text.bytes[..text.len].chunks(48).enumerate(){
+            let mut hex=[0u8;96];let alphabet=b"0123456789abcdef";
+            for(n,b)in bytes.iter().enumerate(){hex[n*2]=alphabet[(b>>4)as usize];hex[n*2+1]=alphabet[(b&15)as usize];}
+            sex_pdx::serial_record!("[spindle.view.bytes] target={} sid={} seq={} paint={} off={} hex={}",instance_pd(),grid_sids()[i],VIEW_SEQUENCE,VIEW_PAINT,chunk*48,core::str::from_utf8(&hex[..bytes.len()*2]).unwrap());
         }
-        if sub != GRID_PREV[s] {
-            if instance_pd()==17{sex_pdx::serial_record!("[spindle.grid.text] target=17 sid={} text={}",grid_sids()[s],core::str::from_utf8(&sub).unwrap_or("INVALID"));}
-            surf_flush(grid_sids()[s], &sub);
-            GRID_PREV[s] = sub;
-            flushed += 1;
-        }
-        s += 1;
-    }
-    static mut FRAME_BUDGET: u32 = 8;
-    if flushed > 0 && FRAME_BUDGET > 0 {
-        FRAME_BUDGET -= 1;
-        serial_println!("[spindle.grid.render.ok] cols={} rows={} surfaces={}",
-            GRID_COLS, GRID_ROWS, GRID_SURF_X * GRID_SURF_Y);
+        DISPLAY_IO.text(i,*text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);GRID_PREV[i]=Some(*text);
     }
 }
 
@@ -2644,7 +2599,7 @@ pub extern "C" fn _start() -> ! {
     assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(12,154)|(17,302)));
     INSTANCE_PD.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     INSTANCE_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
-    unsafe{HISTORY_IO.init(catalog.target_pd);}
+    unsafe{HISTORY_IO.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO=display_delivery::Outbox::new(catalog.target_pd);}
     sex_pdx::serial_record!("[spindle.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[spindle.init.start]");
     serial_println!("[spindle.boot]");
@@ -2675,7 +2630,7 @@ pub extern "C" fn _start() -> ! {
     // Font: 5×7 ASCII bitmap (safe, bounded). JetBrains Mono planned via offline converter.
     serial_println!("[spindle.font.safe] backend=5x7_ascii bounds=checked");
 
-    sex_pdx::serial_record!("[spindle.persist.audit] target={} correlated=1 owner_private=1 transport=existing_boot_storage_edge durability=same_boot_ramfs",instance_pd());
+    sex_pdx::serial_record!("[spindle.persist.audit] target={} correlated=1 owner_private=1 transport=existing_boot_storage_edge durability=boot_granted_journal",instance_pd());
     unsafe{restore_history(hist);}
     // LINEN_ZERO_NAME_CREATE_STORM_V1: the old best-effort .spn create sent
     // OP_LINEN_CREATE_OBJECT with all-zero args, so Linen correctly rejected
@@ -2957,16 +2912,30 @@ pub extern "C" fn _start() -> ! {
     unsafe { content_render(&line, sb) };
 
     serial_println!("[spindle.ready]");
-    if catalog.target_pd==17{
-        while sex_pdx::pdx_call_checked(SLOT_SHELL,0xFA,catalog.surface_id,1,(catalog.target_pd as u64)<<8).is_err(){sex_pdx::sys_yield();}
-    }
+    let mut registration_pending=catalog.target_pd==17;
     let mut presentation_pending=false;let mut presentation_sent=false;
     loop {
-        if let Some(event)=unsafe{HISTORY_IO.step(hist,|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_history::OP,r.header(),r.a,r.b).map(|_|()))}{history_event(event,sb);unsafe{content_render(&line,sb);}}
-        if presentation_pending && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
-        let msg=if presentation_pending || unsafe{HISTORY_IO.busy()}{
+        let display_result=unsafe{DISPLAY_IO.poll(4,|op|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op.opcode,op.surface,op.a,op.b).map(|_|()),|r|sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes))};
+        if let Err(error)=display_result{sex_pdx::serial_record!("[spindle.display.denied] target={} status={}",instance_pd(),error);sex_pdx::task_finish(3);}
+        if registration_pending{
+            match sex_pdx::pdx_call_checked(SLOT_SHELL,0xFA,catalog.surface_id,1,(catalog.target_pd as u64)<<8){Ok(_)=>registration_pending=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>sex_pdx::task_finish(3)}
+        }
+        if let Some(event)=unsafe{HISTORY_IO.step_at(hist,sex_pdx::get_ticks(),|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_history::OP,r.header(),r.a,r.b).map(|_|()))}{history_event(event,sb);unsafe{content_render(&line,sb);}}
+        unsafe{HISTORY_STATUS.update(history_status_state(HISTORY_IO.status()));HISTORY_STATUS.poll(|n|{let a=n.args();sex_pdx::pdx_call_checked(SLOT_SHELL,sex_pdx::spindle_status::OP,a[0],a[1],a[2]).map(|_|())});}
+        if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
+        let msg=if registration_pending || presentation_pending || unsafe{DISPLAY_IO.pending() || HISTORY_IO.busy() || HISTORY_STATUS.pending()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
+        if msg.type_id==sex_pdx::spindle_view::OP {
+            if let Some(n)=sex_pdx::spindle_view::Notice::decode(msg.caller_pd,instance_pd(),catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],unsafe{VIEW_SEQUENCE}) {
+                unsafe{VIEW_SIZE=(n.w,n.h);VIEW_SEQUENCE=n.sequence;HISTORY_STATUS.refresh();GRID_PREV=[None;4];}
+                let v=sex_pdx::spindle_view::Layout::new(n.w,n.h);
+                sb.scroll_offset=scroll_view::clamp(sb.scroll_offset,sb.total_lines,v.lines().saturating_sub(1));
+                sex_pdx::serial_record!("[spindle.view.accepted] target={} task={} sequence={} w={} h={} cols={} top_rows={} bottom_rows={} sender=3",instance_pd(),catalog.task_id,n.sequence,n.w,n.h,v.cols,v.rows[0],v.rows[1]);
+                unsafe{content_render(&line,sb);}
+            }
+            continue;
+        }
         if msg.type_id==1 && msg.caller_pd==11{
             if let Some(event)=unsafe{HISTORY_IO.receive(msg.arg0,hist)}{history_event(event,sb);line.hist_nav=None;unsafe{content_render(&line,sb);}}
             continue;
@@ -2977,6 +2946,8 @@ pub extern "C" fn _start() -> ! {
         }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire)) {
+            let discarded=unsafe{HISTORY_STATUS.cancel();DISPLAY_IO.cancel()};
+            sex_pdx::serial_record!("[spindle.display.cancelled] target={} panes={} pending=0",instance_pd(),discarded);
             sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire));
             sex_pdx::task_finish(0);
         }
@@ -2993,6 +2964,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         if msg.type_id == 0x202 {
+            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
             let scancode = msg.arg0 as u8;
             let value = msg.arg1;
             unsafe {
@@ -3008,7 +2980,7 @@ pub extern "C" fn _start() -> ! {
             if scancode == 0x1C && line.len > 0 {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
-                let control=matches!(cmd_name,b"save"|b"load");
+                let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry");
                 if !control{let idx=hist.push(line.as_bytes());serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
@@ -3052,6 +3024,11 @@ pub extern "C" fn _start() -> ! {
 /// Process a single keyboard scancode into the line editor.
 /// Scancode table matches sexsh convention (US QWERTY set 1).
 fn handle_key(scancode: u8, line: &mut CmdLine, hist: &History) {
+    let moved=match scancode {
+        0x4B=>{line.cursor_left();true},0x47=>{line.cursor_home();true},0x4F=>{line.cursor_end();true},
+        0x4D if line.mode==ViMode::Normal || line.cur<line.len=>{line.cursor_right();true},_=>false,
+    };
+    if moved{serial_println!("[spindle.line.cursor] pos={} len={}",line.cur,line.len);return;}
     match line.mode {
         ViMode::Insert => handle_key_insert(scancode, line, hist),
         ViMode::Normal => handle_key_normal(scancode, line, hist),
@@ -3068,7 +3045,7 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
             line.clear();
         }
         0x0E => { // Backspace — delete before cursor
-            if line.cur > 0 { line.delete_at(line.cur - 1); }
+            if line.cur > 0 {let position=line.cur-1;line.delete_at(position);line.cur=position;}
             serial_println!("[spindle.line.backspace] len={}", line.len);
             serial_println!("[spindle.text.backspace]");
             serial_println!("[spindle.input.recv] key=backspace len={}", line.len);
@@ -3113,23 +3090,14 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
 }
 
 /// SPINDLE_PAGING_V1: page the scrollback view. up=true pages toward older
-/// lines; offset is clamped to what the ring actually still holds. New
-/// output decrements the offset (Scrollback::push), so the view stays
-/// anchored and naturally returns to the live tail.
+/// lines by the number of visible output rows. New output advances the
+/// distance from the tail so the selected history stays anchored; eviction
+/// clamps to retained data. The prompt remains independent and visible.
 fn scrollback_page(up: bool) {
     unsafe {
-        let sb = &mut SPINDLE_SCROLLBACK;
-        let page = (GRID_ROWS - 1) as u32;
-        if up {
-            let total = sb.total_lines;
-            let usable = total.min(MAX_SCROLLBACK as u32);
-            let max_off = usable.saturating_sub(page);
-            sb.scroll_offset = (sb.scroll_offset + page).min(max_off);
-        } else {
-            sb.scroll_offset = sb.scroll_offset.saturating_sub(page);
-        }
-        serial_println!("[spindle.page.nav] dir={} offset={} ok=1",
-            if up { "up" } else { "down" }, sb.scroll_offset);
+        let sb=&mut SPINDLE_SCROLLBACK;let visible=sex_pdx::spindle_view::Layout::new(VIEW_SIZE.0,VIEW_SIZE.1).lines().saturating_sub(1);
+        sb.scroll_offset=scroll_view::page(sb.scroll_offset,up,sb.total_lines,visible);
+        sex_pdx::serial_record!("[spindle.page.nav] dir={} offset={} ok=1 visible={} step={} live={}",if up{"up"}else{"down"},sb.scroll_offset,visible,visible.min(MAX_SCROLLBACK),(sb.scroll_offset==0)as u8);
     }
 }
 

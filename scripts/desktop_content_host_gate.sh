@@ -18,6 +18,11 @@ n=function('native_child_geometry')
 assert '!e.dead && !e.close_pending && e.shell_surface()==Some(frame)' in n
 assert 'desktop_content::children(' in n and '0xEC,child.sid' in n
 assert 'native_child_geometry(surface_id,x,y,w,h)' in function('update_local_geometry')
+focus=function('desktop_state_poll')
+assert focus.index('DESKTOP_STATES.poll(')<focus.index('DISPLAY_FOCUS.poll(')
+assert 'surface_is_alive(sid) && surface_is_lifecycle_focusable(sid) && !is_tombstoned(sid)' in focus
+assert '!DESKTOP_STATES.pending_surface(sid)' in focus
+assert 'DISPLAY_FOCUS.observe(arg0,admission)' in s and 'slot==SLOT_DISPLAY && opcode==0xED' in s
 draw=re.findall(r'^fn shell_draw_text\b.*?^\}',s,re.M|re.S)
 assert len(draw)==1
 pathlib.Path(sys.argv[2]).write_text('\n'.join([p,n,draw[0],function('linen_queue_text')]))

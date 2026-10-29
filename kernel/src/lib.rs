@@ -34,6 +34,7 @@ pub mod paging_state;
 pub mod app_resource_state;
 #[cfg(target_arch = "x86_64")]
 pub mod app_resources;
+pub mod history_recovery;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod pci_bar_bounds;
 #[cfg(target_arch = "x86_64")]

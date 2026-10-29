@@ -1,4 +1,7 @@
 #![allow(dead_code)]
+extern crate self as sex_pdx;
+pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+#[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
 #[path="../servers/silk-shell/src/desktop_content.rs"] mod desktop_content;
 #[path="../servers/silk-shell/src/linen_text_delivery.rs"] mod linen_text_delivery;
@@ -37,6 +40,7 @@ mod integration {
     macro_rules! serial_println {($($arg:tt)*)=>{{ let _=format_args!($($arg)*); }}}
     #[macro_export]macro_rules! discard_record {($($arg:tt)*)=>{{ let _=format_args!($($arg)*); }}}
     mod sex_pdx {pub use crate::discard_record as serial_record;}
+    static mut SPINDLE_VIEWS:[crate::spindle_view::Delivery;2]=[crate::spindle_view::Delivery::new(),crate::spindle_view::Delivery::new()];
     fn pdx_call(_:usize,op:u64,sid:u64,a:u64,b:u64){CALLS.lock().unwrap().push((op,sid,a,b));}
     include!(env!("DESKTOP_CONTENT_PRODUCTION"));
     #[test]fn actual_renderer_emits_real_text_protocol_after_complete_view(){

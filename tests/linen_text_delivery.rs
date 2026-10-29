@@ -71,3 +71,19 @@ fn op(opcode:u64,surface:u64)->Operation{Operation{opcode,surface,packed:11,cont
  let mut q=DesktopStates::new();q.observe(op(0xEC,201),Admission::Full);let chrome=Operation{opcode:0xFD,surface:201,packed:1,control:0x2300};q.observe(chrome,Admission::Accepted);
  q.poll(4,Some,|_|Admission::Accepted);q.poll(4,Some,|x|{assert_eq!(x,chrome);Admission::Accepted});assert!(!q.pending());
 }
+
+#[test]fn focus_full_preserves_exact_current_operation_until_admitted(){
+ let mut f=FocusDelivery::new();f.observe(153,Admission::Full);
+ for _ in 0..3 {assert_eq!(f.poll(153,|_|true,|_|true,|op|{assert_eq!(op,Operation{opcode:0xED,surface:153,packed:0,control:0});Admission::Full}),LatestPoll::Deferred);}
+ assert!(matches!(f.poll(153,|_|true,|_|true,|_|Admission::Accepted),LatestPoll::Applied(_)));
+ assert_eq!(f.poll(153,|_|panic!(),|_|panic!(),|_|panic!()),LatestPoll::Idle);
+}
+#[test]fn superseded_dead_and_permanently_denied_focus_never_replay(){
+ for current in [153,306] {let mut f=FocusDelivery::new();f.observe(153,Admission::Full);assert_eq!(f.poll(current,|_|false,|_|panic!(),|_|panic!()),LatestPoll::Idle);}
+ let mut f=FocusDelivery::new();f.observe(153,Admission::Full);f.observe(306,Admission::Accepted);assert_eq!(f.poll(306,|_|panic!(),|_|panic!(),|_|panic!()),LatestPoll::Idle);
+ f.observe(153,Admission::Full);assert_eq!(f.poll(153,|_|true,|_|true,|_|Admission::Rejected(3)),LatestPoll::Rejected(3));assert_eq!(f.poll(153,|_|panic!(),|_|panic!(),|_|panic!()),LatestPoll::Idle);
+}
+#[test]fn focus_waits_for_geometry_but_clear_is_a_real_operation(){
+ let mut f=FocusDelivery::new();f.observe(153,Admission::Full);assert_eq!(f.poll(153,|_|true,|_|false,|_|panic!()),LatestPoll::Deferred);
+ f.observe(0,Admission::Full);assert!(matches!(f.poll(0,|_|panic!(),|_|true,|op|{assert_eq!((op.opcode,op.surface),(0xED,0));Admission::Accepted}),LatestPoll::Applied(_)));
+}

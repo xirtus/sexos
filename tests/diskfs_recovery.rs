@@ -235,3 +235,23 @@ fn failed_delete_persist_retains_live_identity_and_descriptor_reservation() {
     assert_eq!(v4_indirect_read(3, 0).unwrap().1, 1);
     assert_eq!(events(), ["manifest_persist"]);
 }
+
+#[test]
+fn legacy_allocator_skips_every_block_touching_history_banks() {
+    let mut fm=[0xFF;512];
+    for block in 226..=229 {fm[32+block/8]&=!(1<<(block%8));}
+    assert_eq!(sexfs_v0_freemap_alloc_block_in_range(&mut fm,226,229),Ok(229));
+    assert_eq!(sexfs_v0_freemap_alloc_block_in_range(&mut fm,226,228),Err(messages::ERR_OVERFLOW));
+    for block in 226..=228 {let before=fm;assert_eq!(sexfs_v0_freemap_alloc_specific(&mut fm,block),Err(messages::ERR_OVERFLOW));assert_eq!(before,fm);}
+}
+#[test]
+fn legacy_extent_bounds_fence_both_journal_edges() {
+    let mut p=SexfsObjectEntryV0Parsed {object_id:0,kind:0,flags:0,owner_pd:12,rights_generation:0,content_generation:0,metadata_generation:0,object_size_bytes:1,first_block:1800,extent_count:1,name_hash:0,content_hash:0,created_at_gen:0,modified_at_gen:0,checksum:0,in_use:true};
+    for (lba,allowed) in [(1800,true),(1801,false),(1808,false),(1817,false),(1825,false),(1826,true)] {p.first_block=lba;assert_eq!(sexfs_v0_validate_extent_bounds(&p).is_ok(),allowed,"lba {lba}");}
+}
+#[test]
+fn recovery_rejects_external_descriptor_exposing_history_sectors() {
+    let _guard=reset();object(3,16,Some(0));
+    DESCRIPTORS.lock().unwrap()[3].as_mut().unwrap().0[0].start_lba=1808;
+    v4_bitmap_rebuild(0);assert!(!v4_in_use(3));assert_eq!(*V4_BITMAP.write(),[0;3]);
+}

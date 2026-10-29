@@ -57,14 +57,11 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
     if bw==0 || bh==0 {return result}
     let bx=x.saturating_add(8);let by=y.saturating_add(36);
     if frame==201 {result[0]=Some(Child{sid:156,x:bx,y:by,w:bw,h:bh});}
-    if matches!(frame,153|306) && bw>8 && bh>8 {
-        let cw=(bw-8)/2;let ch=(bh-8)/2;
-        if cw==0 || ch==0 {return result}
+    if matches!(frame,153|306) {
+        let view=sex_pdx::spindle_view::Layout::new(w,h);
         for (i,sid) in (if frame==153 {[154,160,161,162]}else{[302,303,304,305]}).iter().enumerate() {
-            let right=i%2==1;let bottom=i>=2;
-            result[i]=Some(Child{sid:*sid,x:bx.saturating_add(if right {(cw+8)as i32}else{0}),
-                y:by.saturating_add(if bottom {(ch+8)as i32}else{0}),
-                w:if right{bw-8-cw}else{cw},h:if bottom{bh-8-ch}else{ch}});
+            let p=view.panes[i];
+            result[i]=Some(Child{sid:*sid,x:x.saturating_add(p.x as i32),y:y.saturating_add(p.y as i32),w:p.w,h:p.h});
         }
     }
     result

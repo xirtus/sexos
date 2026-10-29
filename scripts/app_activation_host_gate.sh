@@ -38,14 +38,16 @@ QUIL_ACTIVATION_PRODUCTION="$TEST_DIR/production.rs" rustc --edition=2021 --test
 SPINDLE_ACTIVATION_PRODUCTION="$TEST_DIR/production.rs.spindle" rustc --edition=2021 --test "$ROOT_DIR/tests/spindle_activation.rs" -o "$TEST_DIR/spindle-tests"
 "$TEST_DIR/spindle-tests"
 
-python3 - "$ROOT_DIR" "$TEST_DIR/display.rs" <<'PYCODE'
+python3 - "$ROOT_DIR" <<'PYCODE'
 from pathlib import Path
-import re,sys
+import sys
 s=(Path(sys.argv[1])/'apps/spindle/src/main.rs').read_text()
-f=re.findall(r'^fn spindle_display_call\b.*?^}',s,re.M|re.S)
-assert len(f)==1
-assert s.index('surf_flush(grid_sids()[s], &sub);')<s.index('GRID_PREV[s] = sub;')
-Path(sys.argv[2]).write_text(f[0])
+assert 'DISPLAY_IO.poll(4,' in s
+assert 'registration_pending || presentation_pending || unsafe{DISPLAY_IO.pending() || HISTORY_IO.busy() || HISTORY_STATUS.pending()}' in s
+assert 'if presentation_pending && !unsafe{DISPLAY_IO.pending()}' in s
+assert s.index('DISPLAY_IO.cancel()')<s.index('"[app.close.accepted]')
+assert 'spindle_display_call' not in s
+assert s.index('DISPLAY_IO.text(i,*text,')<s.index('GRID_PREV[i]=Some(*text);')
 PYCODE
-SPINDLE_DISPLAY_PRODUCTION="$TEST_DIR/display.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/spindle_display_delivery.rs" -o "$TEST_DIR/display-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/spindle_display_delivery.rs" -o "$TEST_DIR/display-tests"
 "$TEST_DIR/display-tests"
