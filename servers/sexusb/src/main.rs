@@ -8,7 +8,7 @@
 // discovery no longer stops at the first connected port.
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
+use sex_pdx::{serial_record as serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
 const SEXUSB_SYNTHETIC: bool = false; // FORCED OFF
 const SEXUSB_SLOT2_OWNERSHIP_PROOF: bool =
@@ -37,35 +37,23 @@ fn map_xhci_bar0(map_size: u64) -> u64 {
     map_va
 }
 
-fn sys_alloc_phys(size: u64) -> u64 {
-    let phys: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 31u64,
-            in("rdi") size,
-            lateout("rax") phys,
-            out("rcx") _,
-            out("r11") _,
-        );
+// The pool only subdivides this domain's immutable, pre-mapped boot DMA region.
+// Both addresses come from the same reservation; no physical address mapping API.
+fn reserve_dma(pool: &mut Option<sex_pdx::dma_pool::DmaRegionPool>, bytes: u64) -> (u64, u64) {
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
+    if pool.is_none() {
+        let Ok(view) = sex_pdx::memory_region_full_view(
+            sex_pdx::SLOT_DMA_REGION, QUERY_VIEW | READ | WRITE | DMA_ADDRESS,
+        ) else { return (u64::MAX, u64::MAX); };
+        let Ok(new_pool) = sex_pdx::dma_pool::DmaRegionPool::new(view)
+            else { return (u64::MAX, u64::MAX); };
+        sex_pdx::serial_record!("[sexusb.memory.dma.ready] region_id={} length={}", view.region_id, view.length);
+        *pool = Some(new_pool);
     }
-    phys
-}
-
-fn sys_map_phys(phys: u64, size: u64) -> u64 {
-    let va: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 30u64,
-            in("rdi") phys,
-            in("rsi") size,
-            lateout("rax") va,
-            out("rcx") _,
-            out("r11") _,
-        );
+    match pool.as_mut().unwrap().reserve(bytes) {
+        Ok(buffer) => (buffer.physical_address, buffer.virtual_address),
+        Err(_) => (u64::MAX, u64::MAX),
     }
-    va
 }
 
 #[inline(always)]
@@ -319,6 +307,7 @@ fn send_report_to_sexinput(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<b
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let mut dma_pool = None;
     serial_println!("[sexusb.init.start]");
     const PAGE_SIZE: u64 = 4096;
     const TRB_SIZE: u64 = 16;
@@ -326,7 +315,8 @@ pub extern "C" fn _start() -> ! {
     const EVENT_RING_TRBS: u64 = 64;
     const ERST_ENTRIES: u64 = 1;
     const DCBAA_BYTES: u64 = PAGE_SIZE;
-    const MAP_BYTES: u64 = 0x10000; // XHCI BAR is typically 64KB
+    let map_bytes = sex_pdx::memory_region_info(SLOT_USB_HOST)
+        .map(|info| info.length).unwrap_or(0).min(0x10000);
 
     const XHCI_USBCMD: u64 = 0x00;
     const XHCI_USBSTS: u64 = 0x04;
@@ -381,7 +371,7 @@ pub extern "C" fn _start() -> ! {
     let mut map_attempts: u32 = 0;
     while map_attempts < 3 {
         map_attempts += 1;
-        map_va = map_xhci_bar0(MAP_BYTES);
+        map_va = if map_bytes >= 0x20 { map_xhci_bar0(map_bytes) } else { u64::MAX };
         if map_va != 0 && map_va != u64::MAX {
             break;
         }
@@ -418,7 +408,11 @@ pub extern "C" fn _start() -> ! {
         caplength, hciversion, hcsp1, hcsp2, hcc1);
     serial_println!("[sexusb.xhci.probe.ok]");
 
-    let op_base = map_va.wrapping_add(caplength as u64);
+    if caplength as u64 + XHCI_DCBAAP + 8 > map_bytes {
+        serial_println!("[sexusb.xhci.map.bad] reason=op_registers_outside_region");
+        loop { sys_yield(); }
+    }
+    let op_base = map_va + caplength as u64;
     serial_println!("[sexusb.xhci.reset.start]");
 
     // Stop controller first (clear Run/Stop), then wait for Halted.
@@ -450,10 +444,10 @@ pub extern "C" fn _start() -> ! {
     let event_ring_bytes = EVENT_RING_TRBS * TRB_SIZE;
     let erst_bytes = PAGE_SIZE;
 
-    let cmd_ring_phys = sys_alloc_phys(PAGE_SIZE);
-    let event_ring_phys = sys_alloc_phys(PAGE_SIZE);
-    let erst_phys = sys_alloc_phys(erst_bytes);
-    let dcbaa_phys = sys_alloc_phys(DCBAA_BYTES);
+    let (cmd_ring_phys, cmd_ring_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+    let (event_ring_phys, event_ring_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+    let (erst_phys, erst_va) = reserve_dma(&mut dma_pool, erst_bytes);
+    let (dcbaa_phys, dcbaa_va) = reserve_dma(&mut dma_pool, DCBAA_BYTES);
 
     if cmd_ring_phys == 0 || cmd_ring_phys == u64::MAX
         || event_ring_phys == 0 || event_ring_phys == u64::MAX
@@ -464,10 +458,6 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    let cmd_ring_va = sys_map_phys(cmd_ring_phys, PAGE_SIZE);
-    let event_ring_va = sys_map_phys(event_ring_phys, PAGE_SIZE);
-    let erst_va = sys_map_phys(erst_phys, erst_bytes);
-    let dcbaa_va = sys_map_phys(dcbaa_phys, DCBAA_BYTES);
 
     if cmd_ring_va == 0 || cmd_ring_va == u64::MAX
         || event_ring_va == 0 || event_ring_va == u64::MAX
@@ -529,7 +519,7 @@ pub extern "C" fn _start() -> ! {
     // Bounds checks against the mapped BAR slice.
     let op_need_end = op_base.wrapping_add(XHCI_DCBAAP + 8);
     let rt_need_end = intr_base.wrapping_add(XHCI_INTR_ERDP + 8);
-    if op_need_end > map_va.wrapping_add(MAP_BYTES) || rt_need_end > map_va.wrapping_add(MAP_BYTES) {
+    if op_need_end > map_va.wrapping_add(map_bytes) || rt_need_end > map_va.wrapping_add(map_bytes) {
         serial_println!("[sexusb.xhci.ring.ptrs.write.bad]");
         loop { sys_yield(); }
     }
@@ -638,7 +628,7 @@ pub extern "C" fn _start() -> ! {
     let db_base = map_va.wrapping_add((dboff_raw & !0x3u32) as u64);
     serial_println!("[sexusb.xhci.diag.dboff] raw={:#x} db_base={:#x} map_va={:#x}",
         dboff_raw, db_base, map_va);
-    if db_base.wrapping_add(4) > map_va.wrapping_add(MAP_BYTES) {
+    if db_base.wrapping_add(((hcsp1 & 0xFF) as u64 + 1) * 4) > map_va.wrapping_add(map_bytes) {
         serial_println!("[sexusb.xhci.ring.ptrs.write.bad]");
         loop { sys_yield(); }
     }
@@ -880,6 +870,10 @@ pub extern "C" fn _start() -> ! {
     } else {
         max_ports
     };
+    if caplength as u64 + PORTSC_BASE + scan_limit * PORTSC_STRIDE > map_bytes {
+        serial_println!("[sexusb.xhci.map.bad] reason=port_registers_outside_region");
+        loop { sys_yield(); }
+    }
     serial_println!("[usb.xhci.multiport.begin]");
     for port in 1..=scan_limit {
         let portsc_off = PORTSC_BASE + (port - 1) * PORTSC_STRIDE;
@@ -956,9 +950,9 @@ pub extern "C" fn _start() -> ! {
     }
 
     // Allocate input context, device context, EP0 transfer ring pages.
-    let input_ctx_phys = sys_alloc_phys(PAGE_SIZE);
-    let device_ctx_phys = sys_alloc_phys(PAGE_SIZE);
-    let ep0_ring_phys = sys_alloc_phys(PAGE_SIZE);
+    let (input_ctx_phys, input_ctx_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+    let (device_ctx_phys, device_ctx_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+    let (ep0_ring_phys, ep0_ring_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
 
     if input_ctx_phys == 0 || input_ctx_phys == u64::MAX
         || device_ctx_phys == 0 || device_ctx_phys == u64::MAX
@@ -968,9 +962,6 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    let input_ctx_va = sys_map_phys(input_ctx_phys, PAGE_SIZE);
-    let device_ctx_va = sys_map_phys(device_ctx_phys, PAGE_SIZE);
-    let ep0_ring_va = sys_map_phys(ep0_ring_phys, PAGE_SIZE);
 
     if input_ctx_va == 0 || input_ctx_va == u64::MAX
         || device_ctx_va == 0 || device_ctx_va == u64::MAX
@@ -1322,8 +1313,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.desc8.start]");
 
     // Allocate separate descriptor DMA page (no alias with EP0 transfer ring).
-    let desc_data_phys = sys_alloc_phys(PAGE_SIZE);
-    let desc_data_va = sys_map_phys(desc_data_phys, PAGE_SIZE);
+    let (desc_data_phys, desc_data_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+
     if desc_data_phys == 0 || desc_data_phys == u64::MAX
         || desc_data_va == 0 || desc_data_va == u64::MAX
     {
@@ -1412,7 +1403,7 @@ pub extern "C" fn _start() -> ! {
 
     // Doorbell: EP0 on slot_id. DB Target = 1 (EP0 endpoint ID).
     // DB index = en_slot_id (1-based slot from Enable Slot).
-    if db_base.wrapping_add(en_slot_id as u64 * 4 + 4) > map_va.wrapping_add(MAP_BYTES) {
+    if db_base.wrapping_add(en_slot_id as u64 * 4 + 4) > map_va.wrapping_add(map_bytes) {
         serial_println!("[sexusb.xhci.desc8.doorbell.bad]");
         loop { sys_yield(); }
     }
@@ -2877,16 +2868,15 @@ pub extern "C" fn _start() -> ! {
     const EP_TYPE_INTERRUPT_IN: u32 = 7;
     let intr_report_len: u32 = single_bind.max_packet as u32;
 
-    let intr_ring_phys = sys_alloc_phys(PAGE_SIZE);
-    let intr_report_phys = sys_alloc_phys(PAGE_SIZE);
+    let (intr_ring_phys, intr_ring_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+    let (intr_report_phys, intr_report_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
     if intr_ring_phys == 0 || intr_ring_phys == u64::MAX
         || intr_report_phys == 0 || intr_report_phys == u64::MAX
     {
         serial_println!("[sexusb.xhci.intr_in.alloc.bad]");
         loop { sys_yield(); }
     }
-    let intr_ring_va = sys_map_phys(intr_ring_phys, PAGE_SIZE);
-    let intr_report_va = sys_map_phys(intr_report_phys, PAGE_SIZE);
+
     if intr_ring_va == 0 || intr_ring_va == u64::MAX
         || intr_report_va == 0 || intr_report_va == u64::MAX
     {
@@ -3093,9 +3083,9 @@ pub extern "C" fn _start() -> ! {
         cmd_idx += 1;
 
         // --- Allocate second device context pages ---
-        let s2_input_phys = sys_alloc_phys(PAGE_SIZE);
-        let s2_device_phys = sys_alloc_phys(PAGE_SIZE);
-        let s2_ep0_ring_phys = sys_alloc_phys(PAGE_SIZE);
+        let (s2_input_phys, s2_input_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+        let (s2_device_phys, s2_device_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+        let (s2_ep0_ring_phys, s2_ep0_ring_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
         if s2_input_phys == 0 || s2_input_phys == u64::MAX
             || s2_device_phys == 0 || s2_device_phys == u64::MAX
             || s2_ep0_ring_phys == 0 || s2_ep0_ring_phys == u64::MAX
@@ -3103,9 +3093,7 @@ pub extern "C" fn _start() -> ! {
             serial_println!("[sexusb.slot2.alloc.bad]");
             loop { sys_yield(); }
         }
-        let s2_input_va = sys_map_phys(s2_input_phys, PAGE_SIZE);
-        let s2_device_va = sys_map_phys(s2_device_phys, PAGE_SIZE);
-        let s2_ep0_ring_va = sys_map_phys(s2_ep0_ring_phys, PAGE_SIZE);
+
         if s2_input_va == 0 || s2_input_va == u64::MAX
             || s2_device_va == 0 || s2_device_va == u64::MAX
             || s2_ep0_ring_va == 0 || s2_ep0_ring_va == u64::MAX
@@ -3800,16 +3788,15 @@ pub extern "C" fn _start() -> ! {
         let s2_intr_report_len: u32 = s2_intr_ep_mps as u32;
 
         // Allocate ring and report buffer
-        let s2_intr_ring_phys = sys_alloc_phys(PAGE_SIZE);
-        let s2_intr_report_phys = sys_alloc_phys(PAGE_SIZE);
+        let (s2_intr_ring_phys, s2_intr_ring_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
+        let (s2_intr_report_phys, s2_intr_report_va) = reserve_dma(&mut dma_pool, PAGE_SIZE);
         if s2_intr_ring_phys == 0 || s2_intr_ring_phys == u64::MAX
             || s2_intr_report_phys == 0 || s2_intr_report_phys == u64::MAX
         {
             serial_println!("[sexusb.slot2.intr.alloc.bad]");
             loop { sys_yield(); }
         }
-        let s2_intr_ring_va = sys_map_phys(s2_intr_ring_phys, PAGE_SIZE);
-        let s2_intr_report_va = sys_map_phys(s2_intr_report_phys, PAGE_SIZE);
+
         if s2_intr_ring_va == 0 || s2_intr_ring_va == u64::MAX
             || s2_intr_report_va == 0 || s2_intr_report_va == u64::MAX
         {

@@ -70,8 +70,8 @@ check_has_match "sex-pdx listen lateout caller_pd (RSI)" "lateout\\(\"rsi\"\\)\\
 check_has_match "kernel syscall-28 has no response pointer write path" "28\\s*=>\\s*\\{"
 
 echo "[6/6] optional build gate (best-effort in host env)"
-if cargo check -p sex-pdx >/tmp/sexos_guard_build.log 2>&1; then
-  echo "[PASS] cargo check -p sex-pdx"
+if cargo check --locked -p sex-pdx --target x86_64-unknown-none >/tmp/sexos_guard_build.log 2>&1; then
+  echo "[PASS] cargo check -p sex-pdx --target x86_64-unknown-none"
 else
   echo "[WARN] cargo check -p sex-pdx failed in current env"
   sed -n '1,60p' /tmp/sexos_guard_build.log

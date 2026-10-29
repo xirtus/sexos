@@ -8,8 +8,8 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "1e1fcc5840e6fbe16c31918a94d2d2d7426ceee1a4cc5827b40b3521cab29a60"
-contract_sha256 = "38b8af8c5c837952abab12659c66f0d3bfd31db36c1c5cc6c0a55474b7a372d1"
+abi_version_hash = "463bdccb47a62a97dd6294dd5d92926e1c469412fd656288aa81f7d528a5843f"
+contract_sha256 = "641b5000ab8544b94f4c25820c462fd20bb824d33478ff567cef4c35ce4e5898"
 target = "x86_64-sex.json"
 
 [forbidden_env]
@@ -41,6 +41,7 @@ crates = [
   "servers/sexfiles/Cargo.toml",
   "apps/spindle/Cargo.toml",
   "servers/sexnet/Cargo.toml",
+  "servers/sext/Cargo.toml",
   "apps/kaleidoscope/Cargo.toml"
 ]
 
@@ -62,6 +63,7 @@ artifacts = [
 id = "build_kernel"
 action = "cargo_pkg"
 package = "sex-kernel"
+rustflags = ""
 source_artifact = "target/x86_64-sex/release/sex-kernel"
 dest_artifact = "iso_root/sexos-kernel"
 
@@ -92,6 +94,7 @@ action = "cargo_manifest"
 manifest = "servers/sexinput/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexinput"
 dest_artifact = "iso_root/servers/sexinput"
+rustflags = ""
 
 [[stage]]
 id = "build_sexusb"
@@ -143,6 +146,7 @@ action = "cargo_manifest"
 manifest = "servers/sexbell/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexbell"
 dest_artifact = "iso_root/servers/sexbell"
+rustflags = ""
 
 [[stage]]
 id = "build_sexfiles"
@@ -171,6 +175,14 @@ action = "cargo_manifest"
 manifest = "apps/kaleidoscope/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/kaleidoscope"
 dest_artifact = "iso_root/apps/kaleidoscope"
+rustflags = ""
+
+[[stage]]
+id = "build_sext"
+action = "cargo_manifest"
+manifest = "servers/sext/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sext"
+dest_artifact = "iso_root/servers/sext"
 
 [[stage]]
 id = "copy_limine_cfg"

@@ -35,6 +35,8 @@ pub enum IpcError {
 #[derive(Debug, Clone, Copy)]
 pub struct IpcReply {
     pub value: u64,
+    /// Captured from the current protection domain, never supplied by userland.
+    pub caller_pd: u32,
 }
 
 /// Ring buffer message for Storage Completion.

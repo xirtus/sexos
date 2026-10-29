@@ -3039,6 +3039,12 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         let msg = unsafe { sex_pdx::pdx_listen_raw(0) };
+        if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
+            [msg.arg0,msg.arg1,msg.arg2],12,12) {
+            sex_pdx::serial_record!("[app.close.accepted] target=12 task=12 coordinator=3");
+            sex_pdx::task_finish(0);
+        }
+
         // Budgeted raw receive marker: log all incoming PDX messages.
         unsafe {
             static mut SPINDLE_RAW_BUDGET: u32 = 32;

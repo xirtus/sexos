@@ -27,18 +27,13 @@ fn hot_log() -> bool {
 }
 
 static CAP_READY_DISPLAY: AtomicBool = AtomicBool::new(false);
+static EDGE_SEND_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
+static mut STARTUP_INBOX: sex_pdx::display_ready::StartupInbox<
+    { sex_pdx::display_ready::STARTUP_INBOX_CAPACITY }
+> = sex_pdx::display_ready::StartupInbox::new();
 static DEFER_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 
 fn send_update_status(update: SilkBarUpdate) -> u64 {
-    unsafe {
-        static mut BOOTGRAPH_EDGE_SEND_BUDGET: u32 = 1;
-        if BOOTGRAPH_EDGE_SEND_BUDGET > 0 {
-            BOOTGRAPH_EDGE_SEND_BUDGET -= 1;
-            sex_pdx::serial_println!(
-                "[bootgraph.edge.send from=silkbar to=sexdisplay slot=SLOT_DISPLAY op=OP_SILKBAR_UPDATE first=1]"
-            );
-        }
-    }
     let result = sex_pdx::pdx_call_checked(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -46,6 +41,12 @@ fn send_update_status(update: SilkBarUpdate) -> u64 {
         (update.index as u64) << 32 | update.a as u64,
         update.b as u64,
     );
+
+    if result.is_ok() && !EDGE_SEND_EMITTED_DISPLAY.swap(true, Ordering::Relaxed) {
+        sex_pdx::serial_println!(
+            "[bootgraph.edge.send from=silkbar to=sexdisplay slot=SLOT_DISPLAY op=OP_SILKBAR_UPDATE first=1]"
+        );
+    }
 
     if !CAP_READY_DISPLAY.load(Ordering::Relaxed) {
         match result {
@@ -102,6 +103,10 @@ fn send_update(update: SilkBarUpdate) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     sex_pdx::serial_println!("[silkbar.init.start]");
+    // Static per-client storage keeps early ordinary messages off the task stack.
+    let startup_inbox = unsafe { &mut *core::ptr::addr_of_mut!(STARTUP_INBOX) };
+    startup_inbox.wait_for_display().expect("silkbar display-ready inbox full");
+    sex_pdx::serial_println!("[display.ready.accepted] client=silkbar caller=1 version=1");
     sex_pdx::serial_println!("[silkbar.boot.begin]");
     sex_pdx::serial_println!("[bootgraph.silkbar.spawned]");
     let contract_err = validate_silkbar_contract();
@@ -224,7 +229,7 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::serial_println!("[silkbar.stall.before_recv] iter={}", loop_iter);
             }
         }
-        if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
+        if let Some(msg) = startup_inbox.pop().or_else(|| sex_pdx::pdx_try_listen_raw(0)) {
             if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
                 let ws_raw = msg.arg0 as u8;
                 if ws_raw > SILKBAR_WORKSPACE_IDX_MAX {
@@ -269,7 +274,7 @@ pub extern "C" fn _start() -> ! {
                     ));
                     sex_pdx::serial_println!("[silkbar.selected.options.forward] mask={:#x}", options_mask);
                 }
-            } else if msg.type_id == 1 && msg.caller_pd == 1 {
+            } else if msg.type_id == 1 && msg.caller_pd == 10 {
                 // ── Bell reply (SUBSCRIBE generation or LIST packed counts) ──
                 {
                     static mut STALL_BEFORE_BELL_BUDGET: u32 = 2;
@@ -429,10 +434,15 @@ pub extern "C" fn _start() -> ! {
             let count = init_deferred_count;
             while init_deferred_next < init_deferred_count {
                 let update = init_deferred[init_deferred_next];
-                send_update(update);
+                if send_update_status(update) != 0 {
+                    // Retain this update and all later startup work for retry.
+                    break;
+                }
                 init_deferred_next += 1;
             }
-            sex_pdx::serial_println!("[silkbar.boot.init.flush.burst.done] count={}", count);
+            if init_deferred_next == init_deferred_count {
+                sex_pdx::serial_println!("[silkbar.boot.init.flush.burst.done] count={}", count);
+            }
         }
 
         // Tick-watch cadence: prefer real monotonic ticks when get_ticks()>0,

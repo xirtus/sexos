@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "subsystem": "pdx",
+  "invariants": [
+    {
+      "id": "PDX_SLOT_IDENTITY",
+      "requirement": "Full-width slot arguments must not alias a valid slot or the boot bridge by truncation.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/syscalls/mod.rs",
+          "anchor": "pub fn dispatch"
+        },
+        {
+          "path": "kernel/src/capability.rs",
+          "anchor": "pub fn grant_capability"
+        }
+      ],
+      "checks": [
+        "capability_slots"
+      ],
+      "gaps": [
+        "Slot identity validation does not authorize the intended operation."
+      ],
+      "depends_on": [
+        "PDX_SOLE_AUTHORITY"
+      ]
+    },
+    {
+      "id": "PDX_AUTHENTICATED_REPLY",
+      "requirement": "A completion belongs to one authenticated outstanding invocation and cannot overwrite another reply.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/ipc/router.rs",
+          "anchor": "send_reply"
+        }
+      ],
+      "checks": [
+        "reply_sender"
+      ],
+      "gaps": [
+        "Sender provenance and occupied-slot retention are tested, but raw target-ID routing is not a return capability and does not bind replies to one outstanding invocation."
+      ],
+      "depends_on": [
+        "PDX_SOLE_AUTHORITY"
+      ]
+    },
+    {
+      "id": "PDX_REVOCATION",
+      "requirement": "A sanctioned invalidation must prevent future invocation without fabricating new authority.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "kernel/src/capability.rs",
+          "anchor": "pub fn verify_revocation"
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "verify_revocation is not a proven revocation mechanism; lifecycle and stale-handle protocol unspecified."
+      ],
+      "depends_on": [
+        "CAPABILITY_GENESIS"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "event": "PDX_CALL",
+      "preconditions": [
+        "Full-width slot valid; caller and target registered; capability authorizes requested edge."
+      ],
+      "effects": [
+        "Resolve authorized edge; carry authenticated caller and register values."
+      ],
+      "forbidden": [
+        "Truncated slot alias; raw pointer confers authority; PKU substitutes for capability."
+      ],
+      "checks": [
+        "capability_slots",
+        "domain_identity"
+      ]
+    },
+    {
+      "event": "PDX_REPLY",
+      "preconditions": [
+        "Authenticated live exchange exists; receiver identity exact."
+      ],
+      "effects": [
+        "Complete that exchange once; preserve unrelated replies."
+      ],
+      "forbidden": [
+        "Foreign/stale completion; overwrite unrelated exchange."
+      ],
+      "checks": []
+    },
+    {
+      "event": "CAP_GRANT",
+      "preconditions": [
+        "BOOT_DAG genesis phase, before lock."
+      ],
+      "effects": [
+        "Install only sanctioned graph edge."
+      ],
+      "forbidden": [
+        "Unsanctioned runtime minting."
+      ],
+      "checks": []
+    },
+    {
+      "event": "CAP_REVOKE",
+      "preconditions": [
+        "Sanctioned invalidation model explicitly defined; none assumed here."
+      ],
+      "effects": [
+        "Deny future invocations of invalidated identity."
+      ],
+      "forbidden": [
+        "New authority or mutable graph introduced without constitutional design."
+      ],
+      "checks": []
+    }
+  ]
+}

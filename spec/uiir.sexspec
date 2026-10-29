@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "subsystem": "uiir",
+  "invariants": [
+    {
+      "id": "UIIR_AUTHORIZED_STREAM",
+      "requirement": "UiIR is an epoch-gated data transport with sex-pdx-granted ring authority and ordered per-sender streams.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "### 1.4 UiIR"
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "The full documented active UiIR epoch transport is absent; unused ring code is not an implementation."
+      ],
+      "depends_on": [
+        "PDX_SOLE_AUTHORITY",
+        "CAUSAL_DOMAIN_ORDER"
+      ]
+    },
+    {
+      "id": "DISPLAY_COMMIT",
+      "requirement": "Frame visibility changes only at explicit commit boundaries with deterministic drop/recovery semantics.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "servers/sexdisplay/src/main.rs",
+          "anchor": "fn render("
+        },
+        {
+          "path": "crates/sex-pdx/src/display_ready.rs",
+          "anchor": "DISPLAY_READY"
+        },
+        {
+          "path": "servers/sexdisplay/src/surface_lifecycle.rs",
+          "anchor": "pub struct"
+        },
+        {
+          "path": "servers/silk-shell/src/app_custody.rs",
+          "anchor": "pub struct"
+        },
+        {
+          "path": "servers/sexdisplay/src/surface_groups.rs",
+          "anchor": "pub struct FrameGroups"
+        },
+        {
+          "path": "servers/silk-shell/src/linen_text_delivery.rs",
+          "anchor": "pub struct Outbox"
+        }
+      ],
+      "checks": [
+        "display_ready",
+        "display_surface_lifecycle",
+        "shell_app_cleanup",
+        "display_text_readability",
+        "desktop_close_runtime",
+        "desktop_content",
+        "display_surface_groups",
+        "linen_text_delivery"
+      ],
+      "gaps": [
+        "Boot readiness protocol does not prove atomic epoch frames, latch recovery or replay."
+      ],
+      "depends_on": [
+        "EPOCH_COMMIT"
+      ]
+    },
+    {
+      "id": "INPUT_TRANSPORT",
+      "requirement": "Device input reaches its intended domain through authorized ordered messages and must become explicit replay input.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/interrupts.rs",
+          "anchor": "fn timer_interrupt_handler"
+        }
+      ],
+      "checks": [
+        "usb_paths"
+      ],
+      "gaps": [
+        "Synthetic QEMU input delivery does not establish recorded epoch input, complete causal ordering or bare-metal device behavior."
+      ],
+      "depends_on": [
+        "CAUSAL_DOMAIN_ORDER"
+      ]
+    },
+    {
+      "id": "INPUT_STARTUP_ORDER",
+      "requirement": "No real or synthetic shell-bound input is sent before authenticated shell initialization; retain unrelated startup input in FIFO order.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "crates/sex-pdx/src/shell_ready.rs",
+          "anchor": "pub fn is_shell_ready"
+        },
+        {
+          "path": "servers/sexinput/src/main.rs",
+          "anchor": "wait_for_shell()"
+        },
+        {
+          "path": "servers/silk-shell/src/main.rs",
+          "anchor": "shell_ready_publisher.poll()"
+        },
+        {
+          "path": "kernel/src/init.rs",
+          "anchor": "SHELL_READY_INPUT_SLOT_COLLISION"
+        }
+      ],
+      "checks": [
+        "shell_ready",
+        "master_boot",
+        "usb_paths"
+      ],
+      "gaps": [
+        "Boot-only fixed genesis; bounded inbox exhaustion fails startup; restart identities and continued availability remain unspecified."
+      ],
+      "depends_on": [
+        "PDX_SOLE_AUTHORITY"
+      ]
+    },
+    {
+      "id": "LINEN_VIEW_IDENTITY",
+      "requirement": "Linen refresh is bounded and asynchronous with one outstanding request; rescan/open ACKs cannot become metadata, and only a complete unique-ID snapshot publishes without erasing intervening selection.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "servers/silk-shell/src/main.rs",
+          "anchor": "[linen.snapshot.foreign_reply]"
+        },
+        {
+          "path": "servers/silk-shell/src/linen_async.rs",
+          "anchor": "pub struct Snapshot"
+        },
+        {
+          "path": "servers/linen/src/main.rs",
+          "anchor": "unsafe fn handle_get_public_snapshot("
+        }
+      ],
+      "checks": [
+        "reply_sender",
+        "disk_persistence",
+        "linen_snapshot",
+        "linen_reply_delivery"
+      ],
+      "gaps": [
+        "One outstanding request and authenticated sender do not provide full per-invocation correlation, loss recovery or cross-service transactional generations.",
+        "An empty session retains the legacy seed fallback; polished loading/empty/error states and a coherent visual system remain planned."
+      ],
+      "depends_on": [
+        "PDX_AUTHENTICATED_REPLY",
+        "INPUT_STARTUP_ORDER"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "event": "UIIR_PUBLISH",
+      "preconditions": [
+        "PDX-granted ring access; sender causal sequence and epoch explicit."
+      ],
+      "effects": [
+        "Snapshot input; transform privately; publish at epoch commit."
+      ],
+      "forbidden": [
+        "Cross-epoch mutation visibility; ambient ring access."
+      ],
+      "checks": []
+    },
+    {
+      "event": "FRAME_COMMIT",
+      "preconditions": [
+        "Complete validated frame; buffer ownership and epoch explicit."
+      ],
+      "effects": [
+        "Atomic visible swap and commit; retain last good latch for recovery."
+      ],
+      "forbidden": [
+        "In-place visible rendering outside epoch boundary."
+      ],
+      "checks": []
+    },
+    {
+      "event": "LINEN_VIEW_REFRESH",
+      "preconditions": [
+        "Actual Linen sender identity for snapshot replies; bounded metadata and complete names."
+      ],
+      "effects": [
+        "Stage a replacement with unique valid IDs, keep prior view during fetch and preserve a still-existing selection at publication."
+      ],
+      "forbidden": [
+        "Foreign reply becomes an object ID; publish half-built list; duplicate identities route Enter to the wrong document."
+      ],
+      "checks": [
+        "reply_sender",
+        "disk_persistence",
+        "linen_snapshot"
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@ use crate::messages;
 use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::{
     pdx_call, pdx_listen_raw, sys_yield, serial_println, SLOT_BLOCK,
-    SLOT_BUF_LEND, sys_grant_mem_lend,
+    SLOT_BUF_LEND,
     BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_SECTOR_SIZE, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
 };
 use spin::RwLock;
@@ -351,19 +351,19 @@ impl DiskFs {
 
     /// [sexfiles.diskfs.payload.read.begin]
     /// DiskFS-level block payload proof path (block-level, not file-level).
-    /// Allocates a MemLend buffer, issues typed BLOCK_READ, and verifies overwrite.
+    /// Resolves the boot-assigned shared buffer, issues typed BLOCK_READ, and verifies overwrite.
     #[allow(dead_code)]
     pub fn proof_diskfs_read_payload_block() -> Result<(u8, u64), u64> {
         serial_println!("[sexfiles.diskfs.payload.read.begin] offset=0x0 size=512");
-        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
         if buf_va == 0 || buf_va == u64::MAX {
             serial_println!(
-                "[sexfiles.diskfs.payload.err] reason=grant_failed buf_va={:#x}",
+                "[sexfiles.diskfs.payload.err] reason=view_failed buf_va={:#x}",
                 buf_va
             );
             return Err(u64::MAX);
         }
-        serial_println!("[sexfiles.diskfs.payload.bufcap.grant.ok] buf_va={:#x} slot={}", buf_va, SLOT_BUF_LEND);
+        serial_println!("[sexfiles.diskfs.payload.bufcap.view.ok] buf_va={:#x} slot={}", buf_va, SLOT_BUF_LEND);
 
         unsafe {
             let p = buf_va as *mut u8;
@@ -537,7 +537,7 @@ impl DiskFs {
     }
 
     pub fn proof_manifest_write_sector(sector: &[u8; 512]) -> Result<(), u64> {
-        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
         if buf_va == 0 || buf_va == u64::MAX {
             return Err(BLOCK_ERR_NO_DEVICE);
         }
@@ -554,7 +554,7 @@ impl DiskFs {
     }
 
     pub fn proof_manifest_read_sector(out: &mut [u8; 512]) -> Result<(), u64> {
-        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
         if buf_va == 0 || buf_va == u64::MAX {
             return Err(BLOCK_ERR_NO_DEVICE);
         }
@@ -585,7 +585,7 @@ impl DiskFs {
         if lba < DISKFS_PROOF_OBJECT_START_LBA || lba >= (DISKFS_PROOF_OBJECT_START_LBA + DISKFS_PROOF_OBJECT_SECTORS) {
             return Err(messages::ERR_OVERFLOW as u64);
         }
-        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
         if buf_va == 0 || buf_va == u64::MAX {
             return Err(BLOCK_ERR_NO_DEVICE);
         }
@@ -605,7 +605,7 @@ impl DiskFs {
         if lba < DISKFS_PROOF_OBJECT_START_LBA || lba >= (DISKFS_PROOF_OBJECT_START_LBA + DISKFS_PROOF_OBJECT_SECTORS) {
             return Err(messages::ERR_OVERFLOW as u64);
         }
-        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
         if buf_va == 0 || buf_va == u64::MAX {
             return Err(BLOCK_ERR_NO_DEVICE);
         }
@@ -2181,8 +2181,8 @@ impl DiskFs {
     //  Minimal path→LBA resolution with byte-range read/write.
     //  No directory tree, no allocator, no POSIX semantics.
     //
-    //  All methods accept a pre-granted buf_va (MemLend buffer VA) to avoid
-    //  re-granting through the same slot. The caller grants once and reuses.
+    //  All methods accept a boot-resolved buf_va (static block region VA).
+    //  Resolution can be repeated without changing capabilities.
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// [sexfiles.disk.file.lookup] — Resolve a named path to its manifest entry.
@@ -2489,7 +2489,7 @@ impl DiskFs {
     /// V1: single-entry manifest only. Does NOT require
     /// SEXOS_SEXFILES_REAL_BLOCK_PROOF.
     ///
-    /// buf_va: pre-granted MemLend buffer VA (caller provides).
+    /// buf_va: boot-resolved static block buffer VA (caller provides).
     pub fn diskfs_ensure_manifest(buf_va: u64) -> Result<(), u64> {
         serial_println!("[sexfiles.bridge.diskfs.manifest.ensure.begin]");
 
@@ -2910,7 +2910,7 @@ pub fn sexfs_v0_format_to_disk() -> Result<(), i64> {
 
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfs.v0.format.err] reason=buf_grant_failed");
+        serial_println!("[sexfs.v0.format.err] reason=buf_view_failed");
         return Err(messages::ERR_NOT_FOUND);
     }
 
@@ -2989,7 +2989,7 @@ pub fn sexfs_v0_mount_from_disk() -> Result<u64, i64> {
 
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfs.v0.mount.err] reason=buf_grant_failed");
+        serial_println!("[sexfs.v0.mount.err] reason=buf_view_failed");
         return Err(messages::ERR_NOT_FOUND);
     }
 

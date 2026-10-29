@@ -197,7 +197,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                 for page in Page::range_inclusive(start_page, end_page) {
                     unsafe {
                         vas.mapper
-                            .update_flags(page, final_flags)
+                            .update_flags(page, PageTableFlags::from_bits_retain(crate::app_resource_state::final_elf_flags(final_flags.bits(), pku_key)))
                             .map_err(|_| "ELF: update_flags failed")?
                             .flush();
                     }

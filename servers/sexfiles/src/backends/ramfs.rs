@@ -66,6 +66,26 @@ impl RamFs {
         }
     }
 
+    /// Release a terminal subject's volatile leases, preserving saved bytes and
+    /// valid leases held by other live subjects. Lock order matches open/write.
+    pub fn retire_subject(&self, subject: u32) -> (usize,usize) {
+        let mut files=self.files.write();
+        let mut caps=self.caps.write();
+        let mut revoked=0;
+        for cap in caps.iter_mut() {
+            if cap.valid && cap.subject_pd==subject { cap.valid=false; revoked+=1; }
+        }
+        let mut closed=0;
+        for file in files.iter_mut() {
+            if file.active && file.owner_pd==subject && !caps.iter().any(|c|
+                c.valid && c.object_id==file.object_id && c.generation==file.cap_generation
+                && c.subject_pd!=subject && c.rights & CAP_RIGHT_OPEN_EXISTING!=0) {
+                file.active=false; closed+=1;
+            }
+        }
+        (closed,revoked)
+    }
+
     /// Find an active entry by handle.
     fn find_active_by_handle<'s>(files: &'s [FileEntry], handle: u64) -> Option<&'s FileEntry> {
         files.iter().find(|e| e.active && e.handle == handle)

@@ -1,13 +1,13 @@
-use crate::capability::{CapabilityData, ProtectionDomain};
-use core::ptr;
-use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+use crate::capability::CapabilityData;
+use core::sync::atomic::Ordering;
 use x86_64::VirtAddr;
 
 pub mod messages;
 pub mod pagefault;
 pub mod router;
 pub mod state;
-pub mod buffer;
+mod domain_registry;
+pub use domain_registry::DomainRegistry;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BootPhase {
@@ -68,50 +68,6 @@ pub fn get_phase() -> BootPhase {
 pub const MAX_DOMAINS: usize = 1024;
 pub const LOCAL_NODE_ID: u32 = 1;
 
-/// Capability graph node registry.
-pub struct DomainRegistry {
-    pub domains: [AtomicPtr<ProtectionDomain>; MAX_DOMAINS],
-}
-
-impl DomainRegistry {
-    pub const fn new() -> Self {
-        const INIT: AtomicPtr<ProtectionDomain> = AtomicPtr::new(ptr::null_mut());
-        Self {
-            domains: [INIT; MAX_DOMAINS],
-        }
-    }
-
-    pub fn get(&self, id: u32) -> Option<&'static ProtectionDomain> {
-        let idx = id as usize % MAX_DOMAINS;
-        let ptr = self.domains[idx].load(Ordering::Acquire);
-        if ptr.is_null() {
-            None
-        } else {
-            unsafe { Some(&*ptr) }
-        }
-    }
-
-    pub fn insert(&self, id: u32, pd: *mut ProtectionDomain) {
-        // Enforce Phase 1: Only during RegistryBuild
-        let phase = BOOT_PHASE.load(Ordering::SeqCst);
-        if phase != BootPhase::RegistryBuild as u8 {
-            crate::serial_println!(
-                "registry.mutation.denied registry=DOMAIN_REGISTRY op=insert domain_id={} phase={}",
-                id,
-                phase
-            );
-        }
-        assert!(phase == BootPhase::RegistryBuild as u8, "REGISTRY_MUTATION_VIOLATION");
-
-        let idx = id as usize % MAX_DOMAINS;
-        self.domains[idx].store(pd, Ordering::Release);
-    }
-
-    pub fn len(&self) -> usize {
-        self.domains.iter().filter(|p| !p.load(Ordering::Acquire).is_null()).count()
-    }
-}
-
 pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
 
 pub unsafe fn pdx_call(entry_point: VirtAddr, arg0: u64, arg1: u64, arg2: u64) -> u64 {
@@ -133,7 +89,10 @@ pub unsafe fn pdx_call(entry_point: VirtAddr, arg0: u64, arg1: u64, arg2: u64) -
 
 pub enum GraphEdge {
     SyncCall     { entry_point: VirtAddr },
-    AsyncEnqueue { ring: *mut crate::ipc_ring::RingBuffer<crate::ipc::messages::MessageType, 256> },
+    AsyncEnqueue {
+        ring: *mut crate::ipc_ring::RingBuffer<crate::ipc::messages::MessageType, 256>,
+        task: *mut crate::scheduler::Task,
+    },
     AsyncDequeue {
         ring: *mut crate::ipc_ring::RingBuffer<crate::ipc::messages::MessageType, 256>,
         source: DequeueSource
@@ -148,13 +107,18 @@ pub enum DequeueSource {
 pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool) -> Result<GraphEdge, u64> {
     match cap_data {
         CapabilityData::IPC(data) => {
+            if !crate::app_resources::accepts_ipc(data.target_pd_id) {return Err(sex_pdx::ERR_SERVICE_NOT_READY);}
             if is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
             Ok(GraphEdge::SyncCall { entry_point: data.entry_point })
         },
         CapabilityData::Domain(id) => {
+            if !crate::app_resources::accepts_ipc(id) {return Err(sex_pdx::ERR_SERVICE_NOT_READY);}
             if is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
             let pd = DOMAIN_REGISTRY.get(id).ok_or(sex_pdx::ERR_CAP_INVALID)?;
-            Ok(GraphEdge::AsyncEnqueue { ring: pd.message_ring })
+            Ok(GraphEdge::AsyncEnqueue {
+                ring: pd.message_ring,
+                task: pd.main_task.load(Ordering::Acquire),
+            })
         },
         CapabilityData::MessageQueue => {
             if !is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
@@ -176,11 +140,16 @@ pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u
     match edge {
         GraphEdge::SyncCall { entry_point } =>
             unsafe { Ok(pdx_call(entry_point, arg0, arg1, arg2)) },
-        GraphEdge::AsyncEnqueue { ring } => {
+        GraphEdge::AsyncEnqueue { ring, task } => {
             let msg = crate::ipc::messages::MessageType::IpcCall {
                 func_id: opcode, arg0, arg1, arg2, caller_pd,
             };
-            unsafe { (*ring).enqueue(msg).map(|_| 0u64).map_err(|_| sex_pdx::ERR_SERVICE_NOT_READY) }
+            unsafe { (*ring).enqueue(msg).map_err(|_| sex_pdx::ERR_SERVICE_NOT_READY)?; }
+            // Publish the event only after its payload is visible. A full ring
+            // grants no wake; an accepted invocation retains its receiver's
+            // pending event even across park/save/stack-release boundaries.
+            crate::scheduler::unpark_thread(task);
+            Ok(0)
         },
         GraphEdge::AsyncDequeue { ring: _, source: _ } => {
             Err(sex_pdx::ERR_CAP_INVALID)
@@ -214,6 +183,7 @@ pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<u32, u64> {
 }
 
 pub fn route_signal(target_pd_id: u32, signal: u8) -> Result<(), &'static str> {
+    if !crate::app_resources::accepts_ipc(target_pd_id) {return Err("IPC: retired target");}
     let target_pd = DOMAIN_REGISTRY.get(target_pd_id)
         .ok_or("IPC: Target not found")?;
 

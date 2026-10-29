@@ -101,37 +101,23 @@ unsafe fn sys_net_diag(selector: u64) -> u64 {
     result
 }
 
-fn sys_alloc_phys(size: u64) -> u64 {
-    let result: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 31u64,
-            in("rdi") size,
-            lateout("rax") result,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
+// The pool only subdivides this domain's immutable, pre-mapped boot DMA region.
+// Both addresses come from the same reservation; no physical address mapping API.
+fn reserve_dma(pool: &mut Option<sex_pdx::dma_pool::DmaRegionPool>, bytes: u64) -> (u64, u64) {
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
+    if pool.is_none() {
+        let Ok(view) = sex_pdx::memory_region_full_view(
+            sex_pdx::SLOT_DMA_REGION, QUERY_VIEW | READ | WRITE | DMA_ADDRESS,
+        ) else { return (u64::MAX, u64::MAX); };
+        let Ok(new_pool) = sex_pdx::dma_pool::DmaRegionPool::new(view)
+            else { return (u64::MAX, u64::MAX); };
+        sex_pdx::serial_record!("[sexnet.memory.dma.ready] region_id={} length={}", view.region_id, view.length);
+        *pool = Some(new_pool);
     }
-    result
-}
-
-fn sys_map_phys(phys: u64, size: u64) -> u64 {
-    let result: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 30u64,
-            in("rdi") phys,
-            in("rsi") size,
-            lateout("rax") result,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
+    match pool.as_mut().unwrap().reserve(bytes) {
+        Ok(buffer) => (buffer.physical_address, buffer.virtual_address),
+        Err(_) => (u64::MAX, u64::MAX),
     }
-    result
 }
 
 unsafe fn proof_reset() {
@@ -839,6 +825,7 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let mut dma_pool = None;
     let raw = unsafe { sys_net_diag(0) };
     let status = (raw >> 32) as u32;
     let source = ((raw >> 16) & 0xFF) as u8;
@@ -896,7 +883,11 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");
     if SEXNET_PROOF_PROFILE_ENABLED {
         serial_println!("[sexnet.proof.profile] enabled=1 reason=SEXOS_SEXNET_PROOF_PROFILE_set");
-        let nic_va = sex_pdx::sys_map_pci_bar(sex_pdx::SLOT_NIC, 0, 0x10000);
+        let nic_va = sex_pdx::memory_region_full_view(
+            sex_pdx::SLOT_NIC, sex_pdx::memory_region::QUERY_VIEW
+                | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE,
+        ).ok().filter(|view| view.length >= 0x5408)
+            .map(|view| view.virtual_address).unwrap_or(u64::MAX);
         if nic_va != u64::MAX {
             let ral = unsafe { core::ptr::read_volatile((nic_va + 0x5400) as *const u32) };
             let rah = unsafe { core::ptr::read_volatile((nic_va + 0x5404) as *const u32) };
@@ -978,10 +969,10 @@ pub extern "C" fn _start() -> ! {
             };
             serial_println!("[sexnet.nic.rctl.disable_restore.proof.done] ok={}", proof_ok);
 
-            let desc_phys = sys_alloc_phys(4096);
-            let desc_va = sys_map_phys(desc_phys, 4096);
-            let pkt_phys = sys_alloc_phys(4096);
-            let pkt_va = sys_map_phys(pkt_phys, 4096);
+            let (desc_phys, desc_va) = reserve_dma(&mut dma_pool, 4096);
+
+            let (pkt_phys, pkt_va) = reserve_dma(&mut dma_pool, 4096);
+
             let alloc_ok = desc_phys != 0
                 && desc_phys != u64::MAX
                 && desc_va != 0
@@ -1144,8 +1135,8 @@ pub extern "C" fn _start() -> ! {
                 );
                 serial_println!("[sexnet.nic.rx.ring.program_restore.proof.done] ok={}", restore_ok);
 
-                let obs_desc_phys = sys_alloc_phys(4096);
-                let obs_desc_va = sys_map_phys(obs_desc_phys, 4096);
+                let (obs_desc_phys, obs_desc_va) = reserve_dma(&mut dma_pool, 4096);
+
                 let mut obs_pkt_phys = [0u64; 8];
                 let mut obs_pkt_va = [0u64; 8];
                 let mut obs_alloc_ok = obs_desc_phys != 0
@@ -1154,8 +1145,7 @@ pub extern "C" fn _start() -> ! {
                     && obs_desc_va != u64::MAX;
                 let mut oi = 0usize;
                 while oi < 8 {
-                    obs_pkt_phys[oi] = sys_alloc_phys(4096);
-                    obs_pkt_va[oi] = sys_map_phys(obs_pkt_phys[oi], 4096);
+                    (obs_pkt_phys[oi], obs_pkt_va[oi]) = reserve_dma(&mut dma_pool, 4096);
                     if obs_pkt_phys[oi] == 0
                         || obs_pkt_phys[oi] == u64::MAX
                         || obs_pkt_va[oi] == 0
@@ -1451,8 +1441,8 @@ pub extern "C" fn _start() -> ! {
 
                 serial_println!("[sexnet.nic.reset.proof.done] ok=1");
 
-                let perm_desc_phys = sys_alloc_phys(4096);
-                let perm_desc_va = sys_map_phys(perm_desc_phys, 4096);
+                let (perm_desc_phys, perm_desc_va) = reserve_dma(&mut dma_pool, 4096);
+
                 let mut perm_pkt_phys = [0u64; 8];
                 let mut perm_pkt_va = [0u64; 8];
                 let mut perm_alloc_ok = perm_desc_phys != 0
@@ -1461,8 +1451,7 @@ pub extern "C" fn _start() -> ! {
                     && perm_desc_va != u64::MAX;
                 let mut poi = 0usize;
                 while poi < 8 {
-                    perm_pkt_phys[poi] = sys_alloc_phys(4096);
-                    perm_pkt_va[poi] = sys_map_phys(perm_pkt_phys[poi], 4096);
+                    (perm_pkt_phys[poi], perm_pkt_va[poi]) = reserve_dma(&mut dma_pool, 4096);
                     if perm_pkt_phys[poi] == 0
                         || perm_pkt_phys[poi] == u64::MAX
                         || perm_pkt_va[poi] == 0
@@ -1648,10 +1637,10 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
-            let tx_desc_phys = sys_alloc_phys(4096);
-            let tx_desc_va = sys_map_phys(tx_desc_phys, 4096);
-            let tx_frame_phys = sys_alloc_phys(4096);
-            let tx_frame_va = sys_map_phys(tx_frame_phys, 4096);
+            let (tx_desc_phys, tx_desc_va) = reserve_dma(&mut dma_pool, 4096);
+
+            let (tx_frame_phys, tx_frame_va) = reserve_dma(&mut dma_pool, 4096);
+
             let tx_alloc_ok = tx_desc_phys != 0
                 && tx_desc_phys != u64::MAX
                 && tx_desc_va != 0
@@ -1818,10 +1807,10 @@ pub extern "C" fn _start() -> ! {
                 if rx_own != NIC_OWNER_SEXNET_RX {
                     serial_println!("[sexnet.nic.tx.permanent.skip] reason=rx_not_claimed ok=0");
                 } else {
-                    let txp_desc_phys = sys_alloc_phys(4096);
-                    let txp_desc_va = sys_map_phys(txp_desc_phys, 4096);
-                    let txp_frame_phys = sys_alloc_phys(4096);
-                    let txp_frame_va = sys_map_phys(txp_frame_phys, 4096);
+                    let (txp_desc_phys, txp_desc_va) = reserve_dma(&mut dma_pool, 4096);
+
+                    let (txp_frame_phys, txp_frame_va) = reserve_dma(&mut dma_pool, 4096);
+
                     let txp_alloc_ok = txp_desc_phys != 0
                         && txp_desc_phys != u64::MAX
                         && txp_desc_va != 0
@@ -5194,8 +5183,19 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[boot.default.profile] proofs=light ok=1 reason=sexnet_proof_profile_not_set");
         serial_println!("[sexnet.passive.ready.fast] network=0 dns=0 tcp=0 http=0 tls=0 ok=1");
     }
+    let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     loop {
         let req = unsafe { pdx_listen_raw(0) };
+        if req.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
+            if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
+                req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|_| {}) {
+                // Current protocol exposes shared service caches, no client sockets.
+                sex_pdx::serial_record!("[net.app.cleanup.ack] target={} task={} client_leases=0 shared_cache=retained ok={}",n.target_pd,n.task_id,acked as u8);
+            }
+            continue;
+        }
+        if app_custody.is_retired(req.caller_pd) {continue}
+
         let result = handle_call(req.type_id, req.arg0, req.arg1);
         pdx_reply(req.caller_pd, result);
     }

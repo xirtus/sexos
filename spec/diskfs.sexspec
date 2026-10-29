@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "subsystem": "diskfs",
+  "invariants": [
+    {
+      "id": "DISK_ATOMICITY",
+      "requirement": "For each specified durable operation and crash point, recovery exposes complete old or complete new state, never mixed data/metadata.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "servers/sexfiles/src/vfs.rs",
+          "anchor": "fn handle_diskfs_write"
+        },
+        {
+          "path": "servers/sexfiles/src/vfs.rs",
+          "anchor": "fn v4_bitmap_rebuild"
+        }
+      ],
+      "checks": [
+        "diskfs_recovery",
+        "disk_persistence",
+        "diskfs_crash",
+        "diskfs_metadata_crash"
+      ],
+      "gaps": [
+        "Host descriptor I/O is a fixture; full multi-object crash/reboot and physical persistence proof remains open."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "DISK_EXTENT_CUSTODY",
+      "requirement": "Rebuild reserves every valid indirect-referenced pool extent, including a live empty object after descriptor commit before size commit; new slot identities reset stale descriptors before publication.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "servers/sexfiles/src/vfs.rs",
+          "anchor": "fn v4_bitmap_rebuild"
+        },
+        {
+          "path": "servers/sexfiles/src/vfs.rs",
+          "anchor": "fn v4_allocate"
+        },
+        {
+          "path": "servers/sexfiles/src/vfs.rs",
+          "anchor": "fn handle_diskfs_create"
+        },
+        {
+          "path": "servers/sexfiles/src/vfs.rs",
+          "anchor": "fn handle_diskfs_delete"
+        }
+      ],
+      "checks": [
+        "diskfs_recovery",
+        "dynamic_objects"
+      ],
+      "gaps": [
+        "Tests cover production helper logic under fixture I/O; unreferenced corrupt descriptors require a separate conservative recovery policy."
+      ],
+      "depends_on": [
+        "DISK_ATOMICITY"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "event": "DISK_WRITE",
+      "preconditions": [
+        "Client/object authority and valid bounds; unique extent custody."
+      ],
+      "effects": [
+        "Persist data, then indirect descriptors, then publish manifest size."
+      ],
+      "forbidden": [
+        "Expose uncommitted size; reuse reserved extent."
+      ],
+      "checks": [
+        "diskfs_recovery",
+        "diskfs_crash"
+      ]
+    },
+    {
+      "event": "DISK_RECOVER",
+      "preconditions": [
+        "Durable image from named crash window."
+      ],
+      "effects": [
+        "Validate metadata; rebuild reservations including zero-length live owners; classify old/new outcome."
+      ],
+      "forbidden": [
+        "Two live objects alias a pool extent; silently accept unreadable nonempty live descriptor."
+      ],
+      "checks": [
+        "diskfs_recovery",
+        "diskfs_crash",
+        "diskfs_metadata_crash"
+      ]
+    },
+    {
+      "event": "DISK_CREATE",
+      "preconditions": [
+        "Slot free; failed deletion has not erased a still-live in-memory owner."
+      ],
+      "effects": [
+        "Reset and verify the slot descriptor before publishing a new manifest identity; invalidate stale cache."
+      ],
+      "forbidden": [
+        "Publish a new live owner while old generation extents remain reusable."
+      ],
+      "checks": [
+        "diskfs_recovery",
+        "dynamic_objects"
+      ]
+    }
+  ]
+}

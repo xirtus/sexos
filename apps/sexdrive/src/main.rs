@@ -6,12 +6,24 @@ use core::sync::atomic::{compiler_fence, Ordering};
 use sex_pdx::{
     pdx_call, pdx_reply, pdx_try_listen_raw, serial_println,
     SLOT_SHELL, SLOT_USB_HOST,
-    SLOT_BUF_LEND, sys_map_mem_lend,
+    SLOT_DMA_REGION, SLOT_FRAME_REGION, SLOT_BLOCK_BUFFER,
     BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC,
     BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
     BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER,
 };
 
+
+mod dma_transfer;
+use dma_transfer::DmaTransfer;
+use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
+use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
+
+// All permanent DMA allocations are slices of this one boot-granted region.
+// Normal operations reuse the two leases; they never reserve another page.
+static mut DMA_POOL: Option<DmaRegionPool> = None;
+static mut DMA_VIEW: Option<RegionView> = None;
+static mut READ_LEASE: Option<DmaLease> = None;
+static mut WRITE_LEASE: Option<DmaLease> = None;
 
 // SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
 // the full trace (first 240 lines); steady-state loops go quiet so
@@ -148,35 +160,61 @@ static mut NVME_IO_STATE: NvmeIoState = NvmeIoState {
     next_cid: 0x0500,
 };
 
-fn sys_alloc_phys(size: u64) -> u64 {
-    let phys: u64;
+fn init_dma_region() -> bool {
+    let view = match sex_pdx::memory_region_full_view(SLOT_DMA_REGION, QUERY_VIEW | READ | WRITE | DMA_ADDRESS) {
+        Ok(view) if view.length == 512 * 1024 => view,
+        _ => return false,
+    };
+    let mut pool = match DmaRegionPool::new(view) { Ok(pool) => pool, Err(_) => return false };
+    let read = match pool.reserve(PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
+    let write = match pool.reserve(PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
     unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 31u64,
-            in("rdi") size,
-            lateout("rax") phys,
-            out("rcx") _,
-            out("r11") _,
-        );
+        DMA_VIEW = Some(view);
+        DMA_POOL = Some(pool);
+        READ_LEASE = Some(DmaLease::new(read));
+        WRITE_LEASE = Some(DmaLease::new(write));
     }
-    phys
+    sex_pdx::serial_record!("[sexdrive.dma.region] slot={} bytes={} reusable_buffers=2", SLOT_DMA_REGION, view.length);
+    true
 }
 
-fn sys_map_phys(phys: u64, size: u64) -> u64 {
-    let va: u64;
+// Initialization-only reservation; no allocation or mapping syscall exists here.
+fn reserve_dma_phys(size: u64) -> u64 {
     unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 30u64,
-            in("rdi") phys,
-            in("rsi") size,
-            lateout("rax") va,
-            out("rcx") _,
-            out("r11") _,
-        );
+        DMA_POOL.as_mut().and_then(|pool| pool.reserve(size).ok())
+            .map(|buffer| buffer.physical_address).unwrap_or(0)
     }
-    va
+}
+
+// Translate only inside our already-granted DMA arena, never arbitrary physical
+// addresses. The caller's span must also have been permanently reserved.
+fn own_dma_virtual(phys: u64, size: u64) -> u64 {
+    unsafe {
+        let (Some(view), Some(pool)) = (DMA_VIEW, DMA_POOL.as_ref()) else { return 0; };
+        let Some(base) = view.dma_address else { return 0; };
+        let Some(offset) = phys.checked_sub(base) else { return 0; };
+        if size == 0 || !offset.checked_add(size).is_some_and(|end| end <= pool.used()) { return 0; }
+        view.virtual_address + offset
+    }
+}
+
+fn stop_uncertain_io() {
+    unsafe { NVME_IO_STATE.ready = false; }
+    serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
+}
+
+fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
+    unsafe {
+        let lease = if write { WRITE_LEASE.as_mut()? } else { READ_LEASE.as_mut()? };
+        DmaTransfer::prepare(lease, cid as u64, stop_uncertain_io).ok()
+    }
+}
+
+fn block_buffer_view(caller: u32, slot: u64, bytes: u64, rights: u8) -> Option<RegionView> {
+    if slot != SLOT_BLOCK_BUFFER { return None; }
+    let info = sex_pdx::memory_region_info(slot).ok()?;
+    if info.peer_pd != Some(caller) { return None; }
+    sex_pdx::memory_region_view(slot, 0, bytes, QUERY_VIEW | rights).ok()
 }
 
 fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
@@ -219,7 +257,10 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         NVME_IO_STATE.next_cid = NVME_IO_STATE.next_cid.wrapping_add(1);
     }
 
-    let data_phys = sys_alloc_phys(PAGE_SIZE);
+    let mut transfer = match prepare_bounce(false, cid) {
+        Some(transfer) => transfer, None => return BLOCK_ERR_NO_DEVICE,
+    };
+    let data_phys = transfer.buffer.physical_address;
     if data_phys == 0 || data_phys == u64::MAX || (data_phys % PAGE_SIZE) != 0 {
         serial_println!(
             "[sexdrive.block.read.api.err] reason=data_alloc_invalid phys={:#x}",
@@ -227,7 +268,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    let data_va = sys_map_phys(data_phys, PAGE_SIZE);
+    let data_va = transfer.buffer.virtual_address;
     if data_va == 0 || data_va == u64::MAX {
         serial_println!(
             "[sexdrive.block.read.api.err] reason=data_map_failed va={:#x}",
@@ -269,6 +310,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
+        if transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
     if hot_log() { serial_println!(
@@ -315,6 +357,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         polls as u64
     ); }
     if !done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.block.read.api.err] reason=cqe_timeout cid={} head={} phase={}",
             cid as u64, cq_head as u64, cq_phase as u64
@@ -333,10 +376,14 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
 
+    if transfer.complete((dw3 & 0xFFFF) as u16, (dw3 >> 16) & 1, cq_phase).is_err() {
+        return BLOCK_ERR_NO_DEVICE;
+    }
     let sf = (dw3 >> 17) & 0x7FFF;
     let sc = sf & 0xFF;
     let sct = (sf >> 8) & 0x7;
     if sc != 0 || sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; } // CQ error completed DMA; stop stale queue state.
         let sqhd = dw2 & 0xFFFF;
         let sqid = (dw2 >> 16) & 0xFFFF;
         serial_println!(
@@ -413,7 +460,10 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         NVME_IO_STATE.next_cid = NVME_IO_STATE.next_cid.wrapping_add(1);
     }
 
-    let data_phys = sys_alloc_phys(PAGE_SIZE);
+    let mut transfer = match prepare_bounce(false, cid) {
+        Some(transfer) => transfer, None => return BLOCK_ERR_NO_DEVICE,
+    };
+    let data_phys = transfer.buffer.physical_address;
     if data_phys == 0 || data_phys == u64::MAX || (data_phys % PAGE_SIZE) != 0 {
         serial_println!(
             "[sexdrive.block.read.handoff.err] reason=data_alloc_invalid phys={:#x}",
@@ -421,7 +471,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    let data_va = sys_map_phys(data_phys, PAGE_SIZE);
+    let data_va = transfer.buffer.virtual_address;
     if data_va == 0 || data_va == u64::MAX {
         serial_println!(
             "[sexdrive.block.read.handoff.err] reason=data_map_failed va={:#x}",
@@ -458,8 +508,8 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
     if hot_log() { serial_println!(
-        "[sexdrive.nvme.cmd.shape] path=typed op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=memlend last_lba={}",
-        cid as u64, 1u64, slba, nlb, size, data_phys, 0u64, dst_va, data_phys, SLOT_BUF_LEND, last_lba
+        "[sexdrive.nvme.cmd.shape] path=typed op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=capability_region last_lba={}",
+        cid as u64, 1u64, slba, nlb, size, data_phys, 0u64, dst_va, data_phys, SLOT_BLOCK_BUFFER, last_lba
     ); }
     compiler_fence(Ordering::SeqCst);
     if hot_log() { serial_println!(
@@ -468,6 +518,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     ); }
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
+        if transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
     if hot_log() { serial_println!(
@@ -514,6 +565,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         polls as u64
     ); }
     if !done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.block.read.handoff.err] reason=cqe_timeout cid={} head={} phase={}",
             cid as u64, cq_head as u64, cq_phase as u64
@@ -532,10 +584,14 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
 
+    if transfer.complete((dw3 & 0xFFFF) as u16, (dw3 >> 16) & 1, cq_phase).is_err() {
+        return BLOCK_ERR_NO_DEVICE;
+    }
     let sf = (dw3 >> 17) & 0x7FFF;
     let sc = sf & 0xFF;
     let sct = (sf >> 8) & 0x7;
     if sc != 0 || sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; } // CQ error completed DMA; stop stale queue state.
         let sqhd = dw2 & 0xFFFF;
         let sqid = (dw2 >> 16) & 0xFFFF;
         serial_println!(
@@ -577,7 +633,7 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
     let manifest_offset = MANIFEST_LBA * NVME_LBA_BYTES;
     let object_start_offset = PROOF_OBJECT_START_LBA * NVME_LBA_BYTES;
     let object_end_offset = PROOF_OBJECT_END_LBA * NVME_LBA_BYTES;
-    let proof_mode = buf_cap == SLOT_BUF_LEND;
+    let proof_mode = buf_cap == SLOT_BLOCK_BUFFER;
     let allow_manifest = proof_mode && size == WRITE_PROOF_LEN && offset == manifest_offset;
     let linen_start = LINEN_OBJECT_START_LBA * NVME_LBA_BYTES;
     let linen_end   = LINEN_OBJECT_END_LBA   * NVME_LBA_BYTES;
@@ -688,8 +744,11 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         NVME_IO_STATE.next_cid = NVME_IO_STATE.next_cid.wrapping_add(1);
     }
 
-    let write_phys = sys_alloc_phys(PAGE_SIZE);
-    let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+    let mut transfer = match prepare_bounce(true, write_cid) {
+        Some(transfer) => transfer, None => return BLOCK_ERR_NO_DEVICE,
+    };
+    let write_phys = transfer.buffer.physical_address;
+    let write_va = transfer.buffer.virtual_address;
     if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
         || write_va == 0 || write_va == u64::MAX
     {
@@ -742,8 +801,8 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         write_cid as u64, slba, write_phys
     );
     if hot_log() { serial_println!(
-        "[sexdrive.nvme.cmd.shape] path=typed op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=memlend last_lba={}",
-        write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, src_va, write_phys, SLOT_BUF_LEND, last_lba
+        "[sexdrive.nvme.cmd.shape] path=typed op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=capability_region last_lba={}",
+        write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, src_va, write_phys, SLOT_BLOCK_BUFFER, last_lba
     ); }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
@@ -753,6 +812,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
+        if transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
     if hot_log() { serial_println!(
@@ -801,6 +861,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         polls as u64
     ); }
     if !done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.nvme.write.err] reason=cqe_timeout cid={} head={} phase={}",
             write_cid as u64, cq_head as u64, cq_phase as u64
@@ -818,10 +879,14 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
+    if transfer.complete((dw3 & 0xFFFF) as u16, (dw3 >> 16) & 1, cq_phase).is_err() {
+        return BLOCK_ERR_NO_DEVICE;
+    }
     let sf = (dw3 >> 17) & 0x7FFF;
     let sc = sf & 0xFF;
     let sct = (sf >> 8) & 0x7;
     if sc != 0 || sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; } // CQ error completed DMA; stop stale queue state.
         serial_println!(
             "[sexdrive.nvme.write.err] reason=status_fail cid={} sc={} sct={} dw3={:#x}",
             write_cid as u64, sc as u64, sct as u64, dw3 as u64
@@ -897,8 +962,11 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         NVME_IO_STATE.next_cid = NVME_IO_STATE.next_cid.wrapping_add(1);
     }
 
-    let write_phys = sys_alloc_phys(PAGE_SIZE);
-    let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+    let mut write_transfer = match prepare_bounce(true, write_cid) {
+        Some(transfer) => transfer, None => return BLOCK_ERR_NO_DEVICE,
+    };
+    let write_phys = write_transfer.buffer.physical_address;
+    let write_va = write_transfer.buffer.virtual_address;
     if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
         || write_va == 0 || write_va == u64::MAX
     {
@@ -961,6 +1029,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
+        if write_transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
     if hot_log() { serial_println!(
@@ -1011,6 +1080,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         polls as u64
     ); }
     if !done {
+        stop_uncertain_io();
         serial_println!("[sexdrive.storage100.rw.fail] reason=write_cqe_timeout");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=cqe_timeout cid={} head={} phase={}",
@@ -1029,10 +1099,14 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
+    if write_transfer.complete((dw3 & 0xFFFF) as u16, (dw3 >> 16) & 1, cq_phase).is_err() {
+        return BLOCK_ERR_NO_DEVICE;
+    }
     let sf = (dw3 >> 17) & 0x7FFF;
     let sc = sf & 0xFF;
     let sct = (sf >> 8) & 0x7;
     if sc != 0 || sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; }
         serial_println!("[sexdrive.storage100.write.complete] status=1 bytes={}", size);
         serial_println!("[sexdrive.storage100.rw.fail] reason=write_status_fail");
         serial_println!(
@@ -1055,8 +1129,11 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     // Readback verify from same LBA
     serial_println!("[sexdrive.storage100.read.submit] lba={} bytes={}", slba, size);
     serial_println!("[sexdrive.nvme.write.readback.begin] slba={}", slba);
-    let read_phys = sys_alloc_phys(PAGE_SIZE);
-    let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+    let mut read_transfer = match prepare_bounce(false, read_cid) {
+        Some(transfer) => transfer, None => return BLOCK_ERR_NO_DEVICE,
+    };
+    let read_phys = read_transfer.buffer.physical_address;
+    let read_va = read_transfer.buffer.virtual_address;
     if read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
         || read_va == 0 || read_va == u64::MAX
     {
@@ -1097,6 +1174,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     ); }
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
+        if read_transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
     if hot_log() { serial_println!(
@@ -1143,6 +1221,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         polls as u64
     ); }
     if !rb_done {
+        stop_uncertain_io();
         serial_println!("[sexdrive.storage100.rw.fail] reason=read_cqe_timeout");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=readback_timeout cid={} head={} phase={}",
@@ -1161,10 +1240,14 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
+    if read_transfer.complete((rb_dw3 & 0xFFFF) as u16, (rb_dw3 >> 16) & 1, cq_phase).is_err() {
+        return BLOCK_ERR_NO_DEVICE;
+    }
     let rb_sf = (rb_dw3 >> 17) & 0x7FFF;
     let rb_sc = rb_sf & 0xFF;
     let rb_sct = (rb_sf >> 8) & 0x7;
     if rb_sc != 0 || rb_sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; }
         serial_println!("[sexdrive.storage100.read.complete] status=1 bytes={}", size);
         serial_println!("[sexdrive.storage100.rw.fail] reason=read_status_fail");
         serial_println!(
@@ -1224,8 +1307,8 @@ fn nvme_multiblock_write_readback_proof() -> u64 {
             AP4_MULTI_BLOCK_BYTES
         );
 
-        let write_phys = sys_alloc_phys(PAGE_SIZE);
-        let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+        let write_phys = reserve_dma_phys(PAGE_SIZE);
+        let write_va = own_dma_virtual(write_phys, PAGE_SIZE);
         if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
             || write_va == 0 || write_va == u64::MAX
         {
@@ -1265,8 +1348,8 @@ fn nvme_multiblock_write_readback_proof() -> u64 {
             AP4_MULTI_BLOCK_BYTES
         );
 
-        let read_phys = sys_alloc_phys(PAGE_SIZE);
-        let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+        let read_phys = reserve_dma_phys(PAGE_SIZE);
+        let read_va = own_dma_virtual(read_phys, PAGE_SIZE);
         if read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
             || read_va == 0 || read_va == u64::MAX
         {
@@ -1350,8 +1433,8 @@ fn nvme_persist_write_proof() -> u64 {
     let mut b = 0u64;
     while b < AP5A_PERSIST_BLOCKS {
         let lba = AP5A_PERSIST_BASE_LBA + b;
-        let write_phys = sys_alloc_phys(PAGE_SIZE);
-        let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+        let write_phys = reserve_dma_phys(PAGE_SIZE);
+        let write_va = own_dma_virtual(write_phys, PAGE_SIZE);
         if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
             || write_va == 0 || write_va == u64::MAX
         {
@@ -1398,8 +1481,8 @@ fn nvme_persist_read_proof() -> u64 {
     let mut b = 0u64;
     while b < AP5A_PERSIST_BLOCKS {
         let lba = AP5A_PERSIST_BASE_LBA + b;
-        let read_phys = sys_alloc_phys(PAGE_SIZE);
-        let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+        let read_phys = reserve_dma_phys(PAGE_SIZE);
+        let read_va = own_dma_virtual(read_phys, PAGE_SIZE);
         if read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
             || read_va == 0 || read_va == u64::MAX
         {
@@ -1538,6 +1621,7 @@ fn nvme_flush() -> u64 {
         core::hint::spin_loop();
     }
     if !done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.nvme.flush.err] reason=cqe_timeout cid={} head={} phase={}",
             flush_cid as u64, cq_head as u64, cq_phase as u64
@@ -1548,6 +1632,7 @@ fn nvme_flush() -> u64 {
     let sc = sf & 0xFF;
     let sct = (sf >> 8) & 0x7;
     if sc != 0 || sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; }
         serial_println!(
             "[sexdrive.nvme.flush.err] reason=status_fail cid={} sc={} sct={} dw3={:#x}",
             flush_cid as u64, sc as u64, sct as u64, dw3 as u64
@@ -1596,10 +1681,10 @@ fn nvme_storage100_flush_audit() -> u64 {
 fn nvme_storage100_negative_mismatch() -> u64 {
     let lba = AP6_NEG_MISMATCH_LBA;
     let size = AP6_NEG_MISMATCH_BYTES;
-    let write_phys = sys_alloc_phys(PAGE_SIZE);
-    let write_va = sys_map_phys(write_phys, PAGE_SIZE);
-    let read_phys = sys_alloc_phys(PAGE_SIZE);
-    let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+    let write_phys = reserve_dma_phys(PAGE_SIZE);
+    let write_va = own_dma_virtual(write_phys, PAGE_SIZE);
+    let read_phys = reserve_dma_phys(PAGE_SIZE);
+    let read_va = own_dma_virtual(read_phys, PAGE_SIZE);
     if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
         || write_va == 0 || write_va == u64::MAX
         || read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
@@ -1659,6 +1744,10 @@ fn nvme_storage100_negative_mismatch() -> u64 {
 }
 
 fn nvme_probe_bar() {
+    let bar_bytes = match sex_pdx::memory_region_info(SLOT_NVME_HOST) {
+        Ok(info) if info.length >= 0x1000 => info.length,
+        _ => { serial_println!("[sexdrive.nvme.bar.resolve.err] reason=missing_boot_view"); return; }
+    };
     let map_va: u64;
     unsafe {
         // syscall 43 = MAP_PCI_BAR(cap_slot, bar_index, map_size)
@@ -1667,7 +1756,7 @@ fn nvme_probe_bar() {
             in("rax") 43u64,
             in("rdi") SLOT_NVME_HOST,
             in("rsi") 0u64,       // BAR0
-            in("rdx") 0x4000u64,  // 16 KiB — covers NVMe CAP + property registers
+            in("rdx") bar_bytes, // Bound by the actual boot-granted BAR length
             lateout("rax") map_va,
             out("rcx") _,
             out("r11") _,
@@ -1693,6 +1782,12 @@ fn nvme_probe_bar() {
 
     let cap_mqes = (nvme_cap & 0xFFFF) as u16;
     let cap_dstrd = ((nvme_cap >> 32) & 0xF) as u8;
+    // Include IO CQ1's doorbell; reject a controller layout outside its BAR.
+    let required_bar_bytes = 0x1000 + (3u64 << (2 + cap_dstrd)) + 4;
+    if required_bar_bytes > bar_bytes {
+        serial_println!("[sexdrive.nvme.bar.resolve.err] reason=doorbell_out_of_range required={} granted={}", required_bar_bytes, bar_bytes);
+        return;
+    }
     let vs_major = ((nvme_vs >> 16) & 0xFFFF) as u16;
     let vs_minor = ((nvme_vs >> 8) & 0xFF) as u8;
     let csts_rdy = (nvme_csts & 0x1) != 0;
@@ -1772,8 +1867,8 @@ fn nvme_probe_bar() {
             return;
         }
 
-        let asq_phys = sys_alloc_phys(PAGE_SIZE);
-        let acq_phys = sys_alloc_phys(PAGE_SIZE);
+        let asq_phys = reserve_dma_phys(PAGE_SIZE);
+        let acq_phys = reserve_dma_phys(PAGE_SIZE);
         if asq_phys == 0 || asq_phys == u64::MAX || acq_phys == 0 || acq_phys == u64::MAX {
             serial_println!(
                 "[sexdrive.nvme.queue.err] reason=alloc_failed asq_phys={:#x} acq_phys={:#x}",
@@ -1791,8 +1886,8 @@ fn nvme_probe_bar() {
             return;
         }
 
-        let asq_va = sys_map_phys(asq_phys, PAGE_SIZE);
-        let acq_va = sys_map_phys(acq_phys, PAGE_SIZE);
+        let asq_va = own_dma_virtual(asq_phys, PAGE_SIZE);
+        let acq_va = own_dma_virtual(acq_phys, PAGE_SIZE);
         if asq_va == 0 || asq_va == u64::MAX || acq_va == 0 || acq_va == u64::MAX {
             serial_println!(
                 "[sexdrive.nvme.queue.err] reason=map_failed asq_va={:#x} acq_va={:#x}",
@@ -1902,8 +1997,8 @@ fn nvme_probe_bar() {
         return;
     }
 
-    let asq_phys = sys_alloc_phys(PAGE_SIZE);
-    let acq_phys = sys_alloc_phys(PAGE_SIZE);
+    let asq_phys = reserve_dma_phys(PAGE_SIZE);
+    let acq_phys = reserve_dma_phys(PAGE_SIZE);
     if asq_phys == 0 || asq_phys == u64::MAX || acq_phys == 0 || acq_phys == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.reprovision.err] reason=alloc_failed asq_phys={:#x} acq_phys={:#x}",
@@ -1921,8 +2016,8 @@ fn nvme_probe_bar() {
         return;
     }
 
-    let asq_va = sys_map_phys(asq_phys, PAGE_SIZE);
-    let acq_va = sys_map_phys(acq_phys, PAGE_SIZE);
+    let asq_va = own_dma_virtual(asq_phys, PAGE_SIZE);
+    let acq_va = own_dma_virtual(acq_phys, PAGE_SIZE);
     if asq_va == 0 || asq_va == u64::MAX || acq_va == 0 || acq_va == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.reprovision.err] reason=map_failed asq_va={:#x} acq_va={:#x}",
@@ -2086,7 +2181,7 @@ fn nvme_probe_bar() {
         (acq0_dw3_before & 0x1) as u64
     );
 
-    let id_phys = sys_alloc_phys(PAGE_SIZE);
+    let id_phys = reserve_dma_phys(PAGE_SIZE);
     if id_phys == 0 || id_phys == u64::MAX || (id_phys % PAGE_SIZE) != 0 {
         serial_println!(
             "[sexdrive.nvme.admin.identify.v2.err] reason=id_alloc_invalid phys={:#x}",
@@ -2094,7 +2189,7 @@ fn nvme_probe_bar() {
         );
         return;
     }
-    let id_va = sys_map_phys(id_phys, PAGE_SIZE);
+    let id_va = own_dma_virtual(id_phys, PAGE_SIZE);
     if id_va == 0 || id_va == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.admin.identify.v2.err] reason=id_map_failed va={:#x}",
@@ -2322,8 +2417,8 @@ fn nvme_probe_bar() {
     );
 
     // IO Queue creation proof (no IO read/write in this mission).
-    let io_cq_phys = sys_alloc_phys(PAGE_SIZE);
-    let io_sq_phys = sys_alloc_phys(PAGE_SIZE);
+    let io_cq_phys = reserve_dma_phys(PAGE_SIZE);
+    let io_sq_phys = reserve_dma_phys(PAGE_SIZE);
     if io_cq_phys == 0 || io_cq_phys == u64::MAX || io_sq_phys == 0 || io_sq_phys == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.ioq.err] reason=alloc_failed io_cq_phys={:#x} io_sq_phys={:#x}",
@@ -2341,8 +2436,8 @@ fn nvme_probe_bar() {
         return;
     }
 
-    let io_cq_va = sys_map_phys(io_cq_phys, PAGE_SIZE);
-    let io_sq_va = sys_map_phys(io_sq_phys, PAGE_SIZE);
+    let io_cq_va = own_dma_virtual(io_cq_phys, PAGE_SIZE);
+    let io_sq_va = own_dma_virtual(io_sq_phys, PAGE_SIZE);
     if io_cq_va == 0 || io_cq_va == u64::MAX || io_sq_va == 0 || io_sq_va == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.ioq.err] reason=map_failed io_cq_va={:#x} io_sq_va={:#x}",
@@ -2422,6 +2517,7 @@ fn nvme_probe_bar() {
         }
     }
     if !cq_done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.nvme.ioq.err] reason=create_cq_timeout cid={}",
             create_cq_cid as u64
@@ -2501,6 +2597,7 @@ fn nvme_probe_bar() {
         }
     }
     if !sq_done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.nvme.ioq.err] reason=create_sq_timeout cid={}",
             create_sq_cid as u64
@@ -2557,8 +2654,8 @@ fn nvme_probe_bar() {
 
     // AP3: deterministic single-block write/read/match self-test on real NVMe IOQ.
     // This only executes when NVMe BAR resolve + IOQ creation succeeded.
-    let ap3_buf_phys = sys_alloc_phys(PAGE_SIZE);
-    let ap3_buf_va = sys_map_phys(ap3_buf_phys, PAGE_SIZE);
+    let ap3_buf_phys = reserve_dma_phys(PAGE_SIZE);
+    let ap3_buf_va = own_dma_virtual(ap3_buf_phys, PAGE_SIZE);
     if ap3_buf_phys == 0 || ap3_buf_phys == u64::MAX || (ap3_buf_phys % PAGE_SIZE) != 0
         || ap3_buf_va == 0 || ap3_buf_va == u64::MAX
     {
@@ -2606,14 +2703,14 @@ fn nvme_probe_bar() {
     // Default: OFF.  Must NOT run under SEXOS_STORAGE_100_PROOF or DiskFS profile
     // because it writes io_sq_tail=1 (local tracking) which overwrites the
     // storage proof tail (~10) and corrupts the IO SQ doorbell.
-    if STORAGE_100_IO_READ_PROBE_ENABLED {
+    if STORAGE_100_IO_READ_PROBE_ENABLED && unsafe { NVME_IO_STATE.ready } {
     // One real IO READ proof (no BLOCK API wiring in this mission).
     let io_q_entries: u32 = 16;
     let mut io_sq_tail: u32 = 0;
     let mut io_cq_head: u32 = 0;
     let mut io_cq_phase: u32 = 1;
 
-    let data_phys = sys_alloc_phys(PAGE_SIZE);
+    let data_phys = reserve_dma_phys(PAGE_SIZE);
     if data_phys == 0 || data_phys == u64::MAX || (data_phys % PAGE_SIZE) != 0 {
         serial_println!(
             "[sexdrive.nvme.io.read.err] reason=data_alloc_invalid phys={:#x}",
@@ -2621,7 +2718,7 @@ fn nvme_probe_bar() {
         );
         return;
     }
-    let data_va = sys_map_phys(data_phys, PAGE_SIZE);
+    let data_va = own_dma_virtual(data_phys, PAGE_SIZE);
     if data_va == 0 || data_va == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.io.read.err] reason=data_map_failed va={:#x}",
@@ -2714,6 +2811,7 @@ fn nvme_probe_bar() {
         }
     }
     if !read_done {
+        stop_uncertain_io();
         serial_println!(
             "[sexdrive.nvme.io.read.err] reason=cqe_timeout cid={} head={} phase={}",
             read_cid as u64,
@@ -2736,6 +2834,7 @@ fn nvme_probe_bar() {
     }
 
     if rd_sc != 0 || rd_sct != 0 {
+        unsafe { NVME_IO_STATE.ready = false; }
         serial_println!(
             "[sexdrive.nvme.io.read.err] reason=status_fail cid={} sc={} sct={} sqhd={} sqid={} dw3={:#x}",
             read_cid as u64,
@@ -2777,6 +2876,10 @@ fn nvme_probe_bar() {
 }
 
 fn xhci_probe_mmio() {
+    let bar_bytes = match sex_pdx::memory_region_info(SLOT_USB_HOST) {
+        Ok(info) if info.length >= 0x1000 => 0x1000,
+        _ => return,
+    };
     let map_va: u64;
     unsafe {
         // syscall 43 = MAP_PCI_BAR(cap_slot, bar_index, map_size)
@@ -2785,7 +2888,7 @@ fn xhci_probe_mmio() {
             in("rax") 43u64,
             in("rdi") SLOT_USB_HOST,
             in("rsi") 0u64,      // BAR0
-            in("rdx") 0x1000u64, // first page only
+            in("rdx") bar_bytes, // first page, within the actual granted BAR
             lateout("rax") map_va,
             out("rcx") _,
             out("r11") _,
@@ -2813,7 +2916,8 @@ fn xhci_probe_mmio() {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdrive.init.start]");
-    nvme_probe_bar();
+    if init_dma_region() { nvme_probe_bar(); }
+    else { serial_println!("[sexdrive.dma.region.err] ready=0"); }
     xhci_probe_mmio();
 
     // Wait for display/shell to be ready
@@ -2821,22 +2925,14 @@ pub extern "C" fn _start() -> ! {
         core::hint::spin_loop();
     }
 
-    // Allocate shared buffer (1024x768x4 = 3MB)
-    let fb_size = 1024 * 768 * 4;
-    let shared_addr: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 40u64,
-            in("rdi") fb_size as u64,
-            in("rsi") 1u64, // Consumer: SexDisplay (Domain 1)
-            lateout("rax") shared_addr,
-        );
-    }
-
-    if shared_addr == 0 {
-        loop { core::hint::spin_loop(); }
-    }
+    // The paired frame is assigned by BOOT_DAG; no allocation or peer choice.
+    let shared_addr = match sex_pdx::memory_region_view(SLOT_FRAME_REGION, 0, 1024 * 768 * 4, QUERY_VIEW | WRITE) {
+        Ok(view) => view.virtual_address,
+        Err(_) => {
+            serial_println!("[sexdrive.frame.region.err] slot={}", SLOT_FRAME_REGION);
+            loop { core::hint::spin_loop(); }
+        }
+    };
 
     // Zero-copy handoff: Notify AUTHORITY (Silk-Shell) about shared buffer
     unsafe {
@@ -2848,8 +2944,8 @@ pub extern "C" fn _start() -> ! {
     loop {
         // [sexdrive.block.typed.recv] [sexdrive.block.typed.reply]
         // Typed block command dispatch — decodes SLOT_BLOCK messages.
-        // Honest status: ERR_NO_DEVICE for all commands (no real NVMe/AHCI).
-        // No fake read success. Returns ERR_BAD_CMD for unknown commands.
+        // Requests require the static paired data view and a ready NVMe queue.
+        // Failed or uncertain commands never report successful transfer.
         if let Some(msg) = pdx_try_listen_raw(0) {
             let cmd = msg.type_id;
             let offset = msg.arg0;
@@ -2880,8 +2976,20 @@ pub extern "C" fn _start() -> ! {
                 ); }
             }
 
+            // The numeric selector is local to this domain. Its paired peer
+            // must match authenticated provenance before any shared byte access.
+            let block_view = if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+                block_buffer_view(msg.caller_pd, _buf_cap, size,
+                    if cmd == BLOCK_READ { WRITE } else { READ })
+            } else { None };
             // [sexblock.abi.request.decode] — dispatch on typed command
-            let reply_val: u64 = match cmd {
+            let reply_val: u64 = if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
+                && (size == 0 || size > BLOCK_MAX_XFER || offset % BLOCK_SECTOR_SIZE != 0) {
+                BLOCK_ERR_BAD_LEN
+            } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && block_view.is_none() {
+                serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
+                BLOCK_ERR_NO_DEVICE
+            } else { match cmd {
                 BLOCK_READ => {
                     if hot_log() { serial_println!(
                         "[sexdrive.block.read.api.recv] offset={:#x} size={} buf_cap={:#x}",
@@ -2911,7 +3019,7 @@ pub extern "C" fn _start() -> ! {
                             offset
                         );
                         BLOCK_ERR_BAD_LEN
-                    } else if _buf_cap == SLOT_BUF_LEND {
+                    } else if _buf_cap == SLOT_BLOCK_BUFFER {
                         if size != 512 {
                             serial_println!(
                                 "[sexdrive.block.read.handoff.err] reason=bad_len_phase_b size={} expect=512",
@@ -2919,15 +3027,15 @@ pub extern "C" fn _start() -> ! {
                             );
                             BLOCK_ERR_BAD_LEN
                         } else {
-                            let fill_va = sys_map_mem_lend(SLOT_BUF_LEND);
+                            let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
                             if fill_va == 0 || fill_va == u64::MAX {
                                 serial_println!(
                                     "[sexdrive.block.read.handoff.err] reason=map_failed va={:#x}",
                                     fill_va
                                 );
                                 if hot_log() { serial_println!(
-                                    "[sexdrive.nvme.cmd.shape.err] path=typed reason=memlend_map_failed buffer_cap={:#x}",
-                                    SLOT_BUF_LEND
+                                    "[sexdrive.nvme.cmd.shape.err] path=typed reason=region_view_failed buffer_cap={:#x}",
+                                    SLOT_BLOCK_BUFFER
                                 ); }
                                 BLOCK_ERR_NO_DEVICE
                             } else {
@@ -2940,28 +3048,7 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                     } else {
-                        serial_println!(
-                            "[sexdrive.block.read.api.validate.ok] offset={:#x} size={} lba_bytes={}",
-                            offset, size, NVME_LBA_BYTES
-                        );
-                        if _buf_cap == 0 {
-                            serial_println!(
-                                "[sexdrive.block.read.handoff.err] reason=buffer_cap_not_real buf_cap={:#x}",
-                                _buf_cap
-                            );
-                        } else {
-                            serial_println!(
-                                "[sexdrive.block.read.handoff.err] reason=buffer_cap_unverifiable buf_cap={:#x}",
-                                _buf_cap
-                            );
-                        }
-                        // NOTE: current typed ABI path reads into a sexdrive-owned bounce buffer;
-                        // caller buffer handoff via buf_cap is not wired in this mission.
-                        if hot_log() { serial_println!(
-                            "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
-                            op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
-                        ); }
-                        nvme_read_into_bounce(offset, size)
+                        BLOCK_ERR_NO_DEVICE
                     }
                 }
                 BLOCK_WRITE => {
@@ -2970,15 +3057,15 @@ pub extern "C" fn _start() -> ! {
                         offset, size, _buf_cap
                     ); }
                     if write_guard_allows(offset, size, _buf_cap) {
-                        let fill_va = sys_map_mem_lend(SLOT_BUF_LEND);
+                        let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
                         if fill_va == 0 || fill_va == u64::MAX {
                             serial_println!(
                                 "[sexdrive.nvme.write.err] reason=map_failed va={:#x}",
                                 fill_va
                             );
                             if hot_log() { serial_println!(
-                                "[sexdrive.nvme.cmd.shape.err] path=typed reason=memlend_map_failed buffer_cap={:#x}",
-                                SLOT_BUF_LEND
+                                "[sexdrive.nvme.cmd.shape.err] path=typed reason=region_view_failed buffer_cap={:#x}",
+                                SLOT_BLOCK_BUFFER
                             ); }
                             BLOCK_ERR_NO_DEVICE
                         } else {
@@ -3023,7 +3110,7 @@ pub extern "C" fn _start() -> ! {
                     );
                     BLOCK_ERR_BAD_CMD
                 }
-            };
+            }};
 
             if hot_log() { serial_println!(
                 "[sexblock.abi.reply.encode] caller={} status={}",

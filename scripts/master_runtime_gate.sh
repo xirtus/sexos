@@ -12,10 +12,14 @@
 #
 # Options:
 #   --skip-build   Use existing ISO (sexos-v1.0.0.iso) instead of rebuilding
-#   --probe N      Wait N seconds for runtime probe (default: 20)
+#   --probe N      Wait N seconds for runtime probe (default: 25)
 #   --keep-log     Keep the serial log after gate run
 #   --no-nvme      Disable QEMU NVMe test device (default: enabled)
 #   --nvme         Enable QEMU NVMe test device
+#
+# Environment: GATE_DIR isolates run artifacts; REPORT_PATH overrides the
+# default $GATE_DIR/report.md. Custom ISO is supported only with --skip-build.
+# Historical handoff reports are preserved by default.
 #
 # Returns:
 #   0 if ALL gates PASS
@@ -42,6 +46,12 @@ LOG_B="${GATE_DIR}/serial.boot_b.log"
 QEMU_PID=""
 ISO="${ISO:-sexos-v1.0.0.iso}"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
+REPORT_PATH="${REPORT_PATH:-$GATE_DIR/report.md}"
+PROVENANCE_PATH="$GATE_DIR/provenance.json"
+PROBE_GATE="FAIL"
+PROBE_STATUS="not_run"
+RUN_STARTED_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_STARTED_SECONDS=$SECONDS
 
 # ---- gate state ----
 BUILD_GATE="FAIL"
@@ -61,7 +71,12 @@ SEXFILES_BOOT_PROOF="${SEXOS_SEXFILES_BOOT_PROOF:-0}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-build) SKIP_BUILD=true; shift ;;
-        --probe)      PROBE_SECONDS="$2"; shift 2 ;;
+        --probe)
+            if [[ $# -lt 2 || ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "error: --probe requires a positive integer number of seconds" >&2
+                exit 1
+            fi
+            PROBE_SECONDS="$2"; shift 2 ;;
         --keep-log)   KEEP_LOG=true; shift ;;
         --no-nvme)    ENABLE_NVME=0; shift ;;
         --nvme)       ENABLE_NVME=1; shift ;;
@@ -72,6 +87,23 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+mkdir -p "$GATE_DIR" "$(dirname "$LOG")" "$(dirname "$REPORT_PATH")"
+BUILD_LOG="$GATE_DIR/build.log"
+# Start a new observation even when reusing GATE_DIR. Preserve only the NVMe
+# image when requested; commands and diagnostics below append within this run
+# so persistence boot A and B remain together without including an older run.
+rm -f "$REPORT_PATH" "$PROVENANCE_PATH" "$BUILD_LOG" \
+    "$LOG" "$LOG_A" "$LOG_B" "$GATE_DIR/qmp.sock"
+: > "$GATE_DIR/qemu-command.txt"
+: > "$GATE_DIR/qemu.log"
+
+# The sealed entrypoint packages exactly this repository-relative output.
+# A successful build cannot establish provenance for an arbitrary ISO override.
+if [[ "$SKIP_BUILD" != true && "$ISO" != "sexos-v1.0.0.iso" ]]; then
+    echo "error: custom ISO requires --skip-build; sealed builds produce sexos-v1.0.0.iso" >&2
+    exit 1
+fi
+
 # ---- helpers ----
 cleanup() {
     set +e
@@ -81,7 +113,9 @@ cleanup() {
         kill -9 "$QEMU_PID" 2>/dev/null || true
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 has_marker() {
     local pattern="$1"
@@ -123,13 +157,13 @@ if [ "$SKIP_BUILD" = true ]; then
     BUILD_GATE="SKIP"
 else
     echo "[gate] BUILD phase..."
-    if ./scripts/entrypoint_build.sh >/tmp/master_gate_build.log 2>&1; then
+    if ./scripts/entrypoint_build.sh >"$BUILD_LOG" 2>&1; then
         BUILD_GATE="PASS"
         echo "[gate] BUILD: PASS"
     else
         BUILD_GATE="FAIL"
         echo "[gate] BUILD: FAIL"
-        echo "[gate] Build log: /tmp/master_gate_build.log"
+        echo "[gate] Build log: $BUILD_LOG"
     fi
 fi
 
@@ -153,7 +187,7 @@ if [ "$ENABLE_NVME" = "1" ]; then
     else
         dd if=/dev/zero of="$NVME_IMG" bs=512 count=2048 2>/dev/null || true
     fi
-    if "$QEMU_BIN" -device help 2>/dev/null | grep -qE 'name[[:space:]]+"nvme"[[:space:]]*,|(^|[[:space:],])nvme([[:space:],]|$)'; then
+    if "$QEMU_BIN" -device help 2>/dev/null | grep -E 'name[[:space:]]+"nvme"[[:space:]]*,|(^|[[:space:],])nvme([[:space:],]|$)' >/dev/null; then
         NVME_ARGS=(
             -drive "if=none,id=nvm,file=${NVME_IMG},format=raw"
             -device "nvme,serial=sexos01,drive=nvm"
@@ -168,22 +202,86 @@ else
     echo "[gate] NVMe disabled; absent marker path expected."
 fi
 
-set +e
+# Record what was actually tested. With --skip-build the source/image
+# relationship is deliberately unverified; hashes identify evidence, not origin.
+python3 - "$PROVENANCE_PATH" "$ISO" "$SKIP_BUILD" "$RUN_STARTED_UTC" "$BUILD_GATE" <<'PYPROVENANCE'
+import hashlib, json, os, pathlib, subprocess, sys
+out, iso, skip, started, build_gate = sys.argv[1:]
+def git(*args):
+    return subprocess.check_output(["git", *args])
+image = pathlib.Path(iso)
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+image_hash = sha256_file(image) if image.is_file() else None
+revision = git("rev-parse", "HEAD").decode().strip()
+status = git("status", "--porcelain").decode()
+source_diff = git("diff", "HEAD", "--binary")
+untracked = {}
+for raw in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
+    if raw:
+        path = pathlib.Path(os.fsdecode(raw))
+        if path.is_file():
+            untracked[str(path)] = sha256_file(path)
+data = dict(started_utc=started, git_revision=revision, git_status=status,
+            tracked_diff_sha256=hashlib.sha256(source_diff).hexdigest(),
+            untracked_file_sha256=untracked, build_gate=build_gate,
+            iso_path=str(image.resolve()), iso_sha256=image_hash,
+            source_image_binding="sealed_build_this_run" if build_gate == "PASS" else "unverified_existing_image")
+pathlib.Path(out).write_text(json.dumps(data, indent=2) + "\n")
+PYPROVENANCE
+
 run_boot_once() {
     local boot_log="$1"
-    "$QEMU_BIN" \
-        -M q35 \
-        -m 512M \
-        -cpu max,+pku \
-        -cdrom "$ISO" \
-        -device nec-usb-xhci,id=xhci \
-        -device usb-tablet,bus=xhci.0 \
-        "${NVME_ARGS[@]}" \
-        -serial "file:$boot_log" \
-        -display none \
-        -no-reboot \
-        -no-shutdown &
+    local args=(
+        -M q35 -m 512M -cpu max,+pku -cdrom "$ISO"
+        -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0
+        ${NVME_ARGS[@]+"${NVME_ARGS[@]}"} -serial "file:$boot_log"
+        -display none -no-reboot -no-shutdown
+    )
+    printf '%q ' "$QEMU_BIN" "${args[@]}" >> "$GATE_DIR/qemu-command.txt"
+    printf '\n' >> "$GATE_DIR/qemu-command.txt"
+    "$QEMU_BIN" "${args[@]}" >> "$GATE_DIR/qemu.log" 2>&1 &
     QEMU_PID=$!
+    echo "[gate] QEMU PID: $QEMU_PID; log: $boot_log"
+}
+
+finish_probe() {
+    local exit_status=0
+    sleep "$PROBE_SECONDS"
+    # QEMU must stay alive throughout the observation window. A process which
+    # exits early with even status 0 is not a complete runtime observation.
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+        wait "$QEMU_PID" || exit_status=$?
+        PROBE_STATUS="early_exit:$exit_status"
+        QEMU_PID=""
+        return 1
+    fi
+    kill "$QEMU_PID" 2>/dev/null || true
+    # Bound shutdown and reap the child before starting a second persistence boot.
+    for _ in 1 2 3; do
+        if ! kill -0 "$QEMU_PID" 2>/dev/null; then break; fi
+        sleep 1
+    done
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+        kill -9 "$QEMU_PID" 2>/dev/null || true
+        PROBE_STATUS="forced_kill"
+        wait "$QEMU_PID" 2>/dev/null || true
+        QEMU_PID=""
+        return 1
+    fi
+    wait "$QEMU_PID" || exit_status=$?
+    QEMU_PID=""
+    # QEMU handles SIGTERM as exit 0; test wrappers may return 128+SIGTERM.
+    if [[ "$exit_status" != 0 && "$exit_status" != 143 ]]; then
+        PROBE_STATUS="shutdown_exit:$exit_status"
+        return 1
+    fi
+    PROBE_STATUS="observed_full_window"
+    return 0
 }
 
 if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
@@ -193,41 +291,17 @@ if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
 else
     run_boot_once "$LOG"
 fi
-set -e
-
-if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-    echo "[FAIL] QEMU failed to start"
-    exit 1
-fi
-
-echo "[gate] QEMU PID: $QEMU_PID"
-if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
-    echo "[gate] Log A: $LOG_A"
+if finish_probe; then
+    PROBE_GATE="PASS"
 else
-    echo "[gate] Log: $LOG"
-fi
-sleep "$PROBE_SECONDS"
-
-# Stop QEMU
-if kill -0 "$QEMU_PID" 2>/dev/null; then
-    kill "$QEMU_PID" 2>/dev/null || true
-    sleep 1
+    echo "[FAIL] QEMU probe incomplete: $PROBE_STATUS (see $GATE_DIR/qemu.log)"
 fi
 
-if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
-    set +e
+if [ "$PERSIST_REBOOT_PROOF" = "1" ] && [ "$PROBE_GATE" = "PASS" ]; then
     run_boot_once "$LOG_B"
-    set -e
-    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-        echo "[FAIL] QEMU failed to start (boot B)"
-        exit 1
-    fi
-    echo "[gate] QEMU PID (boot B): $QEMU_PID"
-    echo "[gate] Log B: $LOG_B"
-    sleep "$PROBE_SECONDS"
-    if kill -0 "$QEMU_PID" 2>/dev/null; then
-        kill "$QEMU_PID" 2>/dev/null || true
-        sleep 1
+    if ! finish_probe; then
+        PROBE_GATE="FAIL"
+        echo "[FAIL] QEMU boot B incomplete: $PROBE_STATUS"
     fi
     LOG="$LOG_B"
 fi
@@ -249,6 +323,7 @@ echo ""
 echo "--- SPAWN CHECKS ---"
 
 PD_LIST=(
+    "sext"
     "sexdisplay"
     "sexdrive"
     "silk-shell"
@@ -302,7 +377,7 @@ MISSING_RUNNING=""
 for entry in "${PD_ID_MAP[@]}"; do
     pd_id="${entry%%:*}"
     pd_name="${entry##*:}"
-    count=$(count_marker "task\.running.*pd_id=${pd_id}")
+    count=$(count_marker "task\.running.*pd_id=${pd_id}([^0-9]|$)")
     if [ "$count" -ge 1 ]; then
         print_gate "  v $pd_name (PD $pd_id)" "running (${count}x)"
     else
@@ -326,16 +401,21 @@ FAULT_PATTERNS=(
     "PAGE FAULT"
     "#PF"
     "GENERAL PROTECTION"
+    "GP FAULT"
     "#GP"
-    "triple fault"
-    "Triple fault"
+    "DOUBLE FAULT"
+    "TRIPLE FAULT"
+    "EXCEPTION: INVALID OPCODE"
+    "EXCEPTION: UD ENTER"
+    "PKU SECURITY VIOLATION"
+    "TEST FAILED:"
     "fault\.kill"
     "FATAL"
 )
 
 FAULT_HIT=""
 for pat in "${FAULT_PATTERNS[@]}"; do
-    if [ "$(has_marker "$pat")" -eq 1 ]; then
+    if grep -qiE "$pat" "$LOG" 2>/dev/null; then
         print_gate "  x pattern: $pat" "FOUND"
         FAULT_HIT="$pat"
     fi
@@ -361,16 +441,21 @@ if [ ! -x "$BOOTGRAPH_CHECKER" ]; then
     BOOTGRAPH_FAIL_LINE="BOOTGRAPH FAIL: CHECKER_MISSING path=$BOOTGRAPH_CHECKER"
     echo "  x checker missing: $BOOTGRAPH_CHECKER"
 else
-    BOOTGRAPH_OUT="$("$BOOTGRAPH_CHECKER" "$LOG" --allow-fault 2>&1 || true)"
-    BOOTGRAPH_FAIL_LINE="$(printf '%s\n' "$BOOTGRAPH_OUT" | grep -m1 '^BOOTGRAPH FAIL:' || true)"
-    BOOTGRAPH_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^BOOTGRAPH_GATE:/ {print $2; exit}')"
-    CAP_GRANT_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CAP_GRANT_GATE:/ {print $2; exit}')"
-    ORDER_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^ORDER_GATE:/ {print $2; exit}')"
-    BOOTGRAPH_CLOCK_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CLOCK_GATE:/ {print $2; exit}')"
+    CHECKER_STATUS=0
+    BOOTGRAPH_OUT="$("$BOOTGRAPH_CHECKER" "$LOG" --allow-fault 2>&1)" || CHECKER_STATUS=$?
+    BOOTGRAPH_FAIL_LINE="$(printf '%s\n' "$BOOTGRAPH_OUT" | sed -n '/^BOOTGRAPH FAIL:/{p;}' || true)"
+    BOOTGRAPH_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^BOOTGRAPH_GATE:/ {print $2}')"
+    CAP_GRANT_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CAP_GRANT_GATE:/ {print $2}')"
+    ORDER_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^ORDER_GATE:/ {print $2}')"
+    BOOTGRAPH_CLOCK_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CLOCK_GATE:/ {print $2}')"
     if [ -z "$BOOTGRAPH_GATE" ]; then BOOTGRAPH_GATE="FAIL"; fi
     if [ -z "$CAP_GRANT_GATE" ]; then CAP_GRANT_GATE="FAIL"; fi
     if [ -z "$ORDER_GATE" ]; then ORDER_GATE="FAIL"; fi
     if [ -z "$BOOTGRAPH_CLOCK_GATE" ]; then BOOTGRAPH_CLOCK_GATE="FAIL"; fi
+    if [ "$CHECKER_STATUS" -ne 0 ] && [ -z "$BOOTGRAPH_FAIL_LINE" ]; then
+        BOOTGRAPH_GATE="FAIL"
+        BOOTGRAPH_FAIL_LINE="BOOTGRAPH FAIL: CHECKER_EXIT status=$CHECKER_STATUS"
+    fi
     if [ -n "$BOOTGRAPH_FAIL_LINE" ]; then
         echo "  x $BOOTGRAPH_FAIL_LINE"
     else
@@ -383,7 +468,7 @@ echo ""
 echo "--- SEXFILES CHECK ---"
 SEXFILES_READY=$(has_marker '\[sexfiles\.ready\]')
 SEXFILES_KSPAWN=$(has_marker '\[kernel\.spawn\.sexfiles\]')
-SEXFILES_TASK_COUNT=$(count_marker 'task\.running.*pd_id=11')
+SEXFILES_TASK_COUNT=$(count_marker 'task\.running.*pd_id=11([^0-9]|$)')
 
 if [ "$SEXFILES_READY" -eq 1 ]; then
     print_gate "  v sexfiles.ready" "FOUND"
@@ -418,6 +503,7 @@ echo "============================================"
 echo ""
 
 print_gate "BUILD_GATE" "$BUILD_GATE"
+print_gate "PROBE_GATE" "$PROBE_GATE ($PROBE_STATUS)"
 print_gate "SPAWN_GATE" "$SPAWN_GATE"
 print_gate "FAULT_GATE" "$FAULT_GATE"
 print_gate "BOOTGRAPH_GATE" "$BOOTGRAPH_GATE"
@@ -427,7 +513,7 @@ print_gate "CLOCK_GATE" "$BOOTGRAPH_CLOCK_GATE"
 print_gate "SCHED_GATE" "$SCHED_GATE ($SCHED_ADVISORY)"
 print_gate "SEXFILES_GATE" "$SEXFILES_GATE"
 
-if [ "$BUILD_GATE" = "PASS" ] || [ "$BUILD_GATE" = "SKIP" ]; then
+if { [ "$BUILD_GATE" = "PASS" ] || [ "$BUILD_GATE" = "SKIP" ]; } && [ "$PROBE_GATE" = "PASS" ]; then
     if [ "$SPAWN_GATE" = "PASS" ] && [ "$FAULT_GATE" = "PASS" ] \
         && [ "$BOOTGRAPH_GATE" = "PASS" ] && [ "$CAP_GRANT_GATE" = "PASS" ] \
         && [ "$ORDER_GATE" = "PASS" ] && [ "$BOOTGRAPH_CLOCK_GATE" = "PASS" ]; then
@@ -471,14 +557,21 @@ fi
 m_spawn_total=$(count_marker "Spawned PD")
 m_clock_total=$CLOCK_COUNT
 m_task_total=$(count_marker "task\.running")
-m_fault_total=$(count_marker "panic|fault\.kill|#PF|#GP|FATAL")
+FAULT_REGEX=$(IFS='|'; echo "${FAULT_PATTERNS[*]}")
+m_fault_total=$(grep -ciE "$FAULT_REGEX" "$LOG" 2>/dev/null || true)
+m_fault_total=${m_fault_total:-0}
 
 # ---- 5. HANDOFF DOC ----
-cat > docs/handoff/MASTER_RUNTIME_GATE_V1.md << MDEOF
+cat > "$REPORT_PATH" << MDEOF
 # MASTER_RUNTIME_GATE_V1
 
-- date: $(date -Iseconds)
-- git commit: $(git rev-parse --short HEAD)
+- date: $RUN_STARTED_UTC
+- git commit: $(git rev-parse HEAD)
+- provenance: $PROVENANCE_PATH (source dirty state, tracked diff hash, ISO SHA-256, build binding)
+- source/image binding: $([ "$BUILD_GATE" = PASS ] && echo sealed_build_this_run || echo unverified_existing_image)
+- qemu command: $GATE_DIR/qemu-command.txt
+- qemu diagnostics: $GATE_DIR/qemu.log
+- elapsed_seconds: $((SECONDS - RUN_STARTED_SECONDS))
 - log_path: $LOG
 - probe_seconds: $PROBE_SECONDS
 - nvme_enabled: $ENABLE_NVME
@@ -490,6 +583,7 @@ cat > docs/handoff/MASTER_RUNTIME_GATE_V1.md << MDEOF
 | Gate | Status |
 |------|--------|
 | BUILD_GATE | $BUILD_GATE |
+| PROBE_GATE | $PROBE_GATE ($PROBE_STATUS) |
 | SPAWN_GATE | $SPAWN_GATE |
 | FAULT_GATE | $FAULT_GATE |
 | BOOTGRAPH_GATE | $BOOTGRAPH_GATE |
@@ -523,7 +617,7 @@ done)
 $(for entry in "${PD_ID_MAP[@]}"; do
     pd_id="${entry%%:*}"
     pd_name="${entry##*:}"
-    count=$(count_marker "task\.running.*pd_id=${pd_id}")
+    count=$(count_marker "task\.running.*pd_id=${pd_id}([^0-9]|$)")
     echo "- $pd_name (PD $pd_id): task.running ${count}x"
 done)
 
@@ -538,7 +632,7 @@ done)
 
 Score uses these gates:
 
-1. **Build prerequisite**: BUILD_GATE is PASS or SKIP
+1. **Build prerequisite**: BUILD_GATE is PASS or SKIP; PROBE_GATE must PASS
 2. **Hard scoring gates**: SPAWN_GATE, FAULT_GATE, BOOTGRAPH_GATE, CAP_GRANT_GATE, ORDER_GATE, BOOTGRAPH_CLOCK_GATE
 
 Outcome logic:
@@ -588,7 +682,7 @@ MDEOF
 
 HANDOFF_WROTE=1
 
-echo "[gate] Wrote docs/handoff/MASTER_RUNTIME_GATE_V1.md"
+echo "[gate] Wrote $REPORT_PATH"
 
 # ---- 6. CLEANUP LOG ----
 if [ "$KEEP_LOG" = false ]; then

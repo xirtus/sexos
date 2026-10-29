@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "subsystem": "memory",
+  "invariants": [
+    {
+      "id": "FAULT_BY_VALUE",
+      "requirement": "Fault dispatch uses copied register values, a nonzero opcode and the actual authenticated domain; dispatch acceptance is not fault completion.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/ipc/pagefault.rs",
+          "anchor": "forward_page_fault"
+        },
+        {
+          "path": "crates/sex-pdx/src/paging.rs",
+          "anchor": "pub struct FaultNotice"
+        }
+      ],
+      "checks": [
+        "fault_transport",
+        "fault_transactions",
+        "paging_runtime"
+      ],
+      "gaps": [
+        "Real recovery is bounded to nonpresent user data faults in the boot-authorized range; protection/fetch/PKU faults and non-main tasks do not recover."
+      ],
+      "depends_on": [
+        "USERLAND_MEMORY_AUTHORITY"
+      ]
+    },
+    {
+      "id": "MEMORY_REGION_AUTHORITY",
+      "requirement": "Runtime region views require actual BOOT_DAG-granted capability rights and checked bounds; queries create no frames, mappings or capabilities.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/syscalls/mod.rs",
+          "anchor": "pub(crate) fn region_query("
+        },
+        {
+          "path": "kernel/src/boot_memory.rs",
+          "anchor": "pub fn init("
+        },
+        {
+          "path": "crates/sex-pdx/src/memory_region.rs",
+          "anchor": "pub fn resolve_register_view"
+        },
+        {
+          "path": "apps/sexdrive/src/dma_transfer.rs",
+          "anchor": "DmaTransfer"
+        },
+        {
+          "path": "sex-rt/src/heap.rs",
+          "anchor": "pub struct BoundedAllocator"
+        },
+        {
+          "path": "sex-rt/Cargo.toml",
+          "anchor": "linked_list_allocator"
+        },
+        {
+          "path": "Cargo.lock",
+          "anchor": "name = \"linked_list_allocator\""
+        }
+      ],
+      "checks": [
+        "capability_slots",
+        "domain_identity",
+        "user_pointer",
+        "memory_regions",
+        "driver_regions",
+        "drive_dma",
+        "memory_runtime",
+        "runtime_heap"
+      ],
+      "gaps": [
+        "Region queries remain side-effect free; authorized pager commits are separate leaf transitions with no runtime kernel frame/table/VA allocation.",
+        "Fixed boot resources, retained authorized pager aliases and trusted-but-faulty code do not establish hostile-code/IOMMU isolation or general reclamation."
+      ],
+      "depends_on": [
+        "CAPABILITY_GENESIS",
+        "USERLAND_MEMORY_AUTHORITY"
+      ]
+    },
+    {
+      "id": "PAGING_FAULT_RECOVERY",
+      "requirement": "Only a boot-authorized pager can bind a selected unused frame to the exact pending task/page and resume its saved instruction after commit; duplicates cannot remap or wake twice.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/paging.rs",
+          "anchor": "pub fn commit("
+        },
+        {
+          "path": "kernel/src/fault_transaction.rs",
+          "anchor": "pub struct FaultSlot"
+        },
+        {
+          "path": "servers/sext/src/pager.rs",
+          "anchor": "pub fn step("
+        },
+        {
+          "path": "apps/kaleidoscope/src/paging_probe.rs",
+          "anchor": "PAGING_RETRY_VALUE_MISMATCH"
+        },
+        {
+          "path": "crates/silk-client/src/lib.rs",
+          "anchor": "read_volatile"
+        }
+      ],
+      "checks": [
+        "fault_transactions",
+        "paging_mapping",
+        "sext_pager",
+        "paging_runtime",
+        "client_memory"
+      ],
+      "gaps": [
+        "Two boot-authorized eight-page client ranges share eight frames with four-page per-client quotas; bootstrap still reserves backing, VA and tables.",
+        "Cooperative explicit release and BSP-local invalidation only; no physical multi-core TLB shootdown, autonomous eviction, expandable pool or full epoch protocol."
+      ],
+      "depends_on": [
+        "CAPABILITY_GENESIS",
+        "USERLAND_MEMORY_AUTHORITY",
+        "CONTEXT_RELEASE"
+      ]
+    },
+    {
+      "id": "PAGING_SAFE_RECLAMATION",
+      "requirement": "A frame becomes reusable only after its exact client leaf is removed and its translation invalidated; stale commit or release cannot affect a new owner, and reused backing is zero before exposure.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/paging.rs",
+          "anchor": "pub fn reclaim("
+        },
+        {
+          "path": "servers/sext/src/allocator.rs",
+          "anchor": "pub struct FrameAllocator"
+        },
+        {
+          "path": "servers/sext/src/pager.rs",
+          "anchor": "pub fn release("
+        },
+        {
+          "path": "servers/sexbell/src/paging_probe.rs",
+          "anchor": "BELL_DEMAND_NOT_ZERO"
+        },
+        {
+          "path": "scripts/check_multi_client_paging_log.py",
+          "anchor": "def validate("
+        },
+        {
+          "path": "kernel/src/ipc/router.rs",
+          "anchor": "pub fn send_reply("
+        }
+      ],
+      "checks": [
+        "paging_mapping",
+        "sext_pager",
+        "paging_runtime",
+        "paging_reclaim_replay",
+        "reply_sender"
+      ],
+      "gaps": [
+        "Two static clients, fixed pool, BSP and registered main task only; trusted pager retains alias.",
+        "No autonomous eviction, IOMMU revocation, physical SMP shootdown or full epoch/replay proof."
+      ],
+      "depends_on": [
+        "PAGING_FAULT_RECOVERY",
+        "CAPABILITY_GENESIS",
+        "CONTEXT_RELEASE"
+      ]
+    },
+    {
+      "id": "TASK_EXIT_MEMORY_CLEANUP",
+      "requirement": "The authorized pager may reclaim an exited main task's demand frames only after execution and stack custody are released, including unfinished publications; closure and replay cannot affect a surviving client.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/paging.rs",
+          "anchor": "pub fn cleanup("
+        },
+        {
+          "path": "servers/sext/src/pager.rs",
+          "anchor": "pub fn cleanup("
+        },
+        {
+          "path": "servers/sexbell/src/paging_probe.rs",
+          "anchor": "BELL_EXIT_REUSE_NOT_ZERO"
+        },
+        {
+          "path": "kernel/src/task_exit.rs",
+          "anchor": "pub fn validate_dead_target("
+        },
+        {
+          "path": "scripts/check_task_exit_cleanup_log.py",
+          "anchor": "def validate("
+        },
+        {
+          "path": "scripts/tests/fixtures/task_exit_cleanup.log",
+          "anchor": "[task.finish] pd=15"
+        }
+      ],
+      "checks": [
+        "paging_mapping",
+        "sext_pager",
+        "paging_reclaim_replay",
+        "paging_runtime",
+        "task_exit_lifecycle",
+        "task_exit_runtime",
+        "task_exit_profiles"
+      ],
+      "gaps": [
+        "Only two static boot ranges and main tasks with inactive trampolines; no new domain/task incarnations.",
+        "Does not reclaim ELF images, stacks, DMA, display surfaces or arbitrary service objects; no physical SMP shootdown."
+      ],
+      "depends_on": [
+        "PAGING_SAFE_RECLAMATION",
+        "CONTEXT_RELEASE",
+        "PDX_AUTHENTICATED_REPLY"
+      ]
+    },
+    {
+      "id": "APP_RESOURCE_RETIREMENT",
+      "requirement": "App private ELF/user-stack backing is detached only after original task custody and five immutable service leases retire; sext scrubs every byte before actual reuse.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/app_resources.rs",
+          "anchor": "pub fn retire("
+        },
+        {
+          "path": "crates/sex-pdx/src/app_lifecycle.rs",
+          "anchor": "pub struct ServiceCustody"
+        },
+        {
+          "path": "servers/sext/src/workspace.rs",
+          "anchor": "pub unsafe fn admit"
+        }
+      ],
+      "checks": [
+        "app_resources",
+        "service_custody",
+        "sext_workspace",
+        "bell_app_cleanup",
+        "app_resource_runtime",
+        "app_resource_profiles",
+        "kaleido_service_call"
+      ],
+      "gaps": [
+        "Three statically enrolled BSP apps only; permanent PD/task/capability/queue control tombstones remain; no runtime domain restart or SMP shootdown proof."
+      ],
+      "depends_on": [
+        "CAPABILITY_GENESIS",
+        "TASK_EXIT_MEMORY_CLEANUP"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "event": "PAGE_FAULT",
+      "preconditions": [
+        "Faulting domain exact; sanctioned non-self pager edge exists; request valid."
+      ],
+      "effects": [
+        "Save complete context, establish fault custody, and forward address/error/unique token by value with authenticated caller."
+      ],
+      "forbidden": [
+        "Borrowed stack pointer; self-route; assume enqueue means recovery."
+      ],
+      "checks": [
+        "fault_transport",
+        "fault_transactions",
+        "paging_runtime"
+      ]
+    },
+    {
+      "event": "REGION_VIEW",
+      "preconditions": [
+        "Actual caller Region or Pci capability exists; requested rights and nonempty checked extent fit immutable boot grant."
+      ],
+      "effects": [
+        "Return existing VA and length; disclose PA only with DMA_ADDRESS; leave mappings, allocation and capability graph unchanged."
+      ],
+      "forbidden": [
+        "User descriptor substitutes for authority; truncated selector or rights alias; runtime frame allocation or mapping."
+      ],
+      "checks": [
+        "memory_regions",
+        "driver_regions",
+        "drive_dma",
+        "memory_runtime"
+      ]
+    },
+    {
+      "event": "FRAME_ACQUIRE",
+      "preconditions": [
+        "Sanctioned region/frame authority; valid extent and budget."
+      ],
+      "effects": [
+        "Sext selects a free index within its immutable pool grant and policy quota, zeroes all4096 bytes and retains rollback/publication state."
+      ],
+      "forbidden": [
+        "Ambient physical-address mapping; hidden kernel allocation policy."
+      ],
+      "checks": [
+        "sext_pager"
+      ]
+    },
+    {
+      "event": "FRAME_COMMIT",
+      "preconditions": [
+        "Authenticated pending request; exact fault VA; authorized frame and permissions."
+      ],
+      "effects": [
+        "Commit the sext-selected frame to the exact existing absent leaf through sex-pdx authorization; invalidate local TLB, retire pending token, then resume the saved task through custody protocol."
+      ],
+      "forbidden": [
+        "Foreign completion; alias/leak on retry; kernel-only pager policy."
+      ],
+      "checks": [
+        "fault_transactions",
+        "paging_mapping",
+        "paging_runtime"
+      ]
+    },
+    {
+      "event": "FRAME_RELEASE",
+      "preconditions": [
+        "Authenticated enrolled client and monotonic request identity; exact finalized immutable mapping/pool authority and matching live lease."
+      ],
+      "effects": [
+        "Clear matching leaf then invalidate translation before retiring lease and releasing frame; exact retries cannot affect replacement; sext zeroes entire frame before subsequent exposure."
+      ],
+      "forbidden": [
+        "Free before invalidation; stale request resolves new binding; uncertain completion frees or zeroes a published frame; runtime capability minting."
+      ],
+      "checks": [
+        "paging_mapping",
+        "sext_pager",
+        "paging_runtime",
+        "paging_reclaim_replay",
+        "reply_sender"
+      ]
+    },
+    {
+      "event": "EXITED_TARGET_CLEANUP",
+      "preconditions": [
+        "Actual task exited with no CPU owner and released stack custody; only immutable mapping/pool grant holder may request teardown."
+      ],
+      "effects": [
+        "Preflight all leaves and retire dead fault state, clear and invalidate every owned leaf before ledger release, permanently close range, and let sext apply successful cleanup once."
+      ],
+      "forbidden": [
+        "Cleanup on exit intent alone; free unfinalized publication before invalidation; replay frees another client; runtime capability mint or per-process page tables."
+      ],
+      "checks": [
+        "paging_mapping",
+        "sext_pager",
+        "paging_reclaim_replay",
+        "paging_runtime",
+        "task_exit_lifecycle",
+        "task_exit_runtime"
+      ]
+    }
+  ]
+}

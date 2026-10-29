@@ -152,7 +152,8 @@ has '\[spindle\.grid\.surface\.ok\]' && r spindle_visible PASS || r spindle_visi
 has '\[spindle\.(input\.echo\.ok|key\.char)\]' && r spindle_typing PASS || r spindle_typing FAIL
 has '\[spindle\.ghost\.accept\]' && r spindle_ghost PASS || r spindle_ghost FAIL
 has '\[spindle\.history\.nav\] dir=up .*ok=1' && r spindle_history PASS || r spindle_history FAIL
-has '\[linen\.surface\.visible\.ok\] sid=157' && r linen_visible PASS || r linen_visible FAIL
+# Submission evidence only; check_desktop_pixels.py verifies rendered glyphs.
+has '\[linen\.list\.text\] .*rows=[1-9].*committed_view=1' && r linen_text_submitted PASS || r linen_text_submitted FAIL
 has '\[linen\.remote\.snapshot\.fallback\]|\[linen\.remote\.snapshot\.ok\] count=[1-9]' && r linen_objects PASS || r linen_objects FAIL
 has '\[linen\.nav\.select\.ok\]|\[shell\.action\.select_next_linen\]' && r linen_nav_select PASS || r linen_nav_select FAIL
 has '\[quil\.surface\.visible\.ok\]' && r quil_visible PASS || r quil_visible FAIL

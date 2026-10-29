@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "subsystem": "scheduler",
+  "invariants": [
+    {
+      "id": "SCHEDULER_OWNERSHIP",
+      "requirement": "For each task, queue_tokens + dispatch_reservations + attached_or_switching_owners <= 1; admitted runnable work has exactly one custodian.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/scheduler.rs",
+          "anchor": "pub fn tick"
+        },
+        {
+          "path": "kernel/src/scheduler_queue.rs",
+          "anchor": "try_push"
+        }
+      ],
+      "checks": [
+        "scheduler_queue",
+        "scheduler_wake",
+        "no_runnable",
+        "rsp0",
+        "task_ownership",
+        "ownership_runtime"
+      ],
+      "gaps": [
+        "Runtime save/stack-release, periodic interrupt wake liveness and AP bring-up require separate compiled/guest evidence; custody helper alone cannot establish hardware behavior."
+      ],
+      "depends_on": [
+        "CAUSAL_DOMAIN_ORDER"
+      ]
+    },
+    {
+      "id": "WAKE_LIFECYCLE",
+      "requirement": "Wakes retain a coalesced pending event independently of custody; generic wakes cannot resurrect exited tasks or authorize unresolved fault retry.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/scheduler.rs",
+          "anchor": "pub fn unpark_thread"
+        }
+      ],
+      "checks": [
+        "scheduler_wake",
+        "task_ownership",
+        "ownership_runtime",
+        "fault_transactions"
+      ],
+      "gaps": [
+        "Remote attached idle wake requires a functioning periodic timer or explicit core kick; AP scheduling is not activated by this protocol."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "CONTEXT_RELEASE",
+      "requirement": "Dispatch requires fully saved context and release of the previous kernel stack.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/scheduler.rs",
+          "anchor": "pub unsafe fn yield_and_switch"
+        },
+        {
+          "path": "kernel/src/interrupts.rs",
+          "anchor": "fn timer_interrupt_handler"
+        }
+      ],
+      "checks": [
+        "rsp0",
+        "no_runnable",
+        "task_ownership",
+        "compiled_switch",
+        "timer_pkru",
+        "paging_runtime"
+      ],
+      "gaps": [
+        "Compiled ordering and runtime stack bounds guard must pass; physical multi-core TSS/GDT/startup is not exercised by host atomics."
+      ],
+      "depends_on": [
+        "SCHEDULER_OWNERSHIP"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "event": "TASK_RUN",
+      "preconditions": [
+        "Unique scheduling custody; complete saved context; prior stack released."
+      ],
+      "effects": [
+        "Transfer queued/reserved ownership to one core; Ready -> Running."
+      ],
+      "forbidden": [
+        "Second execution owner; dispatch before last save/stack release."
+      ],
+      "checks": [
+        "task_ownership"
+      ]
+    },
+    {
+      "event": "TASK_BLOCK",
+      "preconditions": [
+        "Attached owner; pending-wake handshake defined."
+      ],
+      "effects": [
+        "Block or consume prior wake; retain owner until explicit handoff."
+      ],
+      "forbidden": [
+        "Erase prior wake by unconditional Blocked store."
+      ],
+      "checks": [
+        "task_ownership"
+      ]
+    },
+    {
+      "event": "TASK_WAKE",
+      "preconditions": [
+        "Valid live task identity."
+      ],
+      "effects": [
+        "Atomically retain one pending event without transferring attached execution custody; detached runnable custody is admitted exactly once."
+      ],
+      "forbidden": [
+        "Running -> Ready; Exited -> Ready; direct enqueue of attached task."
+      ],
+      "checks": [
+        "task_ownership"
+      ]
+    },
+    {
+      "event": "TASK_SWITCH_OUT",
+      "preconditions": [
+        "Replacement admitted; outgoing owner retained through save and stack departure."
+      ],
+      "effects": [
+        "Release outgoing owner after final context save and RSP change."
+      ],
+      "forbidden": [
+        "Publish outgoing task while stack or context still in use."
+      ],
+      "checks": [
+        "task_ownership",
+        "compiled_switch"
+      ]
+    },
+    {
+      "event": "TASK_NO_RUNNABLE",
+      "preconditions": [
+        "No admitted replacement found."
+      ],
+      "effects": [
+        "Preserve current task, current protection domain and ownership."
+      ],
+      "forbidden": [
+        "Clear current owner or fabricate replacement."
+      ],
+      "checks": [
+        "no_runnable"
+      ]
+    }
+  ]
+}

@@ -18,6 +18,8 @@ fn hot_log() -> bool {
 #[no_mangle]
 pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.trampoline.enter] ok=1");
+    assert!(crate::proof::run_memory_authority_negative_proof(),
+        "SEXFILES_MEMORY_AUTHORITY_NEGATIVE_FAILED");
     // SLOT_STORAGE is statically assigned; no dynamic registration call is used here.
     serial_println!("[sexfiles.trampoline.before_register] slot=1 ok=1");
     // Optional RamFS proof run (compile-time flag).
@@ -226,6 +228,7 @@ pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.init.ready] slot=1 ok=1");
     serial_println!("[sexfiles.trampoline.loop.enter] ok=1");
 
+    let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     loop {
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
         unsafe {
@@ -249,6 +252,19 @@ pub extern "C" fn trampoline_main() {
             arg0: msg_a0, arg1: msg_a1, arg2: msg_a2,
         };
         let caller = msg.caller_pd;
+        if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
+            if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
+                msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
+                    let (closed,revoked)=vfs::retire_app_subject(notice.target_pd);
+                    sex_pdx::serial_record!("[files.app.cleanup] target={} task={} handles={} caps={} saved_data=retained selection=0",
+                        notice.target_pd,notice.task_id,closed,revoked);
+                }) {
+                sex_pdx::serial_record!("[files.app.cleanup.ack] target={} task={} ok={}",notice.target_pd,notice.task_id,acked as u8);
+            }
+            continue;
+        }
+        if app_custody.is_retired(caller) { continue; }
+
         if hot_log() { serial_println!(
             "[sexfiles.trampoline.after_listen] type={:#x} caller={} a0={:#x} a1={:#x}",
             msg.type_id, caller, msg.arg0, msg.arg1

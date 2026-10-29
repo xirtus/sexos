@@ -25,7 +25,185 @@ arg1_reg = "r10"
 arg2_reg = "r8"
 empty_type_id = 0
 
+[ipc.pdx_reply]
+syscall = 29
+input = "rdi-exact-target-domain,rsi-value"
+output = "rax-zero-enqueued-or-one-failure"
+receive = "type1-arg0-value-caller-actual-sending-domain-captured-by-kernel"
+backpressure = "single-slot-full-rejects-without-overwriting-existing-reply;caller-retries"
+authority_limit = "legacy-target-directed-return-path;sender-provenance-is-authenticated-not-a-return-capability"
+
+[ipc.wait_self]
+syscall = 53
+selector = "rdi-zero-self-inbox-only"
+result = "rax-zero-recheck-input-after-spurious-or-coalesced-wake"
+authority = "no-target-domain-no-cross-domain-wake"
+wait_condition = "self-message-ring-or-reply-pending-handshake"
+fault_wait = "ordinary-message-or-IRQ-wake-cannot-complete-pager-request"
+
+# Reject full register-width aliases before any lookup or side effect.
+# This validates identity; it does not supply operation-specific authority.
+[ipc.selectors]
+capability_slot_min = 1
+capability_slot_max = 1024
+pdx_call_listen_slot_zero = "explicit-existing-bridge-only"
+reply_domain_id = "exact-u64-below-MAX_DOMAINS-then-registry-lookup"
+memlend_destination = "obsolete-operation-denied-no-allocation"
+validated_syscalls = [0, 28, 29, 43, 50, 51, 54, 55]
+invalid_call = "ERR_CAP_INVALID-with-value-zero"
+invalid_listen = "empty-all-output-registers-zero"
+invalid_reply = 1
+invalid_pci_or_memlend = "u64::MAX"
+
+[memory]
+genesis = "BOOT_DAG-fixed-zeroed-reservations-and-premapped-views-before-capability-seal"
+runtime_authority = "actual-caller-capability-table-Region-or-Pci-bar0-view-only"
+runtime_effects = "region-queries-preserve-mappings;sext-authorized-paging-commits-install-preallocated-leaves;no-runtime-kernel-frame-table-VA-allocation-or-capability-minting"
+bootstrap_debt = "kernel-reserves-initial-fixed-backing-VA-and-page-tables;sext-selects-and-zeroes-frames-from-boot-granted-pool"
+denied_syscalls = [30, 31, 40, 50, 51]
+denied_result = "u64::MAX-except-historical-40-returns-zero"
+slot_dma_region = 32
+slot_frame_region = 33
+slot_block_buffer = 17
+rights_query_view = 1
+rights_read = 2
+rights_write = 4
+rights_dma_address = 8
+ordinary_view_physical_address = "zero"
+paired_region_peer = "authenticated-PDX-caller-matches-BOOT_DAG-peer"
+runtime_heap = "65536-byte-ELF-owned-domain-arena-idempotent-init-reusable-byte-allocation-no-frame-map-authority"
+
+[memory.region_view]
+syscall = 54
+input = "rdi-slot,rsi-offset,rdx-length,r10-rights"
+output = "rax-status,rsi-VA,rdx-length,r10-PA-or-zero,r8-region-id"
+invalid = "rax-u64::MAX-all-other-output-registers-zero"
+validation = "full-width-slot-and-rights-before-narrowing-nonempty-checked-subrange"
+
+[memory.region_info]
+syscall = 55
+input = "rdi-slot"
+output = "rax-status,rsi-length,rdx-rights,r10-peer-or-zero,r8-region-id"
+invalid = "rax-u64::MAX-all-other-output-registers-zero"
+
+[memory.pci_bar]
+syscall = 43
+policy = "idempotent-premapped-BOOT_DAG-Pci-BAR0-view-query"
+input = "rdi-Pci-cap-slot,rsi-zero-bar0,rdx-size-zero-defaults-4096"
+output = "rax-existing-VA-or-u64::MAX"
+validation = "requested-size-within-boot-probed-granted-extent"
+
+[ipc.page_fault]
+slot = 2
+opcode = 259
+legacy_opcode = 256
+legacy_policy = "retired-codec-only-no-completion-authority"
+transport = "register-only-by-value"
+capability_kind = "Domain-async-enqueue-only"
+target_policy = "nonzero-in-registry-and-distinct-from-caller"
+type_id_reg = "rax"
+caller_pd_reg = "rsi"
+fault_addr_reg = "rdx"
+error_code_reg = "r10"
+token_reg = "r8"
+address_bits = 48
+address_policy = "nonzero-lower-canonical-user-data-nonpresent-only"
+error_code_bits = 32
+domain_id_bits = 32
+domain_zero_allowed = false
+domain_policy = "authenticated-caller-only-no-payload-domain-id;registered-main-task-only"
+dispatch_success = "accepted-only-not-resolved"
+completion = "exact-nonwrapping-token-and-boot-map-pool-capabilities-through-56;ordinary-wakes-cannot-complete-fault"
+
+[paging]
+address_space = "one-GLOBAL_VAS-no-per-process-page-tables"
+genesis = "BOOT_DAG-FramePool34-PagerMapping36-and37-DemandRegion35-per-client-sealed-before-admission"
+boot_backing = "eight-zeroed-shared-frames-two-distinct-eight-page-arenas-preallocated-intermediate-tables"
+sext_policy_quota = 4
+capability_page_bound = 8
+fault_token = "nonzero-global-monotonic-u64-never-wraps-binds-exact-task-target-pager-page-error-and-saved-frame"
+eligible_fault_errors = [4, 6]
+zero_owner = "sext-writes-entire-frame-through-authorized-alias-kernel-verifies-before-exposure"
+commit_mechanism = "validated-exact-existing-leaf-write-and-local-TLB-invalidation-no-allocator-or-mapping-policy"
+rights_read = 2
+rights_write = 4
+execution = "NX-only-no-executable-demand-pages"
+statuses = "0-success,1-invalid,2-retry,3-denied,4-exhausted,5-target-still-live"
+retry = "post-publication-retry-retains-frame-no-rezero-or-refund"
+duplicate = "same-token-frame-rights-idempotent-no-remap-no-extra-wake;conflicting-tuple-denied"
+rejection = "consumes-only-authenticated-pending-request-and-exits-exact-faulting-task"
+scope = "bounded-two-client-BSP-main-task-paging-and-cooperative-release;task-exit-cleanup-after-custody-release;no-autonomous-eviction-or-SMP-shootdown"
+
+[paging.cleanup]
+syscall = 61
+input = "rdi-mapping-cap,rsi-pool-cap"
+output = "rax-status,rsi-detached-frame-bitmap,rdx-original-main-task-id;r10-r8-zero"
+failure = "all-output-fields-zero"
+precondition = "actual-target-main-task-exited-phaseDead-noCPUowner;trampoline-inactive;exact-static-pager-edge"
+ordering = "preflight-all-owned-and-unowned-leaves;retire-exact-dead-fault;clear-and-invlpg-every-owned-leaf;retire-ledger-and-close-range;acknowledge-watch"
+unfinished = "includes-published-but-not-finalized-commit-and-unpublished-sext-reservations-after-range-closure"
+replay = "cached-original-result-no-PTE-change;sext-releases-current-target-custody-once-never-blind-replay-bitmap-free"
+closure = "permanent-for-boot-range-no-task-or-domain-incarnation-reuse"
+
+[paging.exit_notice]
+opcode = 261
+source = "kernel-caller-zero;target-task-by-value;hint-not-cleanup-authority"
+delivery = "bounded-boot-watches;wake-pager-on-exit-intent-for-last-runnable-progress;enqueue-only-after-execution-custody-released;retry-full-ring;cleanup-ack-stops-watch"
+
+[paging.wait_cleanup]
+opcode = 262
+input = "authenticated-enrolled-client;other-enrolled-target-PD;nonzero-request-ID;reserved-zero"
+reply = "request-correlated-existing-pdx-reply-only-after-target-cleanup-closed"
+authority = "pager-policy-query-only-no-memory-authority-grant"
+
+[task.finish]
+syscall = 62
+input = "rdi-reason-value;no-target-selector"
+result = "actual-current-task-exits-and-switches;never-returns-to-ended-task"
+scope = "scheduler-task-lifecycle-not-Unix-process-exit"
+
+[paging.reclaim]
+syscall = 60
+input = "rdi-mapping-cap,rsi-pool-cap,rdx-frame-index,r10-original-fault-token"
+output = "rax-status"
+ordering = "validate-finalized-exact-binding-and-PTE;clear-leaf;local-invlpg;retire-lease;return-success;sext-may-free-then-zero-before-reuse"
+retry = "retained-exact-retired-binding-success-without-PTE-write;older-forgotten-tombstone-denied;no-new-owner-effect"
+revocation_scope = "all-client-leaves-for-lease-in-GLOBAL_VAS;authorized-trusted-pager-alias-retained;physical-APs-parked"
+
+[paging.release]
+opcode = 260
+input = "authenticated-caller-routes-map;args-pageVA-nonzero-monotonic-request-id-zero"
+reply = "existing-pdx-reply-type1-value-request-id-shift8-or-status;request-id-max-u64max-shift8;caller-and-ID-checked"
+replay = "per-client-last-request-page-result-cache;exact-retry-replays-result;old-zero-wrapped-conflicting-ID-denied-without-lookup-or-reclaim"
+policy = "explicit-client-release-only;allocator-frees-only-after-kernel-success;uncertain-outcome-retains-custody"
+
+[paging.commit]
+syscall = 56
+input = "rdi-mapping-cap,rsi-pool-cap,rdx-frame-index,r10-token,r8-rights"
+output = "rax-status"
+
+[paging.query]
+syscall = 57
+input = "rdi-mapping-cap,rsi-token"
+output = "rax-status,rsi-exact-page-VA,rdx-error-code,r10-authenticated-target-PD,r8-allowed-rights"
+failure = "nonzero-status-all-other-output-registers-zero"
+
+[paging.reject]
+syscall = 58
+input = "rdi-mapping-cap,rsi-token"
+output = "rax-status"
+
+[paging.info]
+syscall = 59
+input = "rdi-capability-slot"
+output = "rax-status,rsi-base-VA,rdx-bytes,r10-target-PD-or-zero-for-pool,r8-rights"
+failure = "nonzero-status-all-other-output-registers-zero"
+
 [slots]
+paging_frame_pool = 34
+paging_demand_region = 35
+paging_primary_mapping = 36
+paging_secondary_mapping = 37
 storage = 1
 sext = 2
 input = 3
@@ -37,3 +215,85 @@ shell = 6
 mismatch_type_id = 255
 error_symbol = "ERROR_PKRU_MISMATCH"
 policy = "explicit-ipc-error-return"
+
+# Display publishes only after renderer initialization; receivers authenticate
+# the kernel-provided caller ID. These messages grant no capability or memory.
+[ipc.display_ready]
+opcode = 257
+version = 1
+publisher_pd = 1
+arg0 = "protocol_version"
+reserved_arg1 = 0
+reserved_arg2 = 0
+scope = "boot-only"
+
+[ipc.shell_ready]
+opcode = 258
+version = 1
+publisher_pd = 3
+recipient_pd = 4
+publisher_route_slot = 9
+route_policy = "BOOT_DAG-Domain-edge-shell-SLOT_SHELL_INPUT_READY-to-sexinput"
+arg0 = "protocol_version"
+reserved_arg1 = 0
+reserved_arg2 = 0
+scope = "boot-only"
+consumer_policy = "wait-before-all-shell-producers-retain-unrelated-FIFO-input"
+overflow_policy = "explicit-startup-failure-before-dequeue"
+publisher_policy = "retry-per-main-loop-without-blocking-while-pending"
+
+[app_lifecycle]
+info_syscall = 63
+ack_syscall = 64
+retire_syscall = 65
+slots = [38, 39, 40]
+apps = "9:Quil:156:frame201;12:Spindle:154,160,161,162:frame153;15:Kaleidoscope:300"
+notice = "0x107;caller0;targetPD,originalTaskID,reserved0;hint-only-retry-until-role-ACK"
+info_input = "rdi-exact-slot,rsi-kind0-dead-status-or-kind1-live-catalog"
+info_output = "rax-status;rsi-target,rdx-task,r10-requiredMask,r8-ackedMask;catalog-r10-surface,r8-shellCoordinator"
+ack_input = "rdi-exact-slot,rsi-originalTaskID;role-derived-from-BOOT-grant"
+required_service_mask = 31
+service_roles = "shell1,display2,files4,net8,bell16"
+retire_input = "rdi-exact-slot;sext-RETIRE-only"
+retire_output = "rax-status,rsi-poolAlias,rdx-byteLength,r10-originalTaskID"
+status = "0-OK,1-invalid,2-retry,3-denied,5-live;failure-query-payload-zero"
+preconditions = "pinned-original-main-Dead-no-owner;inactive-trampoline;all-five-ACK;demand-range-closed;exact-all-private-leaf-preflight"
+effects = "clear-and-local-invlpg-all-ELF-and-user-stack-pages;drain-terminal-message-reply-signal-contents;sext-zero-entire-BOOT-alias-before-workspace-reuse"
+retained = "permanent-PD-task-capability-queue-control-tombstones;shared-live-service-state;saved-documents;no-incarnation-reuse"
+limits = "three-BOOT-enrolled-apps;BSP-local-TLB;cooperative-task-finish;no-runtime-cap-mint-no-per-process-page-tables-no-buddy-free"
+
+[app_lifecycle.close]
+opcode = 264
+slots = [41, 42, 43]
+route = "shell3-to-BOOT-enrolled-app9-12-15"
+args = "targetPD,originalTaskID,reserved0"
+semantics = "cooperative-native-app-finish;retry-every16ticks-until-attested-death;enqueue-is-not-exit;no-runtime-mint"
+
+[app_lifecycle.presentation]
+registration = "shell0xFA-accepted-BOOT-catalog-manifest-replies-actualcaller3-value-surfaceID;reply-retained-on-full"
+opcode = 265
+args = "catalogSurfaceID,nonzeroRequestID-at-most-u64MAX-shift8,reserved0"
+authority = "exact-live-BOOT-catalog-app-owner"
+response = "type1-actual-display1-value-requestID-shift8-or-status;retain-on-BufferFull"
+visibility = "success-only-after-real-compositor-render-where-requested-native-surface-wins-a-framebuffer-pixel"
+cleanup = "discard-pending-app-presentation-before-display-retirement-ACK"
+
+[app_lifecycle.observer]
+holder = "Linen7"
+target = "Spindle12-original-main-task"
+slot = 39
+rights = "QUERY-only;no-ACK-no-RETIRE"
+semantics = "legacy-list-open-search-from12-only-while-statusLIVE;terminal-queued-calls-fenced;reply12-best-effort-as-before;permanent-shell3-replies-retained"
+
+[app_lifecycle.surface_groups]
+associations = "Quil9:frame201:content156;Spindle12:frame153:content154,160,161,162"
+activation = "exact-immutable-catalog-owner-and-shell-coordinator;frame-binding-retained-after-minimize"
+geometry = "frame-authoritative-body-inset8,36,width-minus16,height-minus44;Spindle2x2-gap8"
+composition = "frame-owns-chrome-z-order;exact-app-owned-child-owns-body;bound-child-hidden-with-absent-parent;focus-preserves-content-color"
+
+[desktop.linen_text_delivery]
+authority = "existing-shell3-to-display1-BOOT-Domain-route"
+capacity = "one-active-and-one-latest-complete-text-batch;512bytes-each;no-allocation"
+progress = "at-most-four-checked-send-attempts-per-shell-pass;exact-operation-retained-on-full;receive-and-HID-progress-between-passes"
+receipt = "final-clear-and-chunk-admission-only;actual-visibility-requires-framebuffer-verification"
+coalescing = "active-batch-finishes-without-interleaving;newer-desired-repaint-replaces-only-pending-batch"

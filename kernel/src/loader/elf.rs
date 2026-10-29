@@ -95,6 +95,8 @@ impl ElfLoader {
         }
         serial_println!("loader: Guard-page stack initialized at {:#x}", stack_top);
 
+        crate::app_resources::capture_boot_image(pd_id,pku_key,elf_data,code_base,stack_top)?;
+
         // 5. Verify entrypoint mapping contract before task creation
         Self::assert_user_rip_mapped_executable(0, entry)?;
 

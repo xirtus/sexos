@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Pure authority and exact private-image leaf retirement mechanism.
+pub const MAX_APPS:usize=3;
+pub const MAX_PAGES:usize=512;
+pub const QUERY:u8=1;
+pub const ACK:u8=2;
+pub const RETIRE:u8=4;
+pub const REQUIRED:u8=31;
+pub const INVALID:u64=1;
+pub const RETRY:u64=2;
+pub const DENIED:u64=3;
+pub const LIVE:u64=5;
+pub const PHYSICAL_MASK:u64=0x000f_ffff_ffff_f000;
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct LifecycleGrant {pub target_pd:u32,pub task_id:u32,pub holder_pd:u32,pub rights:u8,pub ack_bit:u8}
+impl LifecycleGrant {
+    pub fn authorize(self,holder:u32,target:u32,task:u32,right:u8)->Result<(),u64>{
+        if self.holder_pd!=holder || self.target_pd!=target || self.task_id!=task
+            || self.rights&right!=right {return Err(DENIED)}
+        if right==ACK && (self.ack_bit==0 || self.ack_bit&!REQUIRED!=0 || !self.ack_bit.is_power_of_two()){return Err(DENIED)}
+        Ok(())
+    }
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct PrivatePage {pub va:u64,pub leaf:u64,pub expected:u64}
+impl PrivatePage {pub const EMPTY:Self=Self{va:0,leaf:0,expected:0};}
+pub fn final_elf_flags(flags:u64,pkey:u8)->u64 {
+    assert!(pkey<16);(flags&!(15u64<<59))|((pkey as u64)<<59)
+}
+/// All fallible checks precede the first mutation. No page can be handed off
+/// before every clear and local invalidation has completed. Only A/D may vary.
+pub fn retire_private_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64,
+    mut clear:impl FnMut(u64),mut flush:impl FnMut(u64))->Result<usize,u64>{
+    if pages.is_empty() || pages.len()>MAX_PAGES{return Err(INVALID)}
+    for (index,page) in pages.iter().enumerate(){
+        if page.va==0 || page.va%4096!=0 || page.leaf==0 || page.expected&5!=5
+            || read(page.leaf)&!0x60 != page.expected&!0x60 {return Err(DENIED)}
+        for old in &pages[..index]{
+            if old.va==page.va || old.leaf==page.leaf
+                || old.expected&PHYSICAL_MASK==page.expected&PHYSICAL_MASK{return Err(DENIED)}
+        }
+    }
+    for page in pages {clear(page.leaf);flush(page.va);}
+    Ok(pages.len())
+}

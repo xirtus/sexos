@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+mod paging_probe;
 
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};
@@ -22,8 +23,9 @@ const LANE_RESERVED_5: u8 = 5; // reserved for future security-class events (was
 // Reply received by caller as pdx_listen_raw(0) → msg.type_id=1, msg.arg0=value.
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    sex_pdx::serial_record!("[paging.client.fatal] bell {}", info);
+    loop { sex_pdx::sys_yield(); }
 }
 
 // ── RAM Queue ─────────────────────────────────────────────────────────
@@ -511,10 +513,37 @@ unsafe fn maybe_run_bell_lane_rename_proof() {
     );
 }
 
+/// Rebuild the bounded ring in arrival order; no dead sender callback remains.
+unsafe fn retire_app_resources(target:u32)->usize {
+    let old=BELL_QUEUE.entries;
+    let head=BELL_QUEUE.head as usize;
+    let count=BELL_QUEUE.count as usize;
+    let mut kept=0usize;
+    let mut removed=0usize;
+    for offset in 0..count {
+        let e=old[(head+offset)%BELL_QUEUE_CAPACITY];
+        if e.caller_pd==target {removed+=1;continue}
+        BELL_QUEUE.entries[kept]=e;kept+=1;
+    }
+    for i in kept..BELL_QUEUE_CAPACITY {BELL_QUEUE.entries[i]=BellQueue::new().entries[0];}
+    BELL_QUEUE.head=0;BELL_QUEUE.count=kept as u16;
+    BELL_QUEUE.tail=(kept%BELL_QUEUE_CAPACITY) as u16;
+    let mut n=0;
+    for i in 0..MUTE_COUNT {if MUTE_LIST[i]!=target {MUTE_LIST[n]=MUTE_LIST[i];n+=1;}}
+    for i in n..MUTE_LIST_CAPACITY {MUTE_LIST[i]=0;} MUTE_COUNT=n;
+    n=0;
+    for i in 0..POLICY_COUNT {if POLICY_TABLE[i].target_pd!=target {POLICY_TABLE[n]=POLICY_TABLE[i];n+=1;}}
+    for i in n..POLICY_TABLE_CAPACITY {POLICY_TABLE[i]=PolicyEntry{target_pd:0,active_flags:0,privacy_level:0,lane_override:0,force_mute:0};}
+    POLICY_COUNT=n;
+    for entry in SPAM_BUDGET.slots.iter_mut() {if entry.0==target {*entry=(0,0,0)}}
+    bump_generation();removed
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
+    paging_probe::run();
 
     // ── Bell Bridge status stub (Phase 1): marker-only, no IPC ──
     unsafe { maybe_run_bell_bridge_status_stub(); }
@@ -540,8 +569,40 @@ pub extern "C" fn _start() -> ! {
     }
 
     serial_println!("[sexbell.ready]");
+    let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
+    #[cfg(paging_exit_cleanup_proof)]
+    let mut exit_probe_pending = false;
     loop {
-        let msg = pdx_listen_raw(0);
+        #[cfg(paging_exit_cleanup_proof)]
+        if exit_probe_pending {
+            exit_probe_pending = false;
+            paging_probe::exit_reuse();
+        }
+        let msg = paging_probe::next_message();
+        paging_probe::check_retained();
+        if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
+            if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
+                msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|n| {
+                    let removed=unsafe{retire_app_resources(n.target_pd)};
+                    sex_pdx::serial_record!("[bell.app.cleanup] target={} task={} events={} callbacks=0 policies=0 mute=0 spam=0",n.target_pd,n.task_id,removed);
+                }) {
+                sex_pdx::serial_record!("[bell.app.cleanup.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);
+            }
+            continue;
+        }
+        if app_custody.is_retired(msg.caller_pd) {continue}
+
+        if msg.type_id == OP_BELL_SUBSCRIBE && msg.caller_pd == 15 {
+            static mut PAGING_CHECKS: u8 = 0;
+            unsafe {
+                PAGING_CHECKS += 1;
+                if PAGING_CHECKS == 2 {
+                    sex_pdx::serial_record!("[paging.client.retained] pd=10 pages=1 cross_client_reuse=1 ok=1");
+                    #[cfg(paging_exit_cleanup_proof)]
+                    { exit_probe_pending = true; }
+                }
+            }
+        }
 
         match msg.type_id {
             OP_BELL_NOTIFY => {

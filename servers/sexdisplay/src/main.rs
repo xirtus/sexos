@@ -104,61 +104,22 @@ const MAX_RECTS: usize = 8;
 /// A compositor surface. Rendered as a solid-color filled rect below the bar.
 /// No backing buffer, no alpha, no z-ordering (insertion order only).
 /// Ownership invariant: owner_pd is set on first create and never changes
-/// while active. Only the owning PD may mutate or destroy the surface.
-/// Focus (z-order/color) is compositor state — open to all callers.
-struct Surface {
-    surface_id: u64,
-    owner_pd: u32,       // PD that created this surface; 0 = unbound
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    color: u32,
-    active: bool,
-    // Per-surface tab info (V1: set via 0xFD from shell; used for colored tab blocks)
-    tab_count: u8,
-    active_tab: u8,
-    // Per-surface chrome flags (V1: bit 0 = top bar enabled)
-    chrome_flags: u8,
-    // Per-surface fill rects (up to MAX_RECTS; fill_count tracks highest set index + 1)
-    fill_count: u8,
-    fill_sx: [i32; MAX_RECTS],
-    fill_sy: [i32; MAX_RECTS],
-    fill_sw: [u32; MAX_RECTS],
-    fill_sh: [u32; MAX_RECTS],
-    fill_color: [u32; MAX_RECTS],
-    text_len: u16,
-    text_color: u32,
-    // TEXT_MODEL_V2: 512-byte text buffer (was 128). OP_TEXT_DRAW offset
-    // extends past 255 via arg2 bits 12-15 (offset bits 8-11); legacy
-    // senders leave those bits zero and behave identically.
-    text_buf: [u8; TEXT_BUF_CAP],
-    // TEXT_MODEL_V2: per-line start offsets into text_buf, recomputed on
-    // every text write. Lines split on '\n' and wrap at wrap_cols. When the
-    // buffer contains NO '\n', wrap_cols stays at the legacy 20 so every
-    // pre-V2 writer (fixed 20-char padded rows) renders unchanged; a '\n'
-    // anywhere opts the surface into width-derived wrap.
-    line_starts: [u16; TEXT_MAX_ROWS],
-    line_count: u8,
-    wrap_cols: u8,
-}
-
-const MAX_SURFACES: usize = 16;
-const TEXT_BUF_CAP: usize = 512;
-const TEXT_MAX_ROWS: usize = 24;
-const TEXT_LEGACY_COLS: u8 = 20;
-const SURFACE_EMPTY: Surface = Surface {
-    surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
-    tab_count: 0, active_tab: 0, chrome_flags: 0,
-    fill_count: 0,
-    fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
-    fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
-    fill_color: [0u32; MAX_RECTS],
-    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
-};
+/// while active. Content belongs to that PD. The immutable catalog coordinator
+/// may manage geometry and hide its associated app/frame surfaces.
+mod surface_lifecycle;
+mod surface_groups;
+static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGroups::new();
+use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
+static mut APP_PRESENT_BITS: u8 = 0;
+static APP300_PRESENTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn report_app_presented() {
+    if unsafe { APP_PRESENT_BITS & 4 != 0 } && !APP300_PRESENTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        sex_pdx::serial_record!("[display.app.presented] target=15 surface=300 scene=1");
+    }
+}
 const FOCUS_SURFACE_COLOR: u32 = 0x0089B4FA;
 
 // ── Frame Chrome Rim (focused surface, matches shell FRAME_RIM_PX) ──
@@ -250,6 +211,7 @@ static mut DISPLAY_TOKENS: RenderTokensV1 = DEFAULT_RENDER_TOKENS;
 
 // Token reception state machine. Call 1 buffers; Call 2 commits.
 static mut TOKEN_BUF_CALL1_RECEIVED: bool = false;
+static mut TOKEN_BUF_OWNER: u32 = 0;
 static mut TOKEN_BUF_ARG0: u64 = 0;
 static mut TOKEN_BUF_ARG1: u64 = 0;
 static mut TOKEN_BUF_ARG2: u64 = 0;
@@ -342,13 +304,16 @@ fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usi
 /// Shared by render() and redraw_surface_area() to prevent drift.
 fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64) -> u32 {
     let mut c = bg;
+    let mut winner_mask = 0;
     unsafe {
+        let selected = FRAME_GROUPS.winner(&SURFACES, focused_id, x, y, w, h).map(|s| s.surface_id);
         // Pass 1: non-focused surfaces (slot order, break on first hit)
         for surf in SURFACES.iter() {
-            if !surf.active || surf.surface_id == focused_id { continue; }
+            if !surf.active || Some(surf.surface_id) != selected || surf.surface_id == focused_id || FRAME_GROUPS.is_frame(surf) { continue; }
             let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
             if sw == 0 || sh == 0 { continue; }
             if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+                winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
                 c = fill_rect_color(surf, x, y, surf.color);
                 // ── Text rendering: glyph foreground overrides fill-rect color ──
                 if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
@@ -356,12 +321,13 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
             }
         }
         // Pass 2: focused surface (always drawn on top)
-        if focused_id != 0 {
+        if selected.is_some() {
             for surf in SURFACES.iter() {
-                if !surf.active || surf.surface_id != focused_id { continue; }
+                if !surf.active || Some(surf.surface_id) != selected || (surf.surface_id != focused_id && !FRAME_GROUPS.is_frame(surf)) { continue; }
                 let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
                 if sw == 0 || sh == 0 { continue; }
                 if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+                    winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
                     // ── Phase 6 proof: real render-path markers ──────────────
                     // Emit once when the focused-surface pixel path is entered.
                     // Proves bounds were checked via clamp_surface + sw/sh guards
@@ -568,15 +534,18 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         }
                     } else {
                         // ── SURFACE CONTENT AREA ──
-                        c = fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color);
-                        // ── Text rendering: glyph foreground overrides focus color ──
-                        if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
+                        let content = FRAME_GROUPS.content(surf, &SURFACES, x, y, w, h);
+                        winner_mask = surface_lifecycle::native_pixel_bit(content.owner_pd, content.surface_id);
+                        c = fill_rect_color(content, x, y, content.color);
+                        // Child text uses its own origin; the parent alone draws chrome.
+                        if let Some(tc) = surface_text_fg_at(x, y, content) { c = tc; }
                     }
                     break;
                 }
             }
         }
     }
+    if winner_mask != 0 { unsafe { APP_PRESENT_BITS |= winner_mask; } }
     c
 }
 
@@ -1029,7 +998,7 @@ const FONT: [[u8; 7]; 10] = [
 // 5×7 ASCII font: glyphs for chars 0x20 (space) through 0x5A (Z), 59 glyphs
 // Each glyph: 7 bytes, MSB = leftmost pixel, 5 bits wide, 3 bits padding
 // Used by surface_text_fg_at() for text rendering on surfaces
-const FONT_ASCII_5X7: [[u8; 7]; 59] = [
+const FONT_ASCII_5X7: [[u8; 7]; 69] = [
     [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
     [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
     [0b01010, 0b01010, 0b01010, 0b00000, 0b00000, 0b00000, 0b00000],
@@ -1088,48 +1057,56 @@ const FONT_ASCII_5X7: [[u8; 7]; 59] = [
     [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
     [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
     [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
-    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111]
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+    [14,8,8,8,8,8,14], // [
+    [16,8,8,4,2,2,1], // backslash
+    [14,2,2,2,2,2,14], // ]
+    [4,10,17,0,0,0,0], // ^
+    [0,0,0,0,0,0,31], // _
+    [8,4,2,0,0,0,0], // backtick
+    [2,4,4,8,4,4,2], // {
+    [4,4,4,4,4,4,4], // |
+    [8,4,4,2,4,4,8], // }
+    [0,0,9,22,0,0,0] // ~
+
 ];
 
 /// Returns `Some(text_color)` if pixel (lx, ly) is a toolbar title glyph pixel
 /// for the given surface_id, or `None` if not in the toolbar title text area.
 /// Uses FONT_ASCII_5X7 at a fixed position within the top bar.
+fn ascii_glyph_index(byte: u8) -> Option<usize> {
+    let upper = if byte.is_ascii_lowercase() { byte - b'a' + b'A' } else { byte };
+    match upper {
+        b' '..=b'Z' => Some((upper - b' ') as usize),
+        b'['..=b'`' => Some(59 + (upper - b'[') as usize),
+        0x7b..=0x7e => Some(65 + (upper - 0x7b) as usize),
+        _ => None,
+    }
+}
+
 fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
+    const SCALE: usize = 2;
     const GLYPH_W: usize = 5;
     const GLYPH_H: usize = 7;
-    // Title text position: after lights exclusion, centered vertically in 32px bar.
     let title_x = FRAME_TOP_BAR_LIGHT_EXCLUSION_PX + 12;
-    let title_y: usize = 10; // top padding for 5x7 glyph in 28px bar
-
-    if (lx as isize) < (title_x as isize) || ly < title_y || ly >= title_y + GLYPH_H {
-        return None;
-    }
-
-    let col = (lx - title_x) / (GLYPH_W + 1);
-    let px = (lx - title_x) % (GLYPH_W + 1);
-    let py = ly - title_y;
+    let title_y = (FRAME_TOP_BAR_HEIGHT_PX - GLYPH_H * SCALE) / 2;
+    if lx < title_x || ly < title_y || ly >= title_y + GLYPH_H * SCALE { return None; }
+    let col = (lx - title_x) / ((GLYPH_W + 1) * SCALE);
+    let px = ((lx - title_x) / SCALE) % (GLYPH_W + 1);
+    let py = (ly - title_y) / SCALE;
     if px >= GLYPH_W { return None; }
-
-    // Hardcoded titles by surface_id
     let title: &[u8] = match surface_id {
-        200 => b"Linen",
-        201 => b"Quil",
-        0x99 => b"Spindle",
-        100 => b"App",
-        _ => return None,
+        200 => b"Linen", 201 | 156 => b"Quil", 0x99 | 154 => b"Spindle",
+        300 => b"Browser", 100 => b"App", _ => return None,
     };
-    if col >= title.len() { return None; }
-    let ch = title[col];
-    if ch < 0x20 || ch > 0x5A { return None; }
-    let glyph_idx = (ch - 0x20) as usize;
-    if glyph_idx >= 59 { return None; }
-    let row_bits = FONT_ASCII_5X7[glyph_idx][py];
-    let pixel_on = (row_bits >> (4 - px)) & 1;
-    if pixel_on != 0 {
-        Some(0x00E8FFFFu32) // bright cyan-white
-    } else {
-        None
-    }
+    let glyph = ascii_glyph_index(*title.get(col)?)?;
+    if (FONT_ASCII_5X7[glyph][py] >> (4 - px)) & 1 != 0 { Some(0x00E8FFFF) } else { None }
+}
+
+/// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column
+/// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
+fn surface_text_scale(surf: &Surface) -> usize {
+    if surf.w >= 256 { 2 } else { 1 }
 }
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
@@ -1139,7 +1116,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
 /// Lines split on '\n' and wrap at wrap_cols. Legacy behavior preserved:
 /// a buffer with no '\n' wraps at the fixed 20 columns every pre-V2 writer
 /// pads to; any '\n' switches the surface to width-derived wrap
-/// ((w - 10) / 6 ≈ usable width over 6px glyph advance, clamped 1..=80).
+/// (usable width / scaled 6px glyph advance, clamped 1..=80).
 fn recompute_text_lines(surf: &mut Surface) {
     let len = (surf.text_len as usize).min(TEXT_BUF_CAP);
     surf.line_count = 0;
@@ -1147,8 +1124,8 @@ fn recompute_text_lines(surf: &mut Surface) {
 
     let has_newline = surf.text_buf[..len].iter().any(|&b| b == b'\n');
     surf.wrap_cols = if has_newline {
-        let derived = (surf.w.saturating_sub(10) / 6) as u8;
-        derived.clamp(1, 80)
+        let advance = 6 * surface_text_scale(surf) as u32;
+        (surf.w.saturating_sub(16) / advance).clamp(1, 80) as u8
     } else {
         TEXT_LEGACY_COLS
     };
@@ -1182,19 +1159,19 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     if surf.text_len == 0 || surf.line_count == 0 { return None; }
     const GLYPH_W: usize = 5;
     const GLYPH_H: usize = 7;
-    const CHAR_SPACING: usize = 1; // 1px gap between chars
-    const LINE_H: usize = GLYPH_H + 2; // line height with spacing
-
-    // Text area inset: 8px from left, 8px from top bar / rim
-    let tx = (surf.x as usize).saturating_add(8);
-    let ty = (surf.y as usize).saturating_add(24); // below title/chrome
+    const CHAR_SPACING: usize = 1;
+    let scale = surface_text_scale(surf);
+    let line_h = (GLYPH_H + 2) * scale;
+    let tx = (surf.x.max(0) as usize).saturating_add(8);
+    let top_inset = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { FRAME_TOP_BAR_HEIGHT_PX + 8 } else { 12 };
+    let ty = (surf.y.max(0) as usize).saturating_add(top_inset);
 
     if x < tx || y < ty { return None; }
 
-    let col = (x - tx) / (GLYPH_W + CHAR_SPACING);
-    let row = (y - ty) / LINE_H;
-    let px = (x - tx) % (GLYPH_W + CHAR_SPACING);
-    let py = (y - ty) % LINE_H;
+    let col = (x - tx) / ((GLYPH_W + CHAR_SPACING) * scale);
+    let row = (y - ty) / line_h;
+    let px = ((x - tx) / scale) % (GLYPH_W + CHAR_SPACING);
+    let py = ((y - ty) / scale) % (GLYPH_H + 2);
 
     if px >= GLYPH_W || py >= GLYPH_H { return None; }
     if col >= surf.wrap_cols as usize { return None; }
@@ -1211,16 +1188,7 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     if char_idx >= end || char_idx >= surf.text_len as usize { return None; }
 
     let c = surf.text_buf[char_idx];
-    // TEXT_MODEL_V2: lowercase is folded to uppercase glyphs. The pre-V2
-    // guard rejected 0x61-0x7A before the fold ran, making typed lowercase
-    // invisible on every surface.
-    if c < 0x20 || (c > 0x5A && !(0x61..=0x7A).contains(&c)) { return None; }
-    let glyph_idx = if (0x61..=0x7A).contains(&c) {
-        (c - 0x61 + 0x21) as usize // 'a' → glyph of 'A' (0x41 - 0x20)
-    } else {
-        (c - 0x20) as usize
-    };
-    if glyph_idx >= 59 { return None; }
+    let glyph_idx = ascii_glyph_index(c)?;
 
     let glyph_row = FONT_ASCII_5X7[glyph_idx][py];
     let bit = (glyph_row >> (GLYPH_W - 1 - px)) & 1;
@@ -1324,29 +1292,29 @@ fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
-fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
+fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
-        return;
+        return false;
     }
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
-        return;
+        return false;
     }
     let pixels = match w.checked_mul(h) {
         Some(v) => v,
-        None => return,
+        None => return false,
     };
     let bytes = match pixels.checked_mul(4) {
         Some(v) => v as u64,
-        None => return,
+        None => return false,
     };
     let end_addr = match fb_addr.checked_add(bytes) {
         Some(v) => v,
-        None => return,
+        None => return false,
     };
     // Guard full framebuffer range before first write.
     if end_addr < HIGH_HALF_BASE {
-        return;
+        return false;
     }
     let frame = RENDER_FRAME_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     // Budgeted marker: full-FB render invoked (proof of render entry + boundedness).
@@ -1391,6 +1359,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
+    unsafe { APP_PRESENT_BITS = 0; }
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -1417,6 +1386,8 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
+    report_app_presented();
+    true
 }
 
 /// Redraw the top strip (rows 0..50) — bar background, workspace indicators, chips, and clock digits.
@@ -1663,6 +1634,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
         }
     }
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
+    unsafe { APP_PRESENT_BITS = 0; }
     for y in 50..h {
         for x in 0..w {
             let c: u32 = if y == 50 {
@@ -1680,6 +1652,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
+    report_app_presented();
 }
 
 // Classic NW arrow, 8 wide × 16 tall.
@@ -2553,6 +2526,88 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
     (ok, kind)
 }
 
+fn load_lifecycle_catalog() -> surface_lifecycle::Lifecycle {
+    let mut lifecycle = surface_lifecycle::Lifecycle::new();
+    let mut mandatory = false;
+    for slot in sex_pdx::app_lifecycle::SLOTS {
+        if let Ok(c) = sex_pdx::app_lifecycle::catalog(slot) {
+            assert!(lifecycle.register(surface_lifecycle::Catalog {
+                slot, target_pd: c.target_pd, task_id: c.task_id,
+                surface_id: c.surface_id, coordinator_pd: c.coordinator_pd,
+            }), "invalid display lifecycle catalog");
+            unsafe { FRAME_GROUPS.register(surface_lifecycle::Catalog {
+                slot, target_pd: c.target_pd, task_id: c.task_id,
+                surface_id: c.surface_id, coordinator_pd: c.coordinator_pd,
+            }); }
+            mandatory |= c.target_pd == 15 && c.surface_id == 300;
+        }
+    }
+    assert!(mandatory, "missing display lifecycle catalog");
+    lifecycle
+}
+
+fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut SilkBar) -> bool {
+    let mut changed = false;
+    for index in 0..surface_lifecycle::CATALOG_CAPACITY {
+        let Some(catalog) = lifecycle.catalog(index) else { continue; };
+        if lifecycle.phase(index) != Some(surface_lifecycle::Phase::Live) { continue; }
+        let Ok(info) = sex_pdx::app_lifecycle::info(catalog.slot) else { continue; };
+        if info.target_pd != catalog.target_pd || info.task_id != catalog.task_id
+            || info.required_mask & sex_pdx::app_lifecycle::ROLE_DISPLAY == 0 { continue; }
+        unsafe {
+            let mut refs = surface_lifecycle::SceneRefs {
+                focused_sid: FOCUSED_SURFACE_ID, active_app_sid: bar.phase1.active_app_sid,
+                token_owner: TOKEN_BUF_OWNER, token_pending: TOKEN_BUF_CALL1_RECEIVED,
+                cursor_under_valid: CURSOR_UNDER_VALID,
+            };
+            if let Some(removed) = lifecycle.prepare(index, info.target_pd, info.task_id, &mut SURFACES, &mut refs) {
+                FOCUSED_SURFACE_ID = refs.focused_sid;
+                bar.phase1.active_app_sid = refs.active_app_sid;
+                TOKEN_BUF_OWNER = refs.token_owner;
+                TOKEN_BUF_CALL1_RECEIVED = refs.token_pending;
+                if !refs.token_pending { TOKEN_BUF_ARG0 = 0; TOKEN_BUF_ARG1 = 0; TOKEN_BUF_ARG2 = 0; }
+                CURSOR_UNDER_VALID = refs.cursor_under_valid;
+                changed = true;
+                sex_pdx::serial_record!("[display.app.cleanup.prepared] target={} task={} removed={} focus={} tombstone=1",
+                    info.target_pd, info.task_id, removed, refs.focused_sid);
+            }
+        }
+    }
+    changed
+}
+
+fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &SilkBar, fb_live: bool) {
+    let prepared = (0..surface_lifecycle::CATALOG_CAPACITY)
+        .any(|i| lifecycle.phase(i) == Some(surface_lifecycle::Phase::Prepared));
+    if (prepared || lifecycle.needs_presentation()) && fb_live
+        && unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, bar) } {
+        lifecycle.pixels_presented(unsafe { APP_PRESENT_BITS });
+        unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
+        for index in 0..surface_lifecycle::CATALOG_CAPACITY {
+            if lifecycle.scene_committed(index) {
+                let c = lifecycle.catalog(index).unwrap();
+                sex_pdx::serial_record!("[display.app.cleanup.committed] target={} task={} scene=1", c.target_pd, c.task_id);
+            }
+        }
+    }
+    for index in 0..surface_lifecycle::CATALOG_CAPACITY {
+        if lifecycle.phase(index) != Some(surface_lifecycle::Phase::Committed) { continue; }
+        let c = lifecycle.catalog(index).unwrap();
+        if sex_pdx::app_lifecycle::ack(c.slot, c.task_id).is_ok() {
+            assert!(lifecycle.acknowledge(index, c.target_pd, c.task_id));
+            sex_pdx::serial_record!("[display.app.cleanup.ack] target={} task={} role=display", c.target_pd, c.task_id);
+        }
+    }
+    for index in 0..surface_lifecycle::CATALOG_CAPACITY {
+        let Some((target, value)) = lifecycle.presentation_reply(index) else { continue; };
+        if sex_pdx::pdx_reply(target, value) == 0 {
+            assert!(lifecycle.presentation_reply_sent(index, value));
+            sex_pdx::serial_record!("[display.app.present.reply] target={} request={} scene=1", target, value >> 8);
+        }
+    }
+
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdisplay.init.start]");
@@ -2573,6 +2628,7 @@ pub extern "C" fn _start() -> ! {
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
+    let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
     let mut last_clock_tick = sex_pdx::get_ticks();
     let mut clock_from_silkbar = false;
@@ -2636,9 +2692,19 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.de.frame_lights.current_tier.pass] visual=1 keyboard=1 pointer_destructive=0 deferred=1");
 
     serial_println!("[sexdisplay.ready]");
+    let mut ready_publisher = sex_pdx::display_ready::ReadyPublisher::new();
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
+        // Announce only after the initialized renderer can drain ordinary work.
+        // Retry each full recipient at most once per pass; never block draining.
+        let ready_sent = ready_publisher.poll();
+        if ready_sent & 1 != 0 {
+            serial_println!("[display.ready.sent] to=silk-shell version=1");
+        }
+        if ready_sent & 2 != 0 {
+            serial_println!("[display.ready.sent] to=silkbar version=1");
+        }
         display_loop_counter = display_loop_counter.wrapping_add(1);
         // ── Per-cycle flags ──
         let mut needs_surface_redraw = false;
@@ -2648,6 +2714,10 @@ pub extern "C" fn _start() -> ! {
         let mut cursor_only_moved = false;
         let mut did_primary_fb_render = false;
         let mut drained: usize = 0;
+        if prepare_app_cleanup(&mut lifecycle, &mut bar) {
+            needs_surface_redraw = true;
+            needs_top_strip_redraw = true;
+        }
         if !fb_live {
             unsafe {
                 static mut FB_LIVE_WAIT_BUDGET: u32 = 4;
@@ -2924,7 +2994,36 @@ pub extern "C" fn _start() -> ! {
             };
             drained += 1;
 
+            // A hint cannot authorize cleanup: capability status above is the authority.
+            if msg.type_id == sex_pdx::app_lifecycle::OP_APP_EXIT {
+                if sex_pdx::app_lifecycle::ExitNotice::decode(msg.type_id, msg.caller_pd as u64,
+                    [msg.arg0, msg.arg1, msg.arg2]).is_ok()
+                    && prepare_app_cleanup(&mut lifecycle, &mut bar) {
+                    needs_surface_redraw = true; needs_top_strip_redraw = true;
+                }
+                continue;
+            }
+            if !lifecycle.caller_live(msg.caller_pd)
+                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD)
+                    && !lifecycle.sid_live(msg.arg0)) {
+                unsafe {
+                    static mut DEAD_CALL_LOG_BUDGET: u8 = 8;
+                    if DEAD_CALL_LOG_BUDGET != 0 {
+                        DEAD_CALL_LOG_BUDGET -= 1;
+                        sex_pdx::serial_record!("[display.app.stale.reject] caller={} sid={} op={:#x}", msg.caller_pd, msg.arg0, msg.type_id);
+                    }
+                }
+                continue;
+            }
+            if msg.type_id == silkbar_model::OP_SILKBAR_UPDATE
+                && msg.arg0 as u32 == UpdateKind::SetActiveApp as u32
+                && !lifecycle.sid_live(msg.arg1 as u32 as u64) { continue; }
             match msg.type_id {
+                sex_pdx::app_lifecycle::OP_APP_PRESENT => {
+                    if lifecycle.request_present(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) {
+                        sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request={}", msg.caller_pd, msg.arg0, msg.arg1);
+                    }
+                }
                 silkbar_model::OP_SILKBAR_UPDATE => {
                     // For SetClock: capture old bar values and decode incoming
                     // BEFORE apply_update mutates bar. This gives accurate
@@ -3161,7 +3260,7 @@ pub extern "C" fn _start() -> ! {
                             if !slot.active {
                                 *slot = Surface {
                                     surface_id: 0,
-                                    owner_pd: 0,
+                                    owner_pd: msg.caller_pd,
                                     x, y, w, h,
                                     color: 0x00303860,
                                     active: true,
@@ -3190,51 +3289,21 @@ pub extern "C" fn _start() -> ! {
                     if w == 0 || h == 0 { continue; }
                     let color = if surface_id & 1 == 0 { 0x00303860u32 } else { 0x00704890u32 };
                     unsafe {
-                        // Upsert: update existing surface or allocate new slot
-                        // Ownership invariant: only the owning PD may upsert an active surface.
-                        let mut handled = false;
-                        for slot in SURFACES.iter_mut() {
-                            if slot.active && slot.surface_id == surface_id {
-                                if slot.owner_pd != msg.caller_pd {
-                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                    if n & 0x3F == 0 {
-                                        serial_println!("AUTH: 0xEC upsert rejected sid={} caller={} owner={}",
-                                            surface_id, msg.caller_pd, slot.owner_pd);
+                        let admission = lifecycle.admit(&SURFACES, msg.caller_pd, surface_id);
+                        if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
+                            FRAME_GROUPS.observe(&SURFACES);
+                            FRAME_GROUPS.fit_children(&mut SURFACES);
+                            for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
+                            if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
+                                recompute_text_lines(surface);
+                                if surface.surface_id == 300 && surface.owner_pd == 15 {
+                                    static ADMITTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                                    if !ADMITTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                                        sex_pdx::serial_record!("[display.app.admitted] target=15 surface=300 owner=15");
                                     }
-                                    continue;
-                                }
-                                slot.x = x; slot.y = y; slot.w = w; slot.h = h;
-                                if slot.color != color { slot.color = color; }
-                                handled = true;
-                                break;
-                            }
-                        }
-                        // Create: bind owner_pd on first allocation of an inactive slot.
-                        // After destroy (active=false) the same or a different PD may
-                        // reclaim the slot, becoming the new owner.
-                        if !handled {
-                            for slot in SURFACES.iter_mut() {
-                                if !slot.active {
-                                    *slot = Surface {
-                                        surface_id, owner_pd: msg.caller_pd, x, y, w, h,
-                                        color,
-                                        active: true,
-                                        tab_count: 0, active_tab: 0, chrome_flags: 0,
-                                        fill_count: 0,
-                                        fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
-                                        fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
-                                        fill_color: [0u32; MAX_RECTS],
-                                        text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-                                        line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
-                                    };
-                                    handled = true;
-                                    break;
                                 }
                             }
-                        }
-                        // Composite full below-bar area to respect registry z-order
-                        if handled && fb_live {
-                            needs_surface_redraw = true;
+                            needs_surface_redraw |= fb_live;
                         }
                     }
                 }
@@ -3262,11 +3331,15 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     continue;
                                 }
+                                found = slot.x != new_x || slot.y != new_y || target_id == CURSOR_SURFACE_ID;
                                 slot.x = new_x;
                                 slot.y = new_y;
-                                found = true;
                                 break;
                             }
+                        }
+                        if found {
+                            FRAME_GROUPS.fit_children(&mut SURFACES);
+                            for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
                         }
                         if found && fb_live {
                             if target_id == CURSOR_SURFACE_ID {
@@ -3340,19 +3413,19 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     unsafe {
+                        needs_surface_redraw |= FOCUSED_SURFACE_ID != sid;
                         FOCUSED_SURFACE_ID = sid;
-                        needs_surface_redraw = true;
                     }
                 }
                 0xEE => {
-                    // OP_SURFACE_DESTROY: arg0=surface_id. Hide/deactivate surface.
+                    // OP_SURFACE_DESTROY: owner, or exact catalog coordinator, hides the surface.
                     let target_id = msg.arg0;
                     if target_id == 0 { continue; }
                     unsafe {
                         let mut found = false;
                         for slot in SURFACES.iter_mut() {
                             if slot.active && slot.surface_id == target_id {
-                                if slot.owner_pd != msg.caller_pd {
+                                if slot.owner_pd != msg.caller_pd && !lifecycle.coordinator_controls(msg.caller_pd, target_id) {
                                     let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                                     if n & 0x3F == 0 {
                                         serial_println!("AUTH: 0xEE destroy rejected sid={} caller={} owner={}",
@@ -3360,12 +3433,12 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     continue;
                                 }
-                                slot.active = false;
+                                *slot = SURFACE_EMPTY;
                                 found = true;
                                 break;
                             }
                         }
-                        if found && fb_live {
+                        if found {
                             if FOCUSED_SURFACE_ID == target_id {
                                 FOCUSED_SURFACE_ID = 0;
                             }
@@ -3374,9 +3447,9 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 0xF5 => {
-                    // OP_REGISTER_WM: first caller wins; idempotent for same caller.
+                    // OP_REGISTER_WM: immutable catalog coordinator only; idempotent.
                     let caller = msg.caller_pd;
-                    if caller == 0 { continue; }
+                    if !lifecycle.is_coordinator(caller) { continue; }
                     match DISPLAY_WM_PD.compare_exchange(
                         0, caller,
                         core::sync::atomic::Ordering::AcqRel,
@@ -3469,6 +3542,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
+                                needs_surface_redraw |= slot.text_len != 0;
                                 slot.text_len = 0;
                                 slot.text_buf = [0u8; TEXT_BUF_CAP];
                                 slot.line_count = 0;
@@ -3502,19 +3576,23 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
+                                let mut text_changed = slot.text_color != text_color && slot.text_len != 0;
                                 slot.text_color = text_color;
                                 // Unpack 8 bytes from arg1 (little-endian)
                                 let mut i = 0usize;
                                 while i < char_count && i < 8 && byte_offset + i < max_buf {
                                     let byte = ((packed >> (i * 8)) & 0xFF) as u8;
+                                    text_changed |= slot.text_buf[byte_offset + i] != byte;
                                     slot.text_buf[byte_offset + i] = byte;
                                     i += 1;
                                 }
                                 let new_len = byte_offset + i;
                                 if new_len > slot.text_len as usize {
+                                    text_changed = true;
                                     slot.text_len = new_len.min(max_buf) as u16;
                                 }
                                 recompute_text_lines(slot);
+                                needs_surface_redraw |= text_changed;
                                 // Diagnostic: confirm text was written to surface
                                 if slot.text_len > 0 && slot.text_len <= 32 {
                                     serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",
@@ -3530,8 +3608,11 @@ pub extern "C" fn _start() -> ! {
                     // Call 1 (TOKEN_BUF_CALL1_RECEIVED=false): buffer 6 packed colors in arg0/arg1/arg2.
                     // Call 2 (TOKEN_BUF_CALL1_RECEIVED=true): commit 8 colors + flags to DISPLAY_TOKENS.
                     // Sequenced by receiver state only — no arg2 tagging (color data in Call 1 arg2).
+                    if !lifecycle.is_coordinator(msg.caller_pd) { continue; }
                     unsafe {
+                        if TOKEN_BUF_CALL1_RECEIVED && TOKEN_BUF_OWNER != msg.caller_pd { continue; }
                         if !TOKEN_BUF_CALL1_RECEIVED {
+                            TOKEN_BUF_OWNER = msg.caller_pd;
                             TOKEN_BUF_ARG0 = msg.arg0;
                             TOKEN_BUF_ARG1 = msg.arg1;
                             TOKEN_BUF_ARG2 = msg.arg2;
@@ -3568,6 +3649,7 @@ pub extern "C" fn _start() -> ! {
                                 effect_levels,
                             };
                             TOKEN_BUF_CALL1_RECEIVED = false;
+                            TOKEN_BUF_OWNER = 0;
                             static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;
                             APPEARANCE_TOKENS_APPLIED += 1;
                             let applied = APPEARANCE_TOKENS_APPLIED;
@@ -3608,10 +3690,11 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
+                                updated = (slot.tab_count, slot.active_tab, slot.chrome_flags)
+                                    != (tab_count, active_tab, chrome_flags_raw);
                                 slot.tab_count = tab_count;
                                 slot.active_tab = active_tab;
                                 slot.chrome_flags = chrome_flags_raw;
-                                updated = true;
                                 break;
                             }
                         }
@@ -3674,15 +3757,18 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        let transaction_full_render = fb_live && (lifecycle.needs_presentation()
+            || (0..surface_lifecycle::CATALOG_CAPACITY)
+                .any(|i| lifecycle.phase(i) == Some(surface_lifecycle::Phase::Prepared)));
         // ── Post-drain redraws ──
         // Surface area: always redraw when needed, regardless of did_primary_fb_render.
         // did_primary_fb_render becomes true on the OP_PRIMARY_FB cycle (which calls
         // render() during drain), but needs_surface_redraw may be set by chrome flag
         // updates draining in the same cycle. Without this, chrome updates are lost.
-        if needs_surface_redraw {
+        if needs_surface_redraw && !transaction_full_render {
             clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
-        } else if cursor_only_moved && fb_live {
+        } else if cursor_only_moved && fb_live && !transaction_full_render {
             // Cursor-only fast path: restore the 8x16 patch saved beneath
             // the previous cursor draw, then draw at the new position (which
             // re-saves). Latest cursor state wins — intermediate positions
@@ -3696,12 +3782,15 @@ pub extern "C" fn _start() -> ! {
             }
         }
         // Top strip: redraw when needed (clock tick, silkbar update).
-        if needs_top_strip_redraw {
+        if needs_top_strip_redraw && !transaction_full_render {
             clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             // Track last drawn canonical second for same-second redraw suppression.
             unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
         }
+
+        if transaction_full_render { clock_canon_apply_to_bar(&mut bar); }
+        finish_display_transactions(&mut lifecycle, &bar, fb_live);
 
         // ── Yield once regardless of whether messages remain queued ──
         loop_iter = loop_iter.wrapping_add(1);

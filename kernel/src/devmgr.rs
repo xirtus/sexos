@@ -28,6 +28,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                         func: dev.func,
                         vendor_id: dev.vendor_id,
                         device_id: dev.device_id,
+                        bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, SLOT_NVME_HOST)),
                     }));
                     serial_println!("[kernel.cap.nvme_bar.grant] pd={} slot={}", sexdrive_pd_id, SLOT_NVME_HOST);
                     // Route IRQ (Simplified vector mapping)
@@ -44,6 +45,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                         func: dev.func,
                         vendor_id: dev.vendor_id,
                         device_id: dev.device_id,
+                        bar0_view: None,
                     }));
                     crate::interrupts::register_irq_route(0x23, sexdisplay_pd_id);
                 }
@@ -64,6 +66,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                         func: dev.func,
                         vendor_id: dev.vendor_id,
                         device_id: dev.device_id,
+                        bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, sex_pdx::SLOT_USB_HOST)),
                     }));
                     pd.grant(CapabilityData::Interrupt(InterruptCapData { irq: irq_line }));
                     serial_println!(
@@ -89,6 +92,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                             func: dev.func,
                             vendor_id: dev.vendor_id,
                             device_id: dev.device_id,
+                            bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, sex_pdx::SLOT_NIC)),
                         }));
                         serial_println!("[kernel.cap.nic.grant] pd={} slot=19", sexnet_pd_id);
                     }

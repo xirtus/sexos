@@ -2010,7 +2010,7 @@ fn quil_persist_save() -> Result<usize, i64> {
             h ^= QUIL_BUFFER[i] as u64;
             h = h.wrapping_mul(0x100_0000_01b3);
         }
-        serial_println!("[quil.persist.save.ok] bytes={} hash={:#x}", len, h);
+        serial_println!("[quil.persist.save.ok] bytes={} hash={:#x} doc={}", len, h, QUIL_DOC_ID);
         Ok(len)
     }
 }
@@ -2081,7 +2081,14 @@ fn quil_persist_load() -> Result<usize, i64> {
         QUIL_DIRTY = false;
         QUIL_DOC_ID = target;
         QUIL_LAST_DOC_ID = target;
-        serial_println!("[quil.persist.load.ok] bytes={}", len);
+        // Match the save-side FNV-1a fingerprint after the staged bytes have
+        // committed, so reboot gates can detect same-length corruption.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for i in 0..len {
+            h ^= QUIL_BUFFER[i] as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        serial_println!("[quil.persist.load.ok] bytes={} hash={:#x} doc={}", len, h, target);
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
         Ok(len)
     }
@@ -4065,6 +4072,12 @@ pub extern "C" fn _start() -> ! {
         }
 
         let msg = pdx_listen_raw(0);
+        if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
+            [msg.arg0,msg.arg1,msg.arg2],9,9) {
+            sex_pdx::serial_record!("[app.close.accepted] target=9 task=9 coordinator=3");
+            sex_pdx::task_finish(0);
+        }
+
 
         unsafe {
             static mut QUIL_LISTEN_BUDGET: u32 = 8;

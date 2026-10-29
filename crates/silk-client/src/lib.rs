@@ -58,16 +58,24 @@ pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    let dest_s = core::slice::from_raw_parts_mut(dest, n);
-    let src_s = core::slice::from_raw_parts(src, n);
-    dest_s.copy_from_slice(src_s);
+    // Do not use a copy intrinsic here: LLVM may lower it back to this symbol.
+    // Volatile byte accesses keep the freestanding implementation self-contained.
+    let mut i = 0;
+    while i < n {
+        dest.add(i).write_volatile(src.add(i).read_volatile());
+        i += 1;
+    }
     dest
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
-    let s_s = core::slice::from_raw_parts_mut(s, n);
-    for i in 0..n { s_s[i] = c as u8; }
+    // Prevent loop recognition from introducing a recursive memset intrinsic.
+    let mut i = 0;
+    while i < n {
+        s.add(i).write_volatile(c as u8);
+        i += 1;
+    }
     s
 }
 

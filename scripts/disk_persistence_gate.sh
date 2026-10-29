@@ -5,8 +5,10 @@
 #           command lists all 3 via REAL sync DiskFS probe, quil types +
 #           palette-saves to RamFS AND DiskFS ([quil.persist.save.ok]).
 #   boot 2: fresh RamFS, same NVMe — quil palette-load restores the document
-#           from DiskFS ([quil.persist.load.ok] with same byte count),
-#           text-model V2 renders the multi-line doc (pixel scan).
+#           from DiskFS ([quil.persist.load.ok] with same doc, byte count and fingerprint),
+#           text-color occupancy appears inside the native Quil viewport.
+#           Document identity comes from matching transport fingerprints;
+#           this occupancy check does not identify document glyphs.
 # Marker-verified keying: every key waits for its serial-side effect, so the
 # gate is robust to boot-time serial spam slowing the input path.
 #
@@ -18,6 +20,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 GATE_DIR="${GATE_DIR:-/tmp/sexos_dpg}"
 mkdir -p "$GATE_DIR"
+# A failed QMP screendump must not reuse a successful older screenshot.
+rm -f "$GATE_DIR/final.ppm" "$GATE_DIR/pixrows.txt" "$GATE_DIR/persistrows.txt"
 ISO="${ISO:-sexos-v1.0.0.iso}"
 QMP="$GATE_DIR/q.sock"
 NVME="$GATE_DIR/nvme.img"
@@ -193,10 +197,11 @@ has1 '\[spindle\.disk\.command\] found=3 ok=1' && r spindle_disk_cmd PASS || r s
 has1 '\[quil\.persist\.save\.ok\]' && r quil_persist_save PASS || r quil_persist_save FAIL
 has2 '\[quil\.persist\.load\.ok\]' && r quil_persist_load_reboot PASS || r quil_persist_load_reboot FAIL
 
-# Save/load byte counts must match across the reboot.
-SB=$(grep -oE '\[quil\.persist\.save\.ok\] bytes=[0-9]+' "$GATE_DIR/b1.log" | tail -1 | grep -oE '[0-9]+$')
-LB=$(grep -oE '\[quil\.persist\.load\.ok\] bytes=[0-9]+' "$GATE_DIR/b2.log" | tail -1 | grep -oE '[0-9]+$')
-if [[ -n "${SB:-}" && "$SB" == "${LB:-}" ]]; then r persist_bytes_match PASS; else r persist_bytes_match "FAIL save=${SB:-none} load=${LB:-none}"; fi
+# Both palette Load and Linen Open must restore the saved document's length
+# and FNV-1a fingerprint. Missing/malformed evidence is a failure.
+python3 scripts/check_disk_persistence.py logs "$GATE_DIR/b1.log" "$GATE_DIR/b2.log" \
+  >"$GATE_DIR/persistrows.txt" || FAILED=1
+cat "$GATE_DIR/persistrows.txt"
 
 has2 '\[linen\.quil\.disk_doc\.intent\].*ok=1' && r linen_disk_open_intent PASS || r linen_disk_open_intent FAIL
 has2 '\[quil\.open\.disk_doc\.recv\]' && r quil_disk_doc_recv PASS || r quil_disk_doc_recv FAIL
@@ -205,25 +210,10 @@ grep -qE "$FAULT_RE" "$GATE_DIR/b1.log" && r fault_free_b1 FAIL || r fault_free_
 grep -qE "$FAULT_RE" "$GATE_DIR/b2.log" && r fault_free_b2 FAIL || r fault_free_b2 PASS
 ./scripts/rsp0_regression_gate.sh "$GATE_DIR/b1.log" >/dev/null 2>&1 && r rsp0_gate PASS || r rsp0_gate FAIL
 
-# Pixel proof: TEXT_MODEL_V2 renders the restored multi-line quil doc.
-# Quil content sid region (x 1072-1272, y 56-360), text color 0xE0F0FF.
-python3 - "$GATE_DIR/final.ppm" <<'PY' >"$GATE_DIR/pixrows.txt" || true
-import sys
-try:
-    with open(sys.argv[1],'rb') as f: data=f.read()
-    parts=data.split(b'\n',3)
-    if parts[0].strip()!=b'P6':
-        print("ROW pixel_scan SKIP fmt"); sys.exit(0)
-    w,h=map(int,parts[1].split()); px=parts[3]
-    quil=0
-    for y in range(56,min(360,h)):
-        for x in range(1072,min(1272,w)):
-            i=(y*w+x)*3
-            if px[i]==0xE0 and px[i+1]==0xF0 and px[i+2]==0xFF: quil+=1
-    print(f"ROW pixel_quil_text_v2 {'PASS' if quil>50 else 'FAIL'} count={quil}")
-except FileNotFoundError:
-    print("ROW pixel_scan SKIP no_dump")
-PY
+# Pixel occupancy only: inspect the current shell-authorized Quil viewport
+# for text color 0xE0F0FF. Fingerprints above establish document identity.
+python3 scripts/check_disk_persistence.py pixels "$GATE_DIR/final.ppm" --log "$GATE_DIR/b2.log" \
+  >"$GATE_DIR/pixrows.txt" || FAILED=1
 cat "$GATE_DIR/pixrows.txt"
 grep -q " FAIL" "$GATE_DIR/pixrows.txt" && FAILED=1
 

@@ -51,6 +51,27 @@ pub fn get_net_diag_body_chunk(idx: usize) -> u64 {
 }
 
 impl PciDevice {
+    /// Boot discovery only. Restore both BAR words and the command register;
+    /// upper status bits are W1C and must never be echoed into a config write.
+    pub fn probe_boot_bar0(&self) -> Option<(u64, u64)> {
+        assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),
+            crate::ipc::BootPhase::RegistryBuild as u8, "PCI_PROBE_AFTER_GENESIS");
+        let low = self.read_u32(0x10);
+        if low & 1 != 0 || !matches!((low >> 1) & 3, 0 | 2) { return None; }
+        let wide = ((low >> 1) & 3) == 2;
+        let high = if wide { self.read_u32(0x14) } else { 0 };
+        let command = self.read_u32(0x04) & 0xffff;
+        self.write_u32(0x04, command & !7);
+        self.write_u32(0x10, u32::MAX);
+        if wide { self.write_u32(0x14, u32::MAX); }
+        let mask_low = self.read_u32(0x10);
+        let mask_high = if wide { self.read_u32(0x14) } else { 0 };
+        self.write_u32(0x10, low);
+        if wide { self.write_u32(0x14, high); }
+        self.write_u32(0x04, command);
+        crate::pci_bar_bounds::decode_bar0(low, high, mask_low, mask_high)
+    }
+
     pub fn read_u32(&self, offset: u8) -> u32 {
         unsafe { pci_config_read(self.bus, self.dev, self.func, offset) }
     }
@@ -92,6 +113,8 @@ pub unsafe fn pci_config_write(bus: u8, slot: u8, func: u8, offset: u8, value: u
 }
 
 pub fn enumerate_bus() -> Vec<PciDevice> {
+    assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),
+        crate::ipc::BootPhase::RegistryBuild as u8, "PCI_ENUMERATION_AFTER_GENESIS");
     let mut devices = Vec::new();
     for bus in 0..256 {
         for slot in 0..32 {
@@ -141,7 +164,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
             cmd |= 0x0001; // IO space
             cmd |= 0x0002; // MEM space
             cmd |= 0x0004; // bus master
-            let new_cmd_status = (cmd_status & 0xFFFF_0000) | (cmd as u32);
+            let new_cmd_status = cmd as u32; // PCI status upper bits are W1C.
             unsafe { pci_config_write(dev.bus, dev.dev, dev.func, 0x04, new_cmd_status); }
             let cmd_status_rb = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
             serial_println!("[pci.net.command.enable] old=0x{:08X} new=0x{:08X} rb=0x{:08X} bm={} mem={} io={} ok=1 reason=pci_command_enable",
@@ -184,8 +207,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                 // Order=0 = 4K page = 256 × 16B descriptors exactly.
                 // No MMIO writes. No RX/TX enable. No packets.
                 // UC policy declared here; actual UC PTE remapping deferred to driver attach.
-                let rx_phys_opt = crate::memory::allocator::alloc_frame();
-                let tx_phys_opt = crate::memory::allocator::alloc_frame();
+                let rx_phys_opt = Some(crate::boot_memory::backing(4096));
+                let tx_phys_opt = Some(crate::boot_memory::backing(4096));
                 if let (Some(rx_p), Some(tx_p)) = (rx_phys_opt, tx_phys_opt) {
                     let hhdm: u64 = 0xFFFF_8000_0000_0000;
                     let rx_v = hhdm + rx_p;
@@ -250,7 +273,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                     let mut pkt_pages: [u64; 8] = [0; 8];
                     let mut pkt_alloc_ok = true;
                     for i in 0..8 {
-                        match crate::memory::allocator::alloc_frame() {
+                        match Some(crate::boot_memory::backing(4096)) {
                             Some(phys) => {
                                 pkt_pages[i] = phys;
                                 // Zero via HHDM immediately

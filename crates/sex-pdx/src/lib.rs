@@ -6,6 +6,15 @@
 
 #![no_std]
 
+pub mod pagefault;
+pub mod display_ready;
+pub mod shell_ready;
+pub mod memory_region;
+pub mod dma_pool;
+pub mod paging;
+pub mod app_lifecycle;
+pub use memory_region::MemoryRegionInfo;
+
 /// Opaque protection domain identifier. All inter-domain references use this type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DomainId(pub u32);
@@ -28,6 +37,21 @@ pub enum AuthLayer {
 
 /// Userland serial writer — calls kernel raw_print (syscall 0, opcode 69).
 pub struct SerialWriter;
+
+mod serial_record_buffer;
+
+/// A complete bounded line uses one raw-print invocation. On the current BSP
+/// syscall entry masks interrupts, so timer diagnostics cannot split its fields.
+pub fn write_serial_record(arguments: core::fmt::Arguments<'_>) {
+    serial_record_buffer::emit(arguments, |line| {
+        let _ = core::fmt::Write::write_str(&mut SerialWriter, line);
+    });
+}
+
+#[macro_export]
+macro_rules! serial_record {
+    ($($arg:tt)*) => { $crate::write_serial_record(core::format_args!($($arg)*)) };
+}
 
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -231,7 +255,8 @@ pub enum MessageType {
 
 pub struct PdxEvent; // Stub
 
-/// Spin-receive from a specific capability slot.
+/// Receive from a capability slot. Self-inbox waits retain wake events across
+/// scheduler ownership transfers; other slot kinds remain cooperative polls.
 pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
     static mut PDX_LISTEN_WRAPPER_BUDGET: u32 = 8;
     loop {
@@ -255,7 +280,7 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             );
         }
         if type_id == 0 {
-            sys_yield();
+            if slot == 0 { sys_wait_self(); } else { sys_yield(); }
             continue;
         }
         unsafe {
@@ -354,6 +379,21 @@ pub fn sys_yield() {
     }
 }
 
+/// Wait for this domain's own inbox/reply activity without consuming a message.
+/// There is no target-domain argument and no authority to wake another task.
+/// Spurious/coalesced wakes are allowed: callers recheck their actual input.
+pub fn sys_wait_self() {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 53u64 => _,
+            in("rdi") 0u64,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+}
+
 pub const SYSCALL_GET_TICKS: u64 = 34;
 
 #[inline]
@@ -414,6 +454,129 @@ pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexd
 pub const SLOT_BUF_LEND: u64 = 17; // kernel-allocated MemLend buffer cap (sexfiles→sexdrive, Phase A)
 pub const SLOT_NET:     u64 = 18; // sexnet network manager route
 pub const SLOT_NIC:     u64 = 19; // e1000e NIC hardware capability (sexnet driver)
+pub const SLOT_DMA_REGION: u64 = 32;
+pub const SLOT_FRAME_REGION: u64 = 33;
+pub const SLOT_BLOCK_BUFFER: u64 = 17;
+
+/// Inspect a boot paging capability without allocating or mapping anything.
+pub fn paging_info(slot: u64) -> Result<paging::PagingInfo, u64> {
+    let (status, base, length, target, rights): (u64, u64, u64, u64, u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_PAGING_INFO => status, in("rdi") slot,
+        lateout("rsi") base, lateout("rdx") length, lateout("r10") target,
+        lateout("r8") rights, out("rcx") _, out("r11") _, options(nostack)); }
+    if status != paging::PAGING_OK { return Err(status); }
+    Ok(paging::PagingInfo { base, length,
+        target_pd: u32::try_from(target).map_err(|_| paging::ERR_PAGING_INVALID)?,
+        rights: u8::try_from(rights).map_err(|_| paging::ERR_PAGING_INVALID)? })
+}
+
+pub fn paging_query(mapping_slot: u64, token: u64) -> Result<paging::FaultQuery, u64> {
+    let (status, page, error, target, rights): (u64, u64, u64, u64, u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_PAGING_QUERY => status, in("rdi") mapping_slot,
+        inlateout("rsi") token => page, lateout("rdx") error,
+        lateout("r10") target, lateout("r8") rights,
+        out("rcx") _, out("r11") _, options(nostack)); }
+    if status != paging::PAGING_OK { return Err(status); }
+    Ok(paging::FaultQuery { page_va: page, error_code: error,
+        target_pd: u32::try_from(target).map_err(|_| paging::ERR_PAGING_INVALID)?,
+        allowed_rights: u8::try_from(rights).map_err(|_| paging::ERR_PAGING_INVALID)? })
+}
+
+/// RETRY retains custody of the same frame; only exact arguments may be retried.
+pub fn paging_commit(mapping_slot: u64, pool_slot: u64, frame_index: u64, token: u64, rights: u8) -> u64 {
+    let status: u64;
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_PAGING_COMMIT => status,
+        in("rdi") mapping_slot, inlateout("rsi") pool_slot => _, inlateout("rdx") frame_index => _,
+        inlateout("r10") token => _, inlateout("r8") rights as u64 => _,
+        out("rcx") _, out("r11") _, options(nostack)); }
+    status
+}
+
+pub fn paging_reject(mapping_slot: u64, token: u64) -> u64 {
+    let status: u64;
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_PAGING_REJECT => status,
+        in("rdi") mapping_slot, inlateout("rsi") token => _,
+        lateout("rdx") _, lateout("r10") _, lateout("r8") _,
+        out("rcx") _, out("r11") _, options(nostack)); }
+    status
+}
+
+/// Free backing only after OK: the exact old leaf and its BSP TLB entry are gone.
+pub fn paging_reclaim(mapping_slot: u64, pool_slot: u64, frame_index: u64, token: u64) -> u64 {
+    let status: u64;
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_PAGING_RECLAIM => status,
+        in("rdi") mapping_slot, inlateout("rsi") pool_slot => _,
+        inlateout("rdx") frame_index => _, inlateout("r10") token => _,
+        lateout("r8") _, out("rcx") _, out("r11") _, options(nostack)); }
+    status
+}
+
+/// Permanently close one boot paging range after its main task has exited and
+/// released CPU/stack custody. OK covers every target-owned leaf, even an
+/// uncertain earlier commit. Apply cleanup to local target ownership once.
+pub fn paging_cleanup(mapping_slot: u64, pool_slot: u64) -> Result<paging::CleanupResult, u64> {
+    let (status, frame_bitmap, task_id): (u64, u64, u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_PAGING_CLEANUP => status,
+        in("rdi") mapping_slot, inlateout("rsi") pool_slot => frame_bitmap,
+        lateout("rdx") task_id, lateout("r10") _, lateout("r8") _,
+        out("rcx") _, out("r11") _, options(nostack)); }
+    if status != paging::PAGING_OK { return Err(status); }
+    Ok(paging::CleanupResult { frame_bitmap, task_id })
+}
+
+/// Finish only the invoking task. The kernel releases its CPU custody before
+/// authorizing cleanup; this call grants no authority over another task.
+pub fn task_finish(reason: u64) -> ! {
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") paging::SYS_TASK_FINISH => _, in("rdi") reason,
+        out("rcx") _, out("r11") _, options(nostack)); }
+    // Defensive fallback if a broken kernel unexpectedly returns.
+    loop { sys_yield(); }
+}
+
+pub const SYS_MEMORY_REGION_VIEW: u64 = 54;
+pub const SYS_MEMORY_REGION_INFO: u64 = 55;
+
+/// Query immutable boot authority. No frames, mappings or capabilities are created.
+pub fn memory_region_info(slot: u64) -> Result<MemoryRegionInfo, u64> {
+    let (status, length, rights, peer, region_id): (u64, u64, u64, u64, u64);
+    unsafe {
+        core::arch::asm!("syscall",
+            inlateout("rax") SYS_MEMORY_REGION_INFO => status, in("rdi") slot,
+            lateout("rsi") length, lateout("rdx") rights,
+            lateout("r10") peer, lateout("r8") region_id,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    if status != 0 { return Err(status); }
+    Ok(MemoryRegionInfo { region_id: region_id as u32, length, rights: rights as u8,
+        peer_pd: if peer == 0 { None } else { Some(peer as u32) } })
+}
+
+pub fn memory_region_view(slot: u64, offset: u64, length: u64, rights: u8) -> Result<memory_region::RegionView, u64> {
+    let (status, virtual_address, view_length, physical, region_id): (u64, u64, u64, u64, u64);
+    unsafe {
+        core::arch::asm!("syscall",
+            inlateout("rax") SYS_MEMORY_REGION_VIEW => status, in("rdi") slot,
+            inlateout("rsi") offset => virtual_address,
+            inlateout("rdx") length => view_length,
+            inlateout("r10") rights as u64 => physical, lateout("r8") region_id,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    if status != 0 { return Err(status); }
+    Ok(memory_region::RegionView { region_id: region_id as u32, virtual_address,
+        length: view_length, dma_address: if physical == 0 { None } else { Some(physical) } })
+}
+
+pub fn memory_region_full_view(slot: u64, rights: u8) -> Result<memory_region::RegionView, u64> {
+    let info = memory_region_info(slot)?;
+    memory_region_view(slot, 0, info.length, rights)
+}
 
 // ── MemLend buffer cap ABI (SEXBLOCK_BUFFER_LEND_CAP_IMPLEMENT_PHASE_A_V1) ──
 pub const SYS_MAP_PCI_BAR: u64 = 43;

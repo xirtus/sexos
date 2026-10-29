@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr, AtomicUsize, AtomicU64};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, AtomicPtr, AtomicU64};
 use crate::capability::ProtectionDomain;
 use crate::ipc_ring::RingBuffer;
 use crate::serial_println;
@@ -34,6 +34,15 @@ pub const STATE_READY: u32 = 0;
 pub const STATE_RUNNING: u32 = 1;
 pub const STATE_BLOCKED: u32 = 2;
 
+#[path = "task_ownership.rs"]
+pub mod task_ownership;
+#[path = "fault_transaction.rs"]
+pub mod fault_transaction;
+#[path = "task_exit.rs"]
+pub mod task_exit;
+pub use task_exit::{register_paging_exit_watch, validate_dead_target, acknowledge_dead_cleanup, poll_paging_exit_notifications};
+use task_ownership::{Admission, ParkResult, TaskOwnership, WakeResult};
+
 /// Phase 1 scheduler ownership decision.
 /// NoRunnable explicitly preserves current_task/current_pd; it must not be
 /// treated as a switch.
@@ -53,10 +62,12 @@ pub struct InitArg {
 pub struct Task {
     pub id: u32,
     pub context: TaskContext,
-    pub state: AtomicU32,
+    pub state: TaskOwnership,
+    pub fault: fault_transaction::FaultSlot,
     pub signal_ring: *mut RingBuffer<u8, 32>,
     pub kstack_top: u64,
     pub(crate) ext_init: Option<InitArg>,
+    resume_observation_pending: AtomicBool,
 }
 
 impl Task {
@@ -106,58 +117,27 @@ impl Task {
         Self {
             id,
             context,
-            state: AtomicU32::new(TaskState::Ready as u32),
+            state: TaskOwnership::new(),
+            fault: fault_transaction::FaultSlot::new(),
             signal_ring: pd.signal_ring,
             kstack_top: kstack_alloc_top,  // initial alloc top (for TSS RSP0)
             ext_init: None,
+            resume_observation_pending: AtomicBool::new(false),
         }
     }
 }
 
 pub const QUEUE_SIZE: usize = 512;
-pub const QUEUE_MASK: usize = QUEUE_SIZE - 1;
-
-pub struct WorkStealingQueue {
-    pub top: AtomicUsize,
-    pub bottom: AtomicUsize,
-    buffer: [AtomicPtr<Task>; QUEUE_SIZE],
-}
-
-impl WorkStealingQueue {
-    pub const fn new() -> Self {
-        const EMPTY_PTR: AtomicPtr<Task> = AtomicPtr::new(ptr::null_mut());
-        Self {
-            top: AtomicUsize::new(0),
-            bottom: AtomicUsize::new(0),
-            buffer: [EMPTY_PTR; QUEUE_SIZE],
-        }
-    }
-
-    pub fn push(&self, task: *mut Task) {
-        let b = self.bottom.load(Ordering::Relaxed);
-        let t = self.top.load(Ordering::Acquire);
-        if b.wrapping_sub(t) < QUEUE_SIZE {
-            self.buffer[b & QUEUE_MASK].store(task, Ordering::Release);
-            self.bottom.store(b.wrapping_add(1), Ordering::Release);
-        }
-    }
-
-    pub fn steal(&self) -> *mut Task {
-        let t = self.top.load(Ordering::Acquire);
-        let b = self.bottom.load(Ordering::Acquire);
-        if t == b { return ptr::null_mut(); }
-        let task = self.buffer[t & QUEUE_MASK].load(Ordering::Acquire);
-        if self.top.compare_exchange(t, t.wrapping_add(1), Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-            task
-        } else {
-            ptr::null_mut()
-        }
-    }
-}
+// Host-tested independently of the privileged context-switch assembly.
+#[path = "scheduler_queue.rs"]
+pub mod scheduler_queue;
+pub type WorkStealingQueue = scheduler_queue::BoundedQueue<Task, QUEUE_SIZE>;
 
 pub struct Scheduler {
     pub runqueue: WorkStealingQueue,
     pub current_task: AtomicPtr<Task>,
+    pending_outgoing: AtomicPtr<Task>,
+    retry_cursor: AtomicU32,
     pub core_id: u32,
 }
 
@@ -189,11 +169,14 @@ impl Scheduler {
         Self {
             runqueue: WorkStealingQueue::new(),
             current_task: AtomicPtr::new(ptr::null_mut()),
+            pending_outgoing: AtomicPtr::new(ptr::null_mut()),
+            retry_cursor: AtomicU32::new(0),
             core_id,
         }
     }
 
     pub fn tick(&self) -> ScheduleDecision {
+        poll_paging_exit_notifications();
         if SCHED_TICK_ENTER_LOG_BUDGET
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
             .is_ok()
@@ -219,6 +202,9 @@ impl Scheduler {
             "SCHEDULER_BOOTSTRAP_VIOLATION"
         );
 
+        // Retained Detached custody survives Full/Contended admission. Scan a
+        // bounded slice of the existing task inventory; Constructed never enters.
+        self.retry_admission();
         let next_task = self.runqueue.steal();
         let next_task = if next_task.is_null() { self.attempt_steal() } else { next_task };
         // SCHEDULER_TICK_PD8_PF_FLAKE_V1: reject corrupt steal results before
@@ -240,6 +226,9 @@ impl Scheduler {
             let corrupt = if addr < crate::HEAP_START || addr >= crate::HEAP_START + crate::HEAP_SIZE {
                 serial_println!("[sched.steal.reject] ptr={:#x} reason=out_of_heap", addr as u64);
                 true
+            } else if !unsafe { (*next_task).state.begin_dispatch(self.core_id) } {
+                // Stale/duplicate or exited token cannot grant execution custody.
+                true
             } else {
                 let pd_ptr = unsafe { (*next_task).context.pd_ptr };
                 let pd_id = unsafe { (*next_task).context.pd_id };
@@ -248,9 +237,14 @@ impl Scheduler {
                         "[sched.steal.reject] ptr={:#x} pd_ptr={:#x} pd_id={} reason=corrupt_task",
                         addr as u64, pd_ptr as u64, pd_id
                     );
+                    unsafe {
+                        (*next_task).state.exit();
+                        (*next_task).state.cancel_dispatch(self.core_id);
+                    }
                     true
                 } else {
-                    false
+                    // An exit before attachment consumes this token to Dead.
+                    !unsafe { (*next_task).state.attach(self.core_id) }
                 }
             };
             if !corrupt {
@@ -293,11 +287,17 @@ impl Scheduler {
             return ScheduleDecision::NoRunnable;
         }
 
-        // A concrete next task exists: now take ownership.
-        let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
+        // A concrete next task has exclusive dispatch custody. Outgoing custody
+        // remains SwitchingOut until the assembly's post-stack-release callback.
+        let old_task = self.current_task.load(Ordering::Acquire);
+        if !old_task.is_null() {
+            assert!(unsafe { (*old_task).state.begin_switch_out(self.core_id) });
+            assert!(self.pending_outgoing.swap(old_task, Ordering::AcqRel).is_null());
+        }
+        let replaced = self.current_task.swap(next_task, Ordering::AcqRel);
+        assert_eq!(replaced, old_task);
 
         unsafe {
-            (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
             if TASK_LIFECYCLE_LOG_BUDGET
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
                 .is_ok()
@@ -328,37 +328,8 @@ impl Scheduler {
             serial_println!("scheduler.pick_next pd_id={}", next_pd_id);
         }
 
-        if !old_task.is_null() {
-            let old_state = unsafe { (*old_task).state.load(Ordering::Acquire) };
-            if old_state == TaskState::Running as u32 {
-                unsafe { (*old_task).state.store(TaskState::Ready as u32, Ordering::Release); }
-                self.runqueue.push(old_task);
-                if TASK_LIFECYCLE_LOG_BUDGET
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-                    .is_ok()
-                {
-                    unsafe {
-                        serial_println!(
-                            "task.requeued id={} pd_id={}",
-                            (*old_task).id,
-                            (*old_task).context.pd_id
-                        );
-                    }
-                }
-            } else if TASK_LIFECYCLE_LOG_BUDGET
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-                .is_ok()
-            {
-                unsafe {
-                    serial_println!(
-                        "task.not_requeued id={} pd_id={} reason_state={}",
-                        (*old_task).id,
-                        (*old_task).context.pd_id,
-                        old_state
-                    );
-                }
-            }
-        }
+        // No outgoing pointer is published here: handlers still need to save
+        // its context, and this core is still executing on its kernel stack.
 
         let old_ctx = if old_task.is_null() {
             core::ptr::null_mut()
@@ -372,6 +343,34 @@ impl Scheduler {
     }
 
 
+    pub fn admit_task(&self, task: *mut Task) -> Admission {
+        if task.is_null() { return Admission::NotRunnable; }
+        unsafe { (*task).state.try_admit(|| self.runqueue.try_push(task)) }
+    }
+
+    /// First admission is explicit; wake cannot activate unfinished trampolines.
+    pub fn activate_task(&self, task: *mut Task) -> bool {
+        if task.is_null() || unsafe { (*task).context.rip == 0 } { return false; }
+        if !unsafe { (*task).state.activate() } { return false; }
+        self.admit_task(task);
+        true
+    }
+
+    fn retry_admission(&self) {
+        const BATCH: u32 = 32;
+        let start = self.retry_cursor.fetch_add(BATCH, Ordering::Relaxed);
+        for offset in 0..BATCH {
+            let id = start.wrapping_add(offset) % crate::ipc::MAX_DOMAINS as u32;
+            if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(id) {
+                for task in [pd.main_task.load(Ordering::Acquire), pd.trampoline_task.load(Ordering::Acquire)] {
+                    if !task.is_null() && unsafe { (*task).state.needs_admission() } {
+                        self.admit_task(task);
+                    }
+                }
+            }
+        }
+    }
+
     fn attempt_steal(&self) -> *mut Task {
         for i in 1..128 {
             let victim_id = (self.core_id + i) % 128;
@@ -382,7 +381,7 @@ impl Scheduler {
     }
 
     #[unsafe(naked)]
-    pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) {
+    pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) -> ! {
         core::arch::naked_asm!(
             // rdi = old_ctx (*mut TaskContext) — kstack_top already set by timer_interrupt_handler
             // rsi = next_ctx (*const TaskContext)
@@ -391,8 +390,18 @@ impl Scheduler {
             // Do NOT save RSP here — that would overwrite the correct stub-frame base
             // with the kernel call-stack depth at time of switch_to entry.
 
-            // 1. Switch to next_ctx.kstack_top and restore PKRU
+            // Never publish the outgoing task until both context writes and
+            // old-stack execution have ended. Scratch grows BELOW next's saved
+            // frame, preserving every existing GPR/IRET offset. R12 is SysV
+            // callee-saved and its user value remains in that untouched frame.
+            "cli",
+            "mov r12, rsi",
+            "mov rsp, [r12 + 0xC0]",
+            "and rsp, -16",
+            "call {finish_switch}",
+            "mov rsi, r12",
             "mov rsp, [rsi + 0xC0]",
+            // Only now narrow PKRU; the Rust callback ran with kernel access.
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
             "mov eax, [rsi + 0x80]", // TaskContext.pkru at offset 0x80
@@ -428,6 +437,7 @@ impl Scheduler {
             "add rsp, 8",  // skip dummy error code
             "iretq",
 
+            finish_switch = sym scheduler_finish_switch,
             pku_enabled = sym crate::pku::PKU_ENABLED,
             actual_iret_rsp = sym ACTUAL_IRET_RSP,
             actual_q0 = sym ACTUAL_IRET_Q0_RIP,
@@ -450,17 +460,224 @@ pub static SCHEDULERS: [Scheduler; 128] = generate_schedulers!(
     96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127
 );
 
+static PARK_COUNT: AtomicU64 = AtomicU64::new(0);
+static DETACHED_WAKE_COUNT: AtomicU64 = AtomicU64::new(0);
+static STACK_RELEASE_COUNT: AtomicU64 = AtomicU64::new(0);
+static LOCAL_RESUME_COUNT: AtomicU64 = AtomicU64::new(0);
+static USER_RESUME_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn log_wake_event(event: &str, task: *mut Task) {
+    if task.is_null() { return; }
+    let counter = match event {
+        "park" => &PARK_COUNT,
+        "detached_wake" => &DETACHED_WAKE_COUNT,
+        "post_stack_release" => &STACK_RELEASE_COUNT,
+        "local_resume" => &LOCAL_RESUME_COUNT,
+        "user_resumed" => &USER_RESUME_COUNT,
+        _ => return,
+    };
+    let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+    if n <= 4 || n.is_power_of_two() {
+        serial_println!("[scheduler.ownership] event={} task={} count={}", event, unsafe { (*task).id }, n);
+    }
+}
+
+/// A fresh syscall or user timer frame proves the parked task actually crossed
+/// the restore/IRET boundary; a merely selected task is not reported resumed.
+pub fn observe_user_entry() {
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    let task = SCHEDULERS[core].current_task.load(Ordering::Acquire);
+    if !task.is_null() && unsafe { (*task).resume_observation_pending.swap(false, Ordering::AcqRel) } {
+        log_wake_event("user_resumed", task);
+    }
+}
+
+// Opt-in QEMU branch exercise. The sealed build spec supplies this cfg; normal
+// images contain no queue-retention or synthetic wake behavior. Only BSP is an
+// active scheduling lane today. Queued tokens retained here remain exclusively
+// held by this proof until restored, with their ownership phase unchanged.
+#[cfg(scheduler_wake_proof)]
+static PROOF_STAGE: AtomicU32 = AtomicU32::new(0);
+#[cfg(scheduler_wake_proof)]
+static PROOF_TASK: AtomicPtr<Task> = AtomicPtr::new(ptr::null_mut());
+#[cfg(scheduler_wake_proof)]
+static PROOF_HELD_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(scheduler_wake_proof)]
+static PROOF_HELD: [AtomicPtr<Task>; QUEUE_SIZE] =
+    [const { AtomicPtr::new(ptr::null_mut()) }; QUEUE_SIZE];
+
+#[cfg(scheduler_wake_proof)]
+fn begin_last_runnable_proof(sched: &Scheduler, current: *mut Task) {
+    if sched.core_id != 0 || PROOF_STAGE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return;
+    }
+    PROOF_TASK.store(current, Ordering::Release);
+    let mut count = 0;
+    for source in &SCHEDULERS {
+        loop {
+            let token = source.runqueue.steal();
+            if token.is_null() { break; }
+            assert!(count < QUEUE_SIZE, "PROOF_QUEUE_CUSTODY_OVERFLOW");
+            assert_eq!(unsafe { (*token).state.snapshot().phase }, task_ownership::Phase::Queued);
+            PROOF_HELD[count].store(token, Ordering::Release);
+            count += 1;
+        }
+    }
+    PROOF_HELD_COUNT.store(count as u32, Ordering::Release);
+    serial_println!("[scheduler.proof.last_runnable.begin] task={} held={} lane=bsp", unsafe { (*current).id }, count);
+}
+
+#[cfg(not(scheduler_wake_proof))]
+fn begin_last_runnable_proof(_sched: &Scheduler, _current: *mut Task) {}
+
+/// Called only for a kernel timer frame. This supplies the real asynchronous
+/// wake while the last runnable task sleeps on its retained kernel stack.
+#[cfg(scheduler_wake_proof)]
+pub fn proof_kernel_timer_wake() {
+    if PROOF_STAGE.load(Ordering::Acquire) != 1 { return; }
+    let task = PROOF_TASK.load(Ordering::Acquire);
+    let core = crate::core_local::CoreLocal::get().core_id;
+    assert_eq!(core, 0, "PROOF_REQUIRES_BSP_LANE");
+    assert_eq!(SCHEDULERS[0].current_task.load(Ordering::Acquire), task);
+    let before = unsafe { (*task).state.snapshot() };
+    assert_eq!(before.phase, task_ownership::Phase::Attached);
+    assert!(before.blocked && !before.fault_blocked);
+    unpark_thread(task);
+    assert_eq!(unsafe { (*task).state.snapshot().phase }, task_ownership::Phase::Attached);
+    PROOF_STAGE.store(2, Ordering::Release);
+    serial_println!("[scheduler.proof.last_runnable.timer_wake] task={}", unsafe { (*task).id });
+}
+
+#[cfg(not(scheduler_wake_proof))]
+pub fn proof_kernel_timer_wake() {}
+
+#[cfg(scheduler_wake_proof)]
+fn finish_last_runnable_proof(current: *mut Task) {
+    if PROOF_STAGE.load(Ordering::Acquire) != 2 { return; }
+    assert_eq!(PROOF_TASK.load(Ordering::Acquire), current);
+    assert_eq!(SCHEDULERS[0].current_task.load(Ordering::Acquire), current);
+    assert!(SCHEDULERS[0].pending_outgoing.load(Ordering::Acquire).is_null());
+    let state = unsafe { (*current).state.snapshot() };
+    assert_eq!(state.phase, task_ownership::Phase::Attached);
+    assert!(!state.blocked && !state.pending);
+    let count = PROOF_HELD_COUNT.load(Ordering::Acquire) as usize;
+    for slot in &PROOF_HELD[..count] {
+        let token = slot.swap(ptr::null_mut(), Ordering::AcqRel);
+        assert!(!token.is_null());
+        // Return the already-owned token; a second admission would be a bug.
+        let restored = SCHEDULERS.iter().any(|sched| sched.runqueue.try_push(token).is_ok());
+        assert!(restored, "PROOF_TOKEN_RESTORE_FAILED");
+    }
+    PROOF_STAGE.store(3, Ordering::Release);
+    serial_println!("[scheduler.proof.last_runnable.pass] task={} restored={} ownership=preserved", unsafe { (*current).id }, count);
+}
+
+#[cfg(not(scheduler_wake_proof))]
+fn finish_last_runnable_proof(_current: *mut Task) {}
+
+/// Called only by switch_to after its RSP pivot, before user PKRU restoration.
+/// No context-to-Task cast is valid: Task's Rust layout is intentionally opaque.
+#[no_mangle]
+pub extern "C" fn scheduler_finish_switch() {
+    let core = crate::core_local::CoreLocal::get().core_id;
+    let sched = &SCHEDULERS[core as usize];
+    let old = sched.pending_outgoing.swap(ptr::null_mut(), Ordering::AcqRel);
+    if old.is_null() { return; }
+    unsafe {
+        let rsp: u64;
+        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, preserves_flags));
+        let top = (*old).kstack_top;
+        assert!(rsp < top - 65536 || rsp >= top, "OUTGOING_STACK_NOT_RELEASED");
+        let frame = (*old).context.kstack_top;
+        assert!(frame >= top - 65536 && frame <= top - 168, "OUTGOING_FRAME_OUTSIDE_STACK");
+        log_wake_event("post_stack_release", old);
+        assert!((*old).state.release_after_stack_switch(core), "OUTGOING_CUSTODY_MISMATCH");
+        // After release, access only immutable fields or the atomic protocol.
+        // Another lane may immediately acquire and rewrite the saved context.
+        sched.admit_task(old);
+        poll_paging_exit_notifications();
+    }
+}
+
+/// Preserves the attached owner until a real replacement exists or its pending
+/// event can resume it locally. The caller has already saved the user frame.
+/// IRQs are enabled only around HLT; every state/selection check runs with IF=0.
+pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskContext {
+    loop {
+        x86_64::instructions::interrupts::disable();
+        let current = sched.current_task.load(Ordering::Acquire);
+        if !current.is_null() && (*current).state.resume_attached(sched.core_id) {
+            log_wake_event("local_resume", current);
+            finish_last_runnable_proof(current);
+            return &(*current).context;
+        }
+        match sched.tick() {
+            ScheduleDecision::Switch { next, .. } => return next,
+            ScheduleDecision::NoRunnable => {}
+        }
+        // Timer interrupts deliberately do not schedule kernel frames. They
+        // return here, where pending wakes and retained admissions are retried.
+        x86_64::instructions::interrupts::enable_and_hlt();
+    }
+}
+
+/// Self-only inbox wait used by syscall 53. Publication performs a pending wake,
+/// closing the empty-observation/park race without dequeuing the caller's data.
+pub unsafe fn wait_for_message(regs_ptr: *const crate::interrupts::SyscallRegs) {
+    x86_64::instructions::interrupts::disable();
+    let core = crate::core_local::CoreLocal::get();
+    let sched = &SCHEDULERS[core.core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if current.is_null() { return; }
+    let pd = core.current_pd_ref();
+    if (*pd.message_ring).len() != 0 || !pd.incoming_replies.lock().is_empty() { return; }
+    match (*current).state.park(core.core_id) {
+        ParkResult::WakeConsumed => return,
+        ParkResult::Blocked => {
+            (*current).resume_observation_pending.store(true, Ordering::Release);
+            log_wake_event("park", current);
+            begin_last_runnable_proof(sched, current);
+            yield_and_switch(regs_ptr);
+        }
+        ParkResult::Exited => yield_and_switch(regs_ptr),
+        ParkResult::NotOwner => panic!("WAIT_WITHOUT_ATTACHED_OWNER"),
+    }
+}
+
 pub fn park_current_thread() {
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &SCHEDULERS[core_id as usize];
     let current = sched.current_task.load(Ordering::Acquire);
     if !current.is_null() {
-        unsafe { (*current).state.store(TaskState::Blocked as u32, Ordering::Release); }
+        unsafe { (*current).state.park(core_id); }
     }
 }
 
 pub fn unpark_thread(task_ptr: *mut Task) {
-    unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
+    if task_ptr.is_null() { return; }
+    if unsafe { (*task_ptr).state.wake() } == WakeResult::NeedsAdmission {
+        // Only Detached can claim admission. Attached/SwitchingOut wakes stay
+        // pending for their owner and cannot duplicate execution custody.
+        let core = crate::core_local::CoreLocal::get().core_id as usize;
+        let result = SCHEDULERS[core].admit_task(task_ptr);
+        if result == Admission::Published {
+            log_wake_event("detached_wake", task_ptr);
+        }
+    }
+}
+
+/// # Safety
+/// A capability-authorized pager has committed the exact pending mapping and
+/// retired its unique fault token. This operation never edits the saved frame.
+pub unsafe fn resume_resolved_fault(task: *mut Task) -> bool {
+    if task.is_null() { return false; }
+    (*task).resume_observation_pending.store(true, Ordering::Release);
+    if !(*task).state.complete_fault() { return false; }
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    // Admission itself rejects Attached/SwitchingOut; final stack release or
+    // the attached wait loop remains responsible for those exact owners.
+    SCHEDULERS[core].admit_task(task);
+    true
 }
 
 pub fn bootstrap_enqueue_all_domains() -> usize {
@@ -474,8 +691,7 @@ pub fn bootstrap_enqueue_all_domains() -> usize {
             if task_ptr.is_null() {
                 continue;
             }
-            unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
-            sched.runqueue.push(task_ptr);
+            if !sched.activate_task(task_ptr) { continue; }
             count += 1;
             unsafe {
                 serial_println!("scheduler.enqueue pd_id={} task={:#x}", pd.id, task_ptr as u64);
@@ -549,31 +765,32 @@ pub unsafe fn debug_dump_user_entry_bytes(next_ctx: *const TaskContext) {
     );
 }
 
-pub fn yield_now() {
-    let core_id = crate::core_local::CoreLocal::get().core_id;
-    let sched = &SCHEDULERS[core_id as usize];
-    let current = sched.current_task.load(Ordering::Acquire);
-    if !current.is_null() {
-        unsafe {
-            let state = (*current).state.load(Ordering::Acquire);
-            if state == TaskState::Running as u32 {
-                (*current).state.store(TaskState::Ready as u32, Ordering::Release);
-                sched.runqueue.push(current);
-                // Clear current_task so tick() won't see Running and
-                // re-requeue a task already placed in the runqueue.
-                sched.current_task.store(ptr::null_mut(), Ordering::Release);
-            }
-        }
-    }
-}
+/// Legacy hint only. Actual yield requires a saved user frame and the unified
+/// switch boundary; it must never publish a still-attached current task.
+pub fn yield_now() { core::hint::spin_loop(); }
 
 /// Cooperative yield + context switch for runtime reachability proof.
 /// Saves current PD context from syscall stack, picks next runnable PD,
 /// and switches to it. Never returns to caller.
+/// Terminate only the currently attached task; no target ID or foreign authority.
+/// The existing yield path saves its complete frame and releases stack custody.
+pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallRegs) -> ! {
+    x86_64::instructions::interrupts::disable();
+    let core=crate::core_local::CoreLocal::get();
+    let task=SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
+    assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
+    (*task).state.exit();
+    serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);
+    poll_paging_exit_notifications();
+    yield_and_switch(regs_ptr)
+}
+
 pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) -> ! {
-    let sched = &SCHEDULERS[0];
+    x86_64::instructions::interrupts::disable();
+    let core_id = crate::core_local::CoreLocal::get().core_id as usize;
+    let sched = &SCHEDULERS[core_id];
     let current = sched.current_task.load(Ordering::Acquire);
-    if !current.is_null() && (*current).state.load(Ordering::Acquire) == TaskState::Running as u32 {
+    if !current.is_null() {
         let ctx = &mut (*current).context;
         let base = regs_ptr as u64 + 72u64;
 
@@ -590,7 +807,7 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         let saved_rdx   = *(base.wrapping_add(80)  as *const u64);
         let saved_rsi   = *(base.wrapping_add(88)  as *const u64);
         let saved_rdi   = *(base.wrapping_add(96)  as *const u64);
-        let saved_rax   = *(base.wrapping_add(104) as *const u64);
+        let saved_rax   = (*regs_ptr).rax; // wait syscall resumes with its explicit result
         let user_rip    = *(base.wrapping_add(112) as *const u64);
         let user_rflags = *(base.wrapping_add(120) as *const u64);
 
@@ -645,11 +862,12 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
                 yield_n, yield_n - 4);
         }
 
-        (*current).state.store(TaskState::Ready as u32, Ordering::Release);
-        sched.runqueue.push(current);
-        sched.current_task.store(ptr::null_mut(), Ordering::Release);
     }
-    if let ScheduleDecision::Switch { old: _old, next } = sched.tick() {
+    let next = match sched.tick() {
+        ScheduleDecision::Switch { next, .. } => next,
+        ScheduleDecision::NoRunnable => wait_for_local_resume_or_switch(sched),
+    };
+    {
         let kstack_top = (*next).kstack_top;
         // SCHEDULER_TICK_PD8_PF_FLAKE_V1 root cause: `next` is *const TaskContext,
         // so kstack_top here is ctx.kstack_top = saved-frame BASE (rax slot), the
@@ -672,6 +890,4 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
             Scheduler::switch_to(core::ptr::null_mut(), next);
         }
     }
-    serial_println!("scheduler.yield_and_switch.no_runnable");
-    loop { x86_64::instructions::hlt(); }
 }

@@ -20,6 +20,16 @@ const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 static CAP_READY_SHELL: AtomicBool = AtomicBool::new(false);
 static DEFER_EMITTED_SHELL: AtomicBool = AtomicBool::new(false);
 static EDGE_SEND_EMITTED_SHELL: AtomicBool = AtomicBool::new(false);
+// Static storage avoids placing a second message ring on the 64 KiB task stack.
+// Only the startup/main loop owns this FIFO of pre-ready USB input.
+static mut STARTUP_INBOX: sex_pdx::shell_ready::StartupInbox<
+    { sex_pdx::shell_ready::STARTUP_INBOX_CAPACITY }
+> = sex_pdx::shell_ready::StartupInbox::new();
+
+fn pop_startup_message() -> Option<PdxMessage> {
+    unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).pop() }
+}
+
 static mut REAL_USB_POINTER_SEEN: bool = false;
 /// Master switch for all synthetic input proofs (drag, click-focus, silkbar clicks).
 ///
@@ -30,15 +40,12 @@ static mut REAL_USB_POINTER_SEEN: bool = false;
 /// Equivalent to the previous three individual `USB_PROOF_DISABLE_*` constants,
 /// merged into one gate to simplify toggling.
 ///
-/// # Build commands
-/// ```sh
-/// # Proof mode (CI / nographic): default, proofs enabled
-/// ./scripts/entrypoint_build.sh
-///
-/// # Interactive visual mode: proofs disabled
-/// SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
-/// ```
-const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = option_env!("SEXOS_PROOFS_DISABLED").is_some();
+/// Normal desktop images never inject input. Synthetic input is available only
+/// when the sealed build_sexinput stage explicitly declares
+/// `rustflags = "--cfg sexos_synthetic_input_proof"` in the build specification.
+/// The legacy disable variable can further suppress a declared proof profile.
+const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = !cfg!(sexos_synthetic_input_proof)
+    || option_env!("SEXOS_PROOFS_DISABLED").is_some();
 /// Enables synthetic SilkBar click proof (launcher/status/clock/bell click script).
 /// Default (unset): disabled to avoid recurring panel toggle behavior during
 /// interactive use.
@@ -306,7 +313,7 @@ pub extern "C" fn _start() -> ! {
         if *remaining > 0 {
             *remaining -= 1;
             let state = if SYNTHETIC_INPUT_PROOFS_DISABLED { 0 } else { 1 };
-            let source = if SYNTHETIC_INPUT_PROOFS_DISABLED { "env" } else { "default" };
+            let source = if SYNTHETIC_INPUT_PROOFS_DISABLED { "desktop_default" } else { "declared_cfg" };
             serial_println!("[proof.gate.state] enabled={} source={}", state, source);
         }
     }
@@ -344,6 +351,14 @@ pub extern "C" fn _start() -> ! {
     let mut ev_key_edge_stage: u8 = 0;
 
     serial_println!("[sexinput.ready]");
+    // No synthetic, PS/2, or USB producer may send shell work until the
+    // authenticated shell has completed initialization. Retain received USB
+    // payloads unchanged and drain this FIFO before new ordinary ring messages.
+    if unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).wait_for_shell() }.is_err() {
+        serial_println!("[shell.ready.wait.failed] reason=inbox_full");
+        panic!("sexinput shell-ready inbox full");
+    }
+    serial_println!("[sexinput.shell.ready.accept] caller=3");
     loop {
         unsafe {
             static mut SYNTHETIC_CLICK_PROOF_GATED_MARKER_EMITTED: bool = false;
@@ -368,7 +383,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
-        if let Some(req) = pdx_try_listen_raw(0) {
+        if let Some(req) = pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
             if req.type_id == OP_USB_MOUSE_REPORT {
                 unsafe { REAL_USB_POINTER_SEEN = true; }
@@ -1215,8 +1230,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         // 6a. KEYBOARD_EDGE_PROOF_V1: one-shot EV_KEY down+up for Enter (scancode 0x1C).
-        //     Proves sexinput→silk-shell EV_KEY path without SEXOS_KEYBOARD_PROOF env var.
-        //     Gated by !SYNTHETIC_INPUT_PROOFS_DISABLED (same gate as other default proofs).
+        //     Available only in the declared synthetic-input proof profile.
         if !SYNTHETIC_INPUT_PROOFS_DISABLED {
             match ev_key_edge_stage {
                 0 if tick == 3 => {

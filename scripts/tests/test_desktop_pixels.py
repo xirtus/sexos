@@ -1,0 +1,101 @@
+"""Synthetic parser/pixel fixtures only; real guest proof is a separate run."""
+from pathlib import Path
+import sys
+import unittest
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import check_desktop_pixels as checker
+
+ROOT=Path(__file__).resolve().parents[2]
+FONT=checker.font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text())
+LOG='''[linen.list.text] x=640 y=50 w=640 h=670 scale=2 text_color=0xf0f8ff rows=2 selected=2 row_y=72 row_h=36 first=0 committed_view=1
+[linen.list.label] id=1 row=0 text=alpha-note
+[linen.list.label] id=2 row=1 text=beta-file
+'''
+
+def image(log=LOG):
+    view,labels=checker.final_view(log);width,height=1280,800
+    pixels=bytearray(width*height*3)
+    for identity,row,name in labels:
+        value=('> 'if identity==view['selected']else'  ')+name
+        for col,char in enumerate(value):
+            for gy,bits in enumerate(checker.glyph(FONT,char)):
+                for gx in range(5):
+                    if not bits&(1<<(4-gx)):continue
+                    for dy in range(2):
+                        for dx in range(2):
+                            x=view['x']+8+(col*6+gx)*2+dx;y=view['y']+view['row_y']+row*36+gy*2+dy
+                            pixels[(y*width+x)*3:(y*width+x)*3+3]=b'\xf0\xf8\xff'
+    return b'P6\n1280 800\n255\n'+pixels
+
+class PixelChecks(unittest.TestCase):
+    def test_hide_requires_actual_text_ink_to_disappear(self):
+        blank=b'P6\n1280 800\n255\n'+bytes(1280*800*3)
+        self.assertEqual(checker.verify_hidden(LOG,blank),[])
+        self.assertTrue(checker.verify_hidden(LOG,image()))
+        self.assertTrue(checker.verify_hidden(LOG,blank[:-1]))
+    def test_hidden_check_does_not_accept_invalid_view_or_missing_intent(self):
+        self.assertTrue(checker.verify_hidden('',image()))
+        self.assertTrue(checker.verify_hidden(LOG.replace('x=640','x=2000'),image()))
+    def test_actual_glyph_shapes_and_selected_marker(self):self.assertEqual(checker.verify(LOG,image(),FONT),[])
+    def test_log_without_pixels_cannot_pass(self):self.assertTrue(checker.verify(LOG,b'P6\n1280 800\n255\n'+bytes(1280*800*3),FONT))
+    def test_solid_white_blocks_cannot_pass(self):self.assertTrue(checker.verify(LOG,b'P6\n1280 800\n255\n'+b'\xf0\xf8\xff'*(1280*800),FONT))
+    def test_other_names_not_accepted(self):self.assertTrue(checker.verify(LOG.replace('beta-file','beta-fake'),image(),FONT))
+    def test_longer_stale_filename_cannot_pass_as_expected_prefix(self):
+        for old,new in [('alpha-note','alpha-notebook'),('beta-file','beta-files'),('alpha-note','alpha-note  X')]:
+            with self.subTest(suffix=new):
+                self.assertTrue(checker.verify(LOG,image(LOG.replace(old,new)),FONT))
+    def test_trailing_ink_at_last_permitted_column_is_rejected(self):
+        longer='alpha-note'+' '*(51-2-len('alpha-note'))+'X'
+        self.assertTrue(checker.verify(LOG,image(LOG.replace('alpha-note',longer)),FONT))
+    def test_selection_intent_must_match_marker_pixels(self):self.assertTrue(checker.verify(LOG.replace('selected=2','selected=1'),image(),FONT))
+    def test_incomplete_name_intents_fail(self):self.assertTrue(checker.verify(LOG.split('[linen.list.label] id=2')[0],image(),FONT))
+    def test_outside_frame_and_invalid_scale_fail(self):
+        for a,b in [('x=640','x=2000'),('scale=2','scale=3'),('rows=2','rows=6'),('committed_view=1','committed_view=0')]:self.assertTrue(checker.verify(LOG.replace(a,b),image(),FONT))
+    def test_only_last_committed_view_is_checked(self):self.assertEqual(checker.verify(LOG.replace('alpha-note','old-note')+LOG,image(),FONT),[])
+    def test_truncated_ppm_fails(self):self.assertTrue(checker.verify(LOG,image()[:-1],FONT))
+    def test_atomic_intent_after_foreign_prefix_is_read(self):self.assertEqual(checker.verify('[foreign.partial] tail='+LOG,image(),FONT),[])
+
+KALEIDO_LOG='[shell.tile.apply] sid=300 x=640 y=385 w=640 h=335\n'
+def kaleido_image(x=640,y=385,w=640,lines=('Kaleidoscope','Cached / sample network text'),color=b'\xcd\xd6\xf4',status_offset=None):
+    width,height=1280,800
+    pixels=bytearray(width*height*3);scale=2 if w>=256 else 1
+    for row,line in enumerate(lines):
+        y0=y+36+(row*9*scale if status_offset is None or row==0 else status_offset)
+        for col,char in enumerate(line):
+            for gy,bits in enumerate(checker.glyph(FONT,char)):
+                for gx in range(5):
+                    if not bits&(1<<(4-gx)):continue
+                    for dy in range(scale):
+                        for dx in range(scale):
+                            px=x+8+(col*6+gx)*scale+dx;py=y0+gy*scale+dy
+                            pixels[(py*width+px)*3:(py*width+px)*3+3]=color
+    return b'P6\n1280 800\n255\n'+pixels
+
+class KaleidoPixelChecks(unittest.TestCase):
+    def test_tiled_title_and_status_at_actual_scaled_line_positions(self):
+        self.assertEqual(checker.verify_kaleido_layout(KALEIDO_LOG,kaleido_image(),FONT),[])
+    def test_narrow_surface_uses_scale_one(self):
+        log='[shell.tile.apply] sid=300 x=40 y=60 w=240 h=160\n'
+        self.assertEqual(checker.verify_kaleido_layout(log,kaleido_image(40,60,240),FONT),[])
+    def test_startup_position_cannot_satisfy_final_tiled_geometry(self):
+        self.assertTrue(checker.verify_kaleido_layout(KALEIDO_LOG,kaleido_image(50,100,520),FONT))
+    def test_latest_complete_target_tile_wins_over_older_or_foreign_intents(self):
+        old='[shell.tile.apply] sid=300 x=50 y=100 w=520 h=120\n'
+        foreign='[shell.tile.apply] sid=200 x=50 y=100 w=520 h=120\n'
+        incomplete='[shell.tile.apply] sid=300 x=10 y=60 w=520\n'
+        self.assertEqual(checker.verify_kaleido_layout(old+KALEIDO_LOG+foreign+incomplete,kaleido_image(),FONT),[])
+        self.assertTrue(checker.verify_kaleido_layout(KALEIDO_LOG+old,kaleido_image(),FONT))
+    def test_wrong_glyphs_spacing_color_and_trailing_text_fail(self):
+        for ppm in [kaleido_image(lines=('Kaleidofcope','Cached / sample network text')),
+                    kaleido_image(lines=('Kaleidoscope','HTTP 200 from 10.0.2.2')),
+                    kaleido_image(lines=('KaleidoscopeX','Cached / sample network text')),
+                    kaleido_image(status_offset=36),kaleido_image(color=b'\xff\xff\xff')]:
+            self.assertTrue(checker.verify_kaleido_layout(KALEIDO_LOG,ppm,FONT))
+    def test_blank_missing_malformed_small_and_offscreen_fail(self):
+        blank=b'P6\n1280 800\n255\n'+bytes(1280*800*3)
+        self.assertTrue(checker.verify_kaleido_layout(KALEIDO_LOG,blank,FONT))
+        self.assertTrue(checker.verify_kaleido_layout(KALEIDO_LOG,kaleido_image()[:-1],FONT))
+        for log in ['',KALEIDO_LOG.replace('sid=300','sid=200'),KALEIDO_LOG.replace('x=640','x=-1'),KALEIDO_LOG.replace('x=640','x=1000'),KALEIDO_LOG.replace('y=385','y=10'),KALEIDO_LOG.replace('w=640','w=100'),KALEIDO_LOG.replace('h=335','h=50'),KALEIDO_LOG.replace('x=640','x=bad')]:
+            self.assertTrue(checker.verify_kaleido_layout(log,kaleido_image(),FONT))
+
+if __name__=='__main__':unittest.main()

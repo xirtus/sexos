@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 REQUIRED_PD_MARKERS: List[Tuple[str, str]] = [
     ("sexdisplay", "sexdisplay"),
     ("sexdrive", "sexdrive"),
-    ("silkshell", "silkshell"),
+    ("silk-shell", "silkshell"),
     ("sexinput", "sexinput"),
     ("sexusb", "sexusb"),
     ("silkbar", "silkbar"),
@@ -28,6 +28,7 @@ REQUIRED_PD_MARKERS: List[Tuple[str, str]] = [
     ("sexbell", "sexbell"),
     ("sexfiles", "sexfiles"),
     ("spindle", "spindle"),
+    ("sext", "sext"),
 ]
 
 # If A2 markers landed, require these grants with ok=1 (observed on full boot).
@@ -36,6 +37,7 @@ REQUIRED_A2_GRANTS_OK1: List[str] = [
     "from=kernel to=3 slot=SLOT_SHELL target=3 ok=1",
     "from=kernel to=4 slot=SLOT_INPUT target=input_ring ok=1",
     "from=kernel to=4 slot=SLOT_SHELL target=3 ok=1",
+    "from=kernel to=3 slot=SLOT_SHELL_INPUT_READY target=4 ok=1",
     "from=kernel to=6 slot=SLOT_DISPLAY target=1 ok=1",
     "from=kernel to=7 slot=SLOT_DISPLAY target=1 ok=1",
     "from=kernel to=3 slot=SLOT_LINEN target=7 ok=1 optional=1",
@@ -56,7 +58,19 @@ CRITICAL_EDGES: List[Tuple[str, str]] = [
     ("spindle", "quil"),
 ]
 
-FAULT_PATTERNS = ["#PF", "#GP", "panic", "fault.kill"]
+# These two startup sends are unconditional and instrumented in the current
+# image. Other edges are input/activity dependent or not instrumented yet;
+# absence there is reported as UNOBSERVED, never as a proven ordering check.
+REQUIRED_STARTUP_EDGES = {("silkbar", "sexdisplay"), ("silk-shell", "sexdisplay")}
+
+# Match the actual diagnostics in kernel/src/interrupts.rs and main.rs,
+# including a trap's first line if the subsequent panic print is truncated.
+FAULT_PATTERNS = [
+    "#PF", "#GP", "panic", "fault.kill", "PAGE FAULT",
+    "GENERAL PROTECTION", "GP FAULT", "DOUBLE FAULT", "TRIPLE FAULT",
+    "FATAL", "EXCEPTION: INVALID OPCODE", "EXCEPTION: UD ENTER",
+    "PKU SECURITY VIOLATION", "TEST FAILED:",
+]
 
 
 @dataclass
@@ -108,7 +122,10 @@ def bootgraph_gate(lines: List[str]) -> Tuple[GateResult, List[PdRow], Dict[str,
         if ready is not None:
             ready_lines[pd] = ready
 
-        if init is None or ready is None:
+        if len(find_all_lines(lines, f"[{token}.init.start]")) > 1 or len(find_all_lines(lines, f"[{token}.ready]")) > 1:
+            state = "DUPLICATE"
+            errs.append(f"{pd} duplicate init/ready marker")
+        elif init is None or ready is None:
             state = "MISSING"
             errs.append(f"{pd} missing {'init' if init is None else 'ready'}")
         elif init >= ready:
@@ -134,11 +151,14 @@ def cap_grant_gate(lines: List[str]) -> GateResult:
     if begin >= complete:
         return GateResult("CAP_GRANT_GATE", False, f"phase25 order invalid ({begin}>={complete})")
 
-    a2_landed = any("[bootgraph.cap.grant" in line for line in lines)
-    if a2_landed:
-        for marker in REQUIRED_A2_GRANTS_OK1:
-            if find_first_line(lines, f"[bootgraph.cap.grant {marker}]") is None:
-                return GateResult("CAP_GRANT_GATE", False, f"missing required grant: {marker}")
+    # The current image always emits these grants. A truncated log without
+    # grant rows must not receive a capability-proof PASS.
+    for marker in REQUIRED_A2_GRANTS_OK1:
+        grant_lines = find_all_lines(lines, f"[bootgraph.cap.grant {marker}]")
+        if len(grant_lines) != 1:
+            return GateResult("CAP_GRANT_GATE", False, f"expected one required grant: {marker} (found {len(grant_lines)})")
+        if not begin < grant_lines[0] < complete:
+            return GateResult("CAP_GRANT_GATE", False, f"grant outside phase25: {marker}")
 
     return GateResult("CAP_GRANT_GATE", True)
 
@@ -177,6 +197,34 @@ def order_gate(lines: List[str], ready_lines: Dict[str, int]) -> Tuple[GateResul
     rows: List[EdgeRow] = []
     errs: List[str] = []
     warnings: List[str] = []
+    if phase_complete is None:
+        errs.append("missing phase25.complete")
+    # Shell readiness is now an unconditional boot dependency for sexinput.
+    # A failed/missing wait must not hide as an activity-dependent absent edge.
+    notify = find_all_lines(lines, "[silk-shell.ready.notify] to=sexinput")
+    accepted = find_all_lines(lines, "[sexinput.shell.ready.accept] caller=3")
+    shell_ready = ready_lines.get("silk-shell")
+    for name, observations in (("shell ready notification", notify), ("input shell-ready acceptance", accepted)):
+        if len(observations) != 1:
+            errs.append(f"expected one {name} (found {len(observations)})")
+        elif shell_ready is None or observations[0] <= shell_ready:
+            errs.append(f"{name} before shell ready")
+    input_send = edges.get(("sexinput", "silk-shell"))
+    if input_send is not None and len(accepted) == 1 and input_send <= accepted[0]:
+        errs.append("sexinput->silk-shell send before authenticated shell-ready acceptance")
+    seen_first = set()
+    send_rx = re.compile(r"\[bootgraph\.edge\.send from=([^\s\]]+) to=([^\s\]]+) slot=([^\s\]]+) op=([^\s\]]+) first=1\]")
+    for line_no, line in enumerate(lines, 1):
+        if "[bootgraph.edge.send" not in line:
+            continue
+        match = send_rx.search(line)
+        if match is None:
+            errs.append(f"malformed edge.send at line {line_no}")
+            continue
+        key = (match.group(1), match.group(2))
+        if key in seen_first:
+            errs.append(f"{key[0]}->{key[1]} duplicate first send at line {line_no}")
+        seen_first.add(key)
 
     for (sender, receiver, slot), lines_for_edge in defers.items():
         if len(lines_for_edge) > 1:
@@ -195,8 +243,16 @@ def order_gate(lines: List[str], ready_lines: Dict[str, int]) -> Tuple[GateResul
         recv_ready = ready_lines.get(receiver)
         edge_name = f"{sender}->{receiver}"
 
-        if send_line is None or recv_ready is None:
-            rows.append(EdgeRow(edge=edge_name, receiver_ready_line=recv_ready, sender_send_line=send_line, result="SKIP"))
+        if send_line is None:
+            required = (sender, receiver) in REQUIRED_STARTUP_EDGES
+            result = "MISSING" if required else "UNOBSERVED"
+            if required:
+                errs.append(f"{edge_name} missing startup edge.send")
+            rows.append(EdgeRow(edge=edge_name, receiver_ready_line=recv_ready, sender_send_line=send_line, result=result))
+            continue
+        if recv_ready is None:
+            errs.append(f"{edge_name} missing receiver ready")
+            rows.append(EdgeRow(edge=edge_name, receiver_ready_line=recv_ready, sender_send_line=send_line, result="FAIL"))
             continue
 
         ok = True
@@ -264,8 +320,9 @@ def clock_gate(lines: List[str], strict_clock: bool) -> Tuple[GateResult, List[s
 
 def fault_gate(lines: List[str], allow_fault: bool) -> GateResult:
     hits: List[str] = []
+    folded_lines = [line.casefold() for line in lines]
     for pat in FAULT_PATTERNS:
-        if any(pat in line for line in lines):
+        if any(pat.casefold() in line for line in folded_lines):
             hits.append(pat)
     if hits and not allow_fault:
         return GateResult("FAULT_GATE", False, "fault markers found: " + ", ".join(hits))

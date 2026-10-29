@@ -2,7 +2,8 @@
 //!
 //! Activated at compile time with `SEXFILES_RAMFS_PROOF=1`.
 //! Runs contract conformance tests at startup and emits serial markers.
-//! No runtime cost when disabled (const bool folding).
+//! Optional suites are const gated. Three non-destructive region denial checks
+//! always run before normal startup readiness.
 //!
 //! Pattern: matches silk-shell SCENE_SETTINGS_PROTOCOL_PROOF.
 //!
@@ -26,6 +27,21 @@ use crate::backends::ramfs::{
 use crate::messages;
 use crate::pdx::serial_println;
 use crate::vfs;
+
+/// Non-destructive runtime authority checks: three view requests, no block I/O.
+/// Normal startup requires these denials before publishing readiness.
+pub fn run_memory_authority_negative_proof() -> bool {
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, DMA_ADDRESS};
+    let no_cap = sex_pdx::memory_region_view(31, 0, 512, QUERY_VIEW | READ);
+    let wrong_kind = sex_pdx::memory_region_view(crate::pdx::SLOT_BLOCK, 0, 512, QUERY_VIEW | READ);
+    let wrong_rights = sex_pdx::memory_region_view(
+        sex_pdx::SLOT_BLOCK_BUFFER, 0, 512, QUERY_VIEW | READ | DMA_ADDRESS,
+    );
+    let ok = no_cap.is_err() && wrong_kind.is_err() && wrong_rights.is_err();
+    sex_pdx::serial_record!("[sexfiles.memory.authority.negative] empty={} wrong_kind={} dma_right={} ok={}",
+        no_cap.is_err() as u8, wrong_kind.is_err() as u8, wrong_rights.is_err() as u8, ok as u8);
+    ok
+}
 
 /// Server-internal PD value: bypasses owner checks.
 const SELF_PD: u32 = 0;
@@ -512,7 +528,7 @@ pub fn run_linen_sexfiles_metadata_proofs() {
 /// through the SexFiles DiskFS file ops path at /disk/sexfiles-proof-v1.
 ///
 /// This proof runs INSIDE SexFiles because Linen does not currently have
-/// direct DiskFS API access (SLOT_BLOCK, MemLend buffer grant). Linen
+/// direct DiskFS API access (SLOT_BLOCK, static block region). Linen
 /// communicates with SexFiles via RamFS opcodes on SLOT_STORAGE. The DiskFS
 /// file ops (diskfs_lookup_path, diskfs_write_object, diskfs_read_object)
 /// are server-internal functions that require SLOT_BLOCK + buf_va.
@@ -530,7 +546,7 @@ pub fn run_linen_disk_object_proof() {
     // ── Pre-grant single buffer for the entire proof ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[linen.disk.object.proof] buf_grant_failed va={:#x}", buf_va);
+        serial_println!("[linen.disk.object.proof] buf_view_failed va={:#x}", buf_va);
         return;
     }
     serial_println!("[linen.disk.object.proof.buf_va] va={:#x}", buf_va);
@@ -1214,19 +1230,9 @@ pub fn run_sexfiles_real_block_proofs() {
         serial_println!("[sexfiles.storage.negative.err] reason=write_bad_size_allowed status=0");
     }
 
-    let no_cap_va = sex_pdx::sys_map_mem_lend(31);
-    let wrong_kind_va = sex_pdx::sys_map_mem_lend(crate::pdx::SLOT_BLOCK);
-    let memlend_no_cap_ok = no_cap_va == u64::MAX && wrong_kind_va == u64::MAX;
-    if memlend_no_cap_ok {
-        serial_println!(
-            "[sexfiles.storage.negative.memlend_no_cap.ok] empty={:#x} wrong_kind={:#x}",
-            no_cap_va, wrong_kind_va
-        );
-    } else {
-        serial_println!(
-            "[sexfiles.storage.negative.err] reason=memlend_map unexpected_empty={:#x} unexpected_wrong_kind={:#x}",
-            no_cap_va, wrong_kind_va
-        );
+    let region_denials_ok = run_memory_authority_negative_proof();
+    if region_denials_ok {
+        serial_println!("[sexfiles.storage.negative.region_denied.ok] empty=1 wrong_kind=1 dma_right=1");
     }
 
     let storage_negative_honest = bad_cmd_honest
@@ -1236,9 +1242,9 @@ pub fn run_sexfiles_real_block_proofs() {
         && write_lba0_ok
         && write_bad_cap_ok
         && write_bad_size_ok
-        && memlend_no_cap_ok;
+        && region_denials_ok;
     serial_println!(
-        "[sexfiles.storage.negative.summary] honest={} bad_cmd={} bad_len={} unaligned={} write_lba0={} write_bad_cap={} write_bad_size={} memlend_no_cap={}",
+        "[sexfiles.storage.negative.summary] honest={} bad_cmd={} bad_len={} unaligned={} write_lba0={} write_bad_cap={} write_bad_size={} region_denials={}",
         storage_negative_honest as u8,
         bad_cmd_honest as u8,
         (read_size0_ok && read_oversize_ok) as u8,
@@ -1246,7 +1252,7 @@ pub fn run_sexfiles_real_block_proofs() {
         write_lba0_ok as u8,
         write_bad_cap_ok as u8,
         write_bad_size_ok as u8,
-        memlend_no_cap_ok as u8
+        region_denials_ok as u8
     );
 
     // Minimal fixed disk manifest proof (single object mapping).
@@ -1434,10 +1440,10 @@ pub fn run_sexfiles_real_block_proofs() {
     }
 
     // Phase-B read payload helper intentionally skipped in this mission run to avoid
-    // SLOT_BUF_LEND occupancy before the real write/readback proof below.
+    // extra I/O before the real write/readback proof below.
     serial_println!("[sexblock.bufcap.phase_b.begin] mode=skipped_for_realwrite");
 
-    // Real guarded write/readback proof via SLOT_BLOCK + MemLend.
+    // Real guarded write/readback proof via SLOT_BLOCK + the static block region.
     // Two-boot persistence mode:
     // - Boot A: read-before-write mismatch expected, then write+readback.
     // - Boot B: read-before-write match expected (same nvme.img), no rewrite.
@@ -1448,13 +1454,13 @@ pub fn run_sexfiles_real_block_proofs() {
     let rw_buf_va = if manifest_buf_va != 0 && manifest_buf_va != u64::MAX {
         manifest_buf_va
     } else {
-        sex_pdx::sys_grant_mem_lend(crate::pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND)
+        crate::vfs::diskfs_bridge_get_buf_va()
     };
     if rw_buf_va == 0 || rw_buf_va == u64::MAX {
-        serial_println!("[sexfiles.realwrite.bufcap.grant.ok] ok=0 buf_va={:#x}", rw_buf_va);
-        serial_println!("[sexfiles.realwrite.readback.mismatch] reason=grant_failed");
+        serial_println!("[sexfiles.realwrite.bufcap.view.ok] ok=0 buf_va={:#x}", rw_buf_va);
+        serial_println!("[sexfiles.realwrite.readback.mismatch] reason=view_failed");
     } else {
-        serial_println!("[sexfiles.realwrite.bufcap.grant.ok] ok=1 buf_va={:#x}", rw_buf_va);
+        serial_println!("[sexfiles.realwrite.bufcap.view.ok] ok=1 buf_va={:#x}", rw_buf_va);
 
         serial_println!("[sexfiles.persistence.boot_b.begin]");
         serial_println!("[sexfiles.persistence.boot_b.read_before_write.begin]");
@@ -1532,8 +1538,8 @@ pub fn run_sexfiles_real_block_proofs() {
 }
 
 /// Run DiskFS minimal file-like operations proof.
-/// Self-contained: pre-grants one MemLend buffer and passes buf_va to all
-/// file ops helpers (avoids re-granting through SLOT_BUF_LEND).
+/// Self-contained: resolves one static block buffer and passes buf_va to all
+/// file ops helpers (idempotent resolution through SLOT_BLOCK_BUFFER).
 ///
 /// Writes the manifest + object, then exercises path lookup / write / read /
 /// partial read / bounds checks with a single shared buffer.
@@ -1544,7 +1550,7 @@ fn run_sexfiles_disk_file_ops_proofs() {
     // ── Pre-grant single buffer for the entire proof ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfiles.disk.file.ops.proof.done] buf_grant_failed");
+        serial_println!("[sexfiles.disk.file.ops.proof.done] buf_view_failed");
         return;
     }
     serial_println!("[sexfiles.disk.file.buf_va] buf_va={:#x}", buf_va);
@@ -2322,7 +2328,7 @@ pub fn run_diskfs_multi_object_proofs() {
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         serial_println!("[sexfiles.diskfs100.ap3.fail] stage=grant buf_va={}", buf_va);
-        serial_println!("[sexfiles.disk.multi.proof.err] reason=grant_failed");
+        serial_println!("[sexfiles.disk.multi.proof.err] reason=view_failed");
         return;
     }
 
@@ -2597,7 +2603,7 @@ pub fn run_diskfs100_ap2_proof() {
     // ── Grant buffer ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfiles.diskfs100.ap2.fail] reason=grant_failed");
+        serial_println!("[sexfiles.diskfs100.ap2.fail] reason=view_failed");
         return;
     }
 
@@ -3133,7 +3139,7 @@ pub fn run_diskfs100_ap4_write_proof() {
     // ── Grant buffer ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfiles.diskfs100.ap4.fail] phase=write reason=grant_failed");
+        serial_println!("[sexfiles.diskfs100.ap4.fail] phase=write reason=view_failed");
         return;
     }
 
@@ -3262,7 +3268,7 @@ pub fn run_diskfs100_ap4_read_proof() {
     // ── Grant buffer ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfiles.diskfs100.ap4.fail] phase=read reason=grant_failed");
+        serial_println!("[sexfiles.diskfs100.ap4.fail] phase=read reason=view_failed");
         return;
     }
 
@@ -3364,7 +3370,7 @@ pub fn run_diskfs100_ap5_neg_mismatch() {
     // ── Grant buffer ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
-        serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=grant_failed");
+        serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=view_failed");
         return;
     }
 

@@ -4,10 +4,11 @@
 
 mod session;
 mod sexobject;
+mod reply_delivery;
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicU64, Ordering};
-use sex_pdx::{pdx_call, pdx_listen_raw, pdx_reply, pdx_try_listen_raw, sched_yield, serial_println, SLOT_DISPLAY, SLOT_STORAGE};
+use sex_pdx::{pdx_call, pdx_listen_raw, pdx_reply, pdx_try_listen_raw, sched_yield, serial_println, SLOT_STORAGE};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -24,13 +25,36 @@ static LINEN_REJECT_BAD_NAME_LEN_COUNT: AtomicU64 = AtomicU64::new(0);
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 
+static mut SHELL_REPLY: reply_delivery::ReplyDelivery = reply_delivery::ReplyDelivery::new();
+fn linen_reply(caller:u32,value:u64) {
+    if caller == 12 {
+        // Legacy Spindle commands never await readback. Do not retain a reply
+        // to an app that can exit, or block permanent shell snapshot service.
+        reply_delivery::legacy_reply(caller,value,pdx_reply);
+        return;
+    }
+    unsafe {
+        assert!(SHELL_REPLY.queue(caller,value), "Linen reply ownership");
+        SHELL_REPLY.poll(pdx_reply);
+    }
+}
+fn linen_reply_poll()->bool { unsafe { SHELL_REPLY.poll(pdx_reply) } }
+fn linen_request_allowed(caller:u32,opcode:u64)->bool {
+    let status = if caller == 12 {
+        match sex_pdx::app_lifecycle::catalog(39) {
+            Ok(c) if c.target_pd == 12 && c.task_id == 12 && c.surface_id == 154 => {
+                match sex_pdx::app_lifecycle::info(39) { Err(code)=>Some(code), Ok(_)=>Some(0) }
+            }
+            _=>None,
+        }
+    } else { None };
+    reply_delivery::admit(caller,opcode,status)
+}
+
+
 // Shell-owned frame sid for Linen (focus/tiling target — shell 0xEC-upserts it).
 #[allow(dead_code)]
 const SURFACE_ID_LINEN: u64 = 200;
-// LINEN_OWN_CONTENT_SID_V1: linen's self-owned content surface. Linen must NOT
-// 0xEC-create sid 200 — shell also creates it, first-create wins owner_pd and
-// the loser's draws get AUTH-rejected (boot-order race). Same fix as quil 156.
-const LINEN_CONTENT_SID: u64 = 157; // 0x9D
 const OP_HID_EVENT: u64 = 0x202;
 
 // ── Linen Session Opcodes ───────────────────────────────────────────────────
@@ -729,22 +753,8 @@ unsafe fn linen_publish_disk_objects() {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[linen.init.start]");
-    // Brief delay to ensure sexdisplay is ready to receive
-    for _ in 0..5_000_000 { core::hint::spin_loop(); }
-
-    // LINEN_OWN_CONTENT_SID_V1: create linen's OWN content surface (0xEC upsert
-    // by id; arg1 = (y<<32)|x, arg2 = (h<<32)|w). owner_pd binds to linen on
-    // first create. Sid 200 is left entirely to the shell (frame/tiling).
-    pdx_call(SLOT_DISPLAY, 0xEC, LINEN_CONTENT_SID,
-        (500u64 << 32) | 900u64,  // x=900, y=500
-        (150u64 << 32) | 300u64); // w=300, h=150
-    serial_println!("[linen.content.sid.ok] sid={} reason=own_content_sid_no_shell_race", LINEN_CONTENT_SID);
-
-    // Fill rect: local (20, 20, 80, 60), coral color
-    pdx_call(SLOT_DISPLAY, 0xEF, LINEN_CONTENT_SID,
-        (20u64 << 32) | 20u64,
-        (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
-    serial_println!("[linen.surface.visible.ok] sid={}", LINEN_CONTENT_SID);
+    // This service publishes objects; shell surface 200 presents the complete
+    // committed view. No independent sample surface or display startup delay.
     // LINEN_DISK_OBJECTS_V1: publish disk-backed objects into the session
     // table before any storage-blocking proofs, so the shell snapshot can
     // pick them up on (re)fetch.
@@ -988,6 +998,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     loop {
+        if !linen_reply_poll() { sched_yield(); continue; }
         unsafe { maybe_run_linen_keyboard_nav_proof(); }
         // LINEN_DEFER_V1: serve requests stashed during storage waits first.
         struct LoopMsg { type_id: u64, caller_pd: u32, arg0: u64, arg1: u64, arg2: u64 }
@@ -998,6 +1009,9 @@ pub extern "C" fn _start() -> ! {
             LoopMsg { type_id: m.type_id, caller_pd: m.caller_pd, arg0: m.arg0, arg1: m.arg1, arg2: m.arg2 }
         };
 
+        // Shell owns the public view. Spindle's existing three async commands
+        // require its pinned task still LIVE under the query-only boot grant.
+        if !linen_request_allowed(msg.caller_pd,msg.type_id) { continue; }
         match msg.type_id {
             OP_HID_EVENT => {
                 handle_hid_event(msg.arg0, msg.arg1);
@@ -1034,7 +1048,7 @@ pub extern "C" fn _start() -> ! {
             }
             OP_LINEN_RESCAN_DISK => {
                 let live = unsafe { linen_rescan_disk() };
-                pdx_reply(msg.caller_pd, live);
+                linen_reply(msg.caller_pd, live);
             }
             OP_LINEN_SEARCH_OBJECTS => {
                 unsafe {
@@ -1160,7 +1174,7 @@ unsafe fn handle_create_object(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) 
         KIND_UNKNOWN => session::ObjectKind::Unknown,
         _ => {
             serial_println!("[linen.session.reject] reason=bad_kind kind={} caller={}", kind_byte, caller_pd);
-            pdx_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFC); // ERR_CAP_INVALID equivalent
+            linen_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFC); // ERR_CAP_INVALID equivalent
             return;
         }
     };
@@ -1178,13 +1192,13 @@ unsafe fn handle_create_object(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) 
             serial_println!("[perf.noise.summary] name=linen.session.reject count={} suppressed={}",
                 n, n - 4);
         }
-        pdx_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE); // ERR_SERVICE_NOT_READY equivalent
+        linen_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE); // ERR_SERVICE_NOT_READY equivalent
         return;
     }
     if name_len as usize > LINEN_CREATE_WIRE_MAX_NAME {
         serial_println!("[linen.session.reject] reason=wire_name_len len={} wire_max={} caller={}",
             name_len, LINEN_CREATE_WIRE_MAX_NAME, caller_pd);
-        pdx_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE);
+        linen_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE);
         return;
     }
 
@@ -1228,11 +1242,11 @@ unsafe fn handle_create_object(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) 
                 }
             }
 
-            pdx_reply(caller_pd, object_id);
+            linen_reply(caller_pd, object_id);
         }
         Err(e) => {
             serial_println!("[linen.session.reject] reason=create_failed err={} caller={}", e, caller_pd);
-            pdx_reply(caller_pd, e as u64);
+            linen_reply(caller_pd, e as u64);
         }
     }
 }
@@ -1263,10 +1277,10 @@ unsafe fn handle_list_objects(arg0: u64, caller_pd: u32) {
                 obj.object_id, obj.kind as u8, obj.name_len, obj.owner_pd);
             serial_println!("[linen.session.proof.list] id={} kind={} name_len={} ramfs={}",
                 obj.object_id, obj.kind as u8, obj.name_len, obj.ramfs_handle);
-            pdx_reply(caller_pd, reply);
+            linen_reply(caller_pd, reply);
         }
         None => {
-            pdx_reply(caller_pd, 0);
+            linen_reply(caller_pd, 0);
         }
     }
 }
@@ -1290,12 +1304,12 @@ unsafe fn handle_get_object(arg0: u64, caller_pd: u32) {
                 obj.object_id, obj.kind as u8, obj.name_len, obj.owner_pd);
             serial_println!("[linen.session.proof.get] id={} owner={} ramfs={}",
                 obj.object_id, obj.owner_pd, obj.ramfs_handle);
-            pdx_reply(caller_pd, reply_name);
+            linen_reply(caller_pd, reply_name);
         }
         Err(e) => {
             serial_println!("[linen.session.reject] reason=get_failed id={} err={} caller={}",
                 object_id, e, caller_pd);
-            pdx_reply(caller_pd, e as u64);
+            linen_reply(caller_pd, e as u64);
         }
     }
 }
@@ -1317,10 +1331,10 @@ unsafe fn handle_get_public_snapshot(arg0: u64, caller_pd: u32) {
                        | ((obj.sexfiles_object_id & 0xFF) << 48);
             serial_println!("[linen.snapshot.slot] slot={} id={} kind={} name_len={}",
                 slot, obj.object_id, obj.kind as u8, obj.name_len);
-            pdx_reply(caller_pd, packed);
+            linen_reply(caller_pd, packed);
         }
         None => {
-            pdx_reply(caller_pd, 0);
+            linen_reply(caller_pd, 0);
         }
     }
 }
@@ -1337,7 +1351,7 @@ unsafe fn handle_get_public_name(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32
         Ok(obj) => {
             let name_len = obj.name_len as usize;
             if byte_offset >= name_len {
-                pdx_reply(caller_pd, 0);
+                linen_reply(caller_pd, 0);
                 return;
             }
             let take = max_len.min(name_len - byte_offset);
@@ -1346,11 +1360,11 @@ unsafe fn handle_get_public_name(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32
                 packed |= (obj.name[byte_offset + i] as u64) << (i * 8);
             }
             serial_println!("[linen.snapshot.name] id={} off={} len={}", object_id, byte_offset, take);
-            pdx_reply(caller_pd, packed);
+            linen_reply(caller_pd, packed);
         }
         Err(e) => {
             serial_println!("[linen.snapshot.name.err] id={} off={} err={}", object_id, byte_offset, e);
-            pdx_reply(caller_pd, e as u64);
+            linen_reply(caller_pd, e as u64);
         }
     }
 }
@@ -1366,11 +1380,11 @@ unsafe fn handle_open_intent(object_id: u64, caller_pd: u32) {
         Ok(obj) => {
             serial_println!("[linen.open_intent.recv] id={} kind={} ok=1",
                 object_id, obj.kind as u8);
-            pdx_reply(caller_pd, 0);
+            linen_reply(caller_pd, 0);
         }
         Err(e) => {
             serial_println!("[linen.open_intent.recv] id={} ok=0", object_id);
-            pdx_reply(caller_pd, e as u64);
+            linen_reply(caller_pd, e as u64);
         }
     }
 }
@@ -1493,7 +1507,7 @@ fn pdx_storage_sync(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64,
             return Ok(value);
         }
         // Non-reply message before reply arrived — handle HID events inline.
-        if msg.type_id == OP_HID_EVENT {
+        if msg.type_id == OP_HID_EVENT && msg.caller_pd == 3 {
             handle_hid_event(msg.arg0, msg.arg1);
         } else if msg.type_id != 0 {
             // LINEN_DEFER_V1: live client request mid-roundtrip — keep it.
@@ -2389,7 +2403,7 @@ unsafe fn run_linen_diskfs_slot_proof() {
             if msg.type_id == 0x1 {
                 return msg.arg0 as i64;
             }
-            if msg.type_id == OP_HID_EVENT {
+            if msg.type_id == OP_HID_EVENT && msg.caller_pd == 3 {
                 handle_hid_event(msg.arg0, msg.arg1);
             }
         }
@@ -2517,7 +2531,7 @@ unsafe fn run_linen_diskfs_ap2_proof() {
             if msg.type_id == 0x1 {
                 return msg.arg0 as i64;
             }
-            if msg.type_id == OP_HID_EVENT {
+            if msg.type_id == OP_HID_EVENT && msg.caller_pd == 3 {
                 handle_hid_event(msg.arg0, msg.arg1);
             }
         }
@@ -2730,7 +2744,7 @@ unsafe fn run_linen_diskfs_ap3_write_proof() {
             if msg.type_id == 0x1 {
                 return msg.arg0 as i64;
             }
-            if msg.type_id == OP_HID_EVENT {
+            if msg.type_id == OP_HID_EVENT && msg.caller_pd == 3 {
                 handle_hid_event(msg.arg0, msg.arg1);
             }
         }
@@ -2925,7 +2939,7 @@ unsafe fn run_linen_diskfs_ap3_read_proof() {
             if msg.type_id == 0x1 {
                 return msg.arg0 as i64;
             }
-            if msg.type_id == OP_HID_EVENT {
+            if msg.type_id == OP_HID_EVENT && msg.caller_pd == 3 {
                 handle_hid_event(msg.arg0, msg.arg1);
             }
         }
@@ -3133,7 +3147,7 @@ unsafe fn run_linen_diskfs_ap5_negative_classifications() {
             if msg.type_id == 0x1 {
                 return msg.arg0 as i64;
             }
-            if msg.type_id == OP_HID_EVENT {
+            if msg.type_id == OP_HID_EVENT && msg.caller_pd == 3 {
                 handle_hid_event(msg.arg0, msg.arg1);
             }
         }

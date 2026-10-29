@@ -7,11 +7,31 @@ use lazy_static::lazy_static;
 pub struct BootInfoFrameAllocator {
     memory_map: &'static limine::request::MemmapResponse,
     pub(crate) next: usize,
+    owned_regions: crate::boot_frame_reservations::BootFrameReservations,
 }
 
 impl BootInfoFrameAllocator {
     pub unsafe fn new(memory_map: &'static limine::request::MemmapResponse) -> Self {
-        BootInfoFrameAllocator { memory_map, next: 0 }
+        BootInfoFrameAllocator { memory_map, next: 0,
+            owned_regions: crate::boot_frame_reservations::BootFrameReservations::new() }
+    }
+
+    /// Reject collision with the entire consumed prefix across usable memmap
+    /// entries before data is zeroed; then exclude every page from future walks.
+    pub fn reserve_boot_region(&mut self, physical: u64, length: u64) -> Result<(), &'static str> {
+        let mut remaining = self.next as u64;
+        let regions = self.memory_map.entries();
+        self.owned_regions.reserve(physical, length, |range| {
+            for region in regions.iter().filter(|r| r.type_ == 0) {
+                let consumed = remaining.min(region.length / 4096);
+                if consumed != 0 && range.overlaps(crate::boot_frame_reservations::Range {
+                    start: region.base, end: region.base + consumed * 4096,
+                }) { return true; }
+                remaining -= consumed;
+                if remaining == 0 { break; }
+            }
+            false
+        })
     }
 
 }
@@ -25,6 +45,7 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     ///
     /// Removed usable_frames() helper — obsolete after this fix.
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        'next_candidate: loop {
         let regions = self.memory_map.entries();
         let mut frame_index = 0usize;
         for region in regions.iter().filter(|r| r.type_ == 0) {
@@ -33,6 +54,7 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
                 let offset = self.next.saturating_sub(frame_index) as u64;
                 let phys_addr = region.base + offset * 4096;
                 self.next += 1;
+                if self.owned_regions.contains(phys_addr) { continue 'next_candidate; }
                 // AP1 diagnostic: record boot-frame allocation for overlap detection.
                 // PERF_LOG_NOISE_ABLATION_V1: first 4 lines, then power-of-two summaries
                 // (67790 per-event lines dominated serial volume; diag_record + reserve
@@ -53,7 +75,8 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
             }
             frame_index += frames_in_region;
         }
-        None
+        return None;
+        }
     }
 }
 
@@ -155,63 +178,28 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
     // the boot frame allocator.
     let consumed_by_init = frame_allocator.next as u64;
     crate::serial_println!("[kernel.mem.global.skip.consumed_by_init] frames={}", consumed_by_init);
-    let mut consumed = 0u64;
-    let mut metadata_allocated = false;
-
+    let mut plan = crate::boot_frame_reservations::BootstrapPlanner::new(
+        consumed_by_init, metadata_pages * 4096);
+    let mut pending_regions = alloc::vec::Vec::new();
     for entry in entries.iter().filter(|e| e.type_ == 0) {
-        let region_pages = entry.length / 4096;
-        let mut region_base = entry.base;
-        let mut region_len = entry.length;
-
-        if consumed < consumed_by_init {
-            if consumed + region_pages <= consumed_by_init {
-                // Entire region consumed by boot mappings.
-                consumed += region_pages;
-                continue;
-            } else {
-                // Partial overlap: skip the consumed portion.
-                let skip_pages = consumed_by_init - consumed;
-                region_base += skip_pages * 4096;
-                region_len -= skip_pages * 4096;
-                consumed = consumed_by_init; // saturate
-            }
-        }
-
-        // Carve metadata array from the first available usable region after heap
-        if !metadata_allocated && region_len >= metadata_pages * 4096 {
-            let metadata_phys = region_base;
-            let metadata_vaddr = hhdm_offset + metadata_phys;
-            crate::serial_println!("[kernel.mem.global.metadata.carve] phys={:#x} size={} pages={} totals={}",
-                metadata_phys, metadata_pages * 4096, metadata_pages, total_pages);
-            unsafe {
-                crate::memory::allocator::GLOBAL_ALLOCATOR.init_metadata(metadata_vaddr, total_pages);
-            }
-            region_base += metadata_pages * 4096;
-            region_len -= metadata_pages * 4096;
-            metadata_allocated = true;
-        }
-
-        if region_len > 0 {
-            unsafe { crate::memory::allocator::GLOBAL_ALLOCATOR.add_memory_region(region_base, region_len) };
+        if let Some(free) = plan.region(entry.base, entry.length).expect("BOOT_MEMORY_PLAN_INVALID") {
+            pending_regions.push(free);
         }
     }
-
-    if !metadata_allocated {
-        crate::serial_println!(
-            "allocator.init.error metadata_not_allocated metadata_pages={} total_pages={}",
-            metadata_pages,
-            total_pages
-        );
-    } else {
-        // Advance BootInfoFrameAllocator past metadata pages so it doesn't
-        // give out frames that overlap with the buddy allocator's PageMetadata
-        // array. Otherwise the frame allocator would allocate a metadata page
-        // as a page table page, corrupting the PageMetadata when page table
-        // entries are written.
-        crate::serial_println!("[kernel.mem.boot_frame.skip_metadata] pages={}", metadata_pages);
-        for _ in 0..metadata_pages {
-            frame_allocator.allocate_frame();
-        }
+    let metadata = plan.metadata.expect("BOOT_ALLOCATOR_METADATA_UNAVAILABLE");
+    // Physical placement may be in a later region. Protect the actual interval,
+    // never an equivalent page count from the current frame-allocator cursor.
+    frame_allocator.reserve_boot_region(metadata.start, metadata.end - metadata.start)
+        .expect("BOOT_METADATA_OWNERSHIP_COLLISION");
+    crate::serial_println!("[kernel.mem.global.metadata.carve] phys={:#x} size={} pages={} totals={}",
+        metadata.start, metadata.end - metadata.start, metadata_pages, total_pages);
+    unsafe {
+        crate::memory::allocator::GLOBAL_ALLOCATOR.init_metadata(hhdm_offset + metadata.start, total_pages);
+    }
+    // Regions preceding the metadata placement also wait for initialization;
+    // otherwise zeroing metadata would erase their published free-list heads.
+    for free in pending_regions {
+        unsafe { crate::memory::allocator::GLOBAL_ALLOCATOR.add_memory_region(free.start, free.end - free.start); }
     }
     // AP2 safety net: reserve every frame BootInfoFrameAllocator has consumed so far
     // in GLOBAL_ALLOCATOR metadata.  The buddy allocator pop functions lazily skip

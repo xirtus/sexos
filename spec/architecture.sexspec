@@ -1,0 +1,715 @@
+{
+  "schema_version": 1,
+  "subsystem": "architecture",
+  "constitution": {
+    "path": "ARCHITECTURE.md",
+    "sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7"
+  },
+  "state_model": {
+    "equation": "S[n+1] = T(S[n], I[n], C)",
+    "state": "Complete observable system state; implemented component models must declare their smaller state explicitly.",
+    "input": "Recorded external bytes, device completions, IRQ/timer order and explicit hardware snapshots.",
+    "capability_graph": "BOOT_DAG-sanctioned graph; tables seal after final static region grants and before task admission.",
+    "boundary": [
+      "snapshot",
+      "transform",
+      "swap",
+      "commit"
+    ]
+  },
+  "checks": [
+    {
+      "id": "scheduler_queue",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/scheduler_queue_host_gate.sh"
+      ],
+      "scope": "Actual bounded pointer queue; not task execution ownership or exhaustive weak-memory proof."
+    },
+    {
+      "id": "scheduler_wake",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/scheduler_wake_host_gate.sh"
+      ],
+      "scope": "Historical lifecycle CAS helper plus separate ownership reference/counterexample model; current runtime custody is tested by task_ownership."
+    },
+    {
+      "id": "no_runnable",
+      "kind": "static",
+      "argv": [
+        "bash",
+        "scripts/scheduler_no_runnable_ownership_gate.sh"
+      ],
+      "scope": "Source pattern/order checks for preserved current owner; not runtime liveness."
+    },
+    {
+      "id": "rsp0",
+      "kind": "static",
+      "argv": [
+        "bash",
+        "scripts/rsp0_regression_gate.sh"
+      ],
+      "scope": "Source guard for saved-frame offset; runtime rows require a supplied boot log."
+    },
+    {
+      "id": "user_pointer",
+      "kind": "static",
+      "argv": [
+        "bash",
+        "scripts/syscall_user_pointer_hardening_gate.sh"
+      ],
+      "scope": "Source guards for user-pointer validation; not an authority or hostile-code proof."
+    },
+    {
+      "id": "capability_slots",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/authority_slot_validation_gate.sh"
+      ],
+      "scope": "Full-width capability and destination identity decoding; not memory authority or reply authentication."
+    },
+    {
+      "id": "domain_identity",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/domain_registry_identity_gate.sh"
+      ],
+      "scope": "Production registry identity validation; not capability graph immutability."
+    },
+    {
+      "id": "fault_transport",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/pagefault_register_transport_gate.sh"
+      ],
+      "scope": "By-value fault request validation; not mapping, completion or recovery."
+    },
+    {
+      "id": "display_ready",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_ready_protocol_gate.sh"
+      ],
+      "scope": "Startup-only authenticated readiness protocol; not epoch/UiIR replay."
+    },
+    {
+      "id": "diskfs_recovery",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/diskfs_recovery_host_gate.sh"
+      ],
+      "scope": "Extracted production bitmap reconstruction/allocation with fixture I/O; not device persistence or whole-disk crash proof."
+    },
+    {
+      "id": "master_boot",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/master_runtime_gate.sh"
+      ],
+      "scope": "Sealed image build and bounded QEMU boot observation; scheduler coverage advisory, not SMP proof."
+    },
+    {
+      "id": "usb_paths",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/usb_path_gate.sh"
+      ],
+      "scope": "QEMU synthetic USB paths; not bare-metal hardware coverage."
+    },
+    {
+      "id": "disk_persistence",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/disk_persistence_gate.sh"
+      ],
+      "scope": "Specified document fingerprint/rendering/reboot scenario; not arbitrary multi-client atomicity."
+    },
+    {
+      "id": "diskfs_crash",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/diskfs_v4_crash_injection_gate.sh"
+      ],
+      "scope": "Existing selected growth crash windows; audit timing and expected observations before accepting evidence."
+    },
+    {
+      "id": "diskfs_metadata_crash",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/diskfs_v4_metadata_crash_gate.sh"
+      ],
+      "scope": "Existing selected metadata crash windows; not exhaustive storage-order proof."
+    },
+    {
+      "id": "shell_ready",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/shell_ready_protocol_gate.sh"
+      ],
+      "scope": "Actual boot-only readiness protocol with syscall boundary doubles and three source wiring checks; not restart availability or epoch replay."
+    },
+    {
+      "id": "dynamic_objects",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/dynamic_object_gate.sh"
+      ],
+      "scope": "Existing two-boot create/rename/delete/reuse scenario via Spindle; not crash interruption, ambiguous device-write failure or arbitrary byte replacement atomicity."
+    },
+    {
+      "id": "task_ownership",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/task_ownership_host_gate.sh"
+      ],
+      "scope": "Production atomic custody plus bounded queue; finite traces and host races do not prove x86 stack release or physical AP scheduling."
+    },
+    {
+      "id": "compiled_switch",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/scheduler_switch_boundary_gate.sh"
+      ],
+      "scope": "Post-build binary instruction-order check, including stack pivot before publication callback and PKRU restore; not runtime SMP execution."
+    },
+    {
+      "id": "timer_pkru",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/timer_pkru_return_gate.sh"
+      ],
+      "scope": "Built timer stub saves/restores PKRU on ordinary returns; not hostile native WRPKRU containment."
+    },
+    {
+      "id": "ownership_runtime",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/scheduler_ownership_runtime_gate.sh"
+      ],
+      "scope": "Required guest park, detached wake, post-stack release and user-resume markers; lastRunnable proof is a separate declared-build cfg."
+    },
+    {
+      "id": "memory_regions",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/memory_region_authority_gate.sh"
+      ],
+      "scope": "Production region authorization, exact extracted syscall query, bounded DMA leases and PCI bounds; not hardware DMA or hostile-code containment."
+    },
+    {
+      "id": "driver_regions",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/driver_region_host_gate.sh"
+      ],
+      "scope": "Actual extracted USB/NIC reservation helpers within boot budgets; mock view lookup, no hardware DMA."
+    },
+    {
+      "id": "drive_dma",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/sexdrive_dma_host_gate.sh"
+      ],
+      "scope": "Production storage DMA transfer guard: abort before submission, completion and timeout quarantine; not hardware completion proof."
+    },
+    {
+      "id": "memory_runtime",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/memory_authority_runtime_gate.sh"
+      ],
+      "scope": "Observed fixed grants, seal before execution, region-query denials and migrated consumers; bootstrap allocation remains explicit kernel debt."
+    },
+    {
+      "id": "runtime_heap",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/sex_rt_heap_host_gate.sh"
+      ],
+      "scope": "Production bounded ELF byte allocator: initialization, alignment, allocation/free reuse, exhaustion and concurrent access; no new frame authority or demand paging."
+    },
+    {
+      "id": "fault_transactions",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/fault_transaction_host_gate.sh"
+      ],
+      "scope": "Production pending identity, nonwrapping tokens and fault-specific custody; host scheduling does not execute IRET."
+    },
+    {
+      "id": "paging_mapping",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/paging_mapping_host_gate.sh"
+      ],
+      "scope": "Production capability validation/ledger and leaf commit with mocked fault/TLB boundary; no guest instruction retry."
+    },
+    {
+      "id": "sext_pager",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/sext_pager_host_gate.sh"
+      ],
+      "scope": "Actual ring-3 allocator/policy/protocol with mock backend, including quota and uncertain publication custody."
+    },
+    {
+      "id": "paging_runtime",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/paging_recovery_runtime_gate.sh"
+      ],
+      "scope": "Guest two-client faults and cross-client frame reuse, exact token/frame/RIP joins, leaf clear before reuse, release replay denials, retained neighbors and separate quota rejection profile; BSP only."
+    },
+    {
+      "id": "client_memory",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/silk_client_memory_gate.sh"
+      ],
+      "scope": "Optimized production compiler-runtime memcpy/memset bodies plus guard/zero-size/repeated-copy execution; optional post-build ELF self-recursion inspection."
+    },
+    {
+      "id": "paging_reclaim_replay",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/paging_reclaim_replay_gate.sh"
+      ],
+      "scope": "Actual sext policy and allocator under duplicate/stale release requests, uncertain reclamation, cross-client reuse and correlated acknowledgments; backend doubles do not prove PTE/TLB execution."
+    },
+    {
+      "id": "reply_sender",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/reply_sender_host_gate.sh"
+      ],
+      "scope": "Actual reply router captures current PD identity, retains occupied slots, and wakes only after publication; listen register tuple is checked statically. This does not prove return-capability or outstanding-invocation authority."
+    },
+    {
+      "id": "task_exit_lifecycle",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/task_exit_lifecycle_gate.sh"
+      ],
+      "scope": "Production bounded exit watch with actual task ownership, last-runnable wake, full-ring retry, exact task and trampoline quiescence; no physical stack or TLB execution."
+    },
+    {
+      "id": "task_exit_runtime",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/task_exit_cleanup_runtime_gate.sh"
+      ],
+      "scope": "Observed self-finish and quota rejection profiles: released task custody, exact four-leaf cleanup, permanent range closure, three surviving-client reuses, retained neighbor and cached cleanup replay; BSP only."
+    },
+    {
+      "id": "task_exit_profiles",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/paging_cleanup_profiles_gate.sh"
+      ],
+      "scope": "Build declared self-finish and quota exit profiles through the sealed entrypoint; validate retained cleanup traces; restore and verify the normal desktop image."
+    },
+    {
+      "id": "linen_snapshot",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/linen_snapshot_host_gate.sh"
+      ],
+      "scope": "Extracted actual Linen snapshot/receiver functions with mock PDX/HID: foreign reply rejection, complete publication, failed-view preservation and selection changes during fetch."
+    },
+    {
+      "id": "app_resources",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/app_resources_host_gate.sh"
+      ],
+      "scope": "Actual immutable lifecycle grants, leaf preflight and retirement with registry/mapper/TLB mocks; BSP guest remains required."
+    },
+    {
+      "id": "service_custody",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/service_custody_host_gate.sh"
+      ],
+      "scope": "Actual once-only service retirement and RamFs saved-data/shared-lease preservation with mocked PDX authority."
+    },
+    {
+      "id": "display_surface_lifecycle",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_surface_lifecycle_gate.sh"
+      ],
+      "scope": "Actual display catalog/owner admission and retirement state; not rendered frame timing."
+    },
+    {
+      "id": "shell_app_cleanup",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/shell_app_cleanup_host_gate.sh"
+      ],
+      "scope": "Actual shell app retirement, interaction cleanup and ACK retry; transport/display mocked."
+    },
+    {
+      "id": "sext_workspace",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/sext_workspace_host_gate.sh"
+      ],
+      "scope": "Actual full-pool scrub and rotating journal in real host memory; kernel retirement authority separate."
+    },
+    {
+      "id": "bell_app_cleanup",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/bell_app_cleanup_gate.sh"
+      ],
+      "scope": "Actual Bell retirement preserves live queue order, identities, policies and rate state."
+    },
+    {
+      "id": "app_resource_runtime",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/app_resource_runtime_gate.sh"
+      ],
+      "scope": "Observed five-service ACKs, surface commit, all private detach and zero/reuse on declared full-resource profile."
+    },
+    {
+      "id": "display_text_readability",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_text_readability_gate.sh"
+      ],
+      "scope": "Exact production integer glyph scaling, clipping and width-aware reflow in a host framebuffer; real desktop screenshots remain required."
+    },
+    {
+      "id": "kaleido_service_call",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/kaleido_service_call_gate.sh"
+      ],
+      "scope": "Actual app call/receive serialization with mocked register transport, enqueue failures and authenticated cooperative close."
+    },
+    {
+      "id": "linen_reply_delivery",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/linen_reply_delivery_host_gate.sh"
+      ],
+      "scope": "Actual bounded retained shell response and normal producer wiring; no transactional reply capability proof."
+    },
+    {
+      "id": "desktop_close_runtime",
+      "kind": "runtime",
+      "argv": [
+        "bash",
+        "scripts/desktop_close_runtime_gate.sh"
+      ],
+      "scope": "Real QMP keyboard closes all three native apps; observes five-role cleanup, private pool zero/reuse, input during refresh, exact filename glyphs and Linen hide/restore pixels. Runs a supplied normal ISO, never builds."
+    },
+    {
+      "id": "desktop_content",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/desktop_content_host_gate.sh"
+      ],
+      "scope": "Actual bounded Linen labels and shell child geometry publication with mock display transport; real guest glyph verification remains separate."
+    },
+    {
+      "id": "display_surface_groups",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_surface_groups_gate.sh"
+      ],
+      "scope": "Actual compositor pixels and fixed catalog grouping with glass effects stubbed; guest framebuffer verification remains necessary."
+    },
+    {
+      "id": "linen_text_delivery",
+      "kind": "host",
+      "argv": ["bash", "scripts/linen_text_delivery_gate.sh"],
+      "scope": "Actual bounded text outbox with injected full transport and production poll wiring; admission receipts are not framebuffer presentation."
+    },
+    {
+      "id": "app_resource_profiles",
+      "kind": "runtime",
+      "argv": ["bash", "scripts/app_resource_profiles_gate.sh"],
+      "scope": "Two sealed resource/normal builds, strict private cleanup and paging, native Close and actual Linen filename pixels; restores previous artifacts on failure."
+    }
+  ],
+  "invariants": [
+    {
+      "id": "GLOBAL_VAS_ADDRESSING",
+      "requirement": "One GLOBAL_VAS defines naming only, without granting access.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/memory/manager.rs",
+          "anchor": "GLOBAL_VAS"
+        }
+      ],
+      "checks": [
+        "master_boot"
+      ],
+      "gaps": [
+        "Boot success does not prove absence of all alternate address spaces or ambient memory access."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "PDX_SOLE_AUTHORITY",
+      "requirement": "Every cross-domain access decision is mediated by sex-pdx.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/syscalls/mod.rs",
+          "anchor": "pub fn dispatch"
+        }
+      ],
+      "checks": [
+        "capability_slots",
+        "fault_transport",
+        "memory_regions"
+      ],
+      "gaps": [
+        "Slot-0 bridge, privileged SyncCall, reply authentication and hostile native-code containment remain incomplete."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "PKU_ENFORCEMENT_ONLY",
+      "requirement": "PKU accelerates enforcement and never grants authority; authorization semantics survive its absence.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/pku.rs",
+          "anchor": "pub unsafe fn wrpkru"
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "No paired PKU-on/off authorization proof; current trusted-but-faulty execution is not hostile-code isolation."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "CAPABILITY_GENESIS",
+      "requirement": "BOOT_DAG is the sole source of capability genesis; graph is immutable after lock.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/capability.rs",
+          "anchor": "pub fn seal"
+        },
+        {
+          "path": "kernel/src/boot_memory.rs",
+          "anchor": "pub fn seal_all()"
+        }
+      ],
+      "checks": [
+        "domain_identity",
+        "memory_runtime",
+        "paging_runtime"
+      ],
+      "gaps": [
+        "Observed boot sealing does not prove all dormant internal grant paths unreachable; complete replay of genesis remains absent."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "NO_AMBIENT_AUTHORITY",
+      "requirement": "Global addresses, slot 0 and privileged execution grant no ambient authority.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/ipc.rs",
+          "anchor": "pub fn traverse_edge"
+        }
+      ],
+      "checks": [
+        "capability_slots",
+        "user_pointer",
+        "memory_regions"
+      ],
+      "gaps": [
+        "Slot-0 bridge and privileged SyncCall remain; global SASOS addresses still need hostile native-code enforcement beyond query authorization."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "DETERMINISTIC_REPLAY",
+      "requirement": "Replay from epoch zero with the same input stream and capability graph yields identical complete observable state.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/desktop/replay.rs",
+          "anchor": "pub fn replay"
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "Active code lacks full epoch/input recorder and system replay; desktop replay assigns only workspace identity."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "EPOCH_COMMIT",
+      "requirement": "Observable transitions follow snapshot -> transform -> swap -> commit at explicit epoch boundaries.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        },
+        {
+          "path": "servers/sexdisplay/src/main.rs",
+          "anchor": "fn render("
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "Current mutable display paths do not implement the complete epoch/UiIR contract."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "NO_PER_PROCESS_TABLES",
+      "requirement": "No per-process page tables or Linux-style process model may be introduced.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "## 0. System Model"
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "Targeted review is not a repository-wide executable absence proof."
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "USERLAND_MEMORY_AUTHORITY",
+      "requirement": "The kernel traps/forwards/resumes; sext owns fault-resolution frame allocation and GLOBAL_VAS mappings.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "### 1.2 sext"
+        },
+        {
+          "path": "kernel/src/ipc/pagefault.rs",
+          "anchor": "forward_page_fault"
+        },
+        {
+          "path": "servers/sext/src/main.rs",
+          "anchor": "zero_owner=sext"
+        }
+      ],
+      "checks": [
+        "fault_transport",
+        "paging_mapping",
+        "sext_pager",
+        "paging_runtime"
+      ],
+      "gaps": [
+        "Sext now allocates within a fixed boot-granted eight-frame pool and owns policy/zeroing; bootstrap still reserves initial backing, VA and table infrastructure in kernel.",
+        "Two boot-authorized client ranges and registered main tasks support cooperative release; no autonomous eviction, expandable frame pools, physical SMP shootdown or complete epoch replay."
+      ],
+      "depends_on": [
+        "PDX_SOLE_AUTHORITY"
+      ]
+    },
+    {
+      "id": "CAUSAL_DOMAIN_ORDER",
+      "requirement": "Cross-domain streams preserve explicit deterministic ordering with no hidden hardware input.",
+      "status": "open",
+      "sources": [
+        {
+          "path": "ARCHITECTURE.md",
+          "anchor": "### 1.4 UiIR"
+        },
+        {
+          "path": "kernel/src/ipc/router.rs",
+          "anchor": "send_reply"
+        }
+      ],
+      "checks": [],
+      "gaps": [
+        "One-deep replies and current transport do not prove per-sender epoch streams."
+      ],
+      "depends_on": [
+        "DETERMINISTIC_REPLAY"
+      ]
+    }
+  ],
+  "transitions": []
+}

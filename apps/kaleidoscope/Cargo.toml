@@ -11,3 +11,6 @@ path = "src/main.rs"
 sex-pdx      = { path = "../../crates/sex-pdx" }
 sex-graphics = { path = "../../crates/sex-graphics" }
 silkclient   = { path = "../../crates/silk-client" }
+
+spin = "0.9.8"
+linked_list_allocator = "0.10"

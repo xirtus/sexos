@@ -1,103 +1,26 @@
 #![no_std]
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 pub use sex_pdx::{SYSCALL_PDX_CALL, SYSCALL_PDX_LISTEN, SYSCALL_YIELD, MessageType, PdxEvent, pdx_call, pdx_listen, pdx_reply, sys_yield, sched_yield};
 
-// Phase 19: Advanced Zero-Copy Runtime
-const HEAP_START_VADDR: usize = 0x_4000_0000_0000; 
-static HEAP_TOP: AtomicUsize = AtomicUsize::new(0); 
-static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(0); 
+mod heap;
 
-#[inline(always)]
-fn align_up(addr: usize, align: usize) -> usize {
-    (addr + align - 1) & !(align - 1)
-}
-
+// This .bss storage is part of each domain's BOOT_DAG-loaded ELF. The runtime
+// subdivides its own bytes; it has no frame allocation or mapping authority.
+static HEAP_ARENA: heap::Arena = heap::Arena::new();
 #[global_allocator]
-static ALLOCATOR: SimpleAllocator = SimpleAllocator;
-
-pub struct SimpleAllocator;
-
-fn expand_heap(needed_size: usize) -> Result<usize, ()> {
-    let current_limit = HEAP_LIMIT.load(Ordering::Acquire);
-    let start_vaddr = if current_limit == 0 {
-        HEAP_START_VADDR
-    } else {
-        current_limit
-    };
-
-    let size_aligned = align_up(needed_size, 4096);
-    
-    let pfn: u64;
-    unsafe {
-        core::arch::asm!("syscall",
-            in("rax") 31, // PDX_ALLOCATE_MEMORY
-            in("rdi") size_aligned as u64,
-            lateout("rax") pfn,
-            lateout("rcx") _, lateout("r11") _,
-        );
-    }
-    if pfn == u64::MAX { return Err(()); }
-
-    let vaddr: u64;
-    unsafe {
-        core::arch::asm!("syscall",
-            in("rax") 30, // PDX_MAP_MEMORY
-            in("rdi") pfn,
-            in("rsi") size_aligned as u64,
-            lateout("rax") vaddr,
-            lateout("rcx") _, lateout("r11") _,
-        );
-    }
-    if vaddr == u64::MAX { return Err(()); }
-
-    HEAP_LIMIT.store(vaddr as usize + size_aligned, Ordering::Release);
-    if HEAP_TOP.load(Ordering::Acquire) == 0 {
-        HEAP_TOP.store(vaddr as usize, Ordering::Release);
-    }
-
-    Ok(start_vaddr)
-}
-
-unsafe impl core::alloc::GlobalAlloc for SimpleAllocator {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        let size = layout.size();
-        let align = layout.align();
-        if size == 0 { return core::ptr::null_mut(); }
-        let mut current = HEAP_TOP.load(Ordering::Acquire);
-        if current == 0 {
-            if expand_heap(size + align).is_err() { return core::ptr::null_mut(); }
-            current = HEAP_TOP.load(Ordering::Acquire);
-        }
-        loop {
-            let aligned = align_up(current, align);
-            let next = aligned.wrapping_add(size);
-            let limit = HEAP_LIMIT.load(Ordering::Acquire);
-            if next > limit {
-                if expand_heap(size + align).is_err() { return core::ptr::null_mut(); }
-                continue;
-            }
-            match HEAP_TOP.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Relaxed) {
-                Ok(_) => return aligned as *mut u8,
-                Err(actual) => current = actual,
-            }
-        }
-    }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
-}
+static ALLOCATOR: heap::BoundedAllocator = heap::BoundedAllocator::new(&HEAP_ARENA);
+static HEAP_INIT_REPORTED: AtomicBool = AtomicBool::new(false);
 
 pub fn sys_exit(status: usize) -> ! {
-    unsafe {
-        core::arch::asm!("syscall",
-            in("rax") 60, // sys_exit
-            in("rdi") status as u64,
-            options(noreturn, nostack),
-        );
-    }
+    sex_pdx::task_finish(status as u64)
 }
 
 pub fn heap_init() {
-    let _ = expand_heap(65536);
+    ALLOCATOR.init();
+    if !HEAP_INIT_REPORTED.swap(true, Ordering::AcqRel) {
+        sex_pdx::serial_record!("[runtime.heap.ready] backing=elf_owned bytes={} runtime_mapping=0", heap::HEAP_BYTES);
+    }
 }
 
 #[no_mangle]

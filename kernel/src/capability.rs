@@ -9,7 +9,7 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityKind {
     Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy, VfsNode,
-    InputRing, MessageQueue,
+    InputRing, MessageQueue, Region, FramePool, PagerMapping, DemandRegion, AppLifecycle,
 }
 
 #[repr(C, align(64))]
@@ -45,7 +45,10 @@ pub struct NodeCapData { pub node_id: u32, pub sexdrive_pd_id: u32, pub inode_id
 pub struct SpawnCapData { pub max_pds: u32, pub allowed_pku_keys: u32 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u16, pub device_id: u16 }
+pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u16, pub device_id: u16,
+    /// Immutable BAR0 view assigned before capability sealing.
+    pub bar0_view: Option<sex_pdx::memory_region::RegionGrant>,
+}
 
 pub struct DisplayHardwareLease {
     pub domain: u16,
@@ -84,6 +87,11 @@ pub enum CapabilityData {
     Domain(u32), Node(NodeCapData), Spawn(SpawnCapData), Pci(PciCapData),
     Network(NetworkCapData), Socket(SocketCapData), MemLend(MemLendCapData), RemoteProxy(GlobalCapId),
     VfsNode(VfsNodeCapData),
+    Region(sex_pdx::memory_region::RegionGrant),
+    FramePool(crate::paging_state::FramePoolGrant),
+    PagerMapping(crate::paging_state::PagerMappingGrant),
+    DemandRegion(crate::paging_state::DemandRegionGrant),
+    AppLifecycle(crate::app_resource_state::LifecycleGrant),
     InputRing, MessageQueue,
 }
 
@@ -179,10 +187,7 @@ pub enum PkruValue {
 impl PkruValue {
     /// Computes the standard PKRU mask for a Protection Domain.
     /// Opens PKEY 0 (Kernel) and the target pkey.
-    /// Shared memory (PKEY 14) is mapped statically:
-    /// - Domain 2 (SexDrive/Producer): RW
-    /// - Domain 1 (SexDisplay/Consumer): RO
-    /// - Others: No Access
+    /// Shared regions use separately mapped aliases tagged with each holder's key.
     pub fn for_domain(pkey: u8) -> u32 {
         let mut mask: u32 = 0xFFFF_FFFF;
         // Open PKEY 0 (Default/Kernel)
@@ -191,25 +196,6 @@ impl PkruValue {
         // Open target PKEY (Self) as RW
         if pkey < 16 {
             mask &= !(0b11 << (pkey * 2));
-        }
-
-        // Handle PKEY 14 (SHARED) via Hard-coded Identity Assertions
-        let shared_pkey = 14;
-        let shift = shared_pkey * 2;
-        mask &= !(0b11 << shift); // Clear bits first
-
-        if pkey == 2 {
-            // Producer (SexDrive): RW (0b00)
-            mask |= 0b00 << shift;
-            debug_assert!((mask >> shift) & 0b11 == 0b00);
-        } else if pkey == 1 {
-            // Consumer (SexDisplay): RO (0b10)
-            mask |= 0b10 << shift;
-            debug_assert!((mask >> shift) & 0b11 == 0b10);
-        } else {
-            // Others: No Access (0b11)
-            mask |= 0b11 << shift;
-            debug_assert!((mask >> shift) & 0b11 == 0b11);
         }
 
         mask
@@ -247,8 +233,8 @@ impl ProtectionDomain {
             incoming_replies: Mutex::new(VecDeque::with_capacity(1)),
         };
 
-        // Static Binding: Slot 0 is ALWAYS the PD's own message ring.
-        pd.grant_capability(0, CapabilityData::MessageQueue);
+        // Slot 0 is an explicit syscall bridge, not an entry in this
+        // one-indexed capability table. PDX_LISTEN handles the self ring.
         pd
     }
 
@@ -257,7 +243,9 @@ impl ProtectionDomain {
     }
 
     pub fn grant_capability(&self, slot: u64, data: CapabilityData) {
-        unsafe { (*self.cap_table).insert_at(slot as u32, data) }
+        if let Some(slot) = crate::capability_slot::decode_capability_slot(slot) {
+            unsafe { (*self.cap_table).insert_at(slot, data) }
+        }
     }
 
     pub fn find_capability(&self, id: u32) -> Option<Capability> {

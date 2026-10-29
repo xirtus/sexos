@@ -39,9 +39,11 @@ pub fn init() {
     let mut sexnet_id = 0;
     let mut kaleido_id = 0;
     let mut kaleido_domain_id = 0;
+    let mut sext_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet", "RESERVED_SHARED", "kaleidoscope"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet", "sext", "kaleidoscope"];
+    crate::app_resources::plan_boot_apps(&[9, 12, 15]);
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -99,6 +101,9 @@ pub fn init() {
                         } else if domain_id == 13 {
                             sexnet_id = id;
                             serial_println!("[kernel.spawn.sexnet] id={} path={}", id, path);
+                        } else if domain_id == 14 {
+                            sext_id = id;
+                            serial_println!("[kernel.spawn.sext] id={} domain_id={}", id, domain_id);
                         } else if domain_id == 15 {
                             kaleido_id = id;
                             kaleido_domain_id = domain_id;
@@ -117,6 +122,43 @@ pub fn init() {
 
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
+    // Static BOOT_DAG return edges for authenticated display-ready messages.
+    // Runtime code only invokes these capabilities; it cannot mint routes.
+    if sexdisp_id != 0 {
+        assert_eq!(sexdisp_id, sex_pdx::display_ready::DISPLAY_PD_ID,
+            "DISPLAY_READY_GENESIS_ID_MISMATCH");
+        if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(sexdisp_id) {
+            for (slot, target, slot_name) in [
+                (sex_pdx::SLOT_SHELL, silkshell_id, "SLOT_SHELL"),
+                (sex_pdx::SLOT_SILKBAR, silkbar_id, "SLOT_SILKBAR"),
+            ] {
+                if target != 0 {
+                    pd.grant_capability(slot, crate::capability::CapabilityData::Domain(target));
+                    serial_println!(
+                        "[bootgraph.cap.grant from=kernel to={} slot={} target={} ok=1]",
+                        sexdisp_id, slot_name, target
+                    );
+                }
+            }
+        }
+    }
+    // Static BOOT_DAG shell-ready return edge. Private shell slot 9 is free;
+    // slot 3 must retain the initial self-signal capability in this domain.
+    if silkshell_id != 0 && sexinput_id != 0 {
+        assert_eq!(silkshell_id, sex_pdx::shell_ready::SHELL_PD_ID,
+            "SHELL_READY_GENESIS_ID_MISMATCH");
+        assert_eq!(sexinput_id, sex_pdx::shell_ready::INPUT_PD_ID,
+            "SHELL_READY_INPUT_ID_MISMATCH");
+        let pd = crate::ipc::DOMAIN_REGISTRY.get(silkshell_id)
+            .expect("SHELL_READY_GENESIS_SHELL_MISSING");
+        assert!(pd.find_capability(sex_pdx::shell_ready::SLOT_SHELL_INPUT_READY as u32).is_none(),
+            "SHELL_READY_INPUT_SLOT_COLLISION");
+        pd.grant_capability(sex_pdx::shell_ready::SLOT_SHELL_INPUT_READY, crate::capability::CapabilityData::Domain(sexinput_id));
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL_INPUT_READY target={} ok=1]",
+            silkshell_id, sexinput_id
+        );
+    }
     if sexdisp_id != 0 && silkshell_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;
         use crate::capability::CapabilityData;
@@ -685,6 +727,53 @@ pub fn init() {
         }
     }
 
+    // Final BOOT_DAG memory edges precede sealing and every task admission.
+    crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
+    assert!(sext_id != 0 && kaleido_id != 0 && sexbell_id != 0, "BOOT_PAGING_DOMAINS_MISSING");
+    // Replace the client's initial self-management edge at static genesis.
+    // The capability graph remains sealed throughout runtime fault recovery.
+    for client in [kaleido_id, sexbell_id] {
+        crate::ipc::DOMAIN_REGISTRY.get(client).expect("BOOT_PAGING_CLIENT_MISSING")
+            .grant_capability(sex_pdx::SLOT_SEXT, crate::capability::CapabilityData::Domain(sext_id));
+        serial_println!("[bootgraph.cap.grant from=kernel to={} slot=SLOT_SEXT target={} ok=1]", client, sext_id);
+    }
+    // Kaleidoscope waits for Bell's normal service reply after Bell's paging
+    // exercise. This is a static service edge, sealed with every other edge.
+    crate::ipc::DOMAIN_REGISTRY.get(kaleido_id).expect("BOOT_PAGING_CLIENT_MISSING")
+        .grant_capability(sex_pdx::SLOT_BELL, crate::capability::CapabilityData::Domain(sexbell_id));
+    serial_println!("[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1]", kaleido_id, sexbell_id);
+    // Native app service routes are immutable genesis edges, including cleanup proof leases.
+    for (slot,target) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_STORAGE,sexfiles_id)] {
+        crate::ipc::DOMAIN_REGISTRY.get(kaleido_id).expect("BOOT_APP_MISSING")
+            .grant_capability(slot,crate::capability::CapabilityData::Domain(target));
+        serial_println!("[boot.app.route] target={} slot={} service={} runtime_mint=0",kaleido_id,slot,target);
+    }
+    crate::boot_memory::init_paging(sext_id, [kaleido_id, sexbell_id]);
+    // Shell close requests use fixed genesis routes; no runtime lookup/mint.
+    for (slot,target) in sex_pdx::app_lifecycle::CLOSE_SLOTS.into_iter().zip([quil_id,spindle_id,kaleido_id]) {
+        let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
+        assert!(shell.find_capability(slot as u32).is_none(),"BOOT_CLOSE_SLOT_OCCUPIED");
+        shell.grant_capability(slot as u64,crate::capability::CapabilityData::Domain(target));
+        serial_println!("[boot.app.close.route] holder={} target={} slot={} runtime_mint=0",silkshell_id,target,slot);
+    }
+    crate::app_resources::init(sext_id, silkshell_id,
+        &[(quil_id,156), (spindle_id,154), (kaleido_id,300)],
+        [silkshell_id,sexdisp_id,sexfiles_id,sexnet_id,sexbell_id]);
+    // Linen serves Spindle's existing async list/open/search route. A read-only
+    // lifecycle observer fences queued requests after death without owning an ACK.
+    let spindle=crate::ipc::DOMAIN_REGISTRY.get(spindle_id).expect("BOOT_SPINDLE_MISSING");
+    let spindle_main=spindle.main_task.load(core::sync::atomic::Ordering::Acquire);
+    assert!(!spindle_main.is_null());
+    let linen=crate::ipc::DOMAIN_REGISTRY.get(linen_id).expect("BOOT_LINEN_MISSING");
+    let observer_slot=sex_pdx::app_lifecycle::SLOTS[1] as u64;
+    assert!(linen.find_capability(observer_slot as u32).is_none());
+    linen.grant_capability(observer_slot,crate::capability::CapabilityData::AppLifecycle(
+        crate::app_resource_state::LifecycleGrant {target_pd:spindle_id,
+            task_id:unsafe{(*spindle_main).id},holder_pd:linen_id,
+            rights:crate::app_resource_state::QUERY,ack_bit:0}));
+    serial_println!("[boot.app.observer] holder={} target={} slot={} query=1 ack=0 retire=0",linen_id,spindle_id,observer_slot);
+    crate::boot_memory::seal_all();
+
     serial_println!("init: Revoking kernel write access...");
 
     // Enqueue all registered PD tasks onto scheduler runqueue
@@ -706,6 +795,7 @@ pub fn init() {
                     11 => "sexfiles",
                     12 => "spindle",
                     13 => "sexnet",
+                    14 => "sext",
                     15 => "kaleidoscope",
                     _ => "unknown",
                 };
@@ -714,8 +804,8 @@ pub fn init() {
                     "[bootgraph.boot.handoff] target={} id={} entry={:#x}",
                     pd_name, pd_id, entry
                 );
-                unsafe { (*task_ptr).state.store(crate::scheduler::STATE_READY, core::sync::atomic::Ordering::Release); }
-                crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
+                assert!(crate::scheduler::SCHEDULERS[0].activate_task(task_ptr),
+                    "BOOT_TASK_ALREADY_ADMITTED_OR_UNCONSTRUCTED");
                 // SCHEDULER_TICK_PD8_PF_FLAKE_V1 phase-2: task ptr + pd_ptr
                 // field address, for hardware-watchpoint corruption capture.
                 serial_println!(

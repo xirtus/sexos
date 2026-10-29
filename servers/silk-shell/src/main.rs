@@ -2,11 +2,15 @@
 #![no_main]
 
 extern crate alloc;
+mod app_custody;
+mod linen_async;
+mod desktop_content;
+mod linen_text_delivery;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{
-    pdx_call, pdx_call_checked, pdx_listen_raw, pdx_try_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
+    pdx_call as raw_pdx_call, pdx_call_checked, pdx_listen_raw, pdx_try_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_SPINDLE, SLOT_STORAGE, SLOT_BELL, OP_QUIL_PING,
     OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE, OP_SILKBAR_UPDATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS, OP_BELL_NOTIFY,
@@ -20,11 +24,131 @@ use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y,
     UpdateKind};
 use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
+// Kernel-catalog app ownership; retained after exit to fence queued messages.
+static mut APP_CUSTODY: [Option<app_custody::Entry>; 3] = [None; 3];
+unsafe fn shell_catalog_init() {
+    for (i, slot) in sex_pdx::app_lifecycle::SLOTS.iter().copied().enumerate() {
+        match sex_pdx::app_lifecycle::catalog(slot) {
+            Ok(c) => {
+                assert!(c.coordinator_pd == 3 && c.target_pd != 0 && c.task_id != 0 && c.surface_id != 0);
+                assert!(!APP_CUSTODY.iter().flatten().any(|e| e.target == c.target_pd || e.surface == c.surface_id));
+                APP_CUSTODY[i] = Some(app_custody::Entry::new(slot, c.target_pd, c.task_id, c.surface_id));
+            }
+            Err(sex_pdx::app_lifecycle::INVALID) => break,
+            Err(_) => panic!("shell lifecycle catalog unavailable"),
+        }
+    }
+}
+unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
+    for e in APP_CUSTODY.iter_mut().flatten() { e.hint(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2); }
+    shell_lifecycle_poll();
+    true
+}
+unsafe fn shell_registration_reply_poll() {
+    for entry in APP_CUSTODY.iter_mut().flatten() {
+        if entry.registration_reply && !entry.dead && pdx_reply(entry.target,entry.surface) == 0 {
+            entry.registration_reply=false;
+            sex_pdx::serial_record!("[shell.app.registered.reply] target={} task={} surface={} committed=1",entry.target,entry.task,entry.surface);
+        }
+    }
+}
+unsafe fn shell_close_poll() {
+    let tick = sex_pdx::get_ticks();
+    for entry in APP_CUSTODY.iter_mut().flatten() {
+        if !entry.close_due(tick) { continue; }
+        let Some(slot) = entry.close_slot() else { continue; };
+        // Even successful enqueue can be consumed by an app's nested wait.
+        // Keep retry ownership until attested death, rate-limited by ticks.
+        entry.attempted_close(tick);
+        let accepted = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE,
+            entry.target as u64, entry.task as u64, 0).is_ok();
+        sex_pdx::serial_record!("[shell.app.close.send] target={} task={} slot={} tick={} accepted={}",entry.target,entry.task,slot,tick,accepted as u8);
+    }
+}
+unsafe fn shell_request_app_close(sid: u64) {
+    if let Some(entry) = APP_CUSTODY.iter_mut().flatten().find(|e|e.owns_surface(sid)) {
+        if entry.request_close() {
+            sex_pdx::serial_record!("[shell.app.close.request] target={} task={} surface={}",entry.target,entry.task,sid);
+        }
+    }
+    shell_close_poll();
+}
+unsafe fn shell_lifecycle_poll() {
+    for i in 0..APP_CUSTODY.len() {
+        let Some(mut entry) = APP_CUSTODY[i] else { continue; };
+        if !entry.pending || entry.acked { continue; }
+        if !entry.dead {
+            let Ok(info) = sex_pdx::app_lifecycle::info(entry.slot) else { continue; };
+            if !entry.attest(info.target_pd, info.task_id, info.required_mask) { continue; }
+            // Publish the permanent fence before touching visual state.
+            APP_CUSTODY[i] = Some(entry);
+        }
+        if !entry.retired {
+            let mut removed = shell_retire_app_surface(entry.surface);
+            if let Some(alias) = entry.shell_surface() { removed += shell_retire_app_surface(alias); }
+            entry.retired = true;
+            entry.bounds = None;
+            APP_CUSTODY[i] = Some(entry);
+            sex_pdx::serial_record!("[shell.app.cleanup] target={} task={} surface={} tabs={} focus={} retired=1", entry.target, entry.task, entry.surface, removed, FOCUSED_SURFACE_ID);
+        }
+        if sex_pdx::app_lifecycle::ack(entry.slot, entry.task).is_ok() {
+            entry.finish_ack();
+            sex_pdx::serial_record!("[shell.app.cleanup.ack] target={} task={} surface={} ok=1", entry.target, entry.task, entry.surface);
+        }
+        APP_CUSTODY[i] = Some(entry);
+    }
+}
+unsafe fn shell_retire_app_surface(sid: u64) -> usize {
+    let mut removed = 0;
+    for slot in FRAMES.iter_mut() {
+        let Some(frame) = slot.as_mut() else { continue; };
+        if !frame.tabs.iter().flatten().any(|tab| tab.surface_id == sid) { continue; }
+        let fid = frame.frame_id;
+        let active_sid = frame.tabs.get(frame.active_tab as usize).and_then(|t| *t).map(|t| t.surface_id);
+        let mut next = [None; MAX_TABS_PER_FRAME as usize];
+        let mut count = 0;
+        for tab in frame.tabs.iter().flatten() {
+            if tab.surface_id == sid { removed += 1; } else { next[count] = Some(*tab); count += 1; }
+        }
+        frame.tabs = next; frame.tab_count = count as u8;
+        frame.active_tab = next.iter().position(|t| t.map(|v| v.surface_id) == active_sid).unwrap_or(0) as u8;
+        if HOVERED_FRAME_ID == fid { HOVERED_FRAME_ID = 0; HOVER_KIND = HOVER_NONE; HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE; }
+        if TAB_DRAG_PENDING_FRAME_ID == fid { TAB_DRAG_PENDING_FRAME_ID = 0; DRAG_PENDING_ACTIVE = false; }
+        if matches!(INTERACTION, InteractionState::TabDragging { frame_id, .. } if frame_id == fid) { INTERACTION = InteractionState::Idle; }
+        if count == 0 { *slot = None; }
+    }
+    if DRAG_PENDING_TARGET == sid { DRAG_PENDING_TARGET = 0; DRAG_PENDING_ACTIVE = false; DRAG_PENDING_KIND = 0; }
+    if matches!(INTERACTION, InteractionState::Dragging {surface_id, ..} | InteractionState::Resizing {surface_id, ..} if surface_id == sid)
+        || (matches!(INTERACTION, InteractionState::ClickPending) && !DRAG_PENDING_ACTIVE) { INTERACTION = InteractionState::Idle; }
+    for grant in COLLAR_GRANTS.iter_mut() { if grant.map_or(false, |g| g.subject_id == sid) { *grant = None; } }
+    WINDOWS.retain(|w| w.desc.window_id != sid);
+    if lifecycle_state(sid).is_some() {
+        set_lifecycle_state(sid, LifecycleState::Closing);
+        set_lifecycle_state(sid, LifecycleState::Tombstoned);
+        set_lifecycle_state(sid, LifecycleState::Destroyed);
+    }
+    if FOCUSED_SURFACE_ID == sid {
+        try_set_focus(0);
+        for frame in FRAMES.iter().flatten() {
+            if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+            if let Some(tab) = frame.tabs[frame.active_tab as usize] {
+                if try_set_focus(tab.surface_id) { break; }
+            }
+        }
+    }
+    sync_focus_ref();
+    send_silkbar_phase2_update(UpdateKind::SetActiveApp as u32, FOCUSED_SURFACE_ID, 0);
+    tile_active_scene_frames();
+    snap_capture_layout();
+    emit_snapshot();
+    removed
+}
+
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
 pub const OP_REGISTER_WM: u64 = 0xF5;
 static CAP_READY_DISPLAY: AtomicBool = AtomicBool::new(false);
-static DEFER_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 static EDGE_SEND_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 
 // Sexstore K/V opcodes (local copies to avoid sex-pdx ABI hash update).
@@ -4236,7 +4360,7 @@ unsafe fn maybe_run_linen_nonblocking_open_proof() {
     // Simulates OP_LINEN_OPEN_INTENT dispatch: send intent, skip sync reply.
     if linen_object_count() > 0 {
         if let Some(obj) = LINEN_OBJECTS[0] {
-            pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_OPEN_INTENT, obj.object_id, 0u64, 0);
+            linen_queue_open(obj.object_id, 0);
             serial_println!("[linen.open_intent.send] id={} idx=0", obj.object_id);
             serial_println!("[linen.sync_reply.skip] path=OP_LINEN_OPEN_INTENT reason=fire_and_forget");
             open_linen_object_in_quil(obj.object_id);
@@ -4936,112 +5060,45 @@ unsafe fn linen_selected_object_accent() -> u32 {
 ///   2: selected row highlight (full-width bright accent)
 ///   3-7: per-row left accent bars (5px wide, kind-colored)
 unsafe fn linen_render_object_list() {
-    // Get current Linen surface geometry from tracked vars.
-    let w = SURFACE_200_W;
-    let h = SURFACE_200_H;
-    if w == 0 || h == 0 { return; }
-
-    serial_println!("[linen.object_list.render] w={} h={}", w, h);
-
-    // Determine header color based on currently selected object's kind.
-    let header_color = linen_selected_object_accent();
-    serial_println!("[linen.selection_visual.header] object_id={} color={:#010x}",
-        SELECTED_LINEN_OBJECT_ID, header_color);
-
-    // Draw header bar at top of surface using selection accent color (rect_index=0).
-    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
-        0u64,  // position (0,0) — top-left corner
-        ((header_color as u64) << 32)
-            | ((LINEN_LIST_HEADER_H as u64) << 16)
-            | w as u64);
-
-    let count = linen_object_count();
-
-    // ── List background (rect_index=1) ───────────────────────────────────────
-    // Single neutral rect behind all rows. Dark slate provides contrast for
-    // accent bars and selected row highlight.
-    let list_bg_h = LINEN_LIST_ACCENT_BARS as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP) - LINEN_LIST_ROW_GAP;
-    let list_bg_y = LINEN_LIST_HEADER_H;
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
-        (list_bg_y as u64) << 32 | 0u64,
-        (1u64 << 56)
-            | ((LINEN_LIST_BG_COLOR as u64) << 32)
-            | ((list_bg_h as u64) << 16)
-            | w as u64);
-    serial_println!("[linen.bg_rect] y={} h={}", list_bg_y, list_bg_h);
-
-    // ── Emit row markers and accent bars (rect_indices 3-7) ──────────────────
-    // Track selected row position for the highlight rect (rect_index=2).
-    let mut rows_emitted: u8 = 0;
-    let mut selected_row_pos: Option<u32> = None;
-    for i in 0..LINEN_MAX_OBJECTS {
-        if let Some(obj) = LINEN_OBJECTS[i] {
-            if rows_emitted >= LINEN_LIST_MAX_ROWS {
-                serial_println!("[linen.object_list.skip] id={} reason=max_rows", obj.object_id);
-                continue;
-            }
-            let kind_name = linen_object_kind_name(obj.kind);
-            let state_name = linen_object_state_name(obj.state);
-            let is_selected = obj.object_id == SELECTED_LINEN_OBJECT_ID;
-            let selected_flag = if is_selected { "true" } else { "false" };
-            if obj.name_len > 0 {
-                let n = obj.name_len as usize;
-                let name_str = core::str::from_utf8(&obj.name[..n]).unwrap_or("[bad_utf8]");
-                serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
-                    obj.object_id, kind_name, state_name, name_str, selected_flag);
-            } else {
-                serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
-                    obj.object_id, kind_name, state_name, obj.display_name, selected_flag);
-            }
-
-            // Track selected row position for later highlight rect.
-            let row_y = LINEN_LIST_HEADER_H
-                + rows_emitted as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP);
-            if is_selected {
-                selected_row_pos = Some(row_y);
-            }
-
-            // Left accent bar (rect_index = 3 + rows_emitted, max 5 rows).
-            if rows_emitted < LINEN_LIST_ACCENT_BARS {
-                let accent_index = (rows_emitted as u64 + 3) & 0x7; // 3,4,5,6,7
-                let accent_color = if is_selected { header_color } else { linen_kind_color(obj.kind) };
-                pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
-                    (row_y as u64) << 32 | 0u64,
-                    (accent_index << 56)
-                        | ((accent_color as u64) << 32)
-                        | ((LINEN_LIST_ROW_H as u64) << 16)
-                        | LINEN_ACCENT_BAR_W as u64);
-                serial_println!("[linen.row_visual.accent] index={} id={} kind={} color={:#010x} selected={}",
-                    accent_index, obj.object_id, kind_name, accent_color, selected_flag);
-            } else {
-                serial_println!("[linen.row_visual.skip] id={} reason=accent_budget", obj.object_id);
-            }
-
-            rows_emitted += 1;
-        }
+    set_frame_top_bar(LINEN_FRAME_ID,true);
+    send_frame_tab_info(LINEN_FRAME_ID);
+    // Build exclusively from the last complete publication; backend staging is
+    // never visible here, including while HID changes selection during refresh.
+    let mut items = [desktop_content::Item { id:0, name:b"" }; LINEN_MAX_OBJECTS];
+    let mut count=0;
+    for obj in LINEN_OBJECTS.iter().flatten() {
+        let name = if obj.name_len != 0 { &obj.name[..(obj.name_len as usize).min(obj.name.len())] }
+            else { obj.display_name.as_bytes() };
+        items[count]=desktop_content::Item{id:obj.object_id,name}; count+=1;
     }
-
-    // ── Selected row highlight (rect_index=2) ───────────────────────────────
-    // Full-width bright accent bar at the selected row's y position.
-    match selected_row_pos {
-        Some(sel_y) => {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
-                (sel_y as u64) << 32 | 0u64,
-                (2u64 << 56)
-                    | ((header_color as u64) << 32)
-                    | ((LINEN_LIST_ROW_H as u64) << 16)
-                    | w as u64);
-            serial_println!("[linen.row_visual.selected] y={} color={:#010x}", sel_y, header_color);
-        }
-        None => {
-            serial_println!("[linen.row.reject] id={} reason=not_found_in_visible_rows",
-                SELECTED_LINEN_OBJECT_ID);
-        }
+    let view=desktop_content::list(&items[..count],SELECTED_LINEN_OBJECT_ID,SURFACE_200_W,SURFACE_200_H);
+    // Fixed 8-rect budget: header, background, selection, five kind accents.
+    for index in 0..8 { pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_LINEN,0,(index as u64)<<56); }
+    let w=SURFACE_200_W as u64;
+    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_LINEN,28u64<<32,
+        (0x0022384Au64<<32)|((view.row_y.saturating_sub(28) as u64)<<16)|w);
+    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_LINEN,(view.row_y as u64)<<32,
+        (1u64<<56)|(0x000C1420u64<<32)|(((view.rows as u32*view.row_h)as u64)<<16)|w);
+    if let Some(row)=view.selected_row {
+        let y=view.row_y+row as u32*view.row_h;
+        pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_LINEN,(y as u64)<<32,
+            (2u64<<56)|(0x002A4960u64<<32)|((view.row_h as u64)<<16)|w);
     }
-
-    serial_println!("[linen.object_select.current] id={}", SELECTED_LINEN_OBJECT_ID);
-    serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
+    for row in 0..view.rows {
+        let y=view.row_y+row as u32*view.row_h;
+        pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_LINEN,(y as u64)<<32,
+            (((row+3)as u64)<<56)|(0x005ED9C3u64<<32)|((view.row_h as u64)<<16)|3);
+    }
+    linen_queue_text(&view.text[..view.len],0x00F0F8FF,
+        linen_text_delivery::Metadata { count, first:view.first, rows:view.rows, selected:SELECTED_LINEN_OBJECT_ID });
+    sex_pdx::serial_record!("[linen.list.text] x={} y={} w={} h={} scale={} text_color=0xf0f8ff rows={} selected={} row_y={} row_h={} first={} committed_view=1",SURFACE_200_X,SURFACE_200_Y,SURFACE_200_W,SURFACE_200_H,if SURFACE_200_W>=256 {2}else{1},view.rows,SELECTED_LINEN_OBJECT_ID,view.row_y,view.row_h,view.first);
+    for row in 0..view.rows {
+        let line=view.text[..view.len].split(|b|*b==b'\n').nth(2+row*2).unwrap_or(b"");
+        let label=core::str::from_utf8(line.get(2..).unwrap_or(b"")).unwrap_or("?");
+        sex_pdx::serial_record!("[linen.list.label] id={} row={} text={}",items[view.first+row].id,row,label);
+    }
+    sex_pdx::serial_record!("[linen.object_select.current] id={}",SELECTED_LINEN_OBJECT_ID);
+    serial_println!("[linen.object_list.done] count={} rows={}",count,view.rows);
 }
 
 /// V1 static browser UI for surface 200.
@@ -5101,167 +5158,192 @@ unsafe fn linen_render_static_ui() {
                 | LINEN_ACCENT_BAR_W as u64);
     }
 
-    // Clear text buf then write title + row labels
-    pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_LINEN, 0, 0);
-
-    let title_color: u64 = 0x00_F0F8FF;
-    pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_LINEN,
-        u64::from_le_bytes(*b"LINEN\0\0\0"),
-        0u64 | (5u64 << 8) | (title_color << 32));
-
-    let label_color: u64 = 0x00_B8CCE0;
-    for i in 0..LINEN_UI_ROW_COUNT {
-        let byte_offset = ((i + 1) * 20) as u64;
-        pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_LINEN,
-            u64::from_le_bytes(row_labels[i]),
-            byte_offset | (8u64 << 8) | (label_color << 32));
-    }
+    // Preserve the legacy sparse twenty-column layout, but deliver through
+    // the same outbox so fallback and object-list text cannot interleave.
+    let mut text = [0u8; (LINEN_UI_ROW_COUNT + 1) * 20];
+    text[..5].copy_from_slice(b"LINEN");
+    for i in 0..LINEN_UI_ROW_COUNT { text[(i+1)*20..(i+1)*20+8].copy_from_slice(&row_labels[i]); }
+    linen_queue_text(&text[..LINEN_UI_ROW_COUNT*20+8],0x00B8CCE0,
+        linen_text_delivery::Metadata { count:0, first:0, rows:LINEN_UI_ROW_COUNT, selected:sel as u64 });
 
     serial_println!("[linen.ui.render] rows={} selected={}", LINEN_UI_ROW_COUNT, sel);
 }
 
-/// Spin-wait for a type_id==0x1 reply in shell's mailbox.
-/// Processes OP_HID_EVENT cursor movement in-line so input is not
-/// starved during blocking Linen fetch.  All other non-reply messages
-/// are acked to unblock the sender.
-unsafe fn linen_sync_reply() -> u64 {
-    loop {
-        let msg = pdx_listen_raw(0);
-        if msg.type_id == 0x1 {
-            return msg.arg0;
-        }
-        // Process HID cursor events in-line so mouse doesn't freeze
-        // while waiting for Linen to reply.
-        if msg.type_id == OP_HID_EVENT {
-            handle_hid_event(msg.arg2, msg.arg0, msg.arg1);
-            continue;
-        }
-        // Unblock sender for non-HID non-reply messages.
+static mut LINEN_REPAINT_AFTER_CREATE: bool = false;
+static mut DESKTOP_STATES: linen_text_delivery::DesktopStates = linen_text_delivery::DesktopStates::new();
+/// Preserve the syscall's real status while retaining only bounded desktop
+/// state operations that encountered display backpressure.
+fn pdx_call(slot:u64, opcode:u64, arg0:u64, arg1:u64, arg2:u64)->(u64,u64) {
+    let result=raw_pdx_call(slot,opcode,arg0,arg1,arg2);
+    if slot==SLOT_DISPLAY && matches!(opcode,0xEC|0xEE|0xFD) && linen_text_delivery::DesktopStates::tracks(arg0) {
+        let admission=match result.0 {0=>linen_text_delivery::Admission::Accepted,
+            sex_pdx::ERR_SERVICE_NOT_READY=>linen_text_delivery::Admission::Full,
+            error=>linen_text_delivery::Admission::Rejected(error)};
         unsafe {
-            static mut LINEN_SYNC_NONREPLY_BUDGET: u32 = 8;
-            let n = &mut LINEN_SYNC_NONREPLY_BUDGET;
-            if *n > 0 {
-                *n -= 1;
-                serial_println!(
-                    "[silk-shell.linen_sync.nonreply] type={:#x} caller={}",
-                    msg.type_id, msg.caller_pd
-                );
+            DESKTOP_STATES.observe(linen_text_delivery::Operation {opcode,surface:arg0,packed:arg1,control:arg2},admission);
+            if arg0==SURFACE_ID_LINEN && opcode==0xEC && !matches!(admission,linen_text_delivery::Admission::Rejected(_)) {LINEN_REPAINT_AFTER_CREATE=true;}
+        }
+    }
+    result
+}
+unsafe fn desktop_state_validate(mut op:linen_text_delivery::Operation)->Option<linen_text_delivery::Operation> {
+    if op.opcode==0xEE {return Some(op);}
+    if !surface_is_alive(op.surface) || APP_CUSTODY.iter().flatten().any(|e|
+        (e.dead || e.close_pending) && e.owns_surface(op.surface)) {return None;}
+    if matches!(lifecycle_state(op.surface),Some(LifecycleState::Hidden | LifecycleState::Minimized |
+        LifecycleState::Closing | LifecycleState::Tombstoned | LifecycleState::Destroyed)) {return None;}
+    if frame_for_surface(op.surface).map_or(false,|frame|frame_is_minimized(frame)) {return None;}
+    if op.opcode==0xFD {
+        if let Some(frame)=frame_for_surface(op.surface) {return frame_chrome_operation(frame);}
+        // Boot chrome may precede lazy shell-frame metadata. The outbox keeps
+        // the exact observed FD payload through a failed EC; never send the
+        // zero placeholder when no real metadata has existed.
+        return if op.packed!=0 || op.control!=0 {Some(op)} else {None};
+    }
+    let (x,y,w,h)=get_surface_bounds(op.surface)?;
+    if w==0 || h==0 {return None;}
+    op.packed=((y as u32 as u64)<<32)|(x as u32 as u64);op.control=((h as u64)<<32)|w as u64;
+    Some(op)
+}
+unsafe fn desktop_state_poll() {
+    DESKTOP_STATES.poll(4,|op|desktop_state_validate(op),|op| {
+        let(status,_)=raw_pdx_call(SLOT_DISPLAY,op.opcode,op.surface,op.packed,op.control);
+        match status {
+            0=>{
+                sex_pdx::serial_record!("[shell.desktop.state.admitted] sid={} opcode={:#x} retry=1",op.surface,op.opcode);
+                linen_text_delivery::Admission::Accepted
+            }
+            sex_pdx::ERR_SERVICE_NOT_READY=>linen_text_delivery::Admission::Full,
+            error=>{
+                sex_pdx::serial_record!("[shell.desktop.state.rejected] sid={} status={:#x}",op.surface,error);
+                linen_text_delivery::Admission::Rejected(error)
             }
         }
-        pdx_reply(msg.caller_pd, 0);
+    });
+}
+
+static mut LINEN_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::new(SURFACE_ID_LINEN);
+static mut PALETTE_VISIBILITY: linen_text_delivery::LatestOperation = linen_text_delivery::LatestOperation::new();
+unsafe fn linen_queue_text(text: &[u8], color: u32, metadata: linen_text_delivery::Metadata) {
+    assert!(LINEN_TEXT.queue(text,color,metadata), "Linen text exceeds fixed buffer");
+}
+fn display_admit(op: linen_text_delivery::Operation) -> linen_text_delivery::Admission {
+    let (status,_) = pdx_call(SLOT_DISPLAY,op.opcode,op.surface,op.packed,op.control);
+    match status {
+        0 => linen_text_delivery::Admission::Accepted,
+        sex_pdx::ERR_SERVICE_NOT_READY => linen_text_delivery::Admission::Full,
+        error => linen_text_delivery::Admission::Rejected(error),
+    }
+}
+unsafe fn linen_text_can_progress() -> bool {
+    (LINEN_TEXT.pending() || LINEN_REPAINT_AFTER_CREATE) && desktop_state_validate(linen_text_delivery::Operation {
+        opcode:0xEC,surface:SURFACE_ID_LINEN,packed:0,control:0 }).is_some()
+}
+unsafe fn linen_text_poll() {
+    // No admission receipt for text directed at an absent/minimized surface.
+    // A restored slot has lost its payload; repaint the latest published view
+    // only after create AND current chrome have both entered the display FIFO.
+    if DESKTOP_STATES.pending_surface(SURFACE_ID_LINEN) || desktop_state_validate(linen_text_delivery::Operation {
+        opcode:0xEC,surface:SURFACE_ID_LINEN,packed:0,control:0 }).is_none() {return;}
+    if LINEN_REPAINT_AFTER_CREATE {
+        LINEN_REPAINT_AFTER_CREATE=false;
+        LINEN_TEXT.cancel();
+        linen_paint_surface_fast();
+        if DESKTOP_STATES.pending_surface(SURFACE_ID_LINEN) {return;}
+    }
+    match LINEN_TEXT.poll(4,display_admit) {
+        linen_text_delivery::Poll::Complete(receipt) => {
+            let m=receipt.metadata;
+            sex_pdx::serial_record!("[linen.text.present] count={} first={} rows={} selected={} bytes={} committed_view=1 admitted=1",m.count,m.first,m.rows,m.selected,receipt.bytes);
+        }
+        linen_text_delivery::Poll::Rejected(error) => {
+            sex_pdx::serial_record!("[linen.text.rejected] status={:#x} admitted=0",error);
+        }
+        _ => {}
+    }
+}
+unsafe fn palette_visibility_poll() {
+    match PALETTE_VISIBILITY.poll(display_admit) {
+        linen_text_delivery::LatestPoll::Applied(op) => {
+            if op.opcode==0xEC && COMMAND_PALETTE_OPEN {
+                if let Some(chrome)=frame_chrome_operation(COMMAND_PALETTE_FRAME_ID) {PALETTE_VISIBILITY.set(chrome);}
+            } else if op.opcode==0xFD && COMMAND_PALETTE_OPEN { palette_render_list(); }
+            sex_pdx::serial_record!("[shell.palette.visibility] open={} admitted=1",(op.opcode!=0xEE) as u8);
+        }
+        linen_text_delivery::LatestPoll::Rejected(error) => {
+            sex_pdx::serial_record!("[shell.palette.visibility.rejected] status={:#x}",error);
+        }
+        _ => {}
     }
 }
 
-/// Sanitize a byte to printable ASCII. Returns '?' for non-printable bytes.
-fn sanitize_ascii(b: u8) -> u8 {
-    if b >= 0x20 && b <= 0x7E { b } else { b'?' }
-}
+static mut LINEN_ASYNC: linen_async::Snapshot = linen_async::Snapshot::new();
 
-/// Fetch the public object snapshot from Linen PD and populate LINEN_OBJECTS.
-/// Iterates all 16 session slots; empty slots (reply=0) are skipped.
-/// For each entry, fetches actual name bytes via OP_LINEN_GET_PUBLIC_NAME (0x45)
-/// in 8-byte chunks, sanitizes to printable ASCII, stores in LinenObject.name.
-/// Replaces seed objects with real session data from Linen's SESSION.
-/// Called once on first linen_paint_surface() invocation.
+/// Queue refresh; transport is serviced once per main-loop pass.
 unsafe fn linen_fetch_remote_snapshot() {
-    serial_println!("[linen.remote.snapshot.begin]");
-    for slot in LINEN_OBJECTS.iter_mut() {
-        *slot = None;
+    if !LINEN_ASYNC.busy() {
+        LINEN_ASYNC.refresh(false);
+        LINEN_REMOTE_FETCHED = true;
+        sex_pdx::serial_record!("[linen.remote.snapshot.begin] async=1");
     }
-    SELECTED_LINEN_OBJECT_ID = 0;
-    let mut write_idx = 0usize;
-    let mut slot_idx = 0u64;
-    while slot_idx < 16 && write_idx < LINEN_MAX_OBJECTS {
-        pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_GET_PUBLIC_SNAPSHOT, slot_idx, 0, 0);
-        let packed = linen_sync_reply();
-        if packed != 0 {
-            let object_id = packed & 0xFFFF_FFFF;
-            let kind_byte = ((packed >> 32) & 0xFF) as u8;
-            let name_len_raw = ((packed >> 40) & 0xFF) as u8;
-            let name_len = (name_len_raw as usize).min(24) as u8;
-
-            // Fetch name bytes via OP_LINEN_GET_PUBLIC_NAME in 8-byte chunks.
-            let mut name = [0u8; 24];
-            let mut fetched_len = 0u8;
-            let mut off = 0u64;
-            let mut fetch_ok = true;
-            while off < name_len as u64 {
-                pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_GET_PUBLIC_NAME, object_id, off, 8);
-                let chunk = linen_sync_reply();
-                if chunk == 0 {
-                    break; // EOF
-                }
-                if (chunk as i64) < 0 {
-                    serial_println!("[linen.remote.name.err] id={} err={}", object_id, chunk as i64);
-                    fetch_ok = false;
-                    break;
-                }
-                let bytes = chunk.to_le_bytes();
-                let remaining = name_len as u64 - off;
-                let take = remaining.min(8) as usize;
-                for i in 0..take {
-                    name[off as usize + i] = sanitize_ascii(bytes[i]);
-                }
-                fetched_len = (off as u8).saturating_add(take as u8);
-                off += 8;
-            }
-
-            if fetch_ok && fetched_len > 0 {
-                serial_println!("[linen.remote.name.ok] id={} len={}", object_id, fetched_len);
-            }
-
-            let kind = match kind_byte {
-                0 => LinenObjectKind::Document,
-                1 => LinenObjectKind::Project,
-                _ => LinenObjectKind::Document,
-            };
-            LINEN_OBJECTS[write_idx] = Some(LinenObject {
-                object_id,
-                kind,
-                state: LinenObjectState::Saved,
-                parent_id: 0,
-                project_id: 0,
-                grant_ref: 0,
-                linked_surface_id: 0,
-                flags: 0,
-                display_name: "[linen.remote]",
-                name,
-                name_len: fetched_len,
-                disk_path: ((packed >> 48) & 0xFF) as u8,
-            });
-            serial_println!("[linen.remote.entry] slot={} id={} kind={} name_len={}",
-                slot_idx, object_id, kind_byte, fetched_len);
-            write_idx += 1;
+}
+unsafe fn linen_queue_open(object: u64, choice: u64) {
+    let queued = LINEN_ASYNC.queue_open(object, choice);
+    sex_pdx::serial_record!("[linen.open.queued] id={} accepted={}", object, queued as u8);
+}
+unsafe fn linen_async_poll() {
+    if let Some(request) = LINEN_ASYNC.request() {
+        if pdx_call_checked(sex_pdx::SLOT_LINEN, request.opcode, request.args[0], request.args[1], request.args[2]).is_ok() {
+            LINEN_ASYNC.sent();
         }
-        slot_idx += 1;
     }
-    serial_println!("[linen.remote.snapshot.ok] count={}", write_idx);
-    LINEN_REMOTE_REAL = write_idx > 0;
-    // LINEN_QUIL_OPEN_DATA_V1: linen PD has no session objects at plain boot
-    // (its object-creating proofs are env-gated), so an empty snapshot used to
-    // leave LINEN_OBJECTS wiped — killing the entire open→link→bell/mesh chain
-    // AND invalidating the 12 boot collar grants (which reference seed ids
-    // 1-6). Restore the seed table when the remote session is empty.
-    if write_idx == 0 {
-        for (i, obj) in LINEN_SEED_OBJECTS.iter().enumerate() {
-            if i < LINEN_MAX_OBJECTS {
-                LINEN_OBJECTS[i] = Some(*obj);
+}
+/// A complete staged table is published once, retaining the latest HID selection.
+unsafe fn linen_async_reply(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != 1 { return false; }
+    if msg.caller_pd != 7 {
+        if LINEN_ASYNC.busy() { sex_pdx::serial_record!("[linen.snapshot.foreign_reply] caller={} ignored=1",msg.caller_pd); }
+        return false;
+    }
+    match LINEN_ASYNC.reply(msg.caller_pd, msg.type_id, msg.arg0) {
+        linen_async::Reply::Published => {
+            let mut next = [None; LINEN_MAX_OBJECTS];
+            for (i, row) in LINEN_ASYNC.objects.iter().enumerate() {
+                if let Some(o) = row {
+                    next[i] = Some(LinenObject { object_id:o.id,
+                        kind:if o.kind==1 {LinenObjectKind::Project}else{LinenObjectKind::Document},
+                        state:LinenObjectState::Saved,parent_id:0,project_id:0,grant_ref:0,
+                        linked_surface_id:0,flags:0,display_name:"[linen.remote]",
+                        name:o.name,name_len:o.len,disk_path:o.disk });
+                    sex_pdx::serial_record!("[linen.remote.entry] slot={} id={} kind={} name_len={}", i,o.id,o.kind,o.len);
+                }
             }
+            LINEN_REMOTE_REAL = LINEN_ASYNC.count != 0;
+            if !LINEN_REMOTE_REAL {
+                for (i,o) in LINEN_SEED_OBJECTS.iter().enumerate().take(LINEN_MAX_OBJECTS) { next[i]=Some(*o); }
+            }
+            let previous_selection = SELECTED_LINEN_OBJECT_ID;
+            LINEN_OBJECTS = next;
+            LINEN_REMOTE_FETCHED = true;
+            if !LINEN_OBJECTS.iter().flatten().any(|o|o.object_id==previous_selection) { linen_select_first_valid_object(); }
+            sex_pdx::serial_record!("[linen.remote.snapshot.ok] count={} unique=1 complete=1 selection_preserved={}", LINEN_ASYNC.count, (SELECTED_LINEN_OBJECT_ID==previous_selection && previous_selection!=0) as u8);
+            linen_paint_surface_fast();
         }
-        serial_println!("[linen.remote.snapshot.fallback] reason=empty_session seeds={}",
-            LINEN_SEED_OBJECTS.len());
+        linen_async::Reply::Rejected => {
+            LINEN_REMOTE_FETCHED = false;
+            sex_pdx::serial_record!("[linen.remote.snapshot.rejected] preserve_view=1 async=1");
+        }
+        linen_async::Reply::OpenComplete(status) => { sex_pdx::serial_record!("[linen.open.complete] status={}",status); }
+        _ => {}
     }
-    linen_select_first_valid_object();
+    true
 }
 
-/// Paint Linen surface 200: fetch remote snapshot on first call, then render.
-/// LINEN_DISK_OBJECTS_V1: while the last snapshot found no real session
-/// entries (seed fallback active), re-fetch on each paint — linen publishes
-/// its disk-backed objects asynchronously after boot, so an early first
-/// snapshot can race it. Bounded by paint events; stops once real entries
-/// arrive.
+/// Paint the current complete view and schedule a bounded asynchronous refresh.
+/// An empty initial session can retry on a later paint event.
 unsafe fn linen_paint_surface() {
-    if !LINEN_REMOTE_FETCHED || !LINEN_REMOTE_REAL {
+    // Startup FIFO dispatch precedes initiating storage refreshes.
+    if !startup_messages_pending() && (!LINEN_REMOTE_FETCHED || !LINEN_REMOTE_REAL) {
         LINEN_REMOTE_FETCHED = true;
         linen_fetch_remote_snapshot();
     }
@@ -8017,6 +8099,7 @@ unsafe fn tile_active_scene_frames() {
         }
 
         // Update local shadow state.
+        update_local_geometry(sid, rx, ry, rw, rh);
         match sid {
             SURFACE_ID_APP => {
                 if let Some(w) = WINDOWS.get_mut(1) {
@@ -10537,6 +10620,8 @@ fn emit_snapshot() {
 /// Used by chrome hit-testing to compute rim/tab-strip regions.
 /// Duplicates the bounds match from point_in_surface to avoid refactoring it.
 unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
+    if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(sid)) {return None;}
+    if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid) { return if e.dead { None } else { e.bounds }; }
     match sid {
         SURFACE_ID_APP    => WINDOWS.get(1).map(|w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
         SURFACE_ID_STATIC => Some((SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H)),
@@ -10563,6 +10648,9 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
         if !surface_is_alive(sid) {
             serial_println!("[shell.surface.dead.skip] id={} reason=inactive", sid);
             return false;
+        }
+        if APP_CUSTODY.iter().flatten().any(|e| e.surface == sid) {
+            return get_surface_bounds(sid).map_or(false, |(x,y,w,h)| px >= x && py >= y && (px as i64) < x as i64 + w as i64 && (py as i64) < y as i64 + h as i64);
         }
         let (x, y, w, h) = match sid {
             SURFACE_ID_APP    => WINDOWS.get(1).map_or((0,0,0,0), |w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
@@ -10597,6 +10685,8 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
 
 /// Returns true if the surface is alive (not destroyed).
 fn surface_is_alive(sid: u64) -> bool {
+    unsafe { if APP_CUSTODY.iter().flatten().any(|e| (e.dead || e.close_pending) && e.owns_surface(sid)) { return false; } }
+    unsafe { if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid) { return !e.dead && e.bounds.is_some() && surface_is_lifecycle_live(sid); } }
     match sid {
         SURFACE_ID_APP      => unsafe { SURFACE_100_ALIVE },
         SURFACE_ID_STATIC   => unsafe { SURFACE_101_ALIVE },
@@ -10980,6 +11070,8 @@ fn is_shell_surface(sid: u64) -> bool {
 /// OS-owned surfaces (cursor, panels) are intentionally excluded —
 /// they are rendered and toggled by the shell but never take focus.
 fn is_focusable_surface(sid: u64) -> bool {
+    unsafe { if APP_CUSTODY.iter().flatten().any(|e| (e.dead || e.close_pending) && e.owns_surface(sid)) { return false; } }
+    unsafe { if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid) { return !e.dead && e.bounds.is_some(); } }
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
     || sid == SURFACE_ID_LINEN  // client surface managed as WM placeholder
@@ -10991,6 +11083,7 @@ fn is_focusable_surface(sid: u64) -> bool {
 /// Return true if the given surface belongs to the active scene.
 /// Surfaces with no frame association (panels, cursor) always pass.
 unsafe fn surface_in_active_scene(sid: u64) -> bool {
+    if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(sid)) {return false;}
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             for tab in frame.tabs.iter() {
@@ -11002,6 +11095,7 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
             }
         }
     }
+    if APP_CUSTODY.iter().flatten().any(|e| e.owns_surface(sid)) { return false; }
     // Surface not found in any frame.
     // Panels (0x90-0x96) and cursor are always visible regardless of scene.
     // Frame-owned surfaces (Linen, Quil) are NOT visible without a frame.
@@ -12324,6 +12418,10 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
         }
     };
 
+    if !APP_CUSTODY.iter().flatten().any(|e| e.allows(caller_pd, manifest.surface_id, manifest.app_id)) {
+        serial_println!("[shell.app_surface.reject] reason=catalog_authority sid={} caller={}", manifest.surface_id, caller_pd);
+        return false;
+    }
     // Validate: non-zero surface_id
     if manifest.surface_id == 0 {
         serial_println!("[shell.app_surface.reject] reason=zero_surface_id caller={}", caller_pd);
@@ -12390,6 +12488,9 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
         normal_h: 400,
     });
 
+    if let Some(e) = APP_CUSTODY.iter_mut().flatten().find(|e| e.surface == manifest.surface_id) {
+        e.bounds = Some((200, 100, 600, 400));
+    }
     // Register lifecycle as Visible
     lifecycle_register(manifest.surface_id, LifecycleState::Visible);
 
@@ -12405,9 +12506,13 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     tile_active_scene_frames();
     try_set_focus(manifest.surface_id);
 
-    serial_println!("[shell.app_surface.accept] sid={} title_id={} frame={} caps={:#x} app_id={} caller={}",
+    sex_pdx::serial_record!("[shell.app_surface.accept] sid={} title_id={} frame={} caps={:#x} app_id={} caller={}",
         manifest.surface_id, manifest.title_id, frame_id,
         manifest.capabilities.bits(), manifest.app_id, caller_pd);
+    if let Some(entry) = APP_CUSTODY.iter_mut().flatten().find(|e|e.target==caller_pd && e.surface==manifest.surface_id) {
+        entry.registration_reply=true;
+    }
+    shell_registration_reply_poll();
     true
 }
 
@@ -12479,15 +12584,12 @@ unsafe fn ensure_linen_frame() -> Option<u32> {
 /// focus, and tile. If Linen is already visible in the active scene, focuses it.
 /// Returns true if Linen became visible/focused.
 unsafe fn open_linen_in_active_scene() -> bool {
-    // LINEN_LIVE_V1: every Linen open re-syncs with storage — fire the
-    // rescan (FIFO ring: linen serves it before our snapshot fetch) and
-    // force the next paint to re-fetch the snapshot.
-    pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_RESCAN_DISK, 0, 0, 0);
-    LINEN_REMOTE_FETCHED = false;
+    // Coalesce refreshes and consume the rescan acknowledgment before metadata.
+    // Input and lifecycle traffic continue through the ordinary dispatcher.
+    LINEN_ASYNC.refresh(true);
+    LINEN_REMOTE_FETCHED = true;
     serial_println!("[shell.linen.rescan.sent] ok=1");
-    // Re-fetch NOW (FIFO: linen serves the rescan before this fetch) so an
-    // already-visible Linen frame shows fresh entries without waiting for
-    // the next paint event.
+    // Paint the previous complete table immediately; completion repaints once.
     linen_paint_surface();
     // D1: duplicate guard — if Linen already visible in active scene, reject open.
     for f in FRAMES.iter() {
@@ -12648,6 +12750,7 @@ const QUIL_PLACEHOLDER_COLOR: u32 = 0x0018202E;
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
 /// Does NOT change visibility or tiling — caller decides that.
 unsafe fn ensure_quil_frame() -> Option<u32> {
+    if APP_CUSTODY.iter().flatten().any(|e| (e.dead || e.close_pending) && e.owns_surface(201)) { return None; }
     // Check if Quil frame already exists.
     for f in FRAMES.iter() {
         if let Some(frame) = f {
@@ -13535,6 +13638,7 @@ static mut COMMAND_PALETTE_SELECTED: u8 = 0;
 /// Ensure a ShellFrame exists for Spindle in an empty FRAMES slot, assigned to
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
 unsafe fn ensure_spindle_frame() -> Option<u32> {
+    if APP_CUSTODY.iter().flatten().any(|e| (e.dead || e.close_pending) && e.owns_surface(153)) { return None; }
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             if frame.frame_id == SPINDLE_FRAME_ID {
@@ -15283,11 +15387,11 @@ unsafe fn palette_render_list() {
 /// Render and call the 0xEC upsert for the command palette surface geometry.
 unsafe fn palette_show() {
     if ensure_command_palette_frame().is_none() { return; }
-    // Position the palette via 0xEC geometry upsert.
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_COMMAND_PALETTE,
-        ((COMMAND_PALETTE_BOOT_Y as u64) << 32) | (COMMAND_PALETTE_BOOT_X as u64 as u64),
-        ((COMMAND_PALETTE_BOOT_H as u64) << 32) | COMMAND_PALETTE_BOOT_W as u64);
-    palette_render_list();
+    set_frame_minimized(COMMAND_PALETTE_FRAME_ID,false);
+    set_lifecycle_state(SURFACE_ID_COMMAND_PALETTE,LifecycleState::Visible);
+    PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEC, surface:SURFACE_ID_COMMAND_PALETTE,
+        packed:((COMMAND_PALETTE_BOOT_Y as u64)<<32)|(COMMAND_PALETTE_BOOT_X as u32 as u64),
+        control:((COMMAND_PALETTE_BOOT_H as u64)<<32)|COMMAND_PALETTE_BOOT_W as u64 });
 }
 
 /// Toggle the command palette open/closed.
@@ -15299,12 +15403,10 @@ unsafe fn toggle_command_palette() -> bool {
         serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
         // Phase 2: palette closed → packed=0.
         unsafe { send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, 0, 0); }
-        if let Some(_) = bell_frame_id() { // use hide pattern
-            if minimize_frame(COMMAND_PALETTE_FRAME_ID) {
-                serial_println!("[command_palette.close]");
-                return true;
-            }
-        }
+        minimize_frame(COMMAND_PALETTE_FRAME_ID);
+        // Retain even when already minimized or no frame metadata remains.
+        PALETTE_VISIBILITY.set(linen_text_delivery::Operation {
+            opcode:0xEE, surface:SURFACE_ID_COMMAND_PALETTE, packed:0, control:0 });
         // If frame doesn't exist yet, just mark closed.
         serial_println!("[command_palette.close]");
         true
@@ -15343,8 +15445,7 @@ unsafe fn toggle_command_palette() -> bool {
             COMMAND_LIST.len()
         );
         for (idx, item) in COMMAND_LIST.iter().enumerate() {
-            serial_println!(
-                "[shell.palette.item] idx={} name={} action={}",
+            sex_pdx::serial_record!("[shell.palette.item] idx={} name={} action={}",
                 idx,
                 item.name,
                 item.command as u8
@@ -15382,7 +15483,7 @@ unsafe fn palette_select_next() {
     let old = COMMAND_PALETTE_SELECTED;
     let next = if COMMAND_PALETTE_SELECTED + 1 >= count { 0 } else { COMMAND_PALETTE_SELECTED + 1 };
     COMMAND_PALETTE_SELECTED = next;
-    serial_println!("[shell.palette.select] old={} new={}", old, next);
+    sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, next);
     serial_println!("[command_palette.select] index={}", next);
     serial_println!("[launcher.nav] old={} new={} count={}", old, next, count);
     palette_render_list();
@@ -15400,7 +15501,7 @@ unsafe fn palette_select_prev() {
     let old = COMMAND_PALETTE_SELECTED;
     let prev = if COMMAND_PALETTE_SELECTED == 0 { count - 1 } else { COMMAND_PALETTE_SELECTED - 1 };
     COMMAND_PALETTE_SELECTED = prev;
-    serial_println!("[shell.palette.select] old={} new={}", old, prev);
+    sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, prev);
     serial_println!("[command_palette.select] index={}", prev);
     serial_println!("[launcher.nav] old={} new={} count={}", old, prev, count);
     palette_render_list();
@@ -15452,7 +15553,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
 unsafe fn palette_execute_selected() -> bool {
     let idx = COMMAND_PALETTE_SELECTED as usize;
     if idx >= COMMAND_LIST.len() {
-        serial_println!("[shell.palette.exec] idx={} action=INVALID ok=0 reason=oob", idx);
+        sex_pdx::serial_record!("[shell.palette.exec] idx={} action=INVALID ok=0 reason=oob", idx);
         return false;
     }
     let cmd = COMMAND_LIST[idx].command;
@@ -15555,8 +15656,7 @@ unsafe fn palette_execute_selected() -> bool {
             access_handle_keyboard_action(SurfaceAction::AccessActivate)
         }
     };
-    serial_println!(
-        "[shell.palette.exec] idx={} action={} ok={} reason={}",
+    sex_pdx::serial_record!("[shell.palette.exec] idx={} action={} ok={} reason={}",
         idx,
         action_name,
         ok as u8,
@@ -15661,8 +15761,7 @@ unsafe fn maybe_run_command_palette_status_proof() {
             // Safe exec: select and execute.
             let old = COMMAND_PALETTE_SELECTED;
             COMMAND_PALETTE_SELECTED = cmd_idx as u8;
-            serial_println!(
-                "[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED
+            sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED
             );
             palette_render_list();
             let ok = palette_execute_selected();
@@ -15897,7 +15996,7 @@ unsafe fn maybe_run_command_palette_daily_proof() {
         let idx = COMMAND_PALETTE_DAILY_PROOF_IDX;
         let old = COMMAND_PALETTE_SELECTED;
         COMMAND_PALETTE_SELECTED = idx;
-        serial_println!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
         palette_render_list();
         let ok = palette_execute_selected();
         serial_println!(
@@ -18746,7 +18845,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
     for idx in 0..COMMAND_LIST.len() {
         let old = COMMAND_PALETTE_SELECTED;
         COMMAND_PALETTE_SELECTED = idx as u8;
-        serial_println!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
         palette_render_list();
 
         // FocusLinen block removed: linen_paint_surface_fast() is non-blocking.
@@ -18901,6 +19000,9 @@ unsafe fn selected_window_options_mask() -> u32 {
 /// OS-owned surfaces (linen, cursor, panels) and unknown surfaces cannot be closed.
 /// Disposable app surfaces (100-103) are always closeable for proof/testing.
 unsafe fn is_closeable_surface(surface_id: u64) -> bool {
+    if let Some(entry) = APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(surface_id)) {
+        return !entry.dead && !entry.close_pending;
+    }
     // Budgeted marker for close_allowed gate decision.
     static mut CLOSE_ALLOWED_GATE_BUDGET: u32 = 16;
     let result: bool;
@@ -18973,6 +19075,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
             _ => {}
         }
     }
+    shell_request_app_close(surface_id);
     // A5: Check drag before lifecycle transition. Cancel drag on target surface.
     if let InteractionState::Dragging { surface_id: drag_sid, .. } = INTERACTION {
         if drag_sid == surface_id {
@@ -19263,8 +19366,10 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     set_lifecycle_state(surface_id, LifecycleState::Minimized);
     // Hide surface on display (deactivate). Restore uses 0xEC to re-activate.
     // Same 0xEE opcode as close, but lifecycle state differs (Minimized vs Tombstoned).
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0);
-    serial_println!("[silk.lifecycle.minimize.hidden] sid={} frame={}", surface_id, frame_id);
+    if surface_id == SURFACE_ID_COMMAND_PALETTE {
+        PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEE, surface:surface_id, packed:0, control:0 });
+    } else { pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0); }
+    sex_pdx::serial_record!("[silk.lifecycle.minimize.hidden] sid={} frame={}", surface_id, frame_id);
     // Clear drag if dragging this surface.
     clear_drag_if_dead();
     // Clear hover if the minimized frame was hovered.
@@ -19326,16 +19431,18 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     // If frame was zoomed before minimize, restore to maximized geometry.
     if frame_is_zoomed(frame_id) {
         let (zx, zy, zw, zh) = layout_maximize();
-        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
-            (zy as u64) << 32 | zx as u64,
-            (zh as u64) << 32 | zw as u64);
+        if surface_id == SURFACE_ID_COMMAND_PALETTE {
+            PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEC, surface:surface_id,
+                packed:(zy as u32 as u64)<<32 | zx as u32 as u64, control:(zh as u64)<<32 | zw as u64 });
+        } else { pdx_call(SLOT_DISPLAY,0xEC,surface_id,(zy as u64)<<32|zx as u64,(zh as u64)<<32|zw as u64); }
         update_local_geometry(surface_id, zx, zy, zw, zh);
     } else {
         let bounds = get_surface_bounds(surface_id);
         if let Some((rx, ry, rw, rh)) = bounds {
-            pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
-                (ry as u64) << 32 | rx as u64,
-                (rh as u64) << 32 | rw as u64);
+            if surface_id == SURFACE_ID_COMMAND_PALETTE {
+                PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEC, surface:surface_id,
+                    packed:(ry as u32 as u64)<<32 | rx as u32 as u64, control:(rh as u64)<<32 | rw as u64 });
+            } else { pdx_call(SLOT_DISPLAY,0xEC,surface_id,(ry as u64)<<32|rx as u64,(rh as u64)<<32|rw as u64); }
         } else {
             return false; // geometry unavailable
         }
@@ -19362,7 +19469,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     }
     snap_capture_layout();
     emit_chrome_diagnostics(frame_id, "restore");
-    serial_println!("[silk.lifecycle.restore.ok] frame={} sid={}", frame_id, surface_id);
+    sex_pdx::serial_record!("[silk.lifecycle.restore.ok] frame={} sid={}", frame_id, surface_id);
     true
 }
 
@@ -19455,11 +19562,27 @@ unsafe fn set_frame_top_bar(frame_id: u32, enabled: bool) {
     }
 }
 
+/// Geometry authority comes from the immutable boot catalog, never app input.
+unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
+    if !APP_CUSTODY.iter().flatten().any(|e| !e.dead && !e.close_pending && e.shell_surface()==Some(frame)) {return;}
+    for child in desktop_content::children(frame,x,y,w,h).iter().flatten() {
+        pdx_call(SLOT_DISPLAY,0xEC,child.sid,
+            ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
+            ((child.h as u64)<<32)|child.w as u64);
+        sex_pdx::serial_record!("[shell.app.viewport] target={} sid={} x={} y={} w={} h={}",if frame==201 {9}else{12},child.sid,child.x,child.y,child.w,child.h);
+    }
+}
+
 /// Update local shell geometry statics to match a 0xEC update sent to sexdisplay.
 /// This keeps shell hit-testing in sync with the display renderer.
 /// Also fixes the stale-dimension bug on surface 100 (SURFACE_100_W/H were never
 /// updated after resize operations).
 unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32) {
+    if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(surface_id)) {return;}
+    if let Some(e) = APP_CUSTODY.iter_mut().flatten().find(|e| e.surface == surface_id && !e.dead) { e.bounds = Some((x,y,w,h)); }
+    native_child_geometry(surface_id,x,y,w,h);
+
+
     match surface_id {
         SURFACE_ID_APP => {
             if let Some(wnd) = WINDOWS.get_mut(1) {
@@ -19484,12 +19607,17 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
             SURFACE_103_W = w; SURFACE_103_H = h;
         }
         SURFACE_ID_LINEN => {
+            let resized=SURFACE_200_W!=w || SURFACE_200_H!=h;
             SURFACE_200_X = x; SURFACE_200_Y = y;
             SURFACE_200_W = w; SURFACE_200_H = h;
+            if resized && linen_object_count()!=0 { linen_render_object_list(); }
         }
         SURFACE_ID_QUIL => {
             SURFACE_201_X = x; SURFACE_201_Y = y;
             SURFACE_201_W = w; SURFACE_201_H = h;
+        }
+        SURFACE_ID_SPINDLE => {
+            SURFACE_0x99_X=x; SURFACE_0x99_Y=y; SURFACE_0x99_W=w; SURFACE_0x99_H=h;
         }
         SURFACE_ID_MESH => {
             SURFACE_202_X = x; SURFACE_202_Y = y;
@@ -21009,10 +21137,10 @@ unsafe fn swap_frame_tabs(frame_id: u32, idx_a: u8, idx_b: u8) -> bool {
 ///   bit 2 (10): SURFACE_CHROME_LIGHT_HOVER
 ///   bits 3-4 (11-12): hovered light kind
 ///   bit 5 (13): close_allowed
-unsafe fn send_frame_tab_info(frame_id: u32) {
+unsafe fn frame_chrome_operation(frame_id: u32) -> Option<linen_text_delivery::Operation> {
     let surface_id = match active_surface_for_frame(frame_id) {
         Some(sid) => sid,
-        None => return,
+        None => return None,
     };
     let tab_count = frame_tab_count(frame_id);
     let active_tab = frame_active_tab_index(frame_id);
@@ -21039,6 +21167,14 @@ unsafe fn send_frame_tab_info(frame_id: u32) {
         | (close_allowed << 5);
     // Pack: low 8 bits = active_tab, bits 8-15 = chrome_flags byte.
     let arg2 = (active_tab as u64) | (chrome_flags << 8);
+    Some(linen_text_delivery::Operation {opcode:OP_SURFACE_TAB_INFO,surface:surface_id,packed:tab_count as u64,control:arg2})
+}
+
+unsafe fn send_frame_tab_info(frame_id: u32) {
+    let Some(op)=frame_chrome_operation(frame_id) else {return;};
+    let surface_id=op.surface;let tab_count=op.packed;let active_tab=op.control&255;
+    let flags=op.control>>8;let chrome_byte=flags&1;let frame_hovered=(flags>>1)&1;let light_hovered=(flags>>2)&1;
+    let arg2=op.control;
     pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, arg2);
     unsafe {
         static mut SHELL_TAB_INFO_SEND_BUDGET: u32 = 8;
@@ -21398,6 +21534,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
             return false;
         }
     }
+    if let Some((x,y,w,h))=get_surface_bounds(sid) { native_child_geometry(sid,x,y,w,h); }
     let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
     // A4: Sync FocusRef shadow and emit commit marker.
@@ -21410,7 +21547,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         mesh_render_pd_graph();
         serial_println!("[mesh.pd_graph.refresh] reason=focus_change old={} new={}", old_focus, sid);
     }
-    serial_println!("[shell.focus.set] id={}", sid);
+    sex_pdx::serial_record!("[shell.focus.set] id={}", sid);
     serial_println!("[shell.interact.focus] sid={}", sid);
     // AP9: Focus target is live by construction (all checks passed above).
     if SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED {
@@ -22093,6 +22230,15 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
         } else {
             // Non-frame surface (linen, standalone) — always hittable.
             return HitTarget::Surface(focused);
+        }
+    }
+    for entry in APP_CUSTODY.iter().flatten() {
+        if entry.dead || entry.surface == focused || !point_in_surface(x,y,entry.surface) { continue; }
+        if let Some(fid) = frame_for_surface(entry.surface) {
+            if frame_accepts_input(fid) {
+                if let Some(chrome) = hit_test_surface_chrome(x,y,entry.surface) { return chrome; }
+                return HitTarget::Surface(entry.surface);
+            }
         }
     }
     let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
@@ -23052,9 +23198,26 @@ unsafe fn snap_restore_layout() -> bool {
     true
 }
 
+// Only this task's startup/main loop owns the bounded deferred inbox.
+static mut STARTUP_INBOX: sex_pdx::display_ready::StartupInbox<
+    { sex_pdx::display_ready::STARTUP_INBOX_CAPACITY }
+> = sex_pdx::display_ready::StartupInbox::new();
+
+fn startup_messages_pending() -> bool {
+    unsafe { !(*core::ptr::addr_of!(STARTUP_INBOX)).is_empty() }
+}
+
+fn pop_startup_message() -> Option<sex_pdx::PdxMessage> {
+    unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).pop() }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[silkshell.init.start]");
+    // Wait before any helper or OP_REGISTER_WM can send ordinary display work.
+    unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).wait_for_display() }
+        .expect("shell display-ready inbox full");
+    serial_println!("[display.ready.accepted] client=silk-shell caller=1 version=1");
     sex_rt::heap_init();
     serial_println!("[silk-shell] Authority Starting...");
 
@@ -23120,6 +23283,7 @@ pub extern "C" fn _start() -> ! {
 
         // A3: Initialize lifecycle metadata for all known surfaces.
         lifecycle_init_all();
+        shell_catalog_init();
         // AP9: Emit surface input lifetime proof begin after lifecycle init.
         surface_input_lifetime_begin_once();
         serial_println!("[silk-shell.spindle.route.ready] slot={} surface={}", SLOT_SPINDLE, SURFACE_ID_SPINDLE);
@@ -23150,7 +23314,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell] AUTHORITATIVE WM LISTENING (PDX SLOT 6)");
 
     // Register as window manager with sexdisplay (first-caller-wins; kernel-verified identity).
-    pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+    sex_pdx::display_ready::send_startup_display(OP_REGISTER_WM, 0, 0, 0)
+        .expect("shell startup display registration failed");
 
     // Stage 2B: advertise workspace 0 active to SilkBar
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, 0, 0, 0);
@@ -23207,7 +23372,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[shell.cursor_surface.create.start] id={:#x}", SURFACE_ID_CURSOR);
     let cursor_arg1 = ((P.height / 2) as u64) << 32 | (P.width / 2) as u64;
     let cursor_arg2 = (18u64 << 32) | 12u64;
-    let cursor_send = pdx_call_checked(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, cursor_arg1, cursor_arg2);
+    let cursor_send = sex_pdx::display_ready::send_startup_display(0xEC, SURFACE_ID_CURSOR, cursor_arg1, cursor_arg2);
     match cursor_send {
         Ok(_) => {
             CAP_READY_DISPLAY.store(true, Ordering::Relaxed);
@@ -23216,22 +23381,7 @@ pub extern "C" fn _start() -> ! {
             }
             serial_println!("[shell.cursor_surface.create.ok]");
         }
-        Err(e) if e == ERR_CAP_INVALID => {
-            if !DEFER_EMITTED_DISPLAY.swap(true, Ordering::Relaxed) {
-                serial_println!("[bootgraph.edge.defer from=silk-shell to=sexdisplay slot=5 reason=missing_cap]");
-            }
-            sys_yield();
-        }
-        Err(e) => {
-            unsafe {
-                static mut SILKSHELL_DISPLAY_SEND_ERR_BUDGET: u32 = 8;
-                let rem = &mut SILKSHELL_DISPLAY_SEND_ERR_BUDGET;
-                if *rem > 0 {
-                    *rem -= 1;
-                    serial_println!("[silkshell.display.send.err e=0x{:x}]", e);
-                }
-            }
-        }
+        Err(e) => panic!("shell startup cursor enqueue failed: {:#x}", e),
     }
 
     // Legacy demo surfaces (100..103) are intentionally not created at boot in
@@ -23399,8 +23549,18 @@ pub extern "C" fn _start() -> ! {
     unsafe { boot_load_scene_settings(); }
     serial_println!("[silk-shell.ready]");
     serial_println!("[silkshell.ready]");
+    let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
 
     loop {
+        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); palette_visibility_poll(); linen_text_poll(); linen_async_poll(); }
+        // Retain failed notification attempts while continuing normal receives.
+        // Success means enqueue only; sexinput validates caller and version.
+        if shell_ready_publisher.poll() {
+            serial_println!("[silk-shell.ready.notify] to=sexinput");
+        }
+        // Deferred startup messages go through the full normal dispatcher
+        // before input-first drains, proof helpers, or synchronous Linen work.
+        if !startup_messages_pending() {
         unsafe { maybe_run_silk_focus_reject_proof(); }
         unsafe { maybe_run_silk_window_move_proof(); }
         unsafe { maybe_run_silk_drag_reject_proof(); }
@@ -23562,40 +23722,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // ── Input-first drain: run BEFORE any blocking work ────────────
-        // Non-blocking bounded drain of pending input messages so
-        // sexinput events are not consumed by linen_sync_reply() or
-        // starved during synthetic proof stages.
-        // Process at most 4 messages per loop pass.
-        unsafe {
-            static mut BEFORE_LINEN_DRAIN_BUDGET: u32 = 16;
-            for _drain_i in 0..4u32 {
-                let maybe = pdx_try_listen_raw(0);
-                if maybe.is_none() { break; }
-                let req = maybe.unwrap();
-                if BEFORE_LINEN_DRAIN_BUDGET > 0 {
-                    BEFORE_LINEN_DRAIN_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.input.before_linen_drain] n={} type={:#x}",
-                        _drain_i, req.type_id
-                    );
-                }
-                if req.type_id == OP_HID_EVENT {
-                    handle_hid_event(req.arg2, req.arg0, req.arg1);
-                } else if req.type_id == OP_AUTODEMO_TICK {
-                    maybe_run_cursor_autodemo();
-                    pdx_reply(req.caller_pd, 0);
-                } else if req.type_id == 0x1 {
-                    // Reply from async service (e.g. sexstore GET).
-                    // Handled by the main match block later; just ack here.
-                    pdx_reply(req.caller_pd, 0);
-                } else {
-                    // Unknown message during pre-paint drain: ack to unblock sender.
-                    pdx_reply(req.caller_pd, 0);
-                }
-            }
-        }
-        // ── End input-first drain ──────────────────────────────────────
+        // Ordinary and lifecycle messages stay in the main FIFO dispatcher.
 
         // Deferred linen paint: run once after main loop starts.
         // Skip during synthetic input proofs to avoid linen_sync_reply
@@ -24091,25 +24218,42 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        } // End startup backlog bypass.
+
         let mut mutated = false;
 
         // INPUT_CURSOR_DRAIN_COHERENCE_V1: when the message backlog is
         // empty, flush the coalesced cursor position (latest wins) before
         // blocking — the display gets exactly one current-state update per
         // drained burst instead of one IPC per HID event.
-        let msg = match pdx_try_listen_raw(0) {
+        let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
                 unsafe { flush_pending_cursor_send(); }
+                // A full input ring may recover while the shell has no work.
+                // Return to the publisher instead of blocking in listen.
+                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                    sys_yield();
+                    continue;
+                }
                 pdx_listen_raw(0)
             }
         };
+        unsafe {
+            if shell_lifecycle_hint(&msg) { continue; }
+            if linen_async_reply(&msg) { continue; }
+            if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {
+                sex_pdx::serial_record!("[shell.app.stale] target={} opcode={:#x} rejected=1", msg.caller_pd, msg.type_id);
+                continue;
+            }
+        }
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }
                     pdx_reply(msg.caller_pd, 0);
                 }
                 OP_SHELL_BIND_BUFFER => {
+                    if !app_custody::buffer_sender(msg.caller_pd) { continue; }
                     let buffer_handle = msg.arg0;
                     serial_println!("[silk-shell] Binding buffer {:#x} to sexdrive window", buffer_handle);
 
@@ -24795,7 +24939,7 @@ pub extern "C" fn _start() -> ! {
                                             }
                                         }
                                     }
-                                    pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_OPEN_INTENT, obj_id, idx as u64, 0);
+                                    linen_queue_open(obj_id, idx as u64);
                                     serial_println!("[linen.open_intent.send] id={} idx={}", obj_id, idx);
                                     serial_println!("[linen.sync_reply.skip] path=OP_LINEN_OPEN_INTENT reason=fire_and_forget");
 
@@ -24874,7 +25018,9 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::DestroyFocused => {
                                         let target = FOCUSED_SURFACE_ID;
                                         let mut destroyed = false;
-                                        if target == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                        if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(target)) {
+                                            destroyed = close_surface_from_frame_light(target);
+                                        } else if target == SURFACE_ID_APP && SURFACE_100_ALIVE {
                                             SURFACE_100_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
@@ -25138,7 +25284,7 @@ pub extern "C" fn _start() -> ! {
                                             } else {
                                                 linen_select_next_object();
                                                 linen_render_object_list();
-                                                serial_println!("[shell.action.select_next_linen] id={}", SELECTED_LINEN_OBJECT_ID);
+                                                sex_pdx::serial_record!("[shell.action.select_next_linen] id={}", SELECTED_LINEN_OBJECT_ID);
                                             }
                                             mutated = true;
                                         } else {
@@ -25894,7 +26040,7 @@ pub extern "C" fn _start() -> ! {
                 // type_id == 0x1 is the kernel's IpcReply marker for
                 // syscall 29 (SYSCALL_PDX_REPLY) pushes to incoming_replies.
                 unsafe {
-                    if SEXSTORE_LOAD_PENDING {
+                    if SEXSTORE_LOAD_PENDING && msg.caller_pd == 8 {
                         SEXSTORE_LOAD_PENDING = false;
                         handle_sexstore_get_reply(msg.arg0);
                     }

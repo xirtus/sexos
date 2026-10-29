@@ -12,16 +12,58 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v4
     - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso
+      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86
     - name: Prepare Limine
       run: |
-        git clone --branch=v7.x-binary --depth=1 https://github.com/limine-bootloader/limine.git limine
+        git init limine
+        git -C limine remote add origin https://github.com/limine-bootloader/limine.git
+        git -C limine fetch --depth=1 origin ca3a5b20d2501e3819983c5cf838c70c30ee532a
+        git -C limine checkout --detach FETCH_HEAD
         make -C limine limine
     - name: Enforce root allowlist
       run: bash scripts/dev/check_root_allowlist.sh --strict
-    - name: Build via single entrypoint (mandatory)
-      run: bash scripts/entrypoint_build.sh
+    - name: Host proof regressions
+      run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+    - name: Host kernel-model regressions
+      run: |
+        python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"
+    - name: Build and boot via single entrypoint (mandatory)
+      run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --probe 60 --keep-log
+    - name: Compiled scheduler stack-release boundary
+      run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
+    - name: Timer PKRU save and restore boundary
+      run: TIMER_PKRU_EVIDENCE="$RUNNER_TEMP/sexos-runtime/timer-pkru.txt" bash scripts/timer_pkru_return_gate.sh
+    - name: Optimized client memory helpers
+      run: bash scripts/silk_client_memory_gate.sh target/x86_64-sex/release/kaleidoscope
+    - name: Guest park, detached wake and user resume
+      run: OWNERSHIP_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/scheduler_ownership_runtime_gate.sh
+    - name: Guest immutable memory region authority
+      run: MEMORY_AUTHORITY_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/memory_authority_runtime_gate.sh
+    - name: Guest sext paging and fault recovery
+      run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
+    - name: USB input paths
+      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Reboot persistence and rendering
+      run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
+    - name: Task finish and quota cleanup with surviving client
+      run: GATE_DIR="$RUNNER_TEMP/sexos-cleanup-profiles" bash scripts/paging_cleanup_profiles_gate.sh
+    - name: App resource retirement and normal desktop close
+      run: GATE_DIR="$RUNNER_TEMP/sexos-app-resource-profiles" bash scripts/app_resource_profiles_gate.sh
+    - name: Preserve runtime evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-runtime-proof
+        path: |
+          ${{ runner.temp }}/sexos-truth
+          ${{ runner.temp }}/sexos-runtime
+          ${{ runner.temp }}/sexos-usb
+          ${{ runner.temp }}/sexos-persistence
+          ${{ runner.temp }}/sexos-cleanup-profiles
+          ${{ runner.temp }}/sexos-app-resource-profiles
+        if-no-files-found: ignore

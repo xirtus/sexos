@@ -61,12 +61,13 @@ run_stage() {
       cp limine/limine-bios.sys iso_root/boot/limine/
       ;;
     cargo_pkg)
-      local pkg src dst
+      local pkg src dst extra_rustflags
       pkg="$(rg -n '^package\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
+      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]*"' "$stage" | sed -E 's/.*"([^"]*)".*/\1/' || true)"
       is_allowed_crate "$pkg" || { echo "[FAIL] package not in whitelist: $pkg"; exit 1; }
-      RUSTFLAGS="-C link-arg=-Tkernel/linker.ld" cargo build \
+      RUSTFLAGS="-C link-arg=-Tkernel/linker.ld ${extra_rustflags:-}" cargo build --locked \
         -Z build-std=core,compiler_builtins,alloc \
         -Z build-std-features=compiler-builtins-mem \
         --package "$pkg" \
@@ -81,7 +82,7 @@ run_stage() {
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
-      RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build \
+      RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
         -Z build-std=core,compiler_builtins,alloc \
         -Z build-std-features=compiler-builtins-mem \
         --manifest-path "$manifest" \

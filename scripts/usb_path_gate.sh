@@ -16,6 +16,7 @@ GATE_DIR="${GATE_DIR:-/tmp/sexos_usb_path_gate}"
 mkdir -p "$GATE_DIR" "$ROOT_DIR/logs"
 ISO="${ISO:-sexos-v1.0.0.iso}"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
+QEMU_DISPLAY="${QEMU_DISPLAY:-none}"
 READY_TIMEOUT="${READY_TIMEOUT:-45}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-4}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
@@ -50,8 +51,11 @@ boot_lane() { # name log qmp_sock devices...
   rm -f "$log" "$qmp"
   echo "[usb_path_gate] lane=$name boot"
   set +e
-  "$QEMU_BIN" -M q35 -m 512M -cdrom "$ISO" \
+  # Match the master gate's CPU features; GUI availability is not an input
+  # requirement, so headless is the default (override QEMU_DISPLAY if needed).
+  "$QEMU_BIN" -M q35 -m 512M -cpu max,+pku -cdrom "$ISO" \
     "$@" \
+    -display "$QEMU_DISPLAY" \
     -serial "file:$log" \
     -qmp "unix:$qmp,server=on,wait=off" \
     -no-reboot -no-shutdown &
@@ -132,23 +136,35 @@ PY
 # Hard faults FAIL a lane. Scheduler defense markers (steal.reject /
 # set_pd.null) mean the kernel caught corruption and kept running — they
 # surface as WARN so the payload gets collected, not buried by a red row.
-FAULT_RE='KERNEL PAGE FAULT|DOUBLE FAULT|sched\.steal\.reject\.exhausted'
+FAULT_RE='panic|PAGE FAULT|#PF|GENERAL PROTECTION|GP FAULT|#GP|DOUBLE FAULT|TRIPLE FAULT|EXCEPTION: INVALID OPCODE|EXCEPTION: UD ENTER|PKU SECURITY VIOLATION|TEST FAILED:|fault\.kill|FATAL|sched\.steal\.reject\.exhausted'
+has_fault() { grep -qiE "$FAULT_RE" "$1" 2>/dev/null; }
 DEFENSE_RE='sched\.steal\.reject|sched\.set_pd\.null'
 
-declare -A ROW
+# macOS ships Bash 3, which has no associative arrays. Only validated fixed
+# keys reach variable indirection; printf -v assigns data without evaluating it.
+row_set() {
+  [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]] || return 2
+  printf -v "ROW_$1" '%s' "$2"
+}
+
+row_get() {
+  [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]] || return 2
+  local row_variable="ROW_$1"
+  printf '%s' "${!row_variable}"
+}
 
 # ── BUILD ────────────────────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == "1" ]]; then
-  ROW[build]="SKIP"
+  row_set build "SKIP"
 elif ./scripts/entrypoint_build.sh >"$GATE_DIR/build.log" 2>&1; then
-  ROW[build]="PASS"
+  row_set build "PASS"
 else
-  ROW[build]="FAIL"
+  row_set build "FAIL"
 fi
 
 # ── LANE 1: tablet ───────────────────────────────────────────────────────
 L1="$GATE_DIR/lane_tablet.log"
-if [[ "${ROW[build]}" != "FAIL" ]]; then
+if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane tablet "$L1" "$GATE_DIR/qmp1.sock" \
     -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0
   if wait_marker '\[sexusb\.enum\.summary\]' "$L1" "$READY_TIMEOUT"; then
@@ -159,46 +175,46 @@ if [[ "${ROW[build]}" != "FAIL" ]]; then
   stop_lane
 
   if has '\[sexusb\.discovery\.summary\] ports=[0-9]+ connected=[1-9]' "$L1"; then
-    ROW[usb_discovery]="PASS"
+    row_set usb_discovery "PASS"
   else
-    ROW[usb_discovery]="FAIL"
+    row_set usb_discovery "FAIL"
   fi
   if has '\[sexusb\.enum\.summary\] ports_connected=1 slots_enabled=1 hid_devices=1 pointer_devices=1' "$L1"; then
-    ROW[usb_enum]="PASS"
+    row_set usb_enum "PASS"
   else
-    ROW[usb_enum]="FAIL"
+    row_set usb_enum "FAIL"
   fi
   if has '\[sexinput\.usb\.contract\] op=0x260' "$L1" \
      && ! has '\[sexinput\.usb\.report\.reject\]' "$L1"; then
-    ROW[usb_pointer_producer]="PASS"
+    row_set usb_pointer_producer "PASS"
   else
-    ROW[usb_pointer_producer]="FAIL"
+    row_set usb_pointer_producer "FAIL"
   fi
   if has '\[sexinput\.contact\.down\]' "$L1" \
      && has '\[sexinput\.contact\.drag\]' "$L1" \
      && has '\[sexinput\.contact\.up\]' "$L1"; then
-    ROW[touch_contact]="PASS"
+    row_set touch_contact "PASS"
   else
-    ROW[touch_contact]="FAIL"
+    row_set touch_contact "FAIL"
   fi
-  if has "$FAULT_RE" "$L1"; then
-    ROW[lane1_fault_free]="FAIL"
+  if has_fault "$L1"; then
+    row_set lane1_fault_free "FAIL"
   elif has "$DEFENSE_RE" "$L1"; then
-    ROW[lane1_fault_free]="WARN"
+    row_set lane1_fault_free "WARN"
     echo "[usb_path_gate] scheduler defense fired (collect payload):"
-    grep -E "$DEFENSE_RE" "$L1" | head -3
+    grep -E "$DEFENSE_RE" "$L1" | sed -n '1,3p'
   else
-    ROW[lane1_fault_free]="PASS"
+    row_set lane1_fault_free "PASS"
   fi
 else
   for r in usb_discovery usb_enum usb_pointer_producer touch_contact lane1_fault_free; do
-    ROW[$r]="SKIP"
+    row_set "$r" "SKIP"
   done
 fi
 
 # ── LANE 2: no device ────────────────────────────────────────────────────
 L2="$GATE_DIR/lane_nodevice.log"
-if [[ "${ROW[build]}" != "FAIL" ]]; then
+if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane nodevice "$L2" "$GATE_DIR/qmp2.sock" \
     -device nec-usb-xhci,id=xhci
   wait_marker '\[sexusb\.discovery\.summary\]' "$L2" "$READY_TIMEOUT" || true
@@ -207,18 +223,18 @@ if [[ "${ROW[build]}" != "FAIL" ]]; then
 
   if has '\[sexusb\.discovery\.summary\] ports=[0-9]+ connected=0 first=none ok=1' "$L2" \
      && ! has '\[sexusb\.enum\.summary\]' "$L2" \
-     && ! has "$FAULT_RE" "$L2"; then
-    ROW[usb_discovery_negative]="PASS"
+     && ! has_fault "$L2"; then
+    row_set usb_discovery_negative "PASS"
   else
-    ROW[usb_discovery_negative]="FAIL"
+    row_set usb_discovery_negative "FAIL"
   fi
 else
-  ROW[usb_discovery_negative]="SKIP"
+  row_set usb_discovery_negative "SKIP"
 fi
 
 # ── LANE 3: usb-kbd (informational) ──────────────────────────────────────
 L3="$GATE_DIR/lane_kbd.log"
-if [[ "${ROW[build]}" != "FAIL" ]]; then
+if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane kbd "$L3" "$GATE_DIR/qmp3.sock" \
     -device nec-usb-xhci,id=xhci -device usb-kbd,bus=xhci.0
   if wait_marker '\[sexusb\.hid\.bind\.summary\]' "$L3" "$READY_TIMEOUT"; then
@@ -230,18 +246,18 @@ if [[ "${ROW[build]}" != "FAIL" ]]; then
 
   if has '\[sexusb\.hid\.bind\.summary\] keyboard_ep=set' "$L3" \
      && has '\[sexusb\.kbd\.forward\]' "$L3" \
-     && ! has "$FAULT_RE" "$L3"; then
-    ROW[usb_kbd_lane]="PASS"
+     && ! has_fault "$L3"; then
+    row_set usb_kbd_lane "PASS"
   else
-    ROW[usb_kbd_lane]="FAIL"
+    row_set usb_kbd_lane "FAIL"
   fi
 else
-  ROW[usb_kbd_lane]="SKIP"
+  row_set usb_kbd_lane "SKIP"
 fi
 
 # ── LANE 4: usb-mouse (relative boot mouse, Phase 3) ─────────────────────
 L4="$GATE_DIR/lane_mouse.log"
-if [[ "${ROW[build]}" != "FAIL" ]]; then
+if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane mouse "$L4" "$GATE_DIR/qmp4.sock" \
     -device nec-usb-xhci,id=xhci -device usb-mouse,bus=xhci.0
   if wait_marker '\[sexusb\.hid\.bind\.summary\]' "$L4" "$READY_TIMEOUT"; then
@@ -275,13 +291,13 @@ PY
   if has '\[sexusb\.hid\.bind\.summary\] .*pointer_role=mouse' "$L4" \
      && has '\[sexinput\.usb_mouse\.decode\.ok\].*is_abs=false' "$L4" \
      && ! has '\[sexusb\.tablet\.abs\]' "$L4" \
-     && ! has "$FAULT_RE" "$L4"; then
-    ROW[usb_boot_mouse]="PASS"
+     && ! has_fault "$L4"; then
+    row_set usb_boot_mouse "PASS"
   else
-    ROW[usb_boot_mouse]="FAIL"
+    row_set usb_boot_mouse "FAIL"
   fi
 else
-  ROW[usb_boot_mouse]="SKIP"
+  row_set usb_boot_mouse "SKIP"
 fi
 
 # ── SUMMARY ──────────────────────────────────────────────────────────────
@@ -290,8 +306,8 @@ echo "=== USB_PATH_GATE SUMMARY ==="
 EXIT=0
 for r in build usb_discovery usb_enum usb_pointer_producer touch_contact \
          lane1_fault_free usb_discovery_negative usb_kbd_lane usb_boot_mouse; do
-  printf '%-26s %s\n' "$r" "${ROW[$r]}"
-  [[ "${ROW[$r]}" == "FAIL" ]] && EXIT=1
+  printf '%-26s %s\n' "$r" "$(row_get "$r")"
+  [[ "$(row_get "$r")" == "FAIL" ]] && EXIT=1
 done
 echo "lane logs: $GATE_DIR/lane_*.log"
 exit "$EXIT"

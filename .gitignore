@@ -11,6 +11,7 @@ config.local.json
 # Rust and Build Artifacts
 /target
 Cargo.lock
+!/Cargo.lock
 *.bin
 *.iso
 *.sex

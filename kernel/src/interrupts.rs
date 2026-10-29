@@ -87,13 +87,13 @@ pub fn init_idt() {
         ).expect("Failed to write STAR MSR");
 
         serial_println!("→ STAR MSR locked");
-        // Runtime reachability proof v1: do NOT mask IF during syscalls.
-        // With IF cleared, the LAPIC timer interrupt cannot be delivered
-        // during the tight pdx_listen→yield loop that keeps IF=0
-        // continuously, starving PD2–PD12 of CPU time.
-        SFMask::write(x86_64::registers::rflags::RFlags::empty());
+        // Enter Rust only after the GS/RSP transition is protected. The original
+        // user flags remain in R11 and are restored by SYSRET/the forged IRET.
+        use x86_64::registers::rflags::RFlags;
+        SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG
+            | RFlags::TRAP_FLAG | RFlags::ALIGNMENT_CHECK);
         Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
-        serial_println!("   → Syscall setup COMPLETE (IF unmasked for timer delivery)");    }
+        serial_println!("   → Syscall setup COMPLETE (IF/DF/TF/AC masked at entry)");    }
 }
 
 #[repr(C)]
@@ -242,6 +242,7 @@ pub unsafe extern "C" fn syscall_entry() {
 #[no_mangle]
 pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     unsafe { crate::pku::wrpkru(0x00000000); }
+    crate::scheduler::observe_user_entry();
     crate::syscalls::dispatch(regs)
 }
 
@@ -264,6 +265,12 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
 
         "cmp byte ptr [rip + {pku_enabled}], 0",
         "je 3f",
+        // Reuse the dummy error qword after all GPRs are saved. A returning
+        // NoRunnable/kernel timer must restore entry PKRU, not leave it open.
+        // The switch path still discards this slot; frame offsets do not move.
+        "xor ecx, ecx",
+        "rdpkru",
+        "mov [rsp + 120], rax",
         "xor eax, eax",
         "xor ecx, ecx",
         "xor edx, edx",
@@ -274,6 +281,14 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
         "lea rdi, [rsp + 136]", // rdi points to InterruptStackFrame (RIP)
         "call timer_interrupt_handler",
         "add rsp, 8", // UNDO ALIGNMENT
+
+        "cmp byte ptr [rip + {pku_enabled}], 0",
+        "je 4f",
+        "mov eax, [rsp + 120]",
+        "xor ecx, ecx",
+        "xor edx, edx",
+        "wrpkru",
+        "4:",
 
         "mov rax, [rsp + 136]", 
         "test al, 3", 
@@ -415,15 +430,19 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     }
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+    crate::scheduler::poll_paging_exit_notifications();
 
     // Timer fired in kernel mode (CS.RPL=0) means a task is mid-syscall on the shared
     // CoreLocal kernel stack. Saving context there is unsafe: other tasks' syscalls reuse
     // the same stack and will corrupt the saved frame before this task is rescheduled.
     // Skip the context switch; the task finishes its syscall and yields cooperatively.
     if stack_frame.code_segment.0 as u64 & 3 == 0 {
+        crate::scheduler::proof_kernel_timer_wake();
         unsafe { send_eoi(); }
         return;
     }
+
+    crate::scheduler::observe_user_entry();
 
     let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
         crate::scheduler::ScheduleDecision::NoRunnable => {
@@ -508,129 +527,30 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     let fault_rip = stack_frame.instruction_pointer.as_u64();
     let fault_rsp = stack_frame.stack_pointer.as_u64();
     let fault_cs = stack_frame.code_segment.0 as u64;
-    let fault_ss = stack_frame.stack_segment.0 as u64;
-    let fault_rflags = stack_frame.cpu_flags.bits();
     let fault_cs_rpl = fault_cs & 0x3;
 
     let cur_pd = crate::core_local::CoreLocal::get().current_pd();
 
-    if fault_addr == 0 && fault_cs_rpl == 3 {
-        serial_println!(
-            "fault.kill user_null_jump pd={} rip={:#x} rsp={:#x} err={:#x}",
-            cur_pd, fault_rip, fault_rsp, error_code
-        );
-    } else if fault_addr == 0 {
-        panic!("Kernel Null Pointer Jump at RIP: {:#x}", fault_rip);
-    }
-
-    // Phase 31: PKU Warden Trigger
-    if (error_code & 0x20) != 0 {
-        crate::pku::pku_warden(fault_addr, fault_rip, error_code);
-        // For Phase 31, we panic on violation to provide clear debug output.
-        // In production, this would terminate the faulting domain.
-        panic!("PKU SECURITY VIOLATION ({} at {:#x})", 
-               if (error_code & 0x10) != 0 { "EXECUTE" } else if (error_code & 0x02) != 0 { "WRITE" } else { "READ" },
-               fault_addr);
-    }
-
-    serial_println!("EXCEPTION: PAGE FAULT at {:#x} (RIP: {:#x}, RSP: {:#x}, ERR: {:#x})",
-        fault_addr, fault_rip, fault_rsp, error_code);
-
-    // Kernel-mode page faults must not reach forward_page_fault: that path
-    // calls current_pd_ref() which requires a valid current PD. During
-    // scheduler transitions (yield_and_switch clears current_pd_ptr before
-    // calling tick()) the ptr is transiently null, causing "KERNEL PD MISSING".
-    // Kernel memory is always mapped; a kernel-mode #PF is always a bug —
-    // halt this core cleanly with diagnostics instead of forwarding to userspace.
-    if fault_cs_rpl == 0 {
-        serial_println!(
-            "KERNEL PAGE FAULT HALT: addr={:#x} rip={:#x} rsp={:#x} err={:#x} pd={}",
-            fault_addr, fault_rip, fault_rsp, error_code, cur_pd
-        );
+    // Kernel faults never enter the user pager transaction. User protection,
+    // PKU, reserved-bit, instruction-fetch and unknown faults fail closed too.
+    if fault_cs_rpl != 3 {
+        serial_println!("KERNEL PAGE FAULT HALT: addr={:#x} rip={:#x} rsp={:#x} err={:#x} pd={}",
+            fault_addr, fault_rip, fault_rsp, error_code, cur_pd);
         loop { x86_64::instructions::hlt(); }
     }
+    let recoverable = crate::scheduler::fault_transaction::eligible_user_fault(
+        fault_addr, error_code, fault_cs);
+    serial_println!("[paging.fault.trap] pd={} addr={:#x} rip={:#x} error={:#x} eligible={}",
+        cur_pd, fault_addr, fault_rip, error_code, recoverable as u8);
 
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
     let current_ptr = sched.current_task.load(Ordering::Acquire);
-    let mut task_id = 0;
-    if !current_ptr.is_null() {
-        unsafe { 
-            let task = &mut *current_ptr;
-            task_id = task.id;
-            task.context.rip = fault_rip;
-            task.context.rsp = fault_rsp;
-            task.context.rflags = fault_rflags;
-            task.state.store(
-                if fault_addr == 0 && fault_cs_rpl == 3 { 3u32 } else { crate::scheduler::STATE_BLOCKED },
-                Ordering::Release
-            );
-            serial_println!(
-                "task.faulted id={} pd_id={} frame_rip={:#x} frame_cs={:#x} frame_rsp={:#x} frame_rflags={:#x} err={:#x}",
-                task.id,
-                task.context.pd_id,
-                task.context.rip,
-                fault_cs,
-                task.context.rsp,
-                task.context.rflags,
-                error_code
-            );
-        }
-    }
-
-    if let Err(e) = crate::ipc::pagefault::forward_page_fault(fault_addr, error_code as u32, task_id as u64) {
-        serial_println!("EXCEPTION: Failed to forward #PF to sext: {}", e);
-        if let Some(target_pd) = crate::ipc::DOMAIN_REGISTRY.get(task_id) {
-            let _ = unsafe { &*target_pd.message_ring }.enqueue(MessageType::Signal(11));
-        }
-    }
-
-    let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
-        crate::scheduler::ScheduleDecision::NoRunnable => {
-            unsafe { send_eoi(); }
-
-            let current_ptr = sched.current_task.load(Ordering::Acquire);
-            if !current_ptr.is_null() {
-                unsafe {
-                    let state = (*current_ptr).state.load(Ordering::Acquire);
-                    if state == 3u32 {
-                        // Task was killed (Exited) — rewrite the raw IRET frame on the
-                        // kernel stack so iretq returns to a kernel halt loop instead of
-                        // the faulting RIP (which was 0x0).  Direct pointer arithmetic
-                        // bypasses any field-access restrictions on InterruptStackFrame.
-                        //
-                        // IRET frame layout relative to stack_frame (after stub's sub rsp,8):
-                        //   [0] = RIP, [1] = CS, [2] = RFLAGS, [3] = RSP, [4] = SS
-                        let halt_addr = &faulted_task_halt as *const _ as u64;
-                        let iret = stack_frame as *const _ as *mut u64;
-                        core::ptr::write(iret,           halt_addr);  // RIP  → kernel halt loop
-                        core::ptr::write(iret.add(1),    0x08u64);    // CS   → kernel code segment
-                        core::ptr::write(iret.add(2),    0x202u64);   // RFLAGS → IF=1, IOPL=0
-                        let cur_rsp: u64;
-                        core::arch::asm!("mov {}, rsp", out(reg) cur_rsp);
-                        core::ptr::write(iret.add(3),    cur_rsp);    // RSP  → current kernel stack
-                        core::ptr::write(iret.add(4),    0x10u64);    // SS   → kernel data segment
-                        serial_println!(
-                            "fault.kill iret_redirect pd={} halt_addr={:#x}",
-                            cur_pd, halt_addr
-                        );
-                    } else if state != crate::scheduler::STATE_RUNNING {
-                        x86_64::instructions::interrupts::enable();
-                        while (*current_ptr).state.load(Ordering::Acquire) != crate::scheduler::STATE_RUNNING {
-                            x86_64::instructions::hlt();
-                        }
-                        x86_64::instructions::interrupts::disable();
-                    }
-                }
-            }
-            return;
-        }
-        crate::scheduler::ScheduleDecision::Switch { old, next } => (old, next),
-    };
-
     unsafe {
-        if !old_ctx_ptr.is_null() {
-            let old_ctx = &mut *old_ctx_ptr;
+        let current_ctx_ptr = if current_ptr.is_null() { core::ptr::null_mut() }
+            else { &mut (*current_ptr).context as *mut crate::scheduler::TaskContext };
+        if !current_ctx_ptr.is_null() {
+            let old_ctx = &mut *current_ctx_ptr;
             let base = stack_frame as *const _ as *const u64;
             old_ctx.rip = stack_frame.instruction_pointer.as_u64();
             old_ctx.cs = stack_frame.code_segment.0 as u64;
@@ -660,10 +580,36 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
             };
         }
 
+        if !current_ptr.is_null() {
+            // This complete frame belongs exclusively to the current owner.
+            // Publish nothing until every saved GPR and IRET field is final.
+            if recoverable {
+                let parked = (*current_ptr).state.park_fault(core_id);
+                if parked != crate::scheduler::task_ownership::ParkResult::Blocked {
+                    (*current_ptr).state.exit();
+                    serial_println!("fault.kill [paging.fault.terminal] pd={} reason=owner_not_parkable", cur_pd);
+                } else if let Err(error) = crate::ipc::pagefault::forward_page_fault(fault_addr, error_code, cur_pd as u64) {
+                    (*current_ptr).state.exit();
+                    serial_println!("fault.kill [paging.fault.terminal] pd={} reason=dispatch_failed status={}", cur_pd, error);
+                }
+            } else {
+                (*current_ptr).state.exit();
+                serial_println!("fault.kill [paging.fault.terminal] pd={} reason=ineligible error={:#x}", cur_pd, error_code);
+            }
+        } else {
+            panic!("USER_PAGE_FAULT_WITHOUT_TASK");
+        }
+
+        send_eoi();
+        let next_ctx_ptr = match sched.tick() {
+            crate::scheduler::ScheduleDecision::Switch { next, .. } => next,
+            crate::scheduler::ScheduleDecision::NoRunnable => {
+                crate::scheduler::wait_for_local_resume_or_switch(sched)
+            }
+        };
         let kstack_top = (*next_ctx_ptr).kstack_top;
         crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
-        send_eoi();
-        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
+        crate::scheduler::Scheduler::switch_to(current_ctx_ptr, next_ctx_ptr);
     }
 }
 

@@ -24,11 +24,16 @@ fn hot_log() -> bool {
 pub static IPC_OPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// The single RamFS instance backing all VFS operations.
+pub fn retire_app_subject(target:u32)->(usize,usize) {
+    DISKFS_SELECTED_PATH_ID[target as usize % DISKFS_CLIENT_SLOTS].store(0,Ordering::Relaxed);
+    RAMFS.retire_subject(target)
+}
+
 pub static RAMFS: RamFs = RamFs::new();
 
 // ── DiskFS bridge buffer state ──────────────────────────────────────────────
-/// One-time granted MemLend buffer VA for DiskFS bridge ops.
-/// Granted via sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND) on first use.
+/// Cached view of the immutable boot-assigned block buffer (slot 17).
+/// Resolution is idempotent and cannot allocate frames or change capabilities.
 /// SexFiles owns this buffer for its lifetime; Linen never sees it.
 static DISKFS_BRIDGE_BUF_VA: AtomicU64 = AtomicU64::new(0);
 
@@ -67,14 +72,18 @@ pub(crate) fn diskfs_bridge_get_buf_va() -> u64 {
         }
         return va;
     }
-    let new_va = sex_pdx::sys_grant_mem_lend(
-        sex_pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND,
-    );
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
+    let Ok(info) = sex_pdx::memory_region_info(sex_pdx::SLOT_BLOCK_BUFFER)
+        else { return u64::MAX; };
+    if info.peer_pd.is_none() || info.length < 4096 { return u64::MAX; }
+    let new_va = sex_pdx::memory_region_view(
+        sex_pdx::SLOT_BLOCK_BUFFER, 0, 4096, QUERY_VIEW | READ | WRITE,
+    ).map(|view| view.virtual_address).unwrap_or(u64::MAX);
     if new_va != 0 && new_va != u64::MAX {
         DISKFS_BRIDGE_BUF_VA.store(new_va, Ordering::Relaxed);
-        crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.buf.ready] buf_va={:#x}",
-            new_va
+        sex_pdx::serial_record!(
+            "[sexfiles.bridge.diskfs.buf.ready] buf_va={:#x} region_id={} length={} peer_pd={}",
+            new_va, info.region_id, info.length, info.peer_pd.unwrap_or(0)
         );
     }
     new_va
@@ -91,7 +100,7 @@ fn handle_diskfs_select(path_id: u64, caller_pd: u32) -> u64 {
     let buf_va = diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.select.err] reason=grant_failed"
+            "[sexfiles.bridge.diskfs.select.err] reason=view_failed"
         );
         return messages::ERR_NOT_FOUND as u64;
     }
@@ -162,7 +171,7 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
     let buf_va = diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.write.err] reason=grant_failed buf_va={:#x}",
+            "[sexfiles.bridge.diskfs.write.err] reason=view_failed buf_va={:#x}",
             buf_va
         );
         return messages::ERR_NOT_FOUND as u64;
@@ -342,7 +351,7 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
     let buf_va = diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.read.err] reason=grant_failed buf_va={:#x}",
+            "[sexfiles.bridge.diskfs.read.err] reason=view_failed buf_va={:#x}",
             buf_va
         );
         return messages::ERR_NOT_FOUND as u64;
@@ -1037,9 +1046,15 @@ fn v4_bitmap_rebuild(buf_va: u64) {
     for i in 0..DISKFS_SLOTS {
         if !v4_in_use(i) { continue; }
         let size_bytes = unsafe { V4_TABLE[i].size_bytes } as u64;
-        if size_bytes == 0 { continue; } // empty object: no indirect sector needed
         let (extents, count) = match v4_indirect_read(i, buf_va) {
             Ok(v) => v,
+            // A fresh empty object need not have an indirect descriptor.
+            // A valid descriptor MUST still reserve its blocks when size is
+            // zero: a crash can land after growth publishes the descriptor
+            // but before the manifest publishes size (or during truncate).
+            // Later writes reuse that descriptor, so freeing those blocks
+            // here would let another object allocate and overwrite them.
+            Err(_) if size_bytes == 0 => continue,
             Err(_) => {
                 crate::pdx::serial_println!(
                     "[sexfiles.diskfs.v4.rebuild.drop] slot={} reason=indirect_unreadable", i);
@@ -1323,6 +1338,11 @@ fn handle_diskfs_create(name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
         crate::pdx::serial_println!("[sexfiles.diskfs.v4.create.err] reason=full");
         return messages::ERR_FULL as u64;
     };
+    // A deleted slot can retain a valid descriptor if deletion crashed after
+    // its manifest commit. Clear that old identity's extents before publishing
+    // the new live slot, or recovery could reserve blocks now owned elsewhere.
+    if let Err(er) = v4_indirect_write(i, buf_va, &[], 0) { return er; }
+    v4_cache_invalidate(i);
     let gen = unsafe { V4_TABLE[i].gen }.wrapping_add(1).max(1);
     let e = V4Entry { name, size_bytes: 0, gen };
     unsafe { V4_TABLE[i] = e; }
@@ -1375,6 +1395,7 @@ fn handle_diskfs_delete(path_id: u64, buf_va: u64) -> u64 {
     let i = path_id as usize;
     if !v4_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
     let (extents, count) = v4_indirect_read(i, buf_va).unwrap_or(([V4Extent::default(); DISKFS_V4_MAX_EXTENTS], 0));
+    let old_entry = unsafe { V4_TABLE[i] };
     unsafe {
         V4_TABLE[i].name = [0u8; DISKFS_V3_NAME_MAX];
         V4_TABLE[i].size_bytes = 0;
@@ -1382,7 +1403,12 @@ fn handle_diskfs_delete(path_id: u64, buf_va: u64) -> u64 {
     }
     crate::pdx::serial_println!(
         "[sexfiles.diskfs.v4.crash_point.delete_pending] slot={}", i);
-    if let Err(e) = v4_persist(buf_va) { return e; }
+    if let Err(e) = v4_persist(buf_va) {
+        // A failed delete must not expose this still-owned slot to CREATE,
+        // which resets descriptors before publishing a new object identity.
+        unsafe { V4_TABLE[i] = old_entry; }
+        return e;
+    }
     crate::pdx::serial_println!(
         "[sexfiles.diskfs.v4.crash_point.delete_committed] slot={}", i);
     {

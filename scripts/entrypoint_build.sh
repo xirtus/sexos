@@ -5,6 +5,23 @@ BUILD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/entrypoint_build.sh"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 SPEC_PATH="$ROOT_DIR/sexos_build_spec.toml"
+ABI_INPUTS=(
+  kernel/src/syscalls/mod.rs
+  kernel/src/capability_slot.rs
+  crates/sex-pdx/src/lib.rs
+  crates/sex-pdx/src/pagefault.rs
+  crates/sex-pdx/src/display_ready.rs
+  crates/sex-pdx/src/shell_ready.rs
+  crates/sex-pdx/src/memory_region.rs
+  crates/sex-pdx/src/paging.rs
+  crates/sex-pdx/src/app_lifecycle.rs
+  kernel/src/paging_state.rs
+  kernel/src/app_resource_state.rs
+  kernel/src/app_resources.rs
+  kernel/src/fault_transaction.rs
+  kernel/src/ipc/messages.rs
+  kernel/src/ipc/router.rs
+)
 
 if [[ "$#" -ne 0 ]]; then
   echo "[FAIL] entrypoint takes no mode flags. deterministic single trace only."
@@ -46,7 +63,10 @@ spec_get() {
 echo "[SEXOS ENTRYPOINT] BUILD_ROOT=$BUILD_ROOT"
 [[ -f "$SPEC_PATH" ]] || fail "missing build spec: $SPEC_PATH"
 
-# 1) ABI guard first, always.
+# Check the architectural obligation bindings before compiling any image.
+python3 scripts/check_architectural_truth.py
+
+# 1) ABI guard, always.
 ./scripts/sexos_pipeline.sh
 
 # 2) Contract validation before any compile/package/run step, then freeze snapshot.
@@ -58,7 +78,7 @@ actual_contract_hash="$(sha256sum sexos_contract.toml | awk '{print $1}')"
 [[ "$expected_contract_hash" = "$actual_contract_hash" ]] || fail "contract hash mismatch vs spec"
 
 expected_abi_hash="$(spec_get abi_version_hash)"
-actual_abi_hash="$({ sha256sum kernel/src/syscalls/mod.rs; sha256sum crates/sex-pdx/src/lib.rs; } | sha256sum | awk '{print $1}')"
+actual_abi_hash="$(sha256sum "${ABI_INPUTS[@]}" | sha256sum | awk '{print $1}')"
 [[ "$expected_abi_hash" = "$actual_abi_hash" ]] || fail "abi_version_hash mismatch vs spec"
 
 SNAP_DIR=".sexos_snapshot"
@@ -70,8 +90,7 @@ chmod 444 "$SNAP_DIR/contract.snapshot.toml"
 # Freeze ABI snapshot once (entrypoint only).
 {
   echo "build_root=$BUILD_ROOT"
-  sha256sum kernel/src/syscalls/mod.rs
-  sha256sum crates/sex-pdx/src/lib.rs
+  sha256sum "${ABI_INPUTS[@]}"
   sha256sum sexos_contract.toml
 } > "$SNAP_DIR/abi.snapshot.lock"
 chmod 444 "$SNAP_DIR/abi.snapshot.lock"
