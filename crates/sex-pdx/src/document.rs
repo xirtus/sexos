@@ -12,6 +12,8 @@ pub const COMMIT: u8 = 8;
 pub const CREATE: u8 = 9;
 pub const ABORT: u8 = 10;
 pub const MAX: usize = 12288;
+/// Maximum admitted data requests per exact BOOT client, not an authority grant.
+pub const WINDOW: usize = 4;
 pub const SEQ_MAX: u32 = 0xFF_FFFF;
 pub const INVALID: u32 = 1;
 pub const DENIED: u32 = 2;

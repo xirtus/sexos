@@ -226,3 +226,27 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
   }
  }}}
 }}
+
+#[test]fn real_compositor_draws_title_after_tab_background_for_all_quil_incarnations(){unsafe{
+ for (owner,sid) in [(3,201),(16,301),(18,307)]{
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+  SURFACES[0]=Surface{owner_pd:owner,surface_id:sid,x:100,y:100,w:400,h:300,active:true,tab_count:1,chrome_flags:1,..SURFACE_EMPTY};
+  let mut ink=0;for y in 0..28{for x in 62..112{if let Some(color)=toolbar_title_fg_at(x,y,sid){ink+=1;assert_eq!(composite_pixel(x+100,y+100,1000,800,0,sid),color);}}}assert!(ink>0);
+ }
+}}
+#[test]fn visual_family_style_does_not_replace_exact_surface_ownership(){
+ for sid in [156,201,301,307]{assert_eq!(desktop_style::native_label(sid),Some("Quil"));assert_eq!(desktop_style::native_indicator(sid),Some(0x00cba6f7));}
+ for(owner,sid)in[(9,156),(16,301),(18,307)]{assert_eq!(desktop_style::native_canvas(owner,sid),Some(desktop_style::NATIVE_CANVAS));}
+ for(owner,sid)in[(3,307),(9,307),(18,301),(17,156),(18,201)]{assert_eq!(desktop_style::native_canvas(owner,sid),None);}
+ assert_eq!(desktop_style::native_label(999),None);
+}
+
+struct SilkBar;
+#[test]
+fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
+ let bar=SilkBar;
+ for sid in [201,301,307]{FOCUSED_SURFACE_ID=sid;for y in 22..26{for x in 155..159{assert_eq!(phase5_active_app_at(x,y,&bar),Some(0xCBA6F7));}}}
+ for sid in [153,306]{FOCUSED_SURFACE_ID=sid;assert_eq!(phase5_active_app_at(155,22,&bar),Some(0x89B4FA));}
+ FOCUSED_SURFACE_ID=0;assert_eq!(phase5_active_app_at(155,22,&bar),None);
+ FOCUSED_SURFACE_ID=307;assert_eq!(phase5_active_app_at(159,22,&bar),None);assert_eq!(phase5_active_app_at(155,26,&bar),None);
+}}

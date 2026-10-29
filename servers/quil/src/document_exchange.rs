@@ -28,6 +28,13 @@ pub struct Event {
     pub revision: u64,
     pub error: u32,
 }
+const WINDOW: usize = w::WINDOW;
+#[derive(Clone, Copy)]
+struct DataRequest {
+    request: w::Request,
+    count: usize,
+    enqueued: bool,
+}
 pub struct Client {
     pub bytes: [u8; w::MAX],
     pub name: [u8; 16],
@@ -40,6 +47,9 @@ pub struct Client {
     seq: u32,
     req: Option<w::Request>,
     awaiting: bool,
+    window: [Option<DataRequest>; WINDOW],
+    issued: usize,
+    completed: usize,
     busy: bool,
     fenced: bool,
     dead: bool,
@@ -65,6 +75,9 @@ impl Client {
             seq: 0,
             req: None,
             awaiting: false,
+            window: [None; WINDOW],
+            issued: 0,
+            completed: 0,
             busy: false,
             fenced: false,
             dead: false,
@@ -113,6 +126,7 @@ impl Client {
         self.creating = false;
         self.phase = Phase::Info;
         self.offset = 0;
+        self.clear_window();
         self.error = 0;
         self.quiescent = false;
         self.busy = true;
@@ -143,6 +157,7 @@ impl Client {
             Phase::Info
         };
         self.offset = 0;
+        self.clear_window();
         self.error = 0;
         self.quiescent = false;
         self.busy = true;
@@ -151,11 +166,20 @@ impl Client {
         true
     }
     pub fn cancel(&mut self) -> bool {
-        if self.dead || self.seq == w::SEQ_MAX {
+        if self.dead {
+            return false;
+        }
+        // Repeated Cancel while the same ABORT is pending consumes no further
+        // sequence or transport capacity and cannot extend its deadline.
+        if self.busy && self.phase == Phase::Abort {
+            return true;
+        }
+        if self.seq == w::SEQ_MAX {
             return false;
         }
         self.req = None;
         self.awaiting = false;
+        self.clear_window();
         self.phase = Phase::Abort;
         self.busy = true;
         self.stall = 0;
@@ -165,15 +189,18 @@ impl Client {
     pub fn close(&mut self) {
         self.bytes.fill(0);
         self.name.fill(0);
+        self.len = 0;
         self.busy = false;
         self.req = None;
         self.awaiting = false;
+        self.clear_window();
         self.dead = true;
     }
     fn finish(&mut self, outcome: Outcome, error: u32) -> Event {
         self.busy = false;
         self.req = None;
         self.awaiting = false;
+        self.clear_window();
         self.error = error;
         self.fenced = outcome == Outcome::Uncertain;
         if !matches!(outcome, Outcome::Loaded | Outcome::Saved) {
@@ -195,6 +222,107 @@ impl Client {
             Some(self.finish(Outcome::Uncertain, error))
         }
     }
+    fn clear_window(&mut self) {
+        self.window = [None; WINDOW];
+        self.issued = 0;
+        self.completed = 0;
+    }
+    fn data_step(&mut self, send: &mut impl FnMut(w::Request) -> Result<(), u64>) -> Option<Event> {
+        // Four privately owned descriptors, no shared pointer or new authority.
+        // Retry only a send explicitly reported as not enqueued, before issuing
+        // another request. An admitted request is never retransmitted.
+        for _ in 0..WINDOW {
+            let retry = self
+                .window
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| e.filter(|e| !e.enqueued).map(|e| (i, e.request.seq)))
+                .min_by_key(|(_, seq)| *seq)
+                .map(|(i, _)| i);
+            let i = if let Some(i) = retry {
+                i
+            } else {
+                if self.issued == self.len {
+                    break;
+                }
+                let Some(i) = self.window.iter().position(Option::is_none) else {
+                    break;
+                };
+                // Leave one sequence available for exact terminal ABORT.
+                if self.seq >= w::SEQ_MAX - 1 {
+                    return Some(self.finish(Outcome::Uncertain, w::STALE));
+                }
+                self.seq += 1;
+                let read = self.phase == Phase::Read;
+                let count = (self.len - self.issued).min(if read { 4 } else { 16 });
+                let (a, b) = if read {
+                    (count as u64, 0)
+                } else {
+                    let mut raw = [0; 16];
+                    raw[..count].copy_from_slice(&self.bytes[self.issued..self.issued + count]);
+                    (
+                        u64::from_le_bytes(raw[..8].try_into().unwrap()),
+                        u64::from_le_bytes(raw[8..].try_into().unwrap()),
+                    )
+                };
+                let request = w::Request {
+                    seq: self.seq,
+                    kind: if read { w::READ } else { w::WRITE },
+                    object: self.object,
+                    offset: self.issued as u32,
+                    a,
+                    b,
+                };
+                self.window[i] = Some(DataRequest {
+                    request,
+                    count,
+                    enqueued: false,
+                });
+                self.issued += count;
+                i
+            };
+            match send(self.window[i].unwrap().request) {
+                Ok(()) => self.window[i].as_mut().unwrap().enqueued = true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => break,
+                Err(_) => return Some(self.finish(Outcome::Uncertain, w::DENIED)),
+            }
+        }
+        None
+    }
+    fn data_receive(&mut self, value: u64) -> Option<Event> {
+        let (i, entry, value) = self.window.iter().enumerate().find_map(|(i, entry)| {
+            let entry = (*entry)?;
+            if !entry.enqueued {
+                return None;
+            }
+            w::decode_reply(value, entry.request.seq).map(|value| (i, entry, value))
+        })?;
+        let v = match value {
+            Ok(v) => v,
+            Err(e) => return self.fail(e),
+        };
+        if self.phase == Phase::Read {
+            if entry.count < 4 && v >> (entry.count * 8) != 0 {
+                return self.fail(w::INVALID);
+            }
+            let offset = entry.request.offset as usize;
+            self.bytes[offset..offset + entry.count]
+                .copy_from_slice(&v.to_le_bytes()[..entry.count]);
+        } else if v as usize != entry.count {
+            return self.fail(w::INVALID);
+        }
+        self.window[i] = None;
+        self.completed += entry.count;
+        self.stall = 0;
+        if self.completed == self.len {
+            self.phase = if self.saving {
+                Phase::Commit
+            } else {
+                Phase::End
+            };
+        }
+        None
+    }
     pub fn step(&mut self, mut send: impl FnMut(w::Request) -> Result<(), u64>) -> Option<Event> {
         if !self.busy {
             return None;
@@ -204,13 +332,20 @@ impl Client {
         if self.stall >= 1_048_576 || self.total >= 16_777_216 {
             return Some(self.finish(Outcome::Uncertain, w::TIMEOUT));
         }
+        if matches!(self.phase, Phase::Read | Phase::Write) {
+            return self.data_step(&mut send);
+        }
         if self.awaiting {
             return None;
         }
         if self.req.is_none() {
-            if self.seq == w::SEQ_MAX {
-                self.dead = true;
-                return self.fail(w::STALE);
+            let limit = if self.phase == Phase::Abort {
+                w::SEQ_MAX
+            } else {
+                w::SEQ_MAX - 1
+            };
+            if self.seq >= limit {
+                return Some(self.finish(Outcome::Uncertain, w::STALE));
             }
             self.seq += 1;
             let (mut a, mut b, mut offset) = (0, 0, 0);
@@ -224,11 +359,7 @@ impl Client {
                     offset = self.offset as u32;
                     w::NAME
                 }
-                Phase::Read => {
-                    offset = self.offset as u32;
-                    a = (self.len - self.offset).min(4) as u64;
-                    w::READ
-                }
+                Phase::Read | Phase::Write => unreachable!(),
                 Phase::End => w::END,
                 Phase::Abort => w::ABORT,
                 Phase::Create => {
@@ -240,15 +371,6 @@ impl Client {
                     a = self.generation as u64;
                     b = self.len as u64;
                     w::BEGIN_SAVE
-                }
-                Phase::Write => {
-                    offset = self.offset as u32;
-                    let n = (self.len - self.offset).min(16);
-                    let mut raw = [0; 16];
-                    raw[..n].copy_from_slice(&self.bytes[self.offset..self.offset + n]);
-                    a = u64::from_le_bytes(raw[..8].try_into().unwrap());
-                    b = u64::from_le_bytes(raw[8..].try_into().unwrap());
-                    w::WRITE
                 }
                 Phase::Commit => {
                     a = w::hash(&self.bytes[..self.len]);
@@ -276,13 +398,20 @@ impl Client {
         None
     }
     pub fn receive(&mut self, caller: u32, value: u64) -> Option<Event> {
-        if caller != 11 || !self.awaiting {
+        if caller != 11 || !self.busy {
+            return None;
+        }
+        if matches!(self.phase, Phase::Read | Phase::Write) {
+            return self.data_receive(value);
+        }
+        if !self.awaiting {
             return None;
         }
         let r = self.req?;
         let value = w::decode_reply(value, r.seq)?;
         self.req = None;
         self.awaiting = false;
+        self.clear_window();
         self.stall = 0;
         let v = match value {
             Ok(v) => v,
@@ -324,17 +453,7 @@ impl Client {
                     }
                 }
             }
-            Phase::Read => {
-                let n = (self.len - self.offset).min(4);
-                if n < 4 && v >> (n * 8) != 0 {
-                    return self.fail(w::INVALID);
-                }
-                self.bytes[self.offset..self.offset + n].copy_from_slice(&v.to_le_bytes()[..n]);
-                self.offset += n;
-                if self.offset == self.len {
-                    self.phase = Phase::End
-                }
-            }
+            Phase::Read | Phase::Write => unreachable!(),
             Phase::End => {
                 if v != 0 {
                     return self.fail(w::INVALID);
@@ -366,16 +485,6 @@ impl Client {
                     Phase::Write
                 }
             }
-            Phase::Write => {
-                let n = (self.len - self.offset).min(16);
-                if v as usize != n {
-                    return self.fail(w::INVALID);
-                }
-                self.offset += n;
-                if self.offset == self.len {
-                    self.phase = Phase::Commit
-                }
-            }
             Phase::Commit => {
                 if v as usize != self.len {
                     return self.fail(w::INVALID);
@@ -392,5 +501,47 @@ impl Client {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::*;
+    #[test]
+    fn partially_issued_window_leaves_a_fresh_abort_sequence() {
+        let mut c = Client::new();
+        c.busy = true;
+        c.phase = Phase::Read;
+        c.object = 3;
+        c.len = 32;
+        c.seq = w::SEQ_MAX - 3;
+        let mut accepted = Vec::new();
+        let e = c
+            .step(|r| {
+                accepted.push(r);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(e.outcome, Outcome::Uncertain);
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(accepted[1].seq, w::SEQ_MAX - 1);
+        assert!(c.cancel());
+        let mut abort = None;
+        c.step(|r| {
+            abort = Some(r);
+            Ok(())
+        });
+        let abort = abort.unwrap();
+        assert_eq!((abort.seq, abort.kind), (w::SEQ_MAX, w::ABORT));
+        assert_eq!(
+            c.receive(11, w::reply(abort.seq, Ok(0))).unwrap().outcome,
+            Outcome::Cancelled
+        );
+        assert!(!c.cancel());
+        assert!(c.load(3, 1));
+        assert_eq!(
+            c.step(|_| panic!("sequence wrapped")).unwrap().outcome,
+            Outcome::Uncertain
+        );
     }
 }

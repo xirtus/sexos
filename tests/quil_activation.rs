@@ -28,3 +28,14 @@ unsafe fn info(state:u64){INFO=[Ok(a::ActivationInfo{successor:16,task:160,surfa
 #[test]fn successor_input_route_requires_active_receipt(){let _l=LOCK.lock().unwrap();unsafe{FOCUSED_SURFACE_ID=301;for state in [0,1,3]{info(state);assert!(!quil_has_focus());assert_eq!(quil_route_slot(),SLOT_QUIL);}info(2);assert!(quil_has_focus());assert_eq!(quil_route_slot(),47);}}
 #[test]fn third_reserve_is_reachable_only_after_second_terminal(){let _l=LOCK.lock().unwrap();unsafe{info(0);INFO[1].as_mut().unwrap().state=1;assert_eq!(quil_activation_info(false).unwrap().successor,16);info(3);INFO[1].as_mut().unwrap().state=1;assert!(quil_launcher_status().0);assert_eq!(quil_activation_info(true).unwrap().task,180);INFO[1].as_mut().unwrap().state=2;FOCUSED_SURFACE_ID=307;assert!(quil_has_focus());assert_eq!(quil_route_slot(),57);FOCUSED_SURFACE_ID=301;assert!(!quil_has_focus());}}
 #[test]fn third_catalog_task_cannot_be_inferred_from_domain(){let _l=LOCK.lock().unwrap();unsafe{info(3);INFO[1].as_mut().unwrap().state=1;INFO[1].as_mut().unwrap().task=18;assert_eq!(quil_activation_info(true),Err(3));info(3);INFO[1].as_mut().unwrap().state=4;assert_eq!(quil_activation_info(true),Err(3));}}
+
+#[test]fn remaining_reserve_queries_both_exact_grants_and_never_enables_action(){let _l=LOCK.lock().unwrap();unsafe{
+ info(0);assert_eq!(quil_reserve_remaining(),Some(2));
+ info(2);assert_eq!(quil_reserve_remaining(),Some(1));
+ info(3);INFO[1].as_mut().unwrap().state=1;assert_eq!(quil_reserve_remaining(),Some(1));
+ INFO[1].as_mut().unwrap().state=2;assert_eq!(quil_reserve_remaining(),Some(0));
+ INFO[1]=Err(2);assert_eq!(quil_reserve_remaining(),None);
+ info(0);INFO[1].as_mut().unwrap().task=18;assert_eq!(quil_reserve_remaining(),None);
+ assert_eq!(quil_reserve_label("CLOSING",false,"incarnation_closing"),"CLOSING");
+ info(2);INFO[1].as_mut().unwrap().state=1;assert_eq!(quil_reserve_remaining(),None);
+}}

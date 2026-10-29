@@ -13,3 +13,14 @@ fn id()->Identity {Identity{domain:9,task:91,surface:156,coordinator:3}}
 #[test]fn bounded_sanitized_text_never_double_wraps(){let rows=[Row{name:"very long\nname that must not inject another status line",status:"CLOSED / REBOOT TO REOPEN"};10];let v=text(&rows,9,256,280);assert!(v.len<=512);let s=std::str::from_utf8(&v.bytes[..v.len]).unwrap();assert!(s.lines().all(|l|l.len()<20));assert!(!s.contains("long\nname"));assert_eq!(s.lines().count(),12);}
 #[test]fn tiny_or_empty_view_is_bounded(){for (w,h) in [(0,0),(12,280),(480,40)]{assert_eq!(text(&[Row{name:"Quil",status:"Closed"}],0,w,h).rows,0);}assert_eq!(text(&[],0,480,280).len,0);}
 #[test]fn wide_future_labels_still_emit_every_complete_line(){let value="x".repeat(200);let rows=[Row{name:&value,status:&value};10];let v=text(&rows,9,1920,800);assert!(v.len<=512);assert_eq!(v.bytes[..v.len].iter().filter(|&&b|b==b'\n').count(),12);}
+
+#[test]fn reserve_count_describes_only_ordered_boot_states(){
+ for first in 0..=4{for third in 0..=4{
+  let expected=match(first,third){(0,0)|(1,0)=>Some(2),(2,0)|(3,0)|(3,1)=>Some(1),(3,2)|(3,3)=>Some(0),_=>None};
+  assert_eq!(quil_reserve(first,third),expected);
+ }}
+ assert_eq!(reserve_label("closed",false,"boot_successor_ready",Some(2)),"closed");
+ assert_eq!(reserve_label("CLEANING",true,"predecessor_cleanup_pending",Some(2)),"CLEANING");
+ for count in [None,Some(0),Some(1),Some(2)]{assert_eq!(reserve_label("UNAVAILABLE",false,"incarnation_unverified",count),"UNAVAILABLE");}
+ assert_eq!(reserve_label("RUNNING / FOCUS",true,"original_incarnation_live",Some(0)),"RUNNING / LAST INSTANCE");
+}

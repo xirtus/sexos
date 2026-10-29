@@ -407,10 +407,6 @@ fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, foc
                         if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
                             c = FRAME_TOP_BAR_DIVIDER_COLOR;
                         }
-                        // Toolbar title text: opaque foreground over glass.
-                        if let Some(fg) = toolbar_title_fg_at(lx, ly, surf.surface_id) {
-                            c = fg;
-                        }
                         // Tab strip: glass background with tab color overlay.
                         if surf.tab_count > 0
                             && lx >= FRAME_TOP_BAR_LIGHT_EXCLUSION_PX
@@ -430,6 +426,8 @@ fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, foc
                                 c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
                             }
                         }
+                        // Title ink follows the tab background; tabs must not erase it.
+                        if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id){c=fg;}
                         // Frame lights: glass background with light color overlay.
                         // Dimmed for single-tab non-hover; full bright for hovered light.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
@@ -813,6 +811,7 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 
 /// Surface ID → indicator color mapping for active app dot.
 const fn app_indicator_color(sid: u32) -> Option<u32> {
+    if let Some(color)=sex_pdx::desktop_style::native_indicator(sid as u64){return Some(color);}
     match sid {
         200 => Some(0x00A6E3A1), // Linen  → green
         201 => Some(0x00CBA6F7), // Quil   → mauve
@@ -842,14 +841,16 @@ const fn accent_swatch_color(idx: u8) -> u32 {
 
 /// Phase 5: active app indicator — 4x4 colored dot near launcher.
 /// Position: x=155..159, y=22..25 (right of options dots at x=135).
-fn phase5_active_app_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
-    if !SILKBAR_PHASE5_PIXEL_PROOF_ENABLED { return None; }
-    if bar.phase1.active_app_sid == 0 { return None; }
+fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar) -> Option<u32> {
+    // The admitted compositor focus is live in normal builds; the separate
+    // phase1 field is updated only by the optional protocol proof path.
+    let focused = unsafe { FOCUSED_SURFACE_ID };
+    if focused == 0 { return None; }
     const DOT_X: usize = 155;
     const DOT_Y: usize = 22;
     const DOT_SZ: usize = 4;
     if x >= DOT_X && x < DOT_X + DOT_SZ && y >= DOT_Y && y < DOT_Y + DOT_SZ {
-        app_indicator_color(bar.phase1.active_app_sid)
+        app_indicator_color(focused as u32)
     } else {
         None
     }
@@ -3356,6 +3357,8 @@ pub extern "C" fn _start() -> ! {
                     unsafe {
                         let admission = lifecycle.admit(&SURFACES, msg.caller_pd, surface_id);
                         let vacant=match &admission { surface_lifecycle::Admission::Vacant(index,_)=>Some(*index),_=>None };
+                        let owner=match &admission{surface_lifecycle::Admission::Vacant(_,owner)=>*owner,surface_lifecycle::Admission::Existing(i)=>SURFACES[*i].owner_pd,_=>0};
+                        let color=sex_pdx::desktop_style::native_canvas(owner,surface_id).unwrap_or(color);
                         if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
                             if let Some(index)=vacant { TEXT_STAGES[index].reset(); }
                             FRAME_GROUPS.observe(&SURFACES);

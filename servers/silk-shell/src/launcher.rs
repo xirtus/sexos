@@ -58,3 +58,17 @@ pub fn text(rows:&[Row<'_>],selected:usize,w:u32,h:u32)->View {
     }
     v
 }
+
+/// Finite reserve is descriptive data, never permission to activate. Only
+/// states returned through both exact BOOT activation grants reach this table.
+pub fn quil_reserve(first:u64,third:u64)->Option<u8>{
+    match(first,third){(0|1,0)=>Some(2),(2,0)|(3,0|1)=>Some(1),(3,2|3)=>Some(0),_=>None}
+}
+pub fn reserve_label<'a>(fallback:&'a str,available:bool,reason:&str,count:Option<u8>)->&'a str{
+    if !available{return fallback;}
+    match reason {
+        "original_incarnation_live"=>match count {Some(2)=>"RUNNING / 2 REOPENS LEFT",Some(1)=>"RUNNING / 1 REOPEN LEFT",Some(0)=>"RUNNING / LAST INSTANCE",_=>"RESERVE CHECK / FOCUS"},
+        "boot_successor_ready"=>match count {Some(2)=>"REOPEN / 2 RESERVED LEFT",Some(1)=>"REOPEN / LAST RESERVED",_=>"RESERVE CHECK / WAIT"},
+        _=>fallback,
+    }
+}

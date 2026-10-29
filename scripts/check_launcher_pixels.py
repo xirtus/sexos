@@ -17,9 +17,10 @@ def layout(text):
         lines.extend([(2+2*row,('> 'if index==v['selected']else'  ')+name),(3+2*row,'  '+status)])
     return v,lines
 
-def verify(text,ppm,font):
+def verify(text,ppm,font,resolution=None):
     try:
-        v,lines=layout(text);width,height,pixels=ppm_rgb(ppm)
+        v,lines=layout(text);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1) if resolution else ppm_rgb(ppm)
+        if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong framebuffer resolution')
         x,y,w,h=(v[k] for k in ('x','y','w','h'));scale=v['scale']
         if x<0 or y<50 or w<=16 or h<=44 or x+w>width or y+h>height:raise ValueError('launcher outside framebuffer')
         columns=min(80,(w-16)//(6*scale));limit=min(columns,40)-1

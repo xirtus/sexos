@@ -15598,7 +15598,8 @@ unsafe fn palette_render_list() {
     for (i,item) in COMMAND_LIST.iter().enumerate() {
         let (available,status,reason)=palette_item_status(item.command);
         let visible_status=match item.command {
-            Command::FocusSpindle=>spindle_history_label(status,available,reason),
+            Command::FocusSpindle=>spindle_reserve_label(spindle_history_label(status,available,reason),available,reason),
+            Command::FocusQuil=>quil_reserve_label(status,available,reason),
             Command::FocusLinen=>"FILES / BROWSE",
             Command::FocusAtlas=>"DESKTOP OVERVIEW",
             Command::FocusBell=>"NOTIFICATIONS",
@@ -15785,22 +15786,29 @@ fn native_launcher_status(target:u32)->(bool,&'static str,&'static str) {
 
 // Resolve the ordered, finite BOOT chain. Errors never skip a grant or
 // resurrect an older identity. Tasks come from immutable lifecycle catalogs.
+fn quil_activation_edge(slot:usize,target:u32,surface:u64,lifecycle:usize,commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
+    use sex_pdx::app_lifecycle as a;
+    let i=a::activation(slot,commit)?;
+    let e=unsafe{APP_CUSTODY.iter().flatten().find(|e|e.target==target&&e.slot==lifecycle).copied()}.ok_or(a::DENIED)?;
+    if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface)||e.surface!=surface||i.state>3{return Err(a::DENIED)}
+    Ok(i)
+}
 fn quil_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
     use sex_pdx::app_lifecycle as a;
-    for (slot,target,surface,lifecycle) in [
-        (a::ACTIVATION_SLOT,16,301,45),
-        (a::QUIL_THIRD_ACTIVATION_SLOT,18,307,a::QUIL_THIRD_LIFECYCLE_SLOT),
-    ] {
-        let validate=|i:a::ActivationInfo|->Result<a::ActivationInfo,u64>{
-            let e=unsafe{APP_CUSTODY.iter().flatten().find(|e|e.target==target&&e.slot==lifecycle).copied()}.ok_or(a::DENIED)?;
-            if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface) || e.surface!=surface || i.state>3{return Err(a::DENIED)}
-            Ok(i)
-        };
-        let i=validate(a::activation(slot,false)?)?;
-        if target==16 && i.state==a::ACTIVATION_EXHAUSTED {continue;}
-        return if commit {validate(a::activation(slot,true)?)} else {Ok(i)};
-    }
-    Err(a::DENIED)
+    for(slot,target,surface,lifecycle)in[(a::ACTIVATION_SLOT,16,301,45),(a::QUIL_THIRD_ACTIVATION_SLOT,18,307,a::QUIL_THIRD_LIFECYCLE_SLOT)]{
+        let i=quil_activation_edge(slot,target,surface,lifecycle,false)?;
+        if target==16&&i.state==a::ACTIVATION_EXHAUSTED{continue;}
+        return if commit{quil_activation_edge(slot,target,surface,lifecycle,true)}else{Ok(i)};
+    }Err(a::DENIED)
+}
+fn quil_reserve_remaining()->Option<u8>{
+    use sex_pdx::app_lifecycle as a;
+    let first=quil_activation_edge(a::ACTIVATION_SLOT,16,301,45,false).ok()?;
+    let third=quil_activation_edge(a::QUIL_THIRD_ACTIVATION_SLOT,18,307,a::QUIL_THIRD_LIFECYCLE_SLOT,false).ok()?;
+    launcher::quil_reserve(first.state,third.state)
+}
+fn quil_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
+    launcher::reserve_label(fallback,available,reason,quil_reserve_remaining())
 }
 fn quil_launcher_status()->(bool,&'static str,&'static str){
     match quil_activation_info(false){
@@ -15829,6 +15837,12 @@ fn spindle_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::Activati
     let e=unsafe{APP_CUSTODY.iter().flatten().find(|e|e.target==17&&e.slot==sex_pdx::app_lifecycle::SPINDLE_LIFECYCLE_SLOT).copied()}.ok_or(sex_pdx::app_lifecycle::DENIED)?;
     if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface) || e.surface!=302 || i.state>3{return Err(sex_pdx::app_lifecycle::DENIED)}
     Ok(i)
+}
+fn spindle_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
+    // Preserve active I/O and recovery state labels over reserve information.
+    if reason=="original_incarnation_live"&&fallback!="RUNNING / FOCUS"{return fallback;}
+    let count=spindle_activation_info(false).ok().map(|i|if i.state<=1{1}else{0});
+    launcher::reserve_label(fallback,available,reason,count)
 }
 fn spindle_launcher_status()->(bool,&'static str,&'static str){
     match spindle_activation_info(false){
@@ -21941,7 +21955,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     let live_mask = selected_window_options_mask();
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, live_mask as u64, 0);
     // Status marker: app name derived from focused surface.
-    let app_label = match sid {
+    let app_label = sex_pdx::desktop_style::native_label(sid).unwrap_or(match sid {
         SURFACE_ID_QUIL => "Quil",
         SURFACE_ID_MESH => "Mesh",
         SURFACE_ID_COLLAR => "Collar",
@@ -21949,7 +21963,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         SURFACE_ID_LINEN => "Linen",
         SURFACE_ID_SPINDLE => "Spindle",
         _ => "App",
-    };
+    });
     serial_println!(
         "[shell.silkbar.status.send] focus={} app={} tint={} bell={} ok=1 reason=focus_set",
         sid, app_label, ACTIVE_TINT_IDX, bell_ring_count()

@@ -15,6 +15,14 @@ pub trait Backend {
         Err(w::DENIED)
     }
 }
+/// Four data requests may be admitted on the existing BOOT route.
+/// Each owns its receipt slot before any backend or staging effect.
+const RECEIPTS: usize = w::WINDOW;
+#[derive(Clone, Copy)]
+struct Receipt {
+    request: w::Request,
+    value: Option<u64>,
+}
 struct Session {
     bytes: [u8; w::MAX],
     name: [u8; 16],
@@ -27,7 +35,8 @@ struct Session {
     written: usize,
     last: Option<w::Request>,
     receipt: u64,
-    pending: Option<u64>,
+    pending: [Option<Receipt>; RECEIPTS],
+    pending_len: usize,
     dead: bool,
 }
 impl Session {
@@ -44,7 +53,8 @@ impl Session {
             written: 0,
             last: None,
             receipt: 0,
-            pending: None,
+            pending: [None; RECEIPTS],
+            pending_len: 0,
             dead: false,
         }
     }
@@ -78,14 +88,14 @@ impl Service {
     pub fn pending(&self) -> bool {
         self.sessions
             .iter()
-            .any(|s| s.pending.is_some() || s.commit.is_some())
+            .any(|s| s.pending_len != 0 || s.commit.is_some())
     }
     /// Called only after queued messages (especially terminal notices) drain.
     /// Admission and completion are separate; a duplicate cannot replay COMMIT.
     pub fn progress(&mut self, b: &mut impl Backend) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
             if let Some(r) = s.commit {
-                let caller = [9,16,18][i];
+                let caller = [9, 16, 18][i];
                 let result = if b.identity(s.object) != Ok(s.generation) {
                     Err(w::STALE)
                 } else {
@@ -102,7 +112,14 @@ impl Service {
                         });
                         let v = w::reply(r.seq, result);
                         s.receipt = v;
-                        s.pending = Some(v);
+                        // COMMIT reserved this entry at admission. Never allocate
+                        // a completion slot after the persistent effect.
+                        for entry in s.pending[..s.pending_len].iter_mut().flatten() {
+                            if entry.request == r {
+                                entry.value = Some(v);
+                                break;
+                            }
+                        }
                     }
                 }
                 // One transaction step per turn, irrespective of client count.
@@ -112,10 +129,18 @@ impl Service {
     }
     pub fn poll(&mut self, mut send: impl FnMut(u32, u64) -> u64) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
-            if let Some(v) = s.pending {
-                if send([9,16,18][i], v) == 0 {
-                    s.pending = None;
+            while s.pending_len != 0 {
+                let Some(v) = s.pending[0].and_then(|entry| entry.value) else {
+                    break;
+                };
+                // The legacy reply syscall returns 1 on Full. Every nonzero
+                // result retains the exact head and all subsequent receipts.
+                if send([9, 16, 18][i], v) != 0 {
+                    break;
                 }
+                s.pending.copy_within(1..s.pending_len, 0);
+                s.pending_len -= 1;
+                s.pending[s.pending_len] = None;
             }
         }
     }
@@ -124,7 +149,8 @@ impl Service {
         if let Some(i) = Self::index(caller) {
             let s = &mut self.sessions[i];
             s.clear();
-            s.pending = None;
+            s.pending = [None; RECEIPTS];
+            s.pending_len = 0;
             s.last = None;
             s.dead = true;
             sex_pdx::serial_record!(
@@ -294,30 +320,37 @@ impl Service {
         if s.dead || !live {
             return Some(w::reply(r.seq, Err(w::DENIED)));
         }
-        if s.commit.is_some() {
-            // Only a fresh exact ABORT may replace an unfinished commit.
-            if r.kind != w::ABORT
-                || r.object != 0
-                || r.offset != 0
-                || r.a != 0
-                || r.b != 0
-                || s.last.map_or(true, |old| r.seq <= old.seq)
-            {
-                return None;
-            }
+        // A queued duplicate consumes neither another receipt nor another
+        // backend effect, including a COMMIT whose completion is not ready.
+        if s.pending[..s.pending_len]
+            .iter()
+            .flatten()
+            .any(|entry| entry.request == r)
+        {
+            return None;
         }
-        if s.pending.is_some() {
-            if r.kind != w::ABORT
-                || r.object != 0
-                || r.offset != 0
-                || r.a != 0
-                || r.b != 0
-                || s.last.map_or(true, |old| r.seq <= old.seq)
-            {
-                return None;
-            }
-            s.pending = None;
+        let fresh_abort = r.kind == w::ABORT
+            && r.object == 0
+            && r.offset == 0
+            && r.a == 0
+            && r.b == 0
+            && s.last.map_or(true, |old| r.seq > old.seq);
+        if fresh_abort {
+            // Terminal cancellation outranks saturation. Already delivered old
+            // replies remain harmless because the client fences their sequence.
+            s.pending = [None; RECEIPTS];
+            s.pending_len = 0;
+        } else if s.commit.is_some() || s.pending_len == RECEIPTS {
+            // Beyond the four-request contract: reject before any effect.
+            // This immediate rejection is not a retained accepted receipt.
+            return Some(w::reply(r.seq, Err(w::BUSY)));
         }
+        let slot = s.pending_len;
+        s.pending[slot] = Some(Receipt {
+            request: r,
+            value: None,
+        });
+        s.pending_len += 1;
         let v = if let Some(old) = s.last {
             if old == r {
                 s.receipt
@@ -334,7 +367,7 @@ impl Service {
             s.receipt = v;
         }
         if s.commit.is_none() {
-            s.pending = Some(v);
+            s.pending[slot].as_mut().unwrap().value = Some(v);
         }
         None
     }
