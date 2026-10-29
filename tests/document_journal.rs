@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+pub const BLOCK_MAX_XFER:u64=4096;
 #[path = "../crates/sex-pdx/src/document.rs"]
 pub mod document;
 #[path = "../servers/sexfiles/src/document_journal.rs"]
@@ -13,6 +14,8 @@ struct Disk {
     op: usize,
     cut: Option<usize>,
     tear: bool,
+    tear_prefix:Option<usize>,
+    calls:Vec<(u8,u64,usize)>,
 }
 impl Disk {
     fn new() -> Self {
@@ -22,6 +25,7 @@ impl Disk {
             op: 0,
             cut: None,
             tear: false,
+            tear_prefix:None, calls:Vec::new(),
         }
     }
     fn point(&mut self) -> Result<(), u32> {
@@ -36,18 +40,21 @@ impl Disk {
         self.live = self.durable.clone();
         self.cut = None;
         self.op = 0;
+        self.calls.clear();
     }
 }
 impl Io for Disk {
     fn read(&mut self, o: u64, out: &mut [u8]) -> Result<(), u32> {
+        self.calls.push((0,o,out.len()));
         self.point()?;
         out.copy_from_slice(&self.live[o as usize..o as usize + out.len()]);
         Ok(())
     }
     fn write(&mut self, o: u64, b: &[u8]) -> Result<(), u32> {
+        self.calls.push((1,o,b.len()));
         if self.point().is_err() {
             if self.tear {
-                let n = b.len() / 2;
+                let n = self.tear_prefix.unwrap_or(b.len()/2).min(b.len());
                 self.durable[o as usize..o as usize + n].copy_from_slice(&b[..n]);
             }
             return Err(w::IO);
@@ -56,6 +63,7 @@ impl Io for Disk {
         Ok(())
     }
     fn sync(&mut self) -> Result<(), u32> {
+        self.calls.push((2,0,0));
         self.point()?;
         self.durable = self.live.clone();
         Ok(())
@@ -147,7 +155,8 @@ fn cooperative(d: &mut Disk, bytes: &[u8]) -> Result<journal::Receipt, u32> {
     for _ in 0..1000 {
         let before = d.op;
         let r = s.step(d, bytes)?;
-        assert!(d.op - before <= 1, "one block operation per step");
+        assert!(d.op - before <= 1, "one logical I/O operation per step");
+        if d.op>before{assert!(d.calls.last().unwrap().2<=4096,"bounded logical I/O");}
         if let Some(r) = r {
             return Ok(r);
         }
@@ -228,4 +237,50 @@ fn cooperative_io_error_fences_cursor_without_replaying_mutation() {
     d.cut = None;
     assert_eq!(s.step(&mut d, b"hi"), Err(w::STALE));
     assert_eq!(d.op, ops);
+}
+
+#[test]
+fn page_chunks_keep_sector_metadata_exact_padding_and_three_flush_barriers(){
+ for len in [0,1,511,512,513,4095,4096,4097,w::MAX-1,w::MAX] {
+  let bytes:Vec<u8>=(0..len).map(|i|(i%251)as u8).collect();let mut d=Disk::new();
+  d.live.fill(0xa5);d.durable=d.live.clone();
+  let r=cooperative(&mut d,&bytes).unwrap();
+  assert!(d.calls.iter().all(|c|c.2<=4096));assert_eq!(d.calls.iter().filter(|c|c.0==2).count(),3);
+  let base=r.bank as usize*journal::STRIDE as usize;
+  let writes:Vec<_>=d.calls.iter().filter(|c|c.0==1).collect();
+  assert_eq!(writes.first().unwrap().1,base as u64);assert_eq!(writes.first().unwrap().2,512);
+  assert_eq!(writes.last().unwrap().1,base as u64);assert_eq!(writes.last().unwrap().2,512);
+  assert!(writes.iter().all(|c|c.1%512==0&&c.2%512==0));
+  let padded=(len+511)/512*512;
+  assert!(d.live[base+512+len..base+512+padded].iter().all(|b|*b==0));
+  assert!(d.live[base+512+padded..base+journal::STRIDE as usize].iter().all(|b|*b==0xa5));
+  d.crash();let mut scratch=[0;w::MAX];let got=journal::recover(&mut d,3,0x40001,&mut scratch).unwrap().unwrap();assert_eq!(&scratch[..got.len],bytes);
+ }
+}
+#[test]
+fn maximum_payload_cut_at_every_operation_with_partial_failed_writes_keeps_old_or_new(){
+ let old:Vec<u8>=(0..w::MAX).map(|i|(i%251)as u8).collect();
+ let new:Vec<u8>=(0..w::MAX-1).map(|i|((i*13+7)%251)as u8).collect();
+ let mut base=Disk::new();cooperative(&mut base,&old).unwrap();base.crash();
+ let mut full=base.clone();cooperative(&mut full,&new).unwrap();
+ for prefix in [0,1,511,512,719,2047,2048,4095,4096] {for cut in 1..=full.op {
+  let mut d=base.clone();d.cut=Some(cut);d.tear=true;d.tear_prefix=Some(prefix);
+  let mut cursor=journal::Save::new(3,0x40001);let mut failed=false;
+  for _ in 0..200 {match cursor.step(&mut d,&new){Err(w::IO)=>{failed=true;break},Ok(None)=>{},other=>panic!("unexpected result {other:?}")}}
+  assert!(failed);let operations=d.op;assert_eq!(cursor.step(&mut d,&new),Err(w::STALE));assert_eq!(d.op,operations);
+  d.crash();let mut scratch=[0;w::MAX];let r=journal::recover(&mut d,3,0x40001,&mut scratch).unwrap().unwrap();
+  assert!(scratch[..r.len]==old||scratch[..r.len]==new,"cut={cut} prefix={prefix}");
+ }}
+}
+#[test]
+fn cancellation_at_every_maximum_payload_turn_preserves_complete_recovery(){
+ let old=vec![0x31;w::MAX];let new=vec![0x75;w::MAX];let mut base=Disk::new();cooperative(&mut base,&old).unwrap();base.crash();
+ let mut full=base.clone();let mut cursor=journal::Save::new(3,0x40001);let mut turns=0;
+ loop{turns+=1;if cursor.step(&mut full,&new).unwrap().is_some(){break}assert!(turns<200);}
+ for stop in 0..=turns {
+  let mut d=base.clone();let mut cursor=journal::Save::new(3,0x40001);
+  for _ in 0..stop {let _=cursor.step(&mut d,&new).unwrap();}drop(cursor);d.crash();
+  let mut scratch=[0;w::MAX];let r=journal::recover(&mut d,3,0x40001,&mut scratch).unwrap().unwrap();
+  assert!(scratch[..r.len]==old||scratch[..r.len]==new,"cancel turn={stop}");
+ }
 }

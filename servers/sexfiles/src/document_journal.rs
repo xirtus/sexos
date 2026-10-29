@@ -5,6 +5,8 @@ use sex_pdx::document as w;
 pub const CAPACITY: u64 = 65_536;
 pub const STRIDE: u64 = 32_768;
 const PAYLOAD: u64 = 512;
+const IO_CHUNK:usize=sex_pdx::BLOCK_MAX_XFER as usize;
+const _:()=assert!(IO_CHUNK>=512 && IO_CHUNK%512==0);
 pub trait Io {
     fn read(&mut self, offset: u64, out: &mut [u8]) -> Result<(), u32>;
     fn write(&mut self, offset: u64, bytes: &[u8]) -> Result<(), u32>;
@@ -108,10 +110,11 @@ pub fn save(
     let base = bank as u64 * STRIDE;
     io.write(base, &[0; 512])?;
     io.sync()?;
-    for (i, chunk) in bytes.chunks(512).enumerate() {
-        let mut sector = [0; 512];
+    for (i, chunk) in bytes.chunks(IO_CHUNK).enumerate() {
+        let mut sector = [0; IO_CHUNK];
         sector[..chunk.len()].copy_from_slice(chunk);
-        io.write(base + PAYLOAD + i as u64 * 512, &sector)?;
+        let padded=(chunk.len()+511)/512*512;
+        io.write(base + PAYLOAD + i as u64 * IO_CHUNK as u64, &sector[..padded])?;
     }
     io.sync()?;
     // Verify payload before publishing the only commit record.
@@ -129,8 +132,10 @@ pub fn save(
     Ok(r)
 }
 
-/// Cooperative save cursor. Each step performs at most one sector read,
-/// write or FLUSH; all state remains service-owned between main-loop turns.
+/// Cooperative save cursor. Each step performs at most one logical read or
+/// write of at most the existing DMA page, or one FLUSH. The VFS may split a
+/// logical operation at exact extent boundaries. State remains service-owned
+/// between turns; small metadata records remain exactly one sector.
 /// Dropping the cursor cancels progress, never rolls back completed writes.
 pub struct Save {
     phase: u8,
@@ -168,15 +173,15 @@ impl Save {
         if bytes.len() > w::MAX {
             return Err(w::INVALID);
         }
-        let mut sector = [0; 512];
+        let mut sector = [0; IO_CHUNK];
         match self.phase {
             0 => {
-                io.read(self.bank as u64 * STRIDE, &mut sector)?;
+                io.read(self.bank as u64 * STRIDE, &mut sector[..512])?;
                 self.candidate = if &sector[..4] == b"QJ02"
                     && sector[4] == self.object
                     && u32::from_le_bytes(sector[8..12].try_into().unwrap()) == self.identity
                     && w::hash(&sector[..504])
-                        == u64::from_le_bytes(sector[504..].try_into().unwrap())
+                        == u64::from_le_bytes(sector[504..512].try_into().unwrap())
                 {
                     let r = Receipt {
                         bank: self.bank,
@@ -199,7 +204,7 @@ impl Save {
             1 => {
                 if let Some(r) = self.candidate {
                     if self.offset < r.len {
-                        let n = (r.len - self.offset).min(512);
+                        let n = (r.len - self.offset).min(IO_CHUNK);
                         io.read(
                             self.bank as u64 * STRIDE + PAYLOAD + self.offset as u64,
                             &mut sector[..n],
@@ -236,7 +241,7 @@ impl Save {
                 }
             }
             2 => {
-                io.write(self.bank as u64 * STRIDE, &sector)?;
+                io.write(self.bank as u64 * STRIDE, &sector[..512])?;
                 self.phase = 3;
             }
             3 => {
@@ -246,11 +251,11 @@ impl Save {
             }
             4 => {
                 if self.offset < bytes.len() {
-                    let n = (bytes.len() - self.offset).min(512);
+                    let n = (bytes.len() - self.offset).min(IO_CHUNK);
                     sector[..n].copy_from_slice(&bytes[self.offset..self.offset + n]);
                     io.write(
                         self.bank as u64 * STRIDE + PAYLOAD + self.offset as u64,
-                        &sector,
+                        &sector[..(n+511)/512*512],
                     )?;
                     self.offset += n;
                 } else {
@@ -264,7 +269,7 @@ impl Save {
             }
             6 | 10 => {
                 if self.offset < bytes.len() {
-                    let n = (bytes.len() - self.offset).min(512);
+                    let n = (bytes.len() - self.offset).min(IO_CHUNK);
                     io.read(
                         self.bank as u64 * STRIDE + PAYLOAD + self.offset as u64,
                         &mut sector[..n],
@@ -292,8 +297,8 @@ impl Save {
                 self.phase = 9;
             }
             9 => {
-                io.read(self.bank as u64 * STRIDE, &mut sector)?;
-                if sector != header(self.object, self.identity, self.next.ok_or(w::INVALID)?) {
+                io.read(self.bank as u64 * STRIDE, &mut sector[..512])?;
+                if sector[..512] != header(self.object, self.identity, self.next.ok_or(w::INVALID)?) {
                     return Err(w::IO);
                 }
                 self.offset = 0;
