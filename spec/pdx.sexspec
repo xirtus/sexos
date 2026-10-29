@@ -63,6 +63,49 @@
       "depends_on": [
         "CAPABILITY_GENESIS"
       ]
+    },
+    {
+      "id": "BOOT_SUCCESSOR_ACTIVATION",
+      "requirement": "A fresh app may execute only through its immutable BOOT-reserved activation grant; predecessor identities and retired backing never become the successor.",
+      "status": "partial",
+      "sources": [
+        {
+          "path": "kernel/src/app_resources.rs",
+          "anchor": "pub fn reserve_successor"
+        },
+        {
+          "path": "kernel/src/app_resources.rs",
+          "anchor": "pub fn activation("
+        },
+        {
+          "path": "kernel/src/app_resource_state.rs",
+          "anchor": "pub struct ActivationGrant"
+        },
+        {
+          "path": "kernel/src/pd/create.rs",
+          "anchor": "pub fn create_boot_domain"
+        },
+        {
+          "path": "kernel/src/core_local.rs",
+          "anchor": "INITIALIZED_CORES"
+        },
+        {
+          "path": "servers/silk-shell/src/main.rs",
+          "anchor": "fn quil_launcher_status"
+        }
+      ],
+      "checks": [
+        "app_resources",
+        "app_activation",
+        "desktop_close_runtime"
+      ],
+      "gaps": [
+        "One BOOT-reserved Quil successor only; no further reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Guest pixel/persistence evidence is required separately from host mocks."
+      ],
+      "depends_on": [
+        "CAPABILITY_GENESIS",
+        "PDX_SOLE_AUTHORITY"
+      ]
     }
   ],
   "transitions": [
@@ -120,6 +163,23 @@
         "New authority or mutable graph introduced without constitutional design."
       ],
       "checks": []
+    },
+    {
+      "event": "BOOT_SUCCESSOR_ACTIVATE",
+      "preconditions": [
+        "Exact immutable holder/predecessor/successor task binding; predecessor all-five service ACKs and private leaf retirement; exact Constructed successor; all absent reserved leaves; BSP-only execution history."
+      ],
+      "effects": [
+        "Restore fresh BOOT leaves, commit one receipt and active routing, then publish one scheduler activation; duplicate requests replay receipt; retain both terminal identities forever."
+      ],
+      "forbidden": [
+        "Runtime capability mint or ELF load; old task resurrection; retired Sext workspace backing reuse as successor; dormant delivery; layout ID used as hardware key."
+      ],
+      "checks": [
+        "app_resources",
+        "app_activation",
+        "desktop_close_runtime"
+      ]
     }
   ]
 }

@@ -2,7 +2,7 @@
 //! Complete app resource runtime; registry, boot mapper and TLB are explicit doubles.
 #![allow(dead_code)]
 extern crate self as spin;extern crate self as x86_64;extern crate self as sex_pdx;
-use std::sync::atomic::{AtomicPtr,AtomicBool,AtomicU64,AtomicUsize,Ordering};
+use std::sync::atomic::{AtomicPtr,AtomicBool,AtomicU64,AtomicUsize,AtomicU32,Ordering};
 use std::collections::{BTreeMap,VecDeque};
 pub struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T>{pub const fn new(v:T)->Self{Self(std::sync::Mutex::new(v))}pub fn lock(&self)->std::sync::MutexGuard<'_,T>{self.0.lock().unwrap()}pub fn try_lock(&self)->Option<std::sync::MutexGuard<'_,T>>{self.0.try_lock().ok()}}
@@ -15,7 +15,7 @@ pub mod structures{pub mod paging{
 pub mod instructions{pub mod tlb{pub fn flush(va:crate::VirtAddr){crate::FLUSHES.lock().push(va.0);}}}
 static FLUSHES:Mutex<Vec<u64>>=Mutex::new(Vec::new());
 static LEAVES:Mutex<BTreeMap<u64,usize>>=Mutex::new(BTreeMap::new());
-static REGISTRY:[AtomicPtr<capability::ProtectionDomain>;16]=[const{AtomicPtr::new(core::ptr::null_mut())};16];
+static REGISTRY:[AtomicPtr<capability::ProtectionDomain>;32]=[const{AtomicPtr::new(core::ptr::null_mut())};32];
 static WAKES:AtomicUsize=AtomicUsize::new(0);
 #[macro_export]macro_rules! serial_println{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}
 #[path="../kernel/src/app_resource_state.rs"]mod app_resource_state;
@@ -26,22 +26,28 @@ static WAKES:AtomicUsize=AtomicUsize::new(0);
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
 mod scheduler{
  pub use crate::ownership as task_ownership;
- pub struct Task{pub id:u32,pub state:crate::ownership::TaskOwnership}
+ pub struct Context{pub pd_id:u64,pub pd_ptr:*const crate::capability::ProtectionDomain,pub rip:u64}
+ pub struct Task{pub id:u32,pub context:Context,pub state:crate::ownership::TaskOwnership}
+ pub struct Scheduler;pub static SCHEDULERS:[Scheduler;1]=[Scheduler];
+ impl Scheduler{pub fn activate_task(&self,t:*mut Task)->bool{unsafe{if !crate::app_resources::activation_permitted((*t).context.pd_id as u32){return false}(*t).state.activate()}}}
  pub fn unpark_thread(task:*mut Task){if !task.is_null(){unsafe{(*task).state.wake();}crate::WAKES.fetch_add(1,crate::Ordering::Relaxed);}}
 }
+mod core_local{pub static INITIALIZED_CORES:crate::AtomicU32=crate::AtomicU32::new(1);pub struct CoreLocal{pub core_id:u32}impl CoreLocal{pub fn get()->Self{Self{core_id:0}}}}
 mod interrupts{pub static TICKS:crate::AtomicU64=crate::AtomicU64::new(0);}
 mod capability{
  use crate::*;
- #[derive(Clone,Copy)]pub enum CapabilityData{AppLifecycle(app_resource_state::LifecycleGrant),Other}
+ #[derive(Clone,Copy)]pub enum CapabilityData{AppLifecycle(app_resource_state::LifecycleGrant),AppActivation(app_resource_state::ActivationGrant),Other}
  pub struct Capability{pub data:CapabilityData}
  pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub trampoline_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut ring::RingBuffer<messages::MessageType,256>,pub signal_ring:*mut ring::RingBuffer<u8,32>,pub incoming_replies:Mutex<VecDeque<u64>>,caps:Mutex<Vec<(u32,CapabilityData)>>}
  impl ProtectionDomain{
   pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|(s,_)|*s==slot).map(|(_,data)|Capability{data:*data})}
   pub fn grant_capability(&self,slot:u64,data:CapabilityData){self.caps.lock().push((slot as u32,data));}
-  pub fn new(id:u32)->&'static Self{
-   let task=Box::into_raw(Box::new(scheduler::Task{id,state:ownership::TaskOwnership::new()}));
-   let tramp=Box::into_raw(Box::new(scheduler::Task{id:id|0x8000,state:ownership::TaskOwnership::new()}));
-   let pd=Box::leak(Box::new(Self{id,pku_key:id as u8,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),caps:Mutex::new(Vec::new())}));
+  pub fn new(id:u32)->&'static Self{Self::new_key(id,id as u8)}
+  pub fn new_key(id:u32,key:u8)->&'static Self{
+   let task=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0x4000},state:ownership::TaskOwnership::new()}));
+   let tramp=Box::into_raw(Box::new(scheduler::Task{id:id|0x8000,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0},state:ownership::TaskOwnership::new()}));
+   let pd=Box::leak(Box::new(Self{id,pku_key:key,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),caps:Mutex::new(Vec::new())}));
+   unsafe{(*task).context.pd_ptr=pd;(*tramp).context.pd_ptr=pd;}
    REGISTRY[id as usize].store(pd,Ordering::Release);pd
   }
  }
@@ -79,12 +85,23 @@ fn fixture_elf()->Vec<u8>{
 #[test]fn actual_lifecycle_checks_all_barriers_retries_hints_then_hands_off_once(){
  use app_resource_state::*;use capability::*;use ownership::{Admission,Phase};
  let services=[3,1,11,13,10];for id in services{ProtectionDomain::new(id);}
- let pager=ProtectionDomain::new(14);let target=ProtectionDomain::new(15);
+ let pager=ProtectionDomain::new(14);let target=ProtectionDomain::new(15);let next=ProtectionDomain::new_key(16,15);
+ let mut next_leaves=Box::new([0u64;17]);
+ for i in 0..17{let va=if i==0{0x5000_0000}else{0x7101_0000-65536+(i as u64-1)*4096};next_leaves[i]=(0x20000+i as u64*4096)|5|(15u64<<59);LEAVES.lock().insert(va,&mut next_leaves[i]as *mut u64 as usize);}
+ // Mock enforcement key is independent of registry identity.
  let base=0x4000_0000;let top=0x7001_0000;let mut leaves=Box::new([0u64;17]);
  for i in 0..17{let va=if i==0{base}else{top-65536+(i as u64-1)*4096};leaves[i]=(0x1000+i as u64*4096)|5|(15u64<<59);LEAVES.lock().insert(va,&mut leaves[i]as *mut u64 as usize);}
- app_resources::plan_boot_apps(&[15]);app_resources::capture_boot_image(15,15,&fixture_elf(),base,top).unwrap();
- app_resources::init(14,3,&[(15,300)],services);
+ app_resources::plan_boot_apps(&[15,16]);app_resources::capture_boot_image(15,15,&fixture_elf(),base,top).unwrap();
+ app_resources::capture_boot_image(16,15,&fixture_elf(),0x5000_0000,0x7101_0000).unwrap();
+ app_resources::init(14,3,&[(15,300),(16,301)],services);
+ app_resources::reserve_successor(15,16,3);
+ let reserved=*next_leaves;assert_eq!(reserved,[0;17]);assert!(!app_resources::activation_permitted(16));assert!(!app_resources::accepts_ipc(16));
+ FLUSHES.lock().clear();
  let shell=ipc::DOMAIN_REGISTRY.get(3).unwrap();
+ assert_eq!(app_resources::activation(shell,44,0),[0,16,16,301,0]);
+ assert_eq!(app_resources::activation(shell,44,1),[RETRY,0,0,0,0]);
+ assert_eq!(app_resources::activation(pager,44,1),[INVALID,0,0,0,0]);
+ assert_eq!(app_resources::activation(shell,0x1_0000_002c,1),[INVALID,0,0,0,0]);
  assert_eq!(app_resources::status(shell,38,1),[0,15,15,300,3]);
  assert_eq!(app_resources::status(shell,38,0),[LIVE,0,0,0,0]);
  assert_eq!(app_resources::status(shell,0x1_0000_0026,1),[INVALID,0,0,0,0]);
@@ -115,4 +132,24 @@ fn fixture_elf()->Vec<u8>{
  assert_eq!(unsafe{(*target.message_ring).len()},0);assert_eq!(unsafe{(*target.signal_ring).len()},0);assert!(target.incoming_replies.lock().is_empty());
  assert_eq!(app_resources::retire(pager,38),result);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(ipc::DOMAIN_REGISTRY.get(15).unwrap().main_task.load(Ordering::Acquire),target.main_task.load(Ordering::Acquire));
+ assert_eq!(app_resources::activation(shell,44,0),[0,16,16,301,1]);
+ core_local::INITIALIZED_CORES.store(2,Ordering::Release);
+ assert_eq!(app_resources::activation(shell,44,1),[DENIED,0,0,0,0]);assert_eq!(*next_leaves,[0;17]);
+ core_local::INITIALIZED_CORES.store(1,Ordering::Release);
+ let next_task=next.main_task.load(Ordering::Acquire);
+ unsafe{(*next_task).context.pd_id=15;}
+ assert_eq!(app_resources::activation(shell,44,1),[DENIED,0,0,0,0]);assert_eq!(*next_leaves,[0;17]);
+ unsafe{(*next_task).context.pd_id=16;}
+ next_leaves[16]=1;let before=FLUSHES.lock().len();
+ assert_eq!(app_resources::activation(shell,44,1),[DENIED,0,0,0,0]);assert_eq!(next_leaves[0],0);assert_eq!(FLUSHES.lock().len(),before);next_leaves[16]=0;
+ assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,2]);
+ assert!(next_leaves.iter().all(|p|*p!=0));assert!(app_resources::accepts_ipc(16));assert!(!app_resources::accepts_ipc(15));
+ assert_eq!(unsafe{(*next_task).state.snapshot().phase},Phase::Detached);
+ let before=FLUSHES.lock().len();assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,2]);assert_eq!(FLUSHES.lock().len(),before);
+ // Old task custody is still permanently dead; receipt replay after successor
+ // death reports exhaustion and cannot resurrect either identity.
+ unsafe{(*next_task).state.exit();}app_resources::poll_exit_notifications();
+ assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,3]);
+ assert_eq!(unsafe{(*next_task).state.snapshot().phase},Phase::Dead);assert_eq!(task.state.snapshot().phase,Phase::Dead);
+
 }

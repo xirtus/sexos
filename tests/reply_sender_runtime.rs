@@ -9,14 +9,18 @@ static SERIAL:Mutex<()>=Mutex::new(());
 static TARGET:AtomicPtr<Domain>=AtomicPtr::new(core::ptr::null_mut());
 static WAKES:AtomicUsize=AtomicUsize::new(0);
 struct ReplyLock(Mutex<VecDeque<messages::IpcReply>>);
-impl ReplyLock{fn lock(&self)->MutexGuard<'_,VecDeque<messages::IpcReply>>{self.0.lock().unwrap()}}
+struct ReplyGuard<'a>(MutexGuard<'a,VecDeque<messages::IpcReply>>);
+impl core::ops::Deref for ReplyGuard<'_>{type Target=VecDeque<messages::IpcReply>;fn deref(&self)->&Self::Target{&self.0}}
+impl core::ops::DerefMut for ReplyGuard<'_>{fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
+impl Drop for ReplyGuard<'_>{fn drop(&mut self){REPLY_HELD.with(|held|held.set(false));}}
+impl ReplyLock{fn lock(&self)->ReplyGuard<'_>{let guard=self.0.lock().unwrap();REPLY_HELD.with(|held|{assert!(!held.replace(true));});ReplyGuard(guard)}}
 struct Ring;
 impl Ring{fn enqueue(&self,_message:messages::MessageType)->Result<(),()>{Ok(())}}
 struct Domain{id:u32,incoming_replies:ReplyLock,main_task:AtomicPtr<scheduler::Task>,trampoline_task:AtomicPtr<scheduler::Task>,message_ring:*mut Ring}
 unsafe impl Sync for Domain{}
 unsafe impl Send for Domain{}
 fn domain(id:u32)->&'static Domain{Box::leak(Box::new(Domain{id,incoming_replies:ReplyLock(Mutex::new(VecDeque::new())),main_task:AtomicPtr::new(core::ptr::null_mut()),trampoline_task:AtomicPtr::new(core::ptr::null_mut()),message_ring:Box::into_raw(Box::new(Ring))}))}
-thread_local!{static CALLER:Cell<*const Domain>=const{Cell::new(core::ptr::null())};}
+thread_local!{static REPLY_HELD:Cell<bool>=const{Cell::new(false)};static CALLER:Cell<*const Domain>=const{Cell::new(core::ptr::null())};}
 mod app_resources{
  pub static ACCEPT:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(true);
  pub fn accepts_ipc(_:u32)->bool{ACCEPT.load(super::Ordering::Acquire)}
@@ -36,8 +40,11 @@ mod scheduler{
  pub fn unpark_thread(task:*mut Task){
   let pd=unsafe{&*super::TARGET.load(super::Ordering::Acquire)};
   assert_eq!(task,pd.main_task.load(super::Ordering::Acquire));
-  // Wake must occur only after publication and after releasing the reply lock.
-  let replies=pd.incoming_replies.0.try_lock().expect("wake while reply lock held");
+  // This sender must release its own lock before waking. A different racing
+  // sender may legitimately hold the same lock by then; try_lock confused
+  // that contention with a publication bug and made this test flaky.
+  super::REPLY_HELD.with(|held|assert!(!held.get(),"wake while this sender holds reply lock"));
+  let replies=pd.incoming_replies.lock();
   assert_eq!(replies.len(),1);assert!(replies[0].caller_pd>0);
   super::WAKES.fetch_add(1,super::Ordering::Relaxed);
  }

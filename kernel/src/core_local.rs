@@ -2,6 +2,8 @@ use core::sync::atomic::{AtomicU32, AtomicPtr, AtomicBool, Ordering};
 use x86_64::registers::model_specific::GsBase;
 use x86_64::VirtAddr;
 
+pub static INITIALIZED_CORES: AtomicU32 = AtomicU32::new(0);
+
 pub static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Per-core local data for SexOS.
@@ -18,6 +20,7 @@ pub struct CoreLocal {
 
 impl CoreLocal {
     pub unsafe fn init(core_id: u32) {
+        INITIALIZED_CORES.fetch_add(1, Ordering::AcqRel);
         use x86_64::structures::paging::PageTableFlags;
         use crate::memory::manager::GLOBAL_VAS;
 

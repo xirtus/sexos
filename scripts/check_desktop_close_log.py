@@ -32,7 +32,7 @@ def responsiveness(text,after=0):
         evidence.append({'start':start,'backend':backend[0],'action':actions[-1][0],'commit':commit,'selected':selected,'current':currents[0][0]})
     return evidence
 
-def check(text):
+def check(text, include_successor=False):
     errors=[]
     records=records_from(text)
     def rows(name,target):
@@ -45,7 +45,7 @@ def check(text):
     presented=rows('display.app.presented',15)
     if not presented or not any(f.get('surface')=='300' and f.get('scene')=='1' for _,f in presented):errors.append('native300 never presented')
     final_pool=-1
-    for target,sid in [(15,300),(9,201),(12,153)]:
+    for target,sid in [(15,300),(9,201),(12,153)]+([(16,301)] if include_successor else []):
         close=one('shell.app.close.request',target)
         # Kaleido's authenticated close handler directly finishes; only Quil
         # and Spindle emit the additional receiver diagnostic.
@@ -61,14 +61,14 @@ def check(text):
         if close[1].get('surface')!=str(sid):errors.append(f'target{target}: wrong close surface')
         for label,row in [('accepted',accepted),('prepared',prepared),('committed',committed),('shell',shell),('retired',retired),('pool',pool)]:
             if row and row[1].get('task')!=task:errors.append(f'target{target}: {label} task mismatch')
-        sends=[(i,f) for i,f in rows('shell.app.close.send',target) if f.get('task')==task and f.get('accepted')=='1' and f.get('slot')==str({9:41,12:42,15:43}[target])]
+        sends=[(i,f) for i,f in rows('shell.app.close.send',target) if f.get('task')==task and f.get('accepted')=='1' and f.get('slot')==str({9:41,12:42,15:43,16:46}[target])]
         if not sends or not any(close[0]<i<retired[0] for i,_ in sends):errors.append(f'target{target}: no accepted close delivery')
         finish=[(i,f) for i,n,f in records if n=='task.finish' and f.get('pd')==str(target) and f.get('task')==task and f.get('terminal')=='1']
         if len(finish)!=1:errors.append(f'target{target}: missing/duplicate exact task finish')
         elif not close[0]<finish[0][0]<prepared[0]<=committed[0]<retired[0]<pool[0]:errors.append(f'target{target}: invalid teardown order')
         elif accepted and not close[0]<accepted[0]<finish[0][0]:errors.append(f'target{target}: invalid receiver acceptance order')
         if target==15 and presented and not min(i for i,_ in presented)<close[0]:errors.append('native300 close preceded presentation')
-        if shell[1].get('retired')!='1' or shell[1].get('surface')!=str({15:300,9:156,12:154}[target]) or shell[1].get('focus') in {str(sid),str({15:300,9:156,12:154}[target])}:errors.append(f'target{target}: stale shell focus/retirement')
+        if shell[1].get('retired')!='1' or shell[1].get('surface')!=str({15:300,9:156,12:154,16:301}[target]) or shell[1].get('focus') in {str(sid),str({15:300,9:156,12:154,16:301}[target])}:errors.append(f'target{target}: stale shell focus/retirement')
         if accepted and accepted[1].get('coordinator')!='3':errors.append(f'target{target}: close accepted from wrong coordinator')
         if not prepared[1].get('removed','').isdecimal() or int(prepared[1].get('removed','0'))>16:errors.append(f'target{target}: invalid display resource count')
         roles=set()
@@ -91,7 +91,7 @@ def check(text):
         except ValueError:errors.append(f'target{target}: invalid private pool accounting')
         if any(r.get(k)!=v for k,v in {'acked':'31','required':'31','all_flushed':'1','pool_reusable':'1','metadata':'retained','runtime_alloc':'0'}.items()):errors.append(f'target{target}: incomplete private retirement')
         if any(p.get(k)!=v for k,v in {'ok':'1','reused':'1','zero_owner':'sext'}.items()):errors.append(f'target{target}: pool not safely reused')
-        retired_surfaces={str(sid),str({15:300,9:156,12:154}[target])}
+        retired_surfaces={str(sid),str({15:300,9:156,12:154,16:301}[target])}
         for i,name,fields in records:
             if i<=retired[0]:continue
             if name=='shell.focus.set' and fields.get('id') in retired_surfaces:errors.append(f'target{target}: retired surface regained focus')

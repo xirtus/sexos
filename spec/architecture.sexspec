@@ -358,7 +358,7 @@
         "bash",
         "scripts/app_resources_host_gate.sh"
       ],
-      "scope": "Actual immutable lifecycle grants, leaf preflight and retirement with registry/mapper/TLB mocks; BSP guest remains required."
+      "scope": "Actual immutable lifecycle/activation grants, dormant/terminal routing, leaf preflight, retirement, one-shot activation and exhaustion with explicit registry/mapper/scheduler/TLB mocks; BSP guest remains required."
     },
     {
       "id": "service_custody",
@@ -493,7 +493,16 @@
         "bash",
         "scripts/launcher_host_gate.sh"
       ],
-      "scope": "Exact incarnation lookup and fail-closed existing-instance policy plus bounded launcher labels; no activation grant or fresh app launch."
+      "scope": "Exact existing-incarnation lookup and bounded launcher text; Quil successor resolution is separately covered by app_activation."
+    },
+    {
+      "id": "app_activation",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/app_activation_host_gate.sh"
+      ],
+      "scope": "Actual shell successor resolution with mocked register transport; static BOOT/runtime commit wiring. Actual kernel transitions and adversarial preflight run in app_resources; guest activation and glyphs remain separate."
     }
   ],
   "invariants": [

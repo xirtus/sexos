@@ -4,6 +4,8 @@ import argparse,hashlib,json,pathlib,re,socket,subprocess,time,os
 from check_desktop_close_log import check,responsiveness
 from check_desktop_pixels import verify as verify_pixels, verify_hidden, verify_kaleido_layout, final_view, font_from_source
 from check_launcher_pixels import verify as verify_launcher
+from check_relaunch_pixels import verify as successor_pixels
+from check_app_activation_log import validate as activation_errors
 class QMP:
     def __init__(self,path):
         self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(5);self.sock.connect(str(path));self.file=self.sock.makefile('rb');self.seq=0;self.read();self.cmd('qmp_capabilities')
@@ -77,16 +79,53 @@ def main():
             focus(sid);key('f11',rf'\[shell.app.close.request\] target={target} task=\d+ surface={sid}')
             wait(rf'\[sext.app.pool.ready\] target={target} task=\d+ .*ok=1',timeout=180)
             q.cmd('screendump',{'filename':str(out/f'after-close-{target}.ppm')})
+        # Persist in the original incarnation before its irreversible close.
+        focus(201)
+        key('esc',r'\[quil.palette.action\] kind=esc clear=1')
+        key('h',r'\[quil.text.recv\]')
+        key('i',r'\[quil.text.recv\]')
+        key('esc',r'kind=esc toggle_on=1')
+        key('down',r'\[quil.palette.selected\] row=1')
+        key('ret',r'\[quil.persist.save.ok\]',timeout=180)
+        saved=re.findall(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',text())[-1]
         close(15,300)
         # Existing Quil shell frame survives independently until its own close.
         close(9,201)
+        # BOOT's one fresh successor is now ready. The same launcher row
+        # activates it, then its real registration/presentation completes.
+        key('grave_accent',r'\[shell.palette.item\] idx=0')
+        key('j',r'\[shell.palette.select\] old=0 new=1')
+        key('ret',r'\[shell.app.relaunch\] predecessor=9 successor=16 task=16 surface=301 receipt_replayed=1')
+        wait(r'\[app.surface.presented\] target=16 surface=301 sequence=1 ok=1',timeout=180)
+        wait(r'\[shell.focus.set\] id=301',timeout=90)
+        key('down',r'\[quil.palette.selected\] row=1')
+        key('down',r'\[quil.palette.selected\] row=2')
+        key('ret',r'\[quil.persist.load.ok\]',timeout=180)
+        loaded=re.findall(r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',text())[-1]
+        if loaded!=saved:raise RuntimeError('successor did not load exact predecessor saved document')
+        key('esc',r'\[quil.palette.action\] kind=esc clear=1')
+        key('z',r'\[quil.text.recv\]')
+        status_match=wait(r'\[quil.text.view\] target=16 surface=301 status=([^\r\n]*) '+str(int(saved[0])+1)+r'B\*',timeout=30)
+        expected_status=status_match[1]+' '+str(int(saved[0])+1)+'B*'
+        pixel_errors=['not rendered'];deadline=time.monotonic()+60
+        while time.monotonic()<deadline:
+            q.cmd('screendump',{'filename':str(out/'successor-input.ppm')})
+            pixel_errors=successor_pixels(text(),(out/'successor-input.ppm').read_bytes(),font,expected_status)
+            if not pixel_errors:break
+            time.sleep(.2)
+        if pixel_errors:raise RuntimeError('successor glyph pixels: '+'; '.join(pixel_errors))
+        close(16,301)
+        (out/'relaunch.json').write_text(json.dumps({'ok':True,'predecessor':9,'successor':16,'surface':301,'saved':saved,'loaded':loaded,'typed_status':expected_status,'pixel_errors':pixel_errors,'scope':'real BOOT activation, native presentation, document identity, input glyphs, successor private cleanup'},indent=2)+'\n')
         key('scroll_lock',r'\[shell.focus.set\] id=153')
         close(12,153)
-        # Closed BOOT instances have no reserved successor. Enter must stay in
+        # Both Quil reservations are terminal. Enter must stay in
         # the launcher with an explicit denial and actual readable closed text.
         key('grave_accent',r'\[shell.palette.item\] idx=0')
         key('j',r'\[shell.palette.select\] old=0 new=1')
-        key('ret',r'\[launcher.execute.denied\] idx=1 .*reason=no_boot_successor')
+        key('ret',r'\[launcher.execute.denied\] idx=1 .*reason=boot_reserve_exhausted')
+        activation_failures=activation_errors(text())
+        (out/'activation-log.json').write_text(json.dumps({'ok':not activation_failures,'errors':activation_failures,'scope':'ordered real activation/retirement records; pixels checked separately'},indent=2)+'\n')
+        if activation_failures:raise RuntimeError('activation log: '+'; '.join(activation_failures))
         launcher_errors=['not rendered'];deadline=time.monotonic()+90
         while time.monotonic()<deadline:
             q.cmd('screendump',{'filename':str(out/'launcher-closed.ppm')})
@@ -153,7 +192,7 @@ def main():
             time.sleep(.2)
         (out/'minimize-restore.json').write_text(json.dumps({'ok':not restored_errors,'errors':restored_errors,'selected':selected,'scope':'visible glyphs then absent ink then restored complete glyphs'},indent=2)+'\n')
         if restored_errors:raise RuntimeError('restored pixels: '+'; '.join(restored_errors))
-        errors=check(text())
+        errors=check(text(),include_successor=True)
         (out/'result.json').write_text(json.dumps({'ok':not errors,'errors':errors,'actions':actions},indent=2)+'\n')
         for error in errors:print('FAIL:',error)
         print('[desktop.close.gate.result] '+('FAIL'if errors else'PASS'))

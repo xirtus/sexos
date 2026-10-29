@@ -42,3 +42,29 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
  assert_eq!(grant.authorize(7,12,12,production::ACK),Err(production::DENIED));
  assert_eq!(grant.authorize(7,12,12,production::RETIRE),Err(production::DENIED));
 }
+#[test]fn activation_grant_binds_holder_logical_incarnation_and_both_tasks(){
+ let g=ActivationGrant{holder:3,logical_app:9,incarnation:2,predecessor:9,predecessor_task:91,successor:16,successor_task:161};
+ assert_eq!(g.authorize(3,9,91,16,161),Ok(()));
+ for (h,p,t,n,nt) in [(1,9,91,16,161),(3,12,91,16,161),(3,9,92,16,161),(3,9,91,17,161),(3,9,91,16,162),(3,9,91,9,161)]{
+  assert_eq!(g.authorize(h,p,t,n,nt),Err(DENIED));
+ }
+ assert_eq!(ActivationGrant{incarnation:3,..g}.authorize(3,9,91,16,161),Err(DENIED));
+ assert_eq!(ActivationGrant{logical_app:0,..g}.authorize(3,9,91,16,161),Err(DENIED));
+}
+#[test]fn successor_all_absent_leaves_preflight_before_any_restore(){
+ let pages=[page(0x4000,1,0x1000),page(0x5000,2,0x2000)];let writes=RefCell::new(Vec::new());
+ assert_eq!(restore_reserved_pages(&pages,|leaf|if leaf==2{0x60}else{0},|l,v|writes.borrow_mut().push((l,v)),|_|panic!("flush failed preflight")),Err(DENIED));
+ assert!(writes.borrow().is_empty());
+}
+#[test]fn successor_restore_exact_boot_frames_flags_then_flushes(){
+ let pages=[page(0x4000,1,0x1000),page(0x5000,2,0x2000)];let events=RefCell::new(Vec::new());
+ assert_eq!(restore_reserved_pages(&pages,|_|0,|l,v|events.borrow_mut().push((l,v)),|va|events.borrow_mut().push((va,0))),Ok(2));
+ assert_eq!(*events.borrow(),vec![(1,pages[0].expected),(0x4000,0),(2,pages[1].expected),(0x5000,0)]);
+}
+#[test]fn successor_rejects_aliases_and_empty_reservation(){
+ let p=page(0x4000,1,0x1000);
+ assert_eq!(restore_reserved_pages(&[],|_|0,|_,_|panic!(),|_|panic!()),Err(INVALID));
+ for q in [page(0x4000,2,0x2000),page(0x5000,1,0x2000),page(0x5000,2,0x1000)]{
+  assert_eq!(restore_reserved_pages(&[p,q],|_|0,|_,_|panic!(),|_|panic!()),Err(DENIED));
+ }
+}

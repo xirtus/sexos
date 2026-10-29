@@ -11,13 +11,14 @@ struct App {
     target:u32,task:u32,main:usize,trampoline:usize,pkey:u8,surface:u64,
     pages:[PrivatePage;MAX_PAGES],count:usize,captured:bool,ready:bool,
     pool:u64,coordinator:u32,pager:u32,services:[u32;5],acked:u8,
-    retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
+    predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:[PrivatePage::EMPTY;MAX_PAGES],count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,retired:false,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,predecessor:0,activated:false,retired:false,last_hint:[0;6],hinted:0,kicked:false}}}
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];
+static DORMANT:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
 static TERMINAL:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
 fn boot(){assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"APP_GENESIS_AFTER_SEAL");}
 pub fn plan_boot_apps(targets:&[u32]){
@@ -100,6 +101,35 @@ pub fn init(pager:u32,coordinator:u32,catalog:&[(u32,u64)],services:[u32;5]){
     // Every captured physical frame belongs to exactly one private app pool.
     for i in 0..MAX_APPS{for j in 0..i{for page in &apps[i].pages[..apps[i].count]{assert!(!apps[j].pages[..apps[j].count].iter().any(|p|p.expected&PHYSICAL_MASK==page.expected&PHYSICAL_MASK),"APP_CROSS_IMAGE_ALIAS");}}}
 }
+/// Genesis reserves a fresh image and permanently binds the one activation
+/// grant. Clear successor leaves before any predecessor user execution.
+pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32){
+    boot();let mut apps=APPS.lock();
+    let old=apps.iter().find(|a|a.ready&&a.target==predecessor).expect("SUCCESSOR_NO_PREDECESSOR");
+    let old_task=old.task;let old_key=old.pkey;
+    let index=apps.iter().position(|a|a.ready&&a.target==successor).expect("SUCCESSOR_NO_IMAGE");
+    let app=&mut apps[index];assert!(app.predecessor==0 && successor!=predecessor && app.pkey==old_key,"SUCCESSOR_BIND");
+    let task=unsafe{&*(app.main as *const crate::scheduler::Task)};
+    assert!(task.state.snapshot().phase==Phase::Constructed,"SUCCESSOR_ALREADY_ACTIVE");
+    app.predecessor=predecessor;
+    DORMANT[index].store(true,Ordering::Release);
+    retire_private_pages(&app.pages[..app.count],
+        |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
+        |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
+        |va|x86_64::instructions::tlb::flush(VirtAddr::new(va))).expect("SUCCESSOR_RESERVE_LEAVES");
+    let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
+    let slot=sex_pdx::app_lifecycle::ACTIVATION_SLOT;
+    assert!(coordinator.find_capability(slot as u32).is_none());
+    coordinator.grant_capability(slot as u64,CapabilityData::AppActivation(ActivationGrant{
+        holder,logical_app:predecessor,incarnation:2,predecessor,predecessor_task:old_task,
+        successor,successor_task:app.task}));
+    crate::serial_println!("[boot.app.successor] logical={} incarnation=2 predecessor={} successor={} task={} surface={} key={} dormant=1 leaves={} runtime_mint=0",predecessor,predecessor,successor,app.task,app.surface,app.pkey,app.count);
+}
+/// Scheduler first-admission fences both BOOT sweeps. Ordinary wakes cannot
+/// activate Constructed tasks; the activation commit drops this fence last.
+pub fn activation_permitted(target:u32)->bool{
+    !TARGETS.iter().enumerate().any(|(i,t)|t.load(Ordering::Acquire)==target && DORMANT[i].load(Ordering::Acquire))
+}
 fn grant(pd:&ProtectionDomain,slot:u64)->Result<LifecycleGrant,u64>{
     let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(INVALID)?;
     match pd.find_capability(slot).map(|c|c.data){Some(CapabilityData::AppLifecycle(g))=>Ok(g),_=>Err(INVALID)}
@@ -116,7 +146,7 @@ fn dead(app:&App)->Result<(),u64>{
     Ok(())
 }
 pub fn accepts_ipc(target:u32)->bool{
-    !TARGETS.iter().enumerate().any(|(i,t)|t.load(Ordering::Acquire)==target && TERMINAL[i].load(Ordering::Acquire))
+    !TARGETS.iter().enumerate().any(|(i,t)|t.load(Ordering::Acquire)==target && (TERMINAL[i].load(Ordering::Acquire)||DORMANT[i].load(Ordering::Acquire)))
 }
 pub fn status(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
     let result=(||{let g=grant(pd,slot)?;let apps=APPS.try_lock().ok_or(RETRY)?;
@@ -125,6 +155,53 @@ pub fn status(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
         if kind==1{return Ok([0,app.target as u64,app.task as u64,app.surface,app.coordinator as u64])}
         if kind!=0{return Err(INVALID)}dead(app)?;
         Ok([0,app.target as u64,app.task as u64,REQUIRED as u64,app.acked as u64])
+    })();result.unwrap_or_else(|e|[e,0,0,0,0])
+}
+/// BSP serialized snapshot/preflight/commit. No runtime frame selection,
+/// ELF loading, capability minting, or predecessor identity mutation.
+pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
+    let result=(||{
+        if kind>1{return Err(INVALID)}
+        let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(INVALID)?;
+        let g=match pd.find_capability(slot).map(|c|c.data){Some(CapabilityData::AppActivation(g))=>g,_=>return Err(INVALID)};
+        let mut apps=APPS.try_lock().ok_or(RETRY)?;
+        let oi=apps.iter().position(|a|a.ready&&a.target==g.predecessor).ok_or(DENIED)?;
+        let ni=apps.iter().position(|a|a.ready&&a.target==g.successor).ok_or(DENIED)?;
+        let old=&apps[oi];let new=&apps[ni];
+        g.authorize(pd.id,old.target,old.task,new.target,new.task)?;
+        if new.predecessor!=old.target{return Err(DENIED)}
+        // Once consumed, replay never revalidates or restores retired leaves.
+        if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,
+            if TERMINAL[ni].load(Ordering::Acquire){3}else{2}])}
+        let ready=old.retired && old.acked==REQUIRED && dead(old).is_ok();
+        let reply=[0,new.target as u64,new.task as u64,new.surface,if ready{1}else{0}];
+        if kind==0{return Ok(reply)}
+        if !ready{return Err(RETRY)}
+        // Local TLB retirement is valid only while exactly the BSP has ever
+        // initialized execution. Fail closed if another core is introduced.
+        if crate::core_local::INITIALIZED_CORES.load(Ordering::Acquire)!=1
+            || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
+        let target=crate::ipc::DOMAIN_REGISTRY.get(new.target).ok_or(DENIED)?;
+        let main=target.main_task.load(Ordering::Acquire);
+        let tramp=target.trampoline_task.load(Ordering::Acquire);
+        if main as usize!=new.main || main.is_null() || tramp as usize!=new.trampoline{return Err(DENIED)}
+        let task=unsafe{&*main};let state=task.state.snapshot();
+        if task.id!=new.task || task.context.pd_id!=new.target as u64
+            || task.context.pd_ptr!=target as *const _ || task.context.rip==0
+            || state.phase!=Phase::Constructed || state.owner_core.is_some() || state.exited{return Err(DENIED)}
+        if !tramp.is_null(){let s=unsafe{(*tramp).state.snapshot()};
+            if s.phase!=Phase::Constructed || s.owner_core.is_some() || s.exited{return Err(DENIED)}}
+        let count=restore_reserved_pages(&new.pages[..new.count],
+            |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
+            |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,value)},
+            |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
+        // All fallible validation is above. IF is masked by the syscall
+        // entry. Publish authority and receipt before scheduler publication.
+        let new=&mut apps[ni];new.activated=true;
+        DORMANT[ni].store(false,Ordering::Release);
+        assert!(crate::scheduler::SCHEDULERS[0].activate_task(main),"SUCCESSOR_EXCLUSIVE_COMMIT");
+        crate::serial_println!("[app.activation.committed] logical={} incarnation={} predecessor={} successor={} task={} surface={} pages={} runtime_alloc=0 runtime_mint=0 bsp=1",g.logical_app,g.incarnation,g.predecessor,g.successor,g.successor_task,new.surface,count);
+        Ok([0,new.target as u64,new.task as u64,new.surface,2])
     })();result.unwrap_or_else(|e|[e,0,0,0,0])
 }
 pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{

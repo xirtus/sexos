@@ -23,6 +23,13 @@ fn pd_watchdog(start: u64, last_checkpoint: &str) {
 
 /// create_protection_domain: Ruthless Phase 6/8/10 implementation.
 pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>, domain_id: u8) -> Result<u32, &'static str> {
+    create_boot_domain(elf_path,requested_id,domain_id,domain_id)
+}
+
+/// BOOT layout identity and finite hardware key are separate inputs.
+pub fn create_boot_domain(elf_path:&str,requested_id:Option<u32>,layout:u8,domain_id:u8)->Result<u32,&'static str>{
+    assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"PD_GENESIS_AFTER_BOOT");
+    assert!(domain_id>0 && domain_id<16 && layout>0,"PD_BOOT_LAYOUT_OR_KEY");
     let start_ticks = crate::hal::get_monotonic_counter();
     let mut checkpoint = "create.start";
     serial_println!("pd: Creating domain for {} (Domain ID {})...", elf_path, domain_id);
@@ -57,7 +64,7 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>, domai
     // 3. Load ELF via PDX to sexfiles
     checkpoint = "elf.before_load";
     serial_println!("pd: checkpoint={} path={}", checkpoint, elf_path);
-    let (entry, stack_top) = ElfLoader::load_elf(elf_path, pd_id, domain_id, domain_id)?;
+    let (entry, stack_top) = ElfLoader::load_elf(elf_path, pd_id, layout, domain_id)?;
     checkpoint = "elf.after_load";
     serial_println!("pd: checkpoint={} entry={:#x}", checkpoint, entry.as_u64());
     ElfLoader::assert_user_rip_mapped_executable(pd_id, entry)?;

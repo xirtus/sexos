@@ -246,8 +246,8 @@ publisher_policy = "retry-per-main-loop-without-blocking-while-pending"
 info_syscall = 63
 ack_syscall = 64
 retire_syscall = 65
-slots = [38, 39, 40]
-apps = "9:Quil:156:frame201;12:Spindle:154,160,161,162:frame153;15:Kaleidoscope:300"
+slots = [38, 39, 40, 45]
+apps = "9:Quil:156:frame201;12:Spindle:154,160,161,162:frame153;15:Kaleidoscope:300;16:Quil-incarnation2:301"
 notice = "0x107;caller0;targetPD,originalTaskID,reserved0;hint-only-retry-until-role-ACK"
 info_input = "rdi-exact-slot,rsi-kind0-dead-status-or-kind1-live-catalog"
 info_output = "rax-status;rsi-target,rdx-task,r10-requiredMask,r8-ackedMask;catalog-r10-surface,r8-shellCoordinator"
@@ -260,12 +260,12 @@ status = "0-OK,1-invalid,2-retry,3-denied,5-live;failure-query-payload-zero"
 preconditions = "pinned-original-main-Dead-no-owner;inactive-trampoline;all-five-ACK;demand-range-closed;exact-all-private-leaf-preflight"
 effects = "clear-and-local-invlpg-all-ELF-and-user-stack-pages;drain-terminal-message-reply-signal-contents;sext-zero-entire-BOOT-alias-before-workspace-reuse"
 retained = "permanent-PD-task-capability-queue-control-tombstones;shared-live-service-state;saved-documents;no-incarnation-reuse"
-limits = "three-BOOT-enrolled-apps;BSP-local-TLB;cooperative-task-finish;no-runtime-cap-mint-no-per-process-page-tables-no-buddy-free"
+limits = "four-BOOT-enrolled-app-identities;BSP-local-TLB;cooperative-task-finish;no-runtime-cap-mint-no-per-process-page-tables-no-buddy-free"
 
 [app_lifecycle.close]
 opcode = 264
-slots = [41, 42, 43]
-route = "shell3-to-BOOT-enrolled-app9-12-15"
+slots = [41, 42, 43, 46]
+route = "shell3-to-BOOT-enrolled-app9-12-15-16"
 args = "targetPD,originalTaskID,reserved0"
 semantics = "cooperative-native-app-finish;retry-every16ticks-until-attested-death;enqueue-is-not-exit;no-runtime-mint"
 
@@ -297,3 +297,17 @@ capacity = "one-active-and-one-latest-complete-text-batch;512bytes-each;no-alloc
 progress = "at-most-four-checked-send-attempts-per-shell-pass;exact-operation-retained-on-full;receive-and-HID-progress-between-passes"
 receipt = "final-clear-and-chunk-admission-only;actual-visibility-requires-framebuffer-verification"
 coalescing = "active-batch-finishes-without-interleaving;newer-desired-repaint-replaces-only-pending-batch"
+
+[app_activation]
+syscall = 66
+slot = 44
+input = "rdi-exact-BOOT-AppActivation-slot;rsi-kind0-observe-or-kind1-activate"
+output = "rax-status;rsi-successorPD,rdx-successorTask,r10-successorSurface,r8-state;failure-payload-zero"
+state = "0-reserved-awaiting-predecessor-retirement,1-ready,2-activated-receipt,3-exhausted-terminal"
+reservation = "logicalQuil9-incarnation2;predecessor9-task9;successor16-task16-surface301;layout16-key9;fresh-ELF-stack-and-kernel-stack-at-BOOT;private-leaves-nonpresent-until-activation"
+authority = "immutable-holder-shell3-exact-predecessor-and-successor-task-tuple;no-runtime-domain-or-capability-creation"
+preconditions = "predecessorDead-no-owner-all5serviceACK-private-retired;exact-constructed-successor-and-trampoline;all-reserved-leaves-zero;BSP-only-execution-history"
+commit = "restore-exact-reserved-leaves-and-local-invlpg;publish-receipt-and-routing;one-scheduler-first-admission;IF-masked-no-other-execution-core"
+replay = "returns-consumed-receipt-without-restoring-leaves-or-requeueing;terminal-successor-exhausts-reserve"
+routes = "successor-close46;successor-call47;self-QUERY-catalog48;all-granted-and-sealed-at-BOOT"
+limits = "one-successor-for-Quil;no-runtime-load-fork-exec-or-per-process-page-tables;other-apps-remain-reboot-only"

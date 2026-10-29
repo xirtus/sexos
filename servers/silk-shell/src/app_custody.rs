@@ -19,7 +19,7 @@ impl Entry {
     }
     pub fn owns_surface(&self, sid: u64) -> bool { self.surface == sid || self.shell_surface() == Some(sid) }
     pub fn close_slot(&self) -> Option<u64> {
-        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), _=>None }
+        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), (16,301)=>Some(46), _=>None }
     }
     pub fn request_close(&mut self) -> bool {
         if self.dead || self.close_slot().is_none() {return false}

@@ -1,5 +1,7 @@
 # Incarnation authority and launcher — 29 October 2026
 
+Historical checkpoint `5c879302`. The next [BOOT-reserved relaunch slice](BOOT_RESERVED_RELAUNCH_2026_10_29.md) implements the first finite Quil successor; the unprovisioned state described below applies to this checkpoint.
+
 The previous verified checkpoint is committed and pushed as `593c6632` on `origin/master`. This follow-up uses one short Astra authority audit; implementation and verification stay in the parent to conserve the remaining allowance.
 
 ## Delivered

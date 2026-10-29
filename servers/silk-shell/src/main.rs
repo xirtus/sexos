@@ -26,7 +26,7 @@ use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y,
 use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Kernel-catalog app ownership; retained after exit to fence queued messages.
-static mut APP_CUSTODY: [Option<app_custody::Entry>; 3] = [None; 3];
+static mut APP_CUSTODY: [Option<app_custody::Entry>; 4] = [None; 4];
 unsafe fn shell_catalog_init() {
     for (i, slot) in sex_pdx::app_lifecycle::SLOTS.iter().copied().enumerate() {
         match sex_pdx::app_lifecycle::catalog(slot) {
@@ -39,6 +39,10 @@ unsafe fn shell_catalog_init() {
             Err(_) => panic!("shell lifecycle catalog unavailable"),
         }
     }
+    assert_eq!(sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::ACTIVATION_SLOT,true),Err(sex_pdx::app_lifecycle::RETRY));
+    let blocked=raw_pdx_call(sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,OP_QUIL_PING,0,0,0).0;
+    assert_eq!(blocked,sex_pdx::ERR_SERVICE_NOT_READY);
+    sex_pdx::serial_record!("[app.activation.negative] dormant_route=denied early_activation=retry ok=1");
 }
 unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
@@ -5175,6 +5179,7 @@ static mut DESKTOP_STATES: linen_text_delivery::DesktopStates = linen_text_deliv
 /// Preserve the syscall's real status while retaining only bounded desktop
 /// state operations that encountered display backpressure.
 fn pdx_call(slot:u64, opcode:u64, arg0:u64, arg1:u64, arg2:u64)->(u64,u64) {
+    let slot=if slot==SLOT_QUIL {quil_route_slot()}else{slot};
     let result=raw_pdx_call(slot,opcode,arg0,arg1,arg2);
     if slot==SLOT_DISPLAY && matches!(opcode,0xEC|0xEE|0xFD) && linen_text_delivery::DesktopStates::tracks(arg0) {
         let admission=match result.0 {0=>linen_text_delivery::Admission::Accepted,
@@ -8104,7 +8109,7 @@ unsafe fn tile_active_scene_frames() {
         let b = &mut SHELL_TILE_APPLY_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[shell.tile.apply] sid={} x={} y={} w={} h={}", sid, rx, ry, rw, rh);
+            sex_pdx::serial_record!("[shell.tile.apply] sid={} x={} y={} w={} h={}", sid, rx, ry, rw, rh);
         }
 
         // Update local shadow state.
@@ -9818,7 +9823,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             // control keys directly to Quil PD before the shell consumes them
             // as UI actions (mirrors the Spindle passthrough above). Lets
             // Enter/Backspace/Escape/letters reach Quil's palette + text buffer.
-            if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL
+            if quil_has_focus()
                 && is_quil_text_key(scancode)
             {
                 static mut QUIL_DRAIN_ROUTE_BUDGET: u32 = 32;
@@ -9826,7 +9831,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     QUIL_DRAIN_ROUTE_BUDGET -= 1;
                     serial_println!(
                         "[silk-shell.key.route] target=quil sid={} code={} down={}",
-                        SURFACE_ID_QUIL, scancode, value
+                        FOCUSED_SURFACE_ID, scancode, value
                     );
                 }
                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
@@ -10129,25 +10134,25 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 return;
             }
 
-            if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
+            if quil_has_focus() {
                 static mut KEY_ROUTE_DRAIN_BUDGET: u32 = 32;
                 if KEY_ROUTE_DRAIN_BUDGET > 0 {
                     KEY_ROUTE_DRAIN_BUDGET -= 1;
                     serial_println!(
                         "[silk-shell.key.route] owner=quil sid={} scancode={:#x}",
-                        SURFACE_ID_QUIL, scancode
+                        FOCUSED_SURFACE_ID, scancode
                     );
                 }
                 // AP9: key route liveness guard
                 {
-                    let live = surface_is_alive(SURFACE_ID_QUIL) as u8;
-                    surface_input_lifetime_mark_key_route(SURFACE_ID_QUIL, live, 1, live);
+                    let live = surface_is_alive(FOCUSED_SURFACE_ID) as u8;
+                    surface_input_lifetime_mark_key_route(FOCUSED_SURFACE_ID, live, 1, live);
                 }
                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
                     serial_println!(
                         "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
-                        scancode, SURFACE_ID_QUIL
+                        scancode, FOCUSED_SURFACE_ID
                     );
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
@@ -12825,6 +12830,26 @@ unsafe fn open_app_in_active_scene_by_sid(sid: u64) {
 }
 
 unsafe fn open_quil_in_active_scene() -> bool {
+    let Ok(instance)=quil_activation_info(false) else{return false};
+    if instance.state==1 {
+        let Ok(active)=quil_activation_info(true) else{return false};
+        // Query replay through the same immutable grant. It must never enqueue
+        // another task or remap private pages, even if UI execution repeats.
+        if quil_activation_info(true)!=Ok(active){return false}
+        assert_eq!(raw_pdx_call(SLOT_QUIL,OP_QUIL_PING,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
+        sex_pdx::serial_record!("[app.activation.negative] stale_predecessor_route=denied duplicate_activation=receipt ok=1");
+        sex_pdx::serial_record!("[shell.app.relaunch] predecessor=9 successor={} task={} surface={} receipt_replayed=1",active.successor,active.task,active.surface);
+        return true; // app registration event completes focus asynchronously
+    }
+    if instance.state==2 {
+        if let Some(fid)=frame_for_surface(instance.surface){
+            if frame_is_minimized(fid) && !restore_minimized_frame(fid){return false}
+            return try_set_focus(instance.surface);
+        }
+        return true; // activation accepted; registration still in flight
+    }
+    if instance.state==3 || !native_launcher_status(9).0{return false}
+
     // E1: duplicate guard — if Quil already visible in active scene, reject open.
     for f in FRAMES.iter() {
         if let Some(frame) = f {
@@ -15496,10 +15521,34 @@ fn native_launcher_status(target:u32)->(bool,&'static str,&'static str) {
     }
 }
 
+// Logical Quil resolves only the exact immutable successor grant. The old
+// catalog entry and surface tombstones are never rewritten.
+fn quil_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
+    let i=sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::ACTIVATION_SLOT,commit)?;
+    if (i.successor,i.task,i.surface)!=(16,16,301) || i.state>3{return Err(sex_pdx::app_lifecycle::DENIED)}
+    Ok(i)
+}
+fn quil_launcher_status()->(bool,&'static str,&'static str){
+    match quil_activation_info(false){
+        Ok(i) if i.state==1=>(true,"REOPEN / RESERVED INSTANCE","boot_successor_ready"),
+        Ok(i) if i.state==2=>native_launcher_status(16),
+        Ok(i) if i.state==3=>(false,"CLOSED / RESERVE EXHAUSTED","boot_reserve_exhausted"),
+        Ok(_)=>{
+            let status=native_launcher_status(9);
+            if status.2=="no_boot_successor" {(false,"CLEANING / PLEASE WAIT","predecessor_cleanup_pending")}else{status}
+        },
+        Err(_)=>launcher::Status::Unavailable.presentation(),
+    }
+}
+fn quil_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_QUIL || (FOCUSED_SURFACE_ID==301 && quil_activation_info(false).map_or(false,|i|i.state==2))}}
+fn quil_route_slot()->u64{
+    if quil_activation_info(false).map_or(false,|i|i.state==2){sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT}else{SLOT_QUIL}
+}
+
 fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
     match cmd {
         Command::FocusSpindle => native_launcher_status(12),
-        Command::FocusQuil => native_launcher_status(9),
+        Command::FocusQuil => quil_launcher_status(),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -15564,7 +15613,7 @@ unsafe fn palette_execute_selected() -> bool {
         }
         Command::FocusQuil => {
             let open_ok = open_quil_in_active_scene();
-            let sid = if open_ok { SURFACE_ID_QUIL } else { 0 };
+            let sid = if open_ok {quil_activation_info(false).map_or(SURFACE_ID_QUIL,|i|if i.state==2{i.surface}else{SURFACE_ID_QUIL})} else { 0 };
             serial_println!(
                 "[shell.palette.focus.result] target=QUIL sid={} ok={}",
                 sid,
@@ -20660,7 +20709,7 @@ unsafe fn maybe_run_spindle_real_keyboard_focus_proof() {
             0 => {
                 serial_println!("[shell.spindle.text.proof] stage=0 action=Begin ok=1");
                 // Ensure Quil is focused so the palette opens over a known surface.
-                if FOCUSED_SURFACE_ID != SURFACE_ID_QUIL {
+                if !quil_has_focus() {
                     if !surface_is_alive(SURFACE_ID_QUIL) {
                         serial_println!("[shell.spindle.real.proof.defer] reason=quil_not_alive");
                         return;
@@ -20776,7 +20825,7 @@ unsafe fn maybe_run_mesh_keyboard_map_proof() {
             0 => {
                 serial_println!("[mesh.keyboard.map.proof] stage=1 action=Begin ok=1");
                 // Ensure Quil is focused so the palette opens over a known surface.
-                if FOCUSED_SURFACE_ID != SURFACE_ID_QUIL {
+                if !quil_has_focus() {
                     if !surface_is_alive(SURFACE_ID_QUIL) {
                         serial_println!("[mesh.keyboard.map.proof] stage=1 action=Defer reason=quil_not_alive");
                         return;
@@ -24554,19 +24603,19 @@ pub extern "C" fn _start() -> ! {
                             let reserved_ui_action = if sink_consumed { None } else { scancode_to_action(scancode) };
                             let reserved_ui_key = reserved_ui_action.is_some() || sink_consumed;
                             // Track C2: key routing proof
-                            if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
+                            if !reserved_ui_key && quil_has_focus() {
                                 unsafe {
                                     static mut KEY_ROUTE_BUDGET: u32 = 16;
                                     let b = &mut KEY_ROUTE_BUDGET;
                                     if *b > 0 {
                                         *b -= 1;
-                                        serial_println!("[silk-shell.key.route] owner=quil sid={} scancode={:#x}", SURFACE_ID_QUIL, scancode);
+                                        serial_println!("[silk-shell.key.route] owner=quil sid={} scancode={:#x}", FOCUSED_SURFACE_ID, scancode);
                                     }
                                 }
                                 // AP9: key route liveness guard
                                 {
-                                    let live = surface_is_alive(SURFACE_ID_QUIL) as u8;
-                                    surface_input_lifetime_mark_key_route(SURFACE_ID_QUIL, live, 1, live);
+                                    let live = surface_is_alive(FOCUSED_SURFACE_ID) as u8;
+                                    surface_input_lifetime_mark_key_route(FOCUSED_SURFACE_ID, live, 1, live);
                                 }
                                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                                 mutated = true;
@@ -24887,7 +24936,7 @@ pub extern "C" fn _start() -> ! {
                             // Spindle pattern above. Non-reserved keys are already
                             // routed by the early owner=quil branch, hence the
                             // reserved_ui_key guard here (avoids double-send).
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL
+                            } else if quil_has_focus()
                                 && reserved_ui_key && is_quil_text_key(scancode)
                             {
                                 static mut MAIN_DISPATCH_QUIL_TEXT_BUDGET: u32 = 32;
@@ -24895,13 +24944,13 @@ pub extern "C" fn _start() -> ! {
                                     MAIN_DISPATCH_QUIL_TEXT_BUDGET -= 1;
                                     serial_println!(
                                         "[silk-shell.key.route] target=quil sid={} code={} down={}",
-                                        SURFACE_ID_QUIL, scancode, value
+                                        FOCUSED_SURFACE_ID, scancode, value
                                     );
                                 }
                                 // AP9: key route liveness guard
                                 {
-                                    let live = surface_is_alive(SURFACE_ID_QUIL) as u8;
-                                    surface_input_lifetime_mark_key_route(SURFACE_ID_QUIL, live, 1, live);
+                                    let live = surface_is_alive(FOCUSED_SURFACE_ID) as u8;
+                                    surface_input_lifetime_mark_key_route(FOCUSED_SURFACE_ID, live, 1, live);
                                 }
                                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                                 mutated = true;

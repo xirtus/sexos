@@ -351,6 +351,7 @@ impl Scheduler {
     /// First admission is explicit; wake cannot activate unfinished trampolines.
     pub fn activate_task(&self, task: *mut Task) -> bool {
         if task.is_null() || unsafe { (*task).context.rip == 0 } { return false; }
+        if !crate::app_resources::activation_permitted(unsafe{(*task).context.pd_id as u32}) {return false;}
         if !unsafe { (*task).state.activate() } { return false; }
         self.admit_task(task);
         true

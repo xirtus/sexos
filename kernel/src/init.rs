@@ -43,7 +43,7 @@ pub fn init() {
 
     // Fixed Spawn Order (Deterministic IDs)
     let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet", "sext", "kaleidoscope"];
-    crate::app_resources::plan_boot_apps(&[9, 12, 15]);
+    crate::app_resources::plan_boot_apps(&[9, 12, 15, 16]);
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -119,6 +119,12 @@ pub fn init() {
             }
         }
     }
+
+    // One fresh Quil incarnation. Layout16 is distinct; hardware key9 is
+    // reused only after the predecessor has no private translations/custody.
+    let quil_module=modules.modules().iter().find(|m|m.path().contains("quil")).expect("BOOT_QUIL_MODULE");
+    let successor=crate::pd::create::create_boot_domain(quil_module.path(),Some(16),16,9).expect("BOOT_QUIL_SUCCESSOR");
+    assert_eq!(successor,16);
 
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
@@ -757,8 +763,21 @@ pub fn init() {
         serial_println!("[boot.app.close.route] holder={} target={} slot={} runtime_mint=0",silkshell_id,target,slot);
     }
     crate::app_resources::init(sext_id, silkshell_id,
-        &[(quil_id,156), (spindle_id,154), (kaleido_id,300)],
+        &[(quil_id,156), (spindle_id,154), (kaleido_id,300), (successor,301)],
         [silkshell_id,sexdisp_id,sexfiles_id,sexnet_id,sexbell_id]);
+    let successor_pd=crate::ipc::DOMAIN_REGISTRY.get(successor).unwrap();
+    for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id)]{
+        successor_pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
+    }
+    let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).unwrap();
+    shell.grant_capability(sex_pdx::app_lifecycle::SUCCESSOR_CLOSE_SLOT,crate::capability::CapabilityData::Domain(successor));
+    shell.grant_capability(sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,crate::capability::CapabilityData::Domain(successor));
+    for id in [quil_id,successor]{
+        let pd=crate::ipc::DOMAIN_REGISTRY.get(id).unwrap();let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
+        pd.grant_capability(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
+            crate::app_resource_state::LifecycleGrant{target_pd:id,task_id:unsafe{(*task).id},holder_pd:id,rights:crate::app_resource_state::QUERY,ack_bit:0}));
+    }
+    crate::app_resources::reserve_successor(quil_id,successor,silkshell_id);
     // Linen serves Spindle's existing async list/open/search route. A read-only
     // lifecycle observer fences queued requests after death without owning an ACK.
     let spindle=crate::ipc::DOMAIN_REGISTRY.get(spindle_id).expect("BOOT_SPINDLE_MISSING");
@@ -779,6 +798,7 @@ pub fn init() {
     // Enqueue all registered PD tasks onto scheduler runqueue
     for pd_id in 1..crate::ipc::MAX_DOMAINS as u32 {
         if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
+            if !crate::app_resources::activation_permitted(pd_id) {continue;}
             let task_ptr = pd.main_task.load(core::sync::atomic::Ordering::Acquire);
             if !task_ptr.is_null() {
                 let pd_name = match pd_id {

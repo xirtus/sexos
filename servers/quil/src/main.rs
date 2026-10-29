@@ -66,7 +66,10 @@ const SURFACE_ID_QUIL: u64 = 201;
 // rejects this PD's draw ops (sexdisplay owner_pd check), and at boot sid
 // 201 does not exist at all — every prior quil draw landed nowhere.
 // Created in _start; all draw call sites below target this sid.
-const QUIL_CONTENT_SID: u64 = 0x9C; // 156 — free in shell + display registries
+static QUIL_CONTENT_SURFACE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(156);
+fn quil_content_sid()->u64{QUIL_CONTENT_SURFACE.load(core::sync::atomic::Ordering::Acquire)}
+static QUIL_TASK: core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
+static QUIL_DOMAIN: core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
 
 // Surface geometry (matches silk-shell SURFACE_201_W/H and BOOT_*)
 const SURFACE_W: u64 = 640;
@@ -566,7 +569,7 @@ fn draw_title_bar() {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
-        QUIL_CONTENT_SID,
+        quil_content_sid(),
         0u64,
         (1u64 << 56)
             | (QUIL_TITLE_BAR_COLOR << 32)
@@ -621,7 +624,7 @@ fn draw_text_lines(buf: &[u8]) {
     const MAX_CHUNK: usize = 8;              // bytes per OP_TEXT_DRAW call
 
     // Clear previous text on this surface.
-    pdx_call(SLOT_DISPLAY, OP_TEXT_CLEAR, QUIL_CONTENT_SID, 0, 0);
+    pdx_call(SLOT_DISPLAY, OP_TEXT_CLEAR, quil_content_sid(), 0, 0);
 
     let line_count = text_buffer_line_count(buf);
     let show_lines = line_count.min(QUIL_MAX_VISIBLE_LINES);
@@ -708,6 +711,11 @@ fn draw_text_lines(buf: &[u8]) {
         total_written += 1;
     }
 
+    let status_end=line_buf[..sp].iter().position(|b|*b==b'\n').unwrap_or(sp);
+    sex_pdx::serial_record!("[quil.text.view] target={} surface={} status={}",
+        QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),quil_content_sid(),
+        core::str::from_utf8(&line_buf[..status_end]).unwrap_or("INVALID"));
+
     // Send padded text in 8-byte chunks via OP_TEXT_DRAW, highest offset first.
     let chunk_count = (total_written + MAX_CHUNK - 1) / MAX_CHUNK;
     for chunk_idx in (0..chunk_count).rev() {
@@ -728,7 +736,7 @@ fn draw_text_lines(buf: &[u8]) {
             | (((offset as u64 >> 8) & 0xF) << 12)
             | (TEXT_LINE_COLOR << 32);
 
-        pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, QUIL_CONTENT_SID, packed, arg2);
+        pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, quil_content_sid(), packed, arg2);
     }
 
     serial_println!("[quil.text.draw.v2.sent] total_bytes={} chunks={}",
@@ -744,7 +752,7 @@ fn emit_rect_slot(slot: u64, x: u64, y: u64, w: u64, h: u64, color: u64) {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
-        QUIL_CONTENT_SID,
+        quil_content_sid(),
         (y << 32) | x,
         (slot << 56) | (color << 32) | (h << 16) | w,
     );
@@ -802,7 +810,7 @@ fn draw_palette(selected: u8) {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
-        QUIL_CONTENT_SID,
+        quil_content_sid(),
         (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
         (QUIL_ROW_INACTIVE << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
     );
@@ -847,7 +855,7 @@ fn draw_palette(selected: u8) {
         pdx_call(
             SLOT_DISPLAY,
             0xEF,
-            QUIL_CONTENT_SID,
+            quil_content_sid(),
             (y << 32) | QUIL_ROW_X,
             (color << 32) | (QUIL_ROW_H << 16) | QUIL_ROW_W,
         );
@@ -856,7 +864,7 @@ fn draw_palette(selected: u8) {
             pdx_call(
                 SLOT_DISPLAY,
                 0xEF,
-                QUIL_CONTENT_SID,
+                quil_content_sid(),
                 (y << 32) | QUIL_ROW_X,
                 (QUIL_ACCENT_COLOR << 32) | (QUIL_ROW_H << 16) | QUIL_ACCENT_W,
             );
@@ -2010,7 +2018,7 @@ fn quil_persist_save() -> Result<usize, i64> {
             h ^= QUIL_BUFFER[i] as u64;
             h = h.wrapping_mul(0x100_0000_01b3);
         }
-        serial_println!("[quil.persist.save.ok] bytes={} hash={:#x} doc={}", len, h, QUIL_DOC_ID);
+        sex_pdx::serial_record!("[quil.persist.save.ok] bytes={} hash={:#x} doc={}", len, h, QUIL_DOC_ID);
         Ok(len)
     }
 }
@@ -2088,7 +2096,7 @@ fn quil_persist_load() -> Result<usize, i64> {
             h ^= QUIL_BUFFER[i] as u64;
             h = h.wrapping_mul(0x100_0000_01b3);
         }
-        serial_println!("[quil.persist.load.ok] bytes={} hash={:#x} doc={}", len, h, target);
+        sex_pdx::serial_record!("[quil.persist.load.ok] bytes={} hash={:#x} doc={}", len, h, target);
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
         Ok(len)
     }
@@ -2306,7 +2314,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                     pdx_call(
                         SLOT_DISPLAY,
                         0xEF,
-                        QUIL_CONTENT_SID,
+                        quil_content_sid(),
                         (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
                         (QUIL_LINE_BG << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
                     );
@@ -2336,7 +2344,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         pdx_call(
                             SLOT_DISPLAY,
                             0xEF,
-                            QUIL_CONTENT_SID,
+                            quil_content_sid(),
                             0,
                             (color << 32) | (2000u64 << 16) | 2000u64,
                         );
@@ -2412,7 +2420,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                             pdx_call(
                                 SLOT_DISPLAY,
                                 0xEF,
-                                QUIL_CONTENT_SID,
+                                quil_content_sid(),
                                 0,
                                 (color << 32) | (2000u64 << 16) | 2000u64,
                             );
@@ -3017,6 +3025,12 @@ unsafe fn check_physical_keyboard_proof(scancode: u64) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("QUIL_SELF_AUTHORITY");
+    assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(9,156)|(16,301)));
+    QUIL_DOMAIN.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
+    QUIL_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
+    QUIL_CONTENT_SURFACE.store(catalog.surface_id,core::sync::atomic::Ordering::Release);
+    sex_pdx::serial_record!("[quil.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[quil.init.start]");
     serial_println!("[quil.boot]");
     serial_println!("[quil.no_fb_write]");
@@ -3026,11 +3040,19 @@ pub extern "C" fn _start() -> ! {
     init_buffer();
 
     // ── APP_SURFACE_PACK_V1: own visible content surface (0xEC binds this
-    // PD as owner; every draw site targets QUIL_CONTENT_SID now) ──────────
-    pdx_call(SLOT_DISPLAY, 0xEC, QUIL_CONTENT_SID,
+    // PD as owner; every draw site targets quil_content_sid() now) ──────────
+    pdx_call(SLOT_DISPLAY, 0xEC, quil_content_sid(),
         (56u64 << 32) | 1072u64,   // x=1072, y=56 (right column, under bar)
         (304u64 << 32) | 200u64);  // w=200, h=304
-    serial_println!("[quil.surface.visible.ok] sid={}", QUIL_CONTENT_SID);
+    serial_println!("[quil.surface.visible.ok] sid={}", quil_content_sid());
+    if catalog.target_pd==16 {
+        // Register through the existing BOOT shell route. The shell owns
+        // framing/geometry and acknowledges the exact fresh catalog subject.
+        loop{
+            if sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,0xFA,catalog.surface_id,1,(catalog.target_pd as u64)<<8).is_ok(){break}
+            sched_yield();
+        }
+    }
 
     // ── Physical Keyboard → Quil Text Proof Setup ──────────────────────────
     // MUST run before any storage-blocking proofs (sexfiles save/load) so the
@@ -3836,7 +3858,12 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    if PERSISTENCE_PROOF_ENABLED {
+    if catalog.target_pd==16 {
+        // The legacy startup fixture owns PD9's RamFS object. A successor
+        // must not inherit that private lease; native DiskFS access remains
+        // available through its own BOOT storage route.
+        sex_pdx::serial_record!("[quil.startup.fixture.skipped] target=16 reason=predecessor_private_object");
+    } else if PERSISTENCE_PROOF_ENABLED {
         serial_println!("[quil.sexfiles.proof.start]");
 
         // ── Proof A: Save ──
@@ -3992,6 +4019,8 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    let mut presentation_pending=false;
+    let mut presentation_sent=false;
     serial_println!("[quil.nonblocking_startup.begin]");
     serial_println!("[quil.nonblocking_startup.no_startup_block] ok=1");
 
@@ -4071,10 +4100,25 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        let msg = pdx_listen_raw(0);
+        if presentation_pending {
+            if sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){
+                presentation_pending=false;presentation_sent=true;
+            }
+        }
+        let msg = if presentation_pending {
+            match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sched_yield();continue}}
+        }else{pdx_listen_raw(0)};
+        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && catalog.target_pd==16 {
+            presentation_pending=true;continue;
+        }
+        if msg.type_id==1 && msg.caller_pd==1 && msg.arg0==256 && presentation_sent {
+            presentation_sent=false;
+            sex_pdx::serial_record!("[app.surface.presented] target={} surface={} sequence=1 ok=1",catalog.target_pd,catalog.surface_id);
+            continue;
+        }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
-            [msg.arg0,msg.arg1,msg.arg2],9,9) {
-            sex_pdx::serial_record!("[app.close.accepted] target=9 task=9 coordinator=3");
+            [msg.arg0,msg.arg1,msg.arg2],QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire)) {
+            sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire));
             sex_pdx::task_finish(0);
         }
 

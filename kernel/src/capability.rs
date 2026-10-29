@@ -92,6 +92,7 @@ pub enum CapabilityData {
     PagerMapping(crate::paging_state::PagerMappingGrant),
     DemandRegion(crate::paging_state::DemandRegionGrant),
     AppLifecycle(crate::app_resource_state::LifecycleGrant),
+    AppActivation(crate::app_resource_state::ActivationGrant),
     InputRing, MessageQueue,
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Immutable BOOT_DAG app lifecycle grants. Exit notifications are hints;
 //! every service attests custody through its own capability before retirement.
-pub const SLOTS: [usize; 3] = [38, 39, 40];
+pub const SLOTS: [usize; 4] = [38, 39, 40, 45];
 pub const OP_APP_EXIT: u64 = 0x107;
 pub const OP_APP_CLOSE: u64 = 0x108;
 pub const OP_APP_PRESENT: u64 = 0x109;
@@ -96,9 +96,9 @@ impl Authority for KernelAuthority {
     fn ack(&mut self,s:usize,t:u32)->Result<(),u64>{ack(s,t)}
 }
 #[derive(Clone,Copy)]
-pub struct ServiceCustody { retired: [Option<ExitNotice>;3], acked:[bool;3] }
+pub struct ServiceCustody { retired: [Option<ExitNotice>;4], acked:[bool;4] }
 impl ServiceCustody {
-    pub const fn new()->Self { Self {retired:[None;3],acked:[false;3]} }
+    pub const fn new()->Self { Self {retired:[None;4],acked:[false;4]} }
     pub fn is_retired(&self,target:u32)->bool {
         self.retired.iter().flatten().any(|n|n.target_pd==target)
     }
@@ -124,4 +124,30 @@ impl ServiceCustody {
         }
         None
     }
+}
+
+/// Immutable BOOT grants for the finite second Quil incarnation.
+pub const ACTIVATION_SLOT:usize=44;
+pub const SUCCESSOR_CLOSE_SLOT:u64=46;
+pub const SUCCESSOR_ROUTE_SLOT:u64=47;
+pub const SELF_CATALOG_SLOT:usize=48;
+pub const SYS_ACTIVATION:u64=66;
+pub const ACTIVATION_RESERVED:u64=0;
+pub const ACTIVATION_READY:u64=1;
+pub const ACTIVATION_ACTIVE:u64=2;
+pub const ACTIVATION_EXHAUSTED:u64=3;
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub struct ActivationInfo{pub successor:u32,pub task:u32,pub surface:u64,pub state:u64}
+/// kind0 observes; kind1 consumes the fixed one-shot grant or replays its
+/// receipt. No caller supplies a domain, image, address or replacement grant.
+#[cfg(target_arch="x86_64")]
+pub fn activation(slot:usize,commit:bool)->Result<ActivationInfo,u64>{
+    let (status,pd,task,surface,state):(u64,u64,u64,u64,u64);
+    unsafe{core::arch::asm!("syscall",inlateout("rax") SYS_ACTIVATION=>status,
+        in("rdi") slot as u64,inlateout("rsi") commit as u64=>pd,
+        lateout("rdx") task,lateout("r10") surface,lateout("r8") state,
+        out("rcx") _,out("r11") _,options(nostack));}
+    if status!=OK{return Err(status)}
+    Ok(ActivationInfo{successor:u32::try_from(pd).map_err(|_|INVALID)?,
+        task:u32::try_from(task).map_err(|_|INVALID)?,surface,state})
 }

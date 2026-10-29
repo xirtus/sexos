@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pure authority and exact private-image leaf retirement mechanism.
-pub const MAX_APPS:usize=3;
+pub const MAX_APPS:usize=4;
 pub const MAX_PAGES:usize=512;
 pub const QUERY:u8=1;
 pub const ACK:u8=2;
@@ -42,4 +42,33 @@ pub fn retire_private_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64,
     }
     for page in pages {clear(page.leaf);flush(page.va);}
     Ok(pages.len())
+}
+
+/// A successor restores only BOOT-reserved, non-present exact leaves. All
+/// checks precede publication; backing never comes from a retired workspace.
+pub fn restore_reserved_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64,
+    mut write:impl FnMut(u64,u64),mut flush:impl FnMut(u64))->Result<usize,u64>{
+    if pages.is_empty() || pages.len()>MAX_PAGES{return Err(INVALID)}
+    for (i,p) in pages.iter().enumerate(){
+        if p.va==0 || p.va%4096!=0 || p.leaf==0 || p.expected&5!=5 || read(p.leaf)!=0
+            || pages[..i].iter().any(|old|old.va==p.va || old.leaf==p.leaf
+                || old.expected&PHYSICAL_MASK==p.expected&PHYSICAL_MASK){return Err(DENIED)}
+    }
+    for p in pages{write(p.leaf,p.expected);flush(p.va);}
+    Ok(pages.len())
+}
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub struct ActivationGrant {
+    pub holder:u32,pub logical_app:u32,pub incarnation:u32,
+    pub predecessor:u32,pub predecessor_task:u32,pub successor:u32,pub successor_task:u32,
+}
+impl ActivationGrant {
+    pub fn authorize(self,holder:u32,predecessor:u32,predecessor_task:u32,successor:u32,successor_task:u32)->Result<(),u64>{
+        if self.holder!=holder || holder==0 || self.logical_app==0 || self.incarnation!=2
+            || predecessor==0 || successor==0 || predecessor==successor
+            || predecessor_task==0 || successor_task==0 || predecessor_task==successor_task
+            || self.predecessor!=predecessor || self.predecessor_task!=predecessor_task
+            || self.successor!=successor || self.successor_task!=successor_task{return Err(DENIED)}
+        Ok(())
+    }
 }

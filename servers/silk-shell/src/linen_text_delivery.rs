@@ -82,14 +82,14 @@ impl LatestOperation {
     }
 }
 
-/// Four boot desktop surfaces only. Observation preserves the caller's actual
+/// Five BOOT desktop surfaces (including the reserved successor) only. Observation preserves the caller's actual
 /// transport result; a full-ring state operation is retried independently.
-pub struct DesktopStates { slots: [Option<Operation>;4], chrome: [Option<Operation>;4], cursor: usize }
+pub struct DesktopStates { slots: [Option<Operation>;5], chrome: [Option<Operation>;5], cursor: usize }
 impl DesktopStates {
-    pub const fn new() -> Self { Self { slots:[None;4],chrome:[None;4],cursor:0 } }
-    pub fn tracks(surface:u64)->bool { matches!(surface,200|201|153|300) }
+    pub const fn new() -> Self { Self { slots:[None;5],chrome:[None;5],cursor:0 } }
+    pub fn tracks(surface:u64)->bool { matches!(surface,200|201|153|300|301) }
     pub fn observe(&mut self, op:Operation, result:Admission) {
-        let index=match op.surface {200=>0,201=>1,153=>2,300=>3,_=>return};
+        let index=match op.surface {200=>0,201=>1,153=>2,300=>3,301=>4,_=>return};
         if op.opcode==0xFD {self.chrome[index]=Some(op);}
         match op.opcode {
             0xEC => self.slots[index]=match result {
@@ -111,9 +111,9 @@ impl DesktopStates {
     /// eligible. No nested work/receive is performed by this bounded pump.
     pub fn poll(&mut self,budget:usize,mut validate:impl FnMut(Operation)->Option<Operation>,mut send:impl FnMut(Operation)->Admission) {
         let mut attempts=0;
-        for _ in 0..4 {
+        for _ in 0..5 {
             if attempts>=budget {break;}
-            let index=self.cursor;self.cursor=(self.cursor+1)%4;
+            let index=self.cursor;self.cursor=(self.cursor+1)%5;
             let Some(original)=self.slots[index] else {continue;};
             let Some(op)=validate(original) else {self.slots[index]=None;continue;};
             attempts+=1;
