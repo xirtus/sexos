@@ -3,6 +3,7 @@
 
 extern crate alloc;
 mod app_custody;
+mod document_policy;
 mod linen_async;
 mod desktop_content;
 mod linen_text_delivery;
@@ -3563,7 +3564,7 @@ unsafe fn maybe_run_silk_drag_reject_proof() {
     // Bottom-right corner: outside every boot frame/tile (surface 103 ends at
     // 1200x680; boot tiling keeps frames left of x=1200 at this row).
     let focus_before = FOCUSED_SURFACE_ID;
-    handle_hid_event(EV_ABS, abs_screen_to_raw(1270, P.width), abs_screen_to_raw(700, P.height));
+    handle_hid_event(EV_ABS, abs_screen_to_raw(1270, desktop_width()), abs_screen_to_raw(700, desktop_height()));
     handle_hid_event(EV_BTN, 1, 1);
     handle_hid_event(EV_BTN, 1, 0);
     let idle = matches!(INTERACTION, InteractionState::Idle);
@@ -3597,7 +3598,7 @@ unsafe fn maybe_run_silk_window_move_proof() {
     SILK_WINDOW_MOVE_PROOF_DONE = true;
     let focus_before = FOCUSED_SURFACE_ID;
     serial_println!("[silk.window.move.proof.begin] frame={} sid={} x0={} y0={}", frame, sid, x0, y0);
-    handle_hid_event(EV_ABS, abs_screen_to_raw(x0, P.width), abs_screen_to_raw(y0, P.height));
+    handle_hid_event(EV_ABS, abs_screen_to_raw(x0, desktop_width()), abs_screen_to_raw(y0, desktop_height()));
     handle_hid_event(EV_BTN, 1, 1); // rim press -> Dragging
     let abs_ready = ABS_SEEN_VALID;
     ABS_SEEN_VALID = false;
@@ -5205,6 +5206,58 @@ unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str
  use sex_pdx::spindle_status::State as S;
  match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY / FOCUS",Some(S::Saving|S::Queued)=>"SAVING HISTORY / FOCUS",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED / FOCUS",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
 }
+static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;2]=[sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new()];
+static mut DOCUMENT_POINTER_SEQUENCE:u64=0;
+static mut DOCUMENT_POINTER:Option<(u64,u32,u8,u64)>=None;
+unsafe fn document_view_poll() {
+    if let Some((slot, target, action, sequence)) = DOCUMENT_POINTER {
+        if !APP_CUSTODY
+            .iter()
+            .flatten()
+            .any(|e| e.target == target && !e.dead && !e.close_pending)
+        {
+            DOCUMENT_POINTER = None;
+        } else {
+            let (s, _) = raw_pdx_call(
+                slot,
+                sex_pdx::document_view::ACTION,
+                (target as u64) << 32 | target as u64,
+                action as u64,
+                sequence,
+            );
+            if s != sex_pdx::ERR_SERVICE_NOT_READY {
+                DOCUMENT_POINTER = None;
+                sex_pdx::serial_record!(
+                    "[shell.document.pointer] target={} action={} status={}",
+                    target,
+                    action,
+                    s
+                );
+            }
+        }
+    }
+    for (i, (target, frame, slot)) in [
+        (9, 201, SLOT_QUIL),
+        (16, 301, sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let live = APP_CUSTODY
+            .iter()
+            .flatten()
+            .any(|e| e.target == target && !e.dead && !e.close_pending);
+        DOCUMENT_VIEWS[i].poll(live, !DESKTOP_STATES.pending_surface(frame), |n| {
+            let a = n.args();
+            let (s, _) = raw_pdx_call(slot, sex_pdx::document_view::OP, a[0], a[1], a[2]);
+            if s == 0 {
+                Ok(())
+            } else {
+                Err(s)
+            }
+        });
+    }
+}
 static mut SPINDLE_VIEWS:[sex_pdx::spindle_view::Delivery;2]=[sex_pdx::spindle_view::Delivery::new(),sex_pdx::spindle_view::Delivery::new()];
 static mut DISPLAY_FOCUS: linen_text_delivery::FocusDelivery = linen_text_delivery::FocusDelivery::new();
 static mut DESKTOP_STATES: linen_text_delivery::DesktopStates = linen_text_delivery::DesktopStates::new();
@@ -5801,6 +5854,10 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
         }
     };
 
+    // Protected storage fixtures are not documents; never let legacy zero
+    // encoding turn selected slot0 into the unrelated legacy document2.
+    if obj.disk_path!=0&&obj.disk_path<3{sex_pdx::serial_record!("[linen.quil.open.reject.workspace] object={} disk_path={} protected=1",object_id,obj.disk_path);return false;}
+
     // 2. Check grant_ref — still allow link but emit no_grant marker.
     if obj.grant_ref == 0 {
         serial_println!("[linen.quil.open.no_grant] id={} kind={}", object_id, obj.kind as u8);
@@ -5917,7 +5974,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
             let pid = (obj.disk_path - 1) as u64;
             let arg1 = if pid == 2 { 0 } else { pid };
             pdx_call(SLOT_QUIL, sex_pdx::OP_QUIL_OPEN_DISK_DOC, object_id, arg1, 0);
-            serial_println!("[linen.quil.disk_doc.intent] object_id={} path_id={} ok=1",
+            sex_pdx::serial_record!("[linen.quil.disk_doc.intent] object_id={} path_id={} ok=1",
                 object_id, pid);
         }
     }
@@ -6047,12 +6104,19 @@ unsafe fn collar_check_operation(
         CollarOperation::OpenObject | CollarOperation::LinkObjectToBuffer => {
             // V2: Grant table lookup replaces AllowStub.
             let target_id = object_id;
+            // A workspace permit must never bypass an explicit object denial.
+            let explicit_denial=COLLAR_GRANTS.iter().flatten().any(|g|g.subject_id==caller_sid&&g.object_id==target_id&&(g.operation_mask&(1<<(op as u64)))!=0&&g.state!=CollarGrantState::Active);
+            if explicit_denial{record_collar_audit(op,target_id,caller_sid,CollarDecision::Deny,0,9);return CollarDecision::Deny;}
             let mut found_grant = false;
             for slot in COLLAR_GRANTS.iter() {
                 if let Some(grant) = slot {
                     if grant.state != CollarGrantState::Active { continue; }
                     if grant.subject_id != caller_sid { continue; }
-                    if grant.object_id != target_id { continue; }
+                    if grant.object_id != target_id {
+                        let workspace=grant.object_id==document_policy::WORKSPACE_SCOPE&&LINEN_OBJECTS.iter().flatten().any(|o|document_policy::allows(caller_sid,op as u8,target_id,o.object_id,o.disk_path,LINEN_REMOTE_REAL,grant.state==CollarGrantState::Active,explicit_denial));
+                        if !workspace{continue;}
+                        sex_pdx::serial_record!("[collar.workspace.allow] subject={} object={} grant={} published=1 kernel_caps_minted=0",caller_sid,target_id,grant.grant_id);
+                    }
                     if (grant.operation_mask & (1 << (op as u64))) == 0 { continue; }
                     found_grant = true;
                     serial_println!("[collar.grant.match] grant_id={} subject={} object={} op={}",
@@ -6279,6 +6343,9 @@ unsafe fn collar_init_grants() {
             gen2, SURFACE_ID_MESH, obj.object_id);
         count += 1;
     }
+    // Static shell restriction for documents already covered by its BOOT
+    // storage route. Publication membership and object denials remain checked.
+    if let Some(next)=COLLAR_GRANT_GENERATION.checked_add(1){let gen=COLLAR_GRANT_GENERATION;let idx=(gen as usize-1)%COLLAR_GRANT_CAP;assert!(COLLAR_GRANTS[idx].is_none(),"WORKSPACE_POLICY_SLOT_OCCUPIED");COLLAR_GRANT_GENERATION=next;COLLAR_GRANTS[idx]=Some(CollarGrant{grant_id:gen,subject_id:SURFACE_ID_LINEN,object_id:document_policy::WORKSPACE_SCOPE,operation_mask:(1<<CollarOperation::OpenObject as u64)|(1<<CollarOperation::LinkObjectToBuffer as u64),generation:gen,state:CollarGrantState::Active});count+=1;sex_pdx::serial_record!("[collar.workspace.seed] subject=200 grant={} storage_boot_edge=1 kernel_caps_minted=0 revocable=1",gen);}
     serial_println!("[collar.grant.init] count={} generation={}", count, COLLAR_GRANT_GENERATION);
 }
 
@@ -6368,6 +6435,7 @@ unsafe fn collar_render_grants_text() {
         buf[base + 10] = b'O';
         buf[base + 11] = b'0' + ((g.object_id / 10) % 10) as u8;
         buf[base + 12] = b'0' + (g.object_id % 10) as u8;
+        if g.object_id==document_policy::WORKSPACE_SCOPE{buf[base+10]=b'W';buf[base+11]=b'S';buf[base+12]=b' ';}
         buf[base + 14] = b'A';
         row += 1;
         vis_idx += 1;
@@ -7920,6 +7988,14 @@ struct DesktopPolicy {
     boot_rect_103: (i32, i32, u32, u32),
 }
 
+static DESKTOP_WIDTH:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(1280);
+static DESKTOP_HEIGHT:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(800);
+fn desktop_width() -> i32 {
+    DESKTOP_WIDTH.load(core::sync::atomic::Ordering::Acquire) as i32
+}
+fn desktop_height() -> i32 {
+    DESKTOP_HEIGHT.load(core::sync::atomic::Ordering::Acquire) as i32
+}
 const P: DesktopPolicy = DesktopPolicy {
     width: 1280,
     height: 720,
@@ -8008,30 +8084,30 @@ fn action_name(action: SurfaceAction) -> &'static str {
 }
 
 fn layout_left() -> (i32, i32, u32, u32) {
-    (0, P.bar_height, (P.width as u32) / 2, (P.height - P.bar_height) as u32)
+    (0, P.bar_height, (desktop_width() as u32) / 2, (desktop_height() - P.bar_height) as u32)
 }
 
 fn layout_right() -> (i32, i32, u32, u32) {
-    (P.width / 2, P.bar_height, (P.width as u32) / 2, (P.height - P.bar_height) as u32)
+    (desktop_width() / 2, P.bar_height, (desktop_width() as u32) / 2, (desktop_height() - P.bar_height) as u32)
 }
 
 fn layout_maximize() -> (i32, i32, u32, u32) {
-    (0, P.bar_height, P.width as u32, (P.height - P.bar_height) as u32)
+    (0, P.bar_height, desktop_width() as u32, (desktop_height() - P.bar_height) as u32)
 }
 
 /// Clamp surface position to stay within content area.
 /// Uses saturating arithmetic so policy drift never panics.
 fn clamp_position(x: i32, y: i32, w: u32, h: u32) -> (i32, i32) {
-    let max_x = (P.width as u32).saturating_sub(w) as i32;
-    let max_y = (P.height as u32).saturating_sub(h).max(P.bar_height as u32) as i32;
+    let max_x = (desktop_width() as u32).saturating_sub(w) as i32;
+    let max_y = (desktop_height() as u32).saturating_sub(h).max(P.bar_height as u32) as i32;
     (x.clamp(0, max_x), y.clamp(P.bar_height, max_y))
 }
 
 /// Bottom-right edge position for SnapEnd.
 /// Uses saturating arithmetic so policy drift never panics.
 fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
-    let x = (P.width as u32).saturating_sub(w) as i32;
-    let y = (P.height as u32).saturating_sub(h) as i32;
+    let x = (desktop_width() as u32).saturating_sub(w) as i32;
+    let y = (desktop_height() as u32).saturating_sub(h) as i32;
     (x.max(0), y.max(P.bar_height))
 }
 
@@ -8125,8 +8201,8 @@ unsafe fn tile_active_scene_frames() {
         return;
     }
 
-    let cw: u32 = P.width as u32;
-    let ch: u32 = (P.height - P.bar_height) as u32;
+    let cw: u32 = desktop_width() as u32;
+    let ch: u32 = (desktop_height() - P.bar_height) as u32;
 
     for i in 0..count {
         let sid = tiles[i];
@@ -9395,8 +9471,8 @@ unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
     CURSOR_APPLIES_SINCE_SEND = 0;
     let old_x = POINTER_X;
     let old_y = POINTER_Y;
-    let cx = x.clamp(0, P.width - 1);
-    let cy = y.clamp(0, P.height - 1);
+    let cx = x.clamp(0, desktop_width() - 1);
+    let cy = y.clamp(0, desktop_height() - 1);
     if cx != x || cy != y {
         static mut CURSOR_CLAMP_SEND_BUDGET: u32 = 16;
         if CURSOR_CLAMP_SEND_BUDGET > 0 {
@@ -9526,8 +9602,8 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
 
     // Initialize to center on first relative movement.
     if !POINTER_USB_STATE_INIT {
-        POINTER_X = P.width / 2;
-        POINTER_Y = P.height / 2;
+        POINTER_X = desktop_width() / 2;
+        POINTER_Y = desktop_height() / 2;
         POINTER_USB_STATE_INIT = true;
     }
 
@@ -9539,10 +9615,10 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     POINTER_Y = raw_new_y;
 
     // Clamp to display bounds.
-    let new_x = POINTER_X.clamp(0, P.width - 1);
-    let new_y = POINTER_Y.clamp(0, P.height - 1);
+    let new_x = POINTER_X.clamp(0, desktop_width() - 1);
+    let new_y = POINTER_Y.clamp(0, desktop_height() - 1);
     let clamped = ((raw_new_x != new_x) || (raw_new_y != new_y)) as u8;
-    let in_bounds = (new_x >= 0 && new_x < P.width && new_y >= 0 && new_y < P.height) as u8;
+    let in_bounds = (new_x >= 0 && new_x < desktop_width() && new_y >= 0 && new_y < desktop_height()) as u8;
     if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
         static mut CURSOR_MOTION_BOUNDS_REL_BUDGET: u32 = 64;
         let rem = &mut CURSOR_MOTION_BOUNDS_REL_BUDGET;
@@ -9550,7 +9626,7 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
             *rem -= 1;
             serial_println!(
                 "[cursor.motion.bounds] source=rel old_x={} old_y={} new_x={} new_y={} w={} h={} clamped={} ok={}",
-                old_x, old_y, new_x, new_y, P.width, P.height, clamped, in_bounds
+                old_x, old_y, new_x, new_y, desktop_width(), desktop_height(), clamped, in_bounds
             );
         }
     }
@@ -9627,8 +9703,8 @@ fn normalize_abs_coord(raw: i32, screen_dim: i32) -> i32 {
 /// then accepts all absolute coordinates for predictable targeting.
 unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
     ABS_SAMPLE_COUNT = ABS_SAMPLE_COUNT.saturating_add(1);
-    let sx = normalize_abs_coord(raw_x, P.width);
-    let sy = normalize_abs_coord(raw_y, P.height);
+    let sx = normalize_abs_coord(raw_x, desktop_width());
+    let sy = normalize_abs_coord(raw_y, desktop_height());
     let last_x = LAST_VALID_ABS_X;
     let last_y = LAST_VALID_ABS_Y;
     let buttons = (POINTER_BUTTONS & 0x07) as u8;
@@ -9641,29 +9717,29 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
         *rem -= 1;
         serial_println!(
             "[usb.tablet.abs.scale] x={} y={} screen_w={} screen_h={} ok=1",
-            sx, sy, P.width, P.height
+            sx, sy, desktop_width(), desktop_height()
         );
     }
 
     if !ABS_SEEN_VALID && sx <= 1 && sy <= 1 {
         accepted = false;
         reason = "zero_init";
-    } else if !ABS_SEEN_VALID && sx >= P.width - 1 && sy >= P.height - 1 {
+    } else if !ABS_SEEN_VALID && sx >= desktop_width() - 1 && sy >= desktop_height() - 1 {
         accepted = false;
         reason = "edge_before_ready";
     } else if ABS_SEEN_VALID {
         let dx = (sx - last_x).unsigned_abs();
         let dy = (sy - last_y).unsigned_abs();
         let near_tl = sx <= 40 && sy <= 20;
-        let at_edge = sx >= P.width - 1 && sy >= P.height - 1;
+        let at_edge = sx >= desktop_width() - 1 && sy >= desktop_height() - 1;
         let left_held = (POINTER_BUTTONS & 0x01) != 0;
         if near_tl && !left_held && last_x >= 0 && last_y >= 0
-            && (dx > (P.width as u32 / 4) || dy > (P.height as u32 / 4))
+            && (dx > (desktop_width() as u32 / 4) || dy > (desktop_height() as u32 / 4))
         {
             accepted = false;
             reason = "corner_poison_after_ready";
         } else if at_edge && !left_held && last_x >= 0 && last_y >= 0
-            && (dx > (P.width as u32 / 3) && dy > (P.height as u32 / 3))
+            && (dx > (desktop_width() as u32 / 3) && dy > (desktop_height() as u32 / 3))
         {
             accepted = false;
             reason = "edge_poison_after_ready";
@@ -9698,7 +9774,7 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
                 *rem -= 1;
                 serial_println!(
                     "[cursor.motion.bounds] source=abs old_x={} old_y={} new_x={} new_y={} w={} h={} clamped=0 ok=1",
-                    last_x, last_y, sx, sy, P.width, P.height
+                    last_x, last_y, sx, sy, desktop_width(), desktop_height()
                 );
             }
         }
@@ -10627,8 +10703,8 @@ static mut SURFACE_0x99_W: u32 = SPINDLE_BOOT_W;
 static mut SURFACE_0x99_H: u32 = SPINDLE_BOOT_H;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
-    let max_w = (P.width - x).max(P.min_width as i32) as u32;
-    let max_h = (P.height - y).max(P.min_height as i32) as u32;
+    let max_w = (desktop_width() - x).max(P.min_width as i32) as u32;
+    let max_h = (desktop_height() - y).max(P.min_height as i32) as u32;
     (w.min(max_w).max(P.min_width), h.min(max_h).max(P.min_height))
 }
 
@@ -11645,7 +11721,7 @@ fn atlas_card_pos(scene_idx: usize, cw: u32) -> (i32, i32, u32, u32) {
 /// Coordinate conversion: overlay surface starts at y=P.bar_height,
 /// and atlas_card_pos() returns positions relative to the overlay.
 fn atlas_scene_at_point(px: i32, py: i32) -> Option<u8> {
-    let cw = P.width as u32;
+    let cw = desktop_width() as u32;
     let local_y = py - P.bar_height;
     if cw == 0 || local_y < 0 { return None; }
     for scene_idx in 0..ATLAS_MAX_SCENES {
@@ -11891,8 +11967,8 @@ unsafe fn atlas_render_stub() {
     // Capture fresh snapshot before rendering.
     atlas_capture_snapshot();
 
-    let cw = P.width as u32;
-    let ch = (P.height - P.bar_height) as u32;
+    let cw = desktop_width() as u32;
+    let ch = (desktop_height() - P.bar_height) as u32;
     if cw == 0 || ch == 0 { return; }
 
     // Create Atlas overlay surface (full content area, below SilkBar).
@@ -16897,7 +16973,7 @@ unsafe fn maybe_run_atlas_phase_e1_click_scene_switch_proof() {
                 for si in 0..ATLAS_MAX_SCENES as u8 {
                     if si != from_scene {
                         // Compute card center for hit-test coordinate.
-                        let cw = P.width as u32;
+                        let cw = desktop_width() as u32;
                         let (cx, cy, card_w, card_h) = atlas_card_pos(si as usize, cw);
                         let hit_x = cx + (card_w as i32 / 2);
                         let hit_y = P.bar_height + cy + (card_h as i32 / 2);
@@ -17125,7 +17201,7 @@ unsafe fn maybe_run_atlas_phase_e3_drag_begin_marker_proof() {
             // Stage 2: Choose a valid card point and emit drag-begin marker.
             2 => {
                 let active = ACTIVE_SCENE_IDX;
-                let cw = P.width as u32;
+                let cw = desktop_width() as u32;
                 let (cx, cy, _card_w, _card_h) = atlas_card_pos(active as usize, cw);
                 let hit_x = cx + (ATLAS_CARD_W as i32 / 2);
                 let hit_y = P.bar_height + cy + (ATLAS_CARD_H as i32 / 2);
@@ -18339,7 +18415,7 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                 }
 
                 // Compute card center for source scene (drag begin point).
-                let cw = P.width as u32;
+                let cw = desktop_width() as u32;
                 let (src_cx, src_cy, src_w, src_h) = atlas_card_pos(source as usize, cw);
                 let src_x = src_cx + (src_w as i32 / 2);
                 let src_y = P.bar_height + src_cy + (src_h as i32 / 2);
@@ -19708,12 +19784,13 @@ unsafe fn set_frame_top_bar(frame_id: u32, enabled: bool) {
 
 /// Geometry authority comes from the immutable boot catalog, never app input.
 unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
-    if !APP_CUSTODY.iter().flatten().any(|e| !e.dead && !e.close_pending && e.shell_surface()==Some(frame)) {return;}
+    if !APP_CUSTODY.iter().flatten().any(|e| !e.dead && !e.close_pending && e.owns_surface(frame)) {return;}
     if matches!(frame,153|306){
-        if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead && !e.close_pending && e.shell_surface()==Some(frame)) {
+        if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead && !e.close_pending && e.owns_surface(frame)) {
             SPINDLE_VIEWS[if frame==153{0}else{1}].queue(e.target,e.task,w,h);
         }
     }
+    if matches!(frame,201|301){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if frame==201{(w.saturating_sub(16),h.saturating_sub(44))}else{(w,h)};DOCUMENT_VIEWS[if frame==201{0}else{1}].queue(e.target,e.task,vw,vh);}}
     for child in desktop_content::children(frame,x,y,w,h).iter().flatten() {
         if child.w>0 && child.h>0 {pdx_call(SLOT_DISPLAY,0xEC,child.sid,
             ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
@@ -20136,7 +20213,7 @@ unsafe fn maybe_run_window_drag_synthetic_proof() {
         return;
     }
     if WINDOW_DRAG_PROOF_STAGE == 2 {
-        handle_hid_event(EV_ABS, abs_screen_to_raw(TX0, P.width), abs_screen_to_raw(TY0, P.height));
+        handle_hid_event(EV_ABS, abs_screen_to_raw(TX0, desktop_width()), abs_screen_to_raw(TY0, desktop_height()));
         handle_hid_event(EV_BTN, 1, 1);
         serial_println!("[shell.drag.synthetic.down]");
         WINDOW_DRAG_PROOF_STAGE = 3;
@@ -20185,7 +20262,7 @@ unsafe fn maybe_run_silk_de_integrated_interaction_proof() {
     };
     let drag_x = sx + sw as i32 / 2;
     let drag_y = sy + FRAME_TOP_BAR_HEIGHT_PX + 20;
-    handle_hid_event(EV_ABS, abs_screen_to_raw(drag_x, P.width), abs_screen_to_raw(drag_y, P.height));
+    handle_hid_event(EV_ABS, abs_screen_to_raw(drag_x, desktop_width()), abs_screen_to_raw(drag_y, desktop_height()));
     handle_hid_event(EV_BTN, 1, 1); // pointer.recv + drag.begin (shell surface content area)
     handle_hid_event(EV_BTN, 1, 0); // drag.end + snap.none (interior position, not near edge)
     // Resize sequence: position at bottom resize zone, BTN down → resize.begin, BTN up → resize.end
@@ -20199,7 +20276,7 @@ unsafe fn maybe_run_silk_de_integrated_interaction_proof() {
     };
     let resize_x = sx + sw2 as i32 / 2;
     let resize_y = sy + sh2 as i32 - 2; // bottom edge, within FRAME_RESIZE_ZONE_PX=4
-    handle_hid_event(EV_ABS, abs_screen_to_raw(resize_x, P.width), abs_screen_to_raw(resize_y, P.height));
+    handle_hid_event(EV_ABS, abs_screen_to_raw(resize_x, desktop_width()), abs_screen_to_raw(resize_y, desktop_height()));
     handle_hid_event(EV_BTN, 1, 1); // pointer.recv + resize.begin (bottom resize zone)
     handle_hid_event(EV_BTN, 1, 0); // resize.end
     serial_println!("[silk.de.integrated.interaction.evidence] pointer=1 focus=1 drag=1 snap=1 resize=1");
@@ -21129,8 +21206,8 @@ unsafe fn maybe_run_cursor_autodemo() {
 
     // Ensure cursor is at a known position before first move.
     if POINTER_X == 0 && POINTER_Y == 0 {
-        POINTER_X = P.width / 2;
-        POINTER_Y = P.height / 2;
+        POINTER_X = desktop_width() / 2;
+        POINTER_Y = desktop_height() / 2;
     }
 
     if !AUTODEMO_BEGUN {
@@ -22102,7 +22179,7 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
     }
     let near_top   = py < P.bar_height + SNAP_TOP_PX;
     let near_left  = px < SNAP_EDGE_PX;
-    let near_right = px >= P.width - SNAP_EDGE_PX;
+    let near_right = px >= desktop_width() - SNAP_EDGE_PX;
     if near_top {
         serial_println!("[silk.snap.hit.top] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
         if !frame_is_zoomed(frame_id) && zoom_frame(frame_id) {
@@ -22114,8 +22191,8 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
     }
     if near_left {
         serial_println!("[silk.snap.hit.left] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
-        let cw = P.width as u32;
-        let ch = (P.height - P.bar_height) as u32;
+        let cw = desktop_width() as u32;
+        let ch = (desktop_height() - P.bar_height) as u32;
         let (nx, ny, nw, nh) = (0i32, P.bar_height, cw / 2, ch);
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
             (ny as u64) << 32 | nx as u64,
@@ -22126,8 +22203,8 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
     }
     if near_right {
         serial_println!("[silk.snap.hit.right] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
-        let cw = P.width as u32;
-        let ch = (P.height - P.bar_height) as u32;
+        let cw = desktop_width() as u32;
+        let ch = (desktop_height() - P.bar_height) as u32;
         let half_w = cw / 2;
         let (nx, ny, nw, nh) = (half_w as i32, P.bar_height, cw - half_w, ch);
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
@@ -22501,6 +22578,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
     }
     let target = hit_test_at(px, py);
+    if buttons_val&1!=0{if let HitTarget::Surface(frame)=target{if matches!(frame,201|301){if let Some((x,y,w,h))=get_surface_bounds(frame){let(target,slot,cx,cy,vw,vh)=if frame==201{(9,SLOT_QUIL,x+8,y+36,w.saturating_sub(16),h.saturating_sub(44))}else{(16,sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,x,y,w,h)};if let Some(action)=sex_pdx::document_view::Layout::new(target,vw,vh).hit(px.saturating_sub(cx)as u32,py.saturating_sub(cy)as u32){if let Some(sequence)=DOCUMENT_POINTER_SEQUENCE.checked_add(1){DOCUMENT_POINTER_SEQUENCE=sequence;if DOCUMENT_POINTER.is_none(){DOCUMENT_POINTER=Some((slot,target,action,sequence));}let _=try_set_focus(frame);return(HitTarget::Surface(frame),true);}}}}}}
+
     if CLICK_DRAG_PROOF_ENABLED {
         let (target_id, hit) = match target {
             HitTarget::Surface(sid) => (sid, 1u8),
@@ -23363,6 +23442,9 @@ fn pop_startup_message() -> Option<sex_pdx::PdxMessage> {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let geometry=sex_pdx::display_boot::geometry().expect("BOOT_SHELL_DISPLAY_GEOMETRY");
+    DESKTOP_WIDTH.store(geometry.width,core::sync::atomic::Ordering::Release);DESKTOP_HEIGHT.store(geometry.height,core::sync::atomic::Ordering::Release);
+
     serial_println!("[silkshell.init.start]");
     // Wait before any helper or OP_REGISTER_WM can send ordinary display work.
     unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).wait_for_display() }
@@ -23520,7 +23602,7 @@ pub extern "C" fn _start() -> ! {
     // Stage: cursor surface — created first so it occupies SURFACES slot 0,
     // winning composite Pass 1 over all other non-focused surfaces.
     serial_println!("[shell.cursor_surface.create.start] id={:#x}", SURFACE_ID_CURSOR);
-    let cursor_arg1 = ((P.height / 2) as u64) << 32 | (P.width / 2) as u64;
+    let cursor_arg1 = ((desktop_height() / 2) as u64) << 32 | (desktop_width() / 2) as u64;
     let cursor_arg2 = (18u64 << 32) | 12u64;
     let cursor_send = sex_pdx::display_ready::send_startup_display(0xEC, SURFACE_ID_CURSOR, cursor_arg1, cursor_arg2);
     match cursor_send {
@@ -23541,8 +23623,8 @@ pub extern "C" fn _start() -> ! {
     // ── UI Readiness: deterministic boot content layout (below SilkBar) ──
     let content_x: i32 = 0;
     let content_y: i32 = P.bar_height.max(0);
-    let content_w: u32 = (P.width.max(0)) as u32;
-    let content_h: u32 = (P.height - content_y).max(0) as u32;
+    let content_w: u32 = (desktop_width().max(0)) as u32;
+    let content_h: u32 = (desktop_height() - content_y).max(0) as u32;
     if content_w == 0 || content_h == 0 {
         serial_println!(
             "[silk-shell.boot.layout.reject] reason=invalid_content_rect x={} y={} w={} h={}",
@@ -23702,7 +23784,7 @@ pub extern "C" fn _start() -> ! {
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
 
     loop {
-        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -24382,7 +24464,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24398,6 +24480,8 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
         }
+        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let target=e.target;let frame=if target==9{201}else{301};DOCUMENT_VIEWS[if target==9{0}else{1}].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
+        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }
@@ -24489,8 +24573,8 @@ pub extern "C" fn _start() -> ! {
                         clear_hover_if_dead();
                         clear_hover_if_wrong_scene();
                         if !POINTER_USB_STATE_INIT {
-                            POINTER_X = P.width / 2;
-                            POINTER_Y = P.height / 2;
+                            POINTER_X = desktop_width() / 2;
+                            POINTER_Y = desktop_height() / 2;
                             POINTER_USB_STATE_INIT = true;
                         }
                         // POINTER_X/Y is NOT updated from dx/dy here.
@@ -25874,8 +25958,8 @@ pub extern "C" fn _start() -> ! {
 
                         // ── Pointer event state updates (no compositor side effects) ──
                         if event_class == EV_ABS {
-                            let ax = normalize_abs_coord(msg.arg0 as i32, P.width);
-                            let ay = normalize_abs_coord(msg.arg1 as i32, P.height);
+                            let ax = normalize_abs_coord(msg.arg0 as i32, desktop_width());
+                            let ay = normalize_abs_coord(msg.arg1 as i32, desktop_height());
                             unsafe {
                                 static mut SILK_SHELL_POINTER_RECV_BUDGET: u32 = 2048;
                                 let rem = &mut SILK_SHELL_POINTER_RECV_BUDGET;

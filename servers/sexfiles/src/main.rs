@@ -14,6 +14,8 @@ mod proof;
 mod sexobject;
 mod spindle_history;
 mod spindle_probe;
+mod document;
+mod document_journal;
 mod history_journal;
 mod history_disk;
 

@@ -9,6 +9,8 @@ ABI_INPUTS=(
   kernel/src/syscalls/mod.rs
   kernel/src/capability_slot.rs
   kernel/src/capability.rs
+  kernel/src/boot_display_state.rs
+  crates/sex-pdx/src/display_boot.rs
   kernel/src/history_recovery.rs
   crates/sex-pdx/src/lib.rs
   crates/sex-pdx/src/pagefault.rs
@@ -20,6 +22,9 @@ ABI_INPUTS=(
   crates/sex-pdx/src/spindle_view.rs
   crates/sex-pdx/src/spindle_status.rs
   crates/sex-pdx/src/spindle_history.rs
+  crates/sex-pdx/src/desktop_style.rs
+  crates/sex-pdx/src/document_view.rs
+  crates/sex-pdx/src/document.rs
   crates/sex-pdx/src/spindle_probe.rs
   crates/sex-pdx/src/history_recovery.rs
   kernel/src/paging_state.rs

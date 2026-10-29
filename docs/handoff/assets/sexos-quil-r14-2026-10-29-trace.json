@@ -1,0 +1,20 @@
+[
+  "[quil.persist.save.ok] bytes=240 hash=0x94974cfa5266d8bc doc=2",
+  "[quil.document.begin] kind=load object=2 revision=0",
+  "[quil.document.edit] revision=1 pending=1 bytes=241",
+  "[files.document.bound] object=2 generation=3 bytes=240",
+  "[quil.document.result] outcome=Loaded error=0 requested_revision=0 revision=1 buffer_retained=1",
+  "[quil.document.begin] kind=load object=2 revision=1",
+  "[files.document.bound] object=2 generation=3 bytes=240",
+  "[quil.persist.load.ok] bytes=240 hash=0x94974cfa5266d8bc doc=2",
+  "[linen.quil.disk_doc.intent] object_id=[quil.document.busy] kind=load",
+  "[linen.quil.disk_doc.intent] object_id=3 path_id=2 ok=1",
+  "[focus.ref.commit] id=201[quil.document.begin] kind=load object=2 revision=2",
+  "[files.document.bound] object=2 generation=3 bytes=240",
+  "[quil.persist.load.ok] bytes=240 hash=0x94974cfa5266d8bc doc=2",
+  "[quil.document.begin] kind=load object=2 revision=3",
+  "[quil.document.close] pending=1",
+  "[files.document.bound] object=2 generation=3 bytes=240",
+  "[files.document.retire] target=9 staged=0 pending=0 terminal=1",
+  "[sext.app.pool.ready] target=9 task=9 bytes=151552 zeroed=151552 workspace_records=2 reused=1 zero_owner=sext ok=1"
+]

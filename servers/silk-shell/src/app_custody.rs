@@ -46,6 +46,9 @@ impl Entry {
         if self.dead || self.close_pending { return false; }
         match opcode {
             0xFA => args[0] == self.surface && args[1] != 0,
+            // Document controls are two exact, no-payload operations on
+            // the existing BOOT orchestration edge, not ambient shell access.
+            0x274 | 0x275 => matches!(self.target,9|16) && args == [self.target as u64,self.task as u64,0],
             // Existing Spindle launcher route selects a fixed shell action.
             0x15 => matches!(self.target,12|17) && args[0] <= 7 && args[1] == 0 && args[2] == 0,
             0 => matches!(self.target,12|17) && args == [0;3], // no-effect endpoint probe

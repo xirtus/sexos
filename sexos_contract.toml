@@ -381,3 +381,38 @@ jobs = "coherent staged names; bounded binary pattern diagnostics; original call
 coordination = "one complete history/probe job owns storage at a time; queued probes get next boundary; dirty history retained; uncertainty fences new work; no nested receive or HID discard"
 cancellation = "fresh own-session ABORT may supersede own pending receipt; ACK means quiescence, not rollback; only read-only retries after ACK; mutations require inspection and a new explicit command"
 desktop = "authenticated bounded probe state enum over existing shell edge; terminal launcher authority overrides status; Close fences local work before finish and service lease retirement precedes cleanup ACK"
+
+[quil_document_exchange]
+transport = "register-only-tagged-main-loop"
+opcode = 77
+subjects = "exact-BOOT-Quil-9-and-reserved-successor-16-live-catalogs"
+authority = "existing-BOOT-Domain-storage-route-workspace-document-2-and-user-slots-3-through-14;object-number-is-data-not-capability"
+selection = "service-owned-generation-bound-private-snapshot;original-authenticated-caller;no-runtime-mint"
+completion = "exact-sender-11-tag-55-or-E5-nonwrapping-sequence;single-admitted-request;Full-retains-receipt"
+publication = "whole-validated-load-and-unchanged-editor-revision;partial-error-timeout-retains-buffer"
+retirement = "terminal-catalog-fence-and-staging-scrub-before-files-cleanup-ack"
+save = "immutable-revision-snapshot-staged-in-service;single-COMMIT-effect;Saved-only-after-completion;newer-edits-stay-dirty;cancel-is-quiescence-not-rollback"
+durability = "QJ02-two-banks-inside-existing-V4-object;inactive-bank-invalidate-flush-payload-flush-readback-header-flush-readback;legacy-QP01-import-beyond-old-content"
+identity = "slot-and-nonwrapping-entry-incarnation;save-checks-previously-opened-identity;no-foreign-session-reference"
+crash_model = "QEMU-sector-I/O-with-ordered-FLUSH;V4-growth-data-descriptor-manifest-barriers;physical-torn-allocator-metadata-not-established"
+
+[quil_document_view]
+geometry = "authenticated-shell-3-exact-BOOT-target-task-nonwrapping-notice;existing-surface-only"
+metrics = "shared-desktop-style-integer-pixel-font-insets-and-line-advance"
+controls = "native-pointer-toolbar-and-app-local-Ctrl-N-O-S-A-R;Open-focuses-Linen-under-live-catalog"
+delivery = "immutable-active-plus-latest-512-byte-batch;4-display-attempts-per-main-loop-turn;Full-retains;admission-not-pixels;Close-scrubs"
+original_quil_orchestration = "BOOT_DAG-checks-slot6-empty-then-grants-Domain-shell3-before-seal;successor16-already-provisioned;no-runtime-mint"
+ready = "main-loop-READY-275-requests-current-geometry-after-startup-diagnostics;exact-live-catalog-check"
+
+[boot_display_metadata]
+query = "sex-pdx-slot0-E6-immutable-before-task-admission;exact-BOOT-display-shell-input-subjects-only"
+address = "query1-display-only-resolves-its-existing-BOOT-framebuffer;no-new-memory-authority-or-runtime-mapping"
+geometry = "queries0-and2-scalar-dimensions-pitch;reserved-args-zero;foreign-and-terminal-apps-denied"
+mode = "normal1280x800-and-compact1024x768-same-sealed-kernel-modules;compositor-checks-contiguous-pitch-before-first-write"
+pointer = "USB-tablet-absolute-coordinates-preserved-through-sexinput;current-shell-geometry-normalizes;no-fixed-height-relative-integration"
+
+[workspace_document_policy]
+kind = "revocable-shell-restriction-over-existing-BOOT-storage-edge;not-kernel-capability-genesis"
+subject = "Linen200-only-OpenObject-and-LinkObjectToBuffer"
+objects = "exact-members-of-complete-published-Linen-snapshot-with-disk-slots2-through14"
+denial = "inactive-workspace-record-or-explicit-object-denial-cannot-be-bypassed;missing-foreign-unpublished-protected-and-nondocument-operations-denied"

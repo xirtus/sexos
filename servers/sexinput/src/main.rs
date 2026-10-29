@@ -104,80 +104,10 @@ fn normalize_pointer_report_v1(
     // Emit ABS/REL movement FIRST so cursor position is current
     // before any button click is processed at silk-shell.
     if report.is_abs {
-        // Scale raw tablet coords (0..32767) to screen pixels, then emit
-        // bounded relative delta (EV_REL) instead of raw absolute coords (EV_ABS).
-        // Screen dimensions match silk-shell DesktopPolicy: 1280x720.
-        const TABLET_RAW_MAX: i32 = 32767;
-        const SCREEN_W: i32 = 1280;
-        const SCREEN_H: i32 = 720;
-        const DELTA_CLAMP: i32 = 64;
-        let sx = if dx <= 0 { 0 } else if dx >= TABLET_RAW_MAX { SCREEN_W - 1 }
-                 else { dx * (SCREEN_W - 1) / TABLET_RAW_MAX };
-        let sy = if dy <= 0 { 0 } else if dy >= TABLET_RAW_MAX { SCREEN_H - 1 }
-                 else { dy * (SCREEN_H - 1) / TABLET_RAW_MAX };
-        unsafe {
-            static mut ABS_INIT: bool = false;
-            static mut LAST_SX: i32 = 0;
-            static mut LAST_SY: i32 = 0;
-            static mut RAW_BLOCKED_BUDGET: u32 = 16;
-            static mut DELTA_EMIT_BUDGET: u32 = 2048;
-            let (ddx, ddy) = if !ABS_INIT {
-                ABS_INIT = true;
-                LAST_SX = sx;
-                LAST_SY = sy;
-                (0i32, 0i32)
-            } else {
-                let ddx = (sx - LAST_SX).clamp(-DELTA_CLAMP, DELTA_CLAMP);
-                let ddy = (sy - LAST_SY).clamp(-DELTA_CLAMP, DELTA_CLAMP);
-                LAST_SX = sx;
-                LAST_SY = sy;
-                (ddx, ddy)
-            };
-            if (dx > DELTA_CLAMP || dy > DELTA_CLAMP) && RAW_BLOCKED_BUDGET > 0 {
-                RAW_BLOCKED_BUDGET -= 1;
-                serial_println!("[usb.tablet.emit.raw_blocked] raw_dx={} raw_dy={} ok=1", dx, dy);
-            }
-            if DELTA_EMIT_BUDGET > 0 {
-                DELTA_EMIT_BUDGET -= 1;
-                serial_println!(
-                    "[usb.tablet.delta.clamp] limit={} dx_in={} dy_in={} dx_out={} dy_out={} ok=1",
-                    DELTA_CLAMP,
-                    dx,
-                    dy,
-                    ddx,
-                    ddy
-                );
-                serial_println!("[usb.tablet.abs.delta] dx={} dy={} buttons={} ok=1",
-                    ddx, ddy, report.buttons);
-                serial_println!("[usb.tablet.emit.delta_only] buttons={} dx={} dy={} ok=1",
-                    report.buttons, ddx, ddy);
-            }
-            if ddx != 0 || ddy != 0 {
-                if reason == "none" { reason = "abs_delta"; }
-                unsafe {
-                    static mut POINTER_FORWARD_BUDGET: u32 = 2048;
-                    if POINTER_FORWARD_BUDGET > 0 {
-                        POINTER_FORWARD_BUDGET -= 1;
-                        serial_println!("[sexinput.pointer.forward.reason={}]", reason);
-                    }
-                }
-                unsafe {
-                    static mut USB_POINTER_PRODUCER_EVREL_BUDGET: u32 = 64;
-                    let rem = &mut USB_POINTER_PRODUCER_EVREL_BUDGET;
-                    if *rem > 0 {
-                        *rem -= 1;
-                        serial_println!(
-                            "[usb.pointer.producer.evrel] dx={} dy={} buttons={} ok=1",
-                            ddx,
-                            ddy,
-                            report.buttons
-                        );
-                    }
-                }
-                emit(ddx as u64, ddy as u64, EV_REL);
-                count += 1;
-            }
-        }
+        // Preserve absolute tablet coordinates; shell owns current BOOT geometry.
+        let x=dx.clamp(0,32767)as u64;let y=dy.clamp(0,32767)as u64;
+        emit(x,y,EV_ABS);count+=1;
+        sex_pdx::serial_record!("[sexinput.tablet.absolute] x={} y={} normalized_in_shell=1",x,y);
     } else {
         if dx != 0 || dy != 0 {
             if reason == "none" { reason = "motion"; }

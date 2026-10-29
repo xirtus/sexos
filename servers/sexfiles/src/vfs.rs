@@ -298,11 +298,13 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
     // Crash-safety ordering: commit the (possibly grown) indirect
     // descriptor before the manifest size that makes it visible.
     if count > orig_count {
+        if DiskFs::diskfs_block_sync()!=0{return messages::ERR_BAD_CMD as u64;}
         if let Err(e) = v4_indirect_write(i, buf_va, &extents, count) {
             let mut bm = V4_BITMAP.write();
             v4_free_pool_only(&mut bm, &extents[orig_count..count]);
             return e;
         }
+        if DiskFs::diskfs_block_sync()!=0{return messages::ERR_BAD_CMD as u64;}
         v4_cache_put(i, extents, count);
         // Deterministic injection point for crash-safety testing (see
         // scripts/diskfs_v4_crash_injection_gate.sh): the new extent is on
@@ -318,6 +320,7 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
         entry.size_bytes = need_end as u32;
         unsafe { V4_TABLE[i] = entry; }
         if let Err(e) = v4_persist(buf_va) { return e; }
+        if DiskFs::diskfs_block_sync()!=0{return messages::ERR_BAD_CMD as u64;}
         // Deterministic injection point: the manifest now publishes the new
         // size. A crash landing exactly here must resolve to the complete
         // NEW version on reboot, never a partial one.
@@ -1335,7 +1338,7 @@ fn handle_diskfs_create(name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
     }
     let mut slot = None;
     for i in (DISKFS_V3_SYSTEM_SLOTS as usize)..DISKFS_SLOTS {
-        if !v4_in_use(i) { slot = Some(i); break; }
+        if !v4_in_use(i) && unsafe{V4_TABLE[i].gen}<u16::MAX { slot = Some(i); break; }
     }
     let Some(i) = slot else {
         crate::pdx::serial_println!("[sexfiles.diskfs.v4.create.err] reason=full");
@@ -1346,7 +1349,7 @@ fn handle_diskfs_create(name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
     // the new live slot, or recovery could reserve blocks now owned elsewhere.
     if let Err(er) = v4_indirect_write(i, buf_va, &[], 0) { return er; }
     v4_cache_invalidate(i);
-    let gen = unsafe { V4_TABLE[i].gen }.wrapping_add(1).max(1);
+    let Some(gen) = unsafe { V4_TABLE[i].gen }.checked_add(1)else{return messages::ERR_OVERFLOW as u64;};
     let e = V4Entry { name, size_bytes: 0, gen };
     unsafe { V4_TABLE[i] = e; }
     crate::pdx::serial_println!(
@@ -1399,10 +1402,11 @@ fn handle_diskfs_delete(path_id: u64, buf_va: u64) -> u64 {
     if !v4_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
     let (extents, count) = v4_indirect_read(i, buf_va).unwrap_or(([V4Extent::default(); DISKFS_V4_MAX_EXTENTS], 0));
     let old_entry = unsafe { V4_TABLE[i] };
+    let Some(next_gen)=old_entry.gen.checked_add(1)else{return messages::ERR_OVERFLOW as u64;};
     unsafe {
         V4_TABLE[i].name = [0u8; DISKFS_V3_NAME_MAX];
         V4_TABLE[i].size_bytes = 0;
-        V4_TABLE[i].gen = V4_TABLE[i].gen.wrapping_add(1);
+        V4_TABLE[i].gen = next_gen;
     }
     crate::pdx::serial_println!(
         "[sexfiles.diskfs.v4.crash_point.delete_pending] slot={}", i);
@@ -1798,4 +1802,53 @@ impl crate::spindle_probe::Backend for SpindleProbeBackend{
    _=>Err(w::INVALID)
   }
  }
+}
+
+/// Authenticated Quil BOOT subjects may select documents in the existing
+/// shared workspace (legacy document 2 and user slots 3..14). No global
+/// legacy selection is consulted by this adapter.
+pub struct DocumentBackend;
+fn document_read(id:u8,offset:u64,out:&mut[u8])->Result<(),u32>{
+ use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let entry=v4_get(id as u64).map_err(|_|w::STALE)?;
+ if offset.checked_add(out.len()as u64).map_or(true,|e|e>entry.size_bytes as u64){return Err(w::IO)}
+ let mut done=0;while done<out.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(id as usize,at,va).map_err(|_|w::IO)?;let n=(out.len()-done).min(512-(rel as usize%512));let got=DiskFs::diskfs_read_object_entry(piece,rel,&mut out[done..done+n],va).map_err(|_|w::IO)?;if got as usize!=n{return Err(w::IO)}done+=n;}Ok(())
+}
+impl crate::document::Backend for DocumentBackend{
+ fn identity(&mut self,id:u8)->Result<u32,u32>{use sex_pdx::document as w;if !(2..15).contains(&id){return Err(w::DENIED)}let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let e=v4_get(id as u64).map_err(|_|w::STALE)?;Ok(((id as u32+1)<<16)|e.gen as u32)}
+ fn name(&mut self,id:u8)->Result<[u8;16],u32>{let e=v4_get(id as u64).map_err(|_|sex_pdx::document::STALE)?;let mut name=[0;16];name.copy_from_slice(&e.name[..16]);Ok(name)}
+ fn create(&mut self,name:[u8;16])->Result<u8,u32>{use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let id=handle_diskfs_create(u64::from_le_bytes(name[..8].try_into().unwrap()),u64::from_le_bytes(name[8..].try_into().unwrap()),va);if !(3..15).contains(&id){return Err(w::IO)}Ok(id as u8)}
+ fn save(&mut self,caller:u32,id:u8,bytes:&[u8])->Result<(),u32>{
+  use sex_pdx::document as w;let identity=<Self as crate::document::Backend>::identity(self,id)?;
+  // Establish fixed bank capacity through the existing BOOT block route.
+  // Growth preserves all legacy bytes; publication barriers are below in V4.
+  let entry=v4_get(id as u64).map_err(|_|w::STALE)?;
+  if entry.size_bytes as u64!=crate::document_journal::CAPACITY{
+   if handle_diskfs_select(id as u64,caller)!=0||handle_diskfs_write(crate::document_journal::CAPACITY-16,0,0,caller)!=16||DiskFs::diskfs_block_sync()!=0{return Err(w::IO)}
+  }
+  static mut VERIFY:[u8;w::MAX]=[0;w::MAX];
+  let r=unsafe{crate::document_journal::save(&mut DocumentIo{id},id,identity,bytes,&mut VERIFY)}?;
+  sex_pdx::serial_record!("[files.document.durable] caller={} object={} identity={} generation={} bank={} bytes={} hash={:#x} barriers=3 readback=1",caller,id,identity,r.generation,r.bank,r.len,r.hash);
+  Ok(())
+ }
+
+ fn load(&mut self,id:u8,out:&mut[u8;sex_pdx::document::MAX])->Result<usize,u32>{
+  use sex_pdx::document as w;let identity=<Self as crate::document::Backend>::identity(self,id)?;let e=v4_get(id as u64).map_err(|_|w::STALE)?;
+  if e.size_bytes as u64==crate::document_journal::CAPACITY{
+   if let Some(r)=crate::document_journal::recover(&mut DocumentIo{id},id,identity,out)?{
+    sex_pdx::serial_record!("[files.document.recovered] object={} identity={} generation={} bank={} bytes={} hash={:#x}",id,identity,r.generation,r.bank,r.len,r.hash);return Ok(r.len)
+   }
+  }
+  let mut header=[0;8];document_read(id,0,&mut header)?;if &header[..4]!=b"QP01"{return Err(w::INVALID)}let len=u32::from_le_bytes(header[4..].try_into().unwrap())as usize;if len>w::MAX{return Err(w::INVALID)}document_read(id,16,&mut out[..len])?;Ok(len)
+ }
+
+}
+
+struct DocumentIo{id:u8}
+impl crate::document_journal::Io for DocumentIo{
+ fn read(&mut self,offset:u64,out:&mut[u8])->Result<(),u32>{document_read(self.id,offset,out)}
+ fn write(&mut self,offset:u64,bytes:&[u8])->Result<(),u32>{
+  use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();let e=v4_get(self.id as u64).map_err(|_|w::STALE)?;if offset.checked_add(bytes.len()as u64).map_or(true,|n|n>e.size_bytes as u64){return Err(w::INVALID)}
+  let mut done=0;while done<bytes.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(self.id as usize,at,va).map_err(|_|w::IO)?;let n=(bytes.len()-done).min(512-rel as usize%512);let written=DiskFs::diskfs_write_object_entry(piece,rel,&bytes[done..done+n],va).map_err(|_|w::IO)?;if written as usize!=n{return Err(w::IO)}done+=n;}Ok(())
+ }
+ fn sync(&mut self)->Result<(),u32>{if DiskFs::diskfs_block_sync()!=0{Err(sex_pdx::document::IO)}else{Ok(())}}
 }

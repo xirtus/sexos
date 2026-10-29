@@ -72,4 +72,32 @@ Path(sys.argv[1]).write_text(f[0])
 PYPARSE
 SPINDLE_PROBE_PARSE_SOURCE="$TEST_DIR/probe_parse.rs" rustc --edition=2021 --test tests/spindle_probe.rs -o "$TEST_DIR/probes"
 "$TEST_DIR/probes"
+rustc --edition=2021 --test tests/quil_document.rs -o "$TEST_DIR/documents"
+"$TEST_DIR/documents"
+rustc --edition=2021 --test tests/document_journal.rs -o "$TEST_DIR/document-journal"
+"$TEST_DIR/document-journal"
+rustc --edition=2021 --test tests/quil_view.rs -o "$TEST_DIR/quil-view"
+"$TEST_DIR/quil-view"
+rustc --edition=2021 --test tests/boot_display.rs -o "$TEST_DIR/boot-display"
+"$TEST_DIR/boot-display"
+python3 - "$TEST_DIR/absolute.rs" <<'PYABS'
+import re,sys
+from pathlib import Path
+s=Path('servers/sexinput/src/main.rs').read_text()
+f=re.findall(r'^fn normalize_pointer_report_v1\b.*?^}',s,re.M|re.S);assert len(f)==1
+Path(sys.argv[1]).write_text(f[0])
+PYABS
+ABS_POINTER_PRODUCTION="$TEST_DIR/absolute.rs" rustc --edition=2021 --test tests/absolute_pointer.rs -o "$TEST_DIR/absolute"
+"$TEST_DIR/absolute"
+python3 - <<'PYPOLICY'
+from pathlib import Path
+s=Path('servers/silk-shell/src/main.rs').read_text()
+p=s[s.index('unsafe fn collar_check_operation('):s.index('// ── C2: Collar Grant Table')]
+assert p.index('if explicit_denial')<p.index('document_policy::allows(')
+assert 'grant.state != CollarGrantState::Active' in p
+f=s[s.index('unsafe fn open_linen_object_in_quil('):s.index('// ── C2: Collar-Gated')]
+assert f.index('obj.disk_path!=0&&obj.disk_path<3')<f.index('collar_check_operation(')
+PYPOLICY
+rustc --edition=2021 --test tests/document_policy.rs -o "$TEST_DIR/document-policy"
+"$TEST_DIR/document-policy"
 echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_and_history_with_mock_transport_authority_and_host_locks'

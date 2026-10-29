@@ -516,6 +516,15 @@ pub fn init() {
         );
     }
 
+    // Quil document controls need the same immutable orchestration edge
+    // already provisioned for its BOOT-reserved successor. Never mint at run time.
+    if quil_id!=0 && silkshell_id!=0 {
+        let pd=crate::ipc::DOMAIN_REGISTRY.get(quil_id).expect("BOOT_QUIL_MISSING");
+        assert!(pd.find_capability(sex_pdx::SLOT_SHELL as u32).is_none(),"BOOT_QUIL_SHELL_SLOT_OCCUPIED");
+        pd.grant_capability(sex_pdx::SLOT_SHELL,crate::capability::CapabilityData::Domain(silkshell_id));
+        serial_println!("[boot.app.route] target={} slot={} service={} runtime_mint=0",quil_id,sex_pdx::SLOT_SHELL,silkshell_id);
+    }
+
     // Spindle route: grant silk-shell capability to send key events
     // to Spindle terminal (domain 12) via SLOT_SPINDLE.
     if spindle_id != 0 && silkshell_id != 0 {
@@ -704,6 +713,7 @@ pub fn init() {
             if let Some(fb) = fb_res.framebuffers().iter().next() {
                 let fb_addr = fb.address() as u64;
                 let fb_size = fb.pitch * fb.height;
+                crate::boot_display::init(crate::boot_display_state::Info{display:sexdisp_id,shell:silkshell_id,input:sexinput_id,address:fb_addr,width:fb.width as u32,height:fb.height as u32,pitch:fb.pitch as u32});
 
                 // Remap FB pages USER_ACCESSIBLE — Ring-3 sexdisplay can't write without this.
                 {

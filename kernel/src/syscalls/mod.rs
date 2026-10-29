@@ -207,6 +207,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
             let (status, value) = if slot == 0 {
                 match num {
+                    0xE6 => {
+                        let caller=crate::core_local::CoreLocal::get().current_pd_ref().id;
+                        match crate::boot_display::query(caller,arg0,arg1,arg2){Some(value)=>(0,value),None=>(sex_pdx::ERR_CAP_INVALID,0)}
+                    }
                     0xE3 => { // PDX_GET_DISPLAY_INFO
                         let ptr = arg0 as *mut DisplayInfo;
                         let info_size = core::mem::size_of::<DisplayInfo>();

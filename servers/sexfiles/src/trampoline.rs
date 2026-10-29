@@ -229,11 +229,13 @@ pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.trampoline.loop.enter] ok=1");
 
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
+    static mut DOCUMENTS:crate::document::Service=crate::document::Service::new();
+    let documents=unsafe{&mut DOCUMENTS};
     let mut probes=crate::spindle_probe::Service::new();
     let mut history=crate::spindle_history::Service::new();
     let mut durable_history=crate::history_disk::Durable::new();
     loop {
-        history.poll(pdx_reply);probes.poll(pdx_reply);
+        history.poll(pdx_reply);probes.poll(pdx_reply);documents.poll(pdx_reply);
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
         unsafe {
             if SEXFILES_TRAMP_LISTEN_BUDGET > 0 {
@@ -248,7 +250,7 @@ pub extern "C" fn trampoline_main() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
-                let m = if history.pending()||probes.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
+                let m = if history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
                 (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2)
             };
         let msg = crate::pdx::ReplayMsg {
@@ -259,7 +261,7 @@ pub extern "C" fn trampoline_main() {
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
-                    history.retire(notice.target_pd);probes.retire(notice.target_pd);
+                    history.retire(notice.target_pd);probes.retire(notice.target_pd);documents.retire(notice.target_pd);
                     let (closed,revoked)=vfs::retire_app_subject(notice.target_pd);
                     sex_pdx::serial_record!("[files.app.cleanup] target={} task={} handles={} caps={} saved_data=retained selection=0",
                         notice.target_pd,notice.task_id,closed,revoked);
@@ -279,6 +281,13 @@ pub extern "C" fn trampoline_main() {
             msg.type_id, caller, msg.arg0, msg.arg1
         ); }
 
+        if msg.type_id==sex_pdx::document::OP{
+            if let Some(r)=sex_pdx::document::Request::decode(msg.arg0,msg.arg1,msg.arg2){
+                let(slot,surface)=match caller{9=>(38,156),16=>(45,301),_=>{continue}};
+                let live=matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c)if(c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(caller,caller,surface,3))&&sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE);
+                if let Some(v)=documents.handle(caller,live,r,&mut vfs::DocumentBackend){pdx_reply(caller,v);}
+            }continue;
+        }
         if msg.type_id==sex_pdx::spindle_probe::OP{
             if let Some(r)=sex_pdx::spindle_probe::Request::decode(msg.arg0,msg.arg1,msg.arg2){
                 if let Some(v)=probes.handle(caller,crate::spindle_history::live(caller),r,&mut vfs::SpindleProbeBackend){pdx_reply(caller,v);}

@@ -4,6 +4,7 @@
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"] mod surface_groups;

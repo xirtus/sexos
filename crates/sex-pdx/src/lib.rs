@@ -905,3 +905,10 @@ pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<DomainId, u64> {
         Err(status)
     }
 }
+
+pub mod document;
+
+pub mod desktop_style;
+pub mod document_view;
+
+pub mod display_boot;

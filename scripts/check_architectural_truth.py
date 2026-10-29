@@ -216,8 +216,9 @@ def main(argv=None):
         # Include checker/harness sources as well as the explicitly bound paths.
         files = set(bindings)
         files.add("scripts/check_architectural_truth.py")
+        files.add("limine.cfg")
         files.update(p.relative_to(args.root).as_posix() for p in (args.root / "scripts").glob("*.py"))
-        for directory in ("kernel/src", "tests", "scripts/tests", "crates/sex-pdx/src", "servers/sexfiles/src",
+        for directory in ("kernel/src", "tests", "scripts/tests", "crates/sex-pdx/src", "servers/sexfiles/src", "servers/quil/src",
                           "sex-rt/src", "apps/sexdrive/src", "servers/sexusb/src", "servers/sexnet/src",
                           "servers/sext/src", "apps/kaleidoscope/src", "apps/spindle/src", "servers/sexbell/src",
                           "servers/silk-shell/src", "servers/linen/src", "servers/sexdisplay/src"):

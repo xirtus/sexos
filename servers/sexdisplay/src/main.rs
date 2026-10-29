@@ -1106,7 +1106,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
 /// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column
 /// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
 fn surface_text_scale(surf: &Surface) -> usize {
-    if surf.w >= 256 { 2 } else { 1 }
+    sex_pdx::desktop_style::scale(surf.w) as usize
 }
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
@@ -1162,8 +1162,8 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     const CHAR_SPACING: usize = 1;
     let scale = surface_text_scale(surf);
     let line_h = (GLYPH_H + 2) * scale;
-    let tx = (surf.x.max(0) as usize).saturating_add(8);
-    let top_inset = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { FRAME_TOP_BAR_HEIGHT_PX + 8 } else { 12 };
+    let tx = (surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
+    let top_inset = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { FRAME_TOP_BAR_HEIGHT_PX + 8 } else { sex_pdx::desktop_style::TEXT_TOP as usize };
     let ty = (surf.y.max(0) as usize).saturating_add(top_inset);
 
     if x < tx || y < ty { return None; }
@@ -2610,6 +2610,13 @@ fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, bar
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Resolve BOOT metadata before the first pixel write, including compact modes.
+    let geometry=sex_pdx::display_boot::geometry().expect("BOOT_DISPLAY_GEOMETRY");
+    let address=sex_pdx::display_boot::framebuffer().expect("BOOT_DISPLAY_FRAMEBUFFER");
+    assert!(geometry.pitch==geometry.width*4,"DISPLAY_PADDED_PITCH_UNSUPPORTED");
+    assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
+    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;}
+    sex_pdx::serial_record!("[display.boot.geometry] width={} height={} pitch={} boot=1",geometry.width,geometry.height,geometry.pitch);
     serial_println!("[sexdisplay.init.start]");
     serial_println!("[silk.contract.validate.start]");
     let contract_err = validate_silkbar_contract();
@@ -2644,7 +2651,7 @@ pub extern "C" fn _start() -> ! {
     let mut fallback_after_drop_pending = false;
     let mut fallback_after_drop_pending_proof = false;
     let mut stale_probe_done = false;
-    let mut fb_live = false;
+    let mut fb_live = true;
     let mut render_proof_done = false;
     let mut loop_iter: u64 = 0;
     let mut last_fallback_raw_tick: u64 = 0;
@@ -3215,7 +3222,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 0x11 => { // OP_PRIMARY_FB
-                    if handle_primary_fb(msg.arg0, msg.arg1) {
+                    if msg.caller_pd==1 && msg.arg0==address && msg.arg1==(geometry.width as u64|((geometry.height as u64)<<32)) && handle_primary_fb(msg.arg0, msg.arg1) {
                         fb_live = true;
                         serial_println!("[pdx.identity.accept] display owner_pd validation active");
                         // ── CLOCK_REDRAW_AFTER_FB_LIVE_FIX_V1 ──

@@ -1,0 +1,186 @@
+//! BOOT-authenticated geometry and document controls; coordinates are data.
+use crate::desktop_style as s;
+pub const OP: u64 = 0x272;
+pub const ACTION: u64 = 0x273;
+pub const OPEN_LINEN: u64 = 0x274;
+pub const READY: u64 = 0x275;
+pub const NEW: u8 = 1;
+pub const OPEN: u8 = 2;
+pub const SAVE: u8 = 3;
+pub const SAVE_AS: u8 = 4;
+pub const QUIESCE: u8 = 5;
+#[derive(Clone, Copy, Debug)]
+pub struct Layout {
+    pub w: u32,
+    pub h: u32,
+    pub scale: u32,
+    pub cols: usize,
+    pub rows: usize,
+    pub top: u32,
+    pub toolbar_rows: usize,
+}
+impl Layout {
+    pub fn new(target: u32, w: u32, h: u32) -> Self {
+        let scale = s::scale(w);
+        let cols = (w.saturating_sub(2 * s::INSET) / (s::ADVANCE * scale))
+            .saturating_sub(1)
+            .clamp(1, 79) as usize;
+        let top = if target == 16 { 36 } else { s::TEXT_TOP };
+        let toolbar_rows = if cols >= 20 {
+            1
+        } else if cols >= 10 {
+            2
+        } else {
+            4
+        };
+        let rows = if h.saturating_sub(top) >= 7 * scale {
+            1 + (h - top - 7 * scale) / (s::LINE * scale)
+        } else {
+            0
+        } as usize;
+        Self {
+            w,
+            h,
+            scale,
+            cols,
+            rows,
+            top,
+            toolbar_rows,
+        }
+    }
+    pub fn body_rows(self) -> usize {
+        self.rows.saturating_sub(1 + self.toolbar_rows + 1).min(24)
+    }
+    pub fn hit(self, x: u32, y: u32) -> Option<u8> {
+        if x < s::INSET || y < self.top + s::LINE * self.scale {
+            return None;
+        }
+        let col = ((x - s::INSET) / (s::ADVANCE * self.scale)) as usize;
+        let row = ((y - self.top) / (s::LINE * self.scale)) as usize - 1;
+        let per = 4 / self.toolbar_rows;
+        let item = row * per + col / 5;
+        if row >= self.toolbar_rows || col >= per * 5 || item >= 4 {
+            return None;
+        }
+        Some(item as u8 + 1)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub target: u32,
+    pub task: u32,
+    pub w: u32,
+    pub h: u32,
+    pub sequence: u64,
+}
+impl Notice {
+    pub fn args(self) -> [u64; 3] {
+        [
+            (self.task as u64) << 32 | self.target as u64,
+            (self.h as u64) << 32 | self.w as u64,
+            self.sequence,
+        ]
+    }
+    pub fn decode(caller: u32, target: u32, task: u32, args: [u64; 3], last: u64) -> Option<Self> {
+        let n = Self {
+            target: args[0] as u32,
+            task: (args[0] >> 32) as u32,
+            w: args[1] as u32,
+            h: (args[1] >> 32) as u32,
+            sequence: args[2],
+        };
+        if caller != 3
+            || !matches!(target, 9 | 16)
+            || n.target != target
+            || n.task != task
+            || n.sequence <= last
+            || n.w == 0
+            || n.h == 0
+            || n.w > 4096
+            || n.h > 4096
+        {
+            return None;
+        }
+        Some(n)
+    }
+}
+/// One desired notice per fixed BOOT subject; full queues retain exact data.
+pub struct Delivery {
+    desired: Option<Notice>,
+    last: Option<(u32, u32)>,
+    sequence: u64,
+    dead: bool,
+}
+impl Delivery {
+    pub const fn new() -> Self {
+        Self {
+            desired: None,
+            last: None,
+            sequence: 0,
+            dead: false,
+        }
+    }
+    pub fn queue(&mut self, target: u32, task: u32, w: u32, h: u32) {
+        if self.dead
+            || !matches!(target, 9 | 16)
+            || task != target
+            || w == 0
+            || h == 0
+            || w > 4096
+            || h > 4096
+        {
+            return;
+        }
+        if self.desired.map(|n| (n.w, n.h)).or(self.last) == Some((w, h)) {
+            return;
+        }
+        let Some(sequence) = self.sequence.checked_add(1) else {
+            self.retire();
+            return;
+        };
+        self.sequence = sequence;
+        self.desired = Some(Notice {
+            target,
+            task,
+            w,
+            h,
+            sequence,
+        });
+    }
+    pub fn refresh(&mut self) {
+        if !self.dead {
+            self.last = None;
+        }
+    }
+    pub fn pending(&self) -> bool {
+        self.desired.is_some()
+    }
+    pub fn retire(&mut self) {
+        self.dead = true;
+        self.desired = None;
+        self.last = None;
+    }
+    pub fn poll(
+        &mut self,
+        live: bool,
+        ready: bool,
+        mut send: impl FnMut(Notice) -> Result<(), u64>,
+    ) {
+        let Some(n) = self.desired else { return };
+        if !live {
+            self.retire();
+            return;
+        }
+        if !ready {
+            return;
+        }
+        match send(n) {
+            Ok(()) => {
+                self.last = Some((n.w, n.h));
+                self.desired = None
+            }
+            Err(crate::ERR_SERVICE_NOT_READY) => {}
+            Err(_) => self.retire(),
+        }
+    }
+}

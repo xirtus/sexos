@@ -21,7 +21,7 @@ class ArchitecturalTruthTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "repo"
         (self.root / "spec").mkdir(parents=True)
-        paths = {"ARCHITECTURE.md", "scripts/check_architectural_truth.py"}
+        paths = {"ARCHITECTURE.md", "limine.cfg", "scripts/check_architectural_truth.py"}
         for spec in (REPO / "spec").glob("*.sexspec"):
             shutil.copyfile(spec, self.root / "spec" / spec.name)
             doc = json.loads(spec.read_text())

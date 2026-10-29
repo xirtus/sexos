@@ -72,7 +72,7 @@ def persistence_rows(boot1: str, boot2: str) -> list[ProofRow]:
                 for name in ["persist_bytes_match", "persist_fingerprint_match"]]
 
 
-def ppm_rgb(data: bytes) -> tuple[int, int, bytes]:
+def ppm_rgb(data: bytes, min_width: int = 1272, min_height: int = 360) -> tuple[int, int, bytes]:
     # Read P6 tokens, allowing standard comments before/between header tokens.
     # After maxval consume precisely its separator: raster bytes may themselves
     # contain whitespace and must never be stripped or tokenized.
@@ -100,7 +100,7 @@ def ppm_rgb(data: bytes) -> tuple[int, int, bytes]:
     if not all(re.fullmatch(rb"[0-9]+", token) for token in tokens[1:]):
         raise ValueError("malformed_ppm_dimensions")
     width, height, maximum = map(int, tokens[1:])
-    if width < 1272 or height < 360 or maximum != 255:
+    if width < min_width or height < min_height or maximum != 255:
         raise ValueError("ppm_bounds_or_depth")
     if position >= len(data):
         raise ValueError("missing_ppm_raster_separator")

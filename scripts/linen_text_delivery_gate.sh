@@ -22,8 +22,8 @@ assert 'bell_frame_id' not in function('toggle_command_palette')
 assert 'minimize_frame(COMMAND_PALETTE_FRAME_ID);' in function('toggle_command_palette')
 assert 'PALETTE_VISIBILITY.set(' in function('toggle_command_palette')
 assert 'set_frame_minimized(COMMAND_PALETTE_FRAME_ID,false)' in function('palette_show')
-assert 'shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll();' in s
-assert 'linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || LINEN_ASYNC.can_send()' in s
+assert 'shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll();' in s
+assert 'linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send()' in s
 Path(sys.argv[2]).write_text('\n'.join(parts))
 PYCODE
 DESKTOP_DELIVERY_PRODUCTION="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/desktop_state_delivery.rs" -o "$TEST_DIR/production-tests"

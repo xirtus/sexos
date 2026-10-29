@@ -107,8 +107,8 @@ def main():
         if loaded!=saved:raise RuntimeError('successor did not load exact predecessor saved document')
         key('esc',r'\[quil.palette.action\] kind=esc clear=1')
         key('z',r'\[quil.text.recv\]')
-        status_match=wait(r'\[quil.text.view\] target=16 surface=301 status=([^\r\n]*) '+str(int(saved[0])+1)+r'B\*',timeout=30)
-        expected_status=status_match[1]+' '+str(int(saved[0])+1)+'B*'
+        status_match=wait(r'\[quil.text.view\] target=16 surface=301 status=([^\r\n]*\* [^\r\n]+)',timeout=30)
+        expected_status=status_match[1]
         pixel_errors=['not rendered'];deadline=time.monotonic()+60
         while time.monotonic()<deadline:
             q.cmd('screendump',{'filename':str(out/'successor-input.ppm')})

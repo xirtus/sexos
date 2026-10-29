@@ -1,0 +1,19 @@
+[
+  "[linen.quil.disk_doc.intent] object_id=2 path_id=1 ok=1",
+  "[quil.document.begin] kind=load object=2 revision=1",
+  "[linen.quil.disk_doc.intent] object_id=3 path_id=2 ok=1",
+  "[linen.quil.disk_doc.intent] object_id=4 path_id=3 ok=1",
+  "[quil.document.superseded] object=3 revision=2",
+  "[files.document.recovered] object=2 identity=196609 generation=1 bank=1 bytes=240 hash=0x94974cfa5266d8bc",
+  "[files.document.bound] object=2 generation=196609 bytes=240",
+  "[quil.document.result] outcome=Cancelled error=0 requested_revision=1 revision=2 buffer_retained=1",
+  "[quil.document.begin] kind=load object=3 revision=2",
+  "[files.document.recovered] object=3 identity=262145 generation=1 bank=1 bytes=10 hash=0x9265c216ac1b7769",
+  "[files.document.bound] object=3 generation=262145 bytes=10",
+  "[quil.persist.load.ok] bytes=10 hash=0x9265c216ac1b7769 doc=3",
+  "[linen.quil.disk_doc.intent] object_id=5 path_id=4 ok=1",
+  "[quil.document.begin] kind=load object=4 revision=4",
+  "[files.document.recovered] object=4 identity=327681 generation=1 bank=1 bytes=11 hash=0xde5fd78672ab47b1",
+  "[files.document.bound] object=4 generation=327681 bytes=11",
+  "[quil.persist.load.ok] bytes=11 hash=0xde5fd78672ab47b1 doc=4"
+]

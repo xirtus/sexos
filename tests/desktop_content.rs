@@ -2,6 +2,8 @@
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/document_view.rs"]pub mod document_view;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
 #[path="../servers/silk-shell/src/desktop_content.rs"] mod desktop_content;
 #[path="../servers/silk-shell/src/linen_text_delivery.rs"] mod linen_text_delivery;
@@ -21,6 +23,7 @@ fn items()->[Item<'static>;3]{[Item{id:1,name:b"notes.txt"},Item{id:2,name:b"ker
 mod integration {
     #![allow(dead_code,static_mut_refs)]
     use super::desktop_content;
+    use super::document_view;
     use super::linen_text_delivery;
     static mut LINEN_TEXT:linen_text_delivery::Outbox=linen_text_delivery::Outbox::new(200);
     use super::app_custody;
@@ -42,6 +45,7 @@ mod integration {
     mod sex_pdx {pub use crate::discard_record as serial_record;}
     static mut SPINDLE_VIEWS:[crate::spindle_view::Delivery;2]=[crate::spindle_view::Delivery::new(),crate::spindle_view::Delivery::new()];
     fn pdx_call(_:usize,op:u64,sid:u64,a:u64,b:u64){CALLS.lock().unwrap().push((op,sid,a,b));}
+    static mut DOCUMENT_VIEWS:[document_view::Delivery;2]=[document_view::Delivery::new(),document_view::Delivery::new()];
     include!(env!("DESKTOP_CONTENT_PRODUCTION"));
     #[test]fn actual_renderer_emits_real_text_protocol_after_complete_view(){
         let _lock=LOCK.lock().unwrap();CALLS.lock().unwrap().clear();

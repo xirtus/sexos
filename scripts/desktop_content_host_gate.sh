@@ -15,7 +15,7 @@ assert 'LINEN_OBJECTS.iter().flatten()' in p and 'LINEN_ASYNC' not in p
 assert 'desktop_content::list(' in p and 'linen_queue_text(&view.text[..view.len]' in p
 assert '0xFA,SURFACE_ID_LINEN' not in p
 n=function('native_child_geometry')
-assert '!e.dead && !e.close_pending && e.shell_surface()==Some(frame)' in n
+assert '!e.dead && !e.close_pending && e.owns_surface(frame)' in n
 assert 'desktop_content::children(' in n and '0xEC,child.sid' in n
 assert 'native_child_geometry(surface_id,x,y,w,h)' in function('update_local_geometry')
 focus=function('desktop_state_poll')
