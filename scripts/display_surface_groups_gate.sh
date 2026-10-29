@@ -9,7 +9,7 @@ import re,sys
 root,out=map(Path,sys.argv[1:]);s=(root/'servers/sexdisplay/src/main.rs').read_text()
 a=s.index('const FONT_ASCII_5X7:');parts=[s[a:s.index('];',s.index('= [',a))+2]]
 parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H)[^\n]+',s,re.M)
-for name in ['clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','fill_rect_color','ascii_glyph_index','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','surface_text_fg_at','redraw_surface_damage','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+for name in ['clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','fill_rect_color','ascii_glyph_index','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','legacy_text_clear','legacy_text_draw','surface_text_fg_at','redraw_surface_damage','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
  parts.append(s[a:i])
@@ -29,6 +29,10 @@ assert 'fill_damage::update(slot,rect_index,sx,sy,sw,sh,color)' in fill
 assert fill.index('slot.owner_pd != msg.caller_pd')<fill.index('fill_damage::update(')
 assert 'needs_surface_redraw = true' not in fill
 assert 'if sw == 0 || sh == 0 { continue; }' not in fill
+for opcode,next_opcode,helper in [('0xFA','0xFB','legacy_text_clear'),('0xFB','0xFC','legacy_text_draw')]:
+ part=s[s.index('                '+opcode+' => {'):s.index('                '+next_opcode+' => {')]
+ assert part.index('slot.owner_pd != msg.caller_pd')<part.index(helper+'(')
+ assert 'text_damage.add('in part and 'needs_surface_redraw'not in part
 assert 'FRAME_GROUPS.observe(&SURFACES)' in s and 'FRAME_GROUPS.fit_children(&mut SURFACES)' in s
 assert 'FRAME_GROUPS.register(surface_lifecycle::Catalog' in s
 assert 'fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color)' not in s

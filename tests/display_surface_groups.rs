@@ -23,6 +23,59 @@ fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{c}
 fn pulse_alpha(base:u8,_a:u8,_f:u64,_p:u64)->u8{base}
 include!(env!("DISPLAY_COMPOSITION_SOURCE"));
 include!("fixtures/compositor_reference.rs");
+// Literal accepted64 legacy mutation behavior, separate from new helpers.
+fn legacy_draw_reference(slot:&mut Surface,packed:u64,arg2:u64){
+ let byte_offset=((arg2&0xFF)|((arg2>>4)&0xF00))as usize;let char_count=((arg2>>8)&0xF)as usize;
+ slot.text_color=((arg2>>32)as u32)|0xFF000000;
+ let mut i=0;while i<char_count&&i<8&&byte_offset+i<TEXT_BUF_CAP{
+  slot.text_buf[byte_offset+i]=((packed>>(i*8))&0xFF)as u8;i+=1;
+ }
+ let new_len=byte_offset+i;if new_len>slot.text_len as usize{slot.text_len=new_len.min(TEXT_BUF_CAP)as u16;}
+ recompute_text_lines(slot);
+}
+fn legacy_args(offset:usize,count:usize,color:u32)->u64{
+ (offset as u64&0xff)|((offset as u64&0xf00)<<4)|((count as u64)<<8)|((color as u64)<<32)
+}
+unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32{
+ let selected=FRAME_GROUPS.winner(&SURFACES,focus,x,y,w,h).map(|s|s.surface_id);
+ reference_composite_pixel_selected(x,y,w,h,0x123,focus,selected)
+}
+#[test]fn legacy_mutation_preserves_real_offset_count_color_wrap_and_clear_semantics(){
+ for offset in [0,1,7,255,256,4095]{for count in [0,1,7,8,15]{for color in [0,0xabcdef,0xff112233]{
+  let mut actual=surf(9,156);actual.text_len=3;actual.text_buf[..3].copy_from_slice(b"old");recompute_text_lines(&mut actual);let mut expected=actual;
+  let args=legacy_args(offset,count,color);let packed=u64::from_le_bytes(*b"A\nB CDEF");
+  legacy_text_draw(&mut actual,packed,args);legacy_draw_reference(&mut expected,packed,args);
+  assert_eq!((actual.text_len,actual.text_color,actual.line_count,actual.wrap_cols),(expected.text_len,expected.text_color,expected.line_count,expected.wrap_cols));
+  assert_eq!(actual.text_buf,expected.text_buf);assert_eq!(actual.line_starts,expected.line_starts);
+  assert_eq!(legacy_text_clear(&mut actual),actual.text_len!=expected.text_len);assert_eq!(actual.text_len,0);assert!(actual.text_buf.iter().all(|b|*b==0));
+  assert_eq!(actual.line_count,0);assert_eq!(actual.wrap_cols,TEXT_LEGACY_COLS);assert!(!legacy_text_clear(&mut actual));
+ }}}
+ let mut s=surf(9,156);let args=legacy_args(0,8,0xabcdef);let bytes=u64::from_le_bytes(*b"sameword");assert!(legacy_text_draw(&mut s,bytes,args));assert!(!legacy_text_draw(&mut s,bytes,args));
+ assert!(legacy_text_draw(&mut s,bytes,legacy_args(0,8,0x123456)));
+}
+#[test]fn legacy_clear_draw_damage_matches_literal_compositor_at_each_drain_boundary(){unsafe{
+ let(w,h)=(320,260);
+ for focus in [201,888,152]{for hidden in [false,true]{for x in [-30,40,290]{for drain in [1,2,4]{
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(cat(9));
+  SURFACES[0]=Surface{x,y:60,w:240,h:190,..frame()};SURFACES[1]=surf(9,156);
+  SURFACES[2]=Surface{x:180,y:110,w:100,h:100,..surf(8,888)};
+  SURFACES[3]=Surface{x:220,y:150,w:80,h:80,..surf(3,152)};
+  FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);if hidden{SURFACES[0]=SURFACE_EMPTY;}
+  SURFACES[1].text_buf[..20].copy_from_slice(b"old words\nmore words");SURFACES[1].text_len=20;recompute_text_lines(&mut SURFACES[1]);
+  let mut actual=vec![0;w*h];for y in 0..h{for px in 0..w{actual[y*w+px]=legacy_reference_pixel(px,y,w,h,focus);}}
+  let ops=[None,Some((u64::from_le_bytes(*b"A\nlonger"),legacy_args(0,8,0xabcdef))),Some((u64::from_le_bytes(*b" words!!"),legacy_args(8,8,0xabcdef))),Some((u64::from_le_bytes(*b"A\nlonger"),legacy_args(0,8,0x345678))),None,Some((b'Z' as u64,legacy_args(0,1,0xabcdef)))];
+  for batch in ops.chunks(drain){
+   let mut d=damage::Damage::new();
+   for &op in batch{
+    let old=text_surface_damage(&SURFACES[1],w,h);
+    let changed=match op{None=>legacy_text_clear(&mut SURFACES[1]),Some((packed,args))=>legacy_text_draw(&mut SURFACES[1],packed,args)};
+    if changed{d.add(old,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);}
+   }
+   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);}
+   for y in 0..h{for px in 0..w{assert_eq!(actual[y*w+px],legacy_reference_pixel(px,y,w,h,focus),"focus={focus} hidden={hidden} x={x} drain={drain} px={px} y={y}");}}
+  }
+ }}}}
+}}
 fn cat(pd:u32)->Catalog{Catalog{slot:pd as usize,target_pd:pd,task_id:pd,surface_id:if pd==9{156}else{154},coordinator_pd:3}}
 fn surf(pd:u32,sid:u64)->Surface{Surface{owner_pd:pd,surface_id:sid,x:100,y:100,w:400,h:300,color:0x123456,active:true,..SURFACE_EMPTY}}
 fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}

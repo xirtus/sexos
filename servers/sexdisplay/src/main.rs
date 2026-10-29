@@ -1204,6 +1204,30 @@ fn recompute_text_lines(surf: &mut Surface) {
     }
 }
 
+// These mutate text data only; dispatch admits the exact live surface owner.
+fn legacy_text_clear(slot:&mut Surface)->bool{
+    let changed=slot.text_len!=0;
+    slot.text_len=0;slot.text_buf=[0u8;TEXT_BUF_CAP];
+    slot.line_count=0;slot.wrap_cols=TEXT_LEGACY_COLS;
+    changed
+}
+fn legacy_text_draw(slot:&mut Surface,packed:u64,arg2:u64)->bool{
+    let offset=((arg2&0xFF)|((arg2>>4)&0xF00))as usize;
+    let count=((arg2>>8)&0xF)as usize;
+    let color=((arg2>>32)as u32)|0xFF000000;
+    let mut changed=slot.text_color!=color&&slot.text_len!=0;
+    slot.text_color=color;
+    let mut i=0;
+    while i<count&&i<8&&offset+i<TEXT_BUF_CAP{
+        let byte=((packed>>(i*8))&0xFF)as u8;
+        changed|=slot.text_buf[offset+i]!=byte;slot.text_buf[offset+i]=byte;i+=1;
+    }
+    if offset+i>slot.text_len as usize{
+        changed=true;slot.text_len=(offset+i).min(TEXT_BUF_CAP)as u16;
+    }
+    recompute_text_lines(slot);changed
+}
+
 fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     if surf.text_len == 0 || surf.line_count == 0 { return None; }
     const GLYPH_W: usize = 5;
@@ -3670,11 +3694,8 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
-                                needs_surface_redraw |= slot.text_len != 0;
-                                slot.text_len = 0;
-                                slot.text_buf = [0u8; TEXT_BUF_CAP];
-                                slot.line_count = 0;
-                                slot.wrap_cols = TEXT_LEGACY_COLS;
+                                let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
+                                if legacy_text_clear(slot){text_damage.add(old_damage,FB_W as usize,FB_H as usize);}
                                 break;
                             }
                         }
@@ -3688,11 +3709,6 @@ pub extern "C" fn _start() -> ! {
                     // Legacy senders leave bits 12-15 zero → offsets 0-255 unchanged.
                     let sid = msg.arg0;
                     if sid == 0 { continue; }
-                    let packed = msg.arg1;
-                    let byte_offset = ((msg.arg2 & 0xFF) | ((msg.arg2 >> 4) & 0xF00)) as usize;
-                    let char_count = ((msg.arg2 >> 8) & 0xF) as usize;
-                    let text_color = ((msg.arg2 >> 32) as u32) | 0xFF000000; // force opaque alpha
-                    let max_buf = TEXT_BUF_CAP;
                     unsafe {
                         for slot in SURFACES.iter_mut() {
                             if slot.active && slot.surface_id == sid {
@@ -3704,23 +3720,11 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
-                                let mut text_changed = slot.text_color != text_color && slot.text_len != 0;
-                                slot.text_color = text_color;
-                                // Unpack 8 bytes from arg1 (little-endian)
-                                let mut i = 0usize;
-                                while i < char_count && i < 8 && byte_offset + i < max_buf {
-                                    let byte = ((packed >> (i * 8)) & 0xFF) as u8;
-                                    text_changed |= slot.text_buf[byte_offset + i] != byte;
-                                    slot.text_buf[byte_offset + i] = byte;
-                                    i += 1;
+                                let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
+                                if legacy_text_draw(slot,msg.arg1,msg.arg2){
+                                    text_damage.add(old_damage,FB_W as usize,FB_H as usize);
+                                    text_damage.add(text_surface_damage(slot,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
                                 }
-                                let new_len = byte_offset + i;
-                                if new_len > slot.text_len as usize {
-                                    text_changed = true;
-                                    slot.text_len = new_len.min(max_buf) as u16;
-                                }
-                                recompute_text_lines(slot);
-                                needs_surface_redraw |= text_changed;
                                 // Diagnostic: confirm text was written to surface
                                 if slot.text_len > 0 && slot.text_len <= 32 {
                                     serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",
