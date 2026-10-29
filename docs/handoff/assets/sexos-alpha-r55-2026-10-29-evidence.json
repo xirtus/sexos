@@ -3106,7 +3106,8 @@
         ]
       },
       "serial_sha256": "194969e3333f78f009b72045c1af5b59444d5ef6dc2e87cbc4f7b9ff003e6289",
-      "disk_sha256": "57e85791441047c573ed32aca7e2a84901ce71af7a1c8bf1759add8da3e14a10"
+      "disk_sha256": "57e85791441047c573ed32aca7e2a84901ce71af7a1c8bf1759add8da3e14a10",
+      "observed_private_pages_retired_zeroed_reused": 341
     },
     "compact": {
       "result": {
@@ -4164,7 +4165,8 @@
         ]
       },
       "serial_sha256": "505cea3df0829872e12cf760345832ebb290d25a1cbbe745d2be836acaf22c71",
-      "disk_sha256": "57e85791441047c573ed32aca7e2a84901ce71af7a1c8bf1759add8da3e14a10"
+      "disk_sha256": "57e85791441047c573ed32aca7e2a84901ce71af7a1c8bf1759add8da3e14a10",
+      "observed_private_pages_retired_zeroed_reused": 341
     },
     "document-reboot": {
       "result": {
@@ -12426,5 +12428,6 @@
       }
     },
     "rust_executions": 644
-  }
+  },
+  "resource_accounting": "Three Quil subjects each occupy40 private pages, versus39 in image51; all six app subjects retire341 pages in image55."
 }
