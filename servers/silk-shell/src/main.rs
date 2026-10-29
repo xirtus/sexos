@@ -8908,6 +8908,42 @@ unsafe fn access_emit_shell_nodes(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NO
     idx
 }
 
+/// Traverse distinct visible focus targets. Semantic annotations can refer to
+/// the same surface as its frame; they must not trap traversal before wrap.
+/// These local nodes select data only; try_set_focus remains the final gate.
+unsafe fn access_move_focus(nodes: &[Option<AccessNode>], forward: bool) -> bool {
+    let mut candidates = [0u64; MAX_ACCESS_NODES];
+    let mut count = 0;
+    for node in nodes.iter().take(MAX_ACCESS_NODES).flatten() {
+        let sid = node.target.surface_id;
+        if sid == 0 || node.state & ACCESS_VISIBLE == 0 || node.actions & ACT_FOCUS == 0
+            || !surface_is_alive(sid) || is_tombstoned(sid)
+            || !surface_is_lifecycle_focusable(sid) || candidates[..count].contains(&sid) {
+            continue;
+        }
+        if surface_scene_id(sid).map_or(false, |scene| scene != ACTIVE_SCENE_IDX) { continue; }
+        candidates[count] = sid;
+        count += 1;
+    }
+    if count == 0 { return false; }
+    let current = candidates[..count].iter().position(|sid| *sid == FOCUSED_SURFACE_ID);
+    for offset in 1..=count {
+        let index = match (current, forward) {
+            (Some(i),true)=>(i+offset)%count,
+            (Some(i),false)=>(i+count-offset)%count,
+            (None,true)=>offset-1,
+            (None,false)=>count-offset,
+        };
+        let sid = candidates[index];
+        if try_set_focus(sid) {
+            sex_pdx::serial_record!("[shell.window.action] action={} frame=0 sid={} ok=1 reason=distinct_visible_target",
+                if forward {"FocusNext"}else{"FocusPrev"},sid);
+            return true;
+        }
+    }
+    false
+}
+
 /// D3: Handle an accessibility keyboard action by building the semantic node
 /// tree and dispatching to the appropriate lifecycle-safe path.
 ///
@@ -8927,65 +8963,7 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
 
     match action {
         SurfaceAction::AccessFocusNext | SurfaceAction::AccessFocusPrev => {
-            let forward = action == SurfaceAction::AccessFocusNext;
-            let current_sid = FOCUSED_SURFACE_ID;
-
-            // Find current position in tree, then scan forward/backward.
-            let start = if current_sid == 0 { 0 } else {
-                // Find index of current focused surface
-                let mut pos = 0;
-                let mut found = false;
-                for i in 0..count {
-                    if let Some(ref node) = nodes[i] {
-                        if node.target.surface_id != 0 && node.target.surface_id == current_sid {
-                            pos = i;
-                            found = true;
-                            break;
-                        }
-                        pos += 1;
-                    }
-                }
-                if !found { 0 } else { pos }
-            };
-
-            // Scan for the next valid node with a focusable surface.
-            let len = count;
-            for offset in 1..=len {
-                let idx = if forward {
-                    (start + offset) % len
-                } else {
-                    (start + len - offset) % len
-                };
-                if let Some(ref node) = nodes[idx] {
-                    let sid = node.target.surface_id;
-                    if sid != 0 && surface_is_alive(sid) && !is_tombstoned(sid)
-                        && surface_is_lifecycle_focusable(sid)
-                    {
-                        let label = core::str::from_utf8(&node.label)
-                            .unwrap_or("?").trim_end_matches('\0');
-                        static mut ACCESS_FOCUS_NEXT_BUDGET: u32 = 8;
-                        let b = &mut ACCESS_FOCUS_NEXT_BUDGET;
-                        if *b > 0 { *b -= 1;
-                            serial_println!("[access.action.focus_next] from={} to={} role={:?} label={}",
-                                current_sid, sid, node.role, label);
-                        }
-                        let ok = try_set_focus(sid);
-                        serial_println!(
-                            "[shell.window.action] action={} frame=0 sid={} ok={} reason={}",
-                            if forward { "FocusNext" } else { "FocusPrev" },
-                            sid,
-                            ok as u8,
-                            if ok { "ok" } else { "focus_reject" }
-                        );
-                        return ok;
-                    }
-                }
-            }
-            // No valid focus target found.
-            static mut ACCESS_FOCUS_EMPTY_BUDGET: u32 = 4;
-            let b = &mut ACCESS_FOCUS_EMPTY_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=focus_next reason=no_targets"); }
-            false
+            access_move_focus(&nodes[..count], action == SurfaceAction::AccessFocusNext)
         }
 
         SurfaceAction::AccessActivate => {

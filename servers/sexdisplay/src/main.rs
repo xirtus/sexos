@@ -856,6 +856,52 @@ fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar) -> Option<u32> {
     }
 }
 
+/// Same visible top-strip content for full and incremental redraws.
+fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar) -> u32 {
+    if let Some(fg) = clock_fg_at(x, y, bar) { fg }
+    else if let Some(fg) = bell_badge_at(x, y, bar) { fg }
+    else if let Some(fg) = phase5_active_app_at(x, y, bar) { fg }
+    else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
+    else if let Some(fg) = phase5_palette_dot_at(x, y, bar) { fg }
+    else { bar_color(x, y, bar) }
+}
+
+// Bounded observation only: no protocol, authority or scheduling decisions.
+static mut REPAINT_BUDGET: u16 = 512;
+static mut REPAINT_ORDINAL: u32 = 0;
+static mut REPAINT_SEEN: u32 = 0;
+static mut REPAINT_DRAINED: usize = 0;
+static mut REPAINT_UPSERTS: u32 = 0;
+static mut REPAINT_FITTED_NOOPS: u32 = 0;
+static mut REPAINT_TEXT_CALLS: u32 = 0;
+static mut REPAINT_STRIP_FOCUS: u64 = u64::MAX;
+fn repaint_begin() -> u64 { if unsafe{REPAINT_BUDGET==0}{0}else{sex_pdx::get_ticks()} }
+fn repaint_end(kind: &str, started: u64) {
+    unsafe {
+        if REPAINT_BUDGET == 0 { return; }
+        let focus_changed = matches!(kind,"full"|"strip") && REPAINT_STRIP_FOCUS != FOCUSED_SURFACE_ID;
+        // Clock-only strips exhausted the first experimental budget before
+        // the mixed workload. Keep every structural/focus observation and
+        // sample ordinary text draws; do not change render scheduling.
+        if kind=="strip" && !focus_changed { return; }
+        if kind=="text" {
+            REPAINT_TEXT_CALLS=REPAINT_TEXT_CALLS.wrapping_add(1);
+            if REPAINT_TEXT_CALLS%16!=0 { return; }
+        }
+        let end = sex_pdx::get_ticks();
+        REPAINT_BUDGET -= 1;
+        REPAINT_ORDINAL += 1;
+        sex_pdx::serial_record!("[display.repaint] ordinal={} kind={} start={} end={} ticks={} seen={} drained={} upserts={} fitted_noops={} focus={}",
+            REPAINT_ORDINAL,kind,started,end,end.saturating_sub(started),REPAINT_SEEN,
+            REPAINT_DRAINED,REPAINT_UPSERTS,REPAINT_FITTED_NOOPS,FOCUSED_SURFACE_ID);
+        if matches!(kind,"full"|"strip") && REPAINT_STRIP_FOCUS != FOCUSED_SURFACE_ID {
+            REPAINT_STRIP_FOCUS = FOCUSED_SURFACE_ID;
+            sex_pdx::serial_record!("[display.focus.drawn] focus={} ordinal={} kind={} tick={} pixels=unconfirmed",
+                FOCUSED_SURFACE_ID,REPAINT_ORDINAL,kind,end);
+        }
+    }
+}
+
 /// Phase 5: tint/accent swatch — 4x4 colored square near right side.
 /// Position: x=1045..1049, y=22..25 (between Bell at x=1020 and Clock at x=1090).
 fn phase5_tint_swatch_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
@@ -1302,6 +1348,7 @@ fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
+    let repaint_started = repaint_begin();
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
         return false;
@@ -1373,14 +1420,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
         let mut row=if y>50 {unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused_id,y,w,h)}}else{None};
         for x in 0..w {
             let c: u32 = if y < 50 {
-                // SilkBar/top strip always on top (layer 3)
-                if let Some(fg) = clock_fg_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = bell_badge_at(x, y, bar) {
-                    fg
-                } else {
-                    bar_color(x, y, bar)
-                }
+                top_strip_pixel(x, y, bar)
             } else if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
@@ -1399,6 +1439,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
     draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
     report_app_presented();
+    repaint_end("full", repaint_started);
     true
 }
 
@@ -1406,6 +1447,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
 /// Called for all SilkBar updates (clock, workspace active/urgent, chip visibility/kind).
 /// This is the only function that touches y<50 pixels after initial render.
 fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
+    let repaint_started = repaint_begin();
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
         return;
@@ -1589,19 +1631,7 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                if let Some(fg) = clock_fg_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = bell_badge_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = phase5_active_app_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = phase5_palette_dot_at(x, y, bar) {
-                    fg
-                } else {
-                    bar_color(x, y, bar)
-                }
+                top_strip_pixel(x, y, bar)
             } else {
                 DEFAULT_THEME.panel_glow
             };
@@ -1623,11 +1653,13 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     // poison the save-under patch with cursor pixels.
     draw_cursor_z_top(fb, w, h, total_pixels, false);
     draw_launcher_panel(fb, w, h, total_pixels);
+    repaint_end("strip", repaint_started);
 }
 
 /// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
 /// Never touches y<50 (SilkBar/clock/chips). Not a full render() call.
 fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
+    let repaint_started = repaint_begin();
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE { return; }
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return; }
@@ -1668,6 +1700,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
     report_app_presented();
+    repaint_end("area", repaint_started);
 }
 
 /// Conservative old/new glyph footprint, derived from the same layout fields
@@ -1686,6 +1719,7 @@ fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize
 /// Text-only redraw after a complete transaction. Restore the old cursor patch
 /// before touching damage, then capture its new background exactly once.
 fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect) {
+    let repaint_started = repaint_begin();
     if (fb as u64) < HIGH_HALF_BASE || w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return; }
     if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return; }
     if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
@@ -1706,6 +1740,7 @@ fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect) {
     draw_cursor_z_top(fb,w,h,total,true);
     draw_launcher_panel(fb,w,h,total);
     report_app_presented();
+    repaint_end("text", repaint_started);
 }
 
 // Classic NW arrow, 8 wide × 16 tall.
@@ -2771,6 +2806,7 @@ pub extern "C" fn _start() -> ! {
         }
         display_loop_counter = display_loop_counter.wrapping_add(1);
         // ── Per-cycle flags ──
+        unsafe { REPAINT_SEEN=0; REPAINT_DRAINED=0; REPAINT_UPSERTS=0; REPAINT_FITTED_NOOPS=0; }
         let mut needs_surface_redraw = false;
         let mut text_damage = damage::Damage::new();
         let mut needs_top_strip_redraw = false;
@@ -3058,6 +3094,14 @@ pub extern "C" fn _start() -> ! {
                 break;
             };
             drained += 1;
+            unsafe {
+                REPAINT_DRAINED=drained;
+                REPAINT_SEEN |= match msg.type_id {
+                    0xEC=>1,0xEB=>2,0xED=>4,0xEE=>8,0xEF=>16,
+                    0x276|0x277|0x278=>32,0xFA|0xFB=>64,0xFD=>128,
+                    silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
+                };
+            }
 
             // A hint cannot authorize cleanup: capability status above is the authority.
             if msg.type_id == sex_pdx::app_lifecycle::OP_APP_EXIT {
@@ -3359,10 +3403,16 @@ pub extern "C" fn _start() -> ! {
                         let vacant=match &admission { surface_lifecycle::Admission::Vacant(index,_)=>Some(*index),_=>None };
                         let owner=match &admission{surface_lifecycle::Admission::Vacant(_,owner)=>*owner,surface_lifecycle::Admission::Existing(i)=>SURFACES[*i].owner_pd,_=>0};
                         let color=sex_pdx::desktop_style::native_canvas(owner,surface_id).unwrap_or(color);
+                        let before = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
+                            .map(|s|(s.x,s.y,s.w,s.h,s.color));
                         if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
+                            REPAINT_UPSERTS += 1;
                             if let Some(index)=vacant { TEXT_STAGES[index].reset(); }
                             FRAME_GROUPS.observe(&SURFACES);
                             FRAME_GROUPS.fit_children(&mut SURFACES);
+                            let after = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
+                                .map(|s|(s.x,s.y,s.w,s.h,s.color));
+                            if before==after { REPAINT_FITTED_NOOPS+=1; }
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
                             if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
                                 recompute_text_lines(surface);
@@ -3483,7 +3533,9 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     unsafe {
-                        needs_surface_redraw |= FOCUSED_SURFACE_ID != sid;
+                        let changed = FOCUSED_SURFACE_ID != sid;
+                        needs_surface_redraw |= changed;
+                        needs_top_strip_redraw |= changed;
                         FOCUSED_SURFACE_ID = sid;
                     }
                 }

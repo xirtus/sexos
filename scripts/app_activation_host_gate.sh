@@ -62,3 +62,14 @@ assert s.index('DISPLAY_IO.text(i,*text,')<s.index('GRID_PREV[i]=Some(*text);')
 PYCODE
 rustc --edition=2021 --test "$ROOT_DIR/tests/spindle_display_delivery.rs" -o "$TEST_DIR/display-tests"
 "$TEST_DIR/display-tests"
+
+python3 - "$ROOT_DIR" "$TEST_DIR/access-focus.rs" <<'PYFOCUS'
+from pathlib import Path
+import re,sys
+s=(Path(sys.argv[1])/'servers/silk-shell/src/main.rs').read_text()
+f=re.findall(r'^unsafe fn access_move_focus\b.*?^}',s,re.M|re.S);assert len(f)==1
+Path(sys.argv[2]).write_text(f[0])
+assert 'access_move_focus(&nodes[..count], action == SurfaceAction::AccessFocusNext)' in s
+PYFOCUS
+ACCESS_FOCUS_SOURCE="$TEST_DIR/access-focus.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/access_focus_cycle.rs" -o "$TEST_DIR/access-focus"
+"$TEST_DIR/access-focus"

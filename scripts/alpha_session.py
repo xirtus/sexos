@@ -62,6 +62,7 @@ def run(c, seconds, acceptance=True, third_quil=False):
         record('quil_input_receipt', sent)
         second['content'] += 'q'
         wait(r'\[quil.ui.view\].*cursor='+str(len(second['content']))+r' ', timeout=30)
+        record('quil_view_receipt', sent)
         capture('soak-current', '#')
         record('quil_input_pixels', sent)
         sent = time.monotonic()

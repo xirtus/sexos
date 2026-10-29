@@ -4,7 +4,7 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');a=p.parse_args()
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
@@ -39,13 +39,21 @@ def main():
   from check_desktop_pixels import font_from_source
   from check_quil_ui_pixels import verify,view,wait_view
   from check_document_disk import recover
-  font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text());resolution=tuple(map(int,a.resolution.split('x')));stages=[]
+  font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text());resolution=tuple(map(int,a.resolution.split('x')));stages=[];capture_traces=[]
   def capture(name,expected):
-   end=time.monotonic()+90;errors=['not painted']
+   began=time.monotonic();end=began+90;errors=['not painted'];attempts=[]
    while time.monotonic()<end:
-    q.cmd('screendump',{'filename':str(out/(name+'.ppm'))});v=text();errors=verify(v,(out/(name+'.ppm')).read_bytes(),font,expected,resolution=resolution)
+    before=time.monotonic();q.cmd('screendump',{'filename':str(out/(name+'.ppm'))});dumped=time.monotonic()
+    v=text();framebuffer=(out/(name+'.ppm')).read_bytes();read=time.monotonic()
+    errors=verify(v,framebuffer,font,expected,resolution=resolution);verified=time.monotonic()
+    if a.capture_profile:
+     attempts.append(dict(start_seconds=before-began,screendump_seconds=dumped-before,read_seconds=read-dumped,
+                          verify_seconds=verified-read,errors=errors[:8]))
     if not errors:break
     time.sleep(.15)
+   if a.capture_profile:
+    capture_traces.append(dict(name=name,passed=not errors,elapsed_seconds=time.monotonic()-began,attempts=attempts))
+    (out/'capture-profile.json').write_text(json.dumps(capture_traces,indent=2)+'\n')
    if errors:raise RuntimeError(name+': '+str(errors))
    stages.append(dict(name=name,view=view(v),pixel_errors=errors))
   def ctrl(k,pattern):

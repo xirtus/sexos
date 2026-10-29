@@ -15,7 +15,7 @@ from check_quil_ui_pixels import verify
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--appearance',action='store_true');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--appearance',action='store_true');p.add_argument('--focus-feedback',action='store_true');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');a=p.parse_args()
     iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('fresh output required')
     disk=out/'nvme.img';shutil.copyfile(src,disk);log=out/'serial.log';sock=pathlib.Path('/tmp')/f'sex-quil-chain-{os.getpid()}.sock'
@@ -50,7 +50,7 @@ def main():
         from desktop_focus import focus_surface
         def focus(sid):return focus_surface(sid,text,key)
         font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text())
-        proof=[];appearance=[]
+        proof=[];appearance=[];focus_feedback=[]
         def palette_check(expected,name,start):
             wait(r'\[launcher.text.row\] index=1 .*status='+re.escape(expected),start)
             from check_launcher_pixels import verify as launcher_pixels
@@ -68,7 +68,22 @@ def main():
                 if a.appearance:palette_check('REOPEN / 2 RESERVED LEFT'if target==16 else'REOPEN / LAST RESERVED',f'reserve-ready-{target}',offset)
                 key('ret',rf'\[shell.app.relaunch\] predecessor={9 if target==16 else 16} successor={target} ')
                 wait(rf'\[app.surface.presented\] target={target} surface={sid} .*ok=1',offset)
-            focus(sid)
+            if a.focus_feedback:
+                focus(200)
+                feedback_offset=len(text());feedback_start=time.monotonic();focus(sid)
+                drawn=wait(rf'\[display.focus.drawn\] focus={sid} ordinal=(\d+) kind=(full|strip) tick=(\d+) pixels=unconfirmed',feedback_offset)
+                record=re.search(r'\[display.repaint\] ordinal='+drawn[1]+r' ([^\r\n]+)',text()[feedback_offset:])
+                if not record:raise RuntimeError('focus redraw observation missing')
+                seen=re.search(r'seen=(\d+)',record[1])
+                if not seen or not int(seen[1])&4:raise RuntimeError('focus feedback inherited a later clock-only redraw')
+                from check_disk_persistence import ppm_rgb
+                q.cmd('screendump',{'filename':str(out/f'focus-{target}.ppm')})
+                width,height,pixels=ppm_rgb((out/f'focus-{target}.ppm').read_bytes(),min_width=1,min_height=1)
+                if (width,height)!=tuple(map(int,a.resolution.split('x'))):raise RuntimeError('focus framebuffer resolution differs')
+                if any(pixels[(yy*width+xx)*3:(yy*width+xx)*3+3]!=b'\xcb\xa6\xf7'for yy in range(22,26)for xx in range(155,159)):
+                    raise RuntimeError('focus dot absent immediately after actual redraw')
+                focus_feedback.append(dict(target=target,ordinal=int(drawn[1]),kind=drawn[2],seen=int(seen[1]),seconds=time.monotonic()-feedback_start,pixel_errors=[]))
+            else:focus(sid)
             offset=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'n'}],'hold-time':80})
             wait(r'\[quil.new.ok\] bytes=0',offset)
             key(letter,r'\[quil.document.edit\]')
@@ -95,7 +110,7 @@ def main():
             proof.append(dict(target=target,surface=sid,pixel_errors=errors,roles=sorted(roles),terminal=True))
         key('grave_accent',r'\[shell.palette.item\] idx=0')
         wait(r'\[shell.palette.item\] idx=1 .*status=CLOSED / RESERVE EXHAUSTED')
-        result=dict(ok=True,iso_sha256=digest,resolution=a.resolution,incarnations=proof,reserve_exhausted=True,appearance=appearance,
+        result=dict(ok=True,iso_sha256=digest,resolution=a.resolution,incarnations=proof,reserve_exhausted=True,appearance=appearance,focus_feedback=focus_feedback,
                     scope='actual new-note input, exact glyphs, five-role cleanup and zero/reuse through the three finite BOOT subjects')
         (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
     except Exception as e:
