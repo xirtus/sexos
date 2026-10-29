@@ -58,3 +58,8 @@ mod integration {
             APP_CUSTODY[0].as_mut().unwrap().close_pending=false;APP_CUSTODY[0].as_mut().unwrap().dead=true;native_child_geometry(201,0,50,640,400);assert!(CALLS.lock().unwrap().is_empty());}
     }
 }
+
+#[test]fn successor_spindle_geometry_uses_only_reserved_fresh_children(){
+ let fresh=children(306,10,50,640,335);let old=children(153,10,50,640,335);
+ for (i,(n,p)) in fresh.into_iter().zip(old).enumerate(){let n=n.unwrap();let p=p.unwrap();assert_eq!(n.sid,[302,303,304,305][i]);assert_eq!((n.x,n.y,n.w,n.h),(p.x,p.y,p.w,p.h));}
+}

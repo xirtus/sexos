@@ -20,8 +20,8 @@ impl ReplyDelivery {
 /// Spindle's legacy async bridge has no leases and never blocks the shell peer.
 /// A missing/contended/terminal lifecycle attestation denies its queued request.
 pub fn admit(caller:u32,opcode:u64,spindle_status:Option<u64>)->bool {
-    caller==3 || (caller==12 && matches!(opcode,0x42|0x46|0x47) && spindle_status==Some(5))
+    caller==3 || (matches!(caller,12|17) && matches!(opcode,0x42|0x46|0x47) && spindle_status==Some(5))
 }
 pub fn legacy_reply(caller:u32,value:u64,mut send:impl FnMut(u32,u64)->u64)->bool {
-    caller==12 && send(caller,value)==0
+    matches!(caller,12|17) && send(caller,value)==0
 }

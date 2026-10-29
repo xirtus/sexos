@@ -1096,7 +1096,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
     let py = (ly - title_y) / SCALE;
     if px >= GLYPH_W { return None; }
     let title: &[u8] = match surface_id {
-        200 => b"Linen", 201 | 156 | 301 => b"Quil", 0x99 | 154 => b"Spindle",
+        200 => b"Linen", 201 | 156 | 301 => b"Quil", 0x99 | 154 | 302 | 306 => b"Spindle",
         300 => b"Browser", 100 => b"App", _ => return None,
     };
     let glyph = ascii_glyph_index(*title.get(col)?)?;

@@ -10,6 +10,7 @@ static LOCK:Mutex<()>=Mutex::new(());
 static CALLS:Mutex<Vec<(u64,u64,u64,u64,u64)>>=Mutex::new(Vec::new());
 static RESULTS:Mutex<VecDeque<(u64,u64)>>=Mutex::new(VecDeque::new());
 static LOG:Mutex<Vec<String>>=Mutex::new(Vec::new());
+const SLOT_SPINDLE:u64=14;fn spindle_route_slot()->u64{52}
 const SLOT_QUIL:u64=10;fn quil_route_slot()->u64{47}
 const SLOT_DISPLAY:u64=5;const SURFACE_ID_LINEN:u64=200;
 #[macro_export]macro_rules! record {($($a:tt)*)=>{$crate::LOG.lock().unwrap().push(format!($($a)*));}}

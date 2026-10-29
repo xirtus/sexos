@@ -59,9 +59,9 @@ fn op(opcode:u64,surface:u64)->Operation{Operation{opcode,surface,packed:11,cont
  let mut q=DesktopStates::new();q.observe(op(0xEC,201),Admission::Full);q.observe(op(0xEE,300),Admission::Full);
  let mut sent=Vec::new();q.poll(4,|x|if x.opcode==0xEE{Some(x)}else{None},|x|{sent.push(x);Admission::Accepted});assert_eq!(sent,vec![op(0xEE,300)]);assert!(!q.pending());
 }
-#[test]fn desktop_only_tracks_five_boot_surfaces_and_preserves_bounded_fairness(){
- let mut q=DesktopStates::new();for sid in[200,201,153,300,301,999,152]{q.observe(op(0xEC,sid),Admission::Full);}
- let mut sent=Vec::new();for _ in 0..5{q.poll(1,Some,|x|{sent.push(x.surface);Admission::Full});}assert_eq!(sent,vec![200,201,153,300,301]);
+#[test]fn desktop_only_tracks_six_boot_surfaces_and_preserves_bounded_fairness(){
+ let mut q=DesktopStates::new();for sid in[200,201,153,300,301,306,999,152]{q.observe(op(0xEC,sid),Admission::Full);}
+ let mut sent=Vec::new();for _ in 0..6{q.poll(1,Some,|x|{sent.push(x.surface);Admission::Full});}assert_eq!(sent,vec![200,201,153,300,301,306]);
 }
 #[test]fn restored_text_cancels_partial_payload_before_current_snapshot_repaint(){
  let mut q=Outbox::new(200);q.queue(b"old partial",1,metadata(1));q.poll(2,|_|Admission::Accepted);q.queue(b"hidden queued",2,metadata(2));

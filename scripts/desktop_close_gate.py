@@ -6,6 +6,8 @@ from check_desktop_pixels import verify as verify_pixels, verify_hidden, verify_
 from check_launcher_pixels import verify as verify_launcher
 from check_relaunch_pixels import verify as successor_pixels
 from check_app_activation_log import validate as activation_errors
+from check_spindle_relaunch_pixels import verify as spindle_pixels
+from check_spindle_history_log import validate as history_errors
 class QMP:
     def __init__(self,path):
         self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(5);self.sock.connect(str(path));self.file=self.sock.makefile('rb');self.seq=0;self.read();self.cmd('qmp_capabilities')
@@ -116,14 +118,63 @@ def main():
         if pixel_errors:raise RuntimeError('successor glyph pixels: '+'; '.join(pixel_errors))
         close(16,301)
         (out/'relaunch.json').write_text(json.dumps({'ok':True,'predecessor':9,'successor':16,'surface':301,'saved':saved,'loaded':loaded,'typed_status':expected_status,'pixel_errors':pixel_errors,'scope':'real BOOT activation, native presentation, document identity, input glyphs, successor private cleanup'},indent=2)+'\n')
+        def spindle_command(command,target=17):
+            for length,char in enumerate(command,1):
+                qcode={' ':'spc','-':'minus'}.get(char,char)
+                # Spaces extend the editor but can leave a padded grid's
+                # pixels unchanged. Await the actual unbudgeted editor receipt;
+                # the final four-grid framebuffer remains mandatory below.
+                key(qcode,rf'\[spindle.input.recv\] key=printable ch={re.escape(char)} len={length}(?:\r|\n)|\[spindle.line.cursor\] pos={length} len={length}(?:\r|\n)')
+            key('ret',rf'\[spindle.instance.command\] target={target} task={target} name='+re.escape(command.split()[0])+r' ok=1',timeout=90)
         key('scroll_lock',r'\[shell.focus.set\] id=153')
+        spindle_command('echo predecessor12',target=12)
+        old_history=wait(r'\[spindle.history.receipt\] target=12 task=12 kind=saved handle=(\d+) bytes=(\d+) count=1 hash=(0x[0-9a-f]+) error=0',timeout=90).groups()
         close(12,153)
+        # Spindle has a separate immutable grant and four fresh grid subjects.
+        key('grave_accent',r'\[shell.palette.item\] idx=0')
+        key('ret',r'\[shell.app.relaunch\] predecessor=12 successor=17 task=17 surface=302 receipt_replayed=1')
+        wait(r'\[app.surface.presented\] target=17 surface=302 sequence=1 ok=1',timeout=180)
+        wait(r'\[shell.focus.set\] id=306',timeout=60)
+        wait(r'\[spindle.history.receipt\] target=17 task=17 kind=missing handle=0 bytes=0 count=0 ',timeout=90)
+        spindle_command('linen-list')
+        wait(r'\[linen.spindle.authority\] target=17 slot=50 op=66 status=5 allowed=1',timeout=60)
+        bell_start=len(text())
+        spindle_command('notify spindle17')
+        bell_recv=wait(r'\[bell.notify.recv\] caller_pd=17 category=0 requested=1',bell_start,timeout=60)
+        wait(r'\[bell.notify.ok\] caller_pd=17 final_lane=\d+ event_id=\d+',bell_start+bell_recv.end(),timeout=60)
+        spindle_command('echo spindle17')
+        wait(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=\d+ bytes=\d+ count=3 hash=0x[0-9a-f]+ error=0',timeout=90)
+        save_start=len(text())
+        spindle_command('save')
+        saved_history=wait(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=(\d+) bytes=(\d+) count=(\d+) hash=(0x[0-9a-f]+) error=0',save_start,timeout=90).groups()
+        load_start=len(text())
+        spindle_command('load')
+        loaded_history=wait(r'\[spindle.history.receipt\] target=17 task=17 kind=loaded handle=(\d+) bytes=(\d+) count=(\d+) hash=(0x[0-9a-f]+) error=0',load_start,timeout=90).groups()
+        if saved_history[1:]!=loaded_history[1:] or saved_history[0]==loaded_history[0] or int(saved_history[0])==0 or int(loaded_history[0])==0:
+            raise RuntimeError('history roundtrip did not use fresh own handles and exact saved bytes/count/hash')
+        key('up',r'\[spindle.history.nav\] dir=up idx=0 len=14 ok=1')
+        (out/'spindle-history.json').write_text(json.dumps({'ok':True,'predecessor_saved':old_history,'successor_started_private_empty':True,'saved':saved_history,'loaded':loaded_history,'recall':'echo spindle17','scope':'same-boot owner-private RamFS; fresh handle receipts, exact snapshot fingerprint, real Up recall; no inherited predecessor history'},indent=2)+'\n')
+        spindle_errors=['not rendered'];deadline=time.monotonic()+90
+        while time.monotonic()<deadline:
+            q.cmd('screendump',{'filename':str(out/'spindle-successor.ppm')})
+            spindle_errors=spindle_pixels(text(),(out/'spindle-successor.ppm').read_bytes(),font)
+            if not spindle_errors:break
+            time.sleep(.2)
+        if spindle_errors:raise RuntimeError('Spindle grid pixels: '+'; '.join(spindle_errors))
+        close(17,306)
+        history_failures=history_errors(text())
+        (out/'history-log.json').write_text(json.dumps({'ok':not history_failures,'errors':history_failures},indent=2)+'\n')
+        if history_failures:raise RuntimeError('history receipt joins: '+'; '.join(history_failures))
+        (out/'spindle-relaunch.json').write_text(json.dumps({'ok':True,'predecessor':12,'successor':17,'task':17,'frame':306,'content':[302,303,304,305],'pixel_errors':spindle_errors,'scope':'real activation, native presentation, Linen observer, Bell notification, command echo glyphs and five-role private cleanup'},indent=2)+'\n')
+        key('grave_accent',r'\[shell.palette.item\] idx=0')
+        key('ret',r'\[launcher.execute.denied\] idx=0 .*reason=boot_reserve_exhausted')
+        key('grave_accent',r'\[command_palette.close\]')
         # Both Quil reservations are terminal. Enter must stay in
         # the launcher with an explicit denial and actual readable closed text.
         key('grave_accent',r'\[shell.palette.item\] idx=0')
         key('j',r'\[shell.palette.select\] old=0 new=1')
         key('ret',r'\[launcher.execute.denied\] idx=1 .*reason=boot_reserve_exhausted')
-        activation_failures=activation_errors(text())
+        activation_failures=activation_errors(text())+activation_errors(text(),spindle=True)
         (out/'activation-log.json').write_text(json.dumps({'ok':not activation_failures,'errors':activation_failures,'scope':'ordered real activation/retirement records; pixels checked separately'},indent=2)+'\n')
         if activation_failures:raise RuntimeError('activation log: '+'; '.join(activation_failures))
         launcher_errors=['not rendered'];deadline=time.monotonic()+90
@@ -192,7 +243,7 @@ def main():
             time.sleep(.2)
         (out/'minimize-restore.json').write_text(json.dumps({'ok':not restored_errors,'errors':restored_errors,'selected':selected,'scope':'visible glyphs then absent ink then restored complete glyphs'},indent=2)+'\n')
         if restored_errors:raise RuntimeError('restored pixels: '+'; '.join(restored_errors))
-        errors=check(text(),include_successor=True)
+        errors=check(text(),include_successor=True,include_spindle_successor=True)
         (out/'result.json').write_text(json.dumps({'ok':not errors,'errors':errors,'actions':actions},indent=2)+'\n')
         for error in errors:print('FAIL:',error)
         print('[desktop.close.gate.result] '+('FAIL'if errors else'PASS'))

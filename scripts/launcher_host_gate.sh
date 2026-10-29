@@ -17,7 +17,7 @@ assert 'sex_pdx::app_lifecycle::catalog(e.slot)' in s
 assert 'sex_pdx::app_lifecycle::info(e.slot)' in s
 assert 'Command::FocusQuil => quil_launcher_status()' in s
 assert 'quil_activation_info(true)!=Ok(active)' in s
-assert 'Command::FocusSpindle => native_launcher_status(12)' in s
+assert 'Command::FocusSpindle => spindle_launcher_status()' in s
 assert s.count('if palette_execute_selected() { toggle_command_palette(); }')==2
 assert 'PALETTE_TEXT.poll(4,display_admit)' in s
 assert 'palette_text_poll(); linen_text_poll();' in s

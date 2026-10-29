@@ -92,15 +92,33 @@
         {
           "path": "servers/silk-shell/src/main.rs",
           "anchor": "fn quil_launcher_status"
+        },
+        {
+          "path": "apps/spindle/src/main.rs",
+          "anchor": "[spindle.incarnation.start]"
+        },
+        {
+          "path": "servers/linen/src/main.rs",
+          "anchor": "fn linen_request_allowed"
+        },
+        {
+          "path": "apps/spindle/src/history_persistence.rs",
+          "anchor": "pub struct Client"
+        },
+        {
+          "path": "servers/sexfiles/src/spindle_history.rs",
+          "anchor": "pub struct Service"
         }
       ],
       "checks": [
         "app_resources",
         "app_activation",
-        "desktop_close_runtime"
+        "desktop_close_runtime",
+        "service_custody"
       ],
       "gaps": [
-        "One BOOT-reserved Quil successor only; no further reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Guest pixel/persistence evidence is required separately from host mocks."
+        "One BOOT-reserved successor each for Quil and Spindle; no reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Guest pixel/persistence evidence is required separately from host mocks.",
+        "History receipts cover incarnation-private same-boot RamFS snapshots only; no durable history transfer across identities or reboot, service-death timeout or complete epoch replay."
       ],
       "depends_on": [
         "CAPABILITY_GENESIS",

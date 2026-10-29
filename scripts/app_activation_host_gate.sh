@@ -13,6 +13,15 @@ for name in ['quil_activation_info','quil_launcher_status','quil_route_slot','qu
     assert len(found)==1,name
     parts.append(found[0])
 Path(sys.argv[2]).write_text('\n'.join(parts))
+parts=[]
+for name in ['spindle_activation_info','spindle_launcher_status','spindle_route_slot','spindle_has_focus']:
+    found=re.findall(r'^fn '+name+r'\b.*?(?=\n(?:fn |unsafe fn |///))',s,re.M|re.S)
+    assert len(found)==1,name
+    parts.append(found[0])
+parts.append(re.findall(r'^const fn is_spindle_text_key\b.*?^}',s,re.M|re.S)[0])
+app=(r/'apps/spindle/src/main.rs').read_text()
+parts.append(re.findall(r'^fn scancode_to_ascii\b.*?^}',app,re.M|re.S)[0])
+Path(sys.argv[2]+'.spindle').write_text('\n'.join(parts))
 k=(r/'kernel/src/app_resources.rs').read_text();a=k[k.index('pub fn activation('):k.index('pub fn ack(')]
 assert a.index('g.authorize(')<a.index('if new.activated')<a.index('restore_reserved_pages(')<a.index('new.activated=true')<a.index('activate_task(main)')
 for path in ['kernel/src/ipc.rs','kernel/src/ipc/router.rs']:
@@ -20,7 +29,23 @@ for path in ['kernel/src/ipc.rs','kernel/src/ipc/router.rs']:
 assert 'app_resources::activation_permitted(' in (r/'kernel/src/scheduler.rs').read_text()
 assert 'load_elf(elf_path, pd_id, layout, domain_id)' in (r/'kernel/src/pd/create.rs').read_text()
 assert 'create_boot_domain(quil_module.path(),Some(16),16,9)' in (r/'kernel/src/init.rs').read_text()
+assert 'create_boot_domain(spindle_module.path(),Some(17),17,12)' in (r/'kernel/src/init.rs').read_text()
 print('[app.activation.wiring] PASS scope=static_reservation_and_commit_order')
 PY
 QUIL_ACTIVATION_PRODUCTION="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/quil_activation.rs" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests"
+
+SPINDLE_ACTIVATION_PRODUCTION="$TEST_DIR/production.rs.spindle" rustc --edition=2021 --test "$ROOT_DIR/tests/spindle_activation.rs" -o "$TEST_DIR/spindle-tests"
+"$TEST_DIR/spindle-tests"
+
+python3 - "$ROOT_DIR" "$TEST_DIR/display.rs" <<'PYCODE'
+from pathlib import Path
+import re,sys
+s=(Path(sys.argv[1])/'apps/spindle/src/main.rs').read_text()
+f=re.findall(r'^fn spindle_display_call\b.*?^}',s,re.M|re.S)
+assert len(f)==1
+assert s.index('surf_flush(grid_sids()[s], &sub);')<s.index('GRID_PREV[s] = sub;')
+Path(sys.argv[2]).write_text(f[0])
+PYCODE
+SPINDLE_DISPLAY_PRODUCTION="$TEST_DIR/display.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/spindle_display_delivery.rs" -o "$TEST_DIR/display-tests"
+"$TEST_DIR/display-tests"

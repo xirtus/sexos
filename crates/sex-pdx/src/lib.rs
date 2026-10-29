@@ -13,6 +13,7 @@ pub mod memory_region;
 pub mod dma_pool;
 pub mod paging;
 pub mod app_lifecycle;
+pub mod spindle_history;
 pub use memory_region::MemoryRegionInfo;
 
 /// Opaque protection domain identifier. All inter-domain references use this type.

@@ -1,5 +1,7 @@
 # BOOT-reserved Quil relaunch — 29 October 2026
 
+Historical checkpoint `33817053`. The [Spindle follow-up](BOOT_RESERVED_SPINDLE_RELAUNCH_2026_10_29.md) adds the second logical app reserve; the one-app limits below describe this checkpoint.
+
 This follows launcher checkpoint `5c879302`. One short Astra read-only audit checked dormant delivery, hardware-key reuse and commit ordering; implementation and verification stayed in the parent.
 
 ## Delivered authority

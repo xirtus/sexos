@@ -57,6 +57,17 @@ const CAP_RIGHT_OPEN_EXISTING: u8 =
 const CAP_MAX_RECORDS: usize = 256;
 
 impl RamFs {
+    /// Publish a complete owner-private snapshot in one service transition.
+    /// Failed validation/allocation before the swap cannot expose a partial file.
+    pub fn replace_owned(&self,handle:u64,data:&[u8],caller:u32)->Result<(),i64>{
+        if data.len()>messages::RAMFS_MAX_FILE_SIZE{return Err(messages::ERR_OVERFLOW)}
+        let mut files=self.files.write();
+        let entry=Self::find_active_by_handle_mut(&mut files,handle).ok_or(messages::ERR_INVALID_HANDLE)?;
+        if caller==0 || entry.owner_pd!=caller{return Err(messages::ERR_PERM_DENIED)}
+        let mut next=Vec::new();
+        next.try_reserve_exact(data.len()).map_err(|_|messages::ERR_FULL)?;
+        next.extend_from_slice(data);entry.data=next;Ok(())
+    }
     pub const fn new() -> Self {
         Self {
             files: RwLock::new(Vec::new()),

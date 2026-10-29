@@ -20,6 +20,11 @@ def fixture():
     return '\n'.join(rows)
 class Check(unittest.TestCase):
     def test_synthetic_complete_scoped_records(self):self.assertEqual(validate(fixture()),[])
+    def test_distinct_spindle_trace_and_cross_app_grant_rejection(self):
+        text=fixture().replace('logical=9','logical=12').replace('predecessor=9','predecessor=12').replace('target=9','target=12').replace('task=9','task=12').replace('successor=16','successor=17').replace('target=16','target=17').replace('task=16','task=17').replace('app_id=16','app_id=17').replace('caller=16','caller=17').replace('surface=301','surface=302').replace('sid=301','sid=302').replace('key=9','key=12').replace('quil.incarnation','spindle.incarnation').replace('app.activation.negative','spindle.activation.negative').replace('idx=1','idx=0')
+        self.assertEqual(validate(text,spindle=True),[])
+        self.assertTrue(validate(text,spindle=False))
+        self.assertTrue(validate(fixture(),spindle=True))
     def test_missing_or_repeated_commit(self):
         text=fixture();line=next(l for l in text.splitlines() if '[app.activation.committed]' in l)
         self.assertTrue(validate(text.replace(line,'')));self.assertTrue(validate(text+'\n'+line))

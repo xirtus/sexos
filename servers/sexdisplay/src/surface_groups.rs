@@ -30,9 +30,9 @@ impl FrameGroups {
             let bx=frame.x.saturating_add(8); let by=frame.y.saturating_add(36);
             let bw=frame.w.saturating_sub(16); let bh=frame.h.saturating_sub(44);
             for child in surfaces.iter_mut().filter(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)) {
-                if g.catalog.target_pd == 12 {
-                    let col = matches!(child.surface_id,160|162) as u32;
-                    let row = matches!(child.surface_id,161|162) as u32;
+                if matches!(g.catalog.target_pd,12|17) {
+                    let col = matches!(child.surface_id,160|162|303|305) as u32;
+                    let row = matches!(child.surface_id,161|162|304|305) as u32;
                     let cw=bw.saturating_sub(8)/2; let ch=bh.saturating_sub(8)/2;
                     child.x=bx.saturating_add((col*(cw+8)) as i32);
                     child.y=by.saturating_add((row*(ch+8)) as i32);

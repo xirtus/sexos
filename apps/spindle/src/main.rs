@@ -85,6 +85,8 @@ use sex_pdx::{
     SLOT_BELL, SLOT_LINEN, SLOT_SHELL, OP_BELL_NOTIFY,
 };
 use sex_graphics::{WindowBuffer, font};
+mod history_persistence;
+static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
 // ── Local window create params (not yet in sex-pdx) ────────────────────────
 
@@ -105,15 +107,9 @@ const OP_LINEN_OPEN_INTENT: u64 = 0x46;
 
 // ── RamFS opcodes (local; defined in servers/sexfiles/src/messages.rs) ────
 const OP_RAMFS_OPEN: u64 = 0x30;
-const OP_RAMFS_WRITE: u64 = 0x32;
-const OP_RAMFS_READ: u64 = 0x31;
-const OP_RAMFS_CLOSE: u64 = 0x33;
 const OP_RAMFS_LIST: u64 = 0x34;
 const OP_RAMFS_OBJECT_ID: u64 = 0x37;
 
-const RAMFS_O_CREATE: u64 = 0x01;
-const HISTORY_FILE: &[u8] = b"spindle_history";
-const HISTORY_PATH: &[u8] = b"/tmp/spindle/history.log";
 
 // ── Spindle surface geometry ───────────────────────────────────────────────
 
@@ -319,11 +315,12 @@ struct History {
     ring: [[u8; HIST_LINE_BYTES]; MAX_HISTORY],
     write_pos: usize,
     total: u32,
+    revision:u64,
 }
 
 impl History {
     const fn new() -> Self {
-        History { ring: [[0u8; HIST_LINE_BYTES]; MAX_HISTORY], write_pos: 0, total: 0 }
+        History { ring: [[0u8; HIST_LINE_BYTES]; MAX_HISTORY], write_pos: 0, total: 0, revision:0 }
     }
 
     /// Push a command line into history. Clamps to HIST_LINE_BYTES.
@@ -334,6 +331,7 @@ impl History {
         for i in n..HIST_LINE_BYTES { self.ring[self.write_pos][i] = 0; }
         self.write_pos = (self.write_pos + 1) % MAX_HISTORY;
         self.total = self.total.saturating_add(1);
+        self.revision=self.revision.wrapping_add(1);
         idx
     }
 
@@ -351,6 +349,7 @@ impl History {
         self.ring = [[0u8; HIST_LINE_BYTES]; MAX_HISTORY];
         self.write_pos = 0;
         self.total = 0;
+        self.revision=self.revision.wrapping_add(1);
     }
 }
 
@@ -530,6 +529,7 @@ static mut SPINDLE_SCROLLBACK: Scrollback = Scrollback {
     scroll_offset: 0,
 };
 static mut SPINDLE_HISTORY: History = History {
+    revision:0,
     ring: [[0u8; HIST_LINE_BYTES]; MAX_HISTORY],
     write_pos: 0,
     total: 0,
@@ -660,6 +660,7 @@ fn parse_doc_id(args: &[u8]) -> Option<u64> {
 // messages until a sustained quiet streak, so no stale reply can be
 // matched to the probe's first request. Bounded both ways.
 fn spindle_storage_settle() {
+    if unsafe{HISTORY_IO.busy()}{return}
     let mut quiet = 0u32;
     let mut total = 0u32;
     let mut eaten = 0u32;
@@ -680,6 +681,7 @@ fn spindle_storage_settle() {
 }
 
 fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> {
+    if unsafe{HISTORY_IO.busy()}{return Err(-102)}
     // Enqueue with bounded retry: the async slot can be momentarily busy
     // right after a previous exchange (observed: SELECT for one path never
     // reached sexfiles when issued back-to-back).
@@ -732,18 +734,32 @@ fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> 
     }
 }
 
+/// Preserve exact display operations under transient backpressure. Only this
+/// app yields; the shell and other native subjects continue processing input.
+/// A permanent denial is terminal, never a successful surface/text receipt.
+fn spindle_display_call(op:u64,a:u64,b:u64,c:u64)->(u64,u64){
+    if instance_pd()!=17{return pdx_call(SLOT_DISPLAY,op,a,b,c)}
+    loop{
+        match sex_pdx::pdx_call_checked(SLOT_DISPLAY,op,a,b,c){
+            Ok(value)=>return (0,value),
+            Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sex_pdx::sys_yield(),
+            Err(error)=>{sex_pdx::serial_record!("[spindle.display.denied] target=17 op={} status={}",op,error);sex_pdx::task_finish(3)}
+        }
+    }
+}
+
 /// WINDOW_LIFECYCLE_V1: create (or re-create) the 2x2 surface grid.
 fn spindle_grid_create() {
     let mut si = 0;
     while si < GRID_SURF_X * GRID_SURF_Y {
         let sx = GRID_X0 + (si % GRID_SURF_X) as i32 * SURF_W as i32;
         let sy = GRID_Y0 + (si / GRID_SURF_X) as i32 * SURF_H as i32;
-        let (create_status, _) = pdx_call(SLOT_DISPLAY, 0xEC, GRID_SIDS[si],
+        let (create_status, _) = spindle_display_call(0xEC, grid_sids()[si],
             ((sy as u64) << 32) | (sx as u64 & 0xFFFF_FFFF),
             ((SURF_H as u64) << 32) | SURF_W as u64);
-        serial_println!("[spindle.grid.surface.ok] sid={} idx={}", GRID_SIDS[si], si);
+        serial_println!("[spindle.grid.surface.ok] sid={} idx={}", grid_sids()[si], si);
         if si == 0 {
-            serial_println!("[spindle.surface.create.ok] sid={} status={}", CONTENT_SID, create_status);
+            serial_println!("[spindle.surface.create.ok] sid={} status={}", content_sid(), create_status);
         }
         si += 1;
     }
@@ -754,7 +770,7 @@ fn spindle_grid_create() {
 fn spindle_grid_destroy() {
     let mut si = 0;
     while si < GRID_SURF_X * GRID_SURF_Y {
-        pdx_call(SLOT_DISPLAY, 0xEE, GRID_SIDS[si], 0, 0);
+        spindle_display_call(0xEE, grid_sids()[si], 0, 0);
         si += 1;
     }
     serial_println!("[spindle.grid.destroy.ok] surfaces={}", GRID_SURF_X * GRID_SURF_Y);
@@ -829,7 +845,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.help.section] name=history_events commands=4");
             sb.push(b"--- History & Events ---");
             sb.push(b"  history      show command history");
-            sb.push(b"  history clr  clear command history");
+            sb.push(b"  history clear  clear and save history");
             sb.push(b"  events       show event log");
             sb.push(b"  events clr   clear event log");
             serial_println!("[spindle.help.command] name=history ok=1");
@@ -840,8 +856,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             // ── section: storage ──
             serial_println!("[spindle.help.section] name=storage commands=3");
             sb.push(b"--- Storage (SexFiles) ---");
-            sb.push(b"  save         persist history (async fire-and-forget)");
-            sb.push(b"  load         restore history (async-limited)");
+            sb.push(b"  save         queue private history snapshot");
+            sb.push(b"  load         restore validated private history");
             sb.push(b"  ls           list SexFiles objects (async-limited)");
             serial_println!("[spindle.help.command] name=save ok=1");
             serial_println!("[spindle.help.command] name=load ok=1");
@@ -1047,7 +1063,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  App launch      kernel spawn + SLOT_SHELL needed");
             sb.push(b"  SilkBar name    no UpdateKind variant (ABI blocker)");
             sb.push(b"  SilkBar tint    no UpdateKind variant (ABI blocker)");
-            sb.push(b"  Sync load       pdx_call(READ) returns (0,0)");
+            sb.push(b"  History load    validated async receipts");
             sb.push(b"  Sync list       OP_RAMFS_LIST async reply only");
             sb.push(b"  Real HID input  spindle not kernel-spawned");
             sb.push(b"");
@@ -1190,7 +1206,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"Spindle V1 -- SexOS Keyboard Control Center");
             sb.push(b"  version: 1.0.0-pre");
             sb.push(b"  source:  apps/spindle (no_std)");
-            sb.push(b"  pd:      Domain 12, PKU 12");
+            sb.push(if instance_pd()==17 {b"  pd:      Domain 17, PKU 12"}else{b"  pd:      Domain 12, PKU 12"});
             sb.push(b"  surface: 0x99 via silk-shell");
             sb.push(b"  session: SpindleSession (.spn)");
             sb.push(b"  bridges: SexFiles + Bell + Linen (all AsyncEnqueue)");
@@ -1212,11 +1228,11 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"close" => {
             serial_println!("[spindle.lifecycle.close]");
             sb.push(b"Spindle session closing.");
-            sb.push(b"  state:      in-memory only (no SexFiles persistence)");
+            sb.push(b"  state:      private same-boot RamFS history");
             sb.push(b"  surface:    WindowBuffer released on PD exit");
-            sb.push(b"  history:    not persisted (SexFiles bridge pending)");
-            sb.push(b"  relaunch:   fresh state, no restore available");
-            sb.push(b"Close/relaunch requires kernel spawn + lifecycle integration.");
+            sb.push(b"  history:    only completed save receipts persist");
+            sb.push(b"  relaunch:   separate incarnation history");
+            sb.push(b"Close uses the desktop lifecycle action.");
             true
         }
         b"faults" => {
@@ -1242,33 +1258,16 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         }
                     }
                 }
-                sb.push(b"history persistence pending SexFiles client bridge.");
-                sb.push(b"capability grant pending -- no PDX call to sexfiles.");
+                sb.push(b"History is incarnation-private; save/load use receipts.");
             }
             true
         }
         b"save" => {
-            let save_ok = unsafe { persist_history(hist) };
-            if save_ok {
-                sb.push(b"History saved to SexFiles RamFS (async).");
-                serial_println!("[spindle.persist.command] name=save ok=1 reason=fire_and_forget");
-                serial_println!("[spindle.files.command] name=save ok=1 reason=fire_and_forget");
-            } else {
-                sb.push(b"Save failed: SexFiles unavailable.");
-                serial_println!("[spindle.persist.command] name=save ok=0 reason=sexfiles_unavailable");
-                serial_println!("[spindle.files.command] name=save ok=0 reason=sexfiles_unavailable");
-            }
+            if unsafe{persist_history(hist)}{sb.push(b"History save queued; awaiting receipt.");}else{sb.push(b"History save unavailable.");}
             true
         }
         b"load" => {
-            // Async-limited: pdx_call to Domain edge is fire-and-forget.
-            // Synchronous readback requires blocking on pdx_listen_raw.
-            // Full async restore deferred to future sync-call edge type.
-            sb.push(b"Load: sync readback unavailable (PDX AsyncEnqueue edge).");
-            sb.push(b"Server replies arrive as type=0x1 in main loop.");
-            sb.push(b"History restore requires future sync-call edge type.");
-            serial_println!("[spindle.persist.command] name=load ok=1 reason=async_limited_sync_readback_unavailable");
-            serial_println!("[spindle.files.command] name=load ok=1 reason=async_limited_sync_readback_unavailable");
+            if unsafe{HISTORY_IO.load(hist)}{sb.push(b"History load queued; awaiting validation.");}else{sb.push(b"History I/O busy; try load after save.");}
             true
         }
         b"ls" => {
@@ -1283,8 +1282,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"Synchronous listing unavailable: AsyncEnqueue edge.");
             sb.push(b"Server reply arrives as type=0x1 in main listen loop.");
             sb.push(b"Known objects (static):");
-            sb.push(b"  spindle_history    command history log");
-            sb.push(b"  /tmp/spindle/history.log");
+            sb.push(b"  Private history snapshot: save / load");
+            sb.push(b"  Same boot only; no inherited private handles");
             serial_println!("[spindle.files.command] name=ls ok=1 reason=async_limited_static_fallback");
             true
         }
@@ -2004,7 +2003,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"-- Bridges (AsyncEnqueue, nonblocking) --");
             sb.push(b"  Bell      active  SLOT_BELL=12, fire-and-forget notify");
             sb.push(b"  Linen     active  SLOT_LINEN=11, open/list (async)");
-            sb.push(b"  SexFiles  active  SLOT_STORAGE=9, save/load (async-limited)");
+            sb.push(b"  SexFiles  active  own history save/load receipts");
             summary_bytes += 220;
             serial_println!("[spindle.daily.item] name=Bell_bridge status=ACTIVE reason=SLOT_BELL_async_enqueue");
             serial_println!("[spindle.daily.item] name=Linen_bridge status=ACTIVE reason=SLOT_LINEN_async_enqueue");
@@ -2016,7 +2015,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  SilkBar tint        BLOCK  no UpdateKind variant (ABI)");
             sb.push(b"  SilkBar palette     BLOCK  no palette variant yet");
             sb.push(b"  App launch          BLOCK  kernel spawn + SLOT_SHELL needed");
-            sb.push(b"  Sync load           BLOCK  pdx_call(READ) returns (0,0)");
+            sb.push(b"  History load       ACTIVE  validated own snapshot");
             sb.push(b"  Sync list           BLOCK  OP_RAMFS_LIST async reply only");
             sb.push(b"  Real HID input      BLOCK  spindle not kernel-spawned");
             summary_bytes += 400;
@@ -2516,88 +2515,14 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     recognized
 }
 
-// ── SexFiles persistence (best-effort, graceful fallback) ──────────────────
-//
-// Architecture note: pdx_call to SLOT_STORAGE uses AsyncEnqueue edge (Domain cap).
-// This is fire-and-forget: enqueue succeeds → returns (0,0) immediately.
-// Server reply arrives asynchronously via incoming_replies, consumed by pdx_listen_raw.
-//
-// Save path: fire-and-forget works — data IS written to sexfiles RamFS.
-// Load path: CANNOT do synchronous readback — pdx_call(READ) always returns (0,0).
-// Load is marked async-limited; no blocking or unbounded wait in hot path.
-
-/// Try to persist command history to SexFiles RamFS.
-/// Fire-and-forget via AsyncEnqueue edge; server processes asynchronously.
-/// Returns true (save enqueued ok), false on unexpected failure.
-unsafe fn persist_history(hist: &History) -> bool {
-    let mut n0: u64 = 0; let mut n1: u64 = 0; let mut n2: u64 = 0;
-    let name = HISTORY_FILE;
-    for (i, &b) in name.iter().enumerate() {
-        match i {
-            0..=7  => n0 |= (b as u64) << (i * 8),
-            8..=15 => n1 |= (b as u64) << ((i - 8) * 8),
-            16..=23 => n2 |= (b as u64) << ((i - 16) * 8),
-            _ => break,
-        }
-    }
-    let flags = (RAMFS_O_CREATE as u64) << 24;
-
-    // OPEN: fire-and-forget via AsyncEnqueue edge — always returns (0,0)
-    let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, n2 | flags);
-    serial_println!("[spindle.sexfiles.open] file={:?}", core::str::from_utf8(name).unwrap_or("?"));
-
-    // WRITE: fire-and-forget each 8-byte chunk
-    let count = hist.total.min(128);
-    let mut global_offset = 0u64;
-    for i in 0..count as usize {
-        if let Some(entry) = hist.get(i) {
-            let data = entry;
-            let chunks = (data.len() + 7) / 8;
-            for c in 0..chunks {
-                let mut chunk: u64 = 0;
-                let base = c * 8;
-                for j in 0..8.min(data.len().saturating_sub(base)) {
-                    chunk |= (data[base + j] as u64) << (j * 8);
-                }
-                let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_WRITE, 0, global_offset, chunk);
-                global_offset += 8;
-            }
-        }
-    }
-
-    // CLOSE: fire-and-forget
-    let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, 0, 0, 0);
-    serial_println!("[spindle.history.save] count={} ok=1 reason=ramfs_fire_and_forget", count);
-    true
-}
-
-/// Try to restore command history from SexFiles RamFS on boot.
-///
-/// ASYNC-LIMITED: pdx_call to SLOT_STORAGE (AsyncEnqueue edge) is fire-and-forget.
-/// pdx_call(READ) always returns (0,0) — synchronous readback is not possible
-/// without blocking on pdx_listen_raw (which would block the hot key path).
-/// Server replies arrive as type=0x1 messages in the main listen loop.
-///
-/// Returns 0 (graceful).  Full async restore would require a dedicated reply
-/// collector integrated with the event loop — deferred to future PDX protocol
-/// enhancement (sync-call edge type for Domain caps).
-unsafe fn restore_history(_hist: &mut History) -> u32 {
-    // Fire OPEN to ensure file exists for future sessions.
-    let mut n0: u64 = 0; let mut n1: u64 = 0; let mut n2: u64 = 0;
-    let name = HISTORY_FILE;
-    for (i, &b) in name.iter().enumerate() {
-        match i {
-            0..=7  => n0 |= (b as u64) << (i * 8),
-            8..=15 => n1 |= (b as u64) << ((i - 8) * 8),
-            _ => break,
-        }
-    }
-    let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, n2);
-    // Async reply with handle goes to incoming_replies, consumed by main loop.
-    // Cannot synchronously read back — pdx_call(READ) always returns (0,0).
-    let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, 0, 0, 0);
-    serial_println!("[spindle.history.load] count=0 ok=1 reason=async_limited_sync_readback_unavailable");
-    0
+// Incarnation-private persistence. Enqueue means queued, never saved.
+unsafe fn persist_history(_hist:&History)->bool{HISTORY_IO.save()}
+unsafe fn restore_history(hist:&mut History)->u32{HISTORY_IO.load(hist);0}
+fn history_event(event:history_persistence::Event,sb:&mut Scrollback){
+ use history_persistence::Outcome;
+ let kind=match event.outcome{Outcome::Saved=>"saved",Outcome::Loaded=>"loaded",Outcome::Missing=>"missing",Outcome::Conflict=>"conflict",Outcome::Failed=>"failed"};
+ sex_pdx::serial_record!("[spindle.history.receipt] target={} task={} kind={} handle={} bytes={} count={} hash={:#x} error={}",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire),kind,event.handle,event.bytes,event.count,event.hash,event.error);
+ match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>sb.push(b"History I/O failed; no success receipt.")}
 }
 
 // ── Entry ──────────────────────────────────────────────────────────────────
@@ -2614,8 +2539,11 @@ unsafe fn restore_history(_hist: &mut History) -> u32 {
 // a 2x2 band of owned surfaces — 40 cols x 12 rows total, 20x6 per
 // surface. This PD holds 4 of the 16 slots (system steady state ~13);
 // do not add more surfaces without re-auditing slot pressure.
-const CONTENT_SID: u64 = 0x9A; // 154 — band 0 left; lane markers key on it
-const GRID_SIDS: [u64; 4] = [0x9A, 0xA0, 0xA1, 0xA2]; // 154,160,161,162
+static INSTANCE_PD:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
+static INSTANCE_TASK:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
+fn instance_pd()->u32{INSTANCE_PD.load(core::sync::atomic::Ordering::Acquire)}
+fn grid_sids()->[u64;4]{if instance_pd()==17{[302,303,304,305]}else{[154,160,161,162]}}
+fn content_sid()->u64{grid_sids()[0]}
 const SURF_COLS: usize = 20; // sexdisplay CHARS_PER_LINE
 const SURF_ROWS: usize = 6;  // 120 of the 128 text bytes used
 const GRID_SURF_X: usize = 2; // surfaces per band
@@ -2639,7 +2567,7 @@ static mut GRID_PREV: [[u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y] =
 /// diagnostic threshold on the very first write — zero per-frame serial
 /// output there.
 unsafe fn surf_flush(sid: u64, sub: &[u8; SURF_COLS * SURF_ROWS]) {
-    pdx_call(SLOT_DISPLAY, 0xFA, sid, 0, 0);
+    spindle_display_call(0xFA, sid, 0, 0);
     let mut c = SURF_COLS * SURF_ROWS / 8;
     while c > 0 {
         c -= 1;
@@ -2650,7 +2578,7 @@ unsafe fn surf_flush(sid: u64, sub: &[u8; SURF_COLS * SURF_ROWS]) {
             packed |= (sub[off + i] as u64) << (i * 8);
             i += 1;
         }
-        pdx_call(SLOT_DISPLAY, 0xFB, sid, packed,
+        spindle_display_call(0xFB, sid, packed,
             off as u64 | (8u64 << 8) | (CONTENT_TEXT_COLOR << 32));
     }
 }
@@ -2695,8 +2623,9 @@ unsafe fn content_render(line: &CmdLine, sb: &Scrollback) {
             row += 1;
         }
         if sub != GRID_PREV[s] {
+            if instance_pd()==17{sex_pdx::serial_record!("[spindle.grid.text] target=17 sid={} text={}",grid_sids()[s],core::str::from_utf8(&sub).unwrap_or("INVALID"));}
+            surf_flush(grid_sids()[s], &sub);
             GRID_PREV[s] = sub;
-            surf_flush(GRID_SIDS[s], &sub);
             flushed += 1;
         }
         s += 1;
@@ -2711,9 +2640,15 @@ unsafe fn content_render(line: &CmdLine, sb: &Scrollback) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("SPINDLE_SELF_AUTHORITY");
+    assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(12,154)|(17,302)));
+    INSTANCE_PD.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
+    INSTANCE_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
+    unsafe{HISTORY_IO.init(catalog.target_pd);}
+    sex_pdx::serial_record!("[spindle.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[spindle.init.start]");
     serial_println!("[spindle.boot]");
-    serial_println!("[spindle.surface.req] pd=12 kernel_spawned=1");
+    sex_pdx::serial_record!("[spindle.surface.req] pd={} kernel_spawned=1",instance_pd());
 
     const CMD_HISTORY_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_COMMAND_HISTORY_PROOF").is_some();
@@ -2740,22 +2675,8 @@ pub extern "C" fn _start() -> ! {
     // Font: 5×7 ASCII bitmap (safe, bounded). JetBrains Mono planned via offline converter.
     serial_println!("[spindle.font.safe] backend=5x7_ascii bounds=checked");
 
-    // ── Persistence audit ──
-    // SLOT_STORAGE uses Domain cap → AsyncEnqueue edge → fire-and-forget.
-    // pdx_call enqueues to sexfiles message ring, returns immediately (non-blocking).
-    // Server reply arrives via incoming_replies, consumed by pdx_listen_raw.
-    // Save: fire-and-forget works (server confirms writes in log).
-    // Load: sync readback unavailable (pdx_call returns (0,0)); async replies
-    //       arrive as type=0x1 in main listen loop. Deferred to future sync-call edge.
-    let storage_cap = SLOT_STORAGE;
-    let edge_type = "AsyncEnqueue";
-    let safe: u8 = 1; // non-blocking, no unbounded wait
-    serial_println!("[spindle.persist.audit] storage_cap={} edge={} safe={} reason=fire_and_forget_non_blocking", storage_cap, edge_type, safe);
-
-    // Best-effort restore from SexFiles (cap granted via 8ce251e).
-    let restored = unsafe { restore_history(hist) };
-    serial_println!("[spindle.history.restore] count={}", restored);
-    serial_println!("[spindle.history.load] count={} ok=1 reason=ramfs_read_bounded", restored);
+    sex_pdx::serial_record!("[spindle.persist.audit] target={} correlated=1 owner_private=1 transport=existing_boot_storage_edge durability=same_boot_ramfs",instance_pd());
+    unsafe{restore_history(hist);}
     // LINEN_ZERO_NAME_CREATE_STORM_V1: the old best-effort .spn create sent
     // OP_LINEN_CREATE_OBJECT with all-zero args, so Linen correctly rejected
     // name_len=0 and the async edge replayed it into a reject storm.
@@ -3036,12 +2957,27 @@ pub extern "C" fn _start() -> ! {
     unsafe { content_render(&line, sb) };
 
     serial_println!("[spindle.ready]");
-
+    if catalog.target_pd==17{
+        while sex_pdx::pdx_call_checked(SLOT_SHELL,0xFA,catalog.surface_id,1,(catalog.target_pd as u64)<<8).is_err(){sex_pdx::sys_yield();}
+    }
+    let mut presentation_pending=false;let mut presentation_sent=false;
     loop {
-        let msg = unsafe { sex_pdx::pdx_listen_raw(0) };
+        if let Some(event)=unsafe{HISTORY_IO.step(hist,|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_history::OP,r.header(),r.a,r.b).map(|_|()))}{history_event(event,sb);unsafe{content_render(&line,sb);}}
+        if presentation_pending && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
+        let msg=if presentation_pending || unsafe{HISTORY_IO.busy()}{
+            match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
+        }else{sex_pdx::pdx_listen_raw(0)};
+        if msg.type_id==1 && msg.caller_pd==11{
+            if let Some(event)=unsafe{HISTORY_IO.receive(msg.arg0,hist)}{history_event(event,sb);line.hist_nav=None;unsafe{content_render(&line,sb);}}
+            continue;
+        }
+        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && catalog.target_pd==17{presentation_pending=true;continue}
+        if msg.type_id==1 && msg.caller_pd==1 && msg.arg0==256 && presentation_sent{
+            presentation_sent=false;sex_pdx::serial_record!("[app.surface.presented] target=17 surface=302 sequence=1 ok=1");continue;
+        }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
-            [msg.arg0,msg.arg1,msg.arg2],12,12) {
-            sex_pdx::serial_record!("[app.close.accepted] target=12 task=12 coordinator=3");
+            [msg.arg0,msg.arg1,msg.arg2],instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire)) {
+            sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire));
             sex_pdx::task_finish(0);
         }
 
@@ -3072,17 +3008,17 @@ pub extern "C" fn _start() -> ! {
             if scancode == 0x1C && line.len > 0 {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
-                let idx = hist.push(line.as_bytes());
-                serial_println!("[spindle.history.push] idx={} len={}", idx, line.len);
-                unsafe { persist_history(&hist); }
-                serial_println!("[spindle.sexfiles.persist] ok");
+                let control=matches!(cmd_name,b"save"|b"load");
+                if !control{let idx=hist.push(line.as_bytes());serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
+                if !control{unsafe{HISTORY_IO.mark_dirty();}}
                 let lines_after = sb.total_lines;
                 let output_lines = lines_after.saturating_sub(lines_before);
                 // Approximate output bytes: each line up to 80 bytes + overhead
                 let output_bytes = (output_lines as u32).saturating_mul(84);
                 serial_println!("[spindle.stargate.segment] kind=status ok={}", recognized as u8);
+                sex_pdx::serial_record!("[spindle.instance.command] target={} task={} name={} ok={}",instance_pd(),catalog.task_id,core::str::from_utf8(cmd_name).unwrap_or("?"),recognized as u8);
                 serial_println!(
                     "[spindle.cmd.exec] name={} ok={} reason={}",
                     core::str::from_utf8(cmd_name).unwrap_or("?"),

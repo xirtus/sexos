@@ -15,6 +15,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/memory_region.rs
   crates/sex-pdx/src/paging.rs
   crates/sex-pdx/src/app_lifecycle.rs
+  crates/sex-pdx/src/spindle_history.rs
   kernel/src/paging_state.rs
   kernel/src/app_resource_state.rs
   kernel/src/app_resources.rs

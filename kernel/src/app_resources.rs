@@ -103,7 +103,7 @@ pub fn init(pager:u32,coordinator:u32,catalog:&[(u32,u64)],services:[u32;5]){
 }
 /// Genesis reserves a fresh image and permanently binds the one activation
 /// grant. Clear successor leaves before any predecessor user execution.
-pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32){
+pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     boot();let mut apps=APPS.lock();
     let old=apps.iter().find(|a|a.ready&&a.target==predecessor).expect("SUCCESSOR_NO_PREDECESSOR");
     let old_task=old.task;let old_key=old.pkey;
@@ -118,7 +118,6 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32){
         |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
         |va|x86_64::instructions::tlb::flush(VirtAddr::new(va))).expect("SUCCESSOR_RESERVE_LEAVES");
     let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
-    let slot=sex_pdx::app_lifecycle::ACTIVATION_SLOT;
     assert!(coordinator.find_capability(slot as u32).is_none());
     coordinator.grant_capability(slot as u64,CapabilityData::AppActivation(ActivationGrant{
         holder,logical_app:predecessor,incarnation:2,predecessor,predecessor_task:old_task,

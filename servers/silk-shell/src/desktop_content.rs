@@ -57,10 +57,10 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
     if bw==0 || bh==0 {return result}
     let bx=x.saturating_add(8);let by=y.saturating_add(36);
     if frame==201 {result[0]=Some(Child{sid:156,x:bx,y:by,w:bw,h:bh});}
-    if frame==153 && bw>8 && bh>8 {
+    if matches!(frame,153|306) && bw>8 && bh>8 {
         let cw=(bw-8)/2;let ch=(bh-8)/2;
         if cw==0 || ch==0 {return result}
-        for (i,sid) in [154,160,161,162].iter().enumerate() {
+        for (i,sid) in (if frame==153 {[154,160,161,162]}else{[302,303,304,305]}).iter().enumerate() {
             let right=i%2==1;let bottom=i>=2;
             result[i]=Some(Child{sid:*sid,x:bx.saturating_add(if right {(cw+8)as i32}else{0}),
                 y:by.saturating_add(if bottom {(ch+8)as i32}else{0}),

@@ -12,6 +12,7 @@ mod trampoline;
 mod backends;
 mod proof;
 mod sexobject;
+mod spindle_history;
 
 use crate::trampoline::trampoline_main;
 

@@ -15,11 +15,11 @@ impl Entry {
     }
     /// Fixed BOOT catalog association, not a caller-supplied ownership bind.
     pub fn shell_surface(&self) -> Option<u64> {
-        match (self.target, self.surface) { (9,156) => Some(201), (12,154) => Some(153), _ => None }
+        match (self.target, self.surface) { (9,156) => Some(201), (12,154) => Some(153), (17,302)=>Some(306), _ => None }
     }
     pub fn owns_surface(&self, sid: u64) -> bool { self.surface == sid || self.shell_surface() == Some(sid) }
     pub fn close_slot(&self) -> Option<u64> {
-        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), (16,301)=>Some(46), _=>None }
+        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), (16,301)=>Some(46), (17,302)=>Some(51), _=>None }
     }
     pub fn request_close(&mut self) -> bool {
         if self.dead || self.close_slot().is_none() {return false}
@@ -47,8 +47,8 @@ impl Entry {
         match opcode {
             0xFA => args[0] == self.surface && args[1] != 0,
             // Existing Spindle launcher route selects a fixed shell action.
-            0x15 => self.target == 12 && args[0] <= 7 && args[1] == 0 && args[2] == 0,
-            0 => self.target == 12 && args == [0;3], // no-effect endpoint probe
+            0x15 => matches!(self.target,12|17) && args[0] <= 7 && args[1] == 0 && args[2] == 0,
+            0 => matches!(self.target,12|17) && args == [0;3], // no-effect endpoint probe
             _ => false,
         }
     }

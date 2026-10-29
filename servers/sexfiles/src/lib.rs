@@ -5,6 +5,7 @@ extern crate spin;
 
 pub mod pdx;
 pub mod vfs;
+pub mod spindle_history;
 pub mod messages;
 pub mod trampoline;
 pub mod backends;

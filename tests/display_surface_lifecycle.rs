@@ -147,3 +147,13 @@ fn create(l:&Lifecycle,s:&mut[Surface],caller:u32,sid:u64)->bool {
     l.pixels_presented(1);assert_eq!(l.presentation_reply(0),None);assert_eq!(l.presentation_reply(1),Some((9,512)));assert_eq!(l.presentation_reply(2),None);
     l.pixels_presented(4|2);assert_eq!(l.presentation_reply(0),Some((15,256)));assert_eq!(l.presentation_reply(2),Some((12,768)));
 }
+
+#[test]fn spindle_successor_reserves_all_children_and_frame_without_reviving_predecessor(){
+ let mut l=Lifecycle::new();assert!(l.register(catalog(39,12,154)));assert!(l.register(catalog(50,17,302)));
+ let mut surfaces=[SURFACE_EMPTY;7];for sid in [302,303,304,305]{assert!(create(&l,&mut surfaces,17,sid));assert!(!create(&l,&mut surfaces,12,sid));}
+ assert!(create(&l,&mut surfaces,3,306));assert!(!create(&l,&mut surfaces,17,306));
+ let mut refs=SceneRefs::default();assert!(l.prepare(0,12,0x800c,&mut surfaces,&mut refs).is_some());
+ for sid in [302,303,304,305]{assert!(l.sid_live(sid));}assert_eq!(surfaces.iter().filter(|s|s.active).count(),5);
+ assert_eq!(l.prepare(1,17,0x8011,&mut surfaces,&mut refs),Some(5));
+ for sid in [302,303,304,305,306]{assert!(!create(&l,&mut surfaces,3,sid));assert!(!create(&l,&mut surfaces,17,sid));}
+}

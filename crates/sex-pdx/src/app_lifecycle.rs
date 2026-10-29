@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Immutable BOOT_DAG app lifecycle grants. Exit notifications are hints;
 //! every service attests custody through its own capability before retirement.
-pub const SLOTS: [usize; 4] = [38, 39, 40, 45];
+pub const SLOTS: [usize; 5] = [38, 39, 40, 45, 50];
 pub const OP_APP_EXIT: u64 = 0x107;
 pub const OP_APP_CLOSE: u64 = 0x108;
 pub const OP_APP_PRESENT: u64 = 0x109;
@@ -96,9 +96,9 @@ impl Authority for KernelAuthority {
     fn ack(&mut self,s:usize,t:u32)->Result<(),u64>{ack(s,t)}
 }
 #[derive(Clone,Copy)]
-pub struct ServiceCustody { retired: [Option<ExitNotice>;4], acked:[bool;4] }
+pub struct ServiceCustody { retired: [Option<ExitNotice>;5], acked:[bool;5] }
 impl ServiceCustody {
-    pub const fn new()->Self { Self {retired:[None;4],acked:[false;4]} }
+    pub const fn new()->Self { Self {retired:[None;5],acked:[false;5]} }
     pub fn is_retired(&self,target:u32)->bool {
         self.retired.iter().flatten().any(|n|n.target_pd==target)
     }
@@ -131,6 +131,10 @@ pub const ACTIVATION_SLOT:usize=44;
 pub const SUCCESSOR_CLOSE_SLOT:u64=46;
 pub const SUCCESSOR_ROUTE_SLOT:u64=47;
 pub const SELF_CATALOG_SLOT:usize=48;
+pub const SPINDLE_ACTIVATION_SLOT:usize=49;
+pub const SPINDLE_LIFECYCLE_SLOT:usize=50;
+pub const SPINDLE_CLOSE_SLOT:u64=51;
+pub const SPINDLE_ROUTE_SLOT:u64=52;
 pub const SYS_ACTIVATION:u64=66;
 pub const ACTIVATION_RESERVED:u64=0;
 pub const ACTIVATION_READY:u64=1;

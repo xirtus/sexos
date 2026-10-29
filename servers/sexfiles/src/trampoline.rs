@@ -229,7 +229,9 @@ pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.trampoline.loop.enter] ok=1");
 
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
+    let mut history=crate::spindle_history::Service::new();
     loop {
+        history.poll(pdx_reply);
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
         unsafe {
             if SEXFILES_TRAMP_LISTEN_BUDGET > 0 {
@@ -244,7 +246,7 @@ pub extern "C" fn trampoline_main() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
-                let m = pdx_listen_raw(0);
+                let m = if history.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
                 (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2)
             };
         let msg = crate::pdx::ReplayMsg {
@@ -255,6 +257,7 @@ pub extern "C" fn trampoline_main() {
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
+                    history.retire(notice.target_pd);
                     let (closed,revoked)=vfs::retire_app_subject(notice.target_pd);
                     sex_pdx::serial_record!("[files.app.cleanup] target={} task={} handles={} caps={} saved_data=retained selection=0",
                         notice.target_pd,notice.task_id,closed,revoked);
@@ -273,6 +276,11 @@ pub extern "C" fn trampoline_main() {
             "[sexfiles.route.recv] type={:#x} caller={} a0={:#x} a1={:#x}",
             msg.type_id, caller, msg.arg0, msg.arg1
         ); }
+
+        if msg.type_id==sex_pdx::spindle_history::OP {
+            if let Some(value)=history.handle(&vfs::RAMFS,caller,crate::spindle_history::live(caller),msg.arg0,msg.arg1,msg.arg2){pdx_reply(caller,value);}
+            continue;
+        }
 
         // Route message type_id to VFS handler, passing caller PD for namespace/cap check
         let reply = vfs::handle_vfs_message(msg.type_id, msg.arg0, msg.arg1, msg.arg2, caller);

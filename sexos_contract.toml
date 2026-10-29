@@ -246,8 +246,8 @@ publisher_policy = "retry-per-main-loop-without-blocking-while-pending"
 info_syscall = 63
 ack_syscall = 64
 retire_syscall = 65
-slots = [38, 39, 40, 45]
-apps = "9:Quil:156:frame201;12:Spindle:154,160,161,162:frame153;15:Kaleidoscope:300;16:Quil-incarnation2:301"
+slots = [38, 39, 40, 45, 50]
+apps = "9:Quil:156:frame201;12:Spindle:154,160,161,162:frame153;15:Kaleidoscope:300;16:Quil-incarnation2:301;17:Spindle-incarnation2:302,303,304,305:frame306"
 notice = "0x107;caller0;targetPD,originalTaskID,reserved0;hint-only-retry-until-role-ACK"
 info_input = "rdi-exact-slot,rsi-kind0-dead-status-or-kind1-live-catalog"
 info_output = "rax-status;rsi-target,rdx-task,r10-requiredMask,r8-ackedMask;catalog-r10-surface,r8-shellCoordinator"
@@ -260,12 +260,12 @@ status = "0-OK,1-invalid,2-retry,3-denied,5-live;failure-query-payload-zero"
 preconditions = "pinned-original-main-Dead-no-owner;inactive-trampoline;all-five-ACK;demand-range-closed;exact-all-private-leaf-preflight"
 effects = "clear-and-local-invlpg-all-ELF-and-user-stack-pages;drain-terminal-message-reply-signal-contents;sext-zero-entire-BOOT-alias-before-workspace-reuse"
 retained = "permanent-PD-task-capability-queue-control-tombstones;shared-live-service-state;saved-documents;no-incarnation-reuse"
-limits = "four-BOOT-enrolled-app-identities;BSP-local-TLB;cooperative-task-finish;no-runtime-cap-mint-no-per-process-page-tables-no-buddy-free"
+limits = "five-BOOT-enrolled-app-identities;BSP-local-TLB;cooperative-task-finish;no-runtime-cap-mint-no-per-process-page-tables-no-buddy-free"
 
 [app_lifecycle.close]
 opcode = 264
-slots = [41, 42, 43, 46]
-route = "shell3-to-BOOT-enrolled-app9-12-15-16"
+slots = [41, 42, 43, 46, 51]
+route = "shell3-to-BOOT-enrolled-app9-12-15-16-17"
 args = "targetPD,originalTaskID,reserved0"
 semantics = "cooperative-native-app-finish;retry-every16ticks-until-attested-death;enqueue-is-not-exit;no-runtime-mint"
 
@@ -286,7 +286,7 @@ rights = "QUERY-only;no-ACK-no-RETIRE"
 semantics = "legacy-list-open-search-from12-only-while-statusLIVE;terminal-queued-calls-fenced;reply12-best-effort-as-before;permanent-shell3-replies-retained"
 
 [app_lifecycle.surface_groups]
-associations = "Quil9:frame201:content156;Spindle12:frame153:content154,160,161,162"
+associations = "Quil9:frame201:content156;Spindle12:frame153:content154,160,161,162;Spindle17:frame306:content302,303,304,305"
 activation = "exact-immutable-catalog-owner-and-shell-coordinator;frame-binding-retained-after-minimize"
 geometry = "frame-authoritative-body-inset8,36,width-minus16,height-minus44;Spindle2x2-gap8"
 composition = "frame-owns-chrome-z-order;exact-app-owned-child-owns-body;bound-child-hidden-with-absent-parent;focus-preserves-content-color"
@@ -310,4 +310,26 @@ preconditions = "predecessorDead-no-owner-all5serviceACK-private-retired;exact-c
 commit = "restore-exact-reserved-leaves-and-local-invlpg;publish-receipt-and-routing;one-scheduler-first-admission;IF-masked-no-other-execution-core"
 replay = "returns-consumed-receipt-without-restoring-leaves-or-requeueing;terminal-successor-exhausts-reserve"
 routes = "successor-close46;successor-call47;self-QUERY-catalog48;all-granted-and-sealed-at-BOOT"
-limits = "one-successor-for-Quil;no-runtime-load-fork-exec-or-per-process-page-tables;other-apps-remain-reboot-only"
+limits = "one-successor-each-for-Quil-and-Spindle;no-runtime-load-fork-exec-or-per-process-page-tables;Kaleidoscope-remains-reboot-only"
+
+[app_activation.spindle]
+slot = 49
+lifecycle_slot = 50
+close_slot = 51
+route_slot = 52
+binding = "logicalSpindle12-incarnation2;predecessor12-task12;successor17-task17;layout17-key12;content302,303,304,305-frame306"
+services = "fresh-BOOT-display-storage-shell-Linen-Bell-edges;Linen50-QUERY-only-observer;new-subject-starts-empty-private-history"
+geometry = "catalog-primary302-registers-shell-owned-frame306;all-four-app-owned-content-surfaces-follow-and-clip-to-frame"
+limits = "one-BOOT-reserved-Spindle-successor;existing-syscall66-and-BSP-activation-preconditions;permanent-both-incarnation-tombstones"
+
+[spindle_history]
+opcode = 75
+clients = "BOOT Spindle12/task12 and Spindle17/task17 only; exact lifecycle QUERY LIVE before every request"
+authority = "existing BOOT storage edge; caller-derived private name; real owner-checked SexFiles handle; no new kernel capabilities"
+request = "arg0=nonwrapping24bitSequence|kind8<<24,reservedHigh32zero;arg1=handle32|offset16<<32|length16<<48;arg2=up-to4bytesLE"
+reply = "actualSexFiles11;tag8<<56|sequence24<<32|payload32;tag0x53success-or0xE3error;single-admitted-client-request"
+operations = "1-open-save,2-open-load,3-stage-write,4-commit,5-stat,6-read,7-close"
+commit = "4096byte-bounded-staging;validate-complete-SHI1-owner-count-length-hash-entries;atomic-owner-private-RamFS-replace;Saved-only-after-commit-and-close-receipts"
+load = "fresh-own-open-handle;complete-validated-staging;close-receipt-before-live-history-swap;newer-local-history-revision-cancels-swap"
+limits = "same-boot-RamFS-only;no-predecessor-history-transfer;newest-complete-entries-fit4096;128entries-max256bytes;no-cross-reboot-durability"
+cleanup = "scrub-service-staging-and-drop-pending-reply-before-existing-RamFS-lease-retirement-and-files-ACK;retain-last-committed-bytes"

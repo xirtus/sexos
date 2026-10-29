@@ -367,7 +367,7 @@
         "bash",
         "scripts/service_custody_host_gate.sh"
       ],
-      "scope": "Actual once-only service retirement and RamFs saved-data/shared-lease preservation with mocked PDX authority."
+      "scope": "Actual service retirement and RamFs owner-private atomic history replacement, bounded client/service receipt state machines, malformed/cross-subject/replay/backpressure cases with mocked PDX transport, authority and host locks. Guest persistence remains separate."
     },
     {
       "id": "display_surface_lifecycle",

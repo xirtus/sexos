@@ -55,7 +55,7 @@ pub const SURFACE_EMPTY: Surface = Surface {
     line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
 };
 
-pub const CATALOG_CAPACITY: usize = 4;
+pub const CATALOG_CAPACITY: usize = 5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Catalog {
     pub slot: usize,
@@ -71,11 +71,13 @@ impl Catalog {
         match (self.target_pd, self.surface_id) {
             (9, 156) => Some(201),
             (12, 154) => Some(153),
+            (17, 302) => Some(306),
             _ => None,
         }
     }
     pub fn is_content(self, sid: u64) -> bool {
         self.surface_id == sid || ((self.target_pd, self.surface_id) == (12, 154) && matches!(sid, 160 | 161 | 162))
+            || ((self.target_pd,self.surface_id)==(17,302) && matches!(sid,303|304|305))
     }
     fn contains(self, sid: u64) -> bool {
         self.is_content(sid) || self.frame_surface_id() == Some(sid)
@@ -92,7 +94,7 @@ struct Presentation { request: u64, phase: PresentPhase }
 impl Presentation { const EMPTY: Self = Self { request: 0, phase: PresentPhase::Idle }; }
 /// Fixed native content routes: no catalog scan in the per-pixel compositor.
 pub const fn native_pixel_bit(owner: u32, sid: u64) -> u8 {
-    match (owner, sid) { (9,156) => 1, (12,154) => 2, (15,300) => 4, (16,301) => 8, _ => 0 }
+    match (owner, sid) { (9,156) => 1, (12,154) => 2, (15,300) => 4, (16,301) => 8, (17,302) => 16, _ => 0 }
 }
 pub struct Lifecycle { entries: [Option<Entry>; CATALOG_CAPACITY] }
 #[derive(Debug, Default, PartialEq, Eq)]
