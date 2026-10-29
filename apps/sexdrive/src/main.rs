@@ -4,7 +4,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{compiler_fence, Ordering};
 use sex_pdx::{
-    pdx_call, pdx_reply, pdx_try_listen_raw, serial_println,
+    pdx_call, pdx_reply, pdx_listen_raw, serial_println,
     SLOT_SHELL, SLOT_USB_HOST,
     SLOT_DMA_REGION, SLOT_FRAME_REGION, SLOT_BLOCK_BUFFER,
     BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC,
@@ -2942,6 +2942,158 @@ fn xhci_probe_mmio() {
     );
 }
 
+// Device commands finish or quarantine their DMA synchronously. There is no
+// periodic storage work; the kernel wake owner resumes this task on IPC.
+fn service_next_request(){
+    let msg=pdx_listen_raw(0);
+    // BLOCK_READ is numeric 1 in the public ABI, not a receipt kind.
+    let cmd = msg.type_id;
+    let offset = msg.arg0;
+    let size = msg.arg1;
+    let _buf_cap = msg.arg2;
+    let ready_snapshot = unsafe { if NVME_IO_STATE.ready { 1u64 } else { 0u64 } };
+    let op = match cmd {
+        BLOCK_READ => "READ",
+        BLOCK_WRITE => "WRITE",
+        _ => "OTHER",
+    };
+    let lba = if BLOCK_SECTOR_SIZE != 0 {
+        offset / BLOCK_SECTOR_SIZE
+    } else {
+        0
+    };
+    let submit_cid_snapshot = unsafe { NVME_IO_STATE.next_cid as u64 };
+    let submit_tail_snapshot = unsafe { NVME_IO_STATE.sq_tail as u64 };
+
+    if hot_log() { serial_println!(
+        "[sexdrive.block.typed.recv] cmd={} offset={:#x} size={} buf_cap={:#x} caller={}",
+        cmd, offset, size, _buf_cap, msg.caller_pd
+    ); }
+    if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+        if hot_log() { serial_println!(
+            "[sexdrive.block.req] op={} ready={} lba={} bytes={} buffer_cap={:#x} device_cap={:#x}",
+            op, ready_snapshot, lba, size, _buf_cap, SLOT_NVME_HOST
+        ); }
+    }
+
+    // The numeric selector is local to this domain. Its paired peer
+    // must match authenticated provenance before any shared byte access.
+    let block_view = if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+        block_buffer_view(msg.caller_pd, _buf_cap, size,
+            if cmd == BLOCK_READ { WRITE } else { READ })
+    } else { None };
+    // [sexblock.abi.request.decode] — dispatch on typed command
+    let reply_val: u64 = if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
+        && (size == 0 || size > BLOCK_MAX_XFER || offset % BLOCK_SECTOR_SIZE != 0) {
+        BLOCK_ERR_BAD_LEN
+    } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && block_view.is_none() {
+        serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
+        BLOCK_ERR_NO_DEVICE
+    } else { match cmd {
+        BLOCK_READ => typed_read_handoff(offset,size,_buf_cap,block_view),
+        BLOCK_WRITE => {
+            if hot_log() { serial_println!(
+                "[sexdrive.block.write.api.recv] offset={:#x} size={} buf_cap={:#x}",
+                offset, size, _buf_cap
+            ); }
+            if write_guard_allows(offset, size, _buf_cap) {
+                let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
+                if fill_va == 0 || fill_va == u64::MAX {
+                    serial_println!(
+                        "[sexdrive.nvme.write.err] reason=map_failed va={:#x}",
+                        fill_va
+                    );
+                    if hot_log() { serial_println!(
+                        "[sexdrive.nvme.cmd.shape.err] path=typed reason=region_view_failed buffer_cap={:#x}",
+                        SLOT_BLOCK_BUFFER
+                    ); }
+                    BLOCK_ERR_NO_DEVICE
+                } else {
+                    if hot_log() { serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va); }
+                    if hot_log() { serial_println!(
+                        "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
+                        op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
+                    ); }
+                    let proof_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
+                    if offset == proof_offset {
+                        nvme_write_readback_proof(offset, size, fill_va)
+                    } else {
+                        nvme_write_one_block(offset, size, fill_va)
+                    }
+                }
+            } else {
+                serial_println!(
+                    "[sexdrive.block.typed] cmd={} ERR_NO_DEVICE honest=write_not_implemented_guard_only",
+                    cmd
+                );
+                BLOCK_ERR_NO_DEVICE
+            }
+        }
+        BLOCK_SYNC => {
+            let status=nvme_flush();
+            sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_nvme_flush=1",status);
+            status
+        }
+        _ => {
+            serial_println!(
+                "[sexdrive.block.typed] cmd={} ERR_BAD_CMD unknown",
+                cmd
+            );
+            BLOCK_ERR_BAD_CMD
+        }
+    }};
+
+    if hot_log() { serial_println!(
+        "[sexblock.abi.reply.encode] caller={} status={}",
+        msg.caller_pd, reply_val
+    ); }
+    pdx_reply(msg.caller_pd, reply_val);
+    if hot_log() { serial_println!(
+        "[sexdrive.block.typed.reply] cmd={} caller={} status={}",
+        cmd, msg.caller_pd, reply_val
+    ); }
+    if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+        if reply_val == 0 {
+            if hot_log() { serial_println!(
+                "[sexdrive.block.nvme.cqe] op={} cid={} status=0",
+                op, submit_cid_snapshot
+            ); }
+            if hot_log() { serial_println!(
+                "[sexdrive.block.reply] op={} status=0 bytes={} ready=1",
+                op, size
+            ); }
+        } else if reply_val == BLOCK_ERR_NO_DEVICE {
+            if hot_log() { serial_println!(
+                "[sexdrive.block.nvme.cqe.timeout] op={} cid={} polls={}",
+                op, submit_cid_snapshot, 0u64
+            ); }
+            let reason = if ready_snapshot == 0 {
+                "no_ioq_ready"
+            } else {
+                "no_device_other"
+            };
+            if hot_log() { serial_println!(
+                "[sexdrive.block.reply] op={} status=4 reason={} ready={}",
+                op, reason, ready_snapshot
+            ); }
+        } else {
+            if hot_log() { serial_println!(
+                "[sexdrive.block.reply] op={} status={} reason=other ready={}",
+                op, reply_val, ready_snapshot
+            ); }
+        }
+    }
+}
+
+// Initialize the existing BOOT-paired demonstration buffer once before the
+// shell sees its binding. Storage service progress never redraws this buffer.
+fn fill_initial_frame(shared_addr:u64){
+    let ptr=shared_addr as *mut u32;
+    for y in 0..768 {for x in 0..1024 {
+        unsafe{core::ptr::write_volatile(ptr.add(y*1024+x),(x as u32^y as u32).wrapping_add(1));}
+    }}
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdrive.init.start]");
@@ -2963,171 +3115,13 @@ pub extern "C" fn _start() -> ! {
         }
     };
 
+    fill_initial_frame(shared_addr);
+
     // Zero-copy handoff: Notify AUTHORITY (Silk-Shell) about shared buffer
     unsafe {
         pdx_call(SLOT_SHELL, OP_SHELL_BIND_BUFFER, shared_addr, 0, 0);
     }
 
-    let mut frame: u32 = 0;
     if hot_log() { serial_println!("[sexdrive.ready]"); }
-    loop {
-        // [sexdrive.block.typed.recv] [sexdrive.block.typed.reply]
-        // Typed block command dispatch — decodes SLOT_BLOCK messages.
-        // Requests require the static paired data view and a ready NVMe queue.
-        // Failed or uncertain commands never report successful transfer.
-        if let Some(msg) = pdx_try_listen_raw(0) {
-            let cmd = msg.type_id;
-            let offset = msg.arg0;
-            let size = msg.arg1;
-            let _buf_cap = msg.arg2;
-            let ready_snapshot = unsafe { if NVME_IO_STATE.ready { 1u64 } else { 0u64 } };
-            let op = match cmd {
-                BLOCK_READ => "READ",
-                BLOCK_WRITE => "WRITE",
-                _ => "OTHER",
-            };
-            let lba = if BLOCK_SECTOR_SIZE != 0 {
-                offset / BLOCK_SECTOR_SIZE
-            } else {
-                0
-            };
-            let submit_cid_snapshot = unsafe { NVME_IO_STATE.next_cid as u64 };
-            let submit_tail_snapshot = unsafe { NVME_IO_STATE.sq_tail as u64 };
-
-            if hot_log() { serial_println!(
-                "[sexdrive.block.typed.recv] cmd={} offset={:#x} size={} buf_cap={:#x} caller={}",
-                cmd, offset, size, _buf_cap, msg.caller_pd
-            ); }
-            if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
-                if hot_log() { serial_println!(
-                    "[sexdrive.block.req] op={} ready={} lba={} bytes={} buffer_cap={:#x} device_cap={:#x}",
-                    op, ready_snapshot, lba, size, _buf_cap, SLOT_NVME_HOST
-                ); }
-            }
-
-            // The numeric selector is local to this domain. Its paired peer
-            // must match authenticated provenance before any shared byte access.
-            let block_view = if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
-                block_buffer_view(msg.caller_pd, _buf_cap, size,
-                    if cmd == BLOCK_READ { WRITE } else { READ })
-            } else { None };
-            // [sexblock.abi.request.decode] — dispatch on typed command
-            let reply_val: u64 = if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
-                && (size == 0 || size > BLOCK_MAX_XFER || offset % BLOCK_SECTOR_SIZE != 0) {
-                BLOCK_ERR_BAD_LEN
-            } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && block_view.is_none() {
-                serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
-                BLOCK_ERR_NO_DEVICE
-            } else { match cmd {
-                BLOCK_READ => typed_read_handoff(offset,size,_buf_cap,block_view),
-                BLOCK_WRITE => {
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.write.api.recv] offset={:#x} size={} buf_cap={:#x}",
-                        offset, size, _buf_cap
-                    ); }
-                    if write_guard_allows(offset, size, _buf_cap) {
-                        let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
-                        if fill_va == 0 || fill_va == u64::MAX {
-                            serial_println!(
-                                "[sexdrive.nvme.write.err] reason=map_failed va={:#x}",
-                                fill_va
-                            );
-                            if hot_log() { serial_println!(
-                                "[sexdrive.nvme.cmd.shape.err] path=typed reason=region_view_failed buffer_cap={:#x}",
-                                SLOT_BLOCK_BUFFER
-                            ); }
-                            BLOCK_ERR_NO_DEVICE
-                        } else {
-                            if hot_log() { serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va); }
-                            if hot_log() { serial_println!(
-                                "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
-                                op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
-                            ); }
-                            let proof_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
-                            if offset == proof_offset {
-                                nvme_write_readback_proof(offset, size, fill_va)
-                            } else {
-                                nvme_write_one_block(offset, size, fill_va)
-                            }
-                        }
-                    } else {
-                        serial_println!(
-                            "[sexdrive.block.typed] cmd={} ERR_NO_DEVICE honest=write_not_implemented_guard_only",
-                            cmd
-                        );
-                        BLOCK_ERR_NO_DEVICE
-                    }
-                }
-                BLOCK_SYNC => {
-                    let status=nvme_flush();
-                    sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_nvme_flush=1",status);
-                    status
-                }
-                _ => {
-                    serial_println!(
-                        "[sexdrive.block.typed] cmd={} ERR_BAD_CMD unknown",
-                        cmd
-                    );
-                    BLOCK_ERR_BAD_CMD
-                }
-            }};
-
-            if hot_log() { serial_println!(
-                "[sexblock.abi.reply.encode] caller={} status={}",
-                msg.caller_pd, reply_val
-            ); }
-            pdx_reply(msg.caller_pd, reply_val);
-            if hot_log() { serial_println!(
-                "[sexdrive.block.typed.reply] cmd={} caller={} status={}",
-                cmd, msg.caller_pd, reply_val
-            ); }
-            if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
-                if reply_val == 0 {
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.nvme.cqe] op={} cid={} status=0",
-                        op, submit_cid_snapshot
-                    ); }
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.reply] op={} status=0 bytes={} ready=1",
-                        op, size
-                    ); }
-                } else if reply_val == BLOCK_ERR_NO_DEVICE {
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.nvme.cqe.timeout] op={} cid={} polls={}",
-                        op, submit_cid_snapshot, 0u64
-                    ); }
-                    let reason = if ready_snapshot == 0 {
-                        "no_ioq_ready"
-                    } else {
-                        "no_device_other"
-                    };
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.reply] op={} status=4 reason={} ready={}",
-                        op, reason, ready_snapshot
-                    ); }
-                } else {
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.reply] op={} status={} reason=other ready={}",
-                        op, reply_val, ready_snapshot
-                    ); }
-                }
-            }
-        }
-
-        frame += 1;
-        let ptr = shared_addr as *mut u32;
-        for y in 0..768 {
-            for x in 0..1024 {
-                let color = (x as u32 ^ y as u32).wrapping_add(frame);
-                unsafe {
-                    *ptr.add(y * 1024 + x) = color;
-                }
-            }
-        }
-
-        // Throttle
-        for _ in 0..2_000_000 {
-            core::hint::spin_loop();
-        }
-    }
+    loop { service_next_request(); }
 }
