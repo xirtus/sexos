@@ -4,6 +4,8 @@ Integration record for the work following task-exit demand-memory cleanup. This 
 
 Astra agents handled lifecycle/authority, shell interaction and compositor work, then independently reviewed the integration. Final builds, native input/pixel checks and artifact restoration were coordinated in the parent workspace.
 
+This report records checkpoint `593c6632`. Later launcher work and remaining relaunch requirements are tracked in the [incarnation/launcher follow-up](INCARNATION_AUTHORITY_AND_LAUNCHER_2026_10_29.md).
+
 ## Delivered behavior
 
 Quil, Spindle, and Kaleidoscope have boot-recorded app identities and private ELF/user-stack manifests. Native Close requests cooperative task finish through fixed shell capabilities. Enqueueing a request never establishes death: the shell retries until the kernel attests the original task is dead and no CPU owns its execution or stack.
@@ -41,7 +43,7 @@ All four USB lanes passed in `/tmp/sxui-usb29/`: tablet/contact, absent-device d
 
 The final source-bound host inventory passes 36 registered host/static gates and 407 Rust test executions, with 315 file hashes. The Python suite passes 219 tests. Evidence is retained in `/tmp/sexos-app-ui-complete-host-20261029/` and `/tmp/sexos-app-ui-verified-python-20261029.log`. Host authority/mapper/TLB/PDX substitutes are explicitly scoped; none is presented as hardware or whole-system proof. The inventory still records seven open and 22 partial architectural obligations.
 
-The root normal ISO is restored and byte-identical to the artifact used by the native desktop, USB and persistence runs. Its SHA-256 is `861e657bcab6a7beb585cce37a3cb5337e0146dbf737d6bf77196a701b6bfb33`; kernel SHA-256 is `2dea8fbfacd7b02c7b90dd8733d30b5025a9c9d7f148314d02957fb26d39e53b`. Tracked changes and untracked production Rust sources match the sealed normal build. The [evidence manifest](assets/sexos-app-desktop-2026-10-29-evidence.json) retains artifact/checker/source hashes. No emulator remains running.
+At that checkpoint, the root normal ISO was restored and byte-identical to the artifact used by the native desktop, USB and persistence runs. Its SHA-256 is `861e657bcab6a7beb585cce37a3cb5337e0146dbf737d6bf77196a701b6bfb33`; kernel SHA-256 is `2dea8fbfacd7b02c7b90dd8733d30b5025a9c9d7f148314d02957fb26d39e53b`. Tracked changes and untracked production Rust sources match the sealed normal build. The [evidence manifest](assets/sexos-app-desktop-2026-10-29-evidence.json) retains artifact/checker/source hashes. No emulator remains running.
 
 ### Failures that changed the implementation
 

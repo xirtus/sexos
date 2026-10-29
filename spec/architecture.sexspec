@@ -471,14 +471,29 @@
     {
       "id": "linen_text_delivery",
       "kind": "host",
-      "argv": ["bash", "scripts/linen_text_delivery_gate.sh"],
+      "argv": [
+        "bash",
+        "scripts/linen_text_delivery_gate.sh"
+      ],
       "scope": "Actual bounded text outbox with injected full transport and production poll wiring; admission receipts are not framebuffer presentation."
     },
     {
       "id": "app_resource_profiles",
       "kind": "runtime",
-      "argv": ["bash", "scripts/app_resource_profiles_gate.sh"],
+      "argv": [
+        "bash",
+        "scripts/app_resource_profiles_gate.sh"
+      ],
       "scope": "Two sealed resource/normal builds, strict private cleanup and paging, native Close and actual Linen filename pixels; restores previous artifacts on failure."
+    },
+    {
+      "id": "launcher",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/launcher_host_gate.sh"
+      ],
+      "scope": "Exact incarnation lookup and fail-closed existing-instance policy plus bounded launcher labels; no activation grant or fresh app launch."
     }
   ],
   "invariants": [

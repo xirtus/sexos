@@ -30,6 +30,8 @@ The architecture defines the required model. The scheduler now tracks task custo
 
 The [multi-client sext paging report](docs/handoff/SEXT_MULTI_CLIENT_PAGING_AND_SAFE_RECLAMATION_2026_10_28.md) covers two boot-authorized clients sharing eight frames, independent quotas, authenticated release, safe frame reuse and real read/write fault recovery. Boot still reserves backing and page-table infrastructure. Reclamation supports cooperative release and task-exit cleanup after custody release on the BSP. The [app resources and desktop report](docs/handoff/APP_RESOURCES_AND_DESKTOP_2026_10_29.md) extends cleanup to Quil, Spindle and Kaleidoscope: native Close, five service acknowledgements, surface retirement, private ELF/user-stack detach and Sext zero/reuse. Linen refresh continues handling input and native app content follows its frame. Safe relaunch, autonomous eviction, hostile-code isolation, physical SMP scheduling and complete epoch replay remain unfinished. The [architectural truth report](docs/handoff/SEXOS_ARCHITECTURAL_TRUTH_2026_10_28.md) records the wider obligations and the scope of the executable checks.
 
+The [launcher follow-up](docs/handoff/INCARNATION_AUTHORITY_AND_LAUNCHER_2026_10_29.md) adds exact BOOT incarnation checks and readable running/closing/closed states. Fresh relaunch still requires reserved successor images, tasks and activation grants; terminal identities are preserved.
+
 What works today:
 
 - x86_64 QEMU boot from the prebuilt ISO.

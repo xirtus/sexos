@@ -54,6 +54,10 @@ impl FrameGroups {
     }
     pub fn winner<'a>(&self, surfaces: &'a [Surface], focused: u64,
         x: usize, y: usize, w: usize, h: usize) -> Option<&'a Surface> {
+        // The shell's modal launcher must remain above app focus without
+        // stealing that focus (its actions still target the previous window).
+        if let Some(overlay)=surfaces.iter().find(|s|s.active && s.owner_pd==3
+            && s.surface_id==152 && contains(rect(s,w,h),x,y)) {return Some(overlay);}
         // A focus reference to a bound child raises its actual frame, never a ghost child.
         let focused = surfaces.iter().find(|s| s.active && s.surface_id == focused)
             .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)

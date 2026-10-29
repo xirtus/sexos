@@ -49,6 +49,10 @@
         {
           "path": "servers/silk-shell/src/linen_text_delivery.rs",
           "anchor": "pub struct Outbox"
+        },
+        {
+          "path": "servers/silk-shell/src/launcher.rs",
+          "anchor": "pub fn resolve"
         }
       ],
       "checks": [
@@ -59,7 +63,8 @@
         "desktop_close_runtime",
         "desktop_content",
         "display_surface_groups",
-        "linen_text_delivery"
+        "linen_text_delivery",
+        "launcher"
       ],
       "gaps": [
         "Boot readiness protocol does not prove atomic epoch frames, latch recovery or replay."

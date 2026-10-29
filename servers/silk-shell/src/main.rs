@@ -6,6 +6,7 @@ mod app_custody;
 mod linen_async;
 mod desktop_content;
 mod linen_text_delivery;
+mod launcher;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -5223,6 +5224,7 @@ unsafe fn desktop_state_poll() {
 }
 
 static mut LINEN_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::new(SURFACE_ID_LINEN);
+static mut PALETTE_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::new(SURFACE_ID_COMMAND_PALETTE);
 static mut PALETTE_VISIBILITY: linen_text_delivery::LatestOperation = linen_text_delivery::LatestOperation::new();
 unsafe fn linen_queue_text(text: &[u8], color: u32, metadata: linen_text_delivery::Metadata) {
     assert!(LINEN_TEXT.queue(text,color,metadata), "Linen text exceeds fixed buffer");
@@ -5262,10 +5264,17 @@ unsafe fn linen_text_poll() {
         _ => {}
     }
 }
+unsafe fn palette_text_poll() {
+    if !COMMAND_PALETTE_OPEN || PALETTE_VISIBILITY.pending() {return;}
+    if let linen_text_delivery::Poll::Complete(_) = PALETTE_TEXT.poll(4,display_admit) {
+        sex_pdx::serial_record!("[launcher.text.admitted] complete=1");
+    }
+}
 unsafe fn palette_visibility_poll() {
     match PALETTE_VISIBILITY.poll(display_admit) {
         linen_text_delivery::LatestPoll::Applied(op) => {
             if op.opcode==0xEC && COMMAND_PALETTE_OPEN {
+                PALETTE_TEXT.cancel();
                 if let Some(chrome)=frame_chrome_operation(COMMAND_PALETTE_FRAME_ID) {PALETTE_VISIBILITY.set(chrome);}
             } else if op.opcode==0xFD && COMMAND_PALETTE_OPEN { palette_render_list(); }
             sex_pdx::serial_record!("[shell.palette.visibility] open={} admitted=1",(op.opcode!=0xEE) as u8);
@@ -9706,8 +9715,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     0x1C => {
                         if !COMMAND_PALETTE_DAILY_PROOF_ACTIVE {
                             serial_println!("[command_palette.drain.execute] scancode=0x1C");
-                            let _ = palette_execute_selected();
-                            toggle_command_palette();
+                            if palette_execute_selected() { toggle_command_palette(); }
                         } else {
                             serial_println!("[command_palette.drain.execute.skip] reason=daily_proof_active");
                         }
@@ -13420,7 +13428,7 @@ const COMMAND_PALETTE_FRAME_ID: u32 = 7;
 const COMMAND_PALETTE_BOOT_X: i32 = 400;
 const COMMAND_PALETTE_BOOT_Y: i32 = 200;
 const COMMAND_PALETTE_BOOT_W: u32 = 480;
-const COMMAND_PALETTE_BOOT_H: u32 = 240;
+const COMMAND_PALETTE_BOOT_H: u32 = 280;
 
 /// Header bar height for command palette, in pixels.
 const PALETTE_LIST_HEADER_H: u32 = 28;
@@ -15300,88 +15308,46 @@ fn command_palette_selected_accent() -> u32 {
 ///   2: selected row highlight (full-width bright accent)
 ///   3-7: per-row left accent bars for the first five rows only
 unsafe fn palette_render_list() {
-    let w = COMMAND_PALETTE_BOOT_W;
-    let h = COMMAND_PALETTE_BOOT_H;
-    if w == 0 || h == 0 { return; }
-
-    serial_println!("[command_palette.render] w={} h={}", w, h);
-
-    // Determine header color based on currently selected command.
-    let header_color = command_palette_selected_accent();
-    serial_println!("[command_palette.selection_visual.header] command={} index={} color={:#010x}",
-        COMMAND_LIST[COMMAND_PALETTE_SELECTED as usize].command as u8,
-        COMMAND_PALETTE_SELECTED, header_color);
-
-    // Draw header bar at top of surface using selected command accent color (rect_index=0).
-    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
-        (0u64 << 32) | 0u64,
-        ((header_color as u64) << 32)
-            | ((PALETTE_LIST_HEADER_H as u64) << 16)
-            | w as u64);
-
-    let selected = COMMAND_PALETTE_SELECTED;
-    let count = COMMAND_LIST.len();
-
-    // ── List background (rect_index=1) ───────────────────────────────────────
-    // Single neutral rect behind all rows. Dark slate provides contrast for
-    // accent bars and selected row highlight.
-    let list_bg_h = count as u32 * (PALETTE_LIST_ROW_H + PALETTE_LIST_ROW_GAP) - PALETTE_LIST_ROW_GAP;
-    let list_bg_y = PALETTE_LIST_HEADER_H;
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
-        (list_bg_y as u64) << 32 | 0u64,
-        (1u64 << 56)
-            | ((PALETTE_LIST_BG_COLOR as u64) << 32)
-            | ((list_bg_h as u64) << 16)
-            | w as u64);
-    serial_println!("[command_palette.bg_rect] y={} h={}", list_bg_y, list_bg_h);
-
-    // ── Selected row highlight (rect_index=2) ───────────────────────────────
-    // Full-width bright accent bar at the selected command row.
-    // Suppressed (with reject marker) if selected index is out of bounds.
-    if (selected as usize) >= count {
-        serial_println!("[quil.palette.row.reject] index={} reason=out_of_bounds", selected);
-    } else {
-        let sel_y = PALETTE_LIST_HEADER_H
-            + selected as u32 * (PALETTE_LIST_ROW_H + PALETTE_LIST_ROW_GAP);
-        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
-            (sel_y as u64) << 32 | 0u64,
-            (2u64 << 56)
-                | ((header_color as u64) << 32)
-                | ((PALETTE_LIST_ROW_H as u64) << 16)
-                | w as u64);
-        serial_println!("[command_palette.row_visual.selected] index={} color={:#010x}",
-            selected, header_color);
+    let (w,h)=(COMMAND_PALETTE_BOOT_W,COMMAND_PALETTE_BOOT_H);
+    let mut rows=[launcher::Row{name:"",status:""};16];
+    for (i,item) in COMMAND_LIST.iter().enumerate() {
+        let (available,status,reason)=palette_item_status(item.command);
+        let visible_status=match item.command {
+            Command::FocusLinen=>"FILES / BROWSE",
+            Command::FocusAtlas=>"DESKTOP OVERVIEW",
+            Command::FocusBell=>"NOTIFICATIONS",
+            Command::FocusCollar=>"APP PERMISSIONS",
+            Command::FocusMesh=>"SYSTEM OVERVIEW",
+            Command::ZoomToggle=>"RESIZE CURRENT WINDOW",
+            Command::MinimizeFocused=>"HIDE CURRENT WINDOW",
+            _=>status,
+        };
+        rows[i]=launcher::Row{name:item.name,status:visible_status};
+        serial_println!("[shell.palette.item] idx={} action={} available={} status={} reason={}",i,item.name,available as u8,status,reason);
     }
-
-    // ── Per-row left accent bars (rect_indices 3-7) ─────────────────────────
-    // Each command row gets a 5px-wide accent bar at the left edge.
-    // Non-selected rows use muted command_kind_color; selected row uses header_color.
-    for i in 0..count {
-        let cmd = &COMMAND_LIST[i];
-        let is_selected = i as u8 == selected;
-        let sel = if is_selected { "true" } else { "false" };
-        serial_println!("[command_palette.row] index={} cmd={} name={} selected={}",
-            i, cmd.command as u8, cmd.name, sel);
-
-        if i >= 5 {
-            serial_println!("[command_palette.row_visual.skip] index={} reason=rect_budget", i);
-            continue;
+    let v=launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h);
+    for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
+    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,28u64<<32,
+        (0x0022384Au64<<32)|((v.row_y.saturating_sub(28) as u64)<<16)|w as u64);
+    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(v.row_y as u64)<<32,
+        (1u64<<56)|(0x000C1420u64<<32)|(((v.rows as u32*v.row_h)as u64)<<16)|w as u64);
+    for row in 0..v.rows {
+        let index=v.first+row;let y=v.row_y+row as u32*v.row_h;
+        if index==COMMAND_PALETTE_SELECTED as usize {
+            pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(y as u64)<<32,
+                (2u64<<56)|(0x002A4960u64<<32)|((v.row_h as u64)<<16)|w as u64);
         }
-        let accent_index = i as u64 + 3; // maps to rect_indices 3,4,5,6,7
-        let row_y = PALETTE_LIST_HEADER_H
-            + i as u32 * (PALETTE_LIST_ROW_H + PALETTE_LIST_ROW_GAP);
-        let accent_color = if is_selected { header_color } else { command_kind_color(cmd.command) };
-        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
-            (row_y as u64) << 32 | 0u64,
-            (accent_index << 56)
-                | ((accent_color as u64) << 32)
-                | ((PALETTE_LIST_ROW_H as u64) << 16)
-                | PALETTE_ACCENT_BAR_W as u64);
-        serial_println!("[command_palette.row_visual.accent] index={} cmd={} color={:#010x} selected={}",
-            i, cmd.command as u8, accent_color, sel);
+        pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(y as u64)<<32,
+            (((row+3)as u64)<<56)|(0x005ED9C3u64<<32)|((v.row_h as u64)<<16)|3);
     }
-    serial_println!("[command_palette.done] count={} selected={}", count, selected);
+    PALETTE_TEXT.queue(&v.bytes[..v.len],0x00F0F8FF,linen_text_delivery::Metadata{
+        count:COMMAND_LIST.len(),first:v.first,rows:v.rows,selected:COMMAND_PALETTE_SELECTED as u64});
+    sex_pdx::serial_record!("[launcher.text.view] x={} y={} w={} h={} scale={} selected={} first={} rows={}",
+        COMMAND_PALETTE_BOOT_X,COMMAND_PALETTE_BOOT_Y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
+    for row in 0..v.rows {let index=v.first+row;
+        sex_pdx::serial_record!("[launcher.text.row] index={} row={} name={} status={}",index,row,rows[index].name,rows[index].status);
+    }
+    serial_println!("[command_palette.done] count={} selected={}",COMMAND_LIST.len(),COMMAND_PALETTE_SELECTED);
 }
 
 /// Render and call the 0xEC upsert for the command palette surface geometry.
@@ -15514,14 +15480,26 @@ unsafe fn palette_select_prev() {
 
 /// Return per-item availability status tuple for a Command:
 /// (available: bool, status_label: &str, reason: &str)
+fn native_launcher_status(target:u32)->(bool,&'static str,&'static str) {
+    unsafe {
+        let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==target) else {return launcher::Status::Unavailable.presentation();};
+        let expected=launcher::Identity{domain:e.target,task:e.task,surface:e.surface,coordinator:3};
+        let catalog=sex_pdx::app_lifecycle::catalog(e.slot).ok().map(|c|launcher::Identity{
+            domain:c.target_pd,task:c.task_id,surface:c.surface_id,coordinator:c.coordinator_pd});
+        let evidence=match sex_pdx::app_lifecycle::info(e.slot) {
+            Err(sex_pdx::app_lifecycle::LIVE)=>launcher::Evidence::Live,
+            Err(sex_pdx::app_lifecycle::RETRY)=>launcher::Evidence::Retry,
+            Ok(i)=>launcher::Evidence::Dead{domain:i.target_pd,task:i.task_id,required:i.required_mask,acked:i.acked_mask},
+            Err(_)=>launcher::Evidence::Invalid,
+        };
+        launcher::resolve(expected,catalog,evidence,e.close_pending,e.dead||e.retired).presentation()
+    }
+}
+
 fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
     match cmd {
-        Command::FocusSpindle => {
-            (true, "ready", "proven_safe")
-        }
-        Command::FocusQuil => {
-            (true, "keyboard_nav_ready", "quil_hid_stash_replay_buffer_nav_proven")
-        }
+        Command::FocusSpindle => native_launcher_status(12),
+        Command::FocusQuil => native_launcher_status(9),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -15538,7 +15516,8 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
             (true, "ready", "proven_safe")
         }
         Command::RestoreMinimized => {
-            (false, "needs_minimized_target", "requires_minimized_target")
+            unsafe {if first_minimized_frame_id().is_some() {(true,"RESTORE WINDOW","minimized_target_exists")}
+                else {(false,"NO MINIMIZED WINDOW","requires_minimized_target")}}
         }
         Command::ZoomToggle => {
             (true, "ready", "proven_safe")
@@ -15558,6 +15537,13 @@ unsafe fn palette_execute_selected() -> bool {
     }
     let cmd = COMMAND_LIST[idx].command;
     let action_name = COMMAND_LIST[idx].name;
+    let (available,status,reason)=palette_item_status(cmd);
+    if !available {
+        sex_pdx::serial_record!("[launcher.execute.denied] idx={} status={} reason={}",idx,status,reason);
+        sex_pdx::serial_record!("[shell.palette.exec] idx={} action={} ok=0 reason={}",idx,action_name,reason);
+        palette_render_list();
+        return false;
+    }
     serial_println!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
 
     // Route to existing SurfaceAction handler paths.
@@ -23552,7 +23538,7 @@ pub extern "C" fn _start() -> ! {
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
 
     loop {
-        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); palette_visibility_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -24232,7 +24218,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24648,8 +24634,7 @@ pub extern "C" fn _start() -> ! {
                                     0x24 => { palette_select_next(); mutated = true; } // J - next
                                     0x25 => { palette_select_prev(); mutated = true; } // K - prev
                                     0x1C => { // Enter - execute
-                                        let _ = palette_execute_selected();
-                                        toggle_command_palette(); // close after execute
+                                        if palette_execute_selected() { toggle_command_palette(); }
                                         mutated = true;
                                     }
                                     0x01 => { // Escape - close

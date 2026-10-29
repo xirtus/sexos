@@ -141,6 +141,7 @@ impl Lifecycle {
             e.phase == Phase::Live && e.catalog.coordinator_pd == caller && e.catalog.contains(sid))
     }
     pub fn admit(&self, surfaces: &[Surface], caller: u32, sid: u64) -> Admission {
+        if sid==152 && caller!=3 {return Admission::Denied;}
         if sid == 0 || !self.caller_live(caller) || !self.sid_live(sid) { return Admission::Denied; }
         let catalog = self.entries.iter().flatten().find(|e| e.catalog.contains(sid)).map(|e| e.catalog);
         let owner = match catalog {

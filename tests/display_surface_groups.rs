@@ -63,7 +63,19 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  SURFACES[1]=frame();FRAME_GROUPS.observe(&SURFACES);assert_eq!(composite_pixel(150,180,1000,800,0,201),0x123456);
  // Another focused window occludes children: no false presented bit survives.
  SURFACES[2]=surf(8,888);APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,888),0x123456);assert_eq!(APP_PRESENT_BITS,0);
+ // Modal launcher beats the focused app without producing native-app bits.
+ SURFACES[3]=Surface{color:0xaabbcc,..surf(3,152)};
+ SURFACES[3].text_len=1;SURFACES[3].text_buf[0]=b'A';SURFACES[3].text_color=0xf0f8ff;recompute_text_lines(&mut SURFACES[3]);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,888),0xaabbcc);assert_eq!(APP_PRESENT_BITS,0);
+ assert_eq!(composite_pixel(110,112,1000,800,0,888),0xf0f8ff);
 }}
+#[test]fn launcher_overlay_requires_shell_owner_and_hide_restores_app_winner(){
+ let g=FrameGroups::new();let mut s=[surf(8,888),surf(3,152)];
+ assert_eq!(g.winner(&s,888,150,180,1000,800).unwrap().surface_id,152);
+ s[1].owner_pd=9;assert_eq!(g.winner(&s,888,150,180,1000,800).unwrap().surface_id,888);
+ s[1].owner_pd=3;s[1].active=false;assert_eq!(g.winner(&s,888,150,180,1000,800).unwrap().surface_id,888);
+ let l=Lifecycle::new();assert_eq!(l.admit(&[],9,152),Admission::Denied);assert_eq!(l.admit(&[SURFACE_EMPTY],3,152),Admission::Vacant(0,3));
+}
 #[test]fn clipped_and_tiny_frames_never_select_children_outside_body_or_framebuffer(){
  for (x,y,w,h) in [(-30,-20,400,300),(950,750,400,300),(10,70,15,43),(10,70,0,0),(i32::MAX,i32::MAX,400,300)]{
   let mut g=FrameGroups::new();g.register(cat(9));let mut s=[Surface{x,y,w,h,..frame()},surf(9,156)];g.observe(&s);g.fit_children(&mut s);

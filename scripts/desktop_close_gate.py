@@ -3,6 +3,7 @@
 import argparse,hashlib,json,pathlib,re,socket,subprocess,time,os
 from check_desktop_close_log import check,responsiveness
 from check_desktop_pixels import verify as verify_pixels, verify_hidden, verify_kaleido_layout, final_view, font_from_source
+from check_launcher_pixels import verify as verify_launcher
 class QMP:
     def __init__(self,path):
         self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(5);self.sock.connect(str(path));self.file=self.sock.makefile('rb');self.seq=0;self.read();self.cmd('qmp_capabilities')
@@ -81,6 +82,20 @@ def main():
         close(9,201)
         key('scroll_lock',r'\[shell.focus.set\] id=153')
         close(12,153)
+        # Closed BOOT instances have no reserved successor. Enter must stay in
+        # the launcher with an explicit denial and actual readable closed text.
+        key('grave_accent',r'\[shell.palette.item\] idx=0')
+        key('j',r'\[shell.palette.select\] old=0 new=1')
+        key('ret',r'\[launcher.execute.denied\] idx=1 .*reason=no_boot_successor')
+        launcher_errors=['not rendered'];deadline=time.monotonic()+90
+        while time.monotonic()<deadline:
+            q.cmd('screendump',{'filename':str(out/'launcher-closed.ppm')})
+            launcher_errors=verify_launcher(text(),(out/'launcher-closed.ppm').read_bytes(),font)
+            if not launcher_errors:break
+            time.sleep(.2)
+        (out/'launcher-pixels.json').write_text(json.dumps({'ok':not launcher_errors,'errors':launcher_errors,'scope':'actual launcher labels and closed-state glyphs after rejected Enter'},indent=2)+'\n')
+        if launcher_errors:raise RuntimeError('launcher pixels: '+'; '.join(launcher_errors))
+        key('grave_accent',r'\[command_palette.close\]')
         # Run real rescan and enqueue J immediately, without awaiting backend.
         # A too-fast completion is not overlap evidence: retry naturally at most3.
         measured=[]
