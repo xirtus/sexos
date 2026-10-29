@@ -46,7 +46,7 @@ mod integration {
     mod sex_pdx {pub use crate::discard_record as serial_record;}
     static mut SPINDLE_VIEWS:[crate::spindle_view::Delivery;2]=[crate::spindle_view::Delivery::new(),crate::spindle_view::Delivery::new()];
     fn pdx_call(_:usize,op:u64,sid:u64,a:u64,b:u64){CALLS.lock().unwrap().push((op,sid,a,b));}
-    static mut DOCUMENT_VIEWS:[document_view::Delivery;2]=[document_view::Delivery::new(),document_view::Delivery::new()];
+    static mut DOCUMENT_VIEWS:[document_view::Delivery;3]=[document_view::Delivery::new(),document_view::Delivery::new(),document_view::Delivery::new()];
     include!(env!("DESKTOP_CONTENT_PRODUCTION"));
     #[test]fn actual_renderer_emits_real_text_protocol_after_complete_view(){
         let _lock=LOCK.lock().unwrap();CALLS.lock().unwrap().clear();

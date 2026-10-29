@@ -107,14 +107,17 @@ impl LatestOperation {
     }
 }
 
-/// Six BOOT desktop surfaces (including the reserved successor) only. Observation preserves the caller's actual
+/// Fixed BOOT frames and their nine app-owned child surfaces only. Observation preserves the actual
 /// transport result; a full-ring state operation is retried independently.
-pub struct DesktopStates { slots: [Option<Operation>;6], chrome: [Option<Operation>;6], cursor: usize }
+pub const DESKTOP_SURFACES:[u64;16]=[200,201,153,300,301,306,307,156,154,160,161,162,302,303,304,305];
+pub struct DesktopStates { slots: [Option<Operation>;DESKTOP_SURFACES.len()], chrome: [Option<Operation>;DESKTOP_SURFACES.len()], denied:[bool;DESKTOP_SURFACES.len()], cursor: usize }
 impl DesktopStates {
-    pub const fn new() -> Self { Self { slots:[None;6],chrome:[None;6],cursor:0 } }
-    pub fn tracks(surface:u64)->bool { matches!(surface,200|201|153|300|301|306) }
+    pub const fn new() -> Self { Self { slots:[None;DESKTOP_SURFACES.len()],chrome:[None;DESKTOP_SURFACES.len()],denied:[false;DESKTOP_SURFACES.len()],cursor:0 } }
+    pub fn tracks(surface:u64)->bool { DESKTOP_SURFACES.contains(&surface) }
     pub fn observe(&mut self, op:Operation, result:Admission) {
-        let index=match op.surface {200=>0,201=>1,153=>2,300=>3,301=>4,306=>5,_=>return};
+        let Some(index)=DESKTOP_SURFACES.iter().position(|s|*s==op.surface) else{return;};
+        if matches!(result,Admission::Rejected(_)){self.denied[index]=true;}
+        if op.opcode==0xEC && result==Admission::Accepted{self.denied[index]=false;}
         if op.opcode==0xFD {self.chrome[index]=Some(op);}
         match op.opcode {
             0xEC => self.slots[index]=match result {
@@ -131,18 +134,24 @@ impl DesktopStates {
     }
     pub fn pending(&self)->bool {self.slots.iter().any(Option::is_some)}
     pub fn pending_surface(&self,surface:u64)->bool {self.slots.iter().flatten().any(|op|op.surface==surface)}
+    pub fn ready(&self,surface:u64)->bool {
+        DESKTOP_SURFACES.iter().position(|s|*s==surface).map_or(false,|i|!self.denied[i]&&!self.pending_surface(surface))
+    }
     /// Validation can replace old create geometry with the shell's latest
     /// bounds, or discard it after minimize/death. Hides remain independently
     /// eligible. No nested work/receive is performed by this bounded pump.
     pub fn poll(&mut self,budget:usize,mut validate:impl FnMut(Operation)->Option<Operation>,mut send:impl FnMut(Operation)->Admission) {
         let mut attempts=0;
-        for _ in 0..6 {
+        for _ in 0..DESKTOP_SURFACES.len() {
             if attempts>=budget {break;}
-            let index=self.cursor;self.cursor=(self.cursor+1)%6;
+            let index=self.cursor;self.cursor=(self.cursor+1)%DESKTOP_SURFACES.len();
             let Some(original)=self.slots[index] else {continue;};
             let Some(op)=validate(original) else {self.slots[index]=None;continue;};
             attempts+=1;
-            self.slots[index]=match send(op) {
+            let result=send(op);
+            if matches!(result,Admission::Rejected(_)){self.denied[index]=true;}
+            if op.opcode==0xEC && result==Admission::Accepted{self.denied[index]=false;}
+            self.slots[index]=match result {
                 Admission::Full=>Some(op),
                 Admission::Accepted if op.opcode==0xEC=>Some(self.chrome[index].unwrap_or(Operation{opcode:0xFD,surface:op.surface,packed:0,control:0})),
                 _=>None,

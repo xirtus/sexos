@@ -10,6 +10,20 @@ from check_desktop_close_log import check as cleanup_errors
 from check_document_disk import recover
 
 
+def boot_lifecycle_errors(result):
+    """Lifecycle joins also serve same-image reboot checks of short rehearsals."""
+    errors=[];soak=result.get('soak') or {}
+    if soak.get('boot_successors') not in ([16,17],[16,17,18]) or soak.get('cleanup_errors')!=[]:
+        errors.append('fresh BOOT successors and complete cleanup required')
+    if soak.get('boot_successors')==[16,17,18]:
+        third=soak.get('third_quil') or {}
+        expected=dict(target=18,surface=307,logical=9,incarnation=3,edited_and_saved=True,
+                      pixel_errors=[],terminal=True,reserve_exhausted=True)
+        if any(third.get(k)!=v for k,v in expected.items()) or third.get('documents')!=[d.get('object')for d in result.get('documents',[])]:
+            errors.append('third BOOT incarnation needs exact recovery/input/terminal proof')
+    return errors
+
+
 def session_errors(result):
     errors=[]
     if result.get('ok') is not True or result.get('acceptance') is not True:
@@ -33,8 +47,7 @@ def session_errors(result):
                 errors.append('invalid observed latency: '+kind)
     if not all(soak.get(k) is True for k in ['pending_quil_close','pending_spindle_close']):
         errors.append('both pending-I/O Close cases are required')
-    if soak.get('boot_successors')!=[16,17] or soak.get('cleanup_errors')!=[]:
-        errors.append('fresh BOOT successors and complete cleanup required')
+    errors+=boot_lifecycle_errors(result)
     docs=result.get('documents',[])
     if len(docs)!=2 or len({d.get('object') for d in docs})!=2:
         errors.append('two distinct saved documents required')
@@ -48,7 +61,7 @@ def inspect(path):
     result=json.loads((path/'result.json').read_text())
     errors=session_errors(result)
     text=(path/'serial.log').read_text(errors='replace')
-    errors+=cleanup_errors(text,include_successor=True,include_spindle_successor=True)
+    errors+=cleanup_errors(text,include_successor=True,include_spindle_successor=True,include_third_quil=(result.get('soak')or{}).get('boot_successors')==[16,17,18])
     if re.search(r'\[sexfiles.defer.drop\]|serial\.record\.overflow|KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at',text):
         errors.append('fault, dropped service request or diagnostic overflow')
     manifest=json.loads((path/'manifest.json').read_text())

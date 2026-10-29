@@ -6,7 +6,7 @@ import time
 import threading
 
 
-def run(c, seconds, acceptance=True):
+def run(c, seconds, acceptance=True, third_quil=False):
     if seconds < (1800 if acceptance else 1):
         raise ValueError('alpha acceptance requires at least 1800 seconds')
     q, wait, text = (c[k] for k in ('q', 'wait', 'text'))
@@ -139,6 +139,10 @@ def run(c, seconds, acceptance=True):
         else:
             raise RuntimeError('successor could not select '+expected['name'])
     close(16,301)
+    third=None
+    if third_quil:
+        from quil_third_probe import run as third_probe
+        third=third_probe(c,refresh,close)
     close(15,300)
     # Prove pending Spindle job retirement and its separately reserved successor.
     focus(153)
@@ -159,9 +163,9 @@ def run(c, seconds, acceptance=True):
     refresh()
     key('j',r'\[shell.action.select_next_linen\] id=[1-9]\d*')
     from check_desktop_close_log import check
-    errors = check(text(),include_successor=True,include_spindle_successor=True)
+    errors = check(text(),include_successor=True,include_spindle_successor=True,include_third_quil=third_quil)
     if errors:
         raise RuntimeError('sustained cleanup: '+str(errors))
     return dict(acceptance=acceptance,elapsed_seconds=elapsed, cycles=cycle, samples=samples,
                 pending_quil_close=True,pending_spindle_close=True,
-                boot_successors=[16,17],cleanup_errors=errors)
+                boot_successors=[16,17,18] if third_quil else [16,17],third_quil=third,cleanup_errors=errors)

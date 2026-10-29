@@ -29,7 +29,18 @@ for path in ['kernel/src/ipc.rs','kernel/src/ipc/router.rs']:
 assert 'app_resources::activation_permitted(' in (r/'kernel/src/scheduler.rs').read_text()
 assert 'load_elf(elf_path, pd_id, layout, domain_id)' in (r/'kernel/src/pd/create.rs').read_text()
 assert 'create_boot_domain(quil_module.path(),Some(16),16,9)' in (r/'kernel/src/init.rs').read_text()
+assert 'create_boot_domain(quil_module.path(),Some(18),18,9)' in (r/'kernel/src/init.rs').read_text()
 assert 'create_boot_domain(spindle_module.path(),Some(17),17,12)' in (r/'kernel/src/init.rs').read_text()
+# Verify the explicit aggregate budget and chain order in the actual genesis.
+init=(r/'kernel/src/init.rs').read_text()
+assert 'plan_boot_apps(&[9, 12, 15, 16, 17, 18])' in init
+assert '(spindle_successor,302), (quil_third,307)' in init
+assert init.index('reserve_successor(quil_id,successor,') < init.index('reserve_successor(successor,quil_third,') < init.index('crate::boot_memory::seal_all()')
+assert 'MAX_APPS:usize=6;' in (r/'kernel/src/app_resource_state.rs').read_text()
+assert 'SLOTS: [usize; 6] = [38, 39, 40, 45, 50, 54]' in (r/'crates/sex-pdx/src/app_lifecycle.rs').read_text()
+assert 'CATALOG_CAPACITY: usize = 6;' in (r/'servers/sexdisplay/src/surface_lifecycle.rs').read_text()
+for name,value in [('QUIL_THIRD_LIFECYCLE_SLOT',54),('QUIL_THIRD_ACTIVATION_SLOT',55),('QUIL_THIRD_CLOSE_SLOT',56),('QUIL_THIRD_ROUTE_SLOT',57)]:
+    assert re.search(r'pub const '+name+r':(?:usize|u64)='+str(value)+r';',(r/'crates/sex-pdx/src/app_lifecycle.rs').read_text())
 print('[app.activation.wiring] PASS scope=static_reservation_and_commit_order')
 PY
 QUIL_ACTIVATION_PRODUCTION="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/quil_activation.rs" -o "$TEST_DIR/tests"

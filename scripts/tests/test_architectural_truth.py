@@ -198,5 +198,20 @@ class ArchitecturalTruthTests(unittest.TestCase):
         self.assertTrue(all(row["exit_code"] == 127 for row in result["checks"]))
 
 
+    def test_mutable_checkout_drift_cannot_inherit_passing_host_checks(self):
+        for added in [False,True]:
+            evidence=Path(self.temp.name)/('drift-added'if added else'drift-edited')
+            path=self.root/('kernel/src/new_during_gate.rs'if added else'kernel/src/scheduler.rs')
+            calls=[]
+            def effect(*args,**kwargs):
+                if not calls:
+                    path.write_text((''if added else path.read_text())+'\n// changed while a gate runs\n')
+                calls.append(1)
+                return mock.Mock(stdout=b'',returncode=0)
+            with mock.patch.object(truth.subprocess,'run',side_effect=effect), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                status=truth.main(['--root',str(self.root),'--run-host','--evidence-dir',str(evidence)])
+            r=json.loads((evidence/'report.json').read_text())
+            self.assertEqual(status,1);self.assertFalse(r['checks_passed']);self.assertFalse(r['sources_unchanged_during_checks'])
+            self.assertIn(str(path.relative_to(self.root)),r['source_drift'])
 if __name__ == "__main__":
     unittest.main()

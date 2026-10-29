@@ -19,6 +19,11 @@ destroy=s[s.index('                0xEE => {'):s.index('                0xF5 => 
 assert destroy.index('TEXT_STAGES[index].reset();')<destroy.index('*slot = SURFACE_EMPTY;')
 assert 'text_damage.rect().filter(|_| fb_live && !transaction_full_render)' in s
 assert '0xFD | 0x276 | 0x277 | 0x278)' in s
+fill=s[s.index('                0xEF => {'):s.index('                sex_pdx::text_batch::BEGIN')]
+assert 'fill_damage::update(slot,rect_index,sx,sy,sw,sh,color)' in fill
+assert fill.index('slot.owner_pd != msg.caller_pd')<fill.index('fill_damage::update(')
+assert 'needs_surface_redraw = true' not in fill
+assert 'if sw == 0 || sh == 0 { continue; }' not in fill
 assert 'FRAME_GROUPS.observe(&SURFACES)' in s and 'FRAME_GROUPS.fit_children(&mut SURFACES)' in s
 assert 'FRAME_GROUPS.register(surface_lifecycle::Catalog' in s
 assert 'fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color)' not in s

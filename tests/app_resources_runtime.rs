@@ -96,12 +96,16 @@ fn fixture_elf()->Vec<u8>{
  for (base,top,pa,leaves) in [(0x6000_0000,0x7201_0000,0x40000,&mut spindle_leaves),(0x6100_0000,0x7301_0000,0x60000,&mut spindle_next_leaves)]{
   for i in 0..17{let va=if i==0{base}else{top-65536+(i as u64-1)*4096};leaves[i]=(pa+i as u64*4096)|5|(12u64<<59);LEAVES.lock().insert(va,&mut leaves[i]as *mut u64 as usize);}
  }
- app_resources::plan_boot_apps(&[15,16,12,17]);app_resources::capture_boot_image(15,15,&fixture_elf(),base,top).unwrap();
+ let third=ProtectionDomain::new_key(18,15);let mut third_leaves=Box::new([0u64;17]);
+ for i in 0..17{let va=if i==0{0x6200_0000}else{0x7401_0000-65536+(i as u64-1)*4096};third_leaves[i]=(0x80000+i as u64*4096)|5|(15u64<<59);LEAVES.lock().insert(va,&mut third_leaves[i]as *mut u64 as usize);}
+ app_resources::plan_boot_apps(&[15,16,12,17,18]);app_resources::capture_boot_image(15,15,&fixture_elf(),base,top).unwrap();
  app_resources::capture_boot_image(16,15,&fixture_elf(),0x5000_0000,0x7101_0000).unwrap();
  app_resources::capture_boot_image(12,12,&fixture_elf(),0x6000_0000,0x7201_0000).unwrap();
  app_resources::capture_boot_image(17,12,&fixture_elf(),0x6100_0000,0x7301_0000).unwrap();
- app_resources::init(14,3,&[(15,300),(16,301),(12,154),(17,302)],services);
+ app_resources::capture_boot_image(18,15,&fixture_elf(),0x6200_0000,0x7401_0000).unwrap();
+ app_resources::init(14,3,&[(15,300),(16,301),(12,154),(17,302),(18,307)],services);
  app_resources::reserve_successor(15,16,3,44);
+ app_resources::reserve_successor(16,18,3,55);
  app_resources::reserve_successor(12,17,3,49);
  let reserved=*next_leaves;assert_eq!(reserved,[0;17]);assert!(!app_resources::activation_permitted(16));assert!(!app_resources::accepts_ipc(16));
  FLUSHES.lock().clear();
@@ -159,6 +163,26 @@ fn fixture_elf()->Vec<u8>{
  unsafe{(*next_task).state.exit();}app_resources::poll_exit_notifications();
  assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,3]);
  assert_eq!(unsafe{(*next_task).state.snapshot().phase},Phase::Dead);assert_eq!(task.state.snapshot().phase,Phase::Dead);
+
+ // A third subject cannot skip second-incarnation cleanup, reuse its leaves,
+ // or turn either consumed receipt back into an activation.
+ assert_eq!(app_resources::activation(shell,55,0),[0,18,18,307,0]);
+ assert_eq!(app_resources::activation(shell,55,1),[RETRY,0,0,0,0]);assert_eq!(*third_leaves,[0;17]);
+ for id in &services[..4]{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(*id).unwrap(),39,16),0);}
+ assert_eq!(app_resources::retire(pager,39)[0],RETRY);
+ assert_eq!(app_resources::activation(shell,55,1),[RETRY,0,0,0,0]);
+ assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(services[4]).unwrap(),39,16),0);
+ assert_eq!(app_resources::retire(pager,39)[0],0);assert_eq!(*next_leaves,[0;17]);
+ assert_eq!(app_resources::activation(shell,55,0),[0,18,18,307,1]);
+ assert_eq!(app_resources::activation(shell,55,1),[0,18,18,307,2]);
+ assert!(third_leaves.iter().all(|p|*p!=0));assert!(!app_resources::accepts_ipc(16));assert!(app_resources::accepts_ipc(18));
+ let task18=third.main_task.load(Ordering::Acquire);unsafe{(*task18).state.exit();}app_resources::poll_exit_notifications();
+ for id in services{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(id).unwrap(),50,18),0);}
+ assert_eq!(app_resources::retire(pager,50)[0],0);assert_eq!(*third_leaves,[0;17]);
+ let before=FLUSHES.lock().len();
+ assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,3]);
+ assert_eq!(app_resources::activation(shell,55,1),[0,18,18,307,3]);
+ assert_eq!(FLUSHES.lock().len(),before);assert!(!app_resources::accepts_ipc(18));
 
  // A second logical app consumes only its own reserved identity/grant, even
  // after the first pair has exhausted its receipt.

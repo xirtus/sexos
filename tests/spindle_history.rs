@@ -15,10 +15,11 @@ mod backends{pub use crate::ramfs;include!(concat!(env!("APP_RESOURCE_TEST_DIR")
 const CMD_MAX:usize=256;
 include!(concat!(env!("APP_RESOURCE_TEST_DIR"),"/history.rs"));
 #[path="../apps/spindle/src/history_persistence.rs"]mod client;
+#[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod lifecycle_protocol;
 pub mod app_lifecycle{
- pub const LIVE:u64=5;#[derive(Clone,Copy)]pub struct Catalog{pub target_pd:u32,pub task_id:u32,pub surface_id:u64,pub coordinator_pd:u32}
+ pub const LIVE:u64=5;pub use crate::lifecycle_protocol::CatalogInfo as Catalog;
  thread_local!{pub static BAD:std::cell::Cell<u8>=const{std::cell::Cell::new(0)};}
- pub fn catalog(slot:usize)->Result<Catalog,u64>{let(pd,surface)=match slot{39=>(12,154),50=>(17,302),_=>return Err(1)};let bad=BAD.get();Ok(Catalog{target_pd:if bad==1{12}else{pd},task_id:if bad==2{12}else{pd},surface_id:if bad==3{154}else{surface},coordinator_pd:if bad==4{7}else{3}})}
+ pub fn catalog(slot:usize)->Result<Catalog,u64>{let(pd,surface)=match slot{39=>(12,154),50=>(17,302),_=>return Err(1)};let bad=BAD.get();Ok(Catalog{target_pd:if bad==1{12}else{pd},task_id:if bad==2{0}else if bad==6{pd*10}else{pd},surface_id:if bad==3{154}else{surface},coordinator_pd:if bad==4{7}else{3}})}
  pub fn info(_:usize)->Result<(),u64>{Err(if BAD.get()==5{2}else{LIVE})}
 }
 use spindle_history as w;use backends::FsBackend;use client::{Client,Event,Outcome};use ramfs::RamFs;use service::Service;
@@ -77,3 +78,5 @@ fn saved(fs:&RamFs,name:&[u8],owner:u32)->Vec<u8>{let h=fs.open(name,0,0,owner).
 
 #[test]fn retry_requires_quiescence_then_reencodes_latest_ram_with_a_fresh_lease(){let fs=RamFs::new();let mut s=Service::new();let mut h=History::new();h.push(b"old");let mut c=Client::new();c.init(17);assert!(!c.retry(&h));c.save();let mut r=None;c.step(&h,|v|{r=Some(v);Ok(())});let lost=rpc(&mut s,&fs,17,r.unwrap());let old=w::decode_reply(lost,r.unwrap().seq).unwrap().unwrap();c.step_at(&h,client::TICK_BUDGET,|_|panic!());assert_eq!(c.status(),client::Status::NeedsRetry);assert!(!c.retry(&h));assert!(c.cancel());assert_eq!(c.status(),client::Status::Cancelling);assert!(!c.save());assert!(!c.retry(&h));drive(&mut c,&mut h,&mut s,&fs,17);assert_eq!(c.status(),client::Status::RetryReady);h.push(b"newest RAM");assert!(c.retry(&h));let e=drive(&mut c,&mut h,&mut s,&fs,17);assert_eq!(e[0].outcome,Outcome::Saved);assert_ne!(e[0].handle,old);h.clear();c.load(&h);drive(&mut c,&mut h,&mut s,&fs,17);assert_eq!(h.get(0),Some(&b"newest RAM"[..]));assert!(!c.retry(&h));}
 #[test]fn load_retry_uses_current_revision_and_never_replays_late_old_data(){let fs=RamFs::new();let mut s=Service::new();let mut h=History::new();h.push(b"saved");let mut c=Client::new();c.init(17);c.save();drive(&mut c,&mut h,&mut s,&fs,17);c.load(&h);let mut r=None;c.step(&h,|v|{r=Some(v);Ok(())});let lost=rpc(&mut s,&fs,17,r.unwrap());c.cancel();drive(&mut c,&mut h,&mut s,&fs,17);h.push(b"new local");assert!(c.retry(&h));assert!(c.receive(lost,&mut h).is_none());assert_eq!(drive(&mut c,&mut h,&mut s,&fs,17)[0].outcome,Outcome::Loaded);assert_eq!(h.get(0),Some(&b"saved"[..]));}
+
+#[test]fn catalog_task_namespace_is_independent_of_domain(){app_lifecycle::BAD.set(6);assert!(service::live(12));assert!(service::live(17));app_lifecycle::BAD.set(0);}

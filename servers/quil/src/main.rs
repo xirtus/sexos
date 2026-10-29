@@ -181,7 +181,7 @@ fn document_save_start(create: bool) {
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
 }
-fn document_event(event: document_exchange::Event) {
+fn document_event(event: document_exchange::Event, palette_active:&mut bool) {
     unsafe {
         if event.outcome == document_exchange::Outcome::Saved {
             DOCUMENT_WORKSPACE.changed();
@@ -207,6 +207,7 @@ fn document_event(event: document_exchange::Event) {
             QUIL_BUFFER[..DOCUMENT_IO.len].copy_from_slice(&DOCUMENT_IO.bytes[..DOCUMENT_IO.len]);
             QUIL_BUFFER_LEN = DOCUMENT_IO.len;
             QUIL_CURSOR_POS = QUIL_BUFFER_LEN;
+            *palette_active=false;
             QUIL_DOC_ID = event.object as u64;
             QUIL_LAST_DOC_ID = QUIL_DOC_ID;
             QUIL_DOC_TITLE = DOCUMENT_IO.name;
@@ -2921,7 +2922,7 @@ unsafe fn check_physical_keyboard_proof(scancode: u64) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("QUIL_SELF_AUTHORITY");
-    assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(9,156)|(16,301)));
+    assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(9,156)|(16,301)|(18,307)));
     unsafe{DOCUMENT_WORKSPACE=sex_pdx::document_view::WorkspaceRefresh::new(catalog.target_pd,catalog.task_id);}
     QUIL_DOMAIN.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     QUIL_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
@@ -2941,7 +2942,7 @@ pub extern "C" fn _start() -> ! {
         (56u64 << 32) | 1072u64,   // x=1072, y=56 (right column, under bar)
         (304u64 << 32) | 200u64);  // w=200, h=304
     serial_println!("[quil.surface.visible.ok] sid={}", quil_content_sid());
-    if catalog.target_pd==16 {
+    if matches!(catalog.target_pd,16|18) {
         // Register through the existing BOOT shell route. The shell owns
         // framing/geometry and acknowledges the exact fresh catalog subject.
         loop{
@@ -3754,11 +3755,11 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    if catalog.target_pd==16 {
+    if matches!(catalog.target_pd,16|18) {
         // The legacy startup fixture owns PD9's RamFS object. A successor
         // must not inherit that private lease; native DiskFS access remains
         // available through its own BOOT storage route.
-        sex_pdx::serial_record!("[quil.startup.fixture.skipped] target=16 reason=predecessor_private_object");
+        sex_pdx::serial_record!("[quil.startup.fixture.skipped] target={} reason=predecessor_private_object",catalog.target_pd);
     } else if PERSISTENCE_PROOF_ENABLED {
         serial_println!("[quil.sexfiles.proof.start]");
 
@@ -3985,11 +3986,11 @@ pub extern "C" fn _start() -> ! {
         unsafe{if DOCUMENT_OPEN{match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::OPEN_LINEN,catalog.target_pd as u64,catalog.task_id as u64,0){Ok(_)=>DOCUMENT_OPEN=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>DOCUMENT_OPEN=false}}}
         unsafe{DOCUMENT_WORKSPACE.poll(|args|sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::WORKSPACE_CHANGED,args[0],args[1],args[2]).map(|_|()));}
         unsafe{DOCUMENT_DISPLAY.poll(quil_content_sid(),|op,sid,a,b|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op,sid,a,b).map(|_|()),|paint,bytes|sex_pdx::serial_record!("[quil.ui.admitted] paint={} bytes={} presentation=unconfirmed",paint,bytes));}
-        unsafe{if let Some(event)=DOCUMENT_IO.step(|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::document::OP,r.header(),r.a,r.b).map(|_|())){document_event(event);}}
+        unsafe{if let Some(event)=DOCUMENT_IO.step(|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::document::OP,r.header(),r.a,r.b).map(|_|())){document_event(event,&mut palette_active);}}
         let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_WORKSPACE.pending()||DOCUMENT_OPEN} {
             match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sched_yield();continue}}
         }else{pdx_listen_raw(0)};
-        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && catalog.target_pd==16 {
+        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && matches!(catalog.target_pd,16|18) {
             presentation_pending=true;continue;
         }
         if msg.type_id==1 && msg.caller_pd==1 && msg.arg0==256 && presentation_sent {
@@ -4005,12 +4006,12 @@ pub extern "C" fn _start() -> ! {
         }
 
 
-        if msg.type_id==sex_pdx::document_view::OP{unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
+        if msg.type_id==sex_pdx::document_view::OP{unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;DOCUMENT_DISPLAY.rebind();DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
         if msg.type_id==sex_pdx::document_view::ACTION{unsafe{if msg.caller_pd==3&&msg.arg0==((catalog.task_id as u64)<<32|catalog.target_pd as u64)&&msg.arg2>DOCUMENT_ACTION_SEQUENCE&&(1..=5).contains(&msg.arg1){DOCUMENT_ACTION_SEQUENCE=msg.arg2;sex_pdx::serial_record!("[quil.ui.pointer] action={} sequence={}",msg.arg1,msg.arg2);document_action(msg.arg1 as u8,&mut palette_active,&mut selected_row);}}continue;}
         if msg.type_id==1 && msg.caller_pd==1 {
             unsafe { if let Some((paint,bytes))=DOCUMENT_DISPLAY.receive(msg.caller_pd,msg.arg0) {sex_pdx::serial_record!("[quil.ui.applied] paint={} bytes={} pixels=unconfirmed",paint,bytes);continue;} }
         }
-        if msg.type_id==1 && msg.caller_pd==11 {unsafe{if let Some(event)=DOCUMENT_IO.receive(msg.caller_pd,msg.arg0){document_event(event);}}continue;}
+        if msg.type_id==1 && msg.caller_pd==11 {unsafe{if let Some(event)=DOCUMENT_IO.receive(msg.caller_pd,msg.arg0){document_event(event,&mut palette_active);}}continue;}
         unsafe {
             static mut QUIL_LISTEN_BUDGET: u32 = 8;
             let b = &mut QUIL_LISTEN_BUDGET;

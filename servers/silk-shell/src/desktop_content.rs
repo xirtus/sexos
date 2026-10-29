@@ -66,3 +66,8 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
     }
     result
 }
+
+/// Immutable BOOT visual association, never caller-supplied authority.
+pub const fn parent_frame(child:u64)->Option<u64>{
+    match child {156=>Some(201),154|160|161|162=>Some(153),302|303|304|305=>Some(306),_=>None}
+}

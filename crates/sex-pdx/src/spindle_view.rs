@@ -35,10 +35,11 @@ pub struct Delivery{desired:Option<Notice>,last:Option<(u32,u32)>,sequence:u64,d
 impl Delivery{
  pub const fn new()->Self{Self{desired:None,last:None,sequence:0,dead:false}}
  pub fn queue(&mut self,target:u32,task:u32,w:u32,h:u32){
-  if self.dead||!matches!(target,12|17)||task!=target||w==0||h==0||w>4096||h>4096{return}
+  if self.dead||!matches!(target,12|17)||task==0||w==0||h==0||w>4096||h>4096{return}
   if self.desired.map(|n|(n.w,n.h)).or(self.last)==Some((w,h)){return}
   let Some(sequence)=self.sequence.checked_add(1)else{self.retire();return};self.sequence=sequence;self.desired=Some(Notice{target,task,w,h,sequence});
  }
+ pub fn refresh(&mut self){if !self.dead{self.last=None;}}
  pub fn pending(&self)->bool{self.desired.is_some()}
  pub fn retire(&mut self){self.dead=true;self.desired=None;self.last=None;}
  pub fn poll(&mut self,live:bool,ready:bool,mut send:impl FnMut(Notice)->Result<(),u64>){

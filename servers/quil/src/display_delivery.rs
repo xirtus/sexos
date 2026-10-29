@@ -65,6 +65,15 @@ impl Outbox {
     pub fn pending(&self) -> bool {
         !self.dead && (self.active.is_some() || self.latest.is_some())
     }
+    /// A fresh, exact shell viewport notice follows its display create/chrome
+    /// admission. Abandon any upload whose old surface binding was scrubbed;
+    /// only a newly rendered, strictly newer paint may resume publication.
+    pub fn rebind(&mut self) {
+        if self.dead {return;}
+        if let Some(b)=self.active.as_mut(){b.text.bytes.fill(0);}
+        if let Some(b)=self.latest.as_mut(){b.text.bytes.fill(0);}
+        self.active=None;self.latest=None;
+    }
     pub fn close(&mut self) {
         if let Some(b) = &mut self.active {
             b.text.bytes.fill(0)

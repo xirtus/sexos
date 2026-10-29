@@ -179,6 +179,22 @@ def load_specs(root):
     return docs, checks, invariants, bindings
 
 
+def source_manifest(root,bindings):
+    # Include checker/harness sources as well as the explicitly bound paths.
+    files = set(bindings)
+    files.add("scripts/check_architectural_truth.py")
+    files.add("limine.cfg")
+    files.update(p.relative_to(root).as_posix() for p in (root / "scripts").glob("*.py"))
+    for directory in ("kernel/src", "tests", "scripts/tests", "crates/sex-pdx/src", "servers/sexfiles/src", "servers/quil/src",
+                      "sex-rt/src", "apps/sexdrive/src", "servers/sexusb/src", "servers/sexnet/src",
+                      "servers/sext/src", "apps/kaleidoscope/src", "apps/spindle/src", "servers/sexbell/src",
+                      "servers/silk-shell/src", "servers/linen/src", "servers/sexdisplay/src"):
+        for path in (root / directory).rglob("*"):
+            if path.is_file() and "__pycache__" not in path.parts and (path.suffix in (".rs", ".py") or path.is_relative_to(root/"tests")):
+                files.add(path.relative_to(root).as_posix())
+    files.update(p.relative_to(root).as_posix()for p in (root/"scripts/tests/fixtures").rglob("*")if p.is_file())
+    return {name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in sorted(files)}
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -213,21 +229,7 @@ def main(argv=None):
                   obligations={key: value["status"] for key, value in sorted(invariants.items())})
     exit_status = 0
     if args.run_host:
-        # Include checker/harness sources as well as the explicitly bound paths.
-        files = set(bindings)
-        files.add("scripts/check_architectural_truth.py")
-        files.add("limine.cfg")
-        files.update(p.relative_to(args.root).as_posix() for p in (args.root / "scripts").glob("*.py"))
-        for directory in ("kernel/src", "tests", "scripts/tests", "crates/sex-pdx/src", "servers/sexfiles/src", "servers/quil/src",
-                          "sex-rt/src", "apps/sexdrive/src", "servers/sexusb/src", "servers/sexnet/src",
-                          "servers/sext/src", "apps/kaleidoscope/src", "apps/spindle/src", "servers/sexbell/src",
-                          "servers/silk-shell/src", "servers/linen/src", "servers/sexdisplay/src"):
-            for path in (args.root / directory).rglob("*"):
-                if path.is_file() and path.suffix in (".rs", ".py"):
-                    files.add(path.relative_to(args.root).as_posix())
-        report["source_sha256"] = {
-            name: hashlib.sha256((args.root / name).read_bytes()).hexdigest() for name in sorted(files)
-        }
+        report["source_sha256"] = source_manifest(args.root,bindings)
         for identity, check in checks.items():
             if check["kind"] == "runtime":
                 continue
@@ -252,6 +254,18 @@ def main(argv=None):
             if returncode != 0:
                 exit_status = 1
                 print(output.decode(errors="replace")[-6000:], file=sys.stderr)
+    if args.run_host:
+        try:
+            final_sources=source_manifest(args.root,bindings)
+            drift=sorted(name for name in report["source_sha256"].keys()|final_sources.keys()
+                         if report["source_sha256"].get(name)!=final_sources.get(name))
+        except OSError as exc:
+            drift=[str(exc)]
+        report["sources_unchanged_during_checks"]=not drift
+        report["source_drift"]=drift
+        if drift:
+            exit_status=1
+            print("[architectural_truth.sources] FAIL changed during checks: "+", ".join(drift),file=sys.stderr)
     report.pop("active_check", None)
     report.update(run_status="complete", checks_passed=(exit_status == 0) if args.run_host else None)
     save_report()

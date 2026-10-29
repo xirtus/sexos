@@ -4,6 +4,8 @@
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
+#[path="../servers/silk-shell/src/desktop_content.rs"]mod desktop_content;
 pub struct PdxMessage{pub type_id:u64,pub caller_pd:u32,pub arg0:u64}
 #[path="../servers/silk-shell/src/linen_text_delivery.rs"] mod linen_text_delivery;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
@@ -105,4 +107,23 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  PALETTE_TEXT.queue(b"must scrub",0,linen_text_delivery::Metadata{count:10,first:0,rows:5,selected:2});
  for _ in 0..2{PALETTE_TEXT.poll(4,|_|linen_text_delivery::Admission::Accepted);}PALETTE_TEXT.cancel();
  assert!(!desktop_text_receive(&PdxMessage{type_id:1,caller_pd:1,arg0:text_batch::Applied{surface:152,sequence:2}.encode().unwrap()}));
+}}
+
+#[test]fn retained_child_create_uses_exact_live_parent_latest_geometry_before_viewport_ready(){let _l=LOCK.lock().unwrap();unsafe{
+ reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(38,9,90,156));
+ RESULTS.lock().unwrap().push_back((ERR_SERVICE_NOT_READY,0));pdx_call(SLOT_DISPLAY,0xEC,156,0,0);
+ assert!(!desktop_content_ready(201));BOUNDS=Some((20,60,800,600));
+ let op=desktop_state_validate(op(0xEC,156)).unwrap();assert_eq!((op.packed,op.control),((96<<32)|28,(556<<32)|784));
+ desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(201));
+ APP_CUSTODY[0].as_mut().unwrap().close_pending=true;assert!(desktop_state_validate(op).is_none());
+ APP_CUSTODY[0].as_mut().unwrap().close_pending=false;STATE=LifecycleState::Minimized;assert!(desktop_state_validate(op).is_none());assert!(!desktop_content_ready(201));
+ reset();assert!(desktop_state_validate(op).is_none());
+}}
+#[test]fn viewport_waits_for_each_spindle_child_and_hard_failure_cannot_be_readiness(){let _l=LOCK.lock().unwrap();unsafe{
+ reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(50,17,170,302));
+ for sid in [302,303,304,305]{DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
+ assert!(!desktop_content_ready(306));desktop_state_poll();assert!(!desktop_content_ready(306));desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(306));
+ DESKTOP_STATES.observe(op(0xEC,303),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(306));
+ DESKTOP_STATES.observe(op(0xFD,303),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(306));
+ DESKTOP_STATES.observe(op(0xEC,303),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(306));
 }}

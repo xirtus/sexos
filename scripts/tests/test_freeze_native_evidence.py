@@ -52,4 +52,19 @@ class FreezeTests(unittest.TestCase):
             (self.root/'scripts/outside.py').symlink_to(target)
             with self.assertRaisesRegex(ValueError,'outside repository'):self.run_freeze()
             self.assertFalse((self.out/'source-binding.json').exists())
+    def test_copies_and_hashes_architectural_checker_inventory(self):
+        (self.root/'scripts/tests/fixtures').mkdir(parents=True);(self.root/'scripts/tests/fixtures/model.log').write_text('model fixture')
+        (self.root/'spec').mkdir();(self.root/'spec/uiir.sexspec').write_text('{"fixture":true}')
+        r=self.run_freeze();name='spec/uiir.sexspec'
+        self.assertEqual((self.out/'source'/name).read_text(),'{"fixture":true}')
+        self.assertEqual((self.out/'source/scripts/tests/fixtures/model.log').read_text(),'model fixture')
+        self.assertIn('scripts/tests/fixtures/model.log',r['runner_sha256'])
+        self.assertEqual(r['runner_sha256'][name],hashlib.sha256((self.root/name).read_bytes()).hexdigest())
+    def test_inventory_symlink_cannot_escape_frozen_root(self):
+        (self.root/'spec').mkdir()
+        with tempfile.TemporaryDirectory()as outside:
+            f=pathlib.Path(outside)/'spec.sexspec';f.write_text('outside')
+            (self.root/'spec/test.sexspec').symlink_to(f)
+            with self.assertRaisesRegex(ValueError,'outside repository'):self.run_freeze()
+            self.assertFalse((self.out/'source-binding.json').exists())
 if __name__=='__main__':unittest.main()

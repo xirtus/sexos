@@ -72,6 +72,16 @@ Path(sys.argv[1]).write_text(f[0])
 PYPARSE
 SPINDLE_PROBE_PARSE_SOURCE="$TEST_DIR/probe_parse.rs" rustc --edition=2021 --test tests/spindle_probe.rs -o "$TEST_DIR/probes"
 "$TEST_DIR/probes"
+python3 - "$TEST_DIR/document_caller.rs" <<'PYCALLER'
+from pathlib import Path
+import re,sys
+s=Path('servers/sexfiles/src/trampoline.rs').read_text()
+f=re.findall(r'^fn document_caller_live\b.*?^}',s,re.M|re.S);assert len(f)==1
+assert 'let live=document_caller_live(caller);' in s
+Path(sys.argv[1]).write_text(f[0])
+PYCALLER
+DOCUMENT_CALLER_SOURCE="$TEST_DIR/document_caller.rs" rustc --edition=2021 --test tests/document_caller.rs -o "$TEST_DIR/document-caller"
+"$TEST_DIR/document-caller"
 rustc --edition=2021 --test tests/quil_document.rs -o "$TEST_DIR/documents"
 "$TEST_DIR/documents"
 rustc --edition=2021 --test tests/document_journal.rs -o "$TEST_DIR/document-journal"
@@ -155,6 +165,11 @@ for name in ['flush_pending_cursor_send','send_cursor_checked']:
 Path(sys.argv[1]).write_text('\n'.join(parts))
 pdx=Path('crates/sex-pdx/src/lib.rs').read_text()
 Path(sys.argv[2]).write_text(next(line for line in pdx.splitlines()if line.startswith('pub const ERR_SERVICE_NOT_READY:'))+'\n')
+quil=Path('servers/quil/src/main.rs').read_text()
+viewport=quil[quil.index('if msg.type_id==sex_pdx::document_view::OP{'):quil.index('if msg.type_id==sex_pdx::document_view::ACTION{')]
+assert viewport.index('Notice::decode(')<viewport.index('DOCUMENT_DISPLAY.rebind();')<viewport.index('draw_text_lines(')
+restore=s[s.index('unsafe fn restore_minimized_frame('):s.index('unsafe fn native_child_geometry(')]
+assert restore.index('DOCUMENT_VIEWS[index].refresh();')<restore.index('set_frame_minimized(frame_id, false);')
 assert 'CURSOR_SEND_PENDING || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress()' in s
 PYCURSOR
 CURSOR_DELIVERY_SOURCE="$TEST_DIR/cursor.rs" CURSOR_STATUS_SOURCE="$TEST_DIR/cursor_status.rs" rustc --edition=2021 --test tests/desktop_cursor_delivery.rs -o "$TEST_DIR/cursor"

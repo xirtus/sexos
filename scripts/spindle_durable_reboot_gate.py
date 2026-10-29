@@ -48,7 +48,8 @@ def main():
     if (a/'spindle-history.json').exists():saved=json.loads((a/'spindle-history.json').read_text())['saved']
     else:
         soak=boot_a_result.get('soak')or{}
-        if soak.get('boot_successors')!=[16,17] or soak.get('cleanup_errors')!=[]:raise RuntimeError('missing complete alpha lifecycle evidence')
+        from check_alpha_session import boot_lifecycle_errors
+        if boot_lifecycle_errors(boot_a_result):raise RuntimeError('missing complete alpha lifecycle evidence')
         source_log=(a/'serial.log').read_text(errors='replace')
         receipts=re.findall(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=(\d+) bytes=(\d+) count=(\d+) hash=(0x[0-9a-f]+) error=0',source_log)
         if not receipts:raise RuntimeError('no acknowledged successor history snapshot')

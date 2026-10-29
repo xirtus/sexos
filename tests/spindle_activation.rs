@@ -1,11 +1,13 @@
 #![allow(dead_code,static_mut_refs)]
 #[path="../servers/silk-shell/src/launcher.rs"] mod launcher;
+#[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
+static mut APP_CUSTODY:[Option<app_custody::Entry>;1]=[Some(app_custody::Entry::new(50,17,170,302))];
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 static mut INFO:Result<sex_pdx::app_lifecycle::ActivationInfo,u64>=Err(1);
 static mut FOCUSED_SURFACE_ID:u64=306;
 const SURFACE_ID_SPINDLE:u64=153;const SLOT_SPINDLE:u64=14;
 mod sex_pdx{pub mod app_lifecycle{
- pub const SPINDLE_ACTIVATION_SLOT:usize=49;pub const DENIED:u64=3;pub const SPINDLE_ROUTE_SLOT:u64=52;
+ pub const SPINDLE_ACTIVATION_SLOT:usize=49;pub const SPINDLE_LIFECYCLE_SLOT:usize=50;pub const DENIED:u64=3;pub const SPINDLE_ROUTE_SLOT:u64=52;
  #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct ActivationInfo{pub successor:u32,pub task:u32,pub surface:u64,pub state:u64}
  pub fn activation(slot:usize,_:bool)->Result<ActivationInfo,u64>{assert_eq!(slot,49);unsafe{crate::INFO}}
 }}
@@ -19,9 +21,9 @@ include!(env!("SPINDLE_ACTIVATION_PRODUCTION"));
  }
  for code in [0x29,0x3B,0x42,0x57,0x58]{assert!(!is_spindle_text_key(code));}
 }
-unsafe fn info(state:u64){INFO=Ok(sex_pdx::app_lifecycle::ActivationInfo{successor:17,task:17,surface:302,state});}
+unsafe fn info(state:u64){INFO=Ok(sex_pdx::app_lifecycle::ActivationInfo{successor:17,task:170,surface:302,state});}
 #[test]fn no_quil_or_stale_tuple_can_resolve_as_spindle(){let _l=LOCK.lock().unwrap();unsafe{
- for i in [(16,16,301,2),(17,12,302,2),(12,17,302,2),(17,17,154,2),(17,17,302,4)]{
+ for i in [(16,16,301,2),(17,12,302,2),(12,17,302,2),(17,170,154,2),(17,170,302,4),(17,17,302,2)]{
   INFO=Ok(sex_pdx::app_lifecycle::ActivationInfo{successor:i.0,task:i.1,surface:i.2,state:i.3});assert_eq!(spindle_activation_info(true),Err(3));assert!(!spindle_launcher_status().0);
  }}}
 #[test]fn availability_tracks_cleanup_ready_active_and_permanent_exhaustion(){let _l=LOCK.lock().unwrap();unsafe{

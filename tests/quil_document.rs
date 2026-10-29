@@ -384,3 +384,27 @@ fn completed_deferred_commit_retains_full_receipt_and_retires_without_replay() {
     s.progress(&mut b);
     s.poll(|_, _| panic!("retired receipt"));
 }
+
+#[test]
+fn third_session_commit_and_retained_reply_use_exact_new_caller() {
+    struct Third{steps:usize,cancels:Vec<u32>}
+    impl Backend for Third {
+        fn identity(&mut self,_:u8)->Result<u32,u32>{Ok(7)}
+        fn load(&mut self,_:u8,_:&mut[u8;w::MAX])->Result<usize,u32>{Ok(0)}
+        fn name(&mut self,_:u8)->Result<[u8;16],u32>{Ok([0;16])}
+        fn save_step(&mut self,pd:u32,_:u8,bytes:&[u8])->Result<bool,u32>{assert_eq!(pd,18);assert_eq!(bytes,b"hi");self.steps+=1;Ok(self.steps==2)}
+        fn cancel_save(&mut self,pd:u32){self.cancels.push(pd);}
+    }
+    let mut s=Service::new();let mut b=Third{steps:0,cancels:vec![]};
+    let r=|seq,kind,a,b|w::Request{seq,kind,object:3,offset:0,a,b};
+    for req in [r(1,w::BEGIN_SAVE,7,2),r(2,w::WRITE,u16::from_le_bytes(*b"hi")as u64,0)] {
+        s.handle(18,true,req,&mut b);s.poll(|pd,_|{assert_eq!(pd,18);0});
+    }
+    s.handle(18,true,r(3,w::COMMIT,w::hash(b"hi"),0),&mut b);
+    s.progress(&mut b);s.poll(|_,_|panic!("early completion"));s.progress(&mut b);
+    for _ in 0..4{s.poll(|pd,v|{assert_eq!(pd,18);assert_eq!(w::decode_reply(v,3),Some(Ok(2)));1});}
+    assert_eq!(b.steps,2);assert_eq!(b.cancels,vec![18]);
+    s.retire(18,&mut b);s.poll(|_,_|panic!("retired receipt"));s.progress(&mut b);
+    assert_eq!(b.steps,2);assert_eq!(w::decode_reply(s.handle(18,true,r(4,w::INFO,0,0),&mut b).unwrap(),4),Some(Err(w::DENIED)));
+    s.handle(16,true,r(1,w::INFO,0,0),&mut b);s.poll(|pd,_|{assert_eq!(pd,16);0});
+}

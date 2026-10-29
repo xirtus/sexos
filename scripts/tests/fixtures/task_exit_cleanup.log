@@ -1,0 +1,149 @@
+# Recorded guest fixture; runtime evidence stays under /tmp/sexos-task-exit-verified-20261028/.
+[boot.paging.genesis] pager=14 target=15 pool_pages=8 arena_pages=8 quota=4 target_pkey=15 leaves_absent=8 tables_preallocated=1
+[boot.paging.genesis] pager=14 target=10 pool_pages=8 arena_pages=8 quota=4 target_pkey=10 leaves_absent=8 tables_preallocated=1
+[boot.memory.authority.sealed] runtime_alloc=0 runtime_map=capability_leaf runtime_mint=0
+[paging.client.begin] pd=10 base=0x40000072b000 bytes=32768
+[paging.fault.trap] pd=10 addr=0x40000072b000 rip=0x49002ca2 error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=1 page=0x40000072b000 rip=0x49002ca2
+[sext.init.start]
+[sext.ready] clients=2 frames=8 quota=4 zero_owner=sext
+[sext.client.ready] target=15 frames=8 quota=4 pool_bytes=32768 arena_bytes=32768 zero_owner=sext
+[sext.client.ready] target=10 frames=8 quota=4 pool_bytes=32768 arena_bytes=32768 zero_owner=sext
+[paging.leaf.commit] token=1 target=10 page=0x40000072b000 frame=0 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=1 resume=1 saved_rip=0x49002ca2
+[paging.client.page] pd=10 page=0 first=read zero=1 value=1 tail=1 ok=1
+[paging.fault.trap] pd=10 addr=0x40000072c000 rip=0x49002d47 error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=2 page=0x40000072c000 rip=0x49002d47
+[sext.fault.commit] target=10 token=1 page=0x40000072b000 frame=0 used=1 zeroed=4096 ok=1
+[sext.commit.negative] token=1 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[paging.leaf.commit] token=2 target=10 page=0x40000072c000 frame=1 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=2 resume=1 saved_rip=0x49002d47
+[sext.fault.commit] target=10 token=2 page=0x40000072c000 frame=1 used=2 zeroed=4096 ok=1
+[sext.commit.negative] token=2 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[paging.client.page] pd=10 page=1 first=read zero=1 value=1 tail=1 ok=1
+[paging.fault.trap] pd=10 addr=0x40000072d000 rip=0x49002df5 error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=3 page=0x40000072d000 rip=0x49002df5
+[paging.leaf.commit] token=3 target=10 page=0x40000072d000 frame=2 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=3 resume=1 saved_rip=0x49002df5
+[sext.fault.commit] target=10 token=3 page=0x40000072d000 frame=2 used=3 zeroed=4096 ok=1
+[sext.commit.negative] token=3 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[paging.client.page] pd=10 page=2 first=read zero=1 value=1 tail=1 ok=1
+[paging.fault.trap] pd=10 addr=0x40000072e000 rip=0x49002ea2 error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=4 page=0x40000072e000 rip=0x49002ea2
+[paging.leaf.commit] token=4 target=10 page=0x40000072e000 frame=3 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=4 resume=1 saved_rip=0x49002ea2
+[sext.fault.commit] target=10 token=4 page=0x40000072e000 frame=3 used=4 zeroed=4096 ok=1
+[paging.client.page] pd=10 page=3 first=read zero=1 value=1 tail=1 ok=1
+[sext.commit.negative] token=4 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[paging.leaf.reclaim] token=1 target=10 page=0x40000072b000 frame=0 cleared=1 tlb=1 runtime_alloc=0
+[sext.release] target=10 request=1 page=0x40000072b000 token=1 frame=0 status=0 replay=0 used=3
+[sext.reclaim.negative] target=10 token=1 frame=0 stale_commit=1 duplicate_reclaim=1 ok=1
+[paging.leaf.reclaim] token=2 target=10 page=0x40000072c000 frame=1 cleared=1 tlb=1 runtime_alloc=0
+[sext.release] target=10 request=2 page=0x40000072c000 token=2 frame=1 status=0 replay=0 used=2
+[sext.reclaim.negative] target=10 token=2 frame=1 stale_commit=1 duplicate_reclaim=1 ok=1
+[paging.leaf.reclaim] token=3 target=10 page=0x40000072d000 frame=2 cleared=1 tlb=1 runtime_alloc=0
+[sext.release] target=10 request=3 page=0x40000072d000 token=3 frame=2 status=0 replay=0 used=1
+[sext.reclaim.negative] target=10 token=3 frame=2 stale_commit=1 duplicate_reclaim=1 ok=1
+[paging.client.released] pd=10 pages=3 retained=1 ok=1
+[paging.client.negative] invalid_slot=1 high_alias=1 wrong_query=1 wrong_commit=1 wrong_reject=1 wrong_reclaim=1 ok=1
+[paging.client.begin] pd=15 base=0x400000723000 bytes=32768
+[paging.fault.trap] pd=15 addr=0x400000723000 rip=0x4e0020dc error=0x4 eligible=1
+[paging.fault.pending] target=15 task=15 token=5 page=0x400000723000 rip=0x4e0020dc
+[paging.leaf.commit] token=5 target=15 page=0x400000723000 frame=0 rights=6 pkey=15 zero=1 runtime_alloc=0
+[paging.fault.completed] target=15 task=15 token=5 resume=1 saved_rip=0x4e0020dc
+[sext.fault.commit] target=15 token=5 page=0x400000723000 frame=0 used=1 zeroed=4096 ok=1
+[sext.commit.negative] token=5 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sexdrive.nvme.doorbell] path=typed qid=1 tail=[paging.client.page] pd=15 page=0 first=read zero=1 value=1 tail=1 ok=1
+[sext.reuse.negative] frame=0 old_token=1 token=5 old_target=10 target=15 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[paging.fault.trap] pd=15 addr=0x400000724000 rip=0x4e0021bf error=0x6 eligible=1
+[paging.fault.pending] target=15 task=15 token=6 page=0x400000724000 rip=0x4e0021bf
+[sexdrive.nvme.doorbell] path=typed qid=1 tail=[paging.leaf.commit] token=6 target=15 page=0x400000724000 frame=1 rights=6 pkey=15 zero=1 runtime_alloc=0
+[paging.fault.completed] target=15 task=15 token=6 resume=1 saved_rip=0x4e0021bf
+[sext.fault.commit] target=15 token=6 page=0x400000724000 frame=1 used=2 zeroed=4096 ok=1
+[sext.commit.negative] token=6 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sext.reuse.negative] frame=1 old_token=2 token=6 old_target=10 target=15 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[paging.client.page] pd=15 page=1 first=write zero=1 value=1 tail=1 ok=1
+[paging.fault.trap] pd=15 addr=0x400000725000 rip=0x4e00227f error=0x4 eligible=1
+[paging.fault.pending] target=15 task=15 token=7 page=0x400000725000 rip=0x4e00227f
+[paging.leaf.commit] token=7 target=15 page=0x400000725000 frame=2 rights=6 pkey=15 zero=1 runtime_alloc=0
+[paging.fault.completed] target=15 task=15 token=7 resume=1 saved_rip=0x4e00227f
+[sext.fault.commit] target=15 token=7 page=0x400000725000 frame=2 used=3 zeroed=4096 ok=1
+[sext.commit.negative] token=7 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sext.reuse.negative] frame=2 old_token=3 token=7 old_target=10 target=15 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[paging.client.page] pd=15 page=2 first=read zero=1 value=1 tail=1 ok=1
+[paging.fault.trap] pd=15 addr=0x400000726000 rip=0x4e00235d error=0x6 eligible=1
+[paging.fault.pending] target=15 task=15 token=8 page=0x400000726000 rip=0x4e00235d
+[paging.leaf.commit] token=8 target=15 page=0x400000726000 frame=4 rights=6 pkey=15 zero=1 runtime_alloc=0
+[paging.fault.completed] target=15 task=15 token=8 resume=1 saved_rip=0x4e00235d
+[sext.fault.commit] target=15 token=8 page=0x400000726000 frame=4 used=4 zeroed=4096 ok=1
+[sext.commit.negative] token=8 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[paging.client.page] pd=15 page=3 first=write zero=1 value=1 tail=1 ok=1
+[paging.client.recovered] pd=15 pages=4 retries=4 retained=4 ok=1
+[paging.leaf.reclaim] token=5 target=15 page=0x400000723000 frame=0 cleared=1 tlb=1 runtime_alloc=0
+[sext.release] target=15 request=1 page=0x400000723000 token=5 frame=0 status=0 replay=0 used=3
+[sext.reclaim.negative] target=15 token=5 frame=0 stale_commit=1 duplicate_reclaim=1 ok=1
+[paging.fault.trap] pd=15 addr=0x400000723000 rip=0x4e00249a error=0x4 eligible=1
+[paging.fault.pending] target=15 task=15 token=9 page=0x400000723000 rip=0x4e00249a
+[paging.leaf.commit] token=9 target=15 page=0x400000723000 frame=0 rights=6 pkey=15 zero=1 runtime_alloc=0
+[paging.fault.completed] target=15 task=15 token=9 resume=1 saved_rip=0x4e00249a
+[sext.fault.commit] target=15 token=9 page=0x400000723000 frame=0 used=4 zeroed=4096 ok=1
+[sext.commit.negative] token=9 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sext.reuse.negative] frame=0 old_token=5 token=9 old_target=15 target=15 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[sext.release] target=15 request=1 page=0x400000723000 token=5 frame=0 status=0 replay=1 used=4
+[sext.release.denied] target=15 request=1 page=0x400000724000 status=3
+[sext.release.denied] target=15 request=0 page=0x400000723000 status=3
+[paging.client.reuse] pd=15 page=0 refault=1 zero=1 replay_safe=1 neighbors=3 ok=1
+[paging.client.retained] pd=10 pages=1 cross_client_reuse=1 ok=1
+[paging.client.finish] pd=15 resident=4 reason=proof
+[task.finish] pd=15 task=15 reason=0 terminal=1
+[paging.exit.notice] target=15 task=15 pager=14 detached=1 accepted=1
+[paging.leaf.cleanup] target=15 task=15 token=9 page=0x400000723000 frame=0 finalized=1 cleared=1 tlb=1 runtime_alloc=0
+[paging.leaf.cleanup] target=15 task=15 token=6 page=0x400000724000 frame=1 finalized=1 cleared=1 tlb=1 runtime_alloc=0
+[paging.leaf.cleanup] target=15 task=15 token=7 page=0x400000725000 frame=2 finalized=1 cleared=1 tlb=1 runtime_alloc=0
+[paging.leaf.cleanup] target=15 task=15 token=8 page=0x400000726000 frame=4 finalized=1 cleared=1 tlb=1 runtime_alloc=0
+[paging.target.cleanup] target=15 task=15 frames=0x17 leaves=4 closed=1 detached=1 all_flushed=1 runtime_alloc=0
+[sext.cleanup] target=15 task=15 bitmap=0x17 released=4 remaining=0 closed=1 ok=1
+[sext.cleanup.wait] caller=10 target=15 request=4 status=0
+[paging.fault.trap] pd=10 addr=0x40000072b000 rip=0x4900349c error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=10 page=0x40000072b000 rip=0x4900349c
+[paging.leaf.commit] token=10 target=10 page=0x40000072b000 frame=0 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=10 resume=1 saved_rip=0x4900349c
+[sext.fault.commit] target=10 token=10 page=0x40000072b000 frame=0 used=2 zeroed=4096 ok=1
+[sext.commit.negative] token=10 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sext.reuse.negative] frame=0 old_token=9 token=10 old_target=15 target=10 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[sext.cleanup.replay] target=15 task=15 bitmap=0x17 frame=0 new_target=10 new_token=10 preserved=1 ok=1
+[paging.client.exit_reuse.page] pd=10 page=0 zero=1 tail=1 value=1 neighbor=1 ok=1
+[paging.fault.trap] pd=10 addr=0x40000072c000 rip=0x4900357d error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=11 page=0x40000072c000 rip=0x4900357d
+[paging.leaf.commit] token=11 target=10 page=0x40000072c000 frame=1 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=11 resume=1 saved_rip=0x4900357d
+[sext.fault.commit] target=10 token=11 page=0x40000072c000 frame=1 used=3 zeroed=4096 ok=1
+[sext.commit.negative] token=11 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sext.reuse.negative] frame=1 old_token=6 token=11 old_target=15 target=10 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[sext.cleanup.replay] target=15 task=15 bitmap=0x17 frame=1 new_target=10 new_token=11 preserved=1 ok=1
+[paging.client.exit_reuse.page] pd=10 page=1 zero=1 tail=1 value=1 neighbor=1 ok=1
+[paging.fault.trap] pd=10 addr=0x40000072d000 rip=0x49003664 error=0x4 eligible=1
+[paging.fault.pending] target=10 task=10 token=12 page=0x40000072d000 rip=0x49003664
+[paging.leaf.commit] token=12 target=10 page=0x40000072d000 frame=2 rights=6 pkey=10 zero=1 runtime_alloc=0
+[paging.fault.completed] target=10 task=10 token=12 resume=1 saved_rip=0x49003664
+[sext.fault.commit] target=10 token=12 page=0x40000072d000 frame=2 used=4 zeroed=4096 ok=1
+[sext.commit.negative] token=12 exact=1 conflicting_frame=1 zero_token=1 unknown_token=1 ok=1
+[sext.reuse.negative] frame=2 old_token=7 token=12 old_target=15 target=10 stale_commit=1 stale_reclaim=1 new_commit=1 ok=1
+[sext.cleanup.replay] target=15 task=15 bitmap=0x17 frame=2 new_target=10 new_token=12 preserved=1 ok=1
+[paging.client.exit_reuse.page] pd=10 page=2 zero=1 tail=1 value=1 neighbor=1 ok=1
+[paging.client.exit_reuse] pd=10 pages=3 retained=1 dead_target=15 ok=1
+[silkbar.clock.send] hh=10 mm=42 ss=1 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=2 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=3 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=4 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=5 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=6 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=7 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=8 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=9 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=10 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=11 status=0x0
+[silkbar.clock.send] hh=10 mm=42 ss=12 status=0x0
+[silkbar.clock.send] hh=10 mm=43 ss=4 status=0x0
+[silkbar.clock.send] hh=10 mm=44 ss=8 status=0x0
+[silkbar.clock.send] hh=10 mm=45 ss=12 status=0x0

@@ -106,3 +106,6 @@ tools/qemu/
 
 # Local frozen native candidates and full acceptance captures
 /.evidence/
+
+# Declarative proof inventory depends on this host model input.
+!/scripts/tests/fixtures/*.log

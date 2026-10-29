@@ -4,7 +4,7 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');a=p.parse_args()
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
@@ -116,7 +116,7 @@ def main():
   soak=None
   if a.soak_seconds:
    from alpha_session import run
-   soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal)
+   soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil)
   checked=[]
   for expected in [first,second]:
    r=recover(disk.read_bytes(),expected['object'])

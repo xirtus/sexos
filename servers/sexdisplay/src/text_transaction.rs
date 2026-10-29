@@ -26,6 +26,7 @@ impl Stage {
         reply_pending: false,
         bytes: [0; CAPACITY],
     };
+    pub fn diagnostic(&self)->(u32,u64,u32,usize,u64,bool,bool){(self.owner,self.sid,self.sequence,self.len,self.coverage,self.sealed,self.poisoned)}
     pub fn reset(&mut self) {
         *self = Self::EMPTY;
     }

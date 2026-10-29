@@ -13,7 +13,7 @@ def function(name):
     found=re.findall(r'^(?:unsafe )?fn '+name+r'\b.*?^\}',s,re.M|re.S)
     assert len(found)==1,name
     return found[0]
-parts=[function(name) for name in ['pdx_call','desktop_state_validate','desktop_state_poll','linen_queue_text','display_admit','linen_text_can_progress','linen_text_poll','desktop_text_receive']]
+parts=[function(name) for name in ['pdx_call','desktop_state_validate','desktop_state_poll','desktop_content_ready','linen_queue_text','display_admit','linen_text_can_progress','linen_text_poll','desktop_text_receive']]
 assert 'LINEN_TEXT.poll(4,display_admit)' in function('linen_text_poll')
 assert s.count('[linen.text.present]')==2 and '[linen.text.present]' in function('linen_text_poll') and '[linen.text.present]' in function('desktop_text_receive')
 assert 'Outbox::atomic(SURFACE_ID_COMMAND_PALETTE)' in s

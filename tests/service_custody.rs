@@ -47,3 +47,24 @@ impl Authority for Auth{
  }
  assert!(!close_requested(OP_APP_CLOSE,3,[0,0,0],0,0));
 }
+
+#[test]fn sixth_catalog_entry_retains_terminal_fence_independently(){
+ struct Sixth;
+ impl Authority for Sixth{
+  fn catalog(&mut self,slot:usize)->Result<CatalogInfo,u64>{if slot==54{Ok(CatalogInfo{target_pd:18,task_id:180,surface_id:307,coordinator_pd:3})}else{Err(INVALID)}}
+  fn info(&mut self,_:usize)->Result<LifecycleInfo,u64>{Ok(LifecycleInfo{target_pd:18,task_id:180,required_mask:31,acked_mask:0})}
+  fn ack(&mut self,slot:usize,task:u32)->Result<(),u64>{assert_eq!((slot,task),(54,180));Ok(())}
+ }
+ let mut c=ServiceCustody::new();let mut a=Sixth;let mut calls=0;
+ assert!(c.receive(&mut a,OP_APP_EXIT,0,[18,18,0],|_|panic!()).is_none());
+ assert_eq!(c.receive(&mut a,OP_APP_EXIT,0,[18,180,0],|_|calls+=1),Some((ExitNotice{target_pd:18,task_id:180},true)));
+ assert!(c.is_retired(18));assert!(!c.is_retired(16));
+ assert!(c.receive(&mut a,OP_APP_EXIT,0,[18,180,0],|_|panic!()).is_none());assert_eq!(calls,1);
+}
+
+#[test]fn kernel_catalog_subject_keeps_task_namespace_separate(){
+ let c=CatalogInfo{target_pd:18,task_id:180,surface_id:307,coordinator_pd:3};
+ assert!(c.is_subject(18,307,3));
+ for bad in [CatalogInfo{task_id:0,..c},CatalogInfo{target_pd:16,..c},CatalogInfo{surface_id:301,..c},CatalogInfo{coordinator_pd:9,..c}]{assert!(!bad.is_subject(18,307,3));}
+ assert!(!c.is_subject(0,307,3));assert!(!c.is_subject(18,0,3));assert!(!c.is_subject(18,307,18));
+}

@@ -28,7 +28,7 @@ use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y,
 use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Kernel-catalog app ownership; retained after exit to fence queued messages.
-static mut APP_CUSTODY: [Option<app_custody::Entry>; 5] = [None; 5];
+static mut APP_CUSTODY: [Option<app_custody::Entry>; sex_pdx::app_lifecycle::SLOTS.len()] = [None; sex_pdx::app_lifecycle::SLOTS.len()];
 unsafe fn shell_catalog_init() {
     for (i, slot) in sex_pdx::app_lifecycle::SLOTS.iter().copied().enumerate() {
         match sex_pdx::app_lifecycle::catalog(slot) {
@@ -5207,7 +5207,7 @@ unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str
  use sex_pdx::spindle_status::State as S;
  match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY / FOCUS",Some(S::Saving|S::Queued)=>"SAVING HISTORY / FOCUS",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED / FOCUS",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
 }
-static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;2]=[sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new()];
+static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;3]=[sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new()];
 static mut DOCUMENT_POINTER_SEQUENCE:u64=0;
 static mut DOCUMENT_POINTER:Option<(u64,u32,u8,u64)>=None;
 unsafe fn document_view_poll() {
@@ -5222,7 +5222,7 @@ unsafe fn document_view_poll() {
             let (s, _) = raw_pdx_call(
                 slot,
                 sex_pdx::document_view::ACTION,
-                (target as u64) << 32 | target as u64,
+                (APP_CUSTODY.iter().flatten().find(|e|e.target==target).unwrap().task as u64) << 32 | target as u64,
                 action as u64,
                 sequence,
             );
@@ -5240,6 +5240,7 @@ unsafe fn document_view_poll() {
     for (i, (target, frame, slot)) in [
         (9, 201, SLOT_QUIL),
         (16, 301, sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT),
+        (18, 307, sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT),
     ]
     .into_iter()
     .enumerate()
@@ -5248,10 +5249,14 @@ unsafe fn document_view_poll() {
             .iter()
             .flatten()
             .any(|e| e.target == target && !e.dead && !e.close_pending);
-        DOCUMENT_VIEWS[i].poll(live, !DESKTOP_STATES.pending_surface(frame), |n| {
+        let origin=get_surface_bounds(frame).map(|(x,y,_,_)|if target==9{(x.saturating_add(8),y.saturating_add(36))}else{(x,y)});
+        DOCUMENT_VIEWS[i].poll(live, desktop_content_ready(frame), |n| {
             let a = n.args();
             let (s, _) = raw_pdx_call(slot, sex_pdx::document_view::OP, a[0], a[1], a[2]);
             if s == 0 {
+                if let Some((x,y))=origin {
+                    sex_pdx::serial_record!("[shell.document.viewport] target={} task={} surface={} sequence={} x={} y={} w={} h={} enqueued=1",n.target,n.task,if target==9{156}else{frame},n.sequence,x,y,n.w,n.h);
+                }
                 Ok(())
             } else {
                 Err(s)
@@ -5286,6 +5291,18 @@ fn pdx_call(slot:u64, opcode:u64, arg0:u64, arg1:u64, arg2:u64)->(u64,u64) {
 }
 unsafe fn desktop_state_validate(mut op:linen_text_delivery::Operation)->Option<linen_text_delivery::Operation> {
     if op.opcode==0xEE {return Some(op);}
+    if let Some(parent)=desktop_content::parent_frame(op.surface){
+        if !surface_is_alive(parent) || !APP_CUSTODY.iter().flatten().any(|e|
+            e.owns_surface(parent)&&!e.dead&&!e.close_pending){return None;}
+        if !matches!(lifecycle_state(parent),Some(LifecycleState::Visible)) ||
+            frame_for_surface(parent).map_or(false,|f|frame_is_minimized(f)){return None;}
+        if op.opcode!=0xEC{return None;} // child panes have no shell chrome
+        let(x,y,w,h)=get_surface_bounds(parent)?;
+        let child=desktop_content::children(parent,x,y,w,h).into_iter().flatten().find(|c|c.sid==op.surface)?;
+        if child.w==0||child.h==0{return None;}
+        op.packed=((child.y as u32 as u64)<<32)|child.x as u32 as u64;
+        op.control=((child.h as u64)<<32)|child.w as u64;return Some(op);
+    }
     if !surface_is_alive(op.surface) || APP_CUSTODY.iter().flatten().any(|e|
         (e.dead || e.close_pending) && e.owns_surface(op.surface)) {return None;}
     if matches!(lifecycle_state(op.surface),Some(LifecycleState::Hidden | LifecycleState::Minimized |
@@ -5302,6 +5319,15 @@ unsafe fn desktop_state_validate(mut op:linen_text_delivery::Operation)->Option<
     if w==0 || h==0 {return None;}
     op.packed=((y as u32 as u64)<<32)|(x as u32 as u64);op.control=((h as u64)<<32)|w as u64;
     Some(op)
+}
+/// A viewport notice follows all retained frame/child create admissions.
+unsafe fn desktop_content_ready(frame:u64)->bool {
+    if !DESKTOP_STATES.ready(frame) || !surface_is_alive(frame)
+        || !matches!(lifecycle_state(frame),Some(LifecycleState::Visible))
+        || frame_for_surface(frame).map_or(false,|f|frame_is_minimized(f)){return false;}
+    let Some((x,y,w,h))=get_surface_bounds(frame)else{return false;};
+    desktop_content::children(frame,x,y,w,h).iter().flatten()
+        .all(|child|child.w==0||child.h==0||DESKTOP_STATES.ready(child.sid))
 }
 unsafe fn desktop_state_poll() {
     DESKTOP_STATES.poll(4,|op|desktop_state_validate(op),|op| {
@@ -5335,7 +5361,7 @@ unsafe fn desktop_state_poll() {
 unsafe fn spindle_view_poll(){
     for (i,(target,frame,slot)) in [(12,153,SLOT_SPINDLE),(17,306,52)].into_iter().enumerate(){
         let live=APP_CUSTODY.iter().flatten().any(|e|e.target==target && !e.dead && !e.close_pending);
-        let ready=!DESKTOP_STATES.pending_surface(frame);
+        let ready=desktop_content_ready(frame);
         SPINDLE_VIEWS[i].poll(live,ready,|notice|{
             let a=notice.args();let(status,_)=raw_pdx_call(slot,sex_pdx::spindle_view::OP,a[0],a[1],a[2]);
             if status==0 {sex_pdx::serial_record!("[shell.spindle.view.admitted] target={} task={} sequence={} w={} h={}",notice.target,notice.task,notice.sequence,notice.w,notice.h);Ok(())}else{Err(status)}
@@ -13043,9 +13069,11 @@ unsafe fn open_quil_in_active_scene() -> bool {
         // Query replay through the same immutable grant. It must never enqueue
         // another task or remap private pages, even if UI execution repeats.
         if quil_activation_info(true)!=Ok(active){return false}
-        assert_eq!(raw_pdx_call(SLOT_QUIL,OP_QUIL_PING,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
+        let predecessor=if active.successor==16{9}else{16};
+        let stale_slot=if predecessor==9{SLOT_QUIL}else{sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT};
+        assert_eq!(raw_pdx_call(stale_slot,OP_QUIL_PING,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
         sex_pdx::serial_record!("[app.activation.negative] stale_predecessor_route=denied duplicate_activation=receipt ok=1");
-        sex_pdx::serial_record!("[shell.app.relaunch] predecessor=9 successor={} task={} surface={} receipt_replayed=1",active.successor,active.task,active.surface);
+        sex_pdx::serial_record!("[shell.app.relaunch] predecessor={} successor={} task={} surface={} receipt_replayed=1",predecessor,active.successor,active.task,active.surface);
         return true; // app registration event completes focus asynchronously
     }
     if instance.state==2 {
@@ -15755,34 +15783,51 @@ fn native_launcher_status(target:u32)->(bool,&'static str,&'static str) {
     }
 }
 
-// Logical Quil resolves only the exact immutable successor grant. The old
-// catalog entry and surface tombstones are never rewritten.
+// Resolve the ordered, finite BOOT chain. Errors never skip a grant or
+// resurrect an older identity. Tasks come from immutable lifecycle catalogs.
 fn quil_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
-    let i=sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::ACTIVATION_SLOT,commit)?;
-    if (i.successor,i.task,i.surface)!=(16,16,301) || i.state>3{return Err(sex_pdx::app_lifecycle::DENIED)}
-    Ok(i)
+    use sex_pdx::app_lifecycle as a;
+    for (slot,target,surface,lifecycle) in [
+        (a::ACTIVATION_SLOT,16,301,45),
+        (a::QUIL_THIRD_ACTIVATION_SLOT,18,307,a::QUIL_THIRD_LIFECYCLE_SLOT),
+    ] {
+        let validate=|i:a::ActivationInfo|->Result<a::ActivationInfo,u64>{
+            let e=unsafe{APP_CUSTODY.iter().flatten().find(|e|e.target==target&&e.slot==lifecycle).copied()}.ok_or(a::DENIED)?;
+            if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface) || e.surface!=surface || i.state>3{return Err(a::DENIED)}
+            Ok(i)
+        };
+        let i=validate(a::activation(slot,false)?)?;
+        if target==16 && i.state==a::ACTIVATION_EXHAUSTED {continue;}
+        return if commit {validate(a::activation(slot,true)?)} else {Ok(i)};
+    }
+    Err(a::DENIED)
 }
 fn quil_launcher_status()->(bool,&'static str,&'static str){
     match quil_activation_info(false){
         Ok(i) if i.state==1=>(true,"REOPEN / RESERVED INSTANCE","boot_successor_ready"),
-        Ok(i) if i.state==2=>native_launcher_status(16),
+        Ok(i) if i.state==2=>native_launcher_status(i.successor),
         Ok(i) if i.state==3=>(false,"CLOSED / RESERVE EXHAUSTED","boot_reserve_exhausted"),
-        Ok(_)=>{
-            let status=native_launcher_status(9);
+        Ok(i)=>{
+            let status=native_launcher_status(if i.successor==16{9}else{16});
             if status.2=="no_boot_successor" {(false,"CLEANING / PLEASE WAIT","predecessor_cleanup_pending")}else{status}
         },
         Err(_)=>launcher::Status::Unavailable.presentation(),
     }
 }
-fn quil_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_QUIL || (FOCUSED_SURFACE_ID==301 && quil_activation_info(false).map_or(false,|i|i.state==2))}}
+fn quil_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_QUIL || quil_activation_info(false).map_or(false,|i|i.state==2&&FOCUSED_SURFACE_ID==i.surface)}}
 fn quil_route_slot()->u64{
-    if quil_activation_info(false).map_or(false,|i|i.state==2){sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT}else{SLOT_QUIL}
+    match quil_activation_info(false){
+        Ok(i) if i.state==2 && i.successor==16=>sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,
+        Ok(i) if i.state==2 && i.successor==18=>sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT,
+        _=>SLOT_QUIL,
+    }
 }
 
 // The second Spindle subject has its own fixed grant, surface group and route.
 fn spindle_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
     let i=sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::SPINDLE_ACTIVATION_SLOT,commit)?;
-    if (i.successor,i.task,i.surface)!=(17,17,302) || i.state>3{return Err(sex_pdx::app_lifecycle::DENIED)}
+    let e=unsafe{APP_CUSTODY.iter().flatten().find(|e|e.target==17&&e.slot==sex_pdx::app_lifecycle::SPINDLE_LIFECYCLE_SLOT).copied()}.ok_or(sex_pdx::app_lifecycle::DENIED)?;
+    if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface) || e.surface!=302 || i.state>3{return Err(sex_pdx::app_lifecycle::DENIED)}
     Ok(i)
 }
 fn spindle_launcher_status()->(bool,&'static str,&'static str){
@@ -19713,6 +19758,14 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
             return false;
         }
     }
+    // Recreated display slots scrub partial text. A fresh viewport sequence
+    // lets the exact live client abandon its obsolete upload and repaint.
+    for (index,frame) in [201,301,307].into_iter().enumerate(){
+        if surface_id==frame {DOCUMENT_VIEWS[index].refresh();}
+    }
+    for (index,frame) in [153,306].into_iter().enumerate(){
+        if surface_id==frame {SPINDLE_VIEWS[index].refresh();}
+    }
     // Clear minimized flag.
     set_frame_minimized(frame_id, false);
     // A3: Track lifecycle state transition: Minimized -> Visible.
@@ -19860,7 +19913,7 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
             SPINDLE_VIEWS[if frame==153{0}else{1}].queue(e.target,e.task,w,h);
         }
     }
-    if matches!(frame,201|301){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if frame==201{(w.saturating_sub(16),h.saturating_sub(44))}else{(w,h)};DOCUMENT_VIEWS[if frame==201{0}else{1}].queue(e.target,e.task,vw,vh);}}
+    if matches!(frame,201|301|307){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if frame==201{(w.saturating_sub(16),h.saturating_sub(44))}else{(w,h)};DOCUMENT_VIEWS[if frame==201{0}else if frame==301{1}else{2}].queue(e.target,e.task,vw,vh);}}
     for child in desktop_content::children(frame,x,y,w,h).iter().flatten() {
         if child.w>0 && child.h>0 {pdx_call(SLOT_DISPLAY,0xEC,child.sid,
             ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
@@ -22648,7 +22701,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
     }
     let target = hit_test_at(px, py);
-    if buttons_val&1!=0{if let HitTarget::Surface(frame)=target{if matches!(frame,201|301){if let Some((x,y,w,h))=get_surface_bounds(frame){let(target,slot,cx,cy,vw,vh)=if frame==201{(9,SLOT_QUIL,x+8,y+36,w.saturating_sub(16),h.saturating_sub(44))}else{(16,sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,x,y,w,h)};if let Some(action)=sex_pdx::document_view::Layout::new(target,vw,vh).hit(px.saturating_sub(cx)as u32,py.saturating_sub(cy)as u32){if let Some(sequence)=DOCUMENT_POINTER_SEQUENCE.checked_add(1){DOCUMENT_POINTER_SEQUENCE=sequence;if DOCUMENT_POINTER.is_none(){DOCUMENT_POINTER=Some((slot,target,action,sequence));}let _=try_set_focus(frame);return(HitTarget::Surface(frame),true);}}}}}}
+    if buttons_val&1!=0{if let HitTarget::Surface(frame)=target{if matches!(frame,201|301|307){if let Some((x,y,w,h))=get_surface_bounds(frame){let(target,slot,cx,cy,vw,vh)=if frame==201{(9,SLOT_QUIL,x+8,y+36,w.saturating_sub(16),h.saturating_sub(44))}else if frame==301{(16,sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,x,y,w,h)}else{(18,sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT,x,y,w,h)};if let Some(action)=sex_pdx::document_view::Layout::new(target,vw,vh).hit(px.saturating_sub(cx)as u32,py.saturating_sub(cy)as u32){if let Some(sequence)=DOCUMENT_POINTER_SEQUENCE.checked_add(1){DOCUMENT_POINTER_SEQUENCE=sequence;if DOCUMENT_POINTER.is_none(){DOCUMENT_POINTER=Some((slot,target,action,sequence));}let _=try_set_focus(frame);return(HitTarget::Surface(frame),true);}}}}}}
 
     if CLICK_DRAG_PROOF_ENABLED {
         let (target_id, hit) = match target {
@@ -24552,8 +24605,8 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
         }
-        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let target=e.target;let frame=if target==9{201}else{301};DOCUMENT_VIEWS[if target==9{0}else{1}].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
-        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
+        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let target=e.target;let frame=if target==9{201}else{e.surface};DOCUMENT_VIEWS[if target==9{0}else if target==16{1}else{2}].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
+        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }

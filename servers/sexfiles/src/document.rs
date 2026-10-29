@@ -59,18 +59,19 @@ impl Session {
     }
 }
 pub struct Service {
-    sessions: [Session; 2],
+    sessions: [Session; 3],
 }
 impl Service {
     pub const fn new() -> Self {
         Self {
-            sessions: [Session::new(), Session::new()],
+            sessions: [Session::new(), Session::new(), Session::new()],
         }
     }
     fn index(caller: u32) -> Option<usize> {
         match caller {
             9 => Some(0),
             16 => Some(1),
+            18 => Some(2),
             _ => None,
         }
     }
@@ -84,7 +85,7 @@ impl Service {
     pub fn progress(&mut self, b: &mut impl Backend) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
             if let Some(r) = s.commit {
-                let caller = if i == 0 { 9 } else { 16 };
+                let caller = [9,16,18][i];
                 let result = if b.identity(s.object) != Ok(s.generation) {
                     Err(w::STALE)
                 } else {
@@ -112,7 +113,7 @@ impl Service {
     pub fn poll(&mut self, mut send: impl FnMut(u32, u64) -> u64) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
             if let Some(v) = s.pending {
-                if send(if i == 0 { 9 } else { 16 }, v) == 0 {
+                if send([9,16,18][i], v) == 0 {
                     s.pending = None;
                 }
             }

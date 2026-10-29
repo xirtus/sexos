@@ -379,3 +379,40 @@ fn ack_then_new_queue_supersedes_older_latest_and_never_replays_behind_display()
     out.queue(t, 3);
     assert!(!out.pending());
 }
+
+#[test]
+fn third_geometry_binds_catalog_task_without_domain_task_alias() {
+    use document_view::{Delivery,Notice};
+    let mut d=Delivery::new();d.queue(18,180,320,300);
+    let mut n=None;d.poll(true,true,|v|{n=Some(v);Ok(())});let n=n.unwrap();
+    assert!(Notice::decode(3,18,180,n.args(),0).is_some());
+    assert!(Notice::decode(3,18,18,n.args(),0).is_none());
+    assert!(Notice::decode(16,18,180,n.args(),0).is_none());
+    assert_eq!(Layout::new(18,320,300).top,36);
+}
+
+#[test]fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequence(){
+ for(target,sid)in[(9,156),(16,301),(18,307)]{for cut in 1..=12{
+  let mut out=delivery::Outbox::new();let mut stage=text_transaction::Stage::EMPTY;
+  let mut old=view::Text::new();old.len=80;old.bytes[..80].fill(b'a');out.queue(old,10);
+  let mut operations=0;let mut admitted=false;
+  for _ in 0..5{out.poll(sid,|op,sid,a,b|{operations+=1;stage.receive(target,sid,text_batch::Request::decode(op,a,b).unwrap());if operations==cut{stage.reset();}Ok(())},|_,_|admitted=true);}
+  assert!(admitted);assert!(out.pending());
+  out.rebind();assert!(!out.pending());
+  let receipt=text_batch::Applied{surface:sid as u16,sequence:10}.encode().unwrap();
+  assert_eq!(out.receive(1,receipt),None);
+  let mut new=view::Text::new();new.len=3;new.bytes[..3].copy_from_slice(b"new");out.queue(new,11);
+  // A queued/replayed old paint cannot return after the new binding notice.
+  out.queue(old,10);
+  let mut commits=0;let mut full=false;
+  for _ in 0..6{out.poll(sid,|op,sid,a,b|{
+   if !full{full=true;return Err(ERR_SERVICE_NOT_READY)}
+   if let Some((n,_,bytes))=stage.receive(target,sid,text_batch::Request::decode(op,a,b).unwrap()){assert_eq!(&bytes[..n],b"new");commits+=1;}
+   Ok(())
+  },|paint,_|assert_eq!(paint,11));}
+  assert_eq!(out.receive(1,receipt),None);
+  stage.poll_reply(|pd,v|{assert_eq!(pd,target);assert_eq!(out.receive(1,v),Some((11,3)));0});
+  assert_eq!(commits,1);assert!(!out.pending());
+  out.close();out.rebind();out.queue(new,12);out.poll(sid,|_,_,_,_|panic!(),|_,_|panic!());
+ }}
+}

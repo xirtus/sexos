@@ -47,8 +47,8 @@ pub extern "C" fn _start() -> ! {
     }
     let mut pending: [Option<Work>; 2] = [None; 2];
     let mut cleanup_pending: [Option<ExitNotice>; 2] = [None; 2];
-    let mut app_pending:[Option<sex_pdx::app_lifecycle::ExitNotice>;5]=[None;5];
-    let mut workspaces:[Option<workspace::Workspace>;5]=[None;5];
+    let mut app_pending:[Option<sex_pdx::app_lifecycle::ExitNotice>;sex_pdx::app_lifecycle::SLOTS.len()]=[None;sex_pdx::app_lifecycle::SLOTS.len()];
+    let mut workspaces:[Option<workspace::Workspace>;sex_pdx::app_lifecycle::SLOTS.len()]=[None;sex_pdx::app_lifecycle::SLOTS.len()];
     let mut turn = 0usize;
     let mut retired: [Option<(u64, u32, u64)>; FRAME_COUNT] = [None; FRAME_COUNT];
     loop {

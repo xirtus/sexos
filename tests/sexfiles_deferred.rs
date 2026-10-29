@@ -13,15 +13,15 @@ fn full_ordinary_backlog_cannot_consume_kernel_terminal_capacity() {
         assert!(q.push(m));
     }
     assert!(!q.push((0x4D, 16, 99, 0, 0)));
-    for pd in [9, 12, 15, 16, 17] {
+    for pd in [9, 12, 15, 16, 17, 18] {
         assert!(q.push((OP_APP_EXIT, 0, pd, pd, 0)));
     }
-    assert_eq!(q.len(), 13);
+    assert_eq!(q.len(), 14);
     // Replayed hints coalesce and cannot crowd out another terminal subject.
     for _ in 0..100 {
         assert!(q.push((OP_APP_EXIT, 0, 9, 9, 0)));
     }
-    for pd in [9, 12, 15, 16, 17] {
+    for pd in [9, 12, 15, 16, 17, 18] {
         assert_eq!(q.pop(), Some((OP_APP_EXIT, 0, pd, pd, 0)));
     }
     for m in requests {

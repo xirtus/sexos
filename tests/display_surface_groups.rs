@@ -194,3 +194,35 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
  s.text_buf[..7].copy_from_slice(b"a\nb\nc\nd");recompute_text_lines(&mut s);
  let (_,_,width,height)=text_surface_damage(&s,1280,800);assert_eq!((width,height),(624,72));assert!(width*height<1280*750/20);
 }
+
+#[path="../servers/sexdisplay/src/fill_damage.rs"]mod fill_damage;
+#[test]fn fill_state_clamps_clears_noops_and_rejects_before_effects(){
+ let mut s=surf(9,156);
+ let (old,new)=fill_damage::update(&mut s,7,-99,999,999,25,0xabcdef).unwrap().unwrap();
+ assert_eq!(old.w,0);assert_eq!((new.x,new.y,new.w,new.h),(0,275,400,25));assert_eq!(s.fill_count,8);
+ assert_eq!(fill_damage::update(&mut s,7,0,275,400,25,0xabcdef),Ok(None));
+ let before=(s.fill_count,s.fill_sw,s.fill_color);assert_eq!(fill_damage::update(&mut s,8,0,0,1,1,0),Err(()));assert_eq!((s.fill_count,s.fill_sw,s.fill_color),before);
+ let (old,new)=fill_damage::update(&mut s,7,0,0,0,25,0).unwrap().unwrap();assert_eq!((old.w,new.w,s.fill_count),(400,0,0));
+ assert_eq!(fill_damage::update(&mut s,7,0,0,0,0,0),Ok(None));
+}
+#[test]fn fill_damage_matches_every_full_compositor_pixel_for_recolor_move_and_clear(){unsafe{
+ for focus in [201,888,152] {for hidden in [false,true] {for x in [-30,100,950] {
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(cat(9));
+  SURFACES[0]=Surface{x,..frame()};SURFACES[1]=surf(9,156);
+  SURFACES[2]=Surface{x:300,y:160,w:200,h:100,color:0xabcdef,..surf(8,888)};
+  SURFACES[3]=Surface{x:480,y:220,w:200,h:200,color:0xaabbcc,..surf(3,152)};
+  FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+  if hidden {SURFACES[0]=SURFACE_EMPTY;}
+  SURFACES[1].text_buf[..9].copy_from_slice(b"old\nwords");SURFACES[1].text_len=9;recompute_text_lines(&mut SURFACES[1]);
+  fill_damage::update(&mut SURFACES[1],0,0,0,80,40,0x121212).unwrap();
+  let(w,h)=(1000,800);let mut actual=Vec::with_capacity(w*h);
+  for py in 0..h {for px in 0..w {actual.push(composite_pixel(px,py,w,h,0x123,focus));}}
+  for (sx,sy,sw,sh,color) in [(0,0,80,40,0x333333),(30,50,120,120,0xabcdef),(-100,-100,60,80,0x123456),(0,0,0,0,0)]{
+   let(old,new)=fill_damage::update(&mut SURFACES[1],0,sx,sy,sw,sh,color).unwrap().unwrap();
+   let mut d=damage::Damage::new();d.add(old.screen(&SURFACES[1],w,h),w,h);d.add(new.screen(&SURFACES[1],w,h),w,h);
+   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
+   if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);}
+   for py in 0..h {for px in 0..w {assert_eq!(actual[py*w+px],composite_pixel(px,py,w,h,0x123,focus),"focus={focus} hidden={hidden} x={x} px={px} py={py}");}}
+  }
+ }}}
+}}

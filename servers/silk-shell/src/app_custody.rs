@@ -19,7 +19,7 @@ impl Entry {
     }
     pub fn owns_surface(&self, sid: u64) -> bool { self.surface == sid || self.shell_surface() == Some(sid) }
     pub fn close_slot(&self) -> Option<u64> {
-        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), (16,301)=>Some(46), (17,302)=>Some(51), _=>None }
+        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), (16,301)=>Some(46), (17,302)=>Some(51), (18,307)=>Some(56), _=>None }
     }
     pub fn request_close(&mut self) -> bool {
         if self.dead || self.close_slot().is_none() {return false}
@@ -48,7 +48,7 @@ impl Entry {
             0xFA => args[0] == self.surface && args[1] != 0,
             // Document controls and read-only invalidation are exact, no-payload operations on
             // the existing BOOT orchestration edge, not ambient shell access.
-            0x274 | 0x275 | 0x279 => matches!(self.target,9|16) && args == [self.target as u64,self.task as u64,0],
+            0x274 | 0x275 | 0x279 => matches!(self.target,9|16|18) && args == [self.target as u64,self.task as u64,0],
             // Existing Spindle launcher route selects a fixed shell action.
             0x15 => matches!(self.target,12|17) && args[0] <= 7 && args[1] == 0 && args[2] == 0,
             0 => matches!(self.target,12|17) && args == [0;3], // no-effect endpoint probe

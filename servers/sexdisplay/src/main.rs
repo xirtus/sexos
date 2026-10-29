@@ -108,6 +108,7 @@ const MAX_RECTS: usize = 8;
 /// may manage geometry and hide its associated app/frame surfaces.
 mod surface_lifecycle;
 mod text_transaction;
+mod fill_damage;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
 mod surface_groups;
@@ -1103,7 +1104,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
     let py = (ly - title_y) / SCALE;
     if px >= GLYPH_W { return None; }
     let title: &[u8] = match surface_id {
-        200 => b"Linen", 201 | 156 | 301 => b"Quil", 0x99 | 154 | 302 | 306 => b"Spindle",
+        200 => b"Linen", 201 | 156 | 301 | 307 => b"Quil", 0x99 | 154 | 302 | 306 => b"Spindle",
         300 => b"Browser", 100 => b"App", _ => return None,
     };
     let glyph = ascii_glyph_index(*title.get(col)?)?;
@@ -3540,14 +3541,12 @@ pub extern "C" fn _start() -> ! {
 
                     let sx = (msg.arg1 & 0xFFFF_FFFF) as i32;
                     let sy = ((msg.arg1 >> 32) & 0xFFFF_FFFF) as i32;
-                    let mut sw = (msg.arg2 & 0xFFFF) as u32;
-                    let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
+                    let sw = (msg.arg2 & 0xFFFF) as u32;
+                    let sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
                     let color = ((msg.arg2 >> 32) & 0x00FF_FFFF) as u32;
                     let rect_index = ((msg.arg2 >> 56) & 0xF) as usize;
-                    if sw == 0 || sh == 0 { continue; }
 
                     unsafe {
-                        let mut updated = false;
                         for slot in SURFACES.iter_mut() {
                             if !(slot.active && slot.surface_id == surface_id) {
                                 continue;
@@ -3566,30 +3565,12 @@ pub extern "C" fn _start() -> ! {
                                 break;
                             }
 
-                            sw = sw.min(slot.w);
-                            sh = sh.min(slot.h);
-                            if sw == 0 || sh == 0 { break; }
-
-                            let max_sx = slot.w.saturating_sub(sw) as i32;
-                            let max_sy = slot.h.saturating_sub(sh) as i32;
-                            let fill_sx = sx.clamp(0, max_sx);
-                            let fill_sy = sy.clamp(0, max_sy);
-
-                            slot.fill_sx[rect_index] = fill_sx;
-                            slot.fill_sy[rect_index] = fill_sy;
-                            slot.fill_sw[rect_index] = sw;
-                            slot.fill_sh[rect_index] = sh;
-                            slot.fill_color[rect_index] = color;
-                            if rect_index + 1 > slot.fill_count as usize {
-                                slot.fill_count = (rect_index + 1) as u8;
+                            if let Ok(Some((old,new)))=fill_damage::update(slot,rect_index,sx,sy,sw,sh,color){
+                                text_damage.add(old.screen(slot,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
+                                text_damage.add(new.screen(slot,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
                             }
-                            if hot_log() { serial_println!("[display.fill_rect.set] sid={} index={}", surface_id, rect_index); }
-                            updated = true;
-                            break;
-                        }
 
-                        if updated {
-                            needs_surface_redraw = true;
+                            break;
                         }
                     }
                 }
@@ -3611,6 +3592,13 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 if let sex_pdx::text_batch::Request::Commit { sequence, .. } = request {
                                     sex_pdx::serial_record!("[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",msg.caller_pd,msg.arg0,sequence,len,changed as u8);
+                                }
+                            } else if let sex_pdx::text_batch::Request::Commit{sequence,..}=request {
+                                static mut INCOMPLETE_BUDGET:u8=16;
+                                if INCOMPLETE_BUDGET>0 {
+                                    INCOMPLETE_BUDGET-=1;
+                                    let(owner,sid,paint,len,coverage,sealed,poisoned)=TEXT_STAGES[index].diagnostic();
+                                    sex_pdx::serial_record!("[display.text.incomplete] target={} surface={} request={} staged_owner={} staged_sid={} paint={} len={} coverage={:#x} sealed={} poisoned={}",msg.caller_pd,msg.arg0,sequence,owner,sid,paint,len,coverage,sealed as u8,poisoned as u8);
                                 }
                             }
                             break;

@@ -38,6 +38,13 @@ def freeze(root, build, out, iso, kernel):
         if digest(path)!=sources[name]:raise ValueError('production source changed since build: '+name)
     runner_names={str(p.relative_to(root)) for directory,suffixes in [('scripts',{'.py','.sh'}),('tests',{'.rs','.py','.sh'})]
                   for p in (root/directory).rglob('*') if p.is_file() and p.suffix in suffixes and '__pycache__'not in p.parts}
+    # Architectural host gates need their declarative inventory too. It is
+    # checker input, independently hashed rather than misrepresented as kernel
+    # production source. Frozen gates can now run without the mutable checkout.
+    runner_names.update(str(p.relative_to(root))for p in (root/'spec').glob('*.sexspec')if p.is_file())
+    for directory in ['tests','scripts/tests/fixtures']:
+        runner_names.update(str(p.relative_to(root))for p in (root/directory).rglob('*')
+                            if p.is_file() and '__pycache__'not in p.parts)
     runners={name:local(root,name) for name in runner_names}
     runner_hashes={name:digest(path)for name,path in runners.items()}
     binding=dict(iso_sha256=digest(iso),kernel_sha256=digest(kernel),

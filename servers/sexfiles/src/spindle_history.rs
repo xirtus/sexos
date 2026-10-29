@@ -75,7 +75,7 @@ impl Service{
 }
 /// Liveness derives from the exact BOOT lifecycle subject, never a key or name.
 pub fn live(caller:u32)->bool{
- let(slot,task,surface)=match caller{12=>(39,12,154),17=>(50,17,302),_=>return false};
- matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if(c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(caller,task,surface,3))
+ let(slot,surface)=match caller{12=>(39,154),17=>(50,302),_=>return false};
+ matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3))
   && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE)
 }

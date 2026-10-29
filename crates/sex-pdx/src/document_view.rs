@@ -25,7 +25,7 @@ impl Layout {
         let cols = (w.saturating_sub(2 * s::INSET) / (s::ADVANCE * scale))
             .saturating_sub(1)
             .clamp(1, 79) as usize;
-        let top = if target == 16 { 36 } else { s::TEXT_TOP };
+        let top = if matches!(target,16|18) { 36 } else { s::TEXT_TOP };
         let toolbar_rows = if cols >= 20 {
             1
         } else if cols >= 10 {
@@ -90,7 +90,7 @@ impl Notice {
             sequence: args[2],
         };
         if caller != 3
-            || !matches!(target, 9 | 16)
+            || !matches!(target, 9 | 16 | 18)
             || n.target != target
             || n.task != task
             || n.sequence <= last
@@ -122,8 +122,8 @@ impl Delivery {
     }
     pub fn queue(&mut self, target: u32, task: u32, w: u32, h: u32) {
         if self.dead
-            || !matches!(target, 9 | 16)
-            || task != target
+            || !matches!(target, 9 | 16 | 18)
+            || task == 0
             || w == 0
             || h == 0
             || w > 4096
@@ -190,7 +190,7 @@ impl Delivery {
 pub const WORKSPACE_CHANGED: u64 = 0x279;
 pub struct WorkspaceRefresh { target:u32, task:u32, pending:bool, closed:bool }
 impl WorkspaceRefresh {
-    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!(matches!(target,9|16)&&task!=0)}}
+    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!(matches!(target,9|16|18)&&task!=0)}}
     pub fn changed(&mut self){if !self.closed{self.pending=true;}}
     pub fn pending(&self)->bool{self.pending&&!self.closed}
     pub fn close(&mut self){self.pending=false;self.closed=true;}

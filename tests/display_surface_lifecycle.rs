@@ -159,3 +159,14 @@ fn create(l:&Lifecycle,s:&mut[Surface],caller:u32,sid:u64)->bool {
 }
 
 #[test]fn collapsed_spindle_primary_can_present_only_via_its_exact_owned_group(){for sid in[154,160,161,162]{assert_eq!(native_pixel_bit(12,sid),2);assert_eq!(native_pixel_bit(17,sid),0);}for sid in[302,303,304,305]{assert_eq!(native_pixel_bit(17,sid),16);assert_eq!(native_pixel_bit(12,sid),0);}let mut l=Lifecycle::new();assert!(l.register(catalog(39,12,154)));assert!(l.request_present(12,154,7,0));l.pixels_presented(native_pixel_bit(12,161));assert_eq!(l.presentation_reply(0),Some((12,7<<8)));}
+
+#[test]fn all_six_boot_catalogs_fit_and_third_quil_cannot_impersonate_old_surface(){
+ let mut l=Lifecycle::new();
+ for (slot,pd,sid) in [(38,9,156),(39,12,154),(40,15,300),(45,16,301),(50,17,302),(54,18,307)] {assert!(l.register(catalog(slot,pd,sid)));}
+ assert!(!l.register(catalog(58,19,308)));
+ let mut surfaces=[SURFACE_EMPTY;16];assert!(create(&l,&mut surfaces,18,307));
+ assert!(!create(&l,&mut surfaces,16,307));assert!(!create(&l,&mut surfaces,18,301));
+ assert_eq!(native_pixel_bit(18,307),32);assert_eq!(native_pixel_bit(16,307),0);
+ let mut refs=SceneRefs::default();assert_eq!(l.prepare(5,18,0x8012,&mut surfaces,&mut refs),Some(1));
+ assert!(!create(&l,&mut surfaces,18,307));assert!(!create(&l,&mut surfaces,3,307));
+}

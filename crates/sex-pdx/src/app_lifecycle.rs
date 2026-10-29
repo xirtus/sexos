@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Immutable BOOT_DAG app lifecycle grants. Exit notifications are hints;
 //! every service attests custody through its own capability before retirement.
-pub const SLOTS: [usize; 5] = [38, 39, 40, 45, 50];
+pub const SLOTS: [usize; 6] = [38, 39, 40, 45, 50, 54];
 pub const OP_APP_EXIT: u64 = 0x107;
 pub const OP_APP_CLOSE: u64 = 0x108;
 pub const OP_APP_PRESENT: u64 = 0x109;
@@ -29,6 +29,15 @@ pub const DENIED: u64 = 3;
 pub const LIVE: u64 = 5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CatalogInfo { pub target_pd: u32, pub task_id: u32, pub surface_id: u64, pub coordinator_pd: u32 }
+impl CatalogInfo {
+    /// A successful kernel catalog query binds the exact task. Numeric domain
+    /// and task identifiers are separate namespaces; zero is never a subject.
+    pub fn is_subject(self,target:u32,surface:u64,coordinator:u32)->bool {
+        target!=0 && surface!=0 && coordinator!=0 && target!=coordinator
+            && self.target_pd==target && self.task_id!=0
+            && self.surface_id==surface && self.coordinator_pd==coordinator
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LifecycleInfo { pub target_pd: u32, pub task_id: u32, pub required_mask: u64, pub acked_mask: u64 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,9 +105,9 @@ impl Authority for KernelAuthority {
     fn ack(&mut self,s:usize,t:u32)->Result<(),u64>{ack(s,t)}
 }
 #[derive(Clone,Copy)]
-pub struct ServiceCustody { retired: [Option<ExitNotice>;5], acked:[bool;5] }
+pub struct ServiceCustody { retired: [Option<ExitNotice>;SLOTS.len()], acked:[bool;SLOTS.len()] }
 impl ServiceCustody {
-    pub const fn new()->Self { Self {retired:[None;5],acked:[false;5]} }
+    pub const fn new()->Self { Self {retired:[None;SLOTS.len()],acked:[false;SLOTS.len()]} }
     pub fn is_retired(&self,target:u32)->bool {
         self.retired.iter().flatten().any(|n|n.target_pd==target)
     }
@@ -131,6 +140,11 @@ pub const ACTIVATION_SLOT:usize=44;
 pub const SUCCESSOR_CLOSE_SLOT:u64=46;
 pub const SUCCESSOR_ROUTE_SLOT:u64=47;
 pub const SELF_CATALOG_SLOT:usize=48;
+/// Third Quil: separate BOOT image/layout and exact predecessor-bound grant.
+pub const QUIL_THIRD_LIFECYCLE_SLOT:usize=54;
+pub const QUIL_THIRD_ACTIVATION_SLOT:usize=55;
+pub const QUIL_THIRD_CLOSE_SLOT:u64=56;
+pub const QUIL_THIRD_ROUTE_SLOT:u64=57;
 pub const SPINDLE_ACTIVATION_SLOT:usize=49;
 pub const SPINDLE_LIFECYCLE_SLOT:usize=50;
 pub const SPINDLE_CLOSE_SLOT:u64=51;

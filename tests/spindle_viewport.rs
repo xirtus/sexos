@@ -21,3 +21,18 @@ use spindle_view::*;
  let middle=viewport::prompt(command,14,40);assert_eq!(middle.bytes[middle.caret.unwrap()],b'|');assert_eq!(middle.start,0);
  let end=viewport::prompt(command,command.len(),40);assert!(end.start>0);assert_eq!(end.bytes[2],b'<');assert_eq!(end.bytes[39],b'|');
 }
+
+#[test]fn notice_carries_actual_catalog_task_and_rejects_domain_alias(){
+ let mut d=Delivery::new();d.queue(17,170,640,335);let mut n=None;
+ d.poll(true,true,|v|{n=Some(v);Ok(())});let n=n.unwrap();
+ assert_eq!(n.task,170);assert!(Notice::decode(3,17,170,n.args(),0).is_some());
+ assert!(Notice::decode(3,17,17,n.args(),0).is_none());
+}
+
+#[test]fn same_size_restore_forces_fresh_nonwrapping_notice_after_create(){
+ let mut d=Delivery::new();d.queue(17,170,640,335);let mut first=0;
+ d.poll(true,true,|n|{first=n.sequence;Ok(())});d.queue(17,170,640,335);assert!(!d.pending());
+ d.refresh();d.queue(17,170,640,335);d.poll(true,false,|_|panic!());
+ d.poll(true,true,|n|{assert!(n.sequence>first);assert_eq!(n.task,170);Ok(())});
+ d.retire();d.refresh();d.queue(17,170,640,335);assert!(!d.pending());
+}

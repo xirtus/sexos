@@ -283,8 +283,7 @@ pub extern "C" fn trampoline_main() {
 
         if msg.type_id==sex_pdx::document::OP{
             if let Some(r)=sex_pdx::document::Request::decode(msg.arg0,msg.arg1,msg.arg2){
-                let(slot,surface)=match caller{9=>(38,156),16=>(45,301),_=>{continue}};
-                let live=matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c)if(c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(caller,caller,surface,3))&&sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE);
+                let live=document_caller_live(caller);
                 if let Some(v)=documents.handle(caller,live,r,&mut vfs::DocumentBackend){pdx_reply(caller,v);}
             }continue;
         }
@@ -312,4 +311,12 @@ pub extern "C" fn trampoline_main() {
             pdx_reply(caller, reply);
         }
     }
+}
+
+/// The message authenticates a PD. Only its immutable kernel lifecycle grant
+/// supplies the task identity; a document request carries no replacement task.
+fn document_caller_live(caller:u32)->bool {
+    let(slot,surface)=match caller{9=>(38,156),16=>(45,301),18=>(54,307),_=>return false};
+    matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3))
+        && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE)
 }
