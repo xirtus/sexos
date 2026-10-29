@@ -231,3 +231,22 @@ Legacy clear/draw dispatch now records the old and new text footprints in the sa
 Frozen image **`35be724786acebbc1750b18c4a290f89937c1f200abc0ee341c4bfc63cff6dfd`** passes sealed BUILD/GREEN, **38 unchanged frozen-source gates /707 Rust executions /297 Python tests**. Both full desktop sizes, three finite Quil incarnations,341-page zero/reuse, maximum-document exact Load/edit/Save bytes, pending-Load Close, compact title/focus checks and both exact same-image persistence reboots pass. The wide short rehearsal completes five cycles in100.009seconds, with checked-input observations0.100/0.697/0.703/0.695/0.684seconds. Native workflows overlap image65’s sustained session and67/68 checker/build work; no controlled speedup or sustained acceptance is inferred. Repaint records remain bounded, sampled per-drain observations rather than causal attribution or complete render costs.
 
 See the [complete binding, pixel-model/native results, repaint observations and test failure](assets/sexos-alpha-r66-2026-10-29-evidence.json), [wide editor](assets/sexos-alpha-r66-wide-2026-10-29.png) and [compact editor](assets/sexos-alpha-r66-compact-2026-10-29.png). Complete frozen inputs/captures live under `.evidence/alpha-2026-10-29/r66-*`; compressed full traces/disks accompany the binding. **48/100 additional rounds are accepted;67–118 remain.** The single-address-space/BOOT/incarnation rules remain unchanged.
+
+
+## Round 67: ordinary app switching acceptance
+
+The new gate measures actual global Alt+Tab without the older stress helper’s minimize/restore/retile traversal. Ten cycles at each resolution make40 switches over exactly300→200→201→153. Each target joins an actual focus-bearing full/strip draw by ordinal and class mask, then checks all16 active-app indicator pixels. Every return to Spindle types another real `z` and checks the complete current prompt. Plain Tab remains app-local; no uncreated legacy frame enters the route; all five terminal cleanup roles complete. Startup still opens Spindle normally before the measured cycles.
+
+Production image/source/kernel are unchanged from accepted66. Frozen67-v2 records the separate checker inputs; **301 Python tests** pass. The exact66 production and existing host checker inputs are unchanged, so its38 gates/707 Rust executions are explicitly reused rather than counted as a new execution. The first native checker wrongly assumed gray for Browser300; actual native style and pixels were teal5ed9c3. The corrected checker parses production native overrides and fallback declarations, with a regression for Browser and successor Spindle. The failed checker, trace and framebuffer remain archived.
+
+| Host observation |1280×800|1024×768|
+|---|---:|---:|
+| Alt+Tab admission median |0.057s|0.057s|
+| Input→checked indicator median |0.304s|0.234s|
+| Checked indicator p95 / maximum |0.513 /2.534s|0.291 /2.021s|
+| Returned input→whole prompt median |0.278s|0.080s|
+| Returned prompt maximum |0.286s|0.260s|
+
+The worst switch is the first Browser→Linen transition in both runs. That startup/backlog delay remains open; no causal diagnosis or hard bound is inferred. Observation polling is50ms and checked-pixel time includes screendump/verification. Both runs overlap image65 sustained and68 build/host work, so they are not an isolated performance comparison. The original mixed stress stream remains intact for separate qualification.
+
+See the [exact bindings, all80 switch samples, distributions and failed checker](assets/sexos-alpha-r67-2026-10-29-evidence.json), [wide returned prompt](assets/sexos-alpha-r67-wide-2026-10-29.png) and [compact returned prompt](assets/sexos-alpha-r67-compact-2026-10-29.png). Full inputs/captures live under `.evidence/alpha-2026-10-29/r67-*`; complete compressed traces/disks accompany the binding. **49/100 additional rounds are accepted;68–118 remain.**
