@@ -186,6 +186,8 @@ fn duplicate_effect_once_pending_receipts_survive_full() {
         b: 0,
     };
     s.handle(9, true, r, &mut b);
+    assert_eq!(b.loads,0);
+    s.progress(&mut b);
     s.poll(|_, _| 1);
     assert!(s.pending());
     s.handle(9, true, r, &mut b);
@@ -530,6 +532,7 @@ fn read_window_reorders_receipts_places_exact_offsets_and_waits_for_end(){
             }
             assert!(s.handle(9,true,r,&mut b).is_none());
         }
+        s.progress(&mut b);
         for _ in 0..3{s.poll(|_,_|1);}
         let mut replies=vec![];s.poll(|pd,v|{assert_eq!(pd,9);replies.push(v);0});
         for v in replies.into_iter().rev(){assert!(c.receive(11,v).is_none());assert!(c.receive(11,v).is_none());}
@@ -694,4 +697,62 @@ fn malformed_write_ack_fences_without_automatic_commit_or_retry(){
     let mut c=Client::new();let mut s=Service::new();let mut b=WindowBackend::new();
     let requests=write_window_ready(&mut c,&mut s,&mut b);let e=c.receive(11,w::reply(requests[0].seq,Ok(15))).unwrap();
     assert_eq!(e.outcome,Outcome::Uncertain);assert_eq!(e.error,w::INVALID);c.step(|_|panic!("uncertain mutation replayed"));assert!(b.saves.is_empty());
+}
+
+struct SlowLoad {steps:usize,cancelled:Vec<u32>,generation:u32,fail_at:usize,name_fails:bool}
+impl SlowLoad{fn new()->Self{Self{steps:0,cancelled:vec![],generation:7,fail_at:usize::MAX,name_fails:false}}}
+impl Backend for SlowLoad{
+ fn identity(&mut self,_:u8)->Result<u32,u32>{Ok(self.generation)}
+ fn load(&mut self,_:u8,_:&mut[u8;w::MAX])->Result<usize,u32>{panic!("synchronous load used")}
+ fn load_step(&mut self,_:u32,_:u8,out:&mut[u8;w::MAX])->Result<Option<usize>,u32>{
+  self.steps+=1;out[self.steps-1]=b'a'+self.steps as u8-1;
+  if self.steps==self.fail_at{Err(w::IO)}else if self.steps==3{Ok(Some(3))}else{Ok(None)}
+ }
+ fn name(&mut self,_:u8)->Result<[u8;16],u32>{if self.name_fails{Err(w::IO)}else{Ok([0;16])}}
+ fn cancel_load(&mut self,pd:u32){self.cancelled.push(pd);}
+}
+fn slow_receipts(s:&mut Service)->Vec<(u32,u64)>{let mut v=vec![];s.poll(|pd,r|{v.push((pd,r));0});v}
+#[test]fn cooperative_load_reserves_receipt_and_rejects_early_reads_without_exposing_staging(){
+ let mut s=Service::new();let mut b=SlowLoad::new();let r=wr(1,w::LOAD,0,7,0);
+ assert!(s.handle(9,true,r,&mut b).is_none());assert_eq!(b.steps,0);assert!(s.pending());assert!(slow_receipts(&mut s).is_empty());
+ for _ in 0..2{
+  s.progress(&mut b);s.handle(9,true,r,&mut b);assert!(slow_receipts(&mut s).is_empty());
+  assert_eq!(w::decode_reply(s.handle(9,true,wr(2,w::READ,0,3,0),&mut b).unwrap(),2),Some(Err(w::BUSY)));
+ }
+ s.progress(&mut b);assert_eq!(slow_receipts(&mut s),[(9,w::reply(1,Ok(3)))]);assert_eq!(b.steps,3);assert_eq!(b.cancelled,[9]);
+ s.handle(9,true,r,&mut b);assert_eq!(slow_receipts(&mut s),[(9,w::reply(1,Ok(3)))]);assert_eq!(b.steps,3);
+ s.handle(9,true,wr(2,w::READ,0,3,0),&mut b);assert_eq!(slow_receipts(&mut s),[(9,w::reply(2,Ok(u32::from_le_bytes(*b"abc\0"))))]);
+}
+#[test]fn cooperative_load_completion_survives_reply_full_without_restarting_io(){
+ for pd in [9,16,18]{
+  let mut s=Service::new();let mut b=SlowLoad::new();s.handle(pd,true,wr(1,w::LOAD,0,7,0),&mut b);
+  for _ in 0..3{s.progress(&mut b);}for _ in 0..8{s.poll(|p,v|{assert_eq!((p,v),(pd,w::reply(1,Ok(3))));1});s.progress(&mut b);}
+  assert_eq!(b.steps,3);assert_eq!(slow_receipts(&mut s),[(pd,w::reply(1,Ok(3)))]);
+ }
+}
+#[test]fn abort_and_terminal_retirement_cancel_every_load_turn_without_old_completion(){
+ for pd in [9,16,18]{for turns in 0..=3{for retire in [false,true]{
+  let mut s=Service::new();let mut b=SlowLoad::new();let load=wr(1,w::LOAD,0,7,0);s.handle(pd,true,load,&mut b);
+  for _ in 0..turns{s.progress(&mut b);}
+  if retire{s.retire(pd,&mut b);}else{s.handle(pd,true,wr(3,w::ABORT,0,0,0),&mut b);}
+  s.progress(&mut b);let receipts=slow_receipts(&mut s);assert_eq!(b.steps,turns);
+  if retire{assert!(receipts.is_empty());assert_eq!(w::decode_reply(s.handle(pd,true,load,&mut b).unwrap(),1),Some(Err(w::DENIED)));}
+  else{assert_eq!(receipts,[(pd,w::reply(3,Ok(0)))]);s.handle(pd,true,wr(4,w::READ,0,1,0),&mut b);assert_eq!(slow_receipts(&mut s),[(pd,w::reply(4,Err(w::STALE)))]);}
+ }}}
+}
+#[test]fn load_failure_identity_change_and_name_failure_publish_only_error_then_fence(){
+ for mode in 0..3{
+  let mut s=Service::new();let mut b=SlowLoad::new();s.handle(9,true,wr(1,w::LOAD,0,7,0),&mut b);s.progress(&mut b);
+  if mode==0{b.fail_at=2;}else if mode==1{b.generation=8;}else{b.name_fails=true;}
+  for _ in 0..4{s.progress(&mut b);}
+  let expected=if mode==1{w::STALE}else{w::IO};assert_eq!(slow_receipts(&mut s),[(9,w::reply(1,Err(expected)))]);
+  let steps=b.steps;for _ in 0..4{s.progress(&mut b);}assert_eq!(steps,b.steps);assert_eq!(b.cancelled,[9]);
+  s.handle(9,true,wr(2,w::READ,0,1,0),&mut b);assert_eq!(slow_receipts(&mut s),[(9,w::reply(2,Err(w::STALE)))]);
+ }
+}
+#[test]fn other_live_client_can_query_while_load_is_pending_and_wrong_caller_cannot_start_it(){
+ let mut s=Service::new();let mut b=SlowLoad::new();s.handle(9,true,wr(1,w::LOAD,0,7,0),&mut b);s.progress(&mut b);
+ s.handle(16,true,wr(1,w::INFO,0,0,0),&mut b);assert_eq!(slow_receipts(&mut s),[(16,w::reply(1,Ok(7)))]);assert_eq!(b.steps,1);
+ assert_eq!(w::decode_reply(s.handle(27,true,wr(1,w::LOAD,0,7,0),&mut b).unwrap(),1),Some(Err(w::DENIED)));
+ assert_eq!(w::decode_reply(s.handle(18,false,wr(1,w::LOAD,0,7,0),&mut b).unwrap(),1),Some(Err(w::DENIED)));assert_eq!(b.steps,1);
 }

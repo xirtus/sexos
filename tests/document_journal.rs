@@ -284,3 +284,76 @@ fn cancellation_at_every_maximum_payload_turn_preserves_complete_recovery(){
   assert!(scratch[..r.len]==old||scratch[..r.len]==new,"cancel turn={stop}");
  }
 }
+
+fn load_cursor(d:&mut Disk,journal_format:bool,out:&mut[u8;w::MAX])->Result<journal::Loaded,u32>{
+ let mut cursor=journal::Load::new(3,0x40001,journal_format);
+ for _ in 0..100{
+  let before=d.op;let r=cursor.step(d,out)?;
+  assert!(d.op-before<=1);if d.op>before{let c=d.calls.last().unwrap();assert_eq!(c.0,0);assert!(c.2<=4096);}
+  if let Some(r)=r{return Ok(r)}
+ }panic!("load did not finish")
+}
+#[test]fn cooperative_recovery_matches_full_recovery_for_all_page_and_document_tails(){
+ for len in [0,1,511,512,513,4095,4096,4097,w::MAX-1,w::MAX]{
+  let bytes:Vec<u8>=(0..len).map(|i|((i*11)%251)as u8).collect();let mut d=Disk::new();
+  cooperative(&mut d,b"previous").unwrap();let expected=cooperative(&mut d,&bytes).unwrap();d.crash();
+  let mut out=[0xa5;w::MAX];assert_eq!(load_cursor(&mut d,true,&mut out),Ok(journal::Loaded::Journal(expected)));
+  assert_eq!(&out[..len],bytes);assert!(out[len..].iter().all(|&b|b==0));
+ }
+}
+#[test]fn cooperative_recovery_keeps_legacy_fallback_bounded_in_both_object_formats(){
+ for journal_format in [false,true]{for len in [0,1,4095,4096,4097,w::MAX]{
+  let bytes:Vec<u8>=(0..len).map(|i|(i%251)as u8).collect();let mut d=Disk::new();
+  d.live[..4].copy_from_slice(b"QP01");d.live[4..8].copy_from_slice(&(len as u32).to_le_bytes());d.live[16..16+len].copy_from_slice(&bytes);d.durable=d.live.clone();
+  let mut out=[0xa5;w::MAX];assert_eq!(load_cursor(&mut d,journal_format,&mut out),Ok(journal::Loaded::Legacy(len)));
+  assert_eq!(&out[..len],bytes);assert!(out[len..].iter().all(|&b|b==0));
+ }}
+}
+#[test]fn cooperative_recovery_rejects_equal_generations_and_falls_back_from_bad_payload(){
+ let mut d=Disk::new();let old=cooperative(&mut d,b"older").unwrap();let latest=cooperative(&mut d,b"newer").unwrap();d.crash();
+ let latest_base=latest.bank as usize*journal::STRIDE as usize;
+ d.live[latest_base+512]^=1;let mut out=[0;w::MAX];
+ assert_eq!(load_cursor(&mut d,true,&mut out),Ok(journal::Loaded::Journal(old)));assert_eq!(&out[..old.len],b"older");
+ d.live[latest_base+512]^=1;
+ let old_base=old.bank as usize*journal::STRIDE as usize;
+ let copied=d.live[latest_base..latest_base+512].to_vec();d.live[old_base..old_base+512].copy_from_slice(&copied);
+ let payload=d.live[latest_base+512..latest_base+512+latest.len].to_vec();d.live[old_base+512..old_base+512+latest.len].copy_from_slice(&payload);
+ assert_eq!(load_cursor(&mut d,true,&mut out),Err(w::STALE));assert!(out.iter().all(|&b|b==0));
+}
+#[test]fn every_cooperative_load_read_failure_scrubs_private_output_and_fences_io(){
+ let mut base=Disk::new();cooperative(&mut base,&vec![0x42;w::MAX]).unwrap();cooperative(&mut base,&vec![0x71;w::MAX-1]).unwrap();base.crash();
+ let mut full=base.clone();load_cursor(&mut full,true,&mut[0;w::MAX]).unwrap();
+ for cut in 1..=full.op{
+  let mut d=base.clone();d.cut=Some(cut);let mut out=[0xa5;w::MAX];let mut cursor=journal::Load::new(3,0x40001,true);let mut failed=false;
+  for _ in 0..100{match cursor.step(&mut d,&mut out){Err(w::IO)=>{failed=true;break},Ok(None)=>{},other=>panic!("unexpected {other:?}")}}
+  assert!(failed);assert!(out.iter().all(|&b|b==0));let before=d.op;
+  assert_eq!(cursor.step(&mut d,&mut out),Err(w::STALE));assert_eq!(d.op,before);assert_eq!(d.live,base.live);
+ }
+}
+#[test]fn cooperative_load_rechecks_selected_header_and_payload_before_publication(){
+ for mutate_header in [true,false]{
+  let mut d=Disk::new();cooperative(&mut d,b"older").unwrap();let latest=cooperative(&mut d,b"newer").unwrap();d.crash();
+  let mut out=[0xa5;w::MAX];let mut cursor=journal::Load::new(3,0x40001,true);let mut changed=false;let mut failure=None;
+  for _ in 0..100{
+   let result=cursor.step(&mut d,&mut out);
+   if let Err(e)=result{failure=Some(e);break}
+   assert!(result.unwrap().is_none());
+   // Two header+payload scans precede the chosen header reread. The latter
+   // is the fifth read for these one-chunk documents.
+   if !changed && d.op==if mutate_header{4}else{5}{
+    let at=latest.bank as usize*journal::STRIDE as usize+if mutate_header{0}else{512};d.live[at]^=1;changed=true;
+   }
+  }
+  assert!(changed);assert_eq!(failure,Some(w::IO));assert!(out.iter().all(|&b|b==0));
+ }
+}
+#[test]fn cooperative_load_rejects_malformed_legacy_and_invalid_identity_without_writes(){
+ for (magic,len)in [(b"QP01",w::MAX+1),(b"nope",4)]{
+  let mut d=Disk::new();d.live[..4].copy_from_slice(magic);d.live[4..8].copy_from_slice(&(len as u32).to_le_bytes());
+  let mut out=[0xa5;w::MAX];assert_eq!(load_cursor(&mut d,false,&mut out),Err(w::INVALID));assert!(out.iter().all(|&b|b==0));assert!(d.calls.iter().all(|c|c.0==0));
+ }
+ let mut d=Disk::new();cooperative(&mut d,b"secret").unwrap();d.crash();
+ let mut c=journal::Load::new(3,0x40002,true);let mut out=[0xa5;w::MAX];let mut result=Ok(None);
+ for _ in 0..100{result=c.step(&mut d,&mut out);if result!=Ok(None){break}}
+ assert_eq!(result,Err(w::INVALID));assert!(out.iter().all(|&b|b==0));
+}

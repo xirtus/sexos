@@ -7,9 +7,22 @@ from check_desktop_pixels import font_from_source
 from check_quil_ui_pixels import verify
 from check_document_disk import fnv,recover
 
+def validate_cancel_load_trace(trace,object_id):
+    if not re.search(r'\[files.document.load.begin\] caller=9 object='+str(object_id)+r' ',trace):
+        raise RuntimeError('no actual cooperative Load admission')
+    close=re.search(r'\[shell.app.close.request\] target=9 ',trace)
+    if not close:raise RuntimeError('no actual Close request')
+    if '[quil.persist.load.ok]'in trace[:close.start()]:raise RuntimeError('Close missed pending client Load')
+    if '[quil.persist.load.ok]'in trace[close.start():]:raise RuntimeError('retired client published Loaded')
+    if not re.search(r'\[files.document.retire\] target=9 .*staged=0 pending=0 terminal=1',trace):
+        raise RuntimeError('missing service staging retirement')
+    roles={int(x)for x in re.findall(r'\[app.service.ack\] target=9 .*role=(\d+) ',trace)}
+    if roles!={1,2,4,8,16}:raise RuntimeError('missing terminal cleanup role')
+    if not re.search(r'\[sext.app.pool.ready\] target=9 .*ok=1',trace):raise RuntimeError('missing zero/reuse completion')
+    return sorted(roles)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--window',type=int,choices=[1,4],required=True);p.add_argument('--object',type=int,default=5);p.add_argument('--name',default='uialpha');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--window',type=int,choices=[1,4],required=True);p.add_argument('--object',type=int,default=5);p.add_argument('--name',default='uialpha');p.add_argument('--cancel-load',action='store_true');a=p.parse_args()
     iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('fresh output required')
     expected=recover(src.read_bytes(),a.object)['payload']
@@ -17,7 +30,7 @@ def main():
     disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-document-window-{os.getpid()}.sock';log=out/'serial.log'
     cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres=1280,yres=800','-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
     digest=hashlib.sha256(iso.read_bytes()).hexdigest()
-    (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=digest,input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=cmd,declared_window=a.window),indent=2)+'\n')
+    (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=digest,input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=cmd,declared_window=a.window,cancel_load=a.cancel_load),indent=2)+'\n')
     proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
     def text():return log.read_text(errors='replace')if log.exists()else''
     def wait(pattern,start=0,timeout=600):
@@ -49,6 +62,20 @@ def main():
         else:raise RuntimeError('named fixture never selected')
         start=len(text());sent=time.monotonic();q.key('ret')
         wait(r'\[linen.quil.disk_doc.intent\] object_id=\d+ path_id='+str(a.object)+r' ok=1',start)
+        if a.cancel_load:
+            wait(r'\[files.document.load.begin\] caller=9 object='+str(a.object)+r' ',start)
+            if '[quil.persist.load.ok]'in text()[start:]:raise RuntimeError('Load finished before Close input')
+            sent=time.monotonic();q.key('f11');wait(r'\[sext.app.pool.ready\] target=9 .*ok=1',start,timeout=60)
+            close_seconds=time.monotonic()-sent
+            roles=validate_cancel_load_trace(text()[start:],a.object)
+            actual=recover(disk.read_bytes(),a.object)
+            if actual['payload']!=expected:raise RuntimeError('cancelled Load changed durable document')
+            focus(200);key('j',r'\[shell.action.select_next_linen\] id=\d+')
+            validate_cancel_load_trace(text()[start:],a.object)
+            q.cmd('screendump',{'filename':str(out/'closed.ppm')})
+            result=dict(ok=True,iso_sha256=digest,cancel_load=True,roles=roles,close_seconds=close_seconds,document_unchanged=True,input_after_close=True,
+                        scope='Actual Close while client Load is pending, service staging retirement and Sext zero/reuse. Does not prove the recovery cursor itself was still reading at Close, nor bound synchronous NVMe completion time.')
+            (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result));return
         loaded=wait(r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(a.object),start);load_seconds=time.monotonic()-sent
         if (int(loaded[1]),int(loaded[2],16))!=(len(expected),fnv(expected)):raise RuntimeError('guest loaded bytes differ from fixture')
         focus(201);key('z',r'\[quil.document.edit\].*bytes='+str(len(expected)+1)+r'(?:\s|$)')

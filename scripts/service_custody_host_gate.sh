@@ -86,6 +86,23 @@ rustc --edition=2021 --test tests/quil_document.rs -o "$TEST_DIR/documents"
 "$TEST_DIR/documents"
 rustc --edition=2021 --test tests/document_journal.rs -o "$TEST_DIR/document-journal"
 "$TEST_DIR/document-journal"
+python3 - "$TEST_DIR/document_load_backend.rs" <<'PYLOAD'
+from pathlib import Path
+import sys
+s=Path('servers/sexfiles/src/vfs.rs').read_text();parts=[]
+a=s.index('static DOCUMENT_WRITE_LOCK:');b=s.index('/// Reserved runs remain private',a);parts.append(s[a:b])
+for name in ['document_cancel','document_cancel_load']:
+ a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
+ while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
+ parts.append(s[a:i])
+a=s.index('impl crate::document::Backend for DocumentBackend');b=s.index('\n}\n\nstruct DocumentIo',a)+2;parts.append(s[a:b])
+# Existing mutation routes must consult the same custody guard before effects.
+for name,arg in [('handle_diskfs_write','diskfs_selected_for(caller_pd)'),('handle_diskfs_truncate','diskfs_selected_for(caller_pd)'),('handle_diskfs_delete','path_id'),('handle_diskfs_rename','path_id')]:
+ a=s.index('fn '+name+'(');body=s[s.index('{',a)+1:];assert body.lstrip().startswith('if document_locked('+arg+')'),name
+Path(sys.argv[1]).write_text('\n'.join(parts))
+PYLOAD
+DOCUMENT_LOAD_BACKEND_SOURCE="$TEST_DIR/document_load_backend.rs" rustc --edition=2021 --test tests/document_load_backend.rs -o "$TEST_DIR/document-load-backend"
+"$TEST_DIR/document-load-backend" --test-threads=1
 rustc --edition=2021 --test tests/display_text_transaction.rs -o "$TEST_DIR/text-transaction"
 "$TEST_DIR/text-transaction"
 rustc --edition=2021 --test tests/quil_view.rs -o "$TEST_DIR/quil-view"

@@ -1804,10 +1804,12 @@ impl crate::spindle_probe::Backend for SpindleProbeBackend{
 /// shared workspace (legacy document 2 and user slots 3..14). No global
 /// legacy selection is consulted by this adapter.
 // Serialization is service-local transaction custody, not new authority.
-// A live commit locks its existing V4 object against legacy/probe mutations.
+// A live commit or recovery locks its existing V4 object against mutations.
 static DOCUMENT_WRITE_LOCK: AtomicU64 = AtomicU64::new(0);
 struct DocumentJob { caller:u32, object:u8, identity:u32, journal:crate::document_journal::Save, growth:Option<DocumentGrowth> }
 static mut DOCUMENT_JOB:Option<DocumentJob> = None;
+struct DocumentLoadJob { caller:u32, object:u8, identity:u32, journal:crate::document_journal::Load }
+static mut DOCUMENT_LOAD_JOB:Option<DocumentLoadJob> = None;
 fn document_locked(id:u64)->bool {
     let lock=DOCUMENT_WRITE_LOCK.load(Ordering::Relaxed);
     lock!=0 && id.checked_add(1)==Some(lock)
@@ -1872,6 +1874,12 @@ fn document_cancel(caller:u32) {
   sex_pdx::serial_record!("[files.document.progress.retired] target={} in_flight=0 rollback=0",caller);
  } }
 }
+fn document_cancel_load(caller:u32){
+ unsafe{if DOCUMENT_LOAD_JOB.as_ref().map_or(false,|j|j.caller==caller){
+  DOCUMENT_LOAD_JOB=None;DOCUMENT_WRITE_LOCK.store(0,Ordering::Relaxed);
+  sex_pdx::serial_record!("[files.document.load.retired] target={} in_flight=0",caller);
+ }}
+}
 pub struct DocumentBackend;
 // A resolved entry is one exact extent, never authority for its neighbor.
 // Bound each synchronous transport to the existing permanent DMA page.
@@ -1890,10 +1898,36 @@ impl crate::document::Backend for DocumentBackend{
  fn name(&mut self,id:u8)->Result<[u8;16],u32>{let e=v4_get(id as u64).map_err(|_|sex_pdx::document::STALE)?;let mut name=[0;16];name.copy_from_slice(&e.name[..16]);Ok(name)}
  fn create(&mut self,name:[u8;16])->Result<u8,u32>{use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let id=handle_diskfs_create(u64::from_le_bytes(name[..8].try_into().unwrap()),u64::from_le_bytes(name[8..].try_into().unwrap()),va);if !(3..15).contains(&id){return Err(w::IO)}Ok(id as u8)}
  fn cancel_save(&mut self,caller:u32){document_cancel(caller)}
+ fn cancel_load(&mut self,caller:u32){document_cancel_load(caller)}
+ fn load_step(&mut self,caller:u32,id:u8,out:&mut[u8;sex_pdx::document::MAX])->Result<Option<usize>,u32>{
+  use sex_pdx::document as w;
+  let identity=<Self as crate::document::Backend>::identity(self,id)?;
+  unsafe{
+   if DOCUMENT_JOB.is_some(){return Err(w::BUSY)}
+   if let Some(job)=DOCUMENT_LOAD_JOB.as_ref(){
+    if(job.caller,job.object,job.identity)!=(caller,id,identity){return Err(w::BUSY)}
+   }else{
+    let entry=v4_get(id as u64).map_err(|_|w::STALE)?;
+    DOCUMENT_LOAD_JOB=Some(DocumentLoadJob{caller,object:id,identity,
+     journal:crate::document_journal::Load::new(id,identity,entry.size_bytes as u64==crate::document_journal::CAPACITY)});
+    DOCUMENT_WRITE_LOCK.store(id as u64+1,Ordering::Relaxed);
+    sex_pdx::serial_record!("[files.document.load.begin] caller={} object={} identity={} cooperative=1",caller,id,identity);
+   }
+   match DOCUMENT_LOAD_JOB.as_mut().ok_or(w::IO)?.journal.step(&mut DocumentIo{id},out)?{
+    None=>Ok(None),
+    Some(crate::document_journal::Loaded::Journal(r))=>{
+     sex_pdx::serial_record!("[files.document.recovered] object={} identity={} generation={} bank={} bytes={} hash={:#x}",id,identity,r.generation,r.bank,r.len,r.hash);
+     Ok(Some(r.len))
+    },
+    Some(crate::document_journal::Loaded::Legacy(len))=>Ok(Some(len)),
+   }
+  }
+ }
  fn save_step(&mut self,caller:u32,id:u8,bytes:&[u8])->Result<bool,u32>{
   use sex_pdx::document as w;
   let identity=<Self as crate::document::Backend>::identity(self,id)?;
   unsafe {
+   if DOCUMENT_LOAD_JOB.is_some(){return Err(w::BUSY)}
    if let Some(job)=DOCUMENT_JOB.as_ref(){
     if (job.caller,job.object,job.identity)!=(caller,id,identity){return Err(w::BUSY)}
    }else{

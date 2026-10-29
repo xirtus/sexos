@@ -19,6 +19,103 @@ pub struct Receipt {
     pub len: usize,
     pub hash: u64,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Loaded {
+    Journal(Receipt),
+    Legacy(usize),
+}
+/// Service-owned recovery state. Each turn performs at most one page-sized
+/// logical read. The caller must hold object custody across turns and keep
+/// `out` private until completion; no address or object number grants access.
+pub struct Load {
+    object:u8, identity:u32, phase:u8, bank:u8, offset:usize,
+    candidate:Option<Receipt>, valid:[Option<Receipt>;2], chosen:Option<Receipt>,
+    sum:u64, legacy_len:usize,
+}
+impl Load {
+    pub const fn new(object:u8,identity:u32,journal:bool)->Self{
+        Self{object,identity,phase:if journal{0}else{5},bank:0,offset:0,
+            candidate:None,valid:[None;2],chosen:None,sum:0xcbf29ce484222325,legacy_len:0}
+    }
+    pub fn step(&mut self,io:&mut impl Io,out:&mut[u8;w::MAX])->Result<Option<Loaded>,u32>{
+        let result=self.step_inner(io,out);
+        if result.is_err(){self.phase=255;out.fill(0);}
+        result
+    }
+    fn decode(&self,h:&[u8],bank:u8)->Option<Receipt>{
+        if &h[..4]!=b"QJ02" || h[4]!=self.object
+            || u32::from_le_bytes(h[8..12].try_into().unwrap())!=self.identity
+            || w::hash(&h[..504])!=u64::from_le_bytes(h[504..512].try_into().unwrap()) {return None}
+        let r=Receipt{bank,generation:u64::from_le_bytes(h[16..24].try_into().unwrap()),
+            len:u32::from_le_bytes(h[24..28].try_into().unwrap())as usize,
+            hash:u64::from_le_bytes(h[32..40].try_into().unwrap())};
+        if r.generation==0||r.len>w::MAX{None}else{Some(r)}
+    }
+    fn step_inner(&mut self,io:&mut impl Io,out:&mut[u8;w::MAX])->Result<Option<Loaded>,u32>{
+        let mut scratch=[0;IO_CHUNK];
+        match self.phase {
+            0=>{
+                io.read(self.bank as u64*STRIDE,&mut scratch[..512])?;
+                self.candidate=self.decode(&scratch[..512],self.bank);
+                self.offset=0;self.sum=0xcbf29ce484222325;self.phase=1;
+            }
+            1=>{
+                if let Some(r)=self.candidate{
+                    if self.offset<r.len{
+                        let n=(r.len-self.offset).min(IO_CHUNK);
+                        io.read(r.bank as u64*STRIDE+PAYLOAD+self.offset as u64,&mut scratch[..n])?;
+                        for &b in &scratch[..n]{self.sum=(self.sum^b as u64).wrapping_mul(0x100000001b3);}
+                        self.offset+=n;return Ok(None)
+                    }
+                    if self.sum==r.hash{self.valid[self.bank as usize]=Some(r);}
+                }
+                if self.bank==0{self.bank=1;self.phase=0;}else{self.phase=2;}
+            }
+            2=>{
+                self.chosen=match(self.valid[0],self.valid[1]){
+                    (Some(a),Some(b))if a.generation==b.generation=>return Err(w::STALE),
+                    (Some(a),Some(b))=>Some(if a.generation>b.generation{a}else{b}),
+                    (a,b)=>a.or(b),
+                };
+                self.phase=if self.chosen.is_some(){3}else{5};
+            }
+            3=>{
+                let r=self.chosen.ok_or(w::STALE)?;
+                io.read(r.bank as u64*STRIDE,&mut scratch[..512])?;
+                if self.decode(&scratch[..512],r.bank)!=Some(r){return Err(w::IO)}
+                self.offset=0;self.sum=0xcbf29ce484222325;self.phase=4;
+            }
+            4=>{
+                let r=self.chosen.ok_or(w::STALE)?;
+                if self.offset<r.len{
+                    let n=(r.len-self.offset).min(IO_CHUNK);
+                    io.read(r.bank as u64*STRIDE+PAYLOAD+self.offset as u64,&mut out[self.offset..self.offset+n])?;
+                    for &b in &out[self.offset..self.offset+n]{self.sum=(self.sum^b as u64).wrapping_mul(0x100000001b3);}
+                    self.offset+=n;
+                }else{
+                    if self.sum!=r.hash{return Err(w::IO)}
+                    out[r.len..].fill(0);self.phase=255;return Ok(Some(Loaded::Journal(r)))
+                }
+            }
+            5=>{
+                io.read(0,&mut scratch[..8])?;
+                if &scratch[..4]!=b"QP01"{return Err(w::INVALID)}
+                self.legacy_len=u32::from_le_bytes(scratch[4..8].try_into().unwrap())as usize;
+                if self.legacy_len>w::MAX{return Err(w::INVALID)}
+                self.offset=0;self.phase=6;
+            }
+            6=>{
+                if self.offset<self.legacy_len{
+                    let n=(self.legacy_len-self.offset).min(IO_CHUNK);
+                    io.read(16+self.offset as u64,&mut out[self.offset..self.offset+n])?;
+                    self.offset+=n;
+                }else{out[self.legacy_len..].fill(0);self.phase=255;return Ok(Some(Loaded::Legacy(self.legacy_len)))}
+            }
+            _=>return Err(w::STALE),
+        }
+        Ok(None)
+    }
+}
 fn header(object: u8, identity: u32, r: Receipt) -> [u8; 512] {
     let mut h = [0; 512];
     h[..4].copy_from_slice(b"QJ02");

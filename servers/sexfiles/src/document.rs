@@ -3,6 +3,10 @@ use sex_pdx::document as w;
 pub trait Backend {
     fn identity(&mut self, id: u8) -> Result<u32, u32>;
     fn load(&mut self, id: u8, out: &mut [u8; w::MAX]) -> Result<usize, u32>;
+    fn cancel_load(&mut self, _caller:u32) {}
+    fn load_step(&mut self, _caller:u32, id:u8, out:&mut[u8;w::MAX])->Result<Option<usize>,u32>{
+        self.load(id,out).map(Some)
+    }
     fn name(&mut self, id: u8) -> Result<[u8; 16], u32>;
     fn create(&mut self, _name: [u8; 16]) -> Result<u8, u32> {
         Err(w::DENIED)
@@ -32,6 +36,7 @@ struct Session {
     bound: bool,
     saving: bool,
     commit: Option<w::Request>,
+    loading: Option<w::Request>,
     written: usize,
     last: Option<w::Request>,
     receipt: u64,
@@ -50,6 +55,7 @@ impl Session {
             bound: false,
             saving: false,
             commit: None,
+            loading: None,
             written: 0,
             last: None,
             receipt: 0,
@@ -65,6 +71,7 @@ impl Session {
         self.bound = false;
         self.saving = false;
         self.commit = None;
+        self.loading = None;
         self.written = 0;
     }
 }
@@ -88,12 +95,37 @@ impl Service {
     pub fn pending(&self) -> bool {
         self.sessions
             .iter()
-            .any(|s| s.pending_len != 0 || s.commit.is_some())
+            .any(|s| s.pending_len != 0 || s.commit.is_some() || s.loading.is_some())
     }
     /// Called only after queued messages (especially terminal notices) drain.
     /// Admission and completion are separate; a duplicate cannot replay COMMIT.
     pub fn progress(&mut self, b: &mut impl Backend) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
+            if let Some(r)=s.loading {
+                let caller=[9,16,18][i];
+                let result=if b.identity(s.object)!=Ok(s.generation){Err(w::STALE)}
+                    else{b.load_step(caller,s.object,&mut s.bytes)};
+                match result{
+                    Ok(None)=>{},
+                    done=>{
+                        let result=done.and_then(|len|{
+                            let len=len.ok_or(w::IO)?;
+                            if len>w::MAX||b.identity(s.object)!=Ok(s.generation){return Err(w::STALE)}
+                            s.name=b.name(s.object)?;
+                            s.len=len;s.bound=true;s.loading=None;
+                            sex_pdx::serial_record!("[files.document.bound] object={} generation={} bytes={}",s.object,s.generation,len);
+                            Ok(len as u32)
+                        });
+                        b.cancel_load(caller);
+                        if result.is_err(){s.clear();}
+                        let v=w::reply(r.seq,result);s.receipt=v;
+                        for entry in s.pending[..s.pending_len].iter_mut().flatten(){
+                            if entry.request==r{entry.value=Some(v);break}
+                        }
+                    }
+                }
+                break;
+            }
             if let Some(r) = s.commit {
                 let caller = [9, 16, 18][i];
                 let result = if b.identity(s.object) != Ok(s.generation) {
@@ -146,6 +178,7 @@ impl Service {
     }
     pub fn retire(&mut self, caller: u32, b: &mut impl Backend) {
         b.cancel_save(caller);
+        b.cancel_load(caller);
         if let Some(i) = Self::index(caller) {
             let s = &mut self.sessions[i];
             s.clear();
@@ -170,6 +203,7 @@ impl Service {
                 return Err(w::INVALID);
             }
             b.cancel_save(caller);
+            b.cancel_load(caller);
             s.clear();
             return Ok(0);
         }
@@ -208,23 +242,11 @@ impl Service {
             if r.a != generation as u64 {
                 return Err(w::STALE);
             }
-            let len = b.load(r.object, &mut s.bytes)?;
-            if len > w::MAX || b.identity(r.object)? != generation {
-                s.clear();
-                return Err(w::STALE);
-            }
-            s.name = b.name(r.object)?;
-            s.len = len;
+            s.clear();
             s.object = r.object;
             s.generation = generation;
-            s.bound = true;
-            sex_pdx::serial_record!(
-                "[files.document.bound] object={} generation={} bytes={}",
-                r.object,
-                generation,
-                len
-            );
-            return Ok(len as u32);
+            s.loading=Some(r);
+            return Ok(0);
         }
         if r.kind == w::BEGIN_SAVE {
             if s.bound || r.offset != 0 || r.b > w::MAX as u64 {
@@ -340,7 +362,7 @@ impl Service {
             // replies remain harmless because the client fences their sequence.
             s.pending = [None; RECEIPTS];
             s.pending_len = 0;
-        } else if s.commit.is_some() || s.pending_len == RECEIPTS {
+        } else if s.commit.is_some() || s.loading.is_some() || s.pending_len == RECEIPTS {
             // Beyond the four-request contract: reject before any effect.
             // This immediate rejection is not a retained accepted receipt.
             return Some(w::reply(r.seq, Err(w::BUSY)));
@@ -366,7 +388,7 @@ impl Service {
             s.last = Some(r);
             s.receipt = v;
         }
-        if s.commit.is_none() {
+        if s.commit.is_none() && s.loading.is_none() {
             s.pending[slot].as_mut().unwrap().value = Some(v);
         }
         None
