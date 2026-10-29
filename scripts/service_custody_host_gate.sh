@@ -204,4 +204,5 @@ assert 'CURSOR_SEND_PENDING || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || li
 PYCURSOR
 CURSOR_DELIVERY_SOURCE="$TEST_DIR/cursor.rs" CURSOR_STATUS_SOURCE="$TEST_DIR/cursor_status.rs" rustc --edition=2021 --test tests/desktop_cursor_delivery.rs -o "$TEST_DIR/cursor"
 "$TEST_DIR/cursor"
-echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_and_history_with_mock_transport_authority_and_host_locks'
+bash scripts/sexnet_service_host_gate.sh
+echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_history_passive_network_with_mock_transport_authority_and_host_locks'
