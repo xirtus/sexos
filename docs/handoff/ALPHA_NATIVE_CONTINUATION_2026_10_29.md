@@ -58,7 +58,11 @@ The final mixed-cycle single-key glyph observations are 0.236 / 0.230 seconds. C
 
 See the [latest complete source/image/test/run binding](assets/sexos-alpha-r43-2026-10-29-evidence.json), [wide capture](assets/sexos-alpha-r43-wide-2026-10-29.png) and [compact capture](assets/sexos-alpha-r43-compact-2026-10-29.png). Complete compressed traces and exact disks for every final run sit alongside that binding. Full local immutable artifacts are under `.evidence/alpha-2026-10-29/r43-*`.
 
-The sustained pass above belongs to the historical round-30 image. The latest image's short rehearsals are explicitly `acceptance=false`; it still needs its own sustained session before a release claim. The strict checker was not relaxed. The source freezer verifies a sealed GREEN build, unchanged production inputs and exact ISO/kernel hashes, copies recorded production/checker/host-test sources, rejects outside-root symlinks and publishes its binding last. A failed build cannot boot an old ISO.
+The round-43 image now also passes its own strict sustained gate: **1,819.6704 seconds, 32 active mixed-app cycles and 299 private pages zeroed/reused**, with no dropped request, diagnostic overflow or fatal fault. Same-image document and Spindle history reboot gates pass. The final notes are `uialpha` (10 bytes, generation 1, hash `0xe41184b5fedbdf93`) and `uibeta` (44 bytes, generation 35, hash `0x2898934531bd2c7b`). Final disk SHA-256: `0858ad31ec32e88650d76db282f59fbd3c00c4f3949ceeec89f00f57c5f90961`. See the [sustained binding, complete results and both reboot results](assets/sexos-alpha-r43-sustained-2026-10-29-evidence.json); complete compressed serial/disk assets sit alongside it, with full local captures under `.evidence/alpha-2026-10-29/r43-sustained*`.
+
+The mixed workload still exposes severe latency: median input-to-exact-glyph observation **19.722 seconds**, 95th percentile 24.285, maximum 25.241. Warm Save receipts have median 4.590 seconds, while Save-to-pixel including concurrent Linen actions has median 13.289. This sustained workload includes repeated focus/reflow and concurrent guests and differs from the burst test above. The short burst result cannot stand in for mixed desktop responsiveness; this remains a measured alpha blocker.
+
+The strict checker was not relaxed. The source freezer verifies a sealed GREEN build, unchanged production inputs and exact ISO/kernel hashes, copies recorded production/checker/host-test sources, rejects outside-root symlinks and publishes its binding last. A failed build cannot boot an old ISO.
 
 ## Round 44: automatic document-list freshness
 
@@ -68,7 +72,7 @@ Final image SHA-256: `5436e59028e7fa76495288e9ceb6140d021cb36265dc0b19f6c8c71505
 
 ## Continue at round 45
 
-The frozen round-43 image's sustained run remains in progress. Continue the remaining **74** substantive rounds.
+The frozen round-43 image's sustained and both reboot gates pass. Finite BOOT reserve expansion is in progress; a new third-incarnation edit gate exposed the Open-to-editor transition, which is being fixed before acceptance. Continue the remaining **74** substantive rounds.
 
 Then expand finite BOOT reserve through explicitly provisioned fresh identities, separate layout/backing, existing-family key policy, activation grants, catalogs, routes and aggregate table/slot/surface/page budgets. Test repeated cleanup and terminal exhaustion. A larger finite pool is not sustainable replenishment. Improve retained block completion progress and the remaining restore/menu latency before adding decorative surfaces.
 

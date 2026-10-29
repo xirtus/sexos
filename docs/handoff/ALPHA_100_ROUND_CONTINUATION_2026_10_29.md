@@ -4,7 +4,7 @@ Requested 29 October 2026 while round 18 was in progress. Continue through **rou
 
 Preserve GLOBAL_VAS, BOOT_DAG capability genesis, sex-pdx runtime authority, terminal incarnation identities and explicit workspace custody. SexOS is not Unix. No runtime capability minting, per-process address spaces, ambient file authority, silent mutation retry or dead-domain resurrection. Keep model delegation low. Freeze accepted source/image/kernel/disk bindings before advancing production slices, run relevant tests and native gates, and commit/push bounded accepted batches.
 
-Round 18 is complete on its immutable historical image; the integrated round-43 image still needs its own sustained run. The prerequisite required: a real 30-minute mixed-app session, two exact persistent notes, actual keyboard/pointer/glyph checks, pending-I/O Close, fresh reserved Quil/Spindle successors, all five cleanup roles and Sext zero/reuse, then same-image reboot byte comparison. Rehearsals and interrupted candidates are recorded as such and cannot satisfy the sustained gate.
+Round 18 is complete on its immutable historical image; the integrated round-43 image also passes its own sustained run and both reboots. The prerequisite required: a real 30-minute mixed-app session, two exact persistent notes, actual keyboard/pointer/glyph checks, pending-I/O Close, fresh reserved Quil/Spindle successors, all five cleanup roles and Sext zero/reuse, then same-image reboot byte comparison. Rehearsals and interrupted candidates are recorded as such and cannot satisfy the sustained gate.
 
 ## Queue and acceptance boundaries
 
@@ -37,7 +37,7 @@ The sequence below sets priorities. Reorder a dependent round when evidence requ
 | 25 | Qualified | Global shell-owned Alt+Tab while plain Tab stays app-local. | Actual chord cycle and returned exact Spindle prompt at both resolutions; all five cleanup roles. |
 | 26 | Qualified | Exclude uncreated legacy placeholders from desktop lifecycle/tiling. | Actual normal focus cycle contains only live app frames, both resolutions. |
 | 27 | Complete | Exact production-source/image/kernel binding and unchanged-during-build verification. | Concurrent source change invalidates a candidate; untracked modules and root target specs included. |
-| 28 | Qualified | Mixed input/storage/Close and same-image reboot qualification of the integrated candidate. | Short wide/compact rehearsals, 299 private pages, exact two-document and history reboots. Explicitly not a sustained acceptance pass. |
+| 28 | Qualified | Mixed input/storage/Close and same-image reboot qualification of the integrated candidate. | Round-43 own-image strict sustained gate passes: 1819.6704 seconds / 32 cycles, 299 private pages and both same-image reboot gates. Mixed input pixels remain slow; no daily-driver claim. |
 | 29 | Complete | Atomic pointer normalization receipt for reliable actual tablet parking evidence. | Sealed build, host gates and current real pointer session; fragmented earlier receipt retained as failed evidence. |
 | 30 | Complete | Retain the latest cursor coordinates on queue Full, bound hard rejection, count actual admissions. | Actual send/flush function tests; passing frozen sustained native candidate. |
 | 31 | Qualified | Sequence-bound atomic display text replacement with private staging and cleanup scrubbing. | Every Full boundary through real client/server machines, coverage/hash/replay/ownership tests; wide native glyph/storage/Close/relaunch rehearsal passes. |
@@ -54,6 +54,6 @@ The sequence below sets priorities. Reorder a dependent round when evidence requ
 | 42 | Complete | Bound repetitive successful write-guard and object I/O diagnostics while retaining rejects, faults and actual flush receipts. | Actual production driver/sector tests, sealed build and final wide/compact storage workflows. |
 | 43 | Complete | Atomic launcher text with exact display acknowledgment, stale surface/sequence fencing and close cancellation. | Client/server and actual shell receive tests; complete latest wide/compact workflows, sixty real typed characters each, same-image document/history reboots, global switching and cleanup. |
 | 44 | Complete | Coalesced read-only workspace invalidation after an actual successful Save; exact live caller/task admission and retained kernel/snapshot retries. | 615 Rust executions / 276 Python tests, sealed boot and both-resolution real Save/Save As walkthroughs: names appear automatically, Quil keeps focus, Linen keeps selection, exact glyphs and cleanup pass. |
-| 45–118 | Pending — 74 remain | Latest-image sustained run, finite BOOT reserve and measured alpha blockers. | Not completed. |
+| 45–118 | Pending — 74 remain | Finite BOOT reserve and measured alpha blockers; round-43 sustained/reboots pass. | Not completed. |
 
 Update this ledger and the next-session handoff after accepted batches. Continue active work until the user's requested scope is complete or an actual external blocker requires user input; never silently reinterpret 100 rounds as a plan-only request.
