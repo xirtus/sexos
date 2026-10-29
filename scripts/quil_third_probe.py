@@ -3,6 +3,22 @@ import re
 import time
 from check_quil_ui_pixels import verify
 
+def open_selected(c):
+    """Serialize a real row Open through its actual completion, then load.
+
+    A time gap cannot establish absence of an asynchronous Open intent.
+    This probe has only one pending row Open, so the completion fences the
+    optional intent before focus/traversal or another Open may be issued.
+    """
+    offset=len(c['text']());c['q'].key('ret')
+    c['wait'](r'\[linen.open.queued\] id=\d+ accepted=1',offset)
+    c['wait'](r'\[linen.open.complete\] status=0',offset)
+    intent=re.search(r'\[linen.quil.disk_doc.intent\] object_id=\d+ path_id=(\d+) ok=1',c['text']()[offset:])
+    if intent is None:return None
+    object_id=int(intent[1])
+    loaded=c['wait'](r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(object_id)+r'(?:\s|$)',offset)
+    return dict(object=object_id,bytes=int(loaded[1]),hash=loaded[2])
+
 def run(c,refresh,close):
     key,wait,text,q,focus=(c[k]for k in ('key','wait','text','q','focus'))
     start=len(text())
@@ -17,12 +33,9 @@ def run(c,refresh,close):
         focus(200)
         for _ in range(20):
             key('j',r'\[shell.action.select_next_linen\] id=\d+')
-            offset=len(text());q.key('ret');end=time.monotonic()+1
-            while time.monotonic()<end and '[linen.quil.disk_doc.intent]'not in text()[offset:]:time.sleep(.05)
-            m=re.search(r'\[linen.quil.disk_doc.intent\] object_id=\d+ path_id=(\d+) ok=1',text()[offset:])
-            if m and int(m[1])==expected['object']:
-                m=wait(r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(expected['object']),offset)
-                if (int(m[1]),m[2])!=(expected['bytes'],expected['hash']):raise RuntimeError('third incarnation document changed')
+            observed=open_selected(c)
+            if observed and observed['object']==expected['object']:
+                if (observed['bytes'],observed['hash'])!=(expected['bytes'],expected['hash']):raise RuntimeError('third incarnation document changed')
                 loaded.append(expected['object']);break
             focus(200)
         else:raise RuntimeError('third incarnation selection unavailable')

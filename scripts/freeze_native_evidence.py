@@ -57,6 +57,9 @@ def freeze(root, build, out, iso, kernel):
         stage=pathlib.Path(temporary);snapshot=stage/'source';snapshot.mkdir()
         for name,path in {**paths,**runners}.items():
             target=snapshot/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
+            # Some gates execute their checker directly after testing -x.
+            # Preserve modes so an archive is a runnable source snapshot.
+            shutil.copymode(path,target)
             expected=runner_hashes[name]if name in runners else sources[name]
             if digest(target)!=expected:raise ValueError('source changed while copying: '+name)
         for path,name in [(iso,'tested.iso'),(kernel,'tested.kernel')]:

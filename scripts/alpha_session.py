@@ -125,15 +125,10 @@ def run(c, seconds, acceptance=True, third_quil=False):
         focus(200)
         for _ in range(20):
             key('j', r'\[shell.action.select_next_linen\] id=\d+')
-            offset = len(text())
-            q.key('ret')
-            end = time.monotonic()+1
-            while time.monotonic()<end and '[linen.quil.disk_doc.intent]' not in text()[offset:]:
-                time.sleep(.05)
-            m = re.search(r'\[linen.quil.disk_doc.intent\] object_id=\d+ path_id=(\d+) ok=1', text()[offset:])
-            if m and int(m[1]) == expected['object']:
-                loaded = wait(r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(expected['object']), offset)
-                if (int(loaded[1]),loaded[2]) != (expected['bytes'],expected['hash']):
+            from quil_third_probe import open_selected
+            observed=open_selected(c)
+            if observed and observed['object']==expected['object']:
+                if (observed['bytes'],observed['hash'])!=(expected['bytes'],expected['hash']):
                     raise RuntimeError('successor document bytes changed')
                 break
             focus(200)

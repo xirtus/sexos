@@ -1873,10 +1873,17 @@ fn document_cancel(caller:u32) {
  } }
 }
 pub struct DocumentBackend;
+// A resolved entry is one exact extent, never authority for its neighbor.
+// Bound each synchronous transport to the existing permanent DMA page.
+fn document_piece_len(piece:DiskManifestEntryV1,rel:u64,remaining:usize)->Result<usize,u32>{
+ let available=(piece.len_bytes as u64).checked_sub(rel).ok_or(sex_pdx::document::IO)?;
+ let n=remaining.min(available as usize).min(sex_pdx::BLOCK_MAX_XFER as usize);
+ if n==0{return Err(sex_pdx::document::IO)}Ok(n)
+}
 fn document_read(id:u8,offset:u64,out:&mut[u8])->Result<(),u32>{
  use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let entry=v4_get(id as u64).map_err(|_|w::STALE)?;
  if offset.checked_add(out.len()as u64).map_or(true,|e|e>entry.size_bytes as u64){return Err(w::IO)}
- let mut done=0;while done<out.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(id as usize,at,va).map_err(|_|w::IO)?;let n=(out.len()-done).min(512-(rel as usize%512));let got=DiskFs::diskfs_read_object_entry(piece,rel,&mut out[done..done+n],va).map_err(|_|w::IO)?;if got as usize!=n{return Err(w::IO)}done+=n;}Ok(())
+ let mut done=0;while done<out.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(id as usize,at,va).map_err(|_|w::IO)?;let n=document_piece_len(piece,rel,out.len()-done)?;let got=DiskFs::diskfs_read_object_entry(piece,rel,&mut out[done..done+n],va).map_err(|_|w::IO)?;if got as usize!=n{return Err(w::IO)}done+=n;}Ok(())
 }
 impl crate::document::Backend for DocumentBackend{
  fn identity(&mut self,id:u8)->Result<u32,u32>{use sex_pdx::document as w;if !(2..15).contains(&id){return Err(w::DENIED)}let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let e=v4_get(id as u64).map_err(|_|w::STALE)?;Ok(((id as u32+1)<<16)|e.gen as u32)}
@@ -1932,8 +1939,8 @@ struct DocumentIo{id:u8}
 impl crate::document_journal::Io for DocumentIo{
  fn read(&mut self,offset:u64,out:&mut[u8])->Result<(),u32>{document_read(self.id,offset,out)}
  fn write(&mut self,offset:u64,bytes:&[u8])->Result<(),u32>{
-  use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();let e=v4_get(self.id as u64).map_err(|_|w::STALE)?;if offset.checked_add(bytes.len()as u64).map_or(true,|n|n>e.size_bytes as u64){return Err(w::INVALID)}
-  let mut done=0;while done<bytes.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(self.id as usize,at,va).map_err(|_|w::IO)?;let n=(bytes.len()-done).min(512-rel as usize%512);let written=DiskFs::diskfs_write_object_entry(piece,rel,&bytes[done..done+n],va).map_err(|_|w::IO)?;if written as usize!=n{return Err(w::IO)}done+=n;}Ok(())
+  use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}let e=v4_get(self.id as u64).map_err(|_|w::STALE)?;if offset.checked_add(bytes.len()as u64).map_or(true,|n|n>e.size_bytes as u64){return Err(w::INVALID)}
+  let mut done=0;while done<bytes.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(self.id as usize,at,va).map_err(|_|w::IO)?;let n=document_piece_len(piece,rel,bytes.len()-done)?;let written=DiskFs::diskfs_write_object_entry(piece,rel,&bytes[done..done+n],va).map_err(|_|w::IO)?;if written as usize!=n{return Err(w::IO)}done+=n;}Ok(())
  }
  fn sync(&mut self)->Result<(),u32>{if DiskFs::diskfs_block_sync()!=0{Err(sex_pdx::document::IO)}else{Ok(())}}
 }

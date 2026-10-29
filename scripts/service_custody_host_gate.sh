@@ -135,11 +135,24 @@ python3 - "$TEST_DIR/sector_write.rs" <<'PYSECTOR'
 import re,sys
 from pathlib import Path
 s=Path('servers/sexfiles/src/backends/diskfs.rs').read_text()
-f=re.findall(r'^    pub fn diskfs_write_object_entry\b.*?^    }',s,re.M|re.S);assert len(f)==1
-Path(sys.argv[1]).write_text('impl DiskFs {\n'+f[0]+'\n}')
+f=re.findall(r'^    pub fn diskfs_(?:write|read)_object_entry\b.*?^    }',s,re.M|re.S);assert len(f)==2
+Path(sys.argv[1]).write_text('impl DiskFs {\n'+'\n'.join(f)+'\n}')
 PYSECTOR
 DISKFS_SECTOR_WRITE_SOURCE="$TEST_DIR/sector_write.rs" rustc --edition=2021 --test tests/diskfs_sector_write.rs -o "$TEST_DIR/sector-write"
 "$TEST_DIR/sector-write"
+python3 - "$TEST_DIR/document_extent.rs" <<'PYEXTENT'
+from pathlib import Path
+import re,sys
+s=Path('servers/sexfiles/src/vfs.rs').read_text();parts=[]
+for name in ['document_piece_len','document_read']:
+ a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
+ while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
+ parts.append(s[a:i])
+a=s.index('impl crate::document_journal::Io for DocumentIo');b=s.index('\n}',a)+2
+parts.append(s[a:b]);Path(sys.argv[1]).write_text('\n'.join(parts))
+PYEXTENT
+DISKFS_SECTOR_WRITE_SOURCE="$TEST_DIR/sector_write.rs" DOCUMENT_EXTENT_SOURCE="$TEST_DIR/document_extent.rs" rustc --edition=2021 --test tests/document_extent_io.rs -o "$TEST_DIR/document-extent"
+"$TEST_DIR/document-extent" --test-threads=1
 rustc --edition=2021 --test tests/sexfiles_deferred.rs -o "$TEST_DIR/deferred"
 "$TEST_DIR/deferred"
 python3 - <<'PYKEYS'

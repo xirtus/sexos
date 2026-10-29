@@ -413,6 +413,19 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
     0u64
 }
 
+// Called only with the peer-checked BOOT view from typed command admission.
+// The public block contract permits one page, not only the early 512-byte demo.
+fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->u64{
+    if size==0 || size>BLOCK_MAX_XFER || size>PAGE_SIZE
+        || size%NVME_LBA_BYTES!=0 || offset%NVME_LBA_BYTES!=0
+        || offset.checked_add(size).is_none(){return BLOCK_ERR_BAD_LEN}
+    if buf_cap!=SLOT_BLOCK_BUFFER{return BLOCK_ERR_NO_DEVICE}
+    let Some(view)=view else{return BLOCK_ERR_NO_DEVICE};
+    if view.length<size || view.virtual_address==0 || view.virtual_address==u64::MAX
+        || view.virtual_address.checked_add(size).is_none(){return BLOCK_ERR_NO_DEVICE}
+    nvme_read_into_mapped_va(offset,size,view.virtual_address)
+}
+
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     if size == 0
         || size > BLOCK_MAX_XFER
@@ -3006,67 +3019,7 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
                 BLOCK_ERR_NO_DEVICE
             } else { match cmd {
-                BLOCK_READ => {
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.read.api.recv] offset={:#x} size={} buf_cap={:#x}",
-                        offset, size, _buf_cap
-                    ); }
-                    if hot_log() { serial_println!(
-                        "[sexdrive.block.read.handoff.begin] offset={:#x} size={} buf_cap={:#x}",
-                        offset, size, _buf_cap
-                    ); }
-                    if size == 0 || size > BLOCK_MAX_XFER {
-                        serial_println!(
-                            "[sexdrive.block.read.api.err] reason=bad_len size={} max={}",
-                            size, BLOCK_MAX_XFER
-                        );
-                        serial_println!(
-                            "[sexdrive.block.read.handoff.err] reason=bad_len size={}",
-                            size
-                        );
-                        BLOCK_ERR_BAD_LEN
-                    } else if (offset % BLOCK_SECTOR_SIZE) != 0 {
-                        serial_println!(
-                            "[sexdrive.block.read.api.err] reason=unaligned_offset offset={:#x} sector={}",
-                            offset, BLOCK_SECTOR_SIZE
-                        );
-                        serial_println!(
-                            "[sexdrive.block.read.handoff.err] reason=unaligned_offset offset={:#x}",
-                            offset
-                        );
-                        BLOCK_ERR_BAD_LEN
-                    } else if _buf_cap == SLOT_BLOCK_BUFFER {
-                        if size != 512 {
-                            serial_println!(
-                                "[sexdrive.block.read.handoff.err] reason=bad_len_phase_b size={} expect=512",
-                                size
-                            );
-                            BLOCK_ERR_BAD_LEN
-                        } else {
-                            let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
-                            if fill_va == 0 || fill_va == u64::MAX {
-                                serial_println!(
-                                    "[sexdrive.block.read.handoff.err] reason=map_failed va={:#x}",
-                                    fill_va
-                                );
-                                if hot_log() { serial_println!(
-                                    "[sexdrive.nvme.cmd.shape.err] path=typed reason=region_view_failed buffer_cap={:#x}",
-                                    SLOT_BLOCK_BUFFER
-                                ); }
-                                BLOCK_ERR_NO_DEVICE
-                            } else {
-                                if hot_log() { serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va); }
-                                if hot_log() { serial_println!(
-                                    "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
-                                    op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
-                                ); }
-                                nvme_read_into_mapped_va(offset, size, fill_va)
-                            }
-                        }
-                    } else {
-                        BLOCK_ERR_NO_DEVICE
-                    }
-                }
+                BLOCK_READ => typed_read_handoff(offset,size,_buf_cap,block_view),
                 BLOCK_WRITE => {
                     if hot_log() { serial_println!(
                         "[sexdrive.block.write.api.recv] offset={:#x} size={} buf_cap={:#x}",

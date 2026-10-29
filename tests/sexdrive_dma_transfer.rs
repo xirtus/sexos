@@ -186,7 +186,8 @@ mod driver_read {
                 sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 42 };
         }
         let result = if write { nvme_write_one_block(0, size as u64, destination.as_ptr() as u64) }
-            else { nvme_read_into_mapped_va(0, 512, destination.as_mut_ptr() as u64) };
+            else { typed_read_handoff(0,size as u64,SLOT_BLOCK_BUFFER,Some(RegionView{
+                region_id:5,virtual_address:destination.as_mut_ptr()as u64,dma_address:None,length:size as u64})) };
         assert_eq!(result, expected);
         assert_eq!(doorbells[0], 1, "real production body must submit");
         unsafe {
@@ -195,8 +196,8 @@ mod driver_read {
             assert_eq!(NVME_IO_STATE.ready, ready);
             if expected == 0 {
                 assert_eq!(destination, if write { vec![0xa5; size] } else { vec![0; size] });
+                assert_eq!(*((sq.as_ptr() as *const u32).add(12)), (size/512-1)as u32);
                 if write {
-                    assert_eq!(*((sq.as_ptr() as *const u32).add(12)), (size/512-1)as u32);
                     assert!(std::slice::from_raw_parts(buffer.as_ptr() as *const u8,size).iter().all(|&b|b==0xA5));
                 }
                 if write { assert_eq!(buffer[0], 0xa5a5_a5a5_a5a5_a5a5); }
@@ -248,6 +249,28 @@ mod driver_read {
     #[test]
     fn production_four_kib_write_uses_eight_lbas_and_the_same_dma_lease(){
         exercise_size(true,42|(1<<16),0,false,true,4096);
+    }
+    #[test]
+    fn typed_page_read_uses_eight_lbas_and_same_lease(){
+        exercise_size(false,42|(1<<16),0,false,true,4096);
+    }
+    #[test]
+    fn typed_page_read_error_and_timeout_never_publish_bytes(){
+        exercise_size(false,0,BLOCK_ERR_NO_DEVICE,true,false,4096);
+        exercise_size(false,42|(1<<16)|(2<<17),BLOCK_ERR_NO_DEVICE,false,false,4096);
+    }
+    #[test]
+    fn typed_read_rejects_bad_length_offset_slot_or_view_before_queue_access(){
+        let _lock=LOCK.lock().unwrap();
+        let view=RegionView{region_id:5,virtual_address:0x400000,dma_address:None,length:4096};
+        unsafe{NVME_IO_STATE.ready=false;}
+        for size in [0,1,513,4097,8192,u64::MAX]{assert_eq!(typed_read_handoff(0,size,17,Some(view)),BLOCK_ERR_BAD_LEN);}
+        assert_eq!(typed_read_handoff(1,4096,17,Some(view)),BLOCK_ERR_BAD_LEN);
+        assert_eq!(typed_read_handoff(u64::MAX-511,4096,17,Some(view)),BLOCK_ERR_BAD_LEN);
+        assert_eq!(typed_read_handoff(0,4096,99,Some(view)),BLOCK_ERR_NO_DEVICE);
+        assert_eq!(typed_read_handoff(0,4096,17,None),BLOCK_ERR_NO_DEVICE);
+        assert_eq!(typed_read_handoff(0,4096,17,Some(RegionView{length:512,..view})),BLOCK_ERR_NO_DEVICE);
+        assert_eq!(typed_read_handoff(0,4096,17,Some(RegionView{virtual_address:u64::MAX-511,..view})),BLOCK_ERR_NO_DEVICE);
     }
     #[test]
     fn production_bulk_guard_checks_whole_pool_interval_and_legacy_limits(){

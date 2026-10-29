@@ -22,6 +22,7 @@ fn glass_over_bg(c:u32,_x:usize,_y:usize,_a:u8)->u32{c}
 fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{c}
 fn pulse_alpha(base:u8,_a:u8,_f:u64,_p:u64)->u8{base}
 include!(env!("DISPLAY_COMPOSITION_SOURCE"));
+include!("fixtures/compositor_reference.rs");
 fn cat(pd:u32)->Catalog{Catalog{slot:pd as usize,target_pd:pd,task_id:pd,surface_id:if pd==9{156}else{154},coordinator_pd:3}}
 fn surf(pd:u32,sid:u64)->Surface{Surface{owner_pd:pd,surface_id:sid,x:100,y:100,w:400,h:300,color:0x123456,active:true,..SURFACE_EMPTY}}
 fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
@@ -265,4 +266,77 @@ fn shared_full_and_incremental_strip_uses_current_focus(){unsafe{
  FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(155,22,&bar),0x89B4FA);
  FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(155,22,&bar),9);
  for (x,c)in [(0,1),(1,2),(2,3),(3,4),(4,9)]{assert_eq!(top_strip_pixel(x,0,&bar),c);}
+}}
+
+// Literal image-58 two-pass shader is an independent oracle. The row cache
+// must preserve both visible pixels and the exact owner-bound presentation mask.
+unsafe fn assert_span_reference(w:usize,h:usize,focuses:&[u64]) {
+ for &focus in focuses {for y in 0..h {
+  let mut row=FRAME_GROUPS.row_winners(&SURFACES,focus,y,w,h).unwrap();
+  for x in 0..w {
+   let selected=FRAME_GROUPS.winner(&SURFACES,focus,x,y,w,h).map(|s|s.surface_id);
+   APP_PRESENT_BITS=0;
+   let expected=reference_composite_pixel_selected(x,y,w,h,0x192837,focus,selected);
+   let expected_mask=APP_PRESENT_BITS;
+   APP_PRESENT_BITS=0;
+   let actual=composite_pixel_source(x,y,w,h,0x192837,row.source(x));
+   assert_eq!((actual,APP_PRESENT_BITS),(expected,expected_mask),"focus={focus} pixel={x},{y}");
+  }
+ }}
+}
+unsafe fn span_text_fill(index:usize) {
+ let s=&mut SURFACES[index];
+ s.text_buf[..8].copy_from_slice(b"AZ\nold\nz");s.text_len=8;s.text_color=0xfedcba;
+ s.fill_count=2;s.fill_sx[0]=0;s.fill_sy[0]=20;s.fill_sw[0]=41;s.fill_sh[0]=35;s.fill_color[0]=0x345678;
+ s.fill_sx[1]=12;s.fill_sy[1]=24;s.fill_sw[1]=31;s.fill_sh[1]=16;s.fill_color[1]=0x876543;
+ recompute_text_lines(s);
+}
+#[test]fn span_shader_matches_accepted_pixels_for_all_native_incarnations_and_pane_gaps(){unsafe{
+ for (pd,frame_id,children) in [
+  (9,201,&[156][..]),(12,153,&[154,160,161,162][..]),
+  (16,301,&[301][..]),(17,306,&[302,303,304,305][..]),(18,307,&[307][..])
+ ] {
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+  FRAME_GROUPS.register(Catalog{slot:pd as usize,target_pd:pd,task_id:pd+100,surface_id:children[0],coordinator_pd:3});
+  let bound=matches!(pd,9|12|17);
+  SURFACES[0]=Surface{x:20,y:55,w:250,h:150,owner_pd:if bound{3}else{pd},surface_id:frame_id,..frame()};
+  if bound {for (i,&sid) in children.iter().enumerate(){SURFACES[i+1]=surf(pd,sid);}}
+  FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+  for i in 0..=if bound{children.len()}else{0} {span_text_fill(i);}
+  // Overlap with a real foreign standalone surface and the modal shell launcher.
+  SURFACES[8]=Surface{x:150,y:90,w:115,h:100,color:0xabcdef,..surf(8,888)};
+  SURFACES[9]=Surface{x:190,y:60,w:45,h:55,color:0x112233,..surf(3,152)};
+  assert_span_reference(300,220,&[0,frame_id,children[0],888,152]);
+  SURFACES[9].active=false;
+  assert_span_reference(300,220,&[frame_id,children[0]]);
+ }
+}}
+#[test]fn span_shader_preserves_unfitted_body_boundaries_clipping_and_tiny_frames(){unsafe{
+ for (x,y,w,h) in [(-20,-30,170,140),(280,200,170,140),(20,55,15,43),(20,55,17,45),(20,55,0,0),(i32::MAX,i32::MAX,100,100)] {
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(cat(9));
+  SURFACES[0]=Surface{x,y,w,h,..frame()};
+  // Deliberately crosses every body edge: child edges alone cannot describe
+  // the content source at x=frame+8 and x=frame+width-8.
+  SURFACES[1]=Surface{x:-40,y:0,w:1000,h:1000,color:0x934567,..surf(9,156)};
+  span_text_fill(1);FRAME_GROUPS.observe(&SURFACES);
+  assert_span_reference(300,220,&[0,201,156]);
+ }
+}}
+#[test]fn span_cache_is_rebuilt_after_hide_restore_slot_reuse_and_full_capacity(){unsafe{
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(cat(12));
+ SURFACES[0]=Surface{x:5,y:53,w:180,h:135,..surf(3,153)};
+ for (i,sid) in [154,160,161,162].into_iter().enumerate(){SURFACES[i+1]=surf(12,sid);}
+ for i in 5..MAX_SURFACES {SURFACES[i]=Surface{x:(i*17) as i32,y:50+(i*7) as i32,w:90,h:80,color:0x102030+i as u32,..surf(8,800+i as u64)};}
+ FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+ assert_span_reference(320,240,&[0,153,154,815]);
+ SURFACES[0]=SURFACE_EMPTY;assert_span_reference(320,240,&[153,154]);
+ SURFACES[0]=Surface{x:30,y:85,w:160,h:140,..surf(8,999)};
+ assert_span_reference(320,240,&[999,154]);
+ SURFACES[0]=Surface{x:60,y:70,w:220,h:160,..surf(3,153)};
+ FRAME_GROUPS.fit_children(&mut SURFACES);assert_span_reference(320,240,&[153,154]);
+ let oversized=[SURFACE_EMPTY;MAX_SURFACES+1];
+ assert!(FRAME_GROUPS.row_winners(&oversized,0,60,320,240).is_none());
+ // Fixed storage remains bounded even when every active rectangle contributes
+ // both outer edges; no dynamic allocation or pointer crosses an IPC boundary.
+ assert!(core::mem::size_of::<surface_groups::RowWinners<'_>>()<=4096);
 }}

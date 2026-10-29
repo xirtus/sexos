@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host-only runtime-proof regressions; no image build or real QEMU required."""
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -281,6 +282,18 @@ class HarnessTests(unittest.TestCase):
     def run_fake(self, mode, extra_lines=(), persistence=False):
         with tempfile.TemporaryDirectory() as temp:
             work = Path(temp)
+            # Exercise the unchanged production gate inside its own minimal
+            # provenance fixture. Frozen source archives intentionally omit .git;
+            # these fake-QEMU tests must not depend on the caller's live checkout.
+            source = work / "source"
+            (source / "scripts").mkdir(parents=True)
+            for name in ["master_runtime_gate.sh", "check_bootgraph_log.py"]:
+                shutil.copy2(ROOT / "scripts" / name, source / "scripts" / name)
+            for args in [["init", "-q"], ["add", "scripts"],
+                         ["-c", "user.name=Harness Fixture", "-c", "user.email=fixture@invalid",
+                          "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "fixture"]]:
+                subprocess.run(["git", *args], cwd=source, check=True,
+                               capture_output=True, text=True)
             fixture = work / "fixture.log"
             fixture.write_text("\n".join(good_log() + list(extra_lines)) + "\n")
             image = work / "test.iso"
@@ -309,9 +322,9 @@ while True:
             env = dict(os.environ, GATE_DIR=str(gate), QEMU_BIN=str(fake),
                        ISO=str(image), FIXTURE=str(fixture), FAKE_MODE=mode,
                        SEXOS_PERSISTENCE_REBOOT_PROOF="1" if persistence else "0")
-            result = subprocess.run(["bash", str(ROOT / "scripts/master_runtime_gate.sh"),
+            result = subprocess.run(["bash", str(source / "scripts/master_runtime_gate.sh"),
                                      "--skip-build", "--no-nvme", "--probe", "1", "--keep-log"],
-                                    cwd=ROOT, env=env, capture_output=True, text=True, timeout=15)
+                                    cwd=source, env=env, capture_output=True, text=True, timeout=15)
             self.assertTrue((work / "gate/report.md").exists(), result.stdout + result.stderr)
             report = (work / "gate/report.md").read_text()
             provenance = (work / "gate/provenance.json").read_text()

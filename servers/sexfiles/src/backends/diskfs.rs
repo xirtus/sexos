@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::{
     pdx_call, pdx_listen_raw, sys_yield, serial_println, SLOT_BLOCK,
     SLOT_BUF_LEND,
-    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_SECTOR_SIZE, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
 };
 use spin::RwLock;
 
@@ -2272,7 +2272,7 @@ impl DiskFs {
             );
             return Err(messages::ERR_OVERFLOW as u64);
         }
-        let end = offset + data.len() as u64;
+        let end = offset.checked_add(data.len() as u64).ok_or(messages::ERR_OVERFLOW as u64)?;
         if end > entry.len_bytes as u64 {
             serial_println!(
                 "[sexfiles.disk.file.bounds.err] reason=end_past_max offset={} len={} max={}",
@@ -2287,7 +2287,9 @@ impl DiskFs {
         }
 
         let max_lba =
-            entry.start_lba + (end.saturating_sub(1)) / BLOCK_SECTOR_SIZE;
+            entry.start_lba.checked_add((end.saturating_sub(1)) / BLOCK_SECTOR_SIZE)
+                .filter(|lba| lba.checked_mul(BLOCK_SECTOR_SIZE).is_some())
+                .ok_or(messages::ERR_OVERFLOW as u64)?;
         if max_lba >= DISKFS_WRITE_PROOF_LBA {
             serial_println!(
                 "[sexfiles.disk.file.bounds.err] reason=lba_collision max_lba={}",
@@ -2303,6 +2305,26 @@ impl DiskFs {
         while data_off < data.len() {
             let lba = entry.start_lba + byte_off / BLOCK_SECTOR_SIZE;
             let sector_off = (byte_off % BLOCK_SECTOR_SIZE) as usize;
+            // Only complete requested sectors use the permanent BOOT DMA
+            // page. Partial boundaries keep the byte-preserving RMW path.
+            if sector_off == 0 && data.len()-data_off >= BLOCK_SECTOR_SIZE as usize {
+                // Preserve the driver's sector-only legacy/metadata routes.
+                // This selects a transfer shape, never grants write authority.
+                let pool_end=sex_pdx::DISKFS_V4_POOL_BASE_LBA+sex_pdx::DISKFS_V4_POOL_SECTORS;
+                let maximum=if lba>=sex_pdx::DISKFS_V4_POOL_BASE_LBA && lba<pool_end {
+                    ((pool_end-lba)*BLOCK_SECTOR_SIZE).min(BLOCK_MAX_XFER)as usize
+                }else{BLOCK_SECTOR_SIZE as usize};
+                let chunk = (data.len()-data_off).min(maximum)
+                    / BLOCK_SECTOR_SIZE as usize * BLOCK_SECTOR_SIZE as usize;
+                unsafe {
+                    let p = buf_va as *mut u8;
+                    for i in 0..chunk { core::ptr::write_volatile(p.add(i),data[data_off+i]); }
+                }
+                let status = Self::diskfs_block_write(lba * BLOCK_SECTOR_SIZE,chunk as u64,SLOT_BUF_LEND);
+                if status != 0 { return Err(status); }
+                written += chunk as u64; byte_off += chunk as u64; data_off += chunk;
+                continue;
+            }
             let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
             let chunk = (data.len() - data_off).min(space);
 
@@ -2385,7 +2407,7 @@ impl DiskFs {
             );
             return Err(messages::ERR_OVERFLOW as u64);
         }
-        let end = offset + out.len() as u64;
+        let end = offset.checked_add(out.len() as u64).ok_or(messages::ERR_OVERFLOW as u64)?;
         if end > entry.len_bytes as u64 {
             serial_println!(
                 "[sexfiles.disk.file.bounds.err] reason=end_past_max offset={} len={} max={}",
@@ -2399,6 +2421,11 @@ impl DiskFs {
             return Ok(0);
         }
 
+        entry.start_lba.checked_add((end-1)/BLOCK_SECTOR_SIZE)
+            .and_then(|lba| lba.checked_add(1))
+            .and_then(|end_lba| end_lba.checked_mul(BLOCK_SECTOR_SIZE))
+            .ok_or(messages::ERR_OVERFLOW as u64)?;
+
         let mut byte_off = offset;
         let mut out_off: usize = 0;
         let mut total_read: u64 = 0;
@@ -2406,6 +2433,18 @@ impl DiskFs {
         while out_off < out.len() {
             let lba = entry.start_lba + byte_off / BLOCK_SECTOR_SIZE;
             let sector_off = (byte_off % BLOCK_SECTOR_SIZE) as usize;
+            if sector_off == 0 && out.len()-out_off >= BLOCK_SECTOR_SIZE as usize {
+                let chunk = (out.len()-out_off).min(BLOCK_MAX_XFER as usize)
+                    / BLOCK_SECTOR_SIZE as usize * BLOCK_SECTOR_SIZE as usize;
+                let status = Self::diskfs_block_read(lba * BLOCK_SECTOR_SIZE,chunk as u64,SLOT_BUF_LEND);
+                if status != 0 { return Err(status); }
+                unsafe {
+                    let p = buf_va as *const u8;
+                    for i in 0..chunk { out[out_off+i] = core::ptr::read_volatile(p.add(i)); }
+                }
+                total_read += chunk as u64; byte_off += chunk as u64; out_off += chunk;
+                continue;
+            }
             let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
             let chunk = (out.len() - out_off).min(space);
 

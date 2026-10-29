@@ -12,10 +12,12 @@ start = source.index('fn block_buffer_view(')
 end = source.index('\nfn ', start + 1)
 Path(sys.argv[2]).write_text(source[start:end])
 parts = []
-for name in ['stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'write_guard_allows']:
+for name in ['stop_uncertain_io', 'prepare_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'write_guard_allows']:
     start = source.index('fn ' + name + '(')
     end = source.index('\nfn ', start + 1)
     parts.append(source[start:end])
+assert 'BLOCK_READ => typed_read_handoff(offset,size,_buf_cap,block_view),' in source
+assert 'bad_len_phase_b' not in source
 Path(sys.argv[3]).write_text('\n'.join(parts))
 PY
 SEXDRIVE_BLOCK_VIEW_SOURCE="$TEST_DIR/block_view.rs" SEXDRIVE_READ_PATH_SOURCE="$TEST_DIR/read_path.rs" rustc --edition=2021 --test \

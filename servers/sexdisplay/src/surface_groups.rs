@@ -84,35 +84,57 @@ pub fn contains((x,y,w,h):(usize,usize,usize,usize),px:usize,py:usize)->bool {
     px >= x && px-x < w && py >= y && py-y < h
 }
 
-// Winner selection changes only at a clamped surface rectangle's horizontal
-// edges. This cache is local to one immutable render row, never reused after
-// input, lifecycle, geometry or focus mutations.
-#[derive(Clone,Copy)]
-struct RowRun { end:usize, surface:Option<u64> }
-pub struct RowWinners { runs:[RowRun;MAX_ROW_RUNS], count:usize, cursor:usize }
-const MAX_ROW_RUNS:usize=crate::surface_lifecycle::MAX_SURFACES*2+1;
-impl RowWinners {
-    pub fn selected(&mut self,x:usize)->Option<u64>{
-        while self.cursor+1<self.count && x>=self.runs[self.cursor].end{self.cursor+=1;}
-        if self.cursor<self.count && x<self.runs[self.cursor].end{self.runs[self.cursor].surface}else{None}
+// Exact composition changes only at clamped surface edges and bound frame body
+// edges. References belong to one immutable render row, never another drain.
+#[derive(Clone, Copy)]
+pub struct PixelSource<'a> {
+    pub surface: &'a Surface,
+    pub content: &'a Surface,
+    pub chrome: bool,
+}
+#[derive(Clone, Copy)]
+struct RowRun<'a> { end: usize, source: Option<PixelSource<'a>> }
+pub struct RowWinners<'a> { runs: [RowRun<'a>; MAX_ROW_RUNS], count: usize, cursor: usize }
+const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 4 + 1;
+impl<'a> RowWinners<'a> {
+    #[inline(always)]
+    pub fn source(&mut self, x: usize) -> Option<PixelSource<'a>> {
+        while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
+        if self.cursor < self.count && x < self.runs[self.cursor].end { self.runs[self.cursor].source } else { None }
     }
+    pub fn selected(&mut self, x: usize) -> Option<u64> { self.source(x).map(|s| s.surface.surface_id) }
 }
 impl FrameGroups {
-    pub fn row_winners(&self,surfaces:&[Surface],focused:u64,y:usize,w:usize,h:usize)->Option<RowWinners>{
-        if surfaces.len()>crate::surface_lifecycle::MAX_SURFACES || w==0 || y>=h{return None}
-        let mut edges=[0usize;MAX_ROW_RUNS+1];edges[1]=w;let mut n=2;
-        for s in surfaces.iter().filter(|s|s.active){
-            let (sx,sy,sw,sh)=rect(s,w,h);
-            if sw!=0 && sh!=0 && y>=sy && y-sy<sh {
-                edges[n]=sx;edges[n+1]=sx+sw;n+=2;
+    pub fn row_winners<'a>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize) -> Option<RowWinners<'a>> {
+        if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
+        let mut edges = [0usize; MAX_ROW_RUNS + 1]; edges[1] = w; let mut n = 2;
+        for s in surfaces.iter().filter(|s| s.active) {
+            let (sx,sy,sw,sh) = rect(s,w,h);
+            if sw != 0 && sh != 0 && y >= sy && y-sy < sh {
+                edges[n] = sx; edges[n+1] = sx+sw; n += 2;
+                // Even an unfitted child cannot replace pixels outside the
+                // parent's body. Splitting here also preserves tiny/clipped frames.
+                if self.is_frame(s) {
+                    let body_y = sy.saturating_add(36);
+                    if y >= body_y && y-body_y < sh.saturating_sub(44) {
+                        let left = sx.saturating_add(8).min(w);
+                        edges[n] = left;
+                        edges[n+1] = left.saturating_add(sw.saturating_sub(16)).min(w);
+                        n += 2;
+                    }
+                }
             }
         }
-        for i in 1..n {let value=edges[i];let mut j=i;while j>0 && edges[j-1]>value{edges[j]=edges[j-1];j-=1;}edges[j]=value;}
-        let mut result=RowWinners{runs:[RowRun{end:0,surface:None};MAX_ROW_RUNS],count:0,cursor:0};
-        for i in 1..n {if edges[i]>edges[i-1]{
-            let winner=self.winner(surfaces,focused,edges[i-1],y,w,h).map(|s|s.surface_id);
-            result.runs[result.count]=RowRun{end:edges[i],surface:winner};result.count+=1;
-        }}
+        for i in 1..n { let value=edges[i]; let mut j=i; while j>0 && edges[j-1]>value { edges[j]=edges[j-1]; j-=1; } edges[j]=value; }
+        let mut result = RowWinners { runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS], count: 0, cursor: 0 };
+        for i in 1..n { if edges[i] > edges[i-1] {
+            let x = edges[i-1];
+            let source = self.winner(surfaces,focused,x,y,w,h).map(|surface| PixelSource {
+                surface, content: self.content(surface,surfaces,x,y,w,h),
+                chrome: surface.surface_id == focused || self.is_frame(surface),
+            });
+            result.runs[result.count] = RowRun { end: edges[i], source }; result.count += 1;
+        } }
         Some(result)
     }
 }

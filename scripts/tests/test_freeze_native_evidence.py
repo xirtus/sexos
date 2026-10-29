@@ -29,6 +29,11 @@ class FreezeTests(unittest.TestCase):
         self.assertIn('tests/actual.rs',r['runner_sha256']);self.assertEqual((self.out/'source/tests/actual.rs').read_text(),'host production extraction fixture')
         with self.assertRaises(FileExistsError):self.run_freeze()
         self.assertEqual(json.loads((self.out/'source-binding.json').read_text()),r)
+    def test_snapshot_preserves_executable_checker_permissions(self):
+        checker=self.root/'scripts/check.py';checker.chmod(0o755)
+        self.run_freeze()
+        self.assertEqual((self.out/'source/scripts/check.py').stat().st_mode&0o777,0o755)
+        self.assertEqual((self.out/'source/tests/actual.rs').stat().st_mode&0o777,(self.root/'tests/actual.rs').stat().st_mode&0o777)
     def test_changed_source_or_wrong_artifact_cannot_publish_binding(self):
         for which in ['source','image','kernel']:
             with self.subTest(which=which):
