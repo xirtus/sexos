@@ -2258,11 +2258,11 @@ impl DiskFs {
         data: &[u8],
         buf_va: u64,
     ) -> Result<u64, u64> {
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.disk.file.write.begin] offset={} len={}",
             offset,
             data.len()
-        );
+        ); }
 
         if offset >= entry.len_bytes as u64 {
             serial_println!(
@@ -2306,26 +2306,15 @@ impl DiskFs {
             let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
             let chunk = (data.len() - data_off).min(space);
 
-            // Read existing sector into buf_va, then copy to local.
-            unsafe {
-                let p = buf_va as *mut u8;
-                let mut i = 0usize;
-                while i < 512 {
-                    core::ptr::write_volatile(p.add(i), 0u8);
-                    i += 1;
-                }
-            }
-            let status = Self::diskfs_block_read(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
-            if status != 0 {
-                return Err(status);
-            }
             let mut sector = [0u8; 512];
-            unsafe {
-                let p = buf_va as *const u8;
-                let mut i = 0usize;
-                while i < 512 {
-                    sector[i] = core::ptr::read_volatile(p.add(i));
-                    i += 1;
+            // Full-sector replacements need no read-modify-write. Keep
+            // partial writes byte-preserving and propagate every read error.
+            if sector_off != 0 || chunk != BLOCK_SECTOR_SIZE as usize {
+                let status = Self::diskfs_block_read(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+                if status != 0 { return Err(status); }
+                unsafe {
+                    let p = buf_va as *const u8;
+                    for i in 0..512 { sector[i] = core::ptr::read_volatile(p.add(i)); }
                 }
             }
 
@@ -2355,11 +2344,11 @@ impl DiskFs {
             data_off += chunk;
         }
 
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.disk.file.write.ok] offset={} written={}",
             offset,
             written
-        );
+        ); }
         Ok(written)
     }
 
@@ -2382,11 +2371,11 @@ impl DiskFs {
         out: &mut [u8],
         buf_va: u64,
     ) -> Result<u64, u64> {
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.disk.file.read.begin] offset={} len={}",
             offset,
             out.len()
-        );
+        ); }
 
         if offset >= entry.len_bytes as u64 {
             serial_println!(
@@ -2454,11 +2443,11 @@ impl DiskFs {
             out_off += chunk;
         }
 
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.disk.file.read.ok] offset={} read={}",
             offset,
             total_read
-        );
+        ); }
         Ok(total_read)
     }
 

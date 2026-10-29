@@ -26,6 +26,13 @@ def fixture(w=1280,h=134,target=12):
                                     xx=x+px+8+col*6*scale+gx*scale+dx;yy=y+py+12+row*9*scale+gy*scale+dy;p=(yy*width+xx)*3;data[p:p+3]=b'\xe8\xff\xff'
     return text,b'P6\n1280 800\n255\n'+data
 class Check(unittest.TestCase):
+    def test_compact_resolution_is_explicit_and_exact(self):
+        text,ppm=fixture(1024,134)
+        rgb=ppm.split(b'\n',3)[3]
+        compact=b'P6\n1024 768\n255\n'+b''.join(rgb[y*1280*3:y*1280*3+1024*3]for y in range(768))
+        self.assertEqual(verify(text,compact,FONT,12,'> echo spindle17',False,False,resolution=(1024,768)),[])
+        self.assertTrue(verify(text,compact,FONT,12,'> echo spindle17',False,False))
+        self.assertTrue(verify(text,compact,FONT,12,'> echo spindle17',False,False,resolution=(1280,800)))
     def test_small_tile_and_wide_resize_keep_real_prompt_ink(self):
         for w,h in [(1280,134),(640,134),(1280,670),(640,80)]:
             text,ppm=fixture(w,h);self.assertEqual(verify(text,ppm,FONT,12,'> echo spindle17',True,False),[])

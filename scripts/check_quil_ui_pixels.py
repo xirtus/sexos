@@ -1,5 +1,6 @@
 """Validate the complete admitted Quil text and caret against native glyph pixels."""
 import re
+import time
 from check_desktop_pixels import glyph
 from check_disk_persistence import ppm_rgb
 
@@ -28,6 +29,16 @@ def view(text,target=9):
   x,y,w,h=map(int,g[-1]);v['x']=x;v['y']=y
   if(v['w'],v['h'])!=(w,h):raise ValueError('view not current successor geometry')
  return v
+
+def wait_view(text, timeout=90, target=9):
+ # A requested view may still be behind an immutable in-flight transaction.
+ # Keep exact admission/geometry checks; absence must fail at the deadline.
+ end=time.monotonic()+timeout;last='no view'
+ while time.monotonic()<end:
+  try:return view(text(),target)
+  except ValueError as e:last=str(e)
+  time.sleep(.05)
+ raise RuntimeError('Quil view did not settle: '+last)
 
 def verify(text,ppm,font,expected=None,target=9,resolution=None):
  try:

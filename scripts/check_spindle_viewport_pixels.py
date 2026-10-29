@@ -12,7 +12,7 @@ def layout(w,h):
     def rows(height):return min(6,1+(height-12-7*largest)//(9*largest))if height>=12+7*largest and cols else 0
     return [(8,36,left,top),(16+left,36,right,top),(8,by,left,bottom),(16+left,by,right,bottom)],cols,[rows(top),rows(bottom)]
 
-def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require_all_ink=True):
+def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require_all_ink=True,resolution=None):
     try:
         sids={12:[154,160,161,162],17:[302,303,304,305]}[target]
         accepted=re.findall(rf'\[spindle.view.accepted\] target={target} task={target} sequence=(\d+) w=(\d+) h=(\d+) cols=(\d+) top_rows=(\d+) bottom_rows=(\d+) sender=3',text)
@@ -23,7 +23,8 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         if set(views)!=set(sids):raise ValueError('missing catalog viewport quadrants')
         x=views[sids[0]][0]-8;y=views[sids[0]][1]-36
         if any(views[sid]!=(x+px,y+py,pw,ph)for sid,(px,py,pw,ph)in zip(sids,panes)):raise ValueError('layout does not match shell geometry')
-        width,height,pixels=ppm_rgb(ppm)
+        width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
+        if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
         if x<0 or y<50 or x+w>width or y+h>height:raise ValueError('viewport outside framebuffer')
         records={}
         for sid,sequence,paint,c,r,n in re.findall(rf'\[spindle.view.text\] target={target} sid=(\d+) sequence=(\d+) paint=(\d+) cols=(\d+) rows=(\d+) bytes=(\d+)',text):

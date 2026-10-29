@@ -2,6 +2,9 @@
 //! Exact production wrapper, lifecycle validator and poll bodies; PDX and shell
 //! model queries are mocked. No guest rendering is claimed by this harness.
 #![allow(dead_code,static_mut_refs)]
+extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+pub struct PdxMessage{pub type_id:u64,pub caller_pd:u32,pub arg0:u64}
 #[path="../servers/silk-shell/src/linen_text_delivery.rs"] mod linen_text_delivery;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
 use std::sync::Mutex;
@@ -14,11 +17,12 @@ const SLOT_SPINDLE:u64=14;fn spindle_route_slot()->u64{52}
 const SLOT_QUIL:u64=10;fn quil_route_slot()->u64{47}
 const SLOT_DISPLAY:u64=5;const SURFACE_ID_LINEN:u64=200;
 #[macro_export]macro_rules! record {($($a:tt)*)=>{{$crate::LOG.lock().unwrap().push(format!($($a)*));}}}
-mod sex_pdx{pub use crate::record as serial_record;pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;}
+pub use crate::record as serial_record;pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 static mut FOCUSED_SURFACE_ID:u64=0;
 static mut DISPLAY_FOCUS:linen_text_delivery::FocusDelivery=linen_text_delivery::FocusDelivery::new();
 static mut DESKTOP_STATES:linen_text_delivery::DesktopStates=linen_text_delivery::DesktopStates::new();
 static mut LINEN_TEXT:linen_text_delivery::Outbox=linen_text_delivery::Outbox::new(200);
+static mut PALETTE_TEXT:linen_text_delivery::Outbox=linen_text_delivery::Outbox::atomic(152);
 static mut LINEN_REPAINT_AFTER_CREATE:bool=false;
 static mut APP_CUSTODY:[Option<app_custody::Entry>;3]=[None;3];
 #[derive(Clone,Copy)]enum LifecycleState{Visible,Hidden,Minimized,Closing,Tombstoned,Destroyed}
@@ -37,7 +41,7 @@ unsafe fn frame_chrome_operation(frame:u32)->Option<linen_text_delivery::Operati
 fn raw_pdx_call(slot:u64,op:u64,sid:u64,a:u64,b:u64)->(u64,u64){CALLS.lock().unwrap().push((slot,op,sid,a,b));RESULTS.lock().unwrap().pop_front().unwrap_or((0,0))}
 unsafe fn linen_paint_surface_fast(){linen_queue_text(b"latest complete view",0xabcdef,linen_text_delivery::Metadata{count:2,first:0,rows:2,selected:SELECTION});}
 include!(env!("DESKTOP_DELIVERY_PRODUCTION"));
-unsafe fn reset(){FOCUSED_SURFACE_ID=0;DISPLAY_FOCUS=linen_text_delivery::FocusDelivery::new();DESKTOP_STATES=linen_text_delivery::DesktopStates::new();LINEN_TEXT=linen_text_delivery::Outbox::new(200);LINEN_REPAINT_AFTER_CREATE=false;APP_CUSTODY=[None;3];STATE=LifecycleState::Visible;ALIVE=true;MINIMIZED=false;FRAME=true;BOUNDS=Some((10,50,640,400));SELECTION=3;CALLS.lock().unwrap().clear();RESULTS.lock().unwrap().clear();LOG.lock().unwrap().clear();}
+unsafe fn reset(){FOCUSED_SURFACE_ID=0;DISPLAY_FOCUS=linen_text_delivery::FocusDelivery::new();DESKTOP_STATES=linen_text_delivery::DesktopStates::new();LINEN_TEXT=linen_text_delivery::Outbox::new(200);LINEN_REPAINT_AFTER_CREATE=false;PALETTE_TEXT=linen_text_delivery::Outbox::atomic(152);APP_CUSTODY=[None;3];STATE=LifecycleState::Visible;ALIVE=true;MINIMIZED=false;FRAME=true;BOUNDS=Some((10,50,640,400));SELECTION=3;CALLS.lock().unwrap().clear();RESULTS.lock().unwrap().clear();LOG.lock().unwrap().clear();}
 fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Operation{opcode:code,surface:sid,packed:0,control:0}}
 #[test]fn actual_wrapper_preserves_status_and_retains_only_selected_display_states(){let _l=LOCK.lock().unwrap();unsafe{reset();}
  RESULTS.lock().unwrap().push_back((sex_pdx::ERR_SERVICE_NOT_READY,77));assert_eq!(pdx_call(5,0xEC,201,1,2),(sex_pdx::ERR_SERVICE_NOT_READY,77));assert!(unsafe{DESKTOP_STATES.pending_surface(201)});
@@ -81,3 +85,24 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  assert_eq!(CALLS.lock().unwrap().len(),1);assert!(LOG.lock().unwrap().is_empty());
  }
 }
+#[test]fn actual_atomic_poll_and_reply_publish_only_current_correlated_metadata(){let _l=LOCK.lock().unwrap();unsafe{
+ reset();LINEN_TEXT=linen_text_delivery::Outbox::atomic(200);
+ linen_queue_text(b"current",1,linen_text_delivery::Metadata{count:1,first:0,rows:1,selected:9});linen_text_poll();
+ assert!(!LOG.lock().unwrap().iter().any(|s|s.contains("linen.text.present")));
+ let value=text_batch::Applied{surface:200,sequence:1}.encode().unwrap();
+ for msg in [PdxMessage{type_id:1,caller_pd:11,arg0:value},PdxMessage{type_id:2,caller_pd:1,arg0:value},PdxMessage{type_id:1,caller_pd:1,arg0:value|1<<56}]{assert!(!desktop_text_receive(&msg));}
+ assert!(desktop_text_receive(&PdxMessage{type_id:1,caller_pd:1,arg0:value}));
+ assert!(LOG.lock().unwrap().iter().any(|s|s.contains("selected=9")&&s.contains("applied=1 pixels=unconfirmed")));
+ assert!(!desktop_text_receive(&PdxMessage{type_id:1,caller_pd:1,arg0:value}));
+}}
+#[test]fn palette_receipt_is_surface_correlated_and_closed_payload_cannot_escape(){let _l=LOCK.lock().unwrap();unsafe{
+ reset();PALETTE_TEXT.queue(b"Open Quil",0xf0f8ff,linen_text_delivery::Metadata{count:10,first:0,rows:5,selected:1});
+ for _ in 0..2{PALETTE_TEXT.poll(4,|_|linen_text_delivery::Admission::Accepted);}
+ let value=text_batch::Applied{surface:152,sequence:1}.encode().unwrap();
+ assert!(!desktop_text_receive(&PdxMessage{type_id:1,caller_pd:1,arg0:text_batch::Applied{surface:200,sequence:1}.encode().unwrap()}));
+ assert!(desktop_text_receive(&PdxMessage{type_id:1,caller_pd:1,arg0:value}));
+ assert!(LOG.lock().unwrap().iter().any(|s|s.contains("launcher.text.admitted")&&s.contains("selected=1")&&s.contains("applied=1")));
+ PALETTE_TEXT.queue(b"must scrub",0,linen_text_delivery::Metadata{count:10,first:0,rows:5,selected:2});
+ for _ in 0..2{PALETTE_TEXT.poll(4,|_|linen_text_delivery::Admission::Accepted);}PALETTE_TEXT.cancel();
+ assert!(!desktop_text_receive(&PdxMessage{type_id:1,caller_pd:1,arg0:text_batch::Applied{surface:152,sequence:2}.encode().unwrap()}));
+}}

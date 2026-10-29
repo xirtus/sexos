@@ -2,6 +2,7 @@
 #![no_main]
 
 extern crate alloc;
+mod desktop_keys;
 mod app_custody;
 mod document_policy;
 mod linen_async;
@@ -5342,8 +5343,8 @@ unsafe fn spindle_view_poll(){
     }
 }
 
-static mut LINEN_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::new(SURFACE_ID_LINEN);
-static mut PALETTE_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::new(SURFACE_ID_COMMAND_PALETTE);
+static mut LINEN_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::atomic(SURFACE_ID_LINEN);
+static mut PALETTE_TEXT: linen_text_delivery::Outbox = linen_text_delivery::Outbox::atomic(SURFACE_ID_COMMAND_PALETTE);
 static mut PALETTE_VISIBILITY: linen_text_delivery::LatestOperation = linen_text_delivery::LatestOperation::new();
 unsafe fn linen_queue_text(text: &[u8], color: u32, metadata: linen_text_delivery::Metadata) {
     assert!(LINEN_TEXT.queue(text,color,metadata), "Linen text exceeds fixed buffer");
@@ -5359,6 +5360,19 @@ fn display_admit(op: linen_text_delivery::Operation) -> linen_text_delivery::Adm
 unsafe fn linen_text_can_progress() -> bool {
     (LINEN_TEXT.pending() || LINEN_REPAINT_AFTER_CREATE) && desktop_state_validate(linen_text_delivery::Operation {
         opcode:0xEC,surface:SURFACE_ID_LINEN,packed:0,control:0 }).is_some()
+}
+unsafe fn desktop_text_receive(msg:&sex_pdx::PdxMessage)->bool {
+    if msg.type_id!=1 {return false;}
+    if let Some(receipt)=LINEN_TEXT.receive(msg.caller_pd,msg.arg0) {
+        let m=receipt.metadata;
+        sex_pdx::serial_record!("[linen.text.present] count={} first={} rows={} selected={} bytes={} committed_view=1 admitted=1 applied=1 pixels=unconfirmed",m.count,m.first,m.rows,m.selected,receipt.bytes);
+        return true;
+    }
+    if let Some(receipt)=PALETTE_TEXT.receive(msg.caller_pd,msg.arg0) {
+        sex_pdx::serial_record!("[launcher.text.admitted] complete=1 selected={} bytes={} applied=1 pixels=unconfirmed",receipt.metadata.selected,receipt.bytes);
+        return true;
+    }
+    false
 }
 unsafe fn linen_text_poll() {
     // No admission receipt for text directed at an absent/minimized surface.
@@ -9364,20 +9378,20 @@ static mut ATLAS_SELECTED_SCENE: u8 = 0;
 const TOMBSTONE_RING_SIZE: usize = 16;
 static mut TOMBSTONE_RING: [Option<TombstoneEvent>; TOMBSTONE_RING_SIZE] = [None; TOMBSTONE_RING_SIZE];
 static mut TOMBSTONE_RING_NEXT: usize = 0;
-static mut SURFACE_100_ALIVE: bool = true;
-static mut SURFACE_101_ALIVE: bool = true;
+static mut SURFACE_100_ALIVE: bool = false;
+static mut SURFACE_101_ALIVE: bool = false;
 static mut SURFACE_101_X: i32 = 180;
 static mut SURFACE_101_Y: i32 = 160;
 static mut SURFACE_100_W: u32 = 800;
 static mut SURFACE_100_H: u32 = 500;
 static mut SURFACE_101_W: u32 = 500;
 static mut SURFACE_101_H: u32 = 300;
-static mut SURFACE_102_ALIVE: bool = true;
+static mut SURFACE_102_ALIVE: bool = false;
 static mut SURFACE_102_X: i32 = 50;
 static mut SURFACE_102_Y: i32 = 60;
 static mut SURFACE_102_W: u32 = 350;
 static mut SURFACE_102_H: u32 = 150;
-static mut SURFACE_103_ALIVE: bool = true;
+static mut SURFACE_103_ALIVE: bool = false;
 static mut SURFACE_103_X: i32 = 900;
 static mut SURFACE_103_Y: i32 = 560;
 static mut SURFACE_103_W: u32 = 300;
@@ -9465,10 +9479,8 @@ unsafe fn flush_pending_cursor_send() {
 /// Send cursor surface update to sexdisplay with bounds clamping.
 /// All cursor movement paths must use this — no direct pdx_call for cursor.
 unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
-    // Any send (rel flush, abs, debug, autodemo) satisfies the pending
-    // coalesced state — the display now has the current position.
-    CURSOR_SEND_PENDING = false;
-    CURSOR_APPLIES_SINCE_SEND = 0;
+    // Input state advances immediately. Display admission owns retry state;
+    // Full retains only the latest coordinates, never a growing message list.
     let old_x = POINTER_X;
     let old_y = POINTER_Y;
     let cx = x.clamp(0, desktop_width() - 1);
@@ -9496,7 +9508,16 @@ unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
     // A flushed send always carries the tick of its newest apply, so
     // apply_to_send=0 states "sent with zero further applies elapsed".
     let trace_arg2 = ((SHELL_APPLY_TICK as u64) << 32) | (cy as u32 as u64);
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, trace_arg1, trace_arg2);
+    let (status,_)=pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, trace_arg1, trace_arg2);
+    if status!=0 {
+        CURSOR_SEND_PENDING=status==sex_pdx::ERR_SERVICE_NOT_READY;
+        if !CURSOR_SEND_PENDING {
+            sex_pdx::serial_record!("[shell.cursor.rejected] status={:#x} x={} y={}",status,cx,cy);
+        }
+        return;
+    }
+    CURSOR_SEND_PENDING=false;
+    CURSOR_APPLIES_SINCE_SEND=0;
     CURSOR_SEND_COUNT = CURSOR_SEND_COUNT.saturating_add(1);
     INPUT_TRACE_SENDS = INPUT_TRACE_SENDS.wrapping_add(1);
     {
@@ -9792,7 +9813,7 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
         );
     }
 
-    serial_println!(
+    sex_pdx::serial_record!(
         "[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}",
         raw_x, raw_y, sx, sy, accepted as u8, reason
     );
@@ -9803,6 +9824,23 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
             "[shell.abs.sample] raw_x={} raw_y={} sx={} sy={} dt=0 accepted={} reason={}",
             raw_x, raw_y, sx, sy, accepted as u8, reason
         );
+    }
+}
+
+static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
+/// Runs before native text routing in both HID paths. Alt remains owned by
+/// the desktop, so changing focus cannot leave a modifier held in the old app.
+unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    match DESKTOP_KEYS.event(code,value) {
+        desktop_keys::Action::Pass=>false,
+        desktop_keys::Action::Consume=>true,
+        desktop_keys::Action::NextFrame=>{
+            let old=FOCUSED_SURFACE_ID;
+            if COMMAND_PALETTE_OPEN {toggle_command_palette();}
+            focus_next_frame();
+            sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
+            true
+        }
     }
 }
 
@@ -9821,6 +9859,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             event_class, scancode, value, arg0, arg1, event_class
         );
     }
+
+    if event_class==EV_KEY && desktop_shortcut(scancode,value){return;}
 
     if event_class == EV_KEY {
         static mut KEY_RECV_DRAIN_BUDGET: u32 = 64;
@@ -11184,11 +11224,13 @@ unsafe fn surface_is_lifecycle_focusable(sid: u64) -> bool {
 /// Register all known surfaces with appropriate initial lifecycle states.
 /// Called once at boot after frame initialization.
 unsafe fn lifecycle_init_all() {
-    // Boot app surfaces — all start Visible in active scene.
-    lifecycle_register(SURFACE_ID_APP, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_STATIC, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Visible);
+    // Legacy descriptors have no boot display surface. Keep them allocated
+    // until an explicit diagnostic/create path maps them; tiling is not genesis.
+    // The working desktop surfaces below start visible in the active scene.
+    lifecycle_register(SURFACE_ID_APP, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_STATIC, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Allocated);
     lifecycle_register(SURFACE_ID_LINEN, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_QUIL, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_MESH, LifecycleState::Visible);
@@ -15554,6 +15596,7 @@ unsafe fn toggle_command_palette() -> bool {
     if COMMAND_PALETTE_OPEN {
         // Close palette — minimize the frame.
         COMMAND_PALETTE_OPEN = false;
+        PALETTE_TEXT.cancel();
         serial_println!("[launcher.close] ok=1 reason=palette_closed");
         serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
         // Phase 2: palette closed → packed=0.
@@ -24464,7 +24507,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24474,6 +24517,7 @@ pub extern "C" fn _start() -> ! {
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
+            if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
             if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {
                 sex_pdx::serial_record!("[shell.app.stale] target={} opcode={:#x} rejected=1", msg.caller_pd, msg.type_id);
@@ -24746,7 +24790,9 @@ pub extern "C" fn _start() -> ! {
                         }
 
                         // ── Event-class dispatch ──
-                        if event_class == EV_KEY && value == 1 {
+                        if event_class==EV_KEY && desktop_shortcut(scancode,value) {
+                            mutated=true;
+                        } else if event_class == EV_KEY && value == 1 {
                             // ── Debug keyboard cursor fallback (main dispatch path) ──────────
                             // SEXOS_KEYBOARD_CURSOR=1 only. Fires keytrace for every key-down.
                             // WASD/arrow keys also move the cursor directly from this path.

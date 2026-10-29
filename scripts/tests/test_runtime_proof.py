@@ -381,6 +381,38 @@ while True:
         result, _, _ = self.run_fake("running", persistence=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_failed_build_never_boots_a_stale_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);scripts=root/"scripts";scripts.mkdir()
+            (scripts/"master_runtime_gate.sh").write_text((ROOT/"scripts/master_runtime_gate.sh").read_text())
+            entry=scripts/"entrypoint_build.sh";entry.write_text("#!/bin/sh\nexit 17\n");entry.chmod(0o755)
+            (root/"sexos-v1.0.0.iso").write_bytes(b"stale image")
+            fake=root/"qemu";fake.write_text("#!/bin/sh\ntouch should-not-boot\n");fake.chmod(0o755)
+            gate=root/"gate";env=dict(os.environ,GATE_DIR=str(gate),QEMU_BIN=str(fake),ISO="sexos-v1.0.0.iso")
+            result=subprocess.run(["bash",str(scripts/"master_runtime_gate.sh"),"--probe","1"],env=env,cwd=root,capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/"should-not-boot").exists())
+            self.assertEqual((gate/"qemu-command.txt").read_text(),"")
+            self.assertIn("RED_MASTER",(gate/"report.md").read_text())
+            self.assertIn('"probe_gate": "NOT_RUN"',(gate/"provenance.json").read_text())
+            self.assertIn('"iso_sha256": null',(gate/"provenance.json").read_text())
+
+    def test_production_edit_during_build_invalidates_candidate_before_probe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);scripts=root/"scripts";scripts.mkdir();(root/"kernel/src").mkdir(parents=True)
+            (root/"kernel/src/main.rs").write_text("before build")
+            (scripts/"master_runtime_gate.sh").write_text((ROOT/"scripts/master_runtime_gate.sh").read_text())
+            entry=scripts/"entrypoint_build.sh"
+            entry.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\nPath('kernel/src/main.rs').write_text('changed during build')\nPath('sexos-v1.0.0.iso').write_bytes(b'image')\n")
+            entry.chmod(0o755)
+            fake=root/"qemu";fake.write_text("#!/bin/sh\ntouch should-not-boot\n");fake.chmod(0o755)
+            gate=root/"gate";env=dict(os.environ,GATE_DIR=str(gate),QEMU_BIN=str(fake),ISO="sexos-v1.0.0.iso")
+            result=subprocess.run(["bash",str(scripts/"master_runtime_gate.sh"),"--probe","1"],env=env,cwd=root,capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/"should-not-boot").exists())
+            self.assertIn('"probe_gate": "NOT_RUN"',(gate/"provenance.json").read_text())
+            self.assertNotEqual((gate/"build-sources.before.json").read_text(),(gate/"build-sources.after.json").read_text())
+
     def test_probe_requires_positive_integer(self):
         for value in ["0", "-1", "1.5", "oops"]:
             result = subprocess.run(["bash", str(ROOT / "scripts/master_runtime_gate.sh"),

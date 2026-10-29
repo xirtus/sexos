@@ -663,8 +663,18 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
         && (offset % NVME_LBA_BYTES) == 0
         && offset >= sexfs_obj_start && offset <= sexfs_obj_end;
 
+    // Bulk zeroing is confined to the already granted V4 pool. Metadata,
+    // legacy objects, proof sectors and the separate history journal retain
+    // their existing sector-only routes. The peer-bound region is checked
+    // before this function and the entire interval must fit the pool.
+    let allow_pool_bulk = proof_mode && size > WRITE_PROOF_LEN && size <= PAGE_SIZE
+        && size % NVME_LBA_BYTES == 0 && offset % NVME_LBA_BYTES == 0
+        && offset >= sex_pdx::DISKFS_V4_POOL_BASE_LBA * NVME_LBA_BYTES
+        && offset.checked_add(size).map_or(false,|end|end <=
+            (sex_pdx::DISKFS_V4_POOL_BASE_LBA+sex_pdx::DISKFS_V4_POOL_SECTORS)*NVME_LBA_BYTES);
     let allow = allow_proof || allow_manifest || allow_object || allow_linen || allow_quil
-        || allow_sexfs_meta || allow_sexfs_obj;
+        || allow_sexfs_meta || allow_sexfs_obj || allow_pool_bulk;
+    if !allow || hot_log() {
     serial_println!(
         "[sexdrive.write.guard.config] proof_lba={} proof_offset={:#x} manifest_lba={} object_lba_start={} object_lba_end={} proof_len={} magic={:#x} sexfs_meta={}-{} sexfs_obj={}-{}",
         WRITE_PROOF_LBA,
@@ -684,7 +694,8 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
         buf_cap,
         if proof_mode { 1u64 } else { 0u64 }
     );
-    if allow {
+    }
+    if allow && hot_log() {
         let lba = if NVME_LBA_BYTES != 0 { offset / NVME_LBA_BYTES } else { u64::MAX };
         if allow_sexfs_meta || allow_sexfs_obj {
             serial_println!(
@@ -699,7 +710,7 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
                 buf_cap
             );
         }
-    } else {
+    } else if !allow {
         let lba = if NVME_LBA_BYTES != 0 { offset / NVME_LBA_BYTES } else { u64::MAX };
         serial_println!(
             "[sexdrive.write_guard.reject] lba={} size={} ok=1",
@@ -710,7 +721,12 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 }
 
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
-    if size != WRITE_PROOF_LEN || src_va == 0 || src_va == u64::MAX {
+    // Success chatter shares the existing finite hot-log budget. Device errors,
+    // timeout/quarantine and actual FLUSH receipts remain unconditional.
+    if size == 0 || size > PAGE_SIZE || size > BLOCK_MAX_XFER
+        || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
+        || offset.checked_add(size).map_or(true,|end|end>(WRITE_PROOF_LBA+1)*NVME_LBA_BYTES)
+        || src_va == 0 || src_va == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.write.err] reason=bad_args offset={:#x} size={} src_va={:#x}",
             offset, size, src_va
@@ -749,7 +765,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     };
     let write_phys = transfer.buffer.physical_address;
     let write_va = transfer.buffer.virtual_address;
-    if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
+    if transfer.buffer.length < size || write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
         || write_va == 0 || write_va == u64::MAX
     {
         serial_println!(
@@ -763,7 +779,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
             core::ptr::write_volatile((write_va as *mut u8).add(i), 0u8);
         }
         let mut i = 0usize;
-        while i < WRITE_PROOF_LEN as usize {
+        while i < size as usize {
             let b = core::ptr::read_volatile((src_va as *const u8).add(i));
             core::ptr::write_volatile((write_va as *mut u8).add(i), b);
             i += 1;
@@ -771,9 +787,9 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     }
 
     let slba = offset / NVME_LBA_BYTES;
-    let nlb = 0u32;
+    let nlb = (size / NVME_LBA_BYTES - 1) as u32;
     let max_lba = WRITE_PROOF_LBA;
-    let last_lba = slba;
+    let last_lba = slba + nlb as u64;
     let range_ok = if slba <= max_lba { 1u64 } else { 0u64 };
     if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
@@ -792,14 +808,14 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr.add(12), nlb);
     }
-    serial_println!(
-        "[sexdrive.nvme.write.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x} sq_tail={}",
-        write_cid as u64, slba, write_phys, sq_tail as u64
-    );
-    serial_println!(
-        "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x}",
-        write_cid as u64, slba, write_phys
-    );
+    if hot_log() { serial_println!(
+        "[sexdrive.nvme.write.submit] cid={} nsid=1 slba={} nlb={} prp1={:#x} sq_tail={}",
+        write_cid as u64, slba, nlb, write_phys, sq_tail as u64
+    ); }
+    if hot_log() { serial_println!(
+        "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb={} prp1={:#x}",
+        write_cid as u64, slba, nlb, write_phys
+    ); }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=typed op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=capability_region last_lba={}",
         write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, src_va, write_phys, SLOT_BLOCK_BUFFER, last_lba
@@ -840,14 +856,14 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         if cid_now == write_cid as u32 && phase_now == cq_phase {
             done = true;
             dw3 = rd_dw3;
-            serial_println!(
+            if hot_log() { serial_println!(
                 "[sexdrive.nvme.write.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
                 cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
-            serial_println!(
+            ); }
+            if hot_log() { serial_println!(
                 "[sexdrive.block.write.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
                 cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
+            ); }
             break;
         }
     }
@@ -904,8 +920,8 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         NVME_IO_STATE.cq_head = cq_head;
         NVME_IO_STATE.cq_phase = cq_phase;
     }
-    serial_println!("[sexdrive.nvme.write.ok] cid={} slba={}", write_cid as u64, slba);
-    serial_println!("[sexdrive.block.write.api.ok] cid={} slba={}", write_cid as u64, slba);
+    if hot_log() { serial_println!("[sexdrive.nvme.write.ok] cid={} slba={}", write_cid as u64, slba); }
+    if hot_log() { serial_println!("[sexdrive.block.write.api.ok] cid={} slba={}", write_cid as u64, slba); }
     0u64
 }
 

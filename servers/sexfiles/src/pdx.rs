@@ -2,9 +2,8 @@
 //! Uses standard pdx_listen_raw(0) / pdx_reply pattern.
 
 pub use sex_pdx::{
-    pdx_listen_raw, pdx_reply, serial_println,
-    SLOT_BLOCK,
-    BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
+    pdx_listen_raw, pdx_reply, serial_println, BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN,
+    BLOCK_ERR_NO_DEVICE, SLOT_BLOCK,
 };
 
 /// SEXFILES_DEFER_V1: client requests that arrive while a nested
@@ -14,24 +13,23 @@ pub use sex_pdx::{
 /// B sent during the wait (root cause of the vanished-request hangs).
 /// Stash them here; the trampoline main loop drains before listening.
 /// Single-threaded PD — plain statics, no atomics needed.
-const DEFER_CAP: usize = 8;
-static mut DEFER_RING: [(u64, u32, u64, u64, u64); DEFER_CAP] = [(0, 0, 0, 0, 0); DEFER_CAP];
-static mut DEFER_LEN: usize = 0;
+static mut DEFERRED: crate::defer_queue::Deferred = crate::defer_queue::Deferred::new();
 
 pub fn defer_stash(type_id: u64, caller_pd: u32, a0: u64, a1: u64, a2: u64) -> bool {
     unsafe {
-        if DEFER_LEN >= DEFER_CAP {
+        if !DEFERRED.push((type_id, caller_pd, a0, a1, a2)) {
             serial_println!(
                 "[sexfiles.defer.drop] type={:#x} caller={} reason=stash_full",
-                type_id, caller_pd
+                type_id,
+                caller_pd
             );
             return false;
         }
-        DEFER_RING[DEFER_LEN] = (type_id, caller_pd, a0, a1, a2);
-        DEFER_LEN += 1;
         serial_println!(
             "[sexfiles.defer.stash] type={:#x} caller={} depth={}",
-            type_id, caller_pd, DEFER_LEN
+            type_id,
+            caller_pd,
+            DEFERRED.len()
         );
         true
     }
@@ -49,15 +47,12 @@ pub struct ReplayMsg {
 
 pub fn defer_pop() -> Option<(u64, u32, u64, u64, u64)> {
     unsafe {
-        if DEFER_LEN == 0 { return None; }
-        let msg = DEFER_RING[0];
-        for i in 1..DEFER_LEN {
-            DEFER_RING[i - 1] = DEFER_RING[i];
-        }
-        DEFER_LEN -= 1;
+        let msg = DEFERRED.pop()?;
         serial_println!(
             "[sexfiles.defer.replay] type={:#x} caller={} depth={}",
-            msg.0, msg.1, DEFER_LEN
+            msg.0,
+            msg.1,
+            DEFERRED.len()
         );
         Some(msg)
     }

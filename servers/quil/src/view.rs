@@ -154,3 +154,58 @@ pub fn render(
     }
     t
 }
+
+/// Move through every rendered line without a stack-sized line index. The
+/// caller retains the goal column across short lines. A soft-wrap boundary
+/// belongs to the following line, so it is not a valid end of the previous one.
+pub fn vertical(
+    buf: &[u8],
+    cursor: usize,
+    cols: usize,
+    goal: &mut usize,
+    up: bool,
+) -> Option<usize> {
+    let width = cols.saturating_sub(1).max(1);
+    let cursor = cursor.min(buf.len());
+    let mut line = 0usize;
+    let mut current = 0usize;
+    let mut start = 0usize;
+    let mut col = 0usize;
+    for (i, &b) in buf.iter().enumerate() {
+        col += 1;
+        if b == b'\n' || col >= width && i + 1 < buf.len() {
+            if i + 1 <= cursor {
+                current = line + 1;
+                start = i + 1;
+            }
+            line += 1;
+            col = 0;
+        }
+    }
+    if *goal == usize::MAX {
+        *goal = cursor - start;
+    }
+    let target = if up {
+        current.checked_sub(1)?
+    } else {
+        if current >= line {
+            return None;
+        }
+        current + 1
+    };
+    let mut line = 0usize;
+    let mut start = 0usize;
+    let mut col = 0usize;
+    for (i, &b) in buf.iter().enumerate() {
+        col += 1;
+        if b == b'\n' || col >= width && i + 1 < buf.len() {
+            if line == target {
+                return Some(start + (*goal).min(i - start));
+            }
+            start = i + 1;
+            line += 1;
+            col = 0;
+        }
+    }
+    Some(start + (*goal).min(buf.len() - start))
+}

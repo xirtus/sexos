@@ -102,6 +102,8 @@ fn completion_without_submission_does_not_release_as_completed() {
 // Test the extracted production driver peer-check body against the same region
 // resolver used by the kernel. Only syscall transport is substituted here.
 const SLOT_BLOCK_BUFFER: u64 = 17;
+pub const DISKFS_V4_POOL_BASE_LBA:u64=400;
+pub const DISKFS_V4_POOL_SECTORS:u64=1408;
 fn grant() -> memory_region::RegionGrant {
     memory_region::RegionGrant { region_id: 5, virtual_base: 0x400000,
         dma_base: None, length: 4096,
@@ -140,6 +142,13 @@ mod driver_read {
     const NVME_LBA_BYTES: u64 = 512;
     const WRITE_PROOF_LBA: u64 = 2047;
     const WRITE_PROOF_LEN: u64 = 512;
+    const MANIFEST_LBA:u64=2046;
+    const PROOF_OBJECT_START_LBA:u64=2038;const PROOF_OBJECT_END_LBA:u64=2045;
+    const LINEN_OBJECT_START_LBA:u64=2030;const LINEN_OBJECT_END_LBA:u64=2037;
+    const QUIL_OBJECT_START_LBA:u64=2022;const QUIL_OBJECT_END_LBA:u64=2029;
+    const SEXFS_V0_META_START_LBA:u64=0;const SEXFS_V0_META_END_LBA:u64=47;
+    const SEXFS_V0_OBJECT_START_LBA:u64=128;const SEXFS_V0_OBJECT_END_LBA:u64=2019;
+    const WRITE_PROOF_MAGIC:u64=0x3156455449525753;
     fn hot_log() -> bool { false }
     struct NvmeState {
         ready: bool, map_va: u64, io_sq_va: u64, io_cq_va: u64,
@@ -155,12 +164,15 @@ mod driver_read {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn exercise(write: bool, cqe: u32, expected: u64, quarantined: bool, ready: bool) {
+        exercise_size(write,cqe,expected,quarantined,ready,512);
+    }
+    fn exercise_size(write:bool,cqe:u32,expected:u64,quarantined:bool,ready:bool,size:usize){
         let _lock = LOCK.lock().unwrap();
         let mut sq = [0u64; 128];
         let mut cq = [0u32; 64];
         let mut doorbells = [0u32; 2];
         let mut buffer = [0u64; 512];
-        let mut destination = [0xa5u8; 512];
+        let mut destination = vec![0xa5u8; size];
         cq[3] = cqe;
         unsafe {
             let lease = Some(DmaLease::new(dma_pool::DmaBuffer {
@@ -173,7 +185,7 @@ mod driver_read {
                 io_cq_va: cq.as_ptr() as u64, sq1tdbl: 0, cq1hdbl: 4,
                 sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 42 };
         }
-        let result = if write { nvme_write_one_block(0, 512, destination.as_ptr() as u64) }
+        let result = if write { nvme_write_one_block(0, size as u64, destination.as_ptr() as u64) }
             else { nvme_read_into_mapped_va(0, 512, destination.as_mut_ptr() as u64) };
         assert_eq!(result, expected);
         assert_eq!(doorbells[0], 1, "real production body must submit");
@@ -182,12 +194,16 @@ mod driver_read {
             assert_eq!(lease.is_quarantined(), quarantined);
             assert_eq!(NVME_IO_STATE.ready, ready);
             if expected == 0 {
-                assert_eq!(destination, if write { [0xa5; 512] } else { [0; 512] });
+                assert_eq!(destination, if write { vec![0xa5; size] } else { vec![0; size] });
+                if write {
+                    assert_eq!(*((sq.as_ptr() as *const u32).add(12)), (size/512-1)as u32);
+                    assert!(std::slice::from_raw_parts(buffer.as_ptr() as *const u8,size).iter().all(|&b|b==0xA5));
+                }
                 if write { assert_eq!(buffer[0], 0xa5a5_a5a5_a5a5_a5a5); }
                 assert_eq!(NVME_IO_STATE.cq_head, 1);
                 assert_eq!(doorbells[1], 1);
             } else {
-                assert_eq!(destination, [0xa5; 512], "failure must not hand off uncompleted data");
+                assert_eq!(destination, vec![0xa5; size], "failure must not hand off uncompleted data");
             }
             READ_LEASE = None;
             WRITE_LEASE = None;
@@ -229,4 +245,26 @@ mod driver_read {
     fn production_read_error_completes_dma_but_stops_queue() {
         exercise(false, 42 | (1 << 16) | (2 << 17), BLOCK_ERR_NO_DEVICE, false, false);
     }
+    #[test]
+    fn production_four_kib_write_uses_eight_lbas_and_the_same_dma_lease(){
+        exercise_size(true,42|(1<<16),0,false,true,4096);
+    }
+    #[test]
+    fn production_bulk_guard_checks_whole_pool_interval_and_legacy_limits(){
+        for size in [1024,2048,4096]{
+            assert!(write_guard_allows(400*512,size,17));
+            assert!(write_guard_allows(1808*512-size,size,17));
+            assert!(!write_guard_allows(1808*512-size+512,size,17));
+            assert!(!write_guard_allows(399*512,size,17));
+            assert!(!write_guard_allows(1808*512,size,17));
+            assert!(!write_guard_allows(2046*512,size,17));
+            assert!(!write_guard_allows(400*512,size,99));
+        }
+        for size in [0,513,8192,u64::MAX]{assert!(!write_guard_allows(400*512,size,17));}
+        assert!(!write_guard_allows(u64::MAX-511,4096,17));
+        assert!(!write_guard_allows(400*512+1,4096,17));
+        assert!(write_guard_allows(2046*512,512,17));
+        assert!(write_guard_allows(1808*512,512,17));
+    }
+
 }

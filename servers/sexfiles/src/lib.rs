@@ -3,6 +3,7 @@
 extern crate alloc;
 extern crate spin;
 
+mod defer_queue;
 pub mod pdx;
 pub mod vfs;
 pub mod spindle_history;

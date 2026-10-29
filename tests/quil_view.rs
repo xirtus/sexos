@@ -1,12 +1,14 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
-pub const ERR_SERVICE_NOT_READY: u64 = 2;
+pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 #[path = "../servers/quil/src/display_delivery.rs"]
 mod delivery;
 #[path = "../crates/sex-pdx/src/desktop_style.rs"]
 pub mod desktop_style;
 #[path = "../crates/sex-pdx/src/document_view.rs"]
 pub mod document_view;
+#[path = "../crates/sex-pdx/src/text_batch.rs"]
+pub mod text_batch;
 #[path = "../servers/quil/src/view.rs"]
 mod view;
 use document_view::Layout;
@@ -121,6 +123,17 @@ fn display_full_retains_exact_active_batch_then_latest_and_close_fences() {
             },
             |paint, _| completed.push(paint),
         );
+        if let Some(&paint) = completed.last() {
+            o.receive(
+                1,
+                text_batch::Applied {
+                    surface: 156,
+                    sequence: paint as u32,
+                }
+                .encode()
+                .unwrap(),
+            );
+        }
         if !o.pending() {
             break;
         }
@@ -130,4 +143,239 @@ fn display_full_retains_exact_active_batch_then_latest_and_close_fences() {
     o.close();
     assert!(!o.pending());
     o.poll(156, |_, _, _, _| panic!(), |_, _| panic!());
+}
+
+#[test]
+fn vertical_navigation_has_no_768_line_limit() {
+    let buf = vec![b'\n'; 12_288];
+    let mut goal = usize::MAX;
+    assert_eq!(
+        view::vertical(&buf, buf.len(), 51, &mut goal, true),
+        Some(12_287)
+    );
+    assert_eq!(
+        view::vertical(&buf, 12_287, 51, &mut goal, false),
+        Some(12_288)
+    );
+    assert_eq!(view::vertical(&buf, 0, 51, &mut goal, true), None);
+    assert_eq!(view::vertical(&buf, buf.len(), 51, &mut goal, false), None);
+}
+#[test]
+fn vertical_sticky_column_and_soft_wrap_stay_on_target_line() {
+    let mut goal = usize::MAX;
+    let buf = b"abcde\nx\nabcde";
+    let short = view::vertical(buf, 4, 51, &mut goal, false).unwrap();
+    assert_eq!(short, 7);
+    assert_eq!(view::vertical(buf, short, 51, &mut goal, false), Some(12));
+    // width=4: position 7 on second line moves to column 3, not the
+    // following line's start at byte4. Existing stored bytes are unchanged.
+    goal = usize::MAX;
+    assert_eq!(
+        view::vertical(b"abcdefghij", 7, 5, &mut goal, true),
+        Some(3)
+    );
+    assert_eq!(
+        view::vertical(b"abcdefghij", 3, 5, &mut goal, false),
+        Some(7)
+    );
+}
+
+#[path = "../servers/sexdisplay/src/text_transaction.rs"]
+mod text_transaction;
+#[test]
+fn outbox_end_to_end_keeps_old_text_until_commit_at_every_full_boundary() {
+    // Real client and server state machines, only the delivery result is fake.
+    for len in [0, 1, 512] {
+        for full_at in 0..(2 + (len + 7) / 8) {
+            let mut t = view::Text::new();
+            t.len = len;
+            t.bytes[..len].fill(b'x');
+            let mut out = delivery::Outbox::new();
+            out.queue(t, 1);
+            let mut stage = text_transaction::Stage::EMPTY;
+            let mut visible = b"previous".to_vec();
+            let mut admitted = vec![];
+            let mut delivered = 0;
+            let mut full = false;
+            while out.pending() {
+                out.poll(
+                    156,
+                    |op, sid, a, b| {
+                        assert_eq!(sid, 156);
+                        if delivered == full_at && !full {
+                            full = true;
+                            return Err(ERR_SERVICE_NOT_READY);
+                        }
+                        let req = text_batch::Request::decode(op, a, b).unwrap();
+                        if let Some((n, _, bytes)) = stage.receive(9, sid, req) {
+                            visible = bytes[..n].to_vec();
+                        } else {
+                            assert_eq!(visible, b"previous");
+                        }
+                        delivered += 1;
+                        Ok(())
+                    },
+                    |paint, n| admitted.push((paint, n)),
+                );
+                stage.poll_reply(|target, value| {
+                    assert_eq!(target, 9);
+                    assert_eq!(out.receive(1, value), Some((1, len)));
+                    0
+                });
+            }
+            assert!(full);
+            assert_eq!(visible, vec![b'x'; len]);
+            assert_eq!(admitted, vec![(1, len)]);
+        }
+    }
+}
+#[test]
+fn exhausted_paint_never_wraps_or_publishes_a_reused_transaction() {
+    let mut out = delivery::Outbox::new();
+    let t = view::Text::new();
+    out.queue(t, u32::MAX as u64 + 1);
+    assert!(!out.pending());
+    out.queue(t, 1);
+    out.poll(156, |_, _, _, _| panic!(), |_, _| panic!());
+}
+#[test]
+fn only_exact_display_receipt_releases_batch_and_latest_coalesces_while_waiting() {
+    let mut out = delivery::Outbox::new();
+    let mut t = view::Text::new();
+    t.len = 1;
+    t.bytes[0] = b'a';
+    out.queue(t, 1);
+    let mut sent = vec![];
+    out.poll(
+        156,
+        |op, _, _, _| {
+            sent.push(op);
+            Ok(())
+        },
+        |paint, _| assert_eq!(paint, 1),
+    );
+    assert_eq!(
+        sent,
+        [text_batch::BEGIN, text_batch::CHUNK, text_batch::COMMIT]
+    );
+    for paint in 2..100 {
+        t.bytes[0] = b'z';
+        out.queue(t, paint);
+    }
+    out.poll(
+        156,
+        |_, _, _, _| panic!("must await receipt"),
+        |_, _| panic!(),
+    );
+    let exact = text_batch::Applied {
+        surface: 156,
+        sequence: 1,
+    }
+    .encode()
+    .unwrap();
+    for (caller, value) in [
+        (3, exact),
+        (1, exact | 1 << 56),
+        (
+            1,
+            text_batch::Applied {
+                surface: 301,
+                sequence: 1,
+            }
+            .encode()
+            .unwrap(),
+        ),
+        (
+            1,
+            text_batch::Applied {
+                surface: 156,
+                sequence: 2,
+            }
+            .encode()
+            .unwrap(),
+        ),
+    ] {
+        assert_eq!(out.receive(caller, value), None);
+    }
+    assert_eq!(out.receive(1, exact), Some((1, 1)));
+    assert_eq!(out.receive(1, exact), None);
+    out.poll(
+        156,
+        |op, _, a, b| {
+            if op == text_batch::BEGIN {
+                assert!(matches!(
+                    text_batch::Request::decode(op, a, b),
+                    Some(text_batch::Request::Begin { sequence: 99, .. })
+                ));
+            }
+            Ok(())
+        },
+        |paint, _| assert_eq!(paint, 99),
+    );
+    out.close();
+    assert_eq!(
+        out.receive(
+            1,
+            text_batch::Applied {
+                surface: 156,
+                sequence: 99
+            }
+            .encode()
+            .unwrap()
+        ),
+        None
+    );
+}
+#[test]
+fn ack_then_new_queue_supersedes_older_latest_and_never_replays_behind_display() {
+    let mut out = delivery::Outbox::new();
+    let mut stage = text_transaction::Stage::EMPTY;
+    let mut t = view::Text::new();
+    t.len = 1;
+    t.bytes[0] = b'a';
+    out.queue(t, 1);
+    out.poll(
+        156,
+        |op, sid, a, b| {
+            stage.receive(9, sid, text_batch::Request::decode(op, a, b).unwrap());
+            Ok(())
+        },
+        |_, _| {},
+    );
+    t.bytes[0] = b'b';
+    out.queue(t, 2);
+    stage.poll_reply(|_, value| {
+        assert_eq!(out.receive(1, value), Some((1, 1)));
+        0
+    });
+    // The real main loop may process another input before its next poll.
+    t.bytes[0] = b'c';
+    out.queue(t, 3);
+    let mut completed = vec![];
+    out.poll(
+        156,
+        |op, sid, a, b| {
+            if let Some((n, _, bytes)) =
+                stage.receive(9, sid, text_batch::Request::decode(op, a, b).unwrap())
+            {
+                assert_eq!(&bytes[..n], b"c");
+            }
+            Ok(())
+        },
+        |paint, _| completed.push(paint),
+    );
+    stage.poll_reply(|_, value| {
+        assert_eq!(out.receive(1, value), Some((3, 1)));
+        0
+    });
+    out.poll(
+        156,
+        |_, _, _, _| panic!("superseded paint must not reappear"),
+        |_, _| panic!(),
+    );
+    assert_eq!(completed, [3]);
+    assert!(!out.pending());
+    out.queue(t, 2);
+    out.queue(t, 3);
+    assert!(!out.pending());
 }

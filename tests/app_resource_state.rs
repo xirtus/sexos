@@ -44,12 +44,12 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
 }
 #[test]fn activation_grant_binds_holder_logical_incarnation_and_both_tasks(){
  let g=ActivationGrant{holder:3,logical_app:9,incarnation:2,predecessor:9,predecessor_task:91,successor:16,successor_task:161};
- assert_eq!(g.authorize(3,9,91,16,161),Ok(()));
+ assert_eq!(g.authorize(3,9,91,16,161,Incarnation::original(9),Incarnation{logical_app:9,number:2}),Ok(()));
  for (h,p,t,n,nt) in [(1,9,91,16,161),(3,12,91,16,161),(3,9,92,16,161),(3,9,91,17,161),(3,9,91,16,162),(3,9,91,9,161)]{
-  assert_eq!(g.authorize(h,p,t,n,nt),Err(DENIED));
+  assert_eq!(g.authorize(h,p,t,n,nt,Incarnation::original(9),Incarnation{logical_app:9,number:2}),Err(DENIED));
  }
- assert_eq!(ActivationGrant{incarnation:3,..g}.authorize(3,9,91,16,161),Err(DENIED));
- assert_eq!(ActivationGrant{logical_app:0,..g}.authorize(3,9,91,16,161),Err(DENIED));
+ assert_eq!(ActivationGrant{incarnation:3,..g}.authorize(3,9,91,16,161,Incarnation::original(9),Incarnation{logical_app:9,number:2}),Err(DENIED));
+ assert_eq!(ActivationGrant{logical_app:0,..g}.authorize(3,9,91,16,161,Incarnation::original(9),Incarnation{logical_app:9,number:2}),Err(DENIED));
 }
 #[test]fn successor_all_absent_leaves_preflight_before_any_restore(){
  let pages=[page(0x4000,1,0x1000),page(0x5000,2,0x2000)];let writes=RefCell::new(Vec::new());
@@ -67,4 +67,20 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
  for q in [page(0x4000,2,0x2000),page(0x5000,1,0x2000),page(0x5000,2,0x1000)]{
   assert_eq!(restore_reserved_pages(&[p,q],|_|0,|_,_|panic!(),|_|panic!()),Err(DENIED));
  }
+}
+#[test]fn activation_chain_binds_boot_family_ordinal_and_cannot_skip_or_wrap(){
+ let old=Incarnation{logical_app:9,number:2};let new=old.next().unwrap();
+ let g=ActivationGrant{holder:3,logical_app:9,incarnation:3,predecessor:16,predecessor_task:161,successor:18,successor_task:181};
+ assert_eq!(g.authorize(3,16,161,18,181,old,new),Ok(()));
+ for (old,new) in [(Incarnation{logical_app:12,..old},new),(old,Incarnation{logical_app:12,..new}),
+  (Incarnation{number:1,..old},new),(old,Incarnation{number:4,..new}),
+  (Incarnation{number:u32::MAX,..old},Incarnation{number:0,..new}),
+  (Incarnation::EMPTY,new)] {
+  assert_eq!(g.authorize(3,16,161,18,181,old,new),Err(DENIED));
+ }
+ for bad in [ActivationGrant{logical_app:12,..g},ActivationGrant{incarnation:2,..g},ActivationGrant{incarnation:4,..g}] {
+  assert_eq!(bad.authorize(3,16,161,18,181,old,new),Err(DENIED));
+ }
+ assert_eq!(Incarnation{logical_app:9,number:u32::MAX}.next(),None);
+ assert_eq!(Incarnation::EMPTY.next(),None);
 }

@@ -4,7 +4,8 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);a=p.parse_args()
+ if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
  disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-quil-{os.getpid()}.sock';log=out/'serial.log'
@@ -29,18 +30,14 @@ def main():
   q=QMP(sock)
   def key(k,pattern):
    start=len(text());q.key(k);return wait(pattern,start)
-  def focus(sid):
-   for _ in range(16):
-    ids=re.findall(r'\[shell.focus.set\] id=(\d+)',text())
-    if ids and int(ids[-1])==sid:return
-    key('tab',r'\[shell.focus.set\] id=\d+')
-   raise RuntimeError('focus failed')
+  from desktop_focus import focus_surface
+  def focus(sid):return focus_surface(sid,text,key)
   if a.resolution=='1024x768':
    wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[linen.disk.publish.done\]')
   focus(201)
   from check_desktop_pixels import font_from_source
-  from check_quil_ui_pixels import verify,view
+  from check_quil_ui_pixels import verify,view,wait_view
   from check_document_disk import recover
   font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text());resolution=tuple(map(int,a.resolution.split('x')));stages=[]
   def capture(name,expected):
@@ -53,15 +50,19 @@ def main():
    stages.append(dict(name=name,view=view(v),pixel_errors=errors))
   def ctrl(k,pattern):
    start=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':k}],'hold-time':80});return wait(pattern,start)
+  def park_pointer():
+   start=len(text())
+   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]})
+   wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
   def toolbar(action,pattern):
-   v=view(text());per=4 if v['cols']>=20 else 2 if v['cols']>=10 else 1;scale=2 if v['w']>=256 else 1;i=action-1
+   v=wait_view(text);per=4 if v['cols']>=20 else 2 if v['cols']>=10 else 1;scale=2 if v['w']>=256 else 1;i=action-1
    x=v['x']+8+((i%per)*5+1)*6*scale;y=v['y']+v['top']+(1+i//per)*9*scale+3
    start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(resolution[0]-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(resolution[1]-1))}}]})
    # Wait for the real USB tablet movement before submitting its button.
    wait(r'\[shell.pointer.abs\]|\[silk-shell.pointer.recv\].*class=',start)
    q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]})
    wait(rf'\[quil.ui.pointer\] action={action} sequence=\d+',start)
-   q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});return wait(pattern,start)
+   q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});result=wait(pattern,start);park_pointer();return result
   def typing(value,name=False):
    for i in range(0,len(value),5):
     start=len(text());part=value[i:i+5];q.key_sequence([{' ':'spc'}.get(c,c)for c in part])
@@ -74,11 +75,11 @@ def main():
   toolbar(1,r'\[quil.new.ok\] bytes=0');typing('first note')
   capture('edited','first note#')
   ctrl('s',r'\[quil.name.mode\] on=1');typing('uialpha',True)
-  start=len(text());q.key('ret');m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',start)
+  cold_start=time.monotonic();start=len(text());q.key('ret');m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',start);cold_first=time.monotonic()-cold_start
   first=dict(bytes=int(m[1]),hash=m[2],object=int(m[3]),name='uialpha',content='first note')
   wait(r'\[quil.document.saved\].*dirty=0',start);capture('saved','uialpha')
   typing('b');toolbar(4,r'\[quil.name.mode\] on=1 save_as=1');typing('uibeta',True)
-  start=len(text());q.key('ret');m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',start);wait(r'\[quil.document.saved\].*dirty=0',start)
+  cold_start=time.monotonic();start=len(text());q.key('ret');m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',start);cold_second=time.monotonic()-cold_start;wait(r'\[quil.document.saved\].*dirty=0',start)
   second=dict(bytes=int(m[1]),hash=m[2],object=int(m[3]),name='uibeta',content='first noteb')
   # Save and a following edit in one actual hardware event stream.
   start=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}for k,down in [('ctrl',True),('s',True),('s',False),('ctrl',False),('z',True),('z',False)]]})
@@ -90,7 +91,7 @@ def main():
   key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=201 ok=1');capture('zoomed','first notebz#')
   key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=201 ok=1');capture('retiled','first notebz#')
   focus(201)
-  before_min=view(text())
+  before_min=wait_view(text)
   key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('ret',r'\[silk.lifecycle.minimize.hidden\] sid=201 frame=\d+')
   from check_disk_persistence import ppm_rgb
   end=time.monotonic()+90
@@ -102,12 +103,20 @@ def main():
    time.sleep(.15)
   # Restore the existing live frame through the visible launcher action.
   key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('k',r'\[shell.palette.select\] old=8 new=7');key('ret',r'\[silk.lifecycle.restore.ok\] frame=\d+ sid=201');focus(201);capture('restored','first notebz#')
+  input_latency=None
+  if a.typing_bursts:
+   from quil_input_latency import run as measure_input
+   input_latency=measure_input(locals(),a.typing_bursts)
+  soak=None
+  if a.soak_seconds:
+   from alpha_session import run
+   soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal)
   checked=[]
   for expected in [first,second]:
    r=recover(disk.read_bytes(),expected['object'])
    if r.pop('payload')!=expected['content'].encode():raise RuntimeError('native saved bytes differ')
    checked.append(r)
-  result=dict(ok=True,round=17,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
+  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
   (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
  except Exception as e:
   (out/'result.json').write_text(json.dumps(dict(ok=False,error=str(e)))+'\n');raise

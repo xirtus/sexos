@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
+extern crate self as sex_pdx;
+pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../servers/sexdisplay/src/text_transaction.rs"]mod display_transaction;
 #[path="../servers/silk-shell/src/linen_text_delivery.rs"] mod production;
 use production::*;
 fn metadata(id:u64)->Metadata{Metadata{count:5,first:id as usize,rows:3,selected:id}}
@@ -86,4 +90,28 @@ fn op(opcode:u64,surface:u64)->Operation{Operation{opcode,surface,packed:11,cont
 #[test]fn focus_waits_for_geometry_but_clear_is_a_real_operation(){
  let mut f=FocusDelivery::new();f.observe(153,Admission::Full);assert_eq!(f.poll(153,|_|true,|_|false,|_|panic!()),LatestPoll::Deferred);
  f.observe(0,Admission::Full);assert!(matches!(f.poll(0,|_|panic!(),|_|true,|op|{assert_eq!((op.opcode,op.surface),(0xED,0));Admission::Accepted}),LatestPoll::Applied(_)));
+}
+#[test]fn atomic_text_is_visible_and_metadata_published_only_after_exact_display_receipt(){
+ let mut o=Outbox::atomic(200);let mut stage=display_transaction::Stage::EMPTY;assert!(o.queue(b"listed\nobjects",0x123456,metadata(7)));
+ let mut visible=b"previous list".to_vec();let mut calls=0;
+ while calls<5 {let result=o.poll(1,|op|{calls+=1;let r=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();
+  if let Some((n,_,bytes))=stage.receive(3,op.surface,r){visible=bytes[..n].to_vec();}else{assert_eq!(visible,b"previous list");}Admission::Accepted});assert_eq!(result,Poll::Pending);
+  if visible==b"listed\nobjects"{break;}
+ }
+ assert_eq!(visible,b"listed\nobjects");assert_eq!(o.poll(4,|_|panic!("awaits receipt")),Poll::Pending);
+ let mut value=0;stage.poll_reply(|owner,v|{assert_eq!(owner,3);value=v;ERR_SERVICE_NOT_READY});
+ assert_eq!(o.receive(11,value),None);assert_eq!(o.receive(1,value|1<<56),None);
+ assert_eq!(o.receive(1,value),Some(Receipt{metadata:metadata(7),bytes:14}));assert!(!o.pending());
+}
+#[test]fn atomic_full_cancel_recreate_and_ack_queue_gap_never_publish_stale_list(){
+ let mut o=Outbox::atomic(200);o.queue(b"old",1,metadata(1));let mut op=None;
+ assert_eq!(o.poll(4,|v|{op=Some(v);Admission::Full}),Poll::Deferred);
+ assert_eq!(o.poll(1,|v|{assert_eq!(Some(v),op);Admission::Accepted}),Poll::Pending);
+ o.cancel();let mut stage=display_transaction::Stage::EMPTY;stage.reset();o.queue(b"current",1,metadata(2));
+ let mut done=0;
+ for _ in 0..4{o.poll(4,|v|{if stage.receive(3,v.surface,text_batch::Request::decode(v.opcode,v.packed,v.control).unwrap()).is_some(){done+=1;}Admission::Accepted});}
+ assert_eq!(done,1);o.queue(b"superseded",1,metadata(3));stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata.selected,2);0});
+ o.queue(b"latest",1,metadata(4));let mut applied=None;
+ for _ in 0..4{o.poll(4,|v|{if let Some((_,_,_))=stage.receive(3,v.surface,text_batch::Request::decode(v.opcode,v.packed,v.control).unwrap()){applied=Some(v);}Admission::Accepted});}
+ stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata.selected,4);0});assert!(applied.is_some());assert_eq!(o.poll(4,|_|panic!()),Poll::Idle);
 }

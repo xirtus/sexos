@@ -7,6 +7,10 @@ pub trait Backend {
     fn create(&mut self, _name: [u8; 16]) -> Result<u8, u32> {
         Err(w::DENIED)
     }
+    fn cancel_save(&mut self, _caller: u32) {}
+    fn save_step(&mut self, caller: u32, id: u8, bytes: &[u8]) -> Result<bool, u32> {
+        self.save(caller, id, bytes).map(|_| true)
+    }
     fn save(&mut self, _caller: u32, _id: u8, _bytes: &[u8]) -> Result<(), u32> {
         Err(w::DENIED)
     }
@@ -19,6 +23,7 @@ struct Session {
     generation: u32,
     bound: bool,
     saving: bool,
+    commit: Option<w::Request>,
     written: usize,
     last: Option<w::Request>,
     receipt: u64,
@@ -35,6 +40,7 @@ impl Session {
             generation: 0,
             bound: false,
             saving: false,
+            commit: None,
             written: 0,
             last: None,
             receipt: 0,
@@ -48,6 +54,7 @@ impl Session {
         self.len = 0;
         self.bound = false;
         self.saving = false;
+        self.commit = None;
         self.written = 0;
     }
 }
@@ -68,7 +75,39 @@ impl Service {
         }
     }
     pub fn pending(&self) -> bool {
-        self.sessions.iter().any(|s| s.pending.is_some())
+        self.sessions
+            .iter()
+            .any(|s| s.pending.is_some() || s.commit.is_some())
+    }
+    /// Called only after queued messages (especially terminal notices) drain.
+    /// Admission and completion are separate; a duplicate cannot replay COMMIT.
+    pub fn progress(&mut self, b: &mut impl Backend) {
+        for (i, s) in self.sessions.iter_mut().enumerate() {
+            if let Some(r) = s.commit {
+                let caller = if i == 0 { 9 } else { 16 };
+                let result = if b.identity(s.object) != Ok(s.generation) {
+                    Err(w::STALE)
+                } else {
+                    b.save_step(caller, s.object, &s.bytes[..s.len])
+                };
+                match result {
+                    Ok(false) => {}
+                    done => {
+                        b.cancel_save(caller);
+                        s.commit = None;
+                        let result = done.map(|_| {
+                            s.saving = false;
+                            s.len as u32
+                        });
+                        let v = w::reply(r.seq, result);
+                        s.receipt = v;
+                        s.pending = Some(v);
+                    }
+                }
+                // One transaction step per turn, irrespective of client count.
+                break;
+            }
+        }
     }
     pub fn poll(&mut self, mut send: impl FnMut(u32, u64) -> u64) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
@@ -79,7 +118,8 @@ impl Service {
             }
         }
     }
-    pub fn retire(&mut self, caller: u32) {
+    pub fn retire(&mut self, caller: u32, b: &mut impl Backend) {
+        b.cancel_save(caller);
         if let Some(i) = Self::index(caller) {
             let s = &mut self.sessions[i];
             s.clear();
@@ -102,6 +142,7 @@ impl Service {
             if r.object != 0 || r.offset != 0 || r.a != 0 || r.b != 0 {
                 return Err(w::INVALID);
             }
+            b.cancel_save(caller);
             s.clear();
             return Ok(0);
         }
@@ -204,10 +245,8 @@ impl Service {
                 {
                     return Err(w::INVALID);
                 }
-                b.save(caller, s.object, &s.bytes[..s.len])?;
-                s.saving = false;
-                s.generation = b.identity(s.object)?;
-                Ok(s.len as u32)
+                s.commit = Some(r);
+                Ok(0)
             }
             w::READ => {
                 if s.saving {
@@ -254,6 +293,18 @@ impl Service {
         if s.dead || !live {
             return Some(w::reply(r.seq, Err(w::DENIED)));
         }
+        if s.commit.is_some() {
+            // Only a fresh exact ABORT may replace an unfinished commit.
+            if r.kind != w::ABORT
+                || r.object != 0
+                || r.offset != 0
+                || r.a != 0
+                || r.b != 0
+                || s.last.map_or(true, |old| r.seq <= old.seq)
+            {
+                return None;
+            }
+        }
         if s.pending.is_some() {
             if r.kind != w::ABORT
                 || r.object != 0
@@ -281,7 +332,9 @@ impl Service {
             s.last = Some(r);
             s.receipt = v;
         }
-        s.pending = Some(v);
+        if s.commit.is_none() {
+            s.pending = Some(v);
+        }
         None
     }
 }

@@ -1,4 +1,5 @@
 import unittest,pathlib,sys
+from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 import check_quil_ui_pixels as c
 from check_desktop_pixels import glyph,font_from_source
@@ -23,4 +24,13 @@ class QuilPixels(unittest.TestCase):
   self.assertTrue(c.verify(LOG.split('[quil.ui.admitted]')[0],fixture(),FONT))
  def test_stale_geometry_wrong_text_and_resolution_rejected(self):
   for log,expected,res in[(LOG.replace('paint=1 w=624','paint=1 w=640'),'hello#',(1280,800)),(LOG,'other',(1280,800)),(LOG,'hello#',(1024,768))]:self.assertTrue(c.verify(log,fixture(),FONT,expected,resolution=res))
+ def test_waits_for_latest_exact_admission_without_accepting_older_paint(self):
+  missing=LOG.split('[quil.ui.admitted]')[0]
+  values=iter([missing,missing,LOG])
+  with patch.object(c.time,'sleep')as sleep:
+   self.assertEqual(c.wait_view(lambda:next(values))['paint'],1)
+   self.assertEqual(sleep.call_count,2)
+ def test_permanent_missing_or_malformed_view_fails_at_deadline(self):
+  with patch.object(c.time,'monotonic',side_effect=[0,0,1]),patch.object(c.time,'sleep'):
+   with self.assertRaisesRegex(RuntimeError,'not fully admitted'):c.wait_view(lambda:LOG.split('[quil.ui.admitted]')[0],timeout=.5)
 if __name__=='__main__':unittest.main()

@@ -93,15 +93,6 @@ const QUIL_BUFFER_MAX_LEN: usize = 12288;
 // anything to the display, so it stays well under 512 bytes regardless of
 // QUIL_BUFFER_MAX_LEN. 24 rows is the renderer's line-table cap.
 const QUIL_MAX_VISIBLE_LINES: usize = 24;
-// QUIL_MAX_DISPLAY_LINES sizes stack-local line-start tables in
-// quil_layout()'s three call sites. It is intentionally decoupled from
-// QUIL_BUFFER_MAX_LEN (which used to double as "worst case one line per
-// byte") — at 12 KiB that would be a ~24KB stack array against a 64KB
-// per-PD user stack (kernel/src/init.rs stack_top), too tight a margin.
-// 768 lines comfortably covers any realistically-typed document; only
-// QUIL_VIEW_ROWS of it are ever visible at once.
-const QUIL_MAX_DISPLAY_LINES: usize = 768;
-
 /// Mutable text buffer — initialized from QUIL_TEXT_INIT at boot.
 /// Updated by quil_load(). Read by draw_text_lines().
 static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
@@ -264,40 +255,6 @@ static mut QUIL_GOAL_COL: usize = usize::MAX;
 const QUIL_VIEW_COLS: usize = 80;
 const QUIL_VIEW_ROWS: usize = 22;
 
-fn quil_layout(buf: &[u8], starts: &mut [u16; QUIL_MAX_DISPLAY_LINES]) -> usize {
-    let mut count = 1usize;
-    starts[0] = 0;
-    let mut col = 0usize;
-    let mut i = 0usize;
-    while i < buf.len() {
-        let c = buf[i];
-        i += 1;
-        if c == b'\n' {
-            if count >= QUIL_MAX_DISPLAY_LINES { break; }
-            starts[count] = i as u16;
-            count += 1;
-            col = 0;
-        } else {
-            col += 1;
-            if col >= unsafe{DOCUMENT_VIEW.cols.saturating_sub(1).max(1)} && i < buf.len() {
-                if count >= QUIL_MAX_DISPLAY_LINES { break; }
-                starts[count] = i as u16;
-                count += 1;
-                col = 0;
-            }
-        }
-    }
-    count
-}
-
-/// Display line index containing byte offset `pos`.
-fn quil_line_of(starts: &[u16; QUIL_MAX_DISPLAY_LINES], count: usize, pos: usize) -> usize {
-    let mut line = 0;
-    for i in 0..count {
-        if (starts[i] as usize) <= pos { line = i; } else { break; }
-    }
-    line
-}
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_SEL_START: usize = 0;
 static mut QUIL_SEL_END: usize = 0;
@@ -694,43 +651,19 @@ fn draw_title_bar() {
 /// QUIL_TEXT_V3: move the cursor one display line up (dir=-1) or down
 /// (dir=1), keeping a sticky goal column across shorter lines.
 unsafe fn quil_cursor_vertical(dir: i32) {
-    let mut starts = [0u16; QUIL_MAX_DISPLAY_LINES];
-    let count = quil_layout(&QUIL_BUFFER[..QUIL_BUFFER_LEN], &mut starts);
-    let line = quil_line_of(&starts, count, QUIL_CURSOR_POS);
-    let line_start = starts[line] as usize;
-    let cur_col = QUIL_CURSOR_POS - line_start;
-    if QUIL_GOAL_COL == usize::MAX { QUIL_GOAL_COL = cur_col; }
-    let target = if dir < 0 {
-        if line == 0 {
-            serial_println!("[quil.cursor.move] dir=up ok=0 reason=first_line");
-            return;
-        }
-        line - 1
-    } else {
-        if line + 1 >= count {
-            serial_println!("[quil.cursor.move] dir=down ok=0 reason=last_line");
-            return;
-        }
-        line + 1
-    };
-    let t_start = starts[target] as usize;
-    let t_end = if target + 1 < count {
-        // exclude the '\n' separator (cursor lands before it)
-        let e = starts[target + 1] as usize;
-        if e > t_start && QUIL_BUFFER[e - 1] == b'\n' { e - 1 } else { e }
-    } else {
-        QUIL_BUFFER_LEN
-    };
-    let t_len = t_end - t_start;
     let old = QUIL_CURSOR_POS;
-    QUIL_CURSOR_POS = t_start + QUIL_GOAL_COL.min(t_len);
+    let Some(next) = view::vertical(&QUIL_BUFFER[..QUIL_BUFFER_LEN], QUIL_CURSOR_POS,
+        DOCUMENT_VIEW.cols, &mut QUIL_GOAL_COL, dir < 0) else {
+        serial_println!("[quil.cursor.move] dir={} ok=0 reason=boundary", if dir < 0 { "up" } else { "down" });
+        return;
+    };
+    QUIL_CURSOR_POS = next;
     serial_println!("[quil.cursor.move] old={} new={} len={} dir={} ok=1",
         old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN, if dir < 0 { "up" } else { "down" });
     draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
 }
 
-/// Draw text buffer lines as actual glyphs via OP_TEXT_DRAW (0xFB) to sexdisplay.
-/// Lines are split on \n, padded to QUIL_TEXT_CHARS_PER_LINE, and sent in 8-byte chunks.
+/// Publish one bounded immutable text transaction; partial chunks remain private to display.
 /// Text color: bright cyan (0x00E0F0FF) over the dark slate background.
 static mut DOCUMENT_DISPLAY:display_delivery::Outbox=display_delivery::Outbox::new();
 static mut DOCUMENT_VIEW:sex_pdx::document_view::Layout=sex_pdx::document_view::Layout{w:640,h:480,scale:2,cols:51,rows:25,top:12,toolbar_rows:1};
@@ -4070,6 +4003,9 @@ pub extern "C" fn _start() -> ! {
 
         if msg.type_id==sex_pdx::document_view::OP{unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
         if msg.type_id==sex_pdx::document_view::ACTION{unsafe{if msg.caller_pd==3&&msg.arg0==((catalog.task_id as u64)<<32|catalog.target_pd as u64)&&msg.arg2>DOCUMENT_ACTION_SEQUENCE&&(1..=5).contains(&msg.arg1){DOCUMENT_ACTION_SEQUENCE=msg.arg2;sex_pdx::serial_record!("[quil.ui.pointer] action={} sequence={}",msg.arg1,msg.arg2);document_action(msg.arg1 as u8,&mut palette_active,&mut selected_row);}}continue;}
+        if msg.type_id==1 && msg.caller_pd==1 {
+            unsafe { if let Some((paint,bytes))=DOCUMENT_DISPLAY.receive(msg.caller_pd,msg.arg0) {sex_pdx::serial_record!("[quil.ui.applied] paint={} bytes={} pixels=unconfirmed",paint,bytes);continue;} }
+        }
         if msg.type_id==1 && msg.caller_pd==11 {unsafe{if let Some(event)=DOCUMENT_IO.receive(msg.caller_pd,msg.arg0){document_event(event);}}continue;}
         unsafe {
             static mut QUIL_LISTEN_BUDGET: u32 = 8;

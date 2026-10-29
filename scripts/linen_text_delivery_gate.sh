@@ -13,9 +13,12 @@ def function(name):
     found=re.findall(r'^(?:unsafe )?fn '+name+r'\b.*?^\}',s,re.M|re.S)
     assert len(found)==1,name
     return found[0]
-parts=[function(name) for name in ['pdx_call','desktop_state_validate','desktop_state_poll','linen_queue_text','display_admit','linen_text_can_progress','linen_text_poll']]
+parts=[function(name) for name in ['pdx_call','desktop_state_validate','desktop_state_poll','linen_queue_text','display_admit','linen_text_can_progress','linen_text_poll','desktop_text_receive']]
 assert 'LINEN_TEXT.poll(4,display_admit)' in function('linen_text_poll')
-assert s.count('[linen.text.present]')==1 and '[linen.text.present]' in function('linen_text_poll')
+assert s.count('[linen.text.present]')==2 and '[linen.text.present]' in function('linen_text_poll') and '[linen.text.present]' in function('desktop_text_receive')
+assert 'Outbox::atomic(SURFACE_ID_COMMAND_PALETTE)' in s
+assert 'PALETTE_TEXT.cancel();' in function('toggle_command_palette')
+assert 'Outbox::atomic(SURFACE_ID_LINEN)' in s and 'if desktop_text_receive(&msg) { continue; }' in s
 for name in ['linen_render_object_list','linen_render_static_ui']:
     body=function(name);assert 'linen_queue_text(' in body and '0xFA' not in body and '0xFB' not in body
 assert 'bell_frame_id' not in function('toggle_command_palette')

@@ -7,6 +7,7 @@ extern crate sex_rt;
 
 mod vfs;
 mod messages;
+mod defer_queue;
 mod pdx;
 mod trampoline;
 mod backends;

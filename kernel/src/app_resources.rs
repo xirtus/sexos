@@ -11,11 +11,11 @@ struct App {
     target:u32,task:u32,main:usize,trampoline:usize,pkey:u8,surface:u64,
     pages:[PrivatePage;MAX_PAGES],count:usize,captured:bool,ready:bool,
     pool:u64,coordinator:u32,pager:u32,services:[u32;5],acked:u8,
-    predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
+    identity:Incarnation,predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:[PrivatePage::EMPTY;MAX_PAGES],count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,predecessor:0,activated:false,retired:false,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,last_hint:[0;6],hinted:0,kicked:false}}}
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];
 static DORMANT:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
@@ -25,7 +25,7 @@ pub fn plan_boot_apps(targets:&[u32]){
     boot();assert!(targets.len()<=MAX_APPS);let mut apps=APPS.lock();
     for (index,&target) in targets.iter().enumerate(){
         assert!(target!=0 && !targets[..index].contains(&target) && apps[index].target==0,"APP_PLAN_IDENTITY");
-        apps[index].target=target;TARGETS[index].store(target,Ordering::Release);
+        apps[index].target=target;apps[index].identity=Incarnation::original(target);TARGETS[index].store(target,Ordering::Release);
     }
 }
 fn capture_range(app:&mut App,start:u64,length:u64)->Result<(),&'static str>{
@@ -107,11 +107,12 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     boot();let mut apps=APPS.lock();
     let old=apps.iter().find(|a|a.ready&&a.target==predecessor).expect("SUCCESSOR_NO_PREDECESSOR");
     let old_task=old.task;let old_key=old.pkey;
+    let next=old.identity.next().expect("SUCCESSOR_INCARNATION_EXHAUSTED");
     let index=apps.iter().position(|a|a.ready&&a.target==successor).expect("SUCCESSOR_NO_IMAGE");
     let app=&mut apps[index];assert!(app.predecessor==0 && successor!=predecessor && app.pkey==old_key,"SUCCESSOR_BIND");
     let task=unsafe{&*(app.main as *const crate::scheduler::Task)};
     assert!(task.state.snapshot().phase==Phase::Constructed,"SUCCESSOR_ALREADY_ACTIVE");
-    app.predecessor=predecessor;
+    app.predecessor=predecessor;app.identity=next;
     DORMANT[index].store(true,Ordering::Release);
     retire_private_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
@@ -120,9 +121,9 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
     assert!(coordinator.find_capability(slot as u32).is_none());
     coordinator.grant_capability(slot as u64,CapabilityData::AppActivation(ActivationGrant{
-        holder,logical_app:predecessor,incarnation:2,predecessor,predecessor_task:old_task,
+        holder,logical_app:next.logical_app,incarnation:next.number,predecessor,predecessor_task:old_task,
         successor,successor_task:app.task}));
-    crate::serial_println!("[boot.app.successor] logical={} incarnation=2 predecessor={} successor={} task={} surface={} key={} dormant=1 leaves={} runtime_mint=0",predecessor,predecessor,successor,app.task,app.surface,app.pkey,app.count);
+    crate::serial_println!("[boot.app.successor] logical={} incarnation={} predecessor={} successor={} task={} surface={} key={} dormant=1 leaves={} runtime_mint=0",next.logical_app,next.number,predecessor,successor,app.task,app.surface,app.pkey,app.count);
 }
 /// Scheduler first-admission fences both BOOT sweeps. Ordinary wakes cannot
 /// activate Constructed tasks; the activation commit drops this fence last.
@@ -167,7 +168,7 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
         let oi=apps.iter().position(|a|a.ready&&a.target==g.predecessor).ok_or(DENIED)?;
         let ni=apps.iter().position(|a|a.ready&&a.target==g.successor).ok_or(DENIED)?;
         let old=&apps[oi];let new=&apps[ni];
-        g.authorize(pd.id,old.target,old.task,new.target,new.task)?;
+        g.authorize(pd.id,old.target,old.task,new.target,new.task,old.identity,new.identity)?;
         if new.predecessor!=old.target{return Err(DENIED)}
         // Once consumed, replay never revalidates or restores retired leaves.
         if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,

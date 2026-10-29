@@ -107,6 +107,9 @@ const MAX_RECTS: usize = 8;
 /// while active. Content belongs to that PD. The immutable catalog coordinator
 /// may manage geometry and hide its associated app/frame surfaces.
 mod surface_lifecycle;
+mod text_transaction;
+mod damage;
+static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
 mod surface_groups;
 static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGroups::new();
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
@@ -303,10 +306,14 @@ fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usi
 /// Composite a single pixel: non-focused surfaces in slot order, then focused on top.
 /// Shared by render() and redraw_surface_area() to prevent drift.
 fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64) -> u32 {
+    let selected=unsafe{FRAME_GROUPS.winner(&SURFACES,focused_id,x,y,w,h).map(|s|s.surface_id)};
+    composite_pixel_selected(x,y,w,h,bg,focused_id,selected)
+}
+
+fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64, selected:Option<u64>) -> u32 {
     let mut c = bg;
     let mut winner_mask = 0;
     unsafe {
-        let selected = FRAME_GROUPS.winner(&SURFACES, focused_id, x, y, w, h).map(|s| s.surface_id);
         // Pass 1: non-focused surfaces (slot order, break on first hit)
         for surf in SURFACES.iter() {
             if !surf.active || Some(surf.surface_id) != selected || surf.surface_id == focused_id || FRAME_GROUPS.is_frame(surf) { continue; }
@@ -1361,6 +1368,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
     unsafe { APP_PRESENT_BITS = 0; }
     for y in 0..h {
+        let mut row=if y>50 {unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused_id,y,w,h)}}else{None};
         for x in 0..w {
             let c: u32 = if y < 50 {
                 // SilkBar/top strip always on top (layer 3)
@@ -1374,7 +1382,9 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
             } else if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
-                composite_pixel(x, y, w, h, bg(y, h), focused_id)
+                if let Some(row)=row.as_mut(){
+                    composite_pixel_selected(x,y,w,h,bg(y,h),focused_id,row.selected(x))
+                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id)}
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -1636,11 +1646,14 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     unsafe { APP_PRESENT_BITS = 0; }
     for y in 50..h {
+        let mut row=if y>50 {unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused_id,y,w,h)}}else{None};
         for x in 0..w {
             let c: u32 = if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
-                composite_pixel(x, y, w, h, bg(y, h), focused_id)
+                if let Some(row)=row.as_mut(){
+                    composite_pixel_selected(x,y,w,h,bg(y,h),focused_id,row.selected(x))
+                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id)}
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -1652,6 +1665,44 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
+    report_app_presented();
+}
+
+/// Conservative old/new glyph footprint, derived from the same layout fields
+/// as surface_text_fg_at. Geometry changes use the full scene path instead.
+fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize,usize) {
+    if surf.text_len == 0 || surf.line_count == 0 {return (0,0,0,0);}
+    let (x,y,sw,sh)=surface_groups::rect(surf,w,h);
+    let top=if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {FRAME_TOP_BAR_HEIGHT_PX+8} else {sex_pdx::desktop_style::TEXT_TOP as usize};
+    let text_y=(surf.y.max(0) as usize).saturating_add(top).max(y);
+    let bottom=(surf.y.max(0) as usize).saturating_add(top)
+        .saturating_add(surf.line_count as usize * 9 * surface_text_scale(surf))
+        .min(y.saturating_add(sh));
+    (x,text_y,sw,bottom.saturating_sub(text_y))
+}
+
+/// Text-only redraw after a complete transaction. Restore the old cursor patch
+/// before touching damage, then capture its new background exactly once.
+fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect) {
+    if (fb as u64) < HIGH_HALF_BASE || w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return; }
+    if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return; }
+    if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
+        redraw_surface_area(fb,w,h); return;
+    }
+    let Some(total) = w.checked_mul(h) else { return; };
+    let focused = unsafe { FOCUSED_SURFACE_ID };
+    unsafe { restore_cursor_under(fb,w,h,total); APP_PRESENT_BITS = 0; }
+    for y in rect.y..rect.bottom {
+        let mut row=unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused,y,w,h)};
+        for x in rect.x..rect.right {
+            let color=if let Some(row)=row.as_mut() {
+                composite_pixel_selected(x,y,w,h,bg(y,h),focused,row.selected(x))
+            } else { composite_pixel(x,y,w,h,bg(y,h),focused) };
+            unsafe { core::ptr::write_volatile(fb.add(y*w+x),color); }
+        }
+    }
+    draw_cursor_z_top(fb,w,h,total,true);
+    draw_launcher_panel(fb,w,h,total);
     report_app_presented();
 }
 
@@ -2561,6 +2612,10 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
                 cursor_under_valid: CURSOR_UNDER_VALID,
             };
             if let Some(removed) = lifecycle.prepare(index, info.target_pd, info.task_id, &mut SURFACES, &mut refs) {
+                for (index,stage) in TEXT_STAGES.iter_mut().enumerate() {
+                    stage.retire(info.target_pd);
+                    if !SURFACES[index].active { stage.reset(); }
+                }
                 FOCUSED_SURFACE_ID = refs.focused_sid;
                 bar.phase1.active_app_sid = refs.active_app_sid;
                 TOKEN_BUF_OWNER = refs.token_owner;
@@ -2715,6 +2770,7 @@ pub extern "C" fn _start() -> ! {
         display_loop_counter = display_loop_counter.wrapping_add(1);
         // ── Per-cycle flags ──
         let mut needs_surface_redraw = false;
+        let mut text_damage = damage::Damage::new();
         let mut needs_top_strip_redraw = false;
         // Cursor moved this cycle but nothing else did: eligible for the
         // save-under fast path instead of a full surface composite.
@@ -3011,7 +3067,7 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             if !lifecycle.caller_live(msg.caller_pd)
-                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD)
+                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278)
                     && !lifecycle.sid_live(msg.arg0)) {
                 unsafe {
                     static mut DEAD_CALL_LOG_BUDGET: u8 = 8;
@@ -3263,8 +3319,9 @@ pub extern "C" fn _start() -> ! {
                     let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
                     if w == 0 || h == 0 { continue; }
                     unsafe {
-                        for slot in SURFACES.iter_mut() {
+                        for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if !slot.active {
+                                TEXT_STAGES[index].reset();
                                 *slot = Surface {
                                     surface_id: 0,
                                     owner_pd: msg.caller_pd,
@@ -3297,7 +3354,9 @@ pub extern "C" fn _start() -> ! {
                     let color = if surface_id & 1 == 0 { 0x00303860u32 } else { 0x00704890u32 };
                     unsafe {
                         let admission = lifecycle.admit(&SURFACES, msg.caller_pd, surface_id);
+                        let vacant=match &admission { surface_lifecycle::Admission::Vacant(index,_)=>Some(*index),_=>None };
                         if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
+                            if let Some(index)=vacant { TEXT_STAGES[index].reset(); }
                             FRAME_GROUPS.observe(&SURFACES);
                             FRAME_GROUPS.fit_children(&mut SURFACES);
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
@@ -3430,7 +3489,7 @@ pub extern "C" fn _start() -> ! {
                     if target_id == 0 { continue; }
                     unsafe {
                         let mut found = false;
-                        for slot in SURFACES.iter_mut() {
+                        for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if slot.active && slot.surface_id == target_id {
                                 if slot.owner_pd != msg.caller_pd && !lifecycle.coordinator_controls(msg.caller_pd, target_id) {
                                     let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -3440,6 +3499,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     continue;
                                 }
+                                TEXT_STAGES[index].reset();
                                 *slot = SURFACE_EMPTY;
                                 found = true;
                                 break;
@@ -3530,6 +3590,30 @@ pub extern "C" fn _start() -> ! {
 
                         if updated {
                             needs_surface_redraw = true;
+                        }
+                    }
+                }
+                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::COMMIT => {
+                    let Some(request) = sex_pdx::text_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
+                    unsafe {
+                        for (index, slot) in SURFACES.iter_mut().enumerate() {
+                            if !slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd { continue; }
+                            if let Some((len,color,bytes)) = TEXT_STAGES[index].receive(msg.caller_pd,msg.arg0,request) {
+                                let changed = slot.text_len as usize != len || slot.text_color != color || slot.text_buf != *bytes;
+                                let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
+                                slot.text_buf = *bytes;
+                                slot.text_len = len as u16;
+                                slot.text_color = color;
+                                recompute_text_lines(slot);
+                                if changed {
+                                    text_damage.add(old_damage,FB_W as usize,FB_H as usize);
+                                    text_damage.add(text_surface_damage(slot,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
+                                }
+                                if let sex_pdx::text_batch::Request::Commit { sequence, .. } = request {
+                                    sex_pdx::serial_record!("[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",msg.caller_pd,msg.arg0,sequence,len,changed as u8);
+                                }
+                            }
+                            break;
                         }
                     }
                 }
@@ -3775,6 +3859,8 @@ pub extern "C" fn _start() -> ! {
         if needs_surface_redraw && !transaction_full_render {
             clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+        } else if let Some(rect) = text_damage.rect().filter(|_| fb_live && !transaction_full_render) {
+            unsafe { redraw_surface_damage(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, rect); }
         } else if cursor_only_moved && fb_live && !transaction_full_render {
             // Cursor-only fast path: restore the 8x16 patch saved beneath
             // the previous cursor draw, then draw at the new position (which
@@ -3798,6 +3884,7 @@ pub extern "C" fn _start() -> ! {
 
         if transaction_full_render { clock_canon_apply_to_bar(&mut bar); }
         finish_display_transactions(&mut lifecycle, &bar, fb_live);
+        unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
 
         // ── Yield once regardless of whether messages remain queued ──
         loop_iter = loop_iter.wrapping_add(1);

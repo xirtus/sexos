@@ -912,3 +912,5 @@ pub mod desktop_style;
 pub mod document_view;
 
 pub mod display_boot;
+
+pub mod text_batch;

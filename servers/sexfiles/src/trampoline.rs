@@ -250,7 +250,7 @@ pub extern "C" fn trampoline_main() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
-                let m = if history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
+                let m = if history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
                 (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2)
             };
         let msg = crate::pdx::ReplayMsg {
@@ -261,7 +261,7 @@ pub extern "C" fn trampoline_main() {
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
-                    history.retire(notice.target_pd);probes.retire(notice.target_pd);documents.retire(notice.target_pd);
+                    history.retire(notice.target_pd);probes.retire(notice.target_pd);documents.retire(notice.target_pd,&mut vfs::DocumentBackend);
                     let (closed,revoked)=vfs::retire_app_subject(notice.target_pd);
                     sex_pdx::serial_record!("[files.app.cleanup] target={} task={} handles={} caps={} saved_data=retained selection=0",
                         notice.target_pd,notice.task_id,closed,revoked);

@@ -141,6 +141,29 @@ print_gate() {
     printf '  %-28s %s\n' "$name" "$state"
 }
 
+# Fingerprint production inputs on both sides of the sealed build. This also
+# covers untracked new modules; a concurrent source edit invalidates the bind.
+capture_production_sources() {
+    python3 - "$1" <<'PYSOURCES'
+import hashlib,json,pathlib,sys
+root=pathlib.Path('.')
+files=[]
+for directory in ['kernel','crates','servers','apps','sex-rt','purple-scanout','sexc','.cargo','targets']:
+    base=root/directory
+    if base.is_dir():
+        files += [p for p in base.rglob('*') if p.is_file() and 'target' not in p.parts
+                  and p.suffix in ['.rs','.toml','.ld','.json','.S','.asm']]
+for name in ['Cargo.toml','Cargo.lock','rust-toolchain.toml','limine.cfg','sexos_contract.toml','sexos_build_spec.toml','ARCHITECTURE.md','x86_64-sex.json','aarch64-sex.json']:
+    p=root/name
+    if p.is_file():files.append(p)
+result={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
+pathlib.Path(sys.argv[1]).write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
+PYSOURCES
+}
+SOURCE_BEFORE="$GATE_DIR/build-sources.before.json"
+SOURCE_AFTER="$GATE_DIR/build-sources.after.json"
+rm -f "$SOURCE_BEFORE" "$SOURCE_AFTER"
+
 # ---- 1. BUILD ----
 echo ""
 echo "============================================"
@@ -157,13 +180,36 @@ if [ "$SKIP_BUILD" = true ]; then
     BUILD_GATE="SKIP"
 else
     echo "[gate] BUILD phase..."
-    if ./scripts/entrypoint_build.sh >"$BUILD_LOG" 2>&1; then
+    capture_production_sources "$SOURCE_BEFORE"
+    if ./scripts/entrypoint_build.sh >"$BUILD_LOG" 2>&1 \
+        && capture_production_sources "$SOURCE_AFTER" \
+        && cmp -s "$SOURCE_BEFORE" "$SOURCE_AFTER"; then
         BUILD_GATE="PASS"
         echo "[gate] BUILD: PASS"
     else
         BUILD_GATE="FAIL"
         echo "[gate] BUILD: FAIL"
         echo "[gate] Build log: $BUILD_LOG"
+        # A failed build cannot authorize a probe of a stale root ISO.
+        # Preserve a fresh failure report without binding any image as tested.
+        python3 - "$PROVENANCE_PATH" "$RUN_STARTED_UTC" <<'PYBUILDFAIL'
+import json,pathlib,sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "started_utc":sys.argv[2],"build_gate":"FAIL","probe_gate":"NOT_RUN",
+    "source_image_binding":"build_failed_no_image_tested","iso_sha256":None
+},indent=2)+"\n")
+PYBUILDFAIL
+        cat > "$REPORT_PATH" <<EOFBUILDFAIL
+# Master runtime gate
+
+| BUILD_GATE | FAIL |
+| PROBE_GATE | NOT_RUN |
+| FINAL_SCORE | RED_MASTER |
+
+Build failed. No existing image was booted or accepted. See $BUILD_LOG.
+EOFBUILDFAIL
+        echo "[gate] FINAL_SCORE: RED_MASTER (build failed; probe not run)"
+        exit 1
     fi
 fi
 
@@ -204,9 +250,9 @@ fi
 
 # Record what was actually tested. With --skip-build the source/image
 # relationship is deliberately unverified; hashes identify evidence, not origin.
-python3 - "$PROVENANCE_PATH" "$ISO" "$SKIP_BUILD" "$RUN_STARTED_UTC" "$BUILD_GATE" <<'PYPROVENANCE'
+python3 - "$PROVENANCE_PATH" "$ISO" "$SKIP_BUILD" "$RUN_STARTED_UTC" "$BUILD_GATE" "$SOURCE_BEFORE" <<'PYPROVENANCE'
 import hashlib, json, os, pathlib, subprocess, sys
-out, iso, skip, started, build_gate = sys.argv[1:]
+out, iso, skip, started, build_gate, source_manifest = sys.argv[1:]
 def git(*args):
     return subprocess.check_output(["git", *args])
 image = pathlib.Path(iso)
@@ -226,7 +272,11 @@ for raw in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
         path = pathlib.Path(os.fsdecode(raw))
         if path.is_file():
             untracked[str(path)] = sha256_file(path)
-data = dict(started_utc=started, git_revision=revision, git_status=status,
+production_sources=json.loads(pathlib.Path(source_manifest).read_text()) if build_gate=="PASS" else None
+kernel=pathlib.Path('target/x86_64-sex/release/sex-kernel')
+kernel_hash=sha256_file(kernel) if build_gate=="PASS" and kernel.is_file() else None
+data = dict(production_source_sha256=production_sources,kernel_sha256=kernel_hash,
+            sources_unchanged_during_build=build_gate=="PASS",started_utc=started, git_revision=revision, git_status=status,
             tracked_diff_sha256=hashlib.sha256(source_diff).hexdigest(),
             untracked_file_sha256=untracked, build_gate=build_gate,
             iso_path=str(image.resolve()), iso_sha256=image_hash,

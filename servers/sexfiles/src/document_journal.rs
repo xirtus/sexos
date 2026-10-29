@@ -128,3 +128,180 @@ pub fn save(
     }
     Ok(r)
 }
+
+/// Cooperative save cursor. Each step performs at most one sector read,
+/// write or FLUSH; all state remains service-owned between main-loop turns.
+/// Dropping the cursor cancels progress, never rolls back completed writes.
+pub struct Save {
+    phase: u8,
+    object: u8,
+    identity: u32,
+    bank: u8,
+    offset: usize,
+    sum: u64,
+    candidate: Option<Receipt>,
+    old: [Option<Receipt>; 2],
+    next: Option<Receipt>,
+}
+impl Save {
+    pub const fn new(object: u8, identity: u32) -> Self {
+        Self {
+            phase: 0,
+            object,
+            identity,
+            bank: 0,
+            offset: 0,
+            sum: 0xcbf29ce484222325,
+            candidate: None,
+            old: [None; 2],
+            next: None,
+        }
+    }
+    pub fn step(&mut self, io: &mut impl Io, bytes: &[u8]) -> Result<Option<Receipt>, u32> {
+        let result = self.step_inner(io, bytes);
+        if result.is_err() {
+            self.phase = 12;
+        }
+        result
+    }
+    fn step_inner(&mut self, io: &mut impl Io, bytes: &[u8]) -> Result<Option<Receipt>, u32> {
+        if bytes.len() > w::MAX {
+            return Err(w::INVALID);
+        }
+        let mut sector = [0; 512];
+        match self.phase {
+            0 => {
+                io.read(self.bank as u64 * STRIDE, &mut sector)?;
+                self.candidate = if &sector[..4] == b"QJ02"
+                    && sector[4] == self.object
+                    && u32::from_le_bytes(sector[8..12].try_into().unwrap()) == self.identity
+                    && w::hash(&sector[..504])
+                        == u64::from_le_bytes(sector[504..].try_into().unwrap())
+                {
+                    let r = Receipt {
+                        bank: self.bank,
+                        generation: u64::from_le_bytes(sector[16..24].try_into().unwrap()),
+                        len: u32::from_le_bytes(sector[24..28].try_into().unwrap()) as usize,
+                        hash: u64::from_le_bytes(sector[32..40].try_into().unwrap()),
+                    };
+                    if r.generation != 0 && r.len <= w::MAX {
+                        Some(r)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                self.offset = 0;
+                self.sum = 0xcbf29ce484222325;
+                self.phase = 1;
+            }
+            1 => {
+                if let Some(r) = self.candidate {
+                    if self.offset < r.len {
+                        let n = (r.len - self.offset).min(512);
+                        io.read(
+                            self.bank as u64 * STRIDE + PAYLOAD + self.offset as u64,
+                            &mut sector[..n],
+                        )?;
+                        for &b in &sector[..n] {
+                            self.sum = (self.sum ^ b as u64).wrapping_mul(0x100000001b3);
+                        }
+                        self.offset += n;
+                        return Ok(None);
+                    }
+                    if self.sum == r.hash {
+                        self.old[self.bank as usize] = Some(r);
+                    }
+                }
+                if self.bank == 0 {
+                    self.bank = 1;
+                    self.phase = 0;
+                } else {
+                    let old = match (self.old[0], self.old[1]) {
+                        (Some(a), Some(b)) if a.generation == b.generation => return Err(w::STALE),
+                        (Some(a), Some(b)) => Some(if a.generation > b.generation { a } else { b }),
+                        (a, b) => a.or(b),
+                    };
+                    self.bank = old.map_or(1, |r| 1 - r.bank);
+                    self.next = Some(Receipt {
+                        bank: self.bank,
+                        generation: old
+                            .map_or(Some(1), |r| r.generation.checked_add(1))
+                            .ok_or(w::STALE)?,
+                        len: bytes.len(),
+                        hash: w::hash(bytes),
+                    });
+                    self.phase = 2;
+                }
+            }
+            2 => {
+                io.write(self.bank as u64 * STRIDE, &sector)?;
+                self.phase = 3;
+            }
+            3 => {
+                io.sync()?;
+                self.offset = 0;
+                self.phase = 4;
+            }
+            4 => {
+                if self.offset < bytes.len() {
+                    let n = (bytes.len() - self.offset).min(512);
+                    sector[..n].copy_from_slice(&bytes[self.offset..self.offset + n]);
+                    io.write(
+                        self.bank as u64 * STRIDE + PAYLOAD + self.offset as u64,
+                        &sector,
+                    )?;
+                    self.offset += n;
+                } else {
+                    self.phase = 5;
+                }
+            }
+            5 => {
+                io.sync()?;
+                self.offset = 0;
+                self.phase = 6;
+            }
+            6 | 10 => {
+                if self.offset < bytes.len() {
+                    let n = (bytes.len() - self.offset).min(512);
+                    io.read(
+                        self.bank as u64 * STRIDE + PAYLOAD + self.offset as u64,
+                        &mut sector[..n],
+                    )?;
+                    if sector[..n] != bytes[self.offset..self.offset + n] {
+                        return Err(w::IO);
+                    }
+                    self.offset += n;
+                } else if self.phase == 6 {
+                    self.phase = 7;
+                } else {
+                    self.phase = 11;
+                    return Ok(self.next);
+                }
+            }
+            7 => {
+                io.write(
+                    self.bank as u64 * STRIDE,
+                    &header(self.object, self.identity, self.next.ok_or(w::INVALID)?),
+                )?;
+                self.phase = 8;
+            }
+            8 => {
+                io.sync()?;
+                self.phase = 9;
+            }
+            9 => {
+                io.read(self.bank as u64 * STRIDE, &mut sector)?;
+                if sector != header(self.object, self.identity, self.next.ok_or(w::INVALID)?) {
+                    return Err(w::IO);
+                }
+                self.offset = 0;
+                self.phase = 10;
+            }
+            // A completed or failed cursor must never replay effects.
+            _ => return Err(w::STALE),
+        }
+        Ok(None)
+    }
+}

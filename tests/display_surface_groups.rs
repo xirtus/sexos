@@ -106,3 +106,91 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  assert_eq!(native_pixel_bit(17,302),16);assert_eq!(native_pixel_bit(12,302),0);
  s[0]=SURFACE_EMPTY;assert!(g.winner(&s,302,120,150,1000,800).is_none());
 }
+
+#[test]
+fn scanline_cache_matches_winner_at_every_pixel_with_focus_clipping_and_minimize(){
+ let mut g=FrameGroups::new();g.register(cat(9));g.register(cat(12));
+ let mut s=[SURFACE_EMPTY;MAX_SURFACES];s[0]=frame();s[1]=surf(9,156);
+ s[2]=Surface{x:-30,y:40,w:111,h:160,..surf(8,888)};
+ s[3]=Surface{x:190,y:65,w:140,h:95,..surf(3,152)};
+ s[4]=Surface{x:200,y:80,w:199,h:150,..surf(3,153)};
+ s[5]=surf(12,154);g.observe(&s);g.fit_children(&mut s);
+ for minimized in [false,true]{
+  s[0].active=!minimized;
+  for focus in [0,201,156,153,154,888]{for y in [49,50,51,64,65,99,100,127,136,159,180,229,250,399]{
+   let mut row=g.row_winners(&s,focus,y,420,410).unwrap();
+   for x in 0..420{assert_eq!(row.selected(x),g.winner(&s,focus,x,y,420,410).map(|s|s.surface_id),"{focus} {x} {y} {minimized}");}
+  }}
+ }
+ assert!(g.row_winners(&s,0,0,0,10).is_none());
+ assert!(g.row_winners(&s,0,10,10,10).is_none());
+}
+
+#[path = "../servers/sexdisplay/src/damage.rs"]
+mod damage;
+#[test]
+fn damage_union_clips_overflow_and_never_touches_silkbar() {
+ let mut d=damage::Damage::new();d.add((usize::MAX,0,usize::MAX,usize::MAX),1000,800);assert_eq!(d.rect(),None);
+ d.add((10,0,30,30),1000,800);assert_eq!(d.rect(),None);
+ d.add((10,40,30,30),1000,800);d.add((900,750,usize::MAX,usize::MAX),1000,800);
+ assert_eq!(d.rect(),Some(damage::Rect{x:10,y:51,right:1000,bottom:800}));
+ let mut empty=damage::Damage::new();empty.add((0,0,1000,800),0,0);assert_eq!(empty.rect(),None);
+}
+#[test]
+fn text_damage_matches_full_compositor_with_focus_clipping_overlay_and_hidden_parent(){unsafe{
+ // Existing screen, replace only app text, then compare damage to a fresh full
+ // composite pixel-for-pixel. No screenshot occupancy substitutes for glyphs.
+ for focus in [201,888,152] {for hidden in [false,true] {for x in [-30,100,950] {
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(cat(9));
+  SURFACES[0]=Surface{x,..frame()};SURFACES[1]=surf(9,156);
+  SURFACES[2]=Surface{x:300,y:160,w:200,h:100,color:0xabcdef,..surf(8,888)};
+  SURFACES[3]=Surface{x:480,y:220,w:200,h:200,color:0xaabbcc,..surf(3,152)};
+  FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+  if hidden {SURFACES[0]=SURFACE_EMPTY;}
+  SURFACES[1].text_buf[..9].copy_from_slice(b"old\nwords");SURFACES[1].text_len=9;recompute_text_lines(&mut SURFACES[1]);
+  let (w,h)=(1000,800);let mut actual=Vec::with_capacity(w*h);
+  for py in 0..h {for px in 0..w {actual.push(composite_pixel(px,py,w,h,0x123,focus));}}
+  let old_damage=text_surface_damage(&SURFACES[1],w,h);
+  SURFACES[1].text_buf=[0;TEXT_BUF_CAP];SURFACES[1].text_buf[..1].copy_from_slice(b"Z");SURFACES[1].text_len=1;recompute_text_lines(&mut SURFACES[1]);
+  let mut d=damage::Damage::new();d.add(old_damage,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);
+  FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
+  if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);}
+  for py in 0..h {for px in 0..w {assert_eq!(actual[py*w+px],composite_pixel(px,py,w,h,0x123,focus),"focus={focus} hidden={hidden} x={x} px={px} py={py}");}}
+ }}}
+}}
+
+// Framebuffer/overlay primitives are sentinels; damage-loop, winner and glyph
+// code are extracted production bodies. Tests run serially over their globals.
+const HIGH_HALF_BASE:u64=0;
+const MAX_FB_W:usize=1920;
+const MAX_FB_H:usize=1080;
+const ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED:bool=false;
+const ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED:bool=false;
+static mut FOCUSED_SURFACE_ID:u64=0;
+static mut DAMAGE_ORDER:Vec<&str>=Vec::new();
+fn bg(_:usize,_:usize)->u32{0x123}
+fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER.push("restore");}}
+fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");}}
+fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER.push("launcher");}}
+fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
+fn redraw_surface_area(_: *mut u32,_:usize,_:usize){panic!("unexpected full redraw");}
+#[test]
+fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacements(){
+ for (x,y,w,h) in [(-30,-30,144,90),(0,0,220,150),(100,100,624,331),(950,750,624,331)] {
+  for chrome in [0,SURFACE_CHROME_TOP_BAR] {
+   let mut s=Surface{x,y,w,h,chrome_flags:chrome,text_len:512,text_buf:[b'A';TEXT_BUF_CAP],..SURFACE_EMPTY};
+   for i in (12..512).step_by(13){s.text_buf[i]=b'\n';}recompute_text_lines(&mut s);
+   let r=text_surface_damage(&s,1000,800);let mut d=damage::Damage::new();d.add(r,1000,800);
+   let bounds=surface_groups::rect(&s,1000,800);
+   for py in 51..800 {for px in bounds.0..bounds.0+bounds.2 {
+    if surface_groups::contains(bounds,px,py) && surface_text_fg_at(px,py,&s).is_some(){
+     let r=d.rect().unwrap();assert!(px>=r.x&&px<r.right&&py>=r.y&&py<r.bottom,"{x} {y} {w} {h} {px} {py}");
+    }
+   }}
+   s.text_len=0;recompute_text_lines(&mut s);assert_eq!(text_surface_damage(&s,1000,800),(0,0,0,0));
+  }
+ }
+ let mut s=Surface{x:8,y:86,w:624,h:706,text_len:7,text_buf:[0;TEXT_BUF_CAP],..SURFACE_EMPTY};
+ s.text_buf[..7].copy_from_slice(b"a\nb\nc\nd");recompute_text_lines(&mut s);
+ let (_,_,width,height)=text_surface_damage(&s,1280,800);assert_eq!((width,height),(624,72));assert!(width*height<1280*750/20);
+}

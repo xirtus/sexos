@@ -13,22 +13,36 @@ pub enum Admission { Accepted, Full, Rejected(u64) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Poll { Idle, Pending, Deferred, Complete(Receipt), Rejected(u64) }
 #[derive(Clone, Copy)]
-struct Batch { bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize }
-pub struct Outbox { surface: u64, active: Option<Batch>, latest: Option<Batch> }
+struct Batch { bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool }
+pub struct Outbox { surface: u64, active: Option<Batch>, latest: Option<Batch>, atomic:bool, sequence:u32 }
 impl Outbox {
-    pub const fn new(surface: u64) -> Self { Self { surface, active: None, latest: None } }
+    pub const fn new(surface: u64) -> Self { Self { surface, active: None, latest: None, atomic:false, sequence:0 } }
+    pub const fn atomic(surface:u64)->Self {Self{surface,active:None,latest:None,atomic:true,sequence:0}}
     /// An oversized input leaves both existing batches untouched. Replacement
     /// affects only the not-yet-started batch, never interleaves active chunks.
     pub fn queue(&mut self, text: &[u8], color: u32, metadata: Metadata) -> bool {
-        if text.len() > CAPACITY { return false; }
-        let mut batch = Batch { bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0 };
+        if text.len() > CAPACITY || self.atomic && (self.surface==0 || self.surface>u16::MAX as u64 || text.iter().any(|&b| b!=b'\n' && !(32..=126).contains(&b))) { return false; }
+        let Some(sequence)=self.sequence.checked_add(1) else {return false;};
+        self.sequence=sequence;
+        let mut batch = Batch { bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false };
         batch.bytes[..text.len()].copy_from_slice(text);
         if self.active.is_none() { self.active = Some(batch); self.latest = None; }
         else { self.latest = Some(batch); }
         true
     }
     pub fn pending(&self) -> bool { self.active.is_some() || self.latest.is_some() }
-    pub fn cancel(&mut self) { self.active=None; self.latest=None; }
+    pub fn cancel(&mut self) {
+        if let Some(b)=self.active.as_mut(){b.bytes.fill(0);}
+        if let Some(b)=self.latest.as_mut(){b.bytes.fill(0);}
+        self.active=None;self.latest=None;
+    }
+    pub fn receive(&mut self,caller:u32,value:u64)->Option<Receipt> {
+        if !self.atomic{return None;}
+        let applied=sex_pdx::text_batch::Applied::decode(caller,value)?;
+        let b=self.active.as_mut()?;
+        if !b.awaiting || applied.surface as u64!=self.surface || applied.sequence!=b.sequence{return None;}
+        let receipt=Receipt{metadata:b.metadata,bytes:b.len};b.bytes.fill(0);self.active=None;Some(receipt)
+    }
     /// At most `budget` calls. Full preserves the exact operation; unexpected
     /// errors abandon only the active batch without a success receipt. A queued
     /// or subsequent repaint can recover by starting with its own clear.
@@ -37,8 +51,15 @@ impl Outbox {
         if self.active.is_none() { return Poll::Idle; }
         for _ in 0..budget {
             let b = self.active.as_mut().unwrap();
+            if b.awaiting {return Poll::Pending;}
             let chunk = (b.len - b.offset).min(8);
-            let operation = if !b.cleared { Operation { opcode: 0xFA, surface: self.surface, packed: 0, control: 0 } }
+            let operation = if self.atomic {
+                use sex_pdx::text_batch::{Request,hash};
+                let req=if !b.cleared {Request::Begin{sequence:b.sequence,len:b.len,color:b.color}}
+                    else if b.offset<b.len {let mut bytes=[0;8];bytes[..chunk].copy_from_slice(&b.bytes[b.offset..b.offset+chunk]);Request::Chunk{sequence:b.sequence,offset:b.offset,count:chunk,bytes}}
+                    else {Request::Commit{sequence:b.sequence,hash:hash(&b.bytes[..b.len])}};
+                let(opcode,packed,control)=req.wire();Operation{opcode,surface:self.surface,packed,control}
+            } else if !b.cleared { Operation { opcode: 0xFA, surface: self.surface, packed: 0, control: 0 } }
                 else {
                     let mut packed = 0;
                     for i in 0..chunk { packed |= (b.bytes[b.offset+i] as u64) << (i*8); }
@@ -48,8 +69,12 @@ impl Outbox {
                 };
             match send(operation) {
                 Admission::Full => return Poll::Deferred,
-                Admission::Rejected(status) => { self.active = None; return Poll::Rejected(status); }
+                Admission::Rejected(status) => { b.bytes.fill(0);self.active = None; return Poll::Rejected(status); }
                 Admission::Accepted => {
+                    if self.atomic {
+                        if !b.cleared{b.cleared=true;}else if b.offset<b.len{b.offset+=chunk;}else{b.awaiting=true;}
+                        continue;
+                    }
                     if !b.cleared { b.cleared = true; } else { b.offset += chunk; }
                     if b.offset == b.len {
                         let receipt = Receipt { metadata: b.metadata, bytes: b.len };

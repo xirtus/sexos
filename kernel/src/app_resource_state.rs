@@ -57,14 +57,29 @@ pub fn restore_reserved_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64
     for p in pages{write(p.leaf,p.expected);flush(p.va);}
     Ok(pages.len())
 }
+/// Identity lineage fixed by BOOT before the graph seal. The ordinal never
+/// grants access by itself; activation also checks both exact subjects/tasks.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub struct Incarnation { pub logical_app:u32, pub number:u32 }
+impl Incarnation {
+    pub const EMPTY:Self=Self{logical_app:0,number:0};
+    pub fn original(target:u32)->Self { Self{logical_app:target,number:1} }
+    pub fn next(self)->Option<Self> {
+        if self.logical_app==0 || self.number==0{return None;}
+        Some(Self{logical_app:self.logical_app,number:self.number.checked_add(1)?})
+    }
+}
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct ActivationGrant {
     pub holder:u32,pub logical_app:u32,pub incarnation:u32,
     pub predecessor:u32,pub predecessor_task:u32,pub successor:u32,pub successor_task:u32,
 }
 impl ActivationGrant {
-    pub fn authorize(self,holder:u32,predecessor:u32,predecessor_task:u32,successor:u32,successor_task:u32)->Result<(),u64>{
-        if self.holder!=holder || holder==0 || self.logical_app==0 || self.incarnation!=2
+    pub fn authorize(self,holder:u32,predecessor:u32,predecessor_task:u32,successor:u32,successor_task:u32,old:Incarnation,new:Incarnation)->Result<(),u64>{
+        if self.holder!=holder || holder==0 || holder==predecessor || holder==successor
+            || self.logical_app==0 || old.logical_app!=self.logical_app || new.logical_app!=self.logical_app
+            || old.next()!=Some(new) || self.incarnation!=new.number
+            || (old.number==1)!=(predecessor==self.logical_app) || successor==self.logical_app
             || predecessor==0 || successor==0 || predecessor==successor
             || predecessor_task==0 || successor_task==0 || predecessor_task==successor_task
             || self.predecessor!=predecessor || self.predecessor_task!=predecessor_task

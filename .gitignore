@@ -103,3 +103,6 @@ rust_output/
 # Local patched QEMU checkout (not a tracked submodule)
 tools/qemu/
 *.bak.*
+
+# Local frozen native candidates and full acceptance captures
+/.evidence/

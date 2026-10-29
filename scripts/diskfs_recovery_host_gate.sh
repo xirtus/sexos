@@ -20,6 +20,7 @@ parts = ['mod sex_pdx {']
 for name in ['DISKFS_V4_POOL_BASE_LBA', 'DISKFS_V4_BLOCK_SECTORS', 'DISKFS_V4_POOL_BLOCKS','SPINDLE_HISTORY_BASE_LBA','SPINDLE_HISTORY_SECTORS']:
     parts.append(unique(r'^pub const ' + name + r':[^\n]+;', pdx))
 parts.append(unique(r'^pub const fn ranges_overlap\b.*?^}', pdx))
+parts.append('pub mod document {pub const IO:u32=9;pub const INVALID:u32=1;pub const STALE:u32=3;}')
 parts.append('}')
 parts.append('mod messages {')
 for name in ['ERR_FULL', 'ERR_BAD_CMD', 'ERR_EXISTS', 'ERR_PERM_DENIED', 'ERR_NOT_FOUND', 'ERR_OVERFLOW']:
@@ -30,10 +31,14 @@ for name in ['DISKFS_SLOTS', 'DISKFS_V3_NAME_MAX', 'DISKFS_V3_SYSTEM_SLOTS', 'DI
     parts.append(unique(r'^(?:pub )?const ' + name + r':[^\n]+;', vfs))
 parts.append('#[derive(Clone, Copy, Default)]\n' + unique(r'^struct V4Extent \{[^}]+\}', vfs))
 parts.append('#[derive(Clone, Copy)]\n' + unique(r'^struct V4Entry \{[^}]+\}', vfs))
+parts.append(unique(r'^static DOCUMENT_WRITE_LOCK:[^\n]+;',vfs))
+parts.append(unique(r'^fn document_locked\b.*?^}',vfs))
 for name in ['v4_in_use', 'v4_bitmap_test', 'v4_bitmap_set', 'v4_bitmap_clear',
              'v4_free_pool_only', 'v4_allocate', 'v4_bitmap_rebuild',
              'v4_unpack_name', 'handle_diskfs_create', 'handle_diskfs_delete']:
     parts.append(unique(r'^fn ' + name + r'\b.*?^\}', vfs))
+parts.append(unique(r'^struct DocumentGrowth \{.*?^}',vfs))
+parts.append(unique(r'^impl DocumentGrowth \{.*?^}',vfs))
 diskfs=(root/'servers/sexfiles/src/backends/diskfs.rs').read_text()
 parts.append('const SEXFS_V0_DATA_LBA_MIN:u64=128; const SEXFS_V0_DATA_LBA_MAX:u64=2019; const DISKFS_BLOCK_SIZE:usize=4096;')
 parts.append(unique(r'^struct SexfsObjectEntryV0Parsed \{[^}]+\}', diskfs))

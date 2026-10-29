@@ -76,6 +76,8 @@ rustc --edition=2021 --test tests/quil_document.rs -o "$TEST_DIR/documents"
 "$TEST_DIR/documents"
 rustc --edition=2021 --test tests/document_journal.rs -o "$TEST_DIR/document-journal"
 "$TEST_DIR/document-journal"
+rustc --edition=2021 --test tests/display_text_transaction.rs -o "$TEST_DIR/text-transaction"
+"$TEST_DIR/text-transaction"
 rustc --edition=2021 --test tests/quil_view.rs -o "$TEST_DIR/quil-view"
 "$TEST_DIR/quil-view"
 rustc --edition=2021 --test tests/boot_display.rs -o "$TEST_DIR/boot-display"
@@ -100,4 +102,42 @@ assert f.index('obj.disk_path!=0&&obj.disk_path<3')<f.index('collar_check_operat
 PYPOLICY
 rustc --edition=2021 --test tests/document_policy.rs -o "$TEST_DIR/document-policy"
 "$TEST_DIR/document-policy"
+python3 - "$TEST_DIR/sector_write.rs" <<'PYSECTOR'
+import re,sys
+from pathlib import Path
+s=Path('servers/sexfiles/src/backends/diskfs.rs').read_text()
+f=re.findall(r'^    pub fn diskfs_write_object_entry\b.*?^    }',s,re.M|re.S);assert len(f)==1
+Path(sys.argv[1]).write_text('impl DiskFs {\n'+f[0]+'\n}')
+PYSECTOR
+DISKFS_SECTOR_WRITE_SOURCE="$TEST_DIR/sector_write.rs" rustc --edition=2021 --test tests/diskfs_sector_write.rs -o "$TEST_DIR/sector-write"
+"$TEST_DIR/sector-write"
+rustc --edition=2021 --test tests/sexfiles_deferred.rs -o "$TEST_DIR/deferred"
+"$TEST_DIR/deferred"
+python3 - <<'PYKEYS'
+from pathlib import Path
+s=Path('servers/silk-shell/src/main.rs').read_text()
+for number,name in [(100,'APP'),(101,'STATIC'),(102,'TEST3'),(103,'TEST4')]:
+    assert f'static mut SURFACE_{number}_ALIVE: bool = false;' in s
+    assert f'lifecycle_register(SURFACE_ID_{name}, LifecycleState::Allocated);' in s
+assert s.count('desktop_shortcut(scancode,value)')==2
+for start,end in [('unsafe fn handle_hid_event(', '// ── Spindle text key passthrough'),('// ── Event-class dispatch','// ── Spindle focused-surface')]:
+    part=s[s.index(start):s.index(end,s.index(start))]
+    assert 'desktop_shortcut(scancode,value)' in part
+PYKEYS
+rustc --edition=2021 --test tests/desktop_keys.rs -o "$TEST_DIR/desktop-keys"
+"$TEST_DIR/desktop-keys"
+python3 - "$TEST_DIR/cursor.rs" "$TEST_DIR/cursor_status.rs" <<'PYCURSOR'
+from pathlib import Path
+import re,sys
+s=Path('servers/silk-shell/src/main.rs').read_text()
+parts=[]
+for name in ['flush_pending_cursor_send','send_cursor_checked']:
+    f=re.findall(r'^unsafe fn '+name+r'\b.*?^}',s,re.M|re.S);assert len(f)==1;parts.append(f[0])
+Path(sys.argv[1]).write_text('\n'.join(parts))
+pdx=Path('crates/sex-pdx/src/lib.rs').read_text()
+Path(sys.argv[2]).write_text(next(line for line in pdx.splitlines()if line.startswith('pub const ERR_SERVICE_NOT_READY:'))+'\n')
+assert 'CURSOR_SEND_PENDING || linen_text_can_progress()' in s
+PYCURSOR
+CURSOR_DELIVERY_SOURCE="$TEST_DIR/cursor.rs" CURSOR_STATUS_SOURCE="$TEST_DIR/cursor_status.rs" rustc --edition=2021 --test tests/desktop_cursor_delivery.rs -o "$TEST_DIR/cursor"
+"$TEST_DIR/cursor"
 echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_and_history_with_mock_transport_authority_and_host_locks'

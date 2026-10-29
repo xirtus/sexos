@@ -60,6 +60,7 @@ fn rpc(s: &mut Service, b: &mut Fake, pd: u32, r: w::Request) -> u64 {
         return v;
     }
     let mut v = None;
+    s.progress(b);
     s.poll(|p, x| {
         if p == pd {
             v = Some(x);
@@ -170,7 +171,7 @@ fn foreign_dead_and_recycled_bindings_reject_before_effects() {
         Some(Err(w::STALE))
     );
     assert_eq!(b.loads, 0);
-    s.retire(9);
+    s.retire(9, &mut b);
     r.seq = 2;
     r.a = 8;
     assert_eq!(
@@ -260,4 +261,126 @@ fn recycled_client_selection_cannot_be_rebound_by_fresh_info() {
     assert_eq!(e.outcome, Outcome::Uncertain);
     assert_eq!(e.error, w::STALE);
     assert!(b.saved.is_empty());
+}
+
+#[test]
+fn deferred_commit_yields_to_abort_and_never_replays_effects() {
+    struct Slow {
+        turns: usize,
+        cancels: usize,
+        effects: usize,
+    }
+    impl Backend for Slow {
+        fn identity(&mut self, _: u8) -> Result<u32, u32> {
+            Ok(7)
+        }
+        fn name(&mut self, _: u8) -> Result<[u8; 16], u32> {
+            Ok([0; 16])
+        }
+        fn load(&mut self, _: u8, _: &mut [u8; w::MAX]) -> Result<usize, u32> {
+            unreachable!()
+        }
+        fn save_step(&mut self, _: u32, _: u8, bytes: &[u8]) -> Result<bool, u32> {
+            assert_eq!(bytes, b"hi");
+            self.turns += 1;
+            if self.turns == 4 {
+                self.effects += 1;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        fn cancel_save(&mut self, _: u32) {
+            self.cancels += 1;
+        }
+    }
+    let mut b = Slow {
+        turns: 0,
+        cancels: 0,
+        effects: 0,
+    };
+    let mut s = Service::new();
+    let req = |seq, kind, a, b| w::Request {
+        seq,
+        kind,
+        object: 3,
+        offset: 0,
+        a,
+        b,
+    };
+    s.handle(9, true, req(1, w::BEGIN_SAVE, 7, 2), &mut b);
+    s.poll(|_, _| 0);
+    s.handle(
+        9,
+        true,
+        req(2, w::WRITE, u16::from_le_bytes(*b"hi") as u64, 0),
+        &mut b,
+    );
+    s.poll(|_, _| 0);
+    let commit = req(3, w::COMMIT, w::hash(b"hi"), 0);
+    s.handle(9, true, commit, &mut b);
+    s.poll(|_, _| panic!("admission is not completion"));
+    s.progress(&mut b);
+    s.handle(9, true, commit, &mut b);
+    s.poll(|_, _| panic!("duplicate must not replay or report Saved"));
+    assert_eq!(b.turns, 1);
+    let abort = w::Request {
+        seq: 4,
+        kind: w::ABORT,
+        object: 0,
+        offset: 0,
+        a: 0,
+        b: 0,
+    };
+    s.handle(9, true, abort, &mut b);
+    s.poll(|_, v| {
+        assert_eq!(w::decode_reply(v, 4), Some(Ok(0)));
+        0
+    });
+    s.progress(&mut b);
+    assert_eq!((b.turns, b.effects, b.cancels), (1, 0, 1));
+    s.retire(9, &mut b);
+    s.progress(&mut b);
+    assert_eq!(b.turns, 1);
+}
+
+#[test]
+fn completed_deferred_commit_retains_full_receipt_and_retires_without_replay() {
+    let mut s = Service::new();
+    let mut b = fake();
+    let req = |seq, kind, a, b| w::Request {
+        seq,
+        kind,
+        object: 3,
+        offset: 0,
+        a,
+        b,
+    };
+    rpc(&mut s, &mut b, 9, req(1, w::BEGIN_SAVE, 7, 2));
+    rpc(
+        &mut s,
+        &mut b,
+        9,
+        req(2, w::WRITE, u16::from_le_bytes(*b"hi") as u64, 0),
+    );
+    let r = req(3, w::COMMIT, w::hash(b"hi"), 0);
+    s.handle(9, true, r, &mut b);
+    assert!(b.saved.is_empty());
+    s.progress(&mut b);
+    assert_eq!(b.saved, vec![b"hi".to_vec()]);
+    for _ in 0..3 {
+        s.poll(|pd, v| {
+            assert_eq!(pd, 9);
+            assert_eq!(w::decode_reply(v, 3), Some(Ok(2)));
+            1
+        });
+        s.progress(&mut b);
+    }
+    assert_eq!(b.saved.len(), 1);
+    s.poll(|_, _| 0);
+    assert_eq!(w::decode_reply(rpc(&mut s, &mut b, 9, r), 3), Some(Ok(2)));
+    assert_eq!(b.saved.len(), 1);
+    s.retire(9, &mut b);
+    s.progress(&mut b);
+    s.poll(|_, _| panic!("retired receipt"));
 }

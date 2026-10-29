@@ -37,13 +37,23 @@ def snapshot(disk):
     return max(valid,key=lambda r:r['generation'])
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--boot-a',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--boot-a',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--recall',default='echo spindle17');args=p.parse_args()
     iso=args.iso.resolve(strict=True);a=args.boot_a.resolve(strict=True);out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('output directory must be empty')
-    if not json.loads((a/'result.json').read_text())['ok']:raise RuntimeError('boot A did not pass')
+    boot_a_result=json.loads((a/'result.json').read_text())
+    if not boot_a_result['ok']:raise RuntimeError('boot A did not pass')
     manifest=json.loads((a/'manifest.json').read_text());iso_hash=hashlib.sha256(iso.read_bytes()).hexdigest()
-    if manifest['sha256']!=iso_hash:raise RuntimeError('different boot A and B image')
-    expected=snapshot((a/'nvme.img').read_bytes());saved=json.loads((a/'spindle-history.json').read_text())['saved']
+    if manifest.get('sha256',manifest.get('iso_sha256'))!=iso_hash:raise RuntimeError('different boot A and B image')
+    expected=snapshot((a/'nvme.img').read_bytes())
+    if (a/'spindle-history.json').exists():saved=json.loads((a/'spindle-history.json').read_text())['saved']
+    else:
+        soak=boot_a_result.get('soak')or{}
+        if soak.get('boot_successors')!=[16,17] or soak.get('cleanup_errors')!=[]:raise RuntimeError('missing complete alpha lifecycle evidence')
+        source_log=(a/'serial.log').read_text(errors='replace')
+        receipts=re.findall(r'\[spindle.history.receipt\] target=17 task=17 kind=saved handle=(\d+) bytes=(\d+) count=(\d+) hash=(0x[0-9a-f]+) error=0',source_log)
+        if not receipts:raise RuntimeError('no acknowledged successor history snapshot')
+        saved=receipts[-1]
+    if not 0<len(args.recall)<=256 or any(not 32<=ord(c)<=126 for c in args.recall):raise RuntimeError('invalid ASCII recall expectation')
     if (expected['source'],str(expected['size']),str(expected['count']),expected['fingerprint'])!=(17,saved[1],saved[2],saved[3]):raise RuntimeError('boot A committed journal differs from acknowledged save')
     disk=out/'nvme.img';shutil.copyfile(a/'nvme.img',disk);log=out/'serial.log';sock=pathlib.Path('/tmp')/f'sex-durable-{os.getpid()}.sock'
     command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
@@ -79,17 +89,17 @@ def main():
         for index in range(8):
             start=len(text());q.key('j');wait(rf'\[shell.palette.select\] old={index} new={index+1}',start)
         start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=153 ok=1',start)
-        start=len(text());q.key('up');wait(r'\[spindle.history.nav\] dir=up idx=0 len=14 ok=1',start)
+        start=len(text());q.key('up');wait(r'\[spindle.history.nav\] dir=up idx=0 len='+str(len(args.recall))+r' ok=1',start)
         font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text());errors=['not visible'];end=time.monotonic()+120
         while time.monotonic()<end:
             q.cmd('screendump',{'filename':str(out/'recovered-history.ppm')})
-            errors=verify(text(),(out/'recovered-history.ppm').read_bytes(),font,target=12,require_all_ink=False,require_prompt='> echo spindle17')
+            errors=verify(text(),(out/'recovered-history.ppm').read_bytes(),font,require_echo=False,target=12,require_all_ink=False,require_prompt='> '+args.recall)
             if not errors:break
             time.sleep(.2)
         if errors:raise RuntimeError('reboot recall pixels: '+'; '.join(errors))
         # Read-only recovery must not rewrite or reformat the journal.
         if snapshot(disk.read_bytes())!=expected:raise RuntimeError('recovery mutated durable journal')
-        (out/'result.json').write_text(json.dumps({'ok':True,'expected':expected,'recovered':recovered,'loaded':loaded,'pixel_errors':errors,'scope':'two actual QEMU boots; durable writer17 to BOOT-authorized new task12; exact data fingerprint, fresh own handle and visible Up recall after native launcher Zoom'},indent=2)+'\n')
+        (out/'result.json').write_text(json.dumps({'ok':True,'expected':expected,'recovered':recovered,'loaded':loaded,'pixel_errors':errors,'recall':args.recall,'scope':'two actual QEMU boots; durable writer17 to BOOT-authorized new task12; exact data fingerprint, fresh own handle and visible Up recall after native launcher Zoom'},indent=2)+'\n')
         print('[spindle.history.reboot] PASS')
     except Exception as e:
         (out/'result.json').write_text(json.dumps({'ok':False,'errors':[str(e)]},indent=2)+'\n');raise

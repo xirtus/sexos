@@ -26,6 +26,13 @@ fn v4_indirect_read(i: usize, _: u64) -> Result<Descriptor, ()> {
     DESCRIPTORS.lock().unwrap()[i].ok_or(())
 }
 fn v4_indirect_write(i: usize, _: u64, extents: &[V4Extent], count: usize) -> Result<(), u64> {
+    if GROW_MODE.load(Ordering::Relaxed)!=0 {
+        growth_point("descriptor")?;
+        assert_eq!(ZEROED.lock().unwrap().len(),GROW_EXPECT_ZERO.load(Ordering::Relaxed));
+        let mut e=[V4Extent::default();DISKFS_V4_MAX_EXTENTS];e[..count].copy_from_slice(&extents[..count]);
+        DESCRIPTORS.lock().unwrap()[i]=Some((e,count));
+        return Ok(())
+    }
     EVENTS.lock().unwrap().push("descriptor_reset");
     // Production CREATE must clear the old descriptor while the slot is
     // still free, before exposing its new name/generation to persistence.
@@ -42,6 +49,7 @@ fn v4_cache_invalidate(_: usize) {
     EVENTS.lock().unwrap().push("cache_invalidate");
 }
 fn v4_persist(_: u64) -> Result<(), u64> {
+    if GROW_MODE.load(Ordering::Relaxed)!=0{growth_point("growth_manifest")?;}
     EVENTS.lock().unwrap().push("manifest_persist");
     PERSIST_CALLS.fetch_add(1, Ordering::Relaxed);
     let error = PERSIST_ERROR.load(Ordering::Relaxed);
@@ -53,6 +61,8 @@ fn reset() -> MutexGuard<'static, ()> {
     unsafe { V4_TABLE = [V4_EMPTY; DISKFS_SLOTS]; }
     *DESCRIPTORS.lock().unwrap() = [None; DISKFS_SLOTS];
     *V4_BITMAP.write() = [0; 3];
+    GROW_MODE.store(0,Ordering::Relaxed);GROW_POINT.store(0,Ordering::Relaxed);GROW_CUT.store(0,Ordering::Relaxed);ZEROED.lock().unwrap().clear();
+    DOCUMENT_WRITE_LOCK.store(0,Ordering::Relaxed);
     PERSIST_CALLS.store(0, Ordering::Relaxed);
     DESCRIPTOR_WRITE_ERROR.store(0, Ordering::Relaxed);
     PERSIST_ERROR.store(0, Ordering::Relaxed);
@@ -254,4 +264,68 @@ fn recovery_rejects_external_descriptor_exposing_history_sectors() {
     let _guard=reset();object(3,16,Some(0));
     DESCRIPTORS.lock().unwrap()[3].as_mut().unwrap().0[0].start_lba=1808;
     v4_bitmap_rebuild(0);assert!(!v4_in_use(3));assert_eq!(*V4_BITMAP.write(),[0;3]);
+}
+
+#[test]
+fn document_commit_custody_blocks_delete_before_metadata_effects() {
+    let _guard=reset();object(3,4096,Some(0));
+    DOCUMENT_WRITE_LOCK.store(4,Ordering::Relaxed);
+    assert!(document_locked(3));assert!(!document_locked(4));assert!(!document_locked(u64::MAX));
+    assert_eq!(handle_diskfs_delete(3,0),messages::ERR_FULL as u64);
+    assert!(v4_in_use(3));assert_eq!(PERSIST_CALLS.load(Ordering::Relaxed),0);
+    DOCUMENT_WRITE_LOCK.store(0,Ordering::Relaxed);assert!(!document_locked(3));
+}
+
+mod document_journal {pub const CAPACITY:u64=65536;}
+static GROW_MODE:AtomicUsize=AtomicUsize::new(0);
+static GROW_POINT:AtomicUsize=AtomicUsize::new(0);
+static GROW_CUT:AtomicUsize=AtomicUsize::new(0);
+static GROW_EXPECT_ZERO:AtomicUsize=AtomicUsize::new(16);
+static ZEROED:Mutex<Vec<u64>>=Mutex::new(Vec::new());
+fn growth_point(name:&'static str)->Result<(),u64>{
+    EVENTS.lock().unwrap().push(name);
+    let p=GROW_POINT.fetch_add(1,Ordering::Relaxed)+1;
+    if p==GROW_CUT.load(Ordering::Relaxed){Err(99)}else{Ok(())}
+}
+struct DiskFs;
+impl DiskFs{fn diskfs_block_sync()->u64{growth_point("growth_flush").err().unwrap_or(0)}}
+fn v4_zero_block(lba:u64,_:u64)->Result<(),u64>{growth_point("growth_zero")?;ZEROED.lock().unwrap().push(lba);Ok(())}
+fn v4_cache_get(i:usize,_:u64)->Descriptor{DESCRIPTORS.lock().unwrap()[i].unwrap_or(([V4Extent::default();DISKFS_V4_MAX_EXTENTS],0))}
+fn v4_cache_put(_:usize,_:[V4Extent;DISKFS_V4_MAX_EXTENTS],_:usize){}
+fn used_blocks()->usize{let bm=V4_BITMAP.write();(0..DISKFS_V4_POOL_BLOCKS).filter(|&b|v4_bitmap_test(&bm,b)).count()}
+#[test]
+fn cooperative_growth_reserves_once_and_publishes_only_after_all_zeroing(){
+    let _g=reset();object(3,0,None);GROW_MODE.store(1,Ordering::Relaxed);
+    GROW_EXPECT_ZERO.store(16,Ordering::Relaxed);
+    let mut g=DocumentGrowth::new(3,0).unwrap();assert_eq!((g.original,g.count,used_blocks()),(0,1,16));
+    for n in 0..16 {assert!(!g.step(0).unwrap());assert_eq!(unsafe{V4_TABLE[3].size_bytes},0);assert!(!g.descriptor_attempted);assert_eq!(ZEROED.lock().unwrap().len(),n+1);}
+    for _ in 0..10 {if g.step(0).unwrap(){break;}}
+    assert_eq!(unsafe{V4_TABLE[3].size_bytes},65536);
+    let events=events();let descriptor=events.iter().position(|&e|e=="descriptor").unwrap();
+    assert_eq!(events[..descriptor].iter().filter(|&&e|e=="growth_zero").count(),16);
+    assert_eq!(events[descriptor-1],"growth_flush");
+    g.cancel();assert_eq!(used_blocks(),16,"published runs stay owned");
+}
+#[test]
+fn cooperative_growth_cancel_and_io_cuts_do_not_free_uncertain_descriptors(){
+    for cut in 1..=21 {
+        let _g=reset();object(3,0,None);GROW_MODE.store(1,Ordering::Relaxed);GROW_EXPECT_ZERO.store(16,Ordering::Relaxed);GROW_CUT.store(cut,Ordering::Relaxed);
+        let mut g=DocumentGrowth::new(3,0).unwrap();let mut failed=false;
+        for _ in 0..40 {match g.step(0){Err(_)=>{failed=true;break},Ok(true)=>break,_=>{}}}
+        assert!(failed,"cut {cut}");let published=g.descriptor_attempted;g.cancel();
+        assert_eq!(used_blocks(),if published{16}else{0},"cut {cut}");
+    }
+    for stop in 0..18 {
+        let _g=reset();object(3,0,None);GROW_MODE.store(1,Ordering::Relaxed);GROW_EXPECT_ZERO.store(16,Ordering::Relaxed);
+        let mut g=DocumentGrowth::new(3,0).unwrap();for _ in 0..stop{g.step(0).unwrap();}assert!(!g.descriptor_attempted);g.cancel();assert_eq!(used_blocks(),0);
+    }
+}
+#[test]
+fn cooperative_growth_keeps_legacy_backing_and_fits_extent_budget(){
+    let _g=reset();object(3,4096,Some(0));v4_bitmap_set(&mut V4_BITMAP.write(),0);
+    GROW_MODE.store(1,Ordering::Relaxed);GROW_EXPECT_ZERO.store(15,Ordering::Relaxed);
+    let mut g=DocumentGrowth::new(3,0).unwrap();assert_eq!((g.original,g.count),(1,2));
+    for _ in 0..40{if g.step(0).unwrap(){break}}
+    assert_eq!(used_blocks(),16);assert_eq!(ZEROED.lock().unwrap().len(),15);
+    assert!(!ZEROED.lock().unwrap().contains(&DISKFS_V4_POOL_BASE_LBA));
 }

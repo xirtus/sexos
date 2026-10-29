@@ -141,3 +141,91 @@ fn first_bank_conversion_keeps_legacy_prefix_until_commit() {
         assert_eq!(&d.live[..21], &base.live[..21]);
     }
 }
+
+fn cooperative(d: &mut Disk, bytes: &[u8]) -> Result<journal::Receipt, u32> {
+    let mut s = journal::Save::new(3, 0x40001);
+    for _ in 0..1000 {
+        let before = d.op;
+        let r = s.step(d, bytes)?;
+        assert!(d.op - before <= 1, "one block operation per step");
+        if let Some(r) = r {
+            return Ok(r);
+        }
+    }
+    panic!("unbounded save")
+}
+#[test]
+fn cooperative_cuts_and_tears_keep_complete_old_or_new() {
+    let old = bytes(1);
+    let new = bytes(9);
+    let mut scratch = [0; w::MAX];
+    let mut base = Disk::new();
+    cooperative(&mut base, &old).unwrap();
+    base.crash();
+    let mut full = base.clone();
+    cooperative(&mut full, &new).unwrap();
+    for tear in [false, true] {
+        for cut in 1..=full.op {
+            let mut d = base.clone();
+            d.cut = Some(cut);
+            d.tear = tear;
+            assert!(cooperative(&mut d, &new).is_err());
+            d.crash();
+            let r = journal::recover(&mut d, 3, 0x40001, &mut scratch)
+                .unwrap()
+                .unwrap();
+            assert!(
+                scratch[..r.len] == old || scratch[..r.len] == new,
+                "cut {cut}"
+            );
+        }
+    }
+}
+#[test]
+fn cooperative_cancel_at_every_turn_preserves_recovery_and_does_not_replay() {
+    let mut base = Disk::new();
+    cooperative(&mut base, b"old").unwrap();
+    base.crash();
+    for stop in 0..45 {
+        let mut d = base.clone();
+        let mut s = journal::Save::new(3, 0x40001);
+        let mut done = false;
+        for _ in 0..stop {
+            if s.step(&mut d, b"new").unwrap().is_some() {
+                done = true;
+                break;
+            }
+        }
+        if done {
+            assert_eq!(s.step(&mut d, b"new"), Err(w::STALE));
+        }
+        drop(s);
+        d.crash();
+        let mut scratch = [0; w::MAX];
+        let r = journal::recover(&mut d, 3, 0x40001, &mut scratch)
+            .unwrap()
+            .unwrap();
+        assert!(&scratch[..r.len] == b"old" || &scratch[..r.len] == b"new");
+    }
+    for b in [vec![], vec![0xED; w::MAX]] {
+        cooperative(&mut base, &b).unwrap();
+        base.crash();
+        let mut scratch = [0; w::MAX];
+        let r = journal::recover(&mut base, 3, 0x40001, &mut scratch)
+            .unwrap()
+            .unwrap();
+        assert_eq!(&scratch[..r.len], b);
+    }
+}
+
+#[test]
+fn cooperative_io_error_fences_cursor_without_replaying_mutation() {
+    let mut d = Disk::new();
+    let mut s = journal::Save::new(3, 0x40001);
+    d.cut = Some(1);
+    assert_eq!(s.step(&mut d, b"hi"), Err(w::IO));
+    let ops = d.op;
+    d.cut = None;
+    assert_eq!(s.step(&mut d, b"hi"), Err(w::STALE));
+    assert_eq!(d.op, ops);
+}
