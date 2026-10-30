@@ -45,7 +45,10 @@ fn pump(p:&mut probe::Client,now:u64){
  let reply={let mut guard=WORLD.lock().unwrap();let w=guard.as_mut().unwrap();let owner=jobs::Identity {pd:15,task:15};
   let rejected=if let Some(r)=w.request.take(){
    if r.kind==network_job::RELEASE&&w.reject_release{Some(network_job::error(r.seq,network_job::IO))}
-   else{assert!(w.machine.handle(owner,r,now,&mut w.wire));None}
+   else{
+    let admission=if r.a==1 {Ok(jobs::Resolution{owner,generation:1,address:[10,0,2,2],observed_tick:0,expires_tick:60000})}else{Err(network_job::DENIED)};
+    assert!(w.machine.handle_resolved(owner,r,now,false,admission,&mut w.wire));None
+   }
   }else{None};
   w.machine.advance(now,&mut w.wire);
   rejected.or_else(||{let reply=w.machine.pending_reply();if reply.is_some(){w.machine.reply_accepted();}reply.map(|(_,word)|word)})
@@ -139,7 +142,7 @@ fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.
 }
 #[test]fn full_maximum_document_is_hidden_until_exact_positive_release_and_raw_is_scrubbed(){
  let _serial=SERIAL.lock().unwrap();let body:Vec<u8>=(0..http_wire::MAX_BODY).map(|n|b'A'+(n%26)as u8).collect();
- reset(false,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.document_scrubbed());assert!(p.start(1));
+ reset(false,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.document_scrubbed());assert!(p.start_resolved(1,1));
  let now=pending(&mut p,network_job::RELEASE,1);no_preview(&p);assert!(!p.document_scrubbed());assert!(!p.raw_scrubbed());
  let request=WORLD.lock().unwrap().as_ref().unwrap().request.unwrap();
  p.reply(network_job::reply(request.seq+1,0),now);p.reply((0x79u64<<56)|(request.seq as u64)<<32,now);
@@ -151,15 +154,15 @@ fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.
 #[test]fn document_sanitizes_every_byte_one_to_one_preserving_newlines_and_full_tail(){
  let _serial=SERIAL.lock().unwrap();let body:Vec<u8>=(0..http_wire::MAX_BODY).map(|n|(n%256)as u8).collect();
  let expected:Vec<u8>=body.iter().map(|&b|if b==10||b>=32&&b<=126{b}else if b<32||b==127{b' '}else{b'?'}).collect();
- reset(true,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);
+ reset(true,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.start_resolved(1,1));finish(&mut p,1);
  assert_eq!(p.document(),expected);assert_eq!(p.document().len(),body.len());assert_eq!(p.document()[10],10);
  assert_eq!(p.document()[9],b' ');assert_eq!(p.document()[13],b' ');assert_eq!(p.document()[127],b' ');assert_eq!(p.document()[255],b'?');
  assert_eq!(&p.document()[2040..],&expected[2040..]);assert!(p.raw_scrubbed());
 }
 #[test]fn shorter_replacement_has_exact_extent_and_reset_scrubs_the_entire_old_document(){
- let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'S';http_wire::MAX_BODY]);let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);
+ let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'S';http_wire::MAX_BODY]);let mut p=probe::Client::new();assert!(p.start_resolved(1,1));finish(&mut p,1);
  assert_eq!(p.document().len(),http_wire::MAX_BODY);WORLD.lock().unwrap().as_mut().unwrap().wire.body=b"tail\n  A\tB\xFF".to_vec();
- assert!(p.start(p.next_sequence()));no_preview(&p);assert!(p.document_scrubbed());finish(&mut p,1000);
+ assert!(p.start_resolved(p.next_sequence(),1));no_preview(&p);assert!(p.document_scrubbed());finish(&mut p,1000);
  assert_eq!(p.document(),b"tail\n  A B?");assert_eq!(p.body_length(),11);assert!(p.raw_scrubbed());
  p.wait_for_resolution();no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());assert_eq!(p.view(),probe::View::Pending);
 }

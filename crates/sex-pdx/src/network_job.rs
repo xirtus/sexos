@@ -3,6 +3,12 @@
 //! Tickets and sequence numbers are data, never capabilities or authority.
 pub const OP: u64 = 0x20C;
 pub const MAX_BYTES: usize = 4096;
+/// Explicit streaming mode retains a fixed ring, never a whole wire response.
+pub const STREAM_RING_BYTES: usize = 1024;
+pub const MAX_STREAM_BYTES: usize = 1024 + 12288;
+pub const STREAM_TOTAL_TICKS: u64 = 30_000;
+pub const STREAM_IDLE_TICKS: u64 = 5_000;
+const _: () = assert!(STREAM_RING_BYTES <= MAX_BYTES && MAX_STREAM_BYTES <= u16::MAX as usize);
 pub const TURN: usize = 256;
 pub const MAX_SEQ: u32 = 0xFF_FFFF;
 pub const MAX_TICKET: u32 = 17_535;
@@ -10,11 +16,15 @@ pub const BEGIN: u8 = 1;
 pub const WRITE: u8 = 2;
 pub const START: u8 = 3;
 pub const STATUS: u8 = 4;
+/// Stream READ requires the exact absolute consumed cursor and removes ≤4
+/// available bytes in Receiving/Complete. STATUS remains cumulative produced.
 pub const READ: u8 = 5;
 pub const CANCEL: u8 = 6;
 pub const RELEASE: u8 = 7;
 /// DNS generation selects service provenance, never new endpoint authority.
 pub const BEGIN_RESOLVED: u8 = 8;
+/// Same exact-owner DNS admission and replay fence; READ drains a finite ring.
+pub const BEGIN_STREAM_RESOLVED: u8 = 9;
 pub const INVALID: u32 = 1;
 pub const DENIED: u32 = 2;
 pub const STALE: u32 = 3;
@@ -43,7 +53,7 @@ impl Request {
         let r = Self { seq: (args[0] & MAX_SEQ as u64) as u32,
             kind: (args[0] >> 24) as u8, offset: (args[0] >> 32) as u16,
             length: (args[0] >> 48) as u16, ticket: args[1] as u32, a: args[2] };
-        if args[1] > u32::MAX as u64 || r.seq == 0 || !(BEGIN..=BEGIN_RESOLVED).contains(&r.kind) {
+        if args[1] > u32::MAX as u64 || r.seq == 0 || !(BEGIN..=BEGIN_STREAM_RESOLVED).contains(&r.kind) {
             return Err(INVALID);
         }
         Ok(r)
@@ -53,7 +63,7 @@ impl Request {
         match self.kind {
             BEGIN => self.ticket == 0 && self.offset == 0 && self.a == 0
                 && self.length != 0 && self.length as usize <= MAX_BYTES,
-            BEGIN_RESOLVED => self.ticket == 0 && self.offset == 0
+            BEGIN_RESOLVED | BEGIN_STREAM_RESOLVED => self.ticket == 0 && self.offset == 0
                 && self.a != 0 && self.a <= MAX_TICKET as u64
                 && self.length != 0 && self.length as usize <= MAX_BYTES,
             WRITE => self.length != 0 && self.length <= 8

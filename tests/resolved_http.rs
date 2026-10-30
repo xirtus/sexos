@@ -37,7 +37,7 @@ impl dns_jobs::Wire for DnsPeer {
  }
  fn abort(&mut self){self.response=None;}
 }
-struct HttpPeer {link:jobs::Link,request:Vec<u8>,response:Vec<u8>,read:usize,begins:Vec<u32>}
+struct HttpPeer {link:jobs::Link,request:Vec<u8>,response:Vec<u8>,read:usize,begins:Vec<u32>,body:Vec<u8>,allow_fin:bool}
 impl jobs::Wire for HttpPeer {
  fn begin(&mut self,ticket:u32)->Result<(),u32>{self.begins.push(ticket);self.link=jobs::Link::Open;self.request.clear();self.response.clear();self.read=0;Ok(())}
  fn receive(&mut self,out:&mut[u8])->Result<usize,u32>{let n=out.len().min(9).min(self.response.len()-self.read);out[..n].copy_from_slice(&self.response[self.read..self.read+n]);self.read+=n;Ok(n)}
@@ -45,7 +45,7 @@ impl jobs::Wire for HttpPeer {
  fn queued(&self)->usize{0}fn link(&self)->jobs::Link{self.link}
  fn finish_send(&mut self){
   assert_eq!(self.request,b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
-  self.response=b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nresolved body".to_vec();self.link=jobs::Link::PeerFin;
+  self.response=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",self.body.len()).into_bytes();self.response.extend_from_slice(&self.body);if self.allow_fin{self.link=jobs::Link::PeerFin;}
  }
  fn abort(&mut self){self.link=jobs::Link::Closed;self.request.clear();self.response.clear();self.read=0;}
 }
@@ -56,7 +56,7 @@ struct World {
 }
 fn reset(full_once:bool,address:[u8;4],ttl:u32){*WORLD.lock().unwrap()=Some(World {
  dns:dns_jobs::Machine::new(),tcp:jobs::Machine::new(),dns_wire:DnsPeer {address,ttl,response:None,begins:Vec::new()},
- http_wire:HttpPeer {link:jobs::Link::Closed,request:Vec::new(),response:Vec::new(),read:0,begins:Vec::new()},
+ http_wire:HttpPeer {link:jobs::Link::Closed,request:Vec::new(),response:Vec::new(),read:0,begins:Vec::new(),body:b"resolved body".to_vec(),allow_fin:true},
  pending:None,accepted:Vec::new(),caller:A,full_once,last_dns_full:0,last_tcp_full:0,deliver_dns:true,deliver_tcp:true,
 });}
 pub fn pdx_call(slot:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){
@@ -78,7 +78,7 @@ pub fn pdx_call(slot:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){
 /// This fixture supplies authenticated identities explicitly; the selector is
 /// never treated as a capability and cannot select a different IP/port.
 fn policy(dns:&dns_jobs::Machine,owner:jobs::Identity,r:network_job::Request,now:u64)->Result<jobs::Resolution,u32>{
- if r.kind!=network_job::BEGIN_RESOLVED{return Err(network_job::DENIED);}
+ if !matches!(r.kind,network_job::BEGIN_RESOLVED|network_job::BEGIN_STREAM_RESOLVED){return Err(network_job::DENIED);}
  let generation=u32::try_from(r.a).map_err(|_|network_job::DENIED)?;
  let record=dns.resolved(owner,generation,now).ok_or(network_job::DENIED)?;
  if record.address!=[10,0,2,2]{return Err(network_job::DENIED);}
@@ -124,7 +124,7 @@ fn wait_http_release(dns:&mut dns_probe::Client,http:&mut http_probe::Client,fro
 }
 fn request(seq:u32,generation:u32)->network_job::Request{
  let mut out=[0;http_wire::MAX_REQUEST];let length=http_wire::request(&mut out);
- network_job::Request {seq,kind:network_job::BEGIN_RESOLVED,offset:0,length:length as u16,ticket:0,a:generation as u64}
+ network_job::Request {seq,kind:network_job::BEGIN_STREAM_RESOLVED,offset:0,length:length as u16,ticket:0,a:generation as u64}
 }
 fn service_call(owner:jobs::Identity,r:network_job::Request,now:u64)->Result<u32,u32>{
  let mut guard=WORLD.lock().unwrap();let w=guard.as_mut().unwrap();w.dns.maintain_records(now,|_|true);
@@ -192,10 +192,36 @@ fn assert_no_tcp(){let guard=WORLD.lock().unwrap();let w=guard.as_ref().unwrap()
  http.advance(now+2001);assert_eq!(http.view(),http_probe::View::Uncertain);http.cancel();http.advance(now+2002);assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().accepted,accepted);
  assert!(!http.start_resolved(100,generation));pump(&mut dns,&mut http,now+2003);finish_http(&mut dns,&mut http,now+2004);
  assert_eq!(http.view(),http_probe::View::Cancelled);assert!(http.raw_scrubbed());assert_eq!(http.preview(),&[b' ';64]);assert_no_tcp();
- let guard=WORLD.lock().unwrap();let requests=guard.as_ref().unwrap().accepted.iter().filter_map(|e|if let Envelope::Tcp(_,r)=e{Some(r.kind)}else{None}).collect::<Vec<_>>();assert_eq!(requests,vec![network_job::BEGIN_RESOLVED,network_job::CANCEL,network_job::RELEASE]);
+ let guard=WORLD.lock().unwrap();let requests=guard.as_ref().unwrap().accepted.iter().filter_map(|e|if let Envelope::Tcp(_,r)=e{Some(r.kind)}else{None}).collect::<Vec<_>>();assert_eq!(requests,vec![network_job::BEGIN_STREAM_RESOLVED,network_job::CANCEL,network_job::RELEASE]);
 }
 #[test]fn exact_released_record_retirement_blocks_handoff_and_foreign_task_cannot_clear_it(){
  let _serial=SERIAL.lock().unwrap();reset(false,[10,0,2,2],60);let mut dns=dns_probe::Client::new();let mut http=http_probe::Client::new();dns.start();let now=finish_dns(&mut dns,&mut http,1);let generation=dns.generation().unwrap();
  {let mut guard=WORLD.lock().unwrap();let w=guard.as_mut().unwrap();assert_eq!(w.dns.owner(),None);assert_eq!(w.dns.owned_records(A),1);assert!(!w.dns.retire(B,&mut w.dns_wire));assert_eq!(w.dns.owned_records(A),1);assert!(!w.dns.retire(A,&mut w.dns_wire));assert_eq!(w.dns.owned_records(A),0);}
  assert!(http.start_resolved(1,generation));finish_http(&mut dns,&mut http,now+1);assert_eq!(http.view(),http_probe::View::Unavailable);assert_no_tcp();
+}
+
+#[test]
+fn twelve_kib_stream_wraps_private_ring_and_waits_for_fin_and_positive_release() {
+ let _serial=SERIAL.lock().unwrap();reset(true,[10,0,2,2],60);
+ let body:Vec<u8>=(0..12288).map(|n|b'A'+(n%26)as u8).collect();
+ {let mut g=WORLD.lock().unwrap();let w=g.as_mut().unwrap();w.http_wire.body=body.clone();w.http_wire.allow_fin=false;}
+ let mut dns=dns_probe::Client::new();let mut http=http_probe::Client::new();dns.start();let now=finish_dns(&mut dns,&mut http,1);
+ assert!(http.start_resolved(1,dns.generation().unwrap()));
+ let mut drained=None;
+ for tick in now+1..now+15000 {
+  http.advance(tick);pump(&mut dns,&mut http,tick);
+  let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();
+  let tail=w.accepted.iter().rev().find_map(|e|if let Envelope::Tcp(_,r)=e{Some(r)}else{None});
+  if w.http_wire.read==w.http_wire.response.len() && tail.is_some_and(|r|r.kind==network_job::READ && r.offset as usize+r.length as usize==w.http_wire.response.len()) {
+   drained=Some(tick);break;
+  }
+ }
+ let now=drained.expect("12KiB did not drain through bounded streaming ring");
+ assert_eq!(http.view(),http_probe::View::Pending);assert!(http.document().is_empty());assert_eq!(http.body_length(),0);
+ {let mut g=WORLD.lock().unwrap();let w=g.as_mut().unwrap();assert_eq!(w.tcp.snapshot().state,network_job::State::Receiving);assert!(w.http_wire.response.len()>network_job::MAX_BYTES);w.http_wire.link=jobs::Link::PeerFin;}
+ let now=wait_http_release(&mut dns,&mut http,now+1);assert_eq!(http.view(),http_probe::View::Pending);assert!(http.document().is_empty());
+ pump(&mut dns,&mut http,now);assert_eq!(http.view(),http_probe::View::Ready);assert_eq!(http.document(),body);assert!(http.raw_scrubbed());
+ let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();assert!(w.tcp.owner().is_none());
+ assert!(w.accepted.iter().any(|e|matches!(e,Envelope::Tcp(_,r)if r.kind==network_job::BEGIN_STREAM_RESOLVED)));
+ assert!(w.accepted.iter().any(|e|matches!(e,Envelope::Tcp(_,r)if r.kind==network_job::READ && r.offset as usize>network_job::MAX_BYTES)));
 }

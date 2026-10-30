@@ -7,9 +7,9 @@
 //! single unquoted charset=us-ascii parameter. Body bytes remain raw data.
 
 pub const MAX_REQUEST: usize = 128;
-pub const MAX_RESPONSE: usize = 4096;
+pub const MAX_RESPONSE: usize = MAX_HEADERS + MAX_BODY;
 pub const MAX_HEADERS: usize = 1024;
-pub const MAX_BODY: usize = 2048;
+pub const MAX_BODY: usize = 12288;
 // Exact supported-profile fixture for host/native wire oracles. Runtime Host
 // bytes come from the shared BOOT profile below; the actual request test binds it.
 const REQUEST: &[u8] = b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
@@ -19,6 +19,8 @@ pub struct Response {
     pub body: core::ops::Range<usize>,
     pub content_length: usize,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Headers { pub header_len: usize, pub content_length: usize }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     Truncated,
@@ -113,11 +115,9 @@ fn content_type(bytes: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Require one complete supported response with an exact Content-Length.
-/// Header extent includes status line and the final CRLFCRLF. Every header and
-/// the entire body extent are validated before returning any publishable range.
-pub fn parse(input: &[u8]) -> Result<Response, Error> {
-    if input.len() > MAX_RESPONSE { return Err(Error::ResponseLimit); }
+/// Validate status and all fields through the first CRLFCRLF. This helper
+/// returns framing metadata only, without claiming complete body receipt.
+fn header_prefix(input: &[u8]) -> Result<Headers, Error> {
     let mut cursor = 0;
     let status = line(input, &mut cursor)?;
     if status.len() < 13 || &status[..9] != b"HTTP/1.1 " {
@@ -148,10 +148,26 @@ pub fn parse(input: &[u8]) -> Result<Response, Error> {
     }
     let content_length = body_length.ok_or(Error::MissingContentLength)?;
     if !has_type { return Err(Error::MissingContentType); }
-    let end = cursor.checked_add(content_length).ok_or(Error::InvalidContentLength)?;
+    Ok(Headers { header_len: cursor, content_length })
+}
+
+/// Parse an exact complete header extent without requiring a body copy.
+/// Call only when CRLFCRLF has arrived; a header does not publish body data.
+pub fn parse_headers(input: &[u8]) -> Result<Headers, Error> {
+    if input.len() > MAX_HEADERS { return Err(Error::HeaderLimit); }
+    let parsed=header_prefix(input)?;
+    if parsed.header_len!=input.len() { return Err(Error::TrailingData); }
+    Ok(parsed)
+}
+
+/// Complete-message convenience validation retains the same header restrictions.
+pub fn parse(input: &[u8]) -> Result<Response, Error> {
+    if input.len() > MAX_RESPONSE { return Err(Error::ResponseLimit); }
+    let parsed=header_prefix(input)?;
+    let end=parsed.header_len.checked_add(parsed.content_length).ok_or(Error::InvalidContentLength)?;
     if input.len() < end { return Err(Error::Truncated); }
     if input.len() > end { return Err(Error::TrailingData); }
-    Ok(Response { body: cursor..end, content_length })
+    Ok(Response { body: parsed.header_len..end, content_length: parsed.content_length })
 }
 
 #[cfg(test)]
@@ -201,7 +217,7 @@ mod tests {
         for value in ["", "-1", "+4", "4,4", "4 4", "0x4", "4a", "999999999999999999999999999999999999999999999999"] {
             assert_eq!(parse(&message(&format!("Content-Length: {value}\r\nContent-Type: text/plain\r\n"), b"body")), Err(Error::InvalidContentLength), "{value}");
         }
-        assert_eq!(parse(&message("Content-Length: 2049\r\nContent-Type: text/plain\r\n", b"")), Err(Error::BodyLimit));
+        assert_eq!(parse(&message(&format!("Content-Length: {}\r\nContent-Type: text/plain\r\n",MAX_BODY+1), b"")), Err(Error::BodyLimit));
         assert_eq!(parse(&message("Content-Type: text/plain\r\n", b"")), Err(Error::MissingContentLength));
     }
     #[test] fn malformed_crlf_controls_names_and_obs_fold_rejected() {
@@ -249,4 +265,24 @@ mod tests {
         assert_eq!(parse(&message("Content-Length: 4\r\nContent-Type: text/plain\r\nBroken later header\r\n", b"body")), Err(Error::Malformed));
         let bytes = response(&[0, 0xFF, b'\r', b'\n']);let parsed = parse(&bytes).unwrap();assert_eq!(&bytes[parsed.body], &[0, 0xFF, b'\r', b'\n']);
     }
+    #[test] fn headers_can_arrive_at_every_four_byte_boundary_without_a_body_buffer() {
+        let full=response(&vec![b'D';MAX_BODY]);let end=full.windows(4).position(|w|w==b"\r\n\r\n").unwrap()+4;
+        let mut retained=[0;MAX_HEADERS];let mut have=0;
+        for chunk in full[..end].chunks(4) {
+            retained[have..have+chunk.len()].copy_from_slice(chunk);have+=chunk.len();
+            if have<end { assert_eq!(parse_headers(&retained[..have]),Err(Error::Truncated)); }
+        }
+        assert_eq!(parse_headers(&retained[..have]),Ok(Headers {header_len:end,content_length:MAX_BODY}));
+        assert_eq!(parse_headers(&full[..end+1]),Err(Error::TrailingData));
+    }
+    #[test] fn every_header_cut_and_all_existing_restrictions_apply_before_streamed_body() {
+        let full=response(b"abc");let end=full.len()-3;
+        for cut in 0..end {assert!(parse_headers(&full[..cut]).is_err(),"cut={cut}");}
+        for fields in ["Content-Length: 1\r\nContent-Length: 1\r\nContent-Type: text/plain\r\n", "Content-Length: 1\r\nContent-Type: text/html\r\n", "Content-Length: 1\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n", "Content-Length: 1\r\nContent-Type: text/plain\r\nContent-Encoding: identity\r\n"] {
+            assert!(parse_headers(&message(fields,b"")).is_err());
+        }
+        assert_eq!(parse_headers(&vec![b'A';MAX_HEADERS+1]),Err(Error::HeaderLimit));
+        assert_eq!(MAX_RESPONSE,MAX_HEADERS+MAX_BODY);assert_eq!(MAX_BODY,12288);
+    }
+
 }

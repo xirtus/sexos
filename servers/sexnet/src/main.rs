@@ -5382,6 +5382,8 @@ pub extern "C" fn _start() -> ! {
                     .map(|r|jobs::Resolution{owner:r.owner,generation:r.generation,address:r.address,observed_tick:r.observed_tick,expires_tick:r.expires_tick})
                     .ok_or(sex_pdx::network_job::DENIED);
                 let before=outbound.snapshot().ticket;
+                let before_state=outbound.snapshot().state;
+                let before_stream=outbound.stream_snapshot();
                 if !outbound.handle_resolved(owner,request,now,dns.owner().is_some(),admission,&mut ClientWire(transport.as_mut())){
                     // Valid clients serialize one request per receipt. A second
                     // same-owner request cannot overwrite its reserved receipt.
@@ -5389,6 +5391,14 @@ pub extern "C" fn _start() -> ! {
                 }
                 if before!=outbound.snapshot().ticket {
                     if let Some(r)=outbound.resolution(){sex_pdx::serial_record!("[net.job.resolved.admitted] owner={} task={} ticket={} dns_generation={} observed={} expires={} now={} fixed=1 at_begin=1",owner.pd,owner.task,outbound.snapshot().ticket,r.generation,r.observed_tick,r.expires_tick,now);}
+                }
+                if request.kind==sex_pdx::network_job::BEGIN_STREAM_RESOLVED && before!=outbound.snapshot().ticket && outbound.stream_snapshot().is_some() {
+                    sex_pdx::serial_record!("[net.job.stream.admitted] owner={} task={} ticket={} kind=9 ring={} max_wire={} total_ticks={} idle_ticks={} authority=held_route",owner.pd,owner.task,outbound.snapshot().ticket,sex_pdx::network_job::STREAM_RING_BYTES,sex_pdx::network_job::MAX_STREAM_BYTES,sex_pdx::network_job::STREAM_TOTAL_TICKS,sex_pdx::network_job::STREAM_IDLE_TICKS);
+                }
+                if let (Some(old),Some(new))=(before_stream,outbound.stream_snapshot()) {
+                    if new.consumed>old.consumed && (old.consumed==0 || old.consumed/1024!=new.consumed/1024) {
+                        sex_pdx::serial_record!("[net.job.stream.drain] owner={} task={} ticket={} produced={} consumed={} buffered={} ring={} state_before={:?} receipt=retained not_delivery=1",owner.pd,owner.task,outbound.snapshot().ticket,new.produced,new.consumed,new.buffered,sex_pdx::network_job::STREAM_RING_BYTES,before_state);
+                    }
                 }
             }else{
                 // Invalid traffic cannot reserve/mutate a job. This rejection

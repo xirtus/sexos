@@ -14,6 +14,7 @@ ABI_INPUTS=(
   kernel/src/pci_command.rs
   crates/sex-net-config/src/lib.rs
   crates/sex-pdx/src/network_config.rs
+  crates/sex-pdx/src/network_job.rs
   kernel/src/boot_display_state.rs
   crates/sex-pdx/src/display_boot.rs
   kernel/src/history_recovery.rs

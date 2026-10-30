@@ -29,6 +29,9 @@ pub struct Snapshot {
     pub state: State, pub ticket: u32, pub staged: usize,
     pub sent: usize, pub received: usize,
 }
+/// Finite private byte custody only, never a delivery or durability receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamSnapshot { pub produced: usize, pub consumed: usize, pub buffered: usize }
 #[derive(Clone, Copy)]
 struct Receipt { owner: Identity, request: Request, word: u64 }
 pub struct Machine {
@@ -36,6 +39,7 @@ pub struct Machine {
     state: State, request: [u8; MAX_BYTES], response: [u8; MAX_BYTES],
     request_len: usize, staged: usize, sent: usize, response_len: usize,
     deadline: u64, last_now: u64, finished_send: bool,
+    streaming: bool, consumed: usize, idle_deadline: u64,
     pending: [Option<Receipt>; 6], reply_cursor: usize,
     // One replay fence for each identity in the finite six-app BOOT roster.
     // Entries survive Release and are reclaimed only by exact retirement.
@@ -47,13 +51,18 @@ impl Machine {
         Self { owner: None, ticket: 0, next_ticket: 1, seq: 0, state: State::Idle,
             request: [0; MAX_BYTES], response: [0; MAX_BYTES], request_len: 0,
             staged: 0, sent: 0, response_len: 0, deadline: 0, last_now: 0,
-            finished_send: false, pending: [None; 6], reply_cursor: 0, cached: [None; 6], resolution: None }
+            finished_send: false, streaming: false, consumed: 0, idle_deadline: 0,
+            pending: [None; 6], reply_cursor: 0, cached: [None; 6], resolution: None }
     }
     pub fn owner(&self) -> Option<Identity> { self.owner }
     pub fn resolution(&self) -> Option<Resolution> { self.resolution }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot { state: self.state, ticket: self.ticket, staged: self.staged,
             sent: self.sent, received: self.response_len }
+    }
+    pub fn stream_snapshot(&self) -> Option<StreamSnapshot> {
+        self.streaming.then_some(StreamSnapshot { produced: self.response_len,
+            consumed: self.consumed, buffered: self.response_len - self.consumed })
     }
     pub fn can_transmit(&self, ticket: u32) -> bool {
         self.owner.is_some() && self.ticket == ticket
@@ -82,6 +91,7 @@ impl Machine {
         self.request.fill(0); self.response.fill(0);
         self.request_len = 0; self.staged = 0; self.sent = 0; self.response_len = 0;
         self.finished_send = false; self.deadline = 0; self.last_now = 0;
+        self.streaming = false; self.consumed = 0; self.idle_deadline = 0;
         self.resolution = None;
         wire.abort();
     }
@@ -125,7 +135,7 @@ impl Machine {
         if self.owner == Some(owner) && r.seq <= self.seq {
             return self.respond(slot, owner, r, Err(abi::STALE));
         }
-        let result = if other_held && matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED) { Err(abi::BUSY) }
+        let result = if other_held && matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED) { Err(abi::BUSY) }
             else { self.apply(owner, r, now, admission, wire) };
         if self.owner == Some(owner) && r.seq <= abi::MAX_SEQ { self.seq = self.seq.max(r.seq); }
         self.respond(slot, owner, r, result)
@@ -142,10 +152,10 @@ impl Machine {
     }
     fn apply(&mut self, owner: Identity, r: Request, now: u64, admission: Result<Resolution,u32>, wire: &mut impl Wire) -> Result<u32, u32> {
         if owner.pd == 0 || owner.task == 0 || !r.valid() { return Err(abi::INVALID); }
-        if matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED) {
+        if matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED) {
             if self.owner.is_some() { return Err(abi::BUSY); }
             if self.next_ticket > abi::MAX_TICKET { return Err(abi::EXHAUSTED); }
-            let resolution = if r.kind == abi::BEGIN_RESOLVED {
+            let resolution = if matches!(r.kind, abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED) {
                 let record = admission?;
                 if record.owner != owner || record.generation as u64 != r.a
                     || now < record.observed_tick || now >= record.expires_tick { return Err(abi::STALE); }
@@ -155,11 +165,19 @@ impl Machine {
             self.next_ticket = self.next_ticket.checked_add(1).ok_or(abi::EXHAUSTED)?;
             self.owner = Some(owner); self.seq = r.seq; self.state = State::Staging;
             self.request_len = r.length as usize;
+            self.streaming = r.kind == abi::BEGIN_STREAM_RESOLVED;
             self.resolution = resolution;
             return Ok(self.ticket);
         }
         if self.owner != Some(owner) { return Err(abi::DENIED); }
         if r.ticket != self.ticket { return Err(abi::STALE); }
+        // A fresh authenticated operation cannot extend an expired stream by
+        // draining old data. Cleanup remains possible after any clock failure.
+        if self.streaming && matches!(self.state, State::Connecting | State::Sending | State::Receiving)
+            && !matches!(r.kind, abi::CANCEL | abi::RELEASE) {
+            if self.expired(now) { self.fail(wire); return Err(abi::TIMEOUT); }
+            self.last_now = now;
+        }
         match r.kind {
             abi::WRITE => {
                 if self.state != State::Staging { return Err(abi::BUSY); }
@@ -170,15 +188,34 @@ impl Machine {
             }
             abi::START => {
                 if self.state != State::Staging || self.staged != self.request_len { return Err(abi::BUSY); }
-                let deadline = match now.checked_add(5_000) { Some(d) => d,
+                let duration = if self.streaming { abi::STREAM_TOTAL_TICKS } else { 5_000 };
+                let deadline = match now.checked_add(duration) { Some(d) => d,
                     None => { self.fail(wire); return Err(abi::TIMEOUT); } };
                 // The empty pending slot was reserved by handle's initial check.
                 self.deadline = deadline; self.last_now = now; self.state = State::Connecting;
+                if self.streaming { self.stream_progress(now); }
                 if let Err(e) = wire.begin(self.ticket) { self.fail(wire); return Err(e); }
                 Ok(0)
             }
             abi::STATUS => Ok(abi::status(self.state, self.response_len)),
             abi::READ => {
+                if self.streaming {
+                    if !matches!(self.state, State::Receiving | State::Complete) { return Err(abi::BUSY); }
+                    if r.offset as usize != self.consumed { return Err(abi::INVALID); }
+                    let end = self.consumed.checked_add(r.length as usize).ok_or(abi::INVALID)?;
+                    if end > self.response_len { return Err(abi::BUSY); }
+                    // handle reserved this owner's pending receipt before apply.
+                    // Its copied word survives Full and exact duplicate replay,
+                    // even after these ring cells are scrubbed/reused.
+                    let mut bytes = [0u8; 4];
+                    for (index, byte) in bytes[..r.length as usize].iter_mut().enumerate() {
+                        let cell = (self.consumed + index) % abi::STREAM_RING_BYTES;
+                        *byte = self.response[cell]; self.response[cell] = 0;
+                    }
+                    self.consumed = end;
+                    self.stream_progress(now);
+                    return Ok(u32::from_le_bytes(bytes));
+                }
                 if self.state != State::Complete { return Err(abi::BUSY); }
                 let start = r.offset as usize; let end = start + r.length as usize;
                 if end > self.response_len { return Err(abi::INVALID); }
@@ -192,35 +229,70 @@ impl Machine {
             _ => Err(abi::INVALID),
         }
     }
+    fn expired(&self, now: u64) -> bool {
+        now < self.last_now || now >= self.deadline || self.streaming && now >= self.idle_deadline
+    }
+    /// Only actual send/receive/consumption refreshes idle time. STATUS, rejected
+    /// operations, cached duplicates and Full admission never count as progress.
+    /// The absolute total bound never moves; Complete holds data until cleanup.
+    fn stream_progress(&mut self, now: u64) {
+        self.idle_deadline = now.checked_add(abi::STREAM_IDLE_TICKS).unwrap_or(self.deadline).min(self.deadline);
+    }
+    /// A full ring is backpressure, not an overflow or an observed EOF. Only the
+    /// independent cumulative wire limit permits a one-byte overflow/EOF probe.
+    fn stream_receive(&mut self, wire: &mut impl Wire) -> Result<(usize, bool), ()> {
+        if self.response_len == abi::MAX_STREAM_BYTES {
+            return match wire.receive(&mut [0u8; 1]) { Ok(0) => Ok((0, true)), _ => Err(()) };
+        }
+        let occupied = self.response_len - self.consumed;
+        let at = self.response_len % abi::STREAM_RING_BYTES;
+        let room = (abi::STREAM_RING_BYTES - occupied).min(abi::STREAM_RING_BYTES - at)
+            .min(TURN).min(abi::MAX_STREAM_BYTES - self.response_len);
+        if room == 0 { return Ok((0, false)); }
+        match wire.receive(&mut self.response[at..at+room]) {
+            Ok(n) if n <= room => { self.response_len += n; Ok((n, n == 0)) },
+            _ => Err(()),
+        }
+    }
     /// At most TURN received bytes, or (only when receive yields zero) TURN sent.
     pub fn advance(&mut self, now: u64, wire: &mut impl Wire) {
         if !matches!(self.state, State::Connecting | State::Sending | State::Receiving) { return; }
-        if now < self.last_now || now >= self.deadline { self.fail(wire); return; }
+        if self.expired(now) { self.fail(wire); return; }
         self.last_now = now;
         if wire.link() == Link::Closed { self.fail(wire); return; }
-        let room = (MAX_BYTES - self.response_len).min(TURN);
-        let received = if room != 0 {
-            wire.receive(&mut self.response[self.response_len..self.response_len + room])
+        let (n, drained) = if self.streaming {
+            match self.stream_receive(wire) { Ok(result) => result, Err(()) => { self.fail(wire); return; } }
         } else {
-            // A full response still needs one bounded probe to distinguish EOF
-            // from overflow; the extra byte is never retained or exposed.
-            wire.receive(&mut [0u8; 1])
+            let room = (MAX_BYTES - self.response_len).min(TURN);
+            let received = if room != 0 {
+                wire.receive(&mut self.response[self.response_len..self.response_len + room])
+            } else {
+                // Legacy whole-response mode retains its exact overflow probe.
+                wire.receive(&mut [0u8; 1])
+            };
+            let n = match received { Ok(n) if n <= room && room != 0 => n,
+                Ok(0) => 0, _ => { self.fail(wire); return; } };
+            self.response_len += n; (n, n == 0)
         };
-        let n = match received { Ok(n) if n <= room && room != 0 => n,
-            Ok(0) => 0, _ => { self.fail(wire); return; } };
-        self.response_len += n;
+        if self.streaming && n != 0 { self.stream_progress(now); }
         if wire.link() == Link::Closed { self.fail(wire); return; }
         if wire.link() == Link::PeerFin {
             if self.sent != self.request_len || wire.queued() != 0 { self.fail(wire); return; }
             if !self.finished_send { wire.finish_send(); self.finished_send = true; }
-            if n == 0 { self.state = State::Complete; }
+            // A valid FIN may arrive while request bytes finish leaving the
+            // protocol queue. The response must become drainable even if the
+            // preceding state was Sending; a full ring is not observed EOF.
+            self.state = if drained { State::Complete } else { State::Receiving };
             return;
         }
         if n == 0 && wire.link() == Link::Open && self.sent < self.request_len {
             self.state = State::Sending;
             let end = (self.sent + TURN).min(self.request_len);
             match wire.send(&self.request[self.sent..end]) {
-                Ok(sent) if sent <= end - self.sent => self.sent += sent,
+                Ok(sent) if sent <= end - self.sent => {
+                    self.sent += sent;
+                    if self.streaming && sent != 0 { self.stream_progress(now); }
+                },
                 _ => { self.fail(wire); return; }
             }
         }
@@ -238,16 +310,17 @@ mod tests {
     const B: Identity = Identity { pd: 7, task: 71 };
     struct TestWire { link: Link, incoming: Vec<u8>, sent: Vec<u8>, receive_at: usize,
         send_limit: usize, receive_limit: usize, queued: usize, begins: usize,
-        aborts: usize, finishes: usize, begin_error: Option<u32> }
+        aborts: usize, finishes: usize, receive_calls: usize, begin_error: Option<u32> }
     impl TestWire {
         fn new() -> Self { Self { link: Link::Open, incoming: Vec::new(), sent: Vec::new(),
             receive_at: 0, send_limit: TURN, receive_limit: TURN, queued: 0,
-            begins: 0, aborts: 0, finishes: 0, begin_error: None } }
+            begins: 0, aborts: 0, finishes: 0, receive_calls: 0, begin_error: None } }
     }
     impl Wire for TestWire {
         fn begin(&mut self, _: u32) -> Result<(), u32> { self.begins += 1; self.begin_error.map_or(Ok(()), Err) }
         fn receive(&mut self, out: &mut [u8]) -> Result<usize, u32> {
             assert!(out.len() <= TURN);
+            self.receive_calls += 1;
             let n = out.len().min(self.receive_limit).min(self.incoming.len() - self.receive_at);
             out[..n].copy_from_slice(&self.incoming[self.receive_at..self.receive_at+n]);
             self.receive_at += n; Ok(n)
@@ -541,6 +614,134 @@ mod tests {
         assert_eq!(resolved_call(&mut m,&mut w,resolved_begin(2,1),11,Ok(observation(A,1))),Ok(1));
         assert!(m.retire(A,&mut w));assert_eq!(m.resolution(),None);
         let mut raw=req(1,abi::BEGIN,0);raw.length=1;assert_eq!(call(&mut m,&mut w,B,raw),Ok(2));assert_eq!(m.resolution(),None);
+    }
+
+    fn stream_begin(seq:u32)->Request {
+        let mut r=resolved_begin(seq,1);r.kind=abi::BEGIN_STREAM_RESOLVED;r.length=1;r
+    }
+    fn call_at(m:&mut Machine,w:&mut TestWire,owner:Identity,r:Request,now:u64)->Result<u32,u32> {
+        assert!(m.handle(owner,r,now,w));let(who,word)=m.pending_reply().unwrap();assert_eq!(who,owner);
+        m.reply_accepted();abi::decode_reply(word,r.seq)
+    }
+    fn streaming()->(Machine,TestWire,u32) {
+        let mut m=Machine::new();let mut w=TestWire::new();
+        let t=resolved_call(&mut m,&mut w,stream_begin(1),10,Ok(observation(A,1))).unwrap();
+        let mut write=req(2,abi::WRITE,t);write.length=1;write.a=b'X' as u64;
+        assert_eq!(call_at(&mut m,&mut w,A,write,10),Ok(1));
+        assert_eq!(call_at(&mut m,&mut w,A,req(3,abi::START,t),10),Ok(0));
+        m.advance(11,&mut w);assert_eq!(m.state,State::Receiving);assert_eq!(w.sent,b"X");(m,w,t)
+    }
+    fn read(seq:u32,t:u32,offset:usize,length:usize)->Request {
+        let mut r=req(seq,abi::READ,t);r.offset=offset as u16;r.length=length as u16;r
+    }
+    #[test] fn stream_kind_selector_bounds_admission_and_other_protocol_denials_are_fenced() {
+        let r=stream_begin(1);assert!(r.valid());assert_eq!(Request::decode(r.encode()),Ok(r));
+        for a in [0,abi::MAX_TICKET as u64+1,1u64<<32]{let mut bad=r;bad.a=a;assert!(!bad.valid());}
+        for length in [0,4097,u16::MAX]{let mut bad=r;bad.length=length;assert!(!bad.valid());}
+        let mut args=r.encode();args[0]=(args[0]&!(255<<24))|(10<<24);assert_eq!(Request::decode(args),Err(abi::INVALID));
+        let mut m=Machine::new();let mut w=TestWire::new();assert_eq!(call_at(&mut m,&mut w,A,r,10),Err(abi::DENIED));
+        assert_eq!(resolved_call(&mut m,&mut w,r,11,Ok(observation(A,1))),Err(abi::DENIED));assert_eq!(m.owner(),None);assert_eq!(m.next_ticket,1);assert!(!m.streaming);
+        assert!(m.handle_resolved(A,stream_begin(2),11,true,Ok(observation(A,1)),&mut w));m.reply_accepted();
+        assert_eq!(resolved_call(&mut m,&mut w,stream_begin(2),11,Ok(observation(A,1))),Err(abi::BUSY));assert_eq!(m.next_ticket,1);assert_eq!(w.begins,0);
+    }
+    #[test] fn stream_full_ring_pauses_without_probe_or_false_fin_and_reuses_scrubbed_cells() {
+        let(mut m,mut w,t)=streaming();w.incoming=(0..2048).map(|n|(n%251)as u8).collect();
+        for now in 12..16{m.advance(now,&mut w);}assert_eq!((m.response_len,m.consumed,w.receive_at),(1024,0,1024));let calls=w.receive_calls;
+        w.link=Link::PeerFin;for now in 16..20{m.advance(now,&mut w);}assert_eq!(w.receive_calls,calls);assert_eq!(m.state,State::Receiving);assert_eq!(w.receive_at,1024);
+        assert_eq!(call_at(&mut m,&mut w,A,read(4,t,0,4),19),Ok(0x03020100));assert_eq!(&m.response[..4],&[0;4]);assert_eq!(m.snapshot().received,1024);
+        assert_eq!(call_at(&mut m,&mut w,A,req(5,abi::STATUS,t),19),Ok(abi::status(State::Receiving,1024)));
+        m.advance(20,&mut w);assert_eq!((m.response_len,m.consumed,w.receive_at),(1028,4,1028));assert_eq!(&m.response[..4],&w.incoming[1024..1028]);assert!(m.response[abi::STREAM_RING_BYTES..].iter().all(|b|*b==0));
+    }
+    #[test] fn stream_read_full_and_exact_replay_preserve_copied_bytes_after_ring_reuse() {
+        let(mut m,mut w,t)=streaming();w.incoming=(0..2048).map(|n|(n%251)as u8).collect();for now in 12..16{m.advance(now,&mut w);}
+        let r=read(4,t,0,4);assert!(m.handle(A,r,16,&mut w));let receipt=m.pending_reply();assert_eq!(receipt,Some((A,abi::reply(4,0x03020100))));assert_eq!(m.consumed,4);
+        assert!(!m.handle(A,read(5,t,4,4),17,&mut w));assert!(!m.handle(A,req(5,abi::CANCEL,t),17,&mut w));assert_eq!(w.aborts,0);
+        m.advance(17,&mut w);assert_eq!(m.response_len,1028);assert_eq!(&m.response[..4],&w.incoming[1024..1028]);let idle=m.idle_deadline;
+        assert!(m.handle(A,r,20_000,&mut w));assert_eq!(m.pending_reply(),receipt);assert_eq!(m.consumed,4);assert_eq!(m.idle_deadline,idle);
+        m.reply_accepted();assert_eq!(call_at(&mut m,&mut w,A,r,20_000),Ok(0x03020100));assert_eq!(m.consumed,4);assert_eq!(m.idle_deadline,idle);
+        let expected=u32::from_le_bytes(w.incoming[4..8].try_into().unwrap());assert_eq!(call_at(&mut m,&mut w,A,read(5,t,4,4),18),Ok(expected));assert_eq!(m.consumed,8);assert_eq!(w.begins,1);
+    }
+    #[test] fn stream_foreign_stale_and_gapped_cursors_cannot_consume_or_refresh_idle() {
+        let(mut m,mut w,t)=streaming();w.incoming=b"abcdefgh".to_vec();m.advance(12,&mut w);let idle=m.idle_deadline;
+        assert_eq!(call_at(&mut m,&mut w,B,read(1,t,0,4),13),Err(abi::DENIED));
+        assert_eq!(call_at(&mut m,&mut w,A,read(4,t+1,0,4),13),Err(abi::STALE));
+        assert_eq!(call_at(&mut m,&mut w,A,read(5,t,1,4),13),Err(abi::INVALID));assert_eq!(m.consumed,0);assert_eq!(m.idle_deadline,idle);
+        assert_eq!(call_at(&mut m,&mut w,A,read(6,t,0,4),13),Ok(u32::from_le_bytes(*b"abcd")));
+        assert_eq!(call_at(&mut m,&mut w,A,read(7,t,0,4),13),Err(abi::INVALID));assert_eq!(m.consumed,4);
+        assert_eq!(call_at(&mut m,&mut w,A,read(8,t,8,4),13),Err(abi::INVALID));assert_eq!(m.consumed,4);
+        assert_eq!(call_at(&mut m,&mut w,A,read(9,t,4,4),13),Ok(u32::from_le_bytes(*b"efgh")));let idle=m.idle_deadline;
+        assert_eq!(call_at(&mut m,&mut w,A,read(10,t,8,1),14),Err(abi::BUSY));assert_eq!((m.consumed,m.response_len),(8,8));assert_eq!(m.idle_deadline,idle);assert_eq!(w.aborts,0);
+    }
+    #[test] fn stream_partial_receives_wrap_and_status_reports_cumulative_length() {
+        let(mut m,mut w,t)=streaming();let wanted:Vec<u8>=(0..MAX_BYTES+777).map(|n|(n*17+19)as u8).collect();w.incoming=wanted.clone();w.receive_limit=7;
+        let mut actual=Vec::new();let mut seq=4;let mut now=11;
+        for _ in 0..5000{now+=1;m.advance(now,&mut w);assert_ne!(m.state,State::Failed);let available=m.response_len-m.consumed;
+            if available!=0{let n=available.min(4);let offset=actual.len();let word=call_at(&mut m,&mut w,A,read(seq,t,offset,n),now).unwrap();seq+=1;actual.extend_from_slice(&word.to_le_bytes()[..n]);}
+            if actual.len()==wanted.len(){break;}}
+        assert_eq!(actual,wanted);assert_eq!(m.response_len,wanted.len());assert_eq!(m.consumed,wanted.len());assert_ne!(m.state,State::Complete);
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::STATUS,t),now),Ok(abi::status(State::Receiving,wanted.len())));seq+=1;
+        w.link=Link::PeerFin;now+=1;m.advance(now,&mut w);assert_eq!(m.state,State::Complete);assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::STATUS,t),now),Ok(abi::status(State::Complete,wanted.len())));
+    }
+    #[test] fn stream_wire_cap_needs_real_fin_and_extra_byte_fails_without_partial_completion() {
+        for extra in [0,1]{let(mut m,mut w,t)=streaming();let wanted:Vec<u8>=(0..abi::MAX_STREAM_BYTES+extra).map(|n|(n*13)as u8).collect();w.incoming=wanted.clone();let mut seq=4;let mut now=11;let mut actual=Vec::new();
+            for _ in 0..5000{now+=1;m.advance(now,&mut w);if m.state==State::Failed{break;}
+                if m.response_len>m.consumed{let n=(m.response_len-m.consumed).min(4);let offset=actual.len();let word=call_at(&mut m,&mut w,A,read(seq,t,offset,n),now).unwrap();seq+=1;actual.extend_from_slice(&word.to_le_bytes()[..n]);}
+                if actual.len()==abi::MAX_STREAM_BYTES{break;}}
+            if extra!=0{assert_eq!(m.state,State::Failed);scrubbed(&m);assert_eq!(w.receive_at,abi::MAX_STREAM_BYTES+1);assert!(!m.can_transmit(t));}
+            else{assert_eq!(actual,wanted);assert_eq!(m.response_len,abi::MAX_STREAM_BYTES);assert_eq!(m.state,State::Receiving);now+=1;m.advance(now,&mut w);assert_eq!(m.state,State::Receiving);
+                w.link=Link::PeerFin;now+=1;m.advance(now,&mut w);assert_eq!(m.state,State::Complete);assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::RELEASE,t),now),Ok(0));scrubbed(&m);}}
+    }
+    #[test] fn stream_complete_can_hold_unread_data_until_release() {
+        let(mut m,mut w,t)=streaming();w.incoming=b"complete then read".to_vec();w.link=Link::PeerFin;m.advance(12,&mut w);assert_eq!(m.state,State::Receiving);m.advance(13,&mut w);assert_eq!(m.state,State::Complete);
+        let produced=m.response_len;let mut actual=Vec::new();let mut seq=4;while actual.len()<produced{let offset=actual.len();let n=(produced-offset).min(4);let word=call_at(&mut m,&mut w,A,read(seq,t,offset,n),40_000).unwrap();seq+=1;actual.extend_from_slice(&word.to_le_bytes()[..n]);}
+        assert_eq!(actual,w.incoming);assert_eq!((m.response_len,m.consumed),(produced,produced));assert!(m.response.iter().all(|b|*b==0));
+    }
+    #[test] fn stream_idle_refreshes_only_true_movement_and_expired_read_cannot_revive() {
+        let(mut m,mut w,t)=streaming();assert_eq!((m.deadline,m.idle_deadline),(30_010,5_011));w.incoming=b"data".to_vec();m.advance(1000,&mut w);assert_eq!(m.idle_deadline,6000);
+        let r=read(4,t,0,4);assert_eq!(call_at(&mut m,&mut w,A,r,2000),Ok(u32::from_le_bytes(*b"data")));assert_eq!(m.idle_deadline,7000);
+        assert_eq!(call_at(&mut m,&mut w,A,r,6999),Ok(u32::from_le_bytes(*b"data")));assert_eq!(m.idle_deadline,7000);
+        assert_eq!(call_at(&mut m,&mut w,A,req(5,abi::STATUS,t),6999),Ok(abi::status(State::Receiving,4)));assert_eq!(m.idle_deadline,7000);m.advance(7000,&mut w);assert_eq!(m.state,State::Failed);scrubbed(&m);
+        let(mut m,mut w,t)=streaming();w.incoming=b"data".to_vec();m.advance(12,&mut w);assert_eq!(call_at(&mut m,&mut w,A,read(4,t,0,4),5012),Err(abi::TIMEOUT));assert_eq!(m.state,State::Failed);scrubbed(&m);
+    }
+    #[test] fn stream_total_deadline_clock_rollback_and_start_overflow_fail_scrubbed() {
+        let(mut m,mut w,t)=streaming();w.incoming=vec![1;32];w.receive_limit=1;
+        for now in [4000,8000,12000,16000,20000,24000,28000]{m.advance(now,&mut w);assert_eq!(m.state,State::Receiving);}
+        assert_eq!((m.deadline,m.idle_deadline),(30_010,30_010));m.advance(30_010,&mut w);assert_eq!(m.state,State::Failed);assert!(!m.can_transmit(t));scrubbed(&m);
+        let(mut m,mut w,_)=streaming();m.advance(12,&mut w);m.advance(11,&mut w);assert_eq!(m.state,State::Failed);scrubbed(&m);
+        let mut m=Machine::new();let mut w=TestWire::new();let t=resolved_call(&mut m,&mut w,stream_begin(1),10,Ok(observation(A,1))).unwrap();let mut write=req(2,abi::WRITE,t);write.length=1;write.a=1;assert_eq!(call_at(&mut m,&mut w,A,write,10),Ok(1));
+        assert_eq!(call_at(&mut m,&mut w,A,req(3,abi::START,t),u64::MAX-100),Err(abi::TIMEOUT));assert_eq!(w.begins,0);assert_eq!(m.state,State::Failed);scrubbed(&m);
+    }
+    #[test] fn stream_cancel_release_retire_scrub_whole_buffers_and_exact_pending_receipts() {
+        for cleanup in [abi::CANCEL,abi::RELEASE,0]{let(mut m,mut w,t)=streaming();w.incoming=vec![0x61;1024];m.advance(12,&mut w);m.request[MAX_BYTES-1]=9;m.response[MAX_BYTES-1]=8;
+            if cleanup==0{assert!(m.handle(A,read(4,t,0,4),12,&mut w));assert!(!m.retire(B,&mut w));assert_eq!(m.consumed,4);assert!(m.retire(A,&mut w));assert_eq!(m.pending_reply(),None);assert!(m.cached.iter().all(Option::is_none));assert_eq!(m.owner(),None);}
+            else{assert_eq!(call_at(&mut m,&mut w,A,req(4,cleanup,t),12),Ok(0));if cleanup==abi::CANCEL{assert_eq!(m.state,State::Cancelled);assert_eq!(m.owner(),Some(A));assert_eq!(call_at(&mut m,&mut w,A,req(5,abi::RELEASE,t),13),Ok(0));}assert_eq!(m.owner(),None);}
+            scrubbed(&m);assert_eq!((m.response_len,m.consumed),(0,0));assert!(!m.streaming);assert_eq!(m.idle_deadline,0);assert!(!m.can_transmit(t));assert_eq!(w.begins,1);}
+    }
+
+    #[test] fn stream_fin_while_sending_exposes_receiving_and_drains_more_than_ring_to_completion() {
+        let mut m=Machine::new();let mut w=TestWire::new();assert_eq!(m.stream_snapshot(),None);
+        let t=resolved_call(&mut m,&mut w,stream_begin(1),10,Ok(observation(A,1))).unwrap();
+        let mut write=req(2,abi::WRITE,t);write.length=1;write.a=b'X' as u64;
+        assert_eq!(call_at(&mut m,&mut w,A,write,10),Ok(1));assert_eq!(call_at(&mut m,&mut w,A,req(3,abi::START,t),10),Ok(0));
+        // Actual send is accepted into a still-pending protocol queue, so the
+        // machine legitimately remains Sending with write-side close deferred.
+        w.queued=1;m.advance(11,&mut w);assert_eq!(w.sent,b"X");assert_eq!(m.state,State::Sending);assert!(!m.finished_send);
+        let wanted:Vec<u8>=(0..2049).map(|n|(n*19+7)as u8).collect();w.incoming=wanted.clone();w.queued=0;w.link=Link::PeerFin;
+        m.advance(12,&mut w);assert_eq!(m.state,State::Receiving);assert!(m.finished_send);assert_eq!(w.finishes,1);
+        for now in 13..17{m.advance(now,&mut w);}
+        assert_eq!(m.stream_snapshot(),Some(StreamSnapshot{produced:1024,consumed:0,buffered:1024}));assert_eq!(m.state,State::Receiving);
+        let mut actual=Vec::new();let mut seq=4;let mut now=16;
+        for _ in 0..1000 {
+            let before=m.stream_snapshot().unwrap();assert!(before.buffered<=abi::STREAM_RING_BYTES);assert_eq!(before.produced-before.consumed,before.buffered);
+            if before.buffered!=0 {
+                let count=before.buffered.min(4);let offset=actual.len();let word=call_at(&mut m,&mut w,A,read(seq,t,offset,count),now).unwrap();seq+=1;
+                actual.extend_from_slice(&word.to_le_bytes()[..count]);let after=m.stream_snapshot().unwrap();assert_eq!(after.produced,before.produced);assert_eq!(after.consumed,before.consumed+count);assert_eq!(after.buffered,before.buffered-count);
+            }
+            if actual.len()==wanted.len()&&m.state==State::Complete{break;}
+            now+=1;m.advance(now,&mut w);assert_ne!(m.state,State::Failed);
+        }
+        assert_eq!(actual,wanted);assert_eq!(m.state,State::Complete);assert_eq!(m.stream_snapshot(),Some(StreamSnapshot{produced:2049,consumed:2049,buffered:0}));assert_eq!(w.finishes,1);
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::RELEASE,t),now),Ok(0));assert_eq!(m.stream_snapshot(),None);scrubbed(&m);
     }
 
 }

@@ -13,7 +13,8 @@ pub struct Client {
     step:Step,seq:u32,ticket:u32,pending:Option<w::Request>,accepted:bool,
     deadline:u64,next_poll:u64,cancel:bool,view:View,terminal:View,
     request:[u8;http_wire::MAX_REQUEST],request_len:usize,written:usize,
-    response:[u8;http_wire::MAX_RESPONSE],response_len:usize,read:usize,
+    header:[u8;http_wire::MAX_HEADERS],header_len:usize,header_done:bool,
+    response_len:usize,read:usize,transport_complete:bool,body_hash:u64,
     preview:[u8;64],body_len:usize,
     document:[u8;http_wire::MAX_BODY],document_len:usize,
     generation:u32,
@@ -23,7 +24,8 @@ impl Client {
         Self {step:Step::Done,seq:1,ticket:0,pending:None,accepted:false,
             deadline:0,next_poll:0,cancel:false,view:View::Idle,terminal:View::Unavailable,
             request:[0;http_wire::MAX_REQUEST],request_len:0,written:0,
-            response:[0;http_wire::MAX_RESPONSE],response_len:0,read:0,
+            header:[0;http_wire::MAX_HEADERS],header_len:0,header_done:false,
+            response_len:0,read:0,transport_complete:false,body_hash:0xcbf29ce484222325,
             preview:BLANK,body_len:0,document:[0;http_wire::MAX_BODY],document_len:0,generation:0}
     }
     pub fn next_sequence(&self)->u32 { self.seq }
@@ -52,14 +54,16 @@ impl Client {
         self.scrub_raw();self.clear_preview();self.seq=next_seq;
         self.generation=generation;
         self.request_len=http_wire::request(&mut self.request);self.written=0;self.read=0;self.response_len=0;
+        self.header_len=0;self.header_done=false;self.transport_complete=false;self.body_hash=0xcbf29ce484222325;
         self.pending=None;self.accepted=false;self.cancel=false;
         self.terminal=View::Unavailable;self.view=View::Pending;self.step=Step::Begin;true
     }
-    fn scrub_raw(&mut self) { self.request.fill(0);self.response.fill(0); }
+    fn scrub_raw(&mut self) { self.request.fill(0);self.header.fill(0); }
     fn clear_preview(&mut self) { self.preview=BLANK;self.body_len=0;self.document.fill(0);self.document_len=0; }
     fn finished(&mut self) {
         self.scrub_raw();self.pending=None;self.accepted=false;self.step=Step::Done;
         self.request_len=0;self.written=0;self.response_len=0;self.read=0;
+        self.header_len=0;self.header_done=false;self.transport_complete=false;self.body_hash=0xcbf29ce484222325;
         self.generation=0;
         self.view=self.terminal;
         if self.view!=View::Ready { self.clear_preview(); }
@@ -83,19 +87,34 @@ impl Client {
         if self.ticket==0 { self.finished(); }
         else { self.step=if kind==w::RELEASE {Step::Held}else{Step::Release}; }
     }
-    fn validate_body(&mut self) {
-        let parsed=match http_wire::parse(&self.response[..self.response_len]) {
-            Ok(parsed)=>parsed,Err(_)=>{self.rejected(w::READ);return;},
-        };
-        let body=&self.response[parsed.body];
-        self.body_len=parsed.content_length;self.preview=normalize(body);
-        self.document.fill(0);self.document_len=body.len();
-        for (out,&byte) in self.document.iter_mut().zip(body) {
-            *out=match byte {b'\n'=>b'\n',32..=126=>byte,0..=31|127=>b' ',_=>b'?'};
+    /// Consume only an exact newly acknowledged absolute-cursor READ turn.
+    /// Raw body bytes feed the receipt hash; only translated presentation data
+    /// is retained. No full-response or raw-body buffer exists in the client.
+    fn consume(&mut self,bytes:&[u8])->Result<(),http_wire::Error> {
+        for &byte in bytes {
+            if !self.header_done {
+                if self.header_len==self.header.len() {return Err(http_wire::Error::HeaderLimit);}
+                self.header[self.header_len]=byte;self.header_len+=1;
+                if self.header[..self.header_len].ends_with(b"\r\n\r\n") {
+                    let parsed=http_wire::parse_headers(&self.header[..self.header_len])?;
+                    self.body_len=parsed.content_length;self.header_done=true;
+                }
+            }else{
+                if self.document_len>=self.body_len {return Err(http_wire::Error::TrailingData);}
+                self.body_hash=(self.body_hash^byte as u64).wrapping_mul(0x100000001b3);
+                self.document[self.document_len]=match byte {b'\n'=>b'\n',32..=126=>byte,0..=31|127=>b' ',_=>b'?'};
+                self.document_len+=1;
+            }
         }
-        let mut hash=0xcbf29ce484222325u64;
-        for &byte in body { hash=(hash^byte as u64).wrapping_mul(0x100000001b3); }
-        sex_pdx::serial_record!("[browser.http.body] ticket={} status=200 length={} hash={:#x} controlled_peer=1 tls=0",self.ticket,self.body_len,hash);
+        Ok(())
+    }
+    fn validate_complete(&mut self) {
+        if !self.transport_complete || self.read!=self.response_len || !self.header_done
+            || self.document_len!=self.body_len || self.read!=self.header_len+self.body_len {
+            self.rejected(w::READ);return;
+        }
+        self.preview=normalize(&self.document[..self.document_len]);
+        sex_pdx::serial_record!("[browser.http.body] ticket={} status=200 length={} hash={:#x} controlled_peer=1 tls=0",self.ticket,self.body_len,self.body_hash);
         self.terminal=View::Ready;self.step=Step::Release;
     }
     pub fn reply(&mut self,word:u64,now:u64) {
@@ -104,15 +123,19 @@ impl Client {
             || ((word>>32)&w::MAX_SEQ as u64)!=r.seq as u64 { return; }
         self.pending=None;self.accepted=false;self.seq=r.seq+1;
         let value=match w::decode_reply(word,r.seq) {
-            Ok(value)=>value,Err(_)=>{self.rejected(r.kind);return;},
+            Ok(value)=>value,
+            Err(w::BUSY) if r.kind==w::READ && self.generation!=0 && !self.cancel=>{
+                self.step=Step::Poll;self.next_poll=now.saturating_add(2);return;
+            }
+            Err(_)=>{self.rejected(r.kind);return;},
         };
         // Late data receipts are reconciled by cleanup, never used to republish
         // cancelled bytes or restart a request whose authority is uncertain.
-        if self.cancel && !matches!(r.kind,w::BEGIN|w::BEGIN_RESOLVED|w::CANCEL|w::RELEASE) {
+        if self.cancel && !matches!(r.kind,w::BEGIN|w::BEGIN_RESOLVED|w::BEGIN_STREAM_RESOLVED|w::CANCEL|w::RELEASE) {
             self.step=Step::Cancel;return;
         }
         match r.kind {
-            w::BEGIN|w::BEGIN_RESOLVED=>{
+            w::BEGIN|w::BEGIN_RESOLVED|w::BEGIN_STREAM_RESOLVED=>{
                 if value==0 || value>w::MAX_TICKET {
                     self.scrub_raw();self.clear_preview();self.view=View::Uncertain;self.step=Step::Held;return;
                 }
@@ -128,10 +151,18 @@ impl Client {
                 self.step=Step::Poll;self.next_poll=now;
             }
             w::STATUS=>match w::decode_status(value) {
-                Some((w::State::Complete,len)) if len!=0 && len<=http_wire::MAX_RESPONSE=>{
-                    self.response_len=len;self.read=0;self.step=Step::Read;
+                Some((state @ (w::State::Receiving|w::State::Complete),len)) if self.generation!=0 || state==w::State::Complete=>{
+                    let limit=if self.generation!=0 {http_wire::MAX_RESPONSE}else{w::MAX_BYTES};
+                    if len>limit || len<self.response_len || len<self.read
+                        || (self.transport_complete && state!=w::State::Complete) {
+                        self.rejected(r.kind);return;
+                    }
+                    self.response_len=len;self.transport_complete=state==w::State::Complete;
+                    if self.read<len {self.step=Step::Read;}
+                    else if self.transport_complete {self.validate_complete();}
+                    else {self.next_poll=now.saturating_add(25);self.step=Step::Poll;}
                 }
-                Some((w::State::Staging|w::State::Connecting|w::State::Sending|w::State::Receiving,_))=>{
+                Some((w::State::Staging|w::State::Connecting|w::State::Sending|w::State::Receiving,_)) if !self.transport_complete && self.read==0=>{
                     self.next_poll=now.saturating_add(25);self.step=Step::Poll;
                 }
                 _=>{self.rejected(r.kind);return;}
@@ -139,9 +170,12 @@ impl Client {
             w::READ=>{
                 let end=self.read+r.length as usize;
                 if r.offset as usize!=self.read || end>self.response_len {self.rejected(r.kind);return;}
-                self.response[self.read..end].copy_from_slice(&value.to_le_bytes()[..r.length as usize]);
+                if self.consume(&value.to_le_bytes()[..r.length as usize]).is_err(){self.rejected(r.kind);return;}
                 self.read=end;
-                if end==self.response_len { self.validate_body(); }
+                if end==self.response_len {
+                    if self.transport_complete {self.validate_complete();}
+                    else {self.next_poll=now;self.step=Step::Poll;}
+                }
             }
             w::CANCEL=>{
                 if value!=0 {self.rejected(r.kind);return;}
@@ -176,7 +210,7 @@ impl Client {
             }
             if self.seq>w::MAX_SEQ {self.scrub_raw();self.clear_preview();self.view=View::Uncertain;self.step=Step::Held;return;}
             let(kind,offset,length,a)=match self.step {
-                Step::Begin=>if self.generation!=0{(w::BEGIN_RESOLVED,0,self.request_len,self.generation as u64)}else{(w::BEGIN,0,self.request_len,0)},
+                Step::Begin=>if self.generation!=0{(w::BEGIN_STREAM_RESOLVED,0,self.request_len,self.generation as u64)}else{(w::BEGIN,0,self.request_len,0)},
                 Step::Write=>{
                     let length=(self.request_len-self.written).min(8);let mut bytes=[0;8];
                     bytes[..length].copy_from_slice(&self.request[self.written..self.written+length]);
@@ -187,7 +221,7 @@ impl Client {
                 Step::Cancel=>(w::CANCEL,0,0,0),Step::Release=>(w::RELEASE,0,0,0),Step::Done|Step::Held=>return,
             };
             self.pending=Some(w::Request {seq:self.seq,kind,offset:offset as u16,length:length as u16,
-                ticket:if matches!(kind,w::BEGIN|w::BEGIN_RESOLVED) {0}else{self.ticket},a});
+                ticket:if matches!(kind,w::BEGIN|w::BEGIN_RESOLVED|w::BEGIN_STREAM_RESOLVED) {0}else{self.ticket},a});
             self.deadline=now.saturating_add(2000);self.accepted=false;
         }
         if !self.accepted {
@@ -200,7 +234,7 @@ impl Client {
         }
     }
     #[cfg(test)] pub fn raw_scrubbed(&self)->bool {
-        self.request.iter().all(|b|*b==0) && self.response.iter().all(|b|*b==0)
+        self.request.iter().all(|b|*b==0) && self.header.iter().all(|b|*b==0)
     }
     #[cfg(test)] pub fn document_scrubbed(&self)->bool {
         self.document_len==0 && self.document.iter().all(|b|*b==0)
@@ -220,4 +254,71 @@ fn normalize(body:&[u8])->[u8;64] {
     }
     if truncated {out[61..].copy_from_slice(b"...");}
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{vec,vec::Vec,format};
+    fn message(body:&[u8])->Vec<u8> {
+        let mut bytes=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",body.len()).into_bytes();bytes.extend_from_slice(body);bytes
+    }
+    fn client()->Client {
+        let mut client=Client::new();client.ticket=1;client.generation=1;client.view=View::Pending;client.step=Step::Poll;client
+    }
+    fn receipt(p:&mut Client,kind:u8,offset:usize,length:usize,value:u32) {
+        let r=w::Request {seq:p.seq,kind,offset:offset as u16,length:length as u16,ticket:p.ticket,a:0};
+        p.pending=Some(r);p.accepted=true;p.reply(w::reply(r.seq,value),10);
+    }
+    fn drain(p:&mut Client,bytes:&[u8],complete:bool) {
+        receipt(p,w::STATUS,0,0,w::status(if complete{w::State::Complete}else{w::State::Receiving},bytes.len()));
+        while p.read<bytes.len() {
+            let at=p.read;let length=(bytes.len()-at).min(4);let mut turn=[0;4];turn[..length].copy_from_slice(&bytes[at..at+length]);
+            receipt(p,w::READ,at,length,u32::from_le_bytes(turn));assert!(p.document().is_empty());assert_eq!(p.view(),View::Pending);
+        }
+    }
+    #[test]fn full_stream_is_incremental_hidden_until_complete_then_exact_positive_release(){
+        let body:Vec<u8>=(0..http_wire::MAX_BODY).map(|n|(n%256)as u8).collect();let bytes=message(&body);let mut p=client();
+        drain(&mut p,&bytes,false);assert_eq!(p.step,Step::Poll);assert_eq!(p.document_len,http_wire::MAX_BODY);assert!(p.document().is_empty());
+        let hash=body.iter().fold(0xcbf29ce484222325u64,|hash,&b|(hash^b as u64).wrapping_mul(0x100000001b3));assert_eq!(p.body_hash,hash);
+        receipt(&mut p,w::STATUS,0,0,w::status(w::State::Complete,bytes.len()));assert_eq!(p.step,Step::Release);assert!(p.document().is_empty());
+        receipt(&mut p,w::RELEASE,0,0,0);assert_eq!(p.view(),View::Ready);assert!(p.raw_scrubbed());assert_eq!(p.body_length(),http_wire::MAX_BODY);
+        let sanitized:Vec<u8>=body.iter().map(|&b|match b{b'\n'=>b'\n',32..=126=>b,0..=31|127=>b' ',_=>b'?'}).collect();assert_eq!(p.document(),sanitized);
+        assert!(core::mem::size_of::<Client>()<15*1024,"bounded header plus presentation body, no second raw response");
+    }
+    #[test]fn every_header_body_turn_alignment_uses_one_parse_and_retains_exact_tail(){
+        for pad in 0..4 {
+            let body=b"one\nfull tail Z";let mut bytes=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nX-Pad: {}\r\n\r\n",body.len(),"x".repeat(pad)).into_bytes();bytes.extend_from_slice(body);
+            let mut p=client();drain(&mut p,&bytes,true);assert_eq!(p.step,Step::Release);receipt(&mut p,w::RELEASE,0,0,0);assert_eq!(p.document(),body);
+        }
+    }
+    #[test]fn complete_short_or_trailing_wire_bytes_never_publish_and_scrub_every_private_byte(){
+        let exact=message(b"body");
+        for bytes in [&exact[..exact.len()-1],&[exact.as_slice(),b"extra"].concat()] {
+            let mut p=client();receipt(&mut p,w::STATUS,0,0,w::status(w::State::Complete,bytes.len()));
+            while p.step==Step::Read {
+                let at=p.read;let length=(bytes.len()-at).min(4);let mut turn=[0;4];turn[..length].copy_from_slice(&bytes[at..at+length]);receipt(&mut p,w::READ,at,length,u32::from_le_bytes(turn));
+            }
+            assert_eq!(p.view(),View::Unavailable);assert!(p.document().is_empty());assert!(p.document_scrubbed());assert!(p.raw_scrubbed());assert_eq!(p.step,Step::Release);
+        }
+    }
+    #[test]fn stream_failure_or_regressed_cumulative_count_scrubs_partially_consumed_data(){
+        let bytes=message(b"partial body");
+        for value in [w::status(w::State::Failed,0),w::status(w::State::Receiving,bytes.len()-1)] {
+            let mut p=client();drain(&mut p,&bytes,false);receipt(&mut p,w::STATUS,0,0,value);
+            assert_eq!(p.view(),View::Unavailable);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());assert_eq!(p.step,Step::Release);
+        }
+    }
+    #[test]fn busy_read_consumes_no_private_bytes_and_resumes_by_fresh_status(){
+        let bytes=message(b"body");let mut p=client();receipt(&mut p,w::STATUS,0,0,w::status(w::State::Receiving,bytes.len()));
+        let r=w::Request {seq:p.seq,kind:w::READ,offset:0,length:4,ticket:1,a:0};p.pending=Some(r);p.accepted=true;p.reply(w::error(r.seq,w::BUSY),10);
+        assert_eq!(p.read,0);assert_eq!(p.header_len,0);assert_eq!(p.step,Step::Poll);assert_eq!(p.seq,r.seq+1);assert!(p.document_scrubbed());
+        drain(&mut p,&bytes,true);receipt(&mut p,w::RELEASE,0,0,0);assert_eq!(p.document(),b"body");
+    }
+    #[test]fn cancel_and_late_accepted_stream_read_cannot_retain_or_republish_partial_body(){
+        let bytes=message(&vec![b'S';8193]);let mut p=client();drain(&mut p,&bytes,false);assert_eq!(p.document_len,8193);
+        let r=w::Request {seq:p.seq,kind:w::STATUS,offset:0,length:0,ticket:1,a:0};p.pending=Some(r);p.accepted=true;p.cancel();assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+        p.reply(w::reply(r.seq,w::status(w::State::Complete,bytes.len())),11);assert_eq!(p.step,Step::Cancel);assert!(p.document_scrubbed());
+        receipt(&mut p,w::CANCEL,0,0,0);receipt(&mut p,w::RELEASE,0,0,0);assert_eq!(p.view(),View::Cancelled);assert!(p.document().is_empty());
+    }
 }

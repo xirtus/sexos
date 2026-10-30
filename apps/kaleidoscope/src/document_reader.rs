@@ -4,7 +4,7 @@
 use sex_pdx::desktop_style::{scale, ADVANCE, INSET, LINE};
 
 const CAPACITY: usize = 512;
-const MAX_BODY: usize = 2048;
+const MAX_BODY: usize = 12288;
 const TOP: u32 = 28 + INSET;
 const GLYPH_HEIGHT: u32 = 7;
 const HOST: &[u8] = sex_pdx::network_config::HOST_NAME;
@@ -48,7 +48,7 @@ fn content(body: &[u8]) -> &[u8] {
 
 /// Consume at least one byte. A newline immediately after a full hard-wrapped
 /// row terminates that same row; trailing newlines never create a blank tail.
-/// Interior blank paragraphs remain visible, and every scan consumes ≤2048B.
+/// Interior blank paragraphs remain visible, and every scan consumes ≤12288B.
 fn line(body: &[u8], start: usize, cols: usize) -> Line {
     let mut end = start;
     while end < body.len() && end-start < cols && body[end] != b'\n' { end += 1; }
@@ -232,8 +232,8 @@ mod tests {
         let mut tail=[b'\n';1024];tail[..4].copy_from_slice(b"last");tail[1000..].fill(b' ');assert!(!r.navigate(&tail,Move::End));let frame=r.render(&tail);assert_eq!((frame.total_lines,frame.first,frame.end),(1,0,1));assert!(row(&frame,2).starts_with(b"last"));
     }
     #[test] fn maximum_body_and_defensive_oversize_input_stay_bounded() {
-        let mut r=reader(82,160);let body=[b'q';2050];assert!(r.navigate(&body,Move::End));let frame=r.render(&body);assert_eq!(frame.total_lines,205);assert_eq!((frame.first,frame.end),(194,205));assert_eq!(&row(&frame,frame.rows-2)[..8],b"qqqqqqqq");assert_eq!(&row(&frame,frame.rows-2)[8..],b"  ");valid(&frame,82,160);
-        let mut paragraphs=[b'\n';2048];paragraphs[2047]=b'Z';r.navigate(&paragraphs,Move::End);let frame=r.render(&paragraphs);assert_eq!(frame.total_lines,2048);assert_eq!(frame.end,2048);assert_eq!(row(&frame,frame.rows-2)[0],b'Z');valid(&frame,82,160);
+        let mut r=reader(82,160);let body=[b'q';MAX_BODY+2];assert!(r.navigate(&body,Move::End));let frame=r.render(&body);assert_eq!(frame.total_lines,1229);assert_eq!((frame.first,frame.end),(1218,1229));assert_eq!(&row(&frame,frame.rows-2)[..8],b"qqqqqqqq");assert_eq!(&row(&frame,frame.rows-2)[8..],b"  ");valid(&frame,82,160);
+        let mut paragraphs=[b'\n';MAX_BODY];paragraphs[MAX_BODY-1]=b'Z';r.navigate(&paragraphs,Move::End);let frame=r.render(&paragraphs);assert_eq!(frame.total_lines,MAX_BODY);assert_eq!(frame.end,MAX_BODY);assert_eq!(row(&frame,frame.rows-2)[0],b'Z');valid(&frame,82,160);
     }
     #[test] fn resize_aligns_old_source_anchor_to_new_wrap_and_clamps_away_blank_tail() {
         let body=[b'x';600];let mut r=reader(82,160);r.navigate(&body,Move::PageDown);r.navigate(&body,Move::Down);let before=r.render(&body);assert_eq!(r.anchor,120);assert_eq!(before.first,12);

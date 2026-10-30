@@ -2,7 +2,7 @@
 import copy,sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from http_content_gate import READER_BODY,READER_TAIL,load_pixel_contract,overview_preview,reader_frame,reader_move,verify_reader_pixels
+from http_content_gate import READER_BODY,READER_TAIL,STREAM_BODY,STREAM_TAIL,STREAM_MODES,MODES,wire_response,stream_receipts,load_pixel_contract,overview_preview,reader_frame,reader_move,verify_reader_pixels
 from check_desktop_pixels import glyph
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -84,10 +84,41 @@ class ReaderPixels(unittest.TestCase):
  def test_clipped_missing_source_and_oversize_fail_closed(self):
   frame=self.frame()
   for wrong in [self.trace(frame).replace('h=706','h=150'),self.trace(frame).replace('y=70','y=200')]:self.assertFalse(self.result(frame,trace=wrong)['ok'])
-  with self.assertRaises(ValueError):self.frame(b'x'*2049)
+  with self.assertRaises(ValueError):self.frame(b'x'*(self.contract['reader_max_body']+1))
   with self.assertRaises(ValueError):self.frame(w=20,h=100)
  def test_non_ascii_controls_model_and_overview_are_distinct(self):
   body=b'a\t\rb\x00\x7f\xff\nnext';frame=self.frame(body);self.assertTrue(frame['lines'][2].startswith(b'a  b  ?'));self.assertTrue(frame['lines'][3].startswith(b'next'))
   self.assertEqual(overview_preview(b' \nA\t\tB\0\xff  ')[:5],b'A B ?');self.assertEqual(overview_preview(READER_BODY)[61:],b'...')
+
+ def test_full_12288_stream_end_and_last_byte_are_independent_pixels(self):
+  self.assertEqual(len(STREAM_BODY),12288);self.assertTrue(STREAM_BODY.endswith(STREAM_TAIL));self.assertEqual(self.contract['wire_max_body'],len(STREAM_BODY));self.assertEqual(self.contract['reader_max_body'],len(STREAM_BODY))
+  first=self.frame(STREAM_BODY);anchor=reader_move(first,'end');last=self.frame(STREAM_BODY,anchor=anchor)
+  self.assertGreater(anchor,11000);self.assertEqual(last['end'],last['total_lines']);self.assertIn(STREAM_TAIL,b''.join(last['lines'][2:-1]));self.assertTrue(self.result(last,STREAM_BODY,anchor=anchor)['ok'])
+  bad=copy.deepcopy(last);index=next(i for i in range(len(bad['lines'])-2,1,-1)if b'Z'in bad['lines'][i]);bad['lines'][index]=bad['lines'][index].replace(b'Z',b'X')
+  self.assertFalse(self.result(last,STREAM_BODY,anchor=anchor,screen=self.screen(bad))['ok'])
+ def test_source_bound_oversize_and_short_stream_wire_are_distinct(self):
+  oversized=wire_response('oversized',max_body=self.contract['wire_max_body']);headers,body=oversized.split(b'\r\n\r\n',1)
+  self.assertIn(b'Content-Length: 12289',headers);self.assertEqual(len(body),12289)
+  short=wire_response('stream-short',STREAM_BODY,max_body=self.contract['wire_max_body']);headers,body=short.split(b'\r\n\r\n',1)
+  self.assertIn(b'Content-Length: 12288',headers);self.assertEqual(len(body),12279);self.assertEqual(body,STREAM_BODY[:-9])
+  full=wire_response('stream',STREAM_BODY,max_body=self.contract['wire_max_body']);self.assertEqual(full.split(b'\r\n\r\n',1)[1],STREAM_BODY)
+ def stream_trace(self,receiving=True):
+  trace='[net.job.resolved.admitted] owner=15 task=15 ticket=2 dns_generation=1 observed=10 expires=60010 now=12 fixed=1 at_begin=1\n[net.job.stream.admitted] owner=15 task=15 ticket=2 kind=9 ring=1024 max_wire=13312 total_ticks=30000 idle_ticks=5000 authority=held_route\n[net.job.egress.submit] ticket=2 sequence=2 length=66 hash=0x1234 scope=dma_admission_not_delivery\n'
+  for consumed in [4]+list(range(1024,12289,1024)):
+   produced=min(12394,256 if consumed==4 else consumed+256);state='Receiving'if receiving and consumed<12288 else'Complete'
+   trace+=f'[net.job.stream.drain] owner=15 task=15 ticket=2 produced={produced} consumed={consumed} buffered={produced-consumed} ring=1024 state_before={state} receipt=retained not_delivery=1\n'
+  return trace
+ def test_stream_receipts_require_receiving_and_large_actual_consumption(self):
+  trace=self.stream_trace();result=stream_receipts(trace,[2],self.contract,[2],[2]);self.assertTrue(result['ok'],result)
+  self.assertLess(result['drains'][-1]['produced'],self.contract['stream_max_wire']);self.assertEqual(result['drains'][-1]['consumed'],12288)
+  self.assertFalse(stream_receipts(self.stream_trace(False),[2],self.contract,[2],[2])['ok'])
+  small='\n'.join(line for line in trace.splitlines()if 'stream.drain'not in line or int(line.split('consumed=')[1].split()[0])<=4096);self.assertFalse(stream_receipts(small,[2],self.contract,[2],[2])['ok'])
+ def test_stream_receipts_reject_repeated_consumption_bad_ring_and_false_admission(self):
+  trace=self.stream_trace();first=next(line for line in trace.splitlines()if 'consumed=1024 'in line)
+  for wrong in [trace+'\n'+first,trace.replace('buffered=252','buffered=1025'),trace.replace('max_wire=13312','max_wire=16384'),trace.replace('kind=9','kind=8'),trace.replace('owner=15','owner=16'),trace.replace('consumed=1024','consumed=2'),trace.replace('receipt=retained','receipt=delivered'),trace.replace('scope=dma_admission_not_delivery','scope=delivery')]:
+   self.assertFalse(stream_receipts(wrong,[2],self.contract,[2],[2])['ok'])
+ def test_stream_modes_add_all_cases_without_removing_prior_modes(self):
+  self.assertEqual(STREAM_MODES,('stream','stream-short','stream-reset','stream-cancel-retry','stream-close'))
+  for mode in ('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch','reader','dns-cname-sections','dns-close')+STREAM_MODES:self.assertIn(mode,MODES)
 
 if __name__=='__main__':unittest.main()

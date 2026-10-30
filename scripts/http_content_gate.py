@@ -11,7 +11,8 @@ from check_disk_persistence import ppm_rgb
 
 DNS_MODES=('dns-disallowed','dns-zero-ttl','dns-malformed','dns-silence','dns-cancel','dns-close','dns-cname-disallowed','dns-cname-zero-ttl','dns-cname-cycle','dns-cname-conflict','dns-bad-pointer','dns-cname-unrelated')
 DNS_SUCCESS=('dns-compressed','dns-cname','dns-cname-reordered','dns-cname-sections')
-MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch','reader')+DNS_MODES+DNS_SUCCESS
+STREAM_MODES=('stream','stream-short','stream-reset','stream-cancel-retry','stream-close')
+MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch','reader')+DNS_MODES+DNS_SUCCESS+STREAM_MODES
 BODY=b'LIVE SEXOS HTTP BODY 80 / FROM CONTROLLED PEER.'
 ECHO=bytes((n*17+78)&255 for n in range(1025))
 # Whole document is independent controlled peer data, including interior blanks
@@ -19,14 +20,17 @@ ECHO=bytes((n*17+78)&255 for n in range(1025))
 READER_TAIL=b'FINAL FULL DOCUMENT BYTE Z'
 READER_BODY=(b''.join((b' '*48 if n%9==8 else(f'{n:03d} SEXOS READER LINE / SOURCE BYTES ARE DATA').encode().ljust(48,b'.'))+b'\n'for n in range(50)))[:2048-len(READER_TAIL)]+READER_TAIL
 assert len(READER_BODY)==2048
+STREAM_TAIL=b'FINAL STREAM DOCUMENT BYTE Z'
+STREAM_BODY=(b''.join((b' '*48 if n%11==10 else(f'{n:03d} SEXOS STREAM LINE / SOURCE BYTES ARE DATA').encode().ljust(48,b'.'))+b'\n'for n in range(300)))[:12288-len(STREAM_TAIL)]+STREAM_TAIL
+assert len(STREAM_BODY)==12288
 
 def load_pixel_contract(root):
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'apps/kaleidoscope/src/http_wire.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs'}
+ paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'apps/kaleidoscope/src/http_wire.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
  def number(key,pattern):
   match=re.search(pattern,sources[key])
   if not match:raise ValueError('production HTTP pixel contract changed: '+pattern)
-  return int(match[1],0)
+  return sum(int(term.strip().replace('_',''),0)for term in match[1].split('+'))
  def literal(key,pattern):
   match=re.search(pattern,sources[key])
   if not match:raise ValueError('missing production HTTP literal: '+pattern)
@@ -43,7 +47,7 @@ def load_pixel_contract(root):
  reader_header=literal('reader',r'put\(&mut frame,0,(b"[^"\n]*")\)')
  reader_footers=[ast.literal_eval(v)for v in re.findall(r'(b"(?:PgUp[^"\n]*|V back|V)")',reader)]
  if len(reader_footers)!=3:raise ValueError('production reader footer contract changed')
- return dict(reader_header=reader_header,reader_footers=reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ return dict(wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
@@ -213,10 +217,13 @@ def wait_http_pixels(q,text,out,expected,body,contract,health,name='browser-http
  result.update(attempts=attempts,seconds=time.monotonic()-began,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Complete actual tiled Plain HTTP/no TLS label, keyboard footer, padding, blank rows and all64body cells including trailing erasure, source-bound production font/style/composer and actual preceding status geometry. Serial completion alone cannot pass.')
  (out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n');return result
 
-def wire_response(mode,body=BODY):
+def wire_response(mode,body=BODY,max_body=None):
  status=b'HTTP/1.1 200 OK\r\n';extra=b'';length=len(body)
  if mode=='short-body':length+=9
- elif mode=='oversized':body=b'X'*2049;length=len(body)
+ elif mode=='stream-short':body=body[:-9]
+ elif mode=='oversized':
+  if max_body is None:max_body=load_pixel_contract(Path(__file__).resolve().parents[1])['wire_max_body']
+  body=b'X'*(max_body+1);length=len(body)
  elif mode=='redirect':status=b'HTTP/1.1 302 Found\r\n';extra=b'Location: /elsewhere\r\n'
  elif mode=='malformed':extra=b'Content-Length: '+str(length).encode()+b'\r\n'
  return status+b'Content-Type: text/plain; charset=us-ascii\r\nContent-Length: '+str(length).encode()+b'\r\n'+extra+b'Connection: close\r\n\r\n'+body
@@ -251,16 +258,47 @@ def resolution_joins(trace,pcap,expected,dns_validation):
    if answer['packet']>=syn['packet']:errors.append(f'HTTP ticket{ticket} emitted SYN before its actual DNS answer')
    joins.append(dict(ticket=ticket,dns_generation=generation,observed_tick=observed,expires_tick=expires,admitted_tick=now,dns_release_log_offset=release.start(),admission_log_offset=admission.start(),egress_log_offset=egress.start(),egress_sequence=int(egress[1]),dns_answer_packet=answer['packet'],tcp_first_syn=syn))
  except(ValueError,IndexError,struct.error)as exc:errors.append(str(exc))
- return dict(ok=not errors,errors=errors,joins=joins,scope='Exact positive DNS RELEASE precedes retained BEGIN_RESOLVED admission; bounded admission time is observed in serial. Subsequent egress hash/length joins the actual first TCP SYN, which follows the actual captured DNS answer. DNS observation is provenance data under held BOOT authority and fixed endpoint policy, not DNS authenticity or new authority.')
+ return dict(ok=not errors,errors=errors,joins=joins,scope='Exact positive DNS RELEASE precedes retained BEGIN_STREAM_RESOLVED admission; bounded admission time is observed in serial. Subsequent egress hash/length joins the actual first TCP SYN, which follows the actual captured DNS answer. DNS observation is provenance data under held BOOT authority and fixed endpoint policy, not DNS authenticity or new authority.')
+
+def stream_receipts(trace,tickets,contract,large_tickets=(),receiving_tickets=()):
+ """Bounded custody samples qualify consumption, never stand in for PCAP."""
+ errors=[];admitted=[];drains=[];admit_offsets={}
+ expected=(contract['stream_ring'],contract['stream_max_wire'],contract['stream_total_ticks'],contract['stream_idle_ticks'])
+ if expected!=(1024,13312,30000,5000):errors.append('source streaming limits differ from the explicit bounded fixture')
+ for m in re.finditer(r'\[net.job.stream.admitted\] owner=(\d+) task=(\d+) ticket=(\d+) kind=(\d+) ring=(\d+) max_wire=(\d+) total_ticks=(\d+) idle_ticks=(\d+) authority=held_route',trace):
+  owner,task,ticket,kind,ring,maximum,total,idle=map(int,m.groups());admitted.append(ticket);admit_offsets[ticket]=m.start()
+  if(owner,task,kind)!=(15,15,9)or(ring,maximum,total,idle)!=expected:errors.append('stream admission differs from exact owner/route/kind/source limits')
+ if admitted!=list(tickets)or len(admitted)!=trace.count('[net.job.stream.admitted]'):errors.append('stream admission ticket sequence missing/extra/malformed')
+ for ticket in tickets:
+  resolved=re.search(rf'\[net.job.resolved.admitted\] owner=15 task=15 ticket={ticket} dns_generation=\d+ ',trace)
+  egress=re.search(rf'\[net.job.egress.submit\] ticket={ticket} sequence=\d+ length=\d+ hash=0x[0-9a-f]+ scope=dma_admission_not_delivery',trace)
+  if not resolved or not egress or ticket not in admit_offsets or not resolved.start()<admit_offsets[ticket]<egress.start():errors.append(f'ticket{ticket} streaming admission does not join resolved authorization before actual egress')
+ previous={};complete=set()
+ for m in re.finditer(r'\[net.job.stream.drain\] owner=(\d+) task=(\d+) ticket=(\d+) produced=(\d+) consumed=(\d+) buffered=(\d+) ring=(\d+) state_before=(\w+) receipt=retained not_delivery=1',trace):
+  owner,task,ticket,produced,consumed,buffered,ring=map(int,m.groups()[:7]);state=m[8]
+  if(owner,task)!=(15,15)or ticket not in tickets or ring!=expected[0]or not 0<consumed<=produced<=expected[1]or buffered!=produced-consumed or buffered>ring:errors.append('stream drain violates exact owner/cursor/ring bounds')
+  old=previous.get(ticket)
+  if ticket not in admit_offsets or m.start()<=admit_offsets[ticket]:errors.append('stream drain precedes its exact kind9 admission')
+  if old and(consumed<=old[1]or produced<old[0]):errors.append('sampled stream produced/consumed counters regressed or repeated consumption')
+  if state not in('Receiving','Complete')or ticket in complete and state!='Complete':errors.append('stream drain state is invalid or regressed')
+  if state=='Complete':complete.add(ticket)
+  previous[ticket]=(produced,consumed);drains.append(dict(ticket=ticket,produced=produced,consumed=consumed,buffered=buffered,state_before=state))
+ if len(drains)!=trace.count('[net.job.stream.drain]'):errors.append('malformed stream drain sample')
+ for ticket in receiving_tickets:
+  if not any(row['ticket']==ticket and row['state_before']=='Receiving'for row in drains):errors.append(f'ticket{ticket} lacks actual destructive READ while Receiving')
+ for ticket in large_tickets:
+  if not any(row['ticket']==ticket and row['consumed']>4096 for row in drains):errors.append(f'ticket{ticket} never actually consumed beyond legacy4096')
+ return dict(ok=not errors,errors=errors,admissions=admitted,drains=drains,source_limits=dict(ring=expected[0],max_wire=expected[1],total_ticks=expected[2],idle_ticks=expected[3]),scope='Exact held-route kind9 admissions and sampled actual destructive READ custody; cumulative produced and strictly increasing consumed remain within the1024-byte ring. Complete endpoint bytes require separate exact PCAP reassembly; no exact max-wire drain sample or delivery claim.')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--mode',choices=MODES,default='echo');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');a=p.parse_args()
  iso=a.iso.resolve(strict=True);seed=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh evidence directory required')
- contract=load_pixel_contract(Path(__file__).resolve().parents[1]);request=contract['request'];response_body=READER_BODY if a.mode=='reader'else BODY;overview=overview_preview(response_body)if a.mode=='reader'else BODY;disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
- count=1 if a.mode in DNS_MODES else 4 if a.mode=='switch'else 3 if a.mode=='cancel-retry'else 2
- dns_count=2 if a.mode in('switch','cancel-retry')else 1
- rows=[];attempts=[];dns_rows=[];dns_attempts=[];server_errors=[];connections=[];stopping=threading.Event();http_seen=threading.Event();dns_seen=threading.Event()
+ contract=load_pixel_contract(Path(__file__).resolve().parents[1]);request=contract['request'];response_body=STREAM_BODY if a.mode in STREAM_MODES else READER_BODY if a.mode=='reader'else BODY;overview=overview_preview(response_body)if a.mode in('reader',)+STREAM_MODES else BODY;disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
+ if a.mode in STREAM_MODES and (contract['wire_max_body']!=len(STREAM_BODY)or contract['reader_max_body']!=len(STREAM_BODY)):raise RuntimeError('source Client/reader stream body limit differs from fixture')
+ count=1 if a.mode in DNS_MODES else 4 if a.mode=='switch'else 3 if a.mode in('cancel-retry','stream-cancel-retry')else 2
+ dns_count=2 if a.mode in('switch','cancel-retry','stream-cancel-retry')else 1
+ rows=[];attempts=[];dns_rows=[];dns_attempts=[];server_errors=[];connections=[];stopping=threading.Event();http_seen=threading.Event();dns_seen=threading.Event();reset_after_drain=threading.Event();partial_sent=threading.Event()
  listener=socket.socket();listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);listener.bind(('127.0.0.1',46078));listener.listen(4);listener.settimeout(.2)
  dns_peer=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);dns_peer.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);dns_peer.bind(('127.0.0.1',46079));dns_peer.settimeout(.2)
  def serve_dns():
@@ -284,14 +322,14 @@ def main():
   except Exception as exc:
    if not stopping.is_set():server_errors.append(repr(exc))
  dns_thread=threading.Thread(target=serve_dns,daemon=True);dns_thread.start()
- def write(conn,ticket,data,late=False):
+ def write(conn,ticket,data,late=False,early_rejection=False):
   sent=bytearray();error=None
   try:
    for start in range(0,len(data),13):
     conn.sendall(data[start:start+13]);sent.extend(data[start:start+13]);time.sleep(.002)
   except OSError as exc:error=repr(exc)
-  finally:attempts.append(dict(ticket=ticket,late_cancelled_peer=late,attempted_hex=data.hex(),sent_hex=bytes(sent).hex(),sent_sha256=hashlib.sha256(sent).hexdigest(),error=error))
-  if error and not late:raise RuntimeError('response write: '+error)
+  finally:attempts.append(dict(ticket=ticket,late_cancelled_peer=late,early_rejection=early_rejection,attempted_hex=data.hex(),sent_hex=bytes(sent).hex(),sent_sha256=hashlib.sha256(sent).hexdigest(),error=error))
+  if error and not(late or early_rejection):raise RuntimeError('response write: '+error)
   return bytes(sent)
  def serve():
   old=None
@@ -313,6 +351,22 @@ def main():
     if echo:
      row['response_hex']=write(conn,ticket,ECHO).hex();conn.shutdown(socket.SHUT_WR);conn.close();continue
     http_seen.set()
+    if ticket==2 and a.mode in('stream-reset','stream-cancel-retry','stream-close'):
+     full=wire_response('stream',response_body,contract['wire_max_body']);header_end=full.index(b'\r\n\r\n')+4
+     prefix=full[:header_end+(5120 if a.mode=='stream-reset'else 2048)]
+     row.update(aborted=True,response_hex=full.hex(),prefix_bytes=len(prefix),host_sent_prefix_hex=write(conn,ticket,prefix).hex(),response_scope='Full planned response and actual sent prefix are separate; complete delivery is never inferred from sendall')
+     partial_sent.set()
+     if a.mode=='stream-reset':
+      deadline=time.monotonic()+90
+      while not stopping.is_set()and not reset_after_drain.wait(.1):
+       if time.monotonic()>deadline:raise TimeoutError('actual >4096 stream drain before peer RST')
+      if stopping.is_set():return
+      conn.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack('ii',1,0));conn.close();continue
+     old=(conn,row)
+     if a.mode=='stream-close':
+      while not stopping.wait(.1):pass
+      return
+     continue
     silent=ticket==2 and a.mode in('silence','cancel-retry','close')
     if silent:
      row['aborted']=True;old=(conn,row)
@@ -322,14 +376,26 @@ def main():
      continue
     if ticket==2 and a.mode=='reset':row['aborted']=True;conn.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack('ii',1,0));conn.close();continue
     if old is not None:
-     old_conn,old_row=old;old_row['response_hex']=wire_response('echo').hex();old_row['host_sent_prefix_hex']=write(old_conn,2,wire_response('echo'),late=True).hex();old_row['response_scope']='attempted late bytes; actual captured prefix is independently qualified';old_conn.close();old=None
-    reply=wire_response(a.mode if ticket==2 else'echo',response_body);row['response_hex']=write(conn,ticket,reply).hex();conn.shutdown(socket.SHUT_WR);conn.close()
+     old_conn,old_row=old
+     if a.mode=='stream-cancel-retry':
+      remaining=bytes.fromhex(old_row['response_hex'])[old_row['prefix_bytes']:]
+      old_row['host_sent_late_suffix_hex']=write(old_conn,2,remaining,late=True).hex();old_row['response_scope']='Planned complete response; initial actual prefix and attempted late remaining suffix retained separately, actual wire independently qualifies only its captured prefix'
+     else:
+      old_row['response_hex']=wire_response('echo').hex();old_row['host_sent_prefix_hex']=write(old_conn,2,wire_response('echo'),late=True).hex();old_row['response_scope']='attempted late bytes; actual captured prefix is independently qualified'
+     old_conn.close();old=None
+    reply=wire_response(a.mode if ticket==2 else'echo',response_body,contract['wire_max_body'])
+    if a.mode=='oversized':
+     row.update(aborted=True,response_hex=reply.hex(),host_sent_prefix_hex=write(conn,ticket,reply,early_rejection=True).hex(),response_scope='Exact source-bound oversized header/body attempt; early incremental rejection may end the wire at its checked prefix')
+     try:conn.shutdown(socket.SHUT_WR)
+     except OSError:pass
+    else:row['response_hex']=write(conn,ticket,reply).hex();conn.shutdown(socket.SHUT_WR)
+    conn.close()
   except Exception as exc:
    if not stopping.is_set():server_errors.append(repr(exc))
  thread=threading.Thread(target=serve,daemon=True);thread.start()
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres='+a.resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{qmp},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
  authority_paths=('apps/kaleidoscope/src/dns_probe.rs','servers/sexnet/src/dns_jobs.rs','servers/sexnet/src/jobs.rs','servers/sexnet/src/main.rs','crates/sex-pdx/src/network_job.rs','crates/sex-net/src/dns_wire.rs')
- (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,resolution=a.resolution,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],authority_source_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()for name in authority_paths},runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py','check_dns_capture.py')},http_request_hex=request.hex(),http_body_hex=response_body.hex(),scope='Actual H now obtains a fixed-name UDP DNS observation, positively releases it, then requests BEGIN_RESOLVED under the existing held BOOT route and immutable HTTP endpoint policy. Real J/R/V/navigation/F11 keys, source-bound reader pages with actual ZoomToggle/restore where selected, loopback UDP46079/TCP46078 fixtures and full shared PCAP. No DNS authenticity, TTL wall-clock accuracy, new capability authority, TLS, public routing, HTML, redirect following or cache claim.'),indent=2)+'\n')
+ (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,resolution=a.resolution,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],authority_source_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()for name in authority_paths},runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py','check_dns_capture.py')},http_request_hex=request.hex(),http_body_hex=response_body.hex(),scope='Actual H now obtains a fixed-name UDP DNS observation, positively releases it, then requests BEGIN_STREAM_RESOLVED kind9 under the existing held BOOT route and immutable HTTP endpoint policy. Real J/R/V/navigation/F11 keys, source-bound reader pages with actual ZoomToggle/restore where selected, loopback UDP46079/TCP46078 fixtures and full shared PCAP. No DNS authenticity, TTL wall-clock accuracy, new capability authority, TLS, public routing, HTML, redirect following or cache claim.'),indent=2)+'\n')
  proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);actions=[];pixel_results=[];reader_results=[];failure=None
  def text():return serial.read_text(errors='replace')if serial.exists()else''
  def health():
@@ -343,6 +409,14 @@ def main():
    if match:return match
    time.sleep(.02)
   raise TimeoutError(pattern)
+ def wait_stream_drain(ticket,minimum):
+  deadline=time.monotonic()+90
+  while time.monotonic()<deadline:
+   health()
+   samples=list(re.finditer(rf'\[net.job.stream.drain\] owner=15 task=15 ticket={ticket} produced=(\d+) consumed=(\d+) buffered=(\d+) ring=1024 state_before=Receiving receipt=retained not_delivery=1',text()))
+   if any(int(m[2])>=minimum for m in samples):return
+   time.sleep(.02)
+  raise TimeoutError(f'actual Receiving drain ticket{ticket} consumed>={minimum}')
  def focus(q):
   for _ in range(8):
    current=re.findall(r'\[shell.focus.set\] id=(\d+)',text())
@@ -380,23 +454,23 @@ def main():
    frame=paint(name);actions.append(dict(action='actual_palette_'+name,tile=frame['tile'],source_anchor=anchor));return frame
   start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start)
   first=paint('browser-reader-initial');original=first['tile']
-  if first['first']!=0 or first['source_bytes']!=2048 or first['total_lines']<=first['body_rows']:raise RuntimeError('native reader fixture does not exercise full document pagination')
+  if first['first']!=0 or first['source_bytes']!=len(response_body) or first['total_lines']<=first['body_rows']:raise RuntimeError('native reader fixture does not exercise full document pagination')
   navigation('pgdn',109);navigation('down',108);navigation('pgup',104);navigation('home',102)
   end=navigation('end',107)
-  if end['end']!=end['total_lines']or READER_TAIL.decode()not in ''.join(reader_results[-1]['expected_rows'][2:-1]):raise RuntimeError('reader End lacks final full-document marker')
+  if end['end']!=end['total_lines']or (STREAM_TAIL if a.mode in STREAM_MODES else READER_TAIL).decode()not in ''.join(reader_results[-1]['expected_rows'][2:-1]):raise RuntimeError('reader End lacks final full-document marker')
   navigation('up',103)
   expanded=zoom('browser-reader-expanded');restored=zoom('browser-reader-restored')
   if expanded['tile']['w']==original['w']and expanded['tile']['h']==original['h']:raise RuntimeError('real ZoomToggle did not change reader geometry')
   if(restored['tile']['w'],restored['tile']['h'])!=(original['w'],original['h']):raise RuntimeError('real ZoomToggle did not restore reader geometry')
-  start=len(text());q.key('v');wait(r'\[browser.view.applied\] bytes=\d+ http=2 body_bytes=2048 pixels=unconfirmed',start);pixels(q,'Ready','browser-reader-overview')
+  start=len(text());q.key('v');wait(rf'\[browser.view.applied\] bytes=\d+ http=2 body_bytes={len(response_body)} pixels=unconfirmed',start);pixels(q,'Ready','browser-reader-overview')
   anchor=0;start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);again=paint('browser-reader-reset')
   if again['first']!=0:raise RuntimeError('reader re-entry did not reset source anchor')
   start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 pixels=unconfirmed',start);pixels(q,'Cancelled','browser-reader-erased')
   layouts=len(re.findall(r'\[browser.reader.layout\]',text()));start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);pixels(q,'Cancelled','browser-reader-cannot-reopen')
   if len(re.findall(r'\[browser.reader.layout\]',text()))!=layouts or re.search(r'\[browser.view.applied\] bytes=\d+ http=258 ',text()[start:]):raise RuntimeError('cancelled document reopened reader')
   if re.search(r'\[net\.(?:job|dns)\.egress\.submit\]|\[net\.job\.resolved\.admitted\]|\[browser.http.body\]|\[browser.dns.answer\]',text()[start_network:]):raise RuntimeError('reader navigation issued new owned network work')
-  if len(rows)!=2 or len(dns_rows)!=1:raise RuntimeError('reader navigation changed actual peer exchange count')
-  actions.append(dict(action='reader_local_navigation_only',http_connections=2,dns_queries=1,cancelled_document_cannot_reopen=True))
+  if len(rows)!=count or len(dns_rows)!=dns_count:raise RuntimeError('reader navigation changed actual peer exchange count')
+  actions.append(dict(action='reader_local_navigation_only',http_connections=count,dns_queries=dns_count,cancelled_document_cannot_reopen=True))
  def close_pending(q,start,kind):
   began=time.monotonic();q.key('f11');wait(rf'\[browser.{kind}.closed\] pending=1 terminal=1',start);wait(r'\[sext.app.pool.ready\] target=15 .*ok=1',start)
   trace=text();roles={int(n)for n in re.findall(r'\[app.service.ack\] target=15 .*role=(\d+) ',trace[start:])};ack=trace.rfind('[net.app.cleanup.ack] target=15')
@@ -433,18 +507,26 @@ def main():
    while not http_seen.wait(.02):
     health()
     if time.monotonic()>deadline:raise RuntimeError('released DNS observation did not produce actual resolved HTTP request')
-  if a.mode=='close':close_pending(q,len(text()),'http')
-  elif a.mode=='cancel-retry':
+  if a.mode in('stream-reset','stream-cancel-retry','stream-close'):
+   deadline=time.monotonic()+60
+   while not partial_sent.wait(.02):
+    health()
+    if time.monotonic()>deadline:raise TimeoutError('controlled stream prefix send not completed')
+   wait_stream_drain(2,5120 if a.mode=='stream-reset'else 1024)
+   if a.mode=='stream-reset':reset_after_drain.set()
+  if a.mode in('close','stream-close'):close_pending(q,len(text()),'http')
+  elif a.mode in('cancel-retry','stream-cancel-retry'):
    start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.http.released\] ticket=2 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-cancelled');actions.append(dict(action='actual_j_cancel',ticket=2,seconds=time.monotonic()-began));start=len(text());q.key('h');resolution(3,2,start);ready(q,3,start,'browser-http');actions.append(dict(action='actual_h_fresh_retry',ticket=3,dns_generation=2))
-  elif a.mode in('echo','switch','reader')+DNS_SUCCESS:
+   if a.mode=='stream-cancel-retry':reader_workflow(q)
+  elif a.mode in('echo','switch','reader','stream')+DNS_SUCCESS:
    ready(q,2,start,'browser-http-first'if a.mode=='switch'else'browser-http')
-   if a.mode=='reader':reader_workflow(q)
+   if a.mode in('reader','stream'):reader_workflow(q)
    if a.mode=='switch':
     start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-erased');actions.append(dict(action='actual_j_erase_previous_ready_body',job_allocated=False))
     start=len(text());q.key('r');wait(r'\[browser.net.job.released\] ticket=3 view=Verified private_job=0',start);actions.append(dict(action='actual_r_echo_same_replay_fence',ticket=3));start=len(text());q.key('h');resolution(4,2,start);ready(q,4,start,'browser-http');actions.append(dict(action='actual_h_after_echo',ticket=4,dns_generation=2))
   elif a.mode not in DNS_MODES:
    wait(r'\[browser.http.released\] ticket=2 view=Unavailable private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=3 body_bytes=0 ',start);pixels(q,'Unavailable','browser-http')
-  expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode=='cancel-retry'else[2]if a.mode in('echo','reader')+DNS_SUCCESS else[]
+  expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode in('cancel-retry','stream-cancel-retry')else[2]if a.mode in('echo','reader','stream')+DNS_SUCCESS else[]
   if [int(n)for n in re.findall(r'\[browser.http.body\] ticket=(\d+) ',text())]!=expected_bodies:raise RuntimeError('invalid, incomplete, cancelled or absent HTTP response became usable body')
   health()
  except Exception as exc:failure=repr(exc)
@@ -470,7 +552,7 @@ def main():
  validation=capture(raw_pcap,expected,guest_ports=range(48001,65536),initiator='guest')if raw_pcap else dict(ok=False,errors=['missing actual full PCAP'])
  dns_expected=[dict(ticket=row['ticket'],response_hex=row['response_hex'])for row in dns_rows]
  dns_validation=dns_capture(raw_pcap,'echo',dns_attempts,expected=dns_expected)if raw_pcap and dns_expected else dict(ok=False,errors=['missing actual H DNS query/capture'])
- admissions=[]if a.mode in DNS_MODES else[(2,1),(4,2)]if a.mode=='switch'else[(2,1),(3,2)]if a.mode=='cancel-retry'else[(2,1)]
+ admissions=[]if a.mode in DNS_MODES else[(2,1),(4,2)]if a.mode=='switch'else[(2,1),(3,2)]if a.mode in('cancel-retry','stream-cancel-retry')else[(2,1)]
  joined=resolution_joins(text(),raw_pcap,admissions,dns_validation)
  if a.mode in DNS_SUCCESS and joined['ok']:
   # The captured alias fixtures carry23s/7s CNAME TTLs and60s A data.
@@ -478,11 +560,20 @@ def main():
   lifetime=60000 if a.mode=='dns-compressed'else 7000
   if len(joined['joins'])!=1 or joined['joins'][0]['expires_tick']-joined['joins'][0]['observed_tick']!=lifetime:
    joined['ok']=False;joined['errors'].append('resolved provenance TTL differs from the exact captured CNAME chain/final A RRset')
+ large=[3]if a.mode=='stream-cancel-retry'else[2]if a.mode in('stream','stream-short','stream-reset')else[]
+ receiving=[2,3]if a.mode=='stream-cancel-retry'else[2]if a.mode in STREAM_MODES else[]
+ streaming=stream_receipts(text(),[ticket for ticket,_ in admissions],contract,large,receiving)
  authority=nic(text(),1,True,True)
  if len(rows)!=count:failure=failure or'incomplete actual peer exchanges'
  if len(dns_rows)!=dns_count:failure=failure or'incomplete actual DNS exchanges'
- if a.mode=='reset'and validation.get('ok')and not validation['connections'][1]['rst_in']:failure=failure or'missing captured real peer reset'
- result=dict(ok=failure is None and validation['ok']and dns_validation['ok']and joined['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,dns_capture=dns_validation,resolution_order=joined,authority=authority,pixels=pixel_results,reader_pixels=reader_results,actions=actions,scope='Actual H-driven fixed-name DNS query/answer and positive cleanup precede generation-bound HTTP admission under existing held BOOT authority and fixed endpoint policy. Exact first TCP SYN joins the admitted egress frame hash/length and follows the captured DNS answer. Denial modes require only baseline Echo TCP and no new HTTP-owned egress. Full HTTP/body pixels or explicit terminal Close qualify presentation/cleanup. Reader mode additionally requires exact2048-byte full-document pages, actual navigation and geometry changes, overview return/reset, cancellation erasure and no new owned network work. No injected native expiry/rollback, DNS authenticity, wall-clock TTL accuracy, new capabilities, TLS, public web, HTML, cache or physical/SMP isolation claim.')
+ if a.mode in('reset','stream-reset')and validation.get('ok')and not validation['connections'][1]['rst_in']:failure=failure or'missing captured real peer reset'
+ if validation.get('ok')and a.mode=='stream-reset':
+  header_len=wire_response('stream',response_body,contract['wire_max_body']).index(b'\r\n\r\n')+4
+  if validation['connections'][1]['incoming_bytes']<=header_len+4096:failure=failure or'RST did not follow actual captured >4096 body prefix'
+ if validation.get('ok')and a.mode=='oversized':
+  header_len=wire_response('oversized',BODY,contract['wire_max_body']).index(b'\r\n\r\n')+4
+  if validation['connections'][1]['incoming_bytes']<header_len:failure=failure or'oversized denial lacks captured complete invalid Content-Length header'
+ result=dict(ok=failure is None and validation['ok']and dns_validation['ok']and joined['ok']and streaming['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,dns_capture=dns_validation,resolution_order=joined,streaming=streaming,authority=authority,pixels=pixel_results,reader_pixels=reader_results,actions=actions,scope='Actual H-driven fixed-name DNS query/answer and positive cleanup precede generation-bound HTTP admission under existing held BOOT authority and fixed endpoint policy. Exact first TCP SYN joins the admitted egress frame hash/length and follows the captured DNS answer. Denial modes require only baseline Echo TCP and no new HTTP-owned egress. Full HTTP/body pixels or explicit terminal Close qualify presentation/cleanup. Reader/stream modes additionally require complete2048/12288-byte full-document pages, actual navigation and geometry changes, overview return/reset, cancellation erasure and no new owned network work. No injected native expiry/rollback, DNS authenticity, wall-clock TTL accuracy, new capabilities, TLS, public web, HTML, cache or physical/SMP isolation claim.')
  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,mode=a.mode,model=a.model,connections=len(rows))))
