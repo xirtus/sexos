@@ -427,8 +427,8 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                     c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
                 }
             }
-            // Title ink follows the tab background; tabs must not erase it.
-            if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id){c=fg;}
+            // Select title ink against the final glass/tab pixel, then paint it.
+            if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id,c){c=fg;}
             // Frame lights: glass background with light color overlay.
             // Dimmed for single-tab non-hover; full bright for hovered light.
             if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
@@ -1167,15 +1167,13 @@ const FONT_ASCII_5X7: [[u8; 7]; 95] = [
     [0, 0, 9, 22, 0, 0, 0], // ASCII 126
 ];
 
-/// Returns `Some(text_color)` if pixel (lx, ly) is a toolbar title glyph pixel
-/// for the given surface_id, or `None` if not in the toolbar title text area.
-/// Uses FONT_ASCII_5X7 at a fixed position within the top bar.
 fn ascii_glyph_index(byte: u8) -> Option<usize> {
     use sex_pdx::desktop_style::{ASCII_FIRST, ASCII_LAST};
     (ASCII_FIRST..=ASCII_LAST).contains(&byte).then(|| (byte - ASCII_FIRST) as usize)
 }
 
-fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
+/// Fixed-position title glyphs choose contrast against the final composed background.
+fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32> {
     const SCALE: usize = 2;
     const GLYPH_W: usize = sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H: usize = sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
@@ -1191,7 +1189,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
         300 => b"Browser", 100 => b"App", _ => return None,
     };
     let glyph = ascii_glyph_index(*title.get(col)?)?;
-    if (FONT_ASCII_5X7[glyph][py] >> (4 - px)) & 1 != 0 { Some(0x00E8FFFF) } else { None }
+    if (FONT_ASCII_5X7[glyph][py] >> (4 - px)) & 1 != 0 { Some(sex_pdx::desktop_style::contrast_ink(background)) } else { None }
 }
 
 /// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column

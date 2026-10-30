@@ -1,5 +1,5 @@
 //! Pure bounded document layout. Rendering never modifies stored bytes.
-use sex_pdx::document_view::Layout;
+use sex_pdx::document_view::{Layout,TOOLBAR_CELL,TOOLBAR_LABELS};
 #[derive(Clone, Copy)]
 pub struct Text {
     pub bytes: [u8; 512],
@@ -57,79 +57,64 @@ pub fn render_selection(
     selection: Option<(usize, usize)>,
 ) -> Text {
     let mut t = Text::new();
+    if l.rows == 0 { return t; }
     let mut head = [0; 96];
     let mut n = 0;
+    let header_limit = l.cols.min(head.len());
     if let Some(name) = naming {
-        for &b in b"NAME? ".iter().chain(name.iter()).chain(b"#") {
+        for &b in b"Name: ".iter().chain(name.iter()).chain(b"#").take(header_limit) {
             head[n] = b;
             n += 1;
         }
     } else {
-        let suffix = state.len() + if dirty { 3 } else { 2 };
-        for &b in name.iter().take(l.cols.saturating_sub(suffix)) {
+        let suffix = state.len().saturating_add(if dirty { 3 } else { 2 });
+        for &b in name.iter().take(header_limit.saturating_sub(suffix)) {
             head[n] = b;
             n += 1;
         }
-        head[n] = b' ';
-        n += 1;
+        if n < header_limit { head[n] = b' '; n += 1; }
         if dirty {
-            head[n] = b'*';
-            n += 1;
-            head[n] = b' ';
-            n += 1;
+            for b in [b'*',b' '] { if n < header_limit { head[n] = b; n += 1; } }
         }
-        for &b in state {
-            head[n] = b;
-            n += 1;
-        }
+        for &b in state.iter().take(header_limit.saturating_sub(n)) { head[n] = b; n += 1; }
     }
-    t.line(&head[..n], l.cols);
+    if l.header_rows() != 0 { t.line(&head[..n], l.cols); }
     if let Some(selected) = palette {
-        for (i, label) in [
-            b"QUIESCE STORAGE".as_slice(),
-            b"SAVE",
-            b"RELOAD SAVED",
-            b"NEW",
-            b"SAVE AS",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let mut row = [b' '; 32];
-            row[0] = if i == selected as usize { b'>' } else { b' ' };
+        let selected = (selected as usize).min(4);
+        let labels = [b"Inspect storage  Ctrl R".as_slice(),b"Save  Ctrl S",b"Reload saved",b"New  Ctrl N",b"Save As  Ctrl Shift S"];
+        let available = l.rows.saturating_sub(l.header_rows());
+        let count = available.min(labels.len());
+        let first = selected.saturating_sub(count.saturating_sub(1));
+        for (i,label) in labels.iter().enumerate().skip(first).take(count) {
+            let mut row = [b' '; 40];
+            row[0] = if i == selected { b'>' } else { b' ' };
             row[2..2 + label.len()].copy_from_slice(label);
             t.line(&row[..2 + label.len()], l.cols);
         }
+        for label in [b"Ctrl A select all".as_slice(),b"Ctrl C/X/V copy/cut/paste",b"Esc returns to document"].iter().take(available-count) {
+            t.line(label,l.cols);
+        }
         return t;
     }
-    let labels = [b"NEW  ", b"OPEN ", b"SAVE ", b"AS   "];
-    let per = 4 / l.toolbar_rows;
+    let per = l.toolbar_per_row();
     for row in 0..l.toolbar_rows {
-        let mut line = [0; 20];
+        let mut line = [0; 4*TOOLBAR_CELL];
         for i in 0..per {
-            line[i * 5..i * 5 + 5].copy_from_slice(labels[row * per + i]);
+            line[i * TOOLBAR_CELL..(i+1)*TOOLBAR_CELL].copy_from_slice(TOOLBAR_LABELS[row*per+i]);
         }
-        t.line(&line[..per * 5], l.cols);
+        t.line(&line[..per * TOOLBAR_CELL], l.cols);
     }
-    t.line(
-        if state.ends_with(b"UNCERTAIN") {
-            b"CTRL R QUIESCE / INSPECT"
-        } else {
-            b"CTRL N O S / ESC CMDS"
-        },
-        l.cols,
-    );
+    let normal_hint: &[u8] = if l.cols >= b"Ctrl N/O/S | Ctrl Shift S | Esc menu".len() {b"Ctrl N/O/S | Ctrl Shift S | Esc menu"}
+        else if l.cols >= b"Ctrl N/O/S | Esc menu".len() {b"Ctrl N/O/S | Esc menu"} else {b"Esc menu"};
+    let uncertain_hint: &[u8] = if l.cols >= 22 {b"Ctrl R inspect storage"} else {b"Esc menu"};
+    if l.hint_rows() != 0 { t.line(if state.ends_with(b"UNCERTAIN") {uncertain_hint} else {normal_hint},l.cols); }
     let width = l.cols.saturating_sub(1).max(1);
     // Reserve chrome by geometry, not the current status/name byte length.
     // Otherwise a transient longer status can remove a body row and scroll an
     // unchanged caret before a failed operation has even completed.
-    let header_budget = l.cols + 1;
-    let toolbar_budget = l.toolbar_rows * ((per * 5).min(l.cols) + 1);
-    let hint_budget = b"CTRL R QUIESCE / INSPECT"
-        .len()
-        .max(b"CTRL N O S / ESC CMDS".len())
-        .min(l.cols)
-        + 1;
+    let header_budget = l.header_rows() * (l.cols + 1);
+    let toolbar_budget = l.toolbar_rows * ((per * TOOLBAR_CELL).min(l.cols) + 1);
+    let hint_budget = l.hint_rows() * (normal_hint.len().max(uncertain_hint.len()).min(l.cols) + 1);
     let chrome_budget = header_budget + toolbar_budget + hint_budget;
     let rows = l
         .body_rows()
@@ -160,6 +145,9 @@ pub fn render_selection(
     if cline >= *top + rows {
         *top = cline + 1 - rows
     }
+    // One physical text cell can express the caret, but not source plus caret.
+    // Keep the stored document and selection intact; avoid an overflowing row.
+    if l.cols == 1 { t.byte(b'#'); return t; }
     let mut line = 0;
     let mut col = 0;
     for i in 0..=buf.len() {

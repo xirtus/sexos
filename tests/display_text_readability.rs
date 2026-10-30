@@ -29,9 +29,9 @@ fn surface(width:u32,text:&[u8])->Surface{
 }
 #[test]fn lowercase_titles_draw_all_letters_inside_existing_chrome(){
  for(letter,ch)in b"Linen".iter().enumerate(){let mut pixels=0;for y in 0..28{for x in 62+letter*12..62+(letter+1)*12{
-     if toolbar_title_fg_at(x,y,200).is_some(){assert!((7..21).contains(&y));pixels+=1;}
+     if toolbar_title_fg_at(x,y,200,0).is_some(){assert!((7..21).contains(&y));pixels+=1;}
  }}assert!(pixels>0,"letter {} ({}) disappeared",letter,*ch);}
- assert_eq!(ascii_glyph_index(b'i'),ascii_glyph_index(b'I'));assert_eq!(ascii_glyph_index(b'\n'),None);
+ assert_ne!(ascii_glyph_index(b'i'),ascii_glyph_index(b'I'));assert_eq!(ascii_glyph_index(b'\n'),None);
 }
 #[test]fn newline_wrap_uses_scaled_advance_and_clamps_before_narrowing(){
  for(width,cols)in[(1,1),(200,30),(256,20),(300,23),(640,52),(8192,80)]{
@@ -48,8 +48,8 @@ fn surface(width:u32,text:&[u8])->Surface{
  let mut row2pixels=0;for y in 114..128{for x in 28..38{row2pixels+=surface_text_fg_at(x,y,&s).is_some()as usize;}}
  assert!(row2pixels>0);for y in 110..114{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
 }
-#[test]fn native_titles_share_existing_font_and_color(){
- for sid in[156,154,300]{let mut pixels=0;for y in 0..28{for x in 62..158{if let Some(color)=toolbar_title_fg_at(x,y,sid){assert_eq!(color,0x00E8FFFF);pixels+=1;}}}assert!(pixels>0);}
+#[test]fn native_titles_share_existing_font_and_contrast_ink(){
+ for sid in[156,154,300]{let mut pixels=0;for y in 0..28{for x in 62..158{if let Some(color)=toolbar_title_fg_at(x,y,sid,0){assert_eq!(color,0x00FFFFFF);pixels+=1;}}}assert!(pixels>0);}
 }
 #[test]fn filename_punctuation_keeps_old_indices_and_has_visible_pixels(){
  for ch in b' '..=b'Z'{assert_eq!(ascii_glyph_index(ch),Some((ch-b' ')as usize));}

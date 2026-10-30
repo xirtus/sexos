@@ -21,8 +21,10 @@ static RENDER_FRAME_COUNTER:core::sync::atomic::AtomicU64=core::sync::atomic::At
 struct Tokens{frame_top_bar_color:u32,active_tab_color:u32,inactive_tab_color:u32,close_light_color:u32,minimize_light_color:u32,zoom_light_color:u32,frame_rim_color:u32}
 static DISPLAY_TOKENS:Tokens=Tokens{frame_top_bar_color:0x111111,active_tab_color:0x222222,inactive_tab_color:0x333333,close_light_color:0x444444,minimize_light_color:0x555555,zoom_light_color:0x666666,frame_rim_color:0x777777};
 fn hot_log()->bool{false}
-fn glass_over_bg(c:u32,_x:usize,_y:usize,_a:u8)->u32{c}
-fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{c}
+static mut TEST_GLASS_BACKGROUND:Option<u32>=None;
+static mut TEST_BLEND_BACKGROUND:Option<u32>=None;
+fn glass_over_bg(c:u32,_x:usize,_y:usize,_a:u8)->u32{unsafe{TEST_GLASS_BACKGROUND.unwrap_or(c)}}
+fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{unsafe{TEST_BLEND_BACKGROUND.unwrap_or(c)}}
 fn pulse_alpha(base:u8,_a:u8,_f:u64,_p:u64)->u8{base}
 include!(env!("DISPLAY_COMPOSITION_SOURCE"));
 include!("fixtures/compositor_reference.rs");
@@ -57,7 +59,7 @@ include!("fixtures/compositor_reference.rs");
  for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..])]{
   for (column,byte)in title.iter().enumerate(){for y in 0..14 {for x in 0..12 {
    let ink=x/2<5&&FONT_ASCII_5X7[(*byte-32)as usize][y/2]&(1<<(4-x/2))!=0;
-   assert_eq!(toolbar_title_fg_at(x0+column*12+x,y0+y,sid),if ink{Some(0xe8ffff)}else{None});
+   assert_eq!(toolbar_title_fg_at(x0+column*12+x,y0+y,sid,0),if ink{Some(0xffffff)}else{None});
   }}}
  }
 }
@@ -378,7 +380,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
  for (owner,sid) in [(3,201),(16,301),(18,307)]{
   SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
   SURFACES[0]=Surface{owner_pd:owner,surface_id:sid,x:100,y:100,w:400,h:300,active:true,tab_count:1,chrome_flags:1,..SURFACE_EMPTY};
-  let mut ink=0;for y in 0..28{for x in 62..112{if let Some(color)=toolbar_title_fg_at(x,y,sid){ink+=1;assert_eq!(composite_pixel(x+100,y+100,1000,800,0,sid),color);}}}assert!(ink>0);
+  let mut ink=0;for y in 0..28{for x in 62..112{if let Some(color)=toolbar_title_fg_at(x,y,sid,DISPLAY_TOKENS.active_tab_color){ink+=1;assert_eq!(composite_pixel(x+100,y+100,1000,800,0,sid),color);}}}assert!(ink>0);
  }
 }}
 #[test]fn visual_family_style_does_not_replace_exact_surface_ownership(){
@@ -628,3 +630,72 @@ fn spindle_children(pd:u32)->[Surface;5] {
  }}
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
 }}
+
+// Independent host-only sRGB/WCAG oracle; production uses a finite integer LUT.
+fn reference_luminance(color:u32)->f64{
+ let linear=|v:u32|{let x=v as f64/255.0;if x<=0.04045{x/12.92}else{((x+0.055)/1.055).powf(2.4)}};
+ linear((color>>16)&255)*0.2126+linear((color>>8)&255)*0.7152+linear(color&255)*0.0722
+}
+fn reference_contrast(a:u32,b:u32)->f64{
+ let(a,b)=(reference_luminance(a),reference_luminance(b));(a.max(b)+0.05)/(a.min(b)+0.05)
+}
+#[test]fn integer_contrast_matches_independent_srgb_at_all_channel_samples_and_thresholds(){
+ for channel in 0..=255{for shift in[0,8,16]{
+  let color=channel<<shift;
+  assert!((desktop_style::relative_luminance(color)as f64/1_000_000.0-reference_luminance(color)).abs()<0.000002);
+ }}
+ for r in(0..=255).step_by(8).chain([255]){for g in(0..=255).step_by(8).chain([255]){for b in(0..=255).step_by(8).chain([255]){
+  let background=(r<<16)|(g<<8)|b;let ink=desktop_style::contrast_ink(background);
+  assert!(ink==0||ink==0xffffff);
+  assert!(reference_contrast(ink,background)>=4.5,"background={background:06x} ink={ink:06x}");
+  assert_eq!(ink,desktop_style::contrast_ink(background|0xff000000));
+ }}}
+ for channel in 0..=255{let background=channel*0x010101;assert!(reference_contrast(desktop_style::contrast_ink(background),background)>=4.5);}
+ assert_eq!(desktop_style::contrast_ink(0x757575),0xffffff);
+ assert_eq!(desktop_style::contrast_ink(0x767676),0);
+ assert_eq!(desktop_style::relative_luminance(0xffffff),1_000_000);
+}
+#[test]fn actual_toolbar_pixels_choose_contrast_after_blending_in_scalar_scanline_and_damage_paths(){unsafe{
+ let(w,h)=(640,480);
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+ for background in[0,0xffffff,0xb4f7de,0x1e1e2e,0x757575,0x767676,0x808080,0xff0000,0x00ff00,0x0000ff]{
+  // Neither shader token has this controlled post-blend color. This tests the
+  // real compositor's background dependency, not the host shader implementation.
+  for sid in[200,201,300,306,301,307]{for tabs in[0,1,2]{
+   // Tabs deliberately replace an opposite-luminance toolbar glass pixel.
+   TEST_GLASS_BACKGROUND=Some(if tabs==0{background}else{if desktop_style::contrast_ink(background)==0{0}else{0xffffff}});
+   TEST_BLEND_BACKGROUND=Some(background);
+   SURFACES[0]=Surface{chrome_flags:SURFACE_CHROME_TOP_BAR,tab_count:tabs,active_tab:0,..surf(3,sid)};
+   FOCUSED_SURFACE_ID=sid;
+   let expected=desktop_style::contrast_ink(background);let mut glyph_pixels=0;
+   let mut framebuffer=vec![0xdeadbeef;w*h];DAMAGE_ORDER.clear();
+   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:162,y:107,right:246,bottom:121});
+   for y in 107..121{
+    let mut row=FRAME_GROUPS.row_winners(&SURFACES,sid,y,w,h).unwrap();
+    for x in 162..246{
+     let foreground=toolbar_title_fg_at(x-100,y-100,sid,background);
+     let want=foreground.unwrap_or(background);
+     if let Some(ink)=foreground{glyph_pixels+=1;assert_eq!(ink,expected);assert!(reference_contrast(ink,background)>=4.5);}
+     assert_eq!(composite_pixel(x,y,w,h,0x987654,sid),want,"scalar bg={background:06x} sid={sid} tabs={tabs}");
+     assert_eq!(composite_pixel_source(x,y,w,h,0x987654,row.source(x)),want,"scanline bg={background:06x} sid={sid} tabs={tabs}");
+     assert_eq!(framebuffer[y*w+x],want,"damage bg={background:06x} sid={sid} tabs={tabs}");
+    }
+   }
+   assert!(glyph_pixels>0);
+  }}
+ }
+ TEST_GLASS_BACKGROUND=None;TEST_BLEND_BACKGROUND=None;SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}
+#[test]fn actual_native_body_and_selection_ink_keep_contrast_on_declared_canvas(){
+ for ink in[desktop_style::TEXT,0x00cdd6f4,0x00e8ffff,0x00f0f8ff]{
+  let mut surface=Surface{x:0,y:50,w:400,h:100,text_color:ink,text_len:1,..surf(9,156)};
+  surface.text_buf[0]=b'A';recompute_text_lines(&mut surface);
+  let mut found_ink=false;let mut found_background=false;
+  surface.selection_end=1;
+  for y in 62..80{for x in 8..20{if let Some(color)=surface_text_fg_at(x,y,&surface){
+   if color==ink{found_ink=true;assert!(reference_contrast(color,desktop_style::NATIVE_CANVAS)>=4.5);assert!(reference_contrast(color,0x36577c)>=4.5);}
+   else{found_background=true;assert_eq!(color,0xff36577c);}
+  }}}
+  assert!(found_ink&&found_background);
+ }
+}

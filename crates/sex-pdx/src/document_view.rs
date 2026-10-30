@@ -9,6 +9,9 @@ pub const OPEN: u8 = 2;
 pub const SAVE: u8 = 3;
 pub const SAVE_AS: u8 = 4;
 pub const QUIESCE: u8 = 5;
+/// Fixed visible button cells, shared by the app view and Shell hit testing.
+pub const TOOLBAR_CELL: usize = 8;
+pub const TOOLBAR_LABELS: [&[u8]; 4] = [b"New     ", b"Open    ", b"Save    ", b"Save As "];
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
     pub w: u32,
@@ -26,18 +29,26 @@ impl Layout {
             .saturating_sub(1)
             .clamp(1, 79) as usize;
         let top = if matches!(target,15|16|18) { 36 } else { s::TEXT_TOP };
-        let toolbar_rows = if cols >= 20 {
+        let desired_toolbar = if cols >= 4 * TOOLBAR_CELL {
             1
-        } else if cols >= 10 {
+        } else if cols >= 2 * TOOLBAR_CELL {
             2
-        } else {
+        } else if cols >= TOOLBAR_CELL {
             4
+        } else {
+            0
         };
-        let rows = if h.saturating_sub(top) >= 7 * scale {
-            1 + (h - top - 7 * scale) / (s::LINE * scale)
+        let rows = if w >= 2 * s::INSET + s::GLYPH_WIDTH * scale
+            && h.saturating_sub(top) >= s::GLYPH_HEIGHT * scale {
+            1 + (h - top - s::GLYPH_HEIGHT * scale) / (s::LINE * scale)
         } else {
             0
         } as usize;
+        // Every useful view retains an editor/caret row. Short views expose
+        // the full command list through Esc instead of invisible button rows.
+        let toolbar_rows = if desired_toolbar != 0 && rows >= desired_toolbar + 2 {
+            desired_toolbar
+        } else { 0 };
         Self {
             w,
             h,
@@ -48,18 +59,29 @@ impl Layout {
             toolbar_rows,
         }
     }
+    pub fn header_rows(self) -> usize { usize::from(self.rows >= 2) }
+    pub fn toolbar_per_row(self) -> usize {
+        match self.toolbar_rows { 1 => 4, 2 => 2, 4 => 1, _ => 0 }
+    }
+    pub fn hint_rows(self) -> usize {
+        usize::from(self.cols >= 8 && self.rows >= self.header_rows() + self.toolbar_rows + 2)
+    }
+    pub fn chrome_rows(self) -> usize {
+        self.header_rows() + self.toolbar_rows + self.hint_rows()
+    }
     pub fn body_rows(self) -> usize {
-        self.rows.saturating_sub(1 + self.toolbar_rows + 1).min(24)
+        self.rows.saturating_sub(self.chrome_rows()).min(24)
     }
     pub fn hit(self, x: u32, y: u32) -> Option<u8> {
-        if x < s::INSET || y < self.top + s::LINE * self.scale {
+        let per = self.toolbar_per_row();
+        if per == 0 || x >= self.w || y >= self.h || x < s::INSET
+            || y < self.top + self.header_rows() as u32 * s::LINE * self.scale {
             return None;
         }
         let col = ((x - s::INSET) / (s::ADVANCE * self.scale)) as usize;
-        let row = ((y - self.top) / (s::LINE * self.scale)) as usize - 1;
-        let per = 4 / self.toolbar_rows;
-        let item = row * per + col / 5;
-        if row >= self.toolbar_rows || col >= per * 5 || item >= 4 {
+        let row = ((y - self.top) / (s::LINE * self.scale)) as usize - self.header_rows();
+        let item = row * per + col / TOOLBAR_CELL;
+        if row >= self.toolbar_rows || col >= self.cols || col >= per * TOOLBAR_CELL || item >= 4 {
             return None;
         }
         Some(item as u8 + 1)

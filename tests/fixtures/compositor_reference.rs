@@ -116,8 +116,8 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                                 c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
                             }
                         }
-                        // Title ink follows the tab background; tabs must not erase it.
-                        if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id){c=fg;}
+                        // Round104 intentionally changes only title foreground: use final glass/tab contrast.
+                        if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id,c){c=fg;}
                         // Frame lights: glass background with light color overlay.
                         // Dimmed for single-tab non-hover; full bright for hovered light.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {

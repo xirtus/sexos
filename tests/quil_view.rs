@@ -45,17 +45,89 @@ fn caret_stays_in_bounded_visible_text_for_long_documents_and_small_tiles() {
 fn toolbar_hit_uses_same_metrics_and_excludes_header_and_editor() {
     for w in [144, 220, 496, 624] {
         let l = Layout::new(9, w, 320);
-        let per = 4 / l.toolbar_rows;
+        let per = l.toolbar_per_row();
         for i in 0..4 {
-            let x = 8 + (i % per * 5 + 1) as u32 * 6 * l.scale;
-            let y = l.top + (1 + i / per) as u32 * 9 * l.scale + 1;
+            let x = 8 + (i % per * document_view::TOOLBAR_CELL + 1) as u32 * 6 * l.scale;
+            let y = l.top + (l.header_rows() + i / per) as u32 * 9 * l.scale + 1;
             assert_eq!(l.hit(x, y), Some(i as u8 + 1));
         }
         assert_eq!(l.hit(8, l.top), None);
         assert_eq!(
-            l.hit(8, l.top + (1 + l.toolbar_rows) as u32 * 9 * l.scale),
+            l.hit(8, l.top + (l.header_rows() + l.toolbar_rows) as u32 * 9 * l.scale),
             None
         );
+    }
+}
+#[test]
+fn every_drawable_short_view_keeps_a_caret_row_and_hides_nonfitting_controls() {
+    for w in 1..=512 { for h in 1..=180 {
+        let l=Layout::new(9,w,h);
+        if l.rows>0 {assert!(l.body_rows()>0,"{w} {h}");}
+        assert!(l.chrome_rows()+l.body_rows()<=l.rows);
+        assert_eq!(l.hit(w,l.top),None);assert_eq!(l.hit(8,h),None);
+        if l.toolbar_rows==0 {
+            for y in 0..h {assert_eq!(l.hit(8,y),None,"{w} {h} {y}");}
+        } else {
+            let per=l.toolbar_per_row();assert!(per*document_view::TOOLBAR_CELL<=l.cols);
+            for i in 0..4 {
+                let x=8+(i%per*document_view::TOOLBAR_CELL)as u32*6*l.scale;
+                let y=l.top+(l.header_rows()+i/per)as u32*9*l.scale;
+                assert!(y+7*l.scale<=h);assert_eq!(l.hit(x,y),Some(i as u8+1));
+            }
+        }
+    }}
+}
+#[test]
+fn short_and_single_cell_rendering_never_exceeds_physical_rows_or_columns() {
+    for target in [9,16,18] {for (w,h)in[(1,80),(16,80),(22,19),(22,50),(80,45),(144,45),(144,90),(496,319),(624,335)] {
+        let l=Layout::new(target,w,h);
+        for body in [b"A readable document with spaces\nand a second line".as_slice(),b"\n\n\nx\n\n",b""] {
+        for cursor in [0,body.len()/2,body.len()] {
+            let mut top=0;let text=view::render_selection(body,cursor,&mut top,l,b"long document name",true,b"CLIPBOARD UNCERTAIN",None,None,Some((0,body.len())));
+            assert!(text.len<=512);
+            if l.rows==0 {assert_eq!(text.len,0);continue;}
+            assert!(text.bytes[..text.len].contains(&b'#'),"{target} {w} {h}");
+            let rows=text.bytes[..text.len].iter().filter(|b|**b==b'\n').count()+usize::from(!text.bytes[..text.len].ends_with(b"\n"));
+            assert!(rows<=l.rows,"{target} {w} {h}: {rows} > {}",l.rows);
+            for line in text.bytes[..text.len].split(|b|*b==b'\n'){assert!(line.len()<=l.cols,"{target} {w} {h}: {} > {}",line.len(),l.cols);}
+        }
+    }}}
+}
+#[test]
+fn command_menu_keeps_each_selected_command_visible_in_short_views() {
+    for target in [9,16] {for (w,h)in[(22,19),(80,45),(144,45),(144,90),(496,319)] {
+        let l=Layout::new(target,w,h);
+        for selected in 0..5 {
+            let mut top=7;let t=view::render(b"document",3,&mut top,l,b"note",false,b"READY",Some(selected),None);
+            assert_eq!(top,7);
+            if l.rows==0 {assert_eq!(t.len,0);continue;}
+            assert_eq!(t.bytes[..t.len].iter().filter(|b|**b==b'>').count(),1,"{target} {w} {h} selected={selected}");
+            let lines:Vec<_>=t.bytes[..t.len].split(|b|*b==b'\n').filter(|s|!s.is_empty()).collect();assert!(lines.len()<=l.rows);
+            for line in lines {assert!(line.len()<=l.cols);}
+        }
+    }}
+}
+#[test]
+fn normal_desktop_chrome_exposes_complete_shortcuts_and_matching_buttons() {
+    for (w,h)in[(496,319),(624,335),(624,706)] {
+        let l=Layout::new(9,w,h);let t=view::render(b"body",4,&mut 0,l,b"note",false,b"READY",None,None);
+        let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();
+        assert!(text.contains("New     Open    Save    Save As "));
+        assert!(text.contains("Ctrl N/O/S | Ctrl Shift S | Esc menu"));
+        let menu=view::render(b"body",4,&mut 0,l,b"note",false,b"READY",Some(4),None);
+        let menu=core::str::from_utf8(&menu.bytes[..menu.len]).unwrap();
+        assert!(menu.contains("> Save As  Ctrl Shift S"));
+        assert!(menu.contains("Ctrl A select all"));assert!(menu.contains("Ctrl C/X/V copy/cut/paste"));
+    }
+}
+#[test]
+fn arbitrary_header_lengths_are_bounded_without_changing_document_bytes() {
+    let body=b"document bytes";let source=*body;let l=Layout::new(9,496,319);
+    for naming in [None,Some(&[b'n';200][..])] {
+        let t=view::render(body,body.len(),&mut 0,l,&[b'x';200],true,&[b'Y';200],None,naming);
+        assert!(t.len<=512);assert_eq!(*body,source);
+        for line in t.bytes[..t.len].split(|b|*b==b'\n'){assert!(line.len()<=l.cols);}
+        assert!(t.bytes[..t.len].contains(&b'#'));
     }
 }
 #[test]
@@ -770,7 +842,7 @@ fn status_and_name_changes_cannot_scroll_or_reflow_the_editor_body() {
         let initial_top = top;
         let first_body = |text: &view::Text| {
             let mut offset = 0;
-            for _ in 0..layout.toolbar_rows + 2 {
+            for _ in 0..layout.chrome_rows() {
                 offset += text.bytes[offset..text.len]
                     .iter()
                     .position(|&b| b == b'\n')

@@ -78,12 +78,12 @@ rustc --edition=2021 --extern sex_trust_config="$TEST_DIR/libsex_trust_config.rl
 echo '[sexnet.trust.policy.host] PASS scope=actual_immutable_config_source_ABI_broker_kernel_entry_model_client_not_live_BOOT_authority_or_peer_authentication'
 
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
-RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
+CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
   --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-tls --target "$HOST_TARGET"
 echo '[sexnet.tls.host] PASS scope=actual_private_TLS_backend_clients_brokers_not_live_entropy_time_network_or_peer_authentication'
 
 # Compile the identical actual vendored library with its pinned provider-free
 # test manifest. Published host integration/OpenSSL dependencies stay excluded.
-RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
+CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
   --manifest-path "$ROOT_DIR/vendor/embedded-tls-0.19.0/sexos-record-tests/Cargo.toml" --target "$HOST_TARGET" --lib
 echo '[sexnet.tls.records.host] PASS scope=actual_AEAD_empty_padding_truncation_and_unsupported_handshake_not_live_peer'

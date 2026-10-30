@@ -1,6 +1,15 @@
 # Alpha continuation: 100 further engineering rounds
 
-## Current checkpoint: accepted round 103; next 104
+## Current checkpoint: accepted round 104; next 105
+
+Quil now exposes complete New/Open/Save/Save As buttons and the Ctrl Shift S shortcut, with clipboard help in Esc commands. The app and Shell share the same8-cell button geometry. Height-aware chrome retains a document/caret row whenever a glyph fits; short command menus keep the selected command visible, and hidden controls have no pointer target. Header lengths are bounded and chrome capacity still depends on geometry, preserving source bytes, selection and viewport through status/name changes.
+
+Window titles choose black or white ink from the actual final blended background in the scalar, scanline and damage paths. A finite integer-only sRGB table replaces the previous fixed pale title ink. Independent contrast tests cover35,937 RGB samples, all gray/channel values and threshold/body/selection palettes. Sealed ISO `ab9870810474ef0f6cbdca98ac00e7dbfe5082a692975ead1dc883620350fb8f`, binding `a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2`;560 production/527 runner inputs. BUILD/GREEN_MASTER, 1,835 frozen Rust executions (exact B/C Rust-input equivalence), 747 frozen Python tests and eight native boots pass. Independent replay verifies98 captures. Both desktop sizes qualify all four pointer actions, command/help pixels, two exact named journal generations, launcher/workspace reuse and clipboard/Save/cold recovery. See [evidence](assets/sexos-alpha-r104-2026-10-30-evidence.json).
+
+Next105 extends text encoding and input beyond the ASCII prototype, preserving exact storage/selection/clipboard bytes and making unsupported cases explicit.106 improves bounded images/assets,107 navigation and108 qualifies an integrated connected session. Active80–200 progress:25/121 accepted;105–200 remain (96 substantive rounds).7 Open/23 Partial/System Proven false remain. GLOBAL_VAS, BOOT-only capability genesis, typed sex-pdx authority and exact terminal incarnations remain mandatory; SexOS is not Unix/POSIX.
+
+
+## Historical checkpoint: accepted round 103; next 104 at that time
 
 Quil, Spindle, Browser, Linen, launcher labels and toolbar titles now preserve displayed letter case. The actual renderer has95 printable-ASCII glyphs, including26 distinct lowercase shapes, in one finite665-byte ROM table. Shared5×7 metrics retain the6×9 cell and existing integer scales. Text bytes, caret/selection offsets, payload limits and capability routes are unchanged. Unsupported bytes have no glyph ink; newline remains structural. There is no loaded font, allocation or glyph cache.
 

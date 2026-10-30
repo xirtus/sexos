@@ -1,0 +1,358 @@
+{
+  "round": 104,
+  "accepted": true,
+  "accepted_goal_rounds": 25,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 96,
+  "iso_sha256": "ab9870810474ef0f6cbdca98ac00e7dbfe5082a692975ead1dc883620350fb8f",
+  "kernel_sha256": "57544310a50dc51d491fcc592e2d1c5cac0399009c0c1f21eb5aff9f9f0bf839",
+  "binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 560,
+  "runner_inputs": 527,
+  "checks": {
+    "master": "BUILD PASS / GREEN_MASTER",
+    "rust": [
+      {
+        "name": "service-custody",
+        "path": "/tmp/sexos-r104-b-frozen-service-custody.log",
+        "executions": 1739,
+        "sha256": "449205925a88ed21d5d21a774eab98bb3e5ad36dfaacf35f559874c9b08ad54f",
+        "scope": "Completed B frozen Rust checks, exact unchanged Rust/shell inputs proved for C. Separate9 readability and35 launcher executions are not inside service-custody."
+      },
+      {
+        "name": "display",
+        "path": "/tmp/sexos-r104-b-frozen-display.log",
+        "executions": 52,
+        "sha256": "dde9b6d25d2a22c41e75262ce1c7ddc39bbe858878ecbd76da792f87e4b6491a",
+        "scope": "Completed B frozen Rust checks, exact unchanged Rust/shell inputs proved for C. Separate9 readability and35 launcher executions are not inside service-custody."
+      },
+      {
+        "name": "readability",
+        "path": "/tmp/sexos-r104-b-frozen-readability.log",
+        "executions": 9,
+        "sha256": "ac18ff8e2e334784fa9fe158dffbfab6b237201cd1e9fa0fe14670fb2b92513f",
+        "scope": "Completed B frozen Rust checks, exact unchanged Rust/shell inputs proved for C. Separate9 readability and35 launcher executions are not inside service-custody."
+      },
+      {
+        "name": "launcher",
+        "path": "/tmp/sexos-r104-b-frozen-launcher.log",
+        "executions": 35,
+        "sha256": "53580889f8509dd948e489f402e28780d92528b21361029c18a303ea927e6160",
+        "scope": "Completed B frozen Rust checks, exact unchanged Rust/shell inputs proved for C. Separate9 readability and35 launcher executions are not inside service-custody."
+      }
+    ],
+    "rust_test_executions": 1835,
+    "rust_reuse_equivalence": {
+      "ok": true,
+      "production_identical": true,
+      "iso_identical": true,
+      "kernel_identical": true,
+      "rust_shell_inputs_identical": true,
+      "runner_changed": [
+        "scripts/quil_readability_gate.py",
+        "scripts/tests/test_quil_readability_gate.py"
+      ],
+      "reused_rust_counts": {
+        "service-custody": 1739,
+        "display": 52,
+        "readability": 9,
+        "launcher": 35
+      },
+      "rust_total": 1835,
+      "scope": "Only2Python checker/test files differ; completed B frozen Rust/shell checks remain exact for C. FinalC Python/native rerun."
+    },
+    "python_tests": 747,
+    "python_log_sha256": "189593f835184df080e7f1f48f30efce794c66af34d5bd284f94ae37a93bc6af",
+    "native_runs": 6,
+    "native_boots": 8,
+    "independent_frames": 98,
+    "root_replay_sha256": "1f9dd3330cde734559f8c39697c893b362a3421741d14c610d46b861e0427ba7",
+    "scalar_audit": {
+      "ok": true,
+      "iso_sha256": "ab9870810474ef0f6cbdca98ac00e7dbfe5082a692975ead1dc883620350fb8f",
+      "elf_sha256": "2c662283fcd392ad39f6b8cf43e4fcb65bd7b6dab1bc2bc01046d9bbcce75dd3",
+      "disassembly_sha256": "6630dedb2a259e3992c7a6bafc70698cbe29c353c29623af15dbe32771818f09",
+      "instructions": 88164,
+      "vector_or_fp_matches": [],
+      "scope": "Decoded ISO-extracted Browser operands and inspected floating-point/state mnemonics only; no runtime stack/register/cache-erasure, scheduler, hostile containment or whole-image instruction proof."
+    },
+    "semantic_negative_controls": {
+      "ok": true,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "controls": [
+        {
+          "name": "title",
+          "negative_rejected": true,
+          "test": "actual_toolbar_pixels_choose_contrast_after_blending_in_scalar_scanline_and_damage_paths",
+          "returncode": 101,
+          "log_sha256": "69998af81ebac46a4c77728856acb522871c4933ba89b0002ea5f017d8f38b1c",
+          "test_source_sha256": "85a86eef3a9a60df00767ef31c1a32998fc169329dbc3fcc9ea8f389380e4ba4"
+        },
+        {
+          "name": "layout",
+          "negative_rejected": true,
+          "test": "every_drawable_short_view_keeps_a_caret_row_and_hides_nonfitting_controls",
+          "returncode": 101,
+          "log_sha256": "27bf92e8e0b5592a219001f3013175b379bf5215498ec668a6dfd8c49cae0020",
+          "test_source_sha256": "6d19c6b37eafd0ab916018d9b4248d8f2130a14b5dadfe8dcbb1205711157673"
+        }
+      ],
+      "scope": "Actual frozen renderer fails pure-white title mutation on light background; actual frozen document layout fails when height guard admits nonfitting toolbar. No production or native image changes."
+    }
+  },
+  "qualification_runs": [
+    {
+      "name": "readability-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r104-c-native-readability-wide",
+      "driver": "/tmp/sexos-r104-c-native-readability-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source/scripts/quil_readability_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r104-c-native-readability-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "quil-readability",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "seconds": 14.337500041001476
+    },
+    {
+      "name": "readability-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r104-c-native-readability-compact",
+      "driver": "/tmp/sexos-r104-c-native-readability-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source/scripts/quil_readability_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r104-c-native-readability-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "quil-readability",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "seconds": 9.67070212494582
+    },
+    {
+      "name": "launcher-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r104-c-native-launcher-wide",
+      "driver": "/tmp/sexos-r104-c-native-launcher-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r104-c-native-launcher-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "seconds": 34.2555629160488
+    },
+    {
+      "name": "launcher-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r104-c-native-launcher-compact",
+      "driver": "/tmp/sexos-r104-c-native-launcher-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r104-c-native-launcher-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "seconds": 25.24332708399743
+    },
+    {
+      "name": "clipboard-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r104-c-native-clipboard-wide",
+      "driver": "/tmp/sexos-r104-c-native-clipboard-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r104-c-native-clipboard-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "seconds": 33.898581333924085
+    },
+    {
+      "name": "clipboard-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r104-c-native-clipboard-compact",
+      "driver": "/tmp/sexos-r104-c-native-clipboard-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r104-readable-c-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r104-c-native-clipboard-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 2,
+      "source_binding_sha256": "a7e6180b6d713a1bf6d3a11380153ae7458f4a3e4960a18956e4f3c8e5e200c2",
+      "seconds": 25.733968958025798
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "label": "editor-wide",
+      "path": "assets/sexos-alpha-r104-2026-10-30-editor-wide.png",
+      "sha256": "c5ee95d2fb74b3f36cb8eee04e8107f298f257fb6661c6b6b26d64e7355cf040",
+      "run": "readability-wide",
+      "boot": "",
+      "raw_ppm": "resaved.ppm",
+      "raw_sha256": "0a634bac517af3af0dce7266ee94784830fb19f0cba9134d86e5389e3c2f80fe",
+      "serial_bytes": 410718,
+      "serial_sha256": "501084ba8ed90fefb86825a99894663823e496dc5e3bc6012619edaa286f6c95"
+    },
+    {
+      "label": "commands-compact",
+      "path": "assets/sexos-alpha-r104-2026-10-30-commands-compact.png",
+      "sha256": "541aa716259dc43a1cc774fc313857514ed1b002af0e140ab6a886bd8e9b5689",
+      "run": "readability-compact",
+      "boot": "",
+      "raw_ppm": "commands.ppm",
+      "raw_sha256": "681cd7f15fbd02c9e05d69cf76374c8ac8010a347303c8fa84f59823a0a94fbf",
+      "serial_bytes": 415463,
+      "serial_sha256": "16afcfee56d1f70714731cfeff61672a28b48f8ed79ee5afa6a3354ce6f247fe"
+    },
+    {
+      "label": "titles-wide",
+      "path": "assets/sexos-alpha-r104-2026-10-30-titles-wide.png",
+      "sha256": "a9ccd86c893dd47f299b95fed71a9156d39dd66b8deeec84ffef36e19beb2583",
+      "run": "launcher-wide",
+      "boot": "",
+      "raw_ppm": "spindle-17-brought.ppm",
+      "raw_sha256": "900e2cb5cead084f306a31f179e74d5c08e503df1fe536b23ad6593cfb2cad0a",
+      "serial_bytes": 582766,
+      "serial_sha256": "901563c2743faedd224cddb32232f5aa1886e195a613c1d47838a47c00aaab45"
+    },
+    {
+      "label": "cold-compact",
+      "path": "assets/sexos-alpha-r104-2026-10-30-cold-compact.png",
+      "sha256": "5dde5f1127b1884374f9253801439131683a3d6092c13391a0e8afb898df35d2",
+      "run": "clipboard-compact",
+      "boot": "recovery",
+      "raw_ppm": "quil-cold-reopened.ppm",
+      "raw_sha256": "e63f01e895019e6ef15bb9e0a968cfd0178f224e83c6f04447cc23a9c4645fd0",
+      "serial_bytes": 292689,
+      "serial_sha256": "a2465d327e6f4de9f74f2df91373c341c4d342597d3206ab9e186d96a11602cc"
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r104-2026-10-30-qualified-raw.tar.gz",
+    "sha256": "e73dbb5225e4bf9b625474aab0de6e4ae1892ee00057b5ce2807ad49dd10fe87",
+    "members": 1359,
+    "verified": true,
+    "bytes": 7438839
+  },
+  "failed_diagnostics": "A stopped before compile because root preflight Cargo generated791 target files inside the reviewed vendor tree. Artifacts moved aside; gate now uses temporary Cargo target. B readability completed9captures/two exact saves but its checker wrongly expected2 focus effects rather than3 including legitimate Linen reopen. C binds3 exact held-subject effects to distinct real operation windows; all actual B helpers replay diagnostically, original B result unchanged. Initial negative-harness path/expected-failure setup issues remain separately diagnostic; final C actual semantic mutants are rejected.",
+  "limitations": [
+    "Native pointer/SaveAs/New/Open/Save/commands proof is original Quil9 at both desktop sizes. Short-height, one-cell, no-glyph, menu scrolling, bounds, denial/queue-pressure and successor-layout cases are actual-function host checks, not tiny-native or hostile certification.",
+    "Independent contrast checks sample35,937 RGB grid colors plus all gray/channel values and threshold/palette cases, with actual scalar/scanline/damage pixels. This is scoped title/body-selection color evidence, not all UI accessibility certification.",
+    "The fixed5x7 font and existing cell geometry remain; encoding/input105, assets106, navigation107 and integrated108 session remain future work.",
+    "Native both-profile clipboard/Save/cold recovery and launcher/workspace regressions qualify this image; no new sustained daily-driver, public-web/general CA, crash/power-loss, physical, SMP, hostile containment or System Proven claim."
+  ],
+  "scope": "One substantive round: readable responsive Quil controls/help and high-contrast native titles, preserving document/selection/viewport and exact held authority. Host gate artifacts now stay out of reviewed vendor sources. GLOBAL_VAS, BOOT-only genesis and typed sex-pdx authority remain; not Unix/POSIX."
+}

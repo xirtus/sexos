@@ -63,8 +63,9 @@ def main():
    q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]})
    wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
   def toolbar(action,pattern):
-   v=wait_view(text);per=4 if v['cols']>=20 else 2 if v['cols']>=10 else 1;scale=2 if v['w']>=256 else 1;i=action-1
-   x=v['x']+8+((i%per)*5+1)*6*scale;y=v['y']+v['top']+(1+i//per)*9*scale+3
+   v=wait_view(text);per=4 if v['cols']>=32 else 2 if v['cols']>=16 else 1 if v['cols']>=8 else 0;scale=2 if v['w']>=256 else 1;i=action-1
+   if not per or v['rows']<4//per+2:raise ValueError('toolbar is hidden in the actual short viewport')
+   x=v['x']+8+((i%per)*8+1)*6*scale;y=v['y']+v['top']+(1+i//per)*9*scale+3
    start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(resolution[0]-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(resolution[1]-1))}}]})
    # Wait for the real USB tablet movement before submitting its button.
    wait(r'\[shell.pointer.abs\]|\[silk-shell.pointer.recv\].*class=',start)
@@ -74,11 +75,11 @@ def main():
   def typing(value,name=False):
    for i in range(0,len(value),5):
     start=len(text());part=value[i:i+5];q.key_sequence([{' ':'spc'}.get(c,c)for c in part])
-    if name:wait(r'\[quil.text.view\].*status=NAME\? '+re.escape(value[:i+len(part)])+r'#',start)
+    if name:wait(r'\[quil.text.view\].*status=Name: '+re.escape(value[:i+len(part)])+r'#',start)
     else:wait(r'\[quil.document.edit\]',start)
   wait(r'\[quil.ui.admitted\]')
   # Pointer Open selects the real Linen app, then keyboard returns to Quil.
-  capture('startup','NEW')
+  capture('startup','New')
   toolbar(2,r'\[shell.document.open\] target=9 linen=200');focus(201)
   toolbar(1,r'\[quil.new.ok\] bytes=0');typing('first note')
   capture('edited','first note#')
