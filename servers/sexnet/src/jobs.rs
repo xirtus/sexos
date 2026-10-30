@@ -5,6 +5,13 @@ use sex_pdx::network_job::{self as abi, Request, State, MAX_BYTES, TURN};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity { pub pd: u32, pub task: u32 }
+/// Copied DNS observation admitted by the parent under its fixed endpoint policy.
+/// Freshness is checked at BEGIN; this data cannot grant a route or redirect it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resolution {
+    pub owner: Identity, pub generation: u32, pub address: [u8; 4],
+    pub observed_tick: u64, pub expires_tick: u64,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Link { Opening, Open, PeerFin, Closed }
 pub trait Wire {
@@ -33,15 +40,17 @@ pub struct Machine {
     // One replay fence for each identity in the finite six-app BOOT roster.
     // Entries survive Release and are reclaimed only by exact retirement.
     cached: [Option<Receipt>; 6],
+    resolution: Option<Resolution>,
 }
 impl Machine {
     pub const fn new() -> Self {
         Self { owner: None, ticket: 0, next_ticket: 1, seq: 0, state: State::Idle,
             request: [0; MAX_BYTES], response: [0; MAX_BYTES], request_len: 0,
             staged: 0, sent: 0, response_len: 0, deadline: 0, last_now: 0,
-            finished_send: false, pending: [None; 6], reply_cursor: 0, cached: [None; 6] }
+            finished_send: false, pending: [None; 6], reply_cursor: 0, cached: [None; 6], resolution: None }
     }
     pub fn owner(&self) -> Option<Identity> { self.owner }
+    pub fn resolution(&self) -> Option<Resolution> { self.resolution }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot { state: self.state, ticket: self.ticket, staged: self.staged,
             sent: self.sent, received: self.response_len }
@@ -73,6 +82,7 @@ impl Machine {
         self.request.fill(0); self.response.fill(0);
         self.request_len = 0; self.staged = 0; self.sent = 0; self.response_len = 0;
         self.finished_send = false; self.deadline = 0; self.last_now = 0;
+        self.resolution = None;
         wire.abort();
     }
     fn fail(&mut self, wire: &mut impl Wire) { self.scrub(wire); self.state = State::Failed; }
@@ -93,6 +103,12 @@ impl Machine {
     }
     /// Another held protocol job forbids new BEGIN effects through this route.
     pub fn handle_exclusive(&mut self, owner: Identity, r: Request, now: u64, other_held: bool, wire: &mut impl Wire) -> bool {
+        self.handle_resolved(owner, r, now, other_held, Err(abi::DENIED), wire)
+    }
+    /// Admission denials use the same retained sequence fence as successes.
+    /// Duplicate requests replay their original receipt without re-admission.
+    pub fn handle_resolved(&mut self, owner: Identity, r: Request, now: u64, other_held: bool,
+        admission: Result<Resolution, u32>, wire: &mut impl Wire) -> bool {
         // Reserve a replay-fence slot before applying any operation. There is
         // no eviction: another live identity must never erase an old sequence.
         let slot = match self.cached.iter().position(|c| c.map(|c| c.owner) == Some(owner))
@@ -109,7 +125,8 @@ impl Machine {
         if self.owner == Some(owner) && r.seq <= self.seq {
             return self.respond(slot, owner, r, Err(abi::STALE));
         }
-        let result = if other_held && r.kind == abi::BEGIN { Err(abi::BUSY) } else { self.apply(owner, r, now, wire) };
+        let result = if other_held && matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED) { Err(abi::BUSY) }
+            else { self.apply(owner, r, now, admission, wire) };
         if self.owner == Some(owner) && r.seq <= abi::MAX_SEQ { self.seq = self.seq.max(r.seq); }
         self.respond(slot, owner, r, result)
     }
@@ -123,15 +140,22 @@ impl Machine {
         }
         true
     }
-    fn apply(&mut self, owner: Identity, r: Request, now: u64, wire: &mut impl Wire) -> Result<u32, u32> {
+    fn apply(&mut self, owner: Identity, r: Request, now: u64, admission: Result<Resolution,u32>, wire: &mut impl Wire) -> Result<u32, u32> {
         if owner.pd == 0 || owner.task == 0 || !r.valid() { return Err(abi::INVALID); }
-        if r.kind == abi::BEGIN {
+        if matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED) {
             if self.owner.is_some() { return Err(abi::BUSY); }
             if self.next_ticket > abi::MAX_TICKET { return Err(abi::EXHAUSTED); }
+            let resolution = if r.kind == abi::BEGIN_RESOLVED {
+                let record = admission?;
+                if record.owner != owner || record.generation as u64 != r.a
+                    || now < record.observed_tick || now >= record.expires_tick { return Err(abi::STALE); }
+                Some(record)
+            } else { None };
             self.ticket = self.next_ticket;
             self.next_ticket = self.next_ticket.checked_add(1).ok_or(abi::EXHAUSTED)?;
             self.owner = Some(owner); self.seq = r.seq; self.state = State::Staging;
             self.request_len = r.length as usize;
+            self.resolution = resolution;
             return Ok(self.ticket);
         }
         if self.owner != Some(owner) { return Err(abi::DENIED); }
@@ -466,6 +490,57 @@ mod tests {
         assert_eq!(m.owner(),None);assert_eq!(m.next_ticket,1);assert_eq!(w.begins,0);
         begin.seq=2;assert!(m.handle_exclusive(A,begin,12,false,&mut w));
         assert_eq!(m.pending_reply(),Some((A,abi::reply(2,1))));assert_eq!(m.owner(),Some(A));
+    }
+
+    fn resolved_begin(seq:u32,generation:u32)->Request {
+        let mut r=req(seq,abi::BEGIN_RESOLVED,0);r.length=86;r.a=generation as u64;r
+    }
+    fn observation(owner:Identity,generation:u32)->Resolution {
+        Resolution{owner,generation,address:[10,0,2,2],observed_tick:10,expires_tick:1010}
+    }
+    fn resolved_call(m:&mut Machine,w:&mut TestWire,r:Request,now:u64,admission:Result<Resolution,u32>)->Result<u32,u32>{
+        assert!(m.handle_resolved(A,r,now,false,admission,w));
+        let (owner,word)=m.pending_reply().unwrap();assert_eq!(owner,A);m.reply_accepted();abi::decode_reply(word,r.seq)
+    }
+    #[test] fn resolved_registers_reject_noncanonical_selectors() {
+        let mut r=resolved_begin(1,1);assert!(r.valid());assert_eq!(Request::decode(r.encode()),Ok(r));
+        for selector in [0,abi::MAX_TICKET as u64+1,1u64<<32]{r.a=selector;assert!(!r.valid());}
+        r.a=1;r.ticket=1;assert!(!r.valid());r.ticket=0;r.offset=1;assert!(!r.valid());
+        r.offset=0;r.length=0;assert!(!r.valid());r.length=4097;assert!(!r.valid());
+    }
+    #[test] fn resolved_denial_is_retained_across_renewal_and_full() {
+        let mut m=Machine::new();let mut w=TestWire::new();let r=resolved_begin(1,3);
+        assert!(m.handle_resolved(A,r,10,false,Err(abi::DENIED),&mut w));
+        let receipt=m.pending_reply();assert_eq!(receipt,Some((A,abi::error(1,abi::DENIED))));
+        assert!(!m.handle_resolved(A,resolved_begin(2,3),11,false,Ok(observation(A,3)),&mut w));
+        assert!(m.handle_resolved(A,r,11,false,Ok(observation(A,3)),&mut w));assert_eq!(m.pending_reply(),receipt);
+        m.reply_accepted();assert_eq!(resolved_call(&mut m,&mut w,r,11,Ok(observation(A,3))),Err(abi::DENIED));
+        assert_eq!(m.next_ticket,1);assert_eq!(m.owner(),None);assert_eq!(w.begins,0);
+        assert_eq!(resolved_call(&mut m,&mut w,resolved_begin(2,3),11,Ok(observation(A,3))),Ok(1));
+    }
+    #[test] fn resolved_acceptance_replays_after_expiry_but_changed_request_cannot() {
+        let mut m=Machine::new();let mut w=TestWire::new();let r=resolved_begin(5,2);let record=observation(A,2);
+        assert_eq!(resolved_call(&mut m,&mut w,r,11,Ok(record)),Ok(1));assert_eq!(m.resolution(),Some(record));
+        assert_eq!(resolved_call(&mut m,&mut w,r,2000,Err(abi::STALE)),Ok(1));
+        assert_eq!(resolved_call(&mut m,&mut w,resolved_begin(5,3),2000,Ok(observation(A,3))),Err(abi::STALE));
+        assert_eq!(m.next_ticket,2);assert_eq!(m.resolution(),Some(record));assert_eq!(w.begins,0);
+        assert_eq!(call(&mut m,&mut w,A,req(6,abi::RELEASE,1)),Ok(0));assert_eq!(m.resolution(),None);
+    }
+    #[test] fn resolved_owner_generation_clock_and_policy_denials_allocate_nothing() {
+        for mode in 0..5{
+            let mut m=Machine::new();let mut w=TestWire::new();let mut record=observation(A,1);let mut now=11;
+            let admission=match mode{0=>{record.owner=B;Ok(record)},1=>{record.generation=2;Ok(record)},2=>{now=9;Ok(record)},3=>{now=1010;Ok(record)},_=>Err(abi::DENIED)};
+            assert!(resolved_call(&mut m,&mut w,resolved_begin(1,1),now,admission).is_err());
+            assert_eq!(m.owner(),None);assert_eq!(m.resolution(),None);assert_eq!(m.next_ticket,1);assert_eq!(w.begins,0);
+        }
+    }
+    #[test] fn resolved_other_protocol_busy_is_fenced_and_raw_begin_clears_provenance() {
+        let mut m=Machine::new();let mut w=TestWire::new();let r=resolved_begin(1,1);
+        assert!(m.handle_resolved(A,r,11,true,Ok(observation(A,1)),&mut w));m.reply_accepted();
+        assert_eq!(resolved_call(&mut m,&mut w,r,11,Ok(observation(A,1))),Err(abi::BUSY));
+        assert_eq!(resolved_call(&mut m,&mut w,resolved_begin(2,1),11,Ok(observation(A,1))),Ok(1));
+        assert!(m.retire(A,&mut w));assert_eq!(m.resolution(),None);
+        let mut raw=req(1,abi::BEGIN,0);raw.length=1;assert_eq!(call(&mut m,&mut w,B,raw),Ok(2));assert_eq!(m.resolution(),None);
     }
 
 }

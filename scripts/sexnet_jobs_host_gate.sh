@@ -38,3 +38,7 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/http_probe.rs" -o "$TEST_DIR/http-c
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_view.rs" -o "$TEST_DIR/browser-view-tests"
 "$TEST_DIR/browser-view-tests"
 echo '[sexnet.http.client.host] PASS scope=actual_client_ABI_job_codec_and_pure_view_not_live_authority_or_pixels'
+
+rustc --edition=2021 --test "$ROOT_DIR/tests/resolved_http.rs" -o "$TEST_DIR/resolved-http-tests"
+"$TEST_DIR/resolved-http-tests"
+echo '[sexnet.resolved.http.host] PASS scope=actual_DNS_release_provenance_HTTP_client_ABI_jobs_codecs_with_explicit_policy_peer_not_live_authority_or_network'

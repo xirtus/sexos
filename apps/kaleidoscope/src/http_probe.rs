@@ -15,6 +15,7 @@ pub struct Client {
     request:[u8;http_wire::MAX_REQUEST],request_len:usize,written:usize,
     response:[u8;http_wire::MAX_RESPONSE],response_len:usize,read:usize,
     preview:[u8;64],body_len:usize,
+    generation:u32,
 }
 impl Client {
     pub const fn new()->Self {
@@ -22,7 +23,7 @@ impl Client {
             deadline:0,next_poll:0,cancel:false,view:View::Idle,terminal:View::Unavailable,
             request:[0;http_wire::MAX_REQUEST],request_len:0,written:0,
             response:[0;http_wire::MAX_RESPONSE],response_len:0,read:0,
-            preview:BLANK,body_len:0}
+            preview:BLANK,body_len:0,generation:0}
     }
     pub fn next_sequence(&self)->u32 { self.seq }
     pub fn busy(&self)->bool { self.step!=Step::Done || self.ticket!=0 }
@@ -30,9 +31,23 @@ impl Client {
     pub fn preview(&self)->&[u8;64] { if self.view==View::Ready {&self.preview}else{&BLANK} }
     pub fn body_length(&self)->usize { if self.view==View::Ready {self.body_len}else{0} }
     pub fn start(&mut self,next_seq:u32)->bool {
+        self.start_with_generation(next_seq,0)
+    }
+    pub fn wait_for_resolution(&mut self) {
+        if !self.busy(){self.scrub_raw();self.clear_preview();self.view=View::Pending;self.terminal=View::Unavailable;self.generation=0;}
+    }
+    pub fn start_resolved(&mut self,next_seq:u32,generation:u32)->bool {
+        if self.busy(){return false;}
+        if generation==0 || generation>w::MAX_TICKET {
+            self.scrub_raw();self.clear_preview();self.view=View::Unavailable;self.terminal=View::Unavailable;self.generation=0;return false;
+        }
+        self.start_with_generation(next_seq,generation)
+    }
+    fn start_with_generation(&mut self,next_seq:u32,generation:u32)->bool {
         if self.busy() { return false; }
         if next_seq<self.seq || next_seq>w::MAX_SEQ-8 { self.scrub_raw();self.clear_preview();self.view=View::Unavailable;self.terminal=View::Unavailable;return false; }
         self.scrub_raw();self.clear_preview();self.seq=next_seq;
+        self.generation=generation;
         self.request_len=http_wire::request(&mut self.request);self.written=0;self.read=0;self.response_len=0;
         self.pending=None;self.accepted=false;self.cancel=false;
         self.terminal=View::Unavailable;self.view=View::Pending;self.step=Step::Begin;true
@@ -42,6 +57,7 @@ impl Client {
     fn finished(&mut self) {
         self.scrub_raw();self.pending=None;self.accepted=false;self.step=Step::Done;
         self.request_len=0;self.written=0;self.response_len=0;self.read=0;
+        self.generation=0;
         self.view=self.terminal;
         if self.view!=View::Ready { self.clear_preview(); }
     }
@@ -85,11 +101,11 @@ impl Client {
         };
         // Late data receipts are reconciled by cleanup, never used to republish
         // cancelled bytes or restart a request whose authority is uncertain.
-        if self.cancel && !matches!(r.kind,w::BEGIN|w::CANCEL|w::RELEASE) {
+        if self.cancel && !matches!(r.kind,w::BEGIN|w::BEGIN_RESOLVED|w::CANCEL|w::RELEASE) {
             self.step=Step::Cancel;return;
         }
         match r.kind {
-            w::BEGIN=>{
+            w::BEGIN|w::BEGIN_RESOLVED=>{
                 if value==0 || value>w::MAX_TICKET {
                     self.scrub_raw();self.clear_preview();self.view=View::Uncertain;self.step=Step::Held;return;
                 }
@@ -153,7 +169,7 @@ impl Client {
             }
             if self.seq>w::MAX_SEQ {self.scrub_raw();self.clear_preview();self.view=View::Uncertain;self.step=Step::Held;return;}
             let(kind,offset,length,a)=match self.step {
-                Step::Begin=>(w::BEGIN,0,self.request_len,0),
+                Step::Begin=>if self.generation!=0{(w::BEGIN_RESOLVED,0,self.request_len,self.generation as u64)}else{(w::BEGIN,0,self.request_len,0)},
                 Step::Write=>{
                     let length=(self.request_len-self.written).min(8);let mut bytes=[0;8];
                     bytes[..length].copy_from_slice(&self.request[self.written..self.written+length]);
@@ -164,7 +180,7 @@ impl Client {
                 Step::Cancel=>(w::CANCEL,0,0,0),Step::Release=>(w::RELEASE,0,0,0),Step::Done|Step::Held=>return,
             };
             self.pending=Some(w::Request {seq:self.seq,kind,offset:offset as u16,length:length as u16,
-                ticket:if kind==w::BEGIN {0}else{self.ticket},a});
+                ticket:if matches!(kind,w::BEGIN|w::BEGIN_RESOLVED) {0}else{self.ticket},a});
             self.deadline=now.saturating_add(2000);self.accepted=false;
         }
         if !self.accepted {

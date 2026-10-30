@@ -22,12 +22,19 @@ def response(ticket,kind='answer'):
  elif kind!='answer':raise ValueError('unknown DNS fixture kind')
  return bytes(packet)
 
-def inspect(data,mode,attempts=None):
+def inspect(data,mode,attempts=None,expected=None):
  """Require actual complete packets; recorded host send calls alone cannot pass."""
  if mode not in MODES:raise ValueError('explicit supported DNS evidence mode required')
  errors=[];packets=[];queries=[];responses=[];zero=0
  expected_tickets=[1,2]if mode=='cancel-retry'else[1]
  try:
+  declared=None
+  if expected is not None:
+   if not isinstance(expected,list)or not expected:raise ValueError('explicit DNS exchanges must be a nonempty list')
+   expected_tickets=[row['ticket']for row in expected]
+   if any(type(t)is not int or not 1<=t<=17535 for t in expected_tickets)or expected_tickets!=sorted(set(expected_tickets)):raise ValueError('explicit DNS tickets must be finite, unique and increasing')
+   declared={row['ticket']:bytes.fromhex(row['response_hex'])if row.get('response_hex')else None for row in expected}
+   if any(p is not None and (len(p)<12 or len(p)>512 or int.from_bytes(p[:2],'big')!=t)for t,p in declared.items()):raise ValueError('explicit DNS response must bind its transaction ticket and datagram bounds')
   for index,frame in enumerate(frames(data)):
    if len(frame)<14 or frame[12:14]!=b'\x08\x00':continue
    ip=frame[14:]
@@ -53,14 +60,18 @@ def inspect(data,mode,attempts=None):
     if payload!=query(ticket):raise ValueError('actual query differs from exact fixed-name A/IN ticket-bound query')
     queries.append(item)
    else:
-    kind=next((kind for kind in('answer','wrong-id','wrong-question','malformed','truncated','nxdomain')if payload==response(ticket,kind)),None)
+    kind=('explicit'if declared.get(ticket)==payload else None)if declared is not None else next((kind for kind in('answer','wrong-id','wrong-question','malformed','truncated','nxdomain')if payload==response(ticket,kind)),None)
     if kind is None:raise ValueError('captured DNS response differs from explicit peer fixtures')
     item['kind']=kind;responses.append(item)
   if [q['ticket']for q in queries]!=expected_tickets:errors.append('actual DNS queries are missing, repeated, reordered, or reused a ticket')
   by_ticket={ticket:[r for r in responses if r['ticket']==ticket]for ticket in expected_tickets}
   if any(r['ticket']not in expected_tickets for r in responses):errors.append('unexpected captured DNS ticket')
   wanted={'echo':['answer'],'wrong-context':['wrong-id','wrong-question','answer'],'malformed':['malformed'],'truncated':['truncated'],'nxdomain':['nxdomain'],'silence':[],'close':[]}
-  if mode=='cancel-retry':
+  if declared is not None:
+   for ticket in expected_tickets:
+    wanted_payload=[]if declared[ticket]is None else[declared[ticket].hex()]
+    if [r['payload_hex']for r in by_ticket[ticket]]!=wanted_payload:errors.append('captured DNS response sequence differs from declared complete bytes')
+  elif mode=='cancel-retry':
    if [r['kind']for r in by_ticket[2]]!=['answer']:errors.append('fresh retry lacks exactly one captured valid response')
    if any(r['kind']!='answer'for r in by_ticket[1]):errors.append('old cancelled tuple has an unexpected packet')
    if len(by_ticket[1])>1:errors.append('duplicate delayed old response')
@@ -75,6 +86,6 @@ def inspect(data,mode,attempts=None):
   for attempt in attempts or []:
    matches=[r['packet']for r in responses if r['ticket']==attempt['ticket']and r['payload_hex']==attempt['response_hex']]
    joined.append(dict(ticket=attempt['ticket'],kind=attempt['kind'],captured_packets=matches,host_send_succeeded=attempt.get('sent_bytes')==len(bytes.fromhex(attempt['response_hex']))))
- except(ValueError,IndexError,struct.error)as exc:
+ except(ValueError,IndexError,KeyError,TypeError,struct.error)as exc:
   errors.append(str(exc));joined=[]
  return dict(ok=not errors,errors=errors,mode=mode,queries=queries,responses=responses,packets=packets,host_attempt_capture_join=joined,ipv4_udp_zero_checksums=zero,scope='Independent full captured Ethernet/IPv4/UDP lengths and checksums, exact query/response bytes, fixed endpoint and finite ticket/transaction binding. IPv4 UDP zero checksums are explicit. Host send attempts are distinct from packets; no DNS cache, public resolver, web, TLS, physical containment or pixel claim.')

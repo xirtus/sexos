@@ -5186,6 +5186,10 @@ pub extern "C" fn _start() -> ! {
     let mut outbound_changes=0u64;
     let mut dns=dns_jobs::Machine::new();
     let mut dns_changes=0u64;
+    // Finite, non-reused job tickets retain their first submitted frame even
+    // after an earlier stream consumed the device's ordinary sample budget.
+    let mut last_job_egress=0u32;
+    let mut last_dns_egress=0u32;
     // Exclusive profiles: never alias a normal driver and the historical proof
     // driver's pool/queues over the same immutable BOOT device reservation.
     let mut device = if SEXNET_PROOF_PROFILE_ENABLED { None } else {
@@ -5221,6 +5225,9 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut()));}
         }
         if let Some(owner)=dns.owner(){if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}}
+        // Released DNS observations retain no active socket. Check their exact
+        // live identities and nominal-tick expiry even on transport-offline turns.
+        dns.maintain_records(sex_pdx::get_ticks(),|owner|network_owner(owner.pd)==Some(owner));
         if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns)){pending_packet=None;}
         if let Some(driver)=ethernet.as_mut() {
             let before=driver.phase();
@@ -5284,11 +5291,18 @@ pub extern "C" fn _start() -> ! {
             if transport_healthy&&driver.phase()==ethernet::Phase::Running&&!driver.busy(){
                 if let Some(packet)=pending_packet.take(){
                     match driver.send(&packet.bytes[..packet.length],sex_pdx::get_ticks()){
-                        Ok((sequence,index,length,hash))=>{if sequence<=64||sequence.is_power_of_two(){
-                            sex_pdx::serial_record!("[sexnet.ether.tx.submit] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);
-                            if let Some(ticket)=packet.dns_ticket(){sex_pdx::serial_record!("[net.dns.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_response",ticket,sequence,length,hash);}
-                            if let Some(ticket)=packet.client_ticket(){sex_pdx::serial_record!("[net.job.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_delivery",ticket,sequence,length,hash);}
-                        }},
+                        Ok((sequence,index,length,hash))=>{
+                            let sampled=sequence<=64||sequence.is_power_of_two();
+                            if sampled{sex_pdx::serial_record!("[sexnet.ether.tx.submit] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
+                            if let Some(ticket)=packet.dns_ticket(){
+                                if sampled||ticket>last_dns_egress{sex_pdx::serial_record!("[net.dns.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_response",ticket,sequence,length,hash);}
+                                last_dns_egress=last_dns_egress.max(ticket);
+                            }
+                            if let Some(ticket)=packet.client_ticket(){
+                                if sampled||ticket>last_job_egress{sex_pdx::serial_record!("[net.job.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_delivery",ticket,sequence,length,hash);}
+                                last_job_egress=last_job_egress.max(ticket);
+                            }
+                        },
                         Err(error)=>sex_pdx::serial_record!("[sexnet.ether.send.failed] error={:?} retry=0",error),
                     }
                 }
@@ -5329,6 +5343,7 @@ pub extern "C" fn _start() -> ! {
                     outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut()));
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
                     if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns)){pending_packet=None;}
+                    sex_pdx::serial_record!("[net.dns.records.retired] target={} task={} remaining={} before_cleanup_ack=1",notice.target_pd,notice.task_id,dns.owned_records(jobs::Identity{pd:notice.target_pd,task:notice.task_id}));
                 }) {
                 // Private job custody and collected owner egress are gone before ACK.
                 // Already-submitted DMA and shared protocol caches stay service-owned.
@@ -5341,10 +5356,21 @@ pub extern "C" fn _start() -> ! {
         if req.type_id==sex_pdx::network_job::OP{
             let request=sex_pdx::network_job::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
-                if !outbound.handle_exclusive(owner,request,sex_pdx::get_ticks(),dns.owner().is_some(),&mut ClientWire(transport.as_mut())){
+                let now=sex_pdx::get_ticks();
+                // DNS is data under the held route. It cannot expand this fixed
+                // controlled endpoint policy or mint any communication authority.
+                let admission=dns.resolved(owner,request.a as u32,now)
+                    .filter(|record|record.address==[10,0,2,2])
+                    .map(|r|jobs::Resolution{owner:r.owner,generation:r.generation,address:r.address,observed_tick:r.observed_tick,expires_tick:r.expires_tick})
+                    .ok_or(sex_pdx::network_job::DENIED);
+                let before=outbound.snapshot().ticket;
+                if !outbound.handle_resolved(owner,request,now,dns.owner().is_some(),admission,&mut ClientWire(transport.as_mut())){
                     // Valid clients serialize one request per receipt. A second
                     // same-owner request cannot overwrite its reserved receipt.
                     sex_pdx::serial_record!("[net.job.request.backpressure] owner={} seq={} effects=0 pending_receipt=retained",owner.pd,request.seq);
+                }
+                if before!=outbound.snapshot().ticket {
+                    if let Some(r)=outbound.resolution(){sex_pdx::serial_record!("[net.job.resolved.admitted] owner={} task={} ticket={} dns_generation={} observed={} expires={} now={} fixed=1 at_begin=1",owner.pd,owner.task,outbound.snapshot().ticket,r.generation,r.observed_tick,r.expires_tick,now);}
                 }
             }else{
                 // Invalid traffic cannot reserve/mutate a job. This rejection

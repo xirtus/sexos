@@ -3,12 +3,14 @@
 import argparse,ast,hashlib,json,os,re,shutil,socket,struct,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
-from check_tcp_capture import inspect as capture,fingerprint
+from check_tcp_capture import inspect as capture,fingerprint,frames
+from check_dns_capture import inspect as dns_capture,query as dns_query,response as dns_response
 from check_nic_command import inspect as nic
 from check_desktop_pixels import font_from_source,glyph,verify_kaleido_layout
 from check_disk_persistence import ppm_rgb
 
-MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch')
+DNS_MODES=('dns-disallowed','dns-zero-ttl','dns-malformed','dns-silence','dns-cancel','dns-close')
+MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch')+DNS_MODES
 BODY=b'LIVE SEXOS HTTP BODY 80 / FROM CONTROLLED PEER.'
 ECHO=bytes((n*17+78)&255 for n in range(1025))
 
@@ -117,14 +119,68 @@ def wire_response(mode):
  elif mode=='malformed':extra=b'Content-Length: '+str(length).encode()+b'\r\n'
  return status+b'Content-Type: text/plain; charset=us-ascii\r\nContent-Length: '+str(length).encode()+b'\r\n'+extra+b'Connection: close\r\n\r\n'+body
 
+def resolution_joins(trace,pcap,expected,dns_validation):
+ """Join positive app cleanup, private admission and the actual first SYN.
+
+ The serial egress hash/length names the exact captured frame, rather than
+ treating a serial state transition or host accept call as TCP wire proof.
+ """
+ errors=[];joins=[]
+ admissions=list(re.finditer(r'\[net\.job\.resolved\.admitted\] owner=15 task=15 ticket=(\d+) dns_generation=(\d+) observed=(\d+) expires=(\d+) now=(\d+) fixed=1 at_begin=1',trace))
+ if [(int(m[1]),int(m[2]))for m in admissions]!=expected:errors.append('resolved admission tickets/generations differ from exact intended HTTP jobs')
+ syns={}
+ try:
+  for index,frame in enumerate(frames(pcap)):
+   if len(frame)<54 or frame[12:14]!=b'\x08\0':continue
+   ip=frame[14:];ihl=(ip[0]&15)*4
+   if ip[0]>>4!=4 or ip[9]!=6 or ip[12:16]!=bytes([10,0,2,15])or ihl<20 or len(ip)<ihl+20:continue
+   tcp=ip[ihl:];port=int.from_bytes(tcp[:2],'big')
+   if 48001<=port<=65535 and tcp[13]&0x12==2:
+    syns.setdefault(port-48000,dict(packet=index,length=len(frame),hash=hex(fingerprint(frame))))
+  for admission in admissions:
+   ticket,generation,observed,expires,now=map(int,admission.groups())
+   release=re.search(rf'\[browser.dns.released\] ticket={generation} view=Answer\(\[10, 0, 2, 2\]\) private_job=0',trace)
+   egress=re.search(rf'\[net.job.egress.submit\] ticket={ticket} sequence=(\d+) length=(\d+) hash=(0x[0-9a-f]+) scope=dma_admission_not_delivery',trace)
+   answer=next((r for r in dns_validation.get('responses',[])if r['ticket']==generation),None);syn=syns.get(ticket)
+   if not release or not egress or not answer or not syn:errors.append(f'HTTP ticket{ticket} lacks positive DNS cleanup, actual answer, admission or joined SYN');continue
+   if not release.start()<admission.start()<egress.start():errors.append(f'HTTP ticket{ticket} DNS release/admission/egress order is invalid')
+   if not observed<=now<expires or not 0<expires-observed<=60000:errors.append(f'HTTP ticket{ticket} was admitted outside its bounded observed lifetime')
+   if syn['length']!=int(egress[2])or syn['hash']!=egress[3]:errors.append(f'HTTP ticket{ticket} admission egress does not name its captured first SYN')
+   if answer['packet']>=syn['packet']:errors.append(f'HTTP ticket{ticket} emitted SYN before its actual DNS answer')
+   joins.append(dict(ticket=ticket,dns_generation=generation,observed_tick=observed,expires_tick=expires,admitted_tick=now,dns_release_log_offset=release.start(),admission_log_offset=admission.start(),egress_log_offset=egress.start(),egress_sequence=int(egress[1]),dns_answer_packet=answer['packet'],tcp_first_syn=syn))
+ except(ValueError,IndexError,struct.error)as exc:errors.append(str(exc))
+ return dict(ok=not errors,errors=errors,joins=joins,scope='Exact positive DNS RELEASE precedes retained BEGIN_RESOLVED admission; bounded admission time is observed in serial. Subsequent egress hash/length joins the actual first TCP SYN, which follows the actual captured DNS answer. DNS observation is provenance data under held BOOT authority and fixed endpoint policy, not DNS authenticity or new authority.')
+
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--mode',choices=MODES,default='echo');a=p.parse_args()
  iso=a.iso.resolve(strict=True);seed=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh evidence directory required')
  contract=load_pixel_contract(Path(__file__).resolve().parents[1]);request=contract['request'];disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
- count=4 if a.mode=='switch'else 3 if a.mode=='cancel-retry'else 2
- rows=[];attempts=[];server_errors=[];connections=[];stopping=threading.Event();http_seen=threading.Event()
+ count=1 if a.mode in DNS_MODES else 4 if a.mode=='switch'else 3 if a.mode=='cancel-retry'else 2
+ dns_count=2 if a.mode in('switch','cancel-retry')else 1
+ rows=[];attempts=[];dns_rows=[];dns_attempts=[];server_errors=[];connections=[];stopping=threading.Event();http_seen=threading.Event();dns_seen=threading.Event()
  listener=socket.socket();listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);listener.bind(('127.0.0.1',46078));listener.listen(4);listener.settimeout(.2)
+ dns_peer=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);dns_peer.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);dns_peer.bind(('127.0.0.1',46079));dns_peer.settimeout(.2)
+ def serve_dns():
+  try:
+   while not stopping.is_set():
+    try:body,remote=dns_peer.recvfrom(4096)
+    except socket.timeout:continue
+    ticket=len(dns_rows)+1
+    row=dict(ticket=ticket,remote=list(remote),request_hex=body.hex(),request_sha256=hashlib.sha256(body).hexdigest(),host_monotonic=time.monotonic(),response_hex=None);dns_rows.append(row)
+    if ticket>dns_count or body!=dns_query(ticket):raise RuntimeError('unexpected, duplicate, or noncanonical actual H DNS query')
+    dns_seen.set()
+    if a.mode in('dns-silence','dns-cancel','dns-close'):continue
+    reply=bytearray(dns_response(ticket,'malformed'if a.mode=='dns-malformed'else'answer'))
+    if a.mode=='dns-disallowed':reply[-4:]=bytes([10,0,2,99])
+    elif a.mode=='dns-zero-ttl':reply[40:44]=b'\0'*4
+    row['response_hex']=bytes(reply).hex();attempt=dict(ticket=ticket,kind=a.mode if a.mode in DNS_MODES else'answer',response_hex=row['response_hex'],response_sha256=hashlib.sha256(reply).hexdigest(),remote=list(remote),host_monotonic=time.monotonic())
+    try:attempt['sent_bytes']=dns_peer.sendto(reply,remote)
+    except OSError as exc:attempt['send_error']=repr(exc);raise
+    finally:dns_attempts.append(attempt)
+  except Exception as exc:
+   if not stopping.is_set():server_errors.append(repr(exc))
+ dns_thread=threading.Thread(target=serve_dns,daemon=True);dns_thread.start()
  def write(conn,ticket,data,late=False):
   sent=bytearray();error=None
   try:
@@ -169,7 +225,8 @@ def main():
    if not stopping.is_set():server_errors.append(repr(exc))
  thread=threading.Thread(target=serve,daemon=True);thread.start()
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres=1280,yres=800','-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{qmp},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
- (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py')},http_request_hex=request.hex(),http_body_hex=BODY.hex(),scope='Actual H/J/R/F11 keys, held BOOT PDX route, controlled fixed HTTP peer10.0.2.2:46078 over real guest TCP. Loopback fixture only. No TLS, public web, HTML execution, redirect following or cache claim.'),indent=2)+'\n')
+ authority_paths=('apps/kaleidoscope/src/dns_probe.rs','servers/sexnet/src/dns_jobs.rs','servers/sexnet/src/jobs.rs','servers/sexnet/src/main.rs','crates/sex-pdx/src/network_job.rs','crates/sex-net/src/dns_wire.rs')
+ (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],authority_source_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()for name in authority_paths},runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py','check_dns_capture.py')},http_request_hex=request.hex(),http_body_hex=BODY.hex(),scope='Actual H now obtains a fixed-name UDP DNS observation, positively releases it, then requests BEGIN_RESOLVED under the existing held BOOT route and immutable HTTP endpoint policy. Real J/R/F11 keys, loopback UDP46079/TCP46078 fixtures and full shared PCAP. No DNS authenticity, TTL wall-clock accuracy, new capability authority, TLS, public routing, HTML, redirect following or cache claim.'),indent=2)+'\n')
  proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);actions=[];pixel_results=[];failure=None
  def text():return serial.read_text(errors='replace')if serial.exists()else''
  def health():
@@ -196,6 +253,15 @@ def main():
   wait(rf'\[browser.http.body\] ticket={ticket} status=200 length={len(BODY)} hash={hex(fingerprint(BODY))} controlled_peer=1 tls=0',start)
   wait(rf'\[browser.http.released\] ticket={ticket} view=Ready private_job=0',start)
   wait(rf'\[browser.view.applied\] bytes=\d+ http=2 body_bytes={len(BODY)} pixels=unconfirmed',start);pixels(q,'Ready',name)
+ def resolution(ticket,generation,start):
+  wait(rf'\[browser.dns.released\] ticket={generation} view=Answer\(\[10, 0, 2, 2\]\) private_job=0',start)
+  wait(rf'\[net.job.resolved.admitted\] owner=15 task=15 ticket={ticket} dns_generation={generation} ',start)
+ def close_pending(q,start,kind):
+  began=time.monotonic();q.key('f11');wait(rf'\[browser.{kind}.closed\] pending=1 terminal=1',start);wait(r'\[sext.app.pool.ready\] target=15 .*ok=1',start)
+  trace=text();roles={int(n)for n in re.findall(r'\[app.service.ack\] target=15 .*role=(\d+) ',trace[start:])};ack=trace.rfind('[net.app.cleanup.ack] target=15')
+  retired=re.search(r'\[net.dns.records.retired\] target=15 task=15 remaining=0 before_cleanup_ack=1',trace[start:])
+  if roles!={1,2,4,8,16}or ack<start or not retired or retired.start()+start>=ack or re.search(r'\[net\.(?:job|dns)\.egress\.submit\]',trace[ack:]):raise RuntimeError('pending Close lacks zero DNS records before ACK and terminal owned-egress cleanup')
+  q.cmd('screendump',{'filename':str(out/'browser-closed.ppm')});actions.append(dict(action='actual_f11_close_pending_'+kind,roles=sorted(roles),dns_records_remaining=0,seconds=time.monotonic()-began));pixel_results.append(dict(ok=True,skipped=True,reason='Browser terminally closed; no live HTTP status surface remains. All five cleanup roles, zero retained DNS records before network cleanup ACK, and wire evidence qualify Close.'))
  try:
   wait(r'\[app.surface.presented\] target=15 surface=300');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0')
   deadline=time.monotonic()+15
@@ -205,23 +271,33 @@ def main():
    time.sleep(.02)
   q=QMP(qmp);focus(q);start=len(text());began=time.monotonic();q.key('h')
   deadline=time.monotonic()+60
-  while not http_seen.wait(.02):
+  while not dns_seen.wait(.02):
    health()
-   if time.monotonic()>deadline:raise RuntimeError('actual H did not emit HTTP request')
-  actions.append(dict(action='actual_h_fetch',ticket=2,seconds=time.monotonic()-began))
-  if a.mode=='close':
-   start=len(text());began=time.monotonic();q.key('f11');wait(r'\[browser.http.closed\] pending=1 terminal=1',start);wait(r'\[sext.app.pool.ready\] target=15 .*ok=1',start)
-   trace=text();roles={int(n)for n in re.findall(r'\[app.service.ack\] target=15 .*role=(\d+) ',trace[start:])};ack=trace.rfind('[net.app.cleanup.ack] target=15')
-   if roles!={1,2,4,8,16}or ack<start or re.search(r'\[net.job.egress.submit\]',trace[ack:]):raise RuntimeError('pending HTTP Close lacks terminal owned-job cleanup')
-   q.cmd('screendump',{'filename':str(out/'browser-closed.ppm')});actions.append(dict(action='actual_f11_close_pending_http',roles=sorted(roles),seconds=time.monotonic()-began));pixel_results.append(dict(ok=True,skipped=True,reason='Browser terminally closed; no live HTTP status surface remains. Lifecycle and wire evidence qualify Close.'))
+   if time.monotonic()>deadline:raise RuntimeError('actual H did not emit real DNS query')
+  actions.append(dict(action='actual_h_dns_then_resolved_fetch',dns_ticket=1,seconds=time.monotonic()-began))
+  if a.mode in DNS_MODES:
+   if a.mode=='dns-close':close_pending(q,len(text()),'dns')
+   elif a.mode=='dns-cancel':
+    start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.dns.released\] ticket=1 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-http');actions.append(dict(action='actual_j_cancel_waiting_dns',seconds=time.monotonic()-began,http_job_allocated=False))
+   else:
+    dns_view=r'Answer\(\[10, 0, 2, 99\]\)'if a.mode=='dns-disallowed'else r'Answer\(\[10, 0, 2, 2\]\)'if a.mode=='dns-zero-ttl'else'Unavailable'
+    wait(rf'\[browser.dns.released\] ticket=1 view={dns_view} private_job=0',start);wait(r'\[browser.http.view\] state=Unavailable tls=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=3 body_bytes=0 ',start);pixels(q,'Unavailable','browser-http')
+   if any(int(n)>1 for n in re.findall(r'\[net.job.egress.submit\] ticket=(\d+) ',text()))or '[net.job.resolved.admitted]'in text():raise RuntimeError('DNS denial/cancellation/Close admitted new HTTP-owned egress')
+  else:
+   resolution(2,1,start)
+   deadline=time.monotonic()+60
+   while not http_seen.wait(.02):
+    health()
+    if time.monotonic()>deadline:raise RuntimeError('released DNS observation did not produce actual resolved HTTP request')
+  if a.mode=='close':close_pending(q,len(text()),'http')
   elif a.mode=='cancel-retry':
-   start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.http.released\] ticket=2 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-cancelled');actions.append(dict(action='actual_j_cancel',ticket=2,seconds=time.monotonic()-began));start=len(text());q.key('h');ready(q,3,start,'browser-http');actions.append(dict(action='actual_h_fresh_retry',ticket=3))
+   start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.http.released\] ticket=2 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-cancelled');actions.append(dict(action='actual_j_cancel',ticket=2,seconds=time.monotonic()-began));start=len(text());q.key('h');resolution(3,2,start);ready(q,3,start,'browser-http');actions.append(dict(action='actual_h_fresh_retry',ticket=3,dns_generation=2))
   elif a.mode in('echo','switch'):
    ready(q,2,start,'browser-http-first'if a.mode=='switch'else'browser-http')
    if a.mode=='switch':
     start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-erased');actions.append(dict(action='actual_j_erase_previous_ready_body',job_allocated=False))
-    start=len(text());q.key('r');wait(r'\[browser.net.job.released\] ticket=3 view=Verified private_job=0',start);actions.append(dict(action='actual_r_echo_same_replay_fence',ticket=3));start=len(text());q.key('h');ready(q,4,start,'browser-http');actions.append(dict(action='actual_h_after_echo',ticket=4))
-  else:
+    start=len(text());q.key('r');wait(r'\[browser.net.job.released\] ticket=3 view=Verified private_job=0',start);actions.append(dict(action='actual_r_echo_same_replay_fence',ticket=3));start=len(text());q.key('h');resolution(4,2,start);ready(q,4,start,'browser-http');actions.append(dict(action='actual_h_after_echo',ticket=4,dns_generation=2))
+  elif a.mode not in DNS_MODES:
    wait(r'\[browser.http.released\] ticket=2 view=Unavailable private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=3 body_bytes=0 ',start);pixels(q,'Unavailable','browser-http')
   expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode=='cancel-retry'else[2]if a.mode=='echo'else[]
   if [int(n)for n in re.findall(r'\[browser.http.body\] ticket=(\d+) ',text())]!=expected_bodies:raise RuntimeError('invalid, incomplete, cancelled or absent HTTP response became usable body')
@@ -233,21 +309,29 @@ def main():
    try:conn.close()
    except OSError:pass
   listener.close();thread.join(timeout=2)
+  dns_peer.close();dns_thread.join(timeout=2)
   if proc.poll()is None:
    proc.terminate()
    try:proc.wait(timeout=10)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
  (out/'endpoint-exchanges.json').write_text(json.dumps(dict(connections=rows,response_send_attempts=attempts),indent=2)+'\n')
+ (out/'dns-endpoint-exchanges.json').write_text(json.dumps(dict(queries=dns_rows,response_send_attempts=dns_attempts),indent=2)+'\n')
  expected=[]
  for row in rows:
   item=dict(payload_hex=row['request_hex'],response_hex=row['response_hex'])
   if row['aborted']:item.update(aborted=True,allow_empty_reply=True)
   expected.append(item)
- validation=capture(pcap.read_bytes(),expected,guest_ports=list(range(48001,48001+count)),initiator='guest')if pcap.exists()else dict(ok=False,errors=['missing actual full PCAP'])
+ raw_pcap=pcap.read_bytes()if pcap.exists()else b''
+ validation=capture(raw_pcap,expected,guest_ports=range(48001,65536),initiator='guest')if raw_pcap else dict(ok=False,errors=['missing actual full PCAP'])
+ dns_expected=[dict(ticket=row['ticket'],response_hex=row['response_hex'])for row in dns_rows]
+ dns_validation=dns_capture(raw_pcap,'echo',dns_attempts,expected=dns_expected)if raw_pcap and dns_expected else dict(ok=False,errors=['missing actual H DNS query/capture'])
+ admissions=[]if a.mode in DNS_MODES else[(2,1),(4,2)]if a.mode=='switch'else[(2,1),(3,2)]if a.mode=='cancel-retry'else[(2,1)]
+ joined=resolution_joins(text(),raw_pcap,admissions,dns_validation)
  authority=nic(text(),1,True,True)
  if len(rows)!=count:failure=failure or'incomplete actual peer exchanges'
+ if len(dns_rows)!=dns_count:failure=failure or'incomplete actual DNS exchanges'
  if a.mode=='reset'and validation.get('ok')and not validation['connections'][1]['rst_in']:failure=failure or'missing captured real peer reset'
- result=dict(ok=failure is None and validation['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,authority=authority,pixels=pixel_results,actions=actions,scope='Actual keyboard-driven HTTP body intent on held BOOT route; independent captured TCP reassembly joined to complete endpoint bytes; exact live plaintext/no TLS label and all64body glyph cells or explicit terminal omission. Host delayed send attempts are distinguished from actual captured old-flow bytes. No TLS, public web, HTML execution, cache, physical/SMP isolation claim.')
+ result=dict(ok=failure is None and validation['ok']and dns_validation['ok']and joined['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,dns_capture=dns_validation,resolution_order=joined,authority=authority,pixels=pixel_results,actions=actions,scope='Actual H-driven fixed-name DNS query/answer and positive cleanup precede generation-bound HTTP admission under existing held BOOT authority and fixed endpoint policy. Exact first TCP SYN joins the admitted egress frame hash/length and follows the captured DNS answer. Denial modes require only baseline Echo TCP and no new HTTP-owned egress. Full HTTP/body pixels or explicit terminal Close qualify presentation/cleanup. No injected native expiry/rollback, DNS authenticity, wall-clock TTL accuracy, new capabilities, TLS, public web, HTML, cache or physical/SMP isolation claim.')
  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,mode=a.mode,model=a.model,connections=len(rows))))

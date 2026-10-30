@@ -13,6 +13,8 @@ pub const STATUS: u8 = 4;
 pub const READ: u8 = 5;
 pub const CANCEL: u8 = 6;
 pub const RELEASE: u8 = 7;
+/// DNS generation selects service provenance, never new endpoint authority.
+pub const BEGIN_RESOLVED: u8 = 8;
 pub const INVALID: u32 = 1;
 pub const DENIED: u32 = 2;
 pub const STALE: u32 = 3;
@@ -41,7 +43,7 @@ impl Request {
         let r = Self { seq: (args[0] & MAX_SEQ as u64) as u32,
             kind: (args[0] >> 24) as u8, offset: (args[0] >> 32) as u16,
             length: (args[0] >> 48) as u16, ticket: args[1] as u32, a: args[2] };
-        if args[1] > u32::MAX as u64 || r.seq == 0 || !(BEGIN..=RELEASE).contains(&r.kind) {
+        if args[1] > u32::MAX as u64 || r.seq == 0 || !(BEGIN..=BEGIN_RESOLVED).contains(&r.kind) {
             return Err(INVALID);
         }
         Ok(r)
@@ -50,6 +52,9 @@ impl Request {
         if self.seq == 0 || self.seq > MAX_SEQ { return false; }
         match self.kind {
             BEGIN => self.ticket == 0 && self.offset == 0 && self.a == 0
+                && self.length != 0 && self.length as usize <= MAX_BYTES,
+            BEGIN_RESOLVED => self.ticket == 0 && self.offset == 0
+                && self.a != 0 && self.a <= MAX_TICKET as u64
                 && self.length != 0 && self.length as usize <= MAX_BYTES,
             WRITE => self.length != 0 && self.length <= 8
                 && (self.length == 8 || self.a >> (self.length * 8) == 0),

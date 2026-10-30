@@ -12,7 +12,7 @@ mod http_probe;
 mod browser_view;
 #[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
 mod text_delivery;
-#[derive(Clone,Copy)]enum Intent{Echo,Dns,Http}
+#[derive(Clone,Copy)]enum Intent{Echo,Dns,HttpDns,Http}
 
 use silkclient::{app_main, SexApp};
 // Private BOOT ELF backing replaces the old ambient fixed-address heap.
@@ -214,15 +214,16 @@ impl SexApp for App {
             }
             if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{
                 if self.ui_failed{self.ui_failed=false;self.ui_retries=0;self.ui_dirty=true;}
-                let intent=match req.arg0{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::Http),_=>None};
+                let intent=match req.arg0{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::HttpDns),_=>None};
                 if let Some(intent)=intent{
                     // Latest user intent waits for positive cleanup of whichever
                     // existing route currently owns a job. No parallel BEGIN.
+                    if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}
                     self.intent=Some(intent);if self.probe.busy(){self.probe.cancel();}if self.dns.busy(){self.dns.cancel();}if self.http.busy(){self.http.cancel();}
                 }else{match req.arg0{
                     0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
-                    0x2D=>{if matches!(self.intent,Some(Intent::Dns)){self.intent=None;}self.dns.cancel();},
-                    0x24=>{if matches!(self.intent,Some(Intent::Http)){self.intent=None;}self.http.cancel();},
+                    0x2D=>{if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
+                    0x24=>{if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();},
                     _=>{},
                 }}
             }
@@ -231,7 +232,15 @@ impl SexApp for App {
             if let Some(intent)=self.intent.take(){
                 // Echo and HTTP share the exact0x20C caller replay fence.
                 let sequence=self.probe.next_sequence().max(self.http.next_sequence());
-                match intent{Intent::Echo=>{if !self.probe.restart_at(sequence){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=echo seq={} effects=0",sequence);}},Intent::Dns=>self.dns.start(),Intent::Http=>{if !self.http.start(sequence){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=http seq={} effects=0",sequence);}}}
+                match intent{
+                    Intent::Echo=>{if !self.probe.restart_at(sequence){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=echo seq={} effects=0",sequence);}},
+                    Intent::Dns=>self.dns.start(),
+                    Intent::HttpDns=>{self.http.wait_for_resolution();self.dns.start();self.intent=Some(Intent::Http);},
+                    Intent::Http=>{
+                        let generation=self.dns.generation().unwrap_or(0);
+                        if !self.http.start_resolved(sequence,generation){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=http seq={} dns_generation={} effects=0",sequence,generation);}
+                    },
+                }
             }
         }
         if self.probe.busy(){self.probe.advance(sex_pdx::get_ticks());}

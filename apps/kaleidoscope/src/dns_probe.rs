@@ -9,14 +9,17 @@ enum Step { Done, Begin, Poll, Result, Cancel, Release, Held }
 pub struct Client {
     step:Step, seq:u32, ticket:u32, pending:Option<w::Request>, accepted:bool,
     deadline:u64, next_poll:u64, cancel:bool, retry:bool, view:View,
+    released_generation:Option<u32>,
 }
 impl Client {
     pub const fn new()->Self {
         Self { step:Step::Done,seq:1,ticket:0,pending:None,accepted:false,
-            deadline:0,next_poll:0,cancel:false,retry:false,view:View::Idle }
+            deadline:0,next_poll:0,cancel:false,retry:false,view:View::Idle,released_generation:None }
     }
     pub fn busy(&self)->bool { self.step!=Step::Done || self.ticket!=0 }
     pub fn view(&self)->View { self.view }
+    /// A selector is usable only after the successful RESULT's positive cleanup.
+    pub fn generation(&self)->Option<u32> { self.released_generation }
     pub fn start(&mut self) {
         if self.busy() {
             self.retry=true;self.cancel=true;
@@ -26,12 +29,14 @@ impl Client {
         self.begin_intent();
     }
     fn begin_intent(&mut self) {
+        self.released_generation=None;
         // Leave room for positive ticket cleanup even at sequence exhaustion.
         if self.seq>w::MAX_SEQ-4 { self.view=View::Unavailable;return; }
         self.step=Step::Begin;self.cancel=false;self.retry=false;
         self.pending=None;self.accepted=false;self.view=View::Pending;
     }
     pub fn cancel(&mut self) {
+        self.released_generation=None;
         self.retry=false;
         if !self.busy() { self.view=View::Cancelled;return; }
         self.cancel=true;
@@ -46,6 +51,7 @@ impl Client {
         if self.retry { self.begin_intent(); }
     }
     fn rejected(&mut self,kind:u8) {
+        self.released_generation=None;
         self.view=if kind==w::RELEASE && self.ticket!=0 { View::Uncertain } else { View::Unavailable };
         if self.ticket==0 { self.finished(); }
         else { self.step=if kind==w::RELEASE { Step::Held } else { Step::Release }; }
@@ -88,6 +94,7 @@ impl Client {
             w::RELEASE=>{
                 if value!=0 { self.rejected(r.kind);return; }
                 if self.cancel { self.view=View::Cancelled; }
+                self.released_generation=if !self.cancel && matches!(self.view,View::Answer(_)){Some(self.ticket)}else{None};
                 sex_pdx::serial_record!("[browser.dns.released] ticket={} view={:?} private_job=0",self.ticket,self.view);
                 self.ticket=0;self.finished();return;
             }

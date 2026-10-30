@@ -53,4 +53,23 @@ class DnsCapture(unittest.TestCase):
   self.assertFalse(inspect(pcap([rows[0],rows[2],rows[1],rows[3]]),'cancel-retry')['ok'])
  def test_legal_zero_udp_checksum_is_explicit(self):
   r=inspect(pcap([packet(1,query(1),zero=True),packet(1,response(1),True,zero=True)]),'echo');self.assertTrue(r['ok'],r['errors']);self.assertEqual(r['ipv4_udp_zero_checksums'],2)
+ def test_explicit_provenance_rows_bind_every_response_byte_and_ticket(self):
+  first=bytearray(response(1));first[-1]=99
+  second=bytearray(response(2));second[40:44]=bytes(4)
+  rows=[packet(1,query(1)),packet(1,bytes(first),True),packet(2,query(2)),packet(2,bytes(second),True)]
+  expected=[dict(ticket=1,response_hex=first.hex()),dict(ticket=2,response_hex=second.hex())]
+  self.assertTrue(inspect(pcap(rows),'echo',expected=expected)['ok'])
+  self.assertFalse(inspect(pcap(rows),'echo')['ok'])
+  expected[1]['response_hex']=response(2).hex()
+  self.assertFalse(inspect(pcap(rows),'echo',expected=expected)['ok'])
+ def test_explicit_silence_rejects_extra_response_missing_query_and_duplicate(self):
+  expected=[dict(ticket=1,response_hex=None)]
+  rows=[packet(1,query(1))]
+  self.assertTrue(inspect(pcap(rows),'echo',expected=expected)['ok'])
+  for altered in [[],rows*2,rows+[packet(1,response(1),True)]]:
+   self.assertFalse(inspect(pcap(altered),'echo',expected=expected)['ok'])
+ def test_invalid_explicit_exchange_declarations_fail_closed(self):
+  data=pcap(fixture('echo'))
+  for expected in [[],[dict(ticket=0,response_hex=None)],[dict(ticket=1,response_hex='xx')],[dict(ticket=1,response_hex=response(2).hex())],[dict(ticket=1),dict(ticket=1)],[dict(ticket=2),dict(ticket=1)]]:
+   self.assertFalse(inspect(data,'echo',expected=expected)['ok'])
 if __name__=='__main__':unittest.main()
