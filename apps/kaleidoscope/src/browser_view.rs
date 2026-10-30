@@ -58,3 +58,16 @@ pub fn compose(preview:&[u8],echo:network_probe::View,dns:dns_probe::View,http:h
  if matches!(http,http_probe::View::Ready) { text.bytes[body_start+2..len].copy_from_slice(body); }
  Some(text)
 }
+
+/// Optional nonsecret source status uses one full replacement extent. Idle
+/// preserves the old snapshot exactly. Seed bytes never enter this interface.
+pub fn with_seed(mut text:Text,label:Option<&[u8]>)->Option<Text>{
+ let Some(label)=label else{return Some(text);};
+ if !matches!(label,b"checking"|b"ready 32 bytes"|b"unavailable"|b"cancelled"|b"waiting receipt"){return None;}
+ let start=text.len;let end=start.checked_add(64)?;
+ text.bytes.get_mut(start..end)?.fill(b' ');
+ let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nPrivate seed: ")?;
+ append(&mut text.bytes[..end],&mut at,label)?;
+ append(&mut text.bytes[..end],&mut at,b"\nE seed  Q clear")?;
+ text.len=end;Some(text)
+}

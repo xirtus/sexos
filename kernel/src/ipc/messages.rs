@@ -1,5 +1,6 @@
 /// IPCtax-compliant Message structures for Driver/VFS interaction.
 /// 100% Zero-Copy via Lent Capabilities.
+extern crate alloc;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +38,31 @@ pub struct IpcReply {
     pub value: u64,
     /// Captured from the current protection domain, never supplied by userland.
     pub caller_pd: u32,
+}
+impl IpcReply{
+    fn scrub(&mut self){unsafe{
+        core::ptr::write_volatile(&mut self.value,0);
+        core::ptr::write_volatile(&mut self.caller_pd,0);
+    }}
+    /// Return one authenticated value and erase its queue backing before the
+    /// deque releases that slot. A logical pop alone retains old secret bits.
+    pub fn take(queue:&mut self::alloc::collections::VecDeque<Self>)->Option<Self>{
+        let item=*queue.front()?;queue.front_mut().unwrap().scrub();let _=queue.pop_front();Some(item)
+    }
+    pub fn erase_queue(queue:&mut self::alloc::collections::VecDeque<Self>){
+        for item in queue.iter_mut(){item.scrub();}queue.clear();
+    }
+}
+
+#[cfg(test)]mod reply_erasure_tests{
+    use super::IpcReply;
+    #[test]fn explicit_erasure_zeros_both_payload_and_sender(){let mut reply=IpcReply{value:u64::MAX,caller_pd:13};reply.scrub();assert_eq!((reply.value,reply.caller_pd),(0,0));}
+    #[test]fn take_preserves_exact_authenticated_value_and_erases_before_next_publication(){
+        let mut queue=super::alloc::collections::VecDeque::new();queue.push_back(IpcReply{value:123,caller_pd:13});
+        let got=IpcReply::take(&mut queue).unwrap();assert_eq!((got.value,got.caller_pd),(123,13));assert!(IpcReply::take(&mut queue).is_none());
+        for sender in [14,15]{queue.push_back(IpcReply{value:sender as u64,caller_pd:sender});let got=IpcReply::take(&mut queue).unwrap();assert_eq!((got.value,got.caller_pd),(sender as u64,sender));}
+        queue.push_back(got);IpcReply::erase_queue(&mut queue);assert!(queue.is_empty());
+    }
 }
 
 /// Ring buffer message for Storage Completion.

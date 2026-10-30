@@ -57,14 +57,14 @@ fn setup(sender:u32)->&'static Domain{
 #[test]fn sender_is_captured_from_current_pd_not_target_or_value(){
  let _lock=SERIAL.lock().unwrap();let pd=setup(14);
  assert_eq!(router::send_reply(15,0xdeadbeef),Ok(()));CALLER.with(|p|p.set(domain(10)));
- let reply=pd.incoming_replies.lock().pop_front().unwrap();assert_eq!((reply.caller_pd,reply.value),(14,0xdeadbeef));
- assert_eq!(router::send_reply(15,14),Ok(()));let reply=pd.incoming_replies.lock().pop_front().unwrap();assert_eq!((reply.caller_pd,reply.value),(10,14));assert_eq!(WAKES.load(Ordering::Relaxed),2);
+ let reply=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((reply.caller_pd,reply.value),(14,0xdeadbeef));
+ assert_eq!(router::send_reply(15,14),Ok(()));let reply=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((reply.caller_pd,reply.value),(10,14));assert_eq!(WAKES.load(Ordering::Relaxed),2);
 }
 #[test]fn full_slot_retains_old_reply_and_retry_publishes_only_after_consumption(){
  let _lock=SERIAL.lock().unwrap();let pd=setup(14);router::send_reply(15,0x100).unwrap();CALLER.with(|p|p.set(domain(10)));
  for _ in 0..20{assert_eq!(router::send_reply(15,0x200),Err(messages::IpcError::BufferFull));}
- assert_eq!(WAKES.load(Ordering::Relaxed),1);let old=pd.incoming_replies.lock().pop_front().unwrap();assert_eq!((old.caller_pd,old.value),(14,0x100));
- router::send_reply(15,0x200).unwrap();let new=pd.incoming_replies.lock().pop_front().unwrap();assert_eq!((new.caller_pd,new.value),(10,0x200));assert_eq!(WAKES.load(Ordering::Relaxed),2);
+ assert_eq!(WAKES.load(Ordering::Relaxed),1);let old=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((old.caller_pd,old.value),(14,0x100));
+ router::send_reply(15,0x200).unwrap();let new=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((new.caller_pd,new.value),(10,0x200));assert_eq!(WAKES.load(Ordering::Relaxed),2);
 }
 #[test]fn invalid_targets_neither_enqueue_nor_wake(){
  let _lock=SERIAL.lock().unwrap();let pd=setup(14);
@@ -80,7 +80,7 @@ fn setup(sender:u32)->&'static Domain{
  let workers:Vec<_>=(1..=16u32).map(|sender|{let barrier=barrier.clone();std::thread::spawn(move||{CALLER.with(|p|p.set(domain(sender)));barrier.wait();(sender,router::send_reply(15,sender as u64+1000))})}).collect();
  let results:Vec<_>=workers.into_iter().map(|w|w.join().unwrap()).collect();let wins:Vec<_>=results.iter().filter(|(_,result)|result.is_ok()).collect();assert_eq!(wins.len(),1);
  assert!(results.iter().filter(|(_,r)|r.is_err()).all(|(_,r)|*r==Err(messages::IpcError::BufferFull)));
- let reply=pd.incoming_replies.lock().pop_front().unwrap();assert_eq!(reply.caller_pd,wins[0].0);assert_eq!(reply.value,wins[0].0 as u64+1000);assert_eq!(WAKES.load(Ordering::Relaxed),1);
+ let reply=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!(reply.caller_pd,wins[0].0);assert_eq!(reply.value,wins[0].0 as u64+1000);assert_eq!(WAKES.load(Ordering::Relaxed),1);
 }
 
 #[test]fn retired_target_keeps_permanent_metadata_but_refuses_new_delivery(){

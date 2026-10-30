@@ -15,6 +15,8 @@ pub mod paging;
 pub mod app_lifecycle;
 pub mod network_job;
 pub mod network_dns;
+pub mod entropy_source;
+pub mod entropy_seed;
 pub mod spindle_history;
 pub mod spindle_probe;
 pub mod spindle_view;
@@ -520,6 +522,24 @@ pub fn device_network_config(slot:u64)->Result<network_config::Config,u64>{
         out("rcx")_,out("r11")_,options(nostack));}
     if status!=0{return Err(if a|b|c|d!=0{pci_command::IO}else{status});}
     network_config::Config::from_words([a,b,c,d]).ok_or(pci_command::IO)
+}
+
+/// Invoke only this subject's typed BOOT seed-source grant. All output words
+/// are decoded; a failed or malformed result cannot become seed material.
+fn entropy_registers(slot:u64,kind:u64)->[u64;5]{
+    let(status,a,b,c,d):(u64,u64,u64,u64,u64);
+    unsafe{core::arch::asm!("syscall",
+        inlateout("rax")entropy_source::SYS=>status,in("rdi")slot,
+        inlateout("rsi")kind=>a,inlateout("rdx")0u64=>b,
+        inlateout("r10")0u64=>c,inlateout("r8")0u64=>d,
+        out("rcx")_,out("r11")_,options(nostack));}
+    [status,a,b,c,d]
+}
+pub fn entropy_info(slot:u64)->Result<entropy_source::Info,u64>{
+    entropy_source::Info::decode(entropy_registers(slot,entropy_source::INFO))
+}
+pub fn entropy_word(slot:u64)->Result<entropy_source::Word,u64>{
+    entropy_source::Word::decode(entropy_registers(slot,entropy_source::READ))
 }
 
 /// Inspect a boot paging capability without allocating or mapping anything.

@@ -9,7 +9,7 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityKind {
     Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy, VfsNode,
-    InputRing, MessageQueue, Region, FramePool, PagerMapping, DemandRegion, AppLifecycle,
+    InputRing, MessageQueue, Region, FramePool, PagerMapping, DemandRegion, AppLifecycle, EntropySource,
 }
 
 #[repr(C, align(64))]
@@ -96,6 +96,7 @@ pub enum CapabilityData {
     AppLifecycle(crate::app_resource_state::LifecycleGrant),
     AppActivation(crate::app_resource_state::ActivationGrant),
     HistoryRecovery(sex_pdx::history_recovery::Grant),
+    EntropySource(sex_pdx::entropy_source::Grant),
     InputRing, MessageQueue,
 }
 

@@ -242,17 +242,3 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     *pt_virt.add(pt_idx) = entry;
     core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
 }
-
-pub fn rdseed_u64() -> Option<u64> {
-    let mut val: u64;
-    let success: u8;
-    unsafe {
-        core::arch::asm!(
-            "rdseed {0}",
-            "setc {1}",
-            out(reg) val,
-            out(reg_byte) success,
-        );
-    }
-    if success != 0 { Some(val) } else { None }
-}

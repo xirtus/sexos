@@ -302,7 +302,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 // Reply sender is captured by the kernel at send time.
                 let mut replies = current_pd.incoming_replies.lock();
                 if slot == 0 && !replies.is_empty() {
-                    if let Some(reply) = replies.pop_front() {
+                    if let Some(reply) = crate::ipc::messages::IpcReply::take(&mut replies) {
                         drop(replies);
                         (0x1, reply.caller_pd as u64, reply.value, 0, 0)
                     } else {
@@ -515,6 +515,11 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         71 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             let reply=crate::pci_command::network_config(pd,rdi,rsi,rdx,r10,r8);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
+        },
+        72 => {
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::entropy_source::invoke(pd,rdi,rsi,rdx,r10,r8);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 

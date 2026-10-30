@@ -53,3 +53,9 @@ echo '[sexnet.document.reader.host] PASS scope=actual_viewport_reader_and_shared
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/http_navigation.rs" -o "$TEST_DIR/http-navigation-tests"
 "$TEST_DIR/http-navigation-tests"
 echo '[sexnet.http.navigation.host] PASS scope=actual_bounded_path_history_and_codec_not_live_network_authority'
+
+rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_service.rs" -o "$TEST_DIR/entropy-service-tests"
+"$TEST_DIR/entropy-service-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_client.rs" -o "$TEST_DIR/entropy-client-tests"
+"$TEST_DIR/entropy-client-tests"
+echo '[sexnet.entropy.host] PASS scope=actual_ABI_private_service_client_not_live_CPU_quality_or_authority'

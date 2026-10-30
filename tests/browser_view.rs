@@ -49,3 +49,19 @@ fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_
 #[test]fn printable_ascii_and_newline_remain_exact_presentation_data() {
  let body=padded(b"<title>literal & text</title>\nH fetch / ?");let text=compose(b"preview\n",E::Cancelled,D::Cancelled,H::Ready,&body).unwrap();assert_eq!(&text.bytes[text.len-64..text.len],&body);assert!(text.bytes[..text.len].iter().all(|b|*b==b'\n'||(32..=126).contains(b)));
 }
+
+#[path="../apps/kaleidoscope/src/body_text.rs"]mod body_text;
+#[test]fn seed_status_extent_preserves_idle_and_fits_actual_max_preview(){
+ let preview=body_text::build(&[b'z';192],&[]);
+ for label in [b"checking" as &[u8],b"ready 32 bytes",b"unavailable",b"cancelled",b"waiting receipt"]{
+  let before=compose(preview.as_bytes(),E::Verified,D::Answer([255;4]),H::Ready,&[b'x';64]).unwrap();
+  let base=before.len;let old=before.bytes;
+  let idle=browser_view::with_seed(before,None).unwrap();assert_eq!(idle.bytes,old);assert_eq!(idle.len,base);
+  let text=browser_view::with_seed(idle,Some(label)).unwrap();assert_eq!(&text.bytes[..base],&old[..base]);assert_eq!(text.len,base+64);assert!(text.len<=512);
+  let mut expected=b"\n\nPrivate seed: ".to_vec();expected.extend_from_slice(label);expected.extend_from_slice(b"\nE seed  Q clear");assert_eq!(&text.bytes[base..base+64],&padded(&expected));assert!(text.bytes[text.len..].iter().all(|b|*b==b' '));
+ }
+}
+#[test]fn seed_status_rejects_unknown_labels_or_capacity_without_truncation(){
+ for label in [b"secret bytes" as &[u8],b"ready\0",b"READY"]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_seed(text,Some(label)).is_none());}
+ let text=compose(&[b'p';254],E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_seed(text,Some(b"checking")).is_none());
+}

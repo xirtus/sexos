@@ -19,6 +19,7 @@ mod ethernet;
 mod arp;
 mod jobs;
 mod dns_jobs;
+mod entropy;
 
 /// The held BOOT lifecycle grants establish exact current subject/task, never
 /// the app-supplied ticket. Err(LIVE) is the kernel's live-task attestation;
@@ -5199,6 +5200,9 @@ pub extern "C" fn _start() -> ! {
     let mut outbound=jobs::Machine::new();
     let mut outbound_changes=0u64;
     let mut dns=dns_jobs::Machine::new();
+    let seed_source=sex_pdx::entropy_info(sex_pdx::entropy_source::SLOT).ok();
+    sex_pdx::serial_record!("[sexnet.entropy.source] held={} available={} source=rdseed fallback=0 broker=private_seed32",seed_source.is_some()as u8,seed_source.is_some_and(|info|info.available)as u8);
+    let mut seed=entropy::Machine::new();
     let mut dns_changes=0u64;
     // Finite, non-reused job tickets retain their first submitted frame even
     // after an earlier stream consumed the device's ordinary sample budget.
@@ -5241,6 +5245,13 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut()));}
         }
         if let Some(owner)=dns.owner(){if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}}
+        if let Some(owner)=seed.owner(){
+            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){seed.retire(owner);}
+        }
+        let before_seed=seed.snapshot();
+        seed.advance(sex_pdx::get_ticks(),||sex_pdx::entropy_word(sex_pdx::entropy_source::SLOT).map(|word|word.value));
+        let after_seed=seed.snapshot();
+        if before_seed!=after_seed{sex_pdx::serial_record!("[entropy.seed.progress] owner={:?} ticket={} state={:?} produced={} consumed={} failure={} private=1",after_seed.owner,after_seed.ticket,after_seed.state,after_seed.produced,after_seed.consumed,after_seed.failure);}
         // Released DNS observations retain no active socket. Check their exact
         // live identities and nominal-tick expiry even on transport-offline turns.
         dns.maintain_records(sex_pdx::get_ticks(),|owner|network_owner(owner.pd)==Some(owner));
@@ -5337,8 +5348,12 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}
             else if pdx_reply(owner.pd,word)==0{dns.reply_accepted();}else{dns.reply_deferred();}
         }
-        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some();
-        let pending=preparing||polling||reply_pending;
+        if let Some((owner,word))=seed.pending_reply(){
+            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){seed.retire(owner);}
+            else if pdx_reply(owner.pd,word)==0{seed.reply_accepted();}else{seed.reply_deferred();}
+        }
+        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some();
+        let pending=preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
             // cleanup or ordinary service calls. try_listen yields when empty.
@@ -5360,6 +5375,8 @@ pub extern "C" fn _start() -> ! {
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|notice| {
                     outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut()));
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
+                    seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
+                    sex_pdx::serial_record!("[entropy.seed.retired] target={} task={} before_cleanup_ack=1 private_payload=erased",notice.target_pd,notice.task_id);
                     if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
                     sex_pdx::serial_record!("[net.dns.records.retired] target={} task={} remaining={} before_cleanup_ack=1",notice.target_pd,notice.task_id,dns.owned_records(jobs::Identity{pd:notice.target_pd,task:notice.task_id}));
                 }) {
@@ -5370,6 +5387,23 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if app_custody.is_retired(req.caller_pd) {continue}
+
+        if req.type_id==sex_pdx::entropy_seed::OP{
+            let request=sex_pdx::entropy_seed::Request::decode([req.arg0,req.arg1,req.arg2]);
+            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+                let before=seed.snapshot();
+                let identity=sex_pdx::entropy_seed::Identity{pd:owner.pd,task:owner.task};
+                if !seed.handle(identity,request,sex_pdx::get_ticks(),seed_source){sex_pdx::serial_record!("[entropy.seed.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);}
+                let after=seed.snapshot();
+                if after.owner==Some(identity)&&before.ticket!=after.ticket{sex_pdx::serial_record!("[entropy.seed.admitted] owner={} task={} ticket={} bytes=32 source=held_boot_grant",owner.pd,owner.task,after.ticket);}
+                let released=seed.pending_reply().is_some_and(|(target,word)|target==identity&&sex_pdx::entropy_seed::decode_reply(word,request.seq)==Ok(0));
+                if request.kind==sex_pdx::entropy_seed::RELEASE&&before.owner==Some(identity)&&before.ticket==request.ticket&&after.owner.is_none()&&released{sex_pdx::serial_record!("[entropy.seed.released] owner={} task={} ticket={} service_payload=erased receipt=retained",owner.pd,owner.task,request.ticket);}
+            }else{
+                let seq=(req.arg0&sex_pdx::entropy_seed::MAX_SEQ as u64)as u32;
+                if seq!=0{pdx_reply(req.caller_pd,sex_pdx::entropy_seed::error(seq,sex_pdx::entropy_seed::INVALID));}
+            }
+            continue;
+        }
 
         if req.type_id==sex_pdx::network_job::OP{
             let request=sex_pdx::network_job::Request::decode([req.arg0,req.arg1,req.arg2]);

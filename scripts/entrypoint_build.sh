@@ -12,9 +12,13 @@ ABI_INPUTS=(
   kernel/src/boot_network_state.rs
   kernel/src/boot_network.rs
   kernel/src/pci_command.rs
+  kernel/src/entropy_source.rs
+  kernel/src/ipc_ring.rs
   crates/sex-net-config/src/lib.rs
   crates/sex-pdx/src/network_config.rs
   crates/sex-pdx/src/network_job.rs
+  crates/sex-pdx/src/entropy_source.rs
+  crates/sex-pdx/src/entropy_seed.rs
   kernel/src/boot_display_state.rs
   crates/sex-pdx/src/display_boot.rs
   kernel/src/history_recovery.rs

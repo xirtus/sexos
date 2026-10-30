@@ -812,6 +812,19 @@ pub fn init() {
         pd.grant_capability(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
             crate::app_resource_state::LifecycleGrant{target_pd:id,task_id:unsafe{(*task).id},holder_pd:id,rights:crate::app_resource_state::QUERY,ack_bit:0}));
     }
+    // Only the existing network service owns the sanctioned source mechanism.
+    // Its consumer tuple is immutable data; Browser receives no source grant.
+    let seed_holder=crate::ipc::DOMAIN_REGISTRY.get(sexnet_id).expect("BOOT_SEED_HOLDER");
+    let seed_consumer=crate::ipc::DOMAIN_REGISTRY.get(kaleido_id).expect("BOOT_SEED_CONSUMER");
+    let holder_task=seed_holder.main_task.load(core::sync::atomic::Ordering::Acquire);
+    let consumer_task=seed_consumer.main_task.load(core::sync::atomic::Ordering::Acquire);
+    assert!(!holder_task.is_null()&&!consumer_task.is_null(),"BOOT_SEED_EXACT_TASKS");
+    assert!(seed_holder.find_capability(sex_pdx::entropy_source::SLOT as u32).is_none(),"BOOT_SEED_SLOT_COLLISION");
+    let seed_grant=sex_pdx::entropy_source::Grant{
+        holder:sex_pdx::entropy_source::Identity{pd:sexnet_id,task:unsafe{(*holder_task).id}},
+        consumer:sex_pdx::entropy_source::Identity{pd:kaleido_id,task:unsafe{(*consumer_task).id}},source:sex_pdx::entropy_source::RDSEED};
+    seed_holder.grant_capability(sex_pdx::entropy_source::SLOT,crate::capability::CapabilityData::EntropySource(seed_grant));
+    serial_println!("[boot.entropy.source] holder={} task={} slot={} consumer={} consumer_task={} source=rdseed attempts={} runtime_mint=0",sexnet_id,seed_grant.holder.task,sex_pdx::entropy_source::SLOT,kaleido_id,seed_grant.consumer.task,sex_pdx::entropy_source::ATTEMPTS);
     // Two finite Spindle incarnations share only the fixed peer service edge.
     // This is BOOT genesis; neither app receives NIC metadata or config rights.
     assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");

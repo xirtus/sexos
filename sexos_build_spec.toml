@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "2d0e8922a8c3035541ee9bbc66155a2fd9647533fb82f5afd8262602836ab99d"
+abi_version_hash = "64b6fd6af82b298d2b47a86b1a49550a85a4f0b145293c08640c2e458d0dc3b4"
 contract_sha256 = "b0fb8b9db16d1b450f9d0c0c1c51b4566a7ae2c352087093f21e23e2bcc5c4d1"
 target = "x86_64-sex.json"
 
