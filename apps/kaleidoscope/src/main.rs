@@ -73,6 +73,7 @@ struct App {
     http:http_probe::Client,
     http_view:http_probe::View,
     intent:Option<Intent>,
+    app_turn:u64,
     resources_last:Option<(heap::Usage,usize,bool,bool,bool,Option<Intent>,bool)>,
     navigation:http_navigation::Navigation,
     preview:body_text::Preview,
@@ -271,11 +272,12 @@ impl SexApp for App {
         Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
             dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:tls_exchange::Client::new(),peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
-            intent:None,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
+            intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
 
     }
 
     fn run(&mut self, _pdx: u32) -> bool {
+        self.app_turn=self.app_turn.checked_add(1).expect("BROWSER_TURN_EXHAUSTED");
         if self.viewport_ready&&sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,self.identity.target_pd as u64,self.identity.task_id as u64,0).is_ok(){self.viewport_ready=false;}
         let pending=self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
         let message=if pending{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
@@ -384,7 +386,9 @@ impl SexApp for App {
         if self.trust.busy(){self.trust.advance(sex_pdx::get_ticks());}
         if self.clock.busy(){self.clock.advance(sex_pdx::get_ticks());}
         if self.seed.busy(){self.seed.advance(sex_pdx::get_ticks());}
-        let(prepared,erased)=self.tls.advance(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks());
+        let tls_begin=sex_pdx::get_ticks();
+        let(prepared,erased)=self.tls.advance(&mut self.trust,&mut self.seed,&mut self.clock,tls_begin);
+        if let Some(work)=self.tls.take_work(){let end=sex_pdx::get_ticks();let elapsed=end.checked_sub(tls_begin);sex_pdx::serial_record!("[browser.tls.work] kind={:?} sequence={} app_turn={} begin_ticks={} end_ticks={} elapsed_ticks={} clock_valid={} payload={} seed_ready={}",work.kind,work.sequence,self.app_turn,tls_begin,end,elapsed.unwrap_or(0),elapsed.is_some()as u8,self.tls.allocated_payload_bytes(),(self.seed.view()==entropy_probe::View::Ready)as u8);}
         if let Some(profile)=self.tls.take_self_check(){sex_pdx::serial_record!("[browser.trust.self_check] profile={} passed=1 fixture=public_controlled_profile authenticated_peer=0",profile);}
         if let Some(stats)=prepared{if self.https_panel{sex_pdx::serial_record!("[browser.https.prepared] task_bytes={} private_bytes={} tx_bytes={} utc_snapshot={} request_bytes=94 document_limit=12288 network=0",stats.task_bytes,stats.private_bytes,stats.tx_bytes,stats.utc_snapshot);}sex_pdx::serial_record!("[browser.tls.prepared] task_bytes={} private_bytes={} read=4096 write=2048 tx_bytes={} utc_snapshot={} authenticated=0 network=0",stats.task_bytes,stats.private_bytes,stats.tx_bytes,stats.utc_snapshot);}
         if erased>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",erased);}

@@ -342,6 +342,19 @@ pub fn hit_test_action(bar: &SilkBar, x: usize, y: usize) -> Action {
     Action::None
 }
 
+/// Keep the finite status group inside a supported desktop without changing
+/// module identity or overlapping the fixed launcher/workspace group. Both
+/// display and shell use this geometry; a narrow unsupported width is explicit.
+pub fn for_desktop_width(width:usize)->Option<SilkBar>{
+    let mut bar=DEFAULT_SILK_BAR;
+    let edge=CHIP_X3.checked_add(CLOCK_W)?.checked_add(16)?;
+    let shift=edge.saturating_sub(width);
+    let left_end=bar.layout[..6].iter().map(|b|b.x+b.w).max()?;
+    if CHIP_X0.checked_sub(shift)?<left_end.checked_add(16)?{return None;}
+    for item in &mut bar.layout[6..]{item.x=item.x.checked_sub(shift)?;}
+    Some(bar)
+}
+
 // ── Update ABI (v4: stable PDX message types) ──────────────────────────────
 
 /// Discriminant for `SilkBarUpdate.kind`.

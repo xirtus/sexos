@@ -1278,17 +1278,27 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
 /// that would create a tear window between bar-fill and clock-overlay.
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const CLOCK_FG: u32 = DEFAULT_THEME.text;
+    const CLOCK_PREFIX:&[u8]=b"DEMO ";
+    const CLOCK_DIGIT_OFFSET:usize=30;
     let (cx, cy, _, _) = module_rect(bar, ModuleSlot::Clock);
-    let cx = cx;
     let cy = cy + 1; // slight inset into chip area
 
     // Quick bounding-box reject
     if y < cy || y >= cy + 7 {
         return None;
     }
-    if x < cx || x > cx + 45 {
+    if x < cx || x > cx + CLOCK_DIGIT_OFFSET + 45 {
         return None;
     }
+    // Both the SilkBar producer and display fallback advance a software
+    // demonstration counter. Neither is wall time or a certificate UTC source.
+    if x<cx+CLOCK_DIGIT_OFFSET{
+        let col=(x-cx)/6;let px=(x-cx)%6;
+        if px>=5{return None;}
+        let glyph=ascii_glyph_index(*CLOCK_PREFIX.get(col)?)?;
+        return ((FONT_ASCII_5X7[glyph][y-cy]>>(4-px))&1!=0).then_some(CLOCK_FG);
+    }
+    let cx=cx+CLOCK_DIGIT_OFFSET;
 
     // Colon 1 at offset 14, Colon 2 at offset 31
     if x == cx + 14 || x == cx + 31 {
@@ -2744,7 +2754,9 @@ pub extern "C" fn _start() -> ! {
     emit_renderer_conformance_marker(true);
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
-    let mut bar = DEFAULT_SILK_BAR;
+    let mut bar = silkbar_model::for_desktop_width(unsafe{FB_W}as usize).unwrap_or(DEFAULT_SILK_BAR);
+    let clock_layout=&bar.layout[ModuleSlot::Clock as usize];
+    sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=30 width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
     let mut last_clock_tick = sex_pdx::get_ticks();

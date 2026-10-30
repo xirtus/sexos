@@ -23216,19 +23216,21 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
 /// Preserves existing marker naming convention for all three panels.
 unsafe fn toggle_os_panel(active: &mut bool, kind: PanelKind, surface_id: u64, label: &str, x: u32, y: u32, w: u32, h: u32) -> bool {
     if !*active {
-        serial_println!("[shell.{}.open.start] id={:#x}", label, surface_id);
+        let(x,y)=clamp_position(x as i32,y as i32,w,h);
+        sex_pdx::serial_record!("[shell.{}.open.start] id={:#x}", label, surface_id);
+        sex_pdx::serial_record!("[shell.panel.geometry] surface={} x={} y={} w={} h={} desktop_w={} desktop_h={} submitted=1",surface_id,x,y,w,h,desktop_width(),desktop_height());
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
             (y as u64) << 32 | x as u64,
             (h as u64) << 32 | w as u64);
-        serial_println!("[shell.{}.open.ok] id={:#x}", label, surface_id);
+        sex_pdx::serial_record!("[shell.{}.open.ok] id={:#x}", label, surface_id);
         *active = true;
         // A3: Track panel open -> Mapped lifecycle state.
         set_lifecycle_state(surface_id, LifecycleState::Mapped);
         try_transition(InteractionState::PanelActive { panel: kind });
     } else {
-        serial_println!("[shell.{}.close.start] id={:#x}", label, surface_id);
+        sex_pdx::serial_record!("[shell.{}.close.start] id={:#x}", label, surface_id);
         pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
-        serial_println!("[shell.{}.close.ok] id={:#x}", label, surface_id);
+        sex_pdx::serial_record!("[shell.{}.close.ok] id={:#x}", label, surface_id);
         *active = false;
         // A3: Track panel close -> Allocated lifecycle state.
         set_lifecycle_state(surface_id, LifecycleState::Allocated);
@@ -23282,7 +23284,8 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     if uy < PANEL_Y || uy >= PANEL_Y + PANEL_H || ux < PANEL_X || ux >= PANEL_X + PANEL_W {
         return false;
     }
-    let action = hit_test_action(&DEFAULT_SILK_BAR, ux, uy);
+    let bar=silkbar_model::for_desktop_width(desktop_width()as usize).unwrap_or(DEFAULT_SILK_BAR);
+    let action = hit_test_action(&bar, ux, uy);
     match action {
         Action::None => false,
         Action::SwitchWorkspace(n) => {
@@ -23314,7 +23317,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
             true
         }
         Action::OpenClock => {
-            serial_println!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
+            sex_pdx::serial_record!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
             unsafe { toggle_os_panel(&mut CLOCK_ACTIVE, PanelKind::Clock, SURFACE_ID_CLOCK, "clock", 1000, 55, 240, 300); }
             true
         }
