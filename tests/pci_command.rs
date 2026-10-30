@@ -112,3 +112,9 @@ fn mutate_pci(pd:&mut ProtectionDomain,f:impl FnOnce(&mut PciCapData)){let Capab
  let p=pd();assert_eq!(invoke(&p,19,6,0),[w::IO,0,0,0,0]);assert_eq!(invoke(&p,19,0,0),[0,2,2,0,0]);
  let m=MODEL.lock().unwrap();let m=m.as_ref().unwrap();assert_eq!(m.config[&address(4)],0xa5a5_0002);assert_eq!(m.events.iter().filter(|e|matches!(e,Op::Write16(_,_))).count(),1);
 }
+
+#[test]fn boot_identity_uses_exact_held_authority_without_any_port_access(){
+ setup(0);let p=pd();assert_eq!(mechanism::identity(&p,19,0,0,0,0),[0,0x8086,0x10d3,0,0]);untouched();
+ for (slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(6,0,0,0,0),(32,0,0,0,0),(19,1,0,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{assert_eq!(mechanism::identity(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();}
+ for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::identity(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
+}

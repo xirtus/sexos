@@ -2,6 +2,7 @@
 //! Immutable BOOT device-command authority. Request integers select bits, never
 //! a BDF, register offset, mapping, DMA address or capability to create.
 pub const SYS_COMMAND: u64 = 68;
+pub const SYS_IDENTITY: u64 = 69;
 pub const MEMORY: u16 = 1 << 1;
 pub const BUS_MASTER: u16 = 1 << 2;
 pub const NIC_BITS: u16 = MEMORY | BUS_MASTER;
@@ -30,6 +31,18 @@ impl Update {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reply { pub before: u16, pub after: u16, pub changed: bool }
+
+/// Immutable BOOT metadata about the held device; never a selector or grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Identity { pub vendor: u16, pub product: u16 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Model { I82540, I82574 }
+impl Identity {
+    pub fn model(self) -> Option<Model> {
+        match (self.vendor,self.product) { (0x8086,0x100e)=>Some(Model::I82540),
+            (0x8086,0x10d3)=>Some(Model::I82574),_=>None }
+    }
+}
 
 /// The grant must be obtained from the current domain's typed capability table.
 pub fn authorize(grant: Option<&Grant>, caller: u32, set: u64, clear: u64) -> Result<Update,u64> {

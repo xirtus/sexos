@@ -5,6 +5,8 @@ use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use spin::Mutex;
 use core::sync::atomic::{AtomicU8, Ordering};
 mod nic;
+mod ethernet;
+mod arp;
 
 // ── Phase M: source3 reliability multi-fetch compile gate ──
 const PHASE_M_RELIABILITY_ENABLED: bool =
@@ -754,6 +756,10 @@ fn command_probe() {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     command_probe();
+    for slot in [0,(1u64<<32)|sex_pdx::SLOT_NIC,sex_pdx::SLOT_DMA_REGION,sex_pdx::SLOT_DISPLAY] {
+        assert_eq!(sex_pdx::device_identity(slot),Err(sex_pdx::pci_command::DENIED),"NIC_BOOT_IDENTITY_PROBE");
+    }
+    sex_pdx::serial_record!("[sexnet.nic.identity.denied] requests=4 output_zero=1 ok=1");
     let mut dma_pool = None;
     let raw = unsafe { sys_net_diag(0) };
     let status = (raw >> 32) as u32;
@@ -5124,8 +5130,10 @@ pub extern "C" fn _start() -> ! {
             },
         }
     };
+    let mut ethernet:Option<ethernet::Driver<nic::Live>>=None;
+    let mut pending_packet:Option<[u8;60]>=None;
     loop {
-        let pending = if let Some(dev) = device.as_mut() {
+        let preparing = if let Some(dev) = device.as_mut() {
             let before = dev.phase();
             if dev.pending() { dev.advance(sex_pdx::get_ticks()); }
             if dev.phase() != before {
@@ -5133,6 +5141,46 @@ pub extern "C" fn _start() -> ! {
             }
             dev.pending()
         } else { false };
+        if device.as_ref().is_some_and(|dev|dev.phase()==nic::Phase::Quiescent) {
+            let (hardware,mac)=device.take().unwrap().into_quiescent().expect("NIC_PREPARATION_CUSTODY");
+            ethernet=Some(ethernet::Driver::new(hardware,mac,sex_pdx::get_ticks()));
+        }
+        let mut polling=false;
+        if let Some(driver)=ethernet.as_mut() {
+            let before=driver.phase();let event=driver.advance(sex_pdx::get_ticks());
+            if driver.phase()!=before {
+                sex_pdx::serial_record!("[sexnet.ether.phase] from={:?} to={:?} failure={:?}",before,driver.phase(),driver.failure());
+                if driver.phase()==ethernet::Phase::Running {
+                    sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=40960 descriptors=8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified as u8);
+                    pending_packet=Some(arp::request(driver.mac));
+                }
+            }
+            match event {
+                Some(ethernet::Event::Received{sequence,index,frame})=>{
+                    if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx] sequence={} index={} length={} hash={:#x}",sequence,index,frame.length,ethernet::fingerprint(&frame.bytes[..frame.length]));}
+                    if let Some(reply)=arp::reply(&frame.bytes[..frame.length],driver.mac){
+                        if pending_packet.is_none(){pending_packet=Some(reply);}else if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.arp.drop] reason=reply_queue_full");}
+                    }
+                },
+                Some(ethernet::Event::Transmitted{sequence,index,length,hash})=>{
+                    if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.tx.done] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
+                },
+                Some(ethernet::Event::Dropped{index,length,status,errors})=>{
+                    if driver.dropped<=64||driver.dropped.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx.drop] index={} length={} status={} errors={} total={}",index,length,status,errors,driver.dropped);}
+                },None=>{},
+            }
+            if driver.phase()==ethernet::Phase::Running&&!driver.busy(){
+                if let Some(packet)=pending_packet.take(){
+                    match driver.send(&packet,sex_pdx::get_ticks()){
+                        Ok((sequence,index,length,hash))=>{if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.tx.submit] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}},
+                        Err(error)=>sex_pdx::serial_record!("[sexnet.ether.send.failed] error={:?} retry=0",error),
+                    }
+                }
+            }
+            polling=driver.active();
+            if !polling{pending_packet=None;}
+        }
+        let pending=preparing||polling;
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
             // cleanup or ordinary service calls. try_listen yields when empty.

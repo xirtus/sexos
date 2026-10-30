@@ -48,3 +48,6 @@ bash "$ROOT_DIR/scripts/pci_command_host_gate.sh"
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_nic_prepare.rs" -o "$TEST_DIR/nic-prepare"
 "$TEST_DIR/nic-prepare" --test-threads=1
 echo '[sexnet.nic.prepare.host] PASS scope=actual_bounded_state_machine_with_explicit_command_register_clock_doubles_no_dma_or_packets'
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_ethernet.rs" -o "$TEST_DIR/ethernet"
+"$TEST_DIR/ethernet" --test-threads=1
+echo '[sexnet.ethernet.host] PASS scope=actual_fixed_queue_driver_with_explicit_device_dma_clock_doubles_not_live_wire_or_hostile_dma_containment'

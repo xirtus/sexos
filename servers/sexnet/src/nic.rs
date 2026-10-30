@@ -25,14 +25,15 @@ pub trait Hardware {
 }
 
 /// Private view, obtained only by the current subject's capability invocation.
-pub struct Live { view: m::RegionView }
+pub struct Live { view: m::RegionView, model: c::Model, dma: Option<m::RegionView> }
 impl Live {
     pub fn open() -> Result<Self, u64> {
         let info = sex_pdx::memory_region_info(sex_pdx::SLOT_NIC)?;
         if !valid_info(info) { return Err(c::DENIED); }
         let view = sex_pdx::memory_region_full_view(sex_pdx::SLOT_NIC, m::QUERY_VIEW | m::READ | m::WRITE)?;
         if !valid_view(info, view) { return Err(c::DENIED); }
-        Ok(Self { view })
+        let model=sex_pdx::device_identity(sex_pdx::SLOT_NIC)?.model().ok_or(c::DENIED)?;
+        Ok(Self { view, model, dma: None })
     }
     fn address(&self, offset: u32) -> *mut u32 {
         assert!(offset % 4 == 0 && offset as u64 + 4 <= self.view.length);
@@ -57,6 +58,31 @@ impl Hardware for Live {
     fn write(&mut self, offset: u32, value: u32) { unsafe { self.address(offset).write_volatile(value); } }
 }
 
+impl Live {
+    fn dma_pointer(&self,offset:u32,bytes:usize)->*mut u8 {
+        let view=self.dma.expect("NIC_DMA_NOT_RESOLVED");
+        assert!((offset as u64).checked_add(bytes as u64).is_some_and(|end|end<=view.length));
+        (view.virtual_address+offset as u64)as *mut u8
+    }
+}
+impl crate::ethernet::Hardware for Live {
+    fn model(&self)->c::Model{self.model}
+    fn mmio_length(&self)->u64{self.view.length}
+    fn dma_region(&mut self)->Result<m::RegionView,u64>{
+        // A single permanent pool per normal driver. No reset/reopen/reclaim.
+        if self.dma.is_some(){return Err(c::DENIED);}
+        let info=sex_pdx::memory_region_info(sex_pdx::SLOT_DMA_REGION)?;
+        if info.region_id!=c::DMA_REGION_ID||info.length!=c::DMA_BYTES||info.rights!=m::QUERY_VIEW|m::READ|m::WRITE|m::DMA_ADDRESS||info.peer_pd.is_some(){return Err(c::DENIED);}
+        let view=sex_pdx::memory_region_full_view(sex_pdx::SLOT_DMA_REGION,info.rights)?;
+        if view.region_id!=info.region_id||view.length!=info.length||sex_pdx::dma_pool::DmaRegionPool::new(view).is_err(){return Err(c::DENIED);}
+        self.dma=Some(view);Ok(view)
+    }
+    fn load64(&mut self,offset:u32)->u64{assert!(offset%8==0);unsafe{(self.dma_pointer(offset,8)as *const u64).read_volatile()}}
+    fn store64(&mut self,offset:u32,value:u64){assert!(offset%8==0);unsafe{(self.dma_pointer(offset,8)as *mut u64).write_volatile(value);}}
+    fn load_bytes(&mut self,offset:u32,out:&mut[u8]){let pointer=self.dma_pointer(offset,out.len());for(i,byte)in out.iter_mut().enumerate(){*byte=unsafe{pointer.add(i).read_volatile()};}}
+    fn store_bytes(&mut self,offset:u32,bytes:&[u8]){let pointer=self.dma_pointer(offset,bytes.len());for(i,byte)in bytes.iter().enumerate(){unsafe{pointer.add(i).write_volatile(*byte);}}}
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase { Cold, Drain, Reset, Verify, Quiescent, Quarantined }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +99,11 @@ pub struct Device<H: Hardware> {
     pub status: u32,
 }
 impl<H: Hardware> Device<H> {
+    /// Consumes the sole preparer's custody. The immutable BOOT backing is
+    /// never freed, including when an unready/quarantined attempt is dropped.
+    pub fn into_quiescent(self) -> Option<(H,[u8;6])> {
+        if self.phase==Phase::Quiescent {Some((self.hardware,self.mac))}else{None}
+    }
     pub fn new(hardware: H, now: u64) -> Self {
         Self { hardware, phase: Phase::Cold, failure: None, started: now, last: now,
             since: now, turns: 0, mac: [0; 6], status: 0 }

@@ -481,6 +481,22 @@ pub fn device_command(slot:u64,set:u64,clear:u64)->Result<pci_command::Reply,u64
     Ok(pci_command::Reply{before:before as u16,after:after as u16,changed:changed!=0})
 }
 
+/// Read metadata from this subject's exact held BOOT device-command lease.
+pub fn device_identity(slot:u64)->Result<pci_command::Identity,u64> {
+    let(status,vendor,product,reserved0,reserved1):(u64,u64,u64,u64,u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") pci_command::SYS_IDENTITY=>status,in("rdi")slot,
+        inlateout("rsi")0u64=>vendor,inlateout("rdx")0u64=>product,
+        inlateout("r10")0u64=>reserved0,inlateout("r8")0u64=>reserved1,
+        out("rcx")_,out("r11")_,options(nostack)); }
+    if status!=0 {
+        if vendor|product|reserved0|reserved1!=0{return Err(pci_command::IO)}
+        return Err(status)
+    }
+    if vendor>u16::MAX as u64||product>u16::MAX as u64||reserved0|reserved1!=0{return Err(pci_command::IO)}
+    Ok(pci_command::Identity{vendor:vendor as u16,product:product as u16})
+}
+
 /// Inspect a boot paging capability without allocating or mapping anything.
 pub fn paging_info(slot: u64) -> Result<paging::PagingInfo, u64> {
     let (status, base, length, target, rights): (u64, u64, u64, u64, u64);

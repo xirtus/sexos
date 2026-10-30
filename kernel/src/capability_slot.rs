@@ -29,7 +29,7 @@ pub fn valid_syscall_selectors(number: u64, selector: u64, destination: u64) -> 
     match number {
         0 | 28 => decode_pdx_slot(selector).is_some(),
         29 => decode_domain_id(selector).is_some(),
-        43 | 51 | 68 => decode_capability_slot(selector).is_some(),
+        43 | 51 | 68 | 69 => decode_capability_slot(selector).is_some(),
         50 => decode_capability_slot(selector).is_some()
             && decode_capability_slot(destination).is_some(),
         _ => true,

@@ -3,7 +3,11 @@
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/pci_command.rs"] pub mod pci_command;
 #[path="../crates/sex-pdx/src/memory_region.rs"] pub mod memory_region;
+#[path="../crates/sex-pdx/src/dma_pool.rs"] pub mod dma_pool;
+#[path="../servers/sexnet/src/ethernet.rs"] mod ethernet;
 const SLOT_NIC:u64=19;
+const SLOT_DMA_REGION:u64=32;
+fn device_identity(_:u64)->Result<pci_command::Identity,u64>{Ok(pci_command::Identity{vendor:0x8086,product:0x10d3})}
 use std::sync::Mutex;
 use memory_region::{MemoryRegionInfo,RegionView};
 static INFO:Mutex<MemoryRegionInfo>=Mutex::new(MemoryRegionInfo{region_id:78867,length:65536,rights:7,peer_pd:None});
