@@ -36,6 +36,28 @@ def snapshot(disk):
     if len(valid)==2 and valid[0]['generation']==valid[1]['generation'] and any(valid[0][k]!=valid[1][k] for k in ['source','size','fingerprint']):raise RuntimeError('ambiguous committed journal generation')
     return max(valid,key=lambda r:r['generation'])
 
+def zoom_receipt(trace,start=0):
+    """Join complete post-action records; damaged window-action text is no proof.
+
+    The independently emitted active rectangle and committed frame zoom must
+    name the same frame and Spindle surface, in that order. Match against the
+    original trace so an action offset cannot invent a new record boundary.
+    """
+    if type(start)is not int or not 0<=start<=len(trace):raise ValueError('invalid Zoom action start')
+    records=re.compile(r'^\[silk.lifecycle.zoom.active\] frame=(\d+) sid=(\d+) zx=(-?\d+) zy=(-?\d+) zw=(\d+) zh=(\d+)\r?\n|^\[shell.frame.zoom\] frame=(\d+) surface=(\d+)\r?\n',re.M)
+    active={}
+    for record in records.finditer(trace,start):
+        if record[1]is not None:
+            frame,sid,x,y,w,h=map(int,record.groups()[:6])
+            active[frame]=(sid,x,y,w,h,record.start(),record.end())
+        else:
+            frame,sid=map(int,record.groups()[6:]);prior=active.get(frame)
+            if frame==0 or sid!=153 or prior is None or prior[:5]!=(153,0,50,1280,750):continue
+            return dict(kind='complete_active_geometry_and_frame_zoom',frame=frame,surface=153,
+                geometry=dict(x=0,y=50,w=1280,h=750),action_start=start,
+                active_log_offset=prior[5],frame_zoom_log_offset=record.start())
+    return None
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--boot-a',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--recall',default='echo spindle17');args=p.parse_args()
     iso=args.iso.resolve(strict=True);a=args.boot_a.resolve(strict=True);out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
@@ -70,6 +92,15 @@ def main():
             if re.search(r'KERNEL PANIC|PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at',value):raise RuntimeError('guest fault')
             time.sleep(.1)
         raise RuntimeError('timeout: '+pattern)
+    def wait_zoom(start,timeout=180):
+        end=time.monotonic()+timeout
+        while time.monotonic()<end:
+            if proc.poll()is not None:raise RuntimeError('guest exited')
+            value=text();receipt=zoom_receipt(value,start)
+            if receipt:return receipt
+            if re.search(r'KERNEL PANIC|PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at',value):raise RuntimeError('guest fault')
+            time.sleep(.1)
+        raise RuntimeError('timeout: complete matching Spindle active geometry and frame Zoom receipts')
     try:
         deadline=time.monotonic()+15
         while not sock.exists():
@@ -89,7 +120,7 @@ def main():
         start=len(text());q.key('grave_accent');wait(r'\[shell.palette.item\] idx=0',start)
         for index in range(8):
             start=len(text());q.key('j');wait(rf'\[shell.palette.select\] old={index} new={index+1}',start)
-        start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=153 ok=1',start)
+        start=len(text());q.key('ret');zoom=wait_zoom(start)
         start=len(text());q.key('up');wait(r'\[spindle.history.nav\] dir=up idx=0 len='+str(len(args.recall))+r' ok=1',start)
         font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text());errors=['not visible'];end=time.monotonic()+120
         while time.monotonic()<end:
@@ -100,7 +131,7 @@ def main():
         if errors:raise RuntimeError('reboot recall pixels: '+'; '.join(errors))
         # Read-only recovery must not rewrite or reformat the journal.
         if snapshot(disk.read_bytes())!=expected:raise RuntimeError('recovery mutated durable journal')
-        (out/'result.json').write_text(json.dumps({'ok':True,'expected':expected,'recovered':recovered,'loaded':loaded,'pixel_errors':errors,'recall':args.recall,'scope':'two actual QEMU boots; durable writer17 to BOOT-authorized new task12; exact data fingerprint, fresh own handle and visible Up recall after native launcher Zoom'},indent=2)+'\n')
+        (out/'result.json').write_text(json.dumps({'ok':True,'expected':expected,'recovered':recovered,'loaded':loaded,'zoom_receipt':zoom,'pixel_errors':errors,'recall':args.recall,'scope':'two actual QEMU boots; durable writer17 to BOOT-authorized new task12; exact data fingerprint, fresh own handle, complete matching active geometry/frame Zoom receipts and visible Up recall after native launcher Zoom'},indent=2)+'\n')
         print('[spindle.history.reboot] PASS')
     except Exception as e:
         (out/'result.json').write_text(json.dumps({'ok':False,'errors':[str(e)]},indent=2)+'\n');raise

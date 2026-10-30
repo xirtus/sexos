@@ -18,6 +18,7 @@ pub struct Client {
     preview:[u8;64],body_len:usize,
     document:[u8;http_wire::MAX_BODY],document_len:usize,
     generation:u32,
+    navigation:bool,path:http_wire::Path,redirect:Option<http_wire::Path>,released_redirect:Option<http_wire::Path>,response_status:u16,
 }
 impl Client {
     pub const fn new()->Self {
@@ -26,7 +27,8 @@ impl Client {
             request:[0;http_wire::MAX_REQUEST],request_len:0,written:0,
             header:[0;http_wire::MAX_HEADERS],header_len:0,header_done:false,
             response_len:0,read:0,transport_complete:false,body_hash:0xcbf29ce484222325,
-            preview:BLANK,body_len:0,document:[0;http_wire::MAX_BODY],document_len:0,generation:0}
+            preview:BLANK,body_len:0,document:[0;http_wire::MAX_BODY],document_len:0,generation:0,
+            navigation:false,path:http_wire::Path::initial(),redirect:None,released_redirect:None,response_status:200}
     }
     pub fn next_sequence(&self)->u32 { self.seq }
     pub fn busy(&self)->bool { self.step!=Step::Done || self.ticket!=0 }
@@ -35,6 +37,14 @@ impl Client {
     pub fn body_length(&self)->usize { if self.view==View::Ready {self.body_len}else{0} }
     /// Sanitized presentation data becomes visible only after positive RELEASE.
     pub fn document(&self)->&[u8] { if self.view==View::Ready {&self.document[..self.document_len]}else{&[]} }
+    pub fn document_path(&self)->&[u8] {if self.view==View::Ready{self.path.as_bytes()}else{&[]}}
+    /// A continuation is data, available only after the preceding job's
+    /// positive RELEASE. Main must apply its hop policy and fresh DNS proof.
+    pub fn take_redirect(&mut self)->Option<http_wire::Path>{if self.busy(){None}else{self.released_redirect.take()}}
+    pub fn reject_redirect(&mut self)->bool{
+        if self.busy(){return false;}
+        self.scrub_raw();self.clear_preview();self.view=View::Unavailable;self.terminal=View::Unavailable;true
+    }
     pub fn start(&mut self,next_seq:u32)->bool {
         self.start_with_generation(next_seq,0)
     }
@@ -48,18 +58,22 @@ impl Client {
         }
         self.start_with_generation(next_seq,generation)
     }
+    pub fn start_resolved_path(&mut self,next_seq:u32,generation:u32,path:http_wire::Path)->bool {
+        if !self.start_resolved(next_seq,generation){return false;}
+        self.navigation=true;self.path=path;self.request_len=http_wire::request_path(&mut self.request,&path);true
+    }
     fn start_with_generation(&mut self,next_seq:u32,generation:u32)->bool {
         if self.busy() { return false; }
         if next_seq<self.seq || next_seq>w::MAX_SEQ-8 { self.scrub_raw();self.clear_preview();self.view=View::Unavailable;self.terminal=View::Unavailable;return false; }
         self.scrub_raw();self.clear_preview();self.seq=next_seq;
-        self.generation=generation;
+        self.generation=generation;self.navigation=false;self.path=http_wire::Path::initial();self.response_status=200;
         self.request_len=http_wire::request(&mut self.request);self.written=0;self.read=0;self.response_len=0;
         self.header_len=0;self.header_done=false;self.transport_complete=false;self.body_hash=0xcbf29ce484222325;
         self.pending=None;self.accepted=false;self.cancel=false;
         self.terminal=View::Unavailable;self.view=View::Pending;self.step=Step::Begin;true
     }
     fn scrub_raw(&mut self) { self.request.fill(0);self.header.fill(0); }
-    fn clear_preview(&mut self) { self.preview=BLANK;self.body_len=0;self.document.fill(0);self.document_len=0; }
+    fn clear_preview(&mut self) { self.preview=BLANK;self.body_len=0;self.document.fill(0);self.document_len=0;self.redirect=None;self.released_redirect=None; }
     fn finished(&mut self) {
         self.scrub_raw();self.pending=None;self.accepted=false;self.step=Step::Done;
         self.request_len=0;self.written=0;self.response_len=0;self.read=0;
@@ -96,8 +110,14 @@ impl Client {
                 if self.header_len==self.header.len() {return Err(http_wire::Error::HeaderLimit);}
                 self.header[self.header_len]=byte;self.header_len+=1;
                 if self.header[..self.header_len].ends_with(b"\r\n\r\n") {
-                    let parsed=http_wire::parse_headers(&self.header[..self.header_len])?;
-                    self.body_len=parsed.content_length;self.header_done=true;
+                    if self.navigation {
+                        let parsed=http_wire::parse_navigation_headers(&self.header[..self.header_len])?;
+                        self.body_len=parsed.content_length;self.redirect=parsed.redirect;self.response_status=parsed.status;
+                    }else{
+                        let parsed=http_wire::parse_headers(&self.header[..self.header_len])?;
+                        self.body_len=parsed.content_length;
+                    }
+                    self.header_done=true;
                 }
             }else{
                 if self.document_len>=self.body_len {return Err(http_wire::Error::TrailingData);}
@@ -112,6 +132,10 @@ impl Client {
         if !self.transport_complete || self.read!=self.response_len || !self.header_done
             || self.document_len!=self.body_len || self.read!=self.header_len+self.body_len {
             self.rejected(w::READ);return;
+        }
+        if let Some(path)=self.redirect{
+            // Redirect bodies are finite framing data, never document content.
+            self.clear_preview();self.redirect=Some(path);self.terminal=View::Pending;self.step=Step::Release;return;
         }
         self.preview=normalize(&self.document[..self.document_len]);
         sex_pdx::serial_record!("[browser.http.body] ticket={} status=200 length={} hash={:#x} controlled_peer=1 tls=0",self.ticket,self.body_len,self.body_hash);
@@ -183,8 +207,13 @@ impl Client {
             }
             w::RELEASE=>{
                 if value!=0 {self.rejected(r.kind);return;}
+                let follow=if !self.cancel&&self.terminal==View::Pending{self.redirect}else{None};
+                let status=self.response_status;
                 self.ticket=0;self.finished();
+                self.released_redirect=follow;
                 sex_pdx::serial_record!("[browser.http.released] ticket={} view={:?} private_job=0",r.ticket,self.view);
+                if self.view==View::Ready{sex_pdx::serial_record!("[browser.http.document] ticket={} path={} status=200 private_bytes={} positive_release=1",r.ticket,core::str::from_utf8(self.path.as_bytes()).unwrap(),self.document_len);}
+                if let Some(path)=follow{sex_pdx::serial_record!("[browser.http.redirect.released] ticket={} status={} path={} positive_release=1 document_bytes=0",r.ticket,status,core::str::from_utf8(path.as_bytes()).unwrap());}
                 return;
             }
             _=>{self.rejected(r.kind);return;}

@@ -100,6 +100,11 @@ impl Reader {
     }
 
     pub fn render(&mut self, body: &[u8]) -> Frame {
+        self.render_path(body,&PATH[1..])
+    }
+    /// The final validated request path is presentation data. Clean every
+    /// byte defensively so it cannot inject a row or replace the reader chrome.
+    pub fn render_path(&mut self, body: &[u8], path:&[u8]) -> Frame {
         let body = content(body);
         let (cols,rows) = self.geometry();
         let mut frame = Frame { bytes: [0;CAPACITY], len: 0, first: 0, end: 0,
@@ -114,7 +119,7 @@ impl Reader {
         put(&mut frame,0,b"Plain HTTP / no TLS");
         if rows > 2 {
             let at = cols+1;
-            for (index,byte) in HOST.iter().chain(PATH).take(cols).enumerate() { frame.bytes[at+index] = *byte; }
+            for (index,byte) in HOST.iter().chain(b" ").chain(path).take(cols).enumerate() { frame.bytes[at+index] = clean(*byte); }
         }
         if rows > 1 {
             let footer: &[u8] = if cols >= 25 { b"PgUp PgDn Home End V back" } else if cols >= 6 { b"V back" } else { b"V" };
@@ -208,6 +213,15 @@ mod tests {
     }
     #[test] fn sanitizes_controls_non_ascii_and_carriage_return_without_injecting_chrome() {
         let frame=reader(624,706).render(b"a\t\rb\x00\x1bc\x7f\xc3\xa9\nnext");assert!(row(&frame,2).starts_with(b"a  b  c ??"));assert!(row(&frame,3).starts_with(b"next"));valid(&frame,624,706);
+    }
+    #[test] fn final_path_replaces_initial_chrome_without_injecting_rows_or_stale_bytes() {
+        let mut r=reader(624,706);let final_view=r.render_path(b"final body",b"/guide/text");
+        assert!(row(&final_view,1).starts_with(b"probe.sexos.test /guide/text"));
+        assert!(row(&final_view,2).starts_with(b"final body"));valid(&final_view,624,706);
+        let shorter=r.render_path(b"new",b"/");assert!(row(&shorter,1).starts_with(b"probe.sexos.test /"));
+        assert!(row(&shorter,1)[HOST.len()+2..].iter().all(|b|*b==b' '));
+        let hostile=r.render_path(b"safe",b"/a\nb\x1b\xff");assert!(row(&hostile,1).starts_with(b"probe.sexos.test /a b ?"));
+        assert!(row(&hostile,2).starts_with(b"safe"));valid(&hostile,624,706);
     }
     #[test] fn hard_wrap_and_explicit_newline_boundary_do_not_double_paragraph_rows() {
         let frame=reader(82,160).render(b"0123456789\nabcdefghijk\n\nlast\n");assert_eq!(frame.cols,10);assert_eq!(frame.total_lines,5);

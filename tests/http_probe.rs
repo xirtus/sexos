@@ -11,20 +11,21 @@ pub const SLOT_NET:u64=18;pub const ERR_SERVICE_NOT_READY:u64=9;
 #[macro_export]macro_rules! serial_record {($($t:tt)*)=>{let _=std::format!($($t)*);};}
 static SERIAL:Mutex<()>=Mutex::new(());
 static WORLD:Mutex<Option<World>>=Mutex::new(None);
-#[derive(Clone,Copy)]enum Mode { Valid, Malformed, Disconnect, Waiting }
-struct Peer {link:jobs::Link,request:Vec<u8>,response:Vec<u8>,read:usize,body:Vec<u8>,mode:Mode,begins:Vec<u32>}
+#[derive(Clone,Copy)]enum Mode { Valid, Malformed, Disconnect, Waiting, Raw }
+struct Peer {link:jobs::Link,request:Vec<u8>,response:Vec<u8>,read:usize,body:Vec<u8>,mode:Mode,begins:Vec<u32>,path:http_wire::Path}
 impl jobs::Wire for Peer {
  fn begin(&mut self,ticket:u32)->Result<(),u32>{self.begins.push(ticket);self.request.clear();self.response.clear();self.read=0;self.link=jobs::Link::Open;Ok(())}
  fn receive(&mut self,out:&mut[u8])->Result<usize,u32>{let n=out.len().min(11).min(self.response.len()-self.read);out[..n].copy_from_slice(&self.response[self.read..self.read+n]);self.read+=n;Ok(n)}
  fn send(&mut self,data:&[u8])->Result<usize,u32>{let n=data.len().min(7);self.request.extend_from_slice(&data[..n]);Ok(n)}
  fn queued(&self)->usize{0}fn link(&self)->jobs::Link{self.link}
  fn finish_send(&mut self){
-  let mut expected=[0;http_wire::MAX_REQUEST];let length=http_wire::request(&mut expected);
+  let mut expected=[0;http_wire::MAX_REQUEST];let length=http_wire::request_path(&mut expected,&self.path);
   assert_eq!(self.request,&expected[..length]);
   match self.mode {
    Mode::Valid=>{self.response=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",self.body.len()).into_bytes();self.response.extend_from_slice(&self.body);self.link=jobs::Link::PeerFin;},
    Mode::Malformed=>{self.response=b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Type: text/plain\r\n\r\nbadEXTRA".to_vec();self.link=jobs::Link::PeerFin;},
    Mode::Disconnect=>self.link=jobs::Link::Closed,Mode::Waiting=>{},
+   Mode::Raw=>{self.response=self.body.clone();self.link=jobs::Link::PeerFin;},
   }
  }
  fn abort(&mut self){self.link=jobs::Link::Closed;self.request.clear();self.response.clear();self.read=0;}
@@ -32,7 +33,7 @@ impl jobs::Wire for Peer {
 struct World {machine:jobs::Machine,wire:Peer,request:Option<network_job::Request>,accepted:Vec<network_job::Request>,
  calls:usize,full_each:bool,last_full:u32,full_always:bool,full_kind:Option<u8>,reject_release:bool}
 fn reset(full:bool,mode:Mode,body:&[u8]){*WORLD.lock().unwrap()=Some(World {
- machine:jobs::Machine::new(),wire:Peer {link:jobs::Link::Closed,request:Vec::new(),response:Vec::new(),read:0,body:body.to_vec(),mode,begins:Vec::new()},
+ machine:jobs::Machine::new(),wire:Peer {link:jobs::Link::Closed,request:Vec::new(),response:Vec::new(),read:0,body:body.to_vec(),mode,begins:Vec::new(),path:http_wire::Path::initial()},
  request:None,accepted:Vec::new(),calls:0,full_each:full,last_full:0,full_always:false,full_kind:None,reject_release:false,
 });}
 pub fn pdx_call(slot:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){
@@ -203,4 +204,34 @@ fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.
  assert!(!p.start_resolved(p.next_sequence(),0));assert_eq!(p.view(),probe::View::Unavailable);no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
  WORLD.lock().unwrap().as_mut().unwrap().wire.body.clear();assert!(p.start(p.next_sequence()));finish(&mut p,1000);
  assert_eq!(p.view(),probe::View::Ready);assert_eq!(p.body_length(),0);assert!(p.document().is_empty());assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+}
+
+fn redirect_response(path:&str,body:&[u8])->Vec<u8>{let mut raw=format!("HTTP/1.1 302 Found\r\nLocation: {path}\r\nContent-Length: {}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n",body.len()).into_bytes();raw.extend_from_slice(body);raw}
+#[test]fn redirect_is_hidden_until_positive_release_and_fresh_path_request_is_explicit(){
+ let _serial=SERIAL.lock().unwrap();reset(true,Mode::Raw,&redirect_response("/guide",b"not a document"));let mut p=probe::Client::new();assert!(p.start_resolved_path(1,1,http_wire::Path::initial()));
+ let now=pending(&mut p,network_job::RELEASE,1);assert!(p.busy());assert!(p.take_redirect().is_none());no_preview(&p);assert!(p.document_scrubbed());
+ pump(&mut p,now);assert!(!p.busy());assert_eq!(p.view(),probe::View::Pending);no_preview(&p);assert!(p.document_path().is_empty());
+ let path=p.take_redirect().unwrap();assert_eq!(path.as_bytes(),b"/guide");assert!(p.take_redirect().is_none());
+ let calls=WORLD.lock().unwrap().as_ref().unwrap().calls;for at in now+1..now+5{p.advance(at);}assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().calls,calls);
+ {let mut g=WORLD.lock().unwrap();let w=g.as_mut().unwrap();assert!(w.machine.owner().is_none());assert_eq!(w.wire.begins.len(),1);w.wire.mode=Mode::Valid;w.wire.body=b"fresh final document".to_vec();w.wire.path=path;}
+ assert!(p.start_resolved_path(p.next_sequence(),1,path));finish(&mut p,now+5);assert_eq!(p.view(),probe::View::Ready);assert_eq!(p.document(),b"fresh final document");assert_eq!(p.document_path(),b"/guide");assert!(p.take_redirect().is_none());
+}
+#[test]fn rejected_or_late_redirect_release_never_authorizes_followup(){
+ let _serial=SERIAL.lock().unwrap();for late in [false,true]{
+  reset(false,Mode::Raw,&redirect_response("/guide",b"discard me"));let mut p=probe::Client::new();assert!(p.start_resolved_path(1,1,http_wire::Path::initial()));let now=pending(&mut p,network_job::RELEASE,1);
+  if late{p.advance(now+2000);}else{WORLD.lock().unwrap().as_mut().unwrap().reject_release=true;pump(&mut p,now);}
+  assert!(p.busy());assert_eq!(p.view(),probe::View::Uncertain);assert!(p.take_redirect().is_none());no_preview(&p);assert!(p.document_scrubbed());
+  WORLD.lock().unwrap().as_mut().unwrap().reject_release=false;p.cancel();finish(&mut p,now+2001);assert!(!p.busy());assert_eq!(p.view(),probe::View::Cancelled);assert!(p.take_redirect().is_none());assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().wire.begins.len(),1);
+ }
+}
+#[test]fn each_accepted_redirect_phase_can_be_cancelled_without_continuation_or_body(){
+ let _serial=SERIAL.lock().unwrap();for kind in [network_job::BEGIN_STREAM_RESOLVED,network_job::WRITE,network_job::START,network_job::STATUS,network_job::READ,network_job::RELEASE]{
+  reset(false,Mode::Raw,&redirect_response("/guide",b"private discarded body"));let mut p=probe::Client::new();assert!(p.start_resolved_path(1,1,http_wire::Path::initial()));let now=pending(&mut p,kind,1);p.cancel();finish(&mut p,now+1);
+  assert!(!p.busy(),"kind={kind}");assert_eq!(p.view(),probe::View::Cancelled);assert!(p.take_redirect().is_none());no_preview(&p);assert!(p.document_scrubbed());assert!(WORLD.lock().unwrap().as_ref().unwrap().machine.owner().is_none());
+ }
+}
+#[test]fn redirect_framing_and_scope_failures_release_without_continuation(){
+ let _serial=SERIAL.lock().unwrap();let mut short=redirect_response("/guide",b"abc");short.pop();let mut trailing=redirect_response("/guide",b"abc");trailing.push(b'x');
+ let responses=[short,trailing,redirect_response("http://elsewhere.test/guide",b""),redirect_response("/guide",&vec![b'x';http_wire::MAX_REDIRECT_BODY+1])];
+ for raw in responses{reset(false,Mode::Raw,&raw);let mut p=probe::Client::new();assert!(p.start_resolved_path(1,1,http_wire::Path::initial()));finish(&mut p,1);assert_eq!(p.view(),probe::View::Unavailable);assert!(p.take_redirect().is_none());no_preview(&p);assert!(p.document_scrubbed());assert!(WORLD.lock().unwrap().as_ref().unwrap().machine.owner().is_none());}
 }

@@ -50,3 +50,6 @@ echo '[sexnet.resolved.http.host] PASS scope=actual_DNS_release_provenance_HTTP_
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/document_reader.rs" -o "$TEST_DIR/document-reader-tests"
 "$TEST_DIR/document-reader-tests"
 echo '[sexnet.document.reader.host] PASS scope=actual_viewport_reader_and_shared_metrics_not_live_display_pixels_input_or_network'
+rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/http_navigation.rs" -o "$TEST_DIR/http-navigation-tests"
+"$TEST_DIR/http-navigation-tests"
+echo '[sexnet.http.navigation.host] PASS scope=actual_bounded_path_history_and_codec_not_live_network_authority'

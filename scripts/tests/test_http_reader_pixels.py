@@ -9,11 +9,13 @@ ROOT=Path(__file__).resolve().parents[2]
 class ReaderPixels(unittest.TestCase):
  @classmethod
  def setUpClass(cls):cls.contract=load_pixel_contract(ROOT)
- def frame(self,body=READER_BODY,w=624,h=706,anchor=0):return reader_frame(body,w,h,self.contract,anchor)
- def trace(self,frame,body=READER_BODY,w=624,h=706,x=600,y=70,sequence=1):
+ def frame(self,body=READER_BODY,w=624,h=706,anchor=0,expected_path=None):return reader_frame(body,w,h,self.contract,anchor,expected_path)
+ def trace(self,frame,body=READER_BODY,w=624,h=706,x=600,y=70,sequence=1,ticket=2):
   return(f'[shell.tile.apply] sid=300 x={x} y={y} w={w} h={h}\n'
    f'[shell.document.viewport] target=15 task=15 surface=300 sequence={sequence} x={x} y={y} w={w} h={h} enqueued=1\n'
    f'[browser.viewport] target=15 task=15 sequence={sequence} w={w} h={h} origin=held_shell\n'
+   f'[browser.http.released] ticket={ticket} view=Ready private_job=0\n'
+   f'[browser.http.document] ticket={ticket} path={frame["path"]} status=200 private_bytes={len(body)} positive_release=1\n'
    f'[browser.reader.layout] first={frame["first"]} end={frame["end"]} body_rows={frame["body_rows"]} rows={frame["rows"]} cols={frame["cols"]} total_lines={frame["total_lines"]} source_bytes={len(body)} viewport={sequence} origin=validated_body tls=0 pixels=unconfirmed\n'
    f'[browser.view.applied] bytes={frame["bytes"]} http=258 body_bytes={len(body)} pixels=unconfirmed\n')
  def screen(self,frame,x=600,y=70,shift=0):
@@ -102,6 +104,47 @@ class ReaderPixels(unittest.TestCase):
   short=wire_response('stream-short',STREAM_BODY,max_body=self.contract['wire_max_body']);headers,body=short.split(b'\r\n\r\n',1)
   self.assertIn(b'Content-Length: 12288',headers);self.assertEqual(len(body),12279);self.assertEqual(body,STREAM_BODY[:-9])
   full=wire_response('stream',STREAM_BODY,max_body=self.contract['wire_max_body']);self.assertEqual(full.split(b'\r\n\r\n',1)[1],STREAM_BODY)
+ def test_redirected_reader_header_uses_positive_final_path_and_independent_expectation(self):
+  frame=self.frame(expected_path=b'/guide/text');trace=self.trace(frame);screen=self.screen(frame)
+  self.assertEqual(frame['lines'][1].rstrip(),b'probe.sexos.test /guide/text')
+  result=verify_reader_pixels(trace,screen,READER_BODY,self.contract,expected_path=b'/guide/text');self.assertTrue(result['ok'],result)
+  self.assertEqual(result['geometry']['path'],'/guide/text');self.assertEqual(result['geometry']['document_ticket'],2)
+  self.assertTrue(verify_reader_pixels(trace,screen,READER_BODY,self.contract)['ok'])
+  self.assertFalse(verify_reader_pixels(trace,screen,READER_BODY,self.contract,expected_path=b'/welcome')['ok'])
+  initial=self.frame();self.assertFalse(verify_reader_pixels(trace,self.screen(initial),READER_BODY,self.contract,expected_path=b'/guide/text')['ok'])
+ def test_document_path_requires_matching_ready_release_ticket_and_length(self):
+  frame=self.frame(expected_path=b'/guide/text');trace=self.trace(frame);screen=self.screen(frame)
+  for wrong in [trace.replace('[browser.http.released] ticket=2','[browser.http.released] ticket=1'),trace.replace('[browser.http.document] ticket=2','[browser.http.document] ticket=3'),trace.replace('view=Ready private_job=0','view=Cancelled private_job=0'),trace.replace('private_job=0','private_job=1'),trace.replace('status=200 private_bytes=2048','status=302 private_bytes=2048'),trace.replace('private_bytes=2048','private_bytes=2047'),trace.replace('positive_release=1','positive_release=0'),trace.replace('ticket=2','ticket=0'),trace.replace('ticket=2','ticket=17536')]:
+   with self.subTest(wrong=wrong):self.assertFalse(verify_reader_pixels(wrong,screen,READER_BODY,self.contract,expected_path=b'/guide/text')['ok'])
+ def test_missing_unreleased_and_after_layout_document_receipts_cannot_pass(self):
+  frame=self.frame();trace=self.trace(frame);screen=self.screen(frame)
+  release=next(line for line in trace.splitlines(True)if '[browser.http.released]'in line);document=next(line for line in trace.splitlines(True)if '[browser.http.document]'in line)
+  for wrong in [trace.replace(release,''),trace.replace(document,''),trace.replace(release+document,document+release),trace.replace(document,'')+document,trace.replace(document,'')+document.replace('ticket=2','ticket=1')]:
+   self.assertFalse(verify_reader_pixels(wrong,screen,READER_BODY,self.contract)['ok'])
+ def test_latest_ticket_cannot_reuse_earlier_ready_document_or_receipt(self):
+  frame=self.frame();trace=self.trace(frame);screen=self.screen(frame)
+  marker='[browser.reader.layout]';at=trace.index(marker)
+  for newer in ['[browser.http.released] ticket=3 view=Ready private_job=0\n','[browser.http.released] ticket=3 view=Cancelled private_job=0\n','[browser.http.document] ticket=1 path=/welcome status=200 private_bytes=2048 positive_release=1\n']:
+   wrong=trace[:at]+newer+trace[at:];self.assertFalse(verify_reader_pixels(wrong,screen,READER_BODY,self.contract)['ok'])
+  # A subsequent completed document requires a new corresponding layout too.
+  newer='[browser.http.released] ticket=3 view=Ready private_job=0\n[browser.http.document] ticket=3 path=/guide status=200 private_bytes=2048 positive_release=1\n'
+  self.assertFalse(verify_reader_pixels(trace+newer,screen,READER_BODY,self.contract)['ok'])
+ def test_current_pending_or_cancelled_view_cannot_reuse_old_ready_path(self):
+  frame=self.frame();trace=self.trace(frame);screen=self.screen(frame)
+  self.assertTrue(verify_reader_pixels(trace+'[browser.http.view] state=Ready tls=0\n',screen,READER_BODY,self.contract)['ok'])
+  for state in ['Pending','Cancelled','Unavailable','Uncertain']:
+   self.assertFalse(verify_reader_pixels(trace+f'[browser.http.view] state={state} tls=0\n',screen,READER_BODY,self.contract)['ok'])
+ def test_forbidden_or_wrong_frame_path_is_rejected_even_when_it_has_matching_pixels(self):
+  frame=self.frame();trace=self.trace(frame);screen=self.screen(frame)
+  for wrong_path in [b'//other/guide',b'http://other/guide',b'/a?b',b'/a#b',b'/../guide',b'/a%2fb',b'/a\\b',b'/a b',b'/'*49]:
+   with self.assertRaises(ValueError):self.frame(expected_path=wrong_path)
+   wrong=trace.replace('path=/welcome','path='+wrong_path.decode('ascii'));self.assertFalse(verify_reader_pixels(wrong,screen,READER_BODY,self.contract)['ok'])
+  # Even clipped path suffixes remain constrained by the independent fixture.
+  path=b'/'+b'a'*47;frame=self.frame(w=82,h=160,expected_path=path);trace=self.trace(frame,w=82,h=160);screen=self.screen(frame)
+  self.assertFalse(verify_reader_pixels(trace,screen,READER_BODY,self.contract,expected_path=path[:-1]+b'b')['ok'])
+ def test_original_redirect_negative_fixture_now_denies_cross_endpoint_location(self):
+  response=wire_response('redirect');self.assertIn(b'Location: http://outside.sexos.test/elsewhere\r\n',response)
+
  def stream_trace(self,receiving=True):
   trace='[net.job.resolved.admitted] owner=15 task=15 ticket=2 dns_generation=1 observed=10 expires=60010 now=12 fixed=1 at_begin=1\n[net.job.stream.admitted] owner=15 task=15 ticket=2 kind=9 ring=1024 max_wire=13312 total_ticks=30000 idle_ticks=5000 authority=held_route\n[net.job.egress.submit] ticket=2 sequence=2 length=66 hash=0x1234 scope=dma_admission_not_delivery\n'
   for consumed in [4]+list(range(1024,12289,1024)):

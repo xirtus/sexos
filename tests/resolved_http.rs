@@ -13,6 +13,7 @@ extern crate self as sex_net;
 #[path="../apps/kaleidoscope/src/dns_probe.rs"]mod dns_probe;
 #[path="../apps/kaleidoscope/src/http_wire.rs"]mod http_wire;
 #[path="../apps/kaleidoscope/src/http_probe.rs"]mod http_probe;
+#[path="../apps/kaleidoscope/src/http_navigation.rs"]mod http_navigation;
 use std::sync::Mutex;
 pub const SLOT_NET:u64=18;pub const SLOT_DISPLAY:u64=5;pub const ERR_SERVICE_NOT_READY:u64=9;
 #[macro_export]macro_rules! serial_record {($($t:tt)*)=>{let _=std::format!($($t)*);};}
@@ -37,15 +38,19 @@ impl dns_jobs::Wire for DnsPeer {
  }
  fn abort(&mut self){self.response=None;}
 }
-struct HttpPeer {link:jobs::Link,request:Vec<u8>,response:Vec<u8>,read:usize,begins:Vec<u32>,body:Vec<u8>,allow_fin:bool}
+struct HttpPeer {link:jobs::Link,request:Vec<u8>,response:Vec<u8>,read:usize,begins:Vec<u32>,body:Vec<u8>,allow_fin:bool,expected_path:http_wire::Path,raw_response:Option<Vec<u8>>,observed_requests:Vec<Vec<u8>>}
 impl jobs::Wire for HttpPeer {
  fn begin(&mut self,ticket:u32)->Result<(),u32>{self.begins.push(ticket);self.link=jobs::Link::Open;self.request.clear();self.response.clear();self.read=0;Ok(())}
  fn receive(&mut self,out:&mut[u8])->Result<usize,u32>{let n=out.len().min(9).min(self.response.len()-self.read);out[..n].copy_from_slice(&self.response[self.read..self.read+n]);self.read+=n;Ok(n)}
  fn send(&mut self,data:&[u8])->Result<usize,u32>{let n=data.len().min(7);self.request.extend_from_slice(&data[..n]);Ok(n)}
  fn queued(&self)->usize{0}fn link(&self)->jobs::Link{self.link}
  fn finish_send(&mut self){
-  assert_eq!(self.request,b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
-  self.response=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",self.body.len()).into_bytes();self.response.extend_from_slice(&self.body);if self.allow_fin{self.link=jobs::Link::PeerFin;}
+  let expected=format!("GET {} HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n",core::str::from_utf8(self.expected_path.as_bytes()).unwrap());
+  assert_eq!(self.request,expected.as_bytes());self.observed_requests.push(self.request.clone());
+  if let Some(raw)=self.raw_response.take(){self.response=raw;}else{
+   self.response=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",self.body.len()).into_bytes();self.response.extend_from_slice(&self.body);
+  }
+  if self.allow_fin{self.link=jobs::Link::PeerFin;}
  }
  fn abort(&mut self){self.link=jobs::Link::Closed;self.request.clear();self.response.clear();self.read=0;}
 }
@@ -56,7 +61,7 @@ struct World {
 }
 fn reset(full_once:bool,address:[u8;4],ttl:u32){*WORLD.lock().unwrap()=Some(World {
  dns:dns_jobs::Machine::new(),tcp:jobs::Machine::new(),dns_wire:DnsPeer {address,ttl,response:None,begins:Vec::new()},
- http_wire:HttpPeer {link:jobs::Link::Closed,request:Vec::new(),response:Vec::new(),read:0,begins:Vec::new(),body:b"resolved body".to_vec(),allow_fin:true},
+ http_wire:HttpPeer {link:jobs::Link::Closed,request:Vec::new(),response:Vec::new(),read:0,begins:Vec::new(),body:b"resolved body".to_vec(),allow_fin:true,expected_path:http_wire::Path::initial(),raw_response:None,observed_requests:Vec::new()},
  pending:None,accepted:Vec::new(),caller:A,full_once,last_dns_full:0,last_tcp_full:0,deliver_dns:true,deliver_tcp:true,
 });}
 pub fn pdx_call(slot:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){
@@ -224,4 +229,120 @@ fn twelve_kib_stream_wraps_private_ring_and_waits_for_fin_and_positive_release()
  let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();assert!(w.tcp.owner().is_none());
  assert!(w.accepted.iter().any(|e|matches!(e,Envelope::Tcp(_,r)if r.kind==network_job::BEGIN_STREAM_RESOLVED)));
  assert!(w.accepted.iter().any(|e|matches!(e,Envelope::Tcp(_,r)if r.kind==network_job::READ && r.offset as usize>network_job::MAX_BYTES)));
+}
+
+fn configure_navigation_peer(path:http_wire::Path,location:Option<&[u8]>,body:&[u8]) {
+ let mut guard=WORLD.lock().unwrap();let peer=&mut guard.as_mut().unwrap().http_wire;
+ peer.expected_path=path;peer.allow_fin=true;
+ peer.raw_response=location.map(|location|{
+  let mut bytes=format!("HTTP/1.1 302 Found\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\nLocation: ",body.len()).into_bytes();
+  bytes.extend_from_slice(location);bytes.extend_from_slice(b"\r\n\r\n");bytes.extend_from_slice(body);bytes
+ });
+ peer.body=body.to_vec();
+}
+fn start_navigation_hop(dns:&mut dns_probe::Client,http:&mut http_probe::Client,path:http_wire::Path,from:u64)->(u64,u32) {
+ assert!(!dns.busy()&&!http.busy());http.wait_for_resolution();dns.start();
+ let release=wait_dns_release(dns,http,from);assert_eq!(dns.generation(),None);
+ let before=WORLD.lock().unwrap().as_ref().unwrap().http_wire.begins.len();
+ WORLD.lock().unwrap().as_mut().unwrap().deliver_dns=false;pump(dns,http,release);
+ for now in release+1..release+4 {
+  dns.advance(now);http.advance(now);pump(dns,http,now);
+  assert_eq!(dns.generation(),None);assert!(http.document().is_empty());assert!(http.take_redirect().is_none());
+  assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().http_wire.begins.len(),before);
+ }
+ WORLD.lock().unwrap().as_mut().unwrap().deliver_dns=true;pump(dns,http,release+4);
+ let generation=dns.generation().unwrap();assert!(http.start_resolved_path(http.next_sequence(),generation,path));
+ (release+5,generation)
+}
+fn release_navigation_hop(dns:&mut dns_probe::Client,http:&mut http_probe::Client,from:u64)->u64 {
+ let release=wait_http_release(dns,http,from);
+ assert_eq!(http.view(),http_probe::View::Pending);assert!(http.document().is_empty());assert!(http.document_path().is_empty());assert!(http.take_redirect().is_none());
+ WORLD.lock().unwrap().as_mut().unwrap().deliver_tcp=false;pump(dns,http,release);
+ assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().tcp.owner(),None);
+ for now in release+1..release+4 {
+  http.advance(now);dns.advance(now);pump(dns,http,now);
+  assert!(http.busy());assert!(http.document().is_empty());assert!(http.document_path().is_empty());assert!(http.take_redirect().is_none());
+ }
+ WORLD.lock().unwrap().as_mut().unwrap().deliver_tcp=true;pump(dns,http,release+4);
+ assert!(!http.busy());assert!(http.raw_scrubbed());
+ release+5
+}
+fn assert_navigation_order(expected_hops:usize) {
+ let guard=WORLD.lock().unwrap();let world=guard.as_ref().unwrap();
+ assert_eq!(world.dns_wire.begins,(1..=expected_hops as u32).collect::<Vec<_>>());
+ assert_eq!(world.http_wire.begins,(1..=expected_hops as u32).collect::<Vec<_>>());
+ for generation in 1..=expected_hops as u32 {
+  let dns_begins:Vec<_>=world.accepted.iter().enumerate().filter_map(|(i,envelope)|if matches!(envelope,Envelope::Dns(_,r)if r.kind==network_dns::BEGIN){Some(i)}else{None}).collect();
+  let begin=dns_begins[generation as usize-1];
+  let release=world.accepted.iter().position(|envelope|matches!(envelope,Envelope::Dns(owner,r)if *owner==A&&r.kind==network_dns::RELEASE&&r.ticket==generation)).unwrap();
+  let http_begin=world.accepted.iter().position(|envelope|matches!(envelope,Envelope::Tcp(owner,r)if *owner==A&&r.kind==network_job::BEGIN_STREAM_RESOLVED&&r.a==generation as u64)).unwrap();
+  assert!(begin<release&&release<http_begin);
+  if generation>1 {
+   let preceding=world.accepted.iter().position(|envelope|matches!(envelope,Envelope::Tcp(owner,r)if *owner==A&&r.kind==network_job::RELEASE&&r.ticket==generation-1)).unwrap();assert!(preceding<begin);
+  }
+ }
+}
+#[test]
+fn two_redirects_use_three_released_dns_generations_and_publish_only_final_twelve_kib_path() {
+ let _serial=SERIAL.lock().unwrap();reset(true,[10,0,2,2],60);
+ let mut navigation=http_navigation::Navigation::new();navigation.begin();
+ let mut dns=dns_probe::Client::new();let mut http=http_probe::Client::new();let mut now=1;
+ let mut body:Vec<u8>=(0..http_wire::MAX_BODY).map(|index|b'A'+(index%26)as u8).collect();
+ let tail=b"FINAL REDIRECT DOCUMENT BYTE Z";let at=body.len()-tail.len();body[at..].copy_from_slice(tail);
+ for(index,location)in [Some(b"/guide".as_slice()),Some(b"/guide/text".as_slice()),None].into_iter().enumerate() {
+  configure_navigation_peer(navigation.current(),location,if location.is_some(){b"discarded redirect body"}else{&body});
+  let(from,generation)=start_navigation_hop(&mut dns,&mut http,navigation.current(),now);assert_eq!(generation,index as u32+1);
+  now=release_navigation_hop(&mut dns,&mut http,from);
+  if let Some(expected)=location {
+   assert_eq!(http.view(),http_probe::View::Pending);assert!(http.document().is_empty());assert!(http.document_scrubbed());
+   let path=http.take_redirect().unwrap();assert_eq!(path.as_bytes(),expected);assert!(http.take_redirect().is_none());assert!(navigation.follow(path));
+  }else{
+   assert_eq!(http.view(),http_probe::View::Ready);assert!(http.take_redirect().is_none());assert_eq!(http.document(),body);assert_eq!(http.document_path(),b"/guide/text");navigation.complete();
+  }
+ }
+ assert_eq!(navigation.hops(),2);assert!(!navigation.active());assert_navigation_order(3);
+ let guard=WORLD.lock().unwrap();let world=guard.as_ref().unwrap();assert_eq!(world.http_wire.observed_requests.len(),3);
+ assert!(world.accepted.iter().any(|envelope|matches!(envelope,Envelope::Tcp(_,r)if r.kind==network_job::READ&&r.offset as usize>network_job::MAX_BYTES)));
+ assert_eq!(world.dns.owner(),None);assert_eq!(world.tcp.owner(),None);
+}
+#[test]
+fn self_two_node_loop_and_third_redirect_reject_without_an_extra_dns_or_http_begin() {
+ let _serial=SERIAL.lock().unwrap();
+ for locations in [vec![b"/welcome".as_slice()],vec![b"/guide".as_slice(),b"/welcome".as_slice()],vec![b"/guide".as_slice(),b"/guide/text".as_slice(),b"/third".as_slice()]] {
+  reset(false,[10,0,2,2],60);let mut navigation=http_navigation::Navigation::new();navigation.begin();
+  let mut dns=dns_probe::Client::new();let mut http=http_probe::Client::new();let mut now=1;
+  for(index,location)in locations.iter().enumerate() {
+   configure_navigation_peer(navigation.current(),Some(location),b"redirect body never displayed");
+   let(from,_)=start_navigation_hop(&mut dns,&mut http,navigation.current(),now);now=release_navigation_hop(&mut dns,&mut http,from);
+   let target=http.take_redirect().unwrap();let previous=navigation.current();let hops=navigation.hops();
+   if index+1<locations.len(){assert!(navigation.follow(target));}
+   else{
+    assert!(!navigation.follow(target));assert_eq!(navigation.current(),previous);assert_eq!(navigation.hops(),hops);assert!(!navigation.active());assert!(http.reject_redirect());
+   }
+  }
+  assert_eq!(http.view(),http_probe::View::Unavailable);assert!(http.document_scrubbed());assert!(http.take_redirect().is_none());
+  let accepted=WORLD.lock().unwrap().as_ref().unwrap().accepted.clone();
+  for tick in now..now+100{dns.advance(tick);http.advance(tick);pump(&mut dns,&mut http,tick);}
+  assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().accepted,accepted);assert_navigation_order(locations.len());
+  let guard=WORLD.lock().unwrap();let world=guard.as_ref().unwrap();assert_eq!(world.http_wire.observed_requests.len(),locations.len());assert_eq!(world.dns.owner(),None);assert_eq!(world.tcp.owner(),None);
+ }
+}
+#[test]
+fn cancelled_redirect_release_cannot_follow_and_new_h_intent_restarts_at_initial_with_fresh_dns() {
+ let _serial=SERIAL.lock().unwrap();reset(false,[10,0,2,2],60);
+ let mut navigation=http_navigation::Navigation::new();navigation.begin();let mut dns=dns_probe::Client::new();let mut http=http_probe::Client::new();
+ configure_navigation_peer(navigation.current(),Some(b"/old-guide"),b"discard me");
+ let(from,_)=start_navigation_hop(&mut dns,&mut http,navigation.current(),1);let release=wait_http_release(&mut dns,&mut http,from);
+ let request=match WORLD.lock().unwrap().as_ref().unwrap().pending.unwrap(){Envelope::Tcp(_,r)=>r,_=>panic!("expected TCP RELEASE")};
+ WORLD.lock().unwrap().as_mut().unwrap().deliver_tcp=false;pump(&mut dns,&mut http,release);
+ http.cancel();navigation.cancel();assert!(http.document_scrubbed());assert!(http.take_redirect().is_none());
+ WORLD.lock().unwrap().as_mut().unwrap().deliver_tcp=true;pump(&mut dns,&mut http,release+1);
+ assert!(!http.busy());assert_eq!(http.view(),http_probe::View::Cancelled);assert!(http.take_redirect().is_none());
+ navigation.begin();configure_navigation_peer(navigation.current(),None,b"fresh initial response");
+ let(from,generation)=start_navigation_hop(&mut dns,&mut http,navigation.current(),release+2);assert_eq!(generation,2);
+ http.advance(from);assert!(WORLD.lock().unwrap().as_ref().unwrap().pending.is_some());
+ http.reply(network_job::reply(request.seq,0),from);assert!(http.busy());assert!(http.take_redirect().is_none());pump(&mut dns,&mut http,from);
+ finish_http(&mut dns,&mut http,from+1);assert_eq!(http.view(),http_probe::View::Ready);assert_eq!(http.document(),b"fresh initial response");assert_eq!(http.document_path(),b"/welcome");assert!(http.take_redirect().is_none());
+ assert_navigation_order(2);
+ let guard=WORLD.lock().unwrap();let world=guard.as_ref().unwrap();assert_eq!(world.http_wire.observed_requests.len(),2);assert!(world.http_wire.observed_requests.iter().all(|bytes|bytes.starts_with(b"GET /welcome HTTP/1.1\r\n")));
 }

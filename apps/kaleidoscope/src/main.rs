@@ -9,6 +9,7 @@ mod network_probe;
 mod dns_probe;
 mod http_wire;
 mod http_probe;
+mod http_navigation;
 mod browser_view;
 mod document_reader;
 #[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
@@ -47,6 +48,7 @@ struct App {
     http:http_probe::Client,
     http_view:http_probe::View,
     intent:Option<Intent>,
+    navigation:http_navigation::Navigation,
     preview:body_text::Preview,
     ui:text_delivery::Outbox,
     ui_last:[u8;512],
@@ -201,7 +203,7 @@ impl SexApp for App {
         Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),reading:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
             dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
-            intent:None,preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
+            intent:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
 
     }
 
@@ -215,7 +217,7 @@ impl SexApp for App {
                 sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
                 sex_pdx::serial_record!("[browser.dns.closed] pending={} terminal=1",self.dns.busy()as u8);
                 sex_pdx::serial_record!("[browser.http.closed] pending={} terminal=1",self.http.busy()as u8);
-                self.http.cancel();self.reader.clear();self.reading=false;self.ui.cancel();self.ui_last.fill(0);self.ui_metadata=None;sex_pdx::task_finish(0);
+                self.navigation.cancel();self.http.cancel();self.reader.clear();self.reading=false;self.ui.cancel();self.ui_last.fill(0);self.ui_metadata=None;sex_pdx::task_finish(0);
             }
             if req.type_id==sex_pdx::document_view::OP{
                 if let Some(n)=sex_pdx::document_view::Notice::decode(req.caller_pd,self.identity.target_pd,self.identity.task_id,[req.arg0,req.arg1,req.arg2],self.viewport_sequence){
@@ -239,17 +241,29 @@ impl SexApp for App {
                 let intent=match req.arg0{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::HttpDns),_=>None};
                 if let Some(intent)=intent{
                     self.reading=false;self.reader.clear();
+                    // New intent also invalidates a released continuation.
+                    if self.navigation.active()||matches!(intent,Intent::HttpDns){self.http.cancel();}
+                    if matches!(intent,Intent::HttpDns){self.navigation.begin();}else{self.navigation.cancel();}
                     // Latest user intent waits for positive cleanup of whichever
                     // existing route currently owns a job. No parallel BEGIN.
                     if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}
                     self.intent=Some(intent);if self.probe.busy(){self.probe.cancel();}if self.dns.busy(){self.dns.cancel();}if self.http.busy(){self.http.cancel();}
                 }else{match req.arg0{
                     0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
-                    0x2D=>{if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
-                    0x24=>{if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
+                    0x2D=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
+                    0x24=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
                     0x2F=>{if self.http.view()==http_probe::View::Ready{self.reading=!self.reading;if self.reading{self.reader.clear();}}},
                     code=>{if self.reading{let movement=match code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};if let Some(movement)=movement{self.reader.navigate(self.http.document(),movement);}}},
                 }}
+            }
+        }
+        if let Some(path)=self.http.take_redirect(){
+            if self.intent.is_none()&&self.navigation.active()&&self.navigation.follow(path){
+                sex_pdx::serial_record!("[browser.http.redirect.follow] hop={} path={} same_endpoint=1 fresh_dns=1 positive_release=1",self.navigation.hops(),core::str::from_utf8(path.as_bytes()).unwrap());
+                self.intent=Some(Intent::HttpDns);
+            }else{
+                self.navigation.cancel();self.http.reject_redirect();
+                sex_pdx::serial_record!("[browser.http.redirect.denied] loop_or_limit_or_superseded=1 effects=0");
             }
         }
         if !self.probe.busy()&&!self.dns.busy()&&!self.http.busy(){
@@ -262,7 +276,7 @@ impl SexApp for App {
                     Intent::HttpDns=>{self.http.wait_for_resolution();self.dns.start();self.intent=Some(Intent::Http);},
                     Intent::Http=>{
                         let generation=self.dns.generation().unwrap_or(0);
-                        if !self.http.start_resolved(sequence,generation){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=http seq={} dns_generation={} effects=0",sequence,generation);}
+                        if !self.http.start_resolved_path(sequence,generation,self.navigation.current()){self.navigation.cancel();sex_pdx::serial_record!("[browser.net.start.rejected] protocol=http seq={} dns_generation={} effects=0",sequence,generation);}
                     },
                 }
             }
@@ -270,12 +284,16 @@ impl SexApp for App {
         if self.probe.busy(){self.probe.advance(sex_pdx::get_ticks());}
         else if self.dns.busy(){self.dns.advance(sex_pdx::get_ticks());}
         else if self.http.busy(){self.http.advance(sex_pdx::get_ticks());}
+        if self.navigation.active()&&self.intent.is_none()&&!self.http.busy()&&!self.dns.busy(){
+            if self.http.view()==http_probe::View::Ready{self.navigation.complete();}
+            else if matches!(self.http.view(),http_probe::View::Unavailable|http_probe::View::Cancelled){self.navigation.cancel();}
+        }
         let view=self.probe.view();if view!=self.probe_view{self.probe_view=view;sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}
         let view=self.dns.view();if view!=self.dns_view{self.dns_view=view;sex_pdx::serial_record!("[browser.dns.view] state={:?} web=0",view);}
         let view=self.http.view();if view!=self.http_view{self.http_view=view;if view!=http_probe::View::Ready{self.reading=false;self.reader.clear();}sex_pdx::serial_record!("[browser.http.view] state={:?} tls=0",view);}
         let mut reader_layout=None;
         let composed=if self.reading&&self.http.view()==http_probe::View::Ready{
-            let f=self.reader.render(self.http.document());reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
+            let f=self.reader.render_path(self.http.document(),self.http.document_path());reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.http.document().len(),first:f.first,rows:f.body_rows,selected:http_view_code(self.http.view())|256}))
         }else{browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()).map(|text|(text,text_delivery::Metadata{count:if matches!(self.http.view(),http_probe::View::Ready){self.http.body_length()}else{0},first:0,rows:0,selected:http_view_code(self.http.view())}))};
         if let Some((text,metadata))=composed{

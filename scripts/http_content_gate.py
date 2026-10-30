@@ -43,11 +43,13 @@ def load_pixel_contract(root):
  if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  if 'let dns_start=preview.len()+64'not in compose or 'let http_start=dns_start+64'not in compose or 'let body_start=http_start+64'not in compose:raise ValueError('production status extent layout changed')
  reader=sources['reader'].split('#[cfg(test)]',1)[0]
- if 'self.reader.render(self.http.document())'not in sources['app']or 'selected:http_view_code(self.http.view())|256'not in sources['app']:raise ValueError('production full document reader binding changed')
+ dynamic_path='self.reader.render_path(self.http.document(),self.http.document_path())'in sources['app']
+ if not(dynamic_path or 'self.reader.render(self.http.document())'in sources['app'])or 'selected:http_view_code(self.http.view())|256'not in sources['app']:raise ValueError('production full document reader binding changed')
+ if dynamic_path and('HOST.iter().chain(b" ").chain(path)'not in reader or 'clean(*byte)'not in reader or '[browser.http.document]'not in sources['client']or 'positive_release=1'not in sources['client']):raise ValueError('production released document/path rendering contract changed')
  reader_header=literal('reader',r'put\(&mut frame,0,(b"[^"\n]*")\)')
  reader_footers=[ast.literal_eval(v)for v in re.findall(r'(b"(?:PgUp[^"\n]*|V back|V)")',reader)]
  if len(reader_footers)!=3:raise ValueError('production reader footer contract changed')
- return dict(wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ return dict(wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
@@ -60,7 +62,12 @@ def overview_preview(body):
  text=b' '.join(words)
  return (text[:61]+b'...'if len(text)>64 else text.ljust(64,b' '))
 
-def reader_frame(body,width,height,contract,anchor=0):
+def reader_path(path,contract):
+ """Independent canonical origin-form data check; never URL authority."""
+ if not isinstance(path,bytes)or not 1<=len(path)<=contract['reader_max_path']or not path.startswith(b'/')or b'//'in path or any(segment in(b'.',b'..')for segment in path.split(b'/'))or any(not(48<=byte<=57 or 65<=byte<=90 or 97<=byte<=122 or byte in b'/.-_~')for byte in path):raise ValueError('invalid expected released document path')
+ return path
+
+def reader_frame(body,width,height,contract,anchor=0,expected_path=None):
  """Independent paragraph/chunk model, without calling the Rust reader."""
  if len(body)>contract['reader_max_body']:raise ValueError('expected document exceeds production body bound')
  factor=2 if width>=contract['scale_threshold']else 1
@@ -81,16 +88,36 @@ def reader_frame(body,width,height,contract,anchor=0):
  if not host:raise ValueError('missing source-bound HTTP hostname')
  footer=contract['reader_footers'][0 if cols>=25 else 1 if cols>=6 else 2]
  shown=lines[first:first+visible]
- output=[contract['reader_header'],host[1]+contract['reader_path']]+shown+[b'']*(visible-len(shown))+[footer]
+ path=reader_path(contract['reader_path'][1:]if expected_path is None else expected_path,contract)
+ output=[contract['reader_header'],host[1]+b' '+path]+shown+[b'']*(visible-len(shown))+[footer]
  output=[line[:cols].ljust(cols,b' ')for line in output]
- return dict(cols=cols,rows=rows,body_rows=visible,first=first,end=first+len(shown),total_lines=len(lines),source_bytes=len(body),scale=factor,anchor=starts[first]if starts else 0,starts=starts,lines=output,bytes=rows*(cols+1)-1)
+ return dict(path=path.decode('ascii'),cols=cols,rows=rows,body_rows=visible,first=first,end=first+len(shown),total_lines=len(lines),source_bytes=len(body),scale=factor,anchor=starts[first]if starts else 0,starts=starts,lines=output,bytes=rows*(cols+1)-1)
 
 def reader_move(frame,action):
  first=frame['first'];last=max(0,frame['total_lines']-frame['body_rows'])
  target={'up':max(0,first-1),'down':min(last,first+1),'pgup':max(0,first-frame['body_rows']),'pgdn':min(last,first+frame['body_rows']),'home':0,'end':last}[action]
  return frame['starts'][target]if frame['starts']else 0
 
-def reader_geometry(trace,body,contract,anchor=0):
+def released_reader_document(trace,body,contract,expected_path=None):
+ """Bind current presentation data to the latest exact positive job release."""
+ releases=list(re.finditer(r'^\[browser.http.released\][^\r\n]*',trace,re.M))
+ documents=list(re.finditer(r'^\[browser.http.document\][^\r\n]*',trace,re.M))
+ if not releases or not documents:raise ValueError('missing positive released document/path receipt')
+ release=re.fullmatch(r'\[browser.http.released\] ticket=(\d+) view=Ready private_job=0',releases[-1][0])
+ document=re.fullmatch(r'\[browser.http.document\] ticket=(\d+) path=(\S+) status=200 private_bytes=(\d+) positive_release=1',documents[-1][0])
+ if not release or not document:raise ValueError('latest document lacks exact positive Ready release/path receipt')
+ ticket=int(release[1])
+ if not 1<=ticket<=contract['reader_max_ticket']or int(document[1])!=ticket or documents[-1].start()<=releases[-1].end():raise ValueError('released document path belongs to an old/unreleased ticket')
+ if int(document[3])!=len(body):raise ValueError('released document byte extent differs from independent body')
+ views=list(re.finditer(r'^\[browser.http.view\] state=(\w+) tls=0',trace,re.M))
+ if views and views[-1].start()>documents[-1].end()and views[-1][1]!='Ready':raise ValueError('released document superseded by current non-Ready HTTP view')
+ path=reader_path(document[2].encode('ascii'),contract)
+ if expected_path is not None and path!=reader_path(expected_path,contract):raise ValueError('released document path differs from independent expected path')
+ layouts=list(re.finditer(r'^\[browser.reader.layout\][^\r\n]*',trace,re.M))
+ if layouts and documents[-1].end()>=layouts[-1].start():raise ValueError('released document path receipt must precede current reader layout')
+ return path,ticket
+
+def reader_geometry(trace,body,contract,anchor=0,expected_path=None):
  # Zoom changes the actual frame without emitting another tiling receipt.
  # Bind the shell's exact queued geometry to the notice accepted by Browser.
  queued=re.findall(r'\[shell.document.viewport\] target=15 task=15 surface=300 sequence=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) enqueued=1',trace)
@@ -100,12 +127,14 @@ def reader_geometry(trace,body,contract,anchor=0):
  if len(matches)!=1:raise ValueError('accepted viewport lacks one exact shell geometry')
  _,x,y,w,h=matches[0]
  if(w,h)!=(nw,nh):raise ValueError('queued and accepted viewport differ')
- frame=reader_frame(body,w,h,contract,anchor);frame.update(tile=dict(x=x,y=y,w=w,h=h),viewport=sequence)
+ path,ticket=released_reader_document(trace,body,contract,expected_path)if contract.get('dynamic_reader_path')else(expected_path,None)
+ frame=reader_frame(body,w,h,contract,anchor,path);frame.update(tile=dict(x=x,y=y,w=w,h=h),viewport=sequence)
+ if ticket is not None:frame['document_ticket']=ticket
  return frame
 
-def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None):
+def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expected_path=None):
  try:
-  expected=reader_geometry(trace,body,contract,anchor);tile=expected['tile'];width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
+  expected=reader_geometry(trace,body,contract,anchor,expected_path);tile=expected['tile'];width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
   if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
   if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
   layouts=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=validated_body tls=0 pixels=unconfirmed',trace))
@@ -135,13 +164,13 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None):
   return dict(ok=not errors,errors=errors,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']],checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)])
 
-def wait_reader_pixels(q,text,out,name,body,contract,anchor,health,timeout=30,resolution=None):
+def wait_reader_pixels(q,text,out,name,body,contract,anchor,health,timeout=30,resolution=None,expected_path=None):
  deadline=time.monotonic()+timeout;attempts=0;screenshot=out/(name+'.ppm');result=dict(ok=False,errors=['no reader screenshot'])
  while time.monotonic()<deadline:
-  health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});result=verify_reader_pixels(text(),screenshot.read_bytes(),body,contract,anchor,resolution)
+  health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});result=verify_reader_pixels(text(),screenshot.read_bytes(),body,contract,anchor,resolution,expected_path)
   if result['ok']:break
   time.sleep(.2)
- result.update(attempts=attempts,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Independent full2048-byte controlled document model, actual held-shell tile/viewport, complete reader chrome/body/footer glyphs, padding/spare column and stale text-band erasure. Applied/layout markers alone cannot pass; no additional network authority.')
+ result.update(attempts=attempts,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Independent complete bounded controlled document model, exact positively released document ticket/path/length, actual held-shell tile/viewport, complete reader chrome/body/footer glyphs, padding/spare column and stale text-band erasure. Applied/layout markers alone cannot pass; no additional network authority.')
  (out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n');return result
 
 def http_status_geometry(text,expected,body,contract):
@@ -224,7 +253,7 @@ def wire_response(mode,body=BODY,max_body=None):
  elif mode=='oversized':
   if max_body is None:max_body=load_pixel_contract(Path(__file__).resolve().parents[1])['wire_max_body']
   body=b'X'*(max_body+1);length=len(body)
- elif mode=='redirect':status=b'HTTP/1.1 302 Found\r\n';extra=b'Location: /elsewhere\r\n'
+ elif mode=='redirect':status=b'HTTP/1.1 302 Found\r\n';extra=b'Location: http://outside.sexos.test/elsewhere\r\n'
  elif mode=='malformed':extra=b'Content-Length: '+str(length).encode()+b'\r\n'
  return status+b'Content-Type: text/plain; charset=us-ascii\r\nContent-Length: '+str(length).encode()+b'\r\n'+extra+b'Connection: close\r\n\r\n'+body
 
