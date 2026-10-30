@@ -1,6 +1,6 @@
 # Alpha continuation: 100 further engineering rounds
 
-**Scope extended by the user on30 October2026:** after completing19–118, continue with the next100 substantive rounds,119–218. The active total is200 additional rounds. At the current checkpoint,55 are accepted (19–73);45 remain in the first batch and100 in the second. Do not stop or mark the goal complete at118. Continue the same architecture, evidence and honest acceptance rules; later priorities should follow measured blockers rather than invented completion counts.
+**Scope extended by the user on30 October2026:** after completing19–118, continue with the next100 substantive rounds,119–218. The active total is200 additional rounds. At the current checkpoint,57 are accepted (19–75);43 remain in the first batch and100 in the second. Do not stop or mark the goal complete at118. Continue the same architecture, evidence and honest acceptance rules; later priorities should follow measured blockers rather than invented completion counts.
 
 Requested 29 October 2026 while round 18 was in progress. Continue through **rounds 19–118**, sequentially. A round is a reviewable implementation or a substantive acceptance investigation with its own result and remaining limits; a test invocation, screenshot, formatting change or arbitrary subdivision is not a round. Do not mark the queue complete merely because the first batch passes.
 
@@ -95,3 +95,5 @@ The user reaffirmed continuation on30 October2026. The [individual119–218 exec
 | 119–218 | Pending — next100 explicitly requested | Continue after118 with substantive work driven by actual alpha/release blockers, preserving the same non-Unix constitution and evidence standard. | Not started; no completion inferred from plans. |
 
 Update this ledger and the next-session handoff after accepted batches. Continue active work until the user's requested scope is complete or an actual external blocker requires user input; never silently reinterpret 100 rounds as a plan-only request.
+
+Image75 own strict sustained qualification passes1800.006799seconds/81 active cycles,341-page retirement and both exact same-image document/history reboots. See [complete evidence](assets/sexos-alpha-r75-sustained-2026-10-30-evidence.json). This qualifies75 only and adds no round;76 remains in progress.

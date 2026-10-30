@@ -453,3 +453,12 @@ See the [full binding, model/native/wire captures and retained failures](assets/
 Keep progressing from actual Ethernet custody to bounded neighbor/IPv4/TCP transport and exact controlled-peer bytes, with protocol parsing, connection/completion identity, deadlines, cancellation and finite buffer ownership. Use service-owned flow state through sanctioned sex-pdx routes; do not reintroduce Unix sockets/file descriptors, raw caller memory, runtime MemLend genesis or fake online receipts. Then implement real DNS/HTTP and TLS/trust/time before useful online browser content. Keep the cached/offline UI honest until those layers actually work.
 
 The current RX path polls cooperatively even while idle. That prototype is explicit; it does not establish IRQ/timer-backed waits, idle power or physical interrupt safety. Measure it and design the missing BOOT-sanctioned wake ownership alongside transport progress. A service waiting only on IPC cannot park indefinitely while RX needs polling. Unknown/failed DMA remains retained, not reclaimed. Firmware DMA drain, IOMMU/hostile containment, complete epoch replay, SMP/hotplug and a named physical platform remain open. Follow `/tmp/sexos-r75-sustained-suite.py` and archive strict validation plus both exact reboots only after all finish. Continue through118 and immediately119–218; the round count cannot confer daily-driver status.
+
+
+### Image75 strict sustained acceptance — completed30 October
+
+Frozen image75 (`1a7bda43a7b89ee8f56c74f4be7c8dbae2430baa0940cd881c7a049ac14f6a04`) passes its own strict **1800.006799seconds/81 active mixed-app cycles**, all six retirements,341 private pages zeroed/reused, exact snapshot joins and both same-image document/history recovery reboots. Both documents and visible `echo alpha17` recall recover exactly. Final disk SHA256:`dddccbbc5980bc3b80112ff1c8be4b070aadc34e640499b86c3ee2fcd4bcf131`.
+
+Checked-input median/p95/maximum are0.702605/0.757690/0.778990seconds; warm Save receipt0.151451/0.184707/0.198663seconds. Runs overlap76 development and establish functional sustained behavior of75, without an isolated comparison or physical bound. They cannot qualify76's new protocol implementation.
+
+See the [strict validation, complete latency samples and exact reboot bindings](assets/sexos-alpha-r75-sustained-2026-10-30-evidence.json), full compressed traces/disks beside the binding and local `.evidence/alpha-2026-10-29/r75-sustained-*`. This adds qualification without adding a round.
