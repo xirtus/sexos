@@ -15,7 +15,17 @@ SCOPE = ('Dependency metadata, effective bare-metal Cargo graph and declared sca
          'quality, runtime enforcement or authenticated-connection proof.')
 PINS = {'embedded-tls': '0.19.0', 'embedded-io': '0.7.1',
         'embedded-io-async': '0.7.0', 'rand_chacha': '0.3.1',
-        'rand_core': '0.6.4', 'sha2': '0.10.9'}
+        'rand_core': '0.6.4', 'sha2': '0.10.9', 'p256': '0.13.2',
+        'webpki': '0.103.16', 'rustls-pki-types': '1.14.0'}
+PACKAGE_NAMES = {'webpki': 'rustls-webpki'}
+DIRECT_FEATURES = {'sha2': ['force-soft'], 'p256': ['ecdsa']}
+LOCAL = {'sex-trust-config': '../sex-trust-config'}
+EFFECTIVE_FEATURES = {
+    'embedded-tls': set(), 'embedded-io': set(), 'embedded-io-async': set(),
+    'rand_chacha': set(), 'rand_core': set(), 'sha2': {'force-soft'},
+    'rustls-webpki': set(), 'rustls-pki-types': set(), 'sex-trust-config': set(),
+    'p256': {'arithmetic', 'digest', 'ecdh', 'ecdsa', 'ecdsa-core', 'sha2', 'sha256'},
+}
 FORCE = {'aes_force_soft', 'polyval_force_soft'}
 BLOCKED = {'libc', 'getrandom', 'rand_os', 'rustix', 'nix', 'ring', 'openssl',
            'openssl-sys', 'native-tls', 'rustls-native-certs', 'security-framework',
@@ -23,23 +33,36 @@ BLOCKED = {'libc', 'getrandom', 'rand_os', 'rustix', 'nix', 'ring', 'openssl',
            'r-efi', 'linux-raw-sys', 'redox_syscall', 'relibc'}
 
 
-def check_manifests(tls, workspace, app):
+def check_manifests(tls, workspace, app, trust=None):
     errors = []
     deps = tls.get('dependencies', {})
-    if set(deps) != set(PINS):
+    if set(deps) != set(PINS) | set(LOCAL):
         errors.append('TLS direct dependency set changed; review backend policy')
     for name, version in PINS.items():
         dep = deps.get(name)
         if not isinstance(dep, dict):
             errors.append('missing explicit TLS dependency policy: ' + name)
             continue
-        expected_features = ['force-soft'] if name == 'sha2' else []
+        expected_features = DIRECT_FEATURES.get(name, [])
+        expected_package = PACKAGE_NAMES.get(name)
         if (dep.get('version') != '=' + version or dep.get('default-features') is not False
                 or dep.get('features', []) != expected_features
-                or set(dep) - {'version', 'default-features', 'features'}):
+                or dep.get('package') != expected_package
+                or set(dep) - ({'version', 'default-features', 'features', 'package'}
+                                if expected_package else {'version', 'default-features', 'features'})):
             errors.append('noncanonical TLS dependency policy: ' + name)
-    if 'crates/sex-tls' not in workspace.get('workspace', {}).get('members', []):
-        errors.append('TLS crate missing from workspace')
+    for name, path in LOCAL.items():
+        if deps.get(name) != {'path': path}:
+            errors.append('noncanonical local TLS policy dependency: ' + name)
+    for member in ['crates/sex-tls', 'crates/sex-trust-config']:
+        if member not in workspace.get('workspace', {}).get('members', []):
+            errors.append('TLS policy crate missing from workspace: ' + member)
+    if trust is not None:
+        if (trust.get('package', {}).get('name') != 'sex-trust-config'
+                or trust.get('package', {}).get('version') != '0.1.0'
+                or any(trust.get(key) for key in ['dependencies', 'build-dependencies',
+                                                'target', 'features', 'patch', 'replace'])):
+            errors.append('immutable trust config must have no provider dependencies or features')
     if app.get('dependencies', {}).get('sex-tls') != {'path': '../../crates/sex-tls'}:
         errors.append('Kaleidoscope must consume the reviewed workspace TLS crate')
     # Target-specific additions and workspace replacements would evade the
@@ -108,18 +131,17 @@ def check_tree(output):
         entry['features'].update(features)
         if name in BLOCKED or name.startswith(('windows-', 'aws-lc-', 'openssl-')):
             errors.append('OS or unreviewed crypto provider in effective graph: ' + name)
-        if features & {'std', 'getrandom', 'os_rng', 'system-verification', 'native-certs'}:
+        if features & {'std', 'alloc', 'getrandom', 'os_rng', 'system-verification', 'native-certs'}:
             errors.append('OS/provider feature in effective graph: ' + name)
-    for name, version in PINS.items():
+    for alias, version in dict(PINS, **{'sex-trust-config': '0.1.0'}).items():
+        name = PACKAGE_NAMES.get(alias, alias)
         if packages.get(name, {}).get('versions') != {version}:
             errors.append('effective dependency version mismatch: ' + name)
     if 'sex-tls' not in packages:
         errors.append('missing TLS graph root')
-    for name in ['embedded-tls', 'rand_chacha', 'rand_core']:
-        if packages.get(name, {}).get('features'):
+    for name, expected in EFFECTIVE_FEATURES.items():
+        if packages.get(name, {}).get('features') != expected:
             errors.append('unexpected effective provider features: ' + name)
-    if packages.get('sha2', {}).get('features') != {'force-soft'}:
-        errors.append('effective SHA2 backend must be force-soft only')
     summary = {name: {'versions': sorted(p['versions']), 'features': sorted(p['features'])}
                for name, p in sorted(packages.items())}
     return errors, summary
@@ -131,11 +153,13 @@ def inspect(root, *, tree_output=None):
     errors = []
     try:
         paths = ['crates/sex-tls/Cargo.toml', 'Cargo.toml', 'apps/kaleidoscope/Cargo.toml',
-                 'sexos_build_spec.toml', 'Cargo.lock', 'x86_64-sex.json']
+                 'sexos_build_spec.toml', 'Cargo.lock', 'x86_64-sex.json',
+                 'crates/sex-trust-config/Cargo.toml', 'crates/sex-trust-config/src/lib.rs']
         raw = {p: (root / p).read_bytes() for p in paths}
         report['inputs'] = {p: hashlib.sha256(b).hexdigest() for p, b in raw.items()}
         parsed = [tomllib.loads(raw[p].decode()) for p in paths[:4]]
-        errors.extend(check_manifests(*parsed[:3]))
+        trust = tomllib.loads(raw['crates/sex-trust-config/Cargo.toml'].decode())
+        errors.extend(check_manifests(*parsed[:3], trust=trust))
         errors.extend(check_flags(parsed[3]))
         if not errors:
             command = ['cargo', 'tree', '--locked', '-p', 'sex-tls', '--target',

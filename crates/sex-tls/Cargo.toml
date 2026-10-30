@@ -12,3 +12,7 @@ rand_chacha = { version = "=0.3.1", default-features = false }
 rand_core = { version = "=0.6.4", default-features = false }
 # Feature unification keeps the TLS transcript on the integer backend too.
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+sex-trust-config = { path = "../sex-trust-config" }
+webpki = { package = "rustls-webpki", version = "=0.103.16", default-features = false }
+rustls-pki-types = { version = "=1.14.0", default-features = false }
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa"] }

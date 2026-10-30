@@ -14,12 +14,16 @@ ABI_INPUTS=(
   kernel/src/pci_command.rs
   kernel/src/entropy_source.rs
   kernel/src/clock_source.rs
+  kernel/src/trust_source.rs
   kernel/src/ipc_ring.rs
   crates/sex-net-config/src/lib.rs
   crates/sex-pdx/src/network_config.rs
   crates/sex-pdx/src/network_job.rs
   crates/sex-pdx/src/entropy_source.rs
   crates/sex-pdx/src/clock_source.rs
+  crates/sex-pdx/src/trust_source.rs
+  crates/sex-pdx/src/trust_policy.rs
+  crates/sex-trust-config/src/lib.rs
   crates/sex-pdx/src/certificate_time.rs
   crates/sex-pdx/src/entropy_seed.rs
   kernel/src/boot_display_state.rs

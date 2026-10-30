@@ -653,6 +653,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pki-types"
+version = "1.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be040f8b0a225e40375822a563fa9524378b9d63112f53e19ffff34df5d33fdd"
+
+[[package]]
+name = "rustls-webpki"
+version = "0.103.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
+dependencies = [
+ "rustls-pki-types",
+ "untrusted",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -765,6 +781,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "sex-net-config",
+ "sex-trust-config",
  "spin",
  "x86_64",
 ]
@@ -788,10 +805,18 @@ dependencies = [
  "embedded-io",
  "embedded-io-async",
  "embedded-tls",
+ "p256",
  "rand_chacha",
  "rand_core 0.6.4",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "sex-trust-config",
  "sha2",
 ]
+
+[[package]]
+name = "sex-trust-config"
+version = "0.1.0"
 
 [[package]]
 name = "sexbell"
@@ -1063,6 +1088,12 @@ dependencies = [
  "crypto-common",
  "subtle",
 ]
+
+[[package]]
+name = "untrusted"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "version_check"

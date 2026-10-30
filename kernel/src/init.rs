@@ -831,6 +831,13 @@ pub fn init() {
         consumer:sex_pdx::clock_source::Identity{pd:kaleido_id,task:unsafe{(*consumer_task).id}},source:sex_pdx::clock_source::CMOS_UTC};
     seed_holder.grant_capability(sex_pdx::clock_source::SLOT,crate::capability::CapabilityData::ClockSource(clock_grant));
     serial_println!("[boot.clock.source] holder={} task={} slot={} consumer={} consumer_task={} source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0",sexnet_id,clock_grant.holder.task,sex_pdx::clock_source::SLOT,kaleido_id,clock_grant.consumer.task);
+    assert!(seed_holder.find_capability(sex_pdx::trust_source::SLOT as u32).is_none(),"BOOT_TRUST_SLOT_COLLISION");
+    let trust_grant=sex_pdx::trust_source::Grant {
+        holder:sex_pdx::trust_source::Identity {pd:sexnet_id,task:unsafe{(*holder_task).id}},
+        consumer:sex_pdx::trust_source::Identity {pd:kaleido_id,task:unsafe{(*consumer_task).id}},
+        profile:sex_pdx::trust_config::PROFILE};
+    seed_holder.grant_capability(sex_pdx::trust_source::SLOT,crate::capability::CapabilityData::TrustPolicy(trust_grant));
+    serial_println!("[boot.trust.policy] holder={} task={} slot={} consumer={} consumer_task={} profile={} root_bytes={} runtime_mint=0",sexnet_id,trust_grant.holder.task,sex_pdx::trust_source::SLOT,kaleido_id,trust_grant.consumer.task,trust_grant.profile,sex_pdx::trust_config::ROOT_DER.len());
     // Two finite Spindle incarnations share only the fixed peer service edge.
     // This is BOOT genesis; neither app receives NIC metadata or config rights.
     assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");

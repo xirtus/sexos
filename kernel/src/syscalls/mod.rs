@@ -517,6 +517,11 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let reply=crate::pci_command::network_config(pd,rdi,rsi,rdx,r10,r8);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
+        74 => {
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::trust_source::invoke(pd,rdi,rsi,rdx,r10,r8);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
+        },
         73 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             let reply=crate::clock_source::invoke(pd,rdi,rsi,rdx,r10,r8);

@@ -4,8 +4,9 @@
 //! One finite task and two finite byte queues live in the caller's ELF-owned
 //! arena. There is no socket, clock, entropy syscall, endpoint selector, or
 //! global allocator of frames here. The caller transfers an already-released
-//! seed and a correlated UTC snapshot. Until trust integration is complete,
-//! every certificate is rejected. A generated ClientHello proves no peer.
+//! seed, a correlated UTC snapshot, and a BOOT-attested fixed trust profile.
+//! The controlled lab root proves no public Internet trust. A generated
+//! ClientHello or local certificate fixture check proves no peer.
 #![no_std]
 #![feature(allocator_api)]
 
@@ -13,16 +14,19 @@ extern crate alloc;
 use alloc::{alloc::{alloc_zeroed, dealloc}, rc::Rc};
 use core::{alloc::Layout, cell::RefCell, future::{poll_fn, Future}, marker::PhantomData,
     pin::Pin, ptr::NonNull, task::{Context, Poll, Waker}};
-use embedded_tls::{Aes128GcmSha256, CertificateRef, CertificateVerifyRef,
+use embedded_tls::{Aes128GcmSha256,
     CryptoProvider, MaxFragmentLength, TlsConfig, TlsConnection, TlsContext,
     TlsError, TlsVerifier};
 use rand_core::SeedableRng;
+mod verifier;
+mod probe_fixture;
+pub use verifier::controlled_self_check;
 
 pub const RECORD_READ: usize = 4096;
 pub const RECORD_WRITE: usize = 2048;
 pub const QUEUE_BYTES: usize = 4096;
 pub const MAX_TASK_BYTES: usize = 32768;
-pub const EXPECTED_NAME: &str = "probe.sexos.test";
+pub const EXPECTED_NAME: &str = sex_trust_config::EXPECTED_NAME;
 
 fn erase(bytes: &mut [u8]) {
     for byte in bytes { unsafe { core::ptr::write_volatile(byte, 0); } }
@@ -33,7 +37,7 @@ impl Drop for Seed { fn drop(&mut self) { erase(&mut self.0); } }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State { Preparing, HelloPending, Rejected }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Memory, Clock, Capacity, Terminal }
+pub enum Error { Memory, Clock, Policy, Capacity, Terminal }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stats {
     pub task_bytes: usize, pub private_bytes: usize, pub tx_bytes: usize,
@@ -116,17 +120,8 @@ impl embedded_io_async::Write for Transport {
     async fn flush(&mut self) -> Result<(), Self::Error> { Ok(()) }
 }
 
-// A concrete rejecting verifier is deliberate. Returning Err from verifier()
-// itself can cause upstream to skip verification; that is never our policy.
-struct RejectPeer;
-impl TlsVerifier<Aes128GcmSha256> for RejectPeer {
-    fn set_hostname_verification(&mut self, hostname:&str) -> Result<(),TlsError> {
-        if hostname==EXPECTED_NAME { Ok(()) } else { Err(TlsError::InvalidCertificate) }
-    }
-    fn verify_certificate(&mut self, _: &embedded_tls::Sha256, _: CertificateRef) -> Result<(),TlsError> { Err(TlsError::InvalidCertificate) }
-    fn verify_signature(&mut self, _: CertificateVerifyRef) -> Result<(),TlsError> { Err(TlsError::InvalidSignature) }
-}
-struct Provider { rng:rand_chacha::ChaCha20Rng, verifier:RejectPeer }
+// Always return a concrete verifier. Err here can make upstream skip checks.
+struct Provider { rng:rand_chacha::ChaCha20Rng, verifier:verifier::Verifier }
 impl CryptoProvider for Provider {
     type CipherSuite=Aes128GcmSha256;
     type Signature=[u8;0];
@@ -138,18 +133,20 @@ pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, sta
 impl Session {
     /// Always erases the transferred caller seed, including rejected starts.
     /// Seconds are input data, not new time authority or an advancing clock.
-    pub fn prepare(seed:&mut[u8;32], seconds:u32) -> Result<Self,Error> {
+    pub fn prepare(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
         let private=Seed(*seed); erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(Error::Clock); }
+        let verifier=verifier::Verifier::new(profile,seconds).map_err(|_|Error::Policy)?;
         let pipe=Rc::try_new(RefCell::new(Pipe::new())).map_err(|_|Error::Memory)?;
         let transport=Transport(pipe.clone());
         let future=async move {
-            let mut provider=Provider { rng:rand_chacha::ChaCha20Rng::from_seed(private.0), verifier:RejectPeer };
+            let mut provider=Provider { rng:rand_chacha::ChaCha20Rng::from_seed(private.0), verifier };
             drop(private);
             let mut read=[0u8;RECORD_READ]; let mut write=[0u8;RECORD_WRITE];
             let config=TlsConfig::new().with_server_name(EXPECTED_NAME).with_max_fragment_length(MaxFragmentLength::Bits10);
             let mut tls=TlsConnection::<_,Aes128GcmSha256>::new(transport,&mut read,&mut write);
-            tls.open(TlsContext::new(&config,&mut provider)).await
+            tls.open(TlsContext::new(&config,&mut provider)).await?;
+            provider.verifier.finished()
         };
         let task=Task::new(future)?;
         let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>(), tx_bytes:0, utc_snapshot:seconds };
@@ -161,7 +158,8 @@ impl Session {
         let Some(task)=self.task.as_mut() else { return self.state; };
         self.pipe.borrow_mut().turn_used=false;
         if task.poll(&mut Context::from_waker(Waker::noop())).is_ready() {
-            // Even an unexpected upstream Ok cannot authenticate this profile.
+            // Connection publication/transport belongs to a later round.
+            // A completed local task cannot publish an authenticated session.
             self.task=None; self.pipe.borrow_mut().scrub(); self.state=State::Rejected;
         } else {
             let pipe=self.pipe.borrow();
@@ -190,7 +188,7 @@ impl Session {
 mod tests {
     use super::*;
     fn prepared() -> Session {
-        let mut seed=[19;32]; let mut s=Session::prepare(&mut seed,1_793_367_907).unwrap();
+        let mut seed=[19;32]; let mut s=Session::prepare(&mut seed,1_793_367_907,sex_trust_config::PROFILE).unwrap();
         assert_eq!(seed,[0;32]);
         for _ in 0..16 { if s.poll()==State::HelloPending { return s; } }
         panic!("library failed to yield with a private ClientHello");
@@ -208,7 +206,7 @@ mod tests {
     }
     #[test] fn invalid_time_always_consumes_and_erases_transferred_seed() {
         for now in [0,1_577_836_799,4_102_444_800,u32::MAX] {
-            let mut seed=[43;32]; assert!(matches!(Session::prepare(&mut seed,now),Err(Error::Clock))); assert_eq!(seed,[0;32]);
+            let mut seed=[43;32]; assert!(matches!(Session::prepare(&mut seed,now,sex_trust_config::PROFILE),Err(Error::Clock))); assert_eq!(seed,[0;32]);
         }
     }
     #[test] fn oversized_ingress_has_no_partial_effect_and_malformed_peer_is_terminal() {
@@ -221,9 +219,11 @@ mod tests {
         assert_eq!(s.offer_incoming(&[0]),Err(Error::Terminal));
         assert!(s.pipe.borrow().rx.iter().chain(s.pipe.borrow().tx.iter()).all(|b|*b==0));
     }
-    #[test] fn no_certificate_or_signature_can_be_accepted_before_trust_integration() {
-        let mut reject=RejectPeer;
-        assert!(reject.set_hostname_verification("attacker.test").is_err());
-        assert!(reject.set_hostname_verification(EXPECTED_NAME).is_ok());
+    #[test] fn unknown_policy_consumes_seed_without_allocating_session() {
+        for profile in [0,2,u32::MAX] {
+            let mut seed=[43;32];
+            assert!(matches!(Session::prepare(&mut seed,1_793_367_907,profile),Err(Error::Policy)));
+            assert_eq!(seed,[0;32]);
+        }
     }
 }

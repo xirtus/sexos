@@ -21,7 +21,7 @@ from check_nonunix_target import inspect as target_check
 
 MODES=('ready','close','unsupported','invalid-year')
 LABELS={'Preparing':b'preparing','HelloPending':b'hello pending; no peer','Unavailable':b'unavailable','Cancelled':b'cancelled','Rejected':b'rejected','TimedOut':b'timed out'}
-SCOPE='Actual L/Q private bounded TLS preparation, exact BOOT entropy and UTC prerequisite receipts, source-bound complete status glyphs and sole public startup Echo flow. private_bytes includes Pipe metadata; erased_payload_bytes counts only owned future plus8192 queue-array bytes. No seed/output bytes or derivatives captured; no TLS wire, handshake, peer authentication, certificate validation, randomness quality, hostile containment, SMP or physical proof.'
+SCOPE='Actual L/Q private bounded TLS preparation, exact BOOT entropy/UTC/trust prerequisite receipts and controlled public certificate/name/time/signature fixture self-check, source-bound complete status glyphs and sole public startup Echo flow. private_bytes includes Pipe metadata; erased_payload_bytes counts only owned future plus8192 queue-array bytes. No seed/output bytes or derivatives captured; no TLS wire, handshake, peer authentication, public-CA trust, randomness quality, hostile containment, SMP or physical proof.'
 
 def command_profile(command,mode):
  errors=[]
@@ -40,11 +40,20 @@ def tls_contract(root):
  for name,expected in [('RECORD_READ',4096),('RECORD_WRITE',2048),('QUEUE_BYTES',4096),('MAX_TASK_BYTES',32768)]:
   match=re.search(r'pub const '+name+r': usize = ([0-9_]+);',backend)
   if not match or int(match[1].replace('_',''))!=expected:raise ValueError('source-bound TLS capacity changed: '+name)
- names=['apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
+ names=['apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/trust_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-pdx/src/trust_source.rs','crates/sex-pdx/src/trust_policy.rs','kernel/src/trust_source.rs','servers/sexnet/src/trust_policy.rs','crates/sex-trust-config/Cargo.toml','crates/sex-trust-config/src/lib.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
  for name in names:
   path=root/name
   if path.is_file():contract['source_sha256'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
   elif name not in('apps/kaleidoscope/Cargo.lock',):raise ValueError('missing source-bound TLS prerequisite: '+name)
+ policy=(root/'crates/sex-trust-config/src/lib.rs').read_text();source=(root/'crates/sex-pdx/src/trust_source.rs').read_text()
+ for name,expected in [('SLOT',62),('SYS',74)]:
+  match=re.search(r'pub const '+name+r'\s*:\s*u64\s*=\s*([0-9_]+);',source)
+  if not match or int(match[1].replace('_',''))!=expected:raise ValueError('source-bound trust syscall/slot changed: '+name)
+ for name in ('PROFILE','VERSION'):
+  if not re.search(r'pub const '+name+r'\s*:\s*u32\s*=\s*1;',policy):raise ValueError('source-bound controlled trust profile changed')
+ if not re.search(r'EXPECTED_NAME\s*:\s*&str\s*=\s*"probe\.sexos\.test";',policy):raise ValueError('source-bound expected controlled name changed')
+ root_der=re.search(r'pub const ROOT_DER[^=]*=\s*&\[(.*?)\];',policy,re.S)
+ if not root_der or len(re.findall(r'0x[0-9a-fA-F]{2}',root_der[1]))!=376:raise ValueError('source-bound controlled root extent changed')
  return contract
 
 def tls_geometry(trace,expected,contract):
@@ -100,11 +109,11 @@ def verify_tls_pixels(trace,ppm,expected,contract,resolution=None):
 
 
 def inspect_tls(trace,mode,command,host_start,host_end):
- errors=list(command_profile(command,mode)['errors']);joins=[];closed_pending=None
+ errors=list(command_profile(command,mode)['errors']);joins=[];trust_joins=[];closed_pending=None
  try:
-  for marker in ('[boot.entropy.source] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0','[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1'):
+  for marker in ('[boot.entropy.source] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0','[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1','[boot.trust.policy] holder=13 task=13 slot=62 consumer=15 consumer_task=15 profile=1 root_bytes=376 runtime_mint=0','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1'):
    assert trace.count(marker)==1,'missing/duplicate exact BOOT/source denial contract'
-  for marker in ('[boot.entropy.source]','[boot.clock.source]'):assert trace.count(marker)==1,'foreign BOOT source grant'
+  for marker in ('[boot.entropy.source]','[boot.clock.source]','[boot.trust.policy]','[browser.trust.source.denied]'):assert trace.count(marker)==1,'foreign BOOT source grant'
   assert trace.count(f'[sexnet.entropy.source] held=1 available={0 if mode=="unsupported"else 1} source=rdseed fallback=0 broker=private_seed32')==1,'wrong actual source availability/fallback'
   private_lines=[line for line in trace.splitlines()if re.search(r'\[(?:browser\.tls|browser\.entropy|entropy\.|sexnet\.entropy|boot\.entropy)',line)]
   assert not any(re.search(r'\b(?:hash|fingerprint|word|value|hex|seed_bytes|seed_value|sample_value|data|secret|random)=',line)for line in private_lines),'secret-bearing private metadata field'
@@ -123,20 +132,40 @@ def inspect_tls(trace,mode,command,host_start,host_end):
    assert math.floor(host_start)-1<=int(source[1])<=math.ceil(host_end)+1,'UTC outside actual trusted host bracket'
   intents=list(re.finditer(r'\[browser.tls.intent\] accepted=1 explicit=1 network=0',trace));expected=1 if mode=='close'else 2
   assert len(intents)==trace.count('[browser.tls.intent]')==expected,'wrong explicit L count'
+  policies=list(re.finditer(r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace))
+  assert len(policies)==trace.count('[trust.policy.snapshot]')==expected,'missing/foreign/duplicate held trust query'
+  assert [int(policy[1])for policy in policies]==list(range(1,expected+1)),'trust query sequence reused or skipped'
+  policy_ready=list(re.finditer(r'\[browser.trust.view\] state=Ready\(1\) immutable_boot_profile=1 transport=0',trace))
+  all_policy_views=list(re.finditer(r'\[browser.trust.view\] state=(?:Idle|Pending|Ready\(1\)|Unavailable|Cancelled|Uncertain) immutable_boot_profile=1 transport=0',trace))
+  assert len(all_policy_views)==trace.count('[browser.trust.view]')and len(policy_ready)==expected,'unknown policy view or missing exact Readyprofile'
+  self_checks=list(re.finditer(r'\[browser.trust.self_check\] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',trace))
+  assert len(self_checks)==trace.count('[browser.trust.self_check]'),'wrong/foreign/failed/public-peer fixture receipt'
+  for index,(intent,policy,ready)in enumerate(zip(intents,policies,policy_ready)):
+   end=intents[index+1].start()if index+1<len(intents)else len(trace)
+   assert intent.start()<policy.start()<ready.start()<end,'trust profile not correlated to this explicit L'
+   for provider in admitted+sources:
+    if intent.start()<provider.start()<end:assert ready.start()<provider.start(),'seed/time source started before BOOT trust profile attestation'
+   trust_joins.append(dict(sequence=int(policy[1]),profile=1,root_bytes=376,policy_offset=policy.start(),ready_offset=ready.start()))
   views=list(re.finditer(r'\[browser.tls.view\] state=(Preparing|HelloPending|Unavailable|Cancelled|Rejected|TimedOut) authenticated=0 network=0',trace))
   assert len(views)==trace.count('[browser.tls.view]'),'unknown state/authentication/network claim'
   prepared=list(re.finditer(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace));hellos=[v for v in views if v[1]=='HelloPending']
+  assert len(prepared)==len(self_checks),'TLS preparation missing corresponding controlled verifier self-check'
   assert len(prepared)==trace.count('[browser.tls.prepared]')==len(hellos),'malformed/extra preparation or HelloPending without preparation'
   erased=list(re.finditer(r'\[browser.tls.erased\] bytes=(\d+) owned_storage=1',trace));assert len(erased)==trace.count('[browser.tls.erased]'),'wrong storage erasure receipt'
   assert all(0<=int(m[1])<=40960 for m in erased),'erased storage outside bounded private arena'
   for index,(prep,hello)in enumerate(zip(prepared,hellos)):
    task,private,tx,utc=map(int,prep.groups());assert 0<task<=32768 and private==task+8216 and private<49152 and 0<tx<=4096,'TLS private task/buffer/output bound differs'
    assert index<len(releases)and index<len(services),'TLS prepared without fresh retained prerequisites'
+   policy=policies[index];check=self_checks[index]
+   assert policy.start()<policy_ready[index].start()<check.start()<prep.start(),'self-check/preparation preceded this exact held trust profile'
+   end=intents[index+1].start()if index+1<len(intents)else len(trace)
+   assert check.start()<prep.start()<end,'self-check/preparation escaped this explicit L'
    release=releases[index];ticket=int(release[1]);admission=next((m for m in admitted if int(m[1])==ticket),None)
    collected=re.search(rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: 15, task: 15 \}}\) ticket={ticket} state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace)
    assert admission and collected and intents[index].start()<admission.start()<collected.start()<release.start()<prep.start()<hello.start(),'HelloPending before exact produced32/positive seed RELEASE'
+   assert release.start()<check.start()and services[index].start()<check.start(),'controlled verifier self-check preceded fresh seed/time prerequisites'
    assert services[index].start()<prep.start()and int(services[index][2])==utc,'prepared UTC differs from fresh held snapshot'
-   joins.append(dict(ticket=ticket,utc_sequence=int(services[index][1]),utc_snapshot=utc,task_bytes=task,private_bytes=private,tx_bytes=tx,prepared_offset=prep.start(),hello_offset=hello.start(),release_offset=release.start()))
+   joins.append(dict(trust_sequence=int(policy[1]),trust_profile=1,self_check_offset=check.start(),ticket=ticket,utc_sequence=int(services[index][1]),utc_snapshot=utc,task_bytes=task,private_bytes=private,tx_bytes=tx,prepared_offset=prep.start(),hello_offset=hello.start(),release_offset=release.start()))
   assert '[certificate.time.rollback]'not in trace,'unexpected native rollback'
   if mode=='ready':
    assert len(joins)==len(admitted)==len(releases)==len(services)==2,'wrong fresh prerequisite/Hello count'
@@ -150,8 +179,10 @@ def inspect_tls(trace,mode,command,host_start,host_end):
    assert len(prepared)==len(joins)==1 and len(admitted)==len(releases)==len(services)==1 and hellos[0].start()<closed.start(),'Close did not follow one fully prepared allocated TLSfuture'
    ack=re.search(r'\[net.app.cleanup.ack\] target=15 task=15 client_leases=0 shared_cache=retained ok=1',trace)
    assert ack and closed.start()<ack.start(),'Close did not precede exact cleanup ACK'
-   for marker in ('[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1'):
+   for marker in ('[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1','[trust.policy.retired] target=15 task=15 before_cleanup_ack=1'):
     assert marker in trace and closed.start()<trace.index(marker)<ack.start(),'missing prerequisite retirement before cleanup ACK'
+   trust_closed=re.search(r'\[browser.trust.closed\] target=15 task=15 pending=0 terminal=1',trace);assert trust_closed and trace.count('[browser.trust.closed]')==1 and closed.start()<trust_closed.start()<ack.start(),'allocated Close did not terminally retire completed policy client'
+   assert trace.count('[trust.policy.retired]')==1,'foreign/duplicate trust retirement'
    assert any(closed.start()>=e.start()for e in erased),'Close missing owned storage erasure'
    if joins:assert any(int(e[1])==joins[0]['task_bytes']+8192 and prepared[0].start()<e.start()<closed.start()for e in erased),'completed Close missing exact owned future+queue erasure'
   if mode!='close':
@@ -162,7 +193,7 @@ def inspect_tls(trace,mode,command,host_start,host_end):
    if mode in('unsupported','invalid-year'):assert len([v for v in views if v[1]=='Unavailable'])==2,'missing both explicit prerequisite failures'
   assert len([v for v in views if v[1]=='Preparing'])==expected,'explicit preparations not observed'
  except(AssertionError,ValueError,IndexError,AttributeError)as exc:errors.append(str(exc))
- return dict(ok=not errors,errors=errors,joins=joins,closed_pending=closed_pending,host_utc_bracket=dict(start=host_start,end=host_end,precision_slack_seconds=1),scope=SCOPE)
+ return dict(ok=not errors,errors=errors,joins=joins,trust_policy=dict(profile=1,root_bytes=376,queries=trust_joins,self_checks=len(locals().get('self_checks',[])),scope='Actual source-bound public controlled-profile verifier fixture only; no live peer or public CA claim.'),closed_pending=closed_pending,host_utc_bracket=dict(start=host_start,end=host_end,precision_slack_seconds=1),scope=SCOPE)
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--mode',choices=list(MODES),default='ready');p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');a=p.parse_args()

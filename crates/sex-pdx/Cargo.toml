@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 sex-net-config = { path = "../sex-net-config" }
+sex-trust-config = { path = "../sex-trust-config" }
 serde = { version = "1.0.228", optional = true, default-features = false, features = ["derive", "alloc"] }
 x86_64 = "0.15.4"
 spin = "0.9.8"

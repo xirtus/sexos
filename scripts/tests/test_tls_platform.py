@@ -15,10 +15,13 @@ TLS = tomllib.loads((ROOT / 'crates/sex-tls/Cargo.toml').read_text())
 WORKSPACE = tomllib.loads((ROOT / 'Cargo.toml').read_text())
 APP = tomllib.loads((ROOT / 'apps/kaleidoscope/Cargo.toml').read_text())
 SPEC = tomllib.loads((ROOT / 'sexos_build_spec.toml').read_text())
+TRUST = tomllib.loads((ROOT / 'crates/sex-trust-config/Cargo.toml').read_text())
 TREE = '\n'.join(['sex-tls v0.1.0 (/private/work/crates/sex-tls) '] +
-                 [f'{name} v{version} ' + ('force-soft' if name == 'sha2' else '')
+                 [f'{gate.PACKAGE_NAMES.get(name, name)} v{version} ' +
+                  ','.join(sorted(gate.EFFECTIVE_FEATURES.get(gate.PACKAGE_NAMES.get(name, name), set())))
                   for name, version in gate.PINS.items()] +
-                 ['aes v0.8.4 ', 'polyval v0.6.2 ', 'ppv-lite86 v0.2.21 simd',
+                 ['sex-trust-config v0.1.0 (/private/work/crates/sex-trust-config) ',
+                  'aes v0.8.4 ', 'polyval v0.6.2 ', 'ppv-lite86 v0.2.21 simd',
                   'zerocopy v0.8.63 simd', 'rand_core v0.6.4  (*)'])
 
 
@@ -29,7 +32,7 @@ class TLSPlatform(unittest.TestCase):
         return gate.check_flags(spec)
 
     def test_actual_manifest_policy_and_scalar_stage(self):
-        self.assertEqual(gate.check_manifests(TLS, WORKSPACE, APP), [])
+        self.assertEqual(gate.check_manifests(TLS, WORKSPACE, APP, TRUST), [])
         self.assertEqual(gate.check_flags(SPEC), [])
 
     def test_each_pinned_dependency_rejects_version_defaults_features_and_source_override(self):
@@ -58,6 +61,42 @@ class TLSPlatform(unittest.TestCase):
         app = copy.deepcopy(APP)
         app['dependencies']['sex-tls'] = {'version': '0.1'}
         self.assertTrue(gate.check_manifests(TLS, WORKSPACE, app))
+
+    def test_alias_cannot_select_another_x509_package_or_registry_backend(self):
+        for value in [None, 'webpki', 'ring', 'rustls-webpki-different']:
+            tls = copy.deepcopy(TLS)
+            tls['dependencies']['webpki']['package'] = value
+            self.assertTrue(gate.check_manifests(tls, WORKSPACE, APP, TRUST), value)
+        self.assertTrue(gate.check_tree(TREE.replace('rustls-webpki v0.103.16', 'webpki v0.103.16'))[0])
+
+    def test_local_immutable_config_cannot_add_provider_features_or_change_path(self):
+        for value in [{'path': '/tmp/other'}, {'path': '../sex-trust-config', 'features': ['std']},
+                      {'version': '0.1.0'}, {'path': '../sex-trust-config', 'default-features': True}]:
+            tls = copy.deepcopy(TLS)
+            tls['dependencies']['sex-trust-config'] = value
+            self.assertTrue(gate.check_manifests(tls, WORKSPACE, APP, TRUST), value)
+        for key, value in [('dependencies', {'libc': '0.2'}), ('features', {'default': ['std']}),
+                           ('build-dependencies', {'openssl-sys': '0.9'}),
+                           ('target', {'cfg(unix)': {'dependencies': {'getrandom': '0.3'}}})]:
+            trust = copy.deepcopy(TRUST)
+            trust[key] = value
+            self.assertTrue(gate.check_manifests(TLS, WORKSPACE, APP, trust), key)
+        workspace = copy.deepcopy(WORKSPACE)
+        workspace['workspace']['members'].remove('crates/sex-trust-config')
+        self.assertTrue(gate.check_manifests(TLS, workspace, APP, TRUST))
+
+    def test_exact_x509_signature_and_config_feature_sets_fail_closed(self):
+        for name in ['rustls-webpki', 'rustls-pki-types', 'p256', 'sex-trust-config']:
+            expected = gate.EFFECTIVE_FEATURES[name]
+            for extra in ['ring', 'aws-lc-rs', 'default', 'alloc', 'std', 'pem']:
+                self.assertTrue(gate.check_tree(TREE + '\n' + name + ' v' +
+                    ('0.1.0' if name == 'sex-trust-config' else
+                     gate.PINS['webpki' if name == 'rustls-webpki' else name]) + ' ' + extra)[0], (name, extra))
+            if expected:
+                self.assertTrue(gate.check_tree(TREE.replace(','.join(sorted(expected)), 'ecdh'))[0])
+        for name in ['rustls-webpki', 'rustls-pki-types', 'sex-trust-config']:
+            self.assertTrue(gate.check_tree('\n'.join(line for line in TREE.splitlines()
+                                                     if not line.startswith(name + ' v')))[0], name)
 
     def test_both_cfg_spellings_accepted_and_missing_duplicate_malformed_rejected(self):
         self.assertEqual(self.flags('--cfg=aes_force_soft --cfg=polyval_force_soft'), [])
@@ -96,7 +135,7 @@ class TLSPlatform(unittest.TestCase):
             self.assertTrue(gate.check_tree(TREE + f'\n{name} v1.0.0 ')[0], name)
 
     def test_effective_std_entropy_or_provider_features_rejected(self):
-        for feature in ['std', 'getrandom', 'os_rng', 'system-verification', 'native-certs']:
+        for feature in ['std', 'alloc', 'getrandom', 'os_rng', 'system-verification', 'native-certs']:
             self.assertTrue(gate.check_tree(TREE + '\nnew-provider v1.0.0 ' + feature)[0], feature)
         for line in ['embedded-tls v0.19.0 alloc', 'rand_core v0.6.4 default',
                      'sha2 v0.10.9 asm', 'rand_chacha v0.3.1 std']:

@@ -18,6 +18,9 @@ pub mod network_dns;
 pub mod entropy_source;
 pub mod clock_source;
 pub mod certificate_time;
+pub mod trust_source;
+pub mod trust_policy;
+pub use sex_trust_config as trust_config;
 pub mod entropy_seed;
 pub mod spindle_history;
 pub mod spindle_probe;
@@ -554,6 +557,16 @@ fn clock_registers(slot:u64,kind:u64)->[u64;5]{
 }
 pub fn clock_info(slot:u64)->Result<clock_source::Info,u64>{clock_source::Info::decode(clock_registers(slot,clock_source::INFO))}
 pub fn clock_snapshot(slot:u64)->Result<clock_source::Snapshot,u64>{clock_source::Snapshot::decode(clock_registers(slot,clock_source::READ))}
+
+/// Inspect only this exact subject's held immutable BOOT trust-policy source.
+pub fn trust_info(slot:u64)->Result<trust_source::Info,u64>{
+    let(status,a,b,c,d):(u64,u64,u64,u64,u64);
+    unsafe{core::arch::asm!("syscall",inlateout("rax")trust_source::SYS=>status,
+        in("rdi")slot,inlateout("rsi")trust_source::INFO=>a,inlateout("rdx")0u64=>b,
+        inlateout("r10")0u64=>c,inlateout("r8")0u64=>d,
+        out("rcx")_,out("r11")_,options(nostack));}
+    trust_source::Info::decode([status,a,b,c,d])
+}
 
 /// Inspect a boot paging capability without allocating or mapping anything.
 pub fn paging_info(slot: u64) -> Result<paging::PagingInfo, u64> {

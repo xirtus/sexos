@@ -1,0 +1,1 @@
+PUBLIC TEST KEYS: root scalar1/server scalar2, P256. These are deliberately public controlled lab fixtures, not credentials. Only probe.sexos.test/profile1 is sanctioned by BOOT. No public Internet trust or production security claim. Reproduce with scripts/generate_tls_fixtures.py using cryptography==46.0.3.

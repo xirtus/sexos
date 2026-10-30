@@ -21,6 +21,7 @@ mod jobs;
 mod dns_jobs;
 mod entropy;
 mod certificate_time;
+mod trust_policy;
 
 /// The held BOOT lifecycle grants establish exact current subject/task, never
 /// the app-supplied ticket. Err(LIVE) is the kernel's live-task attestation;
@@ -5207,6 +5208,7 @@ pub extern "C" fn _start() -> ! {
     let clock_source=sex_pdx::clock_info(sex_pdx::clock_source::SLOT).ok();
     sex_pdx::serial_record!("[sexnet.clock.source] held={} source=q35_cmos_utc no_ticks_fallback=1 precision=1",clock_source.is_some()as u8);
     let mut clock=certificate_time::Machine::new();
+    let mut trust=trust_policy::Machine::new();
     let mut dns_changes=0u64;
     // Finite, non-reused job tickets retain their first submitted frame even
     // after an earlier stream consumed the device's ordinary sample budget.
@@ -5360,7 +5362,11 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){clock.retire(owner);}
             else if pdx_reply(owner.pd,word)==0{clock.reply_accepted();}else{clock.reply_deferred();}
         }
-        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some();
+        if let Some((owner,word))=trust.pending_reply(){
+            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){trust.retire(owner);}
+            else if pdx_reply(owner.pd,word)==0{trust.reply_accepted();}else{trust.reply_deferred();}
+        }
+        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some();
         let pending=preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
@@ -5385,6 +5391,8 @@ pub extern "C" fn _start() -> ! {
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
                     seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
                     clock.retire(sex_pdx::clock_source::Identity{pd:notice.target_pd,task:notice.task_id});
+                    trust.retire(sex_pdx::trust_source::Identity{pd:notice.target_pd,task:notice.task_id});
+                    sex_pdx::serial_record!("[trust.policy.retired] target={} task={} before_cleanup_ack=1",notice.target_pd,notice.task_id);
                     sex_pdx::serial_record!("[certificate.time.retired] target={} task={} before_cleanup_ack=1 high_water_retained=1",notice.target_pd,notice.task_id);
                     sex_pdx::serial_record!("[entropy.seed.retired] target={} task={} before_cleanup_ack=1 private_payload=erased",notice.target_pd,notice.task_id);
                     if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
@@ -5397,6 +5405,27 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if app_custody.is_retired(req.caller_pd) {continue}
+
+        if req.type_id==sex_pdx::trust_policy::OP{
+            let request=sex_pdx::trust_policy::Request::decode([req.arg0,req.arg1,req.arg2]);
+            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+                let identity=sex_pdx::trust_source::Identity{pd:owner.pd,task:owner.task};
+                let mut observed=None;
+                if !trust.handle(identity,request,||{
+                    let result=sex_pdx::trust_info(sex_pdx::trust_source::SLOT);
+                    observed=result.ok();result
+                }){
+                    sex_pdx::serial_record!("[trust.policy.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);
+                }
+                if let Some(info)=observed.filter(|info|info.valid()&&info.consumer==identity){
+                    sex_pdx::serial_record!("[trust.policy.snapshot] owner={} task={} seq={} profile={} root_bytes={} origin=held_boot_grant",owner.pd,owner.task,request.seq,info.profile,info.root_bytes);
+                }
+            }else{
+                let seq=(req.arg0&sex_pdx::trust_policy::MAX_SEQ as u64)as u32;
+                if seq!=0{pdx_reply(req.caller_pd,sex_pdx::trust_policy::error(seq,sex_pdx::trust_policy::INVALID));}
+            }
+            continue;
+        }
 
         if req.type_id==sex_pdx::certificate_time::OP{
             let request=sex_pdx::certificate_time::Request::decode([req.arg0,req.arg1,req.arg2]);

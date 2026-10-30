@@ -64,6 +64,13 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/certificate_time_client.rs" -o "$TE
 "$TEST_DIR/certificate-time-tests"
 echo '[sexnet.certificate.time.host] PASS scope=actual_UTC_ABI_source_decoder_broker_client_not_live_RTC_authenticity_or_TLS'
 
+rustc --edition=2021 --crate-name sex_trust_config --crate-type rlib "$ROOT_DIR/crates/sex-trust-config/src/lib.rs" -o "$TEST_DIR/libsex_trust_config.rlib"
+rustc --edition=2021 --extern sex_trust_config="$TEST_DIR/libsex_trust_config.rlib" --test "$ROOT_DIR/tests/trust_policy_source.rs" -o "$TEST_DIR/trust-policy-source-tests"
+"$TEST_DIR/trust-policy-source-tests"
+rustc --edition=2021 --extern sex_trust_config="$TEST_DIR/libsex_trust_config.rlib" --test "$ROOT_DIR/tests/trust_policy_client.rs" -o "$TEST_DIR/trust-policy-client-tests"
+"$TEST_DIR/trust-policy-client-tests"
+echo '[sexnet.trust.policy.host] PASS scope=actual_immutable_config_source_ABI_broker_kernel_entry_model_client_not_live_BOOT_authority_or_peer_authentication'
+
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
   --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-tls --target "$HOST_TARGET"

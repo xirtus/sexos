@@ -9,7 +9,7 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityKind {
     Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy, VfsNode,
-    InputRing, MessageQueue, Region, FramePool, PagerMapping, DemandRegion, AppLifecycle, EntropySource, ClockSource,
+    InputRing, MessageQueue, Region, FramePool, PagerMapping, DemandRegion, AppLifecycle, EntropySource, ClockSource, TrustPolicy,
 }
 
 #[repr(C, align(64))]
@@ -98,6 +98,7 @@ pub enum CapabilityData {
     HistoryRecovery(sex_pdx::history_recovery::Grant),
     EntropySource(sex_pdx::entropy_source::Grant),
     ClockSource(sex_pdx::clock_source::Grant),
+    TrustPolicy(sex_pdx::trust_source::Grant),
     InputRing, MessageQueue,
 }
 
