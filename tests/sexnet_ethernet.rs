@@ -107,3 +107,8 @@ fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 
 #[test]fn legacy_unimplemented_timing_does_not_exempt_any_dma_register_or_unknown_nonzero_value(){
  for which in 0..4{let model=if which==2{c::Model::I82574}else{c::Model::I82540};let m=Mock::new(model);m.0.borrow_mut().timing=Some(if which==3{1}else{0});m.0.borrow_mut().refuse=which==1;let mut d=Driver::new(m.clone(),MAC,0);for n in 0..30{d.advance(n);}if which==0{assert_eq!(d.phase(),Phase::Running);assert!(!d.timing_verified);}else{assert_eq!(d.failure(),Some(Failure::Registers));assert_eq!(m.0.borrow().command&4,0);}}
 }
+
+#[test]fn protocol_backpressure_holds_rx_without_blocking_exact_tx_completion(){
+ let m=Mock::new(c::Model::I82574);let mut d=ready(&m);m.rx(0,&[0x71;60],3,0,60);let start=m.ops().len();assert!(d.advance_with_receive(100,false).is_none());assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::CopyOut(..)|Op::Write(0x2818,_))));
+ d.send(&[0x33;60],100).unwrap();m.done(0,1);assert!(matches!(d.advance_with_receive(101,false),Some(Event::Transmitted{index:0,..})));assert!(matches!(d.advance_with_receive(102,true),Some(Event::Received{index:0,..})));
+}

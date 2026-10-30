@@ -28,3 +28,5 @@ spin = "0.9.8"
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-rt = { path = "../../sex-rt" }
 libsys = { path = "../../sex-src/lib/libsys" }
+
+sex-net = { path = "../../crates/sex-net" }

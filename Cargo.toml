@@ -19,6 +19,7 @@ members = [
     "apps/kaleidoscope",
     "purple-scanout",
     "crates/sex-pdx",
+    "crates/sex-net",
     "crates/sex-graphics",
     "crates/silkbar-model",
     "crates/sex-object-model",

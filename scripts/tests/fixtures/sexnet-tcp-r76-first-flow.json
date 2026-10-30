@@ -1,0 +1,10 @@
+{
+  "scope": "Actual QEMU/guest packets from explicit generated16641-byte host TCP fixture. Only first complete connection retained for checker negative tests.",
+  "source_iso_sha256": "435da32b4772936ebe4ce2cb4c9a30315dbb54271b33ecd44390dc14a967a3da",
+  "source_pcap_sha256": "d7cbfbf89b84127e3ba6725c5961f2f47ae00051d11386e085ecb4cd4372f0f8",
+  "fixture_sha256": "909e9f8af6103a790f0d751d0761a69b8cf100a67dba71109f86470abaeb297b",
+  "length": 16641,
+  "seed": 7,
+  "payload_sha256": "e75c7ef96d399a8add22013e024067937b250c1e70449df43312321b637c3001",
+  "records": 141
+}

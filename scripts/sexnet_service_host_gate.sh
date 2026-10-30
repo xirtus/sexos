@@ -51,3 +51,4 @@ echo '[sexnet.nic.prepare.host] PASS scope=actual_bounded_state_machine_with_exp
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_ethernet.rs" -o "$TEST_DIR/ethernet"
 "$TEST_DIR/ethernet" --test-threads=1
 echo '[sexnet.ethernet.host] PASS scope=actual_fixed_queue_driver_with_explicit_device_dma_clock_doubles_not_live_wire_or_hostile_dma_containment'
+bash "$ROOT_DIR/scripts/sexnet_transport_host_gate.sh"

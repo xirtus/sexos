@@ -72,6 +72,11 @@ impl<H:Hardware> Driver<H>{
     /// One bounded initialization phase, or at most one TX/RX completion.
     /// The service always handles IPC and yields between calls.
     pub fn advance(&mut self,now:u64)->Option<Event>{
+        self.advance_with_receive(now,true)
+    }
+    /// Receive custody stays with hardware while the private protocol slot is
+    /// full. TX completion and timeout processing must still make progress.
+    pub fn advance_with_receive(&mut self,now:u64,receive:bool)->Option<Event>{
         if !self.active(){return None;}
         if now<self.last{self.fail(Failure::Clock);return None;}self.last=now;
         if self.phase!=Phase::Running{
@@ -143,6 +148,7 @@ impl<H:Hardware> Driver<H>{
                     }
                     if now-pending.since>=TX_TICKS||pending.turns>=TX_TURNS{self.fail(Failure::Deadline);return None;}
                 }
+                if !receive{return None;}
                 let index=self.rx;let word=self.hardware.load64(index*16+8);let status=(word>>32)as u8;
                 if status&1==0{return None;}self.hardware.acquire();
                 if self.hardware.load64(index*16)!=self.layout.unwrap().rx(index){self.fail(Failure::Descriptor);return None;}
