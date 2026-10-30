@@ -9,8 +9,9 @@ from check_nic_command import inspect as nic
 from check_desktop_pixels import font_from_source,glyph,verify_kaleido_layout
 from check_disk_persistence import ppm_rgb
 
-DNS_MODES=('dns-disallowed','dns-zero-ttl','dns-malformed','dns-silence','dns-cancel','dns-close')
-MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch')+DNS_MODES
+DNS_MODES=('dns-disallowed','dns-zero-ttl','dns-malformed','dns-silence','dns-cancel','dns-close','dns-cname-disallowed','dns-cname-zero-ttl','dns-cname-cycle','dns-cname-conflict','dns-bad-pointer','dns-cname-unrelated')
+DNS_SUCCESS=('dns-compressed','dns-cname','dns-cname-reordered','dns-cname-sections')
+MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch')+DNS_MODES+DNS_SUCCESS
 BODY=b'LIVE SEXOS HTTP BODY 80 / FROM CONTROLLED PEER.'
 ECHO=bytes((n*17+78)&255 for n in range(1025))
 
@@ -171,9 +172,10 @@ def main():
     if ticket>dns_count or body!=dns_query(ticket):raise RuntimeError('unexpected, duplicate, or noncanonical actual H DNS query')
     dns_seen.set()
     if a.mode in('dns-silence','dns-cancel','dns-close'):continue
-    reply=bytearray(dns_response(ticket,'malformed'if a.mode=='dns-malformed'else'answer'))
-    if a.mode=='dns-disallowed':reply[-4:]=bytes([10,0,2,99])
-    elif a.mode=='dns-zero-ttl':reply[40:44]=b'\0'*4
+    kind=a.mode[4:]if a.mode in DNS_SUCCESS+('dns-cname-cycle','dns-cname-conflict','dns-bad-pointer','dns-cname-unrelated')else'cname'if a.mode in('dns-cname-disallowed','dns-cname-zero-ttl')else'malformed'if a.mode=='dns-malformed'else'answer'
+    reply=bytearray(dns_response(ticket,kind))
+    if a.mode in('dns-disallowed','dns-cname-disallowed'):reply[-4:]=bytes([10,0,2,99])
+    elif a.mode in('dns-zero-ttl','dns-cname-zero-ttl'):reply[40:44]=b'\0'*4
     row['response_hex']=bytes(reply).hex();attempt=dict(ticket=ticket,kind=a.mode if a.mode in DNS_MODES else'answer',response_hex=row['response_hex'],response_sha256=hashlib.sha256(reply).hexdigest(),remote=list(remote),host_monotonic=time.monotonic())
     try:attempt['sent_bytes']=dns_peer.sendto(reply,remote)
     except OSError as exc:attempt['send_error']=repr(exc);raise
@@ -280,7 +282,7 @@ def main():
    elif a.mode=='dns-cancel':
     start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.dns.released\] ticket=1 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-http');actions.append(dict(action='actual_j_cancel_waiting_dns',seconds=time.monotonic()-began,http_job_allocated=False))
    else:
-    dns_view=r'Answer\(\[10, 0, 2, 99\]\)'if a.mode=='dns-disallowed'else r'Answer\(\[10, 0, 2, 2\]\)'if a.mode=='dns-zero-ttl'else'Unavailable'
+    dns_view=r'Answer\(\[10, 0, 2, 99\]\)'if a.mode in('dns-disallowed','dns-cname-disallowed')else r'Answer\(\[10, 0, 2, 2\]\)'if a.mode in('dns-zero-ttl','dns-cname-zero-ttl')else'Unavailable'
     wait(rf'\[browser.dns.released\] ticket=1 view={dns_view} private_job=0',start);wait(r'\[browser.http.view\] state=Unavailable tls=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=3 body_bytes=0 ',start);pixels(q,'Unavailable','browser-http')
    if any(int(n)>1 for n in re.findall(r'\[net.job.egress.submit\] ticket=(\d+) ',text()))or '[net.job.resolved.admitted]'in text():raise RuntimeError('DNS denial/cancellation/Close admitted new HTTP-owned egress')
   else:
@@ -292,14 +294,14 @@ def main():
   if a.mode=='close':close_pending(q,len(text()),'http')
   elif a.mode=='cancel-retry':
    start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.http.released\] ticket=2 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-cancelled');actions.append(dict(action='actual_j_cancel',ticket=2,seconds=time.monotonic()-began));start=len(text());q.key('h');resolution(3,2,start);ready(q,3,start,'browser-http');actions.append(dict(action='actual_h_fresh_retry',ticket=3,dns_generation=2))
-  elif a.mode in('echo','switch'):
+  elif a.mode in('echo','switch')+DNS_SUCCESS:
    ready(q,2,start,'browser-http-first'if a.mode=='switch'else'browser-http')
    if a.mode=='switch':
     start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-erased');actions.append(dict(action='actual_j_erase_previous_ready_body',job_allocated=False))
     start=len(text());q.key('r');wait(r'\[browser.net.job.released\] ticket=3 view=Verified private_job=0',start);actions.append(dict(action='actual_r_echo_same_replay_fence',ticket=3));start=len(text());q.key('h');resolution(4,2,start);ready(q,4,start,'browser-http');actions.append(dict(action='actual_h_after_echo',ticket=4,dns_generation=2))
   elif a.mode not in DNS_MODES:
    wait(r'\[browser.http.released\] ticket=2 view=Unavailable private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=3 body_bytes=0 ',start);pixels(q,'Unavailable','browser-http')
-  expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode=='cancel-retry'else[2]if a.mode=='echo'else[]
+  expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode=='cancel-retry'else[2]if a.mode in('echo',)+DNS_SUCCESS else[]
   if [int(n)for n in re.findall(r'\[browser.http.body\] ticket=(\d+) ',text())]!=expected_bodies:raise RuntimeError('invalid, incomplete, cancelled or absent HTTP response became usable body')
   health()
  except Exception as exc:failure=repr(exc)
@@ -327,6 +329,12 @@ def main():
  dns_validation=dns_capture(raw_pcap,'echo',dns_attempts,expected=dns_expected)if raw_pcap and dns_expected else dict(ok=False,errors=['missing actual H DNS query/capture'])
  admissions=[]if a.mode in DNS_MODES else[(2,1),(4,2)]if a.mode=='switch'else[(2,1),(3,2)]if a.mode=='cancel-retry'else[(2,1)]
  joined=resolution_joins(text(),raw_pcap,admissions,dns_validation)
+ if a.mode in DNS_SUCCESS and joined['ok']:
+  # The captured alias fixtures carry23s/7s CNAME TTLs and60s A data.
+  # Authority/additional TTL1 is unrelated and must not shorten admission.
+  lifetime=60000 if a.mode=='dns-compressed'else 7000
+  if len(joined['joins'])!=1 or joined['joins'][0]['expires_tick']-joined['joins'][0]['observed_tick']!=lifetime:
+   joined['ok']=False;joined['errors'].append('resolved provenance TTL differs from the exact captured CNAME chain/final A RRset')
  authority=nic(text(),1,True,True)
  if len(rows)!=count:failure=failure or'incomplete actual peer exchanges'
  if len(dns_rows)!=dns_count:failure=failure or'incomplete actual DNS exchanges'

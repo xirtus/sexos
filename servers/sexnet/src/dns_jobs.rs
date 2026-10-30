@@ -178,14 +178,14 @@ impl Machine{
   assert_eq!(m.resolved(A,ticket,1100).unwrap().expires_tick,1101);assert_eq!(m.resolved(A,ticket,1101),None);
   m.maintain_records(1101,|_|true);assert_eq!(m.owned_records(A),0);
   assert_eq!(call_at(&mut m,&mut p,A,r(2,a::RELEASE,ticket),1102),Ok(0));assert_eq!(m.owned_records(A),0);
-  let mut m=Machine::new();let mut p=Peer::new();let ticket=publish(&mut m,&mut p,A,1,100,u32::MAX);
+  let mut m=Machine::new();let mut p=Peer::new();let ticket=publish(&mut m,&mut p,A,1,100,0x7fff_ffff);
   assert_eq!(m.resolved(A,ticket,102).unwrap().expires_tick,60_101);
   let mut m=Machine::new();let mut p=Peer::new();let ticket=call_at(&mut m,&mut p,A,r(1,a::BEGIN,0),100).unwrap();
   p.response=Some(answer_ttl(ticket as u16,1));m.advance(101,&mut p);
   assert_eq!(call_at(&mut m,&mut p,A,r(2,a::RELEASE,ticket),1101),Ok(0));assert_eq!(m.owner(),None);assert_eq!(m.owned_records(A),0);
  }
- #[test]fn zero_ttl_and_checked_expiry_overflow_keep_diagnostic_answer_without_provenance(){
-  for(now,ttl)in[(100,0),(u64::MAX-10_000,u32::MAX)]{
+ #[test]fn zero_highbit_ttl_and_checked_expiry_overflow_keep_diagnostic_answer_without_provenance(){
+  for(now,ttl)in[(100,0),(100,0x8000_0000),(100,u32::MAX),(u64::MAX-10_000,0x7fff_ffff)]{
    let mut m=Machine::new();let mut p=Peer::new();let ticket=call_at(&mut m,&mut p,A,r(1,a::BEGIN,0),now).unwrap();
    p.response=Some(answer_ttl(ticket as u16,ttl));m.advance(now+1,&mut p);
    assert_eq!(m.state(),State::Complete);assert!(m.candidate.is_none());

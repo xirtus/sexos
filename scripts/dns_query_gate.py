@@ -3,7 +3,7 @@
 import argparse,ast,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
-from check_dns_capture import MODES,query,response,inspect
+from check_dns_capture import MODES,POSITIVE_MODES,query,response,inspect
 from check_nic_command import inspect as nic
 from outbound_job_gate import load_pixel_contract as load_probe_contract
 from check_desktop_pixels import glyph,verify_kaleido_layout
@@ -178,18 +178,18 @@ def main():
    wait(r'\[browser.dns.answer\] ticket=2 address=10\.0\.2\.2 controlled_peer=1 tls=0 web=0',start)
    wait(r'\[browser.dns.released\] ticket=2 view=Answer\(\[10, 0, 2, 2\]\) private_job=0',start)
    actions.append(dict(action='actual_d_fresh_retry',ticket=2))
-  elif a.mode in('echo','wrong-context'):
+  elif a.mode in('echo','wrong-context')+POSITIVE_MODES:
    wait(r'\[browser.dns.answer\] ticket=1 address=10\.0\.2\.2 controlled_peer=1 tls=0 web=0',start)
    wait(r'\[browser.dns.released\] ticket=1 view=Answer\(\[10, 0, 2, 2\]\) private_job=0',start)
   else:wait(r'\[browser.dns.released\] ticket=1 view=Unavailable private_job=0',start)
   answers=[int(t)for t in re.findall(r'\[browser.dns.answer\] ticket=(\d+) ',text())]
-  expected_answers=[2]if a.mode=='cancel-retry'else[1]if a.mode in('echo','wrong-context')else[]
+  expected_answers=[2]if a.mode=='cancel-retry'else[1]if a.mode in('echo','wrong-context')+POSITIVE_MODES else[]
   if answers!=expected_answers:raise RuntimeError('bad, unrelated, cancelled or absent DNS packet became usable app answer')
   if a.mode=='close':
    q.cmd('screendump',{'filename':str(out/'browser.ppm')});pixel_result=dict(ok=True,skipped=True,reason='Browser is terminally closed; no live DNS status surface remains. Close is qualified by lifecycle cleanup and captured query evidence.')
    (out/'browser-dns-status-pixels.json').write_text(json.dumps(pixel_result,indent=2)+'\n')
   else:
-   expected='Answer'if a.mode in('echo','wrong-context','cancel-retry')else'Unavailable'
+   expected='Answer'if a.mode in('echo','wrong-context','cancel-retry')+POSITIVE_MODES else'Unavailable'
    pixel_result=wait_dns_pixels(q,text,out,expected,pixel_contract,health)
    if not pixel_result['ok']:raise RuntimeError('actual Browser DNS status pixels: '+'; '.join(pixel_result['errors']))
   health()

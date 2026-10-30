@@ -5,7 +5,35 @@ from check_tcp_capture import frames,checksum
 
 LOCAL=bytes([10,0,2,15]);PEER=bytes([10,0,2,2]);PORT=46079
 QUESTION=b'\x05probe\x05sexos\x04test\0\0\x01\0\x01'
-MODES=('echo','wrong-context','malformed','truncated','nxdomain','silence','cancel-retry','close')
+POSITIVE_MODES=('compressed','cname','cname-reordered','cname-sections')
+ALIAS_FAILURES=('cname-cycle','cname-conflict','bad-pointer','cname-unrelated')
+MODES=('echo','wrong-context','malformed','truncated','nxdomain','silence','cancel-retry','close')+POSITIVE_MODES+ALIAS_FAILURES
+
+def alias_response(ticket,kind):
+ """Explicit independent wire fixtures; no production DNS parser is imported."""
+ packet=bytearray(struct.pack('!6H',ticket,0x8180,1,0,0,0)+QUESTION)
+ def ptr(offset):return struct.pack('!H',0xc000|offset)
+ def rr(owner,typ,ttl,data):
+  start=len(packet);packet.extend(owner+struct.pack('!HHIH',typ,1,ttl,len(data)));rdata=len(packet);packet.extend(data);return start,rdata
+ if kind=='compressed':
+  rr(b'\x05PrObE\xc0\x12',1,60,PEER);answers=1
+ elif kind=='cname-reordered':
+  first,_=rr(b'\x04page\xc0\x12',1,60,PEER);rr(b'\xc0\x0c',5,7,ptr(first));answers=2
+ elif kind=='cname-cycle':
+  _,target=rr(b'\xc0\x0c',5,23,b'\x03mid\xc0\x12');rr(ptr(target),5,7,b'\xc0\x0c');answers=2
+ elif kind=='cname-conflict':
+  _,target=rr(b'\xc0\x0c',5,23,b'\x03mid\xc0\x12');rr(b'\xc0\x0c',5,7,b'\x04page\xc0\x12');rr(ptr(target),1,60,PEER);answers=3
+ elif kind=='bad-pointer':rr(b'\xc0\x0c',5,7,b'\xc0\x04');answers=1
+ elif kind=='cname-unrelated':
+  rr(b'\xc0\x0c',5,23,b'\x03mid\xc0\x12');rr(b'\x05other\xc0\x12',1,60,PEER);answers=2
+ elif kind in('cname','cname-sections'):
+  _,mid=rr(b'\xc0\x0c',5,23,b'\x03mid\xc0\x12');_,page=rr(ptr(mid),5,7,b'\x04page\xc0\x12');rr(ptr(page),1,60,PEER);answers=3
+  if kind=='cname-sections':
+   _,ns=rr(b'\x05sexos\xc0\x18',2,1,b'\x02ns\xc0\x12');rr(ptr(ns),1,1,bytes([203,0,113,55]));packet[8:12]=struct.pack('!HH',1,1)
+ else:raise ValueError('unknown bounded alias fixture')
+ packet[6:8]=struct.pack('!H',answers)
+ if len(packet)>512:raise ValueError('DNS fixture exceeds datagram bound')
+ return bytes(packet)
 
 def query(ticket):
  if not 1<=ticket<=17535:raise ValueError('finite nonzero DNS ticket required')
@@ -13,6 +41,7 @@ def query(ticket):
 
 def response(ticket,kind='answer'):
  """Independent peer fixtures, never a replacement for captured packets."""
+ if kind in POSITIVE_MODES+ALIAS_FAILURES:return alias_response(ticket,kind)
  packet=bytearray(struct.pack('!6H',ticket,0x8180,1,1,0,0)+QUESTION+b'\xc0\x0c'+struct.pack('!HHIH',1,1,60,4)+PEER)
  if kind=='wrong-id':packet[:2]=struct.pack('!H',ticket+100)
  elif kind=='wrong-question':packet[13:18]=b'other'
@@ -60,13 +89,14 @@ def inspect(data,mode,attempts=None,expected=None):
     if payload!=query(ticket):raise ValueError('actual query differs from exact fixed-name A/IN ticket-bound query')
     queries.append(item)
    else:
-    kind=('explicit'if declared.get(ticket)==payload else None)if declared is not None else next((kind for kind in('answer','wrong-id','wrong-question','malformed','truncated','nxdomain')if payload==response(ticket,kind)),None)
+    kind=('explicit'if declared.get(ticket)==payload else None)if declared is not None else next((kind for kind in('answer','wrong-id','wrong-question','malformed','truncated','nxdomain')+POSITIVE_MODES+ALIAS_FAILURES if payload==response(ticket,kind)),None)
     if kind is None:raise ValueError('captured DNS response differs from explicit peer fixtures')
     item['kind']=kind;responses.append(item)
   if [q['ticket']for q in queries]!=expected_tickets:errors.append('actual DNS queries are missing, repeated, reordered, or reused a ticket')
   by_ticket={ticket:[r for r in responses if r['ticket']==ticket]for ticket in expected_tickets}
   if any(r['ticket']not in expected_tickets for r in responses):errors.append('unexpected captured DNS ticket')
   wanted={'echo':['answer'],'wrong-context':['wrong-id','wrong-question','answer'],'malformed':['malformed'],'truncated':['truncated'],'nxdomain':['nxdomain'],'silence':[],'close':[]}
+  wanted.update({kind:[kind]for kind in POSITIVE_MODES+ALIAS_FAILURES})
   if declared is not None:
    for ticket in expected_tickets:
     wanted_payload=[]if declared[ticket]is None else[declared[ticket].hex()]

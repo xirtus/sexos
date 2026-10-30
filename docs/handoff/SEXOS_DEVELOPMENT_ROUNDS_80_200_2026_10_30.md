@@ -1,6 +1,6 @@
 # SexOS active development plan: rounds80–200
 
-The user revised the active goal on30 October2026 to **121 substantive rounds,80–200**. This supersedes the previous19–118 plus119–218 scope. Through83 is accepted;4/121 rounds in the revised scope are complete. Round84 is in preparation and84–200 remain (117 rounds). Entries201–218 in the earlier plan are historical proposals outside the current objective. No plan entry is completion evidence.
+The user revised the active goal on30 October2026 to **121 substantive rounds,80–200**. This supersedes the previous19–118 plus119–218 scope. Through84 is accepted;5/121 rounds in the revised scope are complete. Round85 is in progress and85–200 remain (116 rounds). Entries201–218 in the earlier plan are historical proposals outside the current objective. No plan entry is completion evidence.
 
 Preserve GLOBAL_VAS, BOOT-only capability genesis, sex-pdx authority, exact incarnation ownership and terminal identities. SexOS is not Unix. Each accepted round needs a substantive implementation/investigation, appropriate actual-function and native evidence, an honest ledger, remaining release gates, commit and push. Reorder dependent work when evidence requires it; do not manufacture rounds from tests or document edits. Keep Astra usage low.
 
