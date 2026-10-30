@@ -5,6 +5,9 @@ use sex_pdx::desktop_style::{scale, ADVANCE, INSET, LINE};
 
 const CAPACITY: usize = 512;
 const MAX_BODY: usize = 12288;
+/// A readable measure also leaves room for seven body rows in a tall view
+/// without enlarging the fixed display transaction or shrinking the font.
+pub const MAX_COLUMNS: usize = 47;
 const TOP: u32 = 28 + INSET;
 const GLYPH_HEIGHT: u32 = 7;
 const HOST: &[u8] = sex_pdx::network_config::HOST_NAME;
@@ -23,6 +26,9 @@ pub struct Frame {
     pub rows: usize,
     pub cols: usize,
     pub total_lines: usize,
+    /// Retained source-byte intent; rendering/reflow never moves this anchor.
+    /// `first` describes the independently clamped current wrapped line.
+    pub source_anchor: usize,
 }
 
 /// Geometry and one source-byte anchor are the entire retained reader state.
@@ -85,13 +91,14 @@ impl Reader {
     pub const fn new() -> Self { Self { width: 0, height: 0, anchor: 0 } }
     pub fn resize(&mut self, w: u32, h: u32) { self.width = w; self.height = h; }
     pub fn clear(&mut self) { self.anchor = 0; }
+    pub fn source_anchor(&self) -> usize { self.anchor }
 
     fn geometry(&self) -> (usize, usize) {
         if self.width == 0 || self.height == 0 { return (0,0); }
         let factor = scale(self.width);
         // The renderer wraps immediately on its last physical column. Reserve
         // one column so an explicit newline cannot produce an extra blank row.
-        let cols = (self.width.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1).min(79) as usize;
+        let cols = ((self.width.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1) as usize).min(MAX_COLUMNS);
         let first_bottom = TOP + GLYPH_HEIGHT*factor;
         if cols == 0 || self.height < first_bottom { return (0,0); }
         let physical = 1 + (self.height-first_bottom)/(LINE*factor);
@@ -114,7 +121,7 @@ impl Reader {
         let body = content(body);
         let (cols,rows) = self.geometry();
         let mut frame = Frame { bytes: [0;CAPACITY], len: 0, first: 0, end: 0,
-            body_rows: rows.saturating_sub(3), rows, cols, total_lines: 0 };
+            body_rows: rows.saturating_sub(3), rows, cols, total_lines: 0, source_anchor: self.anchor };
         if rows == 0 { return frame; }
         frame.len = rows*(cols+1)-1;
         for row in 0..rows {
@@ -122,31 +129,32 @@ impl Reader {
             frame.bytes[at..at+cols].fill(b' ');
             if row+1 != rows { frame.bytes[at+cols] = b'\n'; }
         }
-        put(&mut frame,0,banner);
+        let header: &[u8] = if banner==b"Controlled HTTPS / lab root" {
+            if cols>=26 { banner } else if cols>=16 { b"HTTPS / lab root" }
+            else if cols>=9 { b"Lab HTTPS" } else { b"Lab TLS" }
+        } else { banner };
+        put(&mut frame,0,header);
         if rows > 2 {
             let at = cols+1;
             for (index,byte) in host.iter().chain(b" ").chain(path).take(cols).enumerate() { frame.bytes[at+index] = clean(*byte); }
         }
-        if rows > 1 {
-            let footer: &[u8] = if banner==b"Controlled HTTPS / lab root"{if cols>=25{b"PgUp PgDn V back I import"}else if cols>=6{b"V I"}else{b"I"}}else{if cols >= 25 { b"PgUp PgDn Home End V back" } else if cols >= 6 { b"V back" } else { b"V" }};
-            put(&mut frame,rows-1,footer);
-        }
         let visible = frame.body_rows;
         let info = layout(body,cols,visible,self.anchor);
         frame.total_lines = info.total;
-        if visible == 0 { return frame; }
-        self.anchor = info.offset;
-        frame.first = info.first;
-        let mut cursor = info.offset;
-        let mut shown = 0;
-        while shown < visible && cursor < body.len() {
-            let source = line(body,cursor,cols);
-            let at = (shown+2)*(cols+1);
-            for (target,byte) in frame.bytes[at..at+source.end-source.start].iter_mut().zip(&body[source.start..source.end]) { *target = clean(*byte); }
-            cursor = source.next;
-            shown += 1;
+        if visible != 0 {
+            frame.first = info.first;
+            let mut cursor = info.offset;
+            let mut shown = 0;
+            while shown < visible && cursor < body.len() {
+                let source = line(body,cursor,cols);
+                let at = (shown+2)*(cols+1);
+                for (target,byte) in frame.bytes[at..at+source.end-source.start].iter_mut().zip(&body[source.start..source.end]) { *target = clean(*byte); }
+                cursor = source.next;
+                shown += 1;
+            }
+            frame.end = frame.first+shown;
         }
-        frame.end = frame.first+shown;
+        if rows > 1 { footer(&mut frame,banner==b"Controlled HTTPS / lab root"); }
         frame
     }
 
@@ -170,6 +178,46 @@ impl Reader {
     }
 }
 
+/// Bounded decimal formatting. The maximum source has at most12288 lines;
+/// the complete "12288-12288/12288" range occupies17 ASCII bytes.
+fn decimal(out: &mut [u8; 24], length: &mut usize, mut value: usize) {
+    let mut digits = [0u8; 5];
+    let mut count = 0;
+    loop {
+        digits[count] = b'0'+(value%10) as u8;
+        count += 1; value /= 10;
+        if value == 0 { break; }
+    }
+    for digit in digits[..count].iter().rev() { out[*length] = *digit; *length += 1; }
+}
+
+fn footer(frame: &mut Frame, https: bool) {
+    let full: &[u8] = if https { b"PgUp PgDn V back I import" } else { b"PgUp PgDn Home End V back" };
+    let original: &[u8] = if frame.cols>=25 { full }
+        else if frame.cols>=6 { if https { b"V I" } else { b"V back" } }
+        else if https { b"I" } else { b"V" };
+    if frame.body_rows == 0 { put(frame,frame.rows-1,original); return; }
+    let mut range = [0;24]; let mut length = 0;
+    decimal(&mut range,&mut length,if frame.end>frame.first { frame.first+1 } else { 0 });
+    range[length] = b'-'; length += 1;
+    decimal(&mut range,&mut length,frame.end);
+    range[length] = b'/'; length += 1;
+    decimal(&mut range,&mut length,frame.total_lines);
+    let compact: &[u8] = if https { b"PgUp PgDn V I" } else { b"PgUp PgDn V" };
+    let minimal: &[u8] = if https { b"V I" } else { b"V" };
+    let controls = [full,compact,minimal].into_iter().find(|controls|controls.len()+1+length<=frame.cols);
+    let row = frame.rows-1;
+    if let Some(controls) = controls {
+        put(frame,row,controls);
+        let at = row*(frame.cols+1)+frame.cols-length;
+        frame.bytes[at..at+length].copy_from_slice(&range[..length]);
+    } else {
+        // Very narrow views retain a complete existing control hint instead
+        // of presenting a clipped/misleading numeric range.
+        put(frame,row,original);
+    }
+}
+
 fn put(frame: &mut Frame, row: usize, text: &[u8]) {
     let length = text.len().min(frame.cols);
     let at = row*(frame.cols+1);
@@ -182,7 +230,7 @@ mod tests {
     fn reader(w: u32,h: u32) -> Reader { let mut reader=Reader::new();reader.resize(w,h);reader }
     fn row(frame: &Frame,index: usize) -> &[u8] { let at=index*(frame.cols+1);&frame.bytes[at..at+frame.cols] }
     fn valid(frame: &Frame,w: u32,h: u32) {
-        assert!(frame.len<=512);assert!(frame.cols<=79);assert!(frame.rows<=32);
+        assert!(frame.len<=512);assert!(frame.cols<=MAX_COLUMNS);assert!(frame.rows<=32);
         if frame.rows==0 {assert_eq!(frame.len,0);return;}
         assert_eq!(frame.len,frame.rows*(frame.cols+1)-1);
         assert!(frame.rows<=512/(frame.cols+1));assert!(frame.first<=frame.end);assert!(frame.end<=frame.total_lines);
@@ -203,8 +251,8 @@ mod tests {
         for (w,h) in [(624,706),(1280,800),(1024,768),(255,200),(256,200),(28,800),(u32::MAX,u32::MAX)] {
             let mut r=reader(w,h);let frame=r.render(&[b'x';2048]);valid(&frame,w,h);
         }
-        let frame=reader(624,706).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows,frame.len),(49,10,7,499));
-        let frame=reader(1280,800).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows),(79,6,3));
+        let frame=reader(624,706).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows,frame.len),(47,10,7,479));
+        let frame=reader(1280,800).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows),(47,10,7));
     }
     #[test] fn one_two_and_three_rows_keep_only_available_chrome_and_disable_hidden_scrolling() {
         for (h,rows) in [(43,1),(52,2),(61,3)] {
@@ -259,7 +307,7 @@ mod tests {
         let body=[b'x';600];let mut r=reader(82,160);r.navigate(&body,Move::PageDown);r.navigate(&body,Move::Down);let before=r.render(&body);assert_eq!(r.anchor,120);assert_eq!(before.first,12);
         r.resize(142,160);let resized=r.render(&body);assert_eq!(resized.cols,20);assert_eq!(resized.first,6);assert_eq!(r.anchor,120);
         r.resize(112,160);let resized=r.render(&body);assert_eq!(resized.cols,15);assert_eq!(r.anchor,120);
-        r.resize(124,160);let resized=r.render(&body);assert_eq!(resized.cols,17);assert_eq!(r.anchor,119);
+        r.resize(124,160);let resized=r.render(&body);assert_eq!(resized.cols,17);assert_eq!(r.anchor,120);assert_eq!(resized.source_anchor,120);
         r.navigate(&body,Move::End);r.resize(624,706);let last=r.render(&body);assert_eq!(last.end,last.total_lines);assert_eq!(last.first,last.total_lines-last.body_rows);assert!(last.first>0);
     }
     #[test] fn clear_resets_anchor_and_shorter_replacement_erases_old_rows_with_padding() {

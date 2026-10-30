@@ -217,6 +217,7 @@ def reader_geometry(trace,contract,anchor=0):
  tile,sequence=viewport(trace);frame=http.reader_frame(BODY,tile['w'],tile['h'],contract,anchor,b'/welcome');frame.update(tile=tile,viewport=sequence,document_ticket=2)
  layouts=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed',trace));wanted=tuple(frame[k]for k in('first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'))
  assert layouts and layouts[-1].start()>release.end()and tuple(map(int,layouts[-1].groups()))==wanted,'HTTPS reader layout differs from independent authenticated document/navigation'
+ http.reader_position(trace,layouts[-1].end(),frame,1,contract.get('reader_require_position',False))
  assert re.search(rf'\[browser.view.applied\] bytes={frame["bytes"]} http=770 body_bytes=12288 pixels=unconfirmed',trace[layouts[-1].end():]),'missing positive atomic HTTPS reader Applied'
  return frame
 
@@ -320,12 +321,12 @@ def main():
  def key(code,pattern):
   boundary=len(text());q.key(code);return wait(pattern,boundary)
  def picture(name,kind,state=None,anchor=0):
-  path=out/(name+'.ppm');deadline=time.monotonic()+25;result=dict(ok=False,errors=['no frame'])
+  path=out/(name+'.ppm');deadline=time.monotonic()+25;result=dict(ok=False,errors=['no frame']);snapshot=''
   while time.monotonic()<deadline:
-   health();q.cmd('screendump',{'filename':str(path)});result=verify_reader_pixels(text(),path.read_bytes(),contract,anchor,resolution)if kind=='reader'else verify_status_pixels(text(),path.read_bytes(),state,a.mode,contract,resolution)
+   health();q.cmd('screendump',{'filename':str(path)});snapshot=text();result=verify_reader_pixels(snapshot,path.read_bytes(),contract,anchor,resolution)if kind=='reader'else verify_status_pixels(snapshot,path.read_bytes(),state,a.mode,contract,resolution)
    if result['ok']:break
    time.sleep(.1)
-  result.update(screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),source_sha256=contract['source_sha256'],kind=kind,expected=state,anchor=anchor);pixels.append(result);(out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n')
+  result.update(screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),source_sha256=contract['source_sha256'],kind=kind,expected=state,anchor=anchor,serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),requested_anchor=anchor if kind=='reader'else None);pixels.append(result);(out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n')
   if not result['ok']:raise RuntimeError(str(result['errors']))
   return result
  try:
@@ -341,11 +342,30 @@ def main():
   boundary=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',boundary);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',boundary)
   boundary=len(text());q.key('b');wait(r'\[shell.browser.input\] code=48 down=1 slot=43 accepted=1',boundary);wait(r'\[browser.https.intent\] accepted=1 explicit=1 public_internet=0',boundary)
   if a.mode=='ready':
+   contract['reader_require_position']=True
    wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',boundary);event(peer.completed,'actual SSL HTTP response and guest close_notify');initial=picture('https-reader-initial','reader');anchor=0;network_boundary=len(text())
-   for action in('pgdn','end','home'):
+   def navigate(action):
+    nonlocal anchor
     frame=reader_geometry(text(),contract,anchor);anchor=http.reader_move(frame,action);q.key(action);shot=picture('https-reader-'+action,'reader',anchor=anchor);actions.append(dict(action='actual_'+action,anchor=anchor,first=shot['geometry']['first'],end=shot['geometry']['end']))
     if action=='end'and(TAIL.decode()not in ''.join(shot['expected_rows'][2:-1])or shot['geometry']['end']!=shot['geometry']['total_lines']):raise RuntimeError('HTTPS End omitted unique final document byte')
-   key('v',r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1');picture('https-overview','status','Verified');key('v',r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1');picture('https-reader-reopened','reader',anchor=0)
+    return shot
+   navigate('pgdn')
+   if anchor==0:raise RuntimeError('HTTPS resume fixture never left Home')
+   retained=anchor;key('v',r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1');picture('https-overview','status','Verified');key('v',r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1');resumed=picture('https-reader-reopened','reader',anchor=anchor)
+   if resumed['geometry']['source_anchor']!=retained:raise RuntimeError('HTTPS overview/reopen lost requested source anchor')
+   original=resumed['geometry']['tile'];prior_viewport=resumed['geometry']['viewport']
+   for name in('https-reader-restored-tile','https-reader-zoom-roundtrip'):
+    key('grave_accent',r'\[shell.palette.item\] idx=0')
+    for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+    start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
+    shot=picture(name,'reader',anchor=anchor)
+    if shot['geometry']['source_anchor']!=retained:raise RuntimeError('HTTPS Zoom/restoration changed requested source anchor')
+    if shot['geometry']['viewport']<=prior_viewport:raise RuntimeError('HTTPS Zoom did not advance actual held-shell viewport')
+    if name=='https-reader-restored-tile'and shot['geometry']['tile']==original:raise RuntimeError('HTTPS Zoom did not change actual geometry')
+    prior_viewport=shot['geometry']['viewport']
+    actions.append(dict(action=name,anchor=anchor,tile=shot['geometry']['tile']))
+   if shot['geometry']['tile']!=original:raise RuntimeError('HTTPS Zoom roundtrip did not restore actual geometry')
+   navigate('end');navigate('home')
    key('q',r'\[shell.browser.input\] code=16 down=1 slot=43 accepted=1');wait(r'\[browser.https.cleared\] body_visible=0 owned_storage=erased network=0');picture('https-cleared','status','Cancelled');layouts=len(re.findall(r'\[browser.reader.layout\]',text()));key('v',r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1');picture('https-cannot-reopen','status','Cancelled')
    if len(re.findall(r'\[browser.reader.layout\]',text()))!=layouts or re.search(r'\[net\.(?:job|dns)\.egress\.submit\]|\[net.job.resolved.admitted\]',text()[network_boundary:]):raise RuntimeError('reader navigation issued network work or cleared document reopened')
    actions.append(dict(action='positive_released_document_local_navigation_clear',body_bytes=len(BODY),cancelled_document_cannot_reopen=True))

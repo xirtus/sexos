@@ -1,6 +1,16 @@
 # Sustained alpha candidate and desktop continuation
 
-## Current checkpoint: accepted round 99; next 100
+## Current checkpoint: accepted round 100; next 101
+
+Browser reading views preserve the exact requested source byte through overview/resume and viewport reflow, show actual visible-line progress, and display seven body rows in tall views using the existing512-byte transaction. New bodies and explicit Clear reset the position; cleared content cannot reopen. These local actions issue no new network requests or capability grants.
+
+Sealed ISO `bc6ad20feb2d6777f85857578c1b26644703cf594cc9f5e29f796eca6054de11`, final B binding `dd8004ce63bd658c4bdd17ea923dbaec63991f437fe9bd03f142e39ea3750e6b`;553 production/509 runner inputs. BUILD/GREEN_MASTER,1,622 Rust executions on A's byte-identical production/Rust/gate inputs, B's674 frozen Python tests and eight fresh B native boots pass. Independent raw replay verifies48 reader/status and26 import/cold-recovery frames. A native captures remain diagnostic; exact original serial-prefix metadata is mandatory for B's reader frames. See the [round100 ledger](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) and [evidence](assets/sexos-alpha-r100-2026-10-30-evidence.json).
+
+Next101 adds useful capability-scoped selection/clipboard;102 improves launcher/workspace UX. Qualify the then-current image's own sustained mixed session and repeated recovery before a trusted-builtins QEMU alpha label. General online/physical daily-driver readiness remains unproven;7 Open/23 Partial/System Proven false remain. Active80–200 progress:21/121 accepted;101–200 (100 substantive rounds) remain. Earlier checkpoints below are historical. SexOS remains a single-address-space OS with BOOT-only capability genesis and sex-pdx authority; it is not Unix/POSIX.
+
+
+
+## Historical checkpoint: accepted round 99; next 100 at that time
 
 Browser G now loads a bounded authenticated binary QOI resource from its existing BOOT-sanctioned endpoint, decodes only after positive RELEASE, and atomically publishes RGBA pixels on its exact owned surface. Q clears pixels with a positive display receipt; obsolete viewport/transaction receipts cannot revive an image. I cannot import the binary asset as a text document. No runtime capability, mapping authority or Unix/POSIX mechanism is introduced.
 

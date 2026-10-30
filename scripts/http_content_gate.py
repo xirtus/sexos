@@ -49,12 +49,22 @@ def load_pixel_contract(root):
  dynamic_path='self.reader.render_path(self.http.document(),self.http.document_path())'in sources['app']
  if not(dynamic_path or 'self.reader.render(self.http.document())'in sources['app'])or 'selected:http_view_code(self.http.view())|256'not in sources['app']:raise ValueError('production full document reader binding changed')
  if dynamic_path and('host.iter().chain(b" ").chain(path)'not in reader or 'clean(*byte)'not in reader or '[browser.http.document]'not in sources['client']or 'positive_release=1'not in sources['client']):raise ValueError('production released document/path rendering contract changed')
- if 'self.render_source(body,path,b"Plain HTTP / no TLS",HOST)'not in reader or 'put(&mut frame,0,banner)'not in reader:raise ValueError('production plain reader source selection changed')
+ if 'self.render_source(body,path,b"Plain HTTP / no TLS",HOST)'not in reader or 'put(&mut frame,0,header)'not in reader:raise ValueError('production plain reader source selection changed')
+ if re.search(r'self\.anchor\s*=\s*info\.offset',reader)or 'pub fn source_anchor(&self)'not in reader:raise ValueError('production reader no longer retains requested source-byte anchor')
  reader_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),HOST\)')
- reader_footers=[ast.literal_eval(v)for v in re.findall(r'(b"(?:PgUp[^"\n]*|V back|V|V I|I)")',reader)]
- if len(reader_footers)!=6:raise ValueError('production reader footer contract changed')
- https_reader_footers=reader_footers[:3];reader_footers=reader_footers[3:]
- return dict(wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ controls=[]
+ for name in ('full','compact','minimal'):
+  match=re.search(r'let '+name+r': &\[u8\] = if https \{ (b"[^"\n]*") \} else \{ (b"[^"\n]*") \}',reader)
+  if not match:raise ValueError('missing source-bound reader '+name+' controls')
+  controls.append(tuple(ast.literal_eval(value)for value in match.groups()))
+ https_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),b"probe\.sexos\.test:46080"\)')
+ https_headers=[https_header,b'HTTPS / lab root',b'Lab HTTPS',b'Lab TLS']
+ source_literals={ast.literal_eval(value)for value in re.findall(r'(b"[^"\n]*")',reader)}
+ if any(value not in source_literals for value in https_headers[1:]):raise ValueError('missing source-bound responsive laboratory header')
+ for token in ('frame.end>frame.first','range[length] = b\'-\'','range[length] = b\'/\'','controls.len()+1+length<=frame.cols'):
+  if token not in reader:raise ValueError('production finite range/footer contract changed')
+ https_reader_footers=[controls[0][0],b'V I',b'I'];reader_footers=[controls[0][1],b'V back',b'V']
+ return dict(reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
@@ -75,8 +85,9 @@ def reader_path(path,contract):
 def reader_frame(body,width,height,contract,anchor=0,expected_path=None):
  """Independent paragraph/chunk model, without calling the Rust reader."""
  if len(body)>contract['reader_max_body']:raise ValueError('expected document exceeds production body bound')
+ if type(anchor)is not int or not 0<=anchor<=contract['reader_max_body']:raise ValueError('requested source anchor outside bounded body extent')
  factor=2 if width>=contract['scale_threshold']else 1
- cols=min(79,max(0,(width-2*contract['inset'])//(contract['advance']*factor)-1))
+ cols=min(contract['reader_max_columns'],max(0,(width-2*contract['inset'])//(contract['advance']*factor)-1))
  available=height-contract['top']-contract['glyph_height']*factor
  rows=min(contract['max_rows'],contract['reader_capacity']//(cols+1),1+available//(contract['line']*factor))if cols and available>=0 else 0
  if rows<4:raise ValueError('actual reader tile has no fully visible body row')
@@ -91,12 +102,42 @@ def reader_frame(body,width,height,contract,anchor=0,expected_path=None):
  anchored=max((i for i,start in enumerate(starts)if start<=anchor),default=0);first=min(anchored,last)
  host=re.search(br'\r\nHost: ([^\r\n]+)\r\n',contract['request'])
  if not host:raise ValueError('missing source-bound HTTP hostname')
- footer=contract['reader_footers'][0 if cols>=25 else 1 if cols>=6 else 2]
  shown=lines[first:first+visible]
+ https=contract['reader_header']==contract['reader_https_headers'][0]
+ header=contract['reader_https_headers'][0 if cols>=26 else 1 if cols>=16 else 2 if cols>=9 else 3]if https else contract['reader_header']
+ original=contract['reader_footers'][0 if cols>=25 else 1 if cols>=6 else 2]
+ progress=f'{first+1 if shown else 0}-{first+len(shown)}/{len(lines)}'.encode('ascii')
+ choices=[pair[0 if https else 1]for pair in contract['reader_controls']]
+ controls=next((hint for hint in choices if len(hint)+1+len(progress)<=cols),None)
+ footer=controls.ljust(cols-len(progress),b' ')+progress if controls is not None else original
  path=reader_path(contract['reader_path'][1:]if expected_path is None else expected_path,contract)
- output=[contract['reader_header'],host[1]+b' '+path]+shown+[b'']*(visible-len(shown))+[footer]
+ output=[header,host[1]+b' '+path]+shown+[b'']*(visible-len(shown))+[footer]
  output=[line[:cols].ljust(cols,b' ')for line in output]
- return dict(path=path.decode('ascii'),cols=cols,rows=rows,body_rows=visible,first=first,end=first+len(shown),total_lines=len(lines),source_bytes=len(body),scale=factor,anchor=starts[first]if starts else 0,starts=starts,lines=output,bytes=rows*(cols+1)-1)
+ return dict(path=path.decode('ascii'),cols=cols,rows=rows,body_rows=visible,first=first,end=first+len(shown),total_lines=len(lines),source_bytes=len(body),scale=factor,anchor=anchor,source_anchor=anchor,first_byte=starts[first]if starts else 0,progress=progress.decode('ascii')if controls is not None else None,starts=starts,lines=output,bytes=rows*(cols+1)-1)
+
+def reader_position(trace,layout_end,frame,tls,required=False):
+ """Optional legacy fixture receipt; mandatory in fresh native100 probes."""
+ tail=trace[layout_end:];records=list(re.finditer(r'^\[browser.reader.position\][^\r\n]*',tail,re.M))
+ if not records:
+  if required:raise ValueError('missing retained source-byte position receipt')
+  return None
+ if len(records)!=1:raise ValueError('duplicate/foreign current reader position receipt')
+ record=records[0];match=re.fullmatch(r'\[browser.reader.position\] anchor=(\d+) viewport=(\d+) tls=(0|1) retained_body_only=1',record[0])
+ if not match or tuple(map(int,match.groups()))!=(frame['source_anchor'],frame['viewport'],tls):raise ValueError('retained reader position differs from source/viewport/origin')
+ applied=re.search(r'\[browser.view.applied\]',tail)
+ if not applied or record.end()>=applied.start():raise ValueError('reader position not before actual current Applied')
+ return dict(anchor=int(match[1]),viewport=int(match[2]),tls=int(match[3]))
+
+def frame_prefix(trace,frame,reader=False):
+ """Replay the exact textual serial snapshot used for one verified capture."""
+ end=frame.get('serial_end');wanted=frame.get('serial_sha256')
+ if type(end)is not int or not 0<end<=len(trace)or not isinstance(wanted,str)or not re.fullmatch(r'[0-9a-f]{64}',wanted):raise ValueError('missing/invalid immutable frame serial boundary')
+ prefix=trace[:end]
+ if hashlib.sha256(prefix.encode()).hexdigest()!=wanted:raise ValueError('immutable frame serial prefix changed')
+ if 'requested_anchor'not in frame:raise ValueError('missing explicit frame anchor/origin')
+ anchor=frame['requested_anchor']
+ if reader and(type(anchor)is not int or not 0<=anchor<=12288)or not reader and anchor is not None:raise ValueError('invalid stored reader/status anchor')
+ return prefix
 
 def reader_move(frame,action):
  first=frame['first'];last=max(0,frame['total_lines']-frame['body_rows'])
@@ -145,6 +186,7 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expect
   layouts=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=validated_body tls=0 pixels=unconfirmed',trace))
   wanted=tuple(expected[key]for key in ['first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'])
   if not layouts or tuple(map(int,layouts[-1].groups()))!=wanted:raise ValueError('reader layout receipt differs from independent document/geometry/navigation model')
+  reader_position(trace,layouts[-1].end(),expected,0,contract.get('reader_require_position',False))
   if not re.search(rf'\[browser.view.applied\] bytes={expected["bytes"]} http=258 body_bytes={len(body)} pixels=unconfirmed',trace[layouts[-1].end():]):raise ValueError('missing positive atomic reader Applied receipt after current layout')
   scale=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=0;mismatch=0;ink=0
   columns=min(80,max(0,(tile['w']-2*contract['inset'])//(contract['advance']*scale)))
@@ -170,12 +212,12 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expect
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)])
 
 def wait_reader_pixels(q,text,out,name,body,contract,anchor,health,timeout=30,resolution=None,expected_path=None):
- deadline=time.monotonic()+timeout;attempts=0;screenshot=out/(name+'.ppm');result=dict(ok=False,errors=['no reader screenshot'])
+ deadline=time.monotonic()+timeout;attempts=0;screenshot=out/(name+'.ppm');result=dict(ok=False,errors=['no reader screenshot']);snapshot=''
  while time.monotonic()<deadline:
-  health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});result=verify_reader_pixels(text(),screenshot.read_bytes(),body,contract,anchor,resolution,expected_path)
+  health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});snapshot=text();result=verify_reader_pixels(snapshot,screenshot.read_bytes(),body,contract,anchor,resolution,expected_path)
   if result['ok']:break
   time.sleep(.2)
- result.update(attempts=attempts,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Independent complete bounded controlled document model, exact positively released document ticket/path/length, actual held-shell tile/viewport, complete reader chrome/body/footer glyphs, padding/spare column and stale text-band erasure. Applied/layout markers alone cannot pass; no additional network authority.')
+ result.update(attempts=attempts,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),requested_anchor=anchor,scope='Independent complete bounded controlled document model, exact positively released document ticket/path/length, actual held-shell tile/viewport, complete reader chrome/body/footer glyphs, padding/spare column and stale text-band erasure. Applied/layout markers alone cannot pass; no additional network authority.')
  (out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n');return result
 
 def http_status_geometry(text,expected,body,contract):
@@ -240,7 +282,7 @@ def verify_http_pixels(text,ppm,expected,body,contract,resolution=None):
  except(ValueError,KeyError,OverflowError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
 def wait_http_pixels(q,text,out,expected,body,contract,health,name='browser-http',timeout=30,resolution=None):
- began=time.monotonic();deadline=began+timeout;attempts=0;result=dict(ok=False,errors=['no screenshot']);screenshot=out/(name+'.ppm')
+ began=time.monotonic();deadline=began+timeout;attempts=0;result=dict(ok=False,errors=['no screenshot']);screenshot=out/(name+'.ppm');trace=''
  while time.monotonic()<deadline:
   try:
    health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});trace=text();raw=screenshot.read_bytes();result=verify_http_pixels(trace,raw,expected,body,contract,resolution)
@@ -248,7 +290,7 @@ def wait_http_pixels(q,text,out,expected,body,contract,health,name='browser-http
    if result['ok']:break
   except Exception as exc:result=dict(ok=False,errors=['HTTP pixel poll failed: '+repr(exc)],expected=expected);break
   time.sleep(.2)
- result.update(attempts=attempts,seconds=time.monotonic()-began,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Complete actual tiled Plain HTTP/no TLS label, keyboard footer, padding, blank rows and all64body cells including trailing erasure, source-bound production font/style/composer and actual preceding status geometry. Serial completion alone cannot pass.')
+ result.update(attempts=attempts,seconds=time.monotonic()-began,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],serial_end=len(trace),serial_sha256=hashlib.sha256(trace.encode()).hexdigest(),requested_anchor=None,scope='Complete actual tiled Plain HTTP/no TLS label, keyboard footer, padding, blank rows and all64body cells including trailing erasure, source-bound production font/style/composer and actual preceding status geometry. Serial completion alone cannot pass.')
  (out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n');return result
 
 def wire_response(mode,body=BODY,max_body=None):
@@ -468,12 +510,13 @@ def main():
   wait(rf'\[browser.dns.released\] ticket={generation} view=Answer\(\[10, 0, 2, 2\]\) private_job=0',start)
   wait(rf'\[net.job.resolved.admitted\] owner=15 task=15 ticket={ticket} dns_generation={generation} ',start)
  def reader_workflow(q):
+  contract['reader_require_position']=True
   anchor=0;start_network=len(text());original=None
   def paint(name):
    nonlocal anchor
    result=wait_reader_pixels(q,text,out,name,response_body,contract,anchor,health,resolution=tuple(map(int,a.resolution.split('x'))));reader_results.append(result)
    if not result['ok']:raise RuntimeError('actual reader pixels: '+'; '.join(result['errors']))
-   frame=reader_geometry(text(),response_body,contract,anchor);anchor=frame['anchor'];return frame
+   return reader_geometry(text(),response_body,contract,anchor)
   def navigation(key,code):
    nonlocal anchor
    prior=reader_geometry(text(),response_body,contract,anchor);anchor=reader_move(prior,key)
@@ -497,8 +540,8 @@ def main():
   if expanded['tile']['w']==original['w']and expanded['tile']['h']==original['h']:raise RuntimeError('real ZoomToggle did not change reader geometry')
   if(restored['tile']['w'],restored['tile']['h'])!=(original['w'],original['h']):raise RuntimeError('real ZoomToggle did not restore reader geometry')
   start=len(text());q.key('v');wait(rf'\[browser.view.applied\] bytes=\d+ http=2 body_bytes={len(response_body)} pixels=unconfirmed',start);pixels(q,'Ready','browser-reader-overview')
-  anchor=0;start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);again=paint('browser-reader-reset')
-  if again['first']!=0:raise RuntimeError('reader re-entry did not reset source anchor')
+  retained=anchor;start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);again=paint('browser-reader-resumed')
+  if again['anchor']!=retained:raise RuntimeError('same-document reader re-entry lost source anchor')
   start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 pixels=unconfirmed',start);pixels(q,'Cancelled','browser-reader-erased')
   layouts=len(re.findall(r'\[browser.reader.layout\]',text()));start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);pixels(q,'Cancelled','browser-reader-cannot-reopen')
   if len(re.findall(r'\[browser.reader.layout\]',text()))!=layouts or re.search(r'\[browser.view.applied\] bytes=\d+ http=258 ',text()[start:]):raise RuntimeError('cancelled document reopened reader')

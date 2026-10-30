@@ -187,10 +187,10 @@ impl App {
         if code==0x18{
             if !self.importer.busy()||self.importer.view()==document_import::View::Uncertain{self.workspace.changed();self.files_pending=true;}else{sex_pdx::serial_record!("[browser.import.files.blocked] pending=1 effects=0");}return;
         }
-        if self.import_panel&&code==0x2F&&self.has_https_body(){self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;self.reader.clear();return;}
+        if self.import_panel&&code==0x2F&&self.has_https_body(){self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;return;}
         if code==0x10&&(self.import_panel||self.importer.has_document()||self.import_source.is_some()||self.importer.busy()){
             self.import_editor.cancel();self.import_source=None;let _=self.importer.cancel(sex_pdx::get_ticks());self.import_panel=true;self.reading=false;self.reading_https=false;
-            self.import_status=if self.importer.view()==document_import::View::Uncertain{import_view::Status::Uncertain}else if self.importer.busy(){import_view::Status::Cleaning}else{import_view::Status::Cancelled};self.resources("clear",true);return;
+            self.reader.clear();self.import_status=if self.importer.view()==document_import::View::Uncertain{import_view::Status::Uncertain}else if self.importer.busy(){import_view::Status::Cleaning}else{import_view::Status::Cancelled};self.resources("clear",true);return;
         }
         let intent=match code{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::HttpDns),_=>None};
         if let Some(intent)=intent{self.queue_intent(intent,false);}
@@ -205,7 +205,7 @@ impl App {
             0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
             0x2D=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
             0x24=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
-            0x2F=>{if self.https_panel{if self.has_https_body(){self.reading=!self.reading;self.reading_https=self.reading;if self.reading{self.reader.clear();}}}else if self.http.view()==http_probe::View::Ready{self.reading=!self.reading;self.reading_https=false;if self.reading{self.reader.clear();}}},
+            0x2F=>{if self.https_panel{if self.has_https_body(){self.reading=!self.reading;self.reading_https=self.reading;}}else if self.http.view()==http_probe::View::Ready{self.reading=!self.reading;self.reading_https=false;}},
             code=>{if self.reading{let movement=match code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};if let Some(movement)=movement{let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().map_or(&[][..],|d|d.as_bytes())}}else{self.http.document()};self.reader.navigate(body,movement);}}},
         }}
     }
@@ -649,7 +649,7 @@ impl SexApp for App {
             }
             if self.ui_last_len!=text.len||self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata){
                 self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_metadata=Some(metadata);self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
-                if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.https_body().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}}
+                if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.https_body().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}sex_pdx::serial_record!("[browser.reader.position] anchor={} viewport={} tls={} retained_body_only=1",self.reader.source_anchor(),self.viewport_sequence,self.reading_https as u8);}
             }
             if self.ui_dirty&&!self.ui_failed{
                 if self.ui.queue(&text.bytes[..text.len],0x00CDD6F4,metadata){self.ui_dirty=false;}
