@@ -4,6 +4,9 @@ pub trait Backend {
     fn identity(&mut self, id: u8) -> Result<u32, u32>;
     fn load(&mut self, id: u8, out: &mut [u8; w::MAX]) -> Result<usize, u32>;
     fn cancel_load(&mut self, _caller:u32) {}
+    fn publish_load(&mut self, _caller:u32, _request:w::Request, _generation:u32,
+        _name:[u8;16], _bytes:&[u8]) -> Result<(),u32> { Err(w::DENIED) }
+    fn clear_load(&mut self, _caller:u32) -> Result<(),u32> { Ok(()) }
     fn load_step(&mut self, _caller:u32, id:u8, out:&mut[u8;w::MAX])->Result<Option<usize>,u32>{
         self.load(id,out).map(Some)
     }
@@ -112,12 +115,15 @@ impl Service {
                             let len=len.ok_or(w::IO)?;
                             if len>w::MAX||b.identity(s.object)!=Ok(s.generation){return Err(w::STALE)}
                             s.name=b.name(s.object)?;
+                            if r.b == w::SNAPSHOT_MODE {
+                                b.publish_load(caller,r,s.generation,s.name,&s.bytes[..len])?;
+                            }
                             s.len=len;s.bound=true;s.loading=None;
                             sex_pdx::serial_record!("[files.document.bound] object={} generation={} bytes={}",s.object,s.generation,len);
                             Ok(len as u32)
                         });
                         b.cancel_load(caller);
-                        if result.is_err(){s.clear();}
+                        if result.is_err(){let _=b.clear_load(caller);s.clear();}
                         let v=w::reply(r.seq,result);s.receipt=v;
                         for entry in s.pending[..s.pending_len].iter_mut().flatten(){
                             if entry.request==r{entry.value=Some(v);break}
@@ -176,10 +182,11 @@ impl Service {
             }
         }
     }
-    pub fn retire(&mut self, caller: u32, b: &mut impl Backend) {
+    pub fn retire(&mut self, caller: u32, b: &mut impl Backend) -> bool {
         b.cancel_save(caller);
         b.cancel_load(caller);
         if let Some(i) = Self::index(caller) {
+            if b.clear_load(caller).is_err() { return false; }
             let s = &mut self.sessions[i];
             s.clear();
             s.pending = [None; RECEIPTS];
@@ -191,6 +198,7 @@ impl Service {
                 caller
             );
         }
+        true
     }
     fn execute(
         s: &mut Session,
@@ -204,6 +212,7 @@ impl Service {
             }
             b.cancel_save(caller);
             b.cancel_load(caller);
+            b.clear_load(caller)?;
             s.clear();
             return Ok(0);
         }
@@ -235,13 +244,14 @@ impl Service {
             return b.identity(r.object);
         }
         if r.kind == w::LOAD {
-            if s.bound || r.offset != 0 || r.b != 0 {
+            if s.bound || r.offset != 0 || r.b > w::SNAPSHOT_MODE {
                 return Err(w::BUSY);
             }
             let generation = b.identity(r.object)?;
             if r.a != generation as u64 {
                 return Err(w::STALE);
             }
+            b.clear_load(caller)?;
             s.clear();
             s.object = r.object;
             s.generation = generation;
@@ -322,6 +332,7 @@ impl Service {
                 if r.offset != 0 || r.a != 0 || r.b != 0 {
                     return Err(w::INVALID);
                 }
+                b.clear_load(caller)?;
                 s.clear();
                 Ok(0)
             }

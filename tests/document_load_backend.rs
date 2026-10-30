@@ -3,6 +3,20 @@
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 pub const BLOCK_MAX_XFER:u64=4096;
+#[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
+#[path="../crates/sex-pdx/src/document_buffer.rs"]pub mod document_buffer;
+#[path="../crates/sex-pdx/src/document_snapshot.rs"]pub mod document_snapshot;
+#[repr(align(4096))]struct SnapshotWords([core::sync::atomic::AtomicU64;2048]);
+static SNAPSHOTS:[SnapshotWords;3]=[const{SnapshotWords([const{core::sync::atomic::AtomicU64::new(0)};2048])};3];
+// Actual VFS adapter and snapshot publication; only capability resolution/backing
+// are host mocks. Constructor still checks the complete resolved metadata.
+pub fn document_snapshot_view(caller:u32,writer:bool)->Result<document_snapshot::Region,u32>{
+ let index=match caller{9=>0,16=>1,18=>2,_=>return Err(wire::DENIED)};
+ let g=memory_region::RegionGrant{region_id:6+index as u32,virtual_base:SNAPSHOTS[index].0.as_ptr()as u64,length:16384,
+  rights:3|if writer{4}else{0},peer_pd:Some(if writer{caller}else{11}),dma_base:None};
+ let info=memory_region::resolve_info(Some(&g)).unwrap();let view=memory_region::resolve_view(Some(&g),memory_region::ViewRequest{offset:0,length:16384,rights:g.rights}).unwrap();
+ unsafe{document_snapshot::Region::from_resolved(info,view,caller,writer)}
+}
 #[path="../crates/sex-pdx/src/document.rs"]pub mod wire;
 #[path="../servers/sexfiles/src/document.rs"]mod service;
 mod document{pub use crate::wire::*;pub use crate::service::*;}

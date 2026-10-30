@@ -3,6 +3,9 @@ extern crate self as sex_pdx;
 #[macro_export]
 macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 pub const ERR_SERVICE_NOT_READY: u64 = 2;
+#[path = "../crates/sex-pdx/src/memory_region.rs"] pub mod memory_region;
+#[path = "../crates/sex-pdx/src/document_buffer.rs"] pub mod document_buffer;
+#[path = "../crates/sex-pdx/src/document_snapshot.rs"] pub mod document_snapshot;
 #[path = "../servers/quil/src/document_exchange.rs"]
 mod client;
 #[path = "../crates/sex-pdx/src/document.rs"]
@@ -755,4 +758,81 @@ fn slow_receipts(s:&mut Service)->Vec<(u32,u64)>{let mut v=vec![];s.poll(|pd,r|{
  s.handle(16,true,wr(1,w::INFO,0,0,0),&mut b);assert_eq!(slow_receipts(&mut s),[(16,w::reply(1,Ok(7)))]);assert_eq!(b.steps,1);
  assert_eq!(w::decode_reply(s.handle(27,true,wr(1,w::LOAD,0,7,0),&mut b).unwrap(),1),Some(Err(w::DENIED)));
  assert_eq!(w::decode_reply(s.handle(18,false,wr(1,w::LOAD,0,7,0),&mut b).unwrap(),1),Some(Err(w::DENIED)));assert_eq!(b.steps,1);
+}
+
+#[repr(align(4096))]
+struct SnapshotBacking([core::sync::atomic::AtomicU64;2048]);
+struct BulkBackend {
+    buffers:[Box<SnapshotBacking>;3], turns:[usize;3], publications:[usize;3], clears:[usize;3], fail_clear:bool,
+}
+impl BulkBackend {
+    fn new()->Self { Self { buffers:core::array::from_fn(|_|Box::new(SnapshotBacking([const{core::sync::atomic::AtomicU64::new(0)};2048]))),turns:[0;3],publications:[0;3],clears:[0;3],fail_clear:false } }
+    fn index(pd:u32)->usize { [9,16,18].iter().position(|p|*p==pd).unwrap() }
+    fn region(&self,pd:u32,writer:bool)->document_snapshot::Region {
+        use memory_region::*;let i=Self::index(pd);
+        let g=RegionGrant {region_id:6+i as u32,virtual_base:self.buffers[i].0.as_ptr()as u64,length:16384,
+            rights:QUERY_VIEW|READ|if writer{WRITE}else{0},dma_base:None,peer_pd:Some(if writer{pd}else{11})};
+        unsafe {document_snapshot::Region::from_resolved(resolve_info(Some(&g)).unwrap(),resolve_view(Some(&g),ViewRequest{offset:0,length:16384,rights:g.rights}).unwrap(),pd,writer).unwrap()}
+    }
+    fn zero(&self,pd:u32)->bool {self.buffers[Self::index(pd)].0.iter().all(|w|w.load(core::sync::atomic::Ordering::SeqCst)==0)}
+}
+impl Backend for BulkBackend {
+    fn identity(&mut self,_:u8)->Result<u32,u32>{Ok(7)}
+    fn name(&mut self,_:u8)->Result<[u8;16],u32>{Ok(*b"report\0\0\0\0\0\0\0\0\0\0")}
+    fn load(&mut self,_:u8,_:&mut[u8;w::MAX])->Result<usize,u32>{panic!("blocking load")}
+    fn load_step(&mut self,pd:u32,_:u8,out:&mut[u8;w::MAX])->Result<Option<usize>,u32>{
+        let i=Self::index(pd);self.turns[i]+=1;
+        if self.turns[i]%2==1{Ok(None)}else{out.fill(pd as u8);Ok(Some(w::MAX))}
+    }
+    fn publish_load(&mut self,pd:u32,r:w::Request,generation:u32,name:[u8;16],bytes:&[u8])->Result<(),u32>{
+        assert_eq!(r.b,w::SNAPSHOT_MODE);self.region(pd,true).publish(document_snapshot::Identity{subject:pd,object:r.object,generation,sequence:r.seq},name,bytes)?;
+        self.publications[Self::index(pd)]+=1;Ok(())
+    }
+    fn clear_load(&mut self,pd:u32)->Result<(),u32>{
+        if self.fail_clear{return Err(w::DENIED)}
+        self.region(pd,true).clear()?;self.clears[Self::index(pd)]+=1;Ok(())
+    }
+}
+#[test]fn bulk_load_copies_maximum_private_bytes_and_waits_for_scrubbed_end_receipt(){
+    for pd in [9,16,18]{
+        let mut b=BulkBackend::new();let mut s=Service::new();let mut c=Client::new();
+        assert!(c.set_snapshot(b.region(pd,false)));assert!(c.load(3,42));let mut kinds=vec![];let mut ended=false;
+        for _ in 0..30{
+            let mut requests=vec![];assert!(c.step(|r|{requests.push(r);Ok(())}).is_none());
+            for r in requests{kinds.push(r.kind);assert!(s.handle(pd,true,r,&mut b).is_none());if r.kind==w::END{ended=true;assert!(b.zero(pd));}}
+            s.progress(&mut b);
+            // Exact accepted receipt retained under real legacy Full=1.
+            s.poll(|_,_|1);
+            let mut replies=vec![];s.poll(|who,v|{assert_eq!(who,pd);replies.push(v);0});
+            for v in replies{if let Some(e)=c.receive(11,v){assert!(ended);assert_eq!(e.outcome,Outcome::Loaded);assert_eq!(c.bytes,[pd as u8;w::MAX]);assert_eq!(&c.name[..6],b"report");}}
+            if ended&&!c.busy(){break}
+        }
+        assert_eq!(kinds,[w::INFO,w::LOAD,w::END]);assert!(!c.busy());assert_eq!(b.publications[BulkBackend::index(pd)],1);
+        assert!(b.zero(pd));assert!(b.buffers.iter().enumerate().filter(|(i,_)|*i!=BulkBackend::index(pd)).all(|(_,s)|s.0.iter().all(|w|w.load(core::sync::atomic::Ordering::SeqCst)==0)));
+    }
+}
+#[test]fn bulk_abort_or_terminal_cleanup_scrubs_before_receipt_and_never_republishes(){
+    for pd in [9,16,18]{for turns in 0..=2{for terminal in [false,true]{
+        let mut b=BulkBackend::new();let mut s=Service::new();let r=w::Request{seq:1,kind:w::LOAD,object:3,offset:0,a:7,b:w::SNAPSHOT_MODE};
+        s.handle(pd,true,r,&mut b);for _ in 0..turns{s.progress(&mut b);}
+        assert!(s.handle(pd,true,r,&mut b).is_none());let effects=b.publications;
+        if terminal{assert!(s.retire(pd,&mut b));s.poll(|_,_|panic!("terminal reply"));}
+        else{let abort=w::Request{seq:2,kind:w::ABORT,object:0,offset:0,a:0,b:0};s.handle(pd,true,abort,&mut b);assert!(b.zero(pd));
+            s.poll(|_,_|1);let mut replies=vec![];s.poll(|_,v|{replies.push(v);0});assert_eq!(replies,[w::reply(2,Ok(0))]);}
+        assert!(b.zero(pd));s.progress(&mut b);assert_eq!(b.publications,effects);assert!(!s.pending());
+    }}}
+}
+#[test]fn corrupted_bulk_receipt_data_fences_client_without_scalar_fallback(){
+    let mut b=BulkBackend::new();let mut s=Service::new();let mut c=Client::new();c.set_snapshot(b.region(9,false));c.load(3,1);
+    let mut requests=vec![];c.step(|r|{requests.push(r);Ok(())});s.handle(9,true,requests[0],&mut b);s.poll(|_,v|{assert!(c.receive(11,v).is_none());0});
+    requests.clear();c.step(|r|{requests.push(r);Ok(())});s.handle(9,true,requests[0],&mut b);s.progress(&mut b);s.progress(&mut b);
+    b.buffers[0].0[64].store(0,core::sync::atomic::Ordering::SeqCst);
+    let mut event=None;s.poll(|_,v|{event=c.receive(11,v);0});assert_eq!(event.unwrap().outcome,Outcome::Uncertain);assert_eq!(c.bytes,[0;w::MAX]);assert!(!c.load(3,2));
+    c.cancel();requests.clear();c.step(|r|{requests.push(r);Ok(())});assert_eq!(requests[0].kind,w::ABORT);s.handle(9,true,requests[0],&mut b);
+    s.poll(|_,v|{assert_eq!(c.receive(11,v).unwrap().outcome,Outcome::Cancelled);0});assert!(b.zero(9));assert!(c.load(3,2));
+}
+#[test]fn failed_terminal_scrub_cannot_report_success(){
+    let mut b=BulkBackend::new();let mut s=Service::new();let r=w::Request{seq:1,kind:w::LOAD,object:3,offset:0,a:7,b:w::SNAPSHOT_MODE};
+    s.handle(9,true,r,&mut b);s.progress(&mut b);s.progress(&mut b);assert!(!b.zero(9));b.fail_clear=true;
+    assert!(!s.retire(9,&mut b));assert!(!b.zero(9));b.fail_clear=false;assert!(s.retire(9,&mut b));assert!(b.zero(9));s.poll(|_,_|panic!());
 }

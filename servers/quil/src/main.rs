@@ -2925,6 +2925,7 @@ pub extern "C" fn _start() -> ! {
     assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(9,156)|(16,301)|(18,307)));
     unsafe{DOCUMENT_WORKSPACE=sex_pdx::document_view::WorkspaceRefresh::new(catalog.target_pd,catalog.task_id);}
     QUIL_DOMAIN.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
+    unsafe { assert!(DOCUMENT_IO.set_snapshot(sex_pdx::document_snapshot_view(catalog.target_pd,false).expect("QUIL_SNAPSHOT_AUTHORITY"))); }
     QUIL_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
     QUIL_CONTENT_SURFACE.store(catalog.surface_id,core::sync::atomic::Ordering::Release);
     sex_pdx::serial_record!("[quil.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);

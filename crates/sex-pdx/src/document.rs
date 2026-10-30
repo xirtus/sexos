@@ -11,6 +11,8 @@ pub const WRITE: u8 = 7;
 pub const COMMIT: u8 = 8;
 pub const CREATE: u8 = 9;
 pub const ABORT: u8 = 10;
+/// LOAD.b selects coherent transfer through an existing BOOT snapshot Region.
+pub const SNAPSHOT_MODE: u64 = 1;
 pub const MAX: usize = 12288;
 /// Maximum admitted data requests per exact BOOT client, not an authority grant.
 pub const WINDOW: usize = 4;

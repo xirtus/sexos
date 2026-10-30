@@ -583,6 +583,18 @@ pub fn memory_region_full_view(slot: u64, rights: u8) -> Result<memory_region::R
     memory_region_view(slot, 0, info.length, rights)
 }
 
+/// Resolve only the caller's existing BOOT document Region capability. Numeric
+/// subject/slot parameters cannot create a view or upgrade its rights.
+pub fn document_snapshot_view(subject: u32, writer: bool) -> Result<document_snapshot::Region, u32> {
+    let index = match subject { 9 => 0, 16 => 1, 18 => 2, _ => return Err(document::DENIED) };
+    let slot = if writer { document_buffer::PROVIDER_SLOTS[index] } else { document_buffer::CLIENT_SLOT };
+    let rights = memory_region::QUERY_VIEW | memory_region::READ | if writer { memory_region::WRITE } else { 0 };
+    let info = memory_region_info(slot).map_err(|_| document::DENIED)?;
+    let view = memory_region_view(slot, 0, document_buffer::BYTES, rights).map_err(|_| document::DENIED)?;
+    // Only immutable current-domain syscall results reach this constructor.
+    unsafe { document_snapshot::Region::from_resolved(info, view, subject, writer) }
+}
+
 // ── MemLend buffer cap ABI (SEXBLOCK_BUFFER_LEND_CAP_IMPLEMENT_PHASE_A_V1) ──
 pub const SYS_MAP_PCI_BAR: u64 = 43;
 pub const SYS_GRANT_MEM_LEND: u64 = 50; // rdi=domain_slot rsi=length(4096) rdx=lend_slot → producer_va
@@ -908,6 +920,7 @@ pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<DomainId, u64> {
 
 pub mod document;
 pub mod document_buffer;
+pub mod document_snapshot;
 
 pub mod desktop_style;
 pub mod document_view;

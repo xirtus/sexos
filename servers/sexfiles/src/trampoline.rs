@@ -261,7 +261,8 @@ pub extern "C" fn trampoline_main() {
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
-                    history.retire(notice.target_pd);probes.retire(notice.target_pd);documents.retire(notice.target_pd,&mut vfs::DocumentBackend);
+                    history.retire(notice.target_pd);probes.retire(notice.target_pd);
+                    assert!(documents.retire(notice.target_pd,&mut vfs::DocumentBackend),"DOCUMENT_SNAPSHOT_RETIRE_SCRUB");
                     let (closed,revoked)=vfs::retire_app_subject(notice.target_pd);
                     sex_pdx::serial_record!("[files.app.cleanup] target={} task={} handles={} caps={} saved_data=retained selection=0",
                         notice.target_pd,notice.task_id,closed,revoked);

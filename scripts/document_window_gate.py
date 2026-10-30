@@ -30,7 +30,7 @@ def main():
     disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-document-window-{os.getpid()}.sock';log=out/'serial.log'
     cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres=1280,yres=800','-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
     digest=hashlib.sha256(iso.read_bytes()).hexdigest()
-    (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=digest,input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=cmd,declared_window=a.window,cancel_load=a.cancel_load),indent=2)+'\n')
+    (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=digest,input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=cmd,declared_window=a.window,cancel_load=a.cancel_load,cancel_input='immediate_key_edges'if a.cancel_load else None),indent=2)+'\n')
     proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
     def text():return log.read_text(errors='replace')if log.exists()else''
     def wait(pattern,start=0,timeout=600):
@@ -65,7 +65,10 @@ def main():
         if a.cancel_load:
             wait(r'\[files.document.load.begin\] caller=9 object='+str(a.object)+r' ',start)
             if '[quil.persist.load.ok]'in text()[start:]:raise RuntimeError('Load finished before Close input')
-            sent=time.monotonic();q.key('f11');wait(r'\[sext.app.pool.ready\] target=9 .*ok=1',start,timeout=60)
+            # send-key serializes its80ms hold behind the preceding Enter.
+            # Queue real hardware edges immediately; the strict trace checker
+            # still requires actual Close handling before Loaded, not just send.
+            sent=time.monotonic();q.key_sequence(['f11']);wait(r'\[sext.app.pool.ready\] target=9 .*ok=1',start,timeout=60)
             close_seconds=time.monotonic()-sent
             roles=validate_cancel_load_trace(text()[start:],a.object)
             actual=recover(disk.read_bytes(),a.object)

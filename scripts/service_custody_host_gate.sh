@@ -84,6 +84,8 @@ DOCUMENT_CALLER_SOURCE="$TEST_DIR/document_caller.rs" rustc --edition=2021 --tes
 "$TEST_DIR/document-caller"
 rustc --edition=2021 --test tests/quil_document.rs -o "$TEST_DIR/documents"
 "$TEST_DIR/documents"
+rustc --edition=2021 --test tests/document_snapshot.rs -o "$TEST_DIR/document-snapshot"
+"$TEST_DIR/document-snapshot"
 rustc --edition=2021 --test tests/document_journal.rs -o "$TEST_DIR/document-journal"
 "$TEST_DIR/document-journal"
 python3 - "$TEST_DIR/document_load_backend.rs" <<'PYLOAD'

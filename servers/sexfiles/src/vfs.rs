@@ -1894,6 +1894,18 @@ fn document_read(id:u8,offset:u64,out:&mut[u8])->Result<(),u32>{
  let mut done=0;while done<out.len(){let at=offset+done as u64;let(piece,rel)=v4_resolve_offset(id as usize,at,va).map_err(|_|w::IO)?;let n=document_piece_len(piece,rel,out.len()-done)?;let got=DiskFs::diskfs_read_object_entry(piece,rel,&mut out[done..done+n],va).map_err(|_|w::IO)?;if got as usize!=n{return Err(w::IO)}done+=n;}Ok(())
 }
 impl crate::document::Backend for DocumentBackend{
+ fn publish_load(&mut self,caller:u32,r:sex_pdx::document::Request,generation:u32,name:[u8;16],bytes:&[u8])->Result<(),u32>{
+  let mut region=sex_pdx::document_snapshot_view(caller,true)?;
+  region.publish(sex_pdx::document_snapshot::Identity{subject:caller,object:r.object,generation,sequence:r.seq},name,bytes)?;
+  sex_pdx::serial_record!("[files.document.snapshot] caller={} object={} identity={} sequence={} bytes={} published=1",caller,r.object,generation,r.seq,bytes.len());
+  Ok(())
+ }
+ fn clear_load(&mut self,caller:u32)->Result<(),u32>{
+  if !matches!(caller,9|16|18){return Ok(())}
+  sex_pdx::document_snapshot_view(caller,true)?.clear()?;
+  sex_pdx::serial_record!("[files.document.snapshot.clear] caller={} bytes=16384 scrubbed=1",caller);
+  Ok(())
+ }
  fn identity(&mut self,id:u8)->Result<u32,u32>{use sex_pdx::document as w;if !(2..15).contains(&id){return Err(w::DENIED)}let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let e=v4_get(id as u64).map_err(|_|w::STALE)?;Ok(((id as u32+1)<<16)|e.gen as u32)}
  fn name(&mut self,id:u8)->Result<[u8;16],u32>{let e=v4_get(id as u64).map_err(|_|sex_pdx::document::STALE)?;let mut name=[0;16];name.copy_from_slice(&e.name[..16]);Ok(name)}
  fn create(&mut self,name:[u8;16])->Result<u8,u32>{use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let id=handle_diskfs_create(u64::from_le_bytes(name[..8].try_into().unwrap()),u64::from_le_bytes(name[8..].try_into().unwrap()),va);if !(3..15).contains(&id){return Err(w::IO)}Ok(id as u8)}

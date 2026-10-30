@@ -60,6 +60,7 @@ pub struct Client {
     creating: bool,
     known: [Option<u32>; 15],
     quiescent: bool,
+    snapshot: Option<sex_pdx::document_snapshot::Region>,
 }
 impl Client {
     pub const fn new() -> Self {
@@ -88,10 +89,16 @@ impl Client {
             creating: false,
             known: [None; 15],
             quiescent: false,
+            snapshot: None,
         }
     }
     pub fn busy(&self) -> bool {
         self.busy
+    }
+    pub fn set_snapshot(&mut self, region: sex_pdx::document_snapshot::Region) -> bool {
+        if self.busy || self.dead || self.snapshot.is_some() { return false; }
+        self.snapshot = Some(region);
+        true
     }
     pub fn loading(&self) -> bool {
         self.busy && !self.saving
@@ -187,6 +194,7 @@ impl Client {
         true
     }
     pub fn close(&mut self) {
+        self.snapshot = None;
         self.bytes.fill(0);
         self.name.fill(0);
         self.len = 0;
@@ -353,6 +361,7 @@ impl Client {
                 Phase::Info => w::INFO,
                 Phase::Load => {
                     a = self.generation as u64;
+                    if self.snapshot.is_some() { b = w::SNAPSHOT_MODE; }
                     w::LOAD
                 }
                 Phase::Name => {
@@ -439,7 +448,17 @@ impl Client {
                 }
                 self.len = v as usize;
                 self.offset = 0;
-                self.phase = Phase::Name
+                if let Some(region) = self.snapshot.as_ref() {
+                    let id = sex_pdx::document_snapshot::Identity {
+                        subject: region.subject(), object: self.object,
+                        generation: self.generation, sequence: r.seq,
+                    };
+                    if let Err(error) = region.copy(id,self.len,&mut self.bytes,&mut self.name) {
+                        return Some(self.finish(Outcome::Uncertain,error));
+                    }
+                    sex_pdx::serial_record!("[quil.document.snapshot] caller={} object={} identity={} sequence={} bytes={} validated=1",region.subject(),self.object,self.generation,r.seq,self.len);
+                    self.phase = Phase::End;
+                } else { self.phase = Phase::Name; }
             }
             Phase::Name => {
                 self.name[self.offset..self.offset + 4].copy_from_slice(&v.to_le_bytes());

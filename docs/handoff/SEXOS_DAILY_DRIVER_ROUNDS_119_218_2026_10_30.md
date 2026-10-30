@@ -1,6 +1,6 @@
 # SexOS daily-driver continuation: rounds 119–218
 
-Requested and reaffirmed 30 October 2026. Finish rounds19–118, then immediately continue with these100 substantive engineering rounds. Round118 is a checkpoint, not permission to stop. This is an execution queue, not completed work or a release promise. Current accepted implementation is through70;71 is undergoing qualification. The [live ledger](ALPHA_100_ROUND_CONTINUATION_2026_10_29.md) remains the acceptance record.
+Requested and reaffirmed 30 October 2026. Finish rounds19–118, then immediately continue with these100 substantive engineering rounds. Round118 is a checkpoint, not permission to stop. This is an execution queue, not completed work or a release promise. Current accepted implementation is through72; continue at73. The [live ledger](ALPHA_100_ROUND_CONTINUATION_2026_10_29.md) remains the acceptance record.
 
 The goal is a useful, reliable daily-driver desktop with apps and a coherent, attractive UI. The first release boundary is a trusted-builtins QEMU alpha; a full daily driver additionally needs real connectivity, sustainable app lifetimes, recovery, protection appropriate to its threat model and a named physical target. A round count cannot grant any release label. A general modern web browser, arbitrary third-party binary compatibility and native ARM support are separate large projects unless explicitly brought into scope.
 
