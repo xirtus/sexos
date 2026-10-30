@@ -4,8 +4,8 @@
 //! transport receipt: a successful parse publishes a body range, never a prefix.
 //! Navigation accepts bounded same-endpoint origin-form redirect data only.
 //! No arbitrary URLs, cookies, HTML interpretation, TLS, caching or online-web claim.
-//! For200, Content-Type is required and restricted to text/plain, optionally
-//! with one unquoted charset=us-ascii parameter. Redirect MIME is optional
+//! For200, Content-Type must match the selected fixed resource. Legacy text
+//! permits one unquoted charset=us-ascii parameter. Redirect MIME is optional
 //! syntax-checked data; it never selects rendering. Body bytes remain raw data.
 
 pub const MAX_REQUEST: usize = 128;
@@ -19,6 +19,23 @@ pub const MAX_REDIRECT_BODY: usize = 1024;
 // Exact supported-profile fixture for host/native wire oracles. Runtime Host
 // bytes come from the shared BOOT profile below; the actual request test binds it.
 const REQUEST: &[u8] = b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
+
+/// Fixed application data on the same immutable BOOT endpoint. Selecting a
+/// resource never selects a trust profile, host, port, route or capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Resource { WelcomeText, ArtworkQoi }
+impl Resource {
+    pub const fn path(self) -> Path {
+        let source: &[u8] = match self { Self::WelcomeText=>b"/welcome",Self::ArtworkQoi=>b"/art.qoi" };
+        let mut bytes=[0;MAX_PATH];let mut at=0;
+        while at<source.len(){bytes[at]=source[at];at+=1;}
+        Path{bytes,len:source.len()}
+    }
+    pub const fn mime(self) -> &'static [u8] {
+        match self {Self::WelcomeText=>b"text/plain",Self::ArtworkQoi=>b"image/qoi"}
+    }
+}
 
 /// Canonical bounded request-target data, never an endpoint or capability.
 /// Restrict syntax instead of decoding/normalizing aliases or URL authorities.
@@ -101,18 +118,25 @@ pub fn request_path(out: &mut [u8; MAX_REQUEST], path: &Path) -> usize {
 pub fn request_https(out:&mut[u8;HTTPS_MAX_REQUEST],path:&Path)->usize{
     emit_request(out,path,true)
 }
+/// The path and Accept value are selected together from fixed resource data.
+pub fn request_https_resource(out:&mut[u8;HTTPS_MAX_REQUEST],resource:Resource)->usize{
+    emit_request_resource(out,&resource.path(),true,resource)
+}
 fn emit_request(out:&mut[u8],path:&Path,https:bool)->usize{
+    emit_request_resource(out,path,https,Resource::WelcomeText)
+}
+fn emit_request_resource(out:&mut[u8],path:&Path,https:bool,resource:Resource)->usize{
     let prefix=b"GET ";let path=path.as_bytes();let host=sex_net_config::HOST_NAME;
-    let version=b" HTTP/1.1\r\nHost: ";let suffix=b"\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
+    let version=b" HTTP/1.1\r\nHost: ";let suffix=b"\r\nConnection: close\r\nAccept: ";let end=b"\r\n\r\n";
     let mut digits=[0u8;5];let mut start=digits.len();let mut port=sex_net_config::TLS_PORT;
     assert!(port!=0,"BOOT_HTTP_TLS_PORT");
     while port!=0{start-=1;digits[start]=b'0'+(port%10)as u8;port/=10;}
     let tls_suffix=if https{1+digits.len()-start}else{0};
-    let length=prefix.len()+path.len()+version.len()+host.len()+tls_suffix+suffix.len();
+    let length=prefix.len()+path.len()+version.len()+host.len()+tls_suffix+suffix.len()+resource.mime().len()+end.len();
     assert!(length<=out.len(),"BOOT_HTTP_PROFILE_BOUND");let mut at=0;
     for part in [prefix.as_slice(),path,version.as_slice(),host]{out[at..at+part.len()].copy_from_slice(part);at+=part.len();}
     if https{out[at]=b':';at+=1;out[at..at+digits.len()-start].copy_from_slice(&digits[start..]);at+=digits.len()-start;}
-    out[at..at+suffix.len()].copy_from_slice(suffix);length
+    for part in [suffix.as_slice(),resource.mime(),end.as_slice()]{out[at..at+part.len()].copy_from_slice(part);at+=part.len();}length
 }
 
 fn line<'a>(input: &'a [u8], cursor: &mut usize) -> Result<&'a [u8], Error> {
@@ -175,6 +199,12 @@ fn content_type(bytes: &[u8]) -> Result<(), Error> {
     if parts.next().is_some() { return Err(Error::UnsupportedContentType); }
     Ok(())
 }
+fn resource_content_type(bytes:&[u8],resource:Resource)->Result<(),Error>{
+    match resource {
+        Resource::WelcomeText=>content_type(bytes),
+        Resource::ArtworkQoi=>if bytes.eq_ignore_ascii_case(resource.mime()){Ok(())}else{Err(Error::UnsupportedContentType)},
+    }
+}
 
 // Redirect bodies are discarded presentation data. Their optional MIME does
 // not select a renderer; validate bounded media-type syntax without interpreting
@@ -220,10 +250,13 @@ fn ignored_media_type(bytes:&[u8]) -> Result<(),Error> {
 /// Validate status and all fields through the first CRLFCRLF. This helper
 /// returns framing metadata only, without claiming complete body receipt.
 fn header_prefix(input: &[u8]) -> Result<Headers, Error> {
-    let parsed=navigation_prefix(input,false)?;
+    resource_header_prefix(input,Resource::WelcomeText)
+}
+fn resource_header_prefix(input:&[u8],resource:Resource)->Result<Headers,Error>{
+    let parsed=navigation_prefix(input,false,resource)?;
     Ok(Headers {header_len:parsed.header_len,content_length:parsed.content_length})
 }
-fn navigation_prefix(input: &[u8], navigation: bool) -> Result<NavigationHeaders, Error> {
+fn navigation_prefix(input: &[u8], navigation: bool, resource:Resource) -> Result<NavigationHeaders, Error> {
     let mut cursor = 0;
     let status = line(input, &mut cursor)?;
     if status.len() < 13 || &status[..9] != b"HTTP/1.1 " {
@@ -252,7 +285,7 @@ fn navigation_prefix(input: &[u8], navigation: bool) -> Result<NavigationHeaders
             body_length = Some(length(value)?);
         } else if name.eq_ignore_ascii_case(b"content-type") {
             if has_type { return Err(Error::UnsupportedContentType); }
-            if !redirect_status {content_type(value)?;}else{ignored_media_type(value)?;}
+            if !redirect_status {resource_content_type(value,resource)?;}else{ignored_media_type(value)?;}
             has_type = true;
         } else if redirect_status && name.eq_ignore_ascii_case(b"location") {
             if redirect.is_some() {return Err(Error::DuplicateLocation);}
@@ -270,8 +303,13 @@ fn navigation_prefix(input: &[u8], navigation: bool) -> Result<NavigationHeaders
 /// Parse an exact complete header extent without requiring a body copy.
 /// Call only when CRLFCRLF has arrived; a header does not publish body data.
 pub fn parse_headers(input: &[u8]) -> Result<Headers, Error> {
+    parse_headers_resource(input,Resource::WelcomeText)
+}
+/// Exact resource-specific framing. This neither decodes an image nor grants
+/// publication authority; all size, duplicate and encoding rules stay shared.
+pub fn parse_headers_resource(input:&[u8],resource:Resource)->Result<Headers,Error>{
     if input.len() > MAX_HEADERS { return Err(Error::HeaderLimit); }
-    let parsed=header_prefix(input)?;
+    let parsed=resource_header_prefix(input,resource)?;
     if parsed.header_len!=input.len() { return Err(Error::TrailingData); }
     Ok(parsed)
 }
@@ -281,7 +319,7 @@ pub fn parse_headers(input: &[u8]) -> Result<Headers, Error> {
 /// intentionally remain200-only. Redirect Content-Length is required and<=1024.
 pub fn parse_navigation_headers(input:&[u8]) -> Result<NavigationHeaders,Error> {
     if input.len()>MAX_HEADERS {return Err(Error::HeaderLimit);}
-    let parsed=navigation_prefix(input,true)?;
+    let parsed=navigation_prefix(input,true,Resource::WelcomeText)?;
     if parsed.header_len!=input.len() {return Err(Error::TrailingData);}
     Ok(parsed)
 }
@@ -304,11 +342,12 @@ fn erase(bytes:&mut[u8]){for byte in bytes{unsafe{core::ptr::write_volatile(byte
 /// Bytes after that extent within any feed are rejected, never silently dropped.
 pub struct Receiver{
     header:[u8;MAX_HEADERS],body:[u8;MAX_BODY],header_len:usize,body_len:usize,
-    expected:Option<usize>,total:usize,error:Option<Error>,finished:bool,taken:bool,
+    expected:Option<usize>,total:usize,error:Option<Error>,finished:bool,taken:bool,resource:Resource,
 }
 impl Receiver{
-    pub const fn new()->Self{Self{header:[0;MAX_HEADERS],body:[0;MAX_BODY],header_len:0,body_len:0,
-        expected:None,total:0,error:None,finished:false,taken:false}}
+    pub const fn new()->Self{Self::for_resource(Resource::WelcomeText)}
+    pub const fn for_resource(resource:Resource)->Self{Self{header:[0;MAX_HEADERS],body:[0;MAX_BODY],header_len:0,body_len:0,
+        expected:None,total:0,error:None,finished:false,taken:false,resource}}
     pub fn failure(&self)->Option<Error>{self.error}
     pub fn expected_length(&self)->Option<usize>{self.expected}
     pub fn length(&self)->usize{self.body_len}
@@ -336,7 +375,7 @@ impl Receiver{
                 if self.header_len==MAX_HEADERS{return self.reject(Error::HeaderLimit);}
                 self.header[self.header_len]=byte;self.header_len+=1;
                 if self.header[..self.header_len].ends_with(b"\r\n\r\n"){
-                    match parse_headers(&self.header[..self.header_len]){
+                    match parse_headers_resource(&self.header[..self.header_len],self.resource){
                         Ok(headers)=>self.expected=Some(headers.content_length),
                         Err(error)=>return self.reject(error),
                     }
@@ -369,6 +408,52 @@ impl Receiver{
 }
 impl Drop for Receiver{fn drop(&mut self){self.wipe();}}
 const _:()=assert!(core::mem::size_of::<Receiver>()<=MAX_RESPONSE+128);
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    use std::{format,vec,vec::Vec};
+    fn response(fields:&str,body:&[u8])->Vec<u8>{
+        let mut bytes=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{fields}\r\n",body.len()).into_bytes();bytes.extend_from_slice(body);bytes
+    }
+    fn wiped(r:&Receiver){assert!(r.header.iter().chain(r.body.iter()).all(|b|*b==0));assert!(r.body().is_none());}
+    #[test] fn fixed_resource_request_selects_path_accept_and_same_boot_host(){
+        for(resource,path,mime)in[(Resource::WelcomeText,b"/welcome".as_slice(),b"text/plain".as_slice()),(Resource::ArtworkQoi,b"/art.qoi",b"image/qoi")]{
+            assert_eq!(resource.path().as_bytes(),path);assert_eq!(resource.mime(),mime);assert_eq!(Path::from_location(path).unwrap(),resource.path());
+            let mut out=[0xa5;HTTPS_MAX_REQUEST];let len=request_https_resource(&mut out,resource);
+            let expected=format!("GET {} HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: {}\r\n\r\n",core::str::from_utf8(path).unwrap(),core::str::from_utf8(mime).unwrap());
+            assert_eq!(&out[..len],expected.as_bytes());assert!(out[len..].iter().all(|b|*b==0xa5));
+            if resource==Resource::WelcomeText{let mut legacy=[0;HTTPS_MAX_REQUEST];let n=request_https(&mut legacy,&Path::initial());assert_eq!(&legacy[..n],&out[..len]);}
+        }
+    }
+    #[test] fn qoi_profile_preserves_every_raw_byte_up_to_the_same_body_limit(){
+        let body:Vec<u8>=(0..MAX_BODY).map(|i|(i%256)as u8).collect();let bytes=response("Content-Type: image/qoi\r\n",&body);
+        for size in [1,4,511,512,MAX_RESPONSE]{
+            let mut receiver=Receiver::for_resource(Resource::ArtworkQoi);
+            for chunk in bytes.chunks(size){receiver.feed(chunk).unwrap();assert!(receiver.body().is_none());}
+            assert!(receiver.complete());assert_eq!(receiver.finish(),Ok(MAX_BODY));assert_eq!(receiver.body(),Some(body.as_slice()));
+            let mut out=vec![0xa5;MAX_BODY];assert_eq!(receiver.copy_body(&mut out),Ok(MAX_BODY));assert_eq!(out,body);wiped(&receiver);
+        }
+        let excessive=response("Content-Type: image/qoi\r\n",&vec![0;MAX_BODY+1]);let mut r=Receiver::for_resource(Resource::ArtworkQoi);assert_eq!(r.feed(&excessive),Err(Error::BodyLimit));wiped(&r);
+    }
+    #[test] fn resource_mime_is_strict_and_legacy_text_never_accepts_qoi(){
+        for mime in ["text/plain","application/octet-stream","image/png","image/qoi; charset=us-ascii","image/qoi; x=y",""]{
+            let mut r=Receiver::for_resource(Resource::ArtworkQoi);assert_eq!(r.feed(&response(&format!("Content-Type: {mime}\r\n"),b"binary")),Err(Error::UnsupportedContentType));wiped(&r);
+        }
+        let bytes=response("Content-Type: image/qoi\r\n",b"\x00\xff");let mut legacy=Receiver::new();assert_eq!(legacy.feed(&bytes),Err(Error::UnsupportedContentType));wiped(&legacy);
+        assert_eq!(parse(&bytes),Err(Error::UnsupportedContentType));
+        let mut r=Receiver::for_resource(Resource::ArtworkQoi);r.feed(&response("cOnTeNt-TyPe:\tIMAGE/QOI \t\r\n",b"\0\xff")).unwrap();assert_eq!(r.finish(),Ok(2));assert_eq!(r.body(),Some(b"\0\xff".as_slice()));
+    }
+    #[test] fn binary_profile_preserves_framing_rejections_and_erases_on_truncation_or_trailing(){
+        for(fields,error)in[("Content-Type: image/qoi\r\nContent-Type: image/qoi\r\n",Error::UnsupportedContentType),("Content-Type: image/qoi\r\nContent-Length: 4\r\n",Error::DuplicateContentLength),("Content-Type: image/qoi\r\nTransfer-Encoding: chunked\r\n",Error::TransferEncoding),("Content-Type: image/qoi\r\nContent-Encoding: identity\r\n",Error::UnsupportedEncoding),("",Error::MissingContentType)]{
+            let mut r=Receiver::for_resource(Resource::ArtworkQoi);assert_eq!(r.feed(&response(fields,b"BODY")),Err(error));wiped(&r);
+        }
+        let bytes=response("Content-Type: image/qoi\r\n",b"qoif\0\0\0\x30\0\0\0\x30\x04\0\xff\0\xff");
+        for cut in 0..bytes.len(){let mut r=Receiver::for_resource(Resource::ArtworkQoi);r.feed(&bytes[..cut]).unwrap();assert_eq!(r.finish(),Err(Error::Truncated));wiped(&r);}
+        for split in [0,bytes.len()-1,bytes.len()]{let mut all=bytes.clone();all.push(0xff);let mut r=Receiver::for_resource(Resource::ArtworkQoi);r.feed(&all[..split]).unwrap();assert_eq!(r.feed(&all[split..]),Err(Error::TrailingData));wiped(&r);}
+        let mut r=Receiver::for_resource(Resource::ArtworkQoi);r.feed(&bytes).unwrap();r.finish().unwrap();assert_eq!(r.feed(&[0]),Err(Error::TrailingData));wiped(&r);
+    }
+}
 
 #[cfg(test)]
 mod tests {

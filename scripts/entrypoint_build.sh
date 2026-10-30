@@ -41,6 +41,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/spindle_history.rs
   crates/sex-pdx/src/desktop_style.rs
   crates/sex-pdx/src/text_batch.rs
+  crates/sex-pdx/src/bitmap_batch.rs
   crates/sex-pdx/src/document_view.rs
   crates/sex-pdx/src/document.rs
   crates/sex-pdx/src/spindle_probe.rs

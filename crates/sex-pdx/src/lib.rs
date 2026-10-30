@@ -1035,3 +1035,4 @@ pub mod document_view;
 pub mod display_boot;
 
 pub mod text_batch;
+pub mod bitmap_batch;

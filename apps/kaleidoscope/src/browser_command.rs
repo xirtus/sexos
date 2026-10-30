@@ -4,7 +4,7 @@
 use crate::{clock_probe,entropy_probe,tls_probe,trust_probe};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum Intent{Echo,Dns,HttpDns,Http,TlsDns,TlsStart,TlsPrepare,Seed,Clock}
+pub enum Intent{Echo,Dns,HttpDns,Http,TlsDns,TlsAssetDns,TlsStart,TlsPrepare,Seed,Clock}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Busy{pub route:bool,pub providers:bool,pub tls:bool}
 
@@ -19,7 +19,7 @@ pub fn replace(pending:&mut Option<Intent>,next:Intent,tls:&mut tls_probe::Probe
 /// result. Continuations may advance the already owned TLS preparation.
 pub fn take_ready(pending:&mut Option<Intent>,busy:Busy)->Option<Intent>{
     if busy.route{return None;}
-    if matches!(pending,Some(Intent::TlsDns|Intent::TlsPrepare|Intent::Seed|Intent::Clock))
+    if matches!(pending,Some(Intent::TlsDns|Intent::TlsAssetDns|Intent::TlsPrepare|Intent::Seed|Intent::Clock))
         &&(busy.providers||busy.tls){return None;}
     pending.take()
 }

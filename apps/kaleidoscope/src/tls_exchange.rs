@@ -3,16 +3,17 @@
 //! Session bytes and DNS generations are data, never endpoint authority. The
 //! parent serializes this client with the route's Echo/HTTP replay fence.
 use sex_pdx::network_job as w;
-use sex_tls::{Session,Stats};
+use sex_tls::{Resource,Session,Stats};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum View{Idle,Pending,Verified,Unavailable,Cancelled,Uncertain}
 /// Diagnostic of one positively acknowledged RELEASE; not a new capability.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct Released{pub ticket:u32,pub outcome:View,pub authenticated:bool,pub document:bool,pub payload_bytes:usize}
+pub struct Released{pub ticket:u32,pub outcome:View,pub authenticated:bool,pub document:bool,pub resource:Option<Resource>,pub payload_bytes:usize}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum Step{Done,Begin,InitialWrite,Start,Active,Write,Status,Read,Finish,Cancel,Release,Held}
 pub struct Client{
     released:Option<Released>,session:Option<Session>,stats:Option<Stats>,document:Option<sex_tls::Document>,is_document:bool,document_received:usize,http_failure:Option<sex_tls::HttpError>,failure:Option<sex_tls::Failure>,step:Step,seq:u32,ticket:u32,last_ticket:u32,
+    asset:Option<sex_tls::Asset>,resource:Option<Resource>,
     generation:u32,initial:usize,tx:usize,rx:usize,produced:usize,chunk:[u8;8],chunk_len:usize,
     pending:Option<w::Request>,accepted:bool,deadline:u64,total:Option<u64>,last:u64,next_poll:u64,
     active:bool,finish:bool,complete:bool,prefer_read:bool,abort:bool,closed:bool,
@@ -20,7 +21,7 @@ pub struct Client{
 }
 fn erase(bytes:&mut[u8]){for byte in bytes{unsafe{core::ptr::write_volatile(byte,0)}}}
 impl Client{
-    pub const fn new()->Self{Self{released:None,session:None,stats:None,document:None,is_document:false,document_received:0,http_failure:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
+    pub const fn new()->Self{Self{released:None,session:None,stats:None,document:None,asset:None,resource:None,is_document:false,document_received:0,http_failure:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
         generation:0,initial:0,tx:0,rx:0,produced:0,chunk:[0;8],chunk_len:0,
         pending:None,accepted:false,deadline:0,total:None,last:0,next_poll:0,
         active:false,finish:false,complete:false,prefer_read:true,abort:false,closed:false,
@@ -33,12 +34,21 @@ impl Client{
     pub fn allocated_payload_bytes(&self)->usize{
         self.session.as_ref().map_or(0,Session::allocated_payload_bytes)
             +if self.document.is_some(){sex_tls::MAX_DOCUMENT}else{0}
+            +if self.asset.is_some(){sex_tls::MAX_DOCUMENT}else{0}
     }
     /// Nonsensitive reason from this attempt's actual TLS task error only.
     /// Transport timeout/cancellation alone never synthesizes a TLS diagnosis.
     pub fn failure(&self)->Option<sex_tls::Failure>{self.failure}
     pub fn http_failure(&self)->Option<sex_tls::HttpError>{self.http_failure}
     pub fn is_document(&self)->bool{self.is_document}
+    pub fn resource_kind(&self)->Option<Resource>{self.resource}
+    pub fn has_asset(&self)->bool{self.resource==Some(Resource::ArtworkQoi)&&self.view==View::Verified&&!self.busy()&&self.asset.is_some()}
+    /// Asset custody stays private until the exact positive RELEASE receipt.
+    pub fn asset(&self)->Option<&sex_tls::Asset>{if self.has_asset(){self.asset.as_ref()}else{None}}
+    pub fn take_asset(&mut self)->Option<sex_tls::Asset>{if self.has_asset(){self.asset.take()}else{None}}
+    pub fn retained_asset_len(&self)->usize{self.asset.as_ref().map_or(0,|a|a.as_bytes().len())}
+    /// Diagnostic only; no retained binary prefix is published before RELEASE.
+    pub fn retained_asset_hash(&self)->u64{self.asset.as_ref().map_or(0,|a|a.as_bytes().iter().fold(0xcbf29ce484222325u64,|h,b|(h^*b as u64).wrapping_mul(0x100000001b3)))}
     pub fn document_received(&self)->usize{self.document_received}
     pub fn has_document(&self)->bool{self.is_document&&self.view==View::Verified&&self.document.is_some()&&!self.busy()}
     pub fn document(&self)->&[u8]{if self.has_document(){self.document.as_ref().unwrap().as_bytes()}else{&[]}}
@@ -55,7 +65,7 @@ impl Client{
     pub fn rx_bytes(&self)->usize{self.rx}
     pub fn ticket(&self)->u32{self.last_ticket}
     #[cfg(test)]
-    pub fn private_scrubbed_for_test(&self)->bool{self.session.is_none()&&self.document.is_none()&&self.chunk.iter().all(|b|*b==0)&&self.chunk_len==0&&self.pending.is_none_or(|r|r.a==0)}
+    pub fn private_scrubbed_for_test(&self)->bool{self.session.is_none()&&self.document.is_none()&&self.asset.is_none()&&self.chunk.iter().all(|b|*b==0)&&self.chunk_len==0&&self.pending.is_none_or(|r|r.a==0)}
     pub fn peer_authenticated(&self)->bool{self.authenticated}
     pub fn take_authenticated(&mut self)->bool{let v=self.auth_event;self.auth_event=false;v}
     pub fn take_response_verified(&mut self)->bool{let v=self.verify_event;self.verify_event=false;v}
@@ -70,15 +80,15 @@ impl Client{
         }
         let stats=session.stats();let initial=session.outgoing_len();
         *self=Self::new();self.seq=next_seq;self.generation=generation;self.initial=initial;
-        self.stats=Some(stats);self.is_document=session.is_document();self.session=Some(session);self.step=Step::Begin;self.view=View::Pending;true
+        self.stats=Some(stats);self.is_document=session.is_document();self.resource=session.resource_kind();self.session=Some(session);self.step=Step::Begin;self.view=View::Pending;true
     }
     fn scrub(&mut self){self.session=None;erase(&mut self.chunk);self.chunk_len=0;
         if let Some(r)=self.pending.as_mut(){r.a=0;}self.auth_event=false;self.verify_event=false;}
     /// Failed cleanup can retain only its authority/correlation fence, never
     /// the authenticated body waiting for a positive RELEASE.
-    fn hold_uncertain(&mut self){self.document=None;self.scrub();self.step=Step::Held;self.view=View::Uncertain;}
+    fn hold_uncertain(&mut self){self.document=None;self.asset=None;self.resource=None;self.scrub();self.step=Step::Held;self.view=View::Uncertain;}
     fn forget_request(&mut self){if let Some(r)=self.pending.as_mut(){r.a=0;}self.pending=None;self.accepted=false;}
-    fn done(&mut self){self.scrub();self.forget_request();self.total=None;self.active=false;self.step=Step::Done;self.view=self.terminal;if self.view!=View::Verified{self.document=None;}}
+    fn done(&mut self){self.scrub();self.forget_request();self.total=None;self.active=false;self.step=Step::Done;self.view=self.terminal;if self.view!=View::Verified{self.document=None;self.asset=None;self.resource=None;}}
     fn cleanup(&mut self){
         if self.pending.is_some()&&self.accepted{self.view=View::Uncertain;return;}
         if let Some(r)=self.pending{self.seq=r.seq+1;self.forget_request();}
@@ -86,8 +96,8 @@ impl Client{
         else if self.seq<=w::MAX_SEQ{if self.step!=Step::Release{self.step=Step::Cancel;}}
         else{self.hold_uncertain();}
     }
-    fn failed(&mut self,uncertain:bool){self.document=None;self.abort=true;self.terminal=View::Unavailable;self.scrub();self.cleanup();if uncertain&&self.busy(){self.view=View::Uncertain;}}
-    fn clear_idle_metadata(&mut self){self.document=None;self.is_document=false;self.document_received=0;self.http_failure=None;
+    fn failed(&mut self,uncertain:bool){self.document=None;self.asset=None;self.resource=None;self.abort=true;self.terminal=View::Unavailable;self.scrub();self.cleanup();if uncertain&&self.busy(){self.view=View::Uncertain;}}
+    fn clear_idle_metadata(&mut self){self.document=None;self.asset=None;self.resource=None;self.is_document=false;self.document_received=0;self.http_failure=None;
         self.failure=None;self.last_ticket=0;self.stats=None;self.tx=0;self.rx=0;self.produced=0;
         self.authenticated=false;self.verified=false;self.generation=0;self.initial=0;
     }
@@ -102,10 +112,10 @@ impl Client{
         // No live lease means this is a new local cancellation, not a second
         // positive cleanup receipt for the preceding released attempt.
         if !self.busy(){self.clear_idle_metadata();}
-        self.document=None;self.abort=true;self.terminal=View::Cancelled;self.scrub();self.cleanup();
+        self.document=None;self.asset=None;self.resource=None;self.abort=true;self.terminal=View::Cancelled;self.scrub();self.cleanup();
     }
     /// Parent retires the exact service incarnation. No PDX is issued here.
-    pub fn close(&mut self){self.released=None;self.document=None;self.is_document=false;self.document_received=0;self.http_failure=None;self.failure=None;self.closed=true;self.scrub();self.forget_request();self.ticket=0;self.step=Step::Done;self.active=false;self.total=None;self.view=View::Cancelled;self.terminal=View::Cancelled;}
+    pub fn close(&mut self){self.released=None;self.document=None;self.asset=None;self.resource=None;self.is_document=false;self.document_received=0;self.http_failure=None;self.failure=None;self.closed=true;self.scrub();self.forget_request();self.ticket=0;self.step=Step::Done;self.active=false;self.total=None;self.view=View::Cancelled;self.terminal=View::Cancelled;}
     fn poll_session(&mut self){
         if !self.active||self.abort||self.verified{return;}
         let Some(session)=self.session.as_mut()else{self.failed(false);return;};
@@ -115,6 +125,9 @@ impl Client{
             sex_tls::State::ExchangeVerified=>{
                 if self.is_document&&self.document.is_none(){
                     self.document=session.take_document();if self.document.is_none(){self.failed(false);return;}
+                }
+                if self.resource==Some(Resource::ArtworkQoi)&&self.asset.is_none(){
+                    self.asset=session.take_asset();if self.asset.is_none(){self.failed(false);return;}
                 }
                 if !self.authenticated{self.authenticated=true;self.auth_event=true;}self.verified=true;self.verify_event=true;},
             sex_tls::State::Rejected=>{
@@ -215,10 +228,10 @@ impl Client{
             w::CANCEL=>{if value!=0{self.hold_uncertain();}else{self.step=Step::Release;}},
             w::RELEASE=>{if value!=0{self.hold_uncertain();}else{
                 let ticket=self.ticket;self.ticket=0;self.done();
-                self.released=Some(Released{ticket,outcome:self.view,authenticated:self.authenticated,document:self.is_document,payload_bytes:self.allocated_payload_bytes()});
+                self.released=Some(Released{ticket,outcome:self.view,authenticated:self.authenticated,document:self.is_document,resource:self.resource,payload_bytes:self.allocated_payload_bytes()});
             }},
             _=>self.failed(false),
         }
     }
 }
-impl Drop for Client{fn drop(&mut self){self.scrub();}}
+impl Drop for Client{fn drop(&mut self){self.asset=None;self.resource=None;self.scrub();}}

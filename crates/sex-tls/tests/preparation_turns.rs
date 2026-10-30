@@ -160,3 +160,11 @@ impl World{
         assert_eq!(w.p.advance(&mut w.v,&mut w.s,&mut w.t,at),(None,0));assert_eq!(w.p.view(),tls_probe::View::TimedOut);assert!(w.p.take_work().is_none());assert_eq!(w.p.take_self_check(),None);assert_eq!(w.p.allocated_payload_bytes(),0);assert!(w.s.private_scrubbed());assert_eq!(w.s.take_seed(),None);assert!(w.p.take_exchange().is_none());assert_eq!(w.p.close(),0);
     }
 }
+#[test]fn qoi_resource_preparation_joins_fresh_providers_and_preserves_typed_transfer(){
+    let _serial=SERIAL.lock().unwrap_or_else(|e|e.into_inner());let mut w=World::new();
+    assert!(w.p.start_resource(&mut w.v,&mut w.s,&mut w.t,w.now,sex_tls::Resource::ArtworkQoi));let fixture=w.fixture();let stats=w.next_hello(fixture);
+    let mut session=w.p.take_exchange().unwrap();assert_eq!(session.resource_kind(),Some(sex_tls::Resource::ArtworkQoi));assert!(!session.is_document());assert!(session.take_asset().is_none());assert!(session.take_document().is_none());assert!(stats.task_bytes<=sex_tls::MAX_TASK_BYTES);drop(session);assert_eq!(w.p.allocated_payload_bytes(),0);
+    assert_eq!(w.count(trust_policy::OP,0),1);assert_eq!(w.count(entropy_seed::OP,entropy_seed::BEGIN),1);assert_eq!(w.count(certificate_time::OP,0),1);
+    w.start(Mode::Document);let fixture=w.fixture();w.next_hello(fixture);assert_eq!(w.p.take_exchange().unwrap().resource_kind(),Some(sex_tls::Resource::WelcomeText));
+    assert!(w.p.start_resource(&mut w.v,&mut w.s,&mut w.t,w.now,sex_tls::Resource::ArtworkQoi));w.fixture();assert_eq!(w.p.cancel(&mut w.v,&mut w.s,&mut w.t),0);w.idle_stays_erased();assert_eq!(w.p.close(),0);assert!(!w.p.start_resource(&mut w.v,&mut w.s,&mut w.t,w.now,sex_tls::Resource::ArtworkQoi));
+}

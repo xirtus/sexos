@@ -108,9 +108,11 @@ const MAX_RECTS: usize = 8;
 /// may manage geometry and hide its associated app/frame surfaces.
 mod surface_lifecycle;
 mod text_transaction;
+mod bitmap_transaction;
 mod fill_damage;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
+static mut BITMAP_STAGE: bitmap_transaction::Stage = bitmap_transaction::Stage::EMPTY;
 mod surface_groups;
 static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGroups::new();
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
@@ -332,6 +334,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
     let mut winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
     if !source.chrome {
         c = fill_rect_color(surf, x, y, surf.color);
+        c = bitmap_color(surf, x, y, c);
         if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
     } else { unsafe {
         // ── Phase 6 proof: real render-path markers ──────────────
@@ -541,6 +544,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             let content = source.content;
             winner_mask = surface_lifecycle::native_pixel_bit(content.owner_pd, content.surface_id);
             c = fill_rect_color(content, x, y, content.color);
+            c = bitmap_color(content, x, y, c);
             // Child text uses its own origin; the parent alone draws chrome.
             if let Some(tc) = surface_text_fg_at(x, y, content) { c = tc; }
         }
@@ -566,6 +570,21 @@ fn fill_rect_color(surf: &Surface, x: usize, y: usize, base_color: u32) -> u32 {
         }
     }
     c
+}
+
+fn bitmap_viewport(surf: &Surface) -> bitmap_transaction::Viewport {
+    let chrome = surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0;
+    bitmap_transaction::Viewport { x: surf.x, y: surf.y, width: surf.w, height: surf.h,
+        inset: if chrome { 8 } else { 0 }, top: if chrome { FRAME_TOP_BAR_HEIGHT_PX as u32 + 8 } else { 0 } }
+}
+fn bitmap_color(surf: &Surface, x: usize, y: usize, base: u32) -> u32 {
+    if !surf.active || surf.owner_pd != 15 || surf.surface_id != 300 { return base; }
+    let Some((x, y)) = bitmap_viewport(surf).local(x, y) else { return base; };
+    unsafe { BITMAP_STAGE.sample(surf.owner_pd, surf.surface_id, x, y) }
+        .map_or(base, |pixel| bitmap_transaction::blend(pixel, base))
+}
+fn bitmap_surface_damage(surf: &Surface, geometry: Option<sex_pdx::bitmap_batch::Geometry>, w: usize, h: usize) -> (usize, usize, usize, usize) {
+    bitmap_viewport(surf).screen(geometry, w, h)
 }
 
 /// Fixed-point linear interpolation between two XRGB colors.
@@ -2677,6 +2696,7 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
                 cursor_under_valid: CURSOR_UNDER_VALID,
             };
             if let Some(removed) = lifecycle.prepare(index, info.target_pd, info.task_id, &mut SURFACES, &mut refs) {
+                BITMAP_STAGE.retire(info.target_pd);
                 for (index,stage) in TEXT_STAGES.iter_mut().enumerate() {
                     stage.retire(info.target_pd);
                     if !SURFACES[index].active { stage.reset(); }
@@ -3128,7 +3148,7 @@ pub extern "C" fn _start() -> ! {
                 REPAINT_DRAINED=drained;
                 REPAINT_SEEN |= match msg.type_id {
                     0xEC=>1,0xEB=>2,0xED=>4,0xEE=>8,0xEF=>16,
-                    0x276|0x277|0x278=>32,0xFA|0xFB=>64,0xFD=>128,
+                    0x276|0x277|0x278|0x27A|0x27B|0x27C|0x27D=>32,0xFA|0xFB=>64,0xFD=>128,
                     silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
                 };
             }
@@ -3143,7 +3163,7 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             if !lifecycle.caller_live(msg.caller_pd)
-                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278)
+                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D)
                     && !lifecycle.sid_live(msg.arg0)) {
                 unsafe {
                     static mut DEAD_CALL_LOG_BUDGET: u8 = 8;
@@ -3437,7 +3457,10 @@ pub extern "C" fn _start() -> ! {
                             .map(|s|(s.x,s.y,s.w,s.h,s.color));
                         if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
                             REPAINT_UPSERTS += 1;
-                            if let Some(index)=vacant { TEXT_STAGES[index].reset(); }
+                            if let Some(index)=vacant {
+                                TEXT_STAGES[index].reset();
+                                BITMAP_STAGE.reset_surface(owner, surface_id);
+                            }
                             FRAME_GROUPS.observe(&SURFACES);
                             FRAME_GROUPS.fit_children(&mut SURFACES);
                             let after = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
@@ -3586,6 +3609,7 @@ pub extern "C" fn _start() -> ! {
                                     continue;
                                 }
                                 TEXT_STAGES[index].reset();
+                                BITMAP_STAGE.reset_surface(slot.owner_pd, target_id);
                                 *slot = SURFACE_EMPTY;
                                 found = true;
                                 break;
@@ -3656,6 +3680,20 @@ pub extern "C" fn _start() -> ! {
                             }
 
                             break;
+                        }
+                    }
+                }
+                sex_pdx::bitmap_batch::BEGIN | sex_pdx::bitmap_batch::CHUNK | sex_pdx::bitmap_batch::COMMIT | sex_pdx::bitmap_batch::CLEAR => {
+                    if msg.caller_pd != 15 || msg.arg0 != 300 { continue; }
+                    let Some(request) = sex_pdx::bitmap_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
+                    unsafe {
+                        if let Some(slot) = SURFACES.iter().find(|s| s.active && s.surface_id == msg.arg0 && s.owner_pd == msg.caller_pd) {
+                            if let Some(change) = BITMAP_STAGE.receive(msg.caller_pd, msg.arg0, request) {
+                                text_damage.add(bitmap_surface_damage(slot,change.old,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
+                                text_damage.add(bitmap_surface_damage(slot,change.new,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
+                                sex_pdx::serial_record!("[display.bitmap.committed] target=15 surface=300 paint={} width={} height={} scale={} pixels=unconfirmed",
+                                    BITMAP_STAGE.sequence(),change.new.map_or(0,|g|g.width),change.new.map_or(0,|g|g.height),change.new.map_or(0,|g|g.scale));
+                            }
                         }
                     }
                 }
@@ -3938,6 +3976,7 @@ pub extern "C" fn _start() -> ! {
         if transaction_full_render { clock_canon_apply_to_bar(&mut bar); }
         finish_display_transactions(&mut lifecycle, &bar, fb_live);
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
+        unsafe { BITMAP_STAGE.poll_reply(sex_pdx::pdx_reply); }
 
         // ── Yield once regardless of whether messages remain queued ──
         loop_iter = loop_iter.wrapping_add(1);

@@ -1,6 +1,16 @@
 # Shortest path to a useful SexOS alpha
 
-## Current checkpoint: accepted round 98; next 99
+## Current checkpoint: accepted round 99; next 100
+
+Browser G now loads a bounded authenticated binary QOI resource from its existing BOOT-sanctioned endpoint, decodes only after positive RELEASE, and atomically publishes RGBA pixels on its exact owned surface. Q clears pixels with a positive display receipt; obsolete viewport/transaction receipts cannot revive an image. I cannot import the binary asset as a text document. No runtime capability, mapping authority or Unix/POSIX mechanism is introduced.
+
+Final F binding `dd59425931a19cfcd24a9fc7211c5224ae856ff65575b22782e05a6bbee04e25`, ISO `3f7398df7c4ea3042660ea55b05c146b467313103fcc83e8224d424c08f7548c`; 553 production/509 runner inputs, 1616 Rust executions,668 frozen Python tests and sixteen actual qualification boots pass. Ten source-bound image workflows cover both profiles; four affected document import/cold-recovery and two responsiveness boots preserve earlier useful behavior. Every capture is independently replayed against raw source/receipts/wire; failed A–E attempts remain separate. See the [full round99 ledger](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) and [evidence](assets/sexos-alpha-r99-2026-10-30-evidence.json).
+
+Next100 improves readable document measure, visible progress and position retention through overview/Zoom;101 adds scoped clipboard/selection;102 improves launcher/workspace UX. Qualify the then-current image with its own sustained mixed session and repeated recovery before a trusted-builtins QEMU alpha claim. General online/physical daily-driver readiness remains unproven;7 Open/23 Partial/System Proven false remain. Active80–200 progress:20/121 accepted;100–200 (101 rounds) remain.
+
+
+
+## Historical checkpoint: accepted round 98; next 99 at that time
 
 Browser can explicitly import a positively released authenticated document into a fresh workspace object, save through positive COMMIT+END, open it through a user-selected Linen row in Quil, and recover exact bytes after a cold reboot. Duplicate names never replace existing objects. Negative COMMIT receipts remain uncertain even when bytes became durable. A legacy dispatch filter closes Browser's raw DiskFS bypass while preserving owner-checked private RamFS cleanup.
 

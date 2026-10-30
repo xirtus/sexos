@@ -3,7 +3,7 @@
 //! A fresh BOOT-sanctioned profile precedes seed/time and public fixture checks.
 //! Reuses monotonic fences; no transport or authenticated peer is produced.
 use crate::{clock_probe as clock, entropy_probe as entropy, trust_probe as trust};
-use sex_tls::{Session, Stats};
+use sex_tls::{Resource, Session, Stats};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum View { Idle,Preparing,HelloPending,Unavailable,Cancelled,Rejected,TimedOut,Uncertain }
@@ -13,11 +13,11 @@ pub enum PrepWork { FixtureCheck,ClientHello }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Work { pub kind:PrepWork,pub sequence:u64 }
 pub struct Probe {
-    session:Option<Session>, view:View, closed:bool, deadline:Option<u64>, last:u64, profile:Option<u32>, self_check:Option<u32>, exchange:bool,document:bool,
+    session:Option<Session>, view:View, closed:bool, deadline:Option<u64>, last:u64, profile:Option<u32>, self_check:Option<u32>, exchange:bool,resource:Option<Resource>,
     checked_seconds:Option<u32>,turn:u64,work:Option<Work>,
 }
 impl Probe {
-    pub const fn new()->Self { Self {session:None,view:View::Idle,closed:false,deadline:None,last:0,profile:None,self_check:None,exchange:false,document:false,checked_seconds:None,turn:0,work:None} }
+    pub const fn new()->Self { Self {session:None,view:View::Idle,closed:false,deadline:None,last:0,profile:None,self_check:None,exchange:false,resource:None,checked_seconds:None,turn:0,work:None} }
     pub fn view(&self)->View {self.view}
     pub fn turn(&self)->u64{self.turn}
     pub fn take_work(&mut self)->Option<Work>{self.work.take()}
@@ -26,30 +26,33 @@ impl Probe {
     pub fn take_self_check(&mut self)->Option<u32>{self.self_check.take()}
     pub fn busy(&self)->bool {matches!(self.view,View::Preparing|View::HelloPending)&&!self.closed}
     pub fn start(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->bool {
-        self.start_mode(policy,seed,time,now,false,false)
+        self.start_mode(policy,seed,time,now,false,None)
     }
     pub fn start_exchange(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->bool {
-        self.start_mode(policy,seed,time,now,true,false)
+        self.start_mode(policy,seed,time,now,true,None)
     }
     pub fn start_document(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->bool{
-        self.start_mode(policy,seed,time,now,true,true)
+        self.start_resource(policy,seed,time,now,Resource::WelcomeText)
     }
-    fn start_mode(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64,exchange:bool,document:bool)->bool {
+    pub fn start_resource(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64,resource:Resource)->bool{
+        self.start_mode(policy,seed,time,now,true,Some(resource))
+    }
+    fn start_mode(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64,exchange:bool,resource:Option<Resource>)->bool {
         if self.closed||self.busy()||policy.busy()||seed.busy()||time.busy(){return false;}
         let Some(deadline)=now.checked_add(30_000)else{self.view=View::Unavailable;return false;};
-        self.profile=None;self.self_check=None;self.checked_seconds=None;self.work=None;self.exchange=exchange;self.document=document;
-        if !policy.start(){self.view=View::Unavailable;return false;}
+        self.profile=None;self.self_check=None;self.checked_seconds=None;self.work=None;self.exchange=exchange;self.resource=resource;
+        if !policy.start(){self.exchange=false;self.resource=None;self.view=View::Unavailable;return false;}
         self.deadline=Some(deadline);self.last=now;self.view=View::Preparing;true
     }
     /// Transfer the finite owned protocol state only after this fresh start's
     /// positive BOOT policy/seed/time joins and actual private ClientHello.
     pub fn take_exchange(&mut self)->Option<Session>{
         if !self.exchange||self.view!=View::HelloPending||self.closed{return None;}
-        let session=self.session.take()?;self.deadline=None;self.profile=None;self.self_check=None;self.checked_seconds=None;self.work=None;self.exchange=false;self.view=View::Idle;Some(session)
+        let session=self.session.take()?;self.deadline=None;self.profile=None;self.self_check=None;self.checked_seconds=None;self.work=None;self.exchange=false;self.resource=None;self.view=View::Idle;Some(session)
     }
     fn erase(&mut self)->usize {
         let bytes=self.session.as_ref().map_or(0,|s|s.owned_payload_bytes());
-        self.session=None;self.deadline=None;self.profile=None;self.self_check=None;self.checked_seconds=None;self.work=None;bytes
+        self.session=None;self.deadline=None;self.profile=None;self.self_check=None;self.checked_seconds=None;self.work=None;self.exchange=false;self.resource=None;bytes
     }
     pub fn cancel(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client)->usize {
         if self.closed{return 0;}
@@ -100,7 +103,7 @@ impl Probe {
             let seconds=self.checked_seconds.take().unwrap();
             let Some(mut bytes)=seed.take_seed()else{let n=self.cancel(policy,seed,time);self.view=View::Unavailable;return(None,n);};
             self.work=Some(Work{kind:PrepWork::ClientHello,sequence:turn});
-            let prepared=if self.document {Session::document(&mut bytes,seconds,profile)}else if self.exchange {Session::exchange(&mut bytes,seconds,profile)}else{Session::prepare(&mut bytes,seconds,profile)};
+            let prepared=if let Some(resource)=self.resource {Session::resource(&mut bytes,seconds,profile,resource)}else if self.exchange {Session::exchange(&mut bytes,seconds,profile)}else{Session::prepare(&mut bytes,seconds,profile)};
             match prepared {
                 Ok(session)=>self.session=Some(session),
                 Err(_)=>{let n=self.cancel(policy,seed,time);self.view=View::Unavailable;return(None,n);},

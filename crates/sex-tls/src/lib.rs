@@ -22,6 +22,7 @@ mod verifier;
 mod probe_fixture;
 pub use verifier::controlled_self_check;
 pub use sex_http::Error as HttpError;
+pub use sex_http::Resource;
 
 pub const RECORD_READ: usize = 4096;
 pub const RECORD_WRITE: usize = 2048;
@@ -110,13 +111,22 @@ impl Drop for Task {
 /// Owned plaintext bytes, not a memory/transport capability. This allocation
 /// can move into the client without copying a 12KiB object onto its stack.
 /// Publication after positive lease RELEASE remains the caller's obligation.
-pub struct Document { bytes:Box<[u8;MAX_DOCUMENT]>,len:usize,ready:bool }
+pub struct Document { bytes:Box<[u8;MAX_DOCUMENT]>,len:usize,ready:bool,resource:Resource }
 impl Document {
-    fn new()->Result<Self,Error>{Ok(Self{bytes:Box::try_new([0;MAX_DOCUMENT]).map_err(|_|Error::Memory)?,len:0,ready:false})}
+    fn new(resource:Resource)->Result<Self,Error>{Ok(Self{bytes:Box::try_new([0;MAX_DOCUMENT]).map_err(|_|Error::Memory)?,len:0,ready:false,resource})}
     pub fn as_bytes(&self)->&[u8]{if self.ready{&self.bytes[..self.len]}else{&[]}}
     fn scrub(&mut self){erase(self.bytes.as_mut());self.len=0;self.ready=false;}
 }
 impl Drop for Document{fn drop(&mut self){self.scrub();}}
+
+/// Inert binary response custody, with no conversion into a text Document.
+/// Framing and TLS local close are complete; the parent still requires the
+/// actual positive transport RELEASE before decoding for UI or publication.
+pub struct Asset(Document);
+impl Asset {
+    pub fn as_bytes(&self)->&[u8]{self.0.as_bytes()}
+    pub fn resource_kind(&self)->Resource{self.0.resource}
+}
 
 struct Pipe {
     rx: [u8;QUEUE_BYTES], tx: [u8;QUEUE_BYTES], rx_len: usize, tx_len: usize,
@@ -171,32 +181,37 @@ impl CryptoProvider for Provider {
     fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Aes128GcmSha256>,TlsError> { Ok(&mut self.verifier) }
 }
 
-pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, stats:Stats, failure:Option<Failure>,http_failure:Option<sex_http::Error>,is_document:bool }
+pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, stats:Stats, failure:Option<Failure>,http_failure:Option<sex_http::Error>,resource:Option<Resource> }
 impl Session {
     /// Always erases the transferred caller seed, including rejected starts.
     /// Seconds are input data, not new time authority or an advancing clock.
     pub fn prepare(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
-        Self::prepare_mode(seed,seconds,profile,false,false)
+        Self::prepare_mode(seed,seconds,profile,false,None)
     }
     /// Real protocol mode still has no transport/endpoint authority. The
     /// caller must move bytes exclusively through an admitted held duplex job.
     pub fn exchange(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
-        Self::prepare_mode(seed,seconds,profile,true,false)
+        Self::prepare_mode(seed,seconds,profile,true,None)
     }
     /// Bounded HTTP/1.1 text document on the same immutable name/profile.
     /// This generates protocol bytes only; the parent supplies held duplex I/O.
     pub fn document(seed:&mut[u8;32],seconds:u32,profile:u32)->Result<Self,Error>{
-        Self::prepare_mode(seed,seconds,profile,true,true)
+        Self::resource(seed,seconds,profile,Resource::WelcomeText)
     }
-    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool, document:bool) -> Result<Self,Error> {
+    /// Fixed HTTP resource on the same BOOT-attested TLS endpoint/profile.
+    /// Resource metadata is data, never a host, route or trust authority.
+    pub fn resource(seed:&mut[u8;32],seconds:u32,profile:u32,resource:Resource)->Result<Self,Error>{
+        Self::prepare_mode(seed,seconds,profile,true,Some(resource))
+    }
+    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool, resource:Option<Resource>) -> Result<Self,Error> {
         let private=Seed(*seed); erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(Error::Clock); }
         let verifier=verifier::Verifier::new(profile,seconds).map_err(|_|Error::Policy)?;
-        let owned=if document{Some(Document::new()?)}else{None};
+        let owned=resource.map(Document::new).transpose()?;
         let pipe=Rc::try_new(RefCell::new(Pipe::new(owned))).map_err(|_|Error::Memory)?;
         let transport=Transport(pipe.clone());
         let shared=pipe.clone();
-        let task=if document {
+        let task=if let Some(resource)=resource {
             let future=async move {
                 let mut provider=Provider{rng:rand_chacha::ChaCha20Rng::from_seed(private.0),verifier};drop(private);
                 let mut read=[0;RECORD_READ];let mut write=[0;RECORD_WRITE];
@@ -205,11 +220,11 @@ impl Session {
                 tls.open(TlsContext::new(&config,&mut provider)).await?;provider.verifier.finished()?;
                 shared.borrow_mut().authenticated=true;
                 let mut request=[0;sex_http::HTTPS_MAX_REQUEST];
-                let count=sex_http::request_https(&mut request,&sex_http::Path::initial());
+                let count=sex_http::request_https_resource(&mut request,resource);
                 let mut at=0;while at<count{let n=tls.write(&request[at..count]).await?;
                     if n==0{return Err(TlsError::InvalidApplicationData);}at+=n;}
                 erase(&mut request);tls.flush().await?;
-                let mut receiver=sex_http::Receiver::new();let mut chunk=[0;512];
+                let mut receiver=sex_http::Receiver::for_resource(resource);let mut chunk=[0;512];
                 while !receiver.complete(){
                     let n=tls.read(&mut chunk).await?;
                     if n==0{return Err(TlsError::InvalidApplicationData);}
@@ -264,8 +279,8 @@ impl Session {
         };
         Task::new(future)?
         };
-        let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()+if document{MAX_DOCUMENT}else{0}, tx_bytes:0, utc_snapshot:seconds };
-        Ok(Self { task:Some(task),pipe,state:State::Preparing,stats,failure:None,http_failure:None,is_document:document })
+        let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()+if resource.is_some(){MAX_DOCUMENT}else{0}, tx_bytes:0, utc_snapshot:seconds };
+        Ok(Self { task:Some(task),pipe,state:State::Preparing,stats,failure:None,http_failure:None,resource })
     }
     /// One explicit poll, at most one512-byte transport copy. The caller must
     /// poll again on its own bounded turn; this driver has no hidden executor.
@@ -294,9 +309,10 @@ impl Session {
     pub fn state(&self) -> State { self.state }
     pub fn failure(&self) -> Option<Failure> { self.failure }
     pub fn http_failure(&self)->Option<sex_http::Error>{self.http_failure}
-    pub fn is_document(&self)->bool{self.is_document}
+    pub fn is_document(&self)->bool{self.resource==Some(Resource::WelcomeText)}
+    pub fn resource_kind(&self)->Option<Resource>{self.resource}
     pub fn document_received(&self)->usize{self.pipe.borrow().document_received}
-    pub fn owned_payload_bytes(&self)->usize{self.stats.task_bytes+2*QUEUE_BYTES+if self.is_document{MAX_DOCUMENT}else{0}}
+    pub fn owned_payload_bytes(&self)->usize{self.stats.task_bytes+2*QUEUE_BYTES+if self.resource.is_some(){MAX_DOCUMENT}else{0}}
     /// Current owned allocation payload, excluding Rc/allocator metadata. The
     /// future and document may already have been dropped or transferred; peak
     /// Stats must not be used to claim they are still live.
@@ -307,9 +323,18 @@ impl Session {
     /// Transfers private byte custody only after authenticated framing and
     /// encrypted local close completion. No UI/endpoint authority is created.
     pub fn take_document(&mut self)->Option<Document>{
-        if !self.is_document||self.state!=State::ExchangeVerified{return None;}
-        let mut pipe=self.pipe.borrow_mut();if !pipe.document.as_ref()?.ready{return None;}
+        if !self.is_document()||self.state!=State::ExchangeVerified{return None;}
+        let mut pipe=self.pipe.borrow_mut();let body=pipe.document.as_ref()?;
+        if !body.ready||body.resource!=Resource::WelcomeText{return None;}
         pipe.document.take()
+    }
+    /// Move the same finite allocation without copying or permitting binary
+    /// bytes to enter the text/import API. Positive RELEASE belongs to parent.
+    pub fn take_asset(&mut self)->Option<Asset>{
+        if self.resource!=Some(Resource::ArtworkQoi)||self.state!=State::ExchangeVerified{return None;}
+        let mut pipe=self.pipe.borrow_mut();let body=pipe.document.as_ref()?;
+        if !body.ready||body.resource!=Resource::ArtworkQoi{return None;}
+        pipe.document.take().map(Asset)
     }
     pub fn stats(&self) -> Stats { self.stats }
     pub fn outgoing_len(&self)->usize {self.pipe.borrow().tx_len}
@@ -410,5 +435,26 @@ mod tests {
             assert!(matches!(Session::prepare(&mut seed,1_793_367_907,profile),Err(Error::Policy)));
             assert_eq!(seed,[0;32]);
         }
+    }
+    #[test] fn resource_sessions_are_finite_and_cannot_transfer_before_tls_completion(){
+        for resource in [Resource::WelcomeText,Resource::ArtworkQoi]{
+            let mut seed=[29;32];let mut session=Session::resource(&mut seed,1_793_367_907,1,resource).unwrap();assert_eq!(seed,[0;32]);
+            assert_eq!(session.resource_kind(),Some(resource));assert_eq!(session.is_document(),resource==Resource::WelcomeText);
+            assert!(session.take_document().is_none());assert!(session.take_asset().is_none());
+            let stats=session.stats();assert!(stats.task_bytes<=MAX_TASK_BYTES);assert_eq!(stats.private_bytes,stats.task_bytes+PIPE_BYTES+MAX_DOCUMENT);
+            assert_eq!(session.pipe.borrow().document.as_ref().unwrap().bytes.len(),MAX_DOCUMENT);
+            for _ in 0..16{if session.poll()==State::HelloPending{break;}}
+            assert_eq!(session.state(),State::HelloPending);assert!(session.take_document().is_none());assert!(session.take_asset().is_none());
+            let mut out=[0;QUEUE_BYTES];session.take_outgoing(&mut out);session.offer_incoming(&[22,3,3,0,4,255,0,0,0]).unwrap();
+            for _ in 0..8{session.poll();}assert_eq!(session.state(),State::Rejected);assert!(session.task.is_none());assert!(session.take_asset().is_none());assert!(session.take_document().is_none());
+            let pipe=session.pipe.borrow();let body=pipe.document.as_ref().unwrap();assert_eq!(body.len,0);assert!(!body.ready);assert!(body.bytes.iter().all(|b|*b==0));assert!(pipe.rx.iter().chain(pipe.tx.iter()).all(|b|*b==0));
+        }
+    }
+    #[test] fn asset_wrapper_moves_one_body_allocation_and_scrubs_the_entire_capacity(){
+        // Local ownership/erasure test only: these deliberately seeded private
+        // bytes are not a peer, authentication, framing or RELEASE fixture.
+        let mut body=Document::new(Resource::ArtworkQoi).unwrap();body.bytes.fill(0xa5);body.len=5;body.ready=true;
+        let pointer=body.bytes.as_ptr();let mut asset=Asset(body);assert_eq!(asset.resource_kind(),Resource::ArtworkQoi);assert_eq!(asset.as_bytes(),&[0xa5;5]);assert_eq!(asset.0.bytes.as_ptr(),pointer);
+        asset.0.scrub();assert!(asset.as_bytes().is_empty());assert!(asset.0.bytes.iter().all(|b|*b==0));assert_eq!(asset.0.len,0);assert!(!asset.0.ready);
     }
 }

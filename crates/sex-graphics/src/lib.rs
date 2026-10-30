@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod font;
+pub mod qoi;
 
 pub use font::draw_str;
 pub use font::draw_char;
