@@ -21,6 +21,13 @@ static NET_DIAG_HTTP_SOURCE: AtomicU8 = AtomicU8::new(0);
 static NET_DIAG_HTTP_BODY_LEN: AtomicU32 = AtomicU32::new(0);
 static mut NET_DIAG_HTTP_BODY: [u8; 64] = [0u8; 64];
 
+// Optional historical boot diagnostics program rings directly. Ordinary boot
+// discovers devices only; the BOOT-assigned SexNet domain owns activation.
+// Never apply Intel register offsets to an arbitrary network controller.
+fn legacy_nic_diagnostics(vendor:u16,device:u16,setting:Option<&str>)->bool{
+    setting==Some("1") && vendor==0x8086 && matches!(device,0x100e|0x10d3)
+}
+
 pub fn get_net_diag() -> (u32, u32, u8) {
     (
         NET_DIAG_HTTP_STATUS.load(Ordering::Acquire),
@@ -158,6 +165,12 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
         if dev.class_id == 0x02 {
             serial_println!("[pci.net.device] vendor=0x{:04X} device=0x{:04X} class=0x02 subclass=0x{:02X} prog_if=0x{:02X} ok=1 reason=network_controller_detected",
                 dev.vendor_id, dev.device_id, dev.subclass_id, dev.prog_if);
+            if !legacy_nic_diagnostics(dev.vendor_id,dev.device_id,option_env!("SEXOS_BOOT_NIC_DIAGNOSTICS")){
+                serial_println!("[pci.net.passive] vendor=0x{:04X} device=0x{:04X} config_writes=0 mmio=0 rings=0 dma=0 packets=0 owner=boot_assigned_sexnet ok=1",
+                    dev.vendor_id,dev.device_id);
+                continue;
+            }
+            serial_println!("[pci.net.legacy_diagnostics] enabled=1 boot_only=1");
             // Ensure NIC PCI command enables MMIO + bus mastering for DMA.
             let cmd_status = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
             let mut cmd = (cmd_status & 0xFFFF) as u16;
