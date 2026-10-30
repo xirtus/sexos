@@ -126,6 +126,21 @@ pub fn pci_bar0(pd: &ProtectionDomain, dev: &crate::hal::pci::PciDevice, slot: u
     let (physical, actual_length) = dev.probe_boot_bar0().expect("BOOT_MMIO_INVALID_BAR");
     // The active drivers need at most 64 KiB; a larger BAR grants only this prefix.
     let length = actual_length.min(64 * 1024);
+    pci_view(pd,slot,physical,actual_length,length)
+}
+
+/// Only a supported BOOT-selected controller with a complete register prefix.
+/// Reject before aliasing; probing itself remains guarded by BOOT RegistryBuild.
+pub fn nic_bar0(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+    require_boot();
+    if !crate::nic_boot::supported(dev.vendor_id,dev.device_id){return None}
+    let(physical,actual_length)=dev.probe_boot_bar0()?;
+    let length=crate::nic_boot::view_length(actual_length)?;
+    Some(pci_view(pd,slot,physical,actual_length,length))
+}
+
+fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
+    require_boot();
     let virtual_base = alias(pd, physical, length, true, true);
     let region = RegionGrant { region_id: 0x10000 + pd.id * 1024 + slot as u32,
         virtual_base, length, rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None };

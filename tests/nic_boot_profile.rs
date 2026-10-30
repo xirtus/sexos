@@ -1,4 +1,5 @@
 //! Actual guard before the historical NIC register/DMA diagnostics.
+#[path="../kernel/src/nic_boot.rs"]mod nic_boot;
 include!(env!("NIC_BOOT_PROFILE_SOURCE"));
 #[test]fn normal_and_nonexplicit_settings_never_activate_controller_diagnostics(){
  for setting in [None,Some(""),Some("0"),Some("true"),Some("01"),Some("1 ")]{

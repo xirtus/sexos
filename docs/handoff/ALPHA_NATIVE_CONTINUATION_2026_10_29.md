@@ -280,3 +280,32 @@ Accepted normal image **`5c18f2f7b933e9408e3ec1445815828fa79e4d7479ed429550ef1bc
 A bounded read-only Astra review of pending70 found that69’s opt-in legacy diagnostic path still lacks per-BAR length checking and single diagnostic-owner selection. Those corrections belong to separately frozen70. Only normal69 is qualified; no opt-in diagnostic, live-packet, physical-hardware or hostile-containment proof is claimed.
 
 See the [exact source/discovery/host/native binding and remaining opt-in limit](assets/sexos-alpha-r69-2026-10-29-evidence.json), [wide editor](assets/sexos-alpha-r69-wide-2026-10-29.png) and [compact editor](assets/sexos-alpha-r69-compact-2026-10-29.png). Full inputs/captures live under `.evidence/alpha-2026-10-29/r69-*`; complete compressed traces/disks accompany the binding. **51/100 additional rounds are accepted;70–118 remain.**
+
+
+## Round 70: exact BOOT NIC admission
+
+BOOT now leases SLOT_NIC only to the first supported controller with a valid complete register prefix. An occupied slot is preserved before any further probe. Unsupported IDs reject before BAR probing/aliasing; missing or short probed BARs reject before aliasing. The constructor retains the exact subject/slot region identity, bounded64KiB MMIO prefix, query/read/write rights and no DMA-address permission. The generic PCI constructor refactor preserves existing NVMe/USB behavior. All constructors remain guarded by BOOT RegistryBuild; no runtime capability genesis is added.
+
+One shared ID policy governs ordinary NIC admission and the optional historical diagnostic flag. A bounded read-only Astra review found no normal-path blocker but caught missing BAR/single-owner guards in the opt-in diagnostic branch. Those guards were added before final70 build, ahead of bus-master enable/MMIO. Host constructor tests exercise unsupported/missing/short/full-prefix and sealed-phase cases with explicit probe/map mocks. The optional diagnostic hardware/profile itself is not qualified.
+
+Using the same sealed image, three actual PCI boots verify:
+
+| Configuration |Enumerated NICs|BOOT leases|NIC BAR aliases|
+|---|---:|---:|---:|
+| One e1000e |1|1|1|
+| Unsupported virtio NIC |1|0|0|
+| Two e1000e controllers |2|1|1|
+
+Every normal enumeration remains passive, all grants precede seal, explicit skip reasons join the rejected controllers, and cached/offline Kaleido still presents. These are real QEMU PCI/BOOT checks; no packet, physical-hardware or hostile-containment claim follows.
+
+Frozen image **`58b5b838369013de6384048b20360f342c5d2f4a34bf4c15821b951ee49ff8a3`** passes sealed BUILD/GREEN, **38 unchanged frozen-source gates/718 Rust executions/307 Python tests**. Both full desktop sizes, three finite Quil incarnations,341-page zero/reuse, maximum-document exact bytes/glyphs, pending Load Close, compact title/focus checks, both exact persistence reboots and40 ordinary switches at each size pass. Own70 strict1800second session/reboots have started and remain pending. Short native checks overlap final65 sustained/reboots and evidence work; no isolated timing comparison is inferred. An incidental executable bit on the PCI Rust source is normalized in this commit; frozen byte bindings remain exact.
+
+See the [complete binding, all three NIC boots and full native acceptance](assets/sexos-alpha-r70-2026-10-29-evidence.json), [wide editor](assets/sexos-alpha-r70-wide-2026-10-29.png) and [compact editor](assets/sexos-alpha-r70-compact-2026-10-29.png). Complete frozen inputs/captures live under `.evidence/alpha-2026-10-29/r70-*`; compressed full traces/disks accompany the binding. **52/100 additional rounds are accepted;71–118 remain.** The architectural constitution is unchanged.
+
+### Concrete next gains
+
+The user has extended the active goal: after round118, continue with rounds119–218. The accepted checkpoint is52/200 additional rounds;148 remain. Historical52/100 references describe the first batch only. Completion of118 must not end the updated goal.
+
+Reserve document transfer backing at BOOT for exact Quil incarnations9/16/18 and service11, with provider/peer/right checks and complete retirement scrubbing. A bounded readonly snapshot view can replace thousands of scalar four-byte READ receipts for12KiB documents; addressing never substitutes for authority. Keep recovery output private until validated, bind publication/completion to exact object identity/request/incarnation, and verify coherent copy plus whole-editor glyphs and independent durable bytes. Shared BOOT backing is a fixed budget and must not be counted as reclaimed app-private pages. Freeze a legacy-transport baseline with the same reservations before enabling the bulk path, then run a quiet common-checker A–B–B–A comparison after current sustained work finishes.
+
+After Load, extend immutable Save staging only with an explicit BOOT-sanctioned buffer direction and exact receipt/uncertainty/cancellation rules. In parallel planning, the network still needs bounded service-owned ring progress through existing NIC/DMA views, controlled real peer bytes, then TCP/DNS/HTTP/TLS; enabling a giant boot proof profile is not that service. The ordinary first Browser→Linen startup delay, hostile containment, epoch replay, SMP and named physical hardware remain open release gates.

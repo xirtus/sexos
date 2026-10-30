@@ -29,3 +29,18 @@ assert 'continue;'in s[guard:s.index('// Ensure NIC PCI command',guard)]
 PYPROFILE
 NIC_BOOT_PROFILE_SOURCE="$TEST_DIR/profile.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/nic_boot_profile.rs" -o "$TEST_DIR/profile"
 "$TEST_DIR/profile"
+python3 - "$ROOT_DIR" "$TEST_DIR/boot_memory.rs" <<'PYMEM'
+from pathlib import Path
+import sys
+root=Path(sys.argv[1]);s=(root/'kernel/src/boot_memory.rs').read_text();parts=[]
+for name in ['nic_bar0','pci_view']:
+ a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
+ while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
+ parts.append(s[a:i])
+Path(sys.argv[2]).write_text('\n'.join(parts))
+s=(root/'kernel/src/devmgr.rs').read_text();a=s.index('(0x02, 0x00)');part=s[a:s.index('            _ => {}',a)]
+assert part.index('pd.find_capability(sex_pdx::SLOT_NIC as u32).is_some()')<part.index('crate::boot_memory::nic_bar0(')<part.index('pd.grant_capability(')
+assert 'bar0_view: Some(view)'in part
+PYMEM
+NIC_BOOT_MEMORY_SOURCE="$TEST_DIR/boot_memory.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/nic_boot_memory.rs" -o "$TEST_DIR/boot-memory"
+"$TEST_DIR/boot-memory" --test-threads=1

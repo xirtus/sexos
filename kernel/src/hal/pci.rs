@@ -25,7 +25,7 @@ static mut NET_DIAG_HTTP_BODY: [u8; 64] = [0u8; 64];
 // discovers devices only; the BOOT-assigned SexNet domain owns activation.
 // Never apply Intel register offsets to an arbitrary network controller.
 fn legacy_nic_diagnostics(vendor:u16,device:u16,setting:Option<&str>)->bool{
-    setting==Some("1") && vendor==0x8086 && matches!(device,0x100e|0x10d3)
+    setting==Some("1") && crate::nic_boot::supported(vendor,device)
 }
 
 pub fn get_net_diag() -> (u32, u32, u8) {
@@ -153,6 +153,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
         }
     }
     
+    let mut diagnostic_nic_selected=false;
     // Log discovery for XPS 17 target
     for dev in &devices {
         match (dev.vendor_id, dev.device_id) {
@@ -170,6 +171,19 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                     dev.vendor_id,dev.device_id);
                 continue;
             }
+            if diagnostic_nic_selected{
+                serial_println!("[pci.net.legacy_diagnostics.skip] reason=owner_already_selected");
+                continue;
+            }
+            let Some((_,actual_length))=dev.probe_boot_bar0()else{
+                serial_println!("[pci.net.legacy_diagnostics.skip] reason=invalid_bar");
+                continue;
+            };
+            if crate::nic_boot::view_length(actual_length).is_none(){
+                serial_println!("[pci.net.legacy_diagnostics.skip] reason=short_bar");
+                continue;
+            }
+            diagnostic_nic_selected=true;
             serial_println!("[pci.net.legacy_diagnostics] enabled=1 boot_only=1");
             // Ensure NIC PCI command enables MMIO + bus mastering for DMA.
             let cmd_status = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
