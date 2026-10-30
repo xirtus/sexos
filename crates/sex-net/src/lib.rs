@@ -6,7 +6,7 @@
 
 use smoltcp::{iface::{Config as InterfaceConfig,Interface,SocketHandle,SocketSet,SocketStorage},
     phy::{self,Device,DeviceCapabilities,Medium},socket::{tcp,udp},
-    time::{Duration,Instant},wire::{EthernetAddress,IpAddress,IpCidr}};
+    time::{Duration,Instant},wire::{EthernetAddress,IpAddress,IpCidr,Ipv4Address}};
 pub use smoltcp::socket::tcp::State;
 pub use smoltcp::iface::SocketStorage as Storage;
 pub use smoltcp::socket::udp::PacketMetadata as DnsMetadata;
@@ -14,6 +14,10 @@ pub mod dns_wire;
 pub const MAX_FRAME:usize=1514;
 pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
+pub const NEIGHBOR_CAPACITY:usize=8;
+pub const ROUTE_CAPACITY:usize=2;
+const _:()=assert!(smoltcp::config::IFACE_NEIGHBOR_CACHE_COUNT==NEIGHBOR_CAPACITY);
+const _:()=assert!(smoltcp::config::IFACE_MAX_ROUTE_COUNT==ROUTE_CAPACITY);
 // Historical fixture aliases only. Runtime engines/classifiers use their
 // validated copied BOOT configuration, never these baseline constants.
 pub const LOCAL:[u8;4]=sex_net_config::Config::CONTROLLED.local;
@@ -88,8 +92,9 @@ pub struct Engine<'a>{network:sex_net_config::Config,iface:Interface,flows:Socke
     active_flow:bool,stats:Statistics}
 impl<'a> Engine<'a>{
     /// `seed` is explicit input. A predictable development seed does not provide
-    /// hostile-peer sequence protection, entropy or TLS security. Gateway data
-    /// is retained as metadata only: no default route is installed here.
+    /// hostile-peer sequence protection, entropy or TLS security. The immutable
+    /// checked BOOT gateway supplies exactly one private default route. No app
+    /// can change the route table or obtain authority by naming a destination.
     pub fn new(network:sex_net_config::Config,mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;3])->Result<Self,Error>{
         // Configuration is copied data, not an authority source. Reject before
         // touching borrowed storage or constructing any interface/socket state.
@@ -100,6 +105,7 @@ impl<'a> Engine<'a>{
         let mut adapter=Adapter{rx:None,tx:None};let mut config=InterfaceConfig::new(EthernetAddress(mac).into());config.random_seed=seed;
         let mut iface=Interface::new(config,&mut adapter,time);
         iface.update_ip_addrs(|ips|{ips.push(IpCidr::new(IpAddress::v4(network.local[0],network.local[1],network.local[2],network.local[3]),network.prefix)).expect("ONE_STATIC_ADDRESS");});
+        iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(network.gateway[0],network.gateway[1],network.gateway[2],network.gateway[3])).map_err(|_|Error::Config)?;
         let mut connection=tcp::Socket::new(tcp::SocketBuffer::new(&mut rx[..]),tcp::SocketBuffer::new(&mut tx[..]));
         connection.set_timeout(Some(Duration::from_secs(5)));connection.set_ack_delay(None);connection.set_nagle_enabled(false);
         connection.listen((IpAddress::v4(network.local[0],network.local[1],network.local[2],network.local[3]),network.listen_port)).map_err(|_|Error::Protocol)?;
@@ -128,8 +134,8 @@ impl<'a> Engine<'a>{
         self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
         self.adapter.rx=None;self.adapter.tx=None;self.pending.fill(0);self.pending_length=0;self.pending_offset=0;
     }
-    /// One fixed controlled-peer endpoint, reachable on the existing static
-    /// subnet. Ticket is private service data; no address/capability input.
+    /// One fixed BOOT endpoint, reached directly on-link or through the checked
+    /// gateway. Ticket is private service data; no address/capability input.
     pub fn begin_client(&mut self,ticket:u32)->Result<(),Error>{
         if self.stopped{return Err(Error::Stopped);}
         let port=u16::try_from(ticket).ok().and_then(|n|self.network.source_base.checked_add(n)).filter(|_|ticket!=0).ok_or(Error::Length)?;
@@ -151,6 +157,9 @@ impl<'a> Engine<'a>{
         flow.recv_slice(out).map_err(|_|Error::Protocol)
     }
     pub fn client_finish(&mut self){self.flows.get_mut::<tcp::Socket>(self.client_handle).close();}
+    /// The stack may subsequently collect a RST carrying the old source port.
+    /// The caller must retain the per-frame live-ticket fence before DMA; abort
+    /// never relabels an old frame as shared listener/gateway traffic.
     pub fn client_abort(&mut self){
         self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
         if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket(&self.network).is_some()){self.adapter.tx=None;}

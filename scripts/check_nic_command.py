@@ -10,7 +10,7 @@ def config_receipts(text, expected, seal):
     errors=[]
     boot=list(re.finditer(r'\[boot.network.config\] owner=13 version=1 profile=1 origin=boot_descriptor immutable=1 runtime_mint=0',text))
     queries=list(re.finditer(r'\[pci.network.config\] pd=(\d+) slot=(\d+) origin=boot_descriptor runtime_mint=0',text))
-    copies=list(re.finditer(r'\[sexnet.network.config\] words=([0-9a-f]+),([0-9a-f]+),([0-9a-f]+),([0-9a-f]+) origin=held_boot_nic immutable=1 route=not_installed',text))
+    copies=list(re.finditer(r'\[sexnet.network.config\] words=([0-9a-f]+),([0-9a-f]+),([0-9a-f]+),([0-9a-f]+) origin=held_boot_nic immutable=1 route=metadata',text))
     if len(boot)!=1 or text.count('[boot.network.config]')!=1 or seal<0 or boot[0].start()>seal:errors.append('network descriptor absent, duplicated or seeded after BOOT seal')
     if len(queries)!=expected or text.count('[pci.network.config]')!=len(queries):errors.append('wrong held-NIC metadata query count or malformed receipt')
     if len(copies)!=expected or text.count('[sexnet.network.config]')!=len(copies):errors.append('wrong checked network copy count or malformed receipt')
@@ -25,10 +25,24 @@ def config_receipts(text, expected, seal):
         prepare=text.find('[sexnet.nic.prepare]')
         if prepare>=0 and copies[0].start()>prepare:errors.append('configuration read after device preparation began')
     if expected==0 and '[sexnet.network.config.unavailable] network=0 fallback=0'not in text:errors.append('missing configuration did not fail closed without fallback')
-    return dict(ok=not errors,errors=errors,queries=len(queries),copies=len(copies),scope='Immutable BOOT metadata and scalar checked copy; held device authority is checked separately. Route holder obtains no NIC metadata; gateway remains data, no installed default route.')
+    return dict(ok=not errors,errors=errors,queries=len(queries),copies=len(copies),scope='Immutable BOOT metadata and scalar checked copy; held device authority is checked separately. Route holder obtains no NIC metadata; gateway data alone is separate from the transport route receipt.')
 
-def inspect(text, expected=1, preparation=False, ethernet=False, network_config=False):
+def routing_receipts(text, expected):
+    errors=[]
+    marker='[sexnet.route.ready] gateway=10.0.2.2 default=1 routes=1 route_capacity=2 neighbors=8 discovery_ms=1000 expiry_ms=60000 heap=0 authority=held_boot_nic'
+    if text.count(marker)!=expected or text.count('[sexnet.route.ready]')!=expected:errors.append('missing, duplicated or malformed bounded BOOT gateway route')
+    if expected and text.count(marker)==1:
+        at=text.find(marker)
+        copy=text.find('[sexnet.network.config]')
+        ready=text.find('[sexnet.ether.ready]')
+        transport=text.find('[sexnet.transport.ready]')
+        if not 0<=copy<ready<at<transport:errors.append('route does not follow held configuration and device readiness before transport publication')
+    return dict(ok=not errors,errors=errors,routes=expected if not errors else None,scope='Normal-profile private default-route receipt after held BOOT metadata and device readiness. Actual next-hop bytes and neighbor recovery require independent wire evidence.')
+
+
+def inspect(text, expected=1, preparation=False, ethernet=False, network_config=False, routing=False):
     preparation=preparation or ethernet
+    network_config=network_config or routing
     errors=list(discovery(text,expected_leases=expected)['errors'])
     pattern=r'\[boot.nic.command\] pd=(\d+) slot=(\d+) bus=(\d+) device=(\d+) function=(\d+) vendor=(\d+) product=(\d+) allowed=(\d+) dma_region=(\d+) runtime_mint=0'
     grants=list(re.finditer(pattern,text));seal=text.find('[boot.memory.authority.sealed]')
@@ -102,15 +116,17 @@ def inspect(text, expected=1, preparation=False, ethernet=False, network_config=
         elif driver or '[sexnet.ether.ready]'in text or '[sexnet.ether.tx.submit]'in text:errors.append('absent lease reached DMA/packet path')
     configuration=config_receipts(text,expected,seal)if network_config else None
     if configuration:errors.extend(configuration['errors'])
-    return dict(ok=not errors,errors=errors,configuration=configuration,grants=[list(map(int,g.groups()))for g in grants],
+    route=routing_receipts(text,expected)if routing else None
+    if route:errors.extend(route['errors'])
+    return dict(ok=not errors,errors=errors,configuration=configuration,routing=route,grants=[list(map(int,g.groups()))for g in grants],
                 runtime_queries=sum(m.group(5)=='0'and m.group(6)=='0'for m in applied),command_invocations=len(applied),
                 preparation=preparation,ethernet=ethernet,transitions=[m.group(0)for m in phases],
                 scope=('Exact BOOT identity/command custody, reset, fixed DMA queue initialization and actual bus-master transition. Wire bytes require independent peer capture. No online protocol, firmware DMA drain, physical hardware or hostile/SMP containment proof.'if ethernet else 'Normal-profile exact BOOT lease, Ring3 memory-on/master-off command, bounded reset/quiescence and actual station address. No DMA, packets, firmware DMA-drain, physical hardware or hostile containment proof.'if preparation else 'Normal-profile BOOT-only command grant and actual Ring3 zero-mutation query/denials. Masked writes/status preservation are exercised with port mocks; live DMA, packets, hotplug, physical hardware and hostile containment are not established.'))
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--expected',type=int,choices=[0,1],default=1);p.add_argument('--preparation',action='store_true');p.add_argument('--ethernet',action='store_true');p.add_argument('--network-config',action='store_true');a=p.parse_args()
-    r=inspect(a.log.read_text(errors='replace'),a.expected,a.preparation,a.ethernet,a.network_config);print(json.dumps(r,indent=2));return not r['ok']
+    p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--expected',type=int,choices=[0,1],default=1);p.add_argument('--preparation',action='store_true');p.add_argument('--ethernet',action='store_true');p.add_argument('--network-config',action='store_true');p.add_argument('--routing',action='store_true');a=p.parse_args()
+    r=inspect(a.log.read_text(errors='replace'),a.expected,a.preparation,a.ethernet,a.network_config or a.routing,a.routing);print(json.dumps(r,indent=2));return not r['ok']
 
 
 if __name__=='__main__':raise SystemExit(main())

@@ -12,6 +12,91 @@ fn arp_for(peer:[u8;4],local:[u8;4])->Vec<u8>{let mut v=vec![0u8;60];v[..6].fill
 fn tcp(seq:u32,ack:u32,flags:u8,body:&[u8])->Vec<u8>{
  tcp_for(PEER_IP,LOCAL,62000,PORT,seq,ack,flags,body)
 }
+
+// Raw remote endpoints share only a local gateway. Different link identities
+// ensure an ingress peer cannot accidentally stand in for next-hop discovery.
+const ROUTED:sex_net_config::Config=sex_net_config::Config{dns:[198,51,100,53],http:[203,0,113,9],..BASELINE};
+const GATEWAY_MAC:[u8;6]=[2,0,0,0,0,2];
+fn gateway_reply(c:sex_net_config::Config,mac:[u8;6])->Vec<u8>{
+ let mut p=arp_for(c.gateway,c.local);p[..6].copy_from_slice(&OUR);p[6..12].copy_from_slice(&mac);
+ p[20..22].copy_from_slice(&[0,2]);p[22..28].copy_from_slice(&mac);p[32..38].copy_from_slice(&OUR);p
+}
+fn gateway_query(frame:&Frame,c:sex_net_config::Config){
+ let p=&frame.bytes[..frame.length];assert_eq!(&p[..6],&[255;6]);assert_eq!(&p[12..14],&[8,6]);
+ assert_eq!(&p[20..22],&[0,1]);assert_eq!(&p[28..32],&c.local);assert_eq!(&p[38..42],&c.gateway);
+}
+fn via_gateway(frame:&Frame,peer:[u8;4],mac:[u8;6]){
+ assert_eq!(&frame.bytes[..6],&mac);assert_eq!(&frame.bytes[6..12],&OUR);
+ assert_eq!(&frame.bytes[12..14],&[8,0]);assert_eq!(&frame.bytes[26..30],&ROUTED.local);assert_eq!(&frame.bytes[30..34],&peer);
+}
+#[test]fn exactly_one_immutable_default_route_uses_checked_onlink_gateway(){
+ let mut e=engine_with(ROUTED);let r=e.iface.routes().get_default_ipv4_route().unwrap();
+ assert_eq!(r.via_router,IpAddress::v4(10,0,2,2));assert!(r.expires_at.is_none());
+ e.iface.routes_mut().update(|routes|assert_eq!(routes.len(),1));
+ assert_eq!(NEIGHBOR_CAPACITY,8);assert_eq!(ROUTE_CAPACITY,2);
+}
+#[test]fn offlink_tcp_discovers_gateway_and_retains_exact_peer_tuple_and_ticket(){
+ let c=ROUTED;let mut e=engine_with(c);let mut now=0;e.begin_client(7).unwrap();
+ gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+ // Off-link ARP and the peer's different ingress MAC cannot supply a gateway.
+ e.submit_frame(&arp_for(c.http,c.local)).unwrap();assert!(tick(&mut e,&mut now).is_none());
+ e.submit_frame(&gateway_reply(c,GATEWAY_MAC)).unwrap();let syn=tick(&mut e,&mut now).unwrap();
+ via_gateway(&syn,c.http,GATEWAY_MAC);assert_eq!(syn.client_ticket(&c),Some(7));let s=parse(&syn).unwrap();assert_eq!(s.flags&2,2);
+ let server=s.seq.wrapping_add(1);e.submit_frame(&tcp_for(c.http,c.local,c.http_port,c.source_base+7,900,server,0x12,&[])).unwrap();
+ let ack=tick(&mut e,&mut now).unwrap();via_gateway(&ack,c.http,GATEWAY_MAC);assert_eq!(e.client_state(),State::Established);
+ assert_eq!(e.client_send(b"configured remote"),Ok(17));let packet=tick(&mut e,&mut now).unwrap();via_gateway(&packet,c.http,GATEWAY_MAC);assert_eq!(parse(&packet).unwrap().body,b"configured remote");
+ e.submit_frame(&tcp_for(c.http,c.local,c.http_port,c.source_base+7,901,server+17,0x18,b"real answer")).unwrap();tick(&mut e,&mut now);
+ let mut out=[0;32];assert_eq!(e.client_receive(&mut out),Ok(11));assert_eq!(&out[..11],b"real answer");
+}
+#[test]fn offlink_dns_uses_gateway_without_weakening_source_response_binding(){
+ let c=ROUTED;let mut e=engine_with(c);let mut now=0;e.begin_dns(9).unwrap();gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+ e.submit_frame(&gateway_reply(c,GATEWAY_MAC)).unwrap();let query=tick(&mut e,&mut now).unwrap();via_gateway(&query,c.dns,GATEWAY_MAC);
+ assert_eq!(query.dns_ticket(&c),Some(9));let(a,b,p)=parse_udp(&query).unwrap();assert_eq!((a,b),(48009,c.dns_port));assert_eq!(&p[12..],sex_net_config::DNS_QUESTION);
+ let mut out=[0xA5;DNS_BYTES];e.submit_frame(&udp(c.http,c.local,c.dns_port,48009,b"foreign")).unwrap();tick(&mut e,&mut now);assert_eq!(e.dns_receive(&mut out),Ok(None));assert_eq!(out,[0xA5;DNS_BYTES]);
+ e.submit_frame(&udp(c.dns,c.local,c.dns_port,48009,b"answer")).unwrap();tick(&mut e,&mut now);assert_eq!(e.dns_receive(&mut out),Ok(Some(6)));assert_eq!(&out[..6],b"answer");
+}
+#[test]fn missing_gateway_has_rate_limited_discovery_and_no_broadcast_ip_fallback(){
+ let c=ROUTED;let mut e=engine_with(c);let mut now=0;e.begin_dns(1).unwrap();gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+ let mut queries=1;for _ in 0..3500{if let Some(frame)=tick(&mut e,&mut now){gateway_query(&frame,c);queries+=1;}}
+ assert!((2..=4).contains(&queries));assert_eq!(e.dns_receive(&mut[0;DNS_BYTES]),Ok(None));
+ e.dns_abort();for _ in 0..2500{assert!(tick(&mut e,&mut now).is_none());}
+}
+#[test]fn cancel_before_gateway_answer_keeps_old_reset_tagged_and_new_jobs_distinct(){
+ let c=ROUTED;
+ for dns in [false,true]{let mut e=engine_with(c);let mut now=0;
+  if dns{e.begin_dns(1).unwrap();}else{e.begin_client(1).unwrap();}gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+  if dns{e.dns_abort();}else{e.client_abort();}
+  e.submit_frame(&gateway_reply(c,GATEWAY_MAC)).unwrap();
+  for _ in 0..8{if let Some(frame)=tick(&mut e,&mut now){
+   // TCP abort may produce a private RST. It MUST retain the old ticket so
+   // the parent's live-job fence discards it before DMA admission. DNS close
+   // cannot replay a query; neither protocol may resurrect payload or SYN.
+   assert!(!dns);assert_eq!(frame.client_ticket(&c),Some(1));assert_eq!(frame.dns_ticket(&c),None);
+   let reset=parse(&frame).unwrap();assert_eq!(reset.flags&4,4);assert_eq!(reset.flags&2,0);assert!(reset.body.is_empty());
+  }}
+  if dns{e.begin_dns(2).unwrap();}else{e.begin_client(2).unwrap();}
+  let frame=tick(&mut e,&mut now).unwrap();via_gateway(&frame,if dns{c.dns}else{c.http},GATEWAY_MAC);
+  assert_eq!(if dns{frame.dns_ticket(&c)}else{frame.client_ticket(&c)},Some(2));
+ }
+}
+#[test]fn gateway_neighbor_expiry_requires_fresh_discovery_then_accepts_new_mac(){
+ let c=ROUTED;let mut e=engine_with(c);let mut now=0;e.submit_frame(&gateway_reply(c,GATEWAY_MAC)).unwrap();assert!(tick(&mut e,&mut now).is_none());
+ e.begin_dns(1).unwrap();let first=tick(&mut e,&mut now).unwrap();via_gateway(&first,c.dns,GATEWAY_MAC);e.dns_abort();
+ // Time is captured input. No clock getter or wall-clock assumption is used.
+ now=60_002;e.advance(now);assert!(!e.has_frame());e.begin_dns(2).unwrap();gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+ let new_mac=[2,0,0,0,0,3];e.submit_frame(&gateway_reply(c,new_mac)).unwrap();let fresh=tick(&mut e,&mut now).unwrap();via_gateway(&fresh,c.dns,new_mac);assert_eq!(fresh.dns_ticket(&c),Some(2));
+}
+#[test]fn finite_neighbor_pressure_evicts_gateway_then_rediscovers_without_peer_redirection(){
+ let c=ROUTED;let mut e=engine_with(c);let mut now=0;e.submit_frame(&gateway_reply(c,GATEWAY_MAC)).unwrap();tick(&mut e,&mut now);
+ for i in 32..48{e.submit_frame(&arp_for([10,0,2,i],c.local)).unwrap();let reply=tick(&mut e,&mut now).unwrap();assert_eq!(&reply.bytes[38..42],&[10,0,2,i]);}
+ e.begin_dns(4).unwrap();gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+ e.submit_frame(&gateway_reply(c,GATEWAY_MAC)).unwrap();let query=tick(&mut e,&mut now).unwrap();via_gateway(&query,c.dns,GATEWAY_MAC);assert_eq!(query.dns_ticket(&c),Some(4));
+}
+#[test]fn stopped_transport_discards_neighbor_pending_data_and_late_gateway_reply(){
+ let c=ROUTED;let mut e=engine_with(c);let mut now=0;e.begin_dns(1).unwrap();gateway_query(&tick(&mut e,&mut now).unwrap(),c);
+ e.stop(Error::Stopped);assert_eq!(e.submit_frame(&gateway_reply(c,GATEWAY_MAC)),Err(Error::Stopped));
+ for _ in 0..8{assert!(tick(&mut e,&mut now).is_none());}assert_eq!(e.begin_client(2),Err(Error::Stopped));assert_eq!(e.begin_dns(2),Err(Error::Stopped));
+}
 fn tcp_for(source:[u8;4],destination:[u8;4],source_port:u16,destination_port:u16,seq:u32,ack:u32,flags:u8,body:&[u8])->Vec<u8>{
  let mut v=vec![0;54+body.len()];v[..6].copy_from_slice(&OUR);v[6..12].copy_from_slice(&PEER);v[12..14].copy_from_slice(&[8,0]);
  let total=(40+body.len())as u16;v[14]=0x45;v[16..18].copy_from_slice(&total.to_be_bytes());v[20]=0x40;v[22]=64;v[23]=6;v[26..30].copy_from_slice(&source);v[30..34].copy_from_slice(&destination);let check=sum(&v[14..34]);v[24..26].copy_from_slice(&check.to_be_bytes());
@@ -139,7 +224,7 @@ fn configured_ready(config:sex_net_config::Config)->(Engine<'static>,u64){
  for peer in [config.dns,config.http]{e.submit_frame(&arp_for(peer,config.local)).unwrap();let reply=tick(&mut e,&mut now).unwrap();
   assert_eq!(&reply.bytes[20..22],&[0,2]);assert_eq!(&reply.bytes[28..32],&config.local);assert_eq!(&reply.bytes[38..42],&peer);
  }
- assert!(e.iface.routes().get_default_ipv4_route().is_none());(e,now)
+ assert_eq!(e.iface.routes().get_default_ipv4_route().unwrap().via_router,IpAddress::v4(config.gateway[0],config.gateway[1],config.gateway[2],config.gateway[3]));(e,now)
 }
 #[test]fn alternate_arp_listener_echo_and_rearm_use_configured_local_address_and_port(){
  let c=ALTERNATE;let(mut e,mut now)=configured_ready(c);let client=101;
@@ -190,16 +275,16 @@ fn configured_ready(config:sex_net_config::Config)->(Engine<'static>,u64){
  let mut out=[0;DNS_BYTES];assert_eq!(e.dns_receive(&mut out),Ok(Some(8)));assert_eq!(&out[..8],b"accepted");
  e.dns_abort();e.begin_dns(10).unwrap();let second=tick(&mut e,&mut now).unwrap();assert_eq!(second.dns_ticket(&c),Some(10));assert_eq!(first.dns_ticket(&c),Some(9));
 }
-#[test]fn configured_prefix_reaches_onlink_peers_across_slash24_without_a_default_route(){
+#[test]fn configured_prefix_prefers_onlink_peers_across_slash24_over_default_route(){
  let c=sex_net_config::Config{prefix:23,dns:[192,168,45,1],http:[192,168,45,2],..ALTERNATE};
  let(mut e,mut now)=configured_ready(c);e.begin_client(1).unwrap();let frame=tick(&mut e,&mut now).unwrap();assert!(parse(&frame).is_some());assert_eq!(&frame.bytes[30..34],&c.http);
  let(mut e,mut now)=configured_ready(c);e.begin_dns(1).unwrap();let frame=tick(&mut e,&mut now).unwrap();assert!(parse_udp(&frame).is_some());assert_eq!(&frame.bytes[30..34],&c.dns);
- assert_eq!(e.iface.ip_addrs(),&[IpCidr::new(IpAddress::v4(192,168,44,17),23)]);assert!(e.iface.routes().get_default_ipv4_route().is_none());
+ assert_eq!(e.iface.ip_addrs(),&[IpCidr::new(IpAddress::v4(192,168,44,17),23)]);assert_eq!(e.iface.routes().get_default_ipv4_route().unwrap().via_router,IpAddress::v4(c.gateway[0],c.gateway[1],c.gateway[2],c.gateway[3]));
 }
 #[test]fn invalid_config_is_rejected_before_borrowed_buffer_effects_and_classification(){
  for config in[
   sex_net_config::Config{prefix:0,..ALTERNATE},sex_net_config::Config{profile:2,..ALTERNATE},
-  sex_net_config::Config{http:[192,168,45,2],..ALTERNATE},sex_net_config::Config{dns_port:0,..ALTERNATE},
+  sex_net_config::Config{http:[224,0,0,2],..ALTERNATE},sex_net_config::Config{dns_port:0,..ALTERNATE},
   sex_net_config::Config{source_base:47999,..ALTERNATE},sex_net_config::Config{listen_port:48000,..ALTERNATE}]{
   let(mut rx,mut tx,mut client_rx,mut client_tx)=([0xA1;FLOW_BYTES],[0xA2;FLOW_BYTES],[0xA3;FLOW_BYTES],[0xA4;FLOW_BYTES]);
   let(mut dns_rx,mut dns_tx)=([0xA5;DNS_BYTES],[0xA6;DNS_BYTES]);let mut rxmeta=[DnsMetadata::EMPTY];let mut txmeta=[DnsMetadata::EMPTY];let mut storage=[Storage::EMPTY,Storage::EMPTY,Storage::EMPTY];

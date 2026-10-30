@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Bounded immutable BOOT network configuration data, never a capability.
 //! Reading or copying these words grants no route, device, memory or endpoint
-//! authority. sex-pdx must attest the held BOOT grant independently. Gateway
-//! metadata does not install a default route; this profile permits on-link peers.
+//! authority. sex-pdx must attest the held BOOT grant independently. A validated
+//! on-link gateway can carry configured unicast endpoints outside the local link.
 
 pub const SYS_CONFIG:u64=71;
 pub const HOST_NAME:&[u8]=b"probe.sexos.test";
@@ -28,6 +28,7 @@ fn usable(address:[u8;4],mask:u32)->bool {
  let host=u32::from_be_bytes(address)&!mask;
  host!=0&&host!=!mask
 }
+fn unicast(address:[u8;4])->bool {address[0]!=0&&address[0]!=127&&address[0]<224}
 
 impl Config {
  pub const CONTROLLED:Self=Self {
@@ -44,13 +45,20 @@ impl Config {
  }
 
  /// Validation is required even when public fields were constructed directly.
- /// Other on-link static fixtures/ports are data, not newly granted authority.
+ /// Endpoints may be off-link; the gateway must remain a usable local neighbor.
+ /// Endpoint selection is immutable BOOT data, never newly granted authority.
  pub fn valid(&self)->bool {
   self.profile==1&&self.contains(self.local)&&self.contains(self.gateway)
-   &&self.contains(self.dns)&&self.contains(self.http)&&self.gateway!=self.local
+   &&self.endpoint(self.dns)&&self.endpoint(self.http)&&self.gateway!=self.local
    &&self.dns_port!=0&&self.http_port!=0&&self.listen_port!=0
    &&self.listen_port<self.source_base&&self.source_base==SOURCE_BASE
    &&u32::from(self.source_base)+MAX_TICKET==u32::from(u16::MAX)
+ }
+
+ fn endpoint(&self,address:[u8;4])->bool {
+  let Some(mask)=mask(self.prefix)else{return false;};
+  unicast(address)&&address!=self.local
+   &&(u32::from_be_bytes(address)&mask!=u32::from_be_bytes(self.local)&mask||self.contains(address))
  }
 
  /// Known protocol profile data only; no arbitrary name, pointer or ownership.
@@ -114,12 +122,20 @@ impl Config {
  #[test]fn unusable_local_ipv4_ranges_and_subnet_hosts_are_rejected() {
   for local in [[0,0,0,0],[0,12,2,1],[127,0,0,1],[224,0,0,1],[239,255,2,1],[240,0,2,1],[255,255,255,255],[10,0,2,0],[10,0,2,255]] {rejected(Config {local,..Config::CONTROLLED});}
  }
- #[test]fn every_peer_rejects_offlink_reserved_network_and_broadcast_addresses() {
-  for address in [[10,0,3,2],[0,0,0,1],[127,0,0,1],[224,0,0,1],[240,0,0,1],[10,0,2,0],[10,0,2,255]] {
+ #[test]fn gateway_requires_onlink_host_and_endpoints_reject_local_reserved_and_broadcast() {
+  for address in [[0,0,0,1],[127,0,0,1],[224,0,0,1],[240,0,0,1],[10,0,2,0],[10,0,2,255]] {
    assert!(!Config::CONTROLLED.contains(address));
    rejected(Config {gateway:address,..Config::CONTROLLED});rejected(Config {dns:address,..Config::CONTROLLED});rejected(Config {http:address,..Config::CONTROLLED});
   }
+  rejected(Config {gateway:[10,0,3,2],..Config::CONTROLLED});
   rejected(Config {gateway:Config::CONTROLLED.local,..Config::CONTROLLED});
+  rejected(Config {dns:Config::CONTROLLED.local,..Config::CONTROLLED});
+  rejected(Config {http:Config::CONTROLLED.local,..Config::CONTROLLED});
+ }
+ #[test]fn offlink_configured_endpoints_keep_one_onlink_gateway_and_canonical_words() {
+  let config=Config {dns:[198,51,100,53],http:[203,0,113,9],..Config::CONTROLLED};
+  assert!(config.valid());assert!(!config.contains(config.dns));assert!(!config.contains(config.http));
+  assert!(config.contains(config.gateway));assert_eq!(Config::from_words(config.to_words()),Some(config));
  }
  #[test]fn subnet_edges_use_configured_prefix_not_a_fixed_slash24() {
   let config=Config {local:[172,16,1,9],prefix:23,gateway:[172,16,0,1],dns:[172,16,1,254],http:[172,16,0,255],..Config::CONTROLLED};
