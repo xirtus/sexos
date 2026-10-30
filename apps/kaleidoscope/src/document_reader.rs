@@ -19,6 +19,8 @@ pub enum Move { Up, Down, PageUp, PageDown, Home, End }
 pub struct Frame {
     pub bytes: [u8; CAPACITY],
     pub len: usize,
+    /// Rendered-byte selection span. Chrome and final row padding are excluded.
+    pub selection: (u16, u16),
     /// Zero-based wrapped body line range [first,end), excluding chrome.
     pub first: usize,
     pub end: usize,
@@ -112,15 +114,25 @@ impl Reader {
     /// The final validated request path is presentation data. Clean every
     /// byte defensively so it cannot inject a row or replace the reader chrome.
     pub fn render_path(&mut self, body: &[u8], path:&[u8]) -> Frame {
-        self.render_source(body,path,b"Plain HTTP / no TLS",HOST)
+        self.render_path_selected(body,path,None)
+    }
+    pub fn render_path_selected(&mut self,body:&[u8],path:&[u8],selection:Option<(usize,usize)>)->Frame {
+        self.render_source(body,path,b"Plain HTTP / no TLS",HOST,selection)
     }
     pub fn render_https(&mut self,body:&[u8],path:&[u8])->Frame {
-        self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080")
+        self.render_https_selected(body,path,None)
     }
-    fn render_source(&mut self,body:&[u8],path:&[u8],banner:&[u8],host:&[u8])->Frame {
+    pub fn render_https_selected(&mut self,body:&[u8],path:&[u8],selection:Option<(usize,usize)>)->Frame {
+        self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080",selection)
+    }
+    fn render_source(&mut self,body:&[u8],path:&[u8],banner:&[u8],host:&[u8],selection:Option<(usize,usize)>)->Frame {
+        let selected = selection.and_then(|(a,b)| {
+            let (lo,hi)=(a.min(b),a.max(b));
+            (lo<hi && hi<=body.len().min(MAX_BODY)).then_some((lo,hi))
+        });
         let body = content(body);
         let (cols,rows) = self.geometry();
-        let mut frame = Frame { bytes: [0;CAPACITY], len: 0, first: 0, end: 0,
+        let mut frame = Frame { bytes: [0;CAPACITY], len: 0, selection: (0,0), first: 0, end: 0,
             body_rows: rows.saturating_sub(3), rows, cols, total_lines: 0, source_anchor: self.anchor };
         if rows == 0 { return frame; }
         frame.len = rows*(cols+1)-1;
@@ -149,6 +161,15 @@ impl Reader {
                 let source = line(body,cursor,cols);
                 let at = (shown+2)*(cols+1);
                 for (target,byte) in frame.bytes[at..at+source.end-source.start].iter_mut().zip(&body[source.start..source.end]) { *target = clean(*byte); }
+                if let Some((lo,hi))=selected {
+                    let from=source.start.max(lo);let to=source.end.min(hi);
+                    if from<to {
+                        let begin=(at+from-source.start)as u16;
+                        let end=(at+to-source.start)as u16;
+                        if frame.selection==(0,0) {frame.selection.0=begin;}
+                        frame.selection.1=end;
+                    }
+                }
                 cursor = source.next;
                 shown += 1;
             }
@@ -156,6 +177,55 @@ impl Reader {
         }
         if rows > 1 { footer(&mut frame,banner==b"Controlled HTTPS / lab root"); }
         frame
+    }
+
+    /// Vertical selection movement uses the same bounded source rows as paint.
+    /// No retained preferred-column or body copy is introduced. Home/End remain
+    /// exact raw-body endpoints, including a copyable but unpainted blank tail.
+    pub fn selection_move(&self, body:&[u8], caret:usize, action:Move)->usize {
+        let raw_len=body.len().min(MAX_BODY);
+        if action==Move::Home {return 0;}
+        if action==Move::End {return raw_len;}
+        let (cols,rows)=self.geometry();let visible=rows.saturating_sub(3);
+        if cols==0 || visible==0 {return caret.min(raw_len);}
+        let body=content(body);if body.is_empty(){return 0;}
+        let caret=caret.min(body.len());
+        let mut cursor=0;let mut index=0usize;let mut current=0usize;let mut column=0;
+        while cursor<body.len() {
+            let row=line(body,cursor,cols);
+            if row.start<=caret {current=index;column=caret.min(row.end)-row.start;}
+            index+=1;cursor=row.next;
+        }
+        let last=index.saturating_sub(1);
+        let target=match action {
+            Move::Up=>current.saturating_sub(1),
+            Move::Down=>current.saturating_add(1).min(last),
+            Move::PageUp=>current.saturating_sub(visible),
+            Move::PageDown=>current.saturating_add(visible).min(last),
+            Move::Home|Move::End=>current,
+        };
+        let row=line(body,offset_at(body,cols,target),cols);
+        row.start+column.min(row.end-row.start)
+    }
+
+    /// Explicit selection movement can reveal its caret. Ordinary render and
+    /// viewport reflow keep the previously retained source anchor unchanged.
+    pub fn reveal(&mut self,body:&[u8],caret:usize)->bool {
+        let (cols,rows)=self.geometry();let visible=rows.saturating_sub(3);
+        if cols==0 || visible==0 {return false;}
+        let body=content(body);let caret=caret.min(body.len());
+        let info=layout(body,cols,visible,self.anchor);
+        let mut cursor=0;let mut index=0;let mut wanted=0;
+        while cursor<body.len() {
+            let row=line(body,cursor,cols);
+            if row.start<=caret {wanted=index;}
+            index+=1;cursor=row.next;
+        }
+        let first=if wanted<info.first {wanted}
+            else if wanted>=info.first.saturating_add(visible) {wanted+1-visible}
+            else {return false;};
+        let next=offset_at(body,cols,first);
+        let changed=next!=self.anchor;self.anchor=next;changed
     }
 
     pub fn navigate(&mut self, body: &[u8], action: Move) -> bool {
@@ -314,4 +384,57 @@ mod tests {
         let mut r=reader(82,160);r.navigate(&[b'x';600],Move::End);r.clear();let frame=r.render(b"ok");assert_eq!(r.anchor,0);assert_eq!((frame.first,frame.end),(0,1));assert_eq!(row(&frame,2),b"ok        ");for index in 3..frame.rows-1 {assert_eq!(row(&frame,index),b"          ");}
         r.resize(0,0);let empty=r.render(b"ok");assert_eq!(empty.len,0);assert_eq!(empty.bytes,[0;512]);
     }
+    #[test] fn selected_source_bytes_exclude_chrome_and_terminal_padding_and_normalize_reverse() {
+        let body=b"alpha\nbeta\nlast   ";let mut r=reader(82,160);
+        let frame=r.render_path_selected(body,b"/secret",Some((2,9)));
+        let start=2*(frame.cols+1)+2;let end=3*(frame.cols+1)+3;
+        assert_eq!(frame.selection,(start as u16,end as u16));
+        assert_eq!(&frame.bytes[start..start+3],b"pha");
+        assert_eq!(&frame.bytes[end-3..end],b"bet");
+        assert_eq!(r.render_path_selected(body,b"/secret",Some((9,2))).selection,frame.selection);
+        let all=r.render_https_selected(body,b"/",Some((0,body.len())));
+        assert_eq!(all.selection,(2*(all.cols+1)as u16,(4*(all.cols+1)+4)as u16));
+        // A newline-only selection has no character cell; trimmed blank tails
+        // stay copyable as raw source data but do not select invented padding.
+        for range in[(5,6),(15,body.len()),(1,1),(0,body.len()+1)] {
+            assert_eq!(r.render_path_selected(body,b"/",Some(range)).selection,(0,0));
+        }
+        assert_eq!(r.render(body).selection,(0,0));
+    }
+    #[test] fn selected_hard_wrap_reflow_and_viewport_clipping_keep_exact_source_endpoints() {
+        let body=[b'x';600];let mut r=reader(82,160);
+        let narrow=r.render_path_selected(&body,b"/",Some((7,23)));
+        assert_eq!(narrow.selection,((2*11+7)as u16,(4*11+3)as u16));
+        assert!(r.navigate(&body,Move::Down));let anchor=r.source_anchor();
+        let clip=r.render_path_selected(&body,b"/",Some((0,23)));
+        assert_eq!(clip.selection,((2*11)as u16,(3*11+3)as u16));assert_eq!(r.source_anchor(),anchor);
+        r.resize(142,160);let wide=r.render_https_selected(&body,b"/",Some((7,23)));
+        assert_eq!(wide.selection,((2*21+7)as u16,(3*21+3)as u16));assert_eq!(r.source_anchor(),anchor);
+        let off=r.render_path_selected(&body,b"/",Some((500,510)));assert_eq!(off.selection,(0,0));
+        r.resize(0,0);assert_eq!(r.render_path_selected(&body,b"/",Some((0,600))).selection,(0,0));
+    }
+    #[test] fn selection_vertical_page_motion_matches_wrap_and_clamps_short_lines_and_raw_end() {
+        let mut r=reader(82,160);let body=b"0123456789abcdefghij\nxy\n0123456789end   ";
+        assert_eq!(r.selection_move(body,7,Move::Down),17);
+        assert_eq!(r.selection_move(body,17,Move::Down),23); // short row's newline
+        assert_eq!(r.selection_move(body,22,Move::Up),11);
+        assert_eq!(r.selection_move(body,0,Move::Up),0);
+        assert_eq!(r.selection_move(body,7,Move::PageDown),37); // final visible row, trimmed tail
+        assert_eq!(r.selection_move(body,37,Move::PageUp),3);
+        assert_eq!(r.selection_move(body,7,Move::Home),0);
+        assert_eq!(r.selection_move(body,7,Move::End),body.len());
+        r.resize(0,0);assert_eq!(r.selection_move(body,usize::MAX,Move::Down),body.len());
+    }
+    #[test] fn explicit_reveal_follows_caret_both_directions_and_normal_render_never_moves_anchor() {
+        let body=[b'x';600];let mut r=reader(82,160);
+        assert!(!r.reveal(&body,5));assert_eq!(r.source_anchor(),0);
+        assert!(r.reveal(&body,250));assert_eq!(r.source_anchor(),150);
+        let frame=r.render_path_selected(&body,b"/",Some((240,251)));
+        assert_eq!((frame.first,frame.end),(15,26));assert_eq!(r.source_anchor(),150);
+        assert!(!r.reveal(&body,250));assert!(r.reveal(&body,12));assert_eq!(r.source_anchor(),10);
+        assert!(r.reveal(&body,600));assert_eq!(r.source_anchor(),490);
+        let old=r.source_anchor();r.resize(142,160);r.render_path_selected(&body,b"/",Some((590,600)));assert_eq!(r.source_anchor(),old);
+        r.resize(0,0);assert!(!r.reveal(&body,0));assert_eq!(r.source_anchor(),old);
+    }
+
 }

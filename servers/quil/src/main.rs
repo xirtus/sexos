@@ -121,6 +121,155 @@ static mut QUIL_NAME_LEN: usize = 0;
 
 static mut DOCUMENT_IO:document_exchange::Client=document_exchange::Client::new();
 static mut QUIL_REVISION:u64=0;
+// One incarnation owns its scratch and selection; no stack-sized client temporary.
+static mut QUIL_CLIPBOARD:sex_pdx::clipboard_client::Client=sex_pdx::clipboard_client::Client::new();
+static mut QUIL_SELECTION:sex_pdx::text_selection::Selection=sex_pdx::text_selection::Selection::new();
+static mut QUIL_GENERATION:u64=1;
+static mut QUIL_COPY_SNAPSHOT:Option<(u32,sex_pdx::text_selection::Snapshot)>=None;
+static mut QUIL_PASTE_SNAPSHOT:Option<(u32,sex_pdx::text_selection::Snapshot)>=None;
+static mut QUIL_CLIPBOARD_NOTICE:bool=false;
+static mut QUIL_CLIPBOARD_ERROR:Option<&'static[u8]>=None;
+unsafe fn quil_source()->sex_pdx::text_selection::Source {sex_pdx::text_selection::Source{generation:QUIL_GENERATION,revision:QUIL_REVISION}}
+unsafe fn quil_selection_bind() {
+    QUIL_SELECTION.clear();
+    if QUIL_SELECTION.bind(quil_source(),QUIL_BUFFER_LEN).is_ok(){let _=QUIL_SELECTION.move_to(quil_source(),QUIL_CURSOR_POS.min(QUIL_BUFFER_LEN),false);}
+}
+unsafe fn quil_selection_record() {
+    if let Some(s)=QUIL_SELECTION.snapshot(){sex_pdx::serial_record!("[quil.selection] generation={} revision={} bytes={} anchor={} caret={}",s.source().generation,s.source().revision,s.len(),s.anchor(),s.caret());}
+}
+unsafe fn quil_selection_fence() {
+    QUIL_GENERATION=0;QUIL_SELECTION.clear();QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;QUIL_CLIPBOARD.close();
+}
+unsafe fn quil_revision_changed()->bool {
+    let Some(next)=QUIL_REVISION.checked_add(1) else{quil_selection_fence();return false};
+    QUIL_REVISION=next;QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;quil_selection_bind();
+    sex_pdx::serial_record!("[quil.document.edit] revision={} pending={} bytes={}",QUIL_REVISION,DOCUMENT_IO.busy()as u8,QUIL_BUFFER_LEN);true
+}
+unsafe fn quil_fresh_source() {
+    let Some(next)=QUIL_GENERATION.checked_add(1).filter(|_|QUIL_GENERATION!=0)else{quil_selection_fence();return};
+    QUIL_GENERATION=next;QUIL_REVISION=0;QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;UNDO_HEAD=0;UNDO_COUNT=0;UNDO_REDO_COUNT=0;
+    if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());}
+    quil_selection_bind();
+}
+unsafe fn quil_replace(range:(usize,usize),incoming:&[u8])->bool {
+    if QUIL_GENERATION==0 || QUIL_REVISION.checked_add(1).is_none()
+        || view::replacement_len(QUIL_BUFFER_LEN,range,incoming.len()).is_none()
+        || !sex_pdx::clipboard::text(incoming) {return false}
+    text_buffer_undo_push();
+    let Some(caret)=view::replace(&mut QUIL_BUFFER,&mut QUIL_BUFFER_LEN,range,incoming)else{return false};
+    QUIL_CURSOR_POS=caret;QUIL_GOAL_COL=usize::MAX;QUIL_DIRTY=true;
+    quil_revision_changed();quil_selection_record();true
+}
+fn quil_clipboard_status()->Option<&'static[u8]> {
+    unsafe {if !QUIL_CLIPBOARD_NOTICE&&!QUIL_CLIPBOARD.pending(){return None}
+        if let Some(error)=QUIL_CLIPBOARD_ERROR {return Some(error)}
+        use sex_pdx::clipboard_client::View;
+        Some(match QUIL_CLIPBOARD.view(){View::Idle=>return None,View::Pending=>b"CLIPBOARD...",View::Ready=>b"PASTED",View::Copied=>b"COPIED",View::Cancelled=>b"CANCELLED",View::Empty=>b"EMPTY SELECTION",View::Unsupported=>b"UNSUPPORTED",View::Busy=>b"CLIPBOARD BUSY",View::Denied=>b"CLIPBOARD DENIED",View::Uncertain=>b"CLIPBOARD UNCERTAIN"})
+    }
+}
+fn quil_clipboard_events(palette_active:bool) {
+    unsafe {while let Some(event)=QUIL_CLIPBOARD.take_event(){
+        use sex_pdx::clipboard_client::{Event,View};
+        QUIL_CLIPBOARD_NOTICE=true;
+        match event {
+            Event::Export{ticket,cut}=>{
+                QUIL_CLIPBOARD_ERROR=None;
+                if QUIL_NAME_MODE||palette_active {QUIL_CLIPBOARD.decline(ticket,View::Unsupported,sex_pdx::get_ticks());continue}
+                let Some(snapshot)=QUIL_SELECTION.snapshot() else{QUIL_CLIPBOARD.decline(ticket,View::Cancelled,sex_pdx::get_ticks());continue};
+                let(start,end)=snapshot.range();
+                sex_pdx::serial_record!("[quil.clipboard.intent] ticket={} action={} generation={} revision={} start={} end={}",ticket,if cut{"cut"}else{"copy"},snapshot.source().generation,snapshot.source().revision,start,end);
+                if cut {QUIL_COPY_SNAPSHOT=Some((ticket,snapshot));}
+                if !QUIL_CLIPBOARD.publish(ticket,snapshot.source(),&QUIL_BUFFER[start..end],sex_pdx::get_ticks()){QUIL_COPY_SNAPSHOT=None;}
+            },
+            Event::Paste{ticket}=>{
+                QUIL_CLIPBOARD_ERROR=None;
+                if QUIL_NAME_MODE||palette_active {QUIL_CLIPBOARD.decline(ticket,View::Unsupported,sex_pdx::get_ticks());continue}
+                let Some(snapshot)=QUIL_SELECTION.snapshot()else{QUIL_CLIPBOARD.decline(ticket,View::Cancelled,sex_pdx::get_ticks());continue};
+                QUIL_PASTE_SNAPSHOT=Some((ticket,snapshot));
+                sex_pdx::serial_record!("[quil.clipboard.intent] ticket={} action=paste generation={} revision={} start={} end={}",ticket,snapshot.source().generation,snapshot.source().revision,snapshot.range().0,snapshot.range().1);
+                if !QUIL_CLIPBOARD.read(ticket,sex_pdx::get_ticks()){QUIL_PASTE_SNAPSHOT=None;}
+            },
+            Event::Published{ticket,cut,len,generation,hash}=>{
+                let mut applied=false;
+                if cut {if let Some((old,snapshot))=QUIL_COPY_SNAPSHOT.take(){if old==ticket&&QUIL_SELECTION.unchanged(snapshot){applied=quil_replace(snapshot.range(),&[]);}}}
+                if cut&&!applied {QUIL_CLIPBOARD_ERROR=Some(b"COPIED / CUT SKIPPED");}
+                sex_pdx::serial_record!("[quil.clipboard.published] ticket={} bytes={} generation={} hash={:#x} cut={} applied={}",ticket,len,generation,hash,cut as u8,applied as u8);
+            },
+            Event::Ready{ticket,len,generation,hash}=>{
+                let mut applied=false;let mut reason="selection_changed";
+                if let Some((old,snapshot))=QUIL_PASTE_SNAPSHOT.take(){if old==ticket&&QUIL_SELECTION.unchanged(snapshot){
+                    if QUIL_SELECTION.replacement_len(snapshot,len).is_err(){reason="capacity";}
+                    else if let Some(bytes)=QUIL_CLIPBOARD.bytes(){applied=quil_replace(snapshot.range(),bytes);if applied{reason="applied";}}
+                }}
+                QUIL_CLIPBOARD.settle(applied);
+                if !applied{QUIL_CLIPBOARD_ERROR=Some(if reason=="capacity"{b"PASTE TOO LARGE"}else{b"SELECTION CHANGED"});}
+                sex_pdx::serial_record!("[quil.clipboard.paste] ticket={} bytes={} generation={} hash={:#x} applied={} atomic=1 reason={}",ticket,len,generation,hash,applied as u8,reason);
+            },
+            Event::Stopped{ticket,view}=>{
+                if QUIL_COPY_SNAPSHOT.is_some_and(|(t,_)|t==ticket){QUIL_COPY_SNAPSHOT=None;}
+                if QUIL_PASTE_SNAPSHOT.is_some_and(|(t,_)|t==ticket){QUIL_PASTE_SNAPSHOT=None;}
+                sex_pdx::serial_record!("[quil.clipboard.stopped] ticket={} state={:?} payload_erased=1",ticket,view);
+            },
+        }
+        draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+    }}
+}
+fn quil_dispatch_stashed(word:u64,down:u64,class:u64,palette:&mut bool,row:&mut u8) {
+    if let Some(key)=sex_pdx::app_key::Key::decode(word,down,class){quil_dispatch_key(key,palette,row)}
+    else if word<(1<<16){quil_dispatch_palette_key(word,down,palette,row)}
+}
+fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected_row:&mut u8) {
+    // USB keycodes and retained PS/2 scan codes describe the same editor key.
+    let code=match key.code{105=>0x4b,106=>0x4d,102=>0x47,107=>0x4f,103=>0x48,108=>0x50,104=>0x49,109=>0x51,111=>0x53,other=>other};
+    let key=sex_pdx::app_key::Key{code,..key};
+    unsafe {
+        QUIL_CLIPBOARD_NOTICE=false;
+        if key.control {
+            match key.code {
+                0x1e if !QUIL_NAME_MODE=>{*palette_active=false;let _=QUIL_SELECTION.select_all(quil_source());QUIL_CURSOR_POS=QUIL_BUFFER_LEN;quil_selection_record();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
+                0x31=>document_action(sex_pdx::document_view::NEW,palette_active,selected_row),
+                0x18=>document_action(sex_pdx::document_view::OPEN,palette_active,selected_row),
+                0x1f=>document_action(if key.shift{sex_pdx::document_view::SAVE_AS}else{sex_pdx::document_view::SAVE},palette_active,selected_row),
+                0x13=>{if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());QUIL_CLIPBOARD_NOTICE=true;QUIL_CLIPBOARD_ERROR=None;}document_action(sex_pdx::document_view::QUIESCE,palette_active,selected_row);},
+                0x2c if !QUIL_NAME_MODE=>{*palette_active=false;if key.shift{text_buffer_redo();}else{text_buffer_undo();}draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
+                0x15 if !QUIL_NAME_MODE=>{*palette_active=false;text_buffer_redo();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
+                // C/X/V arrive only as a separately authorized Shell INTENT.
+                _=>{},
+            }
+            return
+        }
+        if QUIL_NAME_MODE||*palette_active||key.code==0x01 {
+            SHIFT_HELD=key.shift;
+            quil_dispatch_palette_key(key.code as u64,1,palette_active,selected_row);return
+        }
+        let source=quil_source();
+        let Some(snapshot)=QUIL_SELECTION.snapshot()else{return};
+        let old=QUIL_CURSOR_POS;
+        let movement=match key.code {
+            0x4b=>Some(QUIL_SELECTION.left(source,key.shift)),
+            0x4d=>Some(QUIL_SELECTION.right(source,key.shift)),
+            0x47=>Some(QUIL_SELECTION.home(source,key.shift)),
+            0x4f=>Some(QUIL_SELECTION.end(source,key.shift)),
+            0x48|0x50|0x49|0x51=>{
+                let steps=if key.code==0x49||key.code==0x51{DOCUMENT_VIEW.body_rows().max(1)}else{1};
+                let next=view::vertical_steps(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret(),DOCUMENT_VIEW.cols,&mut QUIL_GOAL_COL,key.code==0x48||key.code==0x49,steps).unwrap_or(snapshot.caret());
+                Some(QUIL_SELECTION.move_to(source,next,key.shift))
+            },_=>None,
+        };
+        if let Some(result)=movement {
+            if result.is_ok(){QUIL_CURSOR_POS=QUIL_SELECTION.snapshot().unwrap().caret();if !matches!(key.code,0x48|0x50|0x49|0x51){QUIL_GOAL_COL=usize::MAX;}quil_selection_record();sex_pdx::serial_record!("[quil.cursor.move] old={} new={} len={} dir={} ok=1",old,QUIL_CURSOR_POS,QUIL_BUFFER_LEN,match key.code{0x4b=>"left",0x4d=>"right",0x47=>"home",0x4f=>"end",0x48=>"up",0x49=>"pageup",0x51=>"pagedown",_=>"down"});draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}return
+        }
+        let range=snapshot.range();let selected=range.0!=range.1;
+        let changed=match key.code {
+            0x0e=>{let range=if selected{range}else{(snapshot.caret().saturating_sub(1),snapshot.caret())};range.0!=range.1&&quil_replace(range,&[])},
+            0x53=>{let range=if selected{range}else{(snapshot.caret(),(snapshot.caret()+1).min(QUIL_BUFFER_LEN))};range.0!=range.1&&quil_replace(range,&[])},
+            0x1c=>quil_replace(range,b"\n"),
+            _=>{if let Some(ch)=scancode_to_char(key.code as u64,key.shift){sex_pdx::serial_record!("[quil.text.recv] code={} ch={}",key.code,ch);quil_replace(range,&[ch])}else{false}},
+        };
+        if changed {draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}
+    }
+}
+
 static mut DOCUMENT_NEXT_LOAD:Option<(u8,u64)>=None;
 fn document_load_start(id: u64) {
     unsafe {
@@ -132,7 +281,7 @@ fn document_load_start(id: u64) {
             sex_pdx::serial_record!("[quil.document.busy] kind=load");
             return;
         }
-        QUIL_REVISION = QUIL_REVISION.saturating_add(1);
+        if !quil_revision_changed(){return;}
         if DOCUMENT_IO.loading() {
             DOCUMENT_NEXT_LOAD = Some((id, QUIL_REVISION));
             DOCUMENT_IO.cancel();
@@ -183,6 +332,7 @@ fn document_save_start(create: bool) {
 }
 fn document_event(event: document_exchange::Event, palette_active:&mut bool) {
     unsafe {
+        QUIL_CLIPBOARD_NOTICE=false;
         if event.outcome == document_exchange::Outcome::Saved {
             DOCUMENT_WORKSPACE.changed();
             QUIL_DOC_ID = event.object as u64;
@@ -213,7 +363,7 @@ fn document_event(event: document_exchange::Event, palette_active:&mut bool) {
             QUIL_DOC_TITLE = DOCUMENT_IO.name;
             QUIL_DIRTY = false;
             QUIL_VIEW_TOP = 0;
-            QUIL_REVISION = QUIL_REVISION.saturating_add(1);
+            quil_fresh_source();
             sex_pdx::serial_record!(
                 "[quil.persist.load.ok] bytes={} hash={:#x} doc={}",
                 QUIL_BUFFER_LEN,
@@ -680,16 +830,17 @@ fn document_draw(buf: &[u8], palette: Option<u8>) {
         } else {
             None
         };
-        let text = view::render(
+        let text = view::render_selection(
             buf,
             QUIL_CURSOR_POS,
             &mut QUIL_VIEW_TOP,
             DOCUMENT_VIEW,
             name,
             QUIL_DIRTY,
-            DOCUMENT_IO.status().as_bytes(),
+            quil_clipboard_status().unwrap_or(DOCUMENT_IO.status().as_bytes()),
             palette,
             naming,
+            QUIL_SELECTION.range(),
         );
         DOCUMENT_PAINT = DOCUMENT_PAINT.saturating_add(1);
         let status_end = text.bytes[..text.len]
@@ -723,6 +874,7 @@ fn draw_text_lines(buf: &[u8]) {
     document_draw(buf, None);
 }
 fn document_action(action: u8, palette: &mut bool, row: &mut u8) {
+    unsafe{QUIL_CLIPBOARD_NOTICE=false;}
     if action == sex_pdx::document_view::OPEN {
         unsafe {
             DOCUMENT_OPEN = true;
@@ -1083,41 +1235,29 @@ fn text_buffer_undo_push() {
 /// Returns true on success, false if nothing to undo.
 fn text_buffer_undo() -> bool {
     unsafe {
-        if UNDO_COUNT == 0 { return false; }
-        let old_len = QUIL_BUFFER_LEN;
-        // Current state becomes redo-able
-        UNDO_REDO_COUNT = UNDO_REDO_COUNT.saturating_add(1).min(UNDO_DEPTH);
-        // Move head back to previous entry
-        UNDO_HEAD = if UNDO_HEAD == 0 { UNDO_DEPTH - 1 } else { UNDO_HEAD - 1 };
-        UNDO_COUNT -= 1;
-        // Restore buffer from ring
-        let restore_len = UNDO_LENS[UNDO_HEAD];
-        QUIL_BUFFER[..restore_len].copy_from_slice(&UNDO_RING[UNDO_HEAD][..restore_len]);
-        QUIL_BUFFER_LEN = restore_len;
-        QUIL_CURSOR_POS = UNDO_CURSORS[UNDO_HEAD];
-        serial_println!("[quil.undo.apply] old_len={} new_len={} ok=1", old_len, QUIL_BUFFER_LEN);
-        true
+        if UNDO_COUNT==0||QUIL_REVISION.checked_add(1).is_none()||QUIL_GENERATION==0{return false}
+        let old_len=QUIL_BUFFER_LEN;
+        let index=if UNDO_HEAD==0{UNDO_DEPTH-1}else{UNDO_HEAD-1};
+        for i in 0..QUIL_BUFFER_MAX_LEN{core::mem::swap(&mut QUIL_BUFFER[i],&mut UNDO_RING[index][i]);}
+        core::mem::swap(&mut QUIL_BUFFER_LEN,&mut UNDO_LENS[index]);
+        core::mem::swap(&mut QUIL_CURSOR_POS,&mut UNDO_CURSORS[index]);
+        UNDO_HEAD=index;UNDO_COUNT-=1;UNDO_REDO_COUNT=UNDO_REDO_COUNT.saturating_add(1).min(UNDO_DEPTH);
+        QUIL_DIRTY=true;QUIL_GOAL_COL=usize::MAX;quil_revision_changed();
+        serial_println!("[quil.undo.apply] old_len={} new_len={} ok=1",old_len,QUIL_BUFFER_LEN);true
     }
 }
 
-/// Redo: re-apply previously undone state.
-/// Returns true on success, false if nothing to redo.
+/// Redo the exact state swapped out by Undo, retaining a single atomic edit.
 fn text_buffer_redo() -> bool {
     unsafe {
-        if UNDO_REDO_COUNT == 0 { return false; }
-        let old_len = QUIL_BUFFER_LEN;
-        // Move head forward to the redo entry (the one we undid past)
-        // Actually, after undo, HEAD points to the restored entry. Redo restores the NEXT one.
-        let redo_idx = UNDO_HEAD;
-        let restore_len = UNDO_LENS[redo_idx];
-        QUIL_BUFFER[..restore_len].copy_from_slice(&UNDO_RING[redo_idx][..restore_len]);
-        QUIL_BUFFER_LEN = restore_len;
-        QUIL_CURSOR_POS = UNDO_CURSORS[redo_idx];
-        UNDO_HEAD = (UNDO_HEAD + 1) % UNDO_DEPTH;
-        UNDO_COUNT += 1;
-        UNDO_REDO_COUNT -= 1;
-        serial_println!("[quil.redo.apply] old_len={} new_len={} ok=1", old_len, QUIL_BUFFER_LEN);
-        true
+        if UNDO_REDO_COUNT==0||QUIL_REVISION.checked_add(1).is_none()||QUIL_GENERATION==0{return false}
+        let old_len=QUIL_BUFFER_LEN;let index=UNDO_HEAD;
+        for i in 0..QUIL_BUFFER_MAX_LEN{core::mem::swap(&mut QUIL_BUFFER[i],&mut UNDO_RING[index][i]);}
+        core::mem::swap(&mut QUIL_BUFFER_LEN,&mut UNDO_LENS[index]);
+        core::mem::swap(&mut QUIL_CURSOR_POS,&mut UNDO_CURSORS[index]);
+        UNDO_HEAD=(UNDO_HEAD+1)%UNDO_DEPTH;UNDO_COUNT=(UNDO_COUNT+1).min(UNDO_DEPTH);UNDO_REDO_COUNT-=1;
+        QUIL_DIRTY=true;QUIL_GOAL_COL=usize::MAX;quil_revision_changed();
+        serial_println!("[quil.redo.apply] old_len={} new_len={} ok=1",old_len,QUIL_BUFFER_LEN);true
     }
 }
 
@@ -1421,7 +1561,7 @@ fn pdx_call_and_reply(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -
         // Non-reply message before reply arrived.
         // OP_HID_EVENT: stash for later replay instead of discarding.
         // Other types: log and keep waiting.
-        if msg.type_id == OP_HID_EVENT {
+        if msg.type_id == OP_HID_EVENT && msg.caller_pd==3 && msg.caller_task==3 {
             unsafe {
                 if HID_STASH_COUNT < HID_STASH_CAPACITY {
                     let idx = HID_STASH_COUNT;
@@ -1479,7 +1619,7 @@ fn pdx_storage_call_bounded(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Res
             if v < 0 { return Err(v); }
             return Ok(msg.arg0);
         }
-        if msg.type_id == OP_HID_EVENT {
+        if msg.type_id == OP_HID_EVENT && msg.caller_pd==3 && msg.caller_task==3 {
             unsafe {
                 if HID_STASH_COUNT < HID_STASH_CAPACITY {
                     let idx = HID_STASH_COUNT;
@@ -2167,7 +2307,6 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                             // document. Disk copy untouched until next save.
                             if unsafe{DOCUMENT_IO.busy()}{sex_pdx::serial_record!("[quil.document.busy] kind=new");return;}
                             unsafe {
-                                QUIL_REVISION=QUIL_REVISION.saturating_add(1);
                                 QUIL_BUFFER = [0u8; QUIL_BUFFER_MAX_LEN];
                                 QUIL_BUFFER_LEN = 0;
                                 QUIL_CURSOR_POS = 0;
@@ -2177,6 +2316,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                                 // first save names + creates its object.
                                 QUIL_DOC_ID = u64::MAX;
                                 QUIL_DOC_TITLE = *b"UNTITLED\0\0\0\0\0\0\0\0";
+                                quil_fresh_source();
                                 draw_text_lines(&QUIL_BUFFER[..0]);
                             }
                             serial_println!("[quil.new.ok] bytes=0");
@@ -2396,7 +2536,7 @@ unsafe fn run_quil_save_open_sexobject_proof(readiness_yields: u64) {
                         reply = Some(msg.arg0);
                         break;
                     }
-                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                    Some(msg) if msg.type_id == OP_HID_EVENT && msg.caller_pd==3 && msg.caller_task==3 => {
                         if HID_STASH_COUNT < HID_STASH_CAPACITY {
                             let idx = HID_STASH_COUNT;
                             HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
@@ -2463,7 +2603,7 @@ unsafe fn run_quil_save_open_sexobject_proof(readiness_yields: u64) {
                         reply = Some(msg.arg0);
                         break;
                     }
-                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                    Some(msg) if msg.type_id == OP_HID_EVENT && msg.caller_pd==3 && msg.caller_task==3 => {
                         if HID_STASH_COUNT < HID_STASH_CAPACITY {
                             let idx = HID_STASH_COUNT;
                             HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
@@ -2560,7 +2700,7 @@ unsafe fn run_text_input_pipeline_proof(palette_active: &mut bool, selected_row:
     let stash_count = HID_STASH_COUNT;
     for i in 0..stash_count {
         let (scancode, value, _arg2) = HID_STASH[i];
-        quil_dispatch_palette_key(scancode, value, palette_active, selected_row);
+        quil_dispatch_stashed(scancode,value,_arg2,palette_active,selected_row);
     }
     HID_STASH_COUNT = 0;
 
@@ -2660,7 +2800,7 @@ unsafe fn run_live_usb_quil_create_save_reopen_proof(
     let stash_count = HID_STASH_COUNT;
     for i in 0..stash_count {
         let (scancode, value, _arg2) = HID_STASH[i];
-        quil_dispatch_palette_key(scancode, value, palette_active, selected_row);
+        quil_dispatch_stashed(scancode,value,_arg2,palette_active,selected_row);
     }
     HID_STASH_COUNT = 0;
 
@@ -2713,7 +2853,7 @@ unsafe fn run_live_usb_quil_create_save_reopen_proof(
                         reply = Some(msg.arg0);
                         break;
                     }
-                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                    Some(msg) if msg.type_id == OP_HID_EVENT && msg.caller_pd==3 && msg.caller_task==3 => {
                         if HID_STASH_COUNT < HID_STASH_CAPACITY {
                             let idx = HID_STASH_COUNT;
                             HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
@@ -2777,7 +2917,7 @@ unsafe fn run_live_usb_quil_create_save_reopen_proof(
                         reply = Some(msg.arg0);
                         break;
                     }
-                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                    Some(msg) if msg.type_id == OP_HID_EVENT && msg.caller_pd==3 && msg.caller_task==3 => {
                         if HID_STASH_COUNT < HID_STASH_CAPACITY {
                             let idx = HID_STASH_COUNT;
                             HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
@@ -2936,6 +3076,7 @@ pub extern "C" fn _start() -> ! {
 
     // ── Initialize mutable buffer ─────────────────────────────────────────
     init_buffer();
+    unsafe{assert!(QUIL_CLIPBOARD.bind(sex_pdx::clipboard::Participant::from_catalog(catalog).expect("QUIL_CLIPBOARD_AUTHORITY")));quil_selection_bind();}
 
     // ── APP_SURFACE_PACK_V1: own visible content surface (0xEC binds this
     // PD as owner; every draw site targets quil_content_sid() now) ──────────
@@ -3028,7 +3169,7 @@ pub extern "C" fn _start() -> ! {
                 let (scancode, value, _arg2) = HID_STASH[i];
                 serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
                     i, scancode, value, _arg2);
-                quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
             }
             HID_STASH_COUNT = 0;
             serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3080,7 +3221,7 @@ pub extern "C" fn _start() -> ! {
                     let (scancode, value, _arg2) = HID_STASH[i];
                     serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
                         i, scancode, value, _arg2);
-                    quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                    quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
                 }
                 HID_STASH_COUNT = 0;
                 serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3137,7 +3278,7 @@ pub extern "C" fn _start() -> ! {
                     let (scancode, value, _arg2) = HID_STASH[i];
                     serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
                         i, scancode, value, _arg2);
-                    quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                    quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
                 }
                 HID_STASH_COUNT = 0;
                 serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3258,7 +3399,7 @@ pub extern "C" fn _start() -> ! {
                     let (scancode, value, _arg2) = HID_STASH[i];
                     serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
                         i, scancode, value, _arg2);
-                    quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                    quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
                 }
                 HID_STASH_COUNT = 0;
                 serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3846,7 +3987,7 @@ pub extern "C" fn _start() -> ! {
                 let (scancode, value, _arg2) = HID_STASH[i];
                 serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
                     i, scancode, value, _arg2);
-                quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
             }
             HID_STASH_COUNT = 0;
             serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3902,6 +4043,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[quil.nonblocking_startup.begin]");
     serial_println!("[quil.nonblocking_startup.no_startup_block] ok=1");
 
+    unsafe{quil_selection_bind();}
     loop {
         // ── Nonblocking startup markers (first iteration only) ────────────
         unsafe {
@@ -3935,7 +4077,7 @@ pub extern "C" fn _start() -> ! {
                     for i in 0..stash_count {
                         let (scancode, value, _arg2) = HID_STASH[i];
                         serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}", i, scancode, value, _arg2);
-                        quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                        quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
                     }
                     HID_STASH_COUNT = 0;
                     serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3967,7 +4109,7 @@ pub extern "C" fn _start() -> ! {
                     for i in 0..stash_count {
                         let (scancode, value, _arg2) = HID_STASH[i];
                         serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}", i, scancode, value, _arg2);
-                        quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                        quil_dispatch_stashed(scancode,value,_arg2,&mut palette_active,&mut selected_row);
                     }
                     HID_STASH_COUNT = 0;
                     serial_println!("[quil.hid.replay.done] count={}", stash_count);
@@ -3988,7 +4130,9 @@ pub extern "C" fn _start() -> ! {
         unsafe{DOCUMENT_WORKSPACE.poll(|args|sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::WORKSPACE_CHANGED,args[0],args[1],args[2]).map(|_|()));}
         unsafe{DOCUMENT_DISPLAY.poll(quil_content_sid(),|op,sid,a,b|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op,sid,a,b).map(|_|()),|paint,bytes|sex_pdx::serial_record!("[quil.ui.admitted] paint={} bytes={} presentation=unconfirmed",paint,bytes));}
         unsafe{if let Some(event)=DOCUMENT_IO.step(|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::document::OP,r.header(),r.a,r.b).map(|_|())){document_event(event,&mut palette_active);}}
-        let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_WORKSPACE.pending()||DOCUMENT_OPEN} {
+        unsafe{QUIL_CLIPBOARD.poll(sex_pdx::get_ticks(),|packet|match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,packet.opcode,packet.args[0],packet.args[1],packet.args[2]){Ok(_)=>sex_pdx::clipboard_client::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sex_pdx::clipboard_client::Admission::Full,Err(_)=>sex_pdx::clipboard_client::Admission::Rejected});}
+        quil_clipboard_events(palette_active);
+        let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_WORKSPACE.pending()||DOCUMENT_OPEN||(QUIL_CLIPBOARD.pending()&&QUIL_CLIPBOARD.view()!=sex_pdx::clipboard_client::View::Uncertain)} {
             match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sched_yield();continue}}
         }else{pdx_listen_raw(0)};
         if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && matches!(catalog.target_pd,16|18) {
@@ -3999,16 +4143,20 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[app.surface.presented] target={} surface={} sequence=1 ok=1",catalog.target_pd,catalog.surface_id);
             continue;
         }
-        if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
+        if msg.caller_task==3 && sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire)) {
             sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire));
-            unsafe{sex_pdx::serial_record!("[quil.document.close] pending={}",DOCUMENT_IO.busy()as u8);DOCUMENT_WORKSPACE.close();DOCUMENT_IO.close();DOCUMENT_DISPLAY.close();DOCUMENT_NEXT_LOAD=None;DOCUMENT_OPEN=false;}
+            unsafe{sex_pdx::serial_record!("[quil.document.close] pending={}",DOCUMENT_IO.busy()as u8);DOCUMENT_WORKSPACE.close();DOCUMENT_IO.close();DOCUMENT_DISPLAY.close();DOCUMENT_NEXT_LOAD=None;DOCUMENT_OPEN=false;let clipboard_pending=QUIL_CLIPBOARD.pending();QUIL_CLIPBOARD.close();QUIL_SELECTION.clear();QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;sex_pdx::serial_record!("[quil.clipboard.closed] pending={} payload_erased=1 selection_cleared=1",clipboard_pending as u8);}
             sex_pdx::task_finish(0);
         }
 
 
-        if msg.type_id==sex_pdx::document_view::OP{unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;DOCUMENT_DISPLAY.rebind();DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
-        if msg.type_id==sex_pdx::document_view::ACTION{unsafe{if msg.caller_pd==3&&msg.arg0==((catalog.task_id as u64)<<32|catalog.target_pd as u64)&&msg.arg2>DOCUMENT_ACTION_SEQUENCE&&(1..=5).contains(&msg.arg1){DOCUMENT_ACTION_SEQUENCE=msg.arg2;sex_pdx::serial_record!("[quil.ui.pointer] action={} sequence={}",msg.arg1,msg.arg2);document_action(msg.arg1 as u8,&mut palette_active,&mut selected_row);}}continue;}
+        if sex_pdx::clipboard::response_opcode(msg.type_id){
+            unsafe{QUIL_CLIPBOARD.receive(sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task},msg.type_id,[msg.arg0,msg.arg1,msg.arg2],sex_pdx::get_ticks());}
+            quil_clipboard_events(palette_active);continue;
+        }
+        if msg.type_id==sex_pdx::document_view::OP{if msg.caller_task!=3{continue;}unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;DOCUMENT_DISPLAY.rebind();DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
+        if msg.type_id==sex_pdx::document_view::ACTION{unsafe{if msg.caller_pd==3&&msg.caller_task==3&&msg.arg0==((catalog.task_id as u64)<<32|catalog.target_pd as u64)&&msg.arg2>DOCUMENT_ACTION_SEQUENCE&&(1..=5).contains(&msg.arg1){DOCUMENT_ACTION_SEQUENCE=msg.arg2;sex_pdx::serial_record!("[quil.ui.pointer] action={} sequence={}",msg.arg1,msg.arg2);document_action(msg.arg1 as u8,&mut palette_active,&mut selected_row);}}continue;}
         if msg.type_id==1 && msg.caller_pd==1 {
             unsafe { if let Some((paint,bytes))=DOCUMENT_DISPLAY.receive(msg.caller_pd,msg.arg0) {sex_pdx::serial_record!("[quil.ui.applied] paint={} bytes={} pixels=unconfirmed",paint,bytes);continue;} }
         }
@@ -4034,6 +4182,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             OP_HID_EVENT => {
+                if msg.caller_pd!=3||msg.caller_task!=3 {continue;}
+                let Some(key)=sex_pdx::app_key::Key::decode(msg.arg0,msg.arg1,msg.arg2)else{continue};
                 // Physical keyboard proof: temporarily force palette off
                 // so keys route through scancode_to_char → text_buffer_append.
                 let saved_palette = palette_active;
@@ -4042,9 +4192,7 @@ pub extern "C" fn _start() -> ! {
                         palette_active = false;
                     }
                 }
-                let before=unsafe{sex_pdx::document::hash(&QUIL_BUFFER[..QUIL_BUFFER_LEN])};
-                quil_dispatch_palette_key(msg.arg0, msg.arg1, &mut palette_active, &mut selected_row);
-                unsafe{if before!=sex_pdx::document::hash(&QUIL_BUFFER[..QUIL_BUFFER_LEN]){QUIL_REVISION=QUIL_REVISION.saturating_add(1);sex_pdx::serial_record!("[quil.document.edit] revision={} pending={} bytes={}",QUIL_REVISION,DOCUMENT_IO.busy()as u8,QUIL_BUFFER_LEN);}}
+                quil_dispatch_key(key,&mut palette_active,&mut selected_row);
 
                 // Physical keyboard proof: check after each real key dispatch.
                 // Keys arrive through kernel PS/2 → sexinput → silk-shell → here.
@@ -4059,7 +4207,7 @@ pub extern "C" fn _start() -> ! {
             }
             sex_pdx::OP_QUIL_OPEN_DISK_DOC => {
                 // Only the existing BOOT shell route may choose a workspace object.
-                if msg.caller_pd==3 {let id=if msg.arg1==0{2}else{msg.arg1};document_load_start(id);}
+                if msg.caller_pd==3&&msg.caller_task==3 {let id=if msg.arg1==0{2}else{msg.arg1};document_load_start(id);}
             }
             _ => {
                 unsafe {

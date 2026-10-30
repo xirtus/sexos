@@ -42,22 +42,23 @@ def load_pixel_contract(root):
  echo={view:ast.literal_eval(value)for view,value in re.findall(r'network_probe::View::(\w+)=>\s*(b"[^"\n]*")',compose)}
  dns={view:ast.literal_eval(value)for view,value in re.findall(r'dns_probe::View::(\w+)=>append\([^\n]*,(b"[^"\n]*")\)',compose)}
  http={view:ast.literal_eval(value)for view,value in re.findall(r'http_probe::View::(\w+)=>\s*(b"[^"\n]*")',compose)}
- if 'self.ui.queue(&text.bytes[..text.len]'not in sources['app']or 'browser_view::compose('not in sources['app']:raise ValueError('Browser no longer publishes composed atomic snapshots')
+ if not any(call in sources['app']for call in('self.ui.queue(&text.bytes[..text.len]','self.ui.queue_selected(&text.bytes[..text.len]'))or 'browser_view::compose('not in sources['app']:raise ValueError('Browser no longer publishes composed atomic snapshots')
+ if 'self.ui.queue_selected(&text.bytes[..text.len]'in sources['app']and ('metadata,visible_selection)'not in sources['app']or 'visible_selection=f.selection'not in sources['app']):raise ValueError('Browser selected snapshot metadata binding changed')
  if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  if 'let dns_start=preview.len()+64'not in compose or 'let http_start=dns_start+64'not in compose or 'let body_start=http_start+64'not in compose:raise ValueError('production status extent layout changed')
  reader=sources['reader'].split('#[cfg(test)]',1)[0]
- dynamic_path='self.reader.render_path(self.http.document(),self.http.document_path())'in sources['app']
+ dynamic_path=any(call in sources['app']for call in('self.reader.render_path(self.http.document(),self.http.document_path())','self.reader.render_path_selected(self.http.document(),self.http.document_path(),self.selection.range())'))
  if not(dynamic_path or 'self.reader.render(self.http.document())'in sources['app'])or 'selected:http_view_code(self.http.view())|256'not in sources['app']:raise ValueError('production full document reader binding changed')
  if dynamic_path and('host.iter().chain(b" ").chain(path)'not in reader or 'clean(*byte)'not in reader or '[browser.http.document]'not in sources['client']or 'positive_release=1'not in sources['client']):raise ValueError('production released document/path rendering contract changed')
- if 'self.render_source(body,path,b"Plain HTTP / no TLS",HOST)'not in reader or 'put(&mut frame,0,header)'not in reader:raise ValueError('production plain reader source selection changed')
+ if not any(call in reader for call in('self.render_source(body,path,b"Plain HTTP / no TLS",HOST)','self.render_source(body,path,b"Plain HTTP / no TLS",HOST,selection)'))or 'put(&mut frame,0,header)'not in reader:raise ValueError('production plain reader source selection changed')
  if re.search(r'self\.anchor\s*=\s*info\.offset',reader)or 'pub fn source_anchor(&self)'not in reader:raise ValueError('production reader no longer retains requested source-byte anchor')
- reader_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),HOST\)')
+ reader_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),HOST(?:,selection)?\)')
  controls=[]
  for name in ('full','compact','minimal'):
   match=re.search(r'let '+name+r': &\[u8\] = if https \{ (b"[^"\n]*") \} else \{ (b"[^"\n]*") \}',reader)
   if not match:raise ValueError('missing source-bound reader '+name+' controls')
   controls.append(tuple(ast.literal_eval(value)for value in match.groups()))
- https_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),b"probe\.sexos\.test:46080"\)')
+ https_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),b"probe\.sexos\.test:46080"(?:,selection)?\)')
  https_headers=[https_header,b'HTTPS / lab root',b'Lab HTTPS',b'Lab TLS']
  source_literals={ast.literal_eval(value)for value in re.findall(r'(b"[^"\n]*")',reader)}
  if any(value not in source_literals for value in https_headers[1:]):raise ValueError('missing source-bound responsive laboratory header')
@@ -68,7 +69,7 @@ def load_pixel_contract(root):
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
-  request=literal('wire',r'const REQUEST: &\[u8\] = (b"[^"\n]*")'),color=number('app',r'self\.ui\.queue\(&text\.bytes\[\.\.text\.len\],(0x[0-9A-Fa-f]+)'),
+  request=literal('wire',r'const REQUEST: &\[u8\] = (b"[^"\n]*")'),color=number('app',r'self\.ui\.queue(?:_selected)?\(&text\.bytes\[\.\.text\.len\],(0x[0-9A-Fa-f]+)'),
   source_sha256={paths[key]:hashlib.sha256(value.encode()).hexdigest()for key,value in sources.items()})
 
 def overview_preview(body):

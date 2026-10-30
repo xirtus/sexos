@@ -1,6 +1,15 @@
 # Sustained alpha candidate and desktop continuation
 
-## Current checkpoint: accepted round 100; next 101
+## Current checkpoint: accepted round 101; next 102
+
+Browser and Quil now support keyboard selection and a finite capability-scoped clipboard over existing BOOT-sanctioned routes. Actual IPC sender task metadata accompanies the sender PD, and clients authenticate exact Shell3/task3. Full12288-byte Browser Copy replaces Quil’s selected draft atomically; capacity refusal and an empty clipboard after producer retirement preserve document bytes, caret and viewport. Save and user-selected cold reopen recover exact durable bytes. Status/name changes no longer scroll Quil’s unchanged document.
+
+Sealed J ISO `d3a7896947758e00f69d77870ae22730ebfa0dbb4b3a6732b077e780b627763d`, binding `e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85`;560 production/522 runner inputs. BUILD/GREEN_MASTER, 1,775 fresh frozen Rust executions, 698 frozen Python tests and ten fresh native boots pass. Both desktop profiles qualify clipboard/save/cold recovery; affected HTTPS reader and import/cold-recovery regressions also pass. Fresh independent replay checks actual pixels, exact serial prefixes, wire/endpoint bytes, sender/receipt joins, terminal custody and raw journals. Earlier failed candidates remain diagnostic. See the [round101 ledger](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) and [evidence](assets/sexos-alpha-r101-2026-10-30-evidence.json).
+
+Next102 removes premature standalone Spindle panes and makes launcher actions reflect Open, Restore, Bring Here or Focus on the actual live incarnation. Next103–107 improve fonts, readable text, input, assets and navigation;108 qualifies a representative connected desktop session. Active80–200 progress:22/121 accepted;102–200 (99 substantive rounds) remain.7 Open/23 Partial/System Proven false remain. A trusted-builtins QEMU alpha still requires its then-current image’s own sustained mixed session and recovery qualification. General online/physical daily-driver readiness remains unproven. GLOBAL_VAS, BOOT-only capability genesis, sex-pdx authority, PKU and exact terminal incarnations remain mandatory; SexOS is not Unix/POSIX.
+
+
+## Historical checkpoint: accepted round 100; next 101 at that time
 
 Browser reading views preserve the exact requested source byte through overview/resume and viewport reflow, show actual visible-line progress, and display seven body rows in tall views using the existing512-byte transaction. New bodies and explicit Clear reset the position; cleared content cannot reopen. These local actions issue no new network requests or capability grants.
 

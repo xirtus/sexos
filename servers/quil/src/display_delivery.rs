@@ -6,6 +6,7 @@ struct Batch {
     paint: u64,
     begun: bool,
     offset: usize,
+    selected: bool,
     awaiting: Option<u16>,
 }
 pub struct Outbox {
@@ -27,7 +28,13 @@ impl Outbox {
         if self.dead {
             return;
         }
-        if paint == 0 || paint > u32::MAX as u64 || text.len > 512 {
+        if paint == 0
+            || paint > u32::MAX as u64
+            || text.len > 512
+            || text
+                .selection
+                .is_some_and(|(start, end)| start >= end || end > text.len)
+        {
             self.close();
             return;
         }
@@ -40,6 +47,7 @@ impl Outbox {
             paint,
             begun: false,
             offset: 0,
+            selected: false,
             awaiting: None,
         };
         if self.active.is_none() {
@@ -69,10 +77,17 @@ impl Outbox {
     /// admission. Abandon any upload whose old surface binding was scrubbed;
     /// only a newly rendered, strictly newer paint may resume publication.
     pub fn rebind(&mut self) {
-        if self.dead {return;}
-        if let Some(b)=self.active.as_mut(){b.text.bytes.fill(0);}
-        if let Some(b)=self.latest.as_mut(){b.text.bytes.fill(0);}
-        self.active=None;self.latest=None;
+        if self.dead {
+            return;
+        }
+        if let Some(b) = self.active.as_mut() {
+            b.text.bytes.fill(0);
+        }
+        if let Some(b) = self.latest.as_mut() {
+            b.text.bytes.fill(0);
+        }
+        self.active = None;
+        self.latest = None;
     }
     pub fn close(&mut self) {
         if let Some(b) = &mut self.active {
@@ -128,10 +143,28 @@ impl Outbox {
                     count,
                     bytes,
                 }
+            } else if !b.selected && b.text.selection.is_some() {
+                let (start, end) = b.text.selection.unwrap();
+                sex_pdx::text_batch::Request::Select {
+                    sequence: b.paint as u32,
+                    start,
+                    end,
+                }
             } else {
+                let hash = if let Some((start, end)) = b.text.selection {
+                    let Some(hash) =
+                        sex_pdx::text_batch::selected_hash(&b.text.bytes[..b.text.len], start, end)
+                    else {
+                        self.close();
+                        return;
+                    };
+                    hash
+                } else {
+                    sex_pdx::text_batch::hash(&b.text.bytes[..b.text.len])
+                };
                 sex_pdx::text_batch::Request::Commit {
                     sequence: b.paint as u32,
-                    hash: sex_pdx::text_batch::hash(&b.text.bytes[..b.text.len]),
+                    hash,
                 }
             };
             let (op, a, packed) = request.wire();
@@ -148,6 +181,8 @@ impl Outbox {
                 b.begun = true;
             } else if b.offset < b.text.len {
                 b.offset += (b.text.len - b.offset).min(8);
+            } else if !b.selected && b.text.selection.is_some() {
+                b.selected = true;
             } else {
                 done(b.paint, b.text.len);
                 b.awaiting = Some(surface);

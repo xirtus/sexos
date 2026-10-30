@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 SPEC_PATH="$ROOT_DIR/sexos_build_spec.toml"
 ABI_INPUTS=(
   kernel/src/syscalls/mod.rs
+  kernel/src/interrupts.rs
   kernel/src/capability_slot.rs
   kernel/src/capability.rs
   kernel/src/boot_network_state.rs
@@ -41,6 +42,10 @@ ABI_INPUTS=(
   crates/sex-pdx/src/spindle_history.rs
   crates/sex-pdx/src/desktop_style.rs
   crates/sex-pdx/src/text_batch.rs
+  crates/sex-pdx/src/text_selection.rs
+  crates/sex-pdx/src/clipboard.rs
+  crates/sex-pdx/src/clipboard_client.rs
+  crates/sex-pdx/src/app_key.rs
   crates/sex-pdx/src/bitmap_batch.rs
   crates/sex-pdx/src/document_view.rs
   crates/sex-pdx/src/document.rs
@@ -51,6 +56,8 @@ ABI_INPUTS=(
   kernel/src/app_resources.rs
   kernel/src/fault_transaction.rs
   kernel/src/ipc/messages.rs
+  kernel/src/ipc.rs
+  kernel/src/ipc/sender.rs
   kernel/src/ipc/router.rs
 )
 

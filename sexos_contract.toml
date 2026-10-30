@@ -3,8 +3,8 @@
 
 [contract]
 name = "sexos-ipc-abi"
-version = "1.0.0"
-date = "2026-04-28"
+version = "1.1.0"
+date = "2026-10-30"
 
 [ipc]
 transport = "register-only"
@@ -20,6 +20,11 @@ value_reg = "rsi"
 syscall = 28
 type_id_reg = "rax"
 caller_pd_reg = "rsi"
+caller_task_reg = "rdi"
+caller_task_return = "SyscallRegs-RDI-offset8-copied-to-saved-RDI-offset96-before-final-return-pop"
+sender = "actual-current-PD-and-scheduled-task-stamped-at-enqueue;task-context-must-match-PD"
+kernel_sender = "explicit-kernel-generated-notices-use-PD0-task0;legacy-IRQ-messages-have-task0"
+caller_task_scope = "scalar-u32-transport-provenance-not-a-capability;no-legacy-struct-return-pointer"
 arg0_reg = "rdx"
 arg1_reg = "r10"
 arg2_reg = "r8"
@@ -29,7 +34,7 @@ empty_type_id = 0
 syscall = 29
 input = "rdi-exact-target-domain,rsi-value"
 output = "rax-zero-enqueued-or-one-failure"
-receive = "type1-arg0-value-caller-actual-sending-domain-captured-by-kernel"
+receive = "type1-arg0-value-caller-actual-sending-domain-and-task-captured-by-kernel"
 backpressure = "single-slot-full-rejects-without-overwriting-existing-reply;caller-retries"
 authority_limit = "legacy-target-directed-return-path;sender-provenance-is-authenticated-not-a-return-capability"
 
@@ -41,6 +46,26 @@ authority = "no-target-domain-no-cross-domain-wake"
 wait_condition = "self-message-ring-or-reply-pending-handshake"
 fault_wait = "ordinary-message-or-IRQ-wake-cannot-complete-pager-request"
 
+[ipc.clipboard]
+transport = "existing-BOOT-held-Domain-routes;register-only;no-caller-pointers"
+authority = "Shell-held-lifecycle-catalog-and-fresh-live-query-plus-actual-IPC-sender-PD-task;focus-selects-input-destination-only"
+participants = "Quil-PD9-surface156,PD16-surface301,PD18-surface307-publish-read;Browser-PD15-surface300-publish-only;exact-catalog-tasks"
+capacity = 12288
+operations = "0x280-Intent,0x281-Begin,0x282-Write,0x283-Read,0x284-Get,0x285-Finish,0x286-Cancel,0x287-Meta,0x288-Data,0x289-Query,0x28a-Publish"
+payload = "ordered-sixteen-byte-register-chunks;ASCII-printable-or-LF;checked-whole-length-and-integrity-hash;no-truncation"
+interaction = "Shell-issued-nonwrapping-ticket;one-global-unfinished-transaction;exact-subject-receipts;Full-retains-unsent-packet"
+effects = "Publish-atomic-after-complete-stage;accepted-mutations-never-replayed;Query-only-reemits-retained-receipt;Cancel-does-not-rollback-publication"
+handoff = "positive-Finish-receipt-admission-completes-read-transfer;source-retirement-before-Finish-admission-invalidates-read;completed-transfer-survives-later-source-retirement"
+cleanup = "permanent-exact-incarnation-fence-before-Shell-terminal-ACK;volatile-whole-buffer-and-pending-payload-erasure;old-producer-retirement-preserves-newer-publication"
+editor = "paste-or-cut-applies-once-only-if-source-generation-revision-and-selection-snapshot-unchanged;capacity-subtracts-replaced-bytes;one-undo-revision-dirty-change"
+key_data = "exact-catalog-destination-FIFO;complete-Control-Shift-snapshot;actual-Shell-main-task-authentication-before-app-key-decoding"
+
+[ipc.text_selection]
+transport = "legacy-text-Begin-Chunk-Commit-plus-optional-0x28b-Select"
+selection = "sequence-u32-and-checked-rendered-byte-range-within512-byte-batch;canonical-empty0-0"
+commit = "Select-after-complete-chunks;styled-hash-binds-body-length-and-range;atomic-with-text;legacy-Commit-clears-old-selection"
+render = "owned-surface-scalar-compositor-highlights-selected-cells-under-glyphs;source-byte-ranges-exclude-reader-chrome"
+
 # Reject full register-width aliases before any lookup or side effect.
 # This validates identity; it does not supply operation-specific authority.
 [ipc.selectors]
@@ -51,7 +76,7 @@ reply_domain_id = "exact-u64-below-MAX_DOMAINS-then-registry-lookup"
 memlend_destination = "obsolete-operation-denied-no-allocation"
 validated_syscalls = [0, 28, 29, 43, 50, 51, 54, 55]
 invalid_call = "ERR_CAP_INVALID-with-value-zero"
-invalid_listen = "empty-all-output-registers-zero"
+invalid_listen = "empty-all-output-registers-zero-including-caller-task-rdi"
 invalid_reply = 1
 invalid_pci_or_memlend = "u64::MAX"
 

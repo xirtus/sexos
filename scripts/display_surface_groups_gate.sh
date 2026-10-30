@@ -23,7 +23,7 @@ assert 'if let Some(index)=vacant {' in s and 'TEXT_STAGES[index].reset();' in s
 destroy=s[s.index('                0xEE => {'):s.index('                0xF5 => {')]
 assert destroy.index('TEXT_STAGES[index].reset();')<destroy.index('*slot = SURFACE_EMPTY;')
 assert 'text_damage.rect().filter(|_| fb_live && !transaction_full_render)' in s
-assert '0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D)' in s
+assert '0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B)' in s
 fill=s[s.index('                0xEF => {'):s.index('                sex_pdx::bitmap_batch::BEGIN')]
 assert 'fill_damage::update(slot,rect_index,sx,sy,sw,sh,color)' in fill
 assert fill.index('slot.owner_pd != msg.caller_pd')<fill.index('fill_damage::update(')

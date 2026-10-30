@@ -93,7 +93,8 @@ pub struct PdxMessage {
     pub arg1:      u64,
     pub arg2:      u64,
     pub caller_pd: u32,
-    _pad:          u32,
+    /// Kernel-stamped actual scheduled sender; zero for explicit kernel/IRQ messages.
+    pub caller_task: u32,
 }
 
 #[repr(C)]
@@ -276,6 +277,7 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
     loop {
         let type_id: u64;
         let caller_pd: u64;
+        let caller_task: u64;
         let arg0: u64;
         let arg1: u64;
         let arg2: u64;
@@ -283,7 +285,7 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             core::arch::asm!(
                 "syscall",
                 in("rax") 28u64,
-                in("rdi") slot,
+                inlateout("rdi") slot => caller_task,
                 lateout("rax") type_id,    // 0 = EMPTY, non-zero = valid
                 lateout("rsi") caller_pd,
                 lateout("rdx") arg0,
@@ -312,7 +314,7 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             arg1,
             arg2,
             caller_pd: caller_pd as u32,
-            _pad: 0,
+            caller_task: u32::try_from(caller_task).unwrap_or(0),
         };
     }
 }
@@ -321,6 +323,7 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
 pub fn pdx_try_listen_raw(slot: u64) -> Option<PdxMessage> {
     let type_id: u64;
     let caller_pd: u64;
+    let caller_task: u64;
     let arg0: u64;
     let arg1: u64;
     let arg2: u64;
@@ -328,7 +331,7 @@ pub fn pdx_try_listen_raw(slot: u64) -> Option<PdxMessage> {
         core::arch::asm!(
             "syscall",
             in("rax") 28u64,
-            in("rdi") slot,
+            inlateout("rdi") slot => caller_task,
             lateout("rax") type_id,
             lateout("rsi") caller_pd,
             lateout("rdx") arg0,
@@ -350,7 +353,7 @@ pub fn pdx_try_listen_raw(slot: u64) -> Option<PdxMessage> {
             arg1,
             arg2,
             caller_pd: caller_pd as u32,
-            _pad: 0,
+            caller_task: u32::try_from(caller_task).unwrap_or(0),
         })
     }
 }
@@ -1035,4 +1038,8 @@ pub mod document_view;
 pub mod display_boot;
 
 pub mod text_batch;
+pub mod text_selection;
+pub mod clipboard;
+pub mod clipboard_client;
+pub mod app_key;
 pub mod bitmap_batch;

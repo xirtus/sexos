@@ -3,6 +3,8 @@
 pub const BEGIN: u64 = 0x276;
 pub const CHUNK: u64 = 0x277;
 pub const COMMIT: u64 = 0x278;
+/// Optional final metadata, after all chunks and before Commit.
+pub const SELECT: u64 = 0x28b;
 pub const CAPACITY: usize = 512;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -16,6 +18,11 @@ pub enum Request {
         offset: usize,
         count: usize,
         bytes: [u8; 8],
+    },
+    Select {
+        sequence: u32,
+        start: usize,
+        end: usize,
     },
     Commit {
         sequence: u32,
@@ -54,6 +61,12 @@ impl Request {
                     bytes,
                 })
             }
+            SELECT if a != 0 && a <= u32::MAX as u64 && b >> 32 == 0 => {
+                let start = (b & 0xffff) as usize;
+                let end = (b >> 16) as usize;
+                (start <= end && end <= CAPACITY && (start != end || start == 0))
+                    .then_some(Self::Select { sequence: a as u32, start, end })
+            }
             COMMIT if a != 0 && a <= u32::MAX as u64 => Some(Self::Commit {
                 sequence: a as u32,
                 hash: b,
@@ -78,6 +91,7 @@ impl Request {
                 u64::from_le_bytes(bytes),
                 (sequence as u64) << 32 | (offset as u64) << 8 | count as u64,
             ),
+            Self::Select { sequence, start, end } => (SELECT, sequence as u64, start as u64 | (end as u64) << 16),
             Self::Commit { sequence, hash } => (COMMIT, sequence as u64, hash),
         }
     }
@@ -86,6 +100,21 @@ pub fn hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |h, &v| {
         (h ^ v as u64).wrapping_mul(0x100000001b3)
     })
+}
+
+/// Integrity binding for an optional Select transaction. This is a corruption
+/// check, never authentication. A styled transaction cannot use the legacy hash.
+pub fn selected_hash(bytes: &[u8], start: usize, end: usize) -> Option<u64> {
+    if bytes.len() > CAPACITY || start > end || end > bytes.len()
+        || (start == end && start != 0) { return None; }
+    let mut h = hash(bytes);
+    for byte in b"SEXOS-TEXT-SELECT-v1".iter().copied()
+        .chain((bytes.len() as u16).to_le_bytes())
+        .chain((start as u16).to_le_bytes())
+        .chain((end as u16).to_le_bytes()) {
+        h = (h ^ byte as u64).wrapping_mul(0x100000001b3);
+    }
+    Some(h)
 }
 
 /// Text state was atomically applied by display. This is not a pixel receipt.

@@ -30,6 +30,11 @@ pub const LIVE: u64 = 5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CatalogInfo { pub target_pd: u32, pub task_id: u32, pub surface_id: u64, pub coordinator_pd: u32 }
 impl CatalogInfo {
+    /// Compare authenticated IPC metadata with this already validated held
+    /// lifecycle catalog. The numbers are correlation data, not capabilities.
+    pub fn is_sender(self, caller_pd:u32, caller_task:u32)->bool {
+        caller_pd!=0 && caller_task!=0 && self.target_pd==caller_pd && self.task_id==caller_task
+    }
     /// A successful kernel catalog query binds the exact task. Numeric domain
     /// and task identifiers are separate namespaces; zero is never a subject.
     pub fn is_subject(self,target:u32,surface:u64,coordinator:u32)->bool {

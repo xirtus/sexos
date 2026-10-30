@@ -255,7 +255,7 @@ pub fn poll_exit_notifications(){
             if app.hinted&bit!=0 && now.wrapping_sub(app.last_hint[recipient])<16{continue}
             let holder=if recipient==5{app.pager}else{app.services[recipient]};
             let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder)else{continue};
-            let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::app_lifecycle::OP_APP_EXIT,arg0:app.target as u64,arg1:app.task as u64,arg2:0,caller_pd:0};
+            let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::app_lifecycle::OP_APP_EXIT,arg0:app.target as u64,arg1:app.task as u64,arg2:0,caller_pd:0,caller_task:0};
             // Back off full queues too; every unsuccessful attempt remains pending.
             app.hinted|=bit;app.last_hint[recipient]=now;
             if unsafe{(*pd.message_ring).enqueue(msg)}.is_ok(){

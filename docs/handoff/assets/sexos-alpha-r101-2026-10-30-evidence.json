@@ -1,0 +1,304 @@
+{
+  "round": 101,
+  "accepted": true,
+  "accepted_goal_rounds": 22,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 99,
+  "iso_sha256": "d3a7896947758e00f69d77870ae22730ebfa0dbb4b3a6732b077e780b627763d",
+  "kernel_sha256": "6b207149fdb0b9633e97dad4b1756602beca453394ab4b638f453665e7586608",
+  "binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 560,
+  "runner_inputs": 522,
+  "checks": {
+    "master": "BUILD PASS / GREEN_MASTER",
+    "rust": [
+      {
+        "name": "service-custody",
+        "path": "/tmp/sexos-r101-j-frozen-service-custody.log",
+        "executions": 1734,
+        "sha256": "6b7c571559f18e45fb752c5a782b947937379d85f07797c274659c97f0c225d4"
+      },
+      {
+        "name": "display",
+        "path": "/tmp/sexos-r101-j-frozen-display.log",
+        "executions": 41,
+        "sha256": "92724ac4bf6be81b2536778edd9f913d49e80966221bde0caa4a83620f99452f"
+      }
+    ],
+    "rust_test_executions": 1775,
+    "python_tests": 698,
+    "python_log_sha256": "b3b85987354784342ab5c7bb02c2c683294d45be983cef0734caadf014b7bb5f",
+    "native_runs": 6,
+    "native_boots": 10,
+    "root_replay_sha256": "2d4102f91c5051dcf3e2d3e5bf2a02b9d70a32eff5fffeec2f693dcf335fae72",
+    "scalar_audit": {
+      "ok": true,
+      "iso_sha256": "d3a7896947758e00f69d77870ae22730ebfa0dbb4b3a6732b077e780b627763d",
+      "elf_sha256": "6cdabe3a474abbe25ce1857799f1d44097e06d97c7faade422d07cbd9c601e77",
+      "disassembly_sha256": "2cb9a535da3e2da2415a18d32f3bed12a9dc33fc73a1a2011591e274611fd02b",
+      "instructions": 88174,
+      "vector_or_fp_matches": [],
+      "scope": "Decoded ISO-extracted Browser operands and inspected floating-point/state mnemonics only; no runtime stack/register/cache-erasure, scheduler, hostile containment or whole-image instruction proof."
+    }
+  },
+  "qualification_runs": [
+    {
+      "name": "clipboard-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r101-j-native-clipboard-wide",
+      "driver": "/tmp/sexos-r101-j-native-clipboard-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r101-j-native-clipboard-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "source_binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+      "seconds": 37.39806545898318
+    },
+    {
+      "name": "clipboard-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r101-j-native-clipboard-compact",
+      "driver": "/tmp/sexos-r101-j-native-clipboard-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r101-j-native-clipboard-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 2,
+      "source_binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+      "seconds": 27.037253833957948
+    },
+    {
+      "name": "https-reader-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r101-j-native-https-reader-wide",
+      "driver": "/tmp/sexos-r101-j-native-https-reader-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source/scripts/https_document_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r101-j-native-https-reader-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--mode",
+        "ready"
+      ],
+      "mode": "ready",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+      "seconds": 18.512133957934566
+    },
+    {
+      "name": "https-reader-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r101-j-native-https-reader-compact",
+      "driver": "/tmp/sexos-r101-j-native-https-reader-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source/scripts/https_document_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r101-j-native-https-reader-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--mode",
+        "ready"
+      ],
+      "mode": "ready",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+      "seconds": 14.466025916975923
+    },
+    {
+      "name": "import-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r101-j-native-import-wide",
+      "driver": "/tmp/sexos-r101-j-native-import-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source/scripts/https_import_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r101-j-native-import-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "import-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "source_binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+      "seconds": 68.31370470800903
+    },
+    {
+      "name": "import-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r101-j-native-import-compact",
+      "driver": "/tmp/sexos-r101-j-native-import-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source/scripts/https_import_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r101-clipboard-j-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r101-j-native-import-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "import-recovery",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 2,
+      "source_binding_sha256": "e3d309122503dabbb56a4e78be29940b8f2bdbfda85b8e8e49312bb92cbf3c85",
+      "seconds": 60.045108374906704
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "label": "selection-wide",
+      "path": "assets/sexos-alpha-r101-2026-10-30-selection-wide.png",
+      "sha256": "0f0c2ce5bcb56c77b892efdb2498672d0305475611503e940b27523e0f41b297",
+      "run": "clipboard-wide",
+      "boot": "write",
+      "raw_ppm": "browser-reflow.ppm",
+      "raw_sha256": "15cab77767053c7a3626c7122ddc34e9d4288bb2559694d635848596947ba5e1",
+      "serial_bytes": 319964,
+      "serial_sha256": "4ab3b2217b3a3a62984e1bc4b5a1bf0cabc5f16d8f8742c6b362991e7c766d1d"
+    },
+    {
+      "label": "copy-compact",
+      "path": "assets/sexos-alpha-r101-2026-10-30-copy-compact.png",
+      "sha256": "8dd624662d4c52dbe1a5dae325f89facf9273a9b92af9761243ccb02cb76cc53",
+      "run": "clipboard-compact",
+      "boot": "write",
+      "raw_ppm": "browser-copied.ppm",
+      "raw_sha256": "c55c61bd3620cdd5460c1aa31e0089a4b1d0a8b7a47b720588664c20f7b3fc8f",
+      "serial_bytes": 335731,
+      "serial_sha256": "0607aa1b6581dbb8f0d6595c7d6fe2a488d373f84a69f6c02b7bf4a3770fd1cf"
+    },
+    {
+      "label": "capacity-compact",
+      "path": "assets/sexos-alpha-r101-2026-10-30-capacity-compact.png",
+      "sha256": "ec8e96317e80088ec2e9f336aeac9869b160e73376fe4780371f44570e3af8ad",
+      "run": "clipboard-compact",
+      "boot": "write",
+      "raw_ppm": "quil-capacity-rejected.ppm",
+      "raw_sha256": "0e8790e56f2939e658a33fa765cfa853ea328a779bd50d1f16e301f340f57dbc",
+      "serial_bytes": 352635,
+      "serial_sha256": "c5bea34171a786f359894a64a482eb871187786e11e655c78a33b0c5ca2bed58"
+    },
+    {
+      "label": "cold-compact",
+      "path": "assets/sexos-alpha-r101-2026-10-30-cold-compact.png",
+      "sha256": "85dc5bd7d537355795495846d471328a1729e595c0551ac16a679cc07fffaf30",
+      "run": "clipboard-compact",
+      "boot": "recovery",
+      "raw_ppm": "quil-cold-reopened.ppm",
+      "raw_sha256": "f8d9df90c2560ae014e030e25b643019c1b12ce454ccb16c41c2dd55b3ec5e70",
+      "serial_bytes": 290189,
+      "serial_sha256": "fe290a1ddc6c9a22617b3caec48bf892e351edc24ec38f1aa240004f17d10744"
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r101-2026-10-30-qualified-raw.tar.gz",
+    "sha256": "906aa39c891249ca48e66f4648e589c6bbf90a57dc75f590f3b5cf0c44f04e82",
+    "members": 1426,
+    "verified": true,
+    "bytes": 8454396
+  },
+  "failed_diagnostics": "C syscall RDI return defect; D trailing UTF8 runner boundary; E input ordering; F focus; G y50/fresh viewport checker; H unsupported test-name key; I real status-driven viewport drift. None accepted; final J reruns both clipboard profiles and affected regressions.",
+  "limitations": [
+    "Selection and payload are bounded ASCII/LF, at most12288 bytes, with keyboard selection only.",
+    "Native proves full Browser Copy\u2192Quil Paste, capacity refusal, producer terminal retirement, empty subsequent read, Save and cold reopen; Cut/races/Full/forged sender cases are actual-function host checks, not hostile native certification.",
+    "Exact incarnation/catalog routes and scalar sender metadata do not themselves prove hostile PKU containment, raw pointer route removal or whole-stack/register/cache erasure.",
+    "Laboratory DNS/HTTP and controlled pinned-root HTTPS regressions only; no public web/general CA qualification.",
+    "No crash/power-loss, physical hardware, SMP, sustained latest-image daily-driver, deterministic whole-system replay or System Proven claim."
+  ],
+  "scope": "One substantive round: authenticated finite cross-app selection/clipboard and stable rejected-paste layout, qualified on one exact sealed image with fresh host gates and ten native boots."
+}

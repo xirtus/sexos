@@ -13,7 +13,16 @@ pub enum Admission { Accepted, Full, Rejected(u64) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Poll { Idle, Pending, Deferred, Complete(Receipt), Rejected(u64) }
 #[derive(Clone, Copy)]
-struct Batch { bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool }
+struct Batch { bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool, selection:(u16,u16), selection_sent:bool }
+impl Batch {
+    fn erase(&mut self) {
+        for byte in &mut self.bytes {unsafe{core::ptr::write_volatile(byte,0);}}
+        unsafe {
+            core::ptr::write_volatile(&mut self.selection,(0,0));
+            core::ptr::write_volatile(&mut self.selection_sent,false);
+        }
+    }
+}
 pub struct Outbox { surface: u64, active: Option<Batch>, latest: Option<Batch>, atomic:bool, sequence:u32 }
 impl Outbox {
     pub const fn new(surface: u64) -> Self { Self { surface, active: None, latest: None, atomic:false, sequence:0 } }
@@ -21,10 +30,18 @@ impl Outbox {
     /// An oversized input leaves both existing batches untouched. Replacement
     /// affects only the not-yet-started batch, never interleaves active chunks.
     pub fn queue(&mut self, text: &[u8], color: u32, metadata: Metadata) -> bool {
+        self.queue_selected(text,color,metadata,(0,0))
+    }
+    /// Selection is part of the immutable atomic batch. Legacy text has no
+    /// selection encoding and explicitly rejects nonempty styled requests.
+    pub fn queue_selected(&mut self,text:&[u8],color:u32,metadata:Metadata,selection:(u16,u16))->bool {
+        let (start,end)=selection;
+        if start>end || end as usize>text.len() || (start==end && start!=0)
+            || (!self.atomic && selection!=(0,0)) {return false;}
         if text.len() > CAPACITY || self.atomic && (self.surface==0 || self.surface>u16::MAX as u64 || text.iter().any(|&b| b!=b'\n' && !(32..=126).contains(&b))) { return false; }
         let Some(sequence)=self.sequence.checked_add(1) else {return false;};
         self.sequence=sequence;
-        let mut batch = Batch { bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false };
+        let mut batch = Batch { bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false, selection, selection_sent:false };
         batch.bytes[..text.len()].copy_from_slice(text);
         if self.active.is_none() { self.active = Some(batch); self.latest = None; }
         else { self.latest = Some(batch); }
@@ -32,8 +49,8 @@ impl Outbox {
     }
     pub fn pending(&self) -> bool { self.active.is_some() || self.latest.is_some() }
     pub fn cancel(&mut self) {
-        if let Some(b)=self.active.as_mut(){b.bytes.fill(0);}
-        if let Some(b)=self.latest.as_mut(){b.bytes.fill(0);}
+        if let Some(b)=self.active.as_mut(){b.erase();}
+        if let Some(b)=self.latest.as_mut(){b.erase();}
         self.active=None;self.latest=None;
     }
     pub fn receive(&mut self,caller:u32,value:u64)->Option<Receipt> {
@@ -41,7 +58,7 @@ impl Outbox {
         let applied=sex_pdx::text_batch::Applied::decode(caller,value)?;
         let b=self.active.as_mut()?;
         if !b.awaiting || applied.surface as u64!=self.surface || applied.sequence!=b.sequence{return None;}
-        let receipt=Receipt{metadata:b.metadata,bytes:b.len};b.bytes.fill(0);self.active=None;Some(receipt)
+        let receipt=Receipt{metadata:b.metadata,bytes:b.len};b.erase();self.active=None;Some(receipt)
     }
     /// At most `budget` calls. Full preserves the exact operation; unexpected
     /// errors abandon only the active batch without a success receipt. A queued
@@ -54,10 +71,11 @@ impl Outbox {
             if b.awaiting {return Poll::Pending;}
             let chunk = (b.len - b.offset).min(8);
             let operation = if self.atomic {
-                use sex_pdx::text_batch::{Request,hash};
+                use sex_pdx::text_batch::{Request,hash,selected_hash};
                 let req=if !b.cleared {Request::Begin{sequence:b.sequence,len:b.len,color:b.color}}
                     else if b.offset<b.len {let mut bytes=[0;8];bytes[..chunk].copy_from_slice(&b.bytes[b.offset..b.offset+chunk]);Request::Chunk{sequence:b.sequence,offset:b.offset,count:chunk,bytes}}
-                    else {Request::Commit{sequence:b.sequence,hash:hash(&b.bytes[..b.len])}};
+                    else if b.selection!=(0,0) && !b.selection_sent {Request::Select{sequence:b.sequence,start:b.selection.0 as usize,end:b.selection.1 as usize}}
+                    else {Request::Commit{sequence:b.sequence,hash:if b.selection!=(0,0) {selected_hash(&b.bytes[..b.len],b.selection.0 as usize,b.selection.1 as usize).unwrap_or(0)} else {hash(&b.bytes[..b.len])}}};
                 let(opcode,packed,control)=req.wire();Operation{opcode,surface:self.surface,packed,control}
             } else if !b.cleared { Operation { opcode: 0xFA, surface: self.surface, packed: 0, control: 0 } }
                 else {
@@ -69,15 +87,17 @@ impl Outbox {
                 };
             match send(operation) {
                 Admission::Full => return Poll::Deferred,
-                Admission::Rejected(status) => { b.bytes.fill(0);self.active = None; return Poll::Rejected(status); }
+                Admission::Rejected(status) => { b.erase();self.active = None; return Poll::Rejected(status); }
                 Admission::Accepted => {
                     if self.atomic {
-                        if !b.cleared{b.cleared=true;}else if b.offset<b.len{b.offset+=chunk;}else{b.awaiting=true;}
+                        if !b.cleared{b.cleared=true;}else if b.offset<b.len{b.offset+=chunk;}
+                        else if b.selection!=(0,0) && !b.selection_sent {b.selection_sent=true;}else{b.awaiting=true;}
                         continue;
                     }
                     if !b.cleared { b.cleared = true; } else { b.offset += chunk; }
                     if b.offset == b.len {
                         let receipt = Receipt { metadata: b.metadata, bytes: b.len };
+                        b.erase();
                         self.active = None;
                         return Poll::Complete(receipt);
                     }

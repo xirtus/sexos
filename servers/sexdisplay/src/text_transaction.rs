@@ -1,5 +1,5 @@
 //! Display-private staging. Nothing in a partial transaction changes visible text.
-use sex_pdx::text_batch::{hash, Request, CAPACITY};
+use sex_pdx::text_batch::{hash, selected_hash, Request, CAPACITY};
 #[derive(Clone, Copy)]
 pub struct Stage {
     owner: u32,
@@ -8,6 +8,9 @@ pub struct Stage {
     len: usize,
     color: u32,
     coverage: u64,
+    selection_start: u16,
+    selection_end: u16,
+    selection_present: bool,
     sealed: bool,
     poisoned: bool,
     reply_pending: bool,
@@ -21,6 +24,9 @@ impl Stage {
         len: 0,
         color: 0,
         coverage: 0,
+        selection_start: 0,
+        selection_end: 0,
+        selection_present: false,
         sealed: false,
         poisoned: false,
         reply_pending: false,
@@ -28,11 +34,26 @@ impl Stage {
     };
     pub fn diagnostic(&self)->(u32,u64,u32,usize,u64,bool,bool){(self.owner,self.sid,self.sequence,self.len,self.coverage,self.sealed,self.poisoned)}
     pub fn reset(&mut self) {
+        // Explicitly erase inline text and selection before terminal reuse.
+        for byte in &mut self.bytes { unsafe { core::ptr::write_volatile(byte, 0); } }
+        unsafe {
+            core::ptr::write_volatile(&mut self.selection_start, 0);
+            core::ptr::write_volatile(&mut self.selection_end, 0);
+            core::ptr::write_volatile(&mut self.selection_present, false);
+        }
         *self = Self::EMPTY;
+    }
+    /// Only expose selection after the same transaction's successful commit.
+    pub fn selection(&self) -> (u16, u16) {
+        if self.sealed { (self.selection_start, self.selection_end) } else { (0, 0) }
+    }
+    fn complete(&self) -> u64 {
+        let chunks = (self.len + 7) / 8;
+        if chunks == 64 { u64::MAX } else { (1u64 << chunks) - 1 }
     }
     pub fn retire(&mut self, owner: u32) {
         if self.owner == owner {
-            *self = Self::EMPTY;
+            self.reset();
         }
     }
     /// One retained completion attempt per display pass. Actual reply transport
@@ -80,7 +101,7 @@ impl Stage {
                     return None;
                 }
                 if self.owner != owner || self.sid != sid {
-                    *self = Self::EMPTY;
+                    self.reset();
                 }
                 if sequence < self.sequence {
                     return None;
@@ -91,6 +112,7 @@ impl Stage {
                     }
                     return None;
                 }
+                self.reset();
                 *self = Self {
                     owner,
                     sid,
@@ -112,7 +134,7 @@ impl Stage {
                 {
                     return None;
                 }
-                if offset >= self.len
+                if self.selection_present || offset >= self.len
                     || offset % 8 != 0
                     || count != (self.len - offset).min(8)
                     || bytes[count..].iter().any(|&v| v != 0)
@@ -132,6 +154,19 @@ impl Stage {
                 self.bytes[offset..offset + count].copy_from_slice(&bytes[..count]);
                 self.coverage |= bit;
             }
+            Request::Select { sequence, start, end } => {
+                if (self.owner, self.sid, self.sequence) != (owner, sid, sequence)
+                    || self.sealed || self.poisoned { return None; }
+                if self.coverage != self.complete() || start > end || end > self.len
+                    || (start == end && start != 0)
+                    || (self.selection_present && (self.selection_start as usize, self.selection_end as usize) != (start, end)) {
+                    self.poisoned = true;
+                    return None;
+                }
+                self.selection_start = start as u16;
+                self.selection_end = end as u16;
+                self.selection_present = true;
+            }
             Request::Commit {
                 sequence,
                 hash: expected,
@@ -142,13 +177,10 @@ impl Stage {
                 {
                     return None;
                 }
-                let chunks = (self.len + 7) / 8;
-                let complete = if chunks == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << chunks) - 1
-                };
-                if self.coverage != complete || hash(&self.bytes[..self.len]) != expected {
+                let integrity = if self.selection_present {
+                    selected_hash(&self.bytes[..self.len], self.selection_start as usize, self.selection_end as usize)
+                } else { Some(hash(&self.bytes[..self.len])) };
+                if self.coverage != self.complete() || integrity != Some(expected) {
                     self.poisoned = true;
                     return None;
                 }

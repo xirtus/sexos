@@ -451,3 +451,34 @@ unsafe fn span_text_fill(index:usize) {
  // both outer edges; no dynamic allocation or pointer crosses an IPC boundary.
  assert!(core::mem::size_of::<surface_groups::RowWinners<'_>>()<=4096);
 }}
+
+#[test]fn actual_selection_cells_cover_spaces_and_spacing_skip_newlines_preserve_ink(){
+ let mut s=Surface{x:20,y:70,w:200,h:150,text_len:5,text_color:0xfffafafa,selection_start:0,selection_end:5,..SURFACE_EMPTY};
+ s.text_buf[..5].copy_from_slice(b"A \n B");recompute_text_lines(&mut s);
+ let scale=surface_text_scale(&s);let tx=20+desktop_style::INSET as usize;let ty=70+desktop_style::TEXT_TOP as usize;
+ // Full selected cells extend through spacing and baseline padding.
+ for row in[0,1]{for col in[0,1]{assert_eq!(surface_text_fg_at(tx+col*6*scale+5*scale,ty+row*9*scale+8*scale,&s),Some(0xff36577c));}}
+ assert_eq!(surface_text_fg_at(tx+2*6*scale,ty,&s),None); // newline cell
+ assert_eq!(surface_text_fg_at(tx+2*6*scale,ty+9*scale,&s),None); // past line end
+ let mut ink=0;for y in ty..ty+7*scale{for x in tx..tx+5*scale{if surface_text_fg_at(x,y,&s)==Some(0xfffafafa){ink+=1;}}}assert!(ink>0);
+ s.erase_selection();assert_eq!((s.selection_start,s.selection_end),(0,0));
+ assert_eq!(surface_text_fg_at(tx+6*scale,ty,&s),None);
+ // Legacy mutation also erases former selection so it cannot drift over bytes.
+ s.selection_end=5;assert!(legacy_text_clear(&mut s));assert_eq!((s.selection_start,s.selection_end),(0,0));
+ s.selection_end=1;assert!(legacy_text_draw(&mut s,b'X' as u64,legacy_args(0,1,0xfffafafa)));assert_eq!(s.selection_end,0);
+}
+#[test]fn selection_only_changes_match_full_and_incremental_compositor_and_clear_old_pixels(){unsafe{
+ for focus in[0,300]{let(w,h)=(320,260);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();BITMAP_STAGE=bitmap_transaction::Stage::EMPTY;
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x123456,text_len:16,text_color:0xfffafafa,..surf(15,300)};
+ SURFACES[0].text_buf[..16].copy_from_slice(b"alpha beta\ngamma");recompute_text_lines(&mut SURFACES[0]);
+ let mut actual=vec![0;w*h];for y in 0..h{for x in 0..w{actual[y*w+x]=composite_pixel(x,y,w,h,bg(y,h),focus);}}
+ for(start,end)in[(0,16),(3,8),(0,0)]{
+  SURFACES[0].selection_start=start;SURFACES[0].selection_end=end;
+  let mut d=damage::Damage::new();d.add(text_surface_damage(&SURFACES[0],w,h),w,h);
+  FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();redraw_surface_damage(actual.as_mut_ptr(),w,h,d.rect().unwrap());
+  assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);
+  for y in 0..h{for x in 0..w{assert_eq!(actual[y*w+x],composite_pixel(x,y,w,h,bg(y,h),focus),"focus={focus} selection={start}..{end} x={x} y={y}");}}
+ }
+ }
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}

@@ -1225,7 +1225,8 @@ fn recompute_text_lines(surf: &mut Surface) {
 
 // These mutate text data only; dispatch admits the exact live surface owner.
 fn legacy_text_clear(slot:&mut Surface)->bool{
-    let changed=slot.text_len!=0;
+    let changed=slot.text_len!=0 || slot.selection_start!=0 || slot.selection_end!=0;
+    slot.erase_selection();
     slot.text_len=0;slot.text_buf=[0u8;TEXT_BUF_CAP];
     slot.line_count=0;slot.wrap_cols=TEXT_LEGACY_COLS;
     changed
@@ -1234,7 +1235,8 @@ fn legacy_text_draw(slot:&mut Surface,packed:u64,arg2:u64)->bool{
     let offset=((arg2&0xFF)|((arg2>>4)&0xF00))as usize;
     let count=((arg2>>8)&0xF)as usize;
     let color=((arg2>>32)as u32)|0xFF000000;
-    let mut changed=slot.text_color!=color&&slot.text_len!=0;
+    let mut changed=(slot.text_color!=color&&slot.text_len!=0) || slot.selection_start!=0 || slot.selection_end!=0;
+    slot.erase_selection();
     slot.text_color=color;
     let mut i=0;
     while i<count&&i<8&&offset+i<TEXT_BUF_CAP{
@@ -1265,7 +1267,6 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     let px = ((x - tx) / scale) % (GLYPH_W + CHAR_SPACING);
     let py = ((y - ty) / scale) % (GLYPH_H + 2);
 
-    if px >= GLYPH_W || py >= GLYPH_H { return None; }
     if col >= surf.wrap_cols as usize { return None; }
     if row >= surf.line_count as usize { return None; }
 
@@ -1280,15 +1281,18 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     if char_idx >= end || char_idx >= surf.text_len as usize { return None; }
 
     let c = surf.text_buf[char_idx];
-    let glyph_idx = ascii_glyph_index(c)?;
-
+    if c == b'\n' { return None; }
+    // Selection belongs to this committed surface text. Paint the whole cell,
+    // including spaces and inter-glyph spacing, beneath existing foreground ink.
+    let selected = char_idx >= surf.selection_start as usize
+        && char_idx < surf.selection_end as usize
+        && surf.selection_end as usize <= surf.text_len as usize;
+    let background = if selected { Some(0xff36577c) } else { None };
+    if px >= GLYPH_W || py >= GLYPH_H { return background; }
+    let Some(glyph_idx) = ascii_glyph_index(c) else { return background; };
     let glyph_row = FONT_ASCII_5X7[glyph_idx][py];
     let bit = (glyph_row >> (GLYPH_W - 1 - px)) & 1;
-    if bit != 0 {
-        Some(surf.text_color)
-    } else {
-        None
-    }
+    if bit != 0 { Some(surf.text_color) } else { background }
 }
 
 /// Returns `Some(fg)` if pixel (x, y) is a clock-digit foreground pixel,
@@ -3163,7 +3167,7 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             if !lifecycle.caller_live(msg.caller_pd)
-                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D)
+                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B)
                     && !lifecycle.sid_live(msg.arg0)) {
                 unsafe {
                     static mut DEAD_CALL_LOG_BUDGET: u8 = 8;
@@ -3418,6 +3422,7 @@ pub extern "C" fn _start() -> ! {
                         for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if !slot.active {
                                 TEXT_STAGES[index].reset();
+                                slot.erase_selection();
                                 *slot = Surface {
                                     surface_id: 0,
                                     owner_pd: msg.caller_pd,
@@ -3429,6 +3434,7 @@ pub extern "C" fn _start() -> ! {
                                     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                     fill_color: [0u32; MAX_RECTS],
+                                    selection_start: 0, selection_end: 0,
                                     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
                                     line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
                                 };
@@ -3610,6 +3616,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 TEXT_STAGES[index].reset();
                                 BITMAP_STAGE.reset_surface(slot.owner_pd, target_id);
+                                slot.erase_selection();
                                 *slot = SURFACE_EMPTY;
                                 found = true;
                                 break;
@@ -3697,15 +3704,19 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::COMMIT => {
+                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::SELECT | sex_pdx::text_batch::COMMIT => {
                     let Some(request) = sex_pdx::text_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
                     unsafe {
                         for (index, slot) in SURFACES.iter_mut().enumerate() {
                             if !slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd { continue; }
                             if let Some((len,color,bytes)) = TEXT_STAGES[index].receive(msg.caller_pd,msg.arg0,request) {
-                                let changed = slot.text_len as usize != len || slot.text_color != color || slot.text_buf != *bytes;
+                                let mut changed = slot.text_len as usize != len || slot.text_color != color || slot.text_buf != *bytes;
                                 let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
                                 slot.text_buf = *bytes;
+                                let (selection_start, selection_end) = TEXT_STAGES[index].selection();
+                                changed |= (slot.selection_start, slot.selection_end) != (selection_start, selection_end);
+                                slot.selection_start = selection_start;
+                                slot.selection_end = selection_end;
                                 slot.text_len = len as u16;
                                 slot.text_color = color;
                                 recompute_text_lines(slot);

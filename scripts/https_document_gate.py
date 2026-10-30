@@ -112,7 +112,9 @@ def load_contract(root):
  for name in('scripts/https_document_gate.py','scripts/tls_exchange_gate.py','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','crates/sex-trust-config/src/lib.rs','crates/sex-http/src/lib.rs','crates/sex-http/src/codec.rs','apps/kaleidoscope/src/tls_exchange.rs','tests/fixtures/tls-controlled/server.pem','tests/fixtures/tls-controlled/server-PUBLIC-TEST-key.pem'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  reader=(root/'apps/kaleidoscope/src/document_reader.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text();view=(root/'apps/kaleidoscope/src/browser_view.rs').read_text()
- if 'self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080")'not in reader or 'self.reader.render_https(body,sex_tls::HTTPS_PATH)'not in app or 'selected:2|256|512'not in app:raise ValueError('source-bound authenticated HTTPS reader selection changed')
+ reader_calls=('self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080")','self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080",selection)')
+ app_calls=('self.reader.render_https(body,sex_tls::HTTPS_PATH)','self.reader.render_https_selected(body,sex_tls::HTTPS_PATH,self.selection.range())')
+ if not any(call in reader for call in reader_calls)or not any(call in app for call in app_calls)or 'selected:2|256|512'not in app:raise ValueError('source-bound authenticated HTTPS reader selection changed')
  if 'b"\\n\\nHTTPS / lab root: "'not in view or 'b"\\nB fetch V read Q clear"'not in view:raise ValueError('source-bound HTTPS status chrome changed')
  source=(root/'crates/sex-tls/src/lib.rs').read_text();meta=re.search(r'pub const PIPE_METADATA_BYTES\s*:\s*usize\s*=\s*(\d+)',source)
  if not meta or int(meta[1])!=56 or 'core::mem::size_of::<Pipe>()==PIPE_BYTES'not in source or 'PIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES'not in source:raise ValueError('source-bound x86_64 Pipe metadata/compile assertion differs')

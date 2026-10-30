@@ -71,7 +71,7 @@ pub fn poll_paging_exit_notifications(){
         let Ok(dead)=validate(watch)else{continue;};
         if watch.notice.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire).is_err(){continue;}
         let message=crate::ipc::messages::MessageType::IpcCall{
-            func_id:sex_pdx::paging::OP_TASK_EXIT,arg0:target as u64,arg1:dead.task_id as u64,arg2:0,caller_pd:0};
+            func_id:sex_pdx::paging::OP_TASK_EXIT,arg0:target as u64,arg1:dead.task_id as u64,arg2:0,caller_pd:0,caller_task:0};
         let accepted=unsafe{(*pager.message_ring).enqueue(message)}.is_ok();
         let _=watch.notice.compare_exchange(1,if accepted{2}else{0},Ordering::AcqRel,Ordering::Acquire);
         if accepted{

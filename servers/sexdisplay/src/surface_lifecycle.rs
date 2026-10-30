@@ -26,6 +26,8 @@ pub struct Surface {
     pub fill_color: [u32; MAX_RECTS],
     pub text_len: u16,
     pub text_color: u32,
+    pub selection_start: u16,
+    pub selection_end: u16,
     // TEXT_MODEL_V2: 512-byte text buffer (was 128). OP_TEXT_DRAW offset
     // extends past 255 via arg2 bits 12-15 (offset bits 8-11); legacy
     // senders leave those bits zero and behave identically.
@@ -40,6 +42,15 @@ pub struct Surface {
     pub wrap_cols: u8,
 }
 
+impl Surface {
+    pub fn erase_selection(&mut self) {
+        unsafe {
+            core::ptr::write_volatile(&mut self.selection_start, 0);
+            core::ptr::write_volatile(&mut self.selection_end, 0);
+        }
+    }
+}
+
 pub const MAX_SURFACES: usize = 16;
 pub const TEXT_BUF_CAP: usize = 512;
 pub const TEXT_MAX_ROWS: usize = 24;
@@ -51,6 +62,7 @@ pub const SURFACE_EMPTY: Surface = Surface {
     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
     fill_color: [0u32; MAX_RECTS],
+    selection_start: 0, selection_end: 0,
     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
     line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
 };
@@ -175,6 +187,7 @@ impl Lifecycle {
                 || (entry.catalog.frame_surface_id() == Some(surface.surface_id) && surface.owner_pd == entry.catalog.coordinator_pd) {
                 if refs.focused_sid == surface.surface_id { refs.focused_sid = 0; }
                 if refs.active_app_sid as u64 == surface.surface_id { refs.active_app_sid = 0; }
+                surface.erase_selection();
                 *surface = SURFACE_EMPTY;
                 count += 1;
             }

@@ -9,6 +9,8 @@ mod linen_async;
 mod desktop_content;
 mod linen_text_delivery;
 mod launcher;
+mod clipboard;
+mod app_input;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +31,103 @@ use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Kernel-catalog app ownership; retained after exit to fence queued messages.
 static mut APP_CUSTODY: [Option<app_custody::Entry>; sex_pdx::app_lifecycle::SLOTS.len()] = [None; sex_pdx::app_lifecycle::SLOTS.len()];
+static mut CLIPBOARD: clipboard::Broker = clipboard::Broker::new();
+static mut APP_INPUT: app_input::Queue = app_input::Queue::new();
+static mut CLIPBOARD_INTAKE:app_input::Intake=app_input::Intake::new();
+static mut APP_MODIFIERS: sex_pdx::app_key::Modifiers = sex_pdx::app_key::Modifiers::new();
+/// Fresh held-catalog and lifecycle checks, never a numeric target as authority.
+/// None is transient contention and must not turn into terminal retirement.
+unsafe fn clipboard_live(subject:sex_pdx::clipboard::Subject)->Option<bool> {
+    let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==subject.pd && e.task==subject.task) else{return Some(false)};
+    if e.dead || e.retired || e.close_pending {return Some(false)}
+    match sex_pdx::app_lifecycle::catalog(e.slot) {
+        Ok(c) if c.is_sender(subject.pd,subject.task) && c.is_subject(e.target,e.surface,3)=>{},
+        Err(sex_pdx::app_lifecycle::RETRY)=>return None,
+        _=>return Some(false),
+    }
+    match sex_pdx::app_lifecycle::info(e.slot) {
+        Err(sex_pdx::app_lifecycle::LIVE)=>Some(true),
+        Err(sex_pdx::app_lifecycle::RETRY)=>None,
+        _=>Some(false),
+    }
+}
+unsafe fn focused_clipboard_participant()->Option<sex_pdx::clipboard::Participant>{
+    let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(FOCUSED_SURFACE_ID)&&!e.dead&&!e.retired&&!e.close_pending)?;
+    let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
+    if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
+    sex_pdx::clipboard::Participant::from_catalog(c)
+}
+unsafe fn clipboard_receive(msg:&sex_pdx::PdxMessage)->bool {
+    if !sex_pdx::clipboard::request_opcode(msg.type_id){return false}
+    let subject=sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task};
+    // This explicit guard also denies unknown domains outside APP_CUSTODY.
+    if !APP_CUSTODY.iter().flatten().any(|e|e.target==subject.pd&&e.task==subject.task&&!e.dead&&!e.close_pending&&matches!(e.target,9|15|16|18)){
+        sex_pdx::serial_record!("[shell.clipboard.denied] pd={} task={} opcode={:#x} effects=0",subject.pd,subject.task,msg.type_id);return true;
+    }
+    if !CLIPBOARD_INTAKE.push(subject,sex_pdx::clipboard::Packet{opcode:msg.type_id,args:[msg.arg0,msg.arg1,msg.arg2]}){
+        sex_pdx::serial_record!("[shell.clipboard.intake.rejected] pd={} task={} opcode={:#x} effects=0",subject.pd,subject.task,msg.type_id);
+    }
+    clipboard_intake_poll();
+    true
+}
+unsafe fn clipboard_intake_poll(){
+    let Some((subject,packet))=CLIPBOARD_INTAKE.front()else{return};
+    match clipboard_live(subject){None=>{CLIPBOARD_INTAKE.defer();return},Some(false)=>{CLIPBOARD_INTAKE.pop();return},Some(true)=>{}}
+    if !clipboard_source_ready(){CLIPBOARD_INTAKE.defer();return}
+    // Producer retirement may have removed this front during the fresh query.
+    // Never dispatch its stale copy or pop another participant's survivor.
+    if CLIPBOARD_INTAKE.front()!=Some((subject,packet)){return}
+    if let Some(request)=sex_pdx::clipboard::Request::decode(packet.opcode,packet.args){
+        let result=CLIPBOARD.receive(subject,request,true,sex_pdx::get_ticks());
+        if !matches!(request,sex_pdx::clipboard::Request::Write{..}|sex_pdx::clipboard::Request::Get{..}){
+            sex_pdx::serial_record!("[shell.clipboard.request] pd={} task={} ticket={} opcode={:#x} result={:?}",subject.pd,subject.task,request.ticket(),packet.opcode,result);
+        }
+    }
+    CLIPBOARD_INTAKE.pop();
+}
+/// A consumer's liveness does not attest the producer. Refresh held producer
+/// custody before read processing and reply admission, including a queued
+/// positive Finish. Broker retirement replaces unfinished read receipts.
+unsafe fn clipboard_source_ready()->bool {
+    let Some(publication)=CLIPBOARD.publication()else{return true};
+    match clipboard_live(publication.owner){
+        None=>false,
+        Some(true)=>true,
+        Some(false)=>{CLIPBOARD.retire(publication.owner);APP_INPUT.retire(publication.owner);CLIPBOARD_INTAKE.retire(publication.owner);true},
+    }
+}
+unsafe fn clipboard_poll(){
+    let source_ready=clipboard_source_ready();
+    CLIPBOARD.poll(sex_pdx::get_ticks(),4,|p,packet|{
+        if !source_ready{return clipboard::Admission::Full}
+        match clipboard_live(p.subject){None=>return clipboard::Admission::Full,Some(false)=>return clipboard::Admission::Rejected(sex_pdx::ERR_CAP_INVALID),Some(true)=>{}}
+        let(status,_)=pdx_call(p.route,packet.opcode,packet.args[0],packet.args[1],packet.args[2]);
+        if status==0{clipboard::Admission::Accepted}else if status==sex_pdx::ERR_SERVICE_NOT_READY{clipboard::Admission::Full}else{clipboard::Admission::Rejected(status)}
+    });
+}
+unsafe fn app_input_poll(){
+    // Admission of an earlier Intent precedes later key events. The payload
+    // transaction itself never blocks ordinary typing or Close.
+    if CLIPBOARD.outbox_pending(){return}
+    let Some(item)=APP_INPUT.front() else{return};
+    match clipboard_live(item.destination.subject){None=>return,Some(false)=>{APP_INPUT.pop();return},Some(true)=>{}}
+    match item.input {
+        app_input::Input::Clipboard(action)=>{
+            let result=CLIPBOARD.issue(item.destination.subject,action,true,sex_pdx::get_ticks());
+            sex_pdx::serial_record!("[shell.clipboard.intent] pd={} task={} action={:?} result={:?}",item.destination.subject.pd,item.destination.subject.task,action,result);
+            if result==Err(sex_pdx::clipboard::Status::Busy){return}
+            APP_INPUT.pop();clipboard_poll();
+        },
+        app_input::Input::Key(key)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),1,EV_KEY);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            if item.destination.subject.pd==15&&status==0{
+                sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot=43 accepted=1",key.code);
+            }
+        },
+    }
+}
 unsafe fn shell_catalog_init() {
     for (i, slot) in sex_pdx::app_lifecycle::SLOTS.iter().copied().enumerate() {
         match sex_pdx::app_lifecycle::catalog(slot) {
@@ -36,6 +135,7 @@ unsafe fn shell_catalog_init() {
                 assert!(c.coordinator_pd == 3 && c.target_pd != 0 && c.task_id != 0 && c.surface_id != 0);
                 assert!(!APP_CUSTODY.iter().flatten().any(|e| e.target == c.target_pd || e.surface == c.surface_id));
                 APP_CUSTODY[i] = Some(app_custody::Entry::new(slot, c.target_pd, c.task_id, c.surface_id));
+                if sex_pdx::clipboard::Participant::from_catalog(c).is_some(){CLIPBOARD.register(c).expect("SHELL_CLIPBOARD_BOOT_PARTICIPANT");}
             }
             Err(sex_pdx::app_lifecycle::INVALID) => break,
             Err(_) => panic!("shell lifecycle catalog unavailable"),
@@ -95,6 +195,10 @@ unsafe fn shell_lifecycle_poll() {
             APP_CUSTODY[i] = Some(entry);
         }
         if !entry.retired {
+            let subject=sex_pdx::clipboard::Subject{pd:entry.target,task:entry.task};
+            CLIPBOARD.retire(subject);
+            APP_INPUT.retire(subject);
+            CLIPBOARD_INTAKE.retire(subject);
             let mut removed = shell_retire_app_surface(entry.surface);
             if let Some(alias) = entry.shell_surface() { removed += shell_retire_app_surface(alias); }
             entry.retired = true;
@@ -9879,15 +9983,28 @@ static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
 /// Runs before native text routing in both HID paths. Alt remains owned by
 /// the desktop, so changing focus cannot leave a modifier held in the old app.
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    let modifier=APP_MODIFIERS.observe(code,value);
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
-            if !COMMAND_PALETTE_OPEN&&FOCUSED_SURFACE_ID==300&&surface_is_alive(300)&&browser_input::command(code).is_some(){
-                if value==1{
-                    if !BROWSER_INPUT.push(code){sex_pdx::serial_record!("[shell.browser.input.full] capacity=8 accepted=0");}
-                    flush_browser_input();
+            if !COMMAND_PALETTE_OPEN {
+                if let Some(destination)=focused_clipboard_participant(){
+                    if modifier || value!=1{return true;}
+                    // Desktop function keys retain their existing Shell actions.
+                    if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
+                    let normalized=if destination.subject.pd==15 {
+                        let Some(c)=browser_input::command(code) else{return true};c
+                    }else{code};
+                    let key=APP_MODIFIERS.key(normalized);
+                    let input=if key.control {
+                        match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
+                    }else{app_input::Input::Key(key)};
+                    if !APP_INPUT.push(app_input::Item{destination,input}){
+                        sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
+                    }
+                    app_input_poll();return true;
                 }
-                true
-            }else{false}
+            }
+            false
         },
         desktop_keys::Action::Consume=>true,
         desktop_keys::Action::NextFrame=>{
@@ -23928,7 +24045,7 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         unsafe {flush_browser_input();}
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -24608,7 +24725,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || BROWSER_INPUT.len()!=0 || APP_INPUT.pending() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24617,6 +24734,7 @@ pub extern "C" fn _start() -> ! {
         };
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if clipboard_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
@@ -24838,6 +24956,8 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 OP_HID_EVENT => {
+                    // Fixed BOOT sexinput main task, authenticated by IPC metadata.
+                    if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID || msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN

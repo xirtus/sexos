@@ -382,39 +382,101 @@ fn ack_then_new_queue_supersedes_older_latest_and_never_replays_behind_display()
 
 #[test]
 fn third_geometry_binds_catalog_task_without_domain_task_alias() {
-    use document_view::{Delivery,Notice};
-    let mut d=Delivery::new();d.queue(18,180,320,300);
-    let mut n=None;d.poll(true,true,|v|{n=Some(v);Ok(())});let n=n.unwrap();
-    assert!(Notice::decode(3,18,180,n.args(),0).is_some());
-    assert!(Notice::decode(3,18,18,n.args(),0).is_none());
-    assert!(Notice::decode(16,18,180,n.args(),0).is_none());
-    assert_eq!(Layout::new(18,320,300).top,36);
+    use document_view::{Delivery, Notice};
+    let mut d = Delivery::new();
+    d.queue(18, 180, 320, 300);
+    let mut n = None;
+    d.poll(true, true, |v| {
+        n = Some(v);
+        Ok(())
+    });
+    let n = n.unwrap();
+    assert!(Notice::decode(3, 18, 180, n.args(), 0).is_some());
+    assert!(Notice::decode(3, 18, 18, n.args(), 0).is_none());
+    assert!(Notice::decode(16, 18, 180, n.args(), 0).is_none());
+    assert_eq!(Layout::new(18, 320, 300).top, 36);
 }
 
-#[test]fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequence(){
- for(target,sid)in[(9,156),(16,301),(18,307)]{for cut in 1..=12{
-  let mut out=delivery::Outbox::new();let mut stage=text_transaction::Stage::EMPTY;
-  let mut old=view::Text::new();old.len=80;old.bytes[..80].fill(b'a');out.queue(old,10);
-  let mut operations=0;let mut admitted=false;
-  for _ in 0..5{out.poll(sid,|op,sid,a,b|{operations+=1;stage.receive(target,sid,text_batch::Request::decode(op,a,b).unwrap());if operations==cut{stage.reset();}Ok(())},|_,_|admitted=true);}
-  assert!(admitted);assert!(out.pending());
-  out.rebind();assert!(!out.pending());
-  let receipt=text_batch::Applied{surface:sid as u16,sequence:10}.encode().unwrap();
-  assert_eq!(out.receive(1,receipt),None);
-  let mut new=view::Text::new();new.len=3;new.bytes[..3].copy_from_slice(b"new");out.queue(new,11);
-  // A queued/replayed old paint cannot return after the new binding notice.
-  out.queue(old,10);
-  let mut commits=0;let mut full=false;
-  for _ in 0..6{out.poll(sid,|op,sid,a,b|{
-   if !full{full=true;return Err(ERR_SERVICE_NOT_READY)}
-   if let Some((n,_,bytes))=stage.receive(target,sid,text_batch::Request::decode(op,a,b).unwrap()){assert_eq!(&bytes[..n],b"new");commits+=1;}
-   Ok(())
-  },|paint,_|assert_eq!(paint,11));}
-  assert_eq!(out.receive(1,receipt),None);
-  stage.poll_reply(|pd,v|{assert_eq!(pd,target);assert_eq!(out.receive(1,v),Some((11,3)));0});
-  assert_eq!(commits,1);assert!(!out.pending());
-  out.close();out.rebind();out.queue(new,12);out.poll(sid,|_,_,_,_|panic!(),|_,_|panic!());
- }}
+#[test]
+fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequence() {
+    for (target, sid) in [(9, 156), (16, 301), (18, 307)] {
+        for cut in 1..=12 {
+            let mut out = delivery::Outbox::new();
+            let mut stage = text_transaction::Stage::EMPTY;
+            let mut old = view::Text::new();
+            old.len = 80;
+            old.bytes[..80].fill(b'a');
+            out.queue(old, 10);
+            let mut operations = 0;
+            let mut admitted = false;
+            for _ in 0..5 {
+                out.poll(
+                    sid,
+                    |op, sid, a, b| {
+                        operations += 1;
+                        stage.receive(target, sid, text_batch::Request::decode(op, a, b).unwrap());
+                        if operations == cut {
+                            stage.reset();
+                        }
+                        Ok(())
+                    },
+                    |_, _| admitted = true,
+                );
+            }
+            assert!(admitted);
+            assert!(out.pending());
+            out.rebind();
+            assert!(!out.pending());
+            let receipt = text_batch::Applied {
+                surface: sid as u16,
+                sequence: 10,
+            }
+            .encode()
+            .unwrap();
+            assert_eq!(out.receive(1, receipt), None);
+            let mut new = view::Text::new();
+            new.len = 3;
+            new.bytes[..3].copy_from_slice(b"new");
+            out.queue(new, 11);
+            // A queued/replayed old paint cannot return after the new binding notice.
+            out.queue(old, 10);
+            let mut commits = 0;
+            let mut full = false;
+            for _ in 0..6 {
+                out.poll(
+                    sid,
+                    |op, sid, a, b| {
+                        if !full {
+                            full = true;
+                            return Err(ERR_SERVICE_NOT_READY);
+                        }
+                        if let Some((n, _, bytes)) = stage.receive(
+                            target,
+                            sid,
+                            text_batch::Request::decode(op, a, b).unwrap(),
+                        ) {
+                            assert_eq!(&bytes[..n], b"new");
+                            commits += 1;
+                        }
+                        Ok(())
+                    },
+                    |paint, _| assert_eq!(paint, 11),
+                );
+            }
+            assert_eq!(out.receive(1, receipt), None);
+            stage.poll_reply(|pd, v| {
+                assert_eq!(pd, target);
+                assert_eq!(out.receive(1, v), Some((11, 3)));
+                0
+            });
+            assert_eq!(commits, 1);
+            assert!(!out.pending());
+            out.close();
+            out.rebind();
+            out.queue(new, 12);
+            out.poll(sid, |_, _, _, _| panic!(), |_, _| panic!());
+        }
+    }
 }
 
 #[test]
@@ -425,18 +487,371 @@ fn browser_geometry_binds_actual_task_and_retains_until_ready() {
     delivery.poll(true, false, |_| panic!("not ready"));
     assert!(delivery.pending());
     let mut first = None;
-    delivery.poll(true, true, |n| { first = Some(n); Err(ERR_SERVICE_NOT_READY) });
+    delivery.poll(true, true, |n| {
+        first = Some(n);
+        Err(ERR_SERVICE_NOT_READY)
+    });
     assert!(delivery.pending());
     let first = first.unwrap();
-    delivery.poll(true, true, |n| { assert_eq!(n, first); Ok(()) });
+    delivery.poll(true, true, |n| {
+        assert_eq!(n, first);
+        Ok(())
+    });
     assert!(!delivery.pending());
     assert!(Notice::decode(3, 15, 150, first.args(), 0).is_some());
-    for (caller, target, task, last) in [(3,15,15,0),(15,15,150,0),(3,16,150,0),(3,15,0,0),(3,15,150,first.sequence)] {
+    for (caller, target, task, last) in [
+        (3, 15, 15, 0),
+        (15, 15, 150, 0),
+        (3, 16, 150, 0),
+        (3, 15, 0, 0),
+        (3, 15, 150, first.sequence),
+    ] {
         assert!(Notice::decode(caller, target, task, first.args(), last).is_none());
     }
-    assert_eq!(Layout::new(15,320,240).top,36);
-    delivery.queue(15,150,220,150);
-    delivery.poll(false,true,|_|panic!("terminal subject"));
-    delivery.queue(15,150,640,480);
+    assert_eq!(Layout::new(15, 320, 240).top, 36);
+    delivery.queue(15, 150, 220, 150);
+    delivery.poll(false, true, |_| panic!("terminal subject"));
+    delivery.queue(15, 150, 640, 480);
     assert!(!delivery.pending());
+}
+
+#[path = "../crates/sex-pdx/src/text_selection.rs"]
+mod text_selection;
+#[test]
+fn selected_source_maps_only_visible_body_cells_not_header_or_caret() {
+    for (w, h) in [(1280, 700), (624, 291), (320, 240), (144, 90)] {
+        let l = Layout::new(9, w, h);
+        let body = b"one two\nthree four\nfive six";
+        for range in [(0, body.len()), (4, body.len()), (0, 3), (7, 8), (3, 3)] {
+            for caret in [range.0, range.1] {
+                let mut top = 0;
+                let plain = view::render(
+                    body, caret, &mut top, l, b"HEADER", false, b"READY", None, None,
+                );
+                let mut top = 0;
+                let selected = view::render_selection(
+                    body,
+                    caret,
+                    &mut top,
+                    l,
+                    b"HEADER",
+                    false,
+                    b"READY",
+                    None,
+                    None,
+                    Some(range),
+                );
+                assert_eq!(selected.bytes, plain.bytes);
+                assert_eq!(selected.len, plain.len);
+                if let Some((start, end)) = selected.selection {
+                    assert!(start < end && end <= selected.len);
+                    let bytes = &selected.bytes[start..end];
+                    assert!(!bytes.contains(&b'#'));
+                    assert!(!bytes.windows(6).any(|w| w == b"HEADER"));
+                    assert!(
+                        start
+                            >= selected.bytes[..selected.len]
+                                .iter()
+                                .position(|&b| b == b'\n')
+                                .unwrap()
+                    );
+                }
+                if range.0 == range.1 || range == (7, 8) {
+                    assert_eq!(selected.selection, None)
+                }
+            }
+        }
+    }
+}
+#[test]
+fn selected_range_scrolls_and_reflows_from_unchanged_source_without_mutating_bytes() {
+    let body = b"a selected long document with spaces\n".repeat(300);
+    let original = body.clone();
+    for (w, h) in [(1280, 700), (624, 291), (320, 240), (144, 90)] {
+        let l = Layout::new(9, w, h);
+        let mut top = 0;
+        let text = view::render_selection(
+            &body,
+            body.len(),
+            &mut top,
+            l,
+            b"note",
+            false,
+            b"READY",
+            None,
+            None,
+            Some((0, body.len())),
+        );
+        if l.body_rows() > 0 {
+            let (start, end) = text.selection.unwrap();
+            assert!(end <= text.len);
+            assert!(text.bytes[start..end].iter().any(|&b| b == b' '));
+            assert!(!text.bytes[start..end].contains(&b'#'));
+        }
+        assert_eq!(body, original);
+    }
+}
+#[test]
+fn replacement_is_whole_capacity_checked_and_zeroes_removed_tail() {
+    let mut body = [0; 12288];
+    body[..7].copy_from_slice(b"abc def");
+    let mut len = 7;
+    assert_eq!(
+        view::replace(&mut body, &mut len, (4, 7), b"world"),
+        Some(9)
+    );
+    assert_eq!(&body[..len], b"abc world");
+    assert_eq!(
+        view::replace(&mut body, &mut len, (0, 9), b"short"),
+        Some(5)
+    );
+    assert_eq!(&body[..len], b"short");
+    assert!(body[len..9].iter().all(|&b| b == 0));
+    let full = [b'Z'; 12288];
+    assert_eq!(
+        view::replace(&mut body, &mut len, (0, 5), &full),
+        Some(12288)
+    );
+    assert_eq!(len, 12288);
+    assert_eq!(body, full);
+    let before = body;
+    for range in [(0, 0), (12288, 12288), (1, 0), (0, 12289)] {
+        let n = len;
+        assert_eq!(view::replace(&mut body, &mut len, range, b"x"), None);
+        assert_eq!(body, before);
+        assert_eq!(len, n);
+    }
+    assert_eq!(view::replace(&mut body, &mut len, (0, 12288), b""), Some(0));
+    assert_eq!(len, 0);
+    assert!(body.iter().all(|&b| b == 0));
+}
+#[test]
+fn replacement_rejects_unsupported_text_and_stale_selection_capacity_without_partial_edit() {
+    let source = text_selection::Source {
+        generation: 7,
+        revision: 0,
+    };
+    let mut selection = text_selection::Selection::new();
+    selection.bind(source, 12288).unwrap();
+    selection.move_to(source, 1, false).unwrap();
+    selection.move_to(source, 5, true).unwrap();
+    let snap = selection.snapshot().unwrap();
+    assert_eq!(selection.replacement_len(snap, 4), Ok(12288));
+    assert!(selection.replacement_len(snap, 5).is_err());
+    selection
+        .rebind(
+            text_selection::Source {
+                generation: 8,
+                revision: 0,
+            },
+            12288,
+        )
+        .unwrap();
+    assert!(!selection.unchanged(snap));
+    assert!(selection.replacement_len(snap, 0).is_err());
+    let mut body = [b'a'; 12288];
+    let original = body;
+    let mut len = 12288;
+    for incoming in [&b"\t"[..], &b"\0"[..], &b"\xff"[..]] {
+        assert_eq!(view::replace(&mut body, &mut len, (0, 3), incoming), None);
+        assert_eq!(body, original);
+        assert_eq!(len, 12288);
+    }
+}
+#[test]
+fn selected_outbox_sends_exact_style_after_chunks_and_full_before_commit() {
+    let mut text = view::Text::new();
+    text.bytes[..5].copy_from_slice(b"a b c");
+    text.len = 5;
+    text.selection = Some((1, 4));
+    let mut out = delivery::Outbox::new();
+    out.queue(text, 7);
+    let mut stage = text_transaction::Stage::EMPTY;
+    let mut sent = vec![];
+    let mut full = false;
+    let mut visible = false;
+    for _ in 0..10 {
+        out.poll(
+            156,
+            |op, sid, a, b| {
+                let r = text_batch::Request::decode(op, a, b).unwrap();
+                if op == text_batch::SELECT && !full {
+                    full = true;
+                    return Err(ERR_SERVICE_NOT_READY);
+                }
+                sent.push(r);
+                if let Some((len, _, bytes)) = stage.receive(9, sid, r) {
+                    assert_eq!(&bytes[..len], b"a b c");
+                    visible = true;
+                } else {
+                    assert!(!visible)
+                }
+                Ok(())
+            },
+            |paint, len| assert_eq!((paint, len), (7, 5)),
+        );
+        if visible {
+            break;
+        }
+    }
+    assert!(full && visible);
+    assert!(matches!(sent[0], text_batch::Request::Begin { .. }));
+    assert!(matches!(sent[1], text_batch::Request::Chunk { .. }));
+    assert_eq!(
+        sent[2],
+        text_batch::Request::Select {
+            sequence: 7,
+            start: 1,
+            end: 4
+        }
+    );
+    assert_eq!(
+        sent[3],
+        text_batch::Request::Commit {
+            sequence: 7,
+            hash: text_batch::selected_hash(b"a b c", 1, 4).unwrap()
+        }
+    );
+    stage.poll_reply(|_, value| {
+        assert_eq!(out.receive(1, value), Some((7, 5)));
+        0
+    });
+    assert!(!out.pending());
+    out.poll(
+        156,
+        |_, _, _, _| panic!("accepted Commit replay"),
+        |_, _| panic!(),
+    );
+}
+#[test]
+fn page_navigation_clamps_to_real_lines_and_retains_goal_column() {
+    let buf = b"abcde\nx\nabcde\nlast";
+    let mut goal = usize::MAX;
+    let next = view::vertical_steps(buf, 4, 51, &mut goal, false, 2).unwrap();
+    assert_eq!(next, 12);
+    assert_eq!(goal, 4);
+    assert_eq!(
+        view::vertical_steps(buf, next, 51, &mut goal, false, 22),
+        Some(buf.len())
+    );
+    assert_eq!(
+        view::vertical_steps(buf, buf.len(), 51, &mut goal, true, 22),
+        Some(4)
+    );
+    assert_eq!(view::vertical_steps(buf, 0, 51, &mut goal, true, 22), None);
+    assert_eq!(
+        view::vertical_steps(buf, buf.len(), 51, &mut goal, false, 22),
+        None
+    );
+}
+
+/// A rejected clipboard operation changes chrome only. Status/naming bytes
+/// must not reduce the body row budget or scroll an unchanged caret/document.
+#[test]
+fn status_and_name_changes_cannot_scroll_or_reflow_the_editor_body() {
+    let body = b"000 SEXOS STREAM LINE / SOURCE BYTES ARE DATA...\n".repeat(256);
+    let body = &body[..12288.min(body.len())];
+    for (w, h) in [(624, 706), (496, 674), (640, 335), (320, 240), (144, 90)] {
+        let layout = Layout::new(9, w, h);
+        let selection = Some((0, body.len()));
+        let mut top = 0;
+        let original = view::render_selection(
+            body,
+            body.len(),
+            &mut top,
+            layout,
+            b"UNTITLED",
+            true,
+            b"PASTED",
+            None,
+            None,
+            selection,
+        );
+        let initial_top = top;
+        let first_body = |text: &view::Text| {
+            let mut offset = 0;
+            for _ in 0..layout.toolbar_rows + 2 {
+                offset += text.bytes[offset..text.len]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .unwrap()
+                    + 1;
+            }
+            text.bytes[offset..text.len].to_vec()
+        };
+        let expected = first_body(&original);
+        let body_selection = original.selection.map(|(start, end)| {
+            let offset = original.len - expected.len();
+            (start - offset, end - offset)
+        });
+        for (state, name, dirty, naming) in [
+            (
+                b"CLIPBOARD...".as_slice(),
+                b"UNTITLED".as_slice(),
+                true,
+                None,
+            ),
+            (
+                b"PASTE TOO LARGE".as_slice(),
+                b"UNTITLED".as_slice(),
+                true,
+                None,
+            ),
+            (
+                b"EMPTY SELECTION".as_slice(),
+                b"UNTITLED".as_slice(),
+                true,
+                None,
+            ),
+            (b"UNKNOWN".as_slice(), b"renamed".as_slice(), false, None),
+            (
+                b"CLIPBOARD UNCERTAIN".as_slice(),
+                b"sixteen-byte-nam".as_slice(),
+                true,
+                None,
+            ),
+            (
+                b"READY".as_slice(),
+                b"renamed".as_slice(),
+                false,
+                Some(b"save-as-name".as_slice()),
+            ),
+            (b"PASTED".as_slice(), b"UNTITLED".as_slice(), true, None),
+        ] {
+            let current = view::render_selection(
+                body,
+                body.len(),
+                &mut top,
+                layout,
+                name,
+                dirty,
+                state,
+                None,
+                naming,
+                selection,
+            );
+            assert_eq!(
+                top, initial_top,
+                "status/name moved viewport at {w}x{h}: {:?}",
+                state
+            );
+            assert_eq!(
+                first_body(&current),
+                expected,
+                "body changed at {w}x{h}: {:?}",
+                state
+            );
+            let offset = current.len - expected.len();
+            assert_eq!(
+                current
+                    .selection
+                    .map(|(start, end)| (start - offset, end - offset)),
+                body_selection
+            );
+            assert!(current.len <= 512);
+            if layout.body_rows() > 0 {
+                assert!(expected.contains(&b'#'));
+            }
+        }
+    }
 }

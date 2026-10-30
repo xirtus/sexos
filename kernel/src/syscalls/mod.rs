@@ -187,6 +187,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 regs.rdx = 0;
                 regs.r10 = 0;
                 regs.r8 = 0;
+                regs.rdi = 0;
                 0
             }
             29 => 1,
@@ -297,6 +298,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let core_local = crate::core_local::CoreLocal::get();
             let current_pd = core_local.current_pd_ref();
 
+            let mut s_caller_task = 0u64;
             let (type_id, s_caller_pd, s_arg0, s_arg1, s_arg2): (u64, u64, u64, u64, u64) = {
                 // 1. Check priority reply buffer (Syscall 29 source)
                 // Reply sender is captured by the kernel at send time.
@@ -304,7 +306,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 if slot == 0 && !replies.is_empty() {
                     if let Some(reply) = crate::ipc::messages::IpcReply::take(&mut replies) {
                         drop(replies);
-                        (0x1, reply.caller_pd as u64, reply.value, 0, 0)
+                        { s_caller_task = reply.caller_task as u64;
+                            (0x1, reply.caller_pd as u64, reply.value, 0, 0) }
                     } else {
                         drop(replies);
                         (0, 0, 0, 0, 0)
@@ -317,8 +320,9 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                     unsafe {
                         if let Some(msg) = (*current_pd.message_ring).dequeue() {
                             match msg {
-                                MessageType::IpcCall { func_id, arg0, arg1, arg2, caller_pd } => {
-                                    (func_id, caller_pd as u64, arg0, arg1, arg2)
+                                MessageType::IpcCall { func_id, arg0, arg1, arg2, caller_pd, caller_task } => {
+                                    { s_caller_task = caller_task as u64;
+                                        (func_id, caller_pd as u64, arg0, arg1, arg2) }
                                 }
                                 MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
                                     (0x11, 1, virt_addr, (width as u64) | ((height as u64) << 32), pitch as u64)
@@ -361,8 +365,9 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                             unsafe {
                                 if let Some(msg) = (*current_pd.message_ring).dequeue() {
                                     match msg {
-                                        MessageType::IpcCall { func_id, arg0, arg1, arg2, caller_pd } => {
-                                            (func_id, caller_pd as u64, arg0, arg1, arg2)
+                                        MessageType::IpcCall { func_id, arg0, arg1, arg2, caller_pd, caller_task } => {
+                                            { s_caller_task = caller_task as u64;
+                                        (func_id, caller_pd as u64, arg0, arg1, arg2) }
                                         }
                                         MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
                                             (0x11, 1, virt_addr, (width as u64) | ((height as u64) << 32), pitch as u64)
@@ -396,6 +401,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rdx = s_arg0;
             regs.r10 = s_arg1;
             regs.r8  = s_arg2;
+            regs.rdi = s_caller_task;
 
             type_id
         },

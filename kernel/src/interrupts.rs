@@ -197,8 +197,10 @@ pub unsafe extern "C" fn syscall_entry() {
         "call syscall_handler",
 
         // 6.5 Propagate modified regs back to original saved slots.
-        // dispatch may set regs.rsi/rdx/r10/r8 (e.g. PDX_CALL/PDX_LISTEN returns).
-        // Restore path pops from [rbp+64..88]; copy SyscallRegs values there.
+        // dispatch may set regs.rdi/rsi/rdx/r10/r8 (PDX receive task and payload).
+        // Copy every output back to the saved slots used by the return path.
+        "mov rcx, [rsp + 8]",  // SyscallRegs.rdi (offset 8)
+        "mov [rbp + 96], rcx", // original saved RDI slot
         "mov rcx, [rsp + 16]", // SyscallRegs.rsi (offset 16 in struct)
         "mov [rbp + 88], rcx", // original saved RSI slot
         "mov rcx, [rsp + 24]", // SyscallRegs.rdx (offset 24)

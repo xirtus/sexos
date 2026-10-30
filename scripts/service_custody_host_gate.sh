@@ -214,9 +214,15 @@ viewport=quil[quil.index('if msg.type_id==sex_pdx::document_view::OP{'):quil.ind
 assert viewport.index('Notice::decode(')<viewport.index('DOCUMENT_DISPLAY.rebind();')<viewport.index('draw_text_lines(')
 restore=s[s.index('unsafe fn restore_minimized_frame('):s.index('unsafe fn native_child_geometry(')]
 assert restore.index('DOCUMENT_VIEWS[index].refresh();')<restore.index('set_frame_minimized(frame_id, false);')
-assert 'CURSOR_SEND_PENDING || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress()' in s
+pending=s[s.index('if shell_ready_publisher.is_pending()'):s.index('pdx_listen_raw(0)',s.index('if shell_ready_publisher.is_pending()'))]
+for required in ['CURSOR_SEND_PENDING','WORKSPACE_REFRESH_PENDING.iter().any(|p|*p)','linen_text_can_progress()','APP_INPUT.pending()','CLIPBOARD_INTAKE.pending()','CLIPBOARD.pending()','BROWSER_INPUT.len()!=0']:
+ assert required in pending,required
 PYCURSOR
 CURSOR_DELIVERY_SOURCE="$TEST_DIR/cursor.rs" CURSOR_STATUS_SOURCE="$TEST_DIR/cursor_status.rs" rustc --edition=2021 --test tests/desktop_cursor_delivery.rs -o "$TEST_DIR/cursor"
 "$TEST_DIR/cursor"
+bash scripts/clipboard_host_gate.sh
+bash scripts/quil_clipboard_host_gate.sh
+bash scripts/ipc_sender_host_gate.sh
+bash scripts/reply_sender_host_gate.sh
 bash scripts/sexnet_service_host_gate.sh
 echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_history_passive_network_with_mock_transport_authority_and_host_locks'

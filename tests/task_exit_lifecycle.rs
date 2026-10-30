@@ -46,7 +46,7 @@ fn domain(id:u32,state:TaskOwnership)->(&'static Domain,*mut scheduler::Task){
  for _ in 0..4{unsafe{(*pd.message_ring).enqueue(messages::MessageType::Empty).unwrap();}}
  for _ in 0..8{exit::poll_paging_exit_notifications();}assert_eq!(WAKES.load(Ordering::Relaxed),1);
  unsafe{(*pd.message_ring).dequeue();}exit::poll_paging_exit_notifications();assert_eq!(WAKES.load(Ordering::Relaxed),2);
- let mut notices=0;while let Some(m)=unsafe{(*pd.message_ring).dequeue()}{if let messages::MessageType::IpcCall{func_id,arg0,arg1,arg2,caller_pd}=m{assert_eq!((func_id,arg0,arg1,arg2,caller_pd),(paging::OP_TASK_EXIT,15,0x800f,0,0));notices+=1;}}assert_eq!(notices,1);
+ let mut notices=0;while let Some(m)=unsafe{(*pd.message_ring).dequeue()}{if let messages::MessageType::IpcCall{func_id,arg0,arg1,arg2,caller_pd,caller_task}=m{assert_eq!((func_id,arg0,arg1,arg2,caller_pd,caller_task),(paging::OP_TASK_EXIT,15,0x800f,0,0,0));notices+=1;}}assert_eq!(notices,1);
  for _ in 0..8{exit::poll_paging_exit_notifications();}assert!(unsafe{(*pd.message_ring).dequeue()}.is_none());
  assert!(!exit::acknowledge_dead_cleanup(15,14,15));assert!(exit::acknowledge_dead_cleanup(15,14,0x800f));exit::poll_paging_exit_notifications();assert_eq!(WAKES.load(Ordering::Relaxed),2);
 }

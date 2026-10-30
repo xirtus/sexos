@@ -6,6 +6,7 @@ pub mod messages;
 pub mod pagefault;
 pub mod router;
 pub mod state;
+pub mod sender;
 mod domain_registry;
 pub use domain_registry::DomainRegistry;
 
@@ -136,13 +137,14 @@ pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool
     }
 }
 
-pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) -> Result<u64, u64> {
+pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32, caller_task: u32) -> Result<u64, u64> {
     match edge {
         GraphEdge::SyncCall { entry_point } =>
             unsafe { Ok(pdx_call(entry_point, arg0, arg1, arg2)) },
         GraphEdge::AsyncEnqueue { ring, task } => {
+            if caller_task == 0 { return Err(sex_pdx::ERR_CAP_INVALID); }
             let msg = crate::ipc::messages::MessageType::IpcCall {
-                func_id: opcode, arg0, arg1, arg2, caller_pd,
+                func_id: opcode, arg0, arg1, arg2, caller_pd, caller_task,
             };
             unsafe { (*ring).enqueue(msg).map_err(|_| sex_pdx::ERR_SERVICE_NOT_READY)?; }
             // Publish the event only after its payload is visible. A full ring
@@ -162,7 +164,7 @@ pub fn safe_pdx_call(cap_id: u32, opcode: u64, arg0: u64, arg1: u64, arg2: u64) 
     let caller_pd_id = current_pd.id;
     let cap = unsafe { (*current_pd.cap_table).find(cap_id) }.ok_or(sex_pdx::ERR_CAP_INVALID)?;
     let edge = resolve_edge(cap.data, caller_pd_id, false)?;
-    traverse_edge(edge, opcode, arg0, arg1, arg2, caller_pd_id)
+    traverse_edge(edge, opcode, arg0, arg1, arg2, caller_pd_id, sender::current_task(caller_pd_id).unwrap_or(0))
 }
 
 pub fn resolve_phys_pdx(cap_id: u32) -> u64 {

@@ -44,12 +44,19 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 const KALEIDO_SURFACE_ID: u64 = 300;
 const SEXNET_DNS_RESOLVE: u64 = 0x20B;
+// Inline payload is private BOOT ELF storage, never an App::new stack copy.
+static mut CLIPBOARD:sex_pdx::clipboard_client::Client=sex_pdx::clipboard_client::Client::new();
 
 struct App {
     identity:sex_pdx::app_lifecycle::CatalogInfo,
     viewport_sequence:u64,
     viewport_ready:bool,
     reader:document_reader::Reader,
+    selection:sex_pdx::text_selection::Selection,
+    selection_generation:u64,
+    selection_body:Option<(bool,usize,u64)>,
+    clipboard_view:sex_pdx::clipboard_client::View,
+    ui_last_selection:(u16,u16),
     reading:bool,
     reading_https:bool,
     https_panel:bool,
@@ -110,6 +117,77 @@ struct App {
 }
 
 impl App {
+    fn clipboard_progress(&self)->bool { unsafe{CLIPBOARD.pending()&&CLIPBOARD.view()!=sex_pdx::clipboard_client::View::Uncertain} }
+    fn clear_selection(&mut self){
+        self.selection.clear();self.selection_body=None;
+        unsafe{CLIPBOARD.cancel(sex_pdx::get_ticks());}
+    }
+    fn reader_body(&self)->&[u8]{if self.reading_https{self.https_body()}else{self.http.document()}}
+    fn sync_selection(&mut self){
+        if !self.reading{return}
+        let body=self.reader_body();let signature=(self.reading_https,body.len(),public_fingerprint(body));
+        if self.selection_body==Some(signature){return}
+        let Some(generation)=self.selection_generation.checked_add(1)else{self.selection.clear();return};
+        self.selection_generation=generation;
+        if self.selection.bind(sex_pdx::text_selection::Source{generation,revision:0},signature.1).is_ok(){self.selection_body=Some(signature);}
+    }
+    fn key_input(&mut self,key:sex_pdx::app_key::Key){
+        self.sync_selection();
+        if key.code==0x01&&unsafe{CLIPBOARD.pending()}{unsafe{CLIPBOARD.cancel(sex_pdx::get_ticks());}return}
+        if key.control {
+            if self.reading&&key.code==0x1e {if let Some(s)=self.selection.snapshot(){let _=self.selection.select_all(s.source());}}
+            // Clipboard chords arrive as Shell-issued interactions. Unknown
+            // Ctrl chords are consumed instead of invoking plain-C Cancel.
+            return;
+        }
+        if self.reading {
+            if let Some(s)=self.selection.snapshot(){
+                let source=s.source();
+                let moved=match key.code {
+                    0x69=>{let _=self.selection.left(source,key.shift);true},
+                    0x6a=>{let _=self.selection.right(source,key.shift);true},
+                    0x66 if key.shift=>{let _=self.selection.home(source,true);true},
+                    0x6b if key.shift=>{let _=self.selection.end(source,true);true},
+                    0x67|0x6c|0x68|0x6d if key.shift=>{
+                        let movement=match key.code{0x67=>document_reader::Move::Up,0x6c=>document_reader::Move::Down,0x68=>document_reader::Move::PageUp,_=>document_reader::Move::PageDown};
+                        let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(b)=self.import_source.as_ref(){b.as_bytes()}else{self.importer.document().map_or(&[][..],|b|b.as_bytes())}}else{self.http.document()};
+                        let to=self.reader.selection_move(body,s.caret(),movement);let _=self.selection.move_to(source,to,true);true
+                    },_=>false,
+                };
+                if moved {
+                    let caret=self.selection.snapshot().unwrap().caret();
+                    let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(b)=self.import_source.as_ref(){b.as_bytes()}else{self.importer.document().map_or(&[][..],|b|b.as_bytes())}}else{self.http.document()};
+                    self.reader.reveal(body,caret);return;
+                }
+            }
+        }
+        self.key(key.code as u64);
+    }
+    fn clipboard_events(&mut self){
+        self.sync_selection();
+        while let Some(event)=unsafe{CLIPBOARD.take_event()}{
+            match event {
+                sex_pdx::clipboard_client::Event::Export{ticket,cut}=>{
+                    let snapshot=self.selection.snapshot();
+                    if !cut&&self.reading&&snapshot.is_some(){
+                        let snapshot=snapshot.unwrap();let(lo,hi)=snapshot.range();let body=self.reader_body();
+                        let accepted=unsafe{CLIPBOARD.publish(ticket,snapshot.source(),&body[lo..hi],sex_pdx::get_ticks())};
+                        sex_pdx::serial_record!("[browser.clipboard.copy] ticket={} generation={} revision={} start={} end={} bytes={} hash={:#x} accepted={}",ticket,snapshot.source().generation,snapshot.source().revision,lo,hi,hi-lo,public_fingerprint(&body[lo..hi]),accepted as u8);
+                    }else{unsafe{CLIPBOARD.decline(ticket,sex_pdx::clipboard_client::View::Unsupported,sex_pdx::get_ticks());}}
+                },
+                sex_pdx::clipboard_client::Event::Published{ticket,len,generation,hash,..}=>sex_pdx::serial_record!("[browser.clipboard.published] ticket={} bytes={} generation={} hash={:#x} positive_ack=1",ticket,len,generation,hash),
+                sex_pdx::clipboard_client::Event::Paste{ticket}=>{unsafe{CLIPBOARD.decline(ticket,sex_pdx::clipboard_client::View::Unsupported,sex_pdx::get_ticks());}},
+                sex_pdx::clipboard_client::Event::Ready{..}=>{unsafe{CLIPBOARD.settle(false);}},
+                sex_pdx::clipboard_client::Event::Stopped{..}=>{},
+            }
+        }
+        unsafe{CLIPBOARD.poll(sex_pdx::get_ticks(),|packet|{
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,packet.opcode,packet.args[0],packet.args[1],packet.args[2]){
+                Ok(_)=>sex_pdx::clipboard_client::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sex_pdx::clipboard_client::Admission::Full,Err(_)=>sex_pdx::clipboard_client::Admission::Rejected,
+            }
+        });}
+        let view=unsafe{CLIPBOARD.view()};if view!=self.clipboard_view{self.clipboard_view=view;sex_pdx::serial_record!("[browser.clipboard.view] state={:?}",view);}
+    }
     fn fence_asset(&mut self,reason:&str){
         self.asset_fenced=true;self.asset_status=asset_view::Status::Uncertain;self.image.clear();
         sex_pdx::serial_record!("[browser.asset.fenced] reason={} accepted_replay=0 owned_storage=erased",reason);
@@ -127,6 +205,7 @@ impl App {
 
         if self.importer.busy(){sex_pdx::serial_record!("[browser.command.blocked] kind={:?} import_pending=1 accepted_replay=0",next);return false;}
         if self.importer.view()==document_import::View::Uncertain{sex_pdx::serial_record!("[browser.command.blocked] kind={:?} import_uncertain=1 accepted_replay=0",next);return false;}
+        self.clear_selection();
         self.clear_asset();if self.asset_fenced{return false;}self.asset_text_viewport=None;self.asset_ticket=0;self.asset_panel=next==Intent::TlsAssetDns;
         if self.asset_panel{self.asset_status=asset_view::Status::Loading;self.asset_peer_view=tls_exchange::View::Idle;self.https_progress_logged=0;}
         self.importer.clear(sex_pdx::get_ticks());self.import_source=None;self.import_editor.cancel();self.import_panel=false;self.import_ticket=0;
@@ -188,6 +267,7 @@ impl App {
             if !self.importer.busy()||self.importer.view()==document_import::View::Uncertain{self.workspace.changed();self.files_pending=true;}else{sex_pdx::serial_record!("[browser.import.files.blocked] pending=1 effects=0");}return;
         }
         if self.import_panel&&code==0x2F&&self.has_https_body(){self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;return;}
+        if matches!(code,0x10|0x24){self.clear_selection();}
         if code==0x10&&(self.import_panel||self.importer.has_document()||self.import_source.is_some()||self.importer.busy()){
             self.import_editor.cancel();self.import_source=None;let _=self.importer.cancel(sex_pdx::get_ticks());self.import_panel=true;self.reading=false;self.reading_https=false;
             self.reader.clear();self.import_status=if self.importer.view()==document_import::View::Uncertain{import_view::Status::Uncertain}else if self.importer.busy(){import_view::Status::Cleaning}else{import_view::Status::Cancelled};self.resources("clear",true);return;
@@ -381,9 +461,10 @@ impl SexApp for App {
             sex_pdx::app_lifecycle::OP_APP_PRESENT, [KALEIDO_SURFACE_ID, 1, 0])
             .expect("display app presentation"), 1 << 8);
         sex_pdx::serial_record!("[app.surface.presented] target=15 surface=300 sequence=1 ok=1");
+        unsafe{assert!(CLIPBOARD.bind(sex_pdx::clipboard::Participant::from_catalog(identity).expect("BROWSER_CLIPBOARD_POLICY")));}
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
-        Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
+        Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
             asset_panel:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(),image_layout:None,asset_fenced:false,asset_text_viewport:None,
             importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
@@ -395,11 +476,11 @@ impl SexApp for App {
     fn run(&mut self, _pdx: u32) -> bool {
         self.app_turn=self.app_turn.checked_add(1).expect("BROWSER_TURN_EXHAUSTED");
         if self.viewport_ready&&sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,self.identity.target_pd as u64,self.identity.task_id as u64,0).is_ok(){self.viewport_ready=false;}
-        let pending=self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
+        let pending=self.clipboard_progress()||self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
         let message=if pending{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
         if let Some(req)=message{
-            if sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],self.identity.target_pd,self.identity.task_id)
-                ||(req.type_id==0xFF_FF&&req.caller_pd==3){
+            if req.caller_pd==3&&req.caller_task==3&&(sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],self.identity.target_pd,self.identity.task_id)
+                ||req.type_id==0xFF_FF){
                 sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
                 sex_pdx::serial_record!("[browser.dns.closed] pending={} terminal=1",self.dns.busy()as u8);
                 sex_pdx::serial_record!("[browser.http.closed] pending={} terminal=1",self.http.busy()as u8);
@@ -421,6 +502,8 @@ impl SexApp for App {
                 sex_pdx::serial_record!("[browser.import.closed] target={} task={} pending={} accepted={} terminal=1 owned_storage=erased",self.identity.target_pd,self.identity.task_id,import_pending as u8,accepted);
                 self.image.clear();self.bitmap.close();self.image_layout=None;
                 sex_pdx::serial_record!("[browser.asset.closed] pending={} terminal=1 owned_storage=erased",asset_pending as u8);
+                unsafe{CLIPBOARD.close();}self.selection.clear();self.selection_body=None;self.ui_last_selection=(0,0);
+                sex_pdx::serial_record!("[browser.clipboard.closed] target={} task={} owned_scratch=erased terminal=1",self.identity.target_pd,self.identity.task_id);
                 self.navigation.cancel();self.http.cancel();self.reader.clear();self.reading=false;self.ui.cancel();self.ui_last.fill(0);self.ui_metadata=None;self.intent=None;self.resources("close",true);sex_pdx::task_finish(0);
             }
             if req.type_id==sex_pdx::document_view::OP{
@@ -469,9 +552,13 @@ impl SexApp for App {
                     sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,if r.metadata.selected&1024!=0{0}else{r.metadata.count});
                 }
             }
-            if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{self.key(req.arg0);}
+            if sex_pdx::clipboard::response_opcode(req.type_id){unsafe{CLIPBOARD.receive(sex_pdx::clipboard::Subject{pd:req.caller_pd,task:req.caller_task},req.type_id,[req.arg0,req.arg1,req.arg2],sex_pdx::get_ticks());}}
+            if req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3{
+                if let Some(key)=sex_pdx::app_key::Key::decode(req.arg0,req.arg1,req.arg2){self.key_input(key);}
+            }
 
         }
+        self.clipboard_events();
         self.importer.advance(sex_pdx::get_ticks());self.record_import_control();
         if let Some(event)=self.importer.take_event(){
             self.import_status=match event.view{document_import::View::Saved=>import_view::Status::Saved,document_import::View::Exists=>import_view::Status::Exists,document_import::View::Uncertain=>import_view::Status::Uncertain,document_import::View::Cancelled=>import_view::Status::Cancelled,_=>import_view::Status::Unavailable};
@@ -614,6 +701,8 @@ impl SexApp for App {
             bitmap_delivery::Poll::Rejected(error)=>{self.fence_asset("display_rejected");sex_pdx::serial_record!("[browser.asset.display.rejected] error={} accepted_replay=0",error);},
             bitmap_delivery::Poll::InvalidPixels|bitmap_delivery::Poll::Closed=>self.fence_asset("invalid_display_state"),_=>{},
         }
+        self.sync_selection();
+        let mut visible_selection=(0,0);
         let mut reader_layout=None;
         let composed=if self.asset_panel{
             let f=asset_view::render(self.import_viewport.0,self.import_viewport.1,self.asset_status);
@@ -625,10 +714,10 @@ impl SexApp for App {
             Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
         }else if self.reading&&self.reading_https&&self.has_https_body(){
             let body=if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().unwrap().as_bytes()};
-            let f=self.reader.render_https(body,sex_tls::HTTPS_PATH);reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
+            let f=self.reader.render_https_selected(body,sex_tls::HTTPS_PATH,self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:body.len(),first:f.first,rows:f.body_rows,selected:2|256|512}))
         }else if self.reading&&self.http.view()==http_probe::View::Ready{
-            let f=self.reader.render_path(self.http.document(),self.http.document_path());reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
+            let f=self.reader.render_path_selected(self.http.document(),self.http.document_path(),self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.http.document().len(),first:f.first,rows:f.body_rows,selected:http_view_code(self.http.view())|256}))
         }else{browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()).and_then(|text|{
             if self.https_panel{browser_view::with_https(text,https_label(self.https_view,self.exchange.failure(),self.exchange.http_failure()))}
@@ -637,7 +726,22 @@ impl SexApp for App {
             else if self.clock_panel{if let Some(status)=clock_view::status(self.clock_view){browser_view::with_clock(text,&status.bytes[..status.len])}else{Some(text)}}
             else{browser_view::with_seed(text,seed_label(self.seed_view))}
         }).map(|text|(text,text_delivery::Metadata{count:if matches!(self.http.view(),http_probe::View::Ready){self.http.body_length()}else{0},first:0,rows:0,selected:http_view_code(self.http.view())}))};
-        if let Some((text,metadata))=composed{
+        if let Some((mut text,metadata))=composed{
+            if reader_layout.is_some(){
+                let view=self.clipboard_view;
+                let label:&[u8]=match view{
+                    sex_pdx::clipboard_client::View::Pending=>b"COPY PENDING / ESC CANCEL",
+                    sex_pdx::clipboard_client::View::Copied=>b"COPIED / CTRL A C / SHIFT SELECT",
+                    sex_pdx::clipboard_client::View::Empty=>b"EMPTY SELECTION / CTRL A",
+                    sex_pdx::clipboard_client::View::Unsupported=>b"COPY UNSUPPORTED",
+                    sex_pdx::clipboard_client::View::Denied=>b"COPY DENIED",
+                    sex_pdx::clipboard_client::View::Uncertain=>b"COPY UNCERTAIN / ESC QUIESCE",
+                    sex_pdx::clipboard_client::View::Busy=>b"CLIPBOARD BUSY",
+                    sex_pdx::clipboard_client::View::Cancelled=>b"COPY CANCELLED / CTRL A C",
+                    _=>if self.selection.range().map_or(false,|(lo,hi)|hi>lo){b"CTRL C COPY / SHIFT SELECT"}else{b""},
+                };
+                if !label.is_empty(){if let Some((_,_,_,rows,cols,_))=reader_layout{if rows>1{let at=(rows-1)*(cols+1);text.bytes[at..at+cols].fill(b' ');let n=cols.min(label.len());text.bytes[at..at+n].copy_from_slice(&label[..n]);}}}
+            }
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&self.https_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&self.tls_panel&&self.tls_view!=tls_probe::View::Idle&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.tls_view);}
@@ -647,12 +751,12 @@ impl SexApp for App {
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed_view).is_some()&&self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.entropy.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.seed_view);
             }
-            if self.ui_last_len!=text.len||self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata){
-                self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_metadata=Some(metadata);self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
+            if self.ui_last_len!=text.len||self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata)||self.ui_last_selection!=visible_selection{
+                self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_metadata=Some(metadata);self.ui_last_selection=visible_selection;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
                 if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.https_body().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}sex_pdx::serial_record!("[browser.reader.position] anchor={} viewport={} tls={} retained_body_only=1",self.reader.source_anchor(),self.viewport_sequence,self.reading_https as u8);}
             }
             if self.ui_dirty&&!self.ui_failed{
-                if self.ui.queue(&text.bytes[..text.len],0x00CDD6F4,metadata){self.ui_dirty=false;}
+                if self.ui.queue_selected(&text.bytes[..text.len],0x00CDD6F4,metadata,visible_selection){self.ui_dirty=false;}
             }
         }
         if let text_delivery::Poll::Rejected(error)=self.ui.poll(4,|op|{
@@ -660,7 +764,7 @@ impl SexApp for App {
                 Ok(_)=>text_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>text_delivery::Admission::Full,Err(e)=>text_delivery::Admission::Rejected(e),
             }
         }){self.ui.cancel();self.ui_dirty=true;self.ui_retries=self.ui_retries.saturating_add(1);self.ui_failed=self.ui_retries>=3;sex_pdx::serial_record!("[browser.view.rejected] error={} attempts={} terminal={} accepted_network_replay=0",error,self.ui_retries,self.ui_failed as u8);}
-        if self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
+        if self.clipboard_progress()||self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
         true
     }
 

@@ -365,3 +365,104 @@ fn surface_destruction_and_vacant_rebinding_scrub_partial_bytes_and_pending_rece
         assert_eq!(&bytes[..n], b"z");
     }
 }
+
+fn selected(s: &mut Stage, seq: u32, start: usize, end: usize) {
+    assert!(s.receive(9, 156, Request::Select { sequence: seq, start, end }).is_none());
+}
+#[test]
+fn selection_wire_is_canonical_and_integrity_binds_range_length_and_text() {
+    for (start,end) in [(0,0),(0,512),(123,511)] {
+        let request=Request::Select{sequence:u32::MAX,start,end};
+        let(op,a,b)=request.wire();assert_eq!(Request::decode(op,a,b),Some(request));
+    }
+    for(a,b)in[(0,0),(1<<32,0),(1,1<<32),(1,513<<16),(1,2|(1<<16)),(1,1|(1<<16))]{
+        assert!(Request::decode(text_batch::SELECT,a,b).is_none());
+    }
+    let h=text_batch::selected_hash(b"abcdef",1,4).unwrap();
+    assert_ne!(h,hash(b"abcdef"));
+    assert_ne!(h,text_batch::selected_hash(b"abcdef",1,5).unwrap());
+    assert_ne!(h,text_batch::selected_hash(b"abcde",1,4).unwrap());
+    assert_ne!(h,text_batch::selected_hash(b"abcdeg",1,4).unwrap());
+    for(start,end)in[(1,1),(2,1),(0,7)]{assert_eq!(text_batch::selected_hash(b"abcdef",start,end),None);}
+}
+#[test]
+fn selection_is_private_until_same_transaction_commits_and_receipt_never_reapplies() {
+    let text=b"one two\nthree";let mut s=Stage::EMPTY;
+    begin(&mut s,5,text.len());for(i,b)in text.chunks(8).enumerate(){chunk(&mut s,5,i*8,b);}
+    selected(&mut s,5,1,11);assert_eq!(s.selection(),(0,0));
+    selected(&mut s,5,1,11); // exact duplicate cannot change meaning
+    s.receive(9,156,Request::Commit{sequence:5,hash:text_batch::selected_hash(text,1,11).unwrap()}).unwrap();
+    assert_eq!(s.selection(),(1,11));
+    selected(&mut s,5,0,4);assert_eq!(s.selection(),(1,11));
+    for _ in 0..4{s.poll_reply(|owner,word|{assert_eq!(owner,9);assert_eq!(text_batch::Applied::decode(1,word).unwrap().sequence,5);1});}
+    s.poll_reply(|_,_|0);s.poll_reply(|_,_|panic!("duplicate receipt"));
+    assert!(s.receive(9,156,Request::Commit{sequence:5,hash:text_batch::selected_hash(text,1,11).unwrap()}).is_none());
+    // A fresh legacy replacement clears selection atomically with its text.
+    begin(&mut s,6,1);chunk(&mut s,6,0,b"z");
+    s.receive(9,156,Request::Commit{sequence:6,hash:hash(b"z")}).unwrap();assert_eq!(s.selection(),(0,0));
+}
+#[test]
+fn premature_invalid_contradictory_or_post_selection_chunks_poison_until_new_sequence() {
+    for mode in 0..5 {
+        let mut s=Stage::EMPTY;begin(&mut s,1,3);
+        if mode==0 {selected(&mut s,1,0,2);}
+        chunk(&mut s,1,0,b"abc");
+        match mode {
+            0=>{},
+            1=>selected(&mut s,1,0,4),
+            2=>{selected(&mut s,1,0,2);selected(&mut s,1,1,3);},
+            3=>{selected(&mut s,1,0,2);chunk(&mut s,1,0,b"abc");},
+            _=>selected(&mut s,1,1,1),
+        }
+        assert!(s.receive(9,156,Request::Commit{sequence:1,hash:text_batch::selected_hash(b"abc",0,2).unwrap()}).is_none());
+        assert_eq!(s.selection(),(0,0));s.poll_reply(|_,_|panic!("poisoned receipt"));
+        begin(&mut s,2,3);chunk(&mut s,2,0,b"abc");selected(&mut s,2,0,2);
+        assert!(s.receive(9,156,Request::Commit{sequence:2,hash:text_batch::selected_hash(b"abc",0,2).unwrap()}).is_some());
+    }
+}
+#[test]
+fn foreign_stale_selection_cannot_poison_current_owner_and_selected_legacy_hash_is_rejected() {
+    let mut s=Stage::EMPTY;begin(&mut s,8,3);chunk(&mut s,8,0,b"abc");
+    for(owner,sid,sequence)in[(16,156,8),(9,301,8),(9,156,7),(0,156,8)]{
+        assert!(s.receive(owner,sid,Request::Select{sequence,start:0,end:3}).is_none());
+    }
+    selected(&mut s,8,0,2);
+    assert!(s.receive(9,156,Request::Commit{sequence:8,hash:hash(b"abc")}).is_none());
+    assert_eq!(s.selection(),(0,0));
+    begin(&mut s,9,0);selected(&mut s,9,0,0);
+    assert!(s.receive(9,156,Request::Commit{sequence:9,hash:text_batch::selected_hash(b"",0,0).unwrap()}).is_some());
+}
+#[test]
+fn selected_full_capacity_and_retirement_clear_metadata_bytes_and_pending_receipt() {
+    let mut s=Stage::EMPTY;let text=[b'x';CAPACITY];begin(&mut s,1,CAPACITY);
+    for(i,b)in text.chunks(8).enumerate(){chunk(&mut s,1,i*8,b);}
+    selected(&mut s,1,0,CAPACITY);
+    s.receive(9,156,Request::Commit{sequence:1,hash:text_batch::selected_hash(&text,0,CAPACITY).unwrap()}).unwrap();
+    assert_eq!(s.selection(),(0,512));s.retire(16);assert_eq!(s.selection(),(0,512));
+    s.retire(9);assert_eq!(s.selection(),(0,0));s.poll_reply(|_,_|panic!("retired receipt"));
+    assert_eq!(s.diagnostic(),(0,0,0,0,0,false,false));
+    // Actual production reset includes volatile erasure of every inline byte and
+    // both selection offsets, rather than relying only on later slot reuse.
+    let source=include_str!("../servers/sexdisplay/src/text_transaction.rs");
+    let reset=&source[source.find("pub fn reset").unwrap()..source.find("/// Only expose selection").unwrap()];
+    assert!(reset.contains("for byte in &mut self.bytes"));assert!(reset.contains("write_volatile(&mut self.selection_start, 0)"));assert!(reset.contains("write_volatile(&mut self.selection_end, 0)"));
+}
+
+#[test]
+fn production_dispatch_keeps_selection_owned_atomic_damaged_and_terminally_erased() {
+    let source=include_str!("../servers/sexdisplay/src/main.rs");
+    let begin=source.find("                sex_pdx::text_batch::BEGIN |").unwrap();
+    let end=source[begin..].find("                // ── Text rendering opcodes").unwrap()+begin;
+    let route=&source[begin..end];
+    assert!(route.contains("sex_pdx::text_batch::SELECT"));
+    assert!(route.find("slot.owner_pd != msg.caller_pd").unwrap()<route.find("TEXT_STAGES[index].receive").unwrap());
+    assert!(route.find("if let Some((len,color,bytes))").unwrap()<route.find("slot.selection_start = selection_start").unwrap());
+    assert!(route.contains("TEXT_STAGES[index].selection()"));
+    assert!(route.contains("changed |= (slot.selection_start, slot.selection_end) != (selection_start, selection_end)"));
+    assert!(route.contains("text_damage.add(old_damage"));
+    let lifecycle=include_str!("../servers/sexdisplay/src/surface_lifecycle.rs");
+    assert!(lifecycle.contains("surface.erase_selection();\n                *surface = SURFACE_EMPTY;"));
+    assert!(lifecycle.contains("write_volatile(&mut self.selection_start, 0)"));
+    assert!(lifecycle.contains("write_volatile(&mut self.selection_end, 0)"));
+    assert!(source.contains("slot.erase_selection();\n                                *slot = SURFACE_EMPTY;"));
+}

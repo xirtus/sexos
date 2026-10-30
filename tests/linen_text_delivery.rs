@@ -115,3 +115,49 @@ fn op(opcode:u64,surface:u64)->Operation{Operation{opcode,surface,packed:11,cont
  for _ in 0..4{o.poll(4,|v|{if let Some((_,_,_))=stage.receive(3,v.surface,text_batch::Request::decode(v.opcode,v.packed,v.control).unwrap()){applied=Some(v);}Admission::Accepted});}
  stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata.selected,4);0});assert!(applied.is_some());assert_eq!(o.poll(4,|_|panic!()),Poll::Idle);
 }
+
+#[test]fn selected_atomic_full_at_every_boundary_retains_bytes_range_sequence_and_receipt(){
+ let text=[b'x';512];
+ for full_at in 0..67 {
+  let mut o=Outbox::atomic(300);let mut stage=display_transaction::Stage::EMPTY;
+  assert!(o.queue_selected(&text,0x123456,metadata(31),(17,509)));
+  let mut accepted=Vec::new();let mut deferred=None;let mut commits=0;
+  for _ in 0..100 {let _=o.poll(4,|op|{
+   if accepted.len()==full_at && deferred.is_none(){deferred=Some(op);return Admission::Full;}
+   if accepted.len()==full_at{assert_eq!(Some(op),deferred);}
+   let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();
+   if let Some((n,_,bytes))=stage.receive(15,300,req){assert_eq!(n,512);assert_eq!(&bytes[..n],&text);commits+=1;}
+   else{assert_eq!(stage.selection(),(0,0));}
+   accepted.push(op);Admission::Accepted
+  });if accepted.len()==67{break;}}
+  assert!(deferred.is_some());assert_eq!(commits,1);assert_eq!(stage.selection(),(17,509));
+  assert_eq!(accepted[65].opcode,text_batch::SELECT);assert_eq!(accepted[66].opcode,text_batch::COMMIT);
+  assert_eq!(o.poll(4,|_|panic!("await receipt")),Poll::Pending);
+  let mut word=0;stage.poll_reply(|_,v|{word=v;1});assert_eq!(o.receive(1,word),Some(Receipt{metadata:metadata(31),bytes:512}));
+  assert_eq!(o.receive(1,word),None);assert_eq!(o.poll(4,|_|panic!()),Poll::Idle);
+ }
+}
+#[test]fn legacy_queue_clears_old_atomic_selection_and_styled_legacy_or_invalid_ranges_are_atomic(){
+ let mut o=Outbox::atomic(300);let mut stage=display_transaction::Stage::EMPTY;
+ assert!(o.queue_selected(b"words",1,metadata(1),(1,4)));
+ for _ in 0..5{o.poll(4,|op|{stage.receive(15,300,text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap());Admission::Accepted});}
+ assert_eq!(stage.selection(),(1,4));stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata,metadata(1));0});
+ assert!(o.queue(b"next",1,metadata(2)));
+ for range in[(4,2),(1,1),(0,5)]{assert!(!o.queue_selected(b"next",2,metadata(3),range));}
+ let mut seq=0;let mut saw_select=false;
+ for _ in 0..5{o.poll(4,|op|{saw_select|=op.opcode==text_batch::SELECT;let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();if let text_batch::Request::Begin{sequence,..}=req{seq=sequence;}stage.receive(15,300,req);Admission::Accepted});}
+ assert_eq!(seq,2);assert!(!saw_select);assert_eq!(stage.selection(),(0,0));
+ stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata,metadata(2));0});
+ let mut legacy=Outbox::new(200);assert!(!legacy.queue_selected(b"words",1,metadata(1),(0,3)));assert!(!legacy.pending());
+}
+#[test]fn queued_selection_never_changes_blocked_active_style_and_latest_style_coalesces(){
+ let mut o=Outbox::atomic(300);let mut stage=display_transaction::Stage::EMPTY;
+ assert!(o.queue_selected(b"same words",1,metadata(1),(0,4)));
+ let mut blocked=None;assert_eq!(o.poll(8,|op|{if op.opcode==text_batch::SELECT{blocked=Some(op);Admission::Full}else{stage.receive(15,300,text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap());Admission::Accepted}}),Poll::Deferred);
+ o.queue_selected(b"same words",1,metadata(2),(1,5));o.queue_selected(b"same words",1,metadata(3),(5,10));
+ let mut first=true;
+ o.poll(4,|op|{if first{assert_eq!(Some(op),blocked);first=false;}stage.receive(15,300,text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap());Admission::Accepted});
+ assert_eq!(stage.selection(),(0,4));stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata,metadata(1));0});
+ for _ in 0..4{o.poll(4,|op|{stage.receive(15,300,text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap());Admission::Accepted});}
+ assert_eq!(stage.selection(),(5,10));stage.poll_reply(|_,v|{assert_eq!(o.receive(1,v).unwrap().metadata,metadata(3));0});assert!(!o.pending());
+}

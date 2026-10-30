@@ -37,14 +37,16 @@ pub fn route_signal(caller_pd_id: u32, target_pd_id: u32, signum: u8, cap_id: u6
 pub fn send_reply(target_pd_id: u32, val: u64) -> Result<(), IpcError> {
     if !crate::app_resources::accepts_ipc(target_pd_id) {return Err(IpcError::InvalidTarget);}
     if let Some(pd) = DOMAIN_REGISTRY.get(target_pd_id) {
+        let caller_pd = crate::core_local::CoreLocal::get().current_pd_ref().id;
+        let caller_task = crate::ipc::sender::current_task(caller_pd)
+            .ok_or(IpcError::InvalidCapability)?;
         // 1. Enqueue the value into the target's internal reply slot
         // Keep the earlier reply until consumed. Sext retries a full ACK slot.
         let mut replies = pd.incoming_replies.lock();
         if replies.len() >= 1 {
             return Err(IpcError::BufferFull);
         }
-        let caller_pd = crate::core_local::CoreLocal::get().current_pd_ref().id;
-        replies.push_back(IpcReply { value: val, caller_pd });
+        replies.push_back(IpcReply { value: val, caller_pd, caller_task });
         drop(replies);
 
         // 2. Unpark the main task to trigger immediate processing
