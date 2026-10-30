@@ -568,6 +568,8 @@ impl Client {
                     Step::ReadAck => len > 0 && len <= MAX_BYTES && generation != 0,
                     Step::FinishAck => {
                         len == self.len && generation == self.generation && hash == self.digest
+                            && abi::hash(&self.payload[..self.len]) == self.digest
+                            && abi::text(&self.payload[..self.len])
                     }
                     Step::CancelAck => len == 0 && generation == 0 && hash == 0,
                     _ => false,
@@ -623,7 +625,6 @@ impl Client {
                 if self.step != Step::Data
                     || offset != self.offset
                     || count != (self.len - self.offset).min(16)
-                    || !abi::text(&bytes[..count])
                 {
                     self.uncertain();
                     return true;
@@ -632,7 +633,10 @@ impl Client {
                 self.offset += count;
                 self.progress(now);
                 if self.offset == self.len {
-                    if abi::hash(&self.payload[..self.len]) != self.digest {
+                    if abi::hash(&self.payload[..self.len]) != self.digest
+                        || !abi::text(&self.payload[..self.len]) {
+                        // A scalar may span several register DATA packets. Only
+                        // the complete immutable body is a text boundary.
                         self.uncertain()
                     } else {
                         self.step = Step::Finish

@@ -1,5 +1,5 @@
 //! Pure bounded document layout. Rendering never modifies stored bytes.
-use sex_pdx::document_view::{Layout,TOOLBAR_CELL,TOOLBAR_LABELS};
+use sex_pdx::{document_view::{Layout,TOOLBAR_CELL,TOOLBAR_LABELS},text_encoding as utf8};
 #[derive(Clone, Copy)]
 pub struct Text {
     pub bytes: [u8; 512],
@@ -18,6 +18,12 @@ impl Text {
         if self.len < 512 {
             self.bytes[self.len] = b;
             self.len += 1;
+        }
+    }
+    fn scalar(&mut self, bytes: &[u8]) {
+        if bytes.len() <= self.bytes.len() - self.len {
+            self.bytes[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+            self.len += bytes.len();
         }
     }
     fn line(&mut self, b: &[u8], cols: usize) {
@@ -91,7 +97,7 @@ pub fn render_selection(
             row[2..2 + label.len()].copy_from_slice(label);
             t.line(&row[..2 + label.len()], l.cols);
         }
-        for label in [b"Ctrl A select all".as_slice(),b"Ctrl C/X/V copy/cut/paste",b"Esc returns to document"].iter().take(available-count) {
+        for label in [b"Ctrl A select all".as_slice(),b"Ctrl C/X/V copy/cut/paste",b"Ctrl Shift U Unicode",b"Esc returns to document"].iter().take(available-count) {
             t.line(label,l.cols);
         }
         return t;
@@ -116,25 +122,44 @@ pub fn render_selection(
     let toolbar_budget = l.toolbar_rows * ((per * TOOLBAR_CELL).min(l.cols) + 1);
     let hint_budget = l.hint_rows() * (normal_hint.len().max(uncertain_hint.len()).min(l.cols) + 1);
     let chrome_budget = header_budget + toolbar_budget + hint_budget;
-    let rows = l
-        .body_rows()
-        .min(512usize.saturating_sub(chrome_budget) / (width + 2));
+    // Reserve by the largest actual wrapped row, not four bytes per cell
+    // across the entire document. One emoji must not collapse an otherwise
+    // ASCII viewport. This bound depends only on source and geometry, so a
+    // transient status/name change still cannot reflow an unchanged body.
+    let mut max_row_bytes = 0;
+    let mut row_bytes = 0;
+    let mut row_cells = 0;
+    let mut at = 0;
+    while let Some((scalar,end)) = utf8::cell(buf,at) {
+        if scalar != b'\n' as u32 {
+            row_bytes += if core::str::from_utf8(&buf[at..end]).is_ok()&&utf8::is_text_scalar(scalar){end-at}else{3};
+        }
+        row_cells += 1;
+        if scalar == b'\n' as u32 || row_cells >= width && end < buf.len() {
+            max_row_bytes=max_row_bytes.max(row_bytes);row_bytes=0;row_cells=0;
+        }
+        at=end;
+    }
+    max_row_bytes=max_row_bytes.max(row_bytes);
+    let rows = l.body_rows().min(512usize.saturating_sub(chrome_budget) / (max_row_bytes + 2));
     if rows == 0 {
         return t;
     }
     let mut cline = 0;
     let mut line = 0;
     let mut col = 0;
-    let cursor = cursor.min(buf.len());
-    for (i, &b) in buf.iter().enumerate() {
+    let cursor = utf8::prefix(buf,cursor.min(buf.len()));
+    let mut i = 0;
+    while let Some((scalar,end)) = utf8::cell(buf,i) {
         if i == cursor {
             cline = line;
         }
         col += 1;
-        if b == b'\n' || col >= width && i + 1 < buf.len() {
+        if scalar == b'\n' as u32 || col >= width && end < buf.len() {
             line += 1;
             col = 0;
         }
+        i=end;
     }
     if cursor == buf.len() {
         cline = line;
@@ -150,7 +175,8 @@ pub fn render_selection(
     if l.cols == 1 { t.byte(b'#'); return t; }
     let mut line = 0;
     let mut col = 0;
-    for i in 0..=buf.len() {
+    let mut i = 0;
+    loop {
         if line >= *top + rows {
             break;
         }
@@ -160,10 +186,14 @@ pub fn render_selection(
         if i == buf.len() {
             break;
         }
-        let b = buf[i];
-        if line >= *top && b != b'\n' {
+        let (scalar,end) = utf8::cell(buf,i).unwrap();
+        if line >= *top && scalar != b'\n' as u32 {
             let at = t.len;
-            t.byte(if (32..=126).contains(&b) { b } else { b'?' });
+            // A valid source scalar reaches Display unchanged. Invalid read-only
+            // bytes get one visible replacement cell, never a stored rewrite.
+            if core::str::from_utf8(&buf[i..end]).is_ok() && utf8::is_text_scalar(scalar) {
+                t.scalar(&buf[i..end]);
+            } else { t.scalar("\u{fffd}".as_bytes()); }
             if t.len > at
                 && selection.is_some_and(|(start, end)| {
                     start < end && end <= buf.len() && i >= start && i < end
@@ -174,13 +204,14 @@ pub fn render_selection(
             }
         }
         col += 1;
-        if b == b'\n' || col >= width && i + 1 < buf.len() {
+        if scalar == b'\n' as u32 || col >= width && end < buf.len() {
             if line >= *top {
                 t.byte(b'\n');
             }
             line += 1;
             col = 0;
         }
+        i=end;
     }
     t
 }
@@ -207,24 +238,22 @@ pub fn vertical_steps(
     steps: usize,
 ) -> Option<usize> {
     let width = cols.saturating_sub(1).max(1);
-    let cursor = cursor.min(buf.len());
+    let cursor = utf8::prefix(buf,cursor.min(buf.len()));
     let mut line = 0usize;
     let mut current = 0usize;
     let mut start = 0usize;
     let mut col = 0usize;
-    for (i, &b) in buf.iter().enumerate() {
+    let mut i = 0;
+    while let Some((scalar,end)) = utf8::cell(buf,i) {
         col += 1;
-        if b == b'\n' || col >= width && i + 1 < buf.len() {
-            if i + 1 <= cursor {
-                current = line + 1;
-                start = i + 1;
-            }
-            line += 1;
-            col = 0;
+        if scalar == b'\n' as u32 || col >= width && end < buf.len() {
+            if end <= cursor { current = line + 1; start = end; }
+            line += 1; col = 0;
         }
+        i=end;
     }
     if *goal == usize::MAX {
-        *goal = cursor - start;
+        *goal = utf8::cells(&buf[start..cursor]);
     }
     let target = if up {
         if current == 0 {
@@ -240,18 +269,16 @@ pub fn vertical_steps(
     let mut line = 0usize;
     let mut start = 0usize;
     let mut col = 0usize;
-    for (i, &b) in buf.iter().enumerate() {
+    let mut i = 0;
+    while let Some((scalar,end)) = utf8::cell(buf,i) {
         col += 1;
-        if b == b'\n' || col >= width && i + 1 < buf.len() {
-            if line == target {
-                return Some(start + (*goal).min(i - start));
-            }
-            start = i + 1;
-            line += 1;
-            col = 0;
+        if scalar == b'\n' as u32 || col >= width && end < buf.len() {
+            if line == target { return Some(start + utf8::offset(&buf[start..i],*goal)); }
+            start=end;line+=1;col=0;
         }
+        i=end;
     }
-    Some(start + (*goal).min(buf.len() - start))
+    Some(start + utf8::offset(&buf[start..],*goal))
 }
 
 /// Preflight a whole replacement before an undo entry or byte is changed.
@@ -273,10 +300,8 @@ pub fn replace(
     incoming: &[u8],
 ) -> Option<usize> {
     let next = replacement_len(*len, range, incoming.len())?;
-    if !incoming
-        .iter()
-        .all(|&b| b == b'\n' || (32..=126).contains(&b))
-    {
+    if !utf8::valid_text(incoming) || !utf8::valid_text(&buf[..*len])
+        || !utf8::is_boundary(&buf[..*len],range.0) || !utf8::is_boundary(&buf[..*len],range.1) {
         return None;
     }
     let (start, end) = range;

@@ -2,6 +2,7 @@
 //! Actual BOOT clipboard ABI and broker; host callbacks model only IPC admission.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
 #[path = "../crates/sex-pdx/src/text_selection.rs"] pub mod text_selection;
 #[path = "../crates/sex-pdx/src/clipboard.rs"] pub mod clipboard;
@@ -113,12 +114,12 @@ fn status(r: Response, phase: Phase, expected: Status) {
     receive(&mut b,Q,Request::Query {ticket:t},999999).unwrap(); assert_eq!(broker::packet(&b,0),Some(packet)); admitted(&mut b,999999); assert_eq!(b.publication(),Some(publication));
 }
 
-#[test] fn malformed_order_tail_ascii_and_hash_poison_whole_stage_without_replacing_publication() {
+#[test] fn malformed_order_tail_and_hash_poison_whole_stage_without_replacing_publication() {
     for bad in 0..5 {
         let mut b=fresh(); publish(&mut b,B,b"old",0,true); let old=b.publication(); let body=b"abcdefghijklmnopq"; let t=begin(&mut b,Q,body,1); write(&mut b,Q,t,&body[..16],1);
         let mut bytes=[0;16]; bytes[0]=b'q'; let (offset,count)=match bad {0=>(32,1),1=>(16,2),_ =>(16,1)};
         if bad==2 {bytes[1]=1;} if bad==3 {bytes[0]=0xff;}
-        if bad<4 {assert_eq!(b.receive(Q,Request::Write{ticket:t,offset,count,bytes},true,1),Err(Status::Invalid)); assert!(broker::clean(&b).0);}
+        if bad<3 {assert_eq!(b.receive(Q,Request::Write{ticket:t,offset,count,bytes},true,1),Err(Status::Invalid)); assert!(broker::clean(&b).0);}
         else {receive(&mut b,Q,Request::Write{ticket:t,offset:16,count:1,bytes},1).unwrap();}
         assert_eq!(receive(&mut b,Q,Request::Publish{ticket:t,len:17,hash:0},1),Err(Status::Invalid)); status(admitted(&mut b,1)[0].1,Phase::Publish,Status::Invalid);
         assert_eq!(b.publication(),old);assert!(broker::clean(&b).0);assert_eq!(&broker::committed(&b)[..3],b"old");
@@ -246,4 +247,27 @@ fn broker_step(b: &mut Broker, s: Subject, c: &mut clipboard_client::Client, now
     assert_eq!(c.take_event(),Some(Event::Export{ticket:t,cut:true}));assert!(c.publish(t,SOURCE,&[b'x';512],1));client_step(&mut b,Q,&mut c,1);broker_step(&mut b,Q,&mut c,1,&mut full);broker_step(&mut b,Q,&mut c,1,&mut full);assert!(!b.outbox_pending());assert!(b.pending());
     assert_eq!(client_step(&mut b,Q,&mut c,1),4);assert!(!broker::clean(&b).0);c.cancel(1);assert!(c.storage_erased());client_step(&mut b,Q,&mut c,1);assert_eq!(broker::clean(&b),(true,true,true));assert!(!b.busy());
     broker_step(&mut b,Q,&mut c,1,&mut full);assert_ne!(c.view(),View::Cancelled);broker_step(&mut b,Q,&mut c,1,&mut full);assert_eq!(c.view(),View::Cancelled);assert!(c.packet_erased());assert!(!b.pending());assert!(b.publication().is_none());
+}
+
+#[test] fn utf8_scalars_cross_every_16_byte_boundary_without_changing_exact_publication_or_read(){
+    for scalar in ["é","€","𐍈"] {for split in 1..scalar.len(){
+        let mut body=vec![b'a';MAX_BYTES];for boundary in (16..MAX_BYTES).step_by(16){let start=boundary-split;body[start..start+scalar.len()].copy_from_slice(scalar.as_bytes());}
+        assert!(text(&body));assert!(!text(&body[..16]));let mut b=fresh();publish(&mut b,Q,&body,1,true);let p=b.publication().unwrap();
+        assert_eq!((p.owner,p.source,p.len,p.hash),(Q,SOURCE,MAX_BYTES,hash(&body)));assert_eq!(&broker::committed(&b)[..MAX_BYTES],body);
+        let t=read(&mut b,Q2,1);assert_eq!(read_all(&mut b,Q2,t,MAX_BYTES,1),body);
+        receive(&mut b,Q2,Request::Finish{ticket:t,generation:p.generation,hash:p.hash},1).unwrap();status(admitted(&mut b,1)[0].1,Phase::Finish,Status::Ok);assert!(broker::clean(&b).0);assert!(broker::clean(&b).2);
+    }}
+}
+
+#[test] fn opaque_malformed_whole_uploads_fail_publish_and_preserve_prior_clipboard(){
+    let mut bodies=vec![vec![0xff],vec![0xc0,0xaf],vec![0xe2,0x82],vec![0xed,0xa0,0x80],vec![0xf4,0x90,0x80,0x80]];
+    for scalar in (0..=159).filter(|c|(*c<32&&*c!=9&&*c!=10)||(127..=159).contains(c)){let mut bytes=[0;4];bodies.push(char::from_u32(scalar).unwrap().encode_utf8(&mut bytes).as_bytes().to_vec());}
+    for body in bodies{
+        let mut b=fresh();publish(&mut b,B,"prior €".as_bytes(),0,true);let old=b.publication();let t=intent(&mut b,Q,Action::Cut,1);
+        receive(&mut b,Q,Request::Begin{ticket:t,len:body.len(),source:SOURCE},1).unwrap();admitted(&mut b,1);write(&mut b,Q,t,&body,1);
+        assert_eq!(b.publication(),old);assert_eq!(receive(&mut b,Q,Request::Publish{ticket:t,len:body.len(),hash:hash(&body)},1),Err(Status::Invalid));
+        status(admitted(&mut b,1)[0].1,Phase::Publish,Status::Invalid);assert_eq!(b.publication(),old);assert_eq!(&broker::committed(&b)[.."prior €".len()],"prior €".as_bytes());assert!(broker::clean(&b).0);
+    }
+    let mut b=fresh();publish(&mut b,B,b"prior",0,true);let old=b.publication();let body="012345678901234€".as_bytes();let t=begin(&mut b,Q,body,1);write(&mut b,Q,t,&body[..16],1);
+    assert_eq!(receive(&mut b,Q,Request::Publish{ticket:t,len:body.len(),hash:hash(body)},1),Err(Status::Invalid));assert_eq!(b.publication(),old);assert!(broker::clean(&b).0);
 }

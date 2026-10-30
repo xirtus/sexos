@@ -43,6 +43,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/desktop_style.rs
   crates/sex-pdx/src/text_batch.rs
   crates/sex-pdx/src/text_selection.rs
+  crates/sex-pdx/src/text_encoding.rs
   crates/sex-pdx/src/clipboard.rs
   crates/sex-pdx/src/clipboard_client.rs
   crates/sex-pdx/src/app_key.rs

@@ -144,8 +144,7 @@ impl App {
             if let Some(s)=self.selection.snapshot(){
                 let source=s.source();
                 let moved=match key.code {
-                    0x69=>{let _=self.selection.left(source,key.shift);true},
-                    0x6a=>{let _=self.selection.right(source,key.shift);true},
+                    0x69|0x6a=>{self.selection_horizontal(key.code==0x6a,key.shift);true},
                     0x66 if key.shift=>{let _=self.selection.home(source,true);true},
                     0x6b if key.shift=>{let _=self.selection.end(source,true);true},
                     0x67|0x6c|0x68|0x6d if key.shift=>{
@@ -162,6 +161,13 @@ impl App {
             }
         }
         self.key(key.code as u64);
+    }
+    fn selection_horizontal(&mut self,right:bool,extend:bool){
+        let Some(snapshot)=self.selection.snapshot()else{return};
+        let(lo,hi)=snapshot.range();
+        let position=if !extend&&lo!=hi{if right{hi}else{lo}}
+            else{let body=self.reader_body();if right{sex_pdx::text_encoding::next(body,snapshot.caret())}else{sex_pdx::text_encoding::previous(body,snapshot.caret())}};
+        let _=self.selection.move_to(snapshot.source(),position,extend);
     }
     fn clipboard_events(&mut self){
         self.sync_selection();
@@ -236,6 +242,13 @@ impl App {
 
         if self.importer.view()==document_import::View::Uncertain{self.import_panel=true;self.import_status=import_view::Status::Uncertain;sex_pdx::serial_record!("[browser.import.blocked] uncertain=1 effects=0");return;}
         if self.importer.busy(){sex_pdx::serial_record!("[browser.import.blocked] pending=1 effects=0");return;}
+        let import_bytes=if let Some(body)=self.import_source.as_ref(){body.as_bytes()}
+            else if self.exchange.has_document(){self.exchange.document()}
+            else{self.importer.document().map_or(&[][..],|body|body.as_bytes())};
+        if !sex_pdx::text_encoding::valid_text(import_bytes){
+            self.import_panel=true;self.import_editor.cancel();self.import_status=import_view::Status::UnsupportedText;
+            sex_pdx::serial_record!("[browser.import.rejected] reason=unsupported_text effects=0 source_preserved=1");return;
+        }
         if self.import_source.is_none(){
             if let Some(body)=self.exchange.take_document_for_import(){self.import_ticket=self.exchange.ticket();self.import_source=Some(body);}
             else if let Some(body)=self.importer.take_document(){self.import_source=Some(body);}
@@ -249,6 +262,10 @@ impl App {
         self.resources("change",true);
     }
     fn submit_import(&mut self){
+        if self.import_source.as_ref().is_some_and(|body|!sex_pdx::text_encoding::valid_text(body.as_bytes())){
+            self.import_editor.cancel();self.import_status=import_view::Status::UnsupportedText;
+            sex_pdx::serial_record!("[browser.import.rejected] reason=unsupported_text effects=0 source_preserved=1");return;
+        }
         let Some(body)=self.import_source.take()else{return;};let name=self.import_editor.name();let len=body.as_bytes().len();let hash=public_fingerprint(body.as_bytes());
         let accepted=match self.importer.start(body,name,sex_pdx::get_ticks()){Ok(())=>true,Err(body)=>{self.import_source=Some(body);false}};
         self.import_status=if accepted{import_view::Status::Saving}else if self.importer.view()==document_import::View::Uncertain{import_view::Status::Uncertain}else{import_view::Status::Unavailable};
@@ -740,7 +757,7 @@ impl SexApp for App {
                     sex_pdx::clipboard_client::View::Cancelled=>b"COPY CANCELLED / CTRL A C",
                     _=>if self.selection.range().map_or(false,|(lo,hi)|hi>lo){b"CTRL C COPY / SHIFT SELECT"}else{b""},
                 };
-                if !label.is_empty(){if let Some((_,_,_,rows,cols,_))=reader_layout{if rows>1{let at=(rows-1)*(cols+1);text.bytes[at..at+cols].fill(b' ');let n=cols.min(label.len());text.bytes[at..at+n].copy_from_slice(&label[..n]);}}}
+                if !label.is_empty(){if let Some((_,_,_,rows,cols,_))=reader_layout{if rows>1{document_reader::replace_footer(&mut text.bytes,text.len,cols,label);}}}
             }
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&self.https_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}

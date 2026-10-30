@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/text_encoding.rs"]
+pub mod text_encoding;
 pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 #[path = "../servers/quil/src/display_delivery.rs"]
 mod delivery;
@@ -724,7 +726,7 @@ fn replacement_rejects_unsupported_text_and_stale_selection_capacity_without_par
     let mut body = [b'a'; 12288];
     let original = body;
     let mut len = 12288;
-    for incoming in [&b"\t"[..], &b"\0"[..], &b"\xff"[..]] {
+    for incoming in [&b"\r"[..], &b"\0"[..], &b"\xff"[..], &b"\xe2\x82"[..], &b"\xc2\x80"[..]] {
         assert_eq!(view::replace(&mut body, &mut len, (0, 3), incoming), None);
         assert_eq!(body, original);
         assert_eq!(len, 12288);
@@ -926,4 +928,61 @@ fn status_and_name_changes_cannot_scroll_or_reflow_the_editor_body() {
             }
         }
     }
+}
+
+
+#[test]
+fn utf8_views_preserve_source_bytes_scalar_columns_and_complete_selected_glyphs() {
+    let body="aé€🙂漢\tZ\nö".as_bytes();let original=body.to_vec();
+    for target in [9,16,18] {for (w,h) in [(624,706),(496,674),(220,150),(80,80),(22,50)] {
+        let l=Layout::new(target,w,h);
+        for caret in (0..=body.len()).filter(|&n|text_encoding::is_boundary(body,n)) {
+            let t=view::render_selection(body,caret,&mut 0,l,b"note",true,b"READY",None,None,Some((1,body.len())));
+            let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();assert_eq!(body,original);
+            assert!(t.len<=512);if l.body_rows()>0 {assert!(text.contains('#'));}
+            for row in text.split('\n'){assert!(row.chars().count()<=l.cols,"{w} {h}: {row:?}");}
+            if let Some((a,b))=t.selection {assert!(text_encoding::is_boundary(&t.bytes[..t.len],a));assert!(text_encoding::is_boundary(&t.bytes[..t.len],b));}
+        }
+    }}
+    let t=view::render_selection(body,body.len(),&mut 0,Layout::new(9,624,706),b"note",false,b"READY",None,None,Some((1,body.len())));
+    let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();assert!(text.contains(core::str::from_utf8(body).unwrap()));
+    let (a,b)=t.selection.unwrap();assert_eq!(&t.bytes[a..b],&body[1..]);
+}
+#[test]
+fn utf8_full_capacity_view_keeps_caret_and_never_splits_frame_or_vertical_targets() {
+    let text="é€🙂漢\tQ\n".repeat(700);let body=text.as_bytes();let body=&body[..text_encoding::prefix(body,12288)];
+    for (w,h) in [(1280,700),(624,706),(496,319),(220,150),(80,80)] {
+        let l=Layout::new(9,w,h);let mut top=0;
+        let t=view::render(body,body.len(),&mut top,l,b"utf8",true,b"READY",None,None);
+        assert!(core::str::from_utf8(&t.bytes[..t.len]).unwrap().contains('#'));assert!(t.len<=512);
+        let mut goal=usize::MAX;let mut caret=body.len();
+        for _ in 0..40 {if let Some(to)=view::vertical(body,caret,l.cols,&mut goal,true){assert!(text_encoding::is_boundary(body,to));assert!(to<=caret);caret=to;}}
+    }
+}
+#[test]
+fn utf8_replacement_rejects_partial_boundaries_without_touching_bytes_or_tail() {
+    let mut buf=[0;12288];let source="aé€🙂z".as_bytes();buf[..source.len()].copy_from_slice(source);let original=buf;let mut len=source.len();
+    for range in [(2,3),(1,2),(4,6),(6,7),(9,10)] {assert_eq!(view::replace(&mut buf,&mut len,range,b"x"),None);assert_eq!(buf,original);assert_eq!(len,source.len());}
+    assert_eq!(view::replace(&mut buf,&mut len,(1,6),"ö\t".as_bytes()),Some(4));
+    assert_eq!(&buf[..len],"aö\t🙂z".as_bytes());assert!(buf[len..source.len()].iter().all(|b|*b==0));
+}
+
+#[test]
+fn tall_narrow_caret_stays_inside_the_actual_display_line_table() {
+    for body in ["x\n".repeat(30),"é\n".repeat(40),"🙂\n".repeat(40)] {
+        for w in [22,40,82,100,144,220,496,624] {
+            let l=Layout::new(9,w,700);let t=view::render(body.as_bytes(),body.len(),&mut 0,l,b"note",false,b"READY",None,None);
+            let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();
+            assert!(text.lines().count()<=24,"{w}: {} rows",text.lines().count());
+            if l.rows>0 {assert!(text.lines().position(|r|r.contains('#')).unwrap()<24);}
+        }
+    }
+}
+
+#[test]
+fn one_four_byte_character_does_not_collapse_otherwise_ascii_viewport() {
+    let mut body=("a".repeat(40)+"\n").repeat(20);body.push('🙂');
+    let l=Layout::new(9,624,706);let t=view::render(body.as_bytes(),body.len(),&mut 0,l,b"note",false,b"READY",None,None);
+    let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();
+    assert!(text.lines().count()>=l.chrome_rows()+5);assert!(text.ends_with("🙂#"));assert!(t.len<=512);
 }

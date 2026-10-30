@@ -10,9 +10,9 @@ FONT=checker.font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text(
 
 class PrintableFont(unittest.TestCase):
     def test_complete_printable_coverage_and_explicit_unsupported_characters(self):
-        self.assertEqual(len(FONT),95)
-        for code in range(32,127):self.assertEqual(checker.glyph(FONT,chr(code)),FONT[code-32])
-        for char in ['','aa','\n','\t','\x00','\x7f','é','ß']:
+        self.assertEqual(len(FONT['ascii']),95)
+        for code in range(32,127):self.assertEqual(checker.glyph(FONT,chr(code)),FONT['ascii'][code-32])
+        for char in ['','aa','\n']:
             with self.assertRaises(ValueError):checker.glyph(FONT,char)
     def test_all_lowercase_shapes_are_distinct_from_uppercase(self):
         for code in range(ord('a'),ord('z')+1):
@@ -124,5 +124,34 @@ class KaleidoPixelChecks(unittest.TestCase):
         self.assertTrue(checker.verify_kaleido_layout(KALEIDO_LOG,kaleido_image()[:-1],FONT))
         for log in ['',KALEIDO_LOG.replace('sid=300','sid=200'),KALEIDO_LOG.replace('x=640','x=-1'),KALEIDO_LOG.replace('x=640','x=1000'),KALEIDO_LOG.replace('y=385','y=10'),KALEIDO_LOG.replace('w=640','w=100'),KALEIDO_LOG.replace('h=335','h=50'),KALEIDO_LOG.replace('x=640','x=bad')]:
             self.assertTrue(checker.verify_kaleido_layout(log,kaleido_image(),FONT))
+
+
+class ScalarFontChecks(unittest.TestCase):
+    def test_finite_repertoire_and_unknown_box_are_source_bound_and_json_stable(self):
+        import json
+        frozen=json.loads(json.dumps(FONT))
+        for char in 'éÉäÄöÖüÜß€…←↑→↓':
+            self.assertTrue(any(checker.glyph(FONT,char)))
+            self.assertEqual(tuple(checker.glyph(frozen,char)),tuple(checker.glyph(FONT,char)))
+        self.assertEqual(checker.glyph(FONT,'\t'),(0,)*7)
+        self.assertEqual(checker.glyph(FONT,'\u00a0'),(0,)*7)
+        self.assertEqual(tuple(checker.glyph(FONT,'😀')),(31,17,21,21,21,17,31))
+        self.assertNotEqual(checker.glyph(FONT,'😀'),checker.glyph(FONT,'?'))
+    def test_incomplete_unbound_and_out_of_cell_scalar_rom_are_rejected(self):
+        source=(ROOT/'servers/sexdisplay/src/main.rs').read_text()
+        for changed in [source.replace('const FONT_UNICODE_5X7:','const UNUSED_UNICODE_5X7:'),
+                        source.replace('[7, 8, 30, 8, 30, 8, 7]','[32, 8, 30, 8, 30, 8, 7]'),
+                        source.replace('map_or(FONT_UNSUPPORTED_5X7','map_or(OTHER_ROM'),
+                        source.replace('[31, 17, 21, 21, 21, 17, 31]','[0, 0, 0, 0, 0, 0, 0]')]:
+            with self.assertRaises(ValueError):checker.font_from_source(changed)
+    def test_independent_cells_retain_exact_scalar_byte_spans_and_replace_invalid_bytes_individually(self):
+        raw='Aé€😀\t\n'.encode()
+        self.assertEqual(checker.text_cells(raw),[('A',0,1),('é',1,3),('€',3,6),('😀',6,10),('\t',10,11),('\n',11,12)])
+        self.assertEqual(checker.text_cells(b'\xe2\x82X\xff'),[('\ufffd',0,1),('\ufffd',1,2),('X',2,3),('\ufffd',3,4)])
+        self.assertEqual(checker.text_cells(b'\xed\xa0\x80'),[('\ufffd',0,1),('\ufffd',1,2),('\ufffd',2,3)])
+    def test_complete_unicode_filename_cells_fail_ascii_question_mark_substitution(self):
+        log=LOG.replace('alpha-note','é€😀').replace('beta-file','Äöß')
+        self.assertEqual(checker.verify(log,image(log),FONT),[])
+        self.assertTrue(checker.verify(log,image(log.replace('é€😀','???')),FONT))
 
 if __name__=='__main__':unittest.main()

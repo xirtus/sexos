@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 #[path = "../crates/sex-pdx/src/text_batch.rs"]
 pub mod text_batch;
@@ -193,7 +194,7 @@ fn actual_owner_surface_retirement_and_slot_rebinding_fence_partial_data() {
         .is_none());
 }
 #[test]
-fn wire_rejects_reserved_bits_zero_wrapping_sequences_bounds_padding_and_controls() {
+fn wire_rejects_reserved_bits_zero_wrapping_sequences_bounds_and_padding() {
     for len in [0, 1, 512] {
         let r = Request::Begin {
             sequence: u32::MAX,
@@ -214,7 +215,6 @@ fn wire_rejects_reserved_bits_zero_wrapping_sequences_bounds_padding_and_control
         (text_batch::CHUNK, 0, 1 << 32 | 1 << 8 | 1),
         (text_batch::CHUNK, 0, 1 << 32 | 9),
         (text_batch::CHUNK, 0x6161, 1 << 32 | 1),
-        (text_batch::CHUNK, 1, 1 << 32 | 1),
     ] {
         assert!(Request::decode(op, a, b).is_none(), "{op:x} {a:x} {b:x}");
     }
@@ -465,4 +465,46 @@ fn production_dispatch_keeps_selection_owned_atomic_damaged_and_terminally_erase
     assert!(lifecycle.contains("write_volatile(&mut self.selection_start, 0)"));
     assert!(lifecycle.contains("write_volatile(&mut self.selection_end, 0)"));
     assert!(source.contains("slot.erase_selection();\n                                *slot = SURFACE_EMPTY;"));
+}
+
+#[test]
+fn utf8_chunks_cross_wire_boundaries_but_only_complete_valid_text_and_scalar_selection_seal(){
+    let text="1234567é€😀\t\nlast".as_bytes();
+    let mut stage=Stage::EMPTY;begin(&mut stage,1,text.len());
+    for(i,part)in text.chunks(8).enumerate(){
+        let mut bytes=[0;8];bytes[..part.len()].copy_from_slice(part);
+        let request=Request::Chunk{sequence:1,offset:i*8,count:part.len(),bytes};
+        let(op,a,b)=request.wire();assert_eq!(Request::decode(op,a,b),Some(request));
+        assert!(stage.receive(9,156,request).is_none());
+    }
+    selected(&mut stage,1,7,16);
+    assert_eq!(stage.selection(),(0,0));
+    let digest=text_batch::selected_hash(text,7,16).unwrap();
+    let(len,_,bytes)=stage.receive(9,156,Request::Commit{sequence:1,hash:digest}).unwrap();
+    assert_eq!(len,text.len());assert_eq!(&bytes[..len],text);assert_eq!(stage.selection(),(7,16));
+    for(start,end)in[(8,9),(7,8),(10,12),(13,16)]{
+        let mut stage=Stage::EMPTY;begin(&mut stage,2,text.len());
+        for(i,part)in text.chunks(8).enumerate(){chunk(&mut stage,2,i*8,part);}
+        selected(&mut stage,2,start,end);
+        assert!(stage.receive(9,156,Request::Commit{sequence:2,hash:text_batch::selected_hash(text,start,end).unwrap()}).is_none());
+        assert_eq!(stage.selection(),(0,0));stage.poll_reply(|_,_|panic!("invalid selection ACK"));
+    }
+}
+#[test]
+fn whole_text_validation_rejects_controls_and_malformed_utf8_without_rewriting_or_receipt(){
+    for text in[&b"\0"[..],&b"\x1b"[..],&b"\x7f"[..],&b"\xc2\x85"[..],&b"\xc0\xaf"[..],&b"\xed\xa0\x80"[..],&b"\xf4\x90\x80\x80"[..],&b"\xe2\x82"[..],&b"\xff"[..]]{
+        let mut stage=Stage::EMPTY;begin(&mut stage,1,text.len());
+        chunk(&mut stage,1,0,text);
+        assert!(stage.receive(9,156,Request::Commit{sequence:1,hash:hash(text)}).is_none());
+        stage.poll_reply(|_,_|panic!("invalid text ACK"));
+        assert!(stage.receive(9,156,Request::Commit{sequence:1,hash:hash(b"?")}).is_none());
+    }
+    for complete in[false,true]{
+        let mut text=[b'a';512];text[510]=0xc3;text[511]=if complete{0xa9}else{0x20};
+        let mut stage=Stage::EMPTY;begin(&mut stage,1,text.len());
+        for(i,part)in text.chunks(8).enumerate(){chunk(&mut stage,1,i*8,part);}
+        let result=stage.receive(9,156,Request::Commit{sequence:1,hash:hash(&text)});
+        assert_eq!(result.is_some(),complete);
+        if let Some((len,_,bytes))=result{assert_eq!(len,512);assert_eq!(&bytes[..len],&text);}
+    }
 }

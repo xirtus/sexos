@@ -25,7 +25,7 @@ STREAM_BODY=(b''.join((b' '*48 if n%11==10 else(f'{n:03d} SEXOS STREAM LINE / SO
 assert len(STREAM_BODY)==12288
 
 def load_pixel_contract(root):
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs'}
+ paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs','text_encoding':'crates/sex-pdx/src/text_encoding.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
  if not re.fullmatch(r'(?s)\s*//[^\n]*\n//! Source-path facade:[^#]*#\[path="\.\./\.\./\.\./crates/sex-http/src/codec\.rs"\]\s*mod codec;\s*pub use self::codec::\*;\s*',sources['wire_facade']):raise ValueError('production HTTP facade no longer uses the single shared codec')
  if '#![no_std]'not in sources['wire_lib']or 'pub use codec::*;'not in sources['wire_lib']or 'mod codec;'not in sources['wire_lib']:raise ValueError('shared HTTP no_std library binding changed')
@@ -52,6 +52,18 @@ def load_pixel_contract(root):
  if dynamic_path and('host.iter().chain(b" ").chain(path)'not in reader or 'clean(*byte)'not in reader or '[browser.http.document]'not in sources['client']or 'positive_release=1'not in sources['client']):raise ValueError('production released document/path rendering contract changed')
  if not any(call in reader for call in('self.render_source(body,path,b"Plain HTTP / no TLS",HOST)','self.render_source(body,path,b"Plain HTTP / no TLS",HOST,selection)'))or 'put(&mut frame,0,header)'not in reader:raise ValueError('production plain reader source selection changed')
  if re.search(r'self\.anchor\s*=\s*info\.offset',reader)or 'pub fn source_anchor(&self)'not in reader:raise ValueError('production reader no longer retains requested source-byte anchor')
+ # Bind the UTF-8 reader to the exact shared decoder and byte-preserving
+ # receive path. ASCII pixel fixtures remain a strict subset of this profile.
+ for token in ('use sex_pdx::text_encoding as text;','end=text::next(body,end);cells+=1;',
+               'text::encode(display_scalar(scalar),&mut bytes)', 'text::REPLACEMENT',
+               'let body_rows=(rows-3).min((CAPACITY-(3*cols+2))/cost);',
+               'replace_row(&mut frame,shown+2,&serialized[..length])',
+               'row_at(frame,row)+frame.cols-length', '.min(MAX_ROWS)',
+               'text::is_boundary(body,lo)&&text::is_boundary(body,hi)'):
+  if token not in reader:raise ValueError('production UTF-8 reader contract changed: '+token)
+ if 'self.document[self.document_len]=byte;'not in sources['client']:raise ValueError('production HTTP body no longer retains exact received bytes')
+ if 'document_reader::replace_footer(&mut text.bytes,text.len,cols,label)'not in sources['app']:raise ValueError('production reader footer no longer follows serialized byte offset')
+ if number('reader',r'const MAX_ROWS: usize = (\d+)')!=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'):raise ValueError('production reader whole-frame row cap differs from Display')
  reader_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),HOST(?:,selection)?\)')
  controls=[]
  for name in ('full','compact','minimal'):
@@ -65,7 +77,7 @@ def load_pixel_contract(root):
  for token in ('frame.end>frame.first','range[length] = b\'-\'','range[length] = b\'/\'','controls.len()+1+length<=frame.cols'):
   if token not in reader:raise ValueError('production finite range/footer contract changed')
  https_reader_footers=[controls[0][0],b'V I',b'I'];reader_footers=[controls[0][1],b'V back',b'V']
- return dict(reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ return dict(reader_encoding='utf-8-scalars',reader_max_rows=number('reader',r'const MAX_ROWS: usize = (\d+)'),reader_tab_cells=1,reader_replacement=0xfffd,reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
@@ -84,7 +96,8 @@ def reader_path(path,contract):
  return path
 
 def reader_frame(body,width,height,contract,anchor=0,expected_path=None):
- """Independent paragraph/chunk model, without calling the Rust reader."""
+ """Independent ASCII fixture model; UTF-8 native profiles use their own oracle."""
+ if any(byte>=127 or byte<32 and byte not in(9,10)for byte in body):raise ValueError('ASCII reader oracle requires UTF-8 profile for non-ASCII or unsupported controls')
  if len(body)>contract['reader_max_body']:raise ValueError('expected document exceeds production body bound')
  if type(anchor)is not int or not 0<=anchor<=contract['reader_max_body']:raise ValueError('requested source anchor outside bounded body extent')
  factor=2 if width>=contract['scale_threshold']else 1

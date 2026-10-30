@@ -10668,7 +10668,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 button, pressed as u8
             );
         }
-        serial_println!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
+        sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
         if button == 1 {
             serial_println!(
@@ -14122,7 +14122,7 @@ unsafe fn open_spindle_in_active_scene() -> bool {
     // Render Spindle output bands.
     spindle_render();
 
-    serial_println!("[spindle.placeholder.open] frame={}", fid);
+    sex_pdx::serial_record!("[spindle.placeholder.open] frame={}", fid);
     launcher_focus_existing(12,SURFACE_ID_SPINDLE,Some(launcher::LiveAction::Open)).unwrap_or(false)
 }
 
@@ -15745,7 +15745,7 @@ unsafe fn toggle_command_palette() -> bool {
         PALETTE_VISIBILITY.set(linen_text_delivery::Operation {
             opcode:0xEE, surface:SURFACE_ID_COMMAND_PALETTE, packed:0, control:0 });
         // If frame doesn't exist yet, just mark closed.
-        serial_println!("[command_palette.close]");
+        sex_pdx::serial_record!("[command_palette.close]");
         true
     } else {
         // Open palette — show the frame and render.
@@ -15771,12 +15771,12 @@ unsafe fn toggle_command_palette() -> bool {
         unsafe { send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, packed, 0); }
         // ── Launcher markers: app subset (indices 0-6) ──
         let app_count: u8 = 7; // FocusSpindle/Quil/Linen/Atlas/Bell/Collar/Mesh
-        serial_println!(
+        sex_pdx::serial_record!(
             "[launcher.open] count={} selected={} ok=1",
             app_count,
             COMMAND_PALETTE_SELECTED
         );
-        serial_println!(
+        sex_pdx::serial_record!(
             "[shell.palette.open] ok=1 selected={} count={}",
             COMMAND_PALETTE_SELECTED,
             COMMAND_LIST.len()
@@ -16138,7 +16138,7 @@ unsafe fn palette_execute_selected() -> bool {
         palette_render_list();
         return false;
     }
-    serial_println!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
+    sex_pdx::serial_record!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
 
     // Route to existing SurfaceAction handler paths.
     // Each of these reuses the same match arms as keyboard-triggered actions.
@@ -17759,7 +17759,7 @@ unsafe fn reparent_frame_to_scene(frame_id: u32, target_scene: u8, reason: &str)
         1 // zero focus is valid
     };
 
-    serial_println!(
+    sex_pdx::serial_record!(
         "[silk.frame.scene.move.done] frame={} from={} to={} ownership_unique=1 focus_valid={} ok=1",
         frame_id, source_scene, target_scene, focus_valid
     );
@@ -26574,7 +26574,7 @@ pub extern "C" fn _start() -> ! {
                                 POINTER_BUTTONS &= !(1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0));
                             }
                             // ── Click/focus proof marker: pointer event received ──
-                            serial_println!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
+                            sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);

@@ -8,7 +8,9 @@ from pathlib import Path
 import sys
 root,out=map(Path,sys.argv[1:]);s=(root/'servers/sexdisplay/src/main.rs').read_text()
 a=s.index('const FONT_ASCII_5X7:');parts=[s[a:s.index('];',s.index('= [',a))+2]]
-for name in ['ascii_glyph_index','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','surface_text_fg_at']:
+for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
+ a=s.index('const '+name+':');parts.append(s[a:s.index('];',a)+2])
+for name in ['ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','surface_text_fg_at']:
     a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
     while depth:
         depth+=(s[i]=='{')-(s[i]=='}');i+=1

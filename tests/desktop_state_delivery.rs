@@ -3,6 +3,7 @@
 //! model queries are mocked. No guest rendering is claimed by this harness.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../servers/silk-shell/src/desktop_content.rs"]mod desktop_content;
@@ -21,6 +22,10 @@ const SLOT_DISPLAY:u64=5;const SURFACE_ID_LINEN:u64=200;
 #[macro_export]macro_rules! record {($($a:tt)*)=>{{$crate::LOG.lock().unwrap().push(format!($($a)*));}}}
 pub use crate::record as serial_record;pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 static mut FOCUSED_SURFACE_ID:u64=0;
+static mut LAST_DISPLAY_FOCUS_RESULT:Option<(u64,u64)>=None;
+// This wrapper harness has no pending launcher request. Its retry predicate is
+// true in that state; actual pending-launcher guards run in launcher_workspace.
+unsafe fn launcher_focus_retry_ready(_:u64)->bool{true}
 static mut DISPLAY_FOCUS:linen_text_delivery::FocusDelivery=linen_text_delivery::FocusDelivery::new();
 static mut DESKTOP_STATES:linen_text_delivery::DesktopStates=linen_text_delivery::DesktopStates::new();
 static mut LINEN_TEXT:linen_text_delivery::Outbox=linen_text_delivery::Outbox::new(200);
@@ -43,7 +48,7 @@ unsafe fn frame_chrome_operation(frame:u32)->Option<linen_text_delivery::Operati
 fn raw_pdx_call(slot:u64,op:u64,sid:u64,a:u64,b:u64)->(u64,u64){CALLS.lock().unwrap().push((slot,op,sid,a,b));RESULTS.lock().unwrap().pop_front().unwrap_or((0,0))}
 unsafe fn linen_paint_surface_fast(){linen_queue_text(b"latest complete view",0xabcdef,linen_text_delivery::Metadata{count:2,first:0,rows:2,selected:SELECTION});}
 include!(env!("DESKTOP_DELIVERY_PRODUCTION"));
-unsafe fn reset(){FOCUSED_SURFACE_ID=0;DISPLAY_FOCUS=linen_text_delivery::FocusDelivery::new();DESKTOP_STATES=linen_text_delivery::DesktopStates::new();LINEN_TEXT=linen_text_delivery::Outbox::new(200);LINEN_REPAINT_AFTER_CREATE=false;PALETTE_TEXT=linen_text_delivery::Outbox::atomic(152);APP_CUSTODY=[None;3];STATE=LifecycleState::Visible;ALIVE=true;MINIMIZED=false;FRAME=true;BOUNDS=Some((10,50,640,400));SELECTION=3;CALLS.lock().unwrap().clear();RESULTS.lock().unwrap().clear();LOG.lock().unwrap().clear();}
+unsafe fn reset(){FOCUSED_SURFACE_ID=0;LAST_DISPLAY_FOCUS_RESULT=None;DISPLAY_FOCUS=linen_text_delivery::FocusDelivery::new();DESKTOP_STATES=linen_text_delivery::DesktopStates::new();LINEN_TEXT=linen_text_delivery::Outbox::new(200);LINEN_REPAINT_AFTER_CREATE=false;PALETTE_TEXT=linen_text_delivery::Outbox::atomic(152);APP_CUSTODY=[None;3];STATE=LifecycleState::Visible;ALIVE=true;MINIMIZED=false;FRAME=true;BOUNDS=Some((10,50,640,400));SELECTION=3;CALLS.lock().unwrap().clear();RESULTS.lock().unwrap().clear();LOG.lock().unwrap().clear();}
 fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Operation{opcode:code,surface:sid,packed:0,control:0}}
 #[test]fn actual_wrapper_preserves_status_and_retains_only_selected_display_states(){let _l=LOCK.lock().unwrap();unsafe{reset();}
  RESULTS.lock().unwrap().push_back((sex_pdx::ERR_SERVICE_NOT_READY,77));assert_eq!(pdx_call(5,0xEC,201,1,2),(sex_pdx::ERR_SERVICE_NOT_READY,77));assert!(unsafe{DESKTOP_STATES.pending_surface(201)});

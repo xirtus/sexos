@@ -37,6 +37,10 @@ class ReaderPixels(unittest.TestCase):
   self.assertEqual(len(READER_BODY),2048);self.assertTrue(READER_BODY.endswith(READER_TAIL));self.assertTrue(all(b==10 or 32<=b<=126 for b in READER_BODY))
   frame=self.frame();self.assertEqual((frame['cols'],frame['rows'],frame['body_rows'],frame['bytes']),(47,10,7,479));self.assertTrue(self.result(frame)['ok'])
   self.assertEqual(frame['lines'][0].rstrip(),b'Plain HTTP / no TLS');self.assertEqual(frame['lines'][1].rstrip(),b'probe.sexos.test /welcome')
+ def test_tall_narrow_whole_frame_matches_display_and_source_row_cap(self):
+  self.assertEqual(self.contract['reader_max_rows'],24);self.assertEqual(self.contract['max_rows'],24)
+  frame=self.frame(b'abcdefghij\n'*100,w=82,h=2000)
+  self.assertEqual((frame['rows'],frame['body_rows']),(24,21));self.assertLessEqual(frame['bytes'],512)
  def test_end_reaches_final_source_byte_well_beyond_preview(self):
   start=self.frame();anchor=reader_move(start,'end');end=self.frame(anchor=anchor)
   self.assertGreater(anchor,64);self.assertEqual(end['end'],end['total_lines']);self.assertIn(READER_TAIL,b''.join(end['lines'][2:-1]));self.assertTrue(self.result(end,anchor=anchor)['ok'])
@@ -148,7 +152,9 @@ class ReaderPixels(unittest.TestCase):
   with self.assertRaises(ValueError):self.frame(b'x'*(self.contract['reader_max_body']+1))
   with self.assertRaises(ValueError):self.frame(w=20,h=100)
  def test_non_ascii_controls_model_and_overview_are_distinct(self):
-  body=b'a\t\rb\x00\x7f\xff\nnext';frame=self.frame(body);self.assertTrue(frame['lines'][2].startswith(b'a  b  ?'));self.assertTrue(frame['lines'][3].startswith(b'next'))
+  body=b'a\tb\nnext';frame=self.frame(body);self.assertTrue(frame['lines'][2].startswith(b'a b'));self.assertTrue(frame['lines'][3].startswith(b'next'))
+  for unsupported in (b'a\r',b'a\0',b'a\x7f',b'\xff','é'.encode()):
+   with self.assertRaisesRegex(ValueError,'UTF-8 profile'):self.frame(unsupported)
   self.assertEqual(overview_preview(b' \nA\t\tB\0\xff  ')[:5],b'A B ?');self.assertEqual(overview_preview(READER_BODY)[61:],b'...')
 
  def test_full_12288_stream_end_and_last_byte_are_independent_pixels(self):

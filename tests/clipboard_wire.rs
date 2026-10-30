@@ -2,6 +2,7 @@
 //! Actual scalar ABI canonicalization, without transport or authority mocks.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
 #[path = "../crates/sex-pdx/src/text_selection.rs"] pub mod text_selection;
 #[path = "../crates/sex-pdx/src/clipboard.rs"] pub mod clipboard;
@@ -56,4 +57,16 @@ fn response(r:Response){let p=r.wire();assert_eq!(Response::decode(p.opcode,p.ar
 #[test]fn opcode_sets_do_not_alias_requests_with_receipts_and_packet_erase_clears_all_words(){
     for op in 0..=0x300{assert_eq!(request_opcode(op),[BEGIN,WRITE,PUBLISH,READ,GET,FINISH,CANCEL,QUERY].contains(&op));assert_eq!(response_opcode(op),[INTENT,REPLY,DATA].contains(&op));assert!(!(request_opcode(op)&&response_opcode(op)));}
     let mut packet=Packet{opcode:u64::MAX,args:[u64::MAX;3]};packet.erase();assert_eq!(packet,Packet{opcode:0,args:[0;3]});assert!(text(b"ASCII\n !~"));assert!(!text(b"a\rb"));assert!(!text(b"a\0b"));assert!(!text(&[255]));assert_eq!(hash(b""),0xcbf29ce484222325);
+}
+
+#[test] fn whole_utf8_text_profile_is_independent_of_opaque_register_chunk_boundaries(){
+    assert!(text("é € 𐍈\n\t".as_bytes()));
+    for scalar in ["é","€","𐍈"]{for split in 1..scalar.len(){
+        let mut body=vec![b'a';32];let start=16-split;body[start..start+scalar.len()].copy_from_slice(scalar.as_bytes());
+        assert!(text(&body));assert!(!text(&body[..16]));
+        for (index,chunk)in body.chunks(16).enumerate(){let mut bytes=[0;16];bytes[..chunk.len()].copy_from_slice(chunk);
+            request(Request::Write{ticket:1,offset:index*16,count:chunk.len(),bytes});response(Response::Data{ticket:1,offset:index*16,count:chunk.len(),bytes});
+        }
+    }}
+    for bad in [&b"\xc0\xaf"[..],&b"\xe2\x82"[..],&b"\xed\xa0\x80"[..],&b"\xf4\x90\x80\x80"[..],&b"\xc2\x80"[..],&b"\x1b"[..]]{assert!(!text(bad));}
 }

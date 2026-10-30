@@ -14,7 +14,13 @@ from check_document_disk import recover,object_bytes,fnv
 from check_nonunix_target import inspect as target_check
 from tls_exchange_gate import command_profile
 
-NAME='readone';BODY=b'readable note';FINAL=BODY+b'z'
+PROFILE='ascii';NAME='readone';BODY=b'readable note';FINAL=BODY+b'z'
+PROFILES={'ascii':('readone',b'readable note'),'utf8':('utfnote','café € 🙂 漢'.encode('utf-8'))}
+def configure(profile):
+ global PROFILE,NAME,BODY,FINAL
+ if profile not in PROFILES:raise ValueError('unsupported text profile')
+ PROFILE=profile;NAME,BODY=PROFILES[profile];FINAL=BODY+b'z'
+
 STAGES=('edited','naming','saved','new-empty','linen-selected','reopened','resaved','commands','returned')
 SCOPE=('One actual boot/profile: original BOOT-held Quil9, all four pointer toolbar actions using the shared responsive Layout, '
        'whole admitted Quil chrome/body and complete command/help glyphs, explicit named SaveAs, user-selected Linen reopen, then Save. '
@@ -26,7 +32,7 @@ def source_contract(root):
  root=Path(root);c=launch.source_contract(root)
  paths=('crates/sex-pdx/src/document_view.rs','crates/sex-pdx/src/desktop_style.rs','servers/quil/src/view.rs','servers/quil/src/main.rs',
         'servers/quil/src/document_exchange.rs','servers/sexfiles/src/document.rs','servers/sexfiles/src/document_journal.rs','servers/sexfiles/src/vfs.rs',
-        'scripts/quil_readability_gate.py','scripts/tests/test_quil_readability_gate.py','scripts/https_import_gate.py','scripts/check_document_disk.py','scripts/desktop_close_gate.py','scripts/check_nonunix_target.py','scripts/tls_exchange_gate.py')
+        'scripts/quil_readability_gate.py','scripts/tests/test_quil_readability_gate.py','scripts/https_import_gate.py','scripts/check_document_disk.py','scripts/desktop_close_gate.py','scripts/check_nonunix_target.py','scripts/tls_exchange_gate.py','crates/sex-pdx/src/text_encoding.rs','servers/quil/src/unicode_input.rs')
  src={name:(root/name).read_text()for name in paths};layout=src[paths[0]];style=src[paths[1]];view=src[paths[2]];client=src[paths[4]]
  def constant(source,name):
   m=re.search(r'pub const '+name+r':[^=]+=\s*(\d+)\s*;',source)
@@ -43,7 +49,7 @@ def source_contract(root):
  commands=re.search(r'let labels = \[(.*?)\];',view,re.S)
  if not commands:raise ValueError('missing command palette labels')
  c.update(cell=cell,toolbar_labels=labels,commands=[ast.literal_eval(x).decode()for x in re.findall(r'b"[^"\n]*"',commands[1])],
-          command_hints=['Ctrl A select all','Ctrl C/X/V copy/cut/paste','Esc returns to document'],
+          command_hints=['Ctrl A select all','Ctrl C/X/V copy/cut/paste','Ctrl Shift U Unicode','Esc returns to document'],
           normal_hint='Ctrl N/O/S | Ctrl Shift S | Esc menu',compact_hint='Ctrl N/O/S | Esc menu',tiny_hint='Esc menu',
           metrics={k:constant(style,k)for k in('INSET','TEXT_TOP','GLYPH_WIDTH','GLYPH_HEIGHT','ADVANCE','LINE')},name_keys=inputs.name_keyboard(NAME,src[paths[3]]))
  for hint in c['command_hints']+[c['normal_hint'],c['compact_hint'],c['tiny_hint']]:
@@ -196,8 +202,31 @@ def journal(disk,meta):
  if [(g,p,h)for g,p,h in banks]!=[(meta['generations'][0],BODY,fnv(BODY)),(meta['generations'][1],FINAL,fnv(FINAL))]or current['payload']!=FINAL:raise ValueError('raw journal does not retain both exact saves')
  return dict(object=meta['object'],name=NAME,identity=meta['identity'],generations=meta['generations'],bytes=len(FINAL),hash=hex(fnv(FINAL)),raw_object_sha256=sha(raw))
 
-def replay(root,out,binding,iso):
- root=Path(root);out=Path(out);bound=frozen_binding(root,Path(iso),Path(binding));c=source_contract(root);manifest=json.loads((out/'manifest.json').read_text())
+def unicode_joins(trace,actions):
+ wanted=[ord(c)for c in BODY.decode('utf-8')if ord(c)>127]
+ rows=[r for r in actions if r.get('kind')=='unicode']
+ if [r.get('scalar')for r in rows]!=wanted:raise ValueError('missing/reordered Unicode keyboard intents')
+ begins=list(re.finditer(r'\[quil.unicode.begin\] generation=(\d+) revision=(\d+) effects=0(?:\r?\n|$)',trace))
+ commits=list(re.finditer(r'\[quil.unicode.commit\] bytes=(\d+) applied=(\d+) revision=(\d+) pending=(\d+)(?:\r?\n|$)',trace))
+ if len(begins)!=len(wanted)or len(commits)!=len(wanted)or '[quil.unicode.refused]'in trace or '[quil.unicode.cancel]'in trace:raise ValueError('Unicode operation counts differ')
+ previous=0
+ for row,begin,commit in zip(rows,begins,commits):
+  start,end=row['serial_start'],row['serial_end'];scalar=row['scalar'];digits=format(scalar,'x');encoded=chr(scalar).encode('utf-8')
+  if row.get('digits')!=digits or not previous<=start<=begin.start()<begin.end()<=commit.start()<commit.end()<=end:raise ValueError('Unicode input window/order differs')
+  window=trace[start:end]
+  edits=list(re.finditer(r'\[quil.document.edit\] revision=(\d+) pending=(\d+) bytes=(\d+)(?:\r?\n|$)',window))
+  if len(edits)!=1 or int(edits[0][1])!=int(begin[2])+1 or int(edits[0][2])!=0 or int(edits[0][3])!=row['expected_bytes']:raise ValueError('Unicode entry was not one exact atomic edit')
+  if tuple(map(int,commit.groups()))!=(len(encoded),1,int(begin[2])+1,0)or int(begin[1])==0:raise ValueError('Unicode commit receipt differs')
+  keys=[r['keys']for r in actions if r.get('kind')=='key'and start<=r['serial_start']<end]
+  if keys!=[['ctrl','shift','u']]+[[d]for d in digits]+[['ret']]:raise ValueError('Unicode entry physical keys differ')
+  previous=end
+ return dict(profile=PROFILE,scalars=wanted,operations=len(wanted),atomic=True)
+
+
+def replay(root,out,binding,iso,expected_profile=None):
+ root=Path(root);out=Path(out);manifest=json.loads((out/'manifest.json').read_text());profile=manifest.get('text_profile','ascii')
+ if expected_profile is not None and expected_profile!=profile:raise ValueError('text profile differs')
+ configure(profile);bound=frozen_binding(root,Path(iso),Path(binding));c=source_contract(root)
  if manifest['binding']!=bound or manifest['source_sha256']!=c['source_sha256']or manifest['scope']!=SCOPE:raise ValueError('source/image/runner binding differs')
  if not command_profile(manifest['command'])['ok']or command_profile(manifest['command'])!=manifest['platform_profile']:raise ValueError('actual native profile differs')
  raw=(out/'serial.log').read_bytes();trace=raw.decode('utf-8',errors='strict');frames=json.loads((out/'frames.json').read_text());actions=json.loads((out/'actions.json').read_text());meta=joins(trace,actions);resolution=tuple(map(int,manifest['resolution'].split('x')))
@@ -217,12 +246,13 @@ def replay(root,out,binding,iso):
  disk=gzip.decompress((out/'nvme.img.gz').read_bytes())
  if sha(disk)!=manifest['final_disk_sha256']:raise ValueError('terminal raw disk hash differs')
  if json.loads((out/'peer.json').read_text())['errors']:raise ValueError('startup fixture failed')
- return dict(ok=True,binding=bound,frames=checked,joins=meta,journal=journal(disk,meta),wire=launch.wire_check((out/'wire.pcap').read_bytes()),scope=SCOPE)
+ return dict(ok=True,text_profile=PROFILE,binding=bound,frames=checked,joins=meta,unicode_input=unicode_joins(trace,actions),journal=journal(disk,meta),wire=launch.wire_check((out/'wire.pcap').read_bytes()),scope=SCOPE)
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--binding',required=True,type=Path);p.add_argument('--source-disk',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--check',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--binding',required=True,type=Path);p.add_argument('--source-disk',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--text-profile',choices=tuple(PROFILES));p.add_argument('--check',action='store_true');a=p.parse_args()
  root=Path(__file__).resolve().parents[1];out=a.out.resolve();iso=a.iso.resolve(strict=True);binding=a.binding.resolve(strict=True)
- if a.check:print(json.dumps(replay(root,out,binding,iso),indent=2));return 0
+ if a.check:print(json.dumps(replay(root,out,binding,iso,a.text_profile),indent=2));return 0
+ configure(a.text_profile or 'ascii')
  if a.source_disk is None:raise ValueError('source disk required')
  out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise ValueError('fresh evidence output required')
@@ -234,7 +264,7 @@ def main():
  if any(r['name']==NAME for r in storage.workspace(seed)['rows']):raise ValueError('fixture name already exists')
  disk=out/'nvme.img';disk.write_bytes(seed);(out/'seed.img.gz').write_bytes(gzip.compress(seed,mtime=0));serial=out/'serial.log';pcap=out/'wire.pcap';sock=Path('/tmp')/f'sex-quil-read-{os.getpid()}.sock';resolution=tuple(map(int,a.resolution.split('x')));command=desktop.native_command(iso,disk,serial,sock,pcap,a.model,a.resolution);profile=command_profile(command)
  if not profile['ok']:raise ValueError('unsupported native profile')
- manifest=dict(binding=bound,source_sha256=c['source_sha256'],scope=SCOPE,command=command,platform_profile=profile,model=a.model,resolution=a.resolution,input_disk_sha256=sha(seed),target=target);(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ manifest=dict(text_profile=PROFILE,binding=bound,source_sha256=c['source_sha256'],scope=SCOPE,command=command,platform_profile=profile,model=a.model,resolution=a.resolution,input_disk_sha256=sha(seed),target=target);(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  proc=None;peer=launch.StartupPeer(root,'ready');frames=[];actions=[];began=time.monotonic();error=None;park_phase=0
  def raw():return serial.read_bytes()if serial.exists()else b''
  def text():return inputs.complete_prefix(raw()).decode('utf-8',errors='strict')
@@ -277,8 +307,18 @@ def main():
   start=len(snapshot.decode());row=dict(kind='toolbar',action=action,point=point,serial_start=start,serial_bytes=len(snapshot),serial_sha256=sha(snapshot));actions.append(row)
   launch.pointer_click(q,*point,resolution,text,wait,actions.append,park);wait(rf'\[quil.ui.pointer\] action={action} sequence=\d+',start);result=wait(pattern,start);row['serial_end']=len(text());return result
  def typing(body):
-  for index,byte in enumerate(body,1):
-   start=len(text());key('spc'if byte==32 else chr(byte));wait(r'\[quil.document.edit\] revision=\d+ pending=0 bytes='+str(index)+r'(?:\s|$)',start)
+  total=0
+  for char in body.decode('utf-8'):
+   start=len(text());total+=len(char.encode('utf-8'))
+   if ord(char)<128:
+    key('spc'if char==' 'else char)
+   else:
+    row=dict(kind='unicode',scalar=ord(char),digits=format(ord(char),'x'),serial_start=start,expected_bytes=total);actions.append(row)
+    key('ctrl','shift','u');wait(r'\[quil.unicode.begin\] generation=\d+ revision=\d+ effects=0',start)
+    for digit in row['digits']:key(digit)
+    key('ret');wait(r'\[quil.unicode.commit\] bytes='+str(len(char.encode('utf-8')))+r' applied=1 revision=\d+ pending=0',start);row['serial_end']=len(text())
+   wait(r'\[quil.document.edit\] revision=\d+ pending=0 bytes='+str(total)+r'(?:\s|$)',start)
+
  try:
   peer.start();proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);deadline=time.monotonic()+20
   while not sock.exists():

@@ -2,6 +2,7 @@
 //! Exact production glyph table, layout and pixel functions, extracted by gate.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod state;
 use state::{Surface,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};

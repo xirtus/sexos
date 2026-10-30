@@ -8,8 +8,10 @@ from pathlib import Path
 import re,sys
 root,out=map(Path,sys.argv[1:]);s=(root/'servers/sexdisplay/src/main.rs').read_text()
 a=s.index('const FONT_ASCII_5X7:');parts=[s[a:s.index('];',s.index('= [',a))+2]]
+for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
+ a=s.index('const '+name+':');parts.append(s[a:s.index('];',a)+2])
 parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H)[^\n]+',s,re.M)
-for name in ['clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','legacy_text_clear','legacy_text_draw','surface_text_fg_at','redraw_surface_damage','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+for name in ['clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','legacy_text_clear','legacy_text_draw','surface_text_fg_at','redraw_surface_damage','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
  parts.append(s[a:i])

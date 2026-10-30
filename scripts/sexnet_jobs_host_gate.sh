@@ -87,3 +87,5 @@ echo '[sexnet.tls.host] PASS scope=actual_private_TLS_backend_clients_brokers_no
 CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
   --manifest-path "$ROOT_DIR/vendor/embedded-tls-0.19.0/sexos-record-tests/Cargo.toml" --target "$HOST_TARGET" --lib
 echo '[sexnet.tls.records.host] PASS scope=actual_AEAD_empty_padding_truncation_and_unsupported_handshake_not_live_peer'
+
+"$ROOT_DIR/scripts/browser_text_host_gate.sh"

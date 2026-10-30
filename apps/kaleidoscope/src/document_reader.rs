@@ -2,9 +2,12 @@
 //! Bounded presentation of already received plain-text data. No endpoint,
 //! capability, HTML, TLS or network operation is introduced by this reader.
 use sex_pdx::desktop_style::{scale, ADVANCE, INSET, LINE};
+use sex_pdx::text_encoding as text;
 
 const CAPACITY: usize = 512;
 const MAX_BODY: usize = 12288;
+/// Match Display's bounded whole-frame row index, including all chrome.
+const MAX_ROWS: usize = 24;
 /// A readable measure also leaves room for seven body rows in a tall view
 /// without enlarging the fixed display transaction or shrinking the font.
 pub const MAX_COLUMNS: usize = 47;
@@ -48,9 +51,9 @@ fn clean(byte: u8) -> u8 {
 /// suffix keeps End on the final actual text while preserving interior blanks
 /// and every retained source-byte position. The original body is never changed.
 fn content(body: &[u8]) -> &[u8] {
-    let body = &body[..body.len().min(MAX_BODY)];
+    let body = &body[..text::prefix(body,MAX_BODY)];
     let mut end = body.len();
-    while end > 0 && (body[end-1] == b'\n' || clean(body[end-1]) == b' ') { end -= 1; }
+    while end > 0 && matches!(body[end-1],b'\n'|b'\t'|b' ') { end -= 1; }
     &body[..end]
 }
 
@@ -58,10 +61,24 @@ fn content(body: &[u8]) -> &[u8] {
 /// row terminates that same row; trailing newlines never create a blank tail.
 /// Interior blank paragraphs remain visible, and every scan consumes ≤12288B.
 fn line(body: &[u8], start: usize, cols: usize) -> Line {
-    let mut end = start;
-    while end < body.len() && end-start < cols && body[end] != b'\n' { end += 1; }
+    let mut end = start;let mut cells=0;
+    while end < body.len() && cells < cols && body[end] != b'\n' {
+        end=text::next(body,end);cells+=1;
+    }
     let next = if body.get(end) == Some(&b'\n') { end+1 } else { end };
     Line { start, end, next }
+}
+
+/// A TAB is one blank cell; malformed bytes and unsupported controls are
+/// visible replacement scalars. This changes only presentation, never source.
+fn display_scalar(scalar:u32)->u32{
+    if scalar==9 {32} else if scalar<32||scalar==127||(128..=159).contains(&scalar){text::REPLACEMENT}else{scalar}
+}
+fn encoded_row_cost(body:&[u8],row:&Line,cols:usize)->usize{
+    let mut at=row.start;let mut cost=cols;
+    while at<row.end {let(scalar,end)=text::cell(body,at).unwrap();let mut bytes=[0;4];
+        cost+=text::encode(display_scalar(scalar),&mut bytes).unwrap()-1;at=end;}
+    cost+1
 }
 
 fn offset_at(body: &[u8], cols: usize, wanted: usize) -> usize {
@@ -104,8 +121,19 @@ impl Reader {
         let first_bottom = TOP + GLYPH_HEIGHT*factor;
         if cols == 0 || self.height < first_bottom { return (0,0); }
         let physical = 1 + (self.height-first_bottom)/(LINE*factor);
-        let rows = (physical as usize).min(32).min(CAPACITY/(cols+1));
+        let rows = (physical as usize).min(MAX_ROWS).min(CAPACITY/(cols+1));
         (cols,rows)
+    }
+
+    /// Reserve complete padded rows plus the ASCII chrome/footer. A bounded
+    /// source pass finds the largest serialized wrapped row, so even a page of
+    /// four-byte scalars fits the same 512-byte transaction without clipping.
+    fn source_geometry(&self,body:&[u8])->(usize,usize){
+        let(cols,rows)=self.geometry();if cols==0||rows<=3{return(cols,rows)}
+        let body=content(body);let mut cursor=0;let mut cost=cols+1;
+        while cursor<body.len(){let row=line(body,cursor,cols);cost=cost.max(encoded_row_cost(body,&row,cols));cursor=row.next;}
+        let body_rows=(rows-3).min((CAPACITY-(3*cols+2))/cost);
+        (cols,body_rows+3)
     }
 
     pub fn render(&mut self, body: &[u8]) -> Frame {
@@ -126,12 +154,15 @@ impl Reader {
         self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080",selection)
     }
     fn render_source(&mut self,body:&[u8],path:&[u8],banner:&[u8],host:&[u8],selection:Option<(usize,usize)>)->Frame {
+        let body=&body[..text::prefix(body,MAX_BODY)];
+        let valid_utf8=core::str::from_utf8(body).is_ok();
         let selected = selection.and_then(|(a,b)| {
             let (lo,hi)=(a.min(b),a.max(b));
-            (lo<hi && hi<=body.len().min(MAX_BODY)).then_some((lo,hi))
+            (lo<hi && hi<=body.len() && (!valid_utf8 ||
+                (text::is_boundary(body,lo)&&text::is_boundary(body,hi)))).then_some((lo,hi))
         });
         let body = content(body);
-        let (cols,rows) = self.geometry();
+        let (cols,rows) = self.source_geometry(body);
         let mut frame = Frame { bytes: [0;CAPACITY], len: 0, selection: (0,0), first: 0, end: 0,
             body_rows: rows.saturating_sub(3), rows, cols, total_lines: 0, source_anchor: self.anchor };
         if rows == 0 { return frame; }
@@ -159,17 +190,20 @@ impl Reader {
             let mut shown = 0;
             while shown < visible && cursor < body.len() {
                 let source = line(body,cursor,cols);
-                let at = (shown+2)*(cols+1);
-                for (target,byte) in frame.bytes[at..at+source.end-source.start].iter_mut().zip(&body[source.start..source.end]) { *target = clean(*byte); }
-                if let Some((lo,hi))=selected {
-                    let from=source.start.max(lo);let to=source.end.min(hi);
-                    if from<to {
-                        let begin=(at+from-source.start)as u16;
-                        let end=(at+to-source.start)as u16;
-                        if frame.selection==(0,0) {frame.selection.0=begin;}
-                        frame.selection.1=end;
+                let at=row_at(&frame,shown+2);
+                let mut serialized=[0;MAX_COLUMNS*4];let mut length=0;let mut cells=0;let mut offset=source.start;
+                while offset<source.end {
+                    let(scalar,end)=text::cell(body,offset).unwrap();let mut bytes=[0;4];
+                    let n=text::encode(display_scalar(scalar),&mut bytes).unwrap();
+                    serialized[length..length+n].copy_from_slice(&bytes[..n]);
+                    if selected.is_some_and(|(lo,hi)|offset>=lo&&end<=hi){
+                        if frame.selection==(0,0){frame.selection.0=(at+length)as u16;}
+                        frame.selection.1=(at+length+n)as u16;
                     }
+                    length+=n;cells+=1;offset=end;
                 }
+                serialized[length..length+cols-cells].fill(b' ');length+=cols-cells;
+                replace_row(&mut frame,shown+2,&serialized[..length]);
                 cursor = source.next;
                 shown += 1;
             }
@@ -183,17 +217,17 @@ impl Reader {
     /// No retained preferred-column or body copy is introduced. Home/End remain
     /// exact raw-body endpoints, including a copyable but unpainted blank tail.
     pub fn selection_move(&self, body:&[u8], caret:usize, action:Move)->usize {
-        let raw_len=body.len().min(MAX_BODY);
+        let raw_len=text::prefix(body,MAX_BODY);
         if action==Move::Home {return 0;}
         if action==Move::End {return raw_len;}
-        let (cols,rows)=self.geometry();let visible=rows.saturating_sub(3);
+        let (cols,rows)=self.source_geometry(body);let visible=rows.saturating_sub(3);
         if cols==0 || visible==0 {return caret.min(raw_len);}
         let body=content(body);if body.is_empty(){return 0;}
         let caret=caret.min(body.len());
         let mut cursor=0;let mut index=0usize;let mut current=0usize;let mut column=0;
         while cursor<body.len() {
             let row=line(body,cursor,cols);
-            if row.start<=caret {current=index;column=caret.min(row.end)-row.start;}
+            if row.start<=caret {current=index;column=text::cells(&body[row.start..caret.min(row.end)]);}
             index+=1;cursor=row.next;
         }
         let last=index.saturating_sub(1);
@@ -205,13 +239,13 @@ impl Reader {
             Move::Home|Move::End=>current,
         };
         let row=line(body,offset_at(body,cols,target),cols);
-        row.start+column.min(row.end-row.start)
+        row.start+text::offset(&body[row.start..row.end],column)
     }
 
     /// Explicit selection movement can reveal its caret. Ordinary render and
     /// viewport reflow keep the previously retained source anchor unchanged.
     pub fn reveal(&mut self,body:&[u8],caret:usize)->bool {
-        let (cols,rows)=self.geometry();let visible=rows.saturating_sub(3);
+        let (cols,rows)=self.source_geometry(body);let visible=rows.saturating_sub(3);
         if cols==0 || visible==0 {return false;}
         let body=content(body);let caret=caret.min(body.len());
         let info=layout(body,cols,visible,self.anchor);
@@ -229,7 +263,7 @@ impl Reader {
     }
 
     pub fn navigate(&mut self, body: &[u8], action: Move) -> bool {
-        let (cols,rows) = self.geometry();
+        let (cols,rows) = self.source_geometry(body);
         let visible = rows.saturating_sub(3);
         if cols == 0 || visible == 0 { return false; }
         let body = content(body);
@@ -279,7 +313,7 @@ fn footer(frame: &mut Frame, https: bool) {
     let row = frame.rows-1;
     if let Some(controls) = controls {
         put(frame,row,controls);
-        let at = row*(frame.cols+1)+frame.cols-length;
+        let at = row_at(frame,row)+frame.cols-length;
         frame.bytes[at..at+length].copy_from_slice(&range[..length]);
     } else {
         // Very narrow views retain a complete existing control hint instead
@@ -288,9 +322,31 @@ fn footer(frame: &mut Frame, https: bool) {
     }
 }
 
+/// Replace only the complete ASCII footer after the final serialized LF.
+/// UTF-8 body rows have variable byte widths; column arithmetic is unsafe here.
+pub fn replace_footer(bytes:&mut[u8;CAPACITY],len:usize,cols:usize,label:&[u8])->bool{
+    if len>CAPACITY||label.iter().any(|b|!(b' '..=b'~').contains(b)){return false}
+    let Some(last)=bytes[..len].iter().rposition(|b|*b==b'\n')else{return false};let at=last+1;
+    if len-at!=cols||bytes[at..len].iter().any(|b|!(b' '..=b'~').contains(b)){return false}
+    bytes[at..len].fill(b' ');let n=cols.min(label.len());bytes[at..at+n].copy_from_slice(&label[..n]);true
+}
+
+fn row_at(frame:&Frame,row:usize)->usize{
+    if row==0{return 0}
+    frame.bytes[..frame.len].iter().enumerate().filter(|(_,b)|**b==b'\n').nth(row-1).map_or(frame.len,|(at,_)|at+1)
+}
+fn replace_row(frame:&mut Frame,row:usize,bytes:&[u8]){
+    let start=row_at(frame,row);let end=frame.bytes[start..frame.len].iter().position(|b|*b==b'\n').map_or(frame.len,|n|start+n);
+    let tail=frame.len-end;let new_len=start+bytes.len()+tail;
+    debug_assert!(new_len<=CAPACITY);
+    frame.bytes.copy_within(end..frame.len,start+bytes.len());
+    frame.bytes[start..start+bytes.len()].copy_from_slice(bytes);frame.len=new_len;
+    frame.bytes[new_len..].fill(0);
+}
+
 fn put(frame: &mut Frame, row: usize, text: &[u8]) {
     let length = text.len().min(frame.cols);
-    let at = row*(frame.cols+1);
+    let at = row_at(frame,row);
     frame.bytes[at..at+length].copy_from_slice(&text[..length]);
 }
 
@@ -298,18 +354,17 @@ fn put(frame: &mut Frame, row: usize, text: &[u8]) {
 mod tests {
     use super::*;
     fn reader(w: u32,h: u32) -> Reader { let mut reader=Reader::new();reader.resize(w,h);reader }
-    fn row(frame: &Frame,index: usize) -> &[u8] { let at=index*(frame.cols+1);&frame.bytes[at..at+frame.cols] }
+    fn row(frame: &Frame,index: usize) -> &[u8] { frame.bytes[..frame.len].split(|b|*b==b'\n').nth(index).unwrap() }
     fn valid(frame: &Frame,w: u32,h: u32) {
-        assert!(frame.len<=512);assert!(frame.cols<=MAX_COLUMNS);assert!(frame.rows<=32);
+        assert!(frame.len<=512);assert!(frame.cols<=MAX_COLUMNS);assert!(frame.rows<=MAX_ROWS);
         if frame.rows==0 {assert_eq!(frame.len,0);return;}
-        assert_eq!(frame.len,frame.rows*(frame.cols+1)-1);
         assert!(frame.rows<=512/(frame.cols+1));assert!(frame.first<=frame.end);assert!(frame.end<=frame.total_lines);
         let factor=scale(w);assert!((frame.cols as u32+1)*ADVANCE*factor<=w.saturating_sub(2*INSET));
         assert!(TOP+GLYPH_HEIGHT*factor+(frame.rows as u32-1)*LINE*factor<=h);
-        for (index,byte) in frame.bytes[..frame.len].iter().enumerate() {
-            if index%(frame.cols+1)==frame.cols {assert_eq!(*byte,b'\n');}
-            else {assert!((b' '..=b'~').contains(byte));}
-        }
+        let serialized=core::str::from_utf8(&frame.bytes[..frame.len]).unwrap();
+        assert_eq!(serialized.split('\n').count(),frame.rows);
+        for row in serialized.split('\n'){assert_eq!(row.chars().count(),frame.cols);assert!(row.chars().all(|c|!c.is_control()));}
+        assert!(frame.bytes[frame.len..].iter().all(|b|*b==0));
     }
     #[test] fn unknown_zero_and_unusable_geometry_produce_empty_whole_replacement() {
         let mut unknown=Reader::new();assert_eq!(unknown.render(b"body").len,0);
@@ -335,8 +390,8 @@ mod tests {
         let mut r=reader(624,706);let frame=r.render(b"hello\n\nworld");assert!(row(&frame,0).starts_with(b"Plain HTTP / no TLS"));assert!(row(&frame,1).starts_with(b"probe.sexos.test /welcome"));assert!(row(&frame,frame.rows-1).starts_with(b"PgUp PgDn Home End V back"));
         assert_eq!(frame.total_lines,3);assert!(row(&frame,2).starts_with(b"hello"));assert!(row(&frame,3).iter().all(|b|*b==b' '));assert!(row(&frame,4).starts_with(b"world"));
     }
-    #[test] fn sanitizes_controls_non_ascii_and_carriage_return_without_injecting_chrome() {
-        let frame=reader(624,706).render(b"a\t\rb\x00\x1bc\x7f\xc3\xa9\nnext");assert!(row(&frame,2).starts_with(b"a  b  c ??"));assert!(row(&frame,3).starts_with(b"next"));valid(&frame,624,706);
+    #[test] fn preserves_utf8_and_visibly_replaces_unsupported_controls_without_injecting_chrome() {
+        let frame=reader(624,706).render(b"a\t\rb\x00\x1bc\x7f\xc3\xa9\nnext");assert!(row(&frame,2).starts_with("a \u{fffd}b\u{fffd}\u{fffd}c\u{fffd}é".as_bytes()));assert!(row(&frame,3).starts_with(b"next"));valid(&frame,624,706);
     }
     #[test] fn final_path_replaces_initial_chrome_without_injecting_rows_or_stale_bytes() {
         let mut r=reader(624,706);let final_view=r.render_path(b"final body",b"/guide/text");

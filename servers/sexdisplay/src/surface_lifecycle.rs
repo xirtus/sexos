@@ -38,6 +38,12 @@ pub struct Surface {
     // pre-V2 writer (fixed 20-char padded rows) renders unchanged; a '\n'
     // anywhere opts the surface into width-derived wrap.
     pub line_starts: [u16; TEXT_MAX_ROWS],
+    // Derived scalar-cell -> source-byte lookup: at most one cell per input
+    // byte, hence 512 entries plus 24 row ordinals. Rebuilt with text/geometry,
+    // cleared with Surface reset; byte offsets are presentation data only.
+    pub cell_starts: [u16; TEXT_BUF_CAP],
+    pub line_cells: [u16; TEXT_MAX_ROWS],
+    pub cell_count: u16,
     pub line_count: u8,
     pub wrap_cols: u8,
 }
@@ -64,7 +70,8 @@ pub const SURFACE_EMPTY: Surface = Surface {
     fill_color: [0u32; MAX_RECTS],
     selection_start: 0, selection_end: 0,
     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+    line_starts: [0u16; TEXT_MAX_ROWS], cell_starts: [0; TEXT_BUF_CAP],
+    line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
 };
 
 pub const CATALOG_CAPACITY: usize = 6;

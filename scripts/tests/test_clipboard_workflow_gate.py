@@ -1,5 +1,5 @@
 """Synthetic negative controls for qualification logic; no native claim."""
-import copy,hashlib,struct,sys,unittest
+import copy,hashlib,json,struct,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -236,5 +236,110 @@ class ClipboardWorkflow(unittest.TestCase):
    with self.assertRaises(ValueError):gate.name_keyboard(name,source)
   changed=source.replace("else { b'c' }","else { b'x' }")
   with self.assertRaises(ValueError):gate.name_keyboard('clipnote',changed)
+
+
+
+class UTF8ClipboardWorkflow(unittest.TestCase):
+ @classmethod
+ def setUpClass(cls):cls.c=gate.source_contract(ROOT,'utf8')
+ def frame(self,selection=(6,13),w=624,h=706,body=None):
+  return gate.selected_frame(gate.UTF8_BODY if body is None else body,w,h,self.c,0,selection,self.c['selection_label'])
+ def trace(self,f,w=624,h=706):return ClipboardWorkflow.trace(self,f,w,h)
+ def screen(self,f,resolution=(1280,800),highlight=True):
+  width,height=resolution;pixels=bytearray(width*height*3);factor=f['scale'];a,b=f['selection'];fg=self.c['color'].to_bytes(3,'big');bg=self.c['selection_color'].to_bytes(3,'big')
+  for row,line in enumerate(f['lines']):
+   for col,(char,start,stop)in enumerate(gate.text_cells(line)):
+    selected=highlight and a<=f['row_offsets'][row]+start<f['row_offsets'][row]+stop<=b
+    bitmap=glyph(self.c['font'],char)
+    for gy in range(9):
+     for gx in range(6):
+      on=gy<7 and gx<5 and bool(bitmap[gy]&(1<<(4-gx)));color=fg if on else bg if selected else b'\0\0\0'
+      for dy in range(factor):
+       for dx in range(factor):
+        x=50+self.c['inset']+(col*6+gx)*factor+dx;y=70+self.c['top']+(row*9+gy)*factor+dy;pixels[(y*width+x)*3:(y*width+x)*3+3]=color
+  return b'P6\n'+f'{width} {height}\n255\n'.encode()+pixels
+ def check(self,f,image=None,selection=(6,13),w=624,h=706,resolution=(1280,800)):
+  return gate.verify_browser(self.trace(f,w,h),self.screen(f,resolution)if image is None else image,gate.UTF8_BODY,self.c,0,selection,'Selected',resolution)
+ def test_fixed_profile_is_exact_bounded_utf8_with_every_required_scalar_and_tail(self):
+  body=gate.profile_body('utf8');self.assertEqual(len(body),12288);decoded=body.decode('utf8');self.assertEqual(len(body),len(gate.BODY));self.assertNotEqual(gate.sha(body),gate.sha(gate.BODY))
+  for char in('é','€','🙂','漢','𐍈','\t','\n'):self.assertIn(char,decoded)
+  self.assertTrue(body.endswith(b'UTF8 CLIPBOARD BYTE TAIL 105 END'));self.assertEqual(gate.reverse_selection(body),(6,13));self.assertEqual(gate.reverse_selection(gate.BODY),(3,5))
+  splits=set()
+  for char,start,end in gate.text_cells(body):
+   if len(char.encode())>1 and start//16!=(end-1)//16:splits.add((len(char.encode()),16-start%16))
+  self.assertTrue({(2,1),(3,1),(3,2),(4,1),(4,2),(4,3)}<=splits)
+ def test_native_sized_both_profile_tiles_have_scalar_pixels_and_exact_byte_selection(self):
+  for w,h,resolution in ((624,706,(1280,800)),(496,674,(1024,768))):
+   f=self.frame(w=w,h=h);check=self.check(f,w=w,h=h,resolution=resolution);self.assertTrue(check['ok'],check);self.assertLessEqual(f['bytes'],512);self.assertEqual(f['bytes'],len(b'\n'.join(f['lines'])));self.assertEqual(f['selection'][1]-f['selection'][0],7)
+   self.assertEqual(len(f['lines'][2].decode()),f['cols']);self.assertIn('Aé€🙂漢 ',f['lines'][2].decode());self.assertGreater(len(f['lines'][2]),f['cols'])
+ def test_midscalar_selection_anchor_and_partial_byte_range_cannot_be_painted(self):
+  for selection in ((2,3),(6,9),(7,13),(-1,1),(0,12289),(1.0,3)):
+   with self.assertRaises(ValueError):self.frame(selection)
+  for anchor in (2,4,7):
+   with self.assertRaises(ValueError):gate.utf8_reader_frame(gate.UTF8_BODY,624,706,self.c,anchor)
+  f=self.frame();self.assertFalse(self.check(f,selection=(6,9))['ok']);self.assertEqual(self.frame((13,6))['selection'],f['selection'])
+ def test_changed_unicode_glyph_missing_highlight_or_wrong_rendered_byte_selection_fail(self):
+  f=self.frame();changed=copy.deepcopy(f);changed['lines'][2]=changed['lines'][2].replace('é'.encode(),'ä'.encode())
+  self.assertFalse(self.check(f,self.screen(changed))['ok']);self.assertFalse(self.check(f,self.screen(f,highlight=False))['ok'])
+  changed=copy.deepcopy(f);changed['selection']=(f['selection'][0]+1,f['selection'][1]);self.assertFalse(self.check(f,self.screen(changed))['ok'])
+  tab=self.frame((13,14));self.assertEqual(tab['selection'][1]-tab['selection'][0],1);self.assertTrue(self.check(tab,selection=(13,14))['ok'])
+ def test_full_frame_budget_reserves_worst_serialized_row_and_footer_after_final_lf(self):
+  body='🙂'.encode()*3072;f=gate.utf8_reader_frame(body,1280,750,self.c,0,(0,len(body)),b'Copied / exact bytes')
+  self.assertEqual((f['cols'],f['body_rows'],f['rows']),(47,1,4));self.assertEqual(f['max_row_cost'],189);self.assertLessEqual(f['bytes'],512)
+  joined=b'\n'.join(f['lines']);self.assertEqual(f['row_offsets'][-1],joined.rfind(b'\n')+1);self.assertTrue(joined[f['row_offsets'][-1]:].startswith(b'Copied / exact bytes'))
+  self.assertLess(f['selection'][1],f['row_offsets'][-1]);self.assertEqual(len(f['lines'][2].decode()),47)
+  # Final whitespace is retained in raw data but never invents visible cells.
+  blank=gate.utf8_reader_frame('é\t\n   '.encode(),624,706,self.c,0,(2,7))
+  self.assertEqual(blank['selection'],(0,0))
+ def test_recorded_profile_sha_and_cli_request_cannot_select_a_different_fixture(self):
+  manifest=dict(text_profile='utf8',body_sha256=gate.sha(gate.UTF8_BODY),body_bytes=12288)
+  self.assertEqual(gate.manifest_profile(manifest),('utf8',gate.UTF8_BODY));self.assertEqual(gate.manifest_profile(manifest,'utf8')[0],'utf8')
+  for bad in ({},dict(manifest,text_profile='ascii'),dict(manifest,body_sha256=gate.sha(gate.BODY)),dict(manifest,body_bytes=12287),dict(manifest,text_profile=[])):
+   with self.assertRaises(ValueError):gate.manifest_profile(bad)
+  with self.assertRaises(ValueError):gate.manifest_profile(manifest,'ascii')
+  self.assertEqual(gate.source_contract(ROOT)['text_profile'],'ascii')
+ def test_utf8_publication_capacity_and_cleanup_joins_bind_whole_raw_hash(self):
+  source=ClipboardWorkflow();trace=source.negative_trace().replace(hex(gate.fnv(gate.BODY)),hex(gate.fnv(gate.UTF8_BODY)))
+  positive=gate.clipboard_join(trace,gate.UTF8_BODY);self.assertEqual(positive['bytes'],12288);self.assertTrue(gate.negative_joins(trace,positive,gate.UTF8_BODY)['ok'])
+  with self.assertRaises(ValueError):gate.clipboard_join(trace)
+  with self.assertRaises(ValueError):gate.negative_joins(trace,positive)
+ def test_exact_raw_utf8_journal_rejects_valid_different_bytes_even_when_hashes_are_updated(self):
+  import test_https_import_gate as fixture
+  before=fixture.disk_object(bytearray(4096*512),2,b'old-note',b'old');after=fixture.disk_object(bytearray(before),5,gate.NAME.encode(),gate.UTF8_BODY)
+  doc=gate.disk_check(bytes(before),bytes(after),gate.UTF8_BODY);self.assertEqual(doc['bytes'],12288);self.assertTrue(gate.unchanged_document(bytes(after),bytes(after),doc,gate.UTF8_BODY)['ok'])
+  wrong=gate.UTF8_BODY.replace('é'.encode(),'ä'.encode(),1);modified=fixture.disk_object(bytearray(before),5,gate.NAME.encode(),wrong)
+  with self.assertRaises(AssertionError):gate.disk_check(bytes(before),bytes(modified),gate.UTF8_BODY)
+  with self.assertRaises(AssertionError):gate.disk_check(bytes(before),bytes(after),gate.BODY)
+
+
+
+ def test_utf8_wire_requires_exact_utf8_charset_and_exact_raw_bytes(self):
+  import test_tls_exchange_gate as fixture
+  response=gate.fixture_response(gate.UTF8_BODY);self.assertIn(b'charset=utf-8\r\n',response);self.assertIn(b'charset=us-ascii\r\n',gate.fixture_response(gate.BODY))
+  def evidence(reply):
+   records=[]
+   def flow(guest,request,data):
+    records.extend([fixture.packet(True,guest,46078,100,0,2),fixture.packet(False,46078,guest,500,101,0x12),fixture.packet(True,guest,46078,101,501,0x10),fixture.packet(True,guest,46078,101,501,0x18,request),fixture.packet(False,46078,guest,501,101+len(request),0x18,data),fixture.packet(True,guest,46078,101+len(request),501+len(data),0x11),fixture.packet(False,46078,guest,501+len(data),102+len(request),0x11)])
+   flow(48001,http.ECHO,http.ECHO);records.extend([fixture.packet(True,48001,46079,0,0,0,http.dns_query(1),True),fixture.packet(False,46079,48001,0,0,0,http.dns_response(1),True)]);flow(48002,self.c['request'],reply)
+   capture=struct.pack('<IHHIIII',0xa1b2c3d4,2,4,0,0,65535,1)+b''.join(struct.pack('<IIII',0,0,len(frame),len(frame))+frame for frame in records)
+   peer=dict(rows=[dict(request_hex=http.ECHO.hex(),response_hex=http.ECHO.hex()),dict(request_hex=self.c['request'].hex(),response_hex=reply.hex())],dns=[dict(ticket=1,response_hex=http.dns_response(1).hex())],attempts=[dict(ticket=1,kind='answer',response_hex=http.dns_response(1).hex(),sent_bytes=len(http.dns_response(1)))])
+   return capture,peer
+  raw,peer=evidence(response);self.assertEqual(gate.wire_check(raw,peer,body=gate.UTF8_BODY)['body_sha256'],gate.sha(gate.UTF8_BODY))
+  for bad in (response.replace(b'charset=utf-8',b'charset=us-ascii'),response.replace('é'.encode(),'ä'.encode(),1),response[:-1],response.replace('漢'.encode(),'€'.encode(),1)):
+   raw,peer=evidence(bad)
+   with self.assertRaises(ValueError):gate.wire_check(raw,peer,body=gate.UTF8_BODY)
+ def test_check_cli_uses_recorded_profile_and_rejects_explicit_mismatch_before_replay(self):
+  manifest=dict(text_profile='utf8',body_sha256=gate.sha(gate.UTF8_BODY),body_bytes=12288,binding={'same':'image'},final_disk_sha256='d',input_disk_sha256='d')
+  with tempfile.TemporaryDirectory()as directory:
+   out=Path(directory)
+   for name in ('write','recovery'):(out/name).mkdir();(out/name/'manifest.json').write_text(json.dumps(manifest))
+   with patch.object(sys,'argv',['gate','--check',str(out),'--text-profile','ascii']),patch.object(gate,'replay_boot')as replay:
+    with self.assertRaises(ValueError):gate.main()
+    replay.assert_not_called()
+   with patch.object(sys,'argv',['gate','--check',str(out)]),patch.object(gate,'source_contract',return_value=self.c)as contract,patch.object(gate,'replay_boot',return_value={'ok':True})as replay,patch('builtins.print'):
+    gate.main();self.assertEqual(contract.call_args.args[1],'utf8');self.assertEqual(replay.call_count,2)
+   changed=dict(manifest,text_profile='ascii',body_sha256=gate.sha(gate.BODY));(out/'recovery/manifest.json').write_text(json.dumps(changed))
+   with patch.object(sys,'argv',['gate','--check',str(out)]),patch.object(gate,'source_contract',return_value=self.c),patch.object(gate,'replay_boot',return_value={'ok':True}),patch('builtins.print'):
+    with self.assertRaises(ValueError):gate.main()
 
 if __name__=='__main__':unittest.main()

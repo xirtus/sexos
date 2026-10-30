@@ -70,7 +70,10 @@ impl Layout {
         self.header_rows() + self.toolbar_rows + self.hint_rows()
     }
     pub fn body_rows(self) -> usize {
-        self.rows.saturating_sub(self.chrome_rows()).min(24)
+        // Display indexes at most 24 rows in the entire committed text frame,
+        // including chrome. A tall narrow view must not scroll its caret into
+        // unindexed rows merely because all of those bytes fit the transport.
+        self.rows.saturating_sub(self.chrome_rows()).min(24usize.saturating_sub(self.chrome_rows()))
     }
     pub fn hit(self, x: u32, y: u32) -> Option<u8> {
         let per = self.toolbar_per_row();

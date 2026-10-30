@@ -17,7 +17,7 @@ def view(text,target=9):
   raw.extend(bytes.fromhex(hex_))
  if len(raw)!=int(admissions[-1][1]):raise ValueError('wrong admitted length')
  if not raw or len(raw)>512:raise ValueError('empty/oversize text')
- v['text']=raw.decode('ascii')
+ v['text']=raw.decode('utf8')
  v['applied']=re.search(rf'\[quil.ui.applied\] paint={v["paint"]} bytes={len(raw)} pixels=unconfirmed',text[m.start():])is not None
  published=re.findall(rf'\[shell.document.viewport\] target={target} task=[1-9]\d* surface={v["surface"]} sequence=[1-9]\d* x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) enqueued=1',text)
  if published:

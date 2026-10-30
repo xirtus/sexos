@@ -35,7 +35,7 @@ impl Client {
     pub fn view(&self)->View { self.view }
     pub fn preview(&self)->&[u8;64] { if self.view==View::Ready {&self.preview}else{&BLANK} }
     pub fn body_length(&self)->usize { if self.view==View::Ready {self.body_len}else{0} }
-    /// Sanitized presentation data becomes visible only after positive RELEASE.
+    /// Exact received body bytes become visible only after positive RELEASE.
     pub fn document(&self)->&[u8] { if self.view==View::Ready {&self.document[..self.document_len]}else{&[]} }
     pub fn document_path(&self)->&[u8] {if self.view==View::Ready{self.path.as_bytes()}else{&[]}}
     /// A continuation is data, available only after the preceding job's
@@ -102,8 +102,8 @@ impl Client {
         else { self.step=if kind==w::RELEASE {Step::Held}else{Step::Release}; }
     }
     /// Consume only an exact newly acknowledged absolute-cursor READ turn.
-    /// Raw body bytes feed the receipt hash; only translated presentation data
-    /// is retained. No full-response or raw-body buffer exists in the client.
+    /// Exact body bytes feed both the receipt hash and retained document.
+    /// Display replacement never rewrites this source storage.
     fn consume(&mut self,bytes:&[u8])->Result<(),http_wire::Error> {
         for &byte in bytes {
             if !self.header_done {
@@ -122,7 +122,7 @@ impl Client {
             }else{
                 if self.document_len>=self.body_len {return Err(http_wire::Error::TrailingData);}
                 self.body_hash=(self.body_hash^byte as u64).wrapping_mul(0x100000001b3);
-                self.document[self.document_len]=match byte {b'\n'=>b'\n',32..=126=>byte,0..=31|127=>b' ',_=>b'?'};
+                self.document[self.document_len]=byte;
                 self.document_len+=1;
             }
         }
@@ -312,8 +312,8 @@ mod tests {
         let hash=body.iter().fold(0xcbf29ce484222325u64,|hash,&b|(hash^b as u64).wrapping_mul(0x100000001b3));assert_eq!(p.body_hash,hash);
         receipt(&mut p,w::STATUS,0,0,w::status(w::State::Complete,bytes.len()));assert_eq!(p.step,Step::Release);assert!(p.document().is_empty());
         receipt(&mut p,w::RELEASE,0,0,0);assert_eq!(p.view(),View::Ready);assert!(p.raw_scrubbed());assert_eq!(p.body_length(),http_wire::MAX_BODY);
-        let sanitized:Vec<u8>=body.iter().map(|&b|match b{b'\n'=>b'\n',32..=126=>b,0..=31|127=>b' ',_=>b'?'}).collect();assert_eq!(p.document(),sanitized);
-        assert!(core::mem::size_of::<Client>()<15*1024,"bounded header plus presentation body, no second raw response");
+        assert_eq!(p.document(),body);
+        assert!(core::mem::size_of::<Client>()<15*1024,"bounded header plus exact body, no second response");
     }
     #[test]fn every_header_body_turn_alignment_uses_one_parse_and_retains_exact_tail(){
         for pad in 0..4 {

@@ -53,4 +53,25 @@ class PublishedViewportTests(unittest.TestCase):
   self.assertEqual(c.verify(published+current,fixture(),FONT,'hello#',target=18,resolution=(1280,800)),[])
   self.assertTrue(c.verify(published.replace('w=624','w=640')+current,fixture(),FONT,target=18))
   self.assertTrue(c.verify(published.replace('target=18','target=16')+current,fixture(),FONT,target=18))
+
+class ScalarQuilPixels(unittest.TestCase):
+ def test_utf8_admission_uses_byte_length_but_scalar_cells_and_explicit_unknown_glyph(self):
+  text='note READY\né€😀\tZ#';raw=text.encode()
+  log=LOG.replace(TEXT.encode().hex(),raw.hex()).replace('bytes='+str(len(TEXT)),'bytes='+str(len(raw)))
+  pixels=bytearray(1280*800*3)
+  for row,line in enumerate(text.split('\n')):
+   for col,ch in enumerate(line):
+    for gy,bits in enumerate(glyph(FONT,ch)):
+     for gx in range(5):
+      if bits&(1<<(4-gx)):
+       for dy in range(2):
+        for dx in range(2):
+         x=656+(col*6+gx)*2+dx;y=98+(row*9+gy)*2+dy;pixels[(y*1280+x)*3:(y*1280+x)*3+3]=b'\xe0\xf0\xff'
+  image=b'P6\n1280 800\n255\n'+pixels
+  self.assertEqual(c.view(log)['text'],text)
+  self.assertEqual(c.verify(log,image,FONT,'é€😀\tZ#'),[])
+  self.assertTrue(c.verify(log.replace(raw.hex(),text.replace('é','?').encode().hex()),image,FONT))
+  bad=bytearray(raw);bad[raw.index('é'.encode())]=0xff
+  self.assertTrue(c.verify(log.replace(raw.hex(),bad.hex()),image,FONT))
+
 if __name__=='__main__':unittest.main()

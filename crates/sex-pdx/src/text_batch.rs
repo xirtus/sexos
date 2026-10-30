@@ -50,10 +50,7 @@ impl Request {
                     && offset < CAPACITY
                     && offset % 8 == 0
                     && (1..=8).contains(&count)
-                    && bytes[count..].iter().all(|&v| v == 0)
-                    && bytes[..count]
-                        .iter()
-                        .all(|&v| v == b'\n' || (32..=126).contains(&v)))
+                    && bytes[count..].iter().all(|&v| v == 0))
                 .then_some(Self::Chunk {
                     sequence,
                     offset,

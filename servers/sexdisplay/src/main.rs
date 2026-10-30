@@ -1167,6 +1167,35 @@ const FONT_ASCII_5X7: [[u8; 7]; 95] = [
     [0, 0, 9, 22, 0, 0, 0], // ASCII 126
 ];
 
+// Finite 5x7 scalar repertoire. Unsupported scalars use an explicit box;
+// glyph choice never rewrites the committed source bytes.
+const FONT_UNICODE_5X7: &[(u32, [u8; 7])] = &[
+    (0x00A0, [0, 0, 0, 0, 0, 0, 0]), // nonbreaking space, one cell
+    (0x00C4, [10, 0, 14, 17, 31, 17, 17]), // Ä
+    (0x00C9, [2, 4, 31, 16, 30, 16, 31]), // É
+    (0x00D6, [10, 0, 14, 17, 17, 17, 14]), // Ö
+    (0x00DC, [10, 0, 17, 17, 17, 17, 14]), // Ü
+    (0x00DF, [12, 18, 18, 28, 18, 18, 28]), // ß
+    (0x00E4, [10, 0, 14, 1, 15, 17, 15]), // ä
+    (0x00E9, [2, 4, 14, 17, 31, 16, 14]), // é
+    (0x00F6, [10, 0, 0, 14, 17, 17, 14]), // ö
+    (0x00FC, [10, 0, 17, 17, 17, 19, 13]), // ü
+    (0x2026, [0, 0, 0, 0, 0, 0, 21]), // …
+    (0x20AC, [7, 8, 30, 8, 30, 8, 7]), // €
+    (0x2190, [0, 4, 8, 31, 8, 4, 0]), // ←
+    (0x2191, [4, 14, 21, 4, 4, 4, 0]), // ↑
+    (0x2192, [0, 4, 2, 31, 2, 4, 0]), // →
+    (0x2193, [0, 4, 4, 4, 21, 14, 4]), // ↓
+];
+const FONT_UNSUPPORTED_5X7: [u8; 7] = [31, 17, 21, 21, 21, 17, 31];
+
+fn scalar_glyph(scalar:u32)->[u8;7]{
+    if scalar==9 { return [0;7]; }
+    if (32..=126).contains(&scalar) { return FONT_ASCII_5X7[(scalar-32)as usize]; }
+    FONT_UNICODE_5X7.iter().find(|(code,_)|*code==scalar)
+        .map_or(FONT_UNSUPPORTED_5X7,|(_,rows)|*rows)
+}
+
 fn ascii_glyph_index(byte: u8) -> Option<usize> {
     use sex_pdx::desktop_style::{ASCII_FIRST, ASCII_LAST};
     (ASCII_FIRST..=ASCII_LAST).contains(&byte).then(|| (byte - ASCII_FIRST) as usize)
@@ -1202,13 +1231,17 @@ fn surface_text_scale(surf: &Surface) -> usize {
 /// within the given surface, or `None` if background/not in the text area.
 /// Uses FONT_ASCII_5X7 (5×7 glyphs) with 1px spacing between characters.
 /// TEXT_MODEL_V2: recompute the per-line index table after a text write.
-/// Lines split on '\n' and wrap at wrap_cols. Legacy behavior preserved:
+/// Lines split on '\n' and wrap at scalar-cell wrap_cols. Legacy behavior preserved:
 /// a buffer with no '\n' wraps at the fixed 20 columns every pre-V2 writer
 /// pads to; any '\n' switches the surface to width-derived wrap
 /// (usable width / scaled 6px glyph advance, clamped 1..=80).
 fn recompute_text_lines(surf: &mut Surface) {
     let len = (surf.text_len as usize).min(TEXT_BUF_CAP);
     surf.line_count = 0;
+    surf.cell_count = 0;
+    surf.cell_starts.fill(0);
+    surf.line_cells.fill(0);
+    surf.line_starts.fill(0);
     if len == 0 { surf.wrap_cols = TEXT_LEGACY_COLS; return; }
 
     let has_newline = surf.text_buf[..len].iter().any(|&b| b == b'\n');
@@ -1223,13 +1256,16 @@ fn recompute_text_lines(surf: &mut Surface) {
     let mut i = 0usize;
     let mut col = 0usize;
     surf.line_starts[0] = 0;
+    surf.line_cells[0] = 0;
     surf.line_count = 1;
-    while i < len {
-        let c = surf.text_buf[i];
-        i += 1;
-        if c == b'\n' {
+    while let Some((scalar,end)) = sex_pdx::text_encoding::cell(&surf.text_buf[..len],i) {
+        surf.cell_starts[surf.cell_count as usize]=i as u16;
+        surf.cell_count+=1;
+        i=end;
+        if scalar == 10 {
             if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
             surf.line_starts[surf.line_count as usize] = i as u16;
+            surf.line_cells[surf.line_count as usize] = surf.cell_count;
             surf.line_count += 1;
             col = 0;
         } else {
@@ -1237,6 +1273,7 @@ fn recompute_text_lines(surf: &mut Surface) {
             if col >= cols && i < len {
                 if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
                 surf.line_starts[surf.line_count as usize] = i as u16;
+                surf.line_cells[surf.line_count as usize] = surf.cell_count;
                 surf.line_count += 1;
                 col = 0;
             }
@@ -1249,7 +1286,7 @@ fn legacy_text_clear(slot:&mut Surface)->bool{
     let changed=slot.text_len!=0 || slot.selection_start!=0 || slot.selection_end!=0;
     slot.erase_selection();
     slot.text_len=0;slot.text_buf=[0u8;TEXT_BUF_CAP];
-    slot.line_count=0;slot.wrap_cols=TEXT_LEGACY_COLS;
+    slot.line_count=0;slot.cell_count=0;slot.cell_starts.fill(0);slot.line_cells.fill(0);slot.line_starts.fill(0);slot.wrap_cols=TEXT_LEGACY_COLS;
     changed
 }
 fn legacy_text_draw(slot:&mut Surface,packed:u64,arg2:u64)->bool{
@@ -1291,27 +1328,22 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     if col >= surf.wrap_cols as usize { return None; }
     if row >= surf.line_count as usize { return None; }
 
-    // TEXT_MODEL_V2: character index via the per-line start table.
-    let start = surf.line_starts[row] as usize;
-    let end = if row + 1 < surf.line_count as usize {
-        surf.line_starts[row + 1] as usize
-    } else {
-        surf.text_len as usize
-    };
-    let char_idx = start + col;
-    if char_idx >= end || char_idx >= surf.text_len as usize { return None; }
-
-    let c = surf.text_buf[char_idx];
-    if c == b'\n' { return None; }
+    // Cell ordinals are derived from the same committed bytes as line starts.
+    // Keep scalar decoding out of the per-pixel column scan.
+    let ordinal=surf.line_cells[row] as usize+col;
+    let row_end=if row+1<surf.line_count as usize {surf.line_cells[row+1]}else{surf.cell_count} as usize;
+    if ordinal>=row_end || ordinal>=surf.cell_count as usize { return None; }
+    let char_idx=surf.cell_starts[ordinal] as usize;
+    let (scalar,char_end)=sex_pdx::text_encoding::cell(&surf.text_buf[..(surf.text_len as usize).min(TEXT_BUF_CAP)],char_idx)?;
+    if scalar==10 { return None; }
     // Selection belongs to this committed surface text. Paint the whole cell,
     // including spaces and inter-glyph spacing, beneath existing foreground ink.
-    let selected = char_idx >= surf.selection_start as usize
-        && char_idx < surf.selection_end as usize
+    let selected = char_idx < surf.selection_end as usize
+        && char_end > surf.selection_start as usize
         && surf.selection_end as usize <= surf.text_len as usize;
     let background = if selected { Some(0xff36577c) } else { None };
     if px >= GLYPH_W || py >= GLYPH_H { return background; }
-    let Some(glyph_idx) = ascii_glyph_index(c) else { return background; };
-    let glyph_row = FONT_ASCII_5X7[glyph_idx][py];
+    let glyph_row = scalar_glyph(scalar)[py];
     let bit = (glyph_row >> (GLYPH_W - 1 - px)) & 1;
     if bit != 0 { Some(surf.text_color) } else { background }
 }
@@ -3457,7 +3489,8 @@ pub extern "C" fn _start() -> ! {
                                     fill_color: [0u32; MAX_RECTS],
                                     selection_start: 0, selection_end: 0,
                                     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-                                    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+                                    line_starts: [0u16; TEXT_MAX_ROWS], cell_starts: [0; TEXT_BUF_CAP],
+                                    line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
                                 };
                                 break;
                             }

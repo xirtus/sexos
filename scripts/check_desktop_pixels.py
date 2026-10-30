@@ -20,14 +20,51 @@ def font_from_source(source):
         rows.append(tuple(int(bit,0) for bit in bits))
     if len(rows)!=95 or any(not 0<=bit<32 for row in rows for bit in row):raise ValueError('invalid printable-ASCII renderer font')
     if any(rows[0]) or any(not any(row)for row in rows[1:]):raise ValueError('missing printable glyph ink')
-    return rows
+    extra=re.search(r'const FONT_UNICODE_5X7:.*?= &\[(.*?)\n\];',source,re.S)
+    fallback=re.search(r'const FONT_UNSUPPORTED_5X7: \[u8; 7\] = \[([^\]]+)\];',source)
+    if not extra or not fallback:raise ValueError('missing scalar renderer font')
+    def row(bits):
+        values=tuple(int(v.strip(),0)for v in bits.split(','))
+        if len(values)!=7 or any(not 0<=v<32 for v in values):raise ValueError('invalid scalar glyph')
+        return values
+    unicode={}
+    entries=re.findall(r'\((0x[0-9A-Fa-f]+), \[([^\]]+)\]\)',re.sub(r'//[^\n]*','',extra[1]))
+    for code,bits in entries:
+        scalar=int(code,0)
+        if not 128<=scalar<=0x10ffff or 0xd800<=scalar<=0xdfff or str(scalar)in unicode:raise ValueError('invalid scalar repertoire')
+        unicode[str(scalar)]=row(bits)
+    if not unicode or len(entries)!=len(unicode):raise ValueError('missing scalar repertoire')
+    unsupported=row(fallback[1])
+    if not any(unsupported):raise ValueError('invisible unsupported scalar')
+    if 'FONT_UNICODE_5X7.iter().find'not in source or 'map_or(FONT_UNSUPPORTED_5X7'not in source:raise ValueError('scalar font not bound to renderer')
+    return dict(ascii=rows,unicode=unicode,fallback=unsupported)
 
 
 def glyph(font,char):
-    # Independent byte-to-ROM mapping; no case conversion or Unicode aliasing.
-    if len(font)!=95 or len(char)!=1 or not 32<=ord(char)<=126:
-        raise ValueError('unsupported printable-ASCII glyph')
-    return font[ord(char)-32]
+    # Independent scalar-to-ROM mapping. A finite repertoire and fallback are
+    # read from the actual renderer source and survive JSON contract freezing.
+    if len(char)!=1 or char=='\n':raise ValueError('expected one non-newline scalar')
+    if isinstance(font,list):
+        # Historical ASCII contracts have no source-bound Unicode fallback.
+        if len(font)!=95 or not 32<=ord(char)<=126:raise ValueError('unsupported historical ASCII glyph')
+        return font[ord(char)-32]
+    if len(font['ascii'])!=95:raise ValueError('invalid ASCII font')
+    if char=='\t':return (0,)*7
+    if 32<=ord(char)<=126:return font['ascii'][ord(char)-32]
+    return font['unicode'].get(str(ord(char)),font['fallback'])
+
+
+def text_cells(raw):
+    """Independent byte spans; malformed read-only bytes each show one box."""
+    result=[];at=0
+    while at<len(raw):
+        first=raw[at];size=1 if first<128 else 2 if 0xc2<=first<=0xdf else 3 if 0xe0<=first<=0xef else 4 if 0xf0<=first<=0xf4 else 0
+        try:
+            if not size or at+size>len(raw):raise UnicodeError('malformed scalar')
+            scalar=raw[at:at+size].decode('utf8')
+        except UnicodeError:scalar='\ufffd';size=1
+        result.append((scalar,at,at+size));at+=size
+    return result
 
 
 def final_view(text):

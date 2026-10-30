@@ -6,10 +6,14 @@ pub mod memory_region;
 pub mod dma_pool;
 #[path = "../apps/sexdrive/src/dma_transfer.rs"]
 mod dma_transfer;
+#[path="../apps/sexdrive/src/completion_wait.rs"]mod completion_wait;
+pub fn get_ticks()->u64{driver_read::mock_ticks()}
+pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{driver_read::mock_wait(ticks)}
 
 use dma_pool::{DmaError, DmaLease, DmaRegionPool};
 use dma_transfer::DmaTransfer;
 use memory_region::{RegionView, QUERY_VIEW, READ, WRITE};
+#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{}}
 
 fn pool() -> DmaRegionPool {
     DmaRegionPool::new(RegionView { region_id: 7, virtual_address: 0x100000,
@@ -160,6 +164,20 @@ mod driver_read {
         sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 1 };
     static mut READ_LEASE: Option<DmaLease> = None;
     static mut WRITE_LEASE: Option<DmaLease> = None;
+    static mut NOW:u64=0;static mut WAITS:u32=0;static mut DELAY:u32=0;
+    static mut CLOCK_MODE:u8=0;static mut COMPLETION:u32=0;static mut CQ_PTR:*mut u32=core::ptr::null_mut();
+    static mut DEST_PTR:*const u8=core::ptr::null();static mut DEST_LEN:usize=0;
+    static mut DOORBELLS:*const u32=core::ptr::null();
+    pub fn mock_ticks()->u64{unsafe{NOW}}
+    pub fn mock_wait(ticks:u64)->Result<(),u64>{unsafe{
+        assert_eq!(ticks,1);WAITS+=1;
+        assert!(NVME_IO_STATE.ready);assert_eq!(NVME_IO_STATE.cq_head,0,"no early CQ consumption");
+        assert_eq!(*DOORBELLS,1,"one submitted SQ doorbell, no replay");assert_eq!(*DOORBELLS.add(1),0,"no CQ doorbell before completion");
+        if !DEST_PTR.is_null(){assert!(core::slice::from_raw_parts(DEST_PTR,DEST_LEN).iter().all(|b|*b==0xa5),"no early READ handoff");}
+        match CLOCK_MODE{1=>NOW=NOW.saturating_sub(1),2=>{},3=>return Err(9),4=>NOW+=completion_wait::MAX_TICKS,_=>NOW+=1}
+        if DELAY!=0&&WAITS==DELAY{core::ptr::write_volatile(CQ_PTR.add(3),COMPLETION);}
+        Ok(())
+    }}
     include!(env!("SEXDRIVE_READ_PATH_SOURCE"));
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -167,6 +185,9 @@ mod driver_read {
         exercise_size(write,cqe,expected,quarantined,ready,512);
     }
     fn exercise_size(write:bool,cqe:u32,expected:u64,quarantined:bool,ready:bool,size:usize){
+        exercise_wait(write,cqe,expected,quarantined,ready,size,0,0,0);
+    }
+    fn exercise_wait(write:bool,cqe:u32,expected:u64,quarantined:bool,ready:bool,size:usize,delay:u32,clock_mode:u8,completion:u32){
         let _lock = LOCK.lock().unwrap();
         let mut sq = [0u64; 128];
         let mut cq = [0u32; 64];
@@ -175,6 +196,8 @@ mod driver_read {
         let mut destination = vec![0xa5u8; size];
         cq[3] = cqe;
         unsafe {
+            NOW=10;WAITS=0;DELAY=delay;CLOCK_MODE=clock_mode;COMPLETION=completion;CQ_PTR=cq.as_mut_ptr();
+            DEST_PTR=destination.as_ptr();DEST_LEN=size;DOORBELLS=doorbells.as_ptr();
             let lease = Some(DmaLease::new(dma_pool::DmaBuffer {
                 virtual_address: buffer.as_mut_ptr() as u64,
                 physical_address: 0x200000, length: 4096,
@@ -206,12 +229,56 @@ mod driver_read {
             } else {
                 assert_eq!(destination, vec![0xa5; size], "failure must not hand off uncompleted data");
             }
+            assert_eq!(NVME_IO_STATE.next_cid,43,"never resubmit or reserve another CID");
+            if quarantined{
+                assert_eq!(NVME_IO_STATE.cq_head,0);assert_eq!(doorbells[1],0);
+                let lease=if write{WRITE_LEASE.as_mut()}else{READ_LEASE.as_mut()}.unwrap();assert_eq!(lease.prepare(99),Err(DmaError::Busy));
+                let before=sq;let result=if write{nvme_write_one_block(0,size as u64,destination.as_ptr()as u64)}else{nvme_read_into_mapped_va(0,size as u64,destination.as_mut_ptr()as u64)};
+                assert_eq!(result,BLOCK_ERR_NO_DEVICE);assert_eq!(NVME_IO_STATE.next_cid,43);assert_eq!(sq,before);assert_eq!(doorbells[0],1);
+            }
+            if delay!=0&&expected==0{assert_eq!(WAITS,delay);}
+            if !quarantined{let lease=if write{WRITE_LEASE.as_mut()}else{READ_LEASE.as_mut()}.unwrap();assert!(lease.prepare(99).is_ok());}
             READ_LEASE = None;
             WRITE_LEASE = None;
+            CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();DEST_PTR=core::ptr::null();
             NVME_IO_STATE.ready = false;
         }
     }
 
+    #[test]fn actual_matching_last_queue_slot_advances_head_and_phase_exactly_once(){
+        let _lock=LOCK.lock().unwrap();let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];let mut buffer=[0u64;512];let source=[0xa5u8;512];
+        unsafe{
+            NOW=10;cq[15*4+3]=42|(1<<16);WRITE_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:buffer.as_mut_ptr()as u64,physical_address:0x200000,length:4096}));
+            NVME_IO_STATE=NvmeState{ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:15,cq_head:15,cq_phase:1,next_cid:42};
+        }
+        assert_eq!(nvme_write_one_block(0,512,source.as_ptr()as u64),0);assert_eq!(db,[0,0]);
+        unsafe{assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.cq_phase,NVME_IO_STATE.next_cid),(0,0,0,43));assert!(!WRITE_LEASE.as_ref().unwrap().is_quarantined());WRITE_LEASE=None;NVME_IO_STATE.ready=false;}
+    }
+    #[test]fn actual_flush_waits_for_exact_completion_and_fences_on_timeout_without_replay(){
+        let _lock=LOCK.lock().unwrap();
+        for success in [false,true]{
+            let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];
+            unsafe{
+                NOW=10;WAITS=0;DELAY=if success{3}else{0};CLOCK_MODE=0;COMPLETION=42|(1<<16);cq[3]=26;
+                CQ_PTR=cq.as_mut_ptr();DOORBELLS=db.as_ptr();DEST_PTR=core::ptr::null();DEST_LEN=0;
+                NVME_IO_STATE=NvmeState{ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:0,cq_head:0,cq_phase:1,next_cid:42};
+            }
+            assert_eq!(nvme_flush(),if success{0}else{BLOCK_ERR_NO_DEVICE});assert_eq!(db[0],1);
+            unsafe{assert_eq!(NVME_IO_STATE.ready,success);assert_eq!(NVME_IO_STATE.next_cid,43);assert_eq!(NVME_IO_STATE.cq_head,success as u32);assert_eq!(db[1],success as u32);if !success{assert_eq!(nvme_flush(),BLOCK_ERR_NO_DEVICE);assert_eq!(NVME_IO_STATE.next_cid,43);assert_eq!(db[0],1);}CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();}
+        }
+    }
+    #[test]fn actual_delayed_read_and_write_complete_after_wait_without_submission_replay(){
+        for write in [false,true]{exercise_wait(write,26,0,false,true,512,3,0,42|(1<<16));}
+    }
+    #[test]fn actual_stale_phase_or_wrong_cid_never_releases_dma_on_foreign_receipt(){
+        for cqe in [42,41|(1<<16)]{exercise_wait(false,cqe,BLOCK_ERR_NO_DEVICE,true,false,512,0,0,0);}
+    }
+    #[test]fn actual_wait_deadline_rollback_stalled_clock_and_denied_full_quarantine(){
+        for mode in [1,2,3,4]{exercise_wait(true,26,BLOCK_ERR_NO_DEVICE,true,false,512,0,mode,0);}
+    }
+    #[test]fn delayed_matching_error_cqe_completes_dma_then_stops_queue_without_copy(){
+        exercise_wait(false,26,BLOCK_ERR_NO_DEVICE,false,false,512,2,0,42|(1<<16)|(2<<17));
+    }
     #[test]
     fn production_write_completion_copies_payload_and_updates_queue() {
         exercise(true, 42 | (1 << 16), 0, false, true);

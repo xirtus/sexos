@@ -38,7 +38,8 @@ impl Status{fn decode(v:u8)->Option<Self>{match v{0=>Some(Self::Ok),1=>Some(Self
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Packet{pub opcode:u64,pub args:[u64;3]}
 impl Packet{pub fn erase(&mut self){unsafe{core::ptr::write_volatile(&mut self.opcode,0);for a in &mut self.args{core::ptr::write_volatile(a,0)}}}}
 pub fn hash(bytes:&[u8])->u64{bytes.iter().fold(0xcbf29ce484222325,|h,&b|(h^b as u64).wrapping_mul(0x100000001b3))}
-pub fn text(bytes:&[u8])->bool{bytes.iter().all(|&b|b==b'\n'||(b' '..=b'~').contains(&b))}
+/// Whole editable text only; register chunks remain opaque until assembled.
+pub fn text(bytes:&[u8])->bool{crate::text_encoding::valid_text(bytes)}
 fn ticket(v:u64)->Option<u32>{(v!=0&&v<=u32::MAX as u64).then_some(v as u32)}
 fn chunk(meta:u64,a:u64,b:u64)->Option<(u32,usize,usize,[u8;16])>{
  let id=meta as u32;let offset=((meta>>32)&0xffff)as usize;let count=((meta>>48)&255)as usize;

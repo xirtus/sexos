@@ -24,9 +24,24 @@ class HttpPixels(unittest.TestCase):
         x=row['x']+(column*self.contract['advance']+gx)*g['scale']+dx;y=row['y']+gy*g['scale']+dy+shift;pixels[(y*1280+x)*3:(y*1280+x)*3+3]=self.contract['color'].to_bytes(3,'big')
   return b'P6\n1280 800\n255\n'+pixels
  def test_shared_codec_and_facade_are_both_in_the_pixel_source_closure(self):
-  for name in ('crates/sex-http/src/codec.rs','crates/sex-http/src/lib.rs','crates/sex-http/Cargo.toml','apps/kaleidoscope/src/http_wire.rs','crates/sex-net-config/src/lib.rs'):
+  for name in ('crates/sex-http/src/codec.rs','crates/sex-http/src/lib.rs','crates/sex-http/Cargo.toml','apps/kaleidoscope/src/http_wire.rs','crates/sex-net-config/src/lib.rs','crates/sex-pdx/src/text_encoding.rs'):
    self.assertEqual(self.contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
   self.assertEqual(self.contract['wire_max_body'],12288);self.assertEqual(self.contract['wire_max_headers'],1024)
+ def test_actual_utf8_reader_body_and_footer_contracts_cannot_silently_drift(self):
+  self.assertEqual(self.contract['reader_encoding'],'utf-8-scalars');self.assertEqual(self.contract['reader_replacement'],0xfffd)
+  actual=Path.read_text
+  changes=(('apps/kaleidoscope/src/document_reader.rs','const MAX_ROWS: usize = 24;','const MAX_ROWS: usize = 32;'),
+           ('apps/kaleidoscope/src/document_reader.rs','end=text::next(body,end);cells+=1;','end+=1;cells+=1;'),
+           ('apps/kaleidoscope/src/document_reader.rs','(CAPACITY-(3*cols+2))/cost','CAPACITY/cost'),
+           ('apps/kaleidoscope/src/http_probe.rs','self.document[self.document_len]=byte;',"self.document[self.document_len]=b'?';"),
+           ('apps/kaleidoscope/src/main.rs','document_reader::replace_footer(&mut text.bytes,text.len,cols,label)','legacy_footer(&mut text.bytes)'))
+  for name,old,new in changes:
+   target=(ROOT/name).resolve()
+   def read(path,*args,**kwargs):
+    source=actual(path,*args,**kwargs)
+    return source.replace(old,new)if path.resolve()==target else source
+   with self.subTest(path=name,token=old),patch.object(Path,'read_text',read):
+    with self.assertRaisesRegex(ValueError,'UTF-8|received bytes|footer|row cap'):load_pixel_contract(ROOT)
  def test_facade_cannot_silently_point_to_a_different_or_duplicate_codec(self):
   actual=Path.read_text;facade=(ROOT/'apps/kaleidoscope/src/http_wire.rs').resolve()
   for change in ('path','implementation'):

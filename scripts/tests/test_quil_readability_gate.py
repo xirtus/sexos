@@ -174,3 +174,39 @@ class CustodyAndJournal(unittest.TestCase):
   with self.assertRaises(ValueError):g.journal(raw,wrong)
 
 if __name__=='__main__':unittest.main()
+
+
+class UnicodeProfile(unittest.TestCase):
+ def setUp(self):g.configure('utf8')
+ def tearDown(self):g.configure('ascii')
+ def test_explicit_profile_body_and_journal_are_exact_utf8(self):
+  self.assertEqual(g.BODY,'café € 🙂 漢'.encode());self.assertEqual(g.NAME,'utfnote');self.assertEqual(g.FINAL,g.BODY+b'z')
+  trace,actions=trace_fixture();meta=g.joins(trace,actions);self.assertEqual(g.journal(raw_disk(),meta)['bytes'],len(g.FINAL))
+  with self.assertRaises(ValueError):g.configure('unknown')
+ def fixture(self):
+  trace='';actions=[];revision=0;total=0
+  for char in g.BODY.decode():
+   total+=len(char.encode())
+   if ord(char)<128:continue
+   start=len(trace);row=dict(kind='unicode',scalar=ord(char),digits=format(ord(char),'x'),serial_start=start,expected_bytes=total);actions.append(row)
+   def key(keys):
+    nonlocal trace
+    actions.append(dict(kind='key',keys=keys,serial_start=len(trace)));trace+='[fixture.key.edge] actual=0\n'
+   key(['ctrl','shift','u']);trace+=f'[quil.unicode.begin] generation=2 revision={revision} effects=0\n'
+   for digit in row['digits']:key([digit])
+   key(['ret']);revision+=1;trace+=f'[quil.document.edit] revision={revision} pending=0 bytes={total}\n'
+   trace+=f'[quil.unicode.commit] bytes={len(char.encode())} applied=1 revision={revision} pending=0\n';row['serial_end']=len(trace)
+  return trace,actions
+ def test_unicode_keyboard_join_requires_exact_atomic_edit_and_physical_digits(self):
+  trace,actions=self.fixture();result=g.unicode_joins(trace,actions);self.assertEqual(result['scalars'],[0xe9,0x20ac,0x1f642,0x6f22]);self.assertTrue(result['atomic'])
+  for bad in [trace.replace('applied=1','applied=0',1),trace.replace('pending=0','pending=1',1),trace.replace('generation=2','generation=0',1),trace.replace('effects=0','effects=1',1),trace+trace]:
+   with self.assertRaises(ValueError):g.unicode_joins(bad,actions)
+  for field,value in [('digits','e8'),('scalar',0xe8),('expected_bytes',999),('serial_end',0)]:
+   bad=copy.deepcopy(actions);next(r for r in bad if r['kind']=='unicode')[field]=value
+   with self.assertRaises(ValueError):g.unicode_joins(trace,bad)
+  bad=copy.deepcopy(actions);next(r for r in bad if r['kind']=='key')['keys']=['ctrl','u']
+  with self.assertRaises(ValueError):g.unicode_joins(trace,bad)
+ def test_ascii_profile_rejects_foreign_unicode_receipts(self):
+  trace,actions=self.fixture();g.configure('ascii')
+  with self.assertRaises(ValueError):g.unicode_joins(trace,actions)
+  self.assertEqual(g.unicode_joins('',[])['operations'],0)

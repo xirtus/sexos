@@ -1,0 +1,669 @@
+{
+  "round": 105,
+  "accepted": true,
+  "accepted_goal_rounds": 26,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 95,
+  "candidate": "H",
+  "iso_sha256": "6ed928ce77b8b208dd803e8a4bdbb1f6c9d9c866358b64699d622a4e5bb7e9e1",
+  "kernel_sha256": "78b79d5b661e28f81c7455f83b58f97fc3fb9e4e2101fcace593a2dd64c96f71",
+  "binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 563,
+  "runner_inputs": 531,
+  "checks": {
+    "master": "BUILD PASS / GREEN_MASTER",
+    "rust": [
+      {
+        "name": "service-custody",
+        "path": "/tmp/sexos-r105-h-frozen-service-custody.log",
+        "executions": 1782,
+        "sha256": "dddcdabb23c83730caf46a96bb5d672e9fd92676ae63b5c3ef506d7d2b509472",
+        "scope": "Actual Rust custody/clipboard/UTF8/editor/reader/network functions with explicitly modeled host callbacks."
+      },
+      {
+        "name": "display",
+        "path": "/tmp/sexos-r105-h-frozen-display.log",
+        "executions": 56,
+        "sha256": "eb32dc93358b394b0c8aad081c8b63676251b17fd87b45b9e959e9b4ecebd257",
+        "scope": "Actual display Stage/scalar/scanline/damage and exact parent policy functions; not guest pixel evidence."
+      },
+      {
+        "name": "readability",
+        "path": "/tmp/sexos-r105-h-frozen-readability.log",
+        "executions": 9,
+        "sha256": "7112c5c02f5e8998f09c26d3cf59b2ece8e4b5ee60f2323a083bbeb35a499603",
+        "scope": "Actual readable layout/contrast functions; separate executions, not unique-test deduplication."
+      },
+      {
+        "name": "launcher",
+        "path": "/tmp/sexos-r105-h-frozen-launcher.log",
+        "executions": 35,
+        "sha256": "8d2f9e0026d3dd32398f5da80cefee45f8577ebc7f3771caa4ac7699dda6cc39",
+        "scope": "Actual Shell action/workspace/admission callbacks; not native frame evidence."
+      },
+      {
+        "name": "text-pipeline",
+        "path": "/tmp/sexos-r105-h-frozen-text-pipeline.log",
+        "executions": 65,
+        "sha256": "da4eb6ddca1e10a6805d741acd3e61bdff47c719f5a5c14f1112abac5005a38b",
+        "scope": "Actual UTF8 Reader/shared Outbox/Display Stage/Applied integration with finite transport callbacks."
+      },
+      {
+        "name": "drive-wait",
+        "path": "/tmp/sexos-r105-h-frozen-drive-wait.log",
+        "executions": 38,
+        "sha256": "81638a2e5be16123e70b7e8218f52f7bf62ffc15341cf901264664d524b0d3df",
+        "scope": "Actual four NVMe completion wait paths/dispatch with fake ticks, CQEs and event words; native checks qualify affected guest workflows only."
+      }
+    ],
+    "rust_test_executions": 1985,
+    "python_tests": 767,
+    "python_log_sha256": "2596f933ede5bfdc86c26b32a96df1a2b894b2f15780b3a8b937e70e7a1e39a1",
+    "native_runs": 6,
+    "native_boots": 8,
+    "independent_frames": 98,
+    "root_replay_sha256": "e5eae62ab6dc668cf30f74b8f4b03ec4dc04d1f2c291055d4bc95eeb94f9b31b",
+    "scalar_audit": {
+      "ok": true,
+      "iso_sha256": "6ed928ce77b8b208dd803e8a4bdbb1f6c9d9c866358b64699d622a4e5bb7e9e1",
+      "elf_sha256": "e625e81fc3b303c38e0b9e1c0a48afbb00bfb0ee8fef154bdb2924c3d32fb1d4",
+      "disassembly_sha256": "011cf648c80fe807c93d114c992b476594928636c9a280f71ae8758dc8b9fc7a",
+      "instructions": 89412,
+      "vector_or_fp_matches": [],
+      "scope": "Decoded ISO-extracted Browser operands and inspected floating-point/state mnemonics only; no runtime stack/register/cache-erasure, scheduler, hostile containment or whole-image instruction proof."
+    },
+    "semantic_negative_controls": {
+      "ok": true,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "controls": [
+        {
+          "name": "unicode-overflow",
+          "test": "unicode_digit_overflow_requires_recovery_and_cannot_commit_a_silent_prefix",
+          "negative_rejected": true,
+          "returncode": 101,
+          "source_sha256": "ef110c52a98f00541fa7387dcafc181f3c335a608d4777e2f4e587dcf12a5167",
+          "mutant_sha256": "744bba8a3b8cd4f225084818e02e8d016e58b6ced1ad9d56eb32039e3649b798",
+          "fixture_sha256": "0cd4843f18ffba230e4e4fb4c805392daec3930bbaf8353a04efcdcda3a45f73",
+          "baseline_passed": true,
+          "log_sha256": "fd31469a2ef8a7957c799e5faf3a9fde077ca50e23d3aa646919537bdad8b0d4"
+        },
+        {
+          "name": "viewport-budget",
+          "test": "one_four_byte_character_does_not_collapse_otherwise_ascii_viewport",
+          "negative_rejected": true,
+          "returncode": 101,
+          "source_sha256": "871f3e5eab46d968aec8ade63daaa6be91ba25c9f6ec22fd3285aea4713eb7ce",
+          "mutant_sha256": "59d868387e1b0e1d9f0f016f21bd2ad945340f86ece48e43826d4ee111ce6e06",
+          "fixture_sha256": "4806cc3269aa4b7e7e74d93dfba41369da472cae699ebe2b1d780f33871344dd",
+          "baseline_passed": true,
+          "log_sha256": "c2663c564f9ca188ae5a6078c438f53bc92ee763ae51d8575dff06fad002a784"
+        },
+        {
+          "name": "atomic-outbox",
+          "test": "utf8_reader_frame_crosses_every_full_boundary_and_only_exact_applied_publishes_metadata",
+          "negative_rejected": true,
+          "returncode": 101,
+          "source_sha256": "4c6a942975f54b6ef121401f8e7316098d0faca0725fe20d60f44207e71fe319",
+          "mutant_sha256": "132e74b2d447ff6c8b011b77b82b8eb969d2a091331032df37cde504fcb48521",
+          "fixture_sha256": "c5958f2c1f326a02af26329e93e6859c2b18f1c71a41f3a3c35c528a1f7438c4",
+          "baseline_passed": true,
+          "log_sha256": "1b298b0d2238c8e7fe6f2f4cc0a24179d64c735c4b5922f4073ff771fdf3855b"
+        },
+        {
+          "name": "browser-source",
+          "test": "utf8_charset_and_split_scalars_retain_exact_bytes_only_after_positive_release",
+          "negative_rejected": true,
+          "returncode": 101,
+          "source_sha256": "b9fbb1d61a63aba193c8dd325279bee59728a31af1c7d6a230d61c72ccf78c0f",
+          "mutant_sha256": "743b07115e3fec2a3144ef711ff3558eb7e3a9603b62bd1a9e0a5cbc042c9eed",
+          "fixture_sha256": "b66384f311cb18213253f05354647db1d470b6eb1b06276fd5dd2fec726d5b73",
+          "baseline_passed": true,
+          "log_sha256": "b66e640682644c26ba6e17df15336abee8d13af6bdab8b8863a64c52fbbf3fa7"
+        }
+      ],
+      "scope": "Actual frozen editor Unicode overflow, Quil viewport budgeting and Browser raw UTF8 retention and shared atomic UTF8 frame outbox functions; separately compiled mutations fail their corresponding real regression. No production/frozen image changed."
+    }
+  },
+  "qualification_runs": [
+    {
+      "name": "readability-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r105-h-native-readability-wide",
+      "driver": "/tmp/sexos-r105-h-native-readability-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source/scripts/quil_readability_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r105-h-native-readability-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--text-profile",
+        "utf8"
+      ],
+      "mode": "quil-readability",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "seconds": 14.288420459022745
+    },
+    {
+      "name": "readability-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r105-h-native-readability-compact",
+      "driver": "/tmp/sexos-r105-h-native-readability-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source/scripts/quil_readability_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r105-h-native-readability-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--text-profile",
+        "utf8"
+      ],
+      "mode": "quil-readability",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "seconds": 9.794889000011608
+    },
+    {
+      "name": "launcher-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r105-h-native-launcher-wide",
+      "driver": "/tmp/sexos-r105-h-native-launcher-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r105-h-native-launcher-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "seconds": 35.01878279191442
+    },
+    {
+      "name": "launcher-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r105-h-native-launcher-compact",
+      "driver": "/tmp/sexos-r105-h-native-launcher-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r105-h-native-launcher-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "seconds": 25.99077675002627
+    },
+    {
+      "name": "clipboard-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r105-h-native-clipboard-wide",
+      "driver": "/tmp/sexos-r105-h-native-clipboard-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r105-h-native-clipboard-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--text-profile",
+        "utf8"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "seconds": 39.46813212498091
+    },
+    {
+      "name": "clipboard-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r105-h-native-clipboard-compact",
+      "driver": "/tmp/sexos-r105-h-native-clipboard-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r105-utf8-h-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r105-h-native-clipboard-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--text-profile",
+        "utf8"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 2,
+      "source_binding_sha256": "68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381",
+      "seconds": 28.807090000016615
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "label": "editor-wide",
+      "path": "assets/sexos-alpha-r105-2026-10-31-editor-wide.png",
+      "sha256": "7b1b2846fe4380dcfbacb54ed16fe3cabe2ade1bc34284d9b370383072cdecbc",
+      "run": "readability-wide",
+      "boot": "",
+      "raw_ppm": "resaved.ppm",
+      "raw_sha256": "c9e18124e93727245a03cc02e6ab08707a086f88943cf4a8218645be65fd0460",
+      "serial_bytes": 426403,
+      "serial_sha256": "d8c3372e1c147c2685db2c2d993e96229e29f23638f111614725d4ddbfeea57e",
+      "rgb_sha256": "5b3db77a9780252c7d01ea38dfc746b12c9097e375e32aa0dbfba7818183beb1",
+      "dimensions": [
+        1280,
+        800
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "commands-compact",
+      "path": "assets/sexos-alpha-r105-2026-10-31-commands-compact.png",
+      "sha256": "53a770a84ebdb2077e3dee30b11bc83ce1484b958b90ec22bd1e2d50f68b4b2f",
+      "run": "readability-compact",
+      "boot": "",
+      "raw_ppm": "commands.ppm",
+      "raw_sha256": "067969628952b2643a48955c76638f1d2138dfc1b4b244467e6fa4c6a2fd4187",
+      "serial_bytes": 430769,
+      "serial_sha256": "559babd35a9ba54da640872acbf1a5e2179e9b89aee27ca6de9f7aa2956b5a62",
+      "rgb_sha256": "35e16d5875105c5b4b3dabdff10dbcd506c3d1fef7a3e9d32f684cc56efdbb32",
+      "dimensions": [
+        1024,
+        768
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "clipboard-wide-selected",
+      "path": "assets/sexos-alpha-r105-2026-10-31-clipboard-wide-selected.png",
+      "sha256": "25a464633d98f38306def2e6733313451460811d299924716d488e8fb3707f0c",
+      "run": "clipboard-wide",
+      "boot": "write",
+      "raw_ppm": "browser-reverse.ppm",
+      "raw_sha256": "8eec1b6fc64e80486503da5bc42290d4b73159f07982c03e7967a9075b950930",
+      "serial_bytes": 309106,
+      "serial_sha256": "56f7e00897c46117afcb7d57438bb409714476640e5195d50d9076bfc2ba6b7f",
+      "rgb_sha256": "9a801cb082a93e3f3095b762c3749a7c449dc13b879f73c6b825d0347be3234d",
+      "dimensions": [
+        1280,
+        800
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "cold-compact",
+      "path": "assets/sexos-alpha-r105-2026-10-31-cold-compact.png",
+      "sha256": "5149f596d37725853b48682e58e1c49d3d52172b9a0281475a3536b2fac39501",
+      "run": "clipboard-compact",
+      "boot": "recovery",
+      "raw_ppm": "quil-cold-reopened.ppm",
+      "raw_sha256": "20e85e5218af1d70d86195f0ee7c4f8c7be43dfcb73b0a86fcb6464bce5cca76",
+      "serial_bytes": 291724,
+      "serial_sha256": "ef2bb64e64920325509a0af63a98cfbc07c949ace6f7bd51a11fbfc1db75e6c1",
+      "rgb_sha256": "14d8cde2ab61d791a47e2582a02db24067582b03148f6cf55fe72a65f03c69c2",
+      "dimensions": [
+        1024,
+        768
+      ],
+      "pixel_identical": true
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r105-2026-10-31-qualified-raw.tar.gz",
+    "sha256": "e359c7f948a6bad574d705e165660275ed21ab03cb54ce5b5b02d9c37c838279",
+    "members": 6301,
+    "verified": true,
+    "bytes": 32091994,
+    "raw_disk_copies": [
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-h-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-h-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-readability-wide/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-readability-wide/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-readability-compact/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-readability-compact/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-launcher-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-launcher-wide/root-terminal-disk.img.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-launcher-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-launcher-compact/root-terminal-disk.img.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-clipboard-wide/recovery/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-clipboard-wide/recovery/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-clipboard-wide/write/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-clipboard-wide/write/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-clipboard-compact/recovery/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-clipboard-compact/recovery/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-h-native-clipboard-compact/write/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-h-native-clipboard-compact/write/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-b-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-b-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-c-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-c-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-d-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-d-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-d-native-readability-wide/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-d-native-readability-wide/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-d-native-readability-compact/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-d-native-readability-compact/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-d-native-launcher-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-d-native-launcher-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-d-native-launcher-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-d-native-launcher-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-d-native-clipboard-wide/write/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-d-native-clipboard-wide/write/nvme.img.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-e-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-e-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-e-native-readability-wide/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-e-native-readability-wide/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-e-native-readability-compact/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-e-native-readability-compact/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-f-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-f-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-f-native-readability-wide/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-f-native-readability-wide/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-f-native-readability-compact/nvme.img",
+        "raw_sha256": "de34fa42ce6497f5c1dfc94fd0a6ac3639ff5fdd09ad00895f001d12f0bd2ede",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-f-native-readability-compact/nvme.img.gz",
+        "compressed_sha256": "f1fb33cc7a631f198793d1f1245a63f5668e00cf66b995f8d9f67e1f62e07d06",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r105-utf8-g-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r105-utf8-g-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-g-native-readability-wide/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-g-native-readability-wide/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-g-native-readability-compact/nvme.img",
+        "raw_sha256": "ce8d517fd04d83b73a258c0adde5c09af17edbb53ded9c724608f0b1858c0b03",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-g-native-readability-compact/nvme.img.gz",
+        "compressed_sha256": "0ece13e27b6edd62926697c0fac90017f68985613d00418c68e29ae6cb65fee2",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r105-g-native-launcher-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r105-g-native-launcher-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r100a-seed.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r100a-seed.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": true,
+        "uncompressed_verified": true
+      }
+    ]
+  },
+  "failed_diagnostics": "Superseded A compile and B/C build attempts, complete D/E/F/G frozen closures and native raw failures/results are retained. D valid UTF8 reader failed shared ASCII outbox admission; E real legacy receipt fragmentation failed strict joins; F real NVMe bounded-poll timeout preserved prior Save and quarantine; G real legacy launcher-open receipt fragmentation failed a strict same-line join despite successful prior readability boots. Those candidates contribute no final native acceptance.",
+  "limitations": [
+    "Text uses one scalar per fixed cell and a finite font with visible fallback. No Unicode shaping, grapheme composition, normalization, IME, bidirectional layout or Unicode filenames are qualified.",
+    "Readability native entry/toolbar/Save proof is original Quil9 at two desktop sizes; clipboard uses a source-defined fixed12288-byte UTF8 HTTP fixture and same-image cold recovery. Tiny viewports, broad queue pressure and other instances remain host-function scopes unless separately recorded.",
+    "NVMe wait evidence covers exactly four runtime completion paths and the actual host fake-clock/CQE/event-word cases. The bounded callback assumes the clock/yield callback returns; no arbitrary callback-termination or whole-driver timing proof is claimed.",
+    "The scalar audit inspects decoded operands/mnemonics in the ISO-extracted Browser ELF only. It is not a whole-image, runtime stack/register/cache-erasure or hostile containment proof.",
+    "The finite captured endpoint is a controlled plain-HTTP fixture. No public web/CA, physical hardware, SMP, crash/power-loss, full-system deterministic replay, sustained daily-driver or System Proven claim."
+  ],
+  "scope": "One substantive UTF8 round: explicit scalar entry, byte-preserving text/clipboard/Save/cold reopen, fixed source-bound finite glyph repertoire and visible unsupported-glyph fallback, plus complete atomic UTF8 display handoff. Four NVMe completion waits now use bounded elapsed ticks/yield and preserve DMA quarantine on uncertainty. Single GLOBAL_VAS, immutable BOOT capability genesis and typed exact-incarnation sex-pdx authority remain; not Unix/POSIX."
+}

@@ -14,7 +14,7 @@ for name in ('app_input_poll','clipboard_intake_poll','clipboard_source_ready','
     parts.extend(found)
 Path(sys.argv[2]).write_text('\n'.join(parts)+'\n')
 PY
-for name in text_selection clipboard_wire clipboard_client clipboard_broker app_input; do
+for name in text_encoding text_selection clipboard_wire clipboard_client clipboard_broker app_input; do
     APP_INPUT_PRODUCTION="$CLIPBOARD_TEMP/app_input_production.rs" rustc --edition=2021 -A dead_code --test "$ROOT/tests/$name.rs" -o "$CLIPBOARD_TEMP/$name"
     "$CLIPBOARD_TEMP/$name" --test-threads=1
 done

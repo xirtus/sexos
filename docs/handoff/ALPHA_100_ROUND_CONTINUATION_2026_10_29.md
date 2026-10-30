@@ -1,6 +1,17 @@
 # Alpha continuation: 100 further engineering rounds
 
-## Current checkpoint: accepted round 104; next 105
+## Current checkpoint: accepted round 105; next 106
+
+Browser documents, clipboard, Quil editing and named storage now preserve exact supported UTF-8 bytes. Scalar-safe wrapping, movement, selection, replacement and deletion retain byte offsets for correlation and capacity. Ctrl Shift U enters one Unicode scalar from hex digits as one undoable edit; its frozen selection and overflow guard prevent stale or partial insertion. Sixteen extra finite glyphs cover common accented letters, currency and arrows; other valid scalars have a visible fallback box while storage keeps their bytes. Unsupported encodings and forbidden controls are refused explicitly. Whole-payload validation lets scalars cross opaque IPC chunks without weakening source, incarnation, ticket or custody checks.
+
+The same round fixes a native Save blocker: runtime NVMe reads, writes and flushes now inspect short bounded completion batches and use the existing BOOT-sanctioned self wait with checked tick deadlines. Submitted DMA remains held until exact CID/phase completion; timeout or denied wait preserves uncertainty and quarantines outstanding buffers without replay. Boot/admin polling is outside this change.
+
+Sealed ISO `6ed928ce77b8b208dd803e8a4bdbb1f6c9d9c866358b64699d622a4e5bb7e9e1`, binding `68a205469586258631d8af5874e38855acf909d7189d7a7695bb0731467d2381`;563 production/531 runner inputs. BUILD/GREEN_MASTER, 1,985 frozen Rust executions, 767 Python tests and six native runs/eight boots pass. Independent raw checking verifies98 captures. Both desktop sizes qualify actual Unicode entry, toolbar actions, exact18/19-byte journal generations, launcher/workspace reuse and a12288-byte UTF-8 Browser Copy/Quil Save/cold reopen. Four actual-code negative controls reject Unicode-prefix insertion, collapsed viewport budgeting, ASCII-only shared delivery and source-byte rewriting. See [evidence](assets/sexos-alpha-r105-2026-10-31-evidence.json).
+
+Next106 adds useful retained image inspection: Fit and1:1 controls, centered integer-pixel placement, dimensions/scale and compact hints over the existing bounded image pipeline. It must bind each changed presentation to its own Applied result, retain exact decoded source bytes and avoid extra network fetches.107 improves navigation;108 qualifies an integrated connected desktop session. Active80–200 progress:26/121 accepted;106–200 remain (95 substantive rounds).7 Open/23 Partial/System Proven false remain. One GLOBAL_VAS, BOOT-only genesis, typed sex-pdx authority and exact terminal incarnations remain mandatory; SexOS is not Unix/POSIX.
+
+
+## Historical checkpoint: accepted round 104; next 105 at that time
 
 Quil now exposes complete New/Open/Save/Save As buttons and the Ctrl Shift S shortcut, with clipboard help in Esc commands. The app and Shell share the same8-cell button geometry. Height-aware chrome retains a document/caret row whenever a glyph fits; short command menus keep the selected command visible, and hidden controls have no pointer target. Header lengths are bounded and chrome capacity still depends on geometry, preserving source bytes, selection and viewport through status/name changes.
 

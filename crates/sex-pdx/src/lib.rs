@@ -1039,6 +1039,7 @@ pub mod display_boot;
 
 pub mod text_batch;
 pub mod text_selection;
+pub mod text_encoding;
 pub mod clipboard;
 pub mod clipboard_client;
 pub mod app_key;

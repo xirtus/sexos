@@ -1,5 +1,6 @@
 //! Actual client/ABI, a finite malformed peer, and actual broker integration.
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"]
 mod app_lifecycle;
 #[path = "../servers/silk-shell/src/clipboard.rs"]
@@ -609,7 +610,7 @@ fn close_is_permanent_and_erases_pending_packet_and_whole_payload() {
 }
 #[test]
 fn empty_invalid_and_oversize_exports_are_atomic_and_never_sent() {
-    for body in [vec![], vec![0], vec![b'\t'], vec![b'a'; MAX_BYTES + 1]] {
+    for body in [vec![], vec![0], vec![b'\r'], vec![b'a'; MAX_BYTES + 1]] {
         let mut c = client();
         intent(&mut c, 1, Action::Copy);
         c.take_event();
@@ -1023,4 +1024,37 @@ fn actual_broker_producer_retirement_before_finish_invalidates_client() {
     assert!(
         matches!(dest.take_event(),Some(Event::Stopped{ticket:t,view:View::Uncertain})if t==ticket)
     );
+}
+
+#[test]
+fn utf8_copy_cut_paste_keeps_exact_bytes_across_every_register_boundary() {
+    for scalar in ["é", "€", "𐍈"] { for split in 1..scalar.len() {
+        let mut body=vec![b'a';MAX_BYTES];for boundary in (16..MAX_BYTES).step_by(16) {let start=boundary-split;body[start..start+scalar.len()].copy_from_slice(scalar.as_bytes());}
+        assert!(clipboard::text(&body));assert!(!clipboard::text(&body[..16]));
+        let mut source=client();let mut peer=Peer::new(&[]);
+        assert_eq!(copy(&mut source,&mut peer,&body,1,true),Event::Published{ticket:1,cut:true,len:MAX_BYTES,generation:peer.generation,hash:clipboard::hash(&body)});
+        assert_eq!(peer.body,body);assert!(source.storage_erased());
+        let mut consumer=client();assert_eq!(paste(&mut consumer,&mut peer,2),Event::Ready{ticket:2,len:MAX_BYTES,generation:peer.generation,hash:clipboard::hash(&body)});
+        assert_eq!(consumer.bytes(),Some(body.as_slice()));assert!(consumer.finish_read());assert!(consumer.storage_erased());
+    }}
+}
+
+#[test]
+fn malformed_complete_reads_never_send_finish_or_expose_ready_even_with_matching_hash() {
+    let mut bodies=vec![vec![0xff],vec![0xc0,0xaf],vec![0xe2,0x82],vec![0xed,0xa0,0x80],vec![0xf4,0x90,0x80,0x80]];
+    for scalar in (0..=159).filter(|c|(*c<32&&*c!=9&&*c!=10)||(127..=159).contains(c)) {let mut bytes=[0;4];bodies.push(char::from_u32(scalar).unwrap().encode_utf8(&mut bytes).as_bytes().to_vec());}
+    for body in bodies {
+        let mut c=client();let mut peer=Peer::new(&[]);peer.body=body.clone();peer.hash=clipboard::hash(&body);intent(&mut c,1,Action::Paste);assert_eq!(c.take_event(),Some(Event::Paste{ticket:1}));assert!(c.read(1,1));
+        for now in 2..20 {peer.turn(&mut c,now);assert!(c.bytes().is_none());assert!(!matches!(c.take_event(),Some(Event::Ready{..})));}
+        assert_eq!(c.view(),View::Uncertain);assert!(c.storage_erased());assert!(!peer.log.iter().any(|r|matches!(r,Request::Finish{..})));
+        let mut exporter=client();intent(&mut exporter,1,Action::Cut);exporter.take_event();assert!(!exporter.publish(1,SOURCE,&body,1));assert!(exporter.storage_erased());assert_eq!(send(&mut exporter,2),vec![Request::Cancel{ticket:1}]);assert!(!matches!(exporter.take_event(),Some(Event::Published{..})));
+    }
+}
+
+#[test]
+fn utf8_tab_and_lf_are_preserved_without_ascii_sanitizing_or_normalization() {
+    let body="café\t€\n𐍈".as_bytes();let mut c=client();let mut peer=Peer::new(&[]);
+    assert!(matches!(copy(&mut c,&mut peer,body,1,false),Event::Published{cut:false,len,..}if len==body.len()));
+    let mut recipient=client();assert!(matches!(paste(&mut recipient,&mut peer,2),Event::Ready{len,..}if len==body.len()));
+    assert_eq!(recipient.bytes(),Some(body));assert_eq!(peer.hash,clipboard::hash(body));assert!(recipient.settle(true));assert!(recipient.storage_erased());
 }

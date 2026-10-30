@@ -5,7 +5,7 @@
 //! Navigation accepts bounded same-endpoint origin-form redirect data only.
 //! No arbitrary URLs, cookies, HTML interpretation, TLS, caching or online-web claim.
 //! For200, Content-Type must match the selected fixed resource. Legacy text
-//! permits one unquoted charset=us-ascii parameter. Redirect MIME is optional
+//! permits one unquoted charset=us-ascii or charset=utf-8 parameter. Redirect MIME is optional
 //! syntax-checked data; it never selects rendering. Body bytes remain raw data.
 
 pub const MAX_REQUEST: usize = 128;
@@ -192,7 +192,8 @@ fn content_type(bytes: &[u8]) -> Result<(), Error> {
     if let Some(parameter) = parts.next() {
         let equals = parameter.iter().position(|&b| b == b'=').ok_or(Error::UnsupportedContentType)?;
         if !trim(&parameter[..equals]).eq_ignore_ascii_case(b"charset")
-            || !trim(&parameter[equals+1..]).eq_ignore_ascii_case(b"us-ascii") {
+            || ![b"us-ascii".as_slice(),b"utf-8".as_slice()].iter()
+                .any(|charset|trim(&parameter[equals+1..]).eq_ignore_ascii_case(charset)) {
             return Err(Error::UnsupportedContentType);
         }
     }
@@ -485,6 +486,17 @@ mod tests {
         let bytes = response(b"");let parsed = parse(&bytes).unwrap();
         assert_eq!(parsed.content_length, 0);assert_eq!(parsed.body, bytes.len()..bytes.len());
     }
+    #[test] fn utf8_profile_preserves_exact_body_across_every_feed_split(){
+        let body="café\t中文\n😀".as_bytes();
+        for charset in ["utf-8","UTF-8","us-ascii"]{
+            let bytes=message(&format!("Content-Length: {}\r\nContent-Type: text/plain; charset={charset}\r\n",body.len()),body);
+            for split in 0..=bytes.len(){let mut receiver=Receiver::new();receiver.feed(&bytes[..split]).unwrap();receiver.feed(&bytes[split..]).unwrap();receiver.finish().unwrap();let mut out=[0;MAX_BODY];assert_eq!(receiver.copy_body(&mut out),Ok(body.len()));assert_eq!(&out[..body.len()],body);}
+        }
+        // Framing/MIME is not editable-text admission: unsupported raw bytes
+        // remain available to the read-only replacement renderer unchanged.
+        let raw=b"bad\0\xff";let bytes=message("Content-Length: 5\r\nContent-Type: text/plain; charset=utf-8\r\n",raw);
+        let parsed=parse(&bytes).unwrap();assert_eq!(&bytes[parsed.body],raw);
+    }
     #[test] fn header_names_mime_and_ascii_charset_are_case_insensitive() {
         let bytes = message("cOnTeNt-LeNgTh:\t 0004 \t\r\ncOnTeNt-TyPe: TeXt/PlAiN ; Charset = US-ASCII\r\nX-Test: valid\tvalue\r\n", b"body");
         let parsed = parse(&bytes).unwrap();assert_eq!(&bytes[parsed.body], b"body");
@@ -524,7 +536,7 @@ mod tests {
             assert_eq!(parse(bytes.as_bytes()), Err(Error::UnsupportedStatus));
         }
         assert_eq!(parse(b"HTTP/1.0 200 OK\r\n\r\n"), Err(Error::UnsupportedVersion));
-        for mime in ["text/html", "application/json", "text/plain; charset=utf-8", "text/plain; charset=\"us-ascii\"", "text/plain; charset=us-ascii; x=y", "text/plain;"] {
+        for mime in ["text/html", "application/json", "text/plain; charset=utf-16", "text/plain; charset=\"us-ascii\"", "text/plain; charset=us-ascii; x=y", "text/plain;"] {
             assert_eq!(parse(&message(&format!("Content-Length: 0\r\nContent-Type: {mime}\r\n"), b"")), Err(Error::UnsupportedContentType));
         }
         assert_eq!(parse(&message("Content-Length: 0\r\n", b"")), Err(Error::MissingContentType));
@@ -604,7 +616,7 @@ mod tests {
     #[test] fn navigation_200_preserves_mime_body_and_unknown_location_semantics() {
         let bytes=message("Content-Length: 3\r\nContent-Type: text/plain; charset=us-ascii\r\nLocation: https://untrusted.invalid/\r\n",b"");
         assert_eq!(parse_navigation_headers(&bytes),Ok(NavigationHeaders {header_len:bytes.len(),content_length:3,status:200,redirect:None}));
-        for fields in ["Content-Length: 0\r\n", "Content-Length: 0\r\nContent-Type: text/html\r\n", "Content-Length: 0\r\nContent-Type: text/plain; charset=utf-8\r\n"] {
+        for fields in ["Content-Length: 0\r\n", "Content-Length: 0\r\nContent-Type: text/html\r\n", "Content-Length: 0\r\nContent-Type: text/plain; charset=utf-16\r\n"] {
             let bytes=message(fields,b"");assert_eq!(parse_navigation_headers(&bytes).unwrap_err(),parse_headers(&bytes).unwrap_err());
         }
         let bytes=message(&format!("Content-Length: {MAX_BODY}\r\nContent-Type: text/plain\r\n"),b"");assert_eq!(parse_navigation_headers(&bytes).unwrap().content_length,MAX_BODY);

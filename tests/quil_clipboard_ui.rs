@@ -4,6 +4,8 @@
 //! This is no native IPC authority, durable-save or pixel proof.
 #![allow(dead_code, unused_variables, static_mut_refs)]
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/text_encoding.rs"]
+pub mod text_encoding;
 #[macro_export]
 macro_rules! serial_record {
     ($($x:tt)*) => {
@@ -31,6 +33,8 @@ pub mod document_view;
 pub mod text_selection;
 #[path = "../servers/quil/src/view.rs"]
 pub mod view;
+#[path = "../servers/quil/src/unicode_input.rs"]
+pub mod unicode_input;
 pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 pub fn get_ticks() -> u64 {
     1
@@ -39,6 +43,9 @@ const QUIL_BUFFER_MAX_LEN: usize = 12288;
 const UNDO_DEPTH: usize = 6;
 static mut QUIL_BUFFER: [u8; 12288] = [0; 12288];
 static mut QUIL_BUFFER_LEN: usize = 0;
+static mut QUIL_UNICODE_INPUT: unicode_input::Input = unicode_input::Input::new();
+static mut QUIL_UNICODE_SNAPSHOT: Option<text_selection::Snapshot> = None;
+static mut QUIL_INPUT_NOTICE: Option<&'static [u8]> = None;
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_REVISION: u64 = 0;
 static mut QUIL_GENERATION: u64 = 1;
@@ -85,6 +92,7 @@ fn quil_dispatch_palette_key(_: u64, _: u64, _: &mut bool, _: &mut u8) {
 }
 fn draw_text_lines(_: &[u8]) {}
 unsafe fn reset(bytes: &[u8]) {
+    QUIL_UNICODE_INPUT.clear();QUIL_UNICODE_SNAPSHOT=None;QUIL_INPUT_NOTICE=None;
     QUIL_BUFFER.fill(0);
     QUIL_BUFFER[..bytes.len()].copy_from_slice(bytes);
     QUIL_BUFFER_LEN = bytes.len();
@@ -350,4 +358,65 @@ fn sequence_exhaustion_fences_without_partial_edit_or_identity_reuse() {
         assert_eq!(QUIL_SELECTION.snapshot(), None);
         assert!(!quil_replace((0, 4), b"x"));
     }
+}
+
+
+#[test]
+fn unicode_entry_is_one_atomic_revision_and_undo_restores_exact_utf8() { unsafe {
+    reset("aé".as_bytes());
+    key(0x16,true,true); // Ctrl Shift U
+    assert!(QUIL_UNICODE_INPUT.active());
+    for c in [0x02,0x21,0x07,0x05,0x03] { key(c,false,false); } // 1F642
+    assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"aé".as_bytes());
+    key(0x1c,false,false);
+    assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"aé🙂".as_bytes());
+    assert_eq!(QUIL_REVISION,1);assert_eq!(UNDO_COUNT,1);assert!(!QUIL_UNICODE_INPUT.active());
+    key(0x2c,false,true);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"aé".as_bytes());
+    key(0x2c,true,true);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"aé🙂".as_bytes());
+}}
+#[test]
+fn utf8_left_right_backspace_delete_and_shift_selection_never_split_a_scalar() { unsafe {
+    reset("Aé€🙂Z".as_bytes());
+    for want in [10,6,3,1,0,0] {key(0x4b,false,false);assert_eq!(QUIL_CURSOR_POS,want);}
+    for want in [1,3,6,10,11,11] {key(0x4d,false,false);assert_eq!(QUIL_CURSOR_POS,want);}
+    key(0x4b,true,false);key(0x4b,true,false);
+    assert_eq!(QUIL_SELECTION.range(),Some((6,11)));
+    key(0x0e,false,false);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"Aé€".as_bytes());
+    key(0x0e,false,false);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"Aé".as_bytes());
+    key(0x47,false,false);key(0x4d,false,false);key(0x53,false,false);
+    assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],b"A");
+    assert!(text_encoding::valid_text(&QUIL_BUFFER[..QUIL_BUFFER_LEN]));
+}}
+#[test]
+fn unicode_invalid_cancel_capacity_and_changed_snapshot_have_no_partial_effect() { unsafe {
+    reset(b"draft");key(0x16,true,true);
+    for c in [0x20,0x09,0x0b,0x0b] {key(c,false,false);} // surrogate D800
+    key(0x1c,false,false);assert!(QUIL_UNICODE_INPUT.active());assert_eq!(QUIL_REVISION,0);
+    key(0x01,false,false);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],b"draft");
+    key(0x16,true,true);key(0x12,false,false);key(0x0a,false,false); // E9
+    assert!(quil_replace((5,5),b"!"));
+    key(0x1c,false,false);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],b"draft!");assert_eq!(QUIL_REVISION,1);
+    reset(&vec![b'a';12287]);key(0x16,true,true);key(0x12,false,false);key(0x0a,false,false);key(0x1c,false,false);
+    assert_eq!(QUIL_BUFFER_LEN,12287);assert_eq!(QUIL_REVISION,0);assert_eq!(UNDO_COUNT,0);
+}}
+#[test]
+fn mid_scalar_replacement_is_rejected_before_undo_and_tabs_are_exact() { unsafe {
+    reset("aé€z".as_bytes());
+    for range in [(2,3),(1,2),(3,4),(4,6)] {assert!(!quil_replace(range,b"q"));}
+    assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"aé€z".as_bytes());assert_eq!(QUIL_REVISION,0);assert_eq!(UNDO_COUNT,0);
+    key(0x0f,false,false);assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN],"aé€z\t".as_bytes());
+}}
+
+#[test]
+fn unicode_digit_overflow_requires_recovery_and_cannot_commit_a_silent_prefix() {
+    let mut input=unicode_input::Input::new();input.begin();
+    for code in [0x0b,0x0b,0x0b,0x0b,0x12,0x0a] {assert_eq!(input.key(code),unicode_input::Action::Pending);}
+    assert_eq!(input.key(0x1e),unicode_input::Action::Refused);
+    assert_eq!(input.key(0x1c),unicode_input::Action::Refused);
+    let (prompt,n)=input.prompt();assert!(core::str::from_utf8(&prompt[..n]).unwrap().contains("invalid"));
+    input.key(0x0e);input.key(0x0a);
+    match input.key(0x1c) {unicode_input::Action::Commit{bytes,len}=>assert_eq!(&bytes[..len],"é".as_bytes()),other=>panic!("{other:?}")}
+    input.begin();input.key(0x12);input.clear();assert!(!input.active());
+    input.begin();assert_eq!(input.key(0x1c),unicode_input::Action::Refused);
+    assert_eq!(input.key(0x01),unicode_input::Action::Cancelled);
 }

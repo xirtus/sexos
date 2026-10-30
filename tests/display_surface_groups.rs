@@ -3,6 +3,7 @@
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../servers/sexdisplay/src/bitmap_transaction.rs"]mod bitmap_transaction;
 static mut BITMAP_STAGE:bitmap_transaction::Stage=bitmap_transaction::Stage::EMPTY;
@@ -46,8 +47,8 @@ include!("fixtures/compositor_reference.rs");
   s.text_buf[0]=byte;if selected{s.selection_end=1;}recompute_text_lines(&mut s);
   let scale=surface_text_scale(&s);
   for y in 0..9*scale {for x in 0..6*scale {
-   let ink=byte>=32&&byte<=126&&x/scale<5&&y/scale<7
-       &&FONT_ASCII_5X7[(byte.saturating_sub(32))as usize][y/scale]&(1<<(4-x/scale))!=0;
+   let rows=if (32..=126).contains(&byte){FONT_ASCII_5X7[(byte-32)as usize]}else if byte==9{[0;7]}else{[31,17,21,21,21,17,31]};
+   let ink=x/scale<5&&y/scale<7&&rows[y/scale]&(1<<(4-x/scale))!=0;
    let expected=if byte==b'\n'{None}else if ink{Some(0xfedcba)}else if selected{Some(0xff36577c)}else{None};
    assert_eq!(surface_text_fg_at(8+x,62+y,&s),expected,"w={width} byte={byte} selected={selected} x={x} y={y}");
   }}
@@ -201,7 +202,10 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 }
 #[test]fn retirement_scrubs_every_secondary_and_prevents_all_queued_recreation(){
  let mut l=Lifecycle::new();l.register(cat(12));let mut s=[surf(3,153),surf(12,154),surf(12,160),surf(12,161),surf(12,162)];let mut refs=SceneRefs::default();
- assert_eq!(l.prepare(0,12,12,&mut s,&mut refs),Some(5));for sid in[153,154,160,161,162]{assert!(!l.sid_live(sid));assert_eq!(l.admit(&s,3,sid),Admission::Denied);assert_eq!(l.admit(&s,12,sid),Admission::Denied);}
+ for surface in&mut s{surface.text_len=2;surface.text_buf[..2].copy_from_slice("é".as_bytes());recompute_text_lines(surface);assert_eq!(surface.cell_count,1);}
+ assert_eq!(l.prepare(0,12,12,&mut s,&mut refs),Some(5));
+ for surface in&s{assert_eq!(surface.cell_count,0);assert!(surface.cell_starts.iter().chain(&surface.line_cells).chain(&surface.line_starts).all(|&x|x==0));}
+ for sid in[153,154,160,161,162]{assert!(!l.sid_live(sid));assert_eq!(l.admit(&s,3,sid),Admission::Denied);assert_eq!(l.admit(&s,12,sid),Admission::Denied);}
  assert_eq!(l.admit(&s,9,999),Admission::Vacant(0,9));
 }
 #[test]fn actual_compositor_keeps_child_color_text_parent_chrome_and_exact_pixel_proof(){unsafe{
@@ -698,4 +702,78 @@ fn reference_contrast(a:u32,b:u32)->f64{
   }}}
   assert!(found_ink&&found_background);
  }
+}
+
+#[test]fn utf8_scalar_cell_tables_preserve_source_offsets_wrapping_and_bounded_reset(){
+ let text="Aé€😀\tZ\nöß…".as_bytes();
+ for width in[40,240,400]{
+  let mut surface=Surface{x:20,y:70,w:width,h:300,text_len:text.len()as u16,..surf(9,156)};
+  surface.text_buf[..text.len()].copy_from_slice(text);recompute_text_lines(&mut surface);
+  assert_eq!(&surface.text_buf[..text.len()],text);
+  assert_eq!(surface.cell_count,10);
+  assert_eq!(&surface.cell_starts[..10],&[0,1,3,6,10,11,12,13,15,17]);
+  let columns=surface.wrap_cols as usize;
+  for row in 0..surface.line_count as usize{
+   assert_eq!(surface.line_starts[row],surface.cell_starts[surface.line_cells[row]as usize]);
+   let begin=surface.line_cells[row]as usize;
+   let end=if row+1<surface.line_count as usize{surface.line_cells[row+1]as usize}else{surface.cell_count as usize};
+   assert!(end-begin<=columns+1);
+   assert!(text_encoding::is_boundary(text,surface.line_starts[row]as usize));
+  }
+  // Reflow is a derived-table update, never a source-byte edit.
+  surface.w=124;recompute_text_lines(&mut surface);assert_eq!(&surface.text_buf[..text.len()],text);
+  assert!(legacy_text_clear(&mut surface));assert_eq!(surface.cell_count,0);
+  assert!(surface.cell_starts.iter().chain(&surface.line_cells).chain(&surface.line_starts).all(|&x|x==0));
+ }
+ let mut maximum=Surface{w:1000,text_len:512,..surf(9,156)};maximum.text_buf.fill(b'A');maximum.text_buf[511]=b'\n';recompute_text_lines(&mut maximum);
+ assert_eq!(maximum.cell_count as usize,TEXT_BUF_CAP);assert_eq!(maximum.cell_starts[511],511);
+ assert_eq!(maximum.cell_starts.len(),512);assert_eq!(maximum.line_cells.len(),24);
+ maximum.text_len=1;maximum.text_buf[0]=b'x';recompute_text_lines(&mut maximum);
+ assert_eq!(maximum.cell_count,1);assert!(maximum.cell_starts[1..].iter().all(|&x|x==0));
+}
+#[test]fn actual_utf8_glyphs_fallback_tab_and_byte_selection_match_scalar_scanline_and_damage(){unsafe{
+ let text="Aé€😀\tZ\nöß…".as_bytes();
+ let expected=[FONT_ASCII_5X7[(b'A'-32)as usize],[2,4,14,17,31,16,14],[7,8,30,8,30,8,7],[31,17,21,21,21,17,31],[0;7],FONT_ASCII_5X7[(b'Z'-32)as usize],[10,0,0,14,17,17,14],[12,18,18,28,18,18,28],[0,0,0,0,0,0,21]];
+ for width in[240,400]{
+  let(w,h)=(600,300);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+  SURFACES[0]=Surface{x:20,y:70,w:width,h:160,text_len:text.len()as u16,text_color:0xe0f0ff,selection_start:1,selection_end:11,..surf(9,156)};
+  SURFACES[0].text_buf[..text.len()].copy_from_slice(text);recompute_text_lines(&mut SURFACES[0]);FOCUSED_SURFACE_ID=0;
+  let factor=surface_text_scale(&SURFACES[0]);let mut framebuffer=vec![0;w*h];DAMAGE_ORDER.clear();
+  redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:20,y:70,right:20+width as usize,bottom:230});
+  for row in 0..2{for column in 0..8{let glyph=if row==0&&column<6{expected[column]}else if row==1&&column<3{expected[6+column]}else{[0;7]};
+   for py in 0..9*factor{let y=82+row*9*factor+py;let mut cache=FRAME_GROUPS.row_winners(&SURFACES,0,y,w,h).unwrap();
+    for px in 0..6*factor{let x=28+column*6*factor+px;
+     let ink=py/factor<7&&px/factor<5&&glyph[py/factor]&(1<<(4-px/factor))!=0;
+     let selected=row==0&&(1..=4).contains(&column);
+     let color=if ink{0xe0f0ff}else if selected{0xff36577c}else{SURFACES[0].color};
+     assert_eq!(composite_pixel(x,y,w,h,0,0),color,"scalar width={width} row={row} col={column}");
+     assert_eq!(composite_pixel_source(x,y,w,h,0,cache.source(x)),color,"scanline width={width} row={row} col={column}");
+     assert_eq!(framebuffer[y*w+x],color,"damage width={width} row={row} col={column}");
+    }
+   }
+  }}
+  assert_eq!(&SURFACES[0].text_buf[..text.len()],text);
+ }
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}
+#[test]fn finite_scalar_font_is_explicit_bounded_and_never_aliases_unknown_to_question_mark(){
+ assert_eq!(FONT_UNICODE_5X7.len(),16);
+ for(code,rows)in FONT_UNICODE_5X7{
+  assert!(char::from_u32(*code).is_some());assert!(rows.iter().all(|&row|row<32));
+  assert_eq!(scalar_glyph(*code),*rows);
+ }
+ assert_ne!(scalar_glyph(0x00f6),scalar_glyph(0x00d6));
+ assert_eq!(scalar_glyph(9),[0;7]);
+ assert_eq!(scalar_glyph(0x1f600),[31,17,21,21,21,17,31]);
+ assert_eq!(scalar_glyph(0xfffd),[31,17,21,21,21,17,31]);
+ assert_ne!(scalar_glyph(0x1f600),FONT_ASCII_5X7[(b'?'-32)as usize]);
+}
+
+#[test]fn scalar_wrap_never_splits_multibyte_source_at_legacy_or_width_derived_columns(){
+ let text="é".repeat(21);let mut s=Surface{w:124,text_len:text.len()as u16,..surf(9,156)};
+ s.text_buf[..text.len()].copy_from_slice(text.as_bytes());recompute_text_lines(&mut s);
+ assert_eq!(s.wrap_cols,20);assert_eq!(s.line_starts[1],40);assert_eq!(s.line_cells[1],20);
+ let text=format!("{text}\n");s.text_len=text.len()as u16;s.text_buf[..text.len()].copy_from_slice(text.as_bytes());recompute_text_lines(&mut s);
+ assert_eq!(s.wrap_cols,18);assert_eq!(s.line_starts[1],36);assert_eq!(s.line_cells[1],18);
+ assert!(s.line_starts[..s.line_count as usize].iter().all(|&at|text_encoding::is_boundary(text.as_bytes(),at as usize)));
 }

@@ -34,11 +34,16 @@ impl Outbox {
     }
     /// Selection is part of the immutable atomic batch. Legacy text has no
     /// selection encoding and explicitly rejects nonempty styled requests.
+    /// Validate the complete frame before advancing sequence or changing either
+    /// batch; register chunks may subsequently split any UTF-8 scalar.
     pub fn queue_selected(&mut self,text:&[u8],color:u32,metadata:Metadata,selection:(u16,u16))->bool {
         let (start,end)=selection;
         if start>end || end as usize>text.len() || (start==end && start!=0)
             || (!self.atomic && selection!=(0,0)) {return false;}
-        if text.len() > CAPACITY || self.atomic && (self.surface==0 || self.surface>u16::MAX as u64 || text.iter().any(|&b| b!=b'\n' && !(32..=126).contains(&b))) { return false; }
+        if text.len() > CAPACITY || self.atomic && (self.surface==0 || self.surface>u16::MAX as u64
+            || !sex_pdx::text_encoding::valid_text(text)
+            || !sex_pdx::text_encoding::is_boundary(text,start as usize)
+            || !sex_pdx::text_encoding::is_boundary(text,end as usize)) { return false; }
         let Some(sequence)=self.sequence.checked_add(1) else {return false;};
         self.sequence=sequence;
         let mut batch = Batch { bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false, selection, selection_sent:false };

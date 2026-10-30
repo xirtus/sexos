@@ -14,6 +14,7 @@ use sex_pdx::{
 
 
 mod dma_transfer;
+mod completion_wait;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -210,6 +211,21 @@ fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
     }
 }
 
+/// The BOOT main-task inventory already sanctions this self-only timed wait.
+/// No inbox receive or new I/O submission occurs while submitted DMA is held.
+fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::Report{
+    let cqe=(cq_va as *const u8).wrapping_add(head as usize*16)as *const u32;
+    let report=completion_wait::wait(cid,phase,||unsafe{
+        // Observe the device's phase/status publication before dependent data.
+        let dw3=core::ptr::read_volatile(cqe.add(3));compiler_fence(Ordering::Acquire);
+        (core::ptr::read_volatile(cqe.add(2)),dw3)
+    },sex_pdx::get_ticks,||sex_pdx::sys_wait_self_ticks(1));
+    if report.turns>0||report.result.is_err(){
+        sex_pdx::serial_record!("[sexdrive.nvme.wait] cid={} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",cid,head,phase,report.polls,report.turns,report.elapsed,report.result.map(|_|()));
+    }
+    report
+}
+
 fn block_buffer_view(caller: u32, slot: u64, bytes: u64, rights: u8) -> Option<RegionView> {
     if slot != SLOT_BLOCK_BUFFER { return None; }
     let info = sex_pdx::memory_region_info(slot).ok()?;
@@ -321,31 +337,23 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
     let mut done = false;
     let mut dw2 = 0u32;
     let mut dw3 = 0u32;
-    let max_polls = 1_000_000u32;
-    let mut polls = 0u32;
-    let mut last_dw3 = 0u32;
+    let max_polls = completion_wait::MAX_POLLS;
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
         cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
     ); }
-    for _ in 0..max_polls {
-        polls = polls.wrapping_add(1);
-        let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
-        let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
-        let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
-        last_dw3 = rd_dw3;
-        let cid_now = rd_dw3 & 0xFFFF;
-        let phase_now = (rd_dw3 >> 16) & 0x1;
-        if cid_now == cid as u32 && phase_now == cq_phase {
-            done = true;
-            dw2 = rd_dw2;
-            dw3 = rd_dw3;
-            serial_println!(
-                "[sexdrive.block.read.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
-            break;
-        }
+    let wait=nvme_wait_completion(io_cq_va,cq_head,cid,cq_phase);
+    let polls=wait.polls;let last_dw3=wait.last_dw3;
+    if let Ok(completion)=wait.result{
+        let rd_dw2=completion.dw2;let rd_dw3=completion.dw3;
+        let cid_now=rd_dw3&0xffff;let phase_now=(rd_dw3>>16)&1;
+        done = true;
+        dw2 = rd_dw2;
+        dw3 = rd_dw3;
+        serial_println!(
+            "[sexdrive.block.read.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
+        );
     }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
@@ -542,31 +550,23 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     let mut done = false;
     let mut dw2 = 0u32;
     let mut dw3 = 0u32;
-    let max_polls = 1_000_000u32;
-    let mut polls = 0u32;
-    let mut last_dw3 = 0u32;
+    let max_polls = completion_wait::MAX_POLLS;
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
         cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
     ); }
-    for _ in 0..max_polls {
-        polls = polls.wrapping_add(1);
-        let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
-        let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
-        let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
-        last_dw3 = rd_dw3;
-        let cid_now = rd_dw3 & 0xFFFF;
-        let phase_now = (rd_dw3 >> 16) & 0x1;
-        if cid_now == cid as u32 && phase_now == cq_phase {
-            done = true;
-            dw2 = rd_dw2;
-            dw3 = rd_dw3;
-            if hot_log() { serial_println!(
-                "[sexdrive.block.read.handoff.nvme.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            ); }
-            break;
-        }
+    let wait=nvme_wait_completion(io_cq_va,cq_head,cid,cq_phase);
+    let polls=wait.polls;let last_dw3=wait.last_dw3;
+    if let Ok(completion)=wait.result{
+        let rd_dw2=completion.dw2;let rd_dw3=completion.dw3;
+        let cid_now=rd_dw3&0xffff;let phase_now=(rd_dw3>>16)&1;
+        done = true;
+        dw2 = rd_dw2;
+        dw3 = rd_dw3;
+        if hot_log() { serial_println!(
+            "[sexdrive.block.read.handoff.nvme.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
+        ); }
     }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
@@ -851,34 +851,26 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
 
     let mut done = false;
     let mut dw3 = 0u32;
-    let max_polls = 1_000_000u32;
-    let mut polls = 0u32;
-    let mut last_dw3 = 0u32;
+    let max_polls = completion_wait::MAX_POLLS;
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
         write_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
     ); }
-    for _ in 0..max_polls {
-        polls = polls.wrapping_add(1);
-        let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
-        let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
-        let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
-        last_dw3 = rd_dw3;
-        let cid_now = rd_dw3 & 0xFFFF;
-        let phase_now = (rd_dw3 >> 16) & 0x1;
-        if cid_now == write_cid as u32 && phase_now == cq_phase {
-            done = true;
-            dw3 = rd_dw3;
-            if hot_log() { serial_println!(
-                "[sexdrive.nvme.write.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            ); }
-            if hot_log() { serial_println!(
-                "[sexdrive.block.write.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            ); }
-            break;
-        }
+    let wait=nvme_wait_completion(io_cq_va,cq_head,write_cid,cq_phase);
+    let polls=wait.polls;let last_dw3=wait.last_dw3;
+    if let Ok(completion)=wait.result{
+        let rd_dw2=completion.dw2;let rd_dw3=completion.dw3;
+        let cid_now=rd_dw3&0xffff;let phase_now=(rd_dw3>>16)&1;
+        done = true;
+        dw3 = rd_dw3;
+        if hot_log() { serial_println!(
+            "[sexdrive.nvme.write.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
+        ); }
+        if hot_log() { serial_println!(
+            "[sexdrive.block.write.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
+        ); }
     }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
@@ -1627,28 +1619,14 @@ fn nvme_flush() -> u64 {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
 
-    // Poll CQE (short timeout — if not supported, return honest error).
-    let mut done = false;
-    let mut dw3 = 0u32;
-    for _poll in 0..1_000_000u32 {
-        let cqe_ptr = unsafe {
-            (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32
-        };
-        let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
-        let cid_now = rd_dw3 & 0xFFFF;
-        let phase_now = (rd_dw3 >> 16) & 0x1;
-        if cid_now == flush_cid as u32 && phase_now == cq_phase {
-            done = true;
-            dw3 = rd_dw3;
-            serial_println!(
-                "[sexdrive.nvme.flush.cqe] cid={} phase={} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw3 as u64
-            );
-            break;
-        }
-        // Spin hint to avoid burning CPU while keeping it simple.
-        core::hint::spin_loop();
-    }
+    // Same bounded observation policy as runtime data commands. FLUSH has
+    // no payload lease, but an unresolved command still fences the whole queue.
+    let wait=nvme_wait_completion(io_cq_va,cq_head,flush_cid,cq_phase);
+    let done=wait.result.is_ok();
+    let dw3=if let Ok(completion)=wait.result{
+        serial_println!("[sexdrive.nvme.flush.cqe] cid={} phase={} dw3={:#x}",flush_cid,cq_phase,completion.dw3);
+        completion.dw3
+    }else{0};
     if !done {
         stop_uncertain_io();
         serial_println!(

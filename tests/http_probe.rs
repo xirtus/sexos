@@ -152,19 +152,19 @@ fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.
  assert_eq!(&p.document()[http_wire::MAX_BODY-26..],&body[http_wire::MAX_BODY-26..]);assert_eq!(&p.preview()[61..],b"...");assert!(p.raw_scrubbed());
  p.cancel();no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
 }
-#[test]fn document_sanitizes_every_byte_one_to_one_preserving_newlines_and_full_tail(){
+#[test]fn document_retains_every_received_byte_without_presentation_rewriting(){
  let _serial=SERIAL.lock().unwrap();let body:Vec<u8>=(0..http_wire::MAX_BODY).map(|n|(n%256)as u8).collect();
- let expected:Vec<u8>=body.iter().map(|&b|if b==10||b>=32&&b<=126{b}else if b<32||b==127{b' '}else{b'?'}).collect();
+
  reset(true,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.start_resolved(1,1));finish(&mut p,1);
- assert_eq!(p.document(),expected);assert_eq!(p.document().len(),body.len());assert_eq!(p.document()[10],10);
- assert_eq!(p.document()[9],b' ');assert_eq!(p.document()[13],b' ');assert_eq!(p.document()[127],b' ');assert_eq!(p.document()[255],b'?');
- assert_eq!(&p.document()[2040..],&expected[2040..]);assert!(p.raw_scrubbed());
+ assert_eq!(p.document(),body);assert_eq!(p.document().len(),body.len());assert_eq!(p.document()[10],10);
+ assert_eq!(p.document()[9],9);assert_eq!(p.document()[13],13);assert_eq!(p.document()[127],127);assert_eq!(p.document()[255],255);
+ assert_eq!(&p.document()[2040..],&body[2040..]);assert!(p.raw_scrubbed());
 }
 #[test]fn shorter_replacement_has_exact_extent_and_reset_scrubs_the_entire_old_document(){
  let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'S';http_wire::MAX_BODY]);let mut p=probe::Client::new();assert!(p.start_resolved(1,1));finish(&mut p,1);
  assert_eq!(p.document().len(),http_wire::MAX_BODY);WORLD.lock().unwrap().as_mut().unwrap().wire.body=b"tail\n  A\tB\xFF".to_vec();
  assert!(p.start_resolved(p.next_sequence(),1));no_preview(&p);assert!(p.document_scrubbed());finish(&mut p,1000);
- assert_eq!(p.document(),b"tail\n  A B?");assert_eq!(p.body_length(),11);assert!(p.raw_scrubbed());
+ assert_eq!(p.document(),b"tail\n  A\tB\xFF");assert_eq!(p.body_length(),11);assert!(p.raw_scrubbed());
  p.wait_for_resolution();no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());assert_eq!(p.view(),probe::View::Pending);
 }
 #[test]fn cancel_after_validation_scrubs_pending_document_and_late_release_cannot_publish_it(){
@@ -234,4 +234,12 @@ fn redirect_response(path:&str,body:&[u8])->Vec<u8>{let mut raw=format!("HTTP/1.
  let _serial=SERIAL.lock().unwrap();let mut short=redirect_response("/guide",b"abc");short.pop();let mut trailing=redirect_response("/guide",b"abc");trailing.push(b'x');
  let responses=[short,trailing,redirect_response("http://elsewhere.test/guide",b""),redirect_response("/guide",&vec![b'x';http_wire::MAX_REDIRECT_BODY+1])];
  for raw in responses{reset(false,Mode::Raw,&raw);let mut p=probe::Client::new();assert!(p.start_resolved_path(1,1,http_wire::Path::initial()));finish(&mut p,1);assert_eq!(p.view(),probe::View::Unavailable);assert!(p.take_redirect().is_none());no_preview(&p);assert!(p.document_scrubbed());assert!(WORLD.lock().unwrap().as_ref().unwrap().machine.owner().is_none());}
+}
+
+#[test]fn utf8_charset_and_split_scalars_retain_exact_bytes_only_after_positive_release(){
+ let _serial=SERIAL.lock().unwrap();let body="café\t中文\n😀 raw".as_bytes();
+ let mut response=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n",body.len()).into_bytes();response.extend_from_slice(body);
+ reset(true,Mode::Raw,&response);let mut p=probe::Client::new();assert!(p.start_resolved(1,1));let now=pending(&mut p,network_job::RELEASE,1);
+ assert!(p.document().is_empty());assert_eq!(p.view(),probe::View::Pending);pump(&mut p,now);assert_eq!(p.document(),body);assert_eq!(p.view(),probe::View::Ready);
+ p.cancel();assert!(p.document_scrubbed());
 }

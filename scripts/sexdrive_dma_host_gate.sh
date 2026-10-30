@@ -12,17 +12,30 @@ start = source.index('fn block_buffer_view(')
 end = source.index('\nfn ', start + 1)
 Path(sys.argv[2]).write_text(source[start:end])
 parts = []
-for name in ['stop_uncertain_io', 'prepare_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'write_guard_allows']:
+for name in ['nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
     start = source.index('fn ' + name + '(')
     end = source.index('\nfn ', start + 1)
     parts.append(source[start:end])
 assert 'BLOCK_READ => typed_read_handoff(offset,size,_buf_cap,block_view),' in source
 assert 'bad_len_phase_b' not in source
+assert 'mod completion_wait;'in source
+assert 'sex_pdx::sys_wait_self_ticks(1)'in source
+for name in ('nvme_read_into_bounce','nvme_read_into_mapped_va','nvme_write_one_block','nvme_flush'):
+ a=source.index('fn '+name+'(');b=source.index('\nfn ',a+1);body=source[a:b]
+ assert body.count('nvme_wait_completion(')==1,name
+ assert '1_000_000'not in body,name
+scheduler=(Path(sys.argv[1])/'kernel/src/scheduler.rs').read_text()
+inventory=scheduler[scheduler.index('pub fn seal_self_wait_inventory()'):scheduler.index('pub fn bootstrap_enqueue_all_domains')]
+assert 'pd.main_task.load(Ordering::Acquire)'in inventory and 'SELF_WAIT_TASKS.register(count,task)'in inventory
+assert 'if !SELF_WAIT_TASKS.contains(task)'in scheduler and 'pd.main_task.load(Ordering::Acquire)!=task'in scheduler
+assert 'crate::scheduler::seal_self_wait_inventory();'in (Path(sys.argv[1])/'kernel/src/init.rs').read_text()
 Path(sys.argv[3]).write_text('\n'.join(parts))
 PY
 SEXDRIVE_BLOCK_VIEW_SOURCE="$TEST_DIR/block_view.rs" SEXDRIVE_READ_PATH_SOURCE="$TEST_DIR/read_path.rs" rustc --edition=2021 --test \
   "$ROOT_DIR/tests/sexdrive_dma_transfer.rs" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests" --nocapture
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_completion_wait.rs" -o "$TEST_DIR/completion-tests"
+"$TEST_DIR/completion-tests"
 echo '[gate.sexdrive_dma_host.result] PASS scope=production_lifetime_peer_check_not_device_DMA_containment'
 python3 - "$ROOT_DIR" "$TEST_DIR/service.rs" "$TEST_DIR/service_abi.rs" <<'PY'
 from pathlib import Path

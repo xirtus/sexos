@@ -138,9 +138,6 @@ impl Stage {
                     || offset % 8 != 0
                     || count != (self.len - offset).min(8)
                     || bytes[count..].iter().any(|&v| v != 0)
-                    || bytes[..count]
-                        .iter()
-                        .any(|&v| v != b'\n' && !(32..=126).contains(&v))
                 {
                     self.poisoned = true;
                     return None;
@@ -158,6 +155,8 @@ impl Stage {
                 if (self.owner, self.sid, self.sequence) != (owner, sid, sequence)
                     || self.sealed || self.poisoned { return None; }
                 if self.coverage != self.complete() || start > end || end > self.len
+                    || !sex_pdx::text_encoding::is_boundary(&self.bytes[..self.len],start)
+                    || !sex_pdx::text_encoding::is_boundary(&self.bytes[..self.len],end)
                     || (start == end && start != 0)
                     || (self.selection_present && (self.selection_start as usize, self.selection_end as usize) != (start, end)) {
                     self.poisoned = true;
@@ -180,7 +179,8 @@ impl Stage {
                 let integrity = if self.selection_present {
                     selected_hash(&self.bytes[..self.len], self.selection_start as usize, self.selection_end as usize)
                 } else { Some(hash(&self.bytes[..self.len])) };
-                if self.coverage != self.complete() || integrity != Some(expected) {
+                if self.coverage != self.complete() || integrity != Some(expected)
+                    || !sex_pdx::text_encoding::valid_text(&self.bytes[..self.len]) {
                     self.poisoned = true;
                     return None;
                 }

@@ -215,7 +215,7 @@ impl Broker {
             }
             Request::Write { offset, count, mut bytes, .. } => {
                 let valid = t.mode == Mode::Upload && t.ready && !t.poisoned && offset == t.offset
-                    && count == core::cmp::min(16, t.len.saturating_sub(t.offset)) && count != 0 && text(&bytes[..count]);
+                    && count == core::cmp::min(16, t.len.saturating_sub(t.offset)) && count != 0;
                 if !valid {
                     erase(&mut bytes);
                     if t.mode == Mode::Upload { self.poison(); }
@@ -227,7 +227,8 @@ impl Broker {
             }
             Request::Publish { len, hash: supplied, .. } => {
                 if t.mode != Mode::Upload || !t.ready { return Err(Status::Denied); }
-                if t.poisoned || len != t.len || t.offset != t.len || hash(&self.stage[..t.len]) != supplied {
+                if t.poisoned || len != t.len || t.offset != t.len || hash(&self.stage[..t.len]) != supplied
+                    || !text(&self.stage[..t.len]) {
                     self.fail(index, ticket, Phase::Publish, Status::Invalid); return Err(Status::Invalid);
                 }
                 let Some(generation) = self.generation.checked_add(1) else {
@@ -265,6 +266,9 @@ impl Broker {
             }
             Request::Finish { generation, hash, .. } => {
                 if t.mode != Mode::Read || !t.ready || t.offset != t.len || t.generation != generation || t.hash != hash { return Err(Status::Invalid); }
+                if sex_pdx::clipboard::hash(&self.read_snapshot[..t.len]) != t.hash || !text(&self.read_snapshot[..t.len]) {
+                    self.fail(index, ticket, Phase::Finish, Status::Invalid); return Err(Status::Invalid);
+                }
                 let value = Publication { owner: self.slots[t.producer].participant.unwrap().subject, source: t.source, len: t.len, generation, hash };
                 self.slots[index].put(meta(ticket, Phase::Finish, Status::Ok, Some(value)), Effect::Finish);
             }
