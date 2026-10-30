@@ -101,6 +101,15 @@ pub fn with_peer(mut text:Text,label:&[u8])->Option<Text>{
  if !matches!(label,b"idle"|b"checking"|b"peer verified"|b"unavailable"|b"cancelled"|b"waiting receipt"){return None;}
  let start=text.len;let end=start.checked_add(64)?;text.bytes.get_mut(start..end)?.fill(b' ');
  let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nControlled TLS: ")?;
- append(&mut text.bytes[..end],&mut at,label)?;append(&mut text.bytes[..end],&mut at,b"\nY peer  Q clear")?;
+ append(&mut text.bytes[..end],&mut at,label)?;append(&mut text.bytes[..end],&mut at,b"\nY peer B HTTPS Q clear")?;
+ text.len=end;Some(text)
+}
+
+/// Complete replacement status for the fixed BOOT-sanctioned HTTPS document.
+pub fn with_https(mut text:Text,label:&[u8])->Option<Text>{
+ if !matches!(label,b"idle"|b"loading"|b"ready"|b"cancelled"|b"waiting receipt"|b"certificate rejected"|b"signature rejected"|b"TLS rejected"|b"invalid TLS record"|b"invalid document"|b"connection failed"){return None;}
+ let start=text.len;let end=start.checked_add(64)?;text.bytes.get_mut(start..end)?.fill(b' ');
+ let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nHTTPS / lab root: ")?;
+ append(&mut text.bytes[..end],&mut at,label)?;append(&mut text.bytes[..end],&mut at,b"\nB fetch V read Q clear")?;
  text.len=end;Some(text)
 }

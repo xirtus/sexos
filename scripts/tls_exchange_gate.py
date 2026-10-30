@@ -318,7 +318,7 @@ def load_contract(root):
   match=re.search(r'pub const '+name+r'[^=]*=\s*(b"[^"\n]*");',backend)
   if not match or ast.literal_eval(match[1])!=expected:raise ValueError('frozen public TLS exchange bytes differ: '+name)
  if 'pub fn with_peer('not in view or 'browser_view::with_peer(text,'not in app:raise ValueError('source-bound controlled peer panel changed')
- for literal in ('b"\\n\\nControlled TLS: "','b"\\nY peer  Q clear"'):
+ for literal in ('b"\\n\\nControlled TLS: "','b"\\nY peer B HTTPS Q clear"'):
   if literal not in view:raise ValueError('source-bound controlled peer chrome changed')
  for label in LABELS.values():
   if ('b"'+label.decode()+'"')not in app and ('b"'+label.decode()+'"')not in view:raise ValueError('source-bound controlled peer label changed')
@@ -350,7 +350,7 @@ def peer_geometry(trace,expected,contract):
  preceding=prefix+b'?'*(length-len(prefix))+contract['echo'][echo_state].ljust(64,b' ')+(contract['dns_prefix']+dns_label+contract['dns_footer']).ljust(64,b' ')+(contract['http_prefix']+contract['http'][http_state]+contract['http_footer']).ljust(64,b' ')+b'\n\n'+b' '*64
  # DNS is public actual state after the peer's positively released query.
  if len(preceding)!=base:raise ValueError('source overview changed')
- status=(b'\n\nControlled TLS: '+LABELS[expected]+b'\nY peer  Q clear').ljust(64,b' ')
+ status=(b'\n\nControlled TLS: '+LABELS[expected]+b'\nY peer B HTTPS Q clear').ljust(64,b' ')
  if len(status)!=64:raise ValueError('controlled TLS panel exceeds64bytes')
  data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(80,max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
  for index,byte in enumerate(data):
@@ -406,7 +406,7 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
   assert seed and produced and released and trace.count('[entropy.seed.admitted]')==trace.count('[entropy.seed.released]')==1 and policy.start()<seed.start()<produced.start()<released.start(),'missing fresh produced32/positive seed cleanup'
   check=re.search(r'\[browser.trust.self_check\] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',trace);prep=re.search(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace)
   assert check and prep and trace.count('[browser.trust.self_check]')==trace.count('[browser.tls.prepared]')==1 and max(released.start(),service.start())<check.start()<prep.start(),'local prerequisite preparation proof missing'
-  task,private,initial,utc=map(int,prep.groups());assert 0<task<=32768 and private==task+8216 and private<49152 and 0<initial<=4096 and utc==int(source[1]),'private task/buffer/UTC bound differs'
+  task,private,initial,utc=map(int,prep.groups());assert 0<task<=32768 and private==task+8248 and private<49152 and 0<initial<=4096 and utc==int(source[1]),'private task/buffer/UTC bound differs'
   assert initial==wire['joins'][0]['outgoing_records'][0]['length']+5,'prepared ClientHello extent differs from first actual TLS record'
   peer_admit=re.search(r'\[browser.tls.peer.admitted\] ticket=(\d+) dns_generation=(\d+) seq=(\d+) task_bytes=(\d+) private_bytes=(\d+) profile=1 authority=held_route',trace);assert peer_admit and trace.count('[browser.tls.peer.admitted]')==1,'missing correlated nonzero duplex lease receipt'
   ticket,generation,seq,atask,aprivate=map(int,peer_admit.groups());assert ticket==wire['joins'][0]['ticket']and ticket==2 and generation==1 and 0<seq<=0xffffff and(atask,aprivate)==(task,private),'wrong peer/DNS/sequence/private join'

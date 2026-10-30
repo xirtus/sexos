@@ -105,6 +105,12 @@ impl Reader {
     /// The final validated request path is presentation data. Clean every
     /// byte defensively so it cannot inject a row or replace the reader chrome.
     pub fn render_path(&mut self, body: &[u8], path:&[u8]) -> Frame {
+        self.render_source(body,path,b"Plain HTTP / no TLS",HOST)
+    }
+    pub fn render_https(&mut self,body:&[u8],path:&[u8])->Frame {
+        self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080")
+    }
+    fn render_source(&mut self,body:&[u8],path:&[u8],banner:&[u8],host:&[u8])->Frame {
         let body = content(body);
         let (cols,rows) = self.geometry();
         let mut frame = Frame { bytes: [0;CAPACITY], len: 0, first: 0, end: 0,
@@ -116,10 +122,10 @@ impl Reader {
             frame.bytes[at..at+cols].fill(b' ');
             if row+1 != rows { frame.bytes[at+cols] = b'\n'; }
         }
-        put(&mut frame,0,b"Plain HTTP / no TLS");
+        put(&mut frame,0,banner);
         if rows > 2 {
             let at = cols+1;
-            for (index,byte) in HOST.iter().chain(b" ").chain(path).take(cols).enumerate() { frame.bytes[at+index] = clean(*byte); }
+            for (index,byte) in host.iter().chain(b" ").chain(path).take(cols).enumerate() { frame.bytes[at+index] = clean(*byte); }
         }
         if rows > 1 {
             let footer: &[u8] = if cols >= 25 { b"PgUp PgDn Home End V back" } else if cols >= 6 { b"V back" } else { b"V" };

@@ -23,6 +23,7 @@ members = [
     "crates/sex-net",
     "crates/sex-net-config",
     "crates/sex-tls",
+    "crates/sex-http",
     "crates/sex-trust-config",
     "crates/sex-graphics",
     "crates/silkbar-model",

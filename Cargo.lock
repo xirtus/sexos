@@ -409,6 +409,7 @@ version = "0.1.0"
 dependencies = [
  "linked_list_allocator",
  "sex-graphics",
+ "sex-net-config",
  "sex-pdx",
  "sex-tls",
  "silkclient",
@@ -729,6 +730,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-http"
+version = "0.1.0"
+dependencies = [
+ "sex-net-config",
+]
+
+[[package]]
 name = "sex-kernel"
 version = "0.1.0"
 dependencies = [
@@ -808,6 +816,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rustls-pki-types",
  "rustls-webpki",
+ "sex-http",
  "sex-trust-config",
  "sha2",
 ]

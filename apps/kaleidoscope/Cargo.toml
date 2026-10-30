@@ -8,6 +8,7 @@ name = "kaleidoscope"
 path = "src/main.rs"
 
 [dependencies]
+sex-net-config = { path = "../../crates/sex-net-config" }
 sex-pdx      = { path = "../../crates/sex-pdx" }
 sex-graphics = { path = "../../crates/sex-graphics" }
 silkclient   = { path = "../../crates/silk-client" }

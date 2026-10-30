@@ -84,3 +84,13 @@ fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_
  }
  for label in [vec![b'x';25],vec![0],vec![0xff]]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_clock(text,&label).is_none());}
 }
+
+#[test]fn https_status_replaces_whole_extent_for_every_actual_outcome(){
+ let preview=body_text::build(&[b'z';192],&[]);
+ for label in [b"idle" as &[u8],b"loading",b"ready",b"cancelled",b"waiting receipt",b"certificate rejected",b"signature rejected",b"TLS rejected",b"invalid TLS record",b"invalid document",b"connection failed"]{
+  let before=compose(preview.as_bytes(),E::Verified,D::Answer([10,0,2,2]),H::Cancelled,&[0;64]).unwrap();let base=before.len;let old=before.bytes;
+  let after=browser_view::with_https(before,label).unwrap();assert_eq!(&after.bytes[..base],&old[..base]);assert_eq!(after.len,base+64);
+  let mut expected=b"\n\nHTTPS / lab root: ".to_vec();expected.extend_from_slice(label);expected.extend_from_slice(b"\nB fetch V read Q clear");assert_eq!(&after.bytes[base..base+64],&padded(&expected));assert!(after.len<=512);
+ }
+ for label in [b"public web" as &[u8],b"ready\0",b"unavailable"]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Cancelled,&[0;64]).unwrap();assert!(browser_view::with_https(text,label).is_none());}
+}

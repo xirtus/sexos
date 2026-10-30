@@ -19,7 +19,7 @@ PINS = {'embedded-tls': '0.19.0', 'embedded-io': '0.7.1',
         'webpki': '0.103.16', 'rustls-pki-types': '1.14.0'}
 PACKAGE_NAMES = {'webpki': 'rustls-webpki'}
 DIRECT_FEATURES = {'sha2': ['force-soft'], 'p256': ['ecdsa']}
-LOCAL = {'sex-trust-config': '../sex-trust-config'}
+LOCAL = {'sex-trust-config': '../sex-trust-config', 'sex-http': '../sex-http'}
 VENDOR = 'vendor/embedded-tls-0.19.0'
 VENDOR_DEP_PATH = '../../' + VENDOR
 VENDOR_PROVENANCE_SHA256 = '7f2667fe7ac3587045b8a22b843eb7412afd562f212e4d7c7ba3cd690b50a4c9'
@@ -31,6 +31,7 @@ EFFECTIVE_FEATURES = {
     'embedded-tls': set(), 'embedded-io': set(), 'embedded-io-async': set(),
     'rand_chacha': set(), 'rand_core': set(), 'sha2': {'force-soft'},
     'rustls-webpki': set(), 'rustls-pki-types': set(), 'sex-trust-config': set(),
+    'sex-http': set(), 'sex-net-config': set(),
     'p256': {'arithmetic', 'digest', 'ecdh', 'ecdsa', 'ecdsa-core', 'sha2', 'sha256'},
 }
 FORCE = {'aes_force_soft', 'polyval_force_soft'}
@@ -62,7 +63,7 @@ def check_manifests(tls, workspace, app, trust=None):
     for name, path in LOCAL.items():
         if deps.get(name) != {'path': path}:
             errors.append('noncanonical local TLS policy dependency: ' + name)
-    for member in ['crates/sex-tls', 'crates/sex-trust-config']:
+    for member in ['crates/sex-tls', 'crates/sex-trust-config', 'crates/sex-http']:
         if member not in workspace.get('workspace', {}).get('members', []):
             errors.append('TLS policy crate missing from workspace: ' + member)
     if trust is not None:

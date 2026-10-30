@@ -25,8 +25,11 @@ STREAM_BODY=(b''.join((b' '*48 if n%11==10 else(f'{n:03d} SEXOS STREAM LINE / SO
 assert len(STREAM_BODY)==12288
 
 def load_pixel_contract(root):
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'apps/kaleidoscope/src/http_wire.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs'}
+ paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
+ if not re.fullmatch(r'(?s)\s*//[^\n]*\n//! Source-path facade:[^#]*#\[path="\.\./\.\./\.\./crates/sex-http/src/codec\.rs"\]\s*mod codec;\s*pub use self::codec::\*;\s*',sources['wire_facade']):raise ValueError('production HTTP facade no longer uses the single shared codec')
+ if '#![no_std]'not in sources['wire_lib']or 'pub use codec::*;'not in sources['wire_lib']or 'mod codec;'not in sources['wire_lib']:raise ValueError('shared HTTP no_std library binding changed')
+ if 'sex_net_config::HOST_NAME'not in sources['wire']:raise ValueError('shared HTTP hostname no longer comes from immutable BOOT data')
  def number(key,pattern):
   match=re.search(pattern,sources[key])
   if not match:raise ValueError('production HTTP pixel contract changed: '+pattern)
@@ -45,8 +48,9 @@ def load_pixel_contract(root):
  reader=sources['reader'].split('#[cfg(test)]',1)[0]
  dynamic_path='self.reader.render_path(self.http.document(),self.http.document_path())'in sources['app']
  if not(dynamic_path or 'self.reader.render(self.http.document())'in sources['app'])or 'selected:http_view_code(self.http.view())|256'not in sources['app']:raise ValueError('production full document reader binding changed')
- if dynamic_path and('HOST.iter().chain(b" ").chain(path)'not in reader or 'clean(*byte)'not in reader or '[browser.http.document]'not in sources['client']or 'positive_release=1'not in sources['client']):raise ValueError('production released document/path rendering contract changed')
- reader_header=literal('reader',r'put\(&mut frame,0,(b"[^"\n]*")\)')
+ if dynamic_path and('host.iter().chain(b" ").chain(path)'not in reader or 'clean(*byte)'not in reader or '[browser.http.document]'not in sources['client']or 'positive_release=1'not in sources['client']):raise ValueError('production released document/path rendering contract changed')
+ if 'self.render_source(body,path,b"Plain HTTP / no TLS",HOST)'not in reader or 'put(&mut frame,0,banner)'not in reader:raise ValueError('production plain reader source selection changed')
+ reader_header=literal('reader',r'self\.render_source\(body,path,(b"[^"\n]*"),HOST\)')
  reader_footers=[ast.literal_eval(v)for v in re.findall(r'(b"(?:PgUp[^"\n]*|V back|V)")',reader)]
  if len(reader_footers)!=3:raise ValueError('production reader footer contract changed')
  return dict(wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,

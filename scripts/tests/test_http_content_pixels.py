@@ -1,5 +1,6 @@
 """Synthetic regressions for the actual composed Browser HTTP/body oracle."""
-import sys,unittest
+import sys,unittest,hashlib
+from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from http_content_gate import BODY,load_pixel_contract,http_status_geometry,verify_http_pixels
@@ -22,6 +23,20 @@ class HttpPixels(unittest.TestCase):
        for dx in range(g['scale']):
         x=row['x']+(column*self.contract['advance']+gx)*g['scale']+dx;y=row['y']+gy*g['scale']+dy+shift;pixels[(y*1280+x)*3:(y*1280+x)*3+3]=self.contract['color'].to_bytes(3,'big')
   return b'P6\n1280 800\n255\n'+pixels
+ def test_shared_codec_and_facade_are_both_in_the_pixel_source_closure(self):
+  for name in ('crates/sex-http/src/codec.rs','crates/sex-http/src/lib.rs','crates/sex-http/Cargo.toml','apps/kaleidoscope/src/http_wire.rs','crates/sex-net-config/src/lib.rs'):
+   self.assertEqual(self.contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
+  self.assertEqual(self.contract['wire_max_body'],12288);self.assertEqual(self.contract['wire_max_headers'],1024)
+ def test_facade_cannot_silently_point_to_a_different_or_duplicate_codec(self):
+  actual=Path.read_text;facade=(ROOT/'apps/kaleidoscope/src/http_wire.rs').resolve()
+  for change in ('path','implementation'):
+   def read(path,*args,**kwargs):
+    source=actual(path,*args,**kwargs)
+    if path.resolve()==facade:
+     return source.replace('crates/sex-http/src/codec.rs','crates/other-http/src/codec.rs')if change=='path'else source+'\npub const MAX_BODY:usize=1;\n'
+    return source
+   with patch.object(Path,'read_text',read):
+    with self.assertRaisesRegex(ValueError,'single shared codec'):load_pixel_contract(ROOT)
  def test_ready_full_body_and_failure_regions(self):
   for view in ('Ready','Unavailable','Cancelled','Uncertain'):
    with self.subTest(view=view):

@@ -17,7 +17,7 @@ def metadata(mode='ready',pending=1):
    lines.extend([f'[entropy.seed.admitted] owner=15 task=15 ticket={seq} bytes=32 source=held_boot_grant',f'[entropy.source.sample] pd=13 task=13 slot=60 source=rdseed attempts=2 count={seq} private=1'])
    if mode!='close'or pending:lines.extend([f'[entropy.seed.progress] owner=Some(Identity {{ pd: 15, task: 15 }}) ticket={seq} state=Some(Ready) produced=32 consumed=0 failure=0 private=1',f'[entropy.seed.released] owner=15 task=15 ticket={seq} service_payload=erased receipt=retained'])
   if mode=='ready'or(mode=='close'and pending):
-   lines.extend([f'[clock.source.snapshot] pd=13 task=13 slot=61 seconds={SECONDS} attempts=1 precision=1 profile=q35_cmos_utc ordinal={seq}',f'[certificate.time.snapshot] owner=15 task=15 seq={seq} seconds={SECONDS} source=q35_cmos_utc precision=1 receipt=retained','[browser.trust.self_check] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',f'[browser.tls.prepared] task_bytes=10000 private_bytes=18216 read=4096 write=2048 tx_bytes=144 utc_snapshot={SECONDS} authenticated=0 network=0','[browser.tls.view] state=HelloPending authenticated=0 network=0'])
+   lines.extend([f'[clock.source.snapshot] pd=13 task=13 slot=61 seconds={SECONDS} attempts=1 precision=1 profile=q35_cmos_utc ordinal={seq}',f'[certificate.time.snapshot] owner=15 task=15 seq={seq} seconds={SECONDS} source=q35_cmos_utc precision=1 receipt=retained','[browser.trust.self_check] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',f'[browser.tls.prepared] task_bytes=10000 private_bytes=18248 read=4096 write=2048 tx_bytes=144 utc_snapshot={SECONDS} authenticated=0 network=0','[browser.tls.view] state=HelloPending authenticated=0 network=0'])
   elif mode!='close':lines+=['[browser.tls.view] state=Unavailable authenticated=0 network=0']
   if mode=='close':lines.extend([f'[browser.tls.erased] bytes={18192 if pending else 0} owned_storage=1',f'[browser.tls.closed] pending={pending} terminal=1 owned_storage=erased','[browser.trust.closed] target=15 task=15 pending=0 terminal=1','[trust.policy.retired] target=15 task=15 before_cleanup_ack=1','[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1','[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1'])
   elif seq==1:lines.extend([f'[browser.tls.erased] bytes={18192 if mode=="ready"else 0} owned_storage=1','[browser.tls.view] state=Cancelled authenticated=0 network=0'])
@@ -62,14 +62,14 @@ class TlsPreparationOracle(unittest.TestCase):
   self.assertFalse(gate.inspect_tls(text,'ready',command(),SECONDS+100,SECONDS+200)['ok'])
  def test_crypto_memory_record_and_output_bounds_fail(self):
   text=metadata()
-  for old,new in [('task_bytes=10000','task_bytes=32769'),('private_bytes=18216','private_bytes=18215'),('read=4096','read=4097'),('write=2048','write=4096'),('tx_bytes=144','tx_bytes=0'),('tx_bytes=144','tx_bytes=4097')]:self.assertFalse(self.inspect(text.replace(old,new))['ok'])
+  for old,new in [('task_bytes=10000','task_bytes=32769'),('private_bytes=18248','private_bytes=18247'),('read=4096','read=4097'),('write=2048','write=4096'),('tx_bytes=144','tx_bytes=0'),('tx_bytes=144','tx_bytes=4097')]:self.assertFalse(self.inspect(text.replace(old,new))['ok'])
  def test_private_values_derivatives_or_secure_claim_fail(self):
   for extra in ['[browser.tls.prepared] hash=0x123\n','[entropy.source.sample] value=123\n','[browser.tls.view] state=HelloPending authenticated=1 network=0\n','[browser.tls.view] state=HelloPending authenticated=0 network=1\n']:self.assertFalse(self.inspect(metadata()+extra)['ok'])
  def test_q_must_erase_before_clear_and_retry(self):
   text=metadata()
   for bad in[text.replace('[browser.tls.erased] bytes=18192 owned_storage=1','[browser.tls.erased] bytes=0 owned_storage=1'),text.replace('state=Cancelled','state=Unavailable'),text.replace('owned_storage=1','owned_storage=0')]:self.assertFalse(self.inspect(bad)['ok'])
  def test_unsupported_and_invalid_utc_cannot_prepare(self):
-  extra=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18216 read=4096 write=2048 tx_bytes=144 utc_snapshot={SECONDS} authenticated=0 network=0\n[browser.tls.view] state=HelloPending authenticated=0 network=0\n'
+  extra=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18248 read=4096 write=2048 tx_bytes=144 utc_snapshot={SECONDS} authenticated=0 network=0\n[browser.tls.view] state=HelloPending authenticated=0 network=0\n'
   for mode in('unsupported','invalid-year'):self.assertFalse(self.inspect(metadata(mode)+extra,mode)['ok'])
  def test_close_requires_erasure_and_retirement_before_ack(self):
   text=metadata('close')
@@ -94,7 +94,7 @@ class TlsPreparationOracle(unittest.TestCase):
   self.assertFalse(self.inspect(text.replace(retire,'')+retire,'close')['ok'])
  def test_dynamic_actual_task_extent_drives_both_capacity_and_erasure(self):
   for task in(8920,12000,20000):
-   text=metadata().replace('task_bytes=10000',f'task_bytes={task}').replace('private_bytes=18216',f'private_bytes={task+8216}').replace('bytes=18192 owned_storage=1',f'bytes={task+8192} owned_storage=1')
+   text=metadata().replace('task_bytes=10000',f'task_bytes={task}').replace('private_bytes=18248',f'private_bytes={task+8248}').replace('bytes=18192 owned_storage=1',f'bytes={task+8192} owned_storage=1')
    r=self.inspect(text);self.assertTrue(r['ok'],r);self.assertEqual(r['joins'][0]['task_bytes'],task)
    self.assertEqual(r['trust_policy']['self_checks'],2)
  def test_whole_status_labels_and_padding_pixels(self):

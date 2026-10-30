@@ -11,7 +11,7 @@
 #![feature(allocator_api)]
 
 extern crate alloc;
-use alloc::{alloc::{alloc_zeroed, dealloc}, rc::Rc};
+use alloc::{alloc::{alloc_zeroed, dealloc}, boxed::Box, rc::Rc};
 use core::{alloc::Layout, cell::RefCell, future::{poll_fn, Future}, marker::PhantomData,
     pin::Pin, ptr::NonNull, task::{Context, Poll, Waker}};
 use embedded_tls::{Aes128GcmSha256,
@@ -21,11 +21,16 @@ use rand_core::SeedableRng;
 mod verifier;
 mod probe_fixture;
 pub use verifier::controlled_self_check;
+pub use sex_http::Error as HttpError;
 
 pub const RECORD_READ: usize = 4096;
 pub const RECORD_WRITE: usize = 2048;
 pub const QUEUE_BYTES: usize = 4096;
 pub const MAX_TASK_BYTES: usize = 32768;
+pub const PIPE_METADATA_BYTES:usize=56;
+pub const PIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES;
+pub const MAX_DOCUMENT:usize=sex_http::MAX_BODY;
+pub const HTTPS_PATH:&[u8]=b"/welcome";
 pub const EXPECTED_NAME: &str = sex_trust_config::EXPECTED_NAME;
 /// Public finite application protocol for the controlled interoperability
 /// endpoint. This is not a browser document or public Internet trust profile.
@@ -102,14 +107,27 @@ impl Drop for Task {
     }
 }
 
+/// Owned plaintext bytes, not a memory/transport capability. This allocation
+/// can move into the client without copying a 12KiB object onto its stack.
+/// Publication after positive lease RELEASE remains the caller's obligation.
+pub struct Document { bytes:Box<[u8;MAX_DOCUMENT]>,len:usize,ready:bool }
+impl Document {
+    fn new()->Result<Self,Error>{Ok(Self{bytes:Box::try_new([0;MAX_DOCUMENT]).map_err(|_|Error::Memory)?,len:0,ready:false})}
+    pub fn as_bytes(&self)->&[u8]{if self.ready{&self.bytes[..self.len]}else{&[]}}
+    fn scrub(&mut self){erase(self.bytes.as_mut());self.len=0;self.ready=false;}
+}
+impl Drop for Document{fn drop(&mut self){self.scrub();}}
+
 struct Pipe {
     rx: [u8;QUEUE_BYTES], tx: [u8;QUEUE_BYTES], rx_len: usize, tx_len: usize,
     turn_used: bool, waiting: bool,
     authenticated: bool, verified: bool,
+    document:Option<Document>,document_received:usize,document_error:Option<sex_http::Error>,
 }
+const _:()=assert!(core::mem::size_of::<Pipe>()==PIPE_BYTES);
 impl Pipe {
-    fn new() -> Self { Self { rx:[0;QUEUE_BYTES], tx:[0;QUEUE_BYTES], rx_len:0, tx_len:0, turn_used:false, waiting:false, authenticated:false, verified:false } }
-    fn scrub(&mut self) { erase(&mut self.rx); erase(&mut self.tx); self.rx_len=0; self.tx_len=0; self.waiting=false; self.authenticated=false; self.verified=false; }
+    fn new(document:Option<Document>) -> Self { Self { rx:[0;QUEUE_BYTES], tx:[0;QUEUE_BYTES], rx_len:0, tx_len:0, turn_used:false, waiting:false, authenticated:false, verified:false,document,document_received:0,document_error:None } }
+    fn scrub(&mut self) { erase(&mut self.rx); erase(&mut self.tx); self.rx_len=0; self.tx_len=0; self.waiting=false; self.authenticated=false; self.verified=false; self.document_received=0;self.document_error=None;if let Some(document)=self.document.as_mut(){document.scrub();} }
 }
 impl Drop for Pipe { fn drop(&mut self) { self.scrub(); } }
 struct Transport(Rc<RefCell<Pipe>>);
@@ -153,25 +171,64 @@ impl CryptoProvider for Provider {
     fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Aes128GcmSha256>,TlsError> { Ok(&mut self.verifier) }
 }
 
-pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, stats:Stats, failure:Option<Failure> }
+pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, stats:Stats, failure:Option<Failure>,http_failure:Option<sex_http::Error>,is_document:bool }
 impl Session {
     /// Always erases the transferred caller seed, including rejected starts.
     /// Seconds are input data, not new time authority or an advancing clock.
     pub fn prepare(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
-        Self::prepare_mode(seed,seconds,profile,false)
+        Self::prepare_mode(seed,seconds,profile,false,false)
     }
     /// Real protocol mode still has no transport/endpoint authority. The
     /// caller must move bytes exclusively through an admitted held duplex job.
     pub fn exchange(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
-        Self::prepare_mode(seed,seconds,profile,true)
+        Self::prepare_mode(seed,seconds,profile,true,false)
     }
-    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool) -> Result<Self,Error> {
+    /// Bounded HTTP/1.1 text document on the same immutable name/profile.
+    /// This generates protocol bytes only; the parent supplies held duplex I/O.
+    pub fn document(seed:&mut[u8;32],seconds:u32,profile:u32)->Result<Self,Error>{
+        Self::prepare_mode(seed,seconds,profile,true,true)
+    }
+    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool, document:bool) -> Result<Self,Error> {
         let private=Seed(*seed); erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(Error::Clock); }
         let verifier=verifier::Verifier::new(profile,seconds).map_err(|_|Error::Policy)?;
-        let pipe=Rc::try_new(RefCell::new(Pipe::new())).map_err(|_|Error::Memory)?;
+        let owned=if document{Some(Document::new()?)}else{None};
+        let pipe=Rc::try_new(RefCell::new(Pipe::new(owned))).map_err(|_|Error::Memory)?;
         let transport=Transport(pipe.clone());
         let shared=pipe.clone();
+        let task=if document {
+            let future=async move {
+                let mut provider=Provider{rng:rand_chacha::ChaCha20Rng::from_seed(private.0),verifier};drop(private);
+                let mut read=[0;RECORD_READ];let mut write=[0;RECORD_WRITE];
+                let config=TlsConfig::new().with_server_name(EXPECTED_NAME).with_max_fragment_length(MaxFragmentLength::Bits10);
+                let mut tls=TlsConnection::<_,Aes128GcmSha256>::new(transport,&mut read,&mut write);
+                tls.open(TlsContext::new(&config,&mut provider)).await?;provider.verifier.finished()?;
+                shared.borrow_mut().authenticated=true;
+                let mut request=[0;sex_http::HTTPS_MAX_REQUEST];
+                let count=sex_http::request_https(&mut request,&sex_http::Path::initial());
+                let mut at=0;while at<count{let n=tls.write(&request[at..count]).await?;
+                    if n==0{return Err(TlsError::InvalidApplicationData);}at+=n;}
+                erase(&mut request);tls.flush().await?;
+                let mut receiver=sex_http::Receiver::new();let mut chunk=[0;512];
+                while !receiver.complete(){
+                    let n=tls.read(&mut chunk).await?;
+                    if n==0{return Err(TlsError::InvalidApplicationData);}
+                    if let Err(error)=receiver.feed(&chunk[..n]){
+                        shared.borrow_mut().document_error=Some(error);erase(&mut chunk);return Err(TlsError::InvalidApplicationData);
+                    }
+                    erase(&mut chunk);shared.borrow_mut().document_received=receiver.length();
+                }
+                receiver.finish().map_err(|error|{shared.borrow_mut().document_error=Some(error);TlsError::InvalidApplicationData})?;
+                // Complete the encrypted outgoing close before moving any body
+                // result out of the owned future. Remaining bounded peer tail
+                // ciphertext is explicitly outside this framing proof.
+                tls.close().await.map_err(|(_,error)|error)?;
+                let mut pipe=shared.borrow_mut();let result=pipe.document.as_mut().ok_or(TlsError::InternalError)?;
+                result.len=receiver.copy_body(result.bytes.as_mut()).map_err(|_|TlsError::InvalidApplicationData)?;
+                result.ready=true;pipe.verified=true;Ok(())
+            };
+            Task::new(future)?
+        }else{
         let future=async move {
             let mut provider=Provider { rng:rand_chacha::ChaCha20Rng::from_seed(private.0), verifier };
             drop(private);
@@ -205,9 +262,10 @@ impl Session {
             shared.borrow_mut().verified=true;
             Ok(())
         };
-        let task=Task::new(future)?;
-        let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>(), tx_bytes:0, utc_snapshot:seconds };
-        Ok(Self { task:Some(task),pipe,state:State::Preparing,stats,failure:None })
+        Task::new(future)?
+        };
+        let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()+if document{MAX_DOCUMENT}else{0}, tx_bytes:0, utc_snapshot:seconds };
+        Ok(Self { task:Some(task),pipe,state:State::Preparing,stats,failure:None,http_failure:None,is_document:document })
     }
     /// One explicit poll, at most one512-byte transport copy. The caller must
     /// poll again on its own bounded turn; this driver has no hidden executor.
@@ -222,6 +280,7 @@ impl Session {
           },
           Poll::Ready(result)=>{
             self.failure=result.err().map(Failure::from_error);
+            self.http_failure=self.pipe.borrow().document_error;
             self.task=None;self.pipe.borrow_mut().scrub();self.state=State::Rejected;
           },
           Poll::Pending=>{
@@ -234,6 +293,17 @@ impl Session {
     }
     pub fn state(&self) -> State { self.state }
     pub fn failure(&self) -> Option<Failure> { self.failure }
+    pub fn http_failure(&self)->Option<sex_http::Error>{self.http_failure}
+    pub fn is_document(&self)->bool{self.is_document}
+    pub fn document_received(&self)->usize{self.pipe.borrow().document_received}
+    pub fn owned_payload_bytes(&self)->usize{self.stats.task_bytes+2*QUEUE_BYTES+if self.is_document{MAX_DOCUMENT}else{0}}
+    /// Transfers private byte custody only after authenticated framing and
+    /// encrypted local close completion. No UI/endpoint authority is created.
+    pub fn take_document(&mut self)->Option<Document>{
+        if !self.is_document||self.state!=State::ExchangeVerified{return None;}
+        let mut pipe=self.pipe.borrow_mut();if !pipe.document.as_ref()?.ready{return None;}
+        pipe.document.take()
+    }
     pub fn stats(&self) -> Stats { self.stats }
     pub fn outgoing_len(&self)->usize {self.pipe.borrow().tx_len}
     pub fn incoming_capacity(&self)->usize {if self.task.is_some(){QUEUE_BYTES-self.pipe.borrow().rx_len}else{0}}

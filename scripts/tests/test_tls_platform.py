@@ -24,6 +24,7 @@ TREE = '\n'.join(['sex-tls v0.1.0 (/private/work/crates/sex-tls) '] +
                   ','.join(sorted(gate.EFFECTIVE_FEATURES.get(gate.PACKAGE_NAMES.get(name, name), set())))
                   for name, version in gate.PINS.items()] +
                  ['sex-trust-config v0.1.0 (/private/work/crates/sex-trust-config) ',
+                  'sex-http v0.1.0 (/private/work/crates/sex-http) ', 'sex-net-config v0.1.0 (/private/work/crates/sex-net-config) ',
                   'aes v0.8.4 ', 'polyval v0.6.2 ', 'ppv-lite86 v0.2.21 simd',
                   'zerocopy v0.8.63 simd', 'rand_core v0.6.4  (*)'])
 

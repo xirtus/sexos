@@ -40,6 +40,7 @@ def tls_contract(root):
  for name,expected in [('RECORD_READ',4096),('RECORD_WRITE',2048),('QUEUE_BYTES',4096),('MAX_TASK_BYTES',32768)]:
   match=re.search(r'pub const '+name+r': usize = ([0-9_]+);',backend)
   if not match or int(match[1].replace('_',''))!=expected:raise ValueError('source-bound TLS capacity changed: '+name)
+ if 'pub const PIPE_METADATA_BYTES:usize=56;'not in backend or 'size_of::<Pipe>()==PIPE_BYTES'not in backend:raise ValueError('source-bound Pipe accounting changed')
  names=['apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/trust_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-pdx/src/trust_source.rs','crates/sex-pdx/src/trust_policy.rs','kernel/src/trust_source.rs','servers/sexnet/src/trust_policy.rs','crates/sex-trust-config/Cargo.toml','crates/sex-trust-config/src/lib.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
  for name in names:
   path=root/name
@@ -154,7 +155,7 @@ def inspect_tls(trace,mode,command,host_start,host_end):
   erased=list(re.finditer(r'\[browser.tls.erased\] bytes=(\d+) owned_storage=1',trace));assert len(erased)==trace.count('[browser.tls.erased]'),'wrong storage erasure receipt'
   assert all(0<=int(m[1])<=40960 for m in erased),'erased storage outside bounded private arena'
   for index,(prep,hello)in enumerate(zip(prepared,hellos)):
-   task,private,tx,utc=map(int,prep.groups());assert 0<task<=32768 and private==task+8216 and private<49152 and 0<tx<=4096,'TLS private task/buffer/output bound differs'
+   task,private,tx,utc=map(int,prep.groups());assert 0<task<=32768 and private==task+8248 and private<49152 and 0<tx<=4096,'TLS private task/buffer/output bound differs'
    assert index<len(releases)and index<len(services),'TLS prepared without fresh retained prerequisites'
    policy=policies[index];check=self_checks[index]
    assert policy.start()<policy_ready[index].start()<check.start()<prep.start(),'self-check/preparation preceded this exact held trust profile'

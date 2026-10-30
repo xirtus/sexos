@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+sex-http = { path = "../sex-http" }
 embedded-tls = { version = "=0.19.0", path = "../../vendor/embedded-tls-0.19.0", default-features = false }
 embedded-io = { version = "=0.7.1", default-features = false }
 embedded-io-async = { version = "=0.7.0", default-features = false }
