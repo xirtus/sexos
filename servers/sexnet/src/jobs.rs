@@ -89,6 +89,10 @@ impl Machine {
     }
     /// False means no reply capacity; no bytes, wire state, or receipts change.
     pub fn handle(&mut self, owner: Identity, r: Request, now: u64, wire: &mut impl Wire) -> bool {
+        self.handle_exclusive(owner,r,now,false,wire)
+    }
+    /// Another held protocol job forbids new BEGIN effects through this route.
+    pub fn handle_exclusive(&mut self, owner: Identity, r: Request, now: u64, other_held: bool, wire: &mut impl Wire) -> bool {
         // Reserve a replay-fence slot before applying any operation. There is
         // no eviction: another live identity must never erase an old sequence.
         let slot = match self.cached.iter().position(|c| c.map(|c| c.owner) == Some(owner))
@@ -105,7 +109,7 @@ impl Machine {
         if self.owner == Some(owner) && r.seq <= self.seq {
             return self.respond(slot, owner, r, Err(abi::STALE));
         }
-        let result = self.apply(owner, r, now, wire);
+        let result = if other_held && r.kind == abi::BEGIN { Err(abi::BUSY) } else { self.apply(owner, r, now, wire) };
         if self.owner == Some(owner) && r.seq <= abi::MAX_SEQ { self.seq = self.seq.max(r.seq); }
         self.respond(slot, owner, r, result)
     }
@@ -451,6 +455,17 @@ mod tests {
         assert!(m.handle(B,begin,11,&mut w)); assert_eq!(m.pending_reply(),Some(receipt_b));
         assert!(!m.retire(B,&mut w)); assert_eq!(m.pending_reply(),None);
         assert!(m.cached.iter().all(Option::is_none));
+    }
+
+    #[test] fn held_other_protocol_blocks_begin_with_retained_replay_receipt() {
+        let mut m=Machine::new(); let mut w=TestWire::new(); let mut begin=req(1,abi::BEGIN,0);begin.length=1;
+        assert!(m.handle_exclusive(A,begin,10,true,&mut w));
+        assert_eq!(m.pending_reply(),Some((A,abi::error(1,abi::BUSY))));m.reply_accepted();
+        assert!(m.handle_exclusive(A,begin,11,false,&mut w));
+        assert_eq!(m.pending_reply(),Some((A,abi::error(1,abi::BUSY))));m.reply_accepted();
+        assert_eq!(m.owner(),None);assert_eq!(m.next_ticket,1);assert_eq!(w.begins,0);
+        begin.seq=2;assert!(m.handle_exclusive(A,begin,12,false,&mut w));
+        assert_eq!(m.pending_reply(),Some((A,abi::reply(2,1))));assert_eq!(m.owner(),Some(A));
     }
 
 }

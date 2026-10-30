@@ -18,7 +18,7 @@ impl Probe{
   if self.ticket!=0{self.seq=seq;self.step=Step::Release;self.retry_after_release=true;self.cancel=true;return;}
   *self=Self::new();self.seq=seq;
  }
- pub fn cancel(&mut self){if self.busy(){self.cancel=true;}}
+ pub fn cancel(&mut self){self.retry_after_release=false;if self.busy(){self.cancel=true;}}
  fn stop(&mut self){self.step=Step::Done;self.pending=None;self.accepted=false;self.view=View::Unavailable;}
  pub fn reply(&mut self,word:u64,now:u64){
   let Some(r)=self.pending else{return;};

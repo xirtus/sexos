@@ -6,6 +6,7 @@ mod paging_probe;
 mod service_call;
 mod body_text;
 mod network_probe;
+mod dns_probe;
 
 use silkclient::{app_main, SexApp};
 // Private BOOT ELF backing replaces the old ambient fixed-address heap.
@@ -30,6 +31,11 @@ struct App {
     probe:network_probe::Probe,
     probe_status:network_probe::Status,
     probe_view:network_probe::View,
+    dns:dns_probe::Client,
+    dns_status:dns_probe::Status,
+    dns_view:dns_probe::View,
+    dns_start_intent:bool,
+    tcp_retry_intent:bool,
 }
 
 impl SexApp for App {
@@ -169,29 +175,46 @@ impl SexApp for App {
         sex_pdx::serial_record!("[app.surface.presented] target=15 surface=300 sequence=1 ok=1");
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
-        Self { live_text, live_len,probe:network_probe::Probe::new(),probe_status:network_probe::Status::new(text.len()),probe_view:network_probe::View::Pending }
+        assert!(text.len()+128<=256,"BROWSER_FIXED_TEXT_EXTENT");
+        Self { live_text, live_len,probe:network_probe::Probe::new(),probe_status:network_probe::Status::new(text.len()),probe_view:network_probe::View::Pending,
+            dns:dns_probe::Client::new(),dns_status:dns_probe::Status::new(text.len()+64),dns_view:dns_probe::View::Idle,dns_start_intent:false,tcp_retry_intent:false }
     }
 
     fn run(&mut self, _pdx: u32) -> bool {
-        let message=if self.probe.busy()||self.probe_status.pending(){sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
+        let message=if self.probe.busy()||self.probe_status.pending()||self.dns.busy()||self.dns_status.pending()||self.dns_start_intent||self.tcp_retry_intent{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
         if let Some(req)=message{
             if sex_pdx::app_lifecycle::close_requested(req.type_id, req.caller_pd,
                 [req.arg0, req.arg1, req.arg2], 15, 15)
                 || (req.type_id == 0xFF_FF && req.caller_pd == 3)
             {
                 sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
+                sex_pdx::serial_record!("[browser.dns.closed] pending={} terminal=1",self.dns.busy()as u8);
                 sex_pdx::task_finish(0);
             }
-            if req.type_id==1&&req.caller_pd==13{self.probe.reply(req.arg0,sex_pdx::get_ticks());}
+            if req.type_id==1&&req.caller_pd==13{
+                if matches!(req.arg0>>56,0x79|0xE9){self.dns.reply(req.arg0,sex_pdx::get_ticks());}
+                else{self.probe.reply(req.arg0,sex_pdx::get_ticks());}
+            }
             if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{
-                match req.arg0{0x13=>self.probe.retry(),0x2E=>self.probe.cancel(),_=>{}}
+                match req.arg0{
+                    0x13=>{self.dns_start_intent=false;if self.dns.busy(){self.dns.cancel();self.tcp_retry_intent=true;}else{self.probe.retry();}},
+                    0x2E=>{self.tcp_retry_intent=false;self.probe.cancel();},
+                    0x20=>{self.tcp_retry_intent=false;if self.probe.busy(){self.probe.cancel();self.dns_start_intent=true;}else{self.dns.start();}},
+                    0x2D=>{self.dns_start_intent=false;self.dns.cancel();},
+                    _=>{},
+                }
             }
         }
-        self.probe.advance(sex_pdx::get_ticks());
+        if !self.dns.busy()&&self.tcp_retry_intent{self.tcp_retry_intent=false;self.probe.retry();}
+        if !self.probe.busy()&&self.dns_start_intent{self.dns_start_intent=false;self.dns.start();}
+        if !self.dns.busy(){self.probe.advance(sex_pdx::get_ticks());}
+        if !self.probe.busy(){self.dns.advance(sex_pdx::get_ticks());}
         let view=self.probe.view();
         if view!=self.probe_view{self.probe_view=view;self.probe_status.set(view);sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}
         self.probe_status.advance();
-        if self.probe.busy()||self.probe_status.pending(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
+        let dns_view=self.dns.view();if dns_view!=self.dns_view{self.dns_view=dns_view;self.dns_status.set(dns_view);sex_pdx::serial_record!("[browser.dns.view] state={:?} web=0",dns_view);}
+        self.dns_status.advance();
+        if self.probe.busy()||self.probe_status.pending()||self.dns.busy()||self.dns_status.pending()||self.dns_start_intent||self.tcp_retry_intent{sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
         true
     }
 

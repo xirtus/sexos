@@ -14,6 +14,7 @@ pub mod dma_pool;
 pub mod paging;
 pub mod app_lifecycle;
 pub mod network_job;
+pub mod network_dns;
 pub mod spindle_history;
 pub mod spindle_probe;
 pub mod spindle_view;

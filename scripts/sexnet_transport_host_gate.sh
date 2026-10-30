@@ -25,7 +25,7 @@ for p in(root/'crates/sex-net/src').rglob('*.rs'):
 meta=json.loads((out/'metadata.json').read_text());packages={p['id']:p for p in meta['packages']}
 stack=[n for n in meta['resolve']['nodes']if packages[n['id']]['name']=='smoltcp'];assert len(stack)==1
 assert packages[stack[0]['id']]['version']=='0.14.0'
-assert set(stack[0]['features'])=={'medium-ethernet','proto-ipv4','socket','socket-tcp'},stack[0]['features']
+assert set(stack[0]['features'])=={'medium-ethernet','proto-ipv4','socket','socket-tcp','socket-udp'},stack[0]['features']
 assert not any(p['name']=='libc'for p in meta['packages'])
 print('[sexnet.transport.dependencies] exact_production_lock_versions_checksums=1 smoltcp=0.14.0 std=0 alloc=0 host_adapters=0')
 PY

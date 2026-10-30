@@ -2,11 +2,15 @@
 //! Private bounded protocol state. No authority, host I/O, mappings or Unix ABI.
 #![no_std]
 
+#[cfg(test)] extern crate std;
+
 use smoltcp::{iface::{Config,Interface,SocketHandle,SocketSet,SocketStorage},
-    phy::{self,Device,DeviceCapabilities,Medium},socket::tcp,
+    phy::{self,Device,DeviceCapabilities,Medium},socket::{tcp,udp},
     time::{Duration,Instant},wire::{EthernetAddress,IpAddress,IpCidr}};
 pub use smoltcp::socket::tcp::State;
 pub use smoltcp::iface::SocketStorage as Storage;
+pub use smoltcp::socket::udp::PacketMetadata as DnsMetadata;
+pub mod dns_wire;
 pub const MAX_FRAME:usize=1514;
 pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
@@ -14,6 +18,8 @@ pub const LOCAL:[u8;4]=[10,0,2,15];
 pub const PORT:u16=46076;
 pub const CLIENT_BASE:u16=48000;
 pub const CLIENT_REMOTE_PORT:u16=46078;
+pub const DNS_BYTES:usize=512;
+pub const DNS_REMOTE_PORT:u16=46079;
 const BASIS:u64=0xcbf29ce484222325;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Error{Mac,Clock,Busy,Length,Stopped,Protocol}
 pub struct Frame{pub length:usize,pub bytes:[u8;MAX_FRAME]}
@@ -26,6 +32,16 @@ impl Frame{
   if b.len()<54||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=6||b[26..30]!=LOCAL{return None;}
   let header=(b[14]&15)as usize*4;
   if header<20||b.len()<14+header+20{return None;}
+  let port=u16::from_be_bytes([b[14+header],b[15+header]]);
+  if port>CLIENT_BASE{Some((port-CLIENT_BASE)as u32)}else{None}
+ }
+ /// UDP and TCP port namespaces are distinct. This trusted stack-output tag
+ /// retains the old DNS job ticket after the UDP socket is aborted or rebound.
+ pub fn dns_ticket(&self)->Option<u32>{
+  let b=&self.bytes[..self.length];
+  if b.len()<42||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=17||b[26..30]!=LOCAL{return None;}
+  let header=(b[14]&15)as usize*4;
+  if header<20||b.len()<14+header+8{return None;}
   let port=u16::from_be_bytes([b[14+header],b[15+header]]);
   if port>CLIENT_BASE{Some((port-CLIENT_BASE)as u32)}else{None}
  }
@@ -61,18 +77,18 @@ impl Device for Adapter{
 }
 impl Statistics{fn new()->Self{Self{received:0,queued:0,receive_hash:BASIS,queue_hash:BASIS,flow_received:0,flow_queued:0,flow_receive_hash:BASIS,flow_queue_hash:BASIS,flow:0,packets:0}}}
 fn hash(mut value:u64,bytes:&[u8])->u64{for b in bytes{value=(value^*b as u64).wrapping_mul(0x100000001b3);}value}
-/// One private listener and one bounded outbound controlled-peer flow. The stack's
+/// One private listener, one outbound TCP flow and one fixed DNS UDP socket. The stack's
 /// handle is internal data, never an app-visible capability or file descriptor.
-pub struct Engine<'a>{iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,adapter:Adapter,last:u64,
+pub struct Engine<'a>{iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
     stopped:bool,failed:Option<Error>,pending:[u8;TURN_BYTES],pending_length:usize,pending_offset:usize,
     active_flow:bool,stats:Statistics}
 impl<'a> Engine<'a>{
     /// `seed` is explicit input. A predictable development seed does not provide
     /// hostile-peer sequence protection, entropy or TLS security.
-    pub fn new(mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],storage:&'a mut[SocketStorage<'a>;2])->Result<Self,Error>{
+    pub fn new(mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;3])->Result<Self,Error>{
         if mac==[0;6]||mac[0]&1!=0{return Err(Error::Mac);}
         let time=Instant::from_millis(i64::try_from(now).map_err(|_|Error::Clock)?);
-        rx.fill(0);tx.fill(0);client_rx.fill(0);client_tx.fill(0);
+        rx.fill(0);tx.fill(0);client_rx.fill(0);client_tx.fill(0);dns_rx.fill(0);dns_tx.fill(0);
         let mut adapter=Adapter{rx:None,tx:None};let mut config=Config::new(EthernetAddress(mac).into());config.random_seed=seed;
         let mut iface=Interface::new(config,&mut adapter,time);
         iface.update_ip_addrs(|ips|{ips.push(IpCidr::new(IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),24)).expect("ONE_STATIC_ADDRESS");});
@@ -83,7 +99,10 @@ impl<'a> Engine<'a>{
         let mut client=tcp::Socket::new(tcp::SocketBuffer::new(&mut client_rx[..]),tcp::SocketBuffer::new(&mut client_tx[..]));
         client.set_timeout(Some(Duration::from_secs(5)));client.set_ack_delay(None);client.set_nagle_enabled(false);
         let client_handle=flows.add(client);
-        Ok(Self{iface,flows,handle,client_handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
+        let dns=udp::Socket::new(udp::PacketBuffer::new(&mut dns_rxmeta[..],&mut dns_rx[..]),
+            udp::PacketBuffer::new(&mut dns_txmeta[..],&mut dns_tx[..]));
+        let dns_handle=flows.add(dns);
+        Ok(Self{iface,flows,handle,client_handle,dns_handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
     }
     pub fn state(&self)->State{self.flows.get::<tcp::Socket>(self.handle).state()}
     pub fn statistics(&self)->Statistics{self.stats}
@@ -98,6 +117,7 @@ impl<'a> Engine<'a>{
     pub fn has_frame(&self)->bool{self.adapter.tx.is_some()}
     pub fn stop(&mut self,reason:Error){
         self.stopped=true;self.failed=Some(reason);self.flows.get_mut::<tcp::Socket>(self.handle).abort();self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
+        self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
         self.adapter.rx=None;self.adapter.tx=None;self.pending.fill(0);self.pending_length=0;self.pending_offset=0;
     }
     /// One fixed controlled-peer endpoint, reachable on the existing static
@@ -126,6 +146,43 @@ impl<'a> Engine<'a>{
     pub fn client_abort(&mut self){
         self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
         if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket().is_some()){self.adapter.tx=None;}
+    }
+
+    /// Emit one fixed-name DNS query, with no transport-level retry. The finite
+    /// ticket selects both the DNS transaction ID and a never-wrapping UDP port;
+    /// job admission/replay fencing remains the caller's private responsibility.
+    pub fn begin_dns(&mut self,ticket:u32)->Result<(),Error>{
+        if self.stopped{return Err(Error::Stopped);}
+        if ticket==0||ticket>17_535{return Err(Error::Length);}
+        let id=ticket as u16;
+        let port=CLIENT_BASE.checked_add(id).ok_or(Error::Length)?;
+        let mut query=[0u8;DNS_BYTES];
+        let length=dns_wire::query(id,&mut query).map_err(|_|Error::Protocol)?;
+        self.dns_abort();
+        let socket=self.flows.get_mut::<udp::Socket>(self.dns_handle);
+        socket.bind((IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),port)).map_err(|_|Error::Protocol)?;
+        if socket.send_slice(&query[..length],(IpAddress::v4(10,0,2,2),DNS_REMOTE_PORT)).is_err(){
+            socket.close();return Err(Error::Protocol);
+        }
+        Ok(())
+    }
+    /// Consume at most one datagram (at most512 bytes). Source/local tuple
+    /// mismatch is discarded without copying bytes into the caller's buffer.
+    pub fn dns_receive(&mut self,out:&mut[u8;DNS_BYTES])->Result<Option<usize>,Error>{
+        if self.stopped{return Err(Error::Stopped);}
+        let socket=self.flows.get_mut::<udp::Socket>(self.dns_handle);
+        if !socket.can_recv(){return Ok(None);}
+        let(bytes,meta)=socket.recv().map_err(|_|Error::Protocol)?;
+        if meta.endpoint.addr!=IpAddress::v4(10,0,2,2)||meta.endpoint.port!=DNS_REMOTE_PORT
+            ||meta.local_address!=Some(IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3])){return Ok(None);}
+        if bytes.len()>out.len(){return Err(Error::Length);}
+        out[..bytes.len()].copy_from_slice(bytes);Ok(Some(bytes.len()))
+    }
+    /// Close resets socket packet metadata; borrowed stack backing stays private
+    /// service storage. This does not claim that close scrubs the backing bytes.
+    pub fn dns_abort(&mut self){
+        self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
+        if self.adapter.tx.as_ref().is_some_and(|f|f.dns_ticket().is_some()){self.adapter.tx=None;}
     }
 
     /// Processes at most one frame and one256-byte echo transfer per turn.
