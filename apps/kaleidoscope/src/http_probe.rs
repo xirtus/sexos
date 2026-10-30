@@ -15,6 +15,7 @@ pub struct Client {
     request:[u8;http_wire::MAX_REQUEST],request_len:usize,written:usize,
     response:[u8;http_wire::MAX_RESPONSE],response_len:usize,read:usize,
     preview:[u8;64],body_len:usize,
+    document:[u8;http_wire::MAX_BODY],document_len:usize,
     generation:u32,
 }
 impl Client {
@@ -23,13 +24,15 @@ impl Client {
             deadline:0,next_poll:0,cancel:false,view:View::Idle,terminal:View::Unavailable,
             request:[0;http_wire::MAX_REQUEST],request_len:0,written:0,
             response:[0;http_wire::MAX_RESPONSE],response_len:0,read:0,
-            preview:BLANK,body_len:0,generation:0}
+            preview:BLANK,body_len:0,document:[0;http_wire::MAX_BODY],document_len:0,generation:0}
     }
     pub fn next_sequence(&self)->u32 { self.seq }
     pub fn busy(&self)->bool { self.step!=Step::Done || self.ticket!=0 }
     pub fn view(&self)->View { self.view }
     pub fn preview(&self)->&[u8;64] { if self.view==View::Ready {&self.preview}else{&BLANK} }
     pub fn body_length(&self)->usize { if self.view==View::Ready {self.body_len}else{0} }
+    /// Sanitized presentation data becomes visible only after positive RELEASE.
+    pub fn document(&self)->&[u8] { if self.view==View::Ready {&self.document[..self.document_len]}else{&[]} }
     pub fn start(&mut self,next_seq:u32)->bool {
         self.start_with_generation(next_seq,0)
     }
@@ -53,7 +56,7 @@ impl Client {
         self.terminal=View::Unavailable;self.view=View::Pending;self.step=Step::Begin;true
     }
     fn scrub_raw(&mut self) { self.request.fill(0);self.response.fill(0); }
-    fn clear_preview(&mut self) { self.preview=BLANK;self.body_len=0; }
+    fn clear_preview(&mut self) { self.preview=BLANK;self.body_len=0;self.document.fill(0);self.document_len=0; }
     fn finished(&mut self) {
         self.scrub_raw();self.pending=None;self.accepted=false;self.step=Step::Done;
         self.request_len=0;self.written=0;self.response_len=0;self.read=0;
@@ -86,6 +89,10 @@ impl Client {
         };
         let body=&self.response[parsed.body];
         self.body_len=parsed.content_length;self.preview=normalize(body);
+        self.document.fill(0);self.document_len=body.len();
+        for (out,&byte) in self.document.iter_mut().zip(body) {
+            *out=match byte {b'\n'=>b'\n',32..=126=>byte,0..=31|127=>b' ',_=>b'?'};
+        }
         let mut hash=0xcbf29ce484222325u64;
         for &byte in body { hash=(hash^byte as u64).wrapping_mul(0x100000001b3); }
         sex_pdx::serial_record!("[browser.http.body] ticket={} status=200 length={} hash={:#x} controlled_peer=1 tls=0",self.ticket,self.body_len,hash);
@@ -194,6 +201,9 @@ impl Client {
     }
     #[cfg(test)] pub fn raw_scrubbed(&self)->bool {
         self.request.iter().all(|b|*b==0) && self.response.iter().all(|b|*b==0)
+    }
+    #[cfg(test)] pub fn document_scrubbed(&self)->bool {
+        self.document_len==0 && self.document.iter().all(|b|*b==0)
     }
 }
 

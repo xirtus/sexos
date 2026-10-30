@@ -416,3 +416,27 @@ fn third_geometry_binds_catalog_task_without_domain_task_alias() {
   out.close();out.rebind();out.queue(new,12);out.poll(sid,|_,_,_,_|panic!(),|_,_|panic!());
  }}
 }
+
+#[test]
+fn browser_geometry_binds_actual_task_and_retains_until_ready() {
+    use document_view::{Delivery, Notice};
+    let mut delivery = Delivery::new();
+    delivery.queue(15, 150, 320, 240);
+    delivery.poll(true, false, |_| panic!("not ready"));
+    assert!(delivery.pending());
+    let mut first = None;
+    delivery.poll(true, true, |n| { first = Some(n); Err(ERR_SERVICE_NOT_READY) });
+    assert!(delivery.pending());
+    let first = first.unwrap();
+    delivery.poll(true, true, |n| { assert_eq!(n, first); Ok(()) });
+    assert!(!delivery.pending());
+    assert!(Notice::decode(3, 15, 150, first.args(), 0).is_some());
+    for (caller, target, task, last) in [(3,15,15,0),(15,15,150,0),(3,16,150,0),(3,15,0,0),(3,15,150,first.sequence)] {
+        assert!(Notice::decode(caller, target, task, first.args(), last).is_none());
+    }
+    assert_eq!(Layout::new(15,320,240).top,36);
+    delivery.queue(15,150,220,150);
+    delivery.poll(false,true,|_|panic!("terminal subject"));
+    delivery.queue(15,150,640,480);
+    assert!(!delivery.pending());
+}

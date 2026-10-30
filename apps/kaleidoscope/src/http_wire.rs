@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Narrow allocation-free HTTP message codec for a controlled diagnostic peer.
+//! Narrow allocation-free HTTP message codec for a configured controlled document peer.
 //! The fixed request grants no network authority. Parse only after complete
 //! transport receipt: a successful parse publishes a body range, never a prefix.
 //! No redirects, cookies, HTML interpretation, TLS, caching or online-web claim.
@@ -12,7 +12,7 @@ pub const MAX_HEADERS: usize = 1024;
 pub const MAX_BODY: usize = 2048;
 // Exact supported-profile fixture for host/native wire oracles. Runtime Host
 // bytes come from the shared BOOT profile below; the actual request test binds it.
-const REQUEST: &[u8] = b"GET /probe HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
+const REQUEST: &[u8] = b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Response {
@@ -41,7 +41,7 @@ pub enum Error {
 /// Emit only the fixed controlled request; the returned length is the extent
 /// to send. Bytes beyond it are not part of the request and are left untouched.
 pub fn request(out: &mut [u8; MAX_REQUEST]) -> usize {
-    let prefix=b"GET /probe HTTP/1.1\r\nHost: ";
+    let prefix=b"GET /welcome HTTP/1.1\r\nHost: ";
     let host=sex_pdx::network_config::HOST_NAME;
     let suffix=b"\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
     let length=prefix.len()+host.len()+suffix.len();
@@ -167,7 +167,7 @@ mod tests {
     }
     #[test] fn actual_fixed_request_bytes() {
         let mut out = [0xA5; MAX_REQUEST];let len = request(&mut out);
-        assert_eq!(&out[..len], b"GET /probe HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
+        assert_eq!(&out[..len], b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
         assert!(out[len..].iter().all(|b| *b == 0xA5));
     }
     #[test] fn complete_200_exposes_exact_body_only_after_full_receipt() {

@@ -11,12 +11,17 @@ from check_disk_persistence import ppm_rgb
 
 DNS_MODES=('dns-disallowed','dns-zero-ttl','dns-malformed','dns-silence','dns-cancel','dns-close','dns-cname-disallowed','dns-cname-zero-ttl','dns-cname-cycle','dns-cname-conflict','dns-bad-pointer','dns-cname-unrelated')
 DNS_SUCCESS=('dns-compressed','dns-cname','dns-cname-reordered','dns-cname-sections')
-MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch')+DNS_MODES+DNS_SUCCESS
+MODES=('echo','malformed','short-body','oversized','redirect','reset','silence','cancel-retry','close','switch','reader')+DNS_MODES+DNS_SUCCESS
 BODY=b'LIVE SEXOS HTTP BODY 80 / FROM CONTROLLED PEER.'
 ECHO=bytes((n*17+78)&255 for n in range(1025))
+# Whole document is independent controlled peer data, including interior blanks
+# and text well beyond the64-byte overview. Last byte must remain reachable.
+READER_TAIL=b'FINAL FULL DOCUMENT BYTE Z'
+READER_BODY=(b''.join((b' '*48 if n%9==8 else(f'{n:03d} SEXOS READER LINE / SOURCE BYTES ARE DATA').encode().ljust(48,b'.'))+b'\n'for n in range(50)))[:2048-len(READER_TAIL)]+READER_TAIL
+assert len(READER_BODY)==2048
 
 def load_pixel_contract(root):
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'apps/kaleidoscope/src/http_wire.rs','client':'apps/kaleidoscope/src/http_probe.rs'}
+ paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'apps/kaleidoscope/src/http_wire.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
  def number(key,pattern):
   match=re.search(pattern,sources[key])
@@ -33,12 +38,107 @@ def load_pixel_contract(root):
  if 'self.ui.queue(&text.bytes[..text.len]'not in sources['app']or 'browser_view::compose('not in sources['app']:raise ValueError('Browser no longer publishes composed atomic snapshots')
  if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  if 'let dns_start=preview.len()+64'not in compose or 'let http_start=dns_start+64'not in compose or 'let body_start=http_start+64'not in compose:raise ValueError('production status extent layout changed')
- return dict(font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ reader=sources['reader'].split('#[cfg(test)]',1)[0]
+ if 'self.reader.render(self.http.document())'not in sources['app']or 'selected:http_view_code(self.http.view())|256'not in sources['app']:raise ValueError('production full document reader binding changed')
+ reader_header=literal('reader',r'put\(&mut frame,0,(b"[^"\n]*")\)')
+ reader_footers=[ast.literal_eval(v)for v in re.findall(r'(b"(?:PgUp[^"\n]*|V back|V)")',reader)]
+ if len(reader_footers)!=3:raise ValueError('production reader footer contract changed')
+ return dict(reader_header=reader_header,reader_footers=reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
-  http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch  J cancel")\)'),
+  http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
   request=literal('wire',r'const REQUEST: &\[u8\] = (b"[^"\n]*")'),color=number('app',r'self\.ui\.queue\(&text\.bytes\[\.\.text\.len\],(0x[0-9A-Fa-f]+)'),
   source_sha256={paths[key]:hashlib.sha256(value.encode()).hexdigest()for key,value in sources.items()})
+
+def overview_preview(body):
+ """Independent overview contract: printable words,64 cells, ellipsis on loss."""
+ words=bytes(32 if b<=32 or b==127 else b if b<127 else 63 for b in body).split()
+ text=b' '.join(words)
+ return (text[:61]+b'...'if len(text)>64 else text.ljust(64,b' '))
+
+def reader_frame(body,width,height,contract,anchor=0):
+ """Independent paragraph/chunk model, without calling the Rust reader."""
+ if len(body)>contract['reader_max_body']:raise ValueError('expected document exceeds production body bound')
+ factor=2 if width>=contract['scale_threshold']else 1
+ cols=min(79,max(0,(width-2*contract['inset'])//(contract['advance']*factor)-1))
+ available=height-contract['top']-contract['glyph_height']*factor
+ rows=min(contract['max_rows'],contract['reader_capacity']//(cols+1),1+available//(contract['line']*factor))if cols and available>=0 else 0
+ if rows<4:raise ValueError('actual reader tile has no fully visible body row')
+ sanitized=bytes(b if b==10 or 32<=b<=126 else 32 if b<128 else 63 for b in body).rstrip(b' \n')
+ lines=[];starts=[];source=0
+ if sanitized:
+  for paragraph in sanitized.split(b'\n'):
+   chunks=[paragraph[n:n+cols]for n in range(0,len(paragraph),cols)]or[b'']
+   for n,chunk in enumerate(chunks):starts.append(source+n*cols);lines.append(chunk)
+   source+=len(paragraph)+1
+ visible=rows-3;last=max(0,len(lines)-visible)
+ anchored=max((i for i,start in enumerate(starts)if start<=anchor),default=0);first=min(anchored,last)
+ host=re.search(br'\r\nHost: ([^\r\n]+)\r\n',contract['request'])
+ if not host:raise ValueError('missing source-bound HTTP hostname')
+ footer=contract['reader_footers'][0 if cols>=25 else 1 if cols>=6 else 2]
+ shown=lines[first:first+visible]
+ output=[contract['reader_header'],host[1]+contract['reader_path']]+shown+[b'']*(visible-len(shown))+[footer]
+ output=[line[:cols].ljust(cols,b' ')for line in output]
+ return dict(cols=cols,rows=rows,body_rows=visible,first=first,end=first+len(shown),total_lines=len(lines),source_bytes=len(body),scale=factor,anchor=starts[first]if starts else 0,starts=starts,lines=output,bytes=rows*(cols+1)-1)
+
+def reader_move(frame,action):
+ first=frame['first'];last=max(0,frame['total_lines']-frame['body_rows'])
+ target={'up':max(0,first-1),'down':min(last,first+1),'pgup':max(0,first-frame['body_rows']),'pgdn':min(last,first+frame['body_rows']),'home':0,'end':last}[action]
+ return frame['starts'][target]if frame['starts']else 0
+
+def reader_geometry(trace,body,contract,anchor=0):
+ # Zoom changes the actual frame without emitting another tiling receipt.
+ # Bind the shell's exact queued geometry to the notice accepted by Browser.
+ queued=re.findall(r'\[shell.document.viewport\] target=15 task=15 surface=300 sequence=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) enqueued=1',trace)
+ notices=re.findall(r'\[browser.viewport\] target=15 task=15 sequence=(\d+) w=(\d+) h=(\d+) origin=held_shell',trace)
+ if not queued or not notices:raise ValueError('missing exact queued or held-shell viewport receipt')
+ sequence,nw,nh=map(int,notices[-1]);matches=[tuple(map(int,row))for row in queued if int(row[0])==sequence]
+ if len(matches)!=1:raise ValueError('accepted viewport lacks one exact shell geometry')
+ _,x,y,w,h=matches[0]
+ if(w,h)!=(nw,nh):raise ValueError('queued and accepted viewport differ')
+ frame=reader_frame(body,w,h,contract,anchor);frame.update(tile=dict(x=x,y=y,w=w,h=h),viewport=sequence)
+ return frame
+
+def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None):
+ try:
+  expected=reader_geometry(trace,body,contract,anchor);tile=expected['tile'];width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
+  if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
+  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
+  layouts=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=validated_body tls=0 pixels=unconfirmed',trace))
+  wanted=tuple(expected[key]for key in ['first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'])
+  if not layouts or tuple(map(int,layouts[-1].groups()))!=wanted:raise ValueError('reader layout receipt differs from independent document/geometry/navigation model')
+  if not re.search(rf'\[browser.view.applied\] bytes={expected["bytes"]} http=258 body_bytes={len(body)} pixels=unconfirmed',trace[layouts[-1].end():]):raise ValueError('missing positive atomic reader Applied receipt after current layout')
+  scale=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=0;mismatch=0;ink=0
+  columns=min(80,max(0,(tile['w']-2*contract['inset'])//(contract['advance']*scale)))
+  # Inspect the entire former text band, including the spare column and all
+  # rows below the bounded reader snapshot. Stale overview/body ink must erase.
+  band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*scale-1)//(contract['line']*scale)))
+  for row in range(band_rows):
+   line=expected['lines'][row]if row<expected['rows']else b''
+   for column in range(columns):
+    bitmap=glyph(contract['font'],chr(line[column]))if column<len(line)else(0,)*7
+    for gy in range(contract['line']):
+     for gx in range(contract['advance']):
+      on=gy<contract['glyph_height']and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
+      for dy in range(scale):
+       py=tile['y']+contract['top']+(row*contract['line']+gy)*scale+dy
+       if py>=tile['y']+tile['h']:continue
+       for dx in range(scale):
+        px=tile['x']+contract['inset']+(column*contract['advance']+gx)*scale+dx
+        actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;checked+=1;ink+=on;mismatch+=actual!=on
+  errors=[]if not mismatch else[f'whole reader glyph/padding/erasure mismatches={mismatch}']
+  if not ink:errors.append('reader frame contains no checked ink')
+  return dict(ok=not errors,errors=errors,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']],checked_pixels=checked,expected_ink_pixels=ink)
+ except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)])
+
+def wait_reader_pixels(q,text,out,name,body,contract,anchor,health,timeout=30,resolution=None):
+ deadline=time.monotonic()+timeout;attempts=0;screenshot=out/(name+'.ppm');result=dict(ok=False,errors=['no reader screenshot'])
+ while time.monotonic()<deadline:
+  health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});result=verify_reader_pixels(text(),screenshot.read_bytes(),body,contract,anchor,resolution)
+  if result['ok']:break
+  time.sleep(.2)
+ result.update(attempts=attempts,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Independent full2048-byte controlled document model, actual held-shell tile/viewport, complete reader chrome/body/footer glyphs, padding/spare column and stale text-band erasure. Applied/layout markers alone cannot pass; no additional network authority.')
+ (out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n');return result
 
 def http_status_geometry(text,expected,body,contract):
  tiles=re.findall(r'\[shell\.tile\.apply\] sid=300 x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',text)
@@ -80,9 +180,10 @@ def http_status_geometry(text,expected,body,contract):
  if any(r['y']+contract['line']*scale>y+h for r in rows):raise ValueError('complete HTTP/body rows are clipped by actual tile')
  return dict(tile=dict(x=x,y=y,w=w,h=h),scale=scale,columns=columns,preview_bytes=length,http_offset=offset,body_offset=length+194,body_bytes=64,echo_view=echo,dns_view=dns,rows=rows)
 
-def verify_http_pixels(text,ppm,expected,body,contract):
+def verify_http_pixels(text,ppm,expected,body,contract,resolution=None):
  try:
-  geometry=http_status_geometry(text,expected,body,contract);width,height,pixels=ppm_rgb(ppm);tile=geometry['tile'];scale=geometry['scale'];errors=[];checked=0;ink=0;body_checked=0;color=contract['color'].to_bytes(3,'big')
+  geometry=http_status_geometry(text,expected,body,contract);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=geometry['tile'];scale=geometry['scale'];errors=[];checked=0;ink=0;body_checked=0;color=contract['color'].to_bytes(3,'big')
+  if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
   if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser tile outside framebuffer')
   for row in geometry['rows']:
    mismatch=0
@@ -100,20 +201,20 @@ def verify_http_pixels(text,ppm,expected,body,contract):
   return dict(ok=not errors,errors=errors,expected=expected,expected_body_hex=body.hex()if expected=='Ready'else'',geometry=geometry,checked_pixels=checked,body_region_pixels=body_checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,OverflowError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
-def wait_http_pixels(q,text,out,expected,body,contract,health,name='browser-http',timeout=30):
+def wait_http_pixels(q,text,out,expected,body,contract,health,name='browser-http',timeout=30,resolution=None):
  began=time.monotonic();deadline=began+timeout;attempts=0;result=dict(ok=False,errors=['no screenshot']);screenshot=out/(name+'.ppm')
  while time.monotonic()<deadline:
   try:
-   health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});trace=text();raw=screenshot.read_bytes();result=verify_http_pixels(trace,raw,expected,body,contract)
-   result['errors']+=verify_kaleido_layout(trace,raw,contract['font']);result['ok']=not result['errors']
+   health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});trace=text();raw=screenshot.read_bytes();result=verify_http_pixels(trace,raw,expected,body,contract,resolution)
+   result['errors']+=verify_kaleido_layout(trace,raw,contract['font'],resolution=resolution);result['ok']=not result['errors']
    if result['ok']:break
   except Exception as exc:result=dict(ok=False,errors=['HTTP pixel poll failed: '+repr(exc)],expected=expected);break
   time.sleep(.2)
  result.update(attempts=attempts,seconds=time.monotonic()-began,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],scope='Complete actual tiled Plain HTTP/no TLS label, keyboard footer, padding, blank rows and all64body cells including trailing erasure, source-bound production font/style/composer and actual preceding status geometry. Serial completion alone cannot pass.')
  (out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n');return result
 
-def wire_response(mode):
- body=BODY;status=b'HTTP/1.1 200 OK\r\n';extra=b'';length=len(body)
+def wire_response(mode,body=BODY):
+ status=b'HTTP/1.1 200 OK\r\n';extra=b'';length=len(body)
  if mode=='short-body':length+=9
  elif mode=='oversized':body=b'X'*2049;length=len(body)
  elif mode=='redirect':status=b'HTTP/1.1 302 Found\r\n';extra=b'Location: /elsewhere\r\n'
@@ -153,10 +254,10 @@ def resolution_joins(trace,pcap,expected,dns_validation):
  return dict(ok=not errors,errors=errors,joins=joins,scope='Exact positive DNS RELEASE precedes retained BEGIN_RESOLVED admission; bounded admission time is observed in serial. Subsequent egress hash/length joins the actual first TCP SYN, which follows the actual captured DNS answer. DNS observation is provenance data under held BOOT authority and fixed endpoint policy, not DNS authenticity or new authority.')
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--mode',choices=MODES,default='echo');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--mode',choices=MODES,default='echo');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');a=p.parse_args()
  iso=a.iso.resolve(strict=True);seed=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh evidence directory required')
- contract=load_pixel_contract(Path(__file__).resolve().parents[1]);request=contract['request'];disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
+ contract=load_pixel_contract(Path(__file__).resolve().parents[1]);request=contract['request'];response_body=READER_BODY if a.mode=='reader'else BODY;overview=overview_preview(response_body)if a.mode=='reader'else BODY;disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
  count=1 if a.mode in DNS_MODES else 4 if a.mode=='switch'else 3 if a.mode=='cancel-retry'else 2
  dns_count=2 if a.mode in('switch','cancel-retry')else 1
  rows=[];attempts=[];dns_rows=[];dns_attempts=[];server_errors=[];connections=[];stopping=threading.Event();http_seen=threading.Event();dns_seen=threading.Event()
@@ -222,14 +323,14 @@ def main():
     if ticket==2 and a.mode=='reset':row['aborted']=True;conn.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack('ii',1,0));conn.close();continue
     if old is not None:
      old_conn,old_row=old;old_row['response_hex']=wire_response('echo').hex();old_row['host_sent_prefix_hex']=write(old_conn,2,wire_response('echo'),late=True).hex();old_row['response_scope']='attempted late bytes; actual captured prefix is independently qualified';old_conn.close();old=None
-    reply=wire_response(a.mode if ticket==2 else'echo');row['response_hex']=write(conn,ticket,reply).hex();conn.shutdown(socket.SHUT_WR);conn.close()
+    reply=wire_response(a.mode if ticket==2 else'echo',response_body);row['response_hex']=write(conn,ticket,reply).hex();conn.shutdown(socket.SHUT_WR);conn.close()
   except Exception as exc:
    if not stopping.is_set():server_errors.append(repr(exc))
  thread=threading.Thread(target=serve,daemon=True);thread.start()
- cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres=1280,yres=800','-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{qmp},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
+ cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres='+a.resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{qmp},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
  authority_paths=('apps/kaleidoscope/src/dns_probe.rs','servers/sexnet/src/dns_jobs.rs','servers/sexnet/src/jobs.rs','servers/sexnet/src/main.rs','crates/sex-pdx/src/network_job.rs','crates/sex-net/src/dns_wire.rs')
- (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],authority_source_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()for name in authority_paths},runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py','check_dns_capture.py')},http_request_hex=request.hex(),http_body_hex=BODY.hex(),scope='Actual H now obtains a fixed-name UDP DNS observation, positively releases it, then requests BEGIN_RESOLVED under the existing held BOOT route and immutable HTTP endpoint policy. Real J/R/F11 keys, loopback UDP46079/TCP46078 fixtures and full shared PCAP. No DNS authenticity, TTL wall-clock accuracy, new capability authority, TLS, public routing, HTML, redirect following or cache claim.'),indent=2)+'\n')
- proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);actions=[];pixel_results=[];failure=None
+ (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,resolution=a.resolution,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],authority_source_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()for name in authority_paths},runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py','check_dns_capture.py')},http_request_hex=request.hex(),http_body_hex=response_body.hex(),scope='Actual H now obtains a fixed-name UDP DNS observation, positively releases it, then requests BEGIN_RESOLVED under the existing held BOOT route and immutable HTTP endpoint policy. Real J/R/V/navigation/F11 keys, source-bound reader pages with actual ZoomToggle/restore where selected, loopback UDP46079/TCP46078 fixtures and full shared PCAP. No DNS authenticity, TTL wall-clock accuracy, new capability authority, TLS, public routing, HTML, redirect following or cache claim.'),indent=2)+'\n')
+ proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);actions=[];pixel_results=[];reader_results=[];failure=None
  def text():return serial.read_text(errors='replace')if serial.exists()else''
  def health():
   if server_errors:raise RuntimeError(str(server_errors))
@@ -249,15 +350,53 @@ def main():
    start=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':code}}}for code,down in [('alt',True),('tab',True),('tab',False),('alt',False)]]});wait(r'\[shell.app.switch\]',start)
   raise RuntimeError('actual AltTab did not focus Browser')
  def pixels(q,view,name):
-  result=wait_http_pixels(q,text,out,view,BODY,contract,health,name);pixel_results.append(result)
+  result=wait_http_pixels(q,text,out,view,overview,contract,health,name,resolution=tuple(map(int,a.resolution.split('x'))));pixel_results.append(result)
   if not result['ok']:raise RuntimeError('actual HTTP pixels: '+'; '.join(result['errors']))
  def ready(q,ticket,start,name):
-  wait(rf'\[browser.http.body\] ticket={ticket} status=200 length={len(BODY)} hash={hex(fingerprint(BODY))} controlled_peer=1 tls=0',start)
+  wait(rf'\[browser.http.body\] ticket={ticket} status=200 length={len(response_body)} hash={hex(fingerprint(response_body))} controlled_peer=1 tls=0',start)
   wait(rf'\[browser.http.released\] ticket={ticket} view=Ready private_job=0',start)
-  wait(rf'\[browser.view.applied\] bytes=\d+ http=2 body_bytes={len(BODY)} pixels=unconfirmed',start);pixels(q,'Ready',name)
+  wait(rf'\[browser.view.applied\] bytes=\d+ http=2 body_bytes={len(response_body)} pixels=unconfirmed',start);pixels(q,'Ready',name)
  def resolution(ticket,generation,start):
   wait(rf'\[browser.dns.released\] ticket={generation} view=Answer\(\[10, 0, 2, 2\]\) private_job=0',start)
   wait(rf'\[net.job.resolved.admitted\] owner=15 task=15 ticket={ticket} dns_generation={generation} ',start)
+ def reader_workflow(q):
+  anchor=0;start_network=len(text());original=None
+  def paint(name):
+   nonlocal anchor
+   result=wait_reader_pixels(q,text,out,name,response_body,contract,anchor,health,resolution=tuple(map(int,a.resolution.split('x'))));reader_results.append(result)
+   if not result['ok']:raise RuntimeError('actual reader pixels: '+'; '.join(result['errors']))
+   frame=reader_geometry(text(),response_body,contract,anchor);anchor=frame['anchor'];return frame
+  def navigation(key,code):
+   nonlocal anchor
+   prior=reader_geometry(text(),response_body,contract,anchor);anchor=reader_move(prior,key)
+   start=len(text());q.key(key);wait(rf'\[shell.browser.input\] code={code} down=1 slot=43 accepted=1',start)
+   frame=paint('browser-reader-'+key);actions.append(dict(action='actual_reader_'+key,first=frame['first'],end=frame['end'],source_anchor=anchor));return frame
+  def zoom(name):
+   start=len(text());q.key('grave_accent');wait(r'\[shell.palette.item\] idx=0',start)
+   for old,new in [(0,9),(9,8)]:
+    start=len(text());q.key('k');wait(rf'\[shell.palette.select\] old={old} new={new}',start)
+   start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start)
+   wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
+   frame=paint(name);actions.append(dict(action='actual_palette_'+name,tile=frame['tile'],source_anchor=anchor));return frame
+  start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start)
+  first=paint('browser-reader-initial');original=first['tile']
+  if first['first']!=0 or first['source_bytes']!=2048 or first['total_lines']<=first['body_rows']:raise RuntimeError('native reader fixture does not exercise full document pagination')
+  navigation('pgdn',109);navigation('down',108);navigation('pgup',104);navigation('home',102)
+  end=navigation('end',107)
+  if end['end']!=end['total_lines']or READER_TAIL.decode()not in ''.join(reader_results[-1]['expected_rows'][2:-1]):raise RuntimeError('reader End lacks final full-document marker')
+  navigation('up',103)
+  expanded=zoom('browser-reader-expanded');restored=zoom('browser-reader-restored')
+  if expanded['tile']['w']==original['w']and expanded['tile']['h']==original['h']:raise RuntimeError('real ZoomToggle did not change reader geometry')
+  if(restored['tile']['w'],restored['tile']['h'])!=(original['w'],original['h']):raise RuntimeError('real ZoomToggle did not restore reader geometry')
+  start=len(text());q.key('v');wait(r'\[browser.view.applied\] bytes=\d+ http=2 body_bytes=2048 pixels=unconfirmed',start);pixels(q,'Ready','browser-reader-overview')
+  anchor=0;start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);again=paint('browser-reader-reset')
+  if again['first']!=0:raise RuntimeError('reader re-entry did not reset source anchor')
+  start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 pixels=unconfirmed',start);pixels(q,'Cancelled','browser-reader-erased')
+  layouts=len(re.findall(r'\[browser.reader.layout\]',text()));start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start);pixels(q,'Cancelled','browser-reader-cannot-reopen')
+  if len(re.findall(r'\[browser.reader.layout\]',text()))!=layouts or re.search(r'\[browser.view.applied\] bytes=\d+ http=258 ',text()[start:]):raise RuntimeError('cancelled document reopened reader')
+  if re.search(r'\[net\.(?:job|dns)\.egress\.submit\]|\[net\.job\.resolved\.admitted\]|\[browser.http.body\]|\[browser.dns.answer\]',text()[start_network:]):raise RuntimeError('reader navigation issued new owned network work')
+  if len(rows)!=2 or len(dns_rows)!=1:raise RuntimeError('reader navigation changed actual peer exchange count')
+  actions.append(dict(action='reader_local_navigation_only',http_connections=2,dns_queries=1,cancelled_document_cannot_reopen=True))
  def close_pending(q,start,kind):
   began=time.monotonic();q.key('f11');wait(rf'\[browser.{kind}.closed\] pending=1 terminal=1',start);wait(r'\[sext.app.pool.ready\] target=15 .*ok=1',start)
   trace=text();roles={int(n)for n in re.findall(r'\[app.service.ack\] target=15 .*role=(\d+) ',trace[start:])};ack=trace.rfind('[net.app.cleanup.ack] target=15')
@@ -265,13 +404,16 @@ def main():
   if roles!={1,2,4,8,16}or ack<start or not retired or retired.start()+start>=ack or re.search(r'\[net\.(?:job|dns)\.egress\.submit\]',trace[ack:]):raise RuntimeError('pending Close lacks zero DNS records before ACK and terminal owned-egress cleanup')
   q.cmd('screendump',{'filename':str(out/'browser-closed.ppm')});actions.append(dict(action='actual_f11_close_pending_'+kind,roles=sorted(roles),dns_records_remaining=0,seconds=time.monotonic()-began));pixel_results.append(dict(ok=True,skipped=True,reason='Browser terminally closed; no live HTTP status surface remains. All five cleanup roles, zero retained DNS records before network cleanup ACK, and wire evidence qualify Close.'))
  try:
-  wait(r'\[app.surface.presented\] target=15 surface=300');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0')
   deadline=time.monotonic()+15
   while not qmp.exists():
    health()
    if time.monotonic()>deadline:raise RuntimeError('QMP unavailable')
    time.sleep(.02)
-  q=QMP(qmp);focus(q);start=len(text());began=time.monotonic();q.key('h')
+  q=QMP(qmp)
+  if a.resolution=='1024x768':
+   wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret');actions.append(dict(action='actual_compact_boot_menu',requested_resolution=[1024,768]))
+  wait(r'\[app.surface.presented\] target=15 surface=300');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0')
+  focus(q);start=len(text());began=time.monotonic();q.key('h')
   deadline=time.monotonic()+60
   while not dns_seen.wait(.02):
    health()
@@ -294,14 +436,15 @@ def main():
   if a.mode=='close':close_pending(q,len(text()),'http')
   elif a.mode=='cancel-retry':
    start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.http.released\] ticket=2 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-cancelled');actions.append(dict(action='actual_j_cancel',ticket=2,seconds=time.monotonic()-began));start=len(text());q.key('h');resolution(3,2,start);ready(q,3,start,'browser-http');actions.append(dict(action='actual_h_fresh_retry',ticket=3,dns_generation=2))
-  elif a.mode in('echo','switch')+DNS_SUCCESS:
+  elif a.mode in('echo','switch','reader')+DNS_SUCCESS:
    ready(q,2,start,'browser-http-first'if a.mode=='switch'else'browser-http')
+   if a.mode=='reader':reader_workflow(q)
    if a.mode=='switch':
     start=len(text());q.key('j');wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-erased');actions.append(dict(action='actual_j_erase_previous_ready_body',job_allocated=False))
     start=len(text());q.key('r');wait(r'\[browser.net.job.released\] ticket=3 view=Verified private_job=0',start);actions.append(dict(action='actual_r_echo_same_replay_fence',ticket=3));start=len(text());q.key('h');resolution(4,2,start);ready(q,4,start,'browser-http');actions.append(dict(action='actual_h_after_echo',ticket=4,dns_generation=2))
   elif a.mode not in DNS_MODES:
    wait(r'\[browser.http.released\] ticket=2 view=Unavailable private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=3 body_bytes=0 ',start);pixels(q,'Unavailable','browser-http')
-  expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode=='cancel-retry'else[2]if a.mode in('echo',)+DNS_SUCCESS else[]
+  expected_bodies=[2,4]if a.mode=='switch'else[3]if a.mode=='cancel-retry'else[2]if a.mode in('echo','reader')+DNS_SUCCESS else[]
   if [int(n)for n in re.findall(r'\[browser.http.body\] ticket=(\d+) ',text())]!=expected_bodies:raise RuntimeError('invalid, incomplete, cancelled or absent HTTP response became usable body')
   health()
  except Exception as exc:failure=repr(exc)
@@ -339,7 +482,7 @@ def main():
  if len(rows)!=count:failure=failure or'incomplete actual peer exchanges'
  if len(dns_rows)!=dns_count:failure=failure or'incomplete actual DNS exchanges'
  if a.mode=='reset'and validation.get('ok')and not validation['connections'][1]['rst_in']:failure=failure or'missing captured real peer reset'
- result=dict(ok=failure is None and validation['ok']and dns_validation['ok']and joined['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,dns_capture=dns_validation,resolution_order=joined,authority=authority,pixels=pixel_results,actions=actions,scope='Actual H-driven fixed-name DNS query/answer and positive cleanup precede generation-bound HTTP admission under existing held BOOT authority and fixed endpoint policy. Exact first TCP SYN joins the admitted egress frame hash/length and follows the captured DNS answer. Denial modes require only baseline Echo TCP and no new HTTP-owned egress. Full HTTP/body pixels or explicit terminal Close qualify presentation/cleanup. No injected native expiry/rollback, DNS authenticity, wall-clock TTL accuracy, new capabilities, TLS, public web, HTML, cache or physical/SMP isolation claim.')
+ result=dict(ok=failure is None and validation['ok']and dns_validation['ok']and joined['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,dns_capture=dns_validation,resolution_order=joined,authority=authority,pixels=pixel_results,reader_pixels=reader_results,actions=actions,scope='Actual H-driven fixed-name DNS query/answer and positive cleanup precede generation-bound HTTP admission under existing held BOOT authority and fixed endpoint policy. Exact first TCP SYN joins the admitted egress frame hash/length and follows the captured DNS answer. Denial modes require only baseline Echo TCP and no new HTTP-owned egress. Full HTTP/body pixels or explicit terminal Close qualify presentation/cleanup. Reader mode additionally requires exact2048-byte full-document pages, actual navigation and geometry changes, overview return/reset, cancellation erasure and no new owned network work. No injected native expiry/rollback, DNS authenticity, wall-clock TTL accuracy, new capabilities, TLS, public web, HTML, cache or physical/SMP isolation claim.')
  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,mode=a.mode,model=a.model,connections=len(rows))))

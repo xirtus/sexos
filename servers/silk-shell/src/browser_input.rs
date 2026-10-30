@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded retention of explicit R/C/D/X/H/J down commands for the existing BOOT route.
+//! Bounded retention of explicit network and bounded reader navigation down commands for the existing BOOT route.
 //! Queue membership is data; the shell's held Domain capability authorizes send.
 const CAPACITY: usize = 8;
+/// PS/2 navigation arrives as its set1 byte; USB uses normalized codes.
+/// Only the focused app route consumes these equivalent representations.
+pub fn command(code:u8)->Option<u8> {
+ let code=match code {0x47=>0x66,0x48=>0x67,0x49=>0x68,0x4F=>0x6B,0x50=>0x6C,0x51=>0x6D,_=>code};
+ if matches!(code,0x13|0x2E|0x20|0x2D|0x23|0x24|0x2F|0x67|0x6C|0x68|0x6D|0x66|0x6B){Some(code)}else{None}
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -24,7 +31,8 @@ impl Queue {
     pub fn len(&self) -> usize { self.len }
     /// Invalid/full input leaves every retained command unchanged.
     pub fn push(&mut self, code: u8) -> bool {
-        if !matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24) || self.len == CAPACITY { return false; }
+        let Some(code)=command(code) else{return false;};
+        if self.len == CAPACITY { return false; }
         self.codes[(self.head + self.len) % CAPACITY] = code;
         self.len += 1;
         true
@@ -84,12 +92,19 @@ mod tests {
         assert_eq!(q.codes, codes); assert_eq!(q.head, head); assert_eq!(q.len(), CAPACITY);
         for n in 0..CAPACITY { sent(&mut q, if n % 2 == 0 { 0x13 } else { 0x2E }); }
     }
-    #[test] fn only_r_and_c_down_codes_are_accepted() {
+    #[test] fn only_network_and_reader_down_codes_are_accepted() {
         for code in 0..=u8::MAX {
             let mut q = Queue::new();
-            assert_eq!(q.push(code), matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24));
-            assert_eq!(q.len(), usize::from(matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24)));
+            assert_eq!(q.push(code), matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24 | 0x2F | 0x67 | 0x6C | 0x68 | 0x6D | 0x66 | 0x6B | 0x47 | 0x48 | 0x49 | 0x4F | 0x50 | 0x51));
+            assert_eq!(q.len(), usize::from(matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24 | 0x2F | 0x67 | 0x6C | 0x68 | 0x6D | 0x66 | 0x6B | 0x47 | 0x48 | 0x49 | 0x4F | 0x50 | 0x51)));
             if q.len() == 0 { assert_eq!(q.codes, [0; CAPACITY]); assert_eq!(q.head, 0); }
+        }
+    }
+    #[test] fn ps2_and_usb_navigation_share_canonical_retained_delivery() {
+        for (raw,normalized) in [(0x47,0x66),(0x48,0x67),(0x49,0x68),(0x4F,0x6B),(0x50,0x6C),(0x51,0x6D)] {
+            let mut q=Queue::new();assert!(q.push(raw));assert!(q.push(normalized));
+            assert_eq!(q.poll(true,FULL,|code|{assert_eq!(code,normalized);Err(FULL)}),Outcome::Blocked);
+            assert_eq!(q.len(),2);sent(&mut q,normalized);sent(&mut q,normalized);
         }
     }
     #[test] fn full_retains_exact_front_and_entire_queue() {

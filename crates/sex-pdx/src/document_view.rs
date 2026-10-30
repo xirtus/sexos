@@ -25,7 +25,7 @@ impl Layout {
         let cols = (w.saturating_sub(2 * s::INSET) / (s::ADVANCE * scale))
             .saturating_sub(1)
             .clamp(1, 79) as usize;
-        let top = if matches!(target,16|18) { 36 } else { s::TEXT_TOP };
+        let top = if matches!(target,15|16|18) { 36 } else { s::TEXT_TOP };
         let toolbar_rows = if cols >= 20 {
             1
         } else if cols >= 10 {
@@ -90,7 +90,8 @@ impl Notice {
             sequence: args[2],
         };
         if caller != 3
-            || !matches!(target, 9 | 16 | 18)
+            || !matches!(target, 9 | 15 | 16 | 18)
+            || task == 0
             || n.target != target
             || n.task != task
             || n.sequence <= last
@@ -122,7 +123,7 @@ impl Delivery {
     }
     pub fn queue(&mut self, target: u32, task: u32, w: u32, h: u32) {
         if self.dead
-            || !matches!(target, 9 | 16 | 18)
+            || !matches!(target, 9 | 15 | 16 | 18)
             || task == 0
             || w == 0
             || h == 0

@@ -30,11 +30,11 @@ fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_
 #[test]fn ready_contains_complete_label_and_all64_body_bytes() {
  let body=*b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
  let text=compose(PREVIEW,E::Verified,D::Answer([10,0,2,2]),H::Ready,&body).unwrap();let start=PREVIEW.len()+128;
- assert_eq!(&text.bytes[start..start+64],&padded(b"\n\nPlain HTTP / no TLS: ready\nH fetch  J cancel"));assert_eq!(&text.bytes[start+64..start+66],b"\n\n");assert_eq!(&text.bytes[start+66..text.len],&body);
+ assert_eq!(&text.bytes[start..start+64],&padded(b"\n\nPlain HTTP / no TLS: ready\nH fetch  J cancel  V read"));assert_eq!(&text.bytes[start+64..start+66],b"\n\n");assert_eq!(&text.bytes[start+66..text.len],&body);
 }
 #[test]fn every_nonready_state_clears_entire_old_body() {
  for(view,label)in[(H::Idle,"idle"),(H::Pending,"checking"),(H::Unavailable,"unavailable"),(H::Cancelled,"cancelled"),(H::Uncertain,"waiting receipt")] {
-  let text=compose(PREVIEW,E::Unavailable,D::Idle,view,&[0xff;64]).unwrap();let start=PREVIEW.len()+128;let expected=format!("\n\nPlain HTTP / no TLS: {label}\nH fetch  J cancel");assert_eq!(&text.bytes[start..start+64],&padded(expected.as_bytes()));assert_eq!(&text.bytes[text.len-64..text.len],&[b' ';64]);
+  let text=compose(PREVIEW,E::Unavailable,D::Idle,view,&[0xff;64]).unwrap();let start=PREVIEW.len()+128;let expected=format!("\n\nPlain HTTP / no TLS: {label}\nH fetch  J cancel  V read");assert_eq!(&text.bytes[start..start+64],&padded(expected.as_bytes()));assert_eq!(&text.bytes[text.len-64..text.len],&[b' ';64]);
  }
 }
 #[test]fn exact_capacity_and_all_unused_bytes_are_spaces() {

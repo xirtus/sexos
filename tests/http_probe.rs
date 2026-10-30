@@ -19,7 +19,8 @@ impl jobs::Wire for Peer {
  fn send(&mut self,data:&[u8])->Result<usize,u32>{let n=data.len().min(7);self.request.extend_from_slice(&data[..n]);Ok(n)}
  fn queued(&self)->usize{0}fn link(&self)->jobs::Link{self.link}
  fn finish_send(&mut self){
-  assert_eq!(self.request,b"GET /probe HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
+  let mut expected=[0;http_wire::MAX_REQUEST];let length=http_wire::request(&mut expected);
+  assert_eq!(self.request,&expected[..length]);
   match self.mode {
    Mode::Valid=>{self.response=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",self.body.len()).into_bytes();self.response.extend_from_slice(&self.body);self.link=jobs::Link::PeerFin;},
    Mode::Malformed=>{self.response=b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Type: text/plain\r\n\r\nbadEXTRA".to_vec();self.link=jobs::Link::PeerFin;},
@@ -56,7 +57,7 @@ fn pending(p:&mut probe::Client,kind:u8,from:u64)->u64 {
  for now in from..from+10000 {p.advance(now);if WORLD.lock().unwrap().as_ref().unwrap().request.is_some_and(|r|r.kind==kind){return now;}pump(p,now);}
  panic!("no pending kind={kind}");
 }
-fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.body_length(),0);}
+fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.body_length(),0);assert!(p.document().is_empty());}
 #[test]fn explicit_start_uses_monotonic_echo_handoff_and_partial_full_actual_http_job(){
  let _serial=SERIAL.lock().unwrap();reset(true,Mode::Valid,b"controlled response\n");
  {let mut guard=WORLD.lock().unwrap();let w=guard.as_mut().unwrap();let owner=jobs::Identity {pd:15,task:15};
@@ -135,4 +136,68 @@ fn no_preview(p:&probe::Client){assert_eq!(p.preview(),&[b' ';64]);assert_eq!(p.
  p.reply(network_job::reply(1,0),2);assert!(p.busy());assert_eq!(p.view(),probe::View::Uncertain);assert!(!p.start(100));p.cancel();
  let calls=WORLD.lock().unwrap().as_ref().unwrap().calls;p.advance(3);assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().calls,calls);
  assert!(p.busy());assert!(p.raw_scrubbed());no_preview(&p);
+}
+#[test]fn full_maximum_document_is_hidden_until_exact_positive_release_and_raw_is_scrubbed(){
+ let _serial=SERIAL.lock().unwrap();let body:Vec<u8>=(0..http_wire::MAX_BODY).map(|n|b'A'+(n%26)as u8).collect();
+ reset(false,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.document_scrubbed());assert!(p.start(1));
+ let now=pending(&mut p,network_job::RELEASE,1);no_preview(&p);assert!(!p.document_scrubbed());assert!(!p.raw_scrubbed());
+ let request=WORLD.lock().unwrap().as_ref().unwrap().request.unwrap();
+ p.reply(network_job::reply(request.seq+1,0),now);p.reply((0x79u64<<56)|(request.seq as u64)<<32,now);
+ no_preview(&p);assert!(p.busy());pump(&mut p,now);
+ assert_eq!(p.view(),probe::View::Ready);assert_eq!(p.body_length(),http_wire::MAX_BODY);assert_eq!(p.document(),body);
+ assert_eq!(&p.document()[http_wire::MAX_BODY-26..],&body[http_wire::MAX_BODY-26..]);assert_eq!(&p.preview()[61..],b"...");assert!(p.raw_scrubbed());
+ p.cancel();no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+}
+#[test]fn document_sanitizes_every_byte_one_to_one_preserving_newlines_and_full_tail(){
+ let _serial=SERIAL.lock().unwrap();let body:Vec<u8>=(0..http_wire::MAX_BODY).map(|n|(n%256)as u8).collect();
+ let expected:Vec<u8>=body.iter().map(|&b|if b==10||b>=32&&b<=126{b}else if b<32||b==127{b' '}else{b'?'}).collect();
+ reset(true,Mode::Valid,&body);let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);
+ assert_eq!(p.document(),expected);assert_eq!(p.document().len(),body.len());assert_eq!(p.document()[10],10);
+ assert_eq!(p.document()[9],b' ');assert_eq!(p.document()[13],b' ');assert_eq!(p.document()[127],b' ');assert_eq!(p.document()[255],b'?');
+ assert_eq!(&p.document()[2040..],&expected[2040..]);assert!(p.raw_scrubbed());
+}
+#[test]fn shorter_replacement_has_exact_extent_and_reset_scrubs_the_entire_old_document(){
+ let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'S';http_wire::MAX_BODY]);let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);
+ assert_eq!(p.document().len(),http_wire::MAX_BODY);WORLD.lock().unwrap().as_mut().unwrap().wire.body=b"tail\n  A\tB\xFF".to_vec();
+ assert!(p.start(p.next_sequence()));no_preview(&p);assert!(p.document_scrubbed());finish(&mut p,1000);
+ assert_eq!(p.document(),b"tail\n  A B?");assert_eq!(p.body_length(),11);assert!(p.raw_scrubbed());
+ p.wait_for_resolution();no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());assert_eq!(p.view(),probe::View::Pending);
+}
+#[test]fn cancel_after_validation_scrubs_pending_document_and_late_release_cannot_publish_it(){
+ let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'L';257]);let mut p=probe::Client::new();assert!(p.start(1));
+ let now=pending(&mut p,network_job::RELEASE,1);let request=WORLD.lock().unwrap().as_ref().unwrap().request.unwrap();
+ assert!(!p.document_scrubbed());p.cancel();no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+ pump(&mut p,now);assert_eq!(p.view(),probe::View::Cancelled);assert!(!p.busy());assert!(p.document_scrubbed());
+ p.reply(network_job::reply(request.seq,0),now+1);no_preview(&p);assert!(p.document_scrubbed());
+ WORLD.lock().unwrap().as_mut().unwrap().wire.body=b"fresh\nbody".to_vec();assert!(p.start(p.next_sequence()));
+ p.reply(network_job::reply(request.seq,0),now+2);no_preview(&p);finish(&mut p,now+3);
+ assert_eq!(p.document(),b"fresh\nbody");assert!(p.raw_scrubbed());
+}
+#[test]fn accepted_release_timeout_hides_and_scrubs_validated_document_without_replay(){
+ let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'T';1025]);let mut p=probe::Client::new();assert!(p.start(1));
+ let now=pending(&mut p,network_job::RELEASE,1);assert!(!p.document_scrubbed());p.advance(now+2000);
+ assert_eq!(p.view(),probe::View::Uncertain);no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+ let calls=WORLD.lock().unwrap().as_ref().unwrap().calls;p.advance(now+2001);assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().calls,calls);
+ pump(&mut p,now+2002);assert_eq!(p.view(),probe::View::Cancelled);assert!(!p.busy());no_preview(&p);assert!(p.document_scrubbed());
+}
+#[test]fn rejected_release_clears_validated_document_while_preserving_owned_cleanup(){
+ let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,&vec![b'R';129]);let mut p=probe::Client::new();assert!(p.start(1));
+ let now=pending(&mut p,network_job::RELEASE,1);assert!(!p.document_scrubbed());WORLD.lock().unwrap().as_mut().unwrap().reject_release=true;pump(&mut p,now);
+ assert_eq!(p.view(),probe::View::Uncertain);assert!(p.busy());no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+ WORLD.lock().unwrap().as_mut().unwrap().reject_release=false;p.cancel();finish(&mut p,now+1);assert_eq!(p.view(),probe::View::Cancelled);assert!(p.document_scrubbed());
+}
+#[test]fn unavailable_response_or_rejected_new_intent_never_retains_prior_document(){
+ let _serial=SERIAL.lock().unwrap();for mode in [Mode::Malformed,Mode::Disconnect]{
+  reset(false,Mode::Valid,&vec![b'Q';2048]);let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);assert_eq!(p.document().len(),2048);
+  WORLD.lock().unwrap().as_mut().unwrap().wire.mode=mode;assert!(p.start(p.next_sequence()));assert!(p.document_scrubbed());finish(&mut p,1000);
+  assert_eq!(p.view(),probe::View::Unavailable);no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+ }
+ reset(false,Mode::Valid,b"old document");let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);assert!(!p.start(p.next_sequence()-1));
+ no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+}
+#[test]fn invalid_resolution_and_empty_success_have_no_document_bytes(){
+ let _serial=SERIAL.lock().unwrap();reset(false,Mode::Valid,b"old document");let mut p=probe::Client::new();assert!(p.start(1));finish(&mut p,1);
+ assert!(!p.start_resolved(p.next_sequence(),0));assert_eq!(p.view(),probe::View::Unavailable);no_preview(&p);assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
+ WORLD.lock().unwrap().as_mut().unwrap().wire.body.clear();assert!(p.start(p.next_sequence()));finish(&mut p,1000);
+ assert_eq!(p.view(),probe::View::Ready);assert_eq!(p.body_length(),0);assert!(p.document().is_empty());assert!(p.document_scrubbed());assert!(p.raw_scrubbed());
 }

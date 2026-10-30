@@ -43,3 +43,7 @@ echo '[sexnet.http.client.host] PASS scope=actual_client_ABI_job_codec_and_pure_
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/resolved_http.rs" -o "$TEST_DIR/resolved-http-tests"
 "$TEST_DIR/resolved-http-tests"
 echo '[sexnet.resolved.http.host] PASS scope=actual_DNS_release_provenance_HTTP_client_ABI_jobs_codecs_with_explicit_policy_peer_not_live_authority_or_network'
+
+rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/document_reader.rs" -o "$TEST_DIR/document-reader-tests"
+"$TEST_DIR/document-reader-tests"
+echo '[sexnet.document.reader.host] PASS scope=actual_viewport_reader_and_shared_metrics_not_live_display_pixels_input_or_network'

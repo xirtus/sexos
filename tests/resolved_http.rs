@@ -44,7 +44,7 @@ impl jobs::Wire for HttpPeer {
  fn send(&mut self,data:&[u8])->Result<usize,u32>{let n=data.len().min(7);self.request.extend_from_slice(&data[..n]);Ok(n)}
  fn queued(&self)->usize{0}fn link(&self)->jobs::Link{self.link}
  fn finish_send(&mut self){
-  assert_eq!(self.request,b"GET /probe HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
+  assert_eq!(self.request,b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
   self.response=b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nresolved body".to_vec();self.link=jobs::Link::PeerFin;
  }
  fn abort(&mut self){self.link=jobs::Link::Closed;self.request.clear();self.response.clear();self.read=0;}

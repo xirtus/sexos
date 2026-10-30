@@ -69,3 +69,13 @@ fn pdx_reply(target:u32,value:u64)->u64{unsafe{REG_REPLIES.push((target,value));
 #[test]fn terminal_registration_never_replies_to_reclaimed_client(){unsafe{reset();APP_CUSTODY[0].as_mut().unwrap().registration_reply=true;shell_lifecycle_hint(&notice(0,15,80));REG_REPLIES.clear();shell_registration_reply_poll();assert!(REG_REPLIES.is_empty());}}
 
 #[test]fn quil_controls_require_exact_live_catalog_subject_and_arguments(){for target in[9,16]{let mut e=app_custody::Entry::new(38,target,target,if target==9{156}else{301});for op in[0x274,0x275,0x279]{assert!(e.allows_operation(op,[target as u64,target as u64,0]));for args in[[12,target as u64,0],[target as u64,99,0],[target as u64,target as u64,1]]{assert!(!e.allows_operation(op,args));}e.close_pending=true;assert!(!e.allows_operation(op,[target as u64,target as u64,0]));e.close_pending=false;}e.dead=true;assert!(!e.allows_operation(0x274,[target as u64,target as u64,0]));}assert!(!app_custody::Entry::new(39,12,12,154).allows_operation(0x274,[12,12,0]));}
+
+#[test]
+fn browser_ready_is_exact_geometry_intent_without_document_control_authority() {
+ let mut e=app_custody::Entry::new(40,15,150,300);
+ assert!(e.allows_operation(0x275,[15,150,0]));
+ for args in [[15,15,0],[16,150,0],[15,0,0],[15,150,1]] { assert!(!e.allows_operation(0x275,args)); }
+ for op in [0x274,0x279,0x273,0x202] { assert!(!e.allows_operation(op,[15,150,0])); }
+ e.close_pending=true;assert!(!e.allows_operation(0x275,[15,150,0]));
+ e.close_pending=false;e.dead=true;assert!(!e.allows_operation(0x275,[15,150,0]));
+}

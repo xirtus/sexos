@@ -5207,7 +5207,7 @@ unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str
  use sex_pdx::spindle_status::State as S;
  match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY / FOCUS",Some(S::Saving|S::Queued)=>"SAVING HISTORY / FOCUS",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED / FOCUS",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
 }
-static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;3]=[sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new()];
+static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;4]=[sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new()];
 static mut DOCUMENT_POINTER_SEQUENCE:u64=0;
 static mut DOCUMENT_POINTER:Option<(u64,u32,u8,u64)>=None;
 unsafe fn document_view_poll() {
@@ -5241,6 +5241,7 @@ unsafe fn document_view_poll() {
         (9, 201, SLOT_QUIL),
         (16, 301, sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT),
         (18, 307, sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT),
+        (15, 300, sex_pdx::app_lifecycle::CLOSE_SLOTS[2] as u64),
     ]
     .into_iter()
     .enumerate()
@@ -9880,7 +9881,7 @@ static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
-            if FOCUSED_SURFACE_ID==300&&surface_is_alive(300)&&matches!(code,0x13|0x2E|0x20|0x2D|0x23|0x24){
+            if !COMMAND_PALETTE_OPEN&&FOCUSED_SURFACE_ID==300&&surface_is_alive(300)&&browser_input::command(code).is_some(){
                 if value==1{
                     if !BROWSER_INPUT.push(code){sex_pdx::serial_record!("[shell.browser.input.full] capacity=8 accepted=0");}
                     flush_browser_input();
@@ -19776,7 +19777,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     }
     // Recreated display slots scrub partial text. A fresh viewport sequence
     // lets the exact live client abandon its obsolete upload and repaint.
-    for (index,frame) in [201,301,307].into_iter().enumerate(){
+    for (index,frame) in [201,301,307,300].into_iter().enumerate(){
         if surface_id==frame {DOCUMENT_VIEWS[index].refresh();}
     }
     for (index,frame) in [153,306].into_iter().enumerate(){
@@ -19929,7 +19930,7 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
             SPINDLE_VIEWS[if frame==153{0}else{1}].queue(e.target,e.task,w,h);
         }
     }
-    if matches!(frame,201|301|307){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if frame==201{(w.saturating_sub(16),h.saturating_sub(44))}else{(w,h)};DOCUMENT_VIEWS[if frame==201{0}else if frame==301{1}else{2}].queue(e.target,e.task,vw,vh);}}
+    if matches!(frame,201|301|307|300){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if frame==201{(w.saturating_sub(16),h.saturating_sub(44))}else{(w,h)};DOCUMENT_VIEWS[if frame==201{0}else if frame==301{1}else if frame==307{2}else{3}].queue(e.target,e.task,vw,vh);}}
     for child in desktop_content::children(frame,x,y,w,h).iter().flatten() {
         if child.w>0 && child.h>0 {pdx_call(SLOT_DISPLAY,0xEC,child.sid,
             ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
@@ -24622,7 +24623,7 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
         }
-        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let target=e.target;let frame=if target==9{201}else{e.surface};DOCUMENT_VIEWS[if target==9{0}else if target==16{1}else{2}].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
+        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|15|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let target=e.target;let frame=if target==9{201}else{e.surface};DOCUMENT_VIEWS[if target==9{0}else if target==16{1}else if target==18{2}else{3}].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
         if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
         match msg.type_id {
                 OP_AUTODEMO_TICK => {

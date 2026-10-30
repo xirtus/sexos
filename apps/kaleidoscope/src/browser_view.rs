@@ -53,7 +53,7 @@ pub fn compose(preview:&[u8],echo:network_probe::View,dns:dns_probe::View,http:h
   http_probe::View::Cancelled=>b"cancelled",http_probe::View::Uncertain=>b"waiting receipt",
  };
  append(&mut text.bytes[..http_start+64],&mut at,http_label)?;
- append(&mut text.bytes[..http_start+64],&mut at,b"\nH fetch  J cancel")?;
+ append(&mut text.bytes[..http_start+64],&mut at,b"\nH fetch  J cancel  V read")?;
  let body_start=http_start+64;text.bytes[body_start..body_start+2].copy_from_slice(b"\n\n");
  if matches!(http,http_probe::View::Ready) { text.bytes[body_start+2..len].copy_from_slice(body); }
  Some(text)

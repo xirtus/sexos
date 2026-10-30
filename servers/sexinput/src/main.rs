@@ -185,11 +185,18 @@ fn send_shell_hid_event(arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
     }
 }
 
-/// Translate USB HID keyboard usage ID to PS/2 scancode set 1.
+/// Translate USB HID keyboard usage to the shell key code.
+/// Ordinary keys use set1 values; navigation uses the existing normalized codes.
 /// Returns None for unmapped keys.
 fn hid_to_ps2(hid: u8) -> Option<u8> {
     match hid {
         0x47 => Some(0x46), // Scroll Lock
+        0x4A => Some(0x66), // Home
+        0x4B => Some(0x68), // Page Up
+        0x4D => Some(0x6B), // End
+        0x4E => Some(0x6D), // Page Down
+        0x51 => Some(0x6C), // Down
+        0x52 => Some(0x67), // Up
         0x28 => Some(0x1C), // Enter
         0x44 => Some(0x57), // F11
         0x45 => Some(0x58), // F12

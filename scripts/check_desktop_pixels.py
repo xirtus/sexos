@@ -97,7 +97,7 @@ def verify_hidden(previous_view_text,ppm):
         return [str(exc)]
 
 
-def verify_kaleido_layout(text,ppm,font):
+def verify_kaleido_layout(text,ppm,font,resolution=None):
     """Match the native app title/status in the latest complete tiled bounds.
 
     The caller separately waits for the app's authenticated presentation reply.
@@ -111,7 +111,8 @@ def verify_kaleido_layout(text,ppm,font):
                 views.append(fields)
         if not views:raise ValueError('missing complete Kaleido tile intent')
         x,y,w,h=(int(views[-1][k],0) for k in ('x','y','w','h'))
-        width,height,pixels=ppm_rgb(ppm)
+        width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
+        if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
         if x<0 or y<50 or w<=0 or h<=0 or x+w>width or y+h>height:
             raise ValueError('Kaleido tile outside framebuffer')
         scale=2 if w>=256 else 1
