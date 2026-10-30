@@ -419,3 +419,12 @@ See the [full source/image/host/native and four-NIC binding](assets/sexos-alpha-
 Implement the actual normal-profile fixed RX/TX rings and real controlled-peer Ethernet bytes as the next substantive driver slice. Consume unique verified device custody, resolve only the existing own Region2/256KiB DMA grant, check every fixed descriptor/buffer span and initialize coherently before bus-master enable. Read DMA only through own layout-derived indices; never trust a returned descriptor address. Bound per-turn RX/TX work, validate lengths/EOP/errors, copy before recycling, and quarantine submitted buffers on uncertain completion without retry or unsafe reuse. Prove repeated wrap/pressure and exact native peer frames on both admitted models, or restrict active support explicitly.
 
 Keep IPC/Close progress and honest offline protocol status. A cooperative RX-poll prototype does not establish an IRQ/timer-backed idle wait or low-power behavior. ARP/link/Ethernet success cannot become TCP/DNS/HTTP/TLS success. No runtime capability genesis, ambient network pointer API, Unix socket/process model or resurrection of terminal identities. Firmware DMA drain, hostile DMA/IOMMU containment, complete epochs, SMP, hotplug and a named physical daily-driver target remain open. Follow `/tmp/sexos-r74-sustained-suite.py` separately; archive strict validation and both reboots only after completion.
+
+
+### Image74 strict sustained acceptance — completed30 October
+
+Frozen image74 (`c8700866280127bf742ab87cdd5c05bcc132450e9db6aa1a40d8aa78aff2c4cb`) passes its own strict **1800.003596seconds/81 active mixed-app cycles**, all six retirements,341 private pages zeroed/reused, exact snapshot/preparation joins and both same-image document/history recovery reboots. Strict validation passes; the two documents and visible `echo alpha17` recall recover exactly. Final disk SHA256:`a05af7a236fd52aa7163f2e83d5af0ad9d510be93037ba4e59df82efa8f64c4c`.
+
+Checked-input median/p95/maximum are0.692486/0.745950/0.765890seconds; warm Save receipt0.158233/0.186415/0.201597seconds. This session overlaps75 build/native work; it establishes74 functional sustained behavior, with no isolated comparison or physical bound. It cannot qualify75's changed active DMA/packet path.
+
+See the [strict validation, all samples/distributions and exact reboot bindings](assets/sexos-alpha-r74-sustained-2026-10-30-evidence.json), complete compressed traces/disks beside the binding and full local `.evidence/alpha-2026-10-29/r74-sustained-*`. This adds qualification to74 without adding a round.
