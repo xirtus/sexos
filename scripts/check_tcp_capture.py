@@ -69,14 +69,14 @@ def inspect(data,expected,guest_ports=None,initiator="peer"):
   if len(connections)!=len(expected):errors.append('wrong actual TCP connection count')
   results=[]
   for item,wanted in zip(connections.values(),expected):
-   request=bytes.fromhex(wanted['payload_hex']);received=bytes(item['incoming'].get(n,0)for n in range(len(item['incoming'])));sent=bytes(item['outgoing'].get(n,0)for n in range(len(item['outgoing'])))
+   request=bytes.fromhex(wanted['payload_hex']);response=bytes.fromhex(wanted.get('response_hex',wanted['payload_hex']));received=bytes(item['incoming'].get(n,0)for n in range(len(item['incoming'])));sent=bytes(item['outgoing'].get(n,0)for n in range(len(item['outgoing'])))
    if set(item['incoming'])!=set(range(len(item['incoming'])))or set(item['outgoing'])!=set(range(len(item['outgoing']))):errors.append('hole in captured stream')
    if item['client_isn']is None or item['server_isn']is None or not item['handshake']:errors.append('missing real three-way handshake acknowledgment')
    if wanted.get('aborted'):
     if initiator=='guest':
-     if not sent or not request.startswith(sent)or not sent.startswith(received)or(not received and not wanted.get('allow_empty_reply')):errors.append('aborted outbound connection differs from explicit prefix/no-response policy')
+     if not sent or not request.startswith(sent)or not response.startswith(received)or('response_hex'not in wanted and not sent.startswith(received))or(not received and not wanted.get('allow_empty_reply')):errors.append('aborted outbound connection differs from explicit prefix/no-response policy')
     elif not received or not sent or not request.startswith(received)or not received.startswith(sent):errors.append('aborted connection bytes differ from explicit observed prefix')
-   elif received!=request or sent!=request or not item['fin_in']or not item['fin_out']:errors.append('full captured stream/FIN differs from actual endpoint payload')
+   elif received!=(response if initiator=='guest'else request)or sent!=(request if initiator=='guest'else response)or not item['fin_in']or not item['fin_out']:errors.append('full captured stream/FIN differs from actual endpoint payload')
    results.append(dict(guest_port=item['guest_port'],incoming_bytes=len(received),outgoing_bytes=len(sent),incoming_hash=hex(fingerprint(received)),outgoing_hash=hex(fingerprint(sent)),fin_in=item['fin_in'],fin_out=item['fin_out'],rst_in=item['rst_in'],rst_out=item['rst_out']))
  except(ValueError,IndexError,struct.error)as error:errors.append(str(error));results=[]
  return dict(ok=not errors,errors=errors,tcp_packets=packets,connections=results,scope='Independent full PCAP checksums and TCP sequence reassembly join real endpoint bytes; aborted prefix is distinguished from completed streams. No app authorization, DNS/HTTP/TLS or hostile/physical containment proof.')

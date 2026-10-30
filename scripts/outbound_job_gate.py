@@ -10,7 +10,7 @@ from check_disk_persistence import ppm_rgb
 
 def load_pixel_contract(root):
  """Freeze source-bound text/font metrics once, before starting the guest."""
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','probe':'apps/kaleidoscope/src/network_probe.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs'}
+ paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','probe':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
  def number(source,pattern):
   match=re.search(pattern,source)
@@ -18,11 +18,11 @@ def load_pixel_contract(root):
   return int(match[1],0)
  prefix=re.search(r'preview\.append\((b"[^"\n]*")\)',sources['preview'])
  if not prefix:raise ValueError('missing production preview prefix')
- labels={view:ast.literal_eval(re.search(r'View::'+view+r'=>\s*(b"[^"\n]*")',sources['probe']).group(1))for view in ('Verified','Unavailable')}
- if 'Status::new(text.len())'not in sources['app']:raise ValueError('probe no longer appends to actual preview')
+ labels={view:ast.literal_eval(re.search(r'network_probe::View::'+view+r'=>\s*(b"[^"\n]*")',sources['probe']).group(1))for view in ('Verified','Unavailable')}
+ if 'browser_view::compose(self.preview.as_bytes()'not in sources['app']or 'Outbox::atomic(300)'not in sources['app']:raise ValueError('missing actual atomic composed Browser publication')
  if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  return dict(font=font_from_source(sources['renderer']),prefix=ast.literal_eval(prefix[1]),labels=labels,
-  status_bytes=number(sources['probe'],r'desired:\[u8;(\d+)\]'),
+  status_bytes=number(sources['probe'],r'dns_start=preview\.len\(\)\+(\d+)'),capacity=number(sources['probe'],r'bytes:\[u8;(\d+)\]'),
   inset=number(sources['style'],r'INSET: u32 = (\d+)'),advance=number(sources['style'],r'ADVANCE: u32 = (\d+)'),line=number(sources['style'],r'LINE: u32 = (\d+)'),
   scale_threshold=number(sources['style'],r'width >= (\d+)'),top=number(sources['renderer'],r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,
   max_rows=number(sources['surface'],r'TEXT_MAX_ROWS: usize = (\d+)'),
@@ -37,7 +37,7 @@ def probe_status_geometry(text,expected,contract):
  scale=2 if w>=contract['scale_threshold']else 1
  cols=max(1,min(80,(w-2*contract['inset'])//(contract['advance']*scale)))
  label=contract['labels'][expected];status=label.ljust(contract['status_bytes'],b' ')
- if len(status)!=contract['status_bytes']or length+len(status)>256:raise ValueError('invalid status replacement extent')
+ if len(status)!=contract['status_bytes']or length+len(status)>contract['capacity']:raise ValueError('invalid status replacement extent')
  # clean() collapses all body controls/newlines; only its actual byte length
  # affects wrapping. The unknown body glyphs precede the region checked here.
  data=prefix+b'?'*(length-len(prefix))+status

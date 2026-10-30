@@ -7,6 +7,12 @@ mod service_call;
 mod body_text;
 mod network_probe;
 mod dns_probe;
+mod http_wire;
+mod http_probe;
+mod browser_view;
+#[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
+mod text_delivery;
+#[derive(Clone,Copy)]enum Intent{Echo,Dns,Http}
 
 use silkclient::{app_main, SexApp};
 // Private BOOT ELF backing replaces the old ambient fixed-address heap.
@@ -29,13 +35,19 @@ struct App {
     live_text: [u8; 64],
     live_len: usize,
     probe:network_probe::Probe,
-    probe_status:network_probe::Status,
     probe_view:network_probe::View,
     dns:dns_probe::Client,
-    dns_status:dns_probe::Status,
     dns_view:dns_probe::View,
-    dns_start_intent:bool,
-    tcp_retry_intent:bool,
+    http:http_probe::Client,
+    http_view:http_probe::View,
+    intent:Option<Intent>,
+    preview:body_text::Preview,
+    ui:text_delivery::Outbox,
+    ui_last:[u8;512],
+    ui_last_len:usize,
+    ui_dirty:bool,
+    ui_failed:bool,
+    ui_retries:u8,
 }
 
 impl SexApp for App {
@@ -175,50 +187,81 @@ impl SexApp for App {
         sex_pdx::serial_record!("[app.surface.presented] target=15 surface=300 sequence=1 ok=1");
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
-        assert!(text.len()+128<=256,"BROWSER_FIXED_TEXT_EXTENT");
-        Self { live_text, live_len,probe:network_probe::Probe::new(),probe_status:network_probe::Status::new(text.len()),probe_view:network_probe::View::Pending,
-            dns:dns_probe::Client::new(),dns_status:dns_probe::Status::new(text.len()+64),dns_view:dns_probe::View::Idle,dns_start_intent:false,tcp_retry_intent:false }
+        Self { live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
+            dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
+            intent:None,preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_dirty:true,ui_failed:false,ui_retries:0 }
+
     }
 
     fn run(&mut self, _pdx: u32) -> bool {
-        let message=if self.probe.busy()||self.probe_status.pending()||self.dns.busy()||self.dns_status.pending()||self.dns_start_intent||self.tcp_retry_intent{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
+        let pending=self.probe.busy()||self.dns.busy()||self.http.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
+        let message=if pending{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
         if let Some(req)=message{
-            if sex_pdx::app_lifecycle::close_requested(req.type_id, req.caller_pd,
-                [req.arg0, req.arg1, req.arg2], 15, 15)
-                || (req.type_id == 0xFF_FF && req.caller_pd == 3)
-            {
+            if sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],15,15)
+                ||(req.type_id==0xFF_FF&&req.caller_pd==3){
                 sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
                 sex_pdx::serial_record!("[browser.dns.closed] pending={} terminal=1",self.dns.busy()as u8);
-                sex_pdx::task_finish(0);
+                sex_pdx::serial_record!("[browser.http.closed] pending={} terminal=1",self.http.busy()as u8);
+                self.ui.cancel();self.ui_last.fill(0);sex_pdx::task_finish(0);
             }
             if req.type_id==1&&req.caller_pd==13{
                 if matches!(req.arg0>>56,0x79|0xE9){self.dns.reply(req.arg0,sex_pdx::get_ticks());}
+                else if self.http.busy(){self.http.reply(req.arg0,sex_pdx::get_ticks());}
                 else{self.probe.reply(req.arg0,sex_pdx::get_ticks());}
             }
+            if req.type_id==1&&req.caller_pd==1{
+                if let Some(r)=self.ui.receive(req.caller_pd,req.arg0){sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,r.metadata.count);}
+            }
             if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{
-                match req.arg0{
-                    0x13=>{self.dns_start_intent=false;if self.dns.busy(){self.dns.cancel();self.tcp_retry_intent=true;}else{self.probe.retry();}},
-                    0x2E=>{self.tcp_retry_intent=false;self.probe.cancel();},
-                    0x20=>{self.tcp_retry_intent=false;if self.probe.busy(){self.probe.cancel();self.dns_start_intent=true;}else{self.dns.start();}},
-                    0x2D=>{self.dns_start_intent=false;self.dns.cancel();},
+                if self.ui_failed{self.ui_failed=false;self.ui_retries=0;self.ui_dirty=true;}
+                let intent=match req.arg0{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::Http),_=>None};
+                if let Some(intent)=intent{
+                    // Latest user intent waits for positive cleanup of whichever
+                    // existing route currently owns a job. No parallel BEGIN.
+                    self.intent=Some(intent);if self.probe.busy(){self.probe.cancel();}if self.dns.busy(){self.dns.cancel();}if self.http.busy(){self.http.cancel();}
+                }else{match req.arg0{
+                    0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
+                    0x2D=>{if matches!(self.intent,Some(Intent::Dns)){self.intent=None;}self.dns.cancel();},
+                    0x24=>{if matches!(self.intent,Some(Intent::Http)){self.intent=None;}self.http.cancel();},
                     _=>{},
-                }
+                }}
             }
         }
-        if !self.dns.busy()&&self.tcp_retry_intent{self.tcp_retry_intent=false;self.probe.retry();}
-        if !self.probe.busy()&&self.dns_start_intent{self.dns_start_intent=false;self.dns.start();}
-        if !self.dns.busy(){self.probe.advance(sex_pdx::get_ticks());}
-        if !self.probe.busy(){self.dns.advance(sex_pdx::get_ticks());}
-        let view=self.probe.view();
-        if view!=self.probe_view{self.probe_view=view;self.probe_status.set(view);sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}
-        self.probe_status.advance();
-        let dns_view=self.dns.view();if dns_view!=self.dns_view{self.dns_view=dns_view;self.dns_status.set(dns_view);sex_pdx::serial_record!("[browser.dns.view] state={:?} web=0",dns_view);}
-        self.dns_status.advance();
-        if self.probe.busy()||self.probe_status.pending()||self.dns.busy()||self.dns_status.pending()||self.dns_start_intent||self.tcp_retry_intent{sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
+        if !self.probe.busy()&&!self.dns.busy()&&!self.http.busy(){
+            if let Some(intent)=self.intent.take(){
+                // Echo and HTTP share the exact0x20C caller replay fence.
+                let sequence=self.probe.next_sequence().max(self.http.next_sequence());
+                match intent{Intent::Echo=>{if !self.probe.restart_at(sequence){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=echo seq={} effects=0",sequence);}},Intent::Dns=>self.dns.start(),Intent::Http=>{if !self.http.start(sequence){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=http seq={} effects=0",sequence);}}}
+            }
+        }
+        if self.probe.busy(){self.probe.advance(sex_pdx::get_ticks());}
+        else if self.dns.busy(){self.dns.advance(sex_pdx::get_ticks());}
+        else if self.http.busy(){self.http.advance(sex_pdx::get_ticks());}
+        let view=self.probe.view();if view!=self.probe_view{self.probe_view=view;sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}
+        let view=self.dns.view();if view!=self.dns_view{self.dns_view=view;sex_pdx::serial_record!("[browser.dns.view] state={:?} web=0",view);}
+        let view=self.http.view();if view!=self.http_view{self.http_view=view;sex_pdx::serial_record!("[browser.http.view] state={:?} tls=0",view);}
+        if let Some(text)=browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()){
+            if self.ui_last_len!=text.len||self.ui_last!=text.bytes{
+                self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
+            }
+            if self.ui_dirty&&!self.ui_failed{
+                let metadata=text_delivery::Metadata{count:if matches!(self.http.view(),http_probe::View::Ready){self.http.body_length()}else{0},first:0,rows:0,selected:http_view_code(self.http.view())};
+                if self.ui.queue(&text.bytes[..text.len],0x00CDD6F4,metadata){self.ui_dirty=false;}
+            }
+        }
+        if let text_delivery::Poll::Rejected(error)=self.ui.poll(4,|op|{
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_DISPLAY,op.opcode,op.surface,op.packed,op.control){
+                Ok(_)=>text_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>text_delivery::Admission::Full,Err(e)=>text_delivery::Admission::Rejected(e),
+            }
+        }){self.ui.cancel();self.ui_dirty=true;self.ui_retries=self.ui_retries.saturating_add(1);self.ui_failed=self.ui_retries>=3;sex_pdx::serial_record!("[browser.view.rejected] error={} attempts={} terminal={} accepted_network_replay=0",error,self.ui_retries,self.ui_failed as u8);}
+        if self.probe.busy()||self.dns.busy()||self.http.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
         true
     }
 
+
 }
+
+fn http_view_code(view:http_probe::View)->u64{match view{http_probe::View::Idle=>0,http_probe::View::Pending=>1,http_probe::View::Ready=>2,http_probe::View::Unavailable=>3,http_probe::View::Cancelled=>4,http_probe::View::Uncertain=>5}}
 
 #[cfg(app_resource_cleanup_proof)]
 fn full_resource_cleanup_proof()->! {

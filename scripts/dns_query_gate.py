@@ -12,7 +12,7 @@ from check_disk_persistence import ppm_rgb
 def load_pixel_contract(root):
  """Bind both preceding text extents and DNS labels to production sources."""
  contract=load_probe_contract(root)
- dns_path='apps/kaleidoscope/src/dns_probe.rs';source=(root/dns_path).read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text();probe=(root/'apps/kaleidoscope/src/network_probe.rs').read_text()
+ dns_path='apps/kaleidoscope/src/browser_view.rs';source=(root/dns_path).read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text()
  def number(pattern):
   match=re.search(pattern,source)
   if not match:raise ValueError('production DNS pixel contract changed: '+pattern)
@@ -21,12 +21,11 @@ def load_pixel_contract(root):
   match=re.search(pattern,source)
   if not match:raise ValueError('production DNS status literal changed: '+pattern)
   return ast.literal_eval(match[1])
- offset=re.search(r'dns_probe::Status::new\(text\.len\(\)\+(\d+)\)',app)
- if not offset or int(offset[1])!=contract['status_bytes']:raise ValueError('DNS no longer follows the complete TCP status extent')
- if not re.search(r'View::Answer\(address\)=>for\(index,byte\)in address\.iter\(\)\.enumerate\(\)',source)or 'decimal(&mut self.desired,&mut at,*byte)'not in source:raise ValueError('DNS answer decimal renderer changed')
- network_labels={view:ast.literal_eval(label)for view,label in re.findall(r'View::(\w+)=>\s*(b"[^"\n]*")',probe)}
- dns_labels={view:ast.literal_eval(label)for view,label in re.findall(r'View::(\w+)=>append\([^\n]*,(b"[^"\n]*")\)',source)}
- contract.update(dns_bytes=number(r'desired:\s*\[u8;\s*(\d+)\]'),capacity=number(r'end>(\d+)'),dns_prefix=literal(r'append\(&mut self\.desired,&mut at,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal(r'append\(&mut self\.desired,&mut at,(b"\\nD query  X cancel")\)'),network_labels=network_labels,dns_labels=dns_labels)
+ if number(r'dns_start=preview\.len\(\)\+(\d+)')!=contract['status_bytes']:raise ValueError('DNS no longer follows complete TCP status')
+ if 'dns_probe::View::Answer(address)'not in source or 'decimal(&mut text.bytes[..dns_start+64],&mut at,*byte)'not in source:raise ValueError('DNS decimal renderer changed')
+ network_labels={view:ast.literal_eval(label)for view,label in re.findall(r'network_probe::View::(\w+)=>\s*(b"[^"\n]*")',source)}
+ dns_labels={view:ast.literal_eval(label)for view,label in re.findall(r'dns_probe::View::(\w+)=>append\([^\n]*,(b"[^"\n]*")\)',source)}
+ contract.update(dns_bytes=number(r'http_start=dns_start\+(\d+)'),capacity=number(r'bytes:\[u8;(\d+)\]'),dns_prefix=literal(r'append\([^\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal(r'append\([^\n]*,(b"\\nD query  X cancel")\)'),network_labels=network_labels,dns_labels=dns_labels)
  contract['source_sha256'][dns_path]=hashlib.sha256(source.encode()).hexdigest()
  return contract
 

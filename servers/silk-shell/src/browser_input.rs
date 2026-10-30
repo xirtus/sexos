@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded retention of explicit R/C/D/X down commands for the existing BOOT route.
+//! Bounded retention of explicit R/C/D/X/H/J down commands for the existing BOOT route.
 //! Queue membership is data; the shell's held Domain capability authorizes send.
 const CAPACITY: usize = 8;
 
@@ -24,7 +24,7 @@ impl Queue {
     pub fn len(&self) -> usize { self.len }
     /// Invalid/full input leaves every retained command unchanged.
     pub fn push(&mut self, code: u8) -> bool {
-        if !matches!(code, 0x13 | 0x2E | 0x20 | 0x2D) || self.len == CAPACITY { return false; }
+        if !matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24) || self.len == CAPACITY { return false; }
         self.codes[(self.head + self.len) % CAPACITY] = code;
         self.len += 1;
         true
@@ -87,8 +87,8 @@ mod tests {
     #[test] fn only_r_and_c_down_codes_are_accepted() {
         for code in 0..=u8::MAX {
             let mut q = Queue::new();
-            assert_eq!(q.push(code), matches!(code, 0x13 | 0x2E | 0x20 | 0x2D));
-            assert_eq!(q.len(), usize::from(matches!(code, 0x13 | 0x2E | 0x20 | 0x2D)));
+            assert_eq!(q.push(code), matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24));
+            assert_eq!(q.len(), usize::from(matches!(code, 0x13 | 0x2E | 0x20 | 0x2D | 0x23 | 0x24)));
             if q.len() == 0 { assert_eq!(q.codes, [0; CAPACITY]); assert_eq!(q.head, 0); }
         }
     }

@@ -4,13 +4,20 @@
 use sex_pdx::network_job as w;
 pub const BYTES:usize=1025;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum View{Pending,Verified,Unavailable,Cancelled,Uncertain}
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Step{Begin,Write,Start,Poll,Read,Cancel,Release,Done}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Step{Begin,Write,Start,Poll,Read,Cancel,Release,Done,Held}
 pub struct Probe{step:Step,seq:u32,ticket:u32,offset:usize,length:usize,pending:Option<w::Request>,accepted:bool,
  deadline:u64,next_poll:u64,hash:u64,cancel:bool,timed_out:bool,retry_after_release:bool,view:View}
 pub fn byte(offset:usize)->u8{(offset.wrapping_mul(17).wrapping_add(78))as u8}
 impl Probe{
  pub const fn new()->Self{Self{step:Step::Begin,seq:1,ticket:0,offset:0,length:0,pending:None,accepted:false,deadline:0,next_poll:0,hash:0xcbf29ce484222325,cancel:false,timed_out:false,retry_after_release:false,view:View::Pending}}
- pub fn busy(&self)->bool{self.step!=Step::Done}
+ pub fn busy(&self)->bool{self.step!=Step::Done||self.ticket!=0}
+ pub fn next_sequence(&self)->u32{self.seq}
+ /// Handoff only after positive cleanup; the shared route fence cannot regress.
+ pub fn restart_at(&mut self,seq:u32)->bool{
+  if self.busy(){return false;}
+  if seq<self.seq||seq==0||seq>w::MAX_SEQ-4{self.view=View::Unavailable;return false;}
+  *self=Self::new();self.seq=seq;true
+ }
  pub fn view(&self)->View{self.view}
  pub fn retry(&mut self){
   if self.busy(){self.retry_after_release=true;self.cancel=true;return;}
@@ -18,19 +25,22 @@ impl Probe{
   if self.ticket!=0{self.seq=seq;self.step=Step::Release;self.retry_after_release=true;self.cancel=true;return;}
   *self=Self::new();self.seq=seq;
  }
- pub fn cancel(&mut self){self.retry_after_release=false;if self.busy(){self.cancel=true;}}
- fn stop(&mut self){self.step=Step::Done;self.pending=None;self.accepted=false;self.view=View::Unavailable;}
+ pub fn cancel(&mut self){self.retry_after_release=false;if self.busy(){self.cancel=true;if self.step==Step::Held&&self.ticket!=0&&self.seq<=w::MAX_SEQ{self.step=Step::Release;}}}
+ fn stop(&mut self){self.pending=None;self.accepted=false;
+  self.step=if self.ticket==0{Step::Done}else if self.seq<=w::MAX_SEQ{Step::Release}else{Step::Held};
+  self.view=if self.step==Step::Held{View::Uncertain}else{View::Unavailable};
+ }
  pub fn reply(&mut self,word:u64,now:u64){
   let Some(r)=self.pending else{return;};
-  if !self.accepted||((word>>32)&w::MAX_SEQ as u64)!=r.seq as u64{return;}
+  if !self.accepted||!matches!(word>>56,0x78|0xE8)||((word>>32)&w::MAX_SEQ as u64)!=r.seq as u64{return;}
   self.pending=None;self.accepted=false;
-  let Some(next)=self.seq.checked_add(1).filter(|n|*n<=w::MAX_SEQ)else{self.stop();return;};self.seq=next;
+  self.seq=r.seq+1;
   let value=match w::decode_reply(word,r.seq){Ok(v)=>v,Err(_)=>{
    self.view=View::Unavailable;
-   if r.kind==w::RELEASE||self.ticket==0{self.step=Step::Done;}else{self.step=Step::Release;}return;
+   if r.kind==w::RELEASE{self.step=Step::Held;self.view=View::Uncertain;}else if self.ticket==0{self.step=Step::Done;}else{self.step=Step::Release;}return;
   }};
   match r.kind{
-   w::BEGIN=>{if value==0||value>w::MAX_TICKET{self.stop();return;}self.ticket=value;self.offset=0;self.step=Step::Write;},
+   w::BEGIN=>{if value==0||value>w::MAX_TICKET{self.step=Step::Held;self.view=View::Uncertain;return;}self.ticket=value;self.offset=0;self.step=Step::Write;},
    w::WRITE=>{self.offset+=r.length as usize;if value!=self.offset as u32{self.stop();return;}if self.offset==BYTES{self.step=Step::Start;}},
    w::START=>{if value!=0{self.stop();return;}self.next_poll=now;self.step=Step::Poll;},
    w::STATUS=>{let Some((state,len))=w::decode_status(value)else{self.stop();return;};match state{
@@ -39,8 +49,9 @@ impl Probe{
     _=>{self.next_poll=now.saturating_add(25);},
    }},
    w::READ=>{for(i,b)in value.to_le_bytes()[..r.length as usize].iter().enumerate(){if *b!=byte(self.offset+i){self.view=View::Unavailable;self.step=Step::Release;return;}self.hash=(self.hash^*b as u64).wrapping_mul(0x100000001b3);}self.offset+=r.length as usize;if self.offset==self.length{self.view=View::Verified;self.step=Step::Release;sex_pdx::serial_record!("[browser.net.job.bytes] ticket={} length={} hash={:#x} exact=1 endpoint=controlled_peer tls=0 web=0",self.ticket,self.length,self.hash);}},
-   w::CANCEL=>{self.view=View::Cancelled;self.step=Step::Release;},
+   w::CANCEL=>{if value!=0{self.stop();return;}self.view=View::Cancelled;self.step=Step::Release;},
    w::RELEASE=>{
+    if value!=0{self.step=Step::Held;self.view=View::Uncertain;return;}
     self.step=Step::Done;sex_pdx::serial_record!("[browser.net.job.released] ticket={} view={:?} private_job=0",self.ticket,self.view);self.ticket=0;
     if self.retry_after_release{let seq=self.seq;*self=Self::new();self.seq=seq;}
    },
@@ -49,7 +60,7 @@ impl Probe{
   if self.cancel&&self.ticket!=0&&r.kind!=w::CANCEL&&r.kind!=w::RELEASE{self.step=Step::Cancel;}
  }
  pub fn advance(&mut self,now:u64){
-  if !self.busy(){return;}
+  if !self.busy()||self.step==Step::Held{return;}
   if self.pending.is_some()&&now>=self.deadline{
    if self.accepted{
     // Accepted admission is uncertain, never permission to forget its job or
@@ -65,6 +76,8 @@ impl Probe{
    self.seq=seq;self.step=Step::Release;
   }
   if self.pending.is_none(){
+   if self.seq>w::MAX_SEQ||(self.ticket==0&&self.step==Step::Begin&&self.seq>w::MAX_SEQ-4){self.stop();return;}
+   if self.ticket!=0&&self.seq>=w::MAX_SEQ-1&&!matches!(self.step,Step::Cancel|Step::Release){self.cancel=true;self.step=Step::Cancel;}
    if self.cancel&&self.ticket!=0&&self.step!=Step::Release{self.step=Step::Cancel;}
    if self.step==Step::Poll&&now<self.next_poll{return;}
    let(kind,offset,length,a)=match self.step{
@@ -72,7 +85,7 @@ impl Probe{
     Step::Write=>{let len=(BYTES-self.offset).min(8);let mut bytes=[0;8];for(i,b)in bytes[..len].iter_mut().enumerate(){*b=byte(self.offset+i);}(w::WRITE,self.offset,len,u64::from_le_bytes(bytes))},
     Step::Start=>(w::START,0,0,0),Step::Poll=>(w::STATUS,0,0,0),
     Step::Read=>(w::READ,self.offset,(self.length-self.offset).min(4),0),
-    Step::Cancel=>(w::CANCEL,0,0,0),Step::Release=>(w::RELEASE,0,0,0),Step::Done=>return,
+    Step::Cancel=>(w::CANCEL,0,0,0),Step::Release=>(w::RELEASE,0,0,0),Step::Done|Step::Held=>return,
    };
    self.pending=Some(w::Request{seq:self.seq,kind,offset:offset as u16,length:length as u16,ticket:if kind==w::BEGIN{0}else{self.ticket},a});self.deadline=now.saturating_add(2000);self.accepted=false;
   }

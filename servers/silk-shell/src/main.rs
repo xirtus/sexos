@@ -9880,7 +9880,7 @@ static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
-            if FOCUSED_SURFACE_ID==300&&surface_is_alive(300)&&matches!(code,0x13|0x2E|0x20|0x2D){
+            if FOCUSED_SURFACE_ID==300&&surface_is_alive(300)&&matches!(code,0x13|0x2E|0x20|0x2D|0x23|0x24){
                 if value==1{
                     if !BROWSER_INPUT.push(code){sex_pdx::serial_record!("[shell.browser.input.full] capacity=8 accepted=0");}
                     flush_browser_input();

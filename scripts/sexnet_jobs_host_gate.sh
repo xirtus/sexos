@@ -32,3 +32,9 @@ echo '[sexnet.dns.jobs.host] PASS scope=actual_owned_job_ABI_codec_not_live_netw
 rustc --edition=2021 --test "$ROOT_DIR/tests/dns_probe.rs" -o "$TEST_DIR/dns-client-tests"
 "$TEST_DIR/dns-client-tests"
 echo '[sexnet.dns.client.host] PASS scope=actual_client_with_private_job_peer_not_live_network'
+
+rustc --edition=2021 --test "$ROOT_DIR/tests/http_probe.rs" -o "$TEST_DIR/http-client-tests"
+"$TEST_DIR/http-client-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/browser_view.rs" -o "$TEST_DIR/browser-view-tests"
+"$TEST_DIR/browser-view-tests"
+echo '[sexnet.http.client.host] PASS scope=actual_client_ABI_job_codec_and_pure_view_not_live_authority_or_pixels'

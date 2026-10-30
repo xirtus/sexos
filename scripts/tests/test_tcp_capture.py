@@ -61,4 +61,19 @@ class OutboundCapture(unittest.TestCase):
   self.assertFalse(inspect(pcap(no_syn),wanted,guest_ports=[48001],initiator='guest')['ok'])
   wrong=[dict(payload_hex='00')];self.assertFalse(inspect(data,wrong,guest_ports=[48001],initiator='guest')['ok'])
 
+class DifferentResponseCapture(unittest.TestCase):
+ def test_actual_capture_mutation_models_distinct_response_with_exact_expected_bytes(self):
+  f=F.parent/'sexnet-outbound-r78.pcap';wanted=bytes((n*17+78)&255 for n in range(1025));reply=bytes(b^0x55 for b in wanted);values=[]
+  for value in frames(f.read_bytes()):
+   v=bytearray(value)
+   if len(v)>=54 and v[12:14]==b'\x08\x00' and v[23]==6 and v[30:34]==bytes([10,0,2,15]):
+    off=14+(v[14]&15)*4;end=14+int.from_bytes(v[16:18],'big');start=off+(v[off+12]>>4)*4
+    for n in range(start,end):v[n]^=0x55
+    value=recompute(v)
+   values.append(value)
+  expected=[dict(payload_hex=wanted.hex(),response_hex=reply.hex())];data=pcap(values)
+  r=inspect(data,expected,guest_ports=[48001],initiator='guest');self.assertTrue(r['ok'],r['errors'])
+  self.assertFalse(inspect(data,[dict(payload_hex=wanted.hex())],guest_ports=[48001],initiator='guest')['ok'])
+  expected[0]['response_hex']='00';self.assertFalse(inspect(data,expected,guest_ports=[48001],initiator='guest')['ok'])
+
 if __name__=='__main__':unittest.main()

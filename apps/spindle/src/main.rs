@@ -362,7 +362,7 @@ impl History {
 fn history_nav(line: &mut CmdLine, hist: &History, up: bool) -> bool {
     let count = (hist.total as usize).min(MAX_HISTORY);
     if count == 0 {
-        serial_println!("[spindle.history.nav] dir={} idx=0 len=0 ok=0", if up { "up" } else { "down" });
+        sex_pdx::serial_record!("[spindle.history.nav] dir={} idx=0 len=0 ok=0", if up { "up" } else { "down" });
         return false;
     }
     if up {
@@ -377,22 +377,22 @@ fn history_nav(line: &mut CmdLine, hist: &History, up: bool) -> bool {
         if let Some(i) = line.hist_nav {
             if let Some(entry) = hist.get(i) {
                 line.set_from_slice(entry);
-                serial_println!("[spindle.history.nav] dir=up idx={} len={} ok=1", i, line.len);
+                sex_pdx::serial_record!("[spindle.history.nav] dir=up idx={} len={} ok=1", i, line.len);
                 return true;
             }
         }
-        serial_println!("[spindle.history.nav] dir=up idx=0 len={} ok=0", line.len);
+        sex_pdx::serial_record!("[spindle.history.nav] dir=up idx=0 len={} ok=0", line.len);
         false
     } else {
         match line.hist_nav {
             None => {
-                serial_println!("[spindle.history.nav] dir=down idx=0 len={} ok=0", line.len);
+                sex_pdx::serial_record!("[spindle.history.nav] dir=down idx=0 len={} ok=0", line.len);
                 false
             }
             Some(0) => {
                 line.hist_nav = None;
                 line.restore_nav_snapshot();
-                serial_println!("[spindle.history.nav] dir=down idx=0 len={} ok=1", line.len);
+                sex_pdx::serial_record!("[spindle.history.nav] dir=down idx=0 len={} ok=1", line.len);
                 true
             }
             Some(i) => {
@@ -400,10 +400,10 @@ fn history_nav(line: &mut CmdLine, hist: &History, up: bool) -> bool {
                 line.hist_nav = Some(ni);
                 if let Some(entry) = hist.get(ni) {
                     line.set_from_slice(entry);
-                    serial_println!("[spindle.history.nav] dir=down idx={} len={} ok=1", ni, line.len);
+                    sex_pdx::serial_record!("[spindle.history.nav] dir=down idx={} len={} ok=1", ni, line.len);
                     return true;
                 }
-                serial_println!("[spindle.history.nav] dir=down idx={} len={} ok=0", ni, line.len);
+                sex_pdx::serial_record!("[spindle.history.nav] dir=down idx={} len={} ok=0", ni, line.len);
                 false
             }
         }
