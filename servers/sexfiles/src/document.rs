@@ -14,6 +14,9 @@ pub trait Backend {
     fn create(&mut self, _name: [u8; 16]) -> Result<u8, u32> {
         Err(w::DENIED)
     }
+    /// Explicit fresh-create contract; never an open-or-create operation.
+    /// Return the service identity of the newly allocated object atomically.
+    fn create_new(&mut self, _name:[u8;16])->Result<(u8,u32),u32>{Err(w::DENIED)}
     fn cancel_save(&mut self, _caller: u32) {}
     fn save_step(&mut self, caller: u32, id: u8, bytes: &[u8]) -> Result<bool, u32> {
         self.save(caller, id, bytes).map(|_| true)
@@ -25,6 +28,8 @@ pub trait Backend {
 /// Four data requests may be admitted on the existing BOOT route.
 /// Each owns its receipt slot before any backend or staging effect.
 const RECEIPTS: usize = w::WINDOW;
+/// Fixed service policy on existing BOOT routes; IDs are not grants.
+const CALLERS:[u32;4]=[9,16,18,15];
 #[derive(Clone, Copy)]
 struct Receipt {
     request: w::Request,
@@ -46,6 +51,7 @@ struct Session {
     pending: [Option<Receipt>; RECEIPTS],
     pending_len: usize,
     dead: bool,
+    created:Option<(u8,u32)>,
 }
 impl Session {
     const fn new() -> Self {
@@ -65,6 +71,7 @@ impl Session {
             pending: [None; RECEIPTS],
             pending_len: 0,
             dead: false,
+            created:None,
         }
     }
     fn clear(&mut self) {
@@ -76,24 +83,26 @@ impl Session {
         self.commit = None;
         self.loading = None;
         self.written = 0;
+        self.created=None;
     }
 }
 pub struct Service {
-    sessions: [Session; 3],
+    sessions: [Session; 4],
 }
 impl Service {
     pub const fn new() -> Self {
         Self {
-            sessions: [Session::new(), Session::new(), Session::new()],
+            sessions: [Session::new(), Session::new(), Session::new(), Session::new()],
         }
     }
     fn index(caller: u32) -> Option<usize> {
-        match caller {
-            9 => Some(0),
-            16 => Some(1),
-            18 => Some(2),
-            _ => None,
-        }
+        CALLERS.iter().position(|subject|*subject==caller)
+    }
+    #[cfg(test)]
+    pub fn browser_import_scrubbed(&self)->bool{
+        let s=&self.sessions[3];s.created.is_none()&&!s.bound&&!s.saving
+            &&s.commit.is_none()&&s.loading.is_none()&&s.bytes.iter().all(|b|*b==0)
+            &&s.name.iter().all(|b|*b==0)&&s.len==0&&s.written==0
     }
     pub fn pending(&self) -> bool {
         self.sessions
@@ -105,7 +114,7 @@ impl Service {
     pub fn progress(&mut self, b: &mut impl Backend) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
             if let Some(r)=s.loading {
-                let caller=[9,16,18][i];
+                let caller=CALLERS[i];
                 let result=if b.identity(s.object)!=Ok(s.generation){Err(w::STALE)}
                     else{b.load_step(caller,s.object,&mut s.bytes)};
                 match result{
@@ -133,7 +142,7 @@ impl Service {
                 break;
             }
             if let Some(r) = s.commit {
-                let caller = [9, 16, 18][i];
+                let caller = CALLERS[i];
                 let result = if b.identity(s.object) != Ok(s.generation) {
                     Err(w::STALE)
                 } else {
@@ -173,7 +182,7 @@ impl Service {
                 };
                 // The legacy reply syscall returns 1 on Full. Every nonzero
                 // result retains the exact head and all subsequent receipts.
-                if send([9, 16, 18][i], v) != 0 {
+                if send(CALLERS[i], v) != 0 {
                     break;
                 }
                 s.pending.copy_within(1..s.pending_len, 0);
@@ -217,7 +226,7 @@ impl Service {
             return Ok(0);
         }
         if r.kind == w::CREATE {
-            if s.bound || r.object != 0 || r.offset != 0 {
+            if s.bound || (caller==15&&s.created.is_some()) || r.object != 0 || r.offset != 0 {
                 return Err(w::BUSY);
             }
             let mut name = [0; 16];
@@ -232,7 +241,24 @@ impl Service {
             {
                 return Err(w::INVALID);
             }
+            if caller==15{
+                let(id,generation)=b.create_new(name)?;
+                if !(3..15).contains(&id)||generation==0{return Err(w::IO)}
+                s.created=Some((id,generation));
+                sex_pdx::serial_record!("[files.browser.import.created] target=15 object={} identity={} create_only=1",id,generation);
+                return Ok(id as u32);
+            }
             return b.create(name).map(|id| id as u32);
+        }
+        if caller==15{
+            if !matches!(r.kind,w::INFO|w::BEGIN_SAVE|w::WRITE|w::COMMIT|w::END){return Err(w::DENIED)}
+            let Some((object,generation))=s.created else{return Err(w::DENIED)};
+            if r.object!=object{return Err(w::DENIED)}
+            if b.identity(object)!=Ok(generation){return Err(w::STALE)}
+            if r.kind==w::END{
+                if r.offset!=0||r.a!=0||r.b!=0{return Err(w::INVALID)}
+                s.clear();return Ok(0);
+            }
         }
         if r.object < 2 || r.object >= 15 {
             return Err(w::DENIED);
@@ -266,7 +292,8 @@ impl Service {
             if r.a != generation as u64 {
                 return Err(w::STALE);
             }
-            s.clear();
+            let created=s.created;
+            s.clear();s.created=created;
             s.len = r.b as usize;
             s.name = b.name(r.object)?;
             s.object = r.object;

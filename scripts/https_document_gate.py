@@ -106,13 +106,13 @@ def inspect_wire(raw,peer_rows,mode):
  return dict(ok=not errors,errors=errors,joins=joins,tcp_packets=packets,scope='Independent checksum/TCP/Hello/outer-record framing and absence of public HTTP plaintext. Actual endpoint SSL establishes decrypted HTTP bytes; serial labels alone never establish authentication. Malformed/partial/certificate-negative modes make no TLS close_notify or TCP FIN claim.')
 
 def load_contract(root):
- root=Path(root);contract=http.load_pixel_contract(root);contract['source_sha256'].update(tls.load_contract(root)['source_sha256']);contract.update(request=REQUEST,reader_header=HEADER,reader_path=b' /welcome',dynamic_reader_path=False)
+ root=Path(root);contract=http.load_pixel_contract(root);contract['source_sha256'].update(tls.load_contract(root)['source_sha256']);contract.update(request=REQUEST,reader_header=HEADER,reader_path=b' /welcome',dynamic_reader_path=False);contract['reader_footers']=contract['https_reader_footers']
  # The independent body is public checker data, not a guest startup fixture.
  contract['expected_body_sha256']=hashlib.sha256(BODY).hexdigest();contract['expected_request_sha256']=hashlib.sha256(REQUEST).hexdigest()
  for name in('scripts/https_document_gate.py','scripts/tls_exchange_gate.py','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','crates/sex-trust-config/src/lib.rs','crates/sex-http/src/lib.rs','crates/sex-http/src/codec.rs','apps/kaleidoscope/src/tls_exchange.rs','tests/fixtures/tls-controlled/server.pem','tests/fixtures/tls-controlled/server-PUBLIC-TEST-key.pem'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  reader=(root/'apps/kaleidoscope/src/document_reader.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text();view=(root/'apps/kaleidoscope/src/browser_view.rs').read_text()
- if 'self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080")'not in reader or 'self.reader.render_https(self.exchange.document(),sex_tls::HTTPS_PATH)'not in app or 'selected:2|256|512'not in app:raise ValueError('source-bound authenticated HTTPS reader selection changed')
+ if 'self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080")'not in reader or 'self.reader.render_https(body,sex_tls::HTTPS_PATH)'not in app or 'selected:2|256|512'not in app:raise ValueError('source-bound authenticated HTTPS reader selection changed')
  if 'b"\\n\\nHTTPS / lab root: "'not in view or 'b"\\nB fetch V read Q clear"'not in view:raise ValueError('source-bound HTTPS status chrome changed')
  source=(root/'crates/sex-tls/src/lib.rs').read_text();meta=re.search(r'pub const PIPE_METADATA_BYTES\s*:\s*usize\s*=\s*(\d+)',source)
  if not meta or int(meta[1])!=56 or 'core::mem::size_of::<Pipe>()==PIPE_BYTES'not in source or 'PIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES'not in source:raise ValueError('source-bound x86_64 Pipe metadata/compile assertion differs')

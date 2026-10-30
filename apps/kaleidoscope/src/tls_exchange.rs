@@ -42,6 +42,12 @@ impl Client{
     pub fn document_received(&self)->usize{self.document_received}
     pub fn has_document(&self)->bool{self.is_document&&self.view==View::Verified&&self.document.is_some()&&!self.busy()}
     pub fn document(&self)->&[u8]{if self.has_document(){self.document.as_ref().unwrap().as_bytes()}else{&[]}}
+    /// Move already-published bytes into a separately owned workspace import.
+    /// A pending lease, partial body or uncertain cleanup can never transfer.
+    pub fn take_document_for_import(&mut self)->Option<sex_tls::Document>{
+        if !self.has_document(){return None;}
+        self.document.take()
+    }
     pub fn retained_document_len(&self)->usize{self.document.as_ref().map_or(0,|d|d.as_bytes().len())}
     /// Public diagnostic fingerprint; this never publishes the retained body.
     pub fn retained_document_hash(&self)->u64{self.document.as_ref().map_or(0,|d|d.as_bytes().iter().fold(0xcbf29ce484222325u64,|h,b|(h^*b as u64).wrapping_mul(0x100000001b3)))}

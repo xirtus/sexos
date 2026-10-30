@@ -82,7 +82,19 @@ Path(sys.argv[1]).write_text(f[0])
 PYCALLER
 DOCUMENT_CALLER_SOURCE="$TEST_DIR/document_caller.rs" rustc --edition=2021 --test tests/document_caller.rs -o "$TEST_DIR/document-caller"
 "$TEST_DIR/document-caller"
+python3 - "$TEST_DIR/browser-storage-dispatch.rs" <<'PYBROWSERSTORAGE'
+from pathlib import Path
+import sys
+s=Path('servers/sexfiles/src/vfs.rs').read_text()
+a=s.index('pub fn legacy_dispatch(')
+b=s.index('\npub fn handle_vfs_message(',a)
+Path(sys.argv[1]).write_text(s[a:b])
+PYBROWSERSTORAGE
+APP_RESOURCE_TEST_DIR="$TEST_DIR" BROWSER_STORAGE_DISPATCH_SOURCE="$TEST_DIR/browser-storage-dispatch.rs" rustc --edition=2021 --test tests/browser_storage_dispatch.rs -o "$TEST_DIR/browser-storage-dispatch"
+"$TEST_DIR/browser-storage-dispatch"
 rustc --edition=2021 --test tests/quil_document.rs -o "$TEST_DIR/documents"
+rustc --edition=2021 --test tests/browser_import_service.rs -o "$TEST_DIR/browser-import"
+"$TEST_DIR/browser-import"
 "$TEST_DIR/documents"
 rustc --edition=2021 --test tests/document_snapshot.rs -o "$TEST_DIR/document-snapshot"
 "$TEST_DIR/document-snapshot"

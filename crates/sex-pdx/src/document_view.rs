@@ -191,7 +191,7 @@ impl Delivery {
 pub const WORKSPACE_CHANGED: u64 = 0x279;
 pub struct WorkspaceRefresh { target:u32, task:u32, pending:bool, closed:bool }
 impl WorkspaceRefresh {
-    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!(matches!(target,9|16|18)&&task!=0)}}
+    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!((matches!(target,9|16|18)&&task!=0)||(target==15&&task==15))}}
     pub fn changed(&mut self){if !self.closed{self.pending=true;}}
     pub fn pending(&self)->bool{self.pending&&!self.closed}
     pub fn close(&mut self){self.pending=false;self.closed=true;}

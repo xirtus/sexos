@@ -317,7 +317,14 @@ pub extern "C" fn trampoline_main() {
 /// The message authenticates a PD. Only its immutable kernel lifecycle grant
 /// supplies the task identity; a document request carries no replacement task.
 fn document_caller_live(caller:u32)->bool {
-    let(slot,surface)=match caller{9=>(38,156),16=>(45,301),18=>(54,307),_=>return false};
-    matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3))
-        && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE)
+    let(slot,surface)=match caller{9=>(38,156),16=>(45,301),18=>(54,307),15=>(40,300),_=>return false};
+    let live=matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3)&&(caller!=15||c.task_id==15))
+        && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE);
+    if caller==15&&live{
+        static AUDITED:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(false);
+        if !AUDITED.swap(true,core::sync::atomic::Ordering::Relaxed){
+            sex_pdx::serial_record!("[files.browser.import.profile] target=15 task=15 slot=40 surface=300 create_only=1 held_storage_route=1 runtime_mint=0");
+        }
+    }
+    live
 }

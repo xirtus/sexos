@@ -1,5 +1,15 @@
 # Shortest path to a useful SexOS alpha
 
+## Current checkpoint: accepted round 98; next 99
+
+Browser can explicitly import a positively released authenticated document into a fresh workspace object, save through positive COMMIT+END, open it through a user-selected Linen row in Quil, and recover exact bytes after a cold reboot. Duplicate names never replace existing objects. Negative COMMIT receipts remain uncertain even when bytes became durable. A legacy dispatch filter closes Browser's raw DiskFS bypass while preserving owner-checked private RamFS cleanup.
+
+Final D ISO `4e08e141372f2a1762303941ef08cbb903b1e722009d3dc179e67e0ad9302288`;546 production/503 runner inputs,1479 Rust test executions,642 frozen Python checks, four import/recovery boots and two responsiveness boots pass. Both profiles save and recover the exact12288-byte object3/identity262145; each of four import/recovery closes reclaims and zeroes131 pages/536576 bytes. Raw wire, receipt, journal, terminal-disk and exact screenshot-prefix replay passes. See the [full round98 ledger](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) and [evidence](assets/sexos-alpha-r98-2026-10-30-evidence.json). Failed/superseded B/C candidates remain separate.
+
+Continue99 bounded resource/content loading,100 navigation/layout,101 scoped selection/clipboard and102 launcher/workspace UX. Require the then-current image's own sustained mixed-session and repeated recovery acceptance before a trusted-builtins QEMU alpha label. No general public-web, crash/power-loss, physical/SMP, hostile-containment or full daily-driver proof is added;7 Open/23 Partial/System Proven false remain. GLOBAL_VAS, BOOT-only capability genesis, sex-pdx authority, PKU and exact terminal incarnations remain mandatory. SexOS is not Unix/POSIX. Active80–200 progress:19/121 accepted;99–200 (102 rounds) remain.
+
+
+
 Current accepted checkpoint: through97,18/121 in the active80–200 goal;98–200 remain (103). Earlier checkpoints and their then-next plans below are historical.
 
 Round 97 separates date-dependent public TLS fixture verification from ClientHello generation across explicit Browser turns. The first phase performs the two public fixture ECDSA checks and returns without a TLS allocation; the released seed stays in its existing client. Only the following turn consumes it and constructs/polls ClientHello. Q, replacement, Close, deadline and backward-time handling erase interstage custody without a stale Hello. Actual Probe/App turn receipts, allocation counts and seed-ready state verify the boundary. Individual P256 calls and coalesced certificate verification remain synchronous; the512-byte I/O limit is not a CPU-time bound.

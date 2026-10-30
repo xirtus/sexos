@@ -23,6 +23,8 @@ pub const STALE: u32 = 3;
 pub const BUSY: u32 = 5;
 pub const TIMEOUT: u32 = 8;
 pub const IO: u32 = 9;
+/// A create-only import may never reuse an existing workspace object.
+pub const EXISTS: u32 = 10;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Request {
     pub seq: u32,

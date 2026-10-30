@@ -24627,7 +24627,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|15|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let target=e.target;let frame=if target==9{201}else{e.surface};DOCUMENT_VIEWS[if target==9{0}else if target==16{1}else if target==18{2}else{3}].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
-        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
+        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&matches!(e.target,9|15|16|18)&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }

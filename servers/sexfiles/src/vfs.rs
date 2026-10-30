@@ -1445,7 +1445,24 @@ fn handle_diskfs_rename(path_id: u64, name_lo: u64, name_hi: u64, buf_va: u64) -
     0
 }
 
+/// Browser keeps its existing owner/capability-checked private RamFS operations.
+/// Persistent workspace authority is only its typed create-only document route.
+/// Reject every other legacy operation before counters, selection or backend work.
+/// Typed document requests and trusted lifecycle notices dispatch separately.
+pub fn legacy_dispatch(type_id:u64,arg0:u64,arg1:u64,arg2:u64,caller_pd:u32,
+    dispatch:impl FnOnce(u64,u64,u64,u64,u32)->u64)->u64{
+    if caller_pd==15&&!matches!(type_id,
+        messages::OP_RAMFS_OPEN|messages::OP_RAMFS_READ|messages::OP_RAMFS_WRITE|
+        messages::OP_RAMFS_CLOSE|messages::OP_RAMFS_LIST|messages::OP_RAMFS_STAT|
+        messages::OP_RAMFS_OBJECT_ID|messages::OP_RAMFS_READNAME){
+        sex_pdx::serial_record!("[files.browser.storage.denied] target=15 op={} profile=typed_import_or_owned_ramfs effects=0",type_id);
+        return messages::ERR_PERM_DENIED as u64;
+    }
+    dispatch(type_id,arg0,arg1,arg2,caller_pd)
+}
+
 pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) -> u64 {
+    legacy_dispatch(type_id,arg0,arg1,arg2,caller_pd,|type_id,arg0,arg1,arg2,caller_pd|{
     crate::pdx::serial_println!(
         "[sexfiles.vfs.enter] type={:#x} caller={} a0={:#x} a1={:#x}",
         type_id, caller_pd, arg0, arg1
@@ -1746,6 +1763,8 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
 
         _ => messages::ERR_NOT_FOUND as u64,
     }
+
+    })
 }
 
 /// Unpack a name from three u64 args.
@@ -1909,6 +1928,17 @@ impl crate::document::Backend for DocumentBackend{
  fn identity(&mut self,id:u8)->Result<u32,u32>{use sex_pdx::document as w;if !(2..15).contains(&id){return Err(w::DENIED)}let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let e=v4_get(id as u64).map_err(|_|w::STALE)?;Ok(((id as u32+1)<<16)|e.gen as u32)}
  fn name(&mut self,id:u8)->Result<[u8;16],u32>{let e=v4_get(id as u64).map_err(|_|sex_pdx::document::STALE)?;let mut name=[0;16];name.copy_from_slice(&e.name[..16]);Ok(name)}
  fn create(&mut self,name:[u8;16])->Result<u8,u32>{use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let id=handle_diskfs_create(u64::from_le_bytes(name[..8].try_into().unwrap()),u64::from_le_bytes(name[8..].try_into().unwrap()),va);if !(3..15).contains(&id){return Err(w::IO)}Ok(id as u8)}
+ fn create_new(&mut self,name:[u8;16])->Result<(u8,u32),u32>{
+  use sex_pdx::document as w;
+  let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;
+  // The single service dispatcher does not interleave VFS mutations during
+  // this strict create. Existing names fail before any allocation or write.
+  let id=handle_diskfs_create(u64::from_le_bytes(name[..8].try_into().unwrap()),u64::from_le_bytes(name[8..].try_into().unwrap()),va);
+  if id==messages::ERR_EXISTS as u64{return Err(w::EXISTS)}
+  if !(3..15).contains(&id){return Err(w::IO)}
+  let entry=v4_get(id).map_err(|_|w::IO)?;
+  Ok((id as u8,((id as u32+1)<<16)|entry.gen as u32))
+ }
  fn cancel_save(&mut self,caller:u32){document_cancel(caller)}
  fn cancel_load(&mut self,caller:u32){document_cancel_load(caller)}
  fn load_step(&mut self,caller:u32,id:u8,out:&mut[u8;sex_pdx::document::MAX])->Result<Option<usize>,u32>{

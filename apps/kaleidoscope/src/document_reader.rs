@@ -128,7 +128,7 @@ impl Reader {
             for (index,byte) in host.iter().chain(b" ").chain(path).take(cols).enumerate() { frame.bytes[at+index] = clean(*byte); }
         }
         if rows > 1 {
-            let footer: &[u8] = if cols >= 25 { b"PgUp PgDn Home End V back" } else if cols >= 6 { b"V back" } else { b"V" };
+            let footer: &[u8] = if banner==b"Controlled HTTPS / lab root"{if cols>=25{b"PgUp PgDn V back I import"}else if cols>=6{b"V I"}else{b"I"}}else{if cols >= 25 { b"PgUp PgDn Home End V back" } else if cols >= 6 { b"V back" } else { b"V" }};
             put(&mut frame,rows-1,footer);
         }
         let visible = frame.body_rows;

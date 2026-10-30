@@ -79,3 +79,16 @@ fn browser_ready_is_exact_geometry_intent_without_document_control_authority() {
  e.close_pending=true;assert!(!e.allows_operation(0x275,[15,150,0]));
  e.close_pending=false;e.dead=true;assert!(!e.allows_operation(0x275,[15,150,0]));
 }
+
+#[test]
+fn browser_import_workspace_controls_require_exact_live_boot_incarnation(){
+ let mut e=app_custody::Entry::new(40,15,15,300);
+ for op in [0x274,0x279]{
+  assert!(e.allows_operation(op,[15,15,0]));
+  for args in [[15,150,0],[16,15,0],[15,0,0],[15,15,1],[15+(1<<32),15,0]]{assert!(!e.allows_operation(op,args));}
+  for task in [0,16,150,u32::MAX]{assert!(!app_custody::Entry::new(40,15,task,300).allows_operation(op,[15,task as u64,0]));}
+  e.close_pending=true;assert!(!e.allows_operation(op,[15,15,0]));e.close_pending=false;
+ }
+ for op in [0x273,0x202,0x15]{assert!(!e.allows_operation(op,[15,15,0]));}
+ e.dead=true;for op in [0x274,0x279]{assert!(!e.allows_operation(op,[15,15,0]));}
+}

@@ -329,3 +329,13 @@ fn cooperative_growth_keeps_legacy_backing_and_fits_extent_budget(){
     assert_eq!(used_blocks(),16);assert_eq!(ZEROED.lock().unwrap().len(),15);
     assert!(!ZEROED.lock().unwrap().contains(&DISKFS_V4_POOL_BASE_LBA));
 }
+
+#[test]fn exact_duplicate_create_never_reopens_overwrites_or_persists_existing_object(){
+    let _guard=reset();let lo=u64::from_le_bytes(*b"import97");
+    assert_eq!(handle_diskfs_create(lo,0,0),3);
+    let before=unsafe{V4_TABLE[3]};let prior=events();let persists=PERSIST_CALLS.load(Ordering::Relaxed);
+    assert_eq!(handle_diskfs_create(lo,0,0),messages::ERR_EXISTS as u64);
+    assert_eq!(events(),prior);assert_eq!(PERSIST_CALLS.load(Ordering::Relaxed),persists);
+    let after=unsafe{V4_TABLE[3]};assert_eq!(after.name,before.name);assert_eq!(after.gen,before.gen);assert_eq!(after.size_bytes,before.size_bytes);
+    assert!(!v4_in_use(4));assert_eq!(v4_indirect_read(3,0).unwrap().1,0);
+}

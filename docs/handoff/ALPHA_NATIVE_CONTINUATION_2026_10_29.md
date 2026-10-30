@@ -1,5 +1,15 @@
 # Sustained alpha candidate and desktop continuation
 
+## Current checkpoint: accepted round 98; next 99
+
+Browser can explicitly import a positively released authenticated document into a fresh workspace object, save through positive COMMIT+END, open it through a user-selected Linen row in Quil, and recover exact bytes after a cold reboot. Duplicate names never replace existing objects. Negative COMMIT receipts remain uncertain even when bytes became durable. A legacy dispatch filter closes Browser's raw DiskFS bypass while preserving owner-checked private RamFS cleanup.
+
+Final D ISO `4e08e141372f2a1762303941ef08cbb903b1e722009d3dc179e67e0ad9302288`;546 production/503 runner inputs,1479 Rust test executions,642 frozen Python checks, four import/recovery boots and two responsiveness boots pass. Both profiles save and recover the exact12288-byte object3/identity262145; each of four import/recovery closes reclaims and zeroes131 pages/536576 bytes. Raw wire, receipt, journal, terminal-disk and exact screenshot-prefix replay passes. See the [full round98 ledger](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) and [evidence](assets/sexos-alpha-r98-2026-10-30-evidence.json). Failed/superseded B/C candidates remain separate.
+
+Continue99 bounded resource/content loading,100 navigation/layout,101 scoped selection/clipboard and102 launcher/workspace UX. Require the then-current image's own sustained mixed-session and repeated recovery acceptance before a trusted-builtins QEMU alpha label. No general public-web, crash/power-loss, physical/SMP, hostile-containment or full daily-driver proof is added;7 Open/23 Partial/System Proven false remain. GLOBAL_VAS, BOOT-only capability genesis, sex-pdx authority, PKU and exact terminal incarnations remain mandatory. SexOS is not Unix/POSIX. Active80–200 progress:19/121 accepted;99–200 (102 rounds) remain.
+
+
+
 **Active goal revised30 October2026:** complete substantive rounds80–200, with verified changes, honest ledger/release gates and commit/push. Through94 is accepted;15/121 rounds in the revised scope are complete and95–200 remain (106 rounds). Historical additional rounds19–94 total76;95–118 has24 remaining. The [active80–200 plan](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) supersedes earlier scope through218. Historical checkpoint counts below remain dated evidence rather than the current scope.
 
 Historical29 October2026 checkpoint: Round18 passes, and the first **33 of the requested 100 additional rounds** are complete: rounds 19–51. Continue at **52**, through 118; the [live ledger](ALPHA_100_ROUND_CONTINUATION_2026_10_29.md) remains active. These are substantive implementation/acceptance slices, not a count of test invocations. Preserve one GLOBAL_VAS, BOOT_DAG capability genesis, sex-pdx authority and terminal incarnation identities. One focused Astra review, with a short follow-up, found two text-lifetime defects that were fixed and tested. No Unix process or file-descriptor model was introduced.

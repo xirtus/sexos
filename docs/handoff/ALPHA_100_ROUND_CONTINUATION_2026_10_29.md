@@ -1,5 +1,15 @@
 # Alpha continuation: 100 further engineering rounds
 
+## Current checkpoint: accepted round 98; next 99
+
+Browser can explicitly import a positively released authenticated document into a fresh workspace object, save through positive COMMIT+END, open it through a user-selected Linen row in Quil, and recover exact bytes after a cold reboot. Duplicate names never replace existing objects. Negative COMMIT receipts remain uncertain even when bytes became durable. A legacy dispatch filter closes Browser's raw DiskFS bypass while preserving owner-checked private RamFS cleanup.
+
+Final D ISO `4e08e141372f2a1762303941ef08cbb903b1e722009d3dc179e67e0ad9302288`;546 production/503 runner inputs,1479 Rust test executions,642 frozen Python checks, four import/recovery boots and two responsiveness boots pass. Both profiles save and recover the exact12288-byte object3/identity262145; each of four import/recovery closes reclaims and zeroes131 pages/536576 bytes. Raw wire, receipt, journal, terminal-disk and exact screenshot-prefix replay passes. See the [full round98 ledger](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) and [evidence](assets/sexos-alpha-r98-2026-10-30-evidence.json). Failed/superseded B/C candidates remain separate.
+
+Continue99 bounded resource/content loading,100 navigation/layout,101 scoped selection/clipboard and102 launcher/workspace UX. Require the then-current image's own sustained mixed-session and repeated recovery acceptance before a trusted-builtins QEMU alpha label. No general public-web, crash/power-loss, physical/SMP, hostile-containment or full daily-driver proof is added;7 Open/23 Partial/System Proven false remain. GLOBAL_VAS, BOOT-only capability genesis, sex-pdx authority, PKU and exact terminal incarnations remain mandatory. SexOS is not Unix/POSIX. Active80–200 progress:19/121 accepted;99–200 (102 rounds) remain.
+
+
+
 **Current user scope,30 October2026:** complete121 substantive rounds80–200. Accepted work through79 is historical baseline;80–97 are accepted, so18/121 of the revised scope are complete and98–200 remain (103 rounds). Historical additional rounds19–97 total79;98–118 has21 remaining. This supersedes the earlier goal through218. Follow the [active individual80–200 plan](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md). Keep architectural invariants, honest acceptance, remaining release gates and commit/push requirements.
 
 Requested 29 October 2026 while round 18 was in progress. Continue through **rounds 19–118**, sequentially. A round is a reviewable implementation or a substantive acceptance investigation with its own result and remaining limits; a test invocation, screenshot, formatting change or arbitrary subdivision is not a round. Do not mark the queue complete merely because the first batch passes.

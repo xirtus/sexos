@@ -18,6 +18,8 @@ mod http_probe;
 mod http_navigation;
 mod browser_view;
 mod document_reader;
+mod document_import;
+mod import_view;
 #[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
 mod text_delivery;
 mod browser_command;
@@ -50,6 +52,15 @@ struct App {
     https_panel:bool,
     https_view:tls_exchange::View,
     https_progress_logged:usize,
+    importer:document_import::Client<sex_tls::Document>,
+    import_source:Option<sex_tls::Document>,
+    import_editor:import_view::Editor,
+    import_status:import_view::Status,
+    import_panel:bool,
+    import_ticket:u32,
+    import_viewport:(u32,u32),
+    workspace:sex_pdx::document_view::WorkspaceRefresh,
+    files_pending:bool,
     live_text: [u8; 64],
     live_len: usize,
     probe:network_probe::Probe,
@@ -87,7 +98,10 @@ struct App {
 }
 
 impl App {
-    fn queue_intent(&mut self,next:Intent,document:bool){
+    fn queue_intent(&mut self,next:Intent,document:bool)->bool{
+        if self.importer.busy(){sex_pdx::serial_record!("[browser.command.blocked] kind={:?} import_pending=1 accepted_replay=0",next);return false;}
+        if self.importer.view()==document_import::View::Uncertain{sex_pdx::serial_record!("[browser.command.blocked] kind={:?} import_uncertain=1 accepted_replay=0",next);return false;}
+        self.importer.clear(sex_pdx::get_ticks());self.import_source=None;self.import_editor.cancel();self.import_panel=false;self.import_ticket=0;
         let n=browser_command::replace(&mut self.intent,next,&mut self.tls,&mut self.trust,&mut self.seed,&mut self.clock);
         if n>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);}
         self.exchange.cancel();if self.probe.busy(){self.probe.cancel();}if self.dns.busy(){self.dns.cancel();}
@@ -98,7 +112,71 @@ impl App {
         self.tls_panel=next==Intent::TlsPrepare;self.clock_panel=next==Intent::Clock;
         if self.https_panel{self.https_progress_logged=0;}
         sex_pdx::serial_record!("[browser.command.queued] kind={:?} document={} retained=1 accepted_replay=0",next,document as u8);
-        self.resources("command",true);
+        self.resources("command",true);true
+    }
+    fn https_body(&self)->&[u8]{
+        if self.exchange.has_document(){self.exchange.document()}
+        else if !self.import_editor.active&&self.import_source.is_some(){self.import_source.as_ref().unwrap().as_bytes()}
+        else if self.importer.view()==document_import::View::Saved{self.importer.document().map_or(&[][..],|d|d.as_bytes())}
+        else{&[]}
+    }
+    fn has_https_body(&self)->bool{self.exchange.has_document()||(!self.import_editor.active&&self.import_source.is_some())||(self.importer.view()==document_import::View::Saved&&self.importer.has_document())}
+    fn record_import_control(&mut self){
+        if let Some(c)=self.importer.take_control(){let(ok,value)=match c.value{None=>(1,0),Some(Ok(v))=>(1,v),Some(Err(e))=>(0,e)};sex_pdx::serial_record!("[browser.import.control] phase={:?} kind={} sequence={} object={} ok={} value={}",c.phase,c.kind,c.sequence,c.object,ok,value);}
+    }
+    fn begin_import(&mut self){
+        if self.importer.view()==document_import::View::Uncertain{self.import_panel=true;self.import_status=import_view::Status::Uncertain;sex_pdx::serial_record!("[browser.import.blocked] uncertain=1 effects=0");return;}
+        if self.importer.busy(){sex_pdx::serial_record!("[browser.import.blocked] pending=1 effects=0");return;}
+        if self.import_source.is_none(){
+            if let Some(body)=self.exchange.take_document_for_import(){self.import_ticket=self.exchange.ticket();self.import_source=Some(body);}
+            else if let Some(body)=self.importer.take_document(){self.import_source=Some(body);}
+        }
+        self.import_panel=true;
+        if let Some(body)=self.import_source.as_ref(){
+            self.https_panel=false;self.peer_panel=false;self.tls_panel=false;self.clock_panel=false;self.reading=false;self.reading_https=false;
+            self.importer.clear(sex_pdx::get_ticks());self.import_editor.begin();self.import_status=import_view::Status::Naming;
+            sex_pdx::serial_record!("[browser.import.intent] source_ticket={} bytes={} hash={:#x} authenticated=1 positive_release=1 create_only=1 accepted=1",self.import_ticket,body.as_bytes().len(),public_fingerprint(body.as_bytes()));
+        }else{self.import_status=import_view::Status::NoDocument;sex_pdx::serial_record!("[browser.import.rejected] reason=no_released_document effects=0");}
+        self.resources("change",true);
+    }
+    fn submit_import(&mut self){
+        let Some(body)=self.import_source.take()else{return;};let name=self.import_editor.name();let len=body.as_bytes().len();let hash=public_fingerprint(body.as_bytes());
+        let accepted=match self.importer.start(body,name,sex_pdx::get_ticks()){Ok(())=>true,Err(body)=>{self.import_source=Some(body);false}};
+        self.import_status=if accepted{import_view::Status::Saving}else if self.importer.view()==document_import::View::Uncertain{import_view::Status::Uncertain}else{import_view::Status::Unavailable};
+        sex_pdx::serial_record!("[browser.import.submit] name={} bytes={} hash={:#x} source_ticket={} accepted={} create_only=1",core::str::from_utf8(self.import_editor.as_bytes()).unwrap(),len,hash,self.import_ticket,accepted as u8);
+        self.resources("change",true);
+    }
+    fn key(&mut self,raw:u64){
+        let Ok(code)=u8::try_from(raw)else{return;};
+        if self.ui_failed{self.ui_failed=false;self.ui_retries=0;self.ui_dirty=true;}
+        if self.import_editor.active{
+            match self.import_editor.key(code){import_view::Key::Submit=>self.submit_import(),import_view::Key::Cancel=>{self.import_status=import_view::Status::Cancelled;self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;},_=>{}}
+            return;
+        }
+        if code==0x17{self.begin_import();return;}
+        if code==0x18{
+            if !self.importer.busy()||self.importer.view()==document_import::View::Uncertain{self.workspace.changed();self.files_pending=true;}else{sex_pdx::serial_record!("[browser.import.files.blocked] pending=1 effects=0");}return;
+        }
+        if self.import_panel&&code==0x2F&&self.has_https_body(){self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;self.reader.clear();return;}
+        if code==0x10&&(self.import_panel||self.importer.has_document()||self.import_source.is_some()||self.importer.busy()){
+            self.import_editor.cancel();self.import_source=None;let _=self.importer.cancel(sex_pdx::get_ticks());self.import_panel=true;self.reading=false;self.reading_https=false;
+            self.import_status=if self.importer.view()==document_import::View::Uncertain{import_view::Status::Uncertain}else if self.importer.busy(){import_view::Status::Cleaning}else{import_view::Status::Cancelled};self.resources("clear",true);return;
+        }
+        let intent=match code{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::HttpDns),_=>None};
+        if let Some(intent)=intent{self.queue_intent(intent,false);}
+        else{match code{
+            0x12=>{self.queue_intent(Intent::Seed,false);},
+            0x14=>{self.queue_intent(Intent::Clock,false);},
+            0x10=>{self.exchange.cancel();if self.https_panel{self.reading=false;self.reading_https=false;self.reader.clear();sex_pdx::serial_record!("[browser.https.cleared] body_visible=0 owned_storage=erased network=0");}if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart|Intent::TlsPrepare|Intent::Seed|Intent::Clock)){self.intent=None;self.dns.cancel();}let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);self.resources("clear",true);},
+            0x26=>{self.queue_intent(Intent::TlsPrepare,false);},
+            0x30=>{if self.queue_intent(Intent::TlsDns,true){sex_pdx::serial_record!("[browser.https.intent] accepted=1 explicit=1 public_internet=0");}},
+            0x15=>{if self.queue_intent(Intent::TlsDns,false){sex_pdx::serial_record!("[browser.tls.peer.intent] accepted=1 explicit=1 public_internet=0");}},
+            0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
+            0x2D=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
+            0x24=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
+            0x2F=>{if self.https_panel{if self.has_https_body(){self.reading=!self.reading;self.reading_https=self.reading;if self.reading{self.reader.clear();}}}else if self.http.view()==http_probe::View::Ready{self.reading=!self.reading;self.reading_https=false;if self.reading{self.reader.clear();}}},
+            code=>{if self.reading{let movement=match code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};if let Some(movement)=movement{let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().map_or(&[][..],|d|d.as_bytes())}}else{self.http.document()};self.reader.navigate(body,movement);}}},
+        }}
     }
     fn waiting_receipt(&self)->bool{
         self.exchange.view()==tls_exchange::View::Uncertain||self.http.view()==http_probe::View::Uncertain||self.probe.view()==network_probe::View::Uncertain||self.dns.view()==dns_probe::View::Uncertain||self.trust.view()==trust_probe::View::Uncertain||self.seed.view()==entropy_probe::View::Uncertain||self.clock.view()==clock_probe::View::Uncertain
@@ -109,8 +187,8 @@ impl App {
     fn resources(&mut self,reason:&str,force:bool){
         let usage=ALLOCATOR.usage();let tls=self.tls.busy();
         let route=self.probe.busy()||self.dns.busy()||self.http.busy()||self.exchange.busy();
-        let providers=self.trust.busy()||self.seed.busy()||self.clock.busy();let body=self.exchange.has_document();
-        let payload=self.tls.allocated_payload_bytes()+self.exchange.allocated_payload_bytes();
+        let providers=self.trust.busy()||self.seed.busy()||self.clock.busy();let body=self.has_https_body();
+        let payload=self.tls.allocated_payload_bytes()+self.exchange.allocated_payload_bytes()+if self.import_source.is_some(){sex_tls::MAX_DOCUMENT}else{0}+if self.importer.has_document(){sex_tls::MAX_DOCUMENT}else{0};
         let snapshot=(usage,payload,tls,route,providers,self.intent,body);
         if force||self.resources_last!=Some(snapshot){self.resources_last=Some(snapshot);sex_pdx::serial_record!("[browser.resources] reason={} heap_used={} heap_free={} heap_total={} tls_payload={} tls_pending={} route_busy={} providers_busy={} queued={:?} body_visible={}",reason,usage.used,usage.free,usage.total,payload,tls as u8,route as u8,providers as u8,self.intent,body as u8);}
     }
@@ -270,6 +348,7 @@ impl SexApp for App {
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
         Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
+            importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
             dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:tls_exchange::Client::new(),peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
             intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
@@ -279,7 +358,7 @@ impl SexApp for App {
     fn run(&mut self, _pdx: u32) -> bool {
         self.app_turn=self.app_turn.checked_add(1).expect("BROWSER_TURN_EXHAUSTED");
         if self.viewport_ready&&sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,self.identity.target_pd as u64,self.identity.task_id as u64,0).is_ok(){self.viewport_ready=false;}
-        let pending=self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
+        let pending=self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
         let message=if pending{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
         if let Some(req)=message{
             if sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],self.identity.target_pd,self.identity.task_id)
@@ -300,17 +379,20 @@ impl SexApp for App {
                 sex_pdx::serial_record!("[browser.trust.closed] target={} task={} pending={} terminal=1",self.identity.target_pd,self.identity.task_id,trust_pending as u8);
                 sex_pdx::serial_record!("[browser.clock.closed] target={} task={} pending={} terminal=1",self.identity.target_pd,self.identity.task_id,clock_pending as u8);
                 sex_pdx::serial_record!("[browser.entropy.closed] target={} task={} pending={} terminal=1 private_payload=erased",self.identity.target_pd,self.identity.task_id,seed_pending as u8);
+                let import_pending=self.importer.busy();let accepted=self.importer.accepted();self.import_editor.cancel();self.import_source=None;self.importer.close();self.workspace.close();self.files_pending=false;
+                sex_pdx::serial_record!("[browser.import.closed] target={} task={} pending={} accepted={} terminal=1 owned_storage=erased",self.identity.target_pd,self.identity.task_id,import_pending as u8,accepted);
                 self.navigation.cancel();self.http.cancel();self.reader.clear();self.reading=false;self.ui.cancel();self.ui_last.fill(0);self.ui_metadata=None;self.intent=None;self.resources("close",true);sex_pdx::task_finish(0);
             }
             if req.type_id==sex_pdx::document_view::OP{
                 if let Some(n)=sex_pdx::document_view::Notice::decode(req.caller_pd,self.identity.target_pd,self.identity.task_id,[req.arg0,req.arg1,req.arg2],self.viewport_sequence){
-                    self.viewport_sequence=n.sequence;self.reader.resize(n.w,n.h);
+                    self.viewport_sequence=n.sequence;self.reader.resize(n.w,n.h);self.import_viewport=(n.w,n.h);
                     // Recreated display slots discard old staging and ACKs.
                     // Preserve the outbox's monotonic sequence across cancel.
                     self.ui.cancel();self.ui_last.fill(0);self.ui_last_len=0;self.ui_metadata=None;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
                     sex_pdx::serial_record!("[browser.viewport] target={} task={} sequence={} w={} h={} origin=held_shell",n.target,n.task,n.sequence,n.w,n.h);
                 }
             }
+            if req.type_id==1&&req.caller_pd==11{self.importer.reply(req.arg0,sex_pdx::get_ticks());self.record_import_control();}
             if req.type_id==1&&req.caller_pd==13{
                 if matches!(req.arg0>>56,0x7C|0xEC){self.trust.reply(req.arg0,sex_pdx::get_ticks());}
                 else if matches!(req.arg0>>56,0x7B|0xEB){self.clock.reply(req.arg0,sex_pdx::get_ticks());}
@@ -321,27 +403,23 @@ impl SexApp for App {
                 else{self.probe.reply(req.arg0,sex_pdx::get_ticks());}
             }
             if req.type_id==1&&req.caller_pd==1{
-                if let Some(r)=self.ui.receive(req.caller_pd,req.arg0){sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,r.metadata.count);}
+                if let Some(r)=self.ui.receive(req.caller_pd,req.arg0){
+                    if r.metadata.selected&1024!=0{let a=sex_pdx::text_batch::Applied::decode(req.caller_pd,req.arg0).unwrap();sex_pdx::serial_record!("[browser.import.applied] bytes={} hash={:#x} rows={} viewport={} state_code={} sequence={} positive_ack=1",r.bytes,r.metadata.count,r.metadata.rows,r.metadata.first,r.metadata.selected>>11,a.sequence);}
+                    sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,if r.metadata.selected&1024!=0{0}else{r.metadata.count});
+                }
             }
-            if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{
-                if self.ui_failed{self.ui_failed=false;self.ui_retries=0;self.ui_dirty=true;}
-                let intent=match req.arg0{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::HttpDns),_=>None};
-                if let Some(intent)=intent{self.queue_intent(intent,false);}
-                else{match req.arg0{
-                    0x12=>self.queue_intent(Intent::Seed,false),
-                    0x14=>self.queue_intent(Intent::Clock,false),
-                    0x10=>{self.exchange.cancel();if self.https_panel{self.reading=false;self.reading_https=false;self.reader.clear();sex_pdx::serial_record!("[browser.https.cleared] body_visible=0 owned_storage=erased network=0");}if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart|Intent::TlsPrepare|Intent::Seed|Intent::Clock)){self.intent=None;self.dns.cancel();}let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);self.resources("clear",true);},
-                    0x26=>self.queue_intent(Intent::TlsPrepare,false),
-                    0x30=>{self.queue_intent(Intent::TlsDns,true);sex_pdx::serial_record!("[browser.https.intent] accepted=1 explicit=1 public_internet=0");},
-                    0x15=>{self.queue_intent(Intent::TlsDns,false);sex_pdx::serial_record!("[browser.tls.peer.intent] accepted=1 explicit=1 public_internet=0");},
-                    0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
-                    0x2D=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
-                    0x24=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
-                    0x2F=>{if self.https_panel{if self.exchange.has_document(){self.reading=!self.reading;self.reading_https=self.reading;if self.reading{self.reader.clear();}}}else if self.http.view()==http_probe::View::Ready{self.reading=!self.reading;self.reading_https=false;if self.reading{self.reader.clear();}}},
-                    code=>{if self.reading{let movement=match code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};if let Some(movement)=movement{let body=if self.reading_https{self.exchange.document()}else{self.http.document()};self.reader.navigate(body,movement);}}},
-                }}
-            }
+            if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{self.key(req.arg0);}
+
         }
+        self.importer.advance(sex_pdx::get_ticks());self.record_import_control();
+        if let Some(event)=self.importer.take_event(){
+            self.import_status=match event.view{document_import::View::Saved=>import_view::Status::Saved,document_import::View::Exists=>import_view::Status::Exists,document_import::View::Uncertain=>import_view::Status::Uncertain,document_import::View::Cancelled=>import_view::Status::Cancelled,_=>import_view::Status::Unavailable};
+            if event.view==document_import::View::Saved{self.workspace.changed();}
+            sex_pdx::serial_record!("[browser.import.event] state={:?} object={} identity={} bytes={} hash={:#x} error={} source_ticket={}",event.view,event.object,event.generation,event.bytes,event.hash,event.error,self.import_ticket);
+            self.resources("change",true);
+        }
+        self.workspace.poll(|args|sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::WORKSPACE_CHANGED,args[0],args[1],args[2]).map(|_|()));
+        if self.files_pending{match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::OPEN_LINEN,self.identity.target_pd as u64,self.identity.task_id as u64,0){Ok(_)=>{self.files_pending=false;sex_pdx::serial_record!("[browser.import.files] target={} task={} accepted=1",self.identity.target_pd,self.identity.task_id);},Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(error)=>{self.files_pending=false;sex_pdx::serial_record!("[browser.import.files] target={} task={} accepted=0 error={}",self.identity.target_pd,self.identity.task_id,error);}}}
         if let Some(path)=self.http.take_redirect(){
             if self.intent.is_none()&&self.navigation.active()&&self.navigation.follow(path){
                 sex_pdx::serial_record!("[browser.http.redirect.follow] hop={} path={} same_endpoint=1 fresh_dns=1 positive_release=1",self.navigation.hops(),core::str::from_utf8(path.as_bytes()).unwrap());
@@ -422,7 +500,7 @@ impl SexApp for App {
                 if peer_view==tls_exchange::View::Unavailable&&peer_ticket!=0&&!self.exchange.busy(){sex_pdx::serial_record!("[browser.https.rejected] ticket={} positive_release=1 authenticated={} failure={:?} http={:?}",peer_ticket,self.exchange.peer_authenticated() as u8,self.exchange.failure(),self.exchange.http_failure());}
                 sex_pdx::serial_record!("[browser.https.view] state={:?} controlled_profile=1 public_internet=0",peer_view);
             }
-        }else if peer_view!=self.peer_view{
+        }else if !self.import_panel&&peer_view!=self.peer_view{
             self.peer_view=peer_view;
             if peer_view==tls_exchange::View::Verified{sex_pdx::serial_record!("[browser.tls.peer.released] ticket={} tx={} rx={} request_bytes={} response_bytes={} positive_release=1 authenticated=1 public_test_root=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),sex_tls::EXCHANGE_REQUEST.len(),sex_tls::EXCHANGE_RESPONSE.len());}
             if peer_view==tls_exchange::View::Cancelled&&peer_ticket!=0&&!self.exchange.busy(){sex_pdx::serial_record!("[browser.tls.peer.cancelled] ticket={} positive_release=1 authenticated={}",peer_ticket,self.exchange.peer_authenticated() as u8);}
@@ -438,9 +516,15 @@ impl SexApp for App {
         let view=if self.intent==Some(Intent::TlsPrepare){if self.waiting_receipt(){tls_probe::View::Uncertain}else{tls_probe::View::Preparing}}else{self.tls.view()};if view!=self.tls_view{self.tls_view=view;sex_pdx::serial_record!("[browser.tls.view] state={:?} authenticated=0 network=0",view);}
         self.resources("change",false);
         let mut reader_layout=None;
-        let composed=if self.reading&&self.reading_https&&self.exchange.has_document(){
-            let f=self.reader.render_https(self.exchange.document(),sex_tls::HTTPS_PATH);reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
-            Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.exchange.document().len(),first:f.first,rows:f.body_rows,selected:2|256|512}))
+        let composed=if self.import_panel{
+            let f=import_view::render(self.import_viewport.0,self.import_viewport.1,self.import_status,self.import_editor.as_bytes());
+            let metadata=text_delivery::Metadata{count:public_fingerprint(&f.bytes[..f.len])as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:1024|((self.import_status as u64)<<11)};
+            if self.ui_last_len!=f.len||self.ui_last!=f.bytes||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.import.layout] state={:?} name={} bytes={} cols={} rows={} viewport={} hash={:#x} pixels=unconfirmed",self.import_status,core::str::from_utf8(self.import_editor.as_bytes()).unwrap(),f.len,f.cols,f.rows,self.viewport_sequence,metadata.count);}
+            Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
+        }else if self.reading&&self.reading_https&&self.has_https_body(){
+            let body=if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().unwrap().as_bytes()};
+            let f=self.reader.render_https(body,sex_tls::HTTPS_PATH);reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
+            Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:body.len(),first:f.first,rows:f.body_rows,selected:2|256|512}))
         }else if self.reading&&self.http.view()==http_probe::View::Ready{
             let f=self.reader.render_path(self.http.document(),self.http.document_path());reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.http.document().len(),first:f.first,rows:f.body_rows,selected:http_view_code(self.http.view())|256}))
@@ -452,18 +536,18 @@ impl SexApp for App {
             else{browser_view::with_seed(text,seed_label(self.seed_view))}
         }).map(|text|(text,text_delivery::Metadata{count:if matches!(self.http.view(),http_probe::View::Ready){self.http.body_length()}else{0},first:0,rows:0,selected:http_view_code(self.http.view())}))};
         if let Some((text,metadata))=composed{
-            if reader_layout.is_none()&&self.https_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
-            if reader_layout.is_none()&&!self.https_panel&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
-            if reader_layout.is_none()&&!self.https_panel&&!self.peer_panel&&self.tls_panel&&self.tls_view!=tls_probe::View::Idle&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.tls_view);}
-            if reader_layout.is_none()&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&self.clock_panel&&self.clock_view!=clock_probe::View::Idle&&self.ui_last!=text.bytes{
+            if reader_layout.is_none()&&!self.import_panel&&self.https_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
+            if reader_layout.is_none()&&!self.import_panel&&!self.https_panel&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
+            if reader_layout.is_none()&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&self.tls_panel&&self.tls_view!=tls_probe::View::Idle&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.tls_view);}
+            if reader_layout.is_none()&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&self.clock_panel&&self.clock_view!=clock_probe::View::Idle&&self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.clock.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.clock_view);
             }
-            if reader_layout.is_none()&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed_view).is_some()&&self.ui_last!=text.bytes{
+            if reader_layout.is_none()&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed_view).is_some()&&self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.entropy.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.seed_view);
             }
             if self.ui_last_len!=text.len||self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata){
                 self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_metadata=Some(metadata);self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
-                if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.exchange.document().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}}
+                if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.https_body().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}}
             }
             if self.ui_dirty&&!self.ui_failed{
                 if self.ui.queue(&text.bytes[..text.len],0x00CDD6F4,metadata){self.ui_dirty=false;}
@@ -474,7 +558,7 @@ impl SexApp for App {
                 Ok(_)=>text_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>text_delivery::Admission::Full,Err(e)=>text_delivery::Admission::Rejected(e),
             }
         }){self.ui.cancel();self.ui_dirty=true;self.ui_retries=self.ui_retries.saturating_add(1);self.ui_failed=self.ui_retries>=3;sex_pdx::serial_record!("[browser.view.rejected] error={} attempts={} terminal={} accepted_network_replay=0",error,self.ui_retries,self.ui_failed as u8);}
-        if self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
+        if self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
         true
     }
 

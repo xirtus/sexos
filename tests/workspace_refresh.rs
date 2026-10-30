@@ -63,11 +63,14 @@ fn publisher_coalesces_full_uses_exact_boot_task_and_close_fences() {
     p.changed();
     p.poll(|_| panic!());
     assert!(!p.pending());
-    for target in [0, 12, 15, 17, u32::MAX] {
+    for target in [0, 12, 17, u32::MAX] {
         let mut p = document_view::WorkspaceRefresh::new(target, 90);
         p.changed();
         assert!(!p.pending());
     }
+    let mut imported=document_view::WorkspaceRefresh::new(15,15);
+    imported.changed();imported.poll(|args|{assert_eq!(args,[15,15,0]);Ok(())});assert!(!imported.pending());
+    for wrong in [0,9,90,16,u32::MAX]{let mut p=document_view::WorkspaceRefresh::new(15,wrong);p.changed();assert!(!p.pending());}
     let mut p = document_view::WorkspaceRefresh::new(16, 160);
     p.changed();
     p.poll(|a| {

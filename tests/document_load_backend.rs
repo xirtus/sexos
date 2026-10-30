@@ -33,14 +33,16 @@ fn diskfs_bridge_get_buf_va()->u64{0x400000}
 fn v4_ensure(_:u64)->Result<(),u32>{Ok(())}
 fn v4_get(id:u64)->Result<Entry,u32>{
  let m=MODEL.lock().unwrap();let m=m.as_ref().unwrap();
- if id==3{Ok(Entry{size_bytes:m.size,gen:m.gen,name:[0;24]})}else{Err(1)}
+ if id==3||id==5{Ok(Entry{size_bytes:m.size,gen:m.gen,name:[0;24]})}else{Err(1)}
 }
-fn handle_diskfs_create(_:u64,_:u64,_:u64)->u64{5}
+static CREATE_RESULT:AtomicU64=AtomicU64::new(5);
+fn handle_diskfs_create(_:u64,_:u64,_:u64)->u64{CREATE_RESULT.load(Ordering::Relaxed)}
 struct DocumentGrowth;
 impl DocumentGrowth{
  fn new(_:usize,_:u64)->Result<Self,u32>{MODEL.lock().unwrap().as_mut().unwrap().growth+=1;Ok(Self)}
  fn step(&mut self,_:u64)->Result<bool,u32>{Ok(true)}fn cancel(&self){}
 }
+mod messages{pub const ERR_EXISTS:i64=-8;}
 pub struct DocumentBackend;
 struct DocumentIo{id:u8}
 impl document_journal::Io for DocumentIo{
@@ -56,6 +58,7 @@ impl document_journal::Io for DocumentIo{
 fn document_read(id:u8,offset:u64,out:&mut[u8])->Result<(),u32>{use document_journal::Io;DocumentIo{id}.read(offset,out)}
 include!(env!("DOCUMENT_LOAD_BACKEND_SOURCE"));
 fn setup(){
+ CREATE_RESULT.store(5,Ordering::Relaxed);
  unsafe{DOCUMENT_JOB=None;DOCUMENT_LOAD_JOB=None;}DOCUMENT_WRITE_LOCK.store(0,Ordering::Relaxed);
  *MODEL.lock().unwrap()=Some(Model{bytes:vec![0;65536],reads:vec![],writes:0,gen:1,size:65536,growth:0});
  document_journal::save(&mut DocumentIo{id:3},3,0x40001,b"durable",&mut[0;wire::MAX]).unwrap();
@@ -88,4 +91,12 @@ fn setup(){
  s.retire(18,&mut b);s.progress(&mut b);s.poll(|_,_|panic!("retired completion"));assert!(!document_locked(3));
  assert_eq!(MODEL.lock().unwrap().as_ref().unwrap().reads.len(),before);assert!(!s.pending());
  assert_eq!(wire::decode_reply(s.handle(18,true,r,&mut b).unwrap(),1),Some(Err(wire::DENIED)));
+}
+
+#[test]fn actual_fresh_create_adapter_returns_exact_identity_and_distinct_collision_error(){
+ let _g=TEST_LOCK.lock().unwrap();setup();let mut b=DocumentBackend;let name=*b"browser-new\0\0\0\0\0";
+ assert_eq!(b.create_new(name),Ok((5,0x60001)));
+ CREATE_RESULT.store(messages::ERR_EXISTS as u64,Ordering::Relaxed);assert_eq!(b.create_new(name),Err(wire::EXISTS));
+ for invalid in [0,1,2,15,u64::MAX]{CREATE_RESULT.store(invalid,Ordering::Relaxed);assert_eq!(b.create_new(name),Err(wire::IO));}
+ assert_eq!(MODEL.lock().unwrap().as_ref().unwrap().writes,0);
 }
