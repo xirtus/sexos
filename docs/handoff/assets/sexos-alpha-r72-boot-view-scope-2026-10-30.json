@@ -1,0 +1,419 @@
+{
+  "scope": "Post-acceptance diagnostic-label correction only. All grant/order/fault validation code is unchanged. Rechecks existing exact native traces; does not create another round, production image or new runtime run.",
+  "checker_sha256": "adfb7f7000cda7b5edcb5fdb66b7cd35206a694657730c3676ddeedf5c18708c",
+  "runs": [
+    {
+      "run": "r72-v2-profile",
+      "serial_sha256": "9e65ea3ac2def8e18276b41a63677494088b9f1b40e331c2570712b7a8c1eaf8",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    },
+    {
+      "run": "r72-v2-compact",
+      "serial_sha256": "e4c830f6d2f79e73b553f8557fc9cc969faf2865132d281709fbcc8dbd6723aa",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    },
+    {
+      "run": "r72-v2-max",
+      "serial_sha256": "a221df0ef8289e04f3a2247f6750a44647734edd24da68bb781a083e4d48c8c9",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    },
+    {
+      "run": "r72-max-a1",
+      "serial_sha256": "b60aa404faf894eb7ae6e9ef29f1a892e9bf1f727c351d1f7551f0379af06b57",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    },
+    {
+      "run": "r72-max-b1",
+      "serial_sha256": "d15c0d5f15045451d35d3a38bdbd592ac04ffebe5e2593a14b6f7a251a8e0e54",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    },
+    {
+      "run": "r72-max-b2",
+      "serial_sha256": "e19fe5200ae79139e2bcb371316170b2601fde745784e8e3e71c23cace27225d",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    },
+    {
+      "run": "r72-max-a2",
+      "serial_sha256": "dfa895e5fa342c376c857274260fb05f69bf1aa87f86f42f35e50128712dfc42",
+      "result": {
+        "ok": true,
+        "errors": [],
+        "grants": [
+          [
+            11,
+            64,
+            6,
+            16384,
+            7,
+            9
+          ],
+          [
+            9,
+            64,
+            6,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            65,
+            7,
+            16384,
+            7,
+            16
+          ],
+          [
+            16,
+            64,
+            7,
+            16384,
+            3,
+            11
+          ],
+          [
+            11,
+            66,
+            8,
+            16384,
+            7,
+            18
+          ],
+          [
+            18,
+            64,
+            8,
+            16384,
+            3,
+            11
+          ]
+        ],
+        "scope": "Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks."
+      }
+    }
+  ]
+}

@@ -28,7 +28,7 @@ def inspect(text):
     if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at', text):
         errors.append('fatal guest fault')
     return dict(ok=not errors, errors=errors, grants=grants,
-                scope='Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Scalar Load unchanged; no hostile-containment or reclamation claim.')
+                scope='Normal profile: three distinct permanent BOOT backings; actual query/leaf/alias/scrub assertions before admission. Transport, hostile containment and reclamation require separate checks.')
 
 
 def main():
