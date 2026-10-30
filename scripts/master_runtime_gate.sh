@@ -145,7 +145,7 @@ print_gate() {
 # covers untracked new modules; a concurrent source edit invalidates the bind.
 capture_production_sources() {
     python3 - "$1" <<'PYSOURCES'
-import hashlib,json,pathlib,subprocess,sys
+import hashlib,json,pathlib,subprocess,sys,tomllib
 root=pathlib.Path('.').resolve()
 files=[]
 # libsys is a live workspace path dependency despite its historical parent
@@ -167,6 +167,21 @@ for package in metadata['packages']:
     if not manifest.is_relative_to(root):raise ValueError('unfreezable external local package: '+str(manifest))
     files += [p for p in manifest.parent.rglob('*') if p.is_file() and 'target' not in p.parts
               and p.suffix in ['.rs','.toml','.ld','.json','.S','.asm']]
+    # The pinned local TLS engine includes README.md at compile time. Retain
+    # its original manifest/license/provenance as part of the sealed closure.
+    if package['name']=='embedded-tls':
+        for name in ['README.md','LICENSE','Cargo.toml.upstream','UPSTREAM.toml']:
+            p=manifest.parent/name
+            if not p.is_file():raise ValueError('missing pinned TLS vendor input: '+str(p))
+            files.append(p)
+        upstream=tomllib.loads((manifest.parent/'UPSTREAM.toml').read_text())
+        for entry in upstream['files']:
+            relative=pathlib.Path(entry['path']);p=(manifest.parent/relative).resolve(strict=True)
+            if relative.is_absolute() or not p.is_relative_to(manifest.parent) or not p.is_file():
+                raise ValueError('invalid pinned TLS vendor input: '+str(relative))
+            if p.stat().st_size!=entry['bytes'] or hashlib.sha256(p.read_bytes()).hexdigest()!=entry['sha256']:
+                raise ValueError('changed pinned TLS vendor input: '+str(relative))
+            files.append(p)
 result={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
 pathlib.Path(sys.argv[1]).write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
 PYSOURCES

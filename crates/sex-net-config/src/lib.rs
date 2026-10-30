@@ -10,6 +10,9 @@ pub const HOST_NAME:&[u8]=b"probe.sexos.test";
 pub const DNS_NAME:&[u8]=b"\x05probe\x05sexos\x04test\0";
 pub const DNS_QUESTION:&[u8]=b"\x05probe\x05sexos\x04test\0\0\x01\0\x01";
 pub const MAX_TICKET:u32=17_535;
+/// Protocol endpoint sanctioned by BOOT profile1. This data cannot authorize a
+/// connection; the held network route, exact subject and trust grant must join.
+pub const TLS_PORT:u16=46080;
 const VERSION:u8=1;
 const SOURCE_BASE:u16=48_000;
 
@@ -66,6 +69,12 @@ impl Config {
   if self.profile==1 {Some(HOST_NAME)}else{None}
  }
 
+ /// Profile1's TLS peer shares its sanctioned named address, with a distinct
+ /// fixed protocol port. No caller-supplied port/address is accepted.
+ pub fn tls_endpoint(&self)->Option<([u8;4],u16)> {
+  self.valid().then_some((self.http,TLS_PORT))
+ }
+
  /// Canonical scalar representation. This encoder does not sanction its input;
  /// consumers still validate constructed data or use the checked decoder.
  pub fn to_words(&self)->[u64;4] {
@@ -107,7 +116,7 @@ impl Config {
  #[test]fn known_profile_has_exact_bounded_protocol_name() {
   assert_eq!(Config::CONTROLLED.hostname(),Some(b"probe.sexos.test" as &[u8]));
   assert_eq!(DNS_QUESTION,b"\x05probe\x05sexos\x04test\0\0\x01\0\x01");assert_eq!(DNS_QUESTION.len(),22);
-  for profile in [0,2,127,255] {let config=Config {profile,..Config::CONTROLLED};assert_eq!(config.hostname(),None);rejected(config);}
+  for profile in [0,2,127,255] {let config=Config {profile,..Config::CONTROLLED};assert_eq!(config.hostname(),None);assert_eq!(config.tls_endpoint(),None);rejected(config);}
  }
  #[test]fn alternate_onlink_private_configuration_and_protocol_port_overlap() {
   let config=Config {local:[192,168,7,9],prefix:27,gateway:[192,168,7,1],dns:[192,168,7,2],

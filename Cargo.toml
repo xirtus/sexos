@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/embedded-tls-0.19.0"]
 members = [
     "kernel",
     "servers/sexbell",

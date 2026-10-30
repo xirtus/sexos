@@ -39,7 +39,7 @@ pub struct Machine {
     state: State, request: [u8; MAX_BYTES], response: [u8; MAX_BYTES],
     request_len: usize, staged: usize, sent: usize, response_len: usize,
     deadline: u64, last_now: u64, finished_send: bool,
-    streaming: bool, consumed: usize, idle_deadline: u64,
+    streaming: bool, duplex: bool, finish_requested: bool, consumed: usize, idle_deadline: u64,
     pending: [Option<Receipt>; 6], reply_cursor: usize,
     // One replay fence for each identity in the finite six-app BOOT roster.
     // Entries survive Release and are reclaimed only by exact retirement.
@@ -51,9 +51,11 @@ impl Machine {
         Self { owner: None, ticket: 0, next_ticket: 1, seq: 0, state: State::Idle,
             request: [0; MAX_BYTES], response: [0; MAX_BYTES], request_len: 0,
             staged: 0, sent: 0, response_len: 0, deadline: 0, last_now: 0,
-            finished_send: false, streaming: false, consumed: 0, idle_deadline: 0,
+            finished_send: false, streaming: false, duplex: false, finish_requested: false, consumed: 0, idle_deadline: 0,
             pending: [None; 6], reply_cursor: 0, cached: [None; 6], resolution: None }
     }
+    pub fn is_duplex(&self) -> bool { self.duplex }
+    pub fn finish_requested(&self) -> bool { self.finish_requested }
     pub fn owner(&self) -> Option<Identity> { self.owner }
     pub fn resolution(&self) -> Option<Resolution> { self.resolution }
     pub fn snapshot(&self) -> Snapshot {
@@ -91,7 +93,7 @@ impl Machine {
         self.request.fill(0); self.response.fill(0);
         self.request_len = 0; self.staged = 0; self.sent = 0; self.response_len = 0;
         self.finished_send = false; self.deadline = 0; self.last_now = 0;
-        self.streaming = false; self.consumed = 0; self.idle_deadline = 0;
+        self.streaming = false; self.duplex = false; self.finish_requested = false; self.consumed = 0; self.idle_deadline = 0;
         self.resolution = None;
         wire.abort();
     }
@@ -135,7 +137,7 @@ impl Machine {
         if self.owner == Some(owner) && r.seq <= self.seq {
             return self.respond(slot, owner, r, Err(abi::STALE));
         }
-        let result = if other_held && matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED) { Err(abi::BUSY) }
+        let result = if other_held && matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED | abi::BEGIN_DUPLEX_RESOLVED) { Err(abi::BUSY) }
             else { self.apply(owner, r, now, admission, wire) };
         if self.owner == Some(owner) && r.seq <= abi::MAX_SEQ { self.seq = self.seq.max(r.seq); }
         self.respond(slot, owner, r, result)
@@ -152,10 +154,10 @@ impl Machine {
     }
     fn apply(&mut self, owner: Identity, r: Request, now: u64, admission: Result<Resolution,u32>, wire: &mut impl Wire) -> Result<u32, u32> {
         if owner.pd == 0 || owner.task == 0 || !r.valid() { return Err(abi::INVALID); }
-        if matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED) {
+        if matches!(r.kind, abi::BEGIN | abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED | abi::BEGIN_DUPLEX_RESOLVED) {
             if self.owner.is_some() { return Err(abi::BUSY); }
             if self.next_ticket > abi::MAX_TICKET { return Err(abi::EXHAUSTED); }
-            let resolution = if matches!(r.kind, abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED) {
+            let resolution = if matches!(r.kind, abi::BEGIN_RESOLVED | abi::BEGIN_STREAM_RESOLVED | abi::BEGIN_DUPLEX_RESOLVED) {
                 let record = admission?;
                 if record.owner != owner || record.generation as u64 != r.a
                     || now < record.observed_tick || now >= record.expires_tick { return Err(abi::STALE); }
@@ -165,7 +167,8 @@ impl Machine {
             self.next_ticket = self.next_ticket.checked_add(1).ok_or(abi::EXHAUSTED)?;
             self.owner = Some(owner); self.seq = r.seq; self.state = State::Staging;
             self.request_len = r.length as usize;
-            self.streaming = r.kind == abi::BEGIN_STREAM_RESOLVED;
+            self.duplex = r.kind == abi::BEGIN_DUPLEX_RESOLVED;
+            self.streaming = r.kind == abi::BEGIN_STREAM_RESOLVED || self.duplex;
             self.resolution = resolution;
             return Ok(self.ticket);
         }
@@ -180,6 +183,14 @@ impl Machine {
         }
         match r.kind {
             abi::WRITE => {
+                if self.duplex && self.state != State::Staging {
+                    if !matches!(self.state,State::Connecting|State::Sending|State::Receiving)||self.finish_requested{return Err(abi::BUSY);}
+                    let end=self.staged.checked_add(r.length as usize).ok_or(abi::INVALID)?;
+                    if r.offset as usize!=self.staged||end>abi::MAX_DUPLEX_BYTES{return Err(abi::INVALID);}
+                    if end-self.sent>MAX_BYTES{return Err(abi::BUSY);}
+                    for (i,byte) in r.a.to_le_bytes()[..r.length as usize].iter().enumerate(){self.request[(self.staged+i)%MAX_BYTES]=*byte;}
+                    self.staged=end;return Ok(end as u32);
+                }
                 if self.state != State::Staging { return Err(abi::BUSY); }
                 let end = self.staged.checked_add(r.length as usize).ok_or(abi::INVALID)?;
                 if r.offset as usize != self.staged || end > self.request_len { return Err(abi::INVALID); }
@@ -200,7 +211,7 @@ impl Machine {
             abi::STATUS => Ok(abi::status(self.state, self.response_len)),
             abi::READ => {
                 if self.streaming {
-                    if !matches!(self.state, State::Receiving | State::Complete) { return Err(abi::BUSY); }
+                    if !(matches!(self.state, State::Receiving | State::Complete)||self.duplex&&matches!(self.state,State::Connecting|State::Sending)) { return Err(abi::BUSY); }
                     if r.offset as usize != self.consumed { return Err(abi::INVALID); }
                     let end = self.consumed.checked_add(r.length as usize).ok_or(abi::INVALID)?;
                     if end > self.response_len { return Err(abi::BUSY); }
@@ -222,6 +233,10 @@ impl Machine {
                 let mut bytes = [0u8; 4]; bytes[..r.length as usize].copy_from_slice(&self.response[start..end]);
                 Ok(u32::from_le_bytes(bytes))
             }
+            abi::FINISH => {
+                if !self.duplex||!matches!(self.state,State::Connecting|State::Sending|State::Receiving|State::Complete){return Err(abi::BUSY);}
+                self.finish_requested=true;Ok(0)
+            }
             abi::CANCEL => { self.scrub(wire); self.state = State::Cancelled; Ok(0) }
             abi::RELEASE => {
                 self.scrub(wire); self.owner = None; self.ticket = 0; self.seq = 0; self.state = State::Idle; Ok(0)
@@ -241,25 +256,51 @@ impl Machine {
     /// A full ring is backpressure, not an overflow or an observed EOF. Only the
     /// independent cumulative wire limit permits a one-byte overflow/EOF probe.
     fn stream_receive(&mut self, wire: &mut impl Wire) -> Result<(usize, bool), ()> {
-        if self.response_len == abi::MAX_STREAM_BYTES {
+        self.stream_receive_bounded(wire,TURN)
+    }
+    fn stream_receive_bounded(&mut self, wire:&mut impl Wire,budget:usize)->Result<(usize,bool),()> {
+        let maximum=if self.duplex{abi::MAX_DUPLEX_BYTES}else{abi::MAX_STREAM_BYTES};
+        if self.response_len == maximum {
             return match wire.receive(&mut [0u8; 1]) { Ok(0) => Ok((0, true)), _ => Err(()) };
         }
         let occupied = self.response_len - self.consumed;
         let at = self.response_len % abi::STREAM_RING_BYTES;
         let room = (abi::STREAM_RING_BYTES - occupied).min(abi::STREAM_RING_BYTES - at)
-            .min(TURN).min(abi::MAX_STREAM_BYTES - self.response_len);
+            .min(budget).min(maximum - self.response_len);
         if room == 0 { return Ok((0, false)); }
         match wire.receive(&mut self.response[at..at+room]) {
             Ok(n) if n <= room => { self.response_len += n; Ok((n, n == 0)) },
             _ => Err(()),
         }
     }
-    /// At most TURN received bytes, or (only when receive yields zero) TURN sent.
+    /// Duplex turns share TURN bytes across both directions. Receive gets at
+    /// most half; available TX always gets the remaining budget even under a
+    /// continuous RX stream. A full RX ring never masquerades as an EOF.
+    fn advance_duplex(&mut self,now:u64,wire:&mut impl Wire){
+        let (received,drained)=match self.stream_receive_bounded(wire,TURN/2){Ok(v)=>v,Err(())=>{self.fail(wire);return;}};
+        if received!=0{self.stream_progress(now);}
+        let link=wire.link();if link==Link::Closed{self.fail(wire);return;}
+        if matches!(link,Link::Open|Link::PeerFin)&&self.sent<self.staged {
+            let at=self.sent%MAX_BYTES;let count=(self.staged-self.sent).min(MAX_BYTES-at).min(TURN-received);
+            match wire.send(&self.request[at..at+count]){
+                Ok(n)if n<=count=>{self.request[at..at+n].fill(0);self.sent+=n;if n!=0{self.stream_progress(now);}},
+                _=>{self.fail(wire);return;}
+            }
+        }
+        if self.finish_requested&&self.sent==self.staged&&wire.queued()==0&&!self.finished_send{
+            wire.finish_send();self.finished_send=true;
+        }
+        if self.finished_send&&wire.link()==Link::PeerFin&&drained&&self.consumed==self.response_len&&wire.queued()==0{self.state=State::Complete;}
+        else if wire.link()!=Link::Opening{self.state=if self.sent<self.staged||wire.queued()!=0{State::Sending}else{State::Receiving};}
+    }
+    /// Legacy modes retain receive priority and implicit one-request FIN. Only
+    /// explicit duplex polls both directions and requires caller FINISH.
     pub fn advance(&mut self, now: u64, wire: &mut impl Wire) {
         if !matches!(self.state, State::Connecting | State::Sending | State::Receiving) { return; }
         if self.expired(now) { self.fail(wire); return; }
         self.last_now = now;
         if wire.link() == Link::Closed { self.fail(wire); return; }
+        if self.duplex{self.advance_duplex(now,wire);return;}
         let (n, drained) = if self.streaming {
             match self.stream_receive(wire) { Ok(result) => result, Err(()) => { self.fail(wire); return; } }
         } else {
@@ -638,7 +679,7 @@ mod tests {
         let r=stream_begin(1);assert!(r.valid());assert_eq!(Request::decode(r.encode()),Ok(r));
         for a in [0,abi::MAX_TICKET as u64+1,1u64<<32]{let mut bad=r;bad.a=a;assert!(!bad.valid());}
         for length in [0,4097,u16::MAX]{let mut bad=r;bad.length=length;assert!(!bad.valid());}
-        let mut args=r.encode();args[0]=(args[0]&!(255<<24))|(10<<24);assert_eq!(Request::decode(args),Err(abi::INVALID));
+        let mut args=r.encode();args[0]=(args[0]&!(255<<24))|(12<<24);assert_eq!(Request::decode(args),Err(abi::INVALID));
         let mut m=Machine::new();let mut w=TestWire::new();assert_eq!(call_at(&mut m,&mut w,A,r,10),Err(abi::DENIED));
         assert_eq!(resolved_call(&mut m,&mut w,r,11,Ok(observation(A,1))),Err(abi::DENIED));assert_eq!(m.owner(),None);assert_eq!(m.next_ticket,1);assert!(!m.streaming);
         assert!(m.handle_resolved(A,stream_begin(2),11,true,Ok(observation(A,1)),&mut w));m.reply_accepted();
@@ -742,6 +783,88 @@ mod tests {
         }
         assert_eq!(actual,wanted);assert_eq!(m.state,State::Complete);assert_eq!(m.stream_snapshot(),Some(StreamSnapshot{produced:2049,consumed:2049,buffered:0}));assert_eq!(w.finishes,1);
         assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::RELEASE,t),now),Ok(0));assert_eq!(m.stream_snapshot(),None);scrubbed(&m);
+    }
+
+    fn duplex(bytes:usize)->(Machine,TestWire,u32,u32){
+        let(mut m,mut w)=(Machine::new(),TestWire::new());let mut begin=stream_begin(1);begin.kind=abi::BEGIN_DUPLEX_RESOLVED;begin.length=bytes as u16;
+        let t=resolved_call(&mut m,&mut w,begin,10,Ok(observation(A,1))).unwrap();let mut seq=2;
+        for offset in (0..bytes).step_by(8){let mut r=req(seq,abi::WRITE,t);seq+=1;r.offset=offset as u16;r.length=(bytes-offset).min(8)as u16;r.a=u64::MAX>>((8-r.length)*8);assert_eq!(call_at(&mut m,&mut w,A,r,10),Ok((offset+r.length as usize)as u32));}
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::START,t),10),Ok(0));seq+=1;assert!(m.is_duplex());assert!(!m.finish_requested());(m,w,t,seq)
+    }
+    fn duplex_write(seq:u32,t:u32,offset:usize,bytes:&[u8])->Request{
+        let mut r=req(seq,abi::WRITE,t);r.offset=offset as u16;r.length=bytes.len()as u16;let mut word=[0;8];word[..bytes.len()].copy_from_slice(bytes);r.a=u64::from_le_bytes(word);r
+    }
+    #[test]fn duplex_abi_canonical_begin_finish_and_fail_closed_admission(){
+        let mut begin=stream_begin(1);begin.kind=abi::BEGIN_DUPLEX_RESOLVED;assert!(begin.valid());assert_eq!(Request::decode(begin.encode()),Ok(begin));
+        for length in [0,4097,u16::MAX]{let mut r=begin;r.length=length;assert!(!r.valid());}for a in [0,abi::MAX_TICKET as u64+1,1<<32]{let mut r=begin;r.a=a;assert!(!r.valid());}
+        let finish=req(2,abi::FINISH,1);assert!(finish.valid());assert_eq!(Request::decode(finish.encode()),Ok(finish));for mode in 0..3{let mut r=finish;match mode{0=>r.offset=1,1=>r.length=1,_=>r.a=1}assert!(!r.valid());}
+        let(mut m,mut w)=(Machine::new(),TestWire::new());assert_eq!(call_at(&mut m,&mut w,A,begin,10),Err(abi::DENIED));assert_eq!(resolved_call(&mut m,&mut w,begin,11,Ok(observation(A,1))),Err(abi::DENIED));assert!(!m.is_duplex());assert_eq!(m.next_ticket,1);assert_eq!(w.begins,0);
+        begin.seq=2;assert!(m.handle_resolved(A,begin,11,true,Ok(observation(A,1)),&mut w));m.reply_accepted();assert_eq!(resolved_call(&mut m,&mut w,begin,12,Ok(observation(A,1))),Err(abi::BUSY));assert_eq!(m.owner(),None);
+    }
+    #[test]fn duplex_initial_drain_never_halfcloses_and_finish_requires_all_ingress_consumed(){
+        let(mut m,mut w,t,mut seq)=duplex(1);m.advance(11,&mut w);assert_eq!((m.sent,w.finishes),(1,0));assert_eq!(m.state,State::Receiving);
+        w.incoming=b"abc".to_vec();w.link=Link::PeerFin;m.advance(12,&mut w);assert_eq!(m.response_len,3);assert_eq!(m.state,State::Receiving);assert_eq!(w.finishes,0);
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),12),Ok(0));seq+=1;m.advance(13,&mut w);assert_eq!(w.finishes,1);assert_eq!(m.state,State::Receiving);
+        assert_eq!(call_at(&mut m,&mut w,A,read(seq,t,0,3),13),Ok(0x00636261));seq+=1;m.advance(14,&mut w);assert_eq!(m.state,State::Complete);assert_eq!(m.consumed,m.response_len);
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),40_000),Ok(0));m.advance(40_001,&mut w);assert_eq!(w.finishes,1);
+    }
+    #[test]fn duplex_finish_seals_writes_and_waits_for_private_and_wire_queues(){
+        let(mut m,mut w,t,mut seq)=duplex(600);w.send_limit=10;w.queued=1;assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),11),Ok(0));seq+=1;
+        assert_eq!(call_at(&mut m,&mut w,A,duplex_write(seq,t,600,b"x"),11),Err(abi::BUSY));seq+=1;assert_eq!(m.staged,600);
+        for now in 12..72{m.advance(now,&mut w);}assert_eq!(m.sent,600);assert_eq!(w.finishes,0);w.queued=0;m.advance(72,&mut w);assert_eq!(w.finishes,1);
+        assert_eq!(call_at(&mut m,&mut w,A,duplex_write(seq,t,600,b"x"),73),Err(abi::BUSY));assert_eq!(m.staged,600);
+        let(mut legacy,mut wire)=(Machine::new(),TestWire::new());let ticket=start(&mut legacy,&mut wire,1);assert_eq!(call_at(&mut legacy,&mut wire,A,req(1001,abi::FINISH,ticket),11),Err(abi::BUSY));
+    }
+    #[test]fn duplex_both_directions_progress_under_continuous_rx_with_shared_turn_budget(){
+        let(mut m,mut w,_,_)=duplex(MAX_BYTES);w.incoming=vec![0x42;2048];
+        for now in 11..19{let before=(m.sent,m.response_len);m.advance(now,&mut w);assert_eq!(m.sent-before.0,TURN/2);assert_eq!(m.response_len-before.1,TURN/2);assert_eq!((m.sent-before.0)+(m.response_len-before.1),TURN);}
+        let calls=w.receive_calls;let sent=m.sent;m.advance(19,&mut w);assert_eq!(w.receive_calls,calls);assert_eq!(m.sent-sent,TURN);assert_eq!(w.finishes,0);assert_eq!(m.response_len,abi::STREAM_RING_BYTES);
+    }
+    #[test]fn duplex_tx_full_rejects_before_effect_then_wraps_with_retained_write_receipt(){
+        let(mut m,mut w,t,mut seq)=duplex(MAX_BYTES);w.link=Link::Opening;let full=duplex_write(seq,t,MAX_BYTES,b"abcdefgh");assert_eq!(call_at(&mut m,&mut w,A,full,11),Err(abi::BUSY));seq+=1;assert_eq!(m.staged,MAX_BYTES);
+        w.link=Link::Open;m.advance(12,&mut w);let write=duplex_write(seq,t,MAX_BYTES,b"abcdefgh");assert!(m.handle(A,write,12,&mut w));let receipt=m.pending_reply();assert_eq!(receipt,Some((A,abi::reply(seq,(MAX_BYTES+8)as u32))));assert_eq!(&m.request[..8],b"abcdefgh");
+        assert!(!m.handle(A,duplex_write(seq+1,t,MAX_BYTES+8,b"z"),13,&mut w));assert_eq!(m.staged,MAX_BYTES+8);for now in 13..32{m.advance(now,&mut w);}assert_eq!(w.sent.len(),MAX_BYTES+8);assert_eq!(&w.sent[MAX_BYTES..],b"abcdefgh");assert!(m.request.iter().all(|b|*b==0));
+        assert!(m.handle(A,write,20_000,&mut w));assert_eq!(m.pending_reply(),receipt);m.reply_accepted();assert_eq!(call_at(&mut m,&mut w,A,write,20_000),Ok((MAX_BYTES+8)as u32));assert_eq!(w.sent.len(),MAX_BYTES+8);assert_eq!(m.staged,MAX_BYTES+8);
+    }
+    #[test]fn duplex_early_read_and_late_exact_replay_survive_ring_reuse(){
+        let(mut m,mut w,t,seq)=duplex(1);w.link=Link::Opening;w.incoming=(0..2048).map(|n|(n%251)as u8).collect();m.advance(11,&mut w);assert_eq!(m.state,State::Connecting);
+        let read=read(seq,t,0,4);assert!(m.handle(A,read,11,&mut w));let receipt=m.pending_reply();assert_eq!(receipt,Some((A,abi::reply(seq,0x03020100))));assert_eq!(m.consumed,4);assert_eq!(&m.response[..4],&[0;4]);
+        for now in 12..22{m.advance(now,&mut w);}assert_eq!(m.response_len,1028);assert_eq!(&m.response[..4],&w.incoming[1024..1028]);assert!(m.handle(A,read,22,&mut w));assert_eq!(m.pending_reply(),receipt);m.reply_accepted();assert_eq!(call_at(&mut m,&mut w,A,read,23),Ok(0x03020100));assert_eq!(m.consumed,4);
+    }
+    #[test]fn duplex_absolute_cursor_and_exact_owner_rejections_preserve_buffers(){
+        let(mut m,mut w,t,mut seq)=duplex(1);m.advance(11,&mut w);w.incoming=b"abcd".to_vec();m.advance(12,&mut w);let idle=m.idle_deadline;
+        assert_eq!(call_at(&mut m,&mut w,B,duplex_write(1,t,1,b"x"),12),Err(abi::DENIED));assert_eq!(call_at(&mut m,&mut w,A,duplex_write(seq,t+1,1,b"x"),12),Err(abi::STALE));seq+=1;
+        for offset in [0,2]{assert_eq!(call_at(&mut m,&mut w,A,duplex_write(seq,t,offset,b"x"),12),Err(abi::INVALID));seq+=1;}assert_eq!(m.staged,1);assert_eq!(m.idle_deadline,idle);
+        assert_eq!(call_at(&mut m,&mut w,B,read(2,t,0,4),12),Err(abi::DENIED));assert_eq!(call_at(&mut m,&mut w,A,read(seq,t,1,3),12),Err(abi::INVALID));assert_eq!((m.consumed,m.response_len),(0,4));assert_eq!(m.idle_deadline,idle);
+    }
+    #[test]fn duplex_cumulative_tx_bound_never_wraps_or_extends_on_duplicate(){
+        let(mut m,mut w,t,mut seq)=duplex(1);m.advance(11,&mut w);let mut expected=vec![255];
+        while m.staged<abi::MAX_DUPLEX_BYTES{let n=(abi::MAX_DUPLEX_BYTES-m.staged).min(8);let bytes=[0x69;8];let r=duplex_write(seq,t,m.staged,&bytes[..n]);assert_eq!(call_at(&mut m,&mut w,A,r,11),Ok((m.staged)as u32));seq+=1;expected.extend_from_slice(&bytes[..n]);m.advance(11,&mut w);}
+        assert_eq!(w.sent,expected);assert_eq!((m.sent,m.staged),(abi::MAX_DUPLEX_BYTES,abi::MAX_DUPLEX_BYTES));assert_eq!(call_at(&mut m,&mut w,A,duplex_write(seq,t,abi::MAX_DUPLEX_BYTES,b"x"),11),Err(abi::INVALID));assert_eq!(m.staged,abi::MAX_DUPLEX_BYTES);assert_eq!(w.finishes,0);
+    }
+    #[test]fn duplex_rx_limit_requires_real_fin_and_full_consumption_extra_byte_fails(){
+        for extra in [0,1]{let(mut m,mut w,t,mut seq)=duplex(1);w.incoming=vec![0x61;abi::MAX_DUPLEX_BYTES+extra];let mut actual=Vec::new();let mut now=10;
+            for _ in 0..9000{now+=1;m.advance(now,&mut w);if m.state==State::Failed{break;}let available=m.response_len-m.consumed;if available!=0{let n=available.min(4);let r=read(seq,t,actual.len(),n);seq+=1;let word=call_at(&mut m,&mut w,A,r,now).unwrap();actual.extend_from_slice(&word.to_le_bytes()[..n]);}if actual.len()==abi::MAX_DUPLEX_BYTES{break;}}
+            if extra!=0{assert_eq!(m.state,State::Failed);scrubbed(&m);}else{assert_eq!(actual,w.incoming);assert_ne!(m.state,State::Complete);assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),now),Ok(0));m.advance(now+1,&mut w);assert_ne!(m.state,State::Complete);w.link=Link::PeerFin;m.advance(now+2,&mut w);assert_eq!(m.state,State::Complete);}
+        }
+    }
+    #[test]fn duplex_deadlines_and_cleanup_scrub_both_rings_and_clear_mode(){
+        for cleanup in [abi::CANCEL,abi::RELEASE,0,255]{let(mut m,mut w,t,seq)=duplex(1);m.advance(11,&mut w);w.incoming=b"secret ciphertext".to_vec();m.advance(12,&mut w);
+            if cleanup==0{assert!(m.retire(A,&mut w));assert_eq!(m.pending_reply(),None);assert!(m.cached.iter().all(Option::is_none));}
+            else if cleanup==255{m.advance(5012,&mut w);assert_eq!(m.state,State::Failed);}
+            else{assert_eq!(call_at(&mut m,&mut w,A,req(seq,cleanup,t),12),Ok(0));}
+            scrubbed(&m);assert!(!m.is_duplex());assert!(!m.finish_requested());assert_eq!((m.staged,m.sent,m.consumed,m.response_len),(0,0,0,0));assert!(!m.can_transmit(t));
+        }
+    }
+
+    #[test]fn duplex_status_and_staging_cannot_refresh_idle_or_total_deadlines(){
+        let(mut m,mut w,t,mut seq)=duplex(1);m.advance(11,&mut w);w.link=Link::Opening;let idle=m.idle_deadline;
+        assert_eq!(call_at(&mut m,&mut w,A,duplex_write(seq,t,1,b"staged"),1000),Ok(7));seq+=1;assert_eq!(m.idle_deadline,idle);
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::STATUS,t),4000),Ok(abi::status(State::Receiving,0)));m.advance(idle,&mut w);assert_eq!(m.state,State::Failed);scrubbed(&m);
+        let(mut m,mut w,_,_)=duplex(1);w.receive_limit=1;w.incoming=vec![7;8];
+        for now in [4000,8000,12000,16000,20000,24000,28000]{m.advance(now,&mut w);assert_ne!(m.state,State::Failed);}
+        assert_eq!(m.deadline,30_010);m.advance(30_010,&mut w);assert_eq!(m.state,State::Failed);scrubbed(&m);
+        let(mut m,mut w,_,_)=duplex(1);m.advance(11,&mut w);m.advance(10,&mut w);assert_eq!(m.state,State::Failed);scrubbed(&m);
     }
 
 }

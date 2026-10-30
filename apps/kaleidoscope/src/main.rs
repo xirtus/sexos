@@ -12,6 +12,7 @@ mod clock_probe;
 mod trust_probe;
 mod clock_view;
 mod tls_probe;
+mod tls_exchange;
 mod http_wire;
 mod http_probe;
 mod http_navigation;
@@ -19,7 +20,7 @@ mod browser_view;
 mod document_reader;
 #[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
 mod text_delivery;
-#[derive(Clone,Copy)]enum Intent{Echo,Dns,HttpDns,Http}
+#[derive(Clone,Copy)]enum Intent{Echo,Dns,HttpDns,Http,TlsDns,TlsStart}
 
 use silkclient::{app_main, SexApp};
 // Private BOOT ELF backing replaces the old ambient fixed-address heap.
@@ -60,6 +61,10 @@ struct App {
     tls:tls_probe::Probe,
     tls_view:tls_probe::View,
     tls_panel:bool,
+    exchange:tls_exchange::Client,
+    peer_view:tls_exchange::View,
+    peer_panel:bool,
+    peer_generation:u32,peer_sequence:u32,peer_ticket_logged:u32,
     http:http_probe::Client,
     http_view:http_probe::View,
     intent:Option<Intent>,
@@ -229,14 +234,14 @@ impl SexApp for App {
         full_resource_cleanup_proof();
         Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),reading:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
-            dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
+            dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:tls_exchange::Client::new(),peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
             intent:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
 
     }
 
     fn run(&mut self, _pdx: u32) -> bool {
         if self.viewport_ready&&sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,self.identity.target_pd as u64,self.identity.task_id as u64,0).is_ok(){self.viewport_ready=false;}
-        let pending=self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
+        let pending=self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
         let message=if pending{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
         if let Some(req)=message{
             if sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],self.identity.target_pd,self.identity.task_id)
@@ -244,6 +249,8 @@ impl SexApp for App {
                 sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
                 sex_pdx::serial_record!("[browser.dns.closed] pending={} terminal=1",self.dns.busy()as u8);
                 sex_pdx::serial_record!("[browser.http.closed] pending={} terminal=1",self.http.busy()as u8);
+                let peer_pending=self.exchange.busy()||matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart));self.exchange.close();
+                sex_pdx::serial_record!("[browser.tls.peer.closed] pending={} terminal=1 owned_storage=erased",peer_pending as u8);
                 let tls_pending=self.tls.busy();let erased=self.tls.close();
                 sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",erased);
                 sex_pdx::serial_record!("[browser.tls.closed] pending={} terminal=1 owned_storage=erased",tls_pending as u8);
@@ -269,6 +276,7 @@ impl SexApp for App {
                 else if matches!(req.arg0>>56,0x7B|0xEB){self.clock.reply(req.arg0,sex_pdx::get_ticks());}
                 else if matches!(req.arg0>>56,0x7A|0xEA){self.seed.reply(req.arg0,sex_pdx::get_ticks());}
                 else if matches!(req.arg0>>56,0x79|0xE9){self.dns.reply(req.arg0,sex_pdx::get_ticks());}
+                else if self.exchange.busy(){self.exchange.reply(req.arg0,sex_pdx::get_ticks());}
                 else if self.http.busy(){self.http.reply(req.arg0,sex_pdx::get_ticks());}
                 else{self.probe.reply(req.arg0,sex_pdx::get_ticks());}
             }
@@ -279,6 +287,7 @@ impl SexApp for App {
                 if self.ui_failed{self.ui_failed=false;self.ui_retries=0;self.ui_dirty=true;}
                 let intent=match req.arg0{0x13=>Some(Intent::Echo),0x20=>Some(Intent::Dns),0x23=>Some(Intent::HttpDns),_=>None};
                 if let Some(intent)=intent{
+                    self.exchange.cancel();if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart)){self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);}self.peer_panel=false;
                     self.reading=false;self.reader.clear();
                     // New intent also invalidates a released continuation.
                     if self.navigation.active()||matches!(intent,Intent::HttpDns){self.http.cancel();}
@@ -288,10 +297,11 @@ impl SexApp for App {
                     if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}
                     self.intent=Some(intent);if self.probe.busy(){self.probe.cancel();}if self.dns.busy(){self.dns.cancel();}if self.http.busy(){self.http.cancel();}
                 }else{match req.arg0{
-                    0x12=>{if self.tls.busy(){let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);if n>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);}}self.tls_panel=false;self.clock_panel=false;self.reading=false;self.reader.clear();let accepted=self.seed.start();sex_pdx::serial_record!("[browser.entropy.intent] accepted={} explicit=1 fallback=0",accepted as u8);},
-                    0x14=>{if self.tls.busy(){let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);if n>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);}}self.tls_panel=false;self.clock_panel=true;self.reading=false;self.reader.clear();let accepted=self.clock.start();sex_pdx::serial_record!("[browser.clock.intent] accepted={} explicit=1 no_ticks_fallback=1",accepted as u8);},
-                    0x10=>{let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);},
-                    0x26=>{self.tls_panel=true;self.reading=false;self.reader.clear();let accepted=self.tls.start(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks());sex_pdx::serial_record!("[browser.tls.intent] accepted={} explicit=1 network=0",accepted as u8);},
+                    0x12=>{if self.tls.busy(){let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);if n>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);}}if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart)){self.intent=None;self.dns.cancel();}self.peer_panel=false;self.exchange.cancel();self.tls_panel=false;self.clock_panel=false;self.reading=false;self.reader.clear();let accepted=self.seed.start();sex_pdx::serial_record!("[browser.entropy.intent] accepted={} explicit=1 fallback=0",accepted as u8);},
+                    0x14=>{if self.tls.busy(){let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);if n>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);}}if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart)){self.intent=None;self.dns.cancel();}self.peer_panel=false;self.exchange.cancel();self.tls_panel=false;self.clock_panel=true;self.reading=false;self.reader.clear();let accepted=self.clock.start();sex_pdx::serial_record!("[browser.clock.intent] accepted={} explicit=1 no_ticks_fallback=1",accepted as u8);},
+                    0x10=>{self.exchange.cancel();if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart)){self.intent=None;self.dns.cancel();}let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);},
+                    0x26=>{self.exchange.cancel();if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart)){self.intent=None;self.dns.cancel();}self.peer_panel=false;self.tls_panel=true;self.reading=false;self.reader.clear();let accepted=self.tls.start(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks());sex_pdx::serial_record!("[browser.tls.intent] accepted={} explicit=1 network=0",accepted as u8);},
+                    0x15=>{self.exchange.cancel();self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);self.probe.cancel();self.dns.cancel();self.http.cancel();self.navigation.cancel();self.reading=false;self.reader.clear();self.peer_panel=true;self.tls_panel=false;self.clock_panel=false;self.intent=Some(Intent::TlsDns);sex_pdx::serial_record!("[browser.tls.peer.intent] accepted=1 explicit=1 public_internet=0");},
                     0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
                     0x2D=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
                     0x24=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
@@ -309,14 +319,27 @@ impl SexApp for App {
                 sex_pdx::serial_record!("[browser.http.redirect.denied] loop_or_limit_or_superseded=1 effects=0");
             }
         }
-        if !self.probe.busy()&&!self.dns.busy()&&!self.http.busy(){
+        if !self.probe.busy()&&!self.dns.busy()&&!self.http.busy()&&!self.exchange.busy(){
             if let Some(intent)=self.intent.take(){
                 // Echo and HTTP share the exact0x20C caller replay fence.
-                let sequence=self.probe.next_sequence().max(self.http.next_sequence());
+                let sequence=self.probe.next_sequence().max(self.http.next_sequence()).max(self.exchange.next_sequence());
                 match intent{
                     Intent::Echo=>{if !self.probe.restart_at(sequence){sex_pdx::serial_record!("[browser.net.start.rejected] protocol=echo seq={} effects=0",sequence);}},
                     Intent::Dns=>self.dns.start(),
                     Intent::HttpDns=>{self.http.wait_for_resolution();self.dns.start();self.intent=Some(Intent::Http);},
+                    Intent::TlsDns=>{
+                        if self.trust.busy()||self.seed.busy()||self.clock.busy(){self.intent=Some(Intent::TlsDns);}
+                        else if self.tls.start_exchange(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks()){self.dns.start();self.intent=Some(Intent::TlsStart);}
+                        else{self.exchange.reject_prerequisites();}
+                    },
+                    Intent::TlsStart=>{
+                        if self.tls.view()==tls_probe::View::HelloPending{
+                            let generation=self.dns.generation().unwrap_or(0);
+                            if let Some(session)=self.tls.take_exchange(){
+                                if self.exchange.start(session,sequence,generation){self.peer_generation=generation;self.peer_sequence=sequence;self.peer_ticket_logged=0;}
+                            }
+                        }else if self.tls.busy(){self.intent=Some(Intent::TlsStart);}else{self.exchange.reject_prerequisites();}
+                    },
                     Intent::Http=>{
                         let generation=self.dns.generation().unwrap_or(0);
                         if !self.http.start_resolved_path(sequence,generation,self.navigation.current()){self.navigation.cancel();sex_pdx::serial_record!("[browser.net.start.rejected] protocol=http seq={} dns_generation={} effects=0",sequence,generation);}
@@ -331,12 +354,28 @@ impl SexApp for App {
         if let Some(profile)=self.tls.take_self_check(){sex_pdx::serial_record!("[browser.trust.self_check] profile={} passed=1 fixture=public_controlled_profile authenticated_peer=0",profile);}
         if let Some(stats)=prepared{sex_pdx::serial_record!("[browser.tls.prepared] task_bytes={} private_bytes={} read=4096 write=2048 tx_bytes={} utc_snapshot={} authenticated=0 network=0",stats.task_bytes,stats.private_bytes,stats.tx_bytes,stats.utc_snapshot);}
         if erased>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",erased);}
-        if self.probe.busy(){self.probe.advance(sex_pdx::get_ticks());}
+        if self.exchange.busy(){self.exchange.advance(sex_pdx::get_ticks());}
+        else if self.probe.busy(){self.probe.advance(sex_pdx::get_ticks());}
         else if self.dns.busy(){self.dns.advance(sex_pdx::get_ticks());}
         else if self.http.busy(){self.http.advance(sex_pdx::get_ticks());}
         if self.navigation.active()&&self.intent.is_none()&&!self.http.busy()&&!self.dns.busy(){
             if self.http.view()==http_probe::View::Ready{self.navigation.complete();}
             else if matches!(self.http.view(),http_probe::View::Unavailable|http_probe::View::Cancelled){self.navigation.cancel();}
+        }
+        let peer_ticket=self.exchange.ticket();
+        if peer_ticket!=0&&peer_ticket!=self.peer_ticket_logged{
+            self.peer_ticket_logged=peer_ticket;if let Some(stats)=self.exchange.stats(){sex_pdx::serial_record!("[browser.tls.peer.admitted] ticket={} dns_generation={} seq={} task_bytes={} private_bytes={} profile=1 authority=held_route",peer_ticket,self.peer_generation,self.peer_sequence,stats.task_bytes,stats.private_bytes);}
+        }
+        if self.exchange.take_authenticated(){sex_pdx::serial_record!("[browser.tls.peer.authenticated] ticket={} profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1",peer_ticket);}
+        if self.exchange.take_response_verified(){sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}
+        let peer_view=if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsStart)){
+            if self.exchange.view()==tls_exchange::View::Uncertain||self.trust.view()==trust_probe::View::Uncertain||self.seed.view()==entropy_probe::View::Uncertain||self.clock.view()==clock_probe::View::Uncertain{tls_exchange::View::Uncertain}else{tls_exchange::View::Pending}
+        }else{self.exchange.view()};
+        if peer_view!=self.peer_view{
+            self.peer_view=peer_view;
+            if peer_view==tls_exchange::View::Verified{sex_pdx::serial_record!("[browser.tls.peer.released] ticket={} tx={} rx={} request_bytes={} response_bytes={} positive_release=1 authenticated=1 public_test_root=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),sex_tls::EXCHANGE_REQUEST.len(),sex_tls::EXCHANGE_RESPONSE.len());}
+            if peer_view==tls_exchange::View::Cancelled&&peer_ticket!=0&&!self.exchange.busy(){sex_pdx::serial_record!("[browser.tls.peer.cancelled] ticket={} positive_release=1 authenticated={}",peer_ticket,self.exchange.peer_authenticated() as u8);}
+            sex_pdx::serial_record!("[browser.tls.peer.view] state={:?} controlled_profile=1 public_internet=0",peer_view);
         }
         let view=self.probe.view();if view!=self.probe_view{self.probe_view=view;sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}
         let view=self.dns.view();if view!=self.dns_view{self.dns_view=view;sex_pdx::serial_record!("[browser.dns.view] state={:?} web=0",view);}
@@ -350,16 +389,18 @@ impl SexApp for App {
             let f=self.reader.render_path(self.http.document(),self.http.document_path());reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.http.document().len(),first:f.first,rows:f.body_rows,selected:http_view_code(self.http.view())|256}))
         }else{browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()).and_then(|text|{
-            if self.tls_panel{browser_view::with_tls(text,tls_probe::label(self.tls.view()))}
+            if self.peer_panel{browser_view::with_peer(text,peer_label(self.peer_view))}
+            else if self.tls_panel{browser_view::with_tls(text,tls_probe::label(self.tls.view()))}
             else if self.clock_panel{if let Some(status)=clock_view::status(self.clock.view()){browser_view::with_clock(text,&status.bytes[..status.len])}else{Some(text)}}
             else{browser_view::with_seed(text,seed_label(self.seed.view()))}
         }).map(|text|(text,text_delivery::Metadata{count:if matches!(self.http.view(),http_probe::View::Ready){self.http.body_length()}else{0},first:0,rows:0,selected:http_view_code(self.http.view())}))};
         if let Some((text,metadata))=composed{
-            if reader_layout.is_none()&&self.tls_panel&&self.tls.view()!=tls_probe::View::Idle&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.tls.view());}
-            if reader_layout.is_none()&&!self.tls_panel&&self.clock_panel&&self.clock.view()!=clock_probe::View::Idle&&self.ui_last!=text.bytes{
+            if reader_layout.is_none()&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
+            if reader_layout.is_none()&&!self.peer_panel&&self.tls_panel&&self.tls.view()!=tls_probe::View::Idle&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.tls.view());}
+            if reader_layout.is_none()&&!self.peer_panel&&!self.tls_panel&&self.clock_panel&&self.clock.view()!=clock_probe::View::Idle&&self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.clock.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.clock.view());
             }
-            if reader_layout.is_none()&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed.view()).is_some()&&self.ui_last!=text.bytes{
+            if reader_layout.is_none()&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed.view()).is_some()&&self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.entropy.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.seed.view());
             }
             if self.ui_last_len!=text.len||self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata){
@@ -375,7 +416,7 @@ impl SexApp for App {
                 Ok(_)=>text_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>text_delivery::Admission::Full,Err(e)=>text_delivery::Admission::Rejected(e),
             }
         }){self.ui.cancel();self.ui_dirty=true;self.ui_retries=self.ui_retries.saturating_add(1);self.ui_failed=self.ui_retries>=3;sex_pdx::serial_record!("[browser.view.rejected] error={} attempts={} terminal={} accepted_network_replay=0",error,self.ui_retries,self.ui_failed as u8);}
-        if self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
+        if self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
         true
     }
 
@@ -414,3 +455,6 @@ fn full_resource_cleanup_proof()->! {
 }
 
 app_main!(App);
+
+fn peer_label(view:tls_exchange::View)->&'static[u8]{match view{tls_exchange::View::Idle=>b"idle",tls_exchange::View::Pending=>b"checking",tls_exchange::View::Verified=>b"peer verified",tls_exchange::View::Unavailable=>b"unavailable",tls_exchange::View::Cancelled=>b"cancelled",tls_exchange::View::Uncertain=>b"waiting receipt"}}
+fn public_fingerprint(bytes:&[u8])->u64{bytes.iter().fold(0xcbf29ce484222325,|hash,byte|(hash^*byte as u64).wrapping_mul(0x100000001b3))}

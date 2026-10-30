@@ -1,0 +1,709 @@
+# Reviewed local fork of the exact published crate, not GitHub main.
+schema = 1
+name = "embedded-tls"
+version = "0.19.0"
+license = "Apache-2.0"
+archive_url = "https://static.crates.io/crates/embedded-tls/embedded-tls-0.19.0.crate"
+archive_sha256 = "6ff3c16c9cedcab3ef5c79fd46349152adbb98f997b937cb1ead7655f5c07e43"
+upstream_git = "865e1fd983c583228e3bbeb9f4996f1abc454ca3"
+original_members = 96
+scope = "Reject empty/all-padding TLSInnerPlaintext and unsupported post-handshake records without panic. No new TLS features, providers, protocols or authority."
+manifest_normalization = "Retain Cargo.toml.upstream exactly. Remove only upstream host integration [[test]] entries and [dev-dependencies.*] from effective Cargo.toml. All normal/optional dependency and feature declarations remain identical."
+test_normalization = "Remove logging-only env_logger::init from upstream key_share unit setup; add a test-only harness of the identical actual vendor library source and existing enabled crypto dependency set, with scalar SHA2."
+patch = "SEXOS_PATCHES.patch"
+
+[[files]]
+path = ".cargo_vcs_info.json"
+sha256 = "6a6b435bbb96a2349863d4fc0d6650c49635da9da178c45dbdeafad42428872b"
+bytes = 94
+upstream_sha256 = "6a6b435bbb96a2349863d4fc0d6650c49635da9da178c45dbdeafad42428872b"
+upstream_bytes = 94
+
+[[files]]
+path = ".gitattributes"
+sha256 = "1377d67d509f4579cf8d0239c010cf64f8452d77122445e6dfc562c23645994e"
+bytes = 22
+upstream_sha256 = "1377d67d509f4579cf8d0239c010cf64f8452d77122445e6dfc562c23645994e"
+upstream_bytes = 22
+
+[[files]]
+path = ".gitignore"
+sha256 = "ecf4a4299be6663d5fa85cb0a9535d60ecc71b3faef4b956888ab33f6b2f7977"
+bytes = 34
+upstream_sha256 = "ecf4a4299be6663d5fa85cb0a9535d60ecc71b3faef4b956888ab33f6b2f7977"
+upstream_bytes = 34
+
+[[files]]
+path = "CHANGELOG.md"
+sha256 = "b651ea1d3d407114f6bdf1f04139b3546ba9dbac66aa3ae3307e09d46e42a628"
+bytes = 1932
+upstream_sha256 = "b651ea1d3d407114f6bdf1f04139b3546ba9dbac66aa3ae3307e09d46e42a628"
+upstream_bytes = 1932
+
+[[files]]
+path = "Cargo.lock"
+sha256 = "3719c7b8e591fb0759739364ee993518a1a3cdd8a09d845384bc3cb483e80a55"
+bytes = 41141
+upstream_sha256 = "3719c7b8e591fb0759739364ee993518a1a3cdd8a09d845384bc3cb483e80a55"
+upstream_bytes = 41141
+
+[[files]]
+path = "Cargo.toml"
+sha256 = "716f06505dab9054a1438a69b8848bdf7a390f652eda1c7435fbea87ddba525c"
+bytes = 3637
+upstream_sha256 = "2a061a6ea8ef71879f5e4985cb453c1a5f83fc18419f8d4884bb5f4e1f9a6c7a"
+upstream_bytes = 4570
+
+[[files]]
+path = "Cargo.toml.orig"
+sha256 = "71ed2582dc121e22a21aeeaceb21dcdf84371e1233f0c07b2593889d02290730"
+bytes = 2744
+upstream_sha256 = "71ed2582dc121e22a21aeeaceb21dcdf84371e1233f0c07b2593889d02290730"
+upstream_bytes = 2744
+
+[[files]]
+path = "Cargo.toml.upstream"
+sha256 = "2a061a6ea8ef71879f5e4985cb453c1a5f83fc18419f8d4884bb5f4e1f9a6c7a"
+bytes = 4570
+added = true
+
+[[files]]
+path = "LICENSE"
+sha256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+bytes = 11357
+upstream_sha256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+upstream_bytes = 11357
+
+[[files]]
+path = "README.md"
+sha256 = "b6d3bb7548768a7f25d83af60a30d75cf44a977e9253c6d3f411d812f60f3637"
+bytes = 1972
+upstream_sha256 = "b6d3bb7548768a7f25d83af60a30d75cf44a977e9253c6d3f411d812f60f3637"
+upstream_bytes = 1972
+
+[[files]]
+path = "SEXOS_PATCHES.patch"
+sha256 = "cafd0823e5b33222608a6b9a1f9bf813519ff2b82ce75a6b7087cc8e9c0e5f57"
+bytes = 9960
+added = true
+
+[[files]]
+path = "WINDOWS.md"
+sha256 = "0e598eb4ef60e9e71ee11679107aac392eb04ca7596ba5e5eb2deb7a176205a9"
+bytes = 457
+upstream_sha256 = "0e598eb4ef60e9e71ee11679107aac392eb04ca7596ba5e5eb2deb7a176205a9"
+upstream_bytes = 457
+
+[[files]]
+path = "rust-toolchain.toml"
+sha256 = "a5fc8fc90f597a7291f3b779e90322a6332cc58d5afcb10d6698a46dfea413e8"
+bytes = 241
+upstream_sha256 = "a5fc8fc90f597a7291f3b779e90322a6332cc58d5afcb10d6698a46dfea413e8"
+upstream_bytes = 241
+
+[[files]]
+path = "rustfmt.toml"
+sha256 = "f1a22634bbffec62822faa208b352d302c19c2f70e29e57613b9df18d7c2fc36"
+bytes = 17
+upstream_sha256 = "f1a22634bbffec62822faa208b352d302c19c2f70e29e57613b9df18d7c2fc36"
+upstream_bytes = 17
+
+[[files]]
+path = "sexos-record-tests/Cargo.lock"
+sha256 = "f6a62617249ad3fc1f8fc693ecbf7a76a03016aa9eef575dd0e566ea6966fe0e"
+bytes = 10746
+added = true
+
+[[files]]
+path = "sexos-record-tests/Cargo.toml"
+sha256 = "8f00e4be940a5b16181d963c412cf8271cf78899226ecc244c5b0dbef6a313cd"
+bytes = 1558
+added = true
+
+[[files]]
+path = "src/alert.rs"
+sha256 = "82d941fb453400043def2d38c4e2d80263d7266a6c2737a60cf4e978dfdaa071"
+bytes = 4024
+upstream_sha256 = "82d941fb453400043def2d38c4e2d80263d7266a6c2737a60cf4e978dfdaa071"
+upstream_bytes = 4024
+
+[[files]]
+path = "src/application_data.rs"
+sha256 = "a2c86926cd017ce3fe5ab2d17da2a39b7f02a5ceea8c66e095be766312d8facf"
+bytes = 779
+upstream_sha256 = "a2c86926cd017ce3fe5ab2d17da2a39b7f02a5ceea8c66e095be766312d8facf"
+upstream_bytes = 779
+
+[[files]]
+path = "src/asynch.rs"
+sha256 = "1ba33317229950448598dcbf06f1ff5f9ac95efa1d3425b8cef51104e0e4b52b"
+bytes = 17140
+upstream_sha256 = "1ba33317229950448598dcbf06f1ff5f9ac95efa1d3425b8cef51104e0e4b52b"
+upstream_bytes = 17140
+
+[[files]]
+path = "src/blocking.rs"
+sha256 = "dfe7d87a69e8c35956f41ed82ec83b8db15f53252a19e4c5c53c8518b98544c5"
+bytes = 16385
+upstream_sha256 = "dfe7d87a69e8c35956f41ed82ec83b8db15f53252a19e4c5c53c8518b98544c5"
+upstream_bytes = 16385
+
+[[files]]
+path = "src/buffer.rs"
+sha256 = "ade6bc48e6ae2f5382fe49b806ed4a94463c977811b28c26d984a4dd531c3be9"
+bytes = 7453
+upstream_sha256 = "ade6bc48e6ae2f5382fe49b806ed4a94463c977811b28c26d984a4dd531c3be9"
+upstream_bytes = 7453
+
+[[files]]
+path = "src/change_cipher_spec.rs"
+sha256 = "67452195cadce5313892555ade847bd8e675b2e720901ee745138c1b7bf065e2"
+bytes = 942
+upstream_sha256 = "67452195cadce5313892555ade847bd8e675b2e720901ee745138c1b7bf065e2"
+upstream_bytes = 942
+
+[[files]]
+path = "src/cipher_suites.rs"
+sha256 = "cea027e5b775d4a701de42feda42f7acf89777a529ab91bfb797db8deb9adf9c"
+bytes = 1102
+upstream_sha256 = "cea027e5b775d4a701de42feda42f7acf89777a529ab91bfb797db8deb9adf9c"
+upstream_bytes = 1102
+
+[[files]]
+path = "src/common/decrypted_buffer_info.rs"
+sha256 = "7f7298a86d1d05fdbb2f78e9f11edafaa949d57b1c714d9685690faef1076eb3"
+bytes = 580
+upstream_sha256 = "7f7298a86d1d05fdbb2f78e9f11edafaa949d57b1c714d9685690faef1076eb3"
+upstream_bytes = 580
+
+[[files]]
+path = "src/common/decrypted_read_handler.rs"
+sha256 = "9c8e411bfa60513f350023e28bb534a94379ff830760994b900438e73f80b262"
+bytes = 4556
+upstream_sha256 = "fafe09a19b9e1c8892a0b80206cb811ddde4b18ee144e6835c80edbb2ff8a076"
+upstream_bytes = 2540
+
+[[files]]
+path = "src/common/mod.rs"
+sha256 = "50fd44091be10dea11cd065b8bb462ad840c73bfcf69c97af2d97cdab2754d35"
+bytes = 63
+upstream_sha256 = "50fd44091be10dea11cd065b8bb462ad840c73bfcf69c97af2d97cdab2754d35"
+upstream_bytes = 63
+
+[[files]]
+path = "src/config.rs"
+sha256 = "604238b59e15d36ad24f856327313303c827bc48ab5162316cacdaa28140ebbe"
+bytes = 13257
+upstream_sha256 = "604238b59e15d36ad24f856327313303c827bc48ab5162316cacdaa28140ebbe"
+upstream_bytes = 13257
+
+[[files]]
+path = "src/connection.rs"
+sha256 = "df97a0327d469aa2f866328cd15b37a51507bd17cddcd2e2ee73d486f25193a2"
+bytes = 25739
+upstream_sha256 = "4a5b1e48b6073705a4bba6839734e753de99d80077e27b2ff259838edf0cea06"
+upstream_bytes = 21357
+
+[[files]]
+path = "src/content_types.rs"
+sha256 = "11fbe89324c1564e863bf6cec33a50c002c8a30d15a1515d0153802174f79295"
+bytes = 535
+upstream_sha256 = "11fbe89324c1564e863bf6cec33a50c002c8a30d15a1515d0153802174f79295"
+upstream_bytes = 535
+
+[[files]]
+path = "src/crypto_engine.rs"
+sha256 = "2059c28e72c2e0f3e833a9f5795c1b07189bd102fe94d01caeee7a75db3f1c72"
+bytes = 431
+upstream_sha256 = "2059c28e72c2e0f3e833a9f5795c1b07189bd102fe94d01caeee7a75db3f1c72"
+upstream_bytes = 431
+
+[[files]]
+path = "src/der_certificate.rs"
+sha256 = "132e04e6b6b45e6cb77d5818eaebf1fe70fa3a3747b61cf7f11eecc112efe2d0"
+bytes = 8868
+upstream_sha256 = "132e04e6b6b45e6cb77d5818eaebf1fe70fa3a3747b61cf7f11eecc112efe2d0"
+upstream_bytes = 8868
+
+[[files]]
+path = "src/extensions/extension_data/alpn.rs"
+sha256 = "5b11920a58b0032fa82decdec0cadc165eb2f1c44d602f08ac5a8e84a8b482c7"
+bytes = 1893
+upstream_sha256 = "5b11920a58b0032fa82decdec0cadc165eb2f1c44d602f08ac5a8e84a8b482c7"
+upstream_bytes = 1893
+
+[[files]]
+path = "src/extensions/extension_data/key_share.rs"
+sha256 = "ad309ee3d2a056ae943fa42e072e2466b1507f93cf0620a496dd09a9d9640159"
+bytes = 3722
+upstream_sha256 = "0d0bbf4797e1735925393f8e8b3940d78286475519835b532fd280e967e9fa04"
+upstream_bytes = 3679
+
+[[files]]
+path = "src/extensions/extension_data/max_fragment_length.rs"
+sha256 = "07702ec92d99b4f921fedf06bd4ae7240e66b88801ccff80750e6913c407939d"
+bytes = 1306
+upstream_sha256 = "07702ec92d99b4f921fedf06bd4ae7240e66b88801ccff80750e6913c407939d"
+upstream_bytes = 1306
+
+[[files]]
+path = "src/extensions/extension_data/mod.rs"
+sha256 = "9fbcc331d89e2395441a32074c2e55ad158aa4e0e30a29e1c92fb216ea7b3f7f"
+bytes = 281
+upstream_sha256 = "9fbcc331d89e2395441a32074c2e55ad158aa4e0e30a29e1c92fb216ea7b3f7f"
+upstream_bytes = 281
+
+[[files]]
+path = "src/extensions/extension_data/pre_shared_key.rs"
+sha256 = "dc78269edbd7672e8591687f3b9c1c7057ea62b445f4a5ac40bfd4c9e68f42f0"
+bytes = 1927
+upstream_sha256 = "dc78269edbd7672e8591687f3b9c1c7057ea62b445f4a5ac40bfd4c9e68f42f0"
+upstream_bytes = 1927
+
+[[files]]
+path = "src/extensions/extension_data/psk_key_exchange_modes.rs"
+sha256 = "ab4fcf556ac1f78c49069421dbaadcd6d5e3bcfa4fea197cae615b7da821171d"
+bytes = 1498
+upstream_sha256 = "ab4fcf556ac1f78c49069421dbaadcd6d5e3bcfa4fea197cae615b7da821171d"
+upstream_bytes = 1498
+
+[[files]]
+path = "src/extensions/extension_data/server_name.rs"
+sha256 = "656f6204da480853e58e7187fc5259a1a66ae94398f4da9a4c93a7f72da1f1c3"
+bytes = 3830
+upstream_sha256 = "656f6204da480853e58e7187fc5259a1a66ae94398f4da9a4c93a7f72da1f1c3"
+upstream_bytes = 3830
+
+[[files]]
+path = "src/extensions/extension_data/signature_algorithms.rs"
+sha256 = "a3ac2dcd5c3f053b24e20739d9c26fdf621c94ef54020565d603bc5e24481667"
+bytes = 4547
+upstream_sha256 = "a3ac2dcd5c3f053b24e20739d9c26fdf621c94ef54020565d603bc5e24481667"
+upstream_bytes = 4547
+
+[[files]]
+path = "src/extensions/extension_data/signature_algorithms_cert.rs"
+sha256 = "1aa42fb7529aa8aaf51819a72d4e7cc846a3abf60c5490eab06670921d7ba764"
+bytes = 1070
+upstream_sha256 = "1aa42fb7529aa8aaf51819a72d4e7cc846a3abf60c5490eab06670921d7ba764"
+upstream_bytes = 1070
+
+[[files]]
+path = "src/extensions/extension_data/supported_groups.rs"
+sha256 = "a3cf9f17a884dba60313cb5d9b863bfdba4423244285cd9892b28fff6255cd88"
+bytes = 2798
+upstream_sha256 = "a3cf9f17a884dba60313cb5d9b863bfdba4423244285cd9892b28fff6255cd88"
+upstream_bytes = 2798
+
+[[files]]
+path = "src/extensions/extension_data/supported_versions.rs"
+sha256 = "56c278a967ecc038bba5722684110d3a423463d6ad07f7f0df645d1192692431"
+bytes = 1811
+upstream_sha256 = "56c278a967ecc038bba5722684110d3a423463d6ad07f7f0df645d1192692431"
+upstream_bytes = 1811
+
+[[files]]
+path = "src/extensions/extension_data/unimplemented.rs"
+sha256 = "2ec7d1303164144215b66e9dea93af4c59318d1cb8ba139cc8ae41d860f8d329"
+bytes = 586
+upstream_sha256 = "2ec7d1303164144215b66e9dea93af4c59318d1cb8ba139cc8ae41d860f8d329"
+upstream_bytes = 586
+
+[[files]]
+path = "src/extensions/extension_group_macro.rs"
+sha256 = "4562aa713813b76291b14bccafbfb8a9cc6ac9566099bd05339ee823d8bfe796"
+bytes = 4541
+upstream_sha256 = "4562aa713813b76291b14bccafbfb8a9cc6ac9566099bd05339ee823d8bfe796"
+upstream_bytes = 4541
+
+[[files]]
+path = "src/extensions/messages.rs"
+sha256 = "6516afedaf04c5ffdfc68ff059049246beabbbdd4025eeb9031c2ee603f6c917"
+bytes = 4135
+upstream_sha256 = "6516afedaf04c5ffdfc68ff059049246beabbbdd4025eeb9031c2ee603f6c917"
+upstream_bytes = 4135
+
+[[files]]
+path = "src/extensions/mod.rs"
+sha256 = "2ee658baf4003e1c5febbf9b41820c3fe1c1cb446f40452c0a7438cf6635553e"
+bytes = 3304
+upstream_sha256 = "2ee658baf4003e1c5febbf9b41820c3fe1c1cb446f40452c0a7438cf6635553e"
+upstream_bytes = 3304
+
+[[files]]
+path = "src/flush_policy.rs"
+sha256 = "12738e58c4365ba8b32c48b0d5d845f777e58abaaf00d759eb2843c389967b32"
+bytes = 1356
+upstream_sha256 = "12738e58c4365ba8b32c48b0d5d845f777e58abaaf00d759eb2843c389967b32"
+upstream_bytes = 1356
+
+[[files]]
+path = "src/fmt.rs"
+sha256 = "0affa90dceba9b0db2a6e8c349d292b029cd258330416bb2dd983a8146c80c78"
+bytes = 5286
+upstream_sha256 = "0affa90dceba9b0db2a6e8c349d292b029cd258330416bb2dd983a8146c80c78"
+upstream_bytes = 5286
+
+[[files]]
+path = "src/handshake/binder.rs"
+sha256 = "6d260fc7d4fbca146807e4c16de6d03cf455b18d8bf6ce529d0a9a7cdc3a6808"
+bytes = 1183
+upstream_sha256 = "6d260fc7d4fbca146807e4c16de6d03cf455b18d8bf6ce529d0a9a7cdc3a6808"
+upstream_bytes = 1183
+
+[[files]]
+path = "src/handshake/certificate.rs"
+sha256 = "fa02354f85e15f5390744024758624897c1bddda3d9747b6e6a85779efa79262"
+bytes = 5356
+upstream_sha256 = "fa02354f85e15f5390744024758624897c1bddda3d9747b6e6a85779efa79262"
+upstream_bytes = 5356
+
+[[files]]
+path = "src/handshake/certificate_request.rs"
+sha256 = "029949be7d8eef94509ccea243a0f73750b91d3e9e1540464aa888928d41e375"
+bytes = 1593
+upstream_sha256 = "029949be7d8eef94509ccea243a0f73750b91d3e9e1540464aa888928d41e375"
+upstream_bytes = 1593
+
+[[files]]
+path = "src/handshake/certificate_verify.rs"
+sha256 = "c9e2cb6fb44fe0aa22503036d34981b1aeae7431ea9b787665da736d3939ab2f"
+bytes = 1913
+upstream_sha256 = "c9e2cb6fb44fe0aa22503036d34981b1aeae7431ea9b787665da736d3939ab2f"
+upstream_bytes = 1913
+
+[[files]]
+path = "src/handshake/client_hello.rs"
+sha256 = "9f1f9ea05cc26b70be936998911c2137dfc6b6b627c9701cb5602a20dcccc4d4"
+bytes = 7229
+upstream_sha256 = "9f1f9ea05cc26b70be936998911c2137dfc6b6b627c9701cb5602a20dcccc4d4"
+upstream_bytes = 7229
+
+[[files]]
+path = "src/handshake/encrypted_extensions.rs"
+sha256 = "0f708b14e326c6375f351ddb26b8d59c87bd08c485891ea4a774f9f5b7521d82"
+bytes = 552
+upstream_sha256 = "0f708b14e326c6375f351ddb26b8d59c87bd08c485891ea4a774f9f5b7521d82"
+upstream_bytes = 552
+
+[[files]]
+path = "src/handshake/finished.rs"
+sha256 = "309d888d890157bdf86023fb99c352f5fb67f95ae6f3fd7961c2bcd4ed3303dd"
+bytes = 1782
+upstream_sha256 = "309d888d890157bdf86023fb99c352f5fb67f95ae6f3fd7961c2bcd4ed3303dd"
+upstream_bytes = 1782
+
+[[files]]
+path = "src/handshake/mod.rs"
+sha256 = "c577cb2c3cb91121d2f51f109646ecbd9404f1c6f8b3ad10ed43031d7b5970f3"
+bytes = 9259
+upstream_sha256 = "c577cb2c3cb91121d2f51f109646ecbd9404f1c6f8b3ad10ed43031d7b5970f3"
+upstream_bytes = 9259
+
+[[files]]
+path = "src/handshake/new_session_ticket.rs"
+sha256 = "baf58a88c3f2358992f14edf97b483ded32a396060bb4265f31b65ad169020f6"
+bytes = 1031
+upstream_sha256 = "baf58a88c3f2358992f14edf97b483ded32a396060bb4265f31b65ad169020f6"
+upstream_bytes = 1031
+
+[[files]]
+path = "src/handshake/server_hello.rs"
+sha256 = "5b0c6b6e9059ef1210310e342f9e06984188a94c76e4ff09b2457d072cb8d064"
+bytes = 2751
+upstream_sha256 = "5b0c6b6e9059ef1210310e342f9e06984188a94c76e4ff09b2457d072cb8d064"
+upstream_bytes = 2751
+
+[[files]]
+path = "src/key_schedule.rs"
+sha256 = "07a89b7afaf9b30e09cfb4baaeb1382eb36fc437dce967b4a30a95e0f1e2bf0e"
+bytes = 14709
+upstream_sha256 = "07a89b7afaf9b30e09cfb4baaeb1382eb36fc437dce967b4a30a95e0f1e2bf0e"
+upstream_bytes = 14709
+
+[[files]]
+path = "src/lib.rs"
+sha256 = "2df2276615f488d87e255eda39b538251bfab8a9158b9bccc03163e628d4c5dc"
+bytes = 4194
+upstream_sha256 = "2df2276615f488d87e255eda39b538251bfab8a9158b9bccc03163e628d4c5dc"
+upstream_bytes = 4194
+
+[[files]]
+path = "src/parse_buffer.rs"
+sha256 = "107b221460fff89b477c66ccccd36fe8897a2f629a93311a9eafb4b1bc119526"
+bytes = 4964
+upstream_sha256 = "107b221460fff89b477c66ccccd36fe8897a2f629a93311a9eafb4b1bc119526"
+upstream_bytes = 4964
+
+[[files]]
+path = "src/pki.rs"
+sha256 = "c93e6e31a1c1dad0c480c5aca53fde3e6824aee19d5a090f5e87ebe4703614dc"
+bytes = 23062
+upstream_sha256 = "c93e6e31a1c1dad0c480c5aca53fde3e6824aee19d5a090f5e87ebe4703614dc"
+upstream_bytes = 23062
+
+[[files]]
+path = "src/read_buffer.rs"
+sha256 = "ca83169adec527541b3c917733228408ae470357b8e191a55e357fa39ae1691c"
+bytes = 4236
+upstream_sha256 = "ca83169adec527541b3c917733228408ae470357b8e191a55e357fa39ae1691c"
+upstream_bytes = 4236
+
+[[files]]
+path = "src/record.rs"
+sha256 = "71446e4eaccee52f4416c472e3c13045d14b89348dffe1ed46a4e714ef415f8c"
+bytes = 7106
+upstream_sha256 = "71446e4eaccee52f4416c472e3c13045d14b89348dffe1ed46a4e714ef415f8c"
+upstream_bytes = 7106
+
+[[files]]
+path = "src/record_reader.rs"
+sha256 = "2d0d8f444131ab384f179a7a6e02d5c6ee5d8c1c9689aa0d8b45b9f47d5a2cc8"
+bytes = 13201
+upstream_sha256 = "2d0d8f444131ab384f179a7a6e02d5c6ee5d8c1c9689aa0d8b45b9f47d5a2cc8"
+upstream_bytes = 13201
+
+[[files]]
+path = "src/webpki.rs"
+sha256 = "18a1cf37d7cf28a87d51df56cc43bb2a4d48b04f6344695e7395f43762c016a6"
+bytes = 11667
+upstream_sha256 = "18a1cf37d7cf28a87d51df56cc43bb2a4d48b04f6344695e7395f43762c016a6"
+upstream_bytes = 11667
+
+[[files]]
+path = "src/write_buffer.rs"
+sha256 = "7ac6bc3e098950c81c1a852826746f1e09a4f95bb7563866077f370776a46102"
+bytes = 7430
+upstream_sha256 = "7ac6bc3e098950c81c1a852826746f1e09a4f95bb7563866077f370776a46102"
+upstream_bytes = 7430
+
+[[files]]
+path = "tests/client_cert_test.rs"
+sha256 = "8a2e92ad3c4717479a91cf550cf4c06ceff98e835a564c1413710b439a30ac37"
+bytes = 5568
+upstream_sha256 = "8a2e92ad3c4717479a91cf550cf4c06ceff98e835a564c1413710b439a30ac37"
+upstream_bytes = 5568
+
+[[files]]
+path = "tests/client_test.rs"
+sha256 = "1ce29995660be141cd809606fcad7fc7f31c3e39a508d7e25a0928fcc5a3dcf9"
+bytes = 11468
+upstream_sha256 = "1ce29995660be141cd809606fcad7fc7f31c3e39a508d7e25a0928fcc5a3dcf9"
+upstream_bytes = 11468
+
+[[files]]
+path = "tests/data/ca-cert.pem"
+sha256 = "762c2922b1fff684f1cec53d947a4e44bd5da0039b5540928de8a93f012b7695"
+bytes = 713
+upstream_sha256 = "762c2922b1fff684f1cec53d947a4e44bd5da0039b5540928de8a93f012b7695"
+upstream_bytes = 713
+
+[[files]]
+path = "tests/data/ca-key.pem"
+sha256 = "0cbcbbe71c04875cce9b04c2f463a0bd467a3a8c64c800b7e953951859f94423"
+bytes = 227
+upstream_sha256 = "0cbcbbe71c04875cce9b04c2f463a0bd467a3a8c64c800b7e953951859f94423"
+upstream_bytes = 227
+
+[[files]]
+path = "tests/data/chain-cert.pem"
+sha256 = "e1154de171f69ca70aeb60be83476bfb68ef89c8cf3c8e8bdc4c06260912f442"
+bytes = 1344
+upstream_sha256 = "e1154de171f69ca70aeb60be83476bfb68ef89c8cf3c8e8bdc4c06260912f442"
+upstream_bytes = 1344
+
+[[files]]
+path = "tests/data/client-cert.pem"
+sha256 = "5baa7ba63baed10d14278a38323113e388e4e3fe40f2d8b4f1b64e4d75defb6e"
+bytes = 684
+upstream_sha256 = "5baa7ba63baed10d14278a38323113e388e4e3fe40f2d8b4f1b64e4d75defb6e"
+upstream_bytes = 684
+
+[[files]]
+path = "tests/data/client-key.pem"
+sha256 = "199ef109e3c716205c46f8c9242a39abb8330e4cbc905cc77286316cd42592c6"
+bytes = 227
+upstream_sha256 = "199ef109e3c716205c46f8c9242a39abb8330e4cbc905cc77286316cd42592c6"
+upstream_bytes = 227
+
+[[files]]
+path = "tests/data/client.csr"
+sha256 = "157481764669dae90af085af69a0f19f7e5aaa1818758357a5576323c3e1f587"
+bytes = 420
+upstream_sha256 = "157481764669dae90af085af69a0f19f7e5aaa1818758357a5576323c3e1f587"
+upstream_bytes = 420
+
+[[files]]
+path = "tests/data/gen_certs_and_keys.sh"
+sha256 = "629f8d31b9cd6f31bfd978195dc5a5291a50960376503a109f77c13495b1315a"
+bytes = 3050
+upstream_sha256 = "629f8d31b9cd6f31bfd978195dc5a5291a50960376503a109f77c13495b1315a"
+upstream_bytes = 3050
+
+[[files]]
+path = "tests/data/im-cert.pem"
+sha256 = "cd035b3e9c45622f13aa0afa5dbc967f26c55cba9554517f7c23fe7aeb5202f1"
+bytes = 688
+upstream_sha256 = "cd035b3e9c45622f13aa0afa5dbc967f26c55cba9554517f7c23fe7aeb5202f1"
+upstream_bytes = 688
+
+[[files]]
+path = "tests/data/im-key.pem"
+sha256 = "d7203dfb9d2868b79f658765d367b8083db18a2ad8aa986b94159b6f60a23851"
+bytes = 227
+upstream_sha256 = "d7203dfb9d2868b79f658765d367b8083db18a2ad8aa986b94159b6f60a23851"
+upstream_bytes = 227
+
+[[files]]
+path = "tests/data/im-server-cert.pem"
+sha256 = "34043952c6650355b4f5f12c837eddbd73d2f0204c987f3cabbadbb87cef1cdc"
+bytes = 656
+upstream_sha256 = "34043952c6650355b4f5f12c837eddbd73d2f0204c987f3cabbadbb87cef1cdc"
+upstream_bytes = 656
+
+[[files]]
+path = "tests/data/im-server-key.pem"
+sha256 = "7b11097831cda732d1252b8b8fccb3e2ed46fd046e3bfa277170b23035872227"
+bytes = 227
+upstream_sha256 = "7b11097831cda732d1252b8b8fccb3e2ed46fd046e3bfa277170b23035872227"
+upstream_bytes = 227
+
+[[files]]
+path = "tests/data/im-server.csr"
+sha256 = "0d0c73484522d401bae54d5b73eab2ff5769931e376d94cc74d653dcb0278862"
+bytes = 412
+upstream_sha256 = "0d0c73484522d401bae54d5b73eab2ff5769931e376d94cc74d653dcb0278862"
+upstream_bytes = 412
+
+[[files]]
+path = "tests/data/im.csr"
+sha256 = "99b64d6d8b9abbcbae1f32527693e7360baf8e147b78de5e49bb6349bc696720"
+bytes = 424
+upstream_sha256 = "99b64d6d8b9abbcbae1f32527693e7360baf8e147b78de5e49bb6349bc696720"
+upstream_bytes = 424
+
+[[files]]
+path = "tests/data/rsa-ca-cert.pem"
+sha256 = "4fce871635aca3f25e3adce971fad0c624db6e8ceeb4721b1fbdd18162bd3a25"
+bytes = 1249
+upstream_sha256 = "4fce871635aca3f25e3adce971fad0c624db6e8ceeb4721b1fbdd18162bd3a25"
+upstream_bytes = 1249
+
+[[files]]
+path = "tests/data/rsa-ca-key.pem"
+sha256 = "1ff0869f16d60e3d211512a24f62a73dface27f61a36f65d48d31b8951538c73"
+bytes = 1704
+upstream_sha256 = "1ff0869f16d60e3d211512a24f62a73dface27f61a36f65d48d31b8951538c73"
+upstream_bytes = 1704
+
+[[files]]
+path = "tests/data/rsa-client-cert.csr"
+sha256 = "69255a1fec415ae1c0e76465000a339541897fda8ffb0b8e255a33cfff050037"
+bytes = 956
+upstream_sha256 = "69255a1fec415ae1c0e76465000a339541897fda8ffb0b8e255a33cfff050037"
+upstream_bytes = 956
+
+[[files]]
+path = "tests/data/rsa-client-cert.pem"
+sha256 = "7016ec9333e948c44cc8418be008d0df75ee0271875a92bf9a2aaa264efd5640"
+bytes = 1224
+upstream_sha256 = "7016ec9333e948c44cc8418be008d0df75ee0271875a92bf9a2aaa264efd5640"
+upstream_bytes = 1224
+
+[[files]]
+path = "tests/data/rsa-client-key.pem"
+sha256 = "34bf9c7c7d5a8e94e071c7b943417e2e495244d7ff6021e878c481b4ccff1fc9"
+bytes = 1708
+upstream_sha256 = "34bf9c7c7d5a8e94e071c7b943417e2e495244d7ff6021e878c481b4ccff1fc9"
+upstream_bytes = 1708
+
+[[files]]
+path = "tests/data/rsa-server-cert.csr"
+sha256 = "f7309aa00698959e84a7a0c800285753a55cf0eb1adec4687f4c0d3785c40c4a"
+bytes = 891
+upstream_sha256 = "f7309aa00698959e84a7a0c800285753a55cf0eb1adec4687f4c0d3785c40c4a"
+upstream_bytes = 891
+
+[[files]]
+path = "tests/data/rsa-server-cert.pem"
+sha256 = "b708e24f1ff149067c0792476754a5ef85c42af16ccde3e594be22127d5328ad"
+bytes = 1159
+upstream_sha256 = "b708e24f1ff149067c0792476754a5ef85c42af16ccde3e594be22127d5328ad"
+upstream_bytes = 1159
+
+[[files]]
+path = "tests/data/rsa-server-key.pem"
+sha256 = "2e73e53a2c12dfdc5052665fc97ecf66b701893f0f8185757793694c0cdeb2fe"
+bytes = 1704
+upstream_sha256 = "2e73e53a2c12dfdc5052665fc97ecf66b701893f0f8185757793694c0cdeb2fe"
+upstream_bytes = 1704
+
+[[files]]
+path = "tests/data/server-cert.pem"
+sha256 = "05c11ef4327a0847d25077cf4ce6bccca2b27fb8bbd1c8ff459f8d7c64f061f0"
+bytes = 688
+upstream_sha256 = "05c11ef4327a0847d25077cf4ce6bccca2b27fb8bbd1c8ff459f8d7c64f061f0"
+upstream_bytes = 688
+
+[[files]]
+path = "tests/data/server-key.pem"
+sha256 = "210078eeadf94d1b161a45660fd1fe4c708559acfa8349389eacaa756d92270a"
+bytes = 227
+upstream_sha256 = "210078eeadf94d1b161a45660fd1fe4c708559acfa8349389eacaa756d92270a"
+upstream_bytes = 227
+
+[[files]]
+path = "tests/data/server.csr"
+sha256 = "629cd99c740b70ac0d22c413d8738f732487db4c588bc42bb4ea668a4d220250"
+bytes = 420
+upstream_sha256 = "629cd99c740b70ac0d22c413d8738f732487db4c588bc42bb4ea668a4d220250"
+upstream_bytes = 420
+
+[[files]]
+path = "tests/early_data_test.rs"
+sha256 = "910da085666f78d294e7e7bd327a7882bfbd795aa24a5f2ea6ff3abfd164900f"
+bytes = 2608
+upstream_sha256 = "910da085666f78d294e7e7bd327a7882bfbd795aa24a5f2ea6ff3abfd164900f"
+upstream_bytes = 2608
+
+[[files]]
+path = "tests/psk_test.rs"
+sha256 = "7f10152587bb20ea31a87b2363f9e2bd05b2fdcdae4f935912316cba45432483"
+bytes = 3201
+upstream_sha256 = "7f10152587bb20ea31a87b2363f9e2bd05b2fdcdae4f935912316cba45432483"
+upstream_bytes = 3201
+
+[[files]]
+path = "tests/rustpki_rsa_test.rs"
+sha256 = "c74a585f92b3217b8b18a57975ce8a92966321be1ce6908bcec666d866fc2f42"
+bytes = 5427
+upstream_sha256 = "c74a585f92b3217b8b18a57975ce8a92966321be1ce6908bcec666d866fc2f42"
+upstream_bytes = 5427
+
+[[files]]
+path = "tests/rustpki_test.rs"
+sha256 = "90768204a4c29edc56300908af0930e0eccbaf48ea7ad6472e9da1744340a5b8"
+bytes = 5873
+upstream_sha256 = "90768204a4c29edc56300908af0930e0eccbaf48ea7ad6472e9da1744340a5b8"
+upstream_bytes = 5873
+
+[[files]]
+path = "tests/split_test.rs"
+sha256 = "b2ac82003fe590ac0445154d98f7aa9a4bc427aec7c6ad97961c6c6577aeedfc"
+bytes = 2873
+upstream_sha256 = "b2ac82003fe590ac0445154d98f7aa9a4bc427aec7c6ad97961c6c6577aeedfc"
+upstream_bytes = 2873
+
+[[files]]
+path = "tests/tlsserver.rs"
+sha256 = "83656f8d7866332f7bb0a7f32336c92f35327ca7c3c5a3f789ae3bbd9da2853d"
+bytes = 11985
+upstream_sha256 = "83656f8d7866332f7bb0a7f32336c92f35327ca7c3c5a3f789ae3bbd9da2853d"
+upstream_bytes = 11985
+
+[[files]]
+path = "tests/webpki_test.rs"
+sha256 = "678f53cb609b328b9cb6ebbbffa6e8aef3b127a25cd4a8eb826d48d1dc2c0cfa"
+bytes = 2413
+upstream_sha256 = "678f53cb609b328b9cb6ebbbffa6e8aef3b127a25cd4a8eb826d48d1dc2c0cfa"
+upstream_bytes = 2413

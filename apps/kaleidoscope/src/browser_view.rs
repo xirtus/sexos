@@ -91,6 +91,16 @@ pub fn with_tls(mut text:Text,label:Option<&[u8]>)->Option<Text>{
  let start=text.len;let end=start.checked_add(64)?;text.bytes.get_mut(start..end)?.fill(b' ');
  let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nTLS preparation: ")?;
  append(&mut text.bytes[..end],&mut at,label)?;
- append(&mut text.bytes[..end],&mut at,b"\nL prepare  Q clear")?;
+ append(&mut text.bytes[..end],&mut at,b"\nL prep Q clear Y peer")?;
+ text.len=end;Some(text)
+}
+
+/// Only actual duplex completion plus positive release may select the verified
+/// label. This controlled lab status carries no public Internet trust claim.
+pub fn with_peer(mut text:Text,label:&[u8])->Option<Text>{
+ if !matches!(label,b"idle"|b"checking"|b"peer verified"|b"unavailable"|b"cancelled"|b"waiting receipt"){return None;}
+ let start=text.len;let end=start.checked_add(64)?;text.bytes.get_mut(start..end)?.fill(b' ');
+ let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nControlled TLS: ")?;
+ append(&mut text.bytes[..end],&mut at,label)?;append(&mut text.bytes[..end],&mut at,b"\nY peer  Q clear")?;
  text.len=end;Some(text)
 }

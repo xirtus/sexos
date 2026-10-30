@@ -8,20 +8,32 @@ use sex_tls::{Session, Stats};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum View { Idle,Preparing,HelloPending,Unavailable,Cancelled,Rejected,TimedOut }
 pub struct Probe {
-    session:Option<Session>, view:View, closed:bool, deadline:Option<u64>, last:u64, profile:Option<u32>, self_check:Option<u32>,
+    session:Option<Session>, view:View, closed:bool, deadline:Option<u64>, last:u64, profile:Option<u32>, self_check:Option<u32>, exchange:bool,
 }
 impl Probe {
-    pub const fn new()->Self { Self {session:None,view:View::Idle,closed:false,deadline:None,last:0,profile:None,self_check:None} }
+    pub const fn new()->Self { Self {session:None,view:View::Idle,closed:false,deadline:None,last:0,profile:None,self_check:None,exchange:false} }
     pub fn view(&self)->View {self.view}
     /// Public controlled-fixture success, consumed once; never a peer receipt.
     pub fn take_self_check(&mut self)->Option<u32>{self.self_check.take()}
     pub fn busy(&self)->bool {matches!(self.view,View::Preparing|View::HelloPending)&&!self.closed}
     pub fn start(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->bool {
+        self.start_mode(policy,seed,time,now,false)
+    }
+    pub fn start_exchange(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->bool {
+        self.start_mode(policy,seed,time,now,true)
+    }
+    fn start_mode(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64,exchange:bool)->bool {
         if self.closed||self.busy()||policy.busy()||seed.busy()||time.busy(){return false;}
         let Some(deadline)=now.checked_add(30_000)else{self.view=View::Unavailable;return false;};
-        self.profile=None;self.self_check=None;
+        self.profile=None;self.self_check=None;self.exchange=exchange;
         if !policy.start(){self.view=View::Unavailable;return false;}
         self.deadline=Some(deadline);self.last=now;self.view=View::Preparing;true
+    }
+    /// Transfer the finite owned protocol state only after this fresh start's
+    /// positive BOOT policy/seed/time joins and actual private ClientHello.
+    pub fn take_exchange(&mut self)->Option<Session>{
+        if !self.exchange||self.view!=View::HelloPending||self.closed{return None;}
+        let session=self.session.take()?;self.deadline=None;self.profile=None;self.self_check=None;self.exchange=false;self.view=View::Idle;Some(session)
     }
     fn erase(&mut self)->usize {
         let bytes=self.session.as_ref().map_or(0,|s|s.stats().task_bytes+2*sex_tls::QUEUE_BYTES);
@@ -68,7 +80,8 @@ impl Probe {
                 let n=self.cancel(policy,seed,time);self.view=View::Rejected;return(None,n);
             }
             self.self_check=Some(profile);
-            match Session::prepare(&mut bytes,seconds,profile) {
+            let prepared=if self.exchange {Session::exchange(&mut bytes,seconds,profile)}else{Session::prepare(&mut bytes,seconds,profile)};
+            match prepared {
                 Ok(session)=>self.session=Some(session),
                 Err(_)=>{let n=self.cancel(policy,seed,time);self.view=View::Unavailable;return(None,n);},
             }
@@ -81,6 +94,11 @@ impl Probe {
                 (if newly{Some(session.stats())}else{None},0)
             },
             sex_tls::State::Rejected=>{let n=self.erase();self.view=View::Rejected;(None,n)},
+            sex_tls::State::PeerAuthenticated|sex_tls::State::ExchangeVerified=>{
+                // Ingress is exclusively the transferred duplex client's job.
+                // A retained preparation has no source of peer bytes.
+                let n=self.erase();self.view=View::Rejected;(None,n)
+            },
         }
     }
 }

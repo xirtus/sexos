@@ -33,7 +33,7 @@ def command_profile(command,mode):
 def tls_contract(root):
  contract=load_pixel_contract(root);app=(root/'apps/kaleidoscope/src/main.rs').read_text();view=(root/'apps/kaleidoscope/src/browser_view.rs').read_text();probe=(root/'apps/kaleidoscope/src/tls_probe.rs').read_text();backend=(root/'crates/sex-tls/src/lib.rs').read_text()
  if 'pub fn with_tls('not in view or 'browser_view::with_tls(text,'not in app or 'start.checked_add(64)'not in view:raise ValueError('source-bound whole64-byte TLS extent changed')
- for literal in ('b"\\n\\nTLS preparation: "','b"\\nL prepare  Q clear"'):
+ for literal in ('b"\\n\\nTLS preparation: "','b"\\nL prep Q clear Y peer"'):
   if literal not in view:raise ValueError('source-bound TLS chrome changed')
  for label in LABELS.values():
   if ('b"'+label.decode()+'"')not in probe:raise ValueError('source-bound TLS label changed')
@@ -70,7 +70,7 @@ def tls_geometry(trace,expected,contract):
  if not re.search(rf'\[browser.view.applied\] bytes={base+64} http=0 body_bytes=0 pixels=unconfirmed',trace[marker.end():]):raise ValueError('missing positive complete Applied after TLS layout')
  preceding=prefix+b'?'*(length-len(prefix))+contract['echo']['Verified'].ljust(64,b' ')+(contract['dns_prefix']+contract['dns']['Idle']+contract['dns_footer']).ljust(64,b' ')+(contract['http_prefix']+contract['http']['Idle']+contract['http_footer']).ljust(64,b' ')+b'\n\n'+b' '*64
  if len(preceding)!=base:raise ValueError('source overview changed')
- status=(b'\n\nTLS preparation: '+LABELS[expected]+b'\nL prepare  Q clear').ljust(64,b' ')
+ status=(b'\n\nTLS preparation: '+LABELS[expected]+b'\nL prep Q clear Y peer').ljust(64,b' ')
  if len(status)!=64:raise ValueError('TLS status overflow')
  data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(80,max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
  for index,byte in enumerate(data):

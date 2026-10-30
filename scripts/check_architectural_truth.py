@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tomllib
 
 
 SUBSYSTEMS = {"architecture", "pdx", "scheduler", "memory", "diskfs", "uiir"}
@@ -186,14 +187,21 @@ def source_manifest(root,bindings):
     files.add("limine.cfg")
     files.update(p.relative_to(root).as_posix() for p in (root / "scripts").glob("*.py"))
     for directory in ("kernel/src", "tests", "scripts/tests", "crates/sex-pdx/src", "servers/sexfiles/src", "servers/quil/src",
-                      "sex-rt/src", "sex-src/lib/libsys/src", "crates/sex-tls", "apps/sexdrive/src", "servers/sexusb/src", "servers/sexnet/src",
+                      "sex-rt/src", "sex-src/lib/libsys/src", "crates/sex-tls", "crates/sex-trust-config", "apps/sexdrive/src", "servers/sexusb/src", "servers/sexnet/src",
                       "servers/sext/src", "apps/kaleidoscope/src", "apps/spindle/src", "servers/sexbell/src",
                       "servers/silk-shell/src", "servers/linen/src", "servers/sexdisplay/src"):
         for path in (root / directory).rglob("*"):
             if path.is_file() and "__pycache__" not in path.parts and (path.suffix in (".rs", ".py") or path.is_relative_to(root/"tests")):
                 files.add(path.relative_to(root).as_posix())
     files.update(p.relative_to(root).as_posix()for p in (root/"scripts/tests/fixtures").rglob("*")if p.is_file())
-    for name in ["Cargo.toml", "Cargo.lock", "apps/kaleidoscope/Cargo.toml", "crates/sex-tls/Cargo.toml",
+    vendor=root/"vendor/embedded-tls-0.19.0"
+    if (vendor/"UPSTREAM.toml").is_file():
+        files.add("vendor/embedded-tls-0.19.0/UPSTREAM.toml")
+        for entry in tomllib.loads((vendor/"UPSTREAM.toml").read_text())["files"]:
+            path=(vendor/entry["path"]).resolve(strict=True)
+            require(path.is_relative_to(vendor.resolve()) and path.is_file(), "vendor host input escapes source")
+            files.add(path.relative_to(root).as_posix())
+    for name in ["Cargo.toml", "Cargo.lock", "apps/kaleidoscope/Cargo.toml", "crates/sex-tls/Cargo.toml", "crates/sex-trust-config/Cargo.toml",
                  "sex-src/lib/libsys/Cargo.toml", "sexos_build_spec.toml", "x86_64-sex.json", "rust-toolchain.toml"]:
         if (root/name).is_file():files.add(name)
     return {name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in sorted(files)}

@@ -27,6 +27,10 @@ pub const RECORD_WRITE: usize = 2048;
 pub const QUEUE_BYTES: usize = 4096;
 pub const MAX_TASK_BYTES: usize = 32768;
 pub const EXPECTED_NAME: &str = sex_trust_config::EXPECTED_NAME;
+/// Public finite application protocol for the controlled interoperability
+/// endpoint. This is not a browser document or public Internet trust profile.
+pub const EXCHANGE_REQUEST: &[u8] = b"SexOS guest encrypted request round93\n";
+pub const EXCHANGE_RESPONSE: &[u8] = b"SexOS controlled encrypted reply round93\n";
 
 fn erase(bytes: &mut [u8]) {
     for byte in bytes { unsafe { core::ptr::write_volatile(byte, 0); } }
@@ -35,7 +39,7 @@ struct Seed([u8;32]);
 impl Drop for Seed { fn drop(&mut self) { erase(&mut self.0); } }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State { Preparing, HelloPending, Rejected }
+pub enum State { Preparing, HelloPending, PeerAuthenticated, ExchangeVerified, Rejected }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Memory, Clock, Policy, Capacity, Terminal }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,10 +86,11 @@ impl Drop for Task {
 struct Pipe {
     rx: [u8;QUEUE_BYTES], tx: [u8;QUEUE_BYTES], rx_len: usize, tx_len: usize,
     turn_used: bool, waiting: bool,
+    authenticated: bool, verified: bool,
 }
 impl Pipe {
-    fn new() -> Self { Self { rx:[0;QUEUE_BYTES], tx:[0;QUEUE_BYTES], rx_len:0, tx_len:0, turn_used:false, waiting:false } }
-    fn scrub(&mut self) { erase(&mut self.rx); erase(&mut self.tx); self.rx_len=0; self.tx_len=0; self.waiting=false; }
+    fn new() -> Self { Self { rx:[0;QUEUE_BYTES], tx:[0;QUEUE_BYTES], rx_len:0, tx_len:0, turn_used:false, waiting:false, authenticated:false, verified:false } }
+    fn scrub(&mut self) { erase(&mut self.rx); erase(&mut self.tx); self.rx_len=0; self.tx_len=0; self.waiting=false; self.authenticated=false; self.verified=false; }
 }
 impl Drop for Pipe { fn drop(&mut self) { self.scrub(); } }
 struct Transport(Rc<RefCell<Pipe>>);
@@ -134,11 +139,20 @@ impl Session {
     /// Always erases the transferred caller seed, including rejected starts.
     /// Seconds are input data, not new time authority or an advancing clock.
     pub fn prepare(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
+        Self::prepare_mode(seed,seconds,profile,false)
+    }
+    /// Real protocol mode still has no transport/endpoint authority. The
+    /// caller must move bytes exclusively through an admitted held duplex job.
+    pub fn exchange(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
+        Self::prepare_mode(seed,seconds,profile,true)
+    }
+    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool) -> Result<Self,Error> {
         let private=Seed(*seed); erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(Error::Clock); }
         let verifier=verifier::Verifier::new(profile,seconds).map_err(|_|Error::Policy)?;
         let pipe=Rc::try_new(RefCell::new(Pipe::new())).map_err(|_|Error::Memory)?;
         let transport=Transport(pipe.clone());
+        let shared=pipe.clone();
         let future=async move {
             let mut provider=Provider { rng:rand_chacha::ChaCha20Rng::from_seed(private.0), verifier };
             drop(private);
@@ -146,7 +160,31 @@ impl Session {
             let config=TlsConfig::new().with_server_name(EXPECTED_NAME).with_max_fragment_length(MaxFragmentLength::Bits10);
             let mut tls=TlsConnection::<_,Aes128GcmSha256>::new(transport,&mut read,&mut write);
             tls.open(TlsContext::new(&config,&mut provider)).await?;
-            provider.verifier.finished()
+            provider.verifier.finished()?;
+            // Local preparation can never publish peer authentication.
+            if !exchange { return Err(TlsError::MissingHandshake); }
+            shared.borrow_mut().authenticated=true;
+            let mut written=0;
+            while written<EXCHANGE_REQUEST.len() {
+                let n=tls.write(&EXCHANGE_REQUEST[written..]).await?;
+                if n==0 { return Err(TlsError::InvalidApplicationData); }
+                written=written.checked_add(n).filter(|n|*n<=EXCHANGE_REQUEST.len()).ok_or(TlsError::InvalidApplicationData)?;
+            }
+            tls.flush().await?;
+            let mut response=[0u8;64];let mut received=0;
+            while received<EXCHANGE_RESPONSE.len() {
+                let n=tls.read(&mut response[received..]).await?;
+                if n==0 { return Err(TlsError::InvalidApplicationData); }
+                received=received.checked_add(n).filter(|n|*n<=EXCHANGE_RESPONSE.len()).ok_or(TlsError::InvalidApplicationData)?;
+                if response[..received]!=EXCHANGE_RESPONSE[..received] { return Err(TlsError::InvalidApplicationData); }
+            }
+            erase(&mut response);
+            // The close_notify is encrypted while the connection is open.
+            // Peer close-control tail is later drained by the byte-custody
+            // client, not interpreted as authenticated application content.
+            tls.close().await.map_err(|(_,error)|error)?;
+            shared.borrow_mut().verified=true;
+            Ok(())
         };
         let task=Task::new(future)?;
         let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>(), tx_bytes:0, utc_snapshot:seconds };
@@ -157,18 +195,25 @@ impl Session {
     pub fn poll(&mut self) -> State {
         let Some(task)=self.task.as_mut() else { return self.state; };
         self.pipe.borrow_mut().turn_used=false;
-        if task.poll(&mut Context::from_waker(Waker::noop())).is_ready() {
-            // Connection publication/transport belongs to a later round.
-            // A completed local task cannot publish an authenticated session.
-            self.task=None; self.pipe.borrow_mut().scrub(); self.state=State::Rejected;
-        } else {
+        match task.poll(&mut Context::from_waker(Waker::noop())) {
+          Poll::Ready(Ok(())) if self.pipe.borrow().verified=>{
+            // Future/key backing is destroyed and wiped; retain outgoing
+            // ciphertext until the caller receives positive WRITE receipts.
+            self.task=None;self.state=State::ExchangeVerified;
+          },
+          Poll::Ready(_)=>{self.task=None;self.pipe.borrow_mut().scrub();self.state=State::Rejected;},
+          Poll::Pending=>{
             let pipe=self.pipe.borrow();
-            if pipe.waiting && pipe.tx_len>0 { self.state=State::HelloPending; }
+            if pipe.authenticated {self.state=State::PeerAuthenticated;}
+            else if pipe.waiting && pipe.tx_len>0 { self.state=State::HelloPending; }
+          },
         }
         self.stats.tx_bytes=self.pipe.borrow().tx_len; self.state
     }
     pub fn state(&self) -> State { self.state }
     pub fn stats(&self) -> Stats { self.stats }
+    pub fn outgoing_len(&self)->usize {self.pipe.borrow().tx_len}
+    pub fn incoming_capacity(&self)->usize {if self.task.is_some(){QUEUE_BYTES-self.pipe.borrow().rx_len}else{0}}
     /// Protocol bytes remain data; draining them grants no endpoint authority.
     pub fn take_outgoing(&mut self, out:&mut[u8]) -> usize {
         let mut pipe=self.pipe.borrow_mut(); let n=out.len().min(pipe.tx_len); let old=pipe.tx_len;

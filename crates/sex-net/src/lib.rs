@@ -137,11 +137,21 @@ impl<'a> Engine<'a>{
     /// One fixed BOOT endpoint, reached directly on-link or through the checked
     /// gateway. Ticket is private service data; no address/capability input.
     pub fn begin_client(&mut self,ticket:u32)->Result<(),Error>{
+        self.begin_protocol_client(ticket,false)
+    }
+    /// Only the parent's exact live-owner duplex admission selects this
+    /// immutable BOOT profile. This accepts no numeric endpoint selector.
+    pub fn begin_client_tls(&mut self,ticket:u32)->Result<(),Error>{
+        self.begin_protocol_client(ticket,true)
+    }
+    fn begin_protocol_client(&mut self,ticket:u32,tls:bool)->Result<(),Error>{
         if self.stopped{return Err(Error::Stopped);}
+        let (address,remote_port)=if tls {self.network.tls_endpoint().ok_or(Error::Config)?}
+            else {(self.network.http,self.network.http_port)};
         let port=u16::try_from(ticket).ok().and_then(|n|self.network.source_base.checked_add(n)).filter(|_|ticket!=0).ok_or(Error::Length)?;
         self.client_abort();
         self.flows.get_mut::<tcp::Socket>(self.client_handle).connect(self.iface.context(),
-            (IpAddress::v4(self.network.http[0],self.network.http[1],self.network.http[2],self.network.http[3]),self.network.http_port),
+            (IpAddress::v4(address[0],address[1],address[2],address[3]),remote_port),
             (IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),port)).map_err(|_|Error::Protocol)
     }
     pub fn client_state(&self)->State{self.flows.get::<tcp::Socket>(self.client_handle).state()}

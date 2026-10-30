@@ -838,6 +838,9 @@ pub fn init() {
         profile:sex_pdx::trust_config::PROFILE};
     seed_holder.grant_capability(sex_pdx::trust_source::SLOT,crate::capability::CapabilityData::TrustPolicy(trust_grant));
     serial_println!("[boot.trust.policy] holder={} task={} slot={} consumer={} consumer_task={} profile={} root_bytes={} runtime_mint=0",sexnet_id,trust_grant.holder.task,sex_pdx::trust_source::SLOT,kaleido_id,trust_grant.consumer.task,trust_grant.profile,sex_pdx::trust_config::ROOT_DER.len());
+    assert_eq!(sex_pdx::network_config::HOST_NAME,sex_pdx::trust_config::EXPECTED_NAME.as_bytes(),"BOOT_TLS_EXPECTED_NAME");
+    assert!(sex_pdx::network_config::Config::CONTROLLED.tls_endpoint().is_some(),"BOOT_TLS_ENDPOINT_PROFILE");
+    serial_println!("[boot.network.tls] holder={} task={} consumer={} consumer_task={} profile=1 peer_port=46080 origin=immutable_boot_profile runtime_mint=0",sexnet_id,trust_grant.holder.task,kaleido_id,trust_grant.consumer.task);
     // Two finite Spindle incarnations share only the fixed peer service edge.
     // This is BOOT genesis; neither app receives NIC metadata or config rights.
     assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");

@@ -3,6 +3,8 @@ import copy
 from pathlib import Path
 import subprocess
 import sys
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 import tomllib
@@ -18,6 +20,7 @@ SPEC = tomllib.loads((ROOT / 'sexos_build_spec.toml').read_text())
 TRUST = tomllib.loads((ROOT / 'crates/sex-trust-config/Cargo.toml').read_text())
 TREE = '\n'.join(['sex-tls v0.1.0 (/private/work/crates/sex-tls) '] +
                  [f'{gate.PACKAGE_NAMES.get(name, name)} v{version} ' +
+                  (f'({ROOT / gate.VENDOR}) ' if name == 'embedded-tls' else '') +
                   ','.join(sorted(gate.EFFECTIVE_FEATURES.get(gate.PACKAGE_NAMES.get(name, name), set())))
                   for name, version in gate.PINS.items()] +
                  ['sex-trust-config v0.1.0 (/private/work/crates/sex-trust-config) ',
@@ -157,6 +160,49 @@ class TLSPlatform(unittest.TestCase):
         self.assertNotIn('RUSTUP_TOOLCHAIN', run.call_args.kwargs['env'])
         self.assertTrue(run.call_args.kwargs['check'])
         self.assertEqual(len(result['graph_sha256']), 64)
+
+    def test_vendored_runtime_manifest_is_exact_and_all_file_hashes_are_bound(self):
+        errors, inputs = gate.check_vendor(ROOT)
+        self.assertEqual(errors, [])
+        self.assertEqual(inputs[gate.VENDOR + '/Cargo.toml'], gate.VENDOR_MANIFEST_SHA256)
+        self.assertEqual(inputs[gate.VENDOR + '/Cargo.toml.upstream'], gate.UPSTREAM_MANIFEST_SHA256)
+        self.assertIn(gate.VENDOR + '/LICENSE', inputs)
+        self.assertIn(gate.VENDOR + '/README.md', inputs)
+        self.assertIn(gate.VENDOR + '/sexos-record-tests/Cargo.lock', inputs)
+
+    def test_reviewed_vendor_path_cannot_be_registry_another_checkout_or_symlink(self):
+        for path in [None, '/tmp/other-embedded-tls', str(ROOT / 'crates/sex-tls')]:
+            wrong = TREE.replace(f'({ROOT / gate.VENDOR}) ', '' if path is None else f'({path}) ')
+            self.assertTrue(gate.check_tree(wrong, root=ROOT)[0], path)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / 'vendor').mkdir()
+            (root / gate.VENDOR).symlink_to(ROOT / gate.VENDOR, target_is_directory=True)
+            self.assertTrue(gate.check_vendor(root)[0])
+
+    def test_vendor_changes_to_sources_manifests_readme_license_or_tests_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            base = root / gate.VENDOR
+            shutil.copytree(ROOT / gate.VENDOR, base)
+            self.assertEqual(gate.check_vendor(root)[0], [])
+            for name in ['Cargo.toml', 'Cargo.toml.upstream', 'LICENSE', 'README.md',
+                         'src/connection.rs', 'src/common/decrypted_read_handler.rs',
+                         'sexos-record-tests/Cargo.toml', 'sexos-record-tests/Cargo.lock',
+                         'SEXOS_PATCHES.patch', 'UPSTREAM.toml']:
+                path = base / name
+                original = path.read_bytes()
+                path.write_bytes(original + b'\n# unreviewed mutation\n')
+                self.assertTrue(gate.check_vendor(root)[0], name)
+                path.write_bytes(original)
+            extra = base / 'src/unreviewed.rs'
+            extra.write_text('pub const UNREVIEWED: bool = true;')
+            self.assertTrue(gate.check_vendor(root)[0])
+            extra.unlink()
+            missing = base / 'README.md'
+            missing.unlink()
+            with self.assertRaises(OSError):
+                gate.check_vendor(root)
 
     def test_failed_actual_cargo_command_cannot_pass(self):
         with patch.object(gate.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, ['cargo'])):

@@ -1,0 +1,84 @@
+# SexOS test-only harness: compile the actual vendored library source, with
+# exactly its enabled production dependencies. No upstream optional-provider
+# or host TLS integration/test dependency is resolved or compiled here.
+[package]
+name = "sexos-embedded-tls-record-tests"
+version = "0.19.0"
+edition = "2024"
+license = "Apache-2.0"
+[workspace]
+[lib]
+name = "embedded_tls"
+path = "../src/lib.rs"
+[features]
+default = []
+log = []
+alloc = []
+defmt = []
+ed25519 = []
+p384 = []
+rsa = []
+rustpki = []
+std = []
+tokio = []
+webpki = []
+
+[dependencies.aes-gcm]
+version = "0.10.1"
+features = ["aes"]
+default-features = false
+
+[dependencies.digest]
+version = "0.10.3"
+features = ["core-api"]
+default-features = false
+
+[dependencies.ecdsa]
+version = "0.16.9"
+default-features = false
+
+[dependencies.embedded-io]
+version = "0.7"
+
+[dependencies.embedded-io-async]
+version = "0.7"
+
+[dependencies.generic-array]
+version = "0.14"
+default-features = false
+
+[dependencies.heapless]
+version = "0.9"
+default-features = false
+
+[dependencies.hkdf]
+version = "0.12.3"
+
+[dependencies.hmac]
+version = "0.12.1"
+
+[dependencies.p256]
+version = "0.13"
+features = ["ecdh", "ecdsa", "sha256"]
+default-features = false
+
+[dependencies.portable-atomic]
+version = "1.6.0"
+default-features = false
+
+[dependencies.rand_core]
+version = "0.6.3"
+default-features = false
+
+[dependencies.sha2]
+version = "0.10.2"
+default-features = false
+features = ["force-soft"]
+
+[dependencies.signature]
+version = "2.2"
+default-features = false
+
+[dependencies.typenum]
+version = "1.15.0"
+default-features = false

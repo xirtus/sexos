@@ -36,9 +36,9 @@ fn network_owner(caller:u32)->Option<jobs::Identity>{
     }
     None
 }
-struct ClientWire<'e,'a>(Option<&'e mut sex_net::Engine<'a>>);
+struct ClientWire<'e,'a>(Option<&'e mut sex_net::Engine<'a>>,bool);
 impl jobs::Wire for ClientWire<'_,'_>{
-    fn begin(&mut self,ticket:u32)->Result<(),u32>{self.0.as_mut().ok_or(sex_pdx::network_job::OFFLINE)?.begin_client(ticket).map_err(|_|sex_pdx::network_job::IO)}
+    fn begin(&mut self,ticket:u32)->Result<(),u32>{let engine=self.0.as_mut().ok_or(sex_pdx::network_job::OFFLINE)?;let result=if self.1 {engine.begin_client_tls(ticket)}else{engine.begin_client(ticket)};result.map_err(|_|sex_pdx::network_job::IO)}
     fn receive(&mut self,out:&mut[u8])->Result<usize,u32>{self.0.as_mut().ok_or(sex_pdx::network_job::OFFLINE)?.client_receive(out).map_err(|_|sex_pdx::network_job::IO)}
     fn send(&mut self,data:&[u8])->Result<usize,u32>{self.0.as_mut().ok_or(sex_pdx::network_job::OFFLINE)?.client_send(data).map_err(|_|sex_pdx::network_job::IO)}
     fn queued(&self)->usize{self.0.as_ref().map_or(0,|e|e.client_queued())}
@@ -5248,7 +5248,7 @@ pub extern "C" fn _start() -> ! {
         }
         let mut polling=false;
         if let Some(owner)=outbound.owner(){
-            if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut()));}
+            if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
         }
         if let Some(owner)=dns.owner(){if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}}
         if let Some(owner)=seed.owner(){
@@ -5308,7 +5308,8 @@ pub extern "C" fn _start() -> ! {
                 }
                 if engine.failure()!=failure{sex_pdx::serial_record!("[sexnet.transport.failed] error={:?}",engine.failure());}
                 let previous=outbound.snapshot();
-                outbound.advance(sex_pdx::get_ticks(),&mut ClientWire(Some(&mut *engine)));
+                let duplex=outbound.is_duplex();
+                outbound.advance(sex_pdx::get_ticks(),&mut ClientWire(Some(&mut *engine),duplex));
                 let current=outbound.snapshot();
                 if previous.state!=current.state{
                     outbound_changes=outbound_changes.saturating_add(1);
@@ -5346,7 +5347,7 @@ pub extern "C" fn _start() -> ! {
             if !polling{pending_packet=None;if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}}
         }
         if let Some((owner,word))=outbound.pending_reply(){
-            if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut()));}
+            if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
             else if pdx_reply(owner.pd,word)==0{outbound.reply_accepted();}
             else{outbound.reply_deferred();}
         }
@@ -5387,7 +5388,7 @@ pub extern "C" fn _start() -> ! {
         if req.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|notice| {
-                    outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut()));
+                    outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut(),false));
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
                     seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
                     clock.retire(sex_pdx::clock_source::Identity{pd:notice.target_pd,task:notice.task_id});
@@ -5473,20 +5474,28 @@ pub extern "C" fn _start() -> ! {
                 let now=sex_pdx::get_ticks();
                 // DNS is data under the held route. It cannot expand this fixed
                 // controlled endpoint policy or mint any communication authority.
+                let tls_admitted=request.kind!=sex_pdx::network_job::BEGIN_DUPLEX_RESOLVED||
+                    sex_pdx::trust_info(sex_pdx::trust_source::SLOT).is_ok_and(|info|info.valid()&&info.consumer==sex_pdx::trust_source::Identity{pd:owner.pd,task:owner.task})
+                    &&network_config.is_some_and(|config|config.tls_endpoint().is_some());
                 let admission=dns.resolved(owner,request.a as u32,now)
+                    .filter(|_|tls_admitted)
                     .filter(|record|network_config.is_some_and(|config|record.address==config.http))
                     .map(|r|jobs::Resolution{owner:r.owner,generation:r.generation,address:r.address,observed_tick:r.observed_tick,expires_tick:r.expires_tick})
                     .ok_or(sex_pdx::network_job::DENIED);
                 let before=outbound.snapshot().ticket;
                 let before_state=outbound.snapshot().state;
                 let before_stream=outbound.stream_snapshot();
-                if !outbound.handle_resolved(owner,request,now,dns.owner().is_some(),admission,&mut ClientWire(transport.as_mut())){
+                let duplex=outbound.is_duplex();
+                if !outbound.handle_resolved(owner,request,now,dns.owner().is_some(),admission,&mut ClientWire(transport.as_mut(),duplex)){
                     // Valid clients serialize one request per receipt. A second
                     // same-owner request cannot overwrite its reserved receipt.
                     sex_pdx::serial_record!("[net.job.request.backpressure] owner={} seq={} effects=0 pending_receipt=retained",owner.pd,request.seq);
                 }
                 if before!=outbound.snapshot().ticket {
                     if let Some(r)=outbound.resolution(){sex_pdx::serial_record!("[net.job.resolved.admitted] owner={} task={} ticket={} dns_generation={} observed={} expires={} now={} fixed=1 at_begin=1",owner.pd,owner.task,outbound.snapshot().ticket,r.generation,r.observed_tick,r.expires_tick,now);}
+                }
+                if request.kind==sex_pdx::network_job::BEGIN_DUPLEX_RESOLVED && before!=outbound.snapshot().ticket && outbound.is_duplex(){
+                    sex_pdx::serial_record!("[net.job.duplex.admitted] owner={} task={} ticket={} kind=10 ring=1024 tx_ring=4096 max_wire=32768 peer_port=46080 trust_profile=1 authority=held_boot_route",owner.pd,owner.task,outbound.snapshot().ticket);
                 }
                 if request.kind==sex_pdx::network_job::BEGIN_STREAM_RESOLVED && before!=outbound.snapshot().ticket && outbound.stream_snapshot().is_some() {
                     sex_pdx::serial_record!("[net.job.stream.admitted] owner={} task={} ticket={} kind=9 ring={} max_wire={} total_ticks={} idle_ticks={} authority=held_route",owner.pd,owner.task,outbound.snapshot().ticket,sex_pdx::network_job::STREAM_RING_BYTES,sex_pdx::network_job::MAX_STREAM_BYTES,sex_pdx::network_job::STREAM_TOTAL_TICKS,sex_pdx::network_job::STREAM_IDLE_TICKS);

@@ -20,6 +20,13 @@ PINS = {'embedded-tls': '0.19.0', 'embedded-io': '0.7.1',
 PACKAGE_NAMES = {'webpki': 'rustls-webpki'}
 DIRECT_FEATURES = {'sha2': ['force-soft'], 'p256': ['ecdsa']}
 LOCAL = {'sex-trust-config': '../sex-trust-config'}
+VENDOR = 'vendor/embedded-tls-0.19.0'
+VENDOR_DEP_PATH = '../../' + VENDOR
+VENDOR_PROVENANCE_SHA256 = 'dd153de13b1561cdb72ec4e99fc6b6ad89e9a1f4c265d5e25951d74862411c9e'
+VENDOR_MANIFEST_SHA256 = '716f06505dab9054a1438a69b8848bdf7a390f652eda1c7435fbea87ddba525c'
+UPSTREAM_MANIFEST_SHA256 = '2a061a6ea8ef71879f5e4985cb453c1a5f83fc18419f8d4884bb5f4e1f9a6c7a'
+UPSTREAM_ARCHIVE_SHA256 = '6ff3c16c9cedcab3ef5c79fd46349152adbb98f997b937cb1ead7655f5c07e43'
+
 EFFECTIVE_FEATURES = {
     'embedded-tls': set(), 'embedded-io': set(), 'embedded-io-async': set(),
     'rand_chacha': set(), 'rand_core': set(), 'sha2': {'force-soft'},
@@ -43,13 +50,14 @@ def check_manifests(tls, workspace, app, trust=None):
         if not isinstance(dep, dict):
             errors.append('missing explicit TLS dependency policy: ' + name)
             continue
-        expected_features = DIRECT_FEATURES.get(name, [])
-        expected_package = PACKAGE_NAMES.get(name)
-        if (dep.get('version') != '=' + version or dep.get('default-features') is not False
-                or dep.get('features', []) != expected_features
-                or dep.get('package') != expected_package
-                or set(dep) - ({'version', 'default-features', 'features', 'package'}
-                                if expected_package else {'version', 'default-features', 'features'})):
+        expected = {'version': '=' + version, 'default-features': False}
+        if name in DIRECT_FEATURES:
+            expected['features'] = DIRECT_FEATURES[name]
+        if name in PACKAGE_NAMES:
+            expected['package'] = PACKAGE_NAMES[name]
+        if name == 'embedded-tls':
+            expected['path'] = VENDOR_DEP_PATH
+        if dep != expected:
             errors.append('noncanonical TLS dependency policy: ' + name)
     for name, path in LOCAL.items():
         if deps.get(name) != {'path': path}:
@@ -73,6 +81,59 @@ def check_manifests(tls, workspace, app, trust=None):
         if workspace.get(key):
             errors.append('workspace dependency replacement needs TLS policy review: ' + key)
     return errors
+
+
+def check_vendor(root):
+    """Exact reviewed published inputs plus tiny recorded patches, no broad fork."""
+    root = Path(root).resolve()
+    base = root / VENDOR
+    errors, inputs = [], {}
+    if base.is_symlink() or base.resolve() != base:
+        return ['TLS vendor path must be a canonical repository directory'], inputs
+    provenance_path = base / 'UPSTREAM.toml'
+    raw = provenance_path.read_bytes()
+    inputs[VENDOR + '/UPSTREAM.toml'] = hashlib.sha256(raw).hexdigest()
+    if inputs[VENDOR + '/UPSTREAM.toml'] != VENDOR_PROVENANCE_SHA256:
+        return ['TLS vendor provenance changed; explicit source review required'], inputs
+    provenance = tomllib.loads(raw.decode())
+    if (provenance.get('archive_sha256') != UPSTREAM_ARCHIVE_SHA256
+            or provenance.get('name') != 'embedded-tls' or provenance.get('version') != '0.19.0'
+            or provenance.get('original_members') != 96 or provenance.get('schema') != 1):
+        errors.append('noncanonical TLS upstream provenance')
+    expected = {'UPSTREAM.toml'}
+    originals = 0
+    for record in provenance.get('files', []):
+        name = record.get('path', '')
+        relative = Path(name)
+        if not name or relative.is_absolute() or '..' in relative.parts or name in expected:
+            errors.append('noncanonical or duplicate TLS vendor source path')
+            continue
+        expected.add(name)
+        path = base / relative
+        if path.is_symlink() or path.resolve() != path:
+            errors.append('TLS vendor source symlink is not reviewed: ' + name)
+            continue
+        payload = path.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        inputs[VENDOR + '/' + name] = digest
+        if digest != record.get('sha256') or len(payload) != record.get('bytes'):
+            errors.append('TLS vendor source differs from reviewed patch: ' + name)
+        originals += 'upstream_sha256' in record
+    actual = {p.relative_to(base).as_posix() for p in base.rglob('*')
+              if p.is_file() or p.is_symlink()}
+    if actual != expected or originals != 96:
+        errors.append('TLS vendor source closure changed; no extra or missing files allowed')
+    for name, digest in [('Cargo.toml', VENDOR_MANIFEST_SHA256),
+                         ('Cargo.toml.upstream', UPSTREAM_MANIFEST_SHA256)]:
+        if inputs.get(VENDOR + '/' + name) != digest:
+            errors.append('TLS vendor manifest changed: ' + name)
+    effective = tomllib.loads((base / 'Cargo.toml').read_text())
+    original = tomllib.loads((base / 'Cargo.toml.upstream').read_text())
+    original.pop('test', None)
+    original.pop('dev-dependencies', None)
+    if effective != original:
+        errors.append('TLS vendor normalization altered runtime dependencies or features')
+    return errors, inputs
 
 
 def check_flags(spec):
@@ -117,14 +178,17 @@ def check_flags(spec):
     return errors
 
 
-def check_tree(output):
+def check_tree(output, *, root=None):
     errors, packages = [], {}
     for line in output.splitlines():
-        match = re.fullmatch(r'([A-Za-z0-9_-]+) v([^ ]+)(?: \([^\n]+\))?(?: (.*))?', line.strip())
+        match = re.fullmatch(r'([A-Za-z0-9_-]+) v([^ ]+)(?: \(([^\n]*?)\))?(?: (.*))?', line.strip())
         if not match:
             errors.append('malformed effective Cargo graph line')
             continue
-        name, version, raw = match.groups()
+        name, version, location, raw = match.groups()
+        if name == 'embedded-tls' and root is not None:
+            if location != str((Path(root).resolve() / VENDOR).resolve()):
+                errors.append('effective TLS graph must use the exact reviewed vendor path')
         features = set((raw or '').removesuffix('(*)').strip().split(',')) - {''}
         entry = packages.setdefault(name, {'versions': set(), 'features': set()})
         entry['versions'].add(version)
@@ -161,6 +225,9 @@ def inspect(root, *, tree_output=None):
         trust = tomllib.loads(raw['crates/sex-trust-config/Cargo.toml'].decode())
         errors.extend(check_manifests(*parsed[:3], trust=trust))
         errors.extend(check_flags(parsed[3]))
+        vendor_errors, vendor_inputs = check_vendor(root)
+        errors.extend(vendor_errors)
+        report['inputs'].update(vendor_inputs)
         if not errors:
             command = ['cargo', 'tree', '--locked', '-p', 'sex-tls', '--target',
                        str(root / 'x86_64-sex.json'), '-e', 'normal,build',
@@ -170,7 +237,7 @@ def inspect(root, *, tree_output=None):
                 env.pop('RUSTUP_TOOLCHAIN', None)
                 tree_output = subprocess.run(command, cwd=root, env=env, check=True,
                                              capture_output=True, text=True, timeout=60).stdout
-            tree_errors, packages = check_tree(tree_output)
+            tree_errors, packages = check_tree(tree_output, root=root)
             errors.extend(tree_errors)
             report.update(command=command, packages=packages,
                           graph_sha256=hashlib.sha256(tree_output.encode()).hexdigest())
