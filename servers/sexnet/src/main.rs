@@ -4,6 +4,7 @@
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use spin::Mutex;
 use core::sync::atomic::{AtomicU8, Ordering};
+mod nic;
 
 // ── Phase M: source3 reliability multi-fetch compile gate ──
 const PHASE_M_RELIABILITY_ENABLED: bool =
@@ -11,7 +12,8 @@ const PHASE_M_RELIABILITY_ENABLED: bool =
 const DNS_SOURCE3_UDP_TX_ENABLED: bool =
     option_env!("SEXNET_DNS_SOURCE3_PROOF").is_some();
 
-/// Heavy proof profile gate: when unset, sexnet boots passive-only.
+/// Heavy historical proof profile gate. The normal path uses bounded NIC
+/// preparation while all IP/transport/application protocols remain offline.
 /// Default boot skips e1000 ring proofs, DNS/TCP/HTTP suites, and
 /// bounded poll loops (50M/100M iterations).
 /// Set SEXOS_SEXNET_PROOF_PROFILE=1 at build time to enable full NIC
@@ -806,7 +808,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
     serial_println!("[sexnet.boot] ok=1 reason=passive_spawn");
-    serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=mock_status_only_no_nic");
+    serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=protocols_offline");
     serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");
     if SEXNET_PROOF_PROFILE_ENABLED {
         serial_println!("[sexnet.proof.profile] enabled=1 reason=SEXOS_SEXNET_PROOF_PROFILE_set");
@@ -5111,8 +5113,34 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexnet.passive.ready.fast] network=0 dns=0 tcp=0 http=0 tls=0 ok=1");
     }
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
+    // Exclusive profiles: never alias a normal driver and the historical proof
+    // driver's pool/queues over the same immutable BOOT device reservation.
+    let mut device = if SEXNET_PROOF_PROFILE_ENABLED { None } else {
+        match nic::Live::open() {
+            Ok(hardware) => Some(nic::Device::new(hardware, sex_pdx::get_ticks())),
+            Err(status) => {
+                sex_pdx::serial_record!("[sexnet.nic.prepare.unavailable] status={} dma=0 packets=0",status);
+                None
+            },
+        }
+    };
     loop {
-        let req = unsafe { pdx_listen_raw(0) };
+        let pending = if let Some(dev) = device.as_mut() {
+            let before = dev.phase();
+            if dev.pending() { dev.advance(sex_pdx::get_ticks()); }
+            if dev.phase() != before {
+                sex_pdx::serial_record!("[sexnet.nic.prepare] from={:?} to={:?} failure={:?} status={} mac={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} dma=0 packets=0",before,dev.phase(),dev.failure(),dev.status,dev.mac[0],dev.mac[1],dev.mac[2],dev.mac[3],dev.mac[4],dev.mac[5]);
+            }
+            dev.pending()
+        } else { false };
+        let req = if pending {
+            // One message per device turn; no startup polling loop can starve
+            // cleanup or ordinary service calls. try_listen yields when empty.
+            match sex_pdx::pdx_try_listen_raw(0) {
+                Some(req) => { sex_pdx::sys_yield(); req },
+                None => continue,
+            }
+        } else { unsafe { pdx_listen_raw(0) } };
         if req.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|_| {}) {

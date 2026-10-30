@@ -16,12 +16,13 @@ def validate(text,count,leases,skip=None):
  return result
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--preparation',action='store_true');a=p.parse_args()
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
  variants=[('single',['-nic','none','-netdev','user,id=n1','-device','e1000e,netdev=n1'],1,1,None),
            ('unsupported',['-nic','none','-netdev','user,id=n1','-device','virtio-net-pci,netdev=n1'],1,0,'unsupported_or_invalid_bar'),
            ('duplicate',['-nic','none','-netdev','user,id=n1','-device','e1000e,netdev=n1','-netdev','user,id=n2','-device','e1000e,netdev=n2'],2,1,'slot_occupied')]
+ if a.preparation:variants.append(('legacy',['-nic','none','-netdev','user,id=n1','-device','e1000,netdev=n1'],1,1,None))
  results=[]
  for name,network,count,leases,skip in variants:
   folder=out/name;folder.mkdir();disk=folder/'nvme.img';shutil.copyfile(src,disk);log=folder/'serial.log'
@@ -34,11 +35,17 @@ def main():
     text=log.read_text(errors='replace')if log.exists()else''
     if proc.poll()is not None:raise RuntimeError('guest exited')
     if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at',text):raise RuntimeError('guest fault')
-    if '[app.surface.presented] target=15 surface=300'in text and '[sexnet.passive.ready.fast]'in text:
+    prepared=not a.preparation or ('to=Quiescent'in text if leases else '[sexnet.nic.prepare.unavailable]'in text)
+    if '[app.surface.presented] target=15 surface=300'in text and '[sexnet.passive.ready.fast]'in text and prepared:
      if ready is None:ready=time.monotonic()
      if time.monotonic()-ready>=2:break
     time.sleep(.1)
-   result=validate(text,count,leases,skip);(folder/'result.json').write_text(json.dumps(result,indent=2)+'\n');results.append(dict(name=name,**result))
+   result=validate(text,count,leases,skip)
+   if a.preparation:
+    from check_nic_command import inspect as command_inspect
+    command=command_inspect(text,leases,True);result['preparation']=command
+    result['errors'].extend(command['errors']);result['ok']=not result['errors']
+   (folder/'result.json').write_text(json.dumps(result,indent=2)+'\n');results.append(dict(name=name,**result))
    if not result['ok']:raise RuntimeError(name+': '+str(result['errors']))
   finally:
    if proc.poll()is None:

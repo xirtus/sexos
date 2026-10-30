@@ -45,3 +45,6 @@ PYMEM
 NIC_BOOT_MEMORY_SOURCE="$TEST_DIR/boot_memory.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/nic_boot_memory.rs" -o "$TEST_DIR/boot-memory"
 "$TEST_DIR/boot-memory" --test-threads=1
 bash "$ROOT_DIR/scripts/pci_command_host_gate.sh"
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_nic_prepare.rs" -o "$TEST_DIR/nic-prepare"
+"$TEST_DIR/nic-prepare" --test-threads=1
+echo '[sexnet.nic.prepare.host] PASS scope=actual_bounded_state_machine_with_explicit_command_register_clock_doubles_no_dma_or_packets'
