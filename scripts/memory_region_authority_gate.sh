@@ -41,4 +41,18 @@ for path in [Path('sex-rt/src/lib.rs'), Path('apps/sexdrive/src/main.rs'),
 PY
 SEXOS_REGION_QUERY_RS="$TEST_DIR/query.rs" rustc --edition=2021 --test tests/memory_region_dispatch.rs -o "$TEST_DIR/dispatch"
 "$TEST_DIR/dispatch"
+python3 - "$TEST_DIR/document_boot.rs" <<'PYDOCUMENT'
+from pathlib import Path
+import sys
+s=Path('kernel/src/boot_memory.rs').read_text();parts=[]
+for name in ['grant','paired','paired_at','init_documents']:
+    a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
+    while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
+    parts.append(s[a:i])
+Path(sys.argv[1]).write_text('\n'.join(parts))
+init=Path('kernel/src/init.rs').read_text()
+assert init.index('boot_memory::init_documents(sexfiles_id, [quil_id, successor, quil_third])') < init.index('boot_memory::seal_all()')
+PYDOCUMENT
+SEXOS_REGION_QUERY_RS="$TEST_DIR/query.rs" DOCUMENT_BOOT_SOURCE="$TEST_DIR/document_boot.rs" rustc --edition=2021 --test tests/document_boot_views.rs -o "$TEST_DIR/document-boot"
+"$TEST_DIR/document-boot"
 echo '[memory.region.authority.gate.result] PASS scope=production_helpers_extracted_query_runtime_boot_required'

@@ -907,6 +907,7 @@ pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<DomainId, u64> {
 }
 
 pub mod document;
+pub mod document_buffer;
 
 pub mod desktop_style;
 pub mod document_view;
