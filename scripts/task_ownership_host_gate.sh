@@ -7,3 +7,5 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 rustc --edition=2021 --test "$ROOT_DIR/tests/task_ownership.rs" -o "$TEST_DIR/ownership-tests"
 "$TEST_DIR/ownership-tests" --nocapture
 echo '[gate.task_ownership_host.result] PASS scope=production_atomics_queue_not_x86_stack_proof'
+
+bash "$ROOT_DIR/scripts/self_wait_host_gate.sh"

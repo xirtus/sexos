@@ -557,6 +557,15 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             }
         },
 
+        70 => { // PDX_WAIT_SELF_TICKS: bounded delay, current BOOT task only.
+            if rsi!=0||rdx!=0||r10!=0||r8!=0 { sex_pdx::ERR_CAP_INVALID }
+            else {
+                regs.rax=0;
+                if unsafe {crate::scheduler::wait_for_message_ticks(regs as *const _,rdi)} {0}
+                else {sex_pdx::ERR_CAP_INVALID}
+            }
+        },
+
         53 => { // PDX_WAIT_SELF: only this domain's own inbox/reply events.
             if rdi != 0 {
                 sex_pdx::ERR_CAP_INVALID

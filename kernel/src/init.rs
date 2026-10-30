@@ -833,6 +833,7 @@ pub fn init() {
     assert!(files.find_capability(sex_pdx::history_recovery::SLOT as u32).is_none());
     files.grant_capability(sex_pdx::history_recovery::SLOT as u64,crate::capability::CapabilityData::HistoryRecovery(sex_pdx::history_recovery::Grant{holder:sexfiles_id,logical:12,original:spindle_id,original_task:unsafe{(*spindle_main).id},successor:spindle_successor,successor_task:unsafe{(*successor_main).id},base:sex_pdx::SPINDLE_HISTORY_BASE_LBA,sectors:sex_pdx::SPINDLE_HISTORY_SECTORS}));
     serial_println!("[boot.history.recovery] holder={} slot=53 logical=12 original=12 task=12 successor=17 successor_task=17 base={} sectors={} runtime_mint=0",sexfiles_id,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS);
+    crate::scheduler::seal_self_wait_inventory();
     crate::boot_memory::seal_all();
 
     serial_println!("init: Revoking kernel write access...");

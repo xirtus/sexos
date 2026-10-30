@@ -39,6 +39,10 @@
         {
           "path": "kernel/src/scheduler.rs",
           "anchor": "pub fn unpark_thread"
+        },
+        {
+          "path": "kernel/src/self_wait.rs",
+          "anchor": "pub struct Deadline"
         }
       ],
       "checks": [
@@ -48,7 +52,8 @@
         "fault_transactions"
       ],
       "gaps": [
-        "Remote attached idle wake requires a functioning periodic timer or explicit core kick; AP scheduling is not activated by this protocol."
+        "Remote attached idle wake requires a functioning periodic timer or explicit core kick; AP scheduling is not activated by this protocol.",
+        "Bounded BOOT-main self-wait deadlines use the existing periodic timer and custody handshake; native BSP evidence does not establish NIC IRQ wake, physical elapsed-time bounds, AP timer accounting or SMP execution."
       ],
       "depends_on": []
     },

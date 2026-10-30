@@ -431,6 +431,7 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
     crate::scheduler::poll_paging_exit_notifications();
+    crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
 
     // Timer fired in kernel mode (CS.RPL=0) means a task is mid-syscall on the shared
     // CoreLocal kernel stack. Saving context there is unsafe: other tasks' syscalls reuse

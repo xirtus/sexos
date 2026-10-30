@@ -178,7 +178,7 @@
         "bash",
         "scripts/task_ownership_host_gate.sh"
       ],
-      "scope": "Production atomic custody plus bounded queue; finite traces and host races do not prove x86 stack release or physical AP scheduling."
+      "scope": "Production atomic custody plus bounded queue; finite traces and host races do not prove x86 stack release or physical AP scheduling. Includes actual bounded self-wait deadline, immutable BOOT inventory and ownership-boundary host tests; not privileged x86 timer or SMP proof."
     },
     {
       "id": "compiled_switch",

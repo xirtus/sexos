@@ -40,6 +40,12 @@ pub mod task_ownership;
 pub mod fault_transaction;
 #[path = "task_exit.rs"]
 pub mod task_exit;
+#[path = "self_wait.rs"]
+pub mod self_wait;
+// Main-task addresses are registered once by BOOT, never from a syscall.
+static SELF_WAIT_TASKS:self_wait::BootInventory<Task,32>=self_wait::BootInventory::new();
+static TIMED_PARKS:AtomicU64=AtomicU64::new(0);
+static TIMER_WAKES:AtomicU64=AtomicU64::new(0);
 pub use task_exit::{register_paging_exit_watch, validate_dead_target, acknowledge_dead_cleanup, poll_paging_exit_notifications};
 use task_ownership::{Admission, ParkResult, TaskOwnership, WakeResult};
 
@@ -68,6 +74,7 @@ pub struct Task {
     pub kstack_top: u64,
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
+    wait_deadline:self_wait::Deadline,
 }
 
 impl Task {
@@ -123,6 +130,7 @@ impl Task {
             kstack_top: kstack_alloc_top,  // initial alloc top (for TSS RSP0)
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
+            wait_deadline:self_wait::Deadline::new(),
         }
     }
 }
@@ -645,6 +653,47 @@ pub unsafe fn wait_for_message(regs_ptr: *const crate::interrupts::SyscallRegs) 
     }
 }
 
+/// Self-only, bounded timer wait on an existing BOOT-created main task. No
+/// target argument or timer capability is created. Generic wake retains sole
+/// task/stack custody, including when the deadline fires in kernel-mode HLT.
+pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallRegs,ticks:u64)->bool{
+    x86_64::instructions::interrupts::disable();
+    let core=crate::core_local::CoreLocal::get();
+    let sched=&SCHEDULERS[core.core_id as usize];
+    let task=sched.current_task.load(Ordering::Acquire);
+    if !SELF_WAIT_TASKS.contains(task)||ticks==0||ticks>self_wait::MAX_TICKS{return false;}
+    let pd=core.current_pd_ref();
+    if pd.main_task.load(Ordering::Acquire)!=task{return false;}
+    if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty(){return true;}
+    let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
+    let Some(deadline)=(*task).wait_deadline.arm(now,ticks)else{return false;};
+    match (*task).state.park(core.core_id){
+        ParkResult::WakeConsumed=>{(*task).wait_deadline.cancel();true},
+        ParkResult::Blocked=>{
+            (*task).resume_observation_pending.store(true,Ordering::Release);
+            let n=TIMED_PARKS.fetch_add(1,Ordering::Relaxed)+1;
+            if n<=4||n.is_power_of_two(){serial_println!("[scheduler.self_wait.park] task={} ticks={} deadline={} count={}",(*task).id,ticks,deadline,n);}
+            yield_and_switch(regs_ptr)
+        },
+        ParkResult::Exited=>{(*task).wait_deadline.cancel();yield_and_switch(regs_ptr)},
+        ParkResult::NotOwner=>{(*task).wait_deadline.cancel();panic!("TIMED_WAIT_WITHOUT_ATTACHED_OWNER")},
+    }
+}
+
+/// Called for both user and kernel timer frames. BOOT inventory reads and
+/// atomic wake/admission only: no domain registry lock or context-frame edit.
+pub fn poll_self_wait_deadlines(now:u64){
+    SELF_WAIT_TASKS.visit(|task|unsafe{
+        if let Some(deadline)=(*task).wait_deadline.take_due(now){
+            let n=TIMER_WAKES.fetch_add(1,Ordering::Relaxed)+1;
+            if n<=4||n.is_power_of_two(){serial_println!("[scheduler.self_wait.expired] task={} deadline={} now={} count={}",(*task).id,deadline,now,n);}
+            // take_due already retired this deadline. Do not cancel a later
+            // arm if another lane has meanwhile resumed and waited again.
+            wake_owned_thread(task);
+        }
+    });
+}
+
 pub fn park_current_thread() {
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &SCHEDULERS[core_id as usize];
@@ -656,6 +705,11 @@ pub fn park_current_thread() {
 
 pub fn unpark_thread(task_ptr: *mut Task) {
     if task_ptr.is_null() { return; }
+    unsafe { (*task_ptr).wait_deadline.cancel(); }
+    wake_owned_thread(task_ptr);
+}
+
+fn wake_owned_thread(task_ptr:*mut Task){
     if unsafe { (*task_ptr).state.wake() } == WakeResult::NeedsAdmission {
         // Only Detached can claim admission. Attached/SwitchingOut wakes stay
         // pending for their owner and cannot duplicate execution custody.
@@ -679,6 +733,22 @@ pub unsafe fn resume_resolved_fault(task: *mut Task) -> bool {
     // the attached wait loop remains responsible for those exact owners.
     SCHEDULERS[core].admit_task(task);
     true
+}
+
+/// Called once from the actual BOOT capability-construction path, including
+/// reserved/dormant main tasks. No runtime registration or lookup from callers.
+pub fn seal_self_wait_inventory(){
+    assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"SELF_WAIT_REGISTRATION_AFTER_BOOT");
+    let mut count=0;
+    for id in 1..crate::ipc::MAX_DOMAINS as u32{
+        if let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(id){
+            let task=pd.main_task.load(Ordering::Acquire);
+            if task.is_null(){continue;}
+            assert!(SELF_WAIT_TASKS.register(count,task),"BOOT_SELF_WAIT_INVENTORY");count+=1;
+        }
+    }
+    assert!(SELF_WAIT_TASKS.seal(),"BOOT_SELF_WAIT_SEAL");
+    serial_println!("[boot.self_wait.sealed] tasks={} capacity=32 max_ticks=64 runtime_registration=0",count);
 }
 
 pub fn bootstrap_enqueue_all_domains() -> usize {
@@ -780,6 +850,7 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     let core=crate::core_local::CoreLocal::get();
     let task=SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
     assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
+    (*task).wait_deadline.cancel();
     (*task).state.exit();
     serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);
     poll_paging_exit_notifications();

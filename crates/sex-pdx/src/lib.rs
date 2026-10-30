@@ -399,6 +399,17 @@ pub fn sys_wait_self() {
     }
 }
 
+/// Pause this BOOT-created main task until inbox/reply activity or a bounded
+/// nominal timer delay (1..=64 ticks). Wakes can be spurious/coalesced; callers
+/// recheck their own inputs. No target task, new grant or delivery receipt.
+pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{
+    let result:u64;
+    unsafe{core::arch::asm!("syscall",inlateout("rax")70u64=>result,
+        in("rdi")ticks,in("rsi")0u64,in("rdx")0u64,in("r10")0u64,in("r8")0u64,
+        out("rcx")_,out("r11")_);}
+    if result==0{Ok(())}else{Err(result)}
+}
+
 pub const SYSCALL_GET_TICKS: u64 = 34;
 
 #[inline]

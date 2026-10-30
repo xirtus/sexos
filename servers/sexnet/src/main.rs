@@ -5122,6 +5122,16 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[boot.default.profile] proofs=light ok=1 reason=sexnet_proof_profile_not_set");
         serial_println!("[sexnet.passive.ready.fast] network=0 dns=0 tcp=0 http=0 tls=0 ok=1");
     }
+    // Ring3 probes execute the real self-only timed-wait frontend; invalid
+    // intervals and every spare field must fail before a task can park.
+    for (ticks,extra) in [(0,0),(65,0),(u64::MAX,0),(1,1),(1,2),(1,3),(1,4)]{
+        let result:u64;
+        unsafe{core::arch::asm!("syscall",inlateout("rax")70u64=>result,in("rdi")ticks,
+            in("rsi")if extra==1{15u64}else{0},in("rdx")if extra==2{15u64}else{0},
+            in("r10")if extra==3{15u64}else{0},in("r8")if extra==4{15u64}else{0},out("rcx")_,out("r11")_);}
+        assert_eq!(result,sex_pdx::ERR_CAP_INVALID,"SELF_WAIT_FRONTEND_PROBE");
+    }
+    sex_pdx::serial_record!("[sexnet.wait.authority] invalid_intervals=3 spare_arguments=4 ok=1");
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     // Exclusive profiles: never alias a normal driver and the historical proof
     // driver's pool/queues over the same immutable BOOT device reservation.
@@ -5139,6 +5149,7 @@ pub extern "C" fn _start() -> ! {
     let mut transport:Option<sex_net::Engine<'static>>=None;
     let mut transport_changes=0u64;
     let mut transfer_changes=0u64;
+    let mut timed_waits=0u64;
     loop {
         let preparing = if let Some(dev) = device.as_mut() {
             let before = dev.phase();
@@ -5217,7 +5228,15 @@ pub extern "C" fn _start() -> ! {
             // cleanup or ordinary service calls. try_listen yields when empty.
             match sex_pdx::pdx_try_listen_raw(0) {
                 Some(req) => { sex_pdx::sys_yield(); req },
-                None => continue,
+                None => {
+                    // Existing try-listen yields once; then bounded own-task
+                    // wait retains IPC publication and guarantees a later poll.
+                    let before=sex_pdx::get_ticks();
+                    sex_pdx::sys_wait_self_ticks(2).expect("BOOT_SELF_WAIT_AUTHORITY");
+                    let after=sex_pdx::get_ticks();timed_waits=timed_waits.saturating_add(1);
+                    if timed_waits<=8||timed_waits.is_power_of_two(){sex_pdx::serial_record!("[sexnet.receive.wait] before={} after={} ticks=2 count={} kind=timer_assisted_poll irq=0",before,after,timed_waits);}
+                    continue;
+                },
             }
         } else { unsafe { pdx_listen_raw(0) } };
         if req.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
@@ -5236,6 +5255,7 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    sex_pdx::serial_record!("[sexnet.fatal] {}",info);
+    loop {sex_pdx::sys_yield();}
 }
