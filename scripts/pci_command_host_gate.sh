@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sexos-pci-command.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
+rustc --edition=2021 --crate-name sex_net_config --crate-type rlib "$ROOT_DIR/crates/sex-net-config/src/lib.rs" -o "$TEST_DIR/libsex_net_config.rlib"
 cd "$ROOT_DIR"
 python3 - "$TEST_DIR" <<'PY'
 from pathlib import Path
@@ -31,8 +32,8 @@ s=Path('kernel/src/devmgr.rs').read_text();a=s.index('(0x02, 0x00)');part=s[a:s.
 assert 'command: Some(crate::boot_memory::nic_command(pd,&dev,sex_pdx::SLOT_NIC,view))'in part
 assert s[:a].count('command: None')==3
 PY
-PCI_COMMAND_PORT_SOURCE="$TEST_DIR/ports.rs" rustc --edition=2021 --test tests/pci_command.rs -o "$TEST_DIR/command"
+PCI_COMMAND_PORT_SOURCE="$TEST_DIR/ports.rs" rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test tests/pci_command.rs -o "$TEST_DIR/command"
 "$TEST_DIR/command" --test-threads=1
-NIC_COMMAND_BOOT_SOURCE="$TEST_DIR/boot.rs" rustc --edition=2021 --test tests/nic_command_boot.rs -o "$TEST_DIR/boot"
+NIC_COMMAND_BOOT_SOURCE="$TEST_DIR/boot.rs" rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test tests/nic_command_boot.rs -o "$TEST_DIR/boot"
 "$TEST_DIR/boot" --test-threads=1
 echo '[pci.command.host.gate] PASS scope=actual_authority_constructor_port_mechanism_with_mock_config_space_not_live_dma_or_packets'

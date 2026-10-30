@@ -5,7 +5,29 @@ from pathlib import Path
 from check_nic_discovery import inspect as discovery
 
 
-def inspect(text, expected=1, preparation=False, ethernet=False):
+def config_receipts(text, expected, seal):
+    """Metadata evidence joins the held-device authority checks in inspect."""
+    errors=[]
+    boot=list(re.finditer(r'\[boot.network.config\] owner=13 version=1 profile=1 origin=boot_descriptor immutable=1 runtime_mint=0',text))
+    queries=list(re.finditer(r'\[pci.network.config\] pd=(\d+) slot=(\d+) origin=boot_descriptor runtime_mint=0',text))
+    copies=list(re.finditer(r'\[sexnet.network.config\] words=([0-9a-f]+),([0-9a-f]+),([0-9a-f]+),([0-9a-f]+) origin=held_boot_nic immutable=1 route=not_installed',text))
+    if len(boot)!=1 or text.count('[boot.network.config]')!=1 or seal<0 or boot[0].start()>seal:errors.append('network descriptor absent, duplicated or seeded after BOOT seal')
+    if len(queries)!=expected or text.count('[pci.network.config]')!=len(queries):errors.append('wrong held-NIC metadata query count or malformed receipt')
+    if len(copies)!=expected or text.count('[sexnet.network.config]')!=len(copies):errors.append('wrong checked network copy count or malformed receipt')
+    if text.count('[browser.network.config.denied] slot=18 kind=route metadata=0')!=1:errors.append('route holder missing actual NIC metadata denial')
+    if text.count('[sexnet.network.config.denied] requests=7 output_zero=1 ok=1')!=1:errors.append('actual metadata slot/reserved-field zero-output denials missing')
+    if expected and '[sexnet.network.config.unavailable]'in text:errors.append('admitted metadata unexpectedly unavailable')
+    wanted=(0x0a00020f|(24<<32)|(1<<40)|(1<<56),0x0a000202|(0x0a000202<<32),46079|(46078<<16)|(46076<<32)|(48000<<48),0x0a000202)
+    if expected and len(queries)==1 and len(copies)==1:
+        if tuple(map(int,queries[0].groups()))!=(13,19):errors.append('network metadata queried through wrong holder/slot')
+        if not seal<queries[0].start()<copies[0].start():errors.append('network copy does not follow post-seal held query')
+        if tuple(int(n,16)for n in copies[0].groups())!=wanted:errors.append('network copy differs from sanctioned controlled BOOT profile')
+        prepare=text.find('[sexnet.nic.prepare]')
+        if prepare>=0 and copies[0].start()>prepare:errors.append('configuration read after device preparation began')
+    if expected==0 and '[sexnet.network.config.unavailable] network=0 fallback=0'not in text:errors.append('missing configuration did not fail closed without fallback')
+    return dict(ok=not errors,errors=errors,queries=len(queries),copies=len(copies),scope='Immutable BOOT metadata and scalar checked copy; held device authority is checked separately. Route holder obtains no NIC metadata; gateway remains data, no installed default route.')
+
+def inspect(text, expected=1, preparation=False, ethernet=False, network_config=False):
     preparation=preparation or ethernet
     errors=list(discovery(text,expected_leases=expected)['errors'])
     pattern=r'\[boot.nic.command\] pd=(\d+) slot=(\d+) bus=(\d+) device=(\d+) function=(\d+) vendor=(\d+) product=(\d+) allowed=(\d+) dma_region=(\d+) runtime_mint=0'
@@ -78,15 +100,17 @@ def inspect(text, expected=1, preparation=False, ethernet=False):
                 if not phases[-1].start()<applied[4].start()<driver[0].start()<driver[3].start()<applied[5].start()<driver[4].start()<driver[5].start():errors.append('bus-master enable/initialization order differs')
             if '[sexnet.ether.send.failed]'in text:errors.append('normal Ethernet submission failed')
         elif driver or '[sexnet.ether.ready]'in text or '[sexnet.ether.tx.submit]'in text:errors.append('absent lease reached DMA/packet path')
-    return dict(ok=not errors,errors=errors,grants=[list(map(int,g.groups()))for g in grants],
+    configuration=config_receipts(text,expected,seal)if network_config else None
+    if configuration:errors.extend(configuration['errors'])
+    return dict(ok=not errors,errors=errors,configuration=configuration,grants=[list(map(int,g.groups()))for g in grants],
                 runtime_queries=sum(m.group(5)=='0'and m.group(6)=='0'for m in applied),command_invocations=len(applied),
                 preparation=preparation,ethernet=ethernet,transitions=[m.group(0)for m in phases],
                 scope=('Exact BOOT identity/command custody, reset, fixed DMA queue initialization and actual bus-master transition. Wire bytes require independent peer capture. No online protocol, firmware DMA drain, physical hardware or hostile/SMP containment proof.'if ethernet else 'Normal-profile exact BOOT lease, Ring3 memory-on/master-off command, bounded reset/quiescence and actual station address. No DMA, packets, firmware DMA-drain, physical hardware or hostile containment proof.'if preparation else 'Normal-profile BOOT-only command grant and actual Ring3 zero-mutation query/denials. Masked writes/status preservation are exercised with port mocks; live DMA, packets, hotplug, physical hardware and hostile containment are not established.'))
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--expected',type=int,choices=[0,1],default=1);p.add_argument('--preparation',action='store_true');p.add_argument('--ethernet',action='store_true');a=p.parse_args()
-    r=inspect(a.log.read_text(errors='replace'),a.expected,a.preparation,a.ethernet);print(json.dumps(r,indent=2));return not r['ok']
+    p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--expected',type=int,choices=[0,1],default=1);p.add_argument('--preparation',action='store_true');p.add_argument('--ethernet',action='store_true');p.add_argument('--network-config',action='store_true');a=p.parse_args()
+    r=inspect(a.log.read_text(errors='replace'),a.expected,a.preparation,a.ethernet,a.network_config);print(json.dumps(r,indent=2));return not r['ok']
 
 
 if __name__=='__main__':raise SystemExit(main())

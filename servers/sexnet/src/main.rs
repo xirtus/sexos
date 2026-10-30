@@ -55,9 +55,10 @@ impl dns_jobs::Wire for DnsWire<'_,'_>{
     fn receive(&mut self,out:&mut[u8;512])->Result<Option<usize>,u32>{self.0.as_mut().ok_or(sex_pdx::network_dns::OFFLINE)?.dns_receive(out).map_err(|_|sex_pdx::network_dns::IO)}
     fn abort(&mut self){if let Some(e)=self.0.as_mut(){e.dns_abort();}}
 }
-fn packet_owned_live(packet:&sex_net::Frame,tcp:&jobs::Machine,dns:&dns_jobs::Machine)->bool{
-    if let Some(ticket)=packet.client_ticket(){return tcp.can_transmit(ticket)&&tcp.owner().is_some_and(|o|network_owner(o.pd)==Some(o));}
-    if let Some(ticket)=packet.dns_ticket(){return dns.can_transmit(ticket)&&dns.owner().is_some_and(|o|network_owner(o.pd)==Some(o));}
+fn packet_owned_live(packet:&sex_net::Frame,tcp:&jobs::Machine,dns:&dns_jobs::Machine,config:Option<&sex_pdx::network_config::Config>)->bool{
+    let Some(config)=config else{return false;};
+    if let Some(ticket)=packet.client_ticket(config){return tcp.can_transmit(ticket)&&tcp.owner().is_some_and(|o|network_owner(o.pd)==Some(o));}
+    if let Some(ticket)=packet.dns_ticket(config){return dns.can_transmit(ticket)&&dns.owner().is_some_and(|o|network_owner(o.pd)==Some(o));}
     true // Existing service-owned ARP/listener traffic carries no app ticket.
 }
 
@@ -5181,6 +5182,19 @@ pub extern "C" fn _start() -> ! {
         assert_eq!(result,sex_pdx::ERR_CAP_INVALID,"SELF_WAIT_FRONTEND_PROBE");
     }
     sex_pdx::serial_record!("[sexnet.wait.authority] invalid_intervals=3 spare_arguments=4 ok=1");
+    for(slot,extra)in[(0,0),(sex_pdx::SLOT_NET,0),(sex_pdx::SLOT_NIC|(1u64<<32),0),(sex_pdx::SLOT_NIC,1),(sex_pdx::SLOT_NIC,2),(sex_pdx::SLOT_NIC,3),(sex_pdx::SLOT_NIC,4)]{
+        let(status,a,b,c,d):(u64,u64,u64,u64,u64);
+        unsafe{core::arch::asm!("syscall",inlateout("rax")sex_pdx::network_config::SYS_CONFIG=>status,in("rdi")slot,
+            inlateout("rsi")if extra==1{1u64}else{0}=>a,inlateout("rdx")if extra==2{1u64}else{0}=>b,
+            inlateout("r10")if extra==3{1u64}else{0}=>c,inlateout("r8")if extra==4{1u64}else{0}=>d,
+            out("rcx")_,out("r11")_);}
+        assert_eq!([status,a,b,c,d],[sex_pdx::pci_command::DENIED,0,0,0,0],"BOOT_NETWORK_FRONTEND_DENIAL");
+    }
+    sex_pdx::serial_record!("[sexnet.network.config.denied] requests=7 output_zero=1 ok=1");
+    let network_config_result=sex_pdx::device_network_config(sex_pdx::SLOT_NIC);
+    let network_config=network_config_result.ok();
+    if let Some(config)=network_config{let w=config.to_words();sex_pdx::serial_record!("[sexnet.network.config] words={:x},{:x},{:x},{:x} origin=held_boot_nic immutable=1 route=not_installed",w[0],w[1],w[2],w[3]);}
+    else{sex_pdx::serial_record!("[sexnet.network.config.unavailable] network=0 fallback=0");}
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     let mut outbound=jobs::Machine::new();
     let mut outbound_changes=0u64;
@@ -5192,7 +5206,9 @@ pub extern "C" fn _start() -> ! {
     let mut last_dns_egress=0u32;
     // Exclusive profiles: never alias a normal driver and the historical proof
     // driver's pool/queues over the same immutable BOOT device reservation.
-    let mut device = if SEXNET_PROOF_PROFILE_ENABLED { None } else {
+    let mut device = if SEXNET_PROOF_PROFILE_ENABLED {None} else if network_config.is_none(){
+        sex_pdx::serial_record!("[sexnet.nic.prepare.unavailable] status={} dma=0 packets=0",network_config_result.err().unwrap_or(sex_pdx::pci_command::DENIED));None
+    } else {
         match nic::Live::open() {
             Ok(hardware) => Some(nic::Device::new(hardware, sex_pdx::get_ticks())),
             Err(status) => {
@@ -5228,7 +5244,7 @@ pub extern "C" fn _start() -> ! {
         // Released DNS observations retain no active socket. Check their exact
         // live identities and nominal-tick expiry even on transport-offline turns.
         dns.maintain_records(sex_pdx::get_ticks(),|owner|network_owner(owner.pd)==Some(owner));
-        if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns)){pending_packet=None;}
+        if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
         if let Some(driver)=ethernet.as_mut() {
             let before=driver.phase();
             let receive=transport.as_ref().is_none_or(|engine|engine.can_receive());
@@ -5238,8 +5254,8 @@ pub extern "C" fn _start() -> ! {
                 if driver.phase()==ethernet::Phase::Running {
                     sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=40960 descriptors=8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified as u8);
                     let mut packet=sex_net::Frame{length:60,bytes:[0;sex_net::MAX_FRAME]};
-                    packet.bytes[..60].copy_from_slice(&arp::request(driver.mac));pending_packet=Some(packet);
-                    transport=Some(unsafe{sex_net::Engine::new(driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
+                    packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac,&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
+                    transport=Some(unsafe{sex_net::Engine::new(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
                         &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX,&mut TRANSPORT_STORAGE)}.expect("FIXED_TRANSPORT_CONFIG"));
                     sex_pdx::serial_record!("[sexnet.transport.ready] implementation=smoltcp0.14.0 flows=1 rx=4096 tx=4096 turn=256 port=46076 no_std=1 heap=0 diagnostic_listener=1 predictable_seed=1 app_network=0 dns=0 http=0 tls=0");
                     sex_pdx::serial_record!("[sexnet.dns.ready] jobs=1 host=probe.sexos.test peer_port=46079 datagram=512 retries=0 service_data=1");
@@ -5286,7 +5302,7 @@ pub extern "C" fn _start() -> ! {
                 if engine.failure().is_some(){pending_packet=None;}
                 else if pending_packet.is_none(){pending_packet=engine.take_frame();}
             }
-            if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns)){pending_packet=None;}
+            if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
             let transport_healthy=transport.as_ref().is_some_and(|engine|engine.failure().is_none());
             if transport_healthy&&driver.phase()==ethernet::Phase::Running&&!driver.busy(){
                 if let Some(packet)=pending_packet.take(){
@@ -5294,11 +5310,11 @@ pub extern "C" fn _start() -> ! {
                         Ok((sequence,index,length,hash))=>{
                             let sampled=sequence<=64||sequence.is_power_of_two();
                             if sampled{sex_pdx::serial_record!("[sexnet.ether.tx.submit] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
-                            if let Some(ticket)=packet.dns_ticket(){
+                            if let Some(ticket)=network_config.as_ref().and_then(|c|packet.dns_ticket(c)){
                                 if sampled||ticket>last_dns_egress{sex_pdx::serial_record!("[net.dns.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_response",ticket,sequence,length,hash);}
                                 last_dns_egress=last_dns_egress.max(ticket);
                             }
-                            if let Some(ticket)=packet.client_ticket(){
+                            if let Some(ticket)=network_config.as_ref().and_then(|c|packet.client_ticket(c)){
                                 if sampled||ticket>last_job_egress{sex_pdx::serial_record!("[net.job.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_delivery",ticket,sequence,length,hash);}
                                 last_job_egress=last_job_egress.max(ticket);
                             }
@@ -5342,7 +5358,7 @@ pub extern "C" fn _start() -> ! {
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|notice| {
                     outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut()));
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
-                    if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns)){pending_packet=None;}
+                    if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
                     sex_pdx::serial_record!("[net.dns.records.retired] target={} task={} remaining={} before_cleanup_ack=1",notice.target_pd,notice.task_id,dns.owned_records(jobs::Identity{pd:notice.target_pd,task:notice.task_id}));
                 }) {
                 // Private job custody and collected owner egress are gone before ACK.
@@ -5360,7 +5376,7 @@ pub extern "C" fn _start() -> ! {
                 // DNS is data under the held route. It cannot expand this fixed
                 // controlled endpoint policy or mint any communication authority.
                 let admission=dns.resolved(owner,request.a as u32,now)
-                    .filter(|record|record.address==[10,0,2,2])
+                    .filter(|record|network_config.is_some_and(|config|record.address==config.http))
                     .map(|r|jobs::Resolution{owner:r.owner,generation:r.generation,address:r.address,observed_tick:r.observed_tick,expires_tick:r.expires_tick})
                     .ok_or(sex_pdx::network_job::DENIED);
                 let before=outbound.snapshot().ticket;

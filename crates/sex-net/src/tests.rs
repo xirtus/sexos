@@ -2,14 +2,20 @@
 extern crate std;
 use super::*;
 use std::{boxed::Box,vec,vec::Vec};
+const BASELINE:sex_net_config::Config=sex_net_config::Config::CONTROLLED;
 const OUR:[u8;6]=[0x52,0x54,0,0x12,0x34,0x56];const PEER:[u8;6]=[2,0,0,0,0,1];const PEER_IP:[u8;4]=[10,0,2,2];
 fn sum(bytes:&[u8])->u16{let mut s=0u32;for c in bytes.chunks(2){s+=u16::from_be_bytes([c[0],*c.get(1).unwrap_or(&0)])as u32;}while s>>16!=0{s=(s&0xffff)+(s>>16);}!(s as u16)}
-fn engine()->Engine<'static>{Engine::new(OUR,0,0x7365786f735f3736,Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([Storage::EMPTY,Storage::EMPTY,Storage::EMPTY]))).unwrap()}
-fn arp()->Vec<u8>{let mut v=vec![0u8;60];v[..6].fill(255);v[6..12].copy_from_slice(&PEER);v[12..22].copy_from_slice(&[8,6,0,1,8,0,6,4,0,1]);v[22..28].copy_from_slice(&PEER);v[28..32].copy_from_slice(&PEER_IP);v[38..42].copy_from_slice(&LOCAL);v}
+fn engine()->Engine<'static>{engine_with(BASELINE)}
+fn engine_with(config:sex_net_config::Config)->Engine<'static>{Engine::new(config,OUR,0,0x7365786f735f3736,Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([Storage::EMPTY,Storage::EMPTY,Storage::EMPTY]))).unwrap()}
+fn arp()->Vec<u8>{arp_for(PEER_IP,LOCAL)}
+fn arp_for(peer:[u8;4],local:[u8;4])->Vec<u8>{let mut v=vec![0u8;60];v[..6].fill(255);v[6..12].copy_from_slice(&PEER);v[12..22].copy_from_slice(&[8,6,0,1,8,0,6,4,0,1]);v[22..28].copy_from_slice(&PEER);v[28..32].copy_from_slice(&peer);v[38..42].copy_from_slice(&local);v}
 fn tcp(seq:u32,ack:u32,flags:u8,body:&[u8])->Vec<u8>{
+ tcp_for(PEER_IP,LOCAL,62000,PORT,seq,ack,flags,body)
+}
+fn tcp_for(source:[u8;4],destination:[u8;4],source_port:u16,destination_port:u16,seq:u32,ack:u32,flags:u8,body:&[u8])->Vec<u8>{
  let mut v=vec![0;54+body.len()];v[..6].copy_from_slice(&OUR);v[6..12].copy_from_slice(&PEER);v[12..14].copy_from_slice(&[8,0]);
- let total=(40+body.len())as u16;v[14]=0x45;v[16..18].copy_from_slice(&total.to_be_bytes());v[20]=0x40;v[22]=64;v[23]=6;v[26..30].copy_from_slice(&PEER_IP);v[30..34].copy_from_slice(&LOCAL);let check=sum(&v[14..34]);v[24..26].copy_from_slice(&check.to_be_bytes());
- v[34..36].copy_from_slice(&62000u16.to_be_bytes());v[36..38].copy_from_slice(&PORT.to_be_bytes());v[38..42].copy_from_slice(&seq.to_be_bytes());v[42..46].copy_from_slice(&ack.to_be_bytes());v[46]=5<<4;v[47]=flags;v[48..50].copy_from_slice(&4096u16.to_be_bytes());v[54..].copy_from_slice(body);
+ let total=(40+body.len())as u16;v[14]=0x45;v[16..18].copy_from_slice(&total.to_be_bytes());v[20]=0x40;v[22]=64;v[23]=6;v[26..30].copy_from_slice(&source);v[30..34].copy_from_slice(&destination);let check=sum(&v[14..34]);v[24..26].copy_from_slice(&check.to_be_bytes());
+ v[34..36].copy_from_slice(&source_port.to_be_bytes());v[36..38].copy_from_slice(&destination_port.to_be_bytes());v[38..42].copy_from_slice(&seq.to_be_bytes());v[42..46].copy_from_slice(&ack.to_be_bytes());v[46]=5<<4;v[47]=flags;v[48..50].copy_from_slice(&4096u16.to_be_bytes());v[54..].copy_from_slice(body);
  let mut pseudo=Vec::from(&v[26..34]);pseudo.extend_from_slice(&[0,6]);pseudo.extend_from_slice(&((20+body.len())as u16).to_be_bytes());pseudo.extend_from_slice(&v[34..]);let check=sum(&pseudo);v[50..52].copy_from_slice(&check.to_be_bytes());v
 }
 struct Segment{seq:u32,ack:u32,flags:u8,body:Vec<u8>}
@@ -28,8 +34,8 @@ fn deliver(e:&mut Engine<'_>,now:&mut u64,client:u32,server:&mut u32,expected:us
 
 #[test]fn outgoing_client_frames_keep_unique_job_identity_through_abort_and_reconnect(){
  let mut e=engine();let mut now=0;e.submit_frame(&arp()).unwrap();tick(&mut e,&mut now);
- e.begin_client(1).unwrap();let first=tick(&mut e,&mut now).unwrap();let s=parse(&first).unwrap();assert_eq!(s.flags&2,2);assert_eq!(first.client_ticket(),Some(1));assert_eq!(u16::from_be_bytes(first.bytes[36..38].try_into().unwrap()),CLIENT_REMOTE_PORT);
- e.client_abort();e.begin_client(2).unwrap();let second=tick(&mut e,&mut now).unwrap();assert_eq!(second.client_ticket(),Some(2));assert_eq!(first.client_ticket(),Some(1));assert_ne!(&first.bytes[34..36],&second.bytes[34..36]);
+ e.begin_client(1).unwrap();let first=tick(&mut e,&mut now).unwrap();let s=parse(&first).unwrap();assert_eq!(s.flags&2,2);assert_eq!(first.client_ticket(&BASELINE),Some(1));assert_eq!(u16::from_be_bytes(first.bytes[36..38].try_into().unwrap()),CLIENT_REMOTE_PORT);
+ e.client_abort();e.begin_client(2).unwrap();let second=tick(&mut e,&mut now).unwrap();assert_eq!(second.client_ticket(&BASELINE),Some(2));assert_eq!(first.client_ticket(&BASELINE),Some(1));assert_ne!(&first.bytes[34..36],&second.bytes[34..36]);
  e.client_abort();assert_eq!(e.client_state(),State::Closed);assert!(!e.has_frame());assert_eq!(e.state(),State::Listen);
 }
 #[test]fn client_bounds_and_stop_cannot_create_another_wire_flow(){
@@ -62,7 +68,7 @@ fn dns_ready()->(Engine<'static>,u64){let mut e=engine();let mut now=0;e.submit_
  assert_eq!(&frame.bytes[26..30],&LOCAL);assert_eq!(&frame.bytes[30..34],&PEER_IP);
  let(src,dst,body)=parse_udp(&frame).unwrap();assert_eq!((src,dst),(48001,DNS_REMOTE_PORT));
  assert_eq!(body,b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05probe\x05sexos\x04test\x00\x00\x01\x00\x01");
- assert_eq!(frame.dns_ticket(),Some(1));assert_eq!(frame.client_ticket(),None);
+ assert_eq!(frame.dns_ticket(&BASELINE),Some(1));assert_eq!(frame.client_ticket(&BASELINE),None);
 }
 #[test]fn dns_receives_one_full_datagram_and_never_replays_it(){
  let(mut e,mut now)=dns_ready();e.begin_dns(1).unwrap();tick(&mut e,&mut now);
@@ -86,7 +92,7 @@ fn dns_ready()->(Engine<'static>,u64){let mut e=engine();let mut now=0;e.submit_
  e.dns_abort();e.begin_dns(2).unwrap();let second=tick(&mut e,&mut now).unwrap();
  let(a,_,first_body)=parse_udp(&first).unwrap();let(b,_,second_body)=parse_udp(&second).unwrap();
  assert_eq!((a,b),(48001,48002));assert_eq!(&first_body[..2],&[0,1]);assert_eq!(&second_body[..2],&[0,2]);
- assert_eq!(first.dns_ticket(),Some(1));assert_eq!(second.dns_ticket(),Some(2));
+ assert_eq!(first.dns_ticket(&BASELINE),Some(1));assert_eq!(second.dns_ticket(&BASELINE),Some(2));
  e.submit_frame(&udp(PEER_IP,LOCAL,DNS_REMOTE_PORT,48001,b"old response")).unwrap();tick(&mut e,&mut now);
  let mut out=[0xA5;DNS_BYTES];assert_eq!(e.dns_receive(&mut out),Ok(None));assert_eq!(out,[0xA5;DNS_BYTES]);
  e.begin_dns(3).unwrap();e.advance(now+1);assert!(e.has_frame());e.dns_abort();assert!(!e.has_frame());
@@ -95,9 +101,9 @@ fn dns_ready()->(Engine<'static>,u64){let mut e=engine();let mut now=0;e.submit_
 #[test]fn invalid_dns_tickets_cannot_abort_or_mutate_valid_pending_query(){
  let(mut e,mut now)=dns_ready();e.begin_dns(1).unwrap();
  for ticket in[0,17536,u32::MAX]{assert_eq!(e.begin_dns(ticket),Err(Error::Length));}
- let frame=tick(&mut e,&mut now).unwrap();assert_eq!(frame.dns_ticket(),Some(1));assert_eq!(parse_udp(&frame).unwrap().2[..2],[0,1]);
+ let frame=tick(&mut e,&mut now).unwrap();assert_eq!(frame.dns_ticket(&BASELINE),Some(1));assert_eq!(parse_udp(&frame).unwrap().2[..2],[0,1]);
  e.begin_dns(17535).unwrap();let frame=tick(&mut e,&mut now).unwrap();assert_eq!(parse_udp(&frame).unwrap().0,u16::MAX);
- assert_eq!(frame.dns_ticket(),Some(17535));
+ assert_eq!(frame.dns_ticket(&BASELINE),Some(17535));
  e.stop(Error::Stopped);assert_eq!(e.begin_dns(1),Err(Error::Stopped));
  assert_eq!(e.dns_receive(&mut[0;DNS_BYTES]),Err(Error::Stopped));assert!(!e.has_frame());assert!(!e.flows.get::<udp::Socket>(e.dns_handle).is_open());
 }
@@ -119,7 +125,87 @@ fn dns_ready()->(Engine<'static>,u64){let mut e=engine();let mut now=0;e.submit_
 }
 #[test]fn aborting_tcp_and_dns_preserves_other_protocols_collected_frame(){
  let(mut e,mut now)=dns_ready();e.begin_client(1).unwrap();now+=1;e.advance(now);assert!(e.has_frame());
- e.begin_dns(1).unwrap();e.dns_abort();let tcp=e.take_frame().unwrap();assert_eq!(tcp.client_ticket(),Some(1));assert_eq!(tcp.dns_ticket(),None);
+ e.begin_dns(1).unwrap();e.dns_abort();let tcp=e.take_frame().unwrap();assert_eq!(tcp.client_ticket(&BASELINE),Some(1));assert_eq!(tcp.dns_ticket(&BASELINE),None);
  let(mut e,mut now)=dns_ready();e.begin_dns(2).unwrap();now+=1;e.advance(now);assert!(e.has_frame());e.client_abort();
- let dns=e.take_frame().unwrap();assert_eq!(dns.dns_ticket(),Some(2));assert_eq!(dns.client_ticket(),None);
+ let dns=e.take_frame().unwrap();assert_eq!(dns.dns_ticket(&BASELINE),Some(2));assert_eq!(dns.client_ticket(&BASELINE),None);
+}
+
+const ALTERNATE:sex_net_config::Config=sex_net_config::Config{
+ local:[192,168,44,17],prefix:24,gateway:[192,168,44,1],dns:[192,168,44,1],
+ http:[192,168,44,2],listen_port:46086,http_port:46088,dns_port:46089,..BASELINE
+};
+fn configured_ready(config:sex_net_config::Config)->(Engine<'static>,u64){
+ let mut e=engine_with(config);let mut now=0;
+ for peer in [config.dns,config.http]{e.submit_frame(&arp_for(peer,config.local)).unwrap();let reply=tick(&mut e,&mut now).unwrap();
+  assert_eq!(&reply.bytes[20..22],&[0,2]);assert_eq!(&reply.bytes[28..32],&config.local);assert_eq!(&reply.bytes[38..42],&peer);
+ }
+ assert!(e.iface.routes().get_default_ipv4_route().is_none());(e,now)
+}
+#[test]fn alternate_arp_listener_echo_and_rearm_use_configured_local_address_and_port(){
+ let c=ALTERNATE;let(mut e,mut now)=configured_ready(c);let client=101;
+ e.submit_frame(&tcp_for(c.http,c.local,62000,c.listen_port,client,0,2,&[])).unwrap();
+ let frame=tick(&mut e,&mut now).unwrap();let synack=parse(&frame).unwrap();assert_eq!(synack.flags&0x12,0x12);
+ assert_eq!(&frame.bytes[26..30],&c.local);assert_eq!(&frame.bytes[30..34],&c.http);
+ assert_eq!(u16::from_be_bytes(frame.bytes[34..36].try_into().unwrap()),c.listen_port);
+ assert_eq!(frame.client_ticket(&c),None);let server=synack.seq.wrapping_add(1);
+ e.submit_frame(&tcp_for(c.http,c.local,62000,c.listen_port,client+1,server,0x10,&[])).unwrap();tick(&mut e,&mut now);assert_eq!(e.state(),State::Established);
+ e.submit_frame(&tcp_for(c.http,c.local,62000,c.listen_port,client+1,server,0x18,b"alternate echo")).unwrap();
+ let mut echo=Vec::new();for _ in 0..10{if let Some(frame)=tick(&mut e,&mut now){if let Some(segment)=parse(&frame){echo.extend_from_slice(&segment.body);}}if echo.len()==14{break;}}
+ assert_eq!(echo,b"alternate echo");assert_eq!(e.statistics().flow_received,14);
+ e.submit_frame(&tcp_for(c.http,c.local,62000,c.listen_port,client+15,server+14,0x14,&[])).unwrap();tick(&mut e,&mut now);assert_eq!(e.state(),State::Listen);
+ e.submit_frame(&tcp_for(c.http,c.local,62001,c.listen_port,200,0,2,&[])).unwrap();
+ let frame=tick(&mut e,&mut now).unwrap();assert_eq!(parse(&frame).unwrap().flags&0x12,0x12);assert_eq!(u16::from_be_bytes(frame.bytes[34..36].try_into().unwrap()),c.listen_port);
+}
+#[test]fn alternate_outbound_tcp_uses_configured_http_tuple_and_rejects_foreign_tuples(){
+ let c=ALTERNATE;let(mut e,mut now)=configured_ready(c);e.begin_client(7).unwrap();let first=tick(&mut e,&mut now).unwrap();let syn=parse(&first).unwrap();
+ assert_eq!(syn.flags&2,2);assert_eq!(&first.bytes[26..30],&c.local);assert_eq!(&first.bytes[30..34],&c.http);
+ assert_eq!(u16::from_be_bytes(first.bytes[34..36].try_into().unwrap()),c.source_base+7);
+ assert_eq!(u16::from_be_bytes(first.bytes[36..38].try_into().unwrap()),c.http_port);
+ assert_eq!(first.client_ticket(&c),Some(7));assert_eq!(first.client_ticket(&BASELINE),None);assert_eq!(first.dns_ticket(&c),None);
+ let server=syn.seq.wrapping_add(1);let peer=901;
+ e.submit_frame(&tcp_for(c.http,c.local,c.http_port,c.source_base+7,peer,server,0x12,&[])).unwrap();tick(&mut e,&mut now);assert_eq!(e.client_state(),State::Established);
+ for(source,destination,source_port,destination_port)in[
+  (c.dns,c.local,c.http_port,c.source_base+7),(c.http,c.local,c.http_port+1,c.source_base+7),
+  (c.http,[192,168,44,18],c.http_port,c.source_base+7),(c.http,c.local,c.http_port,c.source_base+8)]{
+  e.submit_frame(&tcp_for(source,destination,source_port,destination_port,peer+1,server,0x18,b"foreign")).unwrap();tick(&mut e,&mut now);
+  let mut out=[0xA5;16];assert_eq!(e.client_receive(&mut out),Ok(0));assert_eq!(out,[0xA5;16]);assert_eq!(e.client_state(),State::Established);
+ }
+ e.submit_frame(&tcp_for(c.http,c.local,c.http_port,c.source_base+7,peer+1,server,0x18,b"accepted")).unwrap();tick(&mut e,&mut now);
+ let mut out=[0;16];assert_eq!(e.client_receive(&mut out),Ok(8));assert_eq!(&out[..8],b"accepted");
+ e.client_abort();e.begin_client(8).unwrap();let second=tick(&mut e,&mut now).unwrap();assert_eq!(second.client_ticket(&c),Some(8));assert_eq!(first.client_ticket(&c),Some(7));
+}
+#[test]fn alternate_dns_query_and_response_binding_use_configured_addresses_and_ports(){
+ let c=ALTERNATE;let(mut e,mut now)=configured_ready(c);e.begin_dns(9).unwrap();let first=tick(&mut e,&mut now).unwrap();
+ assert_eq!(&first.bytes[26..30],&c.local);assert_eq!(&first.bytes[30..34],&c.dns);
+ let(source,destination,query)=parse_udp(&first).unwrap();assert_eq!((source,destination),(c.source_base+9,c.dns_port));
+ assert_eq!(&query[..12],b"\x00\x09\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00");assert_eq!(&query[12..],sex_net_config::DNS_QUESTION);
+ assert_eq!(first.dns_ticket(&c),Some(9));assert_eq!(first.dns_ticket(&BASELINE),None);assert_eq!(first.client_ticket(&c),None);
+ for(source,destination,source_port,destination_port)in[
+  (c.http,c.local,c.dns_port,c.source_base+9),(c.dns,c.local,c.dns_port+1,c.source_base+9),
+  (c.dns,[192,168,44,18],c.dns_port,c.source_base+9),(c.dns,c.local,c.dns_port,c.source_base+10)]{
+  e.submit_frame(&udp(source,destination,source_port,destination_port,b"foreign")).unwrap();tick(&mut e,&mut now);
+  let mut out=[0xA5;DNS_BYTES];assert_eq!(e.dns_receive(&mut out),Ok(None));assert_eq!(out,[0xA5;DNS_BYTES]);
+ }
+ e.submit_frame(&udp(c.dns,c.local,c.dns_port,c.source_base+9,b"accepted")).unwrap();tick(&mut e,&mut now);
+ let mut out=[0;DNS_BYTES];assert_eq!(e.dns_receive(&mut out),Ok(Some(8)));assert_eq!(&out[..8],b"accepted");
+ e.dns_abort();e.begin_dns(10).unwrap();let second=tick(&mut e,&mut now).unwrap();assert_eq!(second.dns_ticket(&c),Some(10));assert_eq!(first.dns_ticket(&c),Some(9));
+}
+#[test]fn configured_prefix_reaches_onlink_peers_across_slash24_without_a_default_route(){
+ let c=sex_net_config::Config{prefix:23,dns:[192,168,45,1],http:[192,168,45,2],..ALTERNATE};
+ let(mut e,mut now)=configured_ready(c);e.begin_client(1).unwrap();let frame=tick(&mut e,&mut now).unwrap();assert!(parse(&frame).is_some());assert_eq!(&frame.bytes[30..34],&c.http);
+ let(mut e,mut now)=configured_ready(c);e.begin_dns(1).unwrap();let frame=tick(&mut e,&mut now).unwrap();assert!(parse_udp(&frame).is_some());assert_eq!(&frame.bytes[30..34],&c.dns);
+ assert_eq!(e.iface.ip_addrs(),&[IpCidr::new(IpAddress::v4(192,168,44,17),23)]);assert!(e.iface.routes().get_default_ipv4_route().is_none());
+}
+#[test]fn invalid_config_is_rejected_before_borrowed_buffer_effects_and_classification(){
+ for config in[
+  sex_net_config::Config{prefix:0,..ALTERNATE},sex_net_config::Config{profile:2,..ALTERNATE},
+  sex_net_config::Config{http:[192,168,45,2],..ALTERNATE},sex_net_config::Config{dns_port:0,..ALTERNATE},
+  sex_net_config::Config{source_base:47999,..ALTERNATE},sex_net_config::Config{listen_port:48000,..ALTERNATE}]{
+  let(mut rx,mut tx,mut client_rx,mut client_tx)=([0xA1;FLOW_BYTES],[0xA2;FLOW_BYTES],[0xA3;FLOW_BYTES],[0xA4;FLOW_BYTES]);
+  let(mut dns_rx,mut dns_tx)=([0xA5;DNS_BYTES],[0xA6;DNS_BYTES]);let mut rxmeta=[DnsMetadata::EMPTY];let mut txmeta=[DnsMetadata::EMPTY];let mut storage=[Storage::EMPTY,Storage::EMPTY,Storage::EMPTY];
+  assert_eq!(Engine::new(config,[0;6],u64::MAX,0,&mut rx,&mut tx,&mut client_rx,&mut client_tx,&mut rxmeta,&mut dns_rx,&mut txmeta,&mut dns_tx,&mut storage).err(),Some(Error::Config));
+  assert_eq!(rx,[0xA1;FLOW_BYTES]);assert_eq!(tx,[0xA2;FLOW_BYTES]);assert_eq!(client_rx,[0xA3;FLOW_BYTES]);assert_eq!(client_tx,[0xA4;FLOW_BYTES]);assert_eq!(dns_rx,[0xA5;DNS_BYTES]);assert_eq!(dns_tx,[0xA6;DNS_BYTES]);
+  let(mut e,mut now)=configured_ready(ALTERNATE);e.begin_client(1).unwrap();let tcp=tick(&mut e,&mut now).unwrap();assert_eq!(tcp.client_ticket(&config),None);
+  e.client_abort();e.begin_dns(1).unwrap();let dns=tick(&mut e,&mut now).unwrap();assert_eq!(dns.dns_ticket(&config),None);
+ }
 }

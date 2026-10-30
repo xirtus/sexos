@@ -1,6 +1,7 @@
 //! Actual fixed-queue driver with explicit device/DMA/command doubles.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+pub use sex_net_config as network_config;
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 #[path="../crates/sex-pdx/src/dma_pool.rs"]pub mod dma_pool;
 #[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
@@ -111,4 +112,13 @@ fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 
 #[test]fn protocol_backpressure_holds_rx_without_blocking_exact_tx_completion(){
  let m=Mock::new(c::Model::I82574);let mut d=ready(&m);m.rx(0,&[0x71;60],3,0,60);let start=m.ops().len();assert!(d.advance_with_receive(100,false).is_none());assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::CopyOut(..)|Op::Write(0x2818,_))));
  d.send(&[0x33;60],100).unwrap();m.done(0,1);assert!(matches!(d.advance_with_receive(101,false),Some(Event::Transmitted{index:0,..})));assert!(matches!(d.advance_with_receive(102,true),Some(Event::Received{index:0,..})));
+}
+
+#[test]fn configured_arp_uses_exact_local_and_gateway_and_rejects_invalid_data(){
+ let mut cfg=network_config::Config::CONTROLLED;cfg.local=[192,168,44,17];cfg.gateway=[192,168,44,1];cfg.dns=cfg.gateway;cfg.http=[192,168,44,2];
+ let request=arp::request_configured(MAC,&cfg).unwrap();assert_eq!(&request[28..32],&cfg.local);assert_eq!(&request[38..42],&cfg.gateway);
+ let peer=[2,0,0,0,0,1];let mut incoming=request;incoming[6..12].copy_from_slice(&peer);incoming[22..28].copy_from_slice(&peer);incoming[28..32].copy_from_slice(&cfg.gateway);incoming[38..42].copy_from_slice(&cfg.local);
+ let reply=arp::reply_configured(&incoming,MAC,&cfg).unwrap();assert_eq!(&reply[28..32],&cfg.local);assert_eq!(&reply[38..42],&cfg.gateway);
+ assert!(arp::reply_configured(&incoming,MAC,&network_config::Config::CONTROLLED).is_none());cfg.profile=0;
+ assert!(arp::request_configured(MAC,&cfg).is_none());assert!(arp::reply_configured(&incoming,MAC,&cfg).is_none());
 }

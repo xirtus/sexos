@@ -30,6 +30,8 @@ pub mod pci_command;
 pub mod boot_memory;
 pub mod boot_display_state;
 pub mod boot_display;
+pub mod boot_network_state;
+pub mod boot_network;
 #[cfg(target_arch = "x86_64")]
 pub mod paging;
 #[cfg(target_arch = "x86_64")]

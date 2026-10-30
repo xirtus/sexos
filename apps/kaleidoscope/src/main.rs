@@ -52,6 +52,8 @@ struct App {
 
 impl SexApp for App {
     fn new(_pdx: u32) -> Self {
+        assert_eq!(sex_pdx::device_network_config(sex_pdx::SLOT_NET),Err(sex_pdx::pci_command::DENIED),"BROWSER_HAS_ROUTE_NOT_NIC_METADATA");
+        sex_pdx::serial_record!("[browser.network.config.denied] slot=18 kind=route metadata=0");
         ALLOCATOR.init();
         paging_probe::run();
         sex_pdx::serial_println!("[browser.slot.net.static_grant.begin]");

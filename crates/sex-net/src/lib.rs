@@ -4,7 +4,7 @@
 
 #[cfg(test)] extern crate std;
 
-use smoltcp::{iface::{Config,Interface,SocketHandle,SocketSet,SocketStorage},
+use smoltcp::{iface::{Config as InterfaceConfig,Interface,SocketHandle,SocketSet,SocketStorage},
     phy::{self,Device,DeviceCapabilities,Medium},socket::{tcp,udp},
     time::{Duration,Instant},wire::{EthernetAddress,IpAddress,IpCidr}};
 pub use smoltcp::socket::tcp::State;
@@ -14,36 +14,40 @@ pub mod dns_wire;
 pub const MAX_FRAME:usize=1514;
 pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
-pub const LOCAL:[u8;4]=[10,0,2,15];
-pub const PORT:u16=46076;
-pub const CLIENT_BASE:u16=48000;
-pub const CLIENT_REMOTE_PORT:u16=46078;
+// Historical fixture aliases only. Runtime engines/classifiers use their
+// validated copied BOOT configuration, never these baseline constants.
+pub const LOCAL:[u8;4]=sex_net_config::Config::CONTROLLED.local;
+pub const PORT:u16=sex_net_config::Config::CONTROLLED.listen_port;
+pub const CLIENT_BASE:u16=sex_net_config::Config::CONTROLLED.source_base;
+pub const CLIENT_REMOTE_PORT:u16=sex_net_config::Config::CONTROLLED.http_port;
 pub const DNS_BYTES:usize=512;
-pub const DNS_REMOTE_PORT:u16=46079;
+pub const DNS_REMOTE_PORT:u16=sex_net_config::Config::CONTROLLED.dns_port;
 const BASIS:u64=0xcbf29ce484222325;
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Error{Mac,Clock,Busy,Length,Stopped,Protocol}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Error{Config,Mac,Clock,Busy,Length,Stopped,Protocol}
 pub struct Frame{pub length:usize,pub bytes:[u8;MAX_FRAME]}
 impl Frame{
  fn empty()->Self{Self{length:0,bytes:[0;MAX_FRAME]}}
  /// Trusted stack output classification, not caller-supplied authority. Unique
  /// finite source ports retain old job identity even after socket cancellation.
- pub fn client_ticket(&self)->Option<u32>{
-  let b=&self.bytes[..self.length];
-  if b.len()<54||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=6||b[26..30]!=LOCAL{return None;}
+ pub fn client_ticket(&self,config:&sex_net_config::Config)->Option<u32>{
+  if !config.valid(){return None;}
+  let b=self.bytes.get(..self.length)?;
+  if b.len()<54||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=6||b[26..30]!=config.local{return None;}
   let header=(b[14]&15)as usize*4;
   if header<20||b.len()<14+header+20{return None;}
   let port=u16::from_be_bytes([b[14+header],b[15+header]]);
-  if port>CLIENT_BASE{Some((port-CLIENT_BASE)as u32)}else{None}
+  if port>config.source_base{Some((port-config.source_base)as u32)}else{None}
  }
  /// UDP and TCP port namespaces are distinct. This trusted stack-output tag
  /// retains the old DNS job ticket after the UDP socket is aborted or rebound.
- pub fn dns_ticket(&self)->Option<u32>{
-  let b=&self.bytes[..self.length];
-  if b.len()<42||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=17||b[26..30]!=LOCAL{return None;}
+ pub fn dns_ticket(&self,config:&sex_net_config::Config)->Option<u32>{
+  if !config.valid(){return None;}
+  let b=self.bytes.get(..self.length)?;
+  if b.len()<42||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=17||b[26..30]!=config.local{return None;}
   let header=(b[14]&15)as usize*4;
   if header<20||b.len()<14+header+8{return None;}
   let port=u16::from_be_bytes([b[14+header],b[15+header]]);
-  if port>CLIENT_BASE{Some((port-CLIENT_BASE)as u32)}else{None}
+  if port>config.source_base{Some((port-config.source_base)as u32)}else{None}
  }
 }
 struct Adapter{rx:Option<Frame>,tx:Option<Frame>}
@@ -79,22 +83,26 @@ impl Statistics{fn new()->Self{Self{received:0,queued:0,receive_hash:BASIS,queue
 fn hash(mut value:u64,bytes:&[u8])->u64{for b in bytes{value=(value^*b as u64).wrapping_mul(0x100000001b3);}value}
 /// One private listener, one outbound TCP flow and one fixed DNS UDP socket. The stack's
 /// handle is internal data, never an app-visible capability or file descriptor.
-pub struct Engine<'a>{iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
+pub struct Engine<'a>{network:sex_net_config::Config,iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
     stopped:bool,failed:Option<Error>,pending:[u8;TURN_BYTES],pending_length:usize,pending_offset:usize,
     active_flow:bool,stats:Statistics}
 impl<'a> Engine<'a>{
     /// `seed` is explicit input. A predictable development seed does not provide
-    /// hostile-peer sequence protection, entropy or TLS security.
-    pub fn new(mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;3])->Result<Self,Error>{
+    /// hostile-peer sequence protection, entropy or TLS security. Gateway data
+    /// is retained as metadata only: no default route is installed here.
+    pub fn new(network:sex_net_config::Config,mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;3])->Result<Self,Error>{
+        // Configuration is copied data, not an authority source. Reject before
+        // touching borrowed storage or constructing any interface/socket state.
+        if !network.valid(){return Err(Error::Config);}
         if mac==[0;6]||mac[0]&1!=0{return Err(Error::Mac);}
         let time=Instant::from_millis(i64::try_from(now).map_err(|_|Error::Clock)?);
         rx.fill(0);tx.fill(0);client_rx.fill(0);client_tx.fill(0);dns_rx.fill(0);dns_tx.fill(0);
-        let mut adapter=Adapter{rx:None,tx:None};let mut config=Config::new(EthernetAddress(mac).into());config.random_seed=seed;
+        let mut adapter=Adapter{rx:None,tx:None};let mut config=InterfaceConfig::new(EthernetAddress(mac).into());config.random_seed=seed;
         let mut iface=Interface::new(config,&mut adapter,time);
-        iface.update_ip_addrs(|ips|{ips.push(IpCidr::new(IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),24)).expect("ONE_STATIC_ADDRESS");});
+        iface.update_ip_addrs(|ips|{ips.push(IpCidr::new(IpAddress::v4(network.local[0],network.local[1],network.local[2],network.local[3]),network.prefix)).expect("ONE_STATIC_ADDRESS");});
         let mut connection=tcp::Socket::new(tcp::SocketBuffer::new(&mut rx[..]),tcp::SocketBuffer::new(&mut tx[..]));
         connection.set_timeout(Some(Duration::from_secs(5)));connection.set_ack_delay(None);connection.set_nagle_enabled(false);
-        connection.listen((IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),PORT)).map_err(|_|Error::Protocol)?;
+        connection.listen((IpAddress::v4(network.local[0],network.local[1],network.local[2],network.local[3]),network.listen_port)).map_err(|_|Error::Protocol)?;
         let mut flows=SocketSet::new(&mut storage[..]);let handle=flows.add(connection);
         let mut client=tcp::Socket::new(tcp::SocketBuffer::new(&mut client_rx[..]),tcp::SocketBuffer::new(&mut client_tx[..]));
         client.set_timeout(Some(Duration::from_secs(5)));client.set_ack_delay(None);client.set_nagle_enabled(false);
@@ -102,7 +110,7 @@ impl<'a> Engine<'a>{
         let dns=udp::Socket::new(udp::PacketBuffer::new(&mut dns_rxmeta[..],&mut dns_rx[..]),
             udp::PacketBuffer::new(&mut dns_txmeta[..],&mut dns_tx[..]));
         let dns_handle=flows.add(dns);
-        Ok(Self{iface,flows,handle,client_handle,dns_handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
+        Ok(Self{network,iface,flows,handle,client_handle,dns_handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
     }
     pub fn state(&self)->State{self.flows.get::<tcp::Socket>(self.handle).state()}
     pub fn statistics(&self)->Statistics{self.stats}
@@ -124,11 +132,11 @@ impl<'a> Engine<'a>{
     /// subnet. Ticket is private service data; no address/capability input.
     pub fn begin_client(&mut self,ticket:u32)->Result<(),Error>{
         if self.stopped{return Err(Error::Stopped);}
-        let port=u16::try_from(ticket).ok().and_then(|n|CLIENT_BASE.checked_add(n)).filter(|_|ticket!=0).ok_or(Error::Length)?;
+        let port=u16::try_from(ticket).ok().and_then(|n|self.network.source_base.checked_add(n)).filter(|_|ticket!=0).ok_or(Error::Length)?;
         self.client_abort();
         self.flows.get_mut::<tcp::Socket>(self.client_handle).connect(self.iface.context(),
-            (IpAddress::v4(10,0,2,2),CLIENT_REMOTE_PORT),
-            (IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),port)).map_err(|_|Error::Protocol)
+            (IpAddress::v4(self.network.http[0],self.network.http[1],self.network.http[2],self.network.http[3]),self.network.http_port),
+            (IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),port)).map_err(|_|Error::Protocol)
     }
     pub fn client_state(&self)->State{self.flows.get::<tcp::Socket>(self.client_handle).state()}
     pub fn client_queued(&self)->usize{self.flows.get::<tcp::Socket>(self.client_handle).send_queue()}
@@ -145,7 +153,7 @@ impl<'a> Engine<'a>{
     pub fn client_finish(&mut self){self.flows.get_mut::<tcp::Socket>(self.client_handle).close();}
     pub fn client_abort(&mut self){
         self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
-        if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket().is_some()){self.adapter.tx=None;}
+        if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket(&self.network).is_some()){self.adapter.tx=None;}
     }
 
     /// Emit one fixed-name DNS query, with no transport-level retry. The finite
@@ -153,15 +161,15 @@ impl<'a> Engine<'a>{
     /// job admission/replay fencing remains the caller's private responsibility.
     pub fn begin_dns(&mut self,ticket:u32)->Result<(),Error>{
         if self.stopped{return Err(Error::Stopped);}
-        if ticket==0||ticket>17_535{return Err(Error::Length);}
+        if ticket==0||ticket>sex_net_config::MAX_TICKET{return Err(Error::Length);}
         let id=ticket as u16;
-        let port=CLIENT_BASE.checked_add(id).ok_or(Error::Length)?;
+        let port=self.network.source_base.checked_add(id).ok_or(Error::Length)?;
         let mut query=[0u8;DNS_BYTES];
         let length=dns_wire::query(id,&mut query).map_err(|_|Error::Protocol)?;
         self.dns_abort();
         let socket=self.flows.get_mut::<udp::Socket>(self.dns_handle);
-        socket.bind((IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),port)).map_err(|_|Error::Protocol)?;
-        if socket.send_slice(&query[..length],(IpAddress::v4(10,0,2,2),DNS_REMOTE_PORT)).is_err(){
+        socket.bind((IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),port)).map_err(|_|Error::Protocol)?;
+        if socket.send_slice(&query[..length],(IpAddress::v4(self.network.dns[0],self.network.dns[1],self.network.dns[2],self.network.dns[3]),self.network.dns_port)).is_err(){
             socket.close();return Err(Error::Protocol);
         }
         Ok(())
@@ -173,8 +181,8 @@ impl<'a> Engine<'a>{
         let socket=self.flows.get_mut::<udp::Socket>(self.dns_handle);
         if !socket.can_recv(){return Ok(None);}
         let(bytes,meta)=socket.recv().map_err(|_|Error::Protocol)?;
-        if meta.endpoint.addr!=IpAddress::v4(10,0,2,2)||meta.endpoint.port!=DNS_REMOTE_PORT
-            ||meta.local_address!=Some(IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3])){return Ok(None);}
+        if meta.endpoint.addr!=IpAddress::v4(self.network.dns[0],self.network.dns[1],self.network.dns[2],self.network.dns[3])||meta.endpoint.port!=self.network.dns_port
+            ||meta.local_address!=Some(IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3])){return Ok(None);}
         if bytes.len()>out.len(){return Err(Error::Length);}
         out[..bytes.len()].copy_from_slice(bytes);Ok(Some(bytes.len()))
     }
@@ -182,7 +190,7 @@ impl<'a> Engine<'a>{
     /// service storage. This does not claim that close scrubs the backing bytes.
     pub fn dns_abort(&mut self){
         self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
-        if self.adapter.tx.as_ref().is_some_and(|f|f.dns_ticket().is_some()){self.adapter.tx=None;}
+        if self.adapter.tx.as_ref().is_some_and(|f|f.dns_ticket(&self.network).is_some()){self.adapter.tx=None;}
     }
 
     /// Processes at most one frame and one256-byte echo transfer per turn.
@@ -213,7 +221,7 @@ impl<'a> Engine<'a>{
         if connection.state()==State::CloseWait&&!connection.can_recv()&&self.pending_length==0&&connection.send_queue()==0{connection.close();}
         if connection.state()==State::Closed{
             self.pending.fill(0);self.pending_length=0;self.pending_offset=0;self.active_flow=false;
-            if connection.listen((IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),PORT)).is_err(){self.stop(Error::Protocol);return;}
+            if connection.listen((IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),self.network.listen_port)).is_err(){self.stop(Error::Protocol);return;}
         }
         self.iface.poll_egress(time,&mut self.adapter,&mut self.flows);
     }

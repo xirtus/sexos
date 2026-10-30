@@ -2,6 +2,9 @@
 //! tables, interrupt/lock primitives and config-space ports are host doubles.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+pub use sex_net_config as network_config;
+#[path="../kernel/src/boot_network_state.rs"]mod boot_network_state;
+mod boot_network{pub fn query(caller:u32)->Option<[u64;4]>{super::boot_network_state::Info::new(13,super::network_config::Config::CONTROLLED)?.query(caller)}}
 #[macro_export]macro_rules! serial_println{($($a:tt)*)=>{}}
 pub const SLOT_DMA_REGION:u64=32;
 #[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
@@ -117,4 +120,21 @@ fn mutate_pci(pd:&mut ProtectionDomain,f:impl FnOnce(&mut PciCapData)){let Capab
  setup(0);let p=pd();assert_eq!(mechanism::identity(&p,19,0,0,0,0),[0,0x8086,0x10d3,0,0]);untouched();
  for (slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(6,0,0,0,0),(32,0,0,0,0),(19,1,0,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{assert_eq!(mechanism::identity(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();}
  for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::identity(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
+}
+
+#[test]fn boot_network_data_requires_exact_held_lease_without_port_effects(){
+ setup(0);let p=pd();let words=network_config::Config::CONTROLLED.to_words();
+ assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[0,words[0],words[1],words[2],words[3]]);untouched();
+ for(slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(18,0,0,0,0),(19,1,0,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{
+  assert_eq!(mechanism::network_config(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();
+ }
+ for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
+}
+#[test]fn boot_network_snapshot_rejects_invalid_seed_and_foreign_role(){
+ use boot_network_state::Info;let cfg=network_config::Config::CONTROLLED;
+ assert!(Info::new(0,cfg).is_none());let mut bad=cfg;bad.profile=2;assert!(Info::new(13,bad).is_none());
+ let snapshot=Info::new(13,cfg).unwrap();assert_eq!(snapshot.query(13),Some(cfg.to_words()));
+ assert_eq!(snapshot.query(0),None);assert_eq!(snapshot.query(12),None);
+ let mut p=pd();p.id=12;mutate_pci(&mut p,|d|{d.command.as_mut().unwrap().subject=12;d.bar0_view.as_mut().unwrap().region_id=12*1024+0x10000+19;});
+ setup(0);assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();
 }

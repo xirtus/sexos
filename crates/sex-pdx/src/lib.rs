@@ -510,6 +510,18 @@ pub fn device_identity(slot:u64)->Result<pci_command::Identity,u64> {
     Ok(pci_command::Identity{vendor:vendor as u16,product:product as u16})
 }
 
+/// Checked immutable BOOT data through this subject's held NIC lease.
+pub fn device_network_config(slot:u64)->Result<network_config::Config,u64>{
+    let(status,a,b,c,d):(u64,u64,u64,u64,u64);
+    unsafe{core::arch::asm!("syscall",
+        inlateout("rax")network_config::SYS_CONFIG=>status,in("rdi")slot,
+        inlateout("rsi")0u64=>a,inlateout("rdx")0u64=>b,
+        inlateout("r10")0u64=>c,inlateout("r8")0u64=>d,
+        out("rcx")_,out("r11")_,options(nostack));}
+    if status!=0{return Err(if a|b|c|d!=0{pci_command::IO}else{status});}
+    network_config::Config::from_words([a,b,c,d]).ok_or(pci_command::IO)
+}
+
 /// Inspect a boot paging capability without allocating or mapping anything.
 pub fn paging_info(slot: u64) -> Result<paging::PagingInfo, u64> {
     let (status, base, length, target, rights): (u64, u64, u64, u64, u64);
@@ -969,6 +981,7 @@ pub mod document;
 pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
+pub mod network_config;
 
 pub mod desktop_style;
 pub mod document_view;

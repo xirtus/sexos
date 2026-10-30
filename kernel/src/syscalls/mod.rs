@@ -190,7 +190,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 0
             }
             29 => 1,
-            68 | 69 => {
+            68 | 69 | 71 => {
                 regs.rsi=0;regs.rdx=0;regs.r10=0;regs.r8=0;
                 sex_pdx::pci_command::DENIED
             },
@@ -511,6 +511,11 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let reply=crate::pci_command::identity(pd,rdi,rsi,rdx,r10,r8);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];
             reply[0]
+        },
+        71 => {
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::pci_command::network_config(pd,rdi,rsi,rdx,r10,r8);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 
         34 => { // SYSCALL_GET_TICKS — exposes kernel TICKS counter

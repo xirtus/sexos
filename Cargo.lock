@@ -380,8 +380,13 @@ dependencies = [
 name = "sex-net"
 version = "0.1.0"
 dependencies = [
+ "sex-net-config",
  "smoltcp",
 ]
+
+[[package]]
+name = "sex-net-config"
+version = "0.1.0"
 
 [[package]]
 name = "sex-object-model"
@@ -392,6 +397,7 @@ name = "sex-pdx"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sex-net-config",
  "spin",
  "x86_64",
 ]

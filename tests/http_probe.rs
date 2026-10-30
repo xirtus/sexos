@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Actual HTTP Client, network-job ABI/machine and complete-message HTTP codec.
 extern crate self as sex_pdx;
+pub use sex_net_config as network_config;
 #[path="../crates/sex-pdx/src/network_job.rs"]pub mod network_job;
 #[path="../servers/sexnet/src/jobs.rs"]mod jobs;
 #[path="../apps/kaleidoscope/src/http_wire.rs"]mod http_wire;

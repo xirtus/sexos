@@ -9,9 +9,9 @@
 
 pub const MAX_BYTES: usize = 512;
 pub const MAX_ANSWERS: usize = 8;
-pub const QUERY_BYTES: usize = 34;
-const NAME: &[u8] = b"\x05probe\x05sexos\x04test\x00";
-const QUESTION: &[u8] = b"\x05probe\x05sexos\x04test\x00\x00\x01\x00\x01";
+pub const QUERY_BYTES: usize = 12+sex_net_config::DNS_QUESTION.len();
+const NAME: &[u8] = sex_net_config::DNS_NAME;
+const QUESTION: &[u8] = sex_net_config::DNS_QUESTION;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Answer { pub address: [u8; 4], pub ttl: u32 }

@@ -10,6 +10,8 @@ pub const MAX_REQUEST: usize = 128;
 pub const MAX_RESPONSE: usize = 4096;
 pub const MAX_HEADERS: usize = 1024;
 pub const MAX_BODY: usize = 2048;
+// Exact supported-profile fixture for host/native wire oracles. Runtime Host
+// bytes come from the shared BOOT profile below; the actual request test binds it.
 const REQUEST: &[u8] = b"GET /probe HTTP/1.1\r\nHost: probe.sexos.test\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,8 +41,15 @@ pub enum Error {
 /// Emit only the fixed controlled request; the returned length is the extent
 /// to send. Bytes beyond it are not part of the request and are left untouched.
 pub fn request(out: &mut [u8; MAX_REQUEST]) -> usize {
-    out[..REQUEST.len()].copy_from_slice(REQUEST);
-    REQUEST.len()
+    let prefix=b"GET /probe HTTP/1.1\r\nHost: ";
+    let host=sex_pdx::network_config::HOST_NAME;
+    let suffix=b"\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
+    let length=prefix.len()+host.len()+suffix.len();
+    assert!(length<=MAX_REQUEST,"BOOT_HTTP_PROFILE_BOUND");
+    out[..prefix.len()].copy_from_slice(prefix);
+    out[prefix.len()..prefix.len()+host.len()].copy_from_slice(host);
+    out[prefix.len()+host.len()..length].copy_from_slice(suffix);
+    length
 }
 
 fn line<'a>(input: &'a [u8], cursor: &mut usize) -> Result<&'a [u8], Error> {

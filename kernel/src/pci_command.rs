@@ -26,6 +26,15 @@ pub fn identity(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5] 
     [0,grant.vendor_id as u64,grant.device_id as u64,0,0]
 }
 
+/// Read BOOT data only after the exact held device lease passes sex-pdx checks.
+pub fn network_config(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5]{
+    let fail=[w::DENIED,0,0,0,0];
+    if a|b|c|d!=0||held(pd,slot,0,0).is_none(){return fail;}
+    let Some(words)=crate::boot_network::query(pd.id)else{return fail;};
+    crate::serial_println!("[pci.network.config] pd={} slot={} origin=boot_descriptor runtime_mint=0",pd.id,slot);
+    [0,words[0],words[1],words[2],words[3]]
+}
+
 pub fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64,reserved0:u64,reserved1:u64)->[u64;5] {
     let fail=[w::DENIED,0,0,0,0];
     if reserved0!=0 || reserved1!=0 { return fail; }

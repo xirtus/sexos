@@ -3,6 +3,7 @@
 //! machines and codecs. Explicit mock PDX/wires supply inputs; no BOOT liveness,
 //! real NIC, DNS authenticity or endpoint authority is established by this test.
 extern crate self as sex_pdx;
+pub use sex_net_config as network_config;
 extern crate self as sex_net;
 #[path="../crates/sex-pdx/src/network_job.rs"]pub mod network_job;
 #[path="../crates/sex-pdx/src/network_dns.rs"]pub mod network_dns;

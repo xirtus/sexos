@@ -9,6 +9,11 @@ ABI_INPUTS=(
   kernel/src/syscalls/mod.rs
   kernel/src/capability_slot.rs
   kernel/src/capability.rs
+  kernel/src/boot_network_state.rs
+  kernel/src/boot_network.rs
+  kernel/src/pci_command.rs
+  crates/sex-net-config/src/lib.rs
+  crates/sex-pdx/src/network_config.rs
   kernel/src/boot_display_state.rs
   crates/sex-pdx/src/display_boot.rs
   kernel/src/history_recovery.rs
