@@ -7,6 +7,26 @@ import check_desktop_pixels as checker
 
 ROOT=Path(__file__).resolve().parents[2]
 FONT=checker.font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text())
+
+class PrintableFont(unittest.TestCase):
+    def test_complete_printable_coverage_and_explicit_unsupported_characters(self):
+        self.assertEqual(len(FONT),95)
+        for code in range(32,127):self.assertEqual(checker.glyph(FONT,chr(code)),FONT[code-32])
+        for char in ['','aa','\n','\t','\x00','\x7f','é','ß']:
+            with self.assertRaises(ValueError):checker.glyph(FONT,char)
+    def test_all_lowercase_shapes_are_distinct_from_uppercase(self):
+        for code in range(ord('a'),ord('z')+1):
+            self.assertNotEqual(checker.glyph(FONT,chr(code)),checker.glyph(FONT,chr(code-32)))
+        self.assertEqual(checker.glyph(FONT,'a'),(0,0,14,1,15,17,15))
+        self.assertEqual(checker.glyph(FONT,'g'),(0,0,15,17,15,1,14))
+    def test_incomplete_or_out_of_cell_rom_is_rejected(self):
+        source=(ROOT/'servers/sexdisplay/src/main.rs').read_text()
+        for changed in [source.replace('[0, 0, 0, 0, 0, 0, 0], // ASCII 32','[0, 0, 0, 0, 0, 0, 32], // ASCII 32'),source.replace('[0, 0, 14, 1, 15, 17, 15], // ASCII 97','')]:
+            with self.assertRaises(ValueError):checker.font_from_source(changed)
+    def test_old_uppercase_substitution_cannot_pass_lowercase_name_pixels(self):
+        upper=LOG.replace('alpha-note','ALPHA-NOTE').replace('beta-file','BETA-FILE')
+        self.assertTrue(checker.verify(LOG,image(upper),FONT))
+        self.assertEqual(checker.verify(LOG,image(),FONT),[])
 LOG='''[linen.list.text] x=640 y=50 w=640 h=670 scale=2 text_color=0xf0f8ff rows=2 selected=2 row_y=72 row_h=36 first=0 committed_view=1
 [linen.list.label] id=1 row=0 text=alpha-note
 [linen.list.label] id=2 row=1 text=beta-file

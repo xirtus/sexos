@@ -18,18 +18,16 @@ def font_from_source(source):
         bits=re.findall(r'0b[01]+|0x[0-9a-fA-F]+|[0-9]+',row)
         if len(bits)!=7:raise ValueError('invalid renderer glyph')
         rows.append(tuple(int(bit,0) for bit in bits))
-    if len(rows)<59:raise ValueError('incomplete renderer font')
+    if len(rows)!=95 or any(not 0<=bit<32 for row in rows for bit in row):raise ValueError('invalid printable-ASCII renderer font')
+    if any(rows[0]) or any(not any(row)for row in rows[1:]):raise ValueError('missing printable glyph ink')
     return rows
 
 
 def glyph(font,char):
-    char=char.upper()
-    if len(char)!=1:raise ValueError("unsupported filename glyph")
-    code=ord(char)
-    extras={'[':59,'\\':60,']':61,'^':62,'_':63,'`':64,'{':65,'|':66,'}':67,'~':68}
-    index=code-32 if 32<=code<=90 else extras.get(char)
-    if index is None or index>=len(font):raise ValueError('unsupported filename glyph')
-    return font[index]
+    # Independent byte-to-ROM mapping; no case conversion or Unicode aliasing.
+    if len(font)!=95 or len(char)!=1 or not 32<=ord(char)<=126:
+        raise ValueError('unsupported printable-ASCII glyph')
+    return font[ord(char)-32]
 
 
 def final_view(text):

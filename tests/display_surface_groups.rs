@@ -26,6 +26,41 @@ fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{c}
 fn pulse_alpha(base:u8,_a:u8,_f:u64,_p:u64)->u8{base}
 include!(env!("DISPLAY_COMPOSITION_SOURCE"));
 include!("fixtures/compositor_reference.rs");
+#[test]fn printable_rom_preserves_case_and_rejects_every_unsupported_byte(){
+ assert_eq!(FONT_ASCII_5X7.len(),95);
+ assert_eq!((desktop_style::GLYPH_WIDTH,desktop_style::GLYPH_HEIGHT,desktop_style::ADVANCE,desktop_style::LINE),(5,7,6,9));
+ for byte in 0u8..=255 {
+  assert_eq!(ascii_glyph_index(byte),if (32..=126).contains(&byte){Some((byte-32)as usize)}else{None});
+ }
+ assert_eq!(FONT_ASCII_5X7[0],[0;7]);
+ for glyph in &FONT_ASCII_5X7[1..]{assert!(glyph.iter().any(|r|*r!=0));assert!(glyph.iter().all(|r|*r<32));}
+ for lower in b'a'..=b'z'{assert_ne!(FONT_ASCII_5X7[(lower-32)as usize],FONT_ASCII_5X7[(lower-b'a'+b'A'-32)as usize],"byte={lower}");}
+ assert_eq!(FONT_ASCII_5X7[(b'a'-32)as usize],[0,0,14,1,15,17,15]);
+ assert_eq!(FONT_ASCII_5X7[(b'g'-32)as usize],[0,0,15,17,15,1,14]);
+}
+#[test]fn actual_text_shader_covers_all_bytes_at_both_scales_without_rewriting_selection(){
+ for width in [240,400] {for byte in 0u8..=255 {for selected in [false,true] {
+  let mut s=Surface{x:0,y:50,w:width,h:100,text_len:1,text_color:0xfedcba,..surf(9,156)};
+  s.text_buf[0]=byte;if selected{s.selection_end=1;}recompute_text_lines(&mut s);
+  let scale=surface_text_scale(&s);
+  for y in 0..9*scale {for x in 0..6*scale {
+   let ink=byte>=32&&byte<=126&&x/scale<5&&y/scale<7
+       &&FONT_ASCII_5X7[(byte.saturating_sub(32))as usize][y/scale]&(1<<(4-x/scale))!=0;
+   let expected=if byte==b'\n'{None}else if ink{Some(0xfedcba)}else if selected{Some(0xff36577c)}else{None};
+   assert_eq!(surface_text_fg_at(8+x,62+y,&s),expected,"w={width} byte={byte} selected={selected} x={x} y={y}");
+  }}
+  assert_eq!(s.text_buf[0],byte);assert_eq!((s.selection_start,s.selection_end),(0,if selected{1}else{0}));
+ }}}
+}
+#[test]fn actual_toolbar_titles_keep_lowercase_at_fixed_integer_metrics(){
+ let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-14)/2;
+ for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..])]{
+  for (column,byte)in title.iter().enumerate(){for y in 0..14 {for x in 0..12 {
+   let ink=x/2<5&&FONT_ASCII_5X7[(*byte-32)as usize][y/2]&(1<<(4-x/2))!=0;
+   assert_eq!(toolbar_title_fg_at(x0+column*12+x,y0+y,sid),if ink{Some(0xe8ffff)}else{None});
+  }}}
+ }
+}
 // Literal accepted64 legacy mutation behavior, separate from new helpers.
 fn legacy_draw_reference(slot:&mut Surface,packed:u64,arg2:u64){
  let byte_offset=((arg2&0xFF)|((arg2>>4)&0xF00))as usize;let char_count=((arg2>>8)&0xF)as usize;

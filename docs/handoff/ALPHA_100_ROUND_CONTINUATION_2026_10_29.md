@@ -1,6 +1,15 @@
 # Alpha continuation: 100 further engineering rounds
 
-## Current checkpoint: accepted round 102; next 103
+## Current checkpoint: accepted round 103; next 104
+
+Quil, Spindle, Browser, Linen, launcher labels and toolbar titles now preserve displayed letter case. The actual renderer has95 printable-ASCII glyphs, including26 distinct lowercase shapes, in one finite665-byte ROM table. Shared5×7 metrics retain the6×9 cell and existing integer scales. Text bytes, caret/selection offsets, payload limits and capability routes are unchanged. Unsupported bytes have no glyph ink; newline remains structural. There is no loaded font, allocation or glyph cache.
+
+Sealed ISO `f1ad5c79aa5230b8826e2d273ebc645f5d59da236bd88ab348fc1f9573485989`, binding `66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9`;560 production/525 runner inputs. BUILD/GREEN_MASTER, 1,818 frozen Rust executions, 734 frozen Python tests and six native boots pass. Both desktop sizes qualify live launcher/workspace actions and clipboard/Save/cold reopen. Independent raw replay verifies80 captures. All256 byte values, both scales, selection preservation and mixed-case toolbar glyphs are actual-renderer host checks. Six raw native Quil/Spindle/launcher captures pass the case-sensitive oracle and reject the old uppercase appearance. The real extracted renderer also fails its new test when case folding is restored. See [evidence](assets/sexos-alpha-r103-2026-10-30-evidence.json).
+
+Next104 improves readable typography, contrast and real app view layout;105 extends encoding/input,106 bounded images/assets,107 navigation and108 an integrated connected session. Active80–200 progress:24/121 accepted;104–200 remain (97 substantive rounds).7 Open/23 Partial/System Proven false remain. GLOBAL_VAS, BOOT-only capability genesis, typed sex-pdx authority and exact terminal incarnations remain mandatory; SexOS is not Unix/POSIX.
+
+
+## Historical checkpoint: accepted round 102; next 103 at that time
 
 The launcher names its actual live action: Open, Restore, Bring Here or Focus. Quil and Spindle reuse their held live incarnation and frame, preserve typed text across minimize/workspace moves, and retain only a bounded pending focus under Display backpressure. Reparent, restore and activation are not replayed. Exact lifecycle/catalog checks fence terminal subjects, and exhausted BOOT reserves remain visibly disabled. Spindle's eight sanctioned child panes stay hidden until their actual Shell parent exists, preventing startup slivers.
 

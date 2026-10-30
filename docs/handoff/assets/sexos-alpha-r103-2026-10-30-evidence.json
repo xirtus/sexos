@@ -1,0 +1,331 @@
+{
+  "round": 103,
+  "accepted": true,
+  "accepted_goal_rounds": 24,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 97,
+  "iso_sha256": "f1ad5c79aa5230b8826e2d273ebc645f5d59da236bd88ab348fc1f9573485989",
+  "kernel_sha256": "266d86678d1cc5a97060d8895592f65b6c176af7a49a0b4fa25b4452305a4183",
+  "binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 560,
+  "runner_inputs": 525,
+  "font": {
+    "printable_glyphs": 95,
+    "distinct_lowercase": 26,
+    "rom_row_bytes": 665,
+    "dimensions": [
+      5,
+      7
+    ],
+    "cell": [
+      6,
+      9
+    ],
+    "loaded_fonts": false,
+    "heap_cache": false,
+    "unsupported_bytes": "No ink; newline remains structural. Byte positions and selection custody unchanged."
+  },
+  "checks": {
+    "master": "BUILD PASS / GREEN_MASTER",
+    "rust": [
+      {
+        "name": "service-custody",
+        "path": "/tmp/sexos-r103-b-frozen-service-custody.log",
+        "executions": 1734,
+        "sha256": "5af8306b06673a540f737c8c037354b5494d9a28ae7355ddd2582f786210031b"
+      },
+      {
+        "name": "display",
+        "path": "/tmp/sexos-r103-b-frozen-display.log",
+        "executions": 49,
+        "sha256": "5687200276629572ef3e150da3cc6a01c6f2b62db17d4714d25f266b0ae13a8d"
+      },
+      {
+        "name": "launcher",
+        "path": "/tmp/sexos-r103-b-frozen-launcher.log",
+        "executions": 35,
+        "sha256": "5d2f2462a80488dd53c87a755cdf438568299fe991a4ffc1def1b43ff84ba9b8"
+      }
+    ],
+    "rust_test_executions": 1818,
+    "python_tests": 734,
+    "python_log_sha256": "55faa1e4fcc86111effd1e2db76d72913259799b66d05da518af6850a50d55aa",
+    "native_runs": 4,
+    "native_boots": 6,
+    "independent_frames": 80,
+    "root_replay_sha256": "311c74f9c1f57e09f0c77fd0e6be685fbc52eb79fd14ef70633ccdc7f22c35ca",
+    "scalar_audit": {
+      "ok": true,
+      "iso_sha256": "f1ad5c79aa5230b8826e2d273ebc645f5d59da236bd88ab348fc1f9573485989",
+      "elf_sha256": "4b3b980df6d6df589b8e6c88467089eb1855cb4400801d10ba52a838e5a744d8",
+      "disassembly_sha256": "9a67af44fb0ada9082eaf2d48b5594d81438dd79d4c16ceda7da893a53f48a3c",
+      "instructions": 88174,
+      "vector_or_fp_matches": [],
+      "scope": "Decoded ISO-extracted Browser operands and inspected floating-point/state mnemonics only; no runtime stack/register/cache-erasure, scheduler, hostile containment or whole-image instruction proof."
+    },
+    "actual_renderer_case_negative": {
+      "ok": true,
+      "negative_rejected": true,
+      "returncode": 101,
+      "mutation": "Only ascii_glyph_index shadows its byte with to_ascii_uppercase; original95-entry ROM and all actual shaders remain.",
+      "source_binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+      "mutant_extracted_source_sha256": "17d5d7c714707749fd5d2c7346b12306ac8b0cc547458928c37dbcd3ec2b5820",
+      "test_source_sha256": "bf75f12dfd9ed681475971ea4d812194d409b6785c4e24a6f055ae8ad36b8e93",
+      "log_sha256": "49f7bd161e45a7ea97f5b8608f3bdd941e412b1b5097b0ba4aa2b379f5394df8",
+      "scope": "Actual extracted renderer fails at lowercase a under case-folding; no native hostile or image mutation claim."
+    },
+    "native_case_controls": {
+      "ok": true,
+      "source_binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+      "controls": [
+        {
+          "profile": "wide",
+          "name": "quil-9-typed",
+          "negative_rejected": true,
+          "error": "Quil glyphs: ['Quil glyph mismatch=344', 'Quil stray text pixels=136']",
+          "raw_ppm_sha256": "fb19659972f80a45fcc63d588e692442ea0381eefee30a9901e01ef97ee6525b",
+          "serial_bytes": 283893,
+          "serial_sha256": "385d5c621bc80d1d79add60178d3d1e29b5c57a858f92d7dd8441b0010ef23a6"
+        },
+        {
+          "profile": "wide",
+          "name": "spindle-17-typed",
+          "negative_rejected": true,
+          "error": "Spindle glyphs: ['sid304: viewport glyph mismatch=276']",
+          "raw_ppm_sha256": "869b106c5510f7e78bd35498c2bfb01072190ec6869cf1fb4f270bf9c26228b6",
+          "serial_bytes": 515571,
+          "serial_sha256": "b181d12b0d6c338cd2aad44cbd7e1452a73193f9b1ff9e4c764166802d2991de"
+        },
+        {
+          "profile": "wide",
+          "name": "launcher-9-bring",
+          "negative_rejected": true,
+          "error": "launcher glyphs: ['launcher line=2 glyph_mismatches=492', 'launcher line=4 glyph_mismatches=504', 'launcher line=6 glyph_mismatches=352', 'launcher line=8 glyph_mismatches=476', 'launcher line=10 glyph_mismatches=384']",
+          "raw_ppm_sha256": "42e56489166f025f641395ec2d03f1fdb1d66332453832cea468702f2d76daa0",
+          "serial_bytes": 349480,
+          "serial_sha256": "09cddca1672c2223975aead2924e7e870d0be661fb9db64461f18c946fa9543c"
+        },
+        {
+          "profile": "compact",
+          "name": "quil-9-typed",
+          "negative_rejected": true,
+          "error": "Quil glyphs: ['Quil glyph mismatch=344', 'Quil stray text pixels=136']",
+          "raw_ppm_sha256": "3b99d722c6a3aa42cfe5fa17889b76f2989192be51659cbebc1cf73037b5d1a8",
+          "serial_bytes": 283638,
+          "serial_sha256": "9597750d960c3e0dca3c09cac99f5523082e72e61680cdffca60eabf5082ca97"
+        },
+        {
+          "profile": "compact",
+          "name": "spindle-17-typed",
+          "negative_rejected": true,
+          "error": "Spindle glyphs: ['sid304: viewport glyph mismatch=69']",
+          "raw_ppm_sha256": "46a65c6b506e54a63f890afd8807904639b73215bf26db1e0b8572447711d0f6",
+          "serial_bytes": 517960,
+          "serial_sha256": "1a74c32d41ce9ae2cb070abc7c520a62b2e7f9e2fe2e037cb47d7497ecb955af"
+        },
+        {
+          "profile": "compact",
+          "name": "launcher-9-bring",
+          "negative_rejected": true,
+          "error": "launcher glyphs: ['launcher line=2 glyph_mismatches=492', 'launcher line=4 glyph_mismatches=504', 'launcher line=6 glyph_mismatches=352', 'launcher line=8 glyph_mismatches=476', 'launcher line=10 glyph_mismatches=384']",
+          "raw_ppm_sha256": "7c4318b0129b5a9ecb84d1eae4605d4a7c30796ee48faf29ec392729f0045720",
+          "serial_bytes": 350294,
+          "serial_sha256": "bbefaad2ce7d5447d72a60e8f22963e1c46a1edfe4493d1cbb465593932e4144"
+        }
+      ],
+      "scope": "Same raw native Quil/Spindle typed text and launcher names at both resolutions: exact case-sensitive oracle passes; substituting uppercase shapes for lowercase fails. No actual image or production source is modified."
+    }
+  },
+  "qualification_runs": [
+    {
+      "name": "launcher-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r103-b-native-launcher-wide",
+      "driver": "/tmp/sexos-r103-b-native-launcher-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r103-font-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r103-b-native-launcher-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+      "seconds": 37.41802808304783
+    },
+    {
+      "name": "launcher-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r103-b-native-launcher-compact",
+      "driver": "/tmp/sexos-r103-b-native-launcher-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r103-font-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r103-b-native-launcher-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+      "seconds": 24.886830583098345
+    },
+    {
+      "name": "clipboard-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r103-b-native-clipboard-wide",
+      "driver": "/tmp/sexos-r103-b-native-clipboard-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r103-font-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r103-b-native-clipboard-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "source_binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+      "seconds": 33.97774537501391
+    },
+    {
+      "name": "clipboard-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r103-b-native-clipboard-compact",
+      "driver": "/tmp/sexos-r103-b-native-clipboard-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r103-font-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r103-font-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r103-b-native-clipboard-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 2,
+      "source_binding_sha256": "66987133a5a3f25b9bbdc1832069c0932001725f6a8c37b96ea726ac8cb1dcf9",
+      "seconds": 23.12643449997995
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "label": "spindle-wide",
+      "path": "assets/sexos-alpha-r103-2026-10-30-spindle-wide.png",
+      "sha256": "45b732acd9f9d029fad87eaf52cb63f8b9d8c19f3c3e733cfe7d85f0efee6ac3",
+      "run": "launcher-wide",
+      "boot": "",
+      "raw_ppm": "spindle-17-brought.ppm",
+      "raw_sha256": "6c242625273f47d0ac4d5637e22302dd8f39c1300974308b8eb8b342e94c95a5",
+      "serial_bytes": 582016,
+      "serial_sha256": "c59f0b99d97dc7b5b09a997ec885c917817a41e02b22849ce659e9c68fd74634"
+    },
+    {
+      "label": "launcher-compact",
+      "path": "assets/sexos-alpha-r103-2026-10-30-launcher-compact.png",
+      "sha256": "e302b6a94bb9be593edf24796455ebe8cf7baed4bd5a162daeacd4f4110cdc20",
+      "run": "launcher-compact",
+      "boot": "",
+      "raw_ppm": "launcher-9-bring.ppm",
+      "raw_sha256": "7c4318b0129b5a9ecb84d1eae4605d4a7c30796ee48faf29ec392729f0045720",
+      "serial_bytes": 350294,
+      "serial_sha256": "bbefaad2ce7d5447d72a60e8f22963e1c46a1edfe4493d1cbb465593932e4144"
+    },
+    {
+      "label": "reader-compact",
+      "path": "assets/sexos-alpha-r103-2026-10-30-reader-compact.png",
+      "sha256": "811616da41e16073f34a2bf67c5a975e2d8b4aca36f5069f6d0a022c703ef204",
+      "run": "clipboard-compact",
+      "boot": "write",
+      "raw_ppm": "browser-reflow.ppm",
+      "raw_sha256": "12e36e507c9e88fd59881c8cb59d2d8665513a073f04db797a25e452c6ea74a6",
+      "serial_bytes": 320742,
+      "serial_sha256": "d6db262e9b7e78279f52dc9d78cffd541a08e2a43fb691536257187ed7ebdd98"
+    },
+    {
+      "label": "cold-compact",
+      "path": "assets/sexos-alpha-r103-2026-10-30-cold-compact.png",
+      "sha256": "cc39777997acc823f6cbe8eaa52aea1f4739350f0a1023ace3d388f107f34fcd",
+      "run": "clipboard-compact",
+      "boot": "recovery",
+      "raw_ppm": "quil-cold-reopened.ppm",
+      "raw_sha256": "3f692c884fb89cf9f2c9a107562cdc470152a6dd11066081dfd9ff40493992ef",
+      "serial_bytes": 290720,
+      "serial_sha256": "f53f295c49117d4fa18ed0073b174f0d0416d5cdccdd765f356fb9e4574b713c"
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r103-2026-10-30-qualified-raw.tar.gz",
+    "sha256": "2468b2cdd5945822b794568d26ea7d09362cf50074ab4a62ee8cf286c4db0018",
+    "members": 1275,
+    "verified": true,
+    "bytes": 6765777
+  },
+  "failed_diagnostics": "A stopped before compile/probe because shared-metrics changes required the ABI input inventory hash update. Final sealedB includes the updated hash and runs its own full cohort. It is not an ABI authority change or acceptedA run.",
+  "limitations": [
+    "Actual-function host tests cover every byte and printable glyph at both scales, selection and toolbar semantics. Native six-case negative controls prove mixed-case Quil/Spindle/launcher pixels at both sizes; no all95-glyph native atlas claim.",
+    "The fixed5x7 font remains intentionally small. This round preserves geometry; larger typography/accessibility and encoding/input are subsequent work. No Unicode, shaped text, font loading, heap cache or font authority is added.",
+    "Native clipboard/Save/cold recovery is qualified at both resolutions on this image. No new sustained latest-image daily-driver, public-web/general CA, crash/power-loss, hostile-containment, physical hardware, SMP or System Proven claim."
+  ],
+  "scope": "One substantive round: complete case-preserving printable ASCII rendering and finite shared metrics, visible in actual app/workspace/clipboard workflows. GLOBAL_VAS, BOOT-only genesis and typed sex-pdx authority preserved; not Unix/POSIX."
+}

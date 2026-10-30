@@ -1,6 +1,10 @@
 //! Shared native text metrics and focus ink; integer pixels only.
 pub const INSET: u32 = 8;
 pub const TEXT_TOP: u32 = 12;
+pub const ASCII_FIRST: u8 = 32;
+pub const ASCII_LAST: u8 = 126;
+pub const GLYPH_WIDTH: u32 = 5;
+pub const GLYPH_HEIGHT: u32 = 7;
 pub const ADVANCE: u32 = 6;
 pub const LINE: u32 = 9;
 pub const TEXT: u32 = 0x00E0F0FF;
