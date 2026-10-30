@@ -9858,12 +9858,36 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
     }
 }
 
+mod browser_input;
+static mut BROWSER_INPUT:browser_input::Queue=browser_input::Queue::new();
+unsafe fn flush_browser_input(){
+    let outcome=BROWSER_INPUT.poll(surface_is_alive(300),sex_pdx::ERR_SERVICE_NOT_READY,|code|{
+        // BOOT already gave shell this exact Domain edge to Browser for Close.
+        // Its existing invocation rights also authorize bounded keyboard data.
+        let(status,_)=pdx_call(sex_pdx::app_lifecycle::CLOSE_SLOTS[2]as u64,OP_HID_EVENT,code as u64,1,EV_KEY);
+        if status==0{Ok(())}else{Err(status)}
+    });
+    match outcome{
+        browser_input::Outcome::Sent(code)=>sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot=43 accepted=1",code),
+        browser_input::Outcome::Failed(error)=>sex_pdx::serial_record!("[shell.browser.input.failed] error={} retained=0",error),
+        _=>{},
+    }
+}
+
 static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
 /// Runs before native text routing in both HID paths. Alt remains owned by
 /// the desktop, so changing focus cannot leave a modifier held in the old app.
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     match DESKTOP_KEYS.event(code,value) {
-        desktop_keys::Action::Pass=>false,
+        desktop_keys::Action::Pass=>{
+            if FOCUSED_SURFACE_ID==300&&surface_is_alive(300)&&matches!(code,0x13|0x2E){
+                if value==1{
+                    if !BROWSER_INPUT.push(code){sex_pdx::serial_record!("[shell.browser.input.full] capacity=8 accepted=0");}
+                    flush_browser_input();
+                }
+                true
+            }else{false}
+        },
         desktop_keys::Action::Consume=>true,
         desktop_keys::Action::NextFrame=>{
             let old=FOCUSED_SURFACE_ID;
@@ -23899,6 +23923,7 @@ pub extern "C" fn _start() -> ! {
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
 
     loop {
+        unsafe {flush_browser_input();}
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); desktop_state_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.

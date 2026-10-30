@@ -1,0 +1,7 @@
+{
+  "scope": "Actual preliminary round78 guest app outbound echo capture; parser fixture only, not final production acceptance.",
+  "source_iso_sha256": "cce8dd344fe60673c86c7328bf08ef750d45b0836d6485b880a8f7adff5d1d04",
+  "fixture_sha256": "8be1492cf29fce864497ac58eaa3ba35c2c58d00f0822645abf4272f2bc8302e",
+  "length": 1025,
+  "payload_sha256": "a125324d7b0e013b8ade5840714c790a9d57e3e888e9e284ac24763c144f47a6"
+}

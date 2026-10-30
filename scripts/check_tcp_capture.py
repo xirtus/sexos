@@ -27,7 +27,9 @@ def frames(data):
   if size!=original or offset+size>len(data):raise ValueError('truncated PCAP packet')
   yield data[offset:offset+size];offset+=size
 
-def inspect(data,expected):
+def inspect(data,expected,guest_ports=None,initiator="peer"):
+ ports=(PORT,)if guest_ports is None else tuple(guest_ports)
+ if initiator not in("peer","guest")or not ports:raise ValueError("explicit TCP capture role/ports required")
  errors=[];connections={};packets=0
  try:
   for frame in frames(data):
@@ -41,16 +43,21 @@ def inspect(data,expected):
    header=(tcp[12]>>4)*4
    if header<20 or header>len(tcp):raise ValueError('bad captured TCP header length')
    sport,dport=struct.unpack_from('!HH',tcp);seq,ack=struct.unpack_from('!II',tcp,4);flags=tcp[13];payload=tcp[header:]
-   outbound=ip[12:16]==LOCAL and sport==PORT;inbound=ip[16:20]==LOCAL and dport==PORT
+   outbound=ip[12:16]==LOCAL and sport in ports;inbound=ip[16:20]==LOCAL and dport in ports
    if not(outbound or inbound):continue
-   packets+=1;key=(ip[16:20].hex(),dport)if outbound else(ip[12:16].hex(),sport)
-   item=connections.setdefault(key,dict(incoming={},outgoing={},client_isn=None,server_isn=None,handshake=False,fin_in=0,fin_out=0,rst_in=0,rst_out=0))
+   packets+=1;key=(ip[16:20].hex(),dport,sport)if outbound else(ip[12:16].hex(),sport,dport)
+   item=connections.setdefault(key,dict(guest_port=key[2],incoming={},outgoing={},client_isn=None,server_isn=None,handshake=False,fin_in=0,fin_out=0,rst_in=0,rst_out=0))
    side='outgoing'if outbound else'incoming';isn='server_isn'if outbound else'client_isn'
    if flags&2:
     if item[isn]not in[None,seq]:raise ValueError('same tuple reused without a separately identified connection')
     item[isn]=seq
-    if outbound and(item['client_isn']is None or not flags&0x10 or ack!=(item['client_isn']+1)&0xffffffff):raise ValueError('invalid SYN/ACK acknowledgment')
-   if inbound and flags&0x10 and not flags&2 and item['server_isn']is not None and seq==(item['client_isn']+1)&0xffffffff and ack==(item['server_isn']+1)&0xffffffff:item['handshake']=True
+    responder=outbound if initiator=='peer'else inbound
+    other='client_isn'if outbound else'server_isn'
+    if responder and(item[other]is None or not flags&0x10 or ack!=(item[other]+1)&0xffffffff):raise ValueError('invalid SYN/ACK acknowledgment')
+    if not responder and flags&0x10:raise ValueError('initiator SYN has unexpected ACK')
+   final_ack=inbound if initiator=='peer'else outbound
+   other='client_isn'if outbound else'server_isn'
+   if final_ack and flags&0x10 and not flags&2 and item[other]is not None and item[isn]is not None and seq==(item[isn]+1)&0xffffffff and ack==(item[other]+1)&0xffffffff:item['handshake']=True
    if payload:
     if item[isn]is None:raise ValueError('payload precedes captured SYN')
     start=(seq-item[isn]-1)&0xffffffff
@@ -66,8 +73,10 @@ def inspect(data,expected):
    if set(item['incoming'])!=set(range(len(item['incoming'])))or set(item['outgoing'])!=set(range(len(item['outgoing']))):errors.append('hole in captured stream')
    if item['client_isn']is None or item['server_isn']is None or not item['handshake']:errors.append('missing real three-way handshake acknowledgment')
    if wanted.get('aborted'):
-    if not received or not sent or not request.startswith(received)or not received.startswith(sent):errors.append('aborted connection bytes differ from explicit observed prefix')
+    if initiator=='guest':
+     if not sent or not request.startswith(sent)or not sent.startswith(received)or(not received and not wanted.get('allow_empty_reply')):errors.append('aborted outbound connection differs from explicit prefix/no-response policy')
+    elif not received or not sent or not request.startswith(received)or not received.startswith(sent):errors.append('aborted connection bytes differ from explicit observed prefix')
    elif received!=request or sent!=request or not item['fin_in']or not item['fin_out']:errors.append('full captured stream/FIN differs from actual endpoint payload')
-   results.append(dict(incoming_bytes=len(received),outgoing_bytes=len(sent),incoming_hash=hex(fingerprint(received)),outgoing_hash=hex(fingerprint(sent)),fin_in=item['fin_in'],fin_out=item['fin_out'],rst_in=item['rst_in'],rst_out=item['rst_out']))
+   results.append(dict(guest_port=item['guest_port'],incoming_bytes=len(received),outgoing_bytes=len(sent),incoming_hash=hex(fingerprint(received)),outgoing_hash=hex(fingerprint(sent)),fin_in=item['fin_in'],fin_out=item['fin_out'],rst_in=item['rst_in'],rst_out=item['rst_out']))
  except(ValueError,IndexError,struct.error)as error:errors.append(str(error));results=[]
  return dict(ok=not errors,errors=errors,tcp_packets=packets,connections=results,scope='Independent full PCAP checksums and TCP sequence reassembly join real endpoint bytes; aborted prefix is distinguished from completed streams. No app authorization, DNS/HTTP/TLS or hostile/physical containment proof.')

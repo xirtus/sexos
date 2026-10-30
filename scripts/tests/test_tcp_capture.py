@@ -49,4 +49,16 @@ class TcpCapture(unittest.TestCase):
   for data in [b'',F.read_bytes()[:-1],F.read_bytes()[:30]]:self.assertFalse(inspect(data,expected())['ok'])
   self.assertFalse(inspect(F.read_bytes(),expected()*2)['ok']);wrong=expected();wrong[0]['payload_hex']='00';self.assertFalse(inspect(F.read_bytes(),wrong)['ok'])
 
+class OutboundCapture(unittest.TestCase):
+ def test_real_guest_initiated_stream_and_explicit_role(self):
+  f=F.parent/'sexnet-outbound-r78.pcap';data=f.read_bytes();meta=json.loads(f.with_suffix('.json').read_text());self.assertEqual(hashlib.sha256(data).hexdigest(),meta['fixture_sha256'])
+  wanted=[dict(payload_hex=bytes((n*17+78)&255 for n in range(1025)).hex())]
+  result=inspect(data,wanted,guest_ports=[48001],initiator='guest');self.assertTrue(result['ok'],result['errors']);self.assertEqual(result['connections'][0]['guest_port'],48001);self.assertEqual(result['connections'][0]['incoming_bytes'],1025);self.assertEqual(result['connections'][0]['outgoing_bytes'],1025)
+  self.assertFalse(inspect(data,wanted,guest_ports=[48001],initiator='peer')['ok']);self.assertFalse(inspect(data,wanted,guest_ports=[48002],initiator='guest')['ok'])
+ def test_outbound_handshake_and_real_payload_required(self):
+  data=(F.parent/'sexnet-outbound-r78.pcap').read_bytes();values=list(frames(data));wanted=[dict(payload_hex=bytes((n*17+78)&255 for n in range(1025)).hex())]
+  no_syn=[v for v in values if len(v)<34 or v[12:14]!=b'\x08\x00' or v[23]!=6 or not(v[14+(v[14]&15)*4+13]&2)]
+  self.assertFalse(inspect(pcap(no_syn),wanted,guest_ports=[48001],initiator='guest')['ok'])
+  wrong=[dict(payload_hex='00')];self.assertFalse(inspect(data,wrong,guest_ports=[48001],initiator='guest')['ok'])
+
 if __name__=='__main__':unittest.main()

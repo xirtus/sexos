@@ -4,7 +4,7 @@ use super::*;
 use std::{boxed::Box,vec,vec::Vec};
 const OUR:[u8;6]=[0x52,0x54,0,0x12,0x34,0x56];const PEER:[u8;6]=[2,0,0,0,0,1];const PEER_IP:[u8;4]=[10,0,2,2];
 fn sum(bytes:&[u8])->u16{let mut s=0u32;for c in bytes.chunks(2){s+=u16::from_be_bytes([c[0],*c.get(1).unwrap_or(&0)])as u32;}while s>>16!=0{s=(s&0xffff)+(s>>16);}!(s as u16)}
-fn engine()->Engine<'static>{Engine::new(OUR,0,0x7365786f735f3736,Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([Storage::EMPTY]))).unwrap()}
+fn engine()->Engine<'static>{Engine::new(OUR,0,0x7365786f735f3736,Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([Storage::EMPTY,Storage::EMPTY]))).unwrap()}
 fn arp()->Vec<u8>{let mut v=vec![0u8;60];v[..6].fill(255);v[6..12].copy_from_slice(&PEER);v[12..22].copy_from_slice(&[8,6,0,1,8,0,6,4,0,1]);v[22..28].copy_from_slice(&PEER);v[28..32].copy_from_slice(&PEER_IP);v[38..42].copy_from_slice(&LOCAL);v}
 fn tcp(seq:u32,ack:u32,flags:u8,body:&[u8])->Vec<u8>{
  let mut v=vec![0;54+body.len()];v[..6].copy_from_slice(&OUR);v[6..12].copy_from_slice(&PEER);v[12..14].copy_from_slice(&[8,0]);
@@ -25,3 +25,14 @@ fn deliver(e:&mut Engine<'_>,now:&mut u64,client:u32,server:&mut u32,expected:us
 #[test]fn clock_reversal_stops_protocol_without_emitting_or_accepting_more_packets(){let(mut e,mut now,client,server)=established();e.submit_frame(&tcp(client,server,0x18,b"private")).unwrap();tick(&mut e,&mut now);e.advance(now-1);assert_eq!(e.failure(),Some(Error::Clock));assert!(!e.has_frame());assert_eq!(e.submit_frame(&arp()),Err(Error::Stopped));let stats=e.statistics();for n in now..now+100{e.advance(n);}assert_eq!(e.statistics(),stats);}
 #[test]fn lost_segment_is_retransmitted_with_same_sequence_without_duplicate_application_consumption(){let(mut e,mut now,client,server)=established();let body=b"real transport retransmission";e.submit_frame(&tcp(client,server,0x18,body)).unwrap();let mut first=None;for _ in 0..20{if let Some(f)=tick(&mut e,&mut now){if let Some(s)=parse(&f){if !s.body.is_empty(){first=Some(s);break;}}}}let first=first.unwrap();assert_eq!(first.seq,server);let stats=e.statistics();now+=1500;let duplicate=parse(&tick(&mut e,&mut now).unwrap()).unwrap();assert_eq!(duplicate.seq,first.seq);assert_eq!(duplicate.body,first.body);assert_eq!(e.statistics().received,stats.received);assert_eq!(e.statistics().queued,stats.queued);}
 #[test]fn malformed_lengths_and_station_address_are_rejected_before_processing(){let mut e=engine();for n in [0,13,1515]{assert_eq!(e.submit_frame(&vec![0;n]),Err(Error::Length));}assert_eq!(e.statistics().packets,0);}
+
+#[test]fn outgoing_client_frames_keep_unique_job_identity_through_abort_and_reconnect(){
+ let mut e=engine();let mut now=0;e.submit_frame(&arp()).unwrap();tick(&mut e,&mut now);
+ e.begin_client(1).unwrap();let first=tick(&mut e,&mut now).unwrap();let s=parse(&first).unwrap();assert_eq!(s.flags&2,2);assert_eq!(first.client_ticket(),Some(1));assert_eq!(u16::from_be_bytes(first.bytes[36..38].try_into().unwrap()),CLIENT_REMOTE_PORT);
+ e.client_abort();e.begin_client(2).unwrap();let second=tick(&mut e,&mut now).unwrap();assert_eq!(second.client_ticket(),Some(2));assert_eq!(first.client_ticket(),Some(1));assert_ne!(&first.bytes[34..36],&second.bytes[34..36]);
+ e.client_abort();assert_eq!(e.client_state(),State::Closed);assert!(!e.has_frame());assert_eq!(e.state(),State::Listen);
+}
+#[test]fn client_bounds_and_stop_cannot_create_another_wire_flow(){
+ let mut e=engine();for ticket in[0,17536,u32::MAX]{assert_eq!(e.begin_client(ticket),Err(Error::Length));assert_eq!(e.client_state(),State::Closed);}
+ assert_eq!(e.client_send(&[0;TURN_BYTES+1]),Err(Error::Length));assert_eq!(e.client_receive(&mut[0;TURN_BYTES+1]),Err(Error::Length));e.stop(Error::Stopped);assert_eq!(e.begin_client(1),Err(Error::Stopped));assert_eq!(e.client_send(b"x"),Err(Error::Stopped));assert!(!e.has_frame());
+}

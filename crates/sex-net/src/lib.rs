@@ -12,10 +12,24 @@ pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
 pub const LOCAL:[u8;4]=[10,0,2,15];
 pub const PORT:u16=46076;
+pub const CLIENT_BASE:u16=48000;
+pub const CLIENT_REMOTE_PORT:u16=46078;
 const BASIS:u64=0xcbf29ce484222325;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Error{Mac,Clock,Busy,Length,Stopped,Protocol}
 pub struct Frame{pub length:usize,pub bytes:[u8;MAX_FRAME]}
-impl Frame{fn empty()->Self{Self{length:0,bytes:[0;MAX_FRAME]}}}
+impl Frame{
+ fn empty()->Self{Self{length:0,bytes:[0;MAX_FRAME]}}
+ /// Trusted stack output classification, not caller-supplied authority. Unique
+ /// finite source ports retain old job identity even after socket cancellation.
+ pub fn client_ticket(&self)->Option<u32>{
+  let b=&self.bytes[..self.length];
+  if b.len()<54||b[12..14]!=[8,0]||b[14]>>4!=4||b[23]!=6||b[26..30]!=LOCAL{return None;}
+  let header=(b[14]&15)as usize*4;
+  if header<20||b.len()<14+header+20{return None;}
+  let port=u16::from_be_bytes([b[14+header],b[15+header]]);
+  if port>CLIENT_BASE{Some((port-CLIENT_BASE)as u32)}else{None}
+ }
+}
 struct Adapter{rx:Option<Frame>,tx:Option<Frame>}
 struct Receive(Frame);
 struct Transmit<'a>(&'a mut Option<Frame>);
@@ -47,18 +61,18 @@ impl Device for Adapter{
 }
 impl Statistics{fn new()->Self{Self{received:0,queued:0,receive_hash:BASIS,queue_hash:BASIS,flow_received:0,flow_queued:0,flow_receive_hash:BASIS,flow_queue_hash:BASIS,flow:0,packets:0}}}
 fn hash(mut value:u64,bytes:&[u8])->u64{for b in bytes{value=(value^*b as u64).wrapping_mul(0x100000001b3);}value}
-/// One private diagnostic TCP flow on a fixed static IPv4 endpoint. The stack's
+/// One private listener and one bounded outbound controlled-peer flow. The stack's
 /// handle is internal data, never an app-visible capability or file descriptor.
-pub struct Engine<'a>{iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,adapter:Adapter,last:u64,
+pub struct Engine<'a>{iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,adapter:Adapter,last:u64,
     stopped:bool,failed:Option<Error>,pending:[u8;TURN_BYTES],pending_length:usize,pending_offset:usize,
     active_flow:bool,stats:Statistics}
 impl<'a> Engine<'a>{
     /// `seed` is explicit input. A predictable development seed does not provide
     /// hostile-peer sequence protection, entropy or TLS security.
-    pub fn new(mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],storage:&'a mut[SocketStorage<'a>;1])->Result<Self,Error>{
+    pub fn new(mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],storage:&'a mut[SocketStorage<'a>;2])->Result<Self,Error>{
         if mac==[0;6]||mac[0]&1!=0{return Err(Error::Mac);}
         let time=Instant::from_millis(i64::try_from(now).map_err(|_|Error::Clock)?);
-        rx.fill(0);tx.fill(0);
+        rx.fill(0);tx.fill(0);client_rx.fill(0);client_tx.fill(0);
         let mut adapter=Adapter{rx:None,tx:None};let mut config=Config::new(EthernetAddress(mac).into());config.random_seed=seed;
         let mut iface=Interface::new(config,&mut adapter,time);
         iface.update_ip_addrs(|ips|{ips.push(IpCidr::new(IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),24)).expect("ONE_STATIC_ADDRESS");});
@@ -66,7 +80,10 @@ impl<'a> Engine<'a>{
         connection.set_timeout(Some(Duration::from_secs(5)));connection.set_ack_delay(None);connection.set_nagle_enabled(false);
         connection.listen((IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),PORT)).map_err(|_|Error::Protocol)?;
         let mut flows=SocketSet::new(&mut storage[..]);let handle=flows.add(connection);
-        Ok(Self{iface,flows,handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
+        let mut client=tcp::Socket::new(tcp::SocketBuffer::new(&mut client_rx[..]),tcp::SocketBuffer::new(&mut client_tx[..]));
+        client.set_timeout(Some(Duration::from_secs(5)));client.set_ack_delay(None);client.set_nagle_enabled(false);
+        let client_handle=flows.add(client);
+        Ok(Self{iface,flows,handle,client_handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
     }
     pub fn state(&self)->State{self.flows.get::<tcp::Socket>(self.handle).state()}
     pub fn statistics(&self)->Statistics{self.stats}
@@ -80,9 +97,37 @@ impl<'a> Engine<'a>{
     pub fn take_frame(&mut self)->Option<Frame>{self.adapter.tx.take()}
     pub fn has_frame(&self)->bool{self.adapter.tx.is_some()}
     pub fn stop(&mut self,reason:Error){
-        self.stopped=true;self.failed=Some(reason);self.flows.get_mut::<tcp::Socket>(self.handle).abort();
+        self.stopped=true;self.failed=Some(reason);self.flows.get_mut::<tcp::Socket>(self.handle).abort();self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
         self.adapter.rx=None;self.adapter.tx=None;self.pending.fill(0);self.pending_length=0;self.pending_offset=0;
     }
+    /// One fixed controlled-peer endpoint, reachable on the existing static
+    /// subnet. Ticket is private service data; no address/capability input.
+    pub fn begin_client(&mut self,ticket:u32)->Result<(),Error>{
+        if self.stopped{return Err(Error::Stopped);}
+        let port=u16::try_from(ticket).ok().and_then(|n|CLIENT_BASE.checked_add(n)).filter(|_|ticket!=0).ok_or(Error::Length)?;
+        self.client_abort();
+        self.flows.get_mut::<tcp::Socket>(self.client_handle).connect(self.iface.context(),
+            (IpAddress::v4(10,0,2,2),CLIENT_REMOTE_PORT),
+            (IpAddress::v4(LOCAL[0],LOCAL[1],LOCAL[2],LOCAL[3]),port)).map_err(|_|Error::Protocol)
+    }
+    pub fn client_state(&self)->State{self.flows.get::<tcp::Socket>(self.client_handle).state()}
+    pub fn client_queued(&self)->usize{self.flows.get::<tcp::Socket>(self.client_handle).send_queue()}
+    pub fn client_send(&mut self,bytes:&[u8])->Result<usize,Error>{
+        if self.stopped{return Err(Error::Stopped);}if bytes.len()>TURN_BYTES{return Err(Error::Length);}
+        let flow=self.flows.get_mut::<tcp::Socket>(self.client_handle);if !flow.can_send(){return Ok(0);}
+        flow.send_slice(bytes).map_err(|_|Error::Protocol)
+    }
+    pub fn client_receive(&mut self,out:&mut[u8])->Result<usize,Error>{
+        if self.stopped{return Err(Error::Stopped);}if out.len()>TURN_BYTES{return Err(Error::Length);}
+        let flow=self.flows.get_mut::<tcp::Socket>(self.client_handle);if !flow.can_recv(){return Ok(0);}
+        flow.recv_slice(out).map_err(|_|Error::Protocol)
+    }
+    pub fn client_finish(&mut self){self.flows.get_mut::<tcp::Socket>(self.client_handle).close();}
+    pub fn client_abort(&mut self){
+        self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
+        if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket().is_some()){self.adapter.tx=None;}
+    }
+
     /// Processes at most one frame and one256-byte echo transfer per turn.
     /// Private single-frame backpressure bounds stack egress independently of
     /// retransmission timers. No DMA submission occurs in this library.

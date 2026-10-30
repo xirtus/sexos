@@ -5,6 +5,7 @@ extern crate alloc;
 mod paging_probe;
 mod service_call;
 mod body_text;
+mod network_probe;
 
 use silkclient::{app_main, SexApp};
 // Private BOOT ELF backing replaces the old ambient fixed-address heap.
@@ -26,6 +27,9 @@ const SEXNET_DNS_RESOLVE: u64 = 0x20B;
 struct App {
     live_text: [u8; 64],
     live_len: usize,
+    probe:network_probe::Probe,
+    probe_status:network_probe::Status,
+    probe_view:network_probe::View,
 }
 
 impl SexApp for App {
@@ -165,17 +169,32 @@ impl SexApp for App {
         sex_pdx::serial_record!("[app.surface.presented] target=15 surface=300 sequence=1 ok=1");
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
-        Self { live_text, live_len }
+        Self { live_text, live_len,probe:network_probe::Probe::new(),probe_status:network_probe::Status::new(text.len()),probe_view:network_probe::View::Pending }
     }
 
     fn run(&mut self, _pdx: u32) -> bool {
-        let req = sex_pdx::pdx_listen_raw(0);
-        if sex_pdx::app_lifecycle::close_requested(req.type_id, req.caller_pd,
-            [req.arg0, req.arg1, req.arg2], 15, 15)
-            || (req.type_id == 0xFF_FF && req.caller_pd == 3)
-        { sex_pdx::task_finish(0); }
+        let message=if self.probe.busy()||self.probe_status.pending(){sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
+        if let Some(req)=message{
+            if sex_pdx::app_lifecycle::close_requested(req.type_id, req.caller_pd,
+                [req.arg0, req.arg1, req.arg2], 15, 15)
+                || (req.type_id == 0xFF_FF && req.caller_pd == 3)
+            {
+                sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
+                sex_pdx::task_finish(0);
+            }
+            if req.type_id==1&&req.caller_pd==13{self.probe.reply(req.arg0,sex_pdx::get_ticks());}
+            if req.type_id==0x202&&req.caller_pd==3&&req.arg1==1{
+                match req.arg0{0x13=>self.probe.retry(),0x2E=>self.probe.cancel(),_=>{}}
+            }
+        }
+        self.probe.advance(sex_pdx::get_ticks());
+        let view=self.probe.view();
+        if view!=self.probe_view{self.probe_view=view;self.probe_status.set(view);sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}
+        self.probe_status.advance();
+        if self.probe.busy()||self.probe_status.pending(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
         true
     }
+
 }
 
 #[cfg(app_resource_cleanup_proof)]
