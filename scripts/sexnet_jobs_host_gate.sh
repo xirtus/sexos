@@ -63,3 +63,8 @@ echo '[sexnet.entropy.host] PASS scope=actual_ABI_private_service_client_not_liv
 rustc --edition=2021 --test "$ROOT_DIR/tests/certificate_time_client.rs" -o "$TEST_DIR/certificate-time-tests"
 "$TEST_DIR/certificate-time-tests"
 echo '[sexnet.certificate.time.host] PASS scope=actual_UTC_ABI_source_decoder_broker_client_not_live_RTC_authenticity_or_TLS'
+
+HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
+  --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-tls --target "$HOST_TARGET"
+echo '[sexnet.tls.host] PASS scope=actual_private_TLS_backend_clients_brokers_not_live_entropy_time_network_or_peer_authentication'

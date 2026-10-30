@@ -9,6 +9,15 @@ use dns_probe::View as D;
 use http_probe::View as H;
 use network_probe::View as E;
 const PREVIEW:&[u8]=b"Kaleidoscope\nCached / sample network text\n\nHello sample.";
+#[test]fn tls_preparation_whole_extent_never_claims_authenticated_content(){
+ let preview=body_text::build(&[b'z';192],&[]);
+ for label in [b"preparing" as &[u8],b"hello pending; no peer",b"unavailable",b"cancelled",b"rejected",b"timed out"]{
+  let before=compose(preview.as_bytes(),E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();let base=before.len;let old=before.bytes;
+  let after=browser_view::with_tls(before,Some(label)).unwrap();assert_eq!(&after.bytes[..base],&old[..base]);assert_eq!(after.len,base+64);
+  let mut expected=b"\n\nTLS preparation: ".to_vec();expected.extend_from_slice(label);expected.extend_from_slice(b"\nL prepare  Q clear");assert_eq!(&after.bytes[base..base+64],&padded(&expected));assert!(after.bytes[after.len..].iter().all(|b|*b==b' '));
+ }
+ for label in [b"secure" as &[u8],b"authenticated",b"hello\0"]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_tls(text,Some(label)).is_none());}
+}
 fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_from_slice(bytes);out }
 
 #[test]fn preserved_preview_and_exact_echo_status_extents() {

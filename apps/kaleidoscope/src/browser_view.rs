@@ -82,3 +82,15 @@ pub fn with_clock(mut text:Text,status:&[u8])->Option<Text>{
  append(&mut text.bytes[..end],&mut at,b"\nT sample  Q clear")?;
  text.len=end;Some(text)
 }
+
+/// One auxiliary extent; this label describes private protocol preparation,
+/// never an authenticated connection or permission to contact a peer.
+pub fn with_tls(mut text:Text,label:Option<&[u8]>)->Option<Text>{
+ let Some(label)=label else{return Some(text);};
+ if !matches!(label,b"preparing"|b"hello pending; no peer"|b"unavailable"|b"cancelled"|b"rejected"|b"timed out"){return None;}
+ let start=text.len;let end=start.checked_add(64)?;text.bytes.get_mut(start..end)?.fill(b' ');
+ let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nTLS preparation: ")?;
+ append(&mut text.bytes[..end],&mut at,label)?;
+ append(&mut text.bytes[..end],&mut at,b"\nL prepare  Q clear")?;
+ text.len=end;Some(text)
+}

@@ -92,6 +92,11 @@ echo "[SEXOS ENTRYPOINT] BUILD_ROOT=$BUILD_ROOT"
 # Check the architectural obligation bindings before compiling any image.
 python3 scripts/check_architectural_truth.py
 
+# Dependency platform selection must describe SexOS's bare-metal target. This
+# checks compiler cfg as well as JSON; runtime authority is a separate gate.
+python3 scripts/check_nonunix_target.py
+python3 scripts/check_tls_platform.py
+
 # 1) ABI guard, always.
 ./scripts/sexos_pipeline.sh
 

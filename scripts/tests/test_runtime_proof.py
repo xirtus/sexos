@@ -397,6 +397,11 @@ while True:
     def test_failed_build_never_boots_a_stale_image(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);scripts=root/"scripts";scripts.mkdir()
+            (root/"kernel/src").mkdir(parents=True)
+            (root/"kernel/src/main.rs").write_text("fixture source")
+            (root/"Cargo.toml").write_text('[workspace]\nmembers=["kernel"]\nresolver="2"\n')
+            (root/"kernel/Cargo.toml").write_text('[package]\nname="gate-fixture"\nversion="0.0.0"\nedition="2021"\n')
+            (root/"Cargo.lock").write_text('version=4\n[[package]]\nname="gate-fixture"\nversion="0.0.0"\n')
             (scripts/"master_runtime_gate.sh").write_text((ROOT/"scripts/master_runtime_gate.sh").read_text())
             entry=scripts/"entrypoint_build.sh";entry.write_text("#!/bin/sh\nexit 17\n");entry.chmod(0o755)
             (root/"sexos-v1.0.0.iso").write_bytes(b"stale image")
@@ -413,10 +418,16 @@ while True:
     def test_production_edit_during_build_invalidates_candidate_before_probe(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);scripts=root/"scripts";scripts.mkdir();(root/"kernel/src").mkdir(parents=True)
+            (root/"Cargo.toml").write_text('[workspace]\nmembers=["kernel"]\nresolver="2"\n')
+            (root/"kernel/Cargo.toml").write_text('[package]\nname="gate-fixture"\nversion="0.0.0"\nedition="2021"\n[dependencies]\ncapture-fixture={path="../unconventional/library"}\n')
+            (root/"unconventional/library/src").mkdir(parents=True)
+            (root/"unconventional/library/Cargo.toml").write_text('[package]\nname="capture-fixture"\nversion="0.0.0"\nedition="2021"\n')
+            (root/"unconventional/library/src/lib.rs").write_text("before build")
+            (root/"Cargo.lock").write_text('version=4\n[[package]]\nname="capture-fixture"\nversion="0.0.0"\n[[package]]\nname="gate-fixture"\nversion="0.0.0"\ndependencies=["capture-fixture"]\n')
             (root/"kernel/src/main.rs").write_text("before build")
             (scripts/"master_runtime_gate.sh").write_text((ROOT/"scripts/master_runtime_gate.sh").read_text())
             entry=scripts/"entrypoint_build.sh"
-            entry.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\nPath('kernel/src/main.rs').write_text('changed during build')\nPath('sexos-v1.0.0.iso').write_bytes(b'image')\n")
+            entry.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\nPath('unconventional/library/src/lib.rs').write_text('changed during build')\nPath('sexos-v1.0.0.iso').write_bytes(b'image')\n")
             entry.chmod(0o755)
             fake=root/"qemu";fake.write_text("#!/bin/sh\ntouch should-not-boot\n");fake.chmod(0o755)
             gate=root/"gate";env=dict(os.environ,GATE_DIR=str(gate),QEMU_BIN=str(fake),ISO="sexos-v1.0.0.iso")
@@ -425,6 +436,19 @@ while True:
             self.assertFalse((root/"should-not-boot").exists())
             self.assertIn('"probe_gate": "NOT_RUN"',(gate/"provenance.json").read_text())
             self.assertNotEqual((gate/"build-sources.before.json").read_text(),(gate/"build-sources.after.json").read_text())
+            self.assertIn('unconventional/library/src/lib.rs',(gate/"build-sources.before.json").read_text())
+
+    def test_dependency_capture_failure_records_red_and_never_builds_or_boots(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);scripts=root/"scripts";scripts.mkdir()
+            (scripts/"master_runtime_gate.sh").write_text((ROOT/"scripts/master_runtime_gate.sh").read_text())
+            entry=scripts/"entrypoint_build.sh";entry.write_text("#!/bin/sh\ntouch should-not-build\n");entry.chmod(0o755)
+            gate=root/"gate"
+            result=subprocess.run(["bash",str(scripts/"master_runtime_gate.sh"),"--probe","1"],cwd=root,
+                env=dict(os.environ,GATE_DIR=str(gate)),capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0);self.assertFalse((root/"should-not-build").exists())
+            self.assertIn("RED_MASTER",(gate/"report.md").read_text())
+            self.assertIn('"probe_gate": "NOT_RUN"',(gate/"provenance.json").read_text())
 
     def test_probe_requires_positive_integer(self):
         for value in ["0", "-1", "1.5", "oops"]:

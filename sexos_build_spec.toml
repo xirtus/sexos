@@ -175,7 +175,7 @@ action = "cargo_manifest"
 manifest = "apps/kaleidoscope/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/kaleidoscope"
 dest_artifact = "iso_root/apps/kaleidoscope"
-rustflags = ""
+rustflags = "--cfg aes_force_soft --cfg polyval_force_soft"
 
 [[stage]]
 id = "build_sext"

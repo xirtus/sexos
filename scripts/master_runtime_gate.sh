@@ -145,10 +145,12 @@ print_gate() {
 # covers untracked new modules; a concurrent source edit invalidates the bind.
 capture_production_sources() {
     python3 - "$1" <<'PYSOURCES'
-import hashlib,json,pathlib,sys
-root=pathlib.Path('.')
+import hashlib,json,pathlib,subprocess,sys
+root=pathlib.Path('.').resolve()
 files=[]
-for directory in ['kernel','crates','servers','apps','sex-rt','purple-scanout','sexc','.cargo','targets']:
+# libsys is a live workspace path dependency despite its historical parent
+# directory. Omitting it prevents a frozen build from resolving its own graph.
+for directory in ['kernel','crates','servers','apps','sex-rt','sex-src/lib/libsys','purple-scanout','sexc','.cargo','targets']:
     base=root/directory
     if base.is_dir():
         files += [p for p in base.rglob('*') if p.is_file() and 'target' not in p.parts
@@ -156,7 +158,16 @@ for directory in ['kernel','crates','servers','apps','sex-rt','purple-scanout','
 for name in ['Cargo.toml','Cargo.lock','rust-toolchain.toml','limine.cfg','sexos_contract.toml','sexos_build_spec.toml','ARCHITECTURE.md','x86_64-sex.json','aarch64-sex.json']:
     p=root/name
     if p.is_file():files.append(p)
-result={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
+# Resolve actual local package roots too: directory conventions are not a
+# dependency closure. Registry inputs are pinned by the captured Cargo.lock.
+metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--format-version','1'],text=True))
+for package in metadata['packages']:
+    if package['source'] is not None:continue
+    manifest=pathlib.Path(package['manifest_path']).resolve()
+    if not manifest.is_relative_to(root):raise ValueError('unfreezable external local package: '+str(manifest))
+    files += [p for p in manifest.parent.rglob('*') if p.is_file() and 'target' not in p.parts
+              and p.suffix in ['.rs','.toml','.ld','.json','.S','.asm']]
+result={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
 pathlib.Path(sys.argv[1]).write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
 PYSOURCES
 }
@@ -180,9 +191,9 @@ if [ "$SKIP_BUILD" = true ]; then
     BUILD_GATE="SKIP"
 else
     echo "[gate] BUILD phase..."
-    capture_production_sources "$SOURCE_BEFORE"
-    if ./scripts/entrypoint_build.sh >"$BUILD_LOG" 2>&1 \
-        && capture_production_sources "$SOURCE_AFTER" \
+    if capture_production_sources "$SOURCE_BEFORE" >"$BUILD_LOG" 2>&1 \
+        && ./scripts/entrypoint_build.sh >>"$BUILD_LOG" 2>&1 \
+        && capture_production_sources "$SOURCE_AFTER" >>"$BUILD_LOG" 2>&1 \
         && cmp -s "$SOURCE_BEFORE" "$SOURCE_AFTER"; then
         BUILD_GATE="PASS"
         echo "[gate] BUILD: PASS"

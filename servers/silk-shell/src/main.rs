@@ -9073,7 +9073,7 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
             }
             if let Some(fid) = frame_for_surface(sid) {
                 if toggle_zoom_frame(fid) {
-                    serial_println!("[shell.window.action] action=ZoomToggle frame={} sid={} ok=1 reason=ok", fid, sid);
+                    sex_pdx::serial_record!("[shell.window.action] action=ZoomToggle frame={} sid={} ok=1 reason=ok", fid, sid);
                     static mut ACCESS_ZOOM_OK_BUDGET: u32 = 8;
                     let b = &mut ACCESS_ZOOM_OK_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[access.action.zoom] frame={} target={}", fid, sid); }
@@ -20049,7 +20049,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
         (zh as u64) << 32 | zw as u64);
     // Update local geometry to match display.
     update_local_geometry(surface_id, zx, zy, zw, zh);
-    serial_println!("[silk.lifecycle.zoom.active] frame={} sid={} zx={} zy={} zw={} zh={}", frame_id, surface_id, zx, zy, zw, zh);
+    sex_pdx::serial_record!("[silk.lifecycle.zoom.active] frame={} sid={} zx={} zy={} zw={} zh={}", frame_id, surface_id, zx, zy, zw, zh);
     // Clear stale hover light — zoom changes surface geometry completely,
     // invalidating any light position from the previous (non-zoomed) chrome.
     HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
@@ -20059,7 +20059,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
         let b = &mut FRAME_ZOOM_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[shell.frame.zoom] frame={} surface={}", frame_id, surface_id);
+            sex_pdx::serial_record!("[shell.frame.zoom] frame={} surface={}", frame_id, surface_id);
         }
     }
     snap_capture_layout();
