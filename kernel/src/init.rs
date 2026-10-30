@@ -812,6 +812,16 @@ pub fn init() {
         pd.grant_capability(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
             crate::app_resource_state::LifecycleGrant{target_pd:id,task_id:unsafe{(*task).id},holder_pd:id,rights:crate::app_resource_state::QUERY,ack_bit:0}));
     }
+    // Two finite Spindle incarnations share only the fixed peer service edge.
+    // This is BOOT genesis; neither app receives NIC metadata or config rights.
+    assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");
+    for target in [spindle_id,spindle_successor] {
+        let pd=crate::ipc::DOMAIN_REGISTRY.get(target).expect("BOOT_SPINDLE_NETWORK_SUBJECT");
+        assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_SPINDLE_NETWORK_COLLISION");
+        pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+        let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
+        serial_println!("[boot.spindle.net.route] target={} task={} slot=18 service={} fixed_peer=1 nic_metadata=0 runtime_mint=0",target,unsafe{(*task).id},sexnet_id);
+    }
     crate::app_resources::reserve_successor(quil_id,successor,silkshell_id,sex_pdx::app_lifecycle::ACTIVATION_SLOT);
     crate::app_resources::reserve_successor(successor,quil_third,silkshell_id,sex_pdx::app_lifecycle::QUIL_THIRD_ACTIVATION_SLOT);
     crate::app_resources::reserve_successor(spindle_id,spindle_successor,silkshell_id,sex_pdx::app_lifecycle::SPINDLE_ACTIVATION_SLOT);

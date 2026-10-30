@@ -14,6 +14,9 @@ rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" 
 echo '[sexnet.jobs.host] PASS scope=actual_bounded_job_and_ABI_not_live_network_authority'
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/network_probe.rs" -o "$TEST_DIR/client-tests"
 "$TEST_DIR/client-tests"
+rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/spindle_network.rs" -o "$TEST_DIR/spindle-network-tests"
+"$TEST_DIR/spindle-network-tests"
+echo '[sexnet.spindle.client.host] PASS scope=actual_explicit_client_ABI_job_with_partial_peer_not_live_network_authority_or_desktop'
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/servers/silk-shell/src/browser_input.rs" -o "$TEST_DIR/input-tests"
 "$TEST_DIR/input-tests"
 

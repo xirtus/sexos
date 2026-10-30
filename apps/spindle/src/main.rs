@@ -87,6 +87,9 @@ use sex_pdx::{
 use sex_graphics::{WindowBuffer, font};
 mod history_persistence;
 mod storage_probe;
+mod network_probe;
+static mut NETWORK_PROBE:network_probe::Client=network_probe::Client::new();
+static mut NETWORK_GENERATION:u64=0;
 static mut STORAGE_PROBE:storage_probe::Client=storage_probe::Client::new();
 mod viewport;
 mod scroll_view;
@@ -688,6 +691,12 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     }
     if cmd.is_empty() { return true; }
     let recognized = match cmd {
+        b"net-probe" | b"net-retry" | b"net-cancel" | b"net-status" => {
+            if !args.is_empty() {sb.push(b"Network diagnostics take no arguments.");return true;}
+            let accepted=unsafe{match cmd {b"net-probe"|b"net-retry"=>NETWORK_PROBE.start_or_retry(),b"net-cancel"=>NETWORK_PROBE.cancel(),_=>true}};
+            sex_pdx::serial_record!("[spindle.net.intent] target={} task={} command={} accepted={} seq={} fixed_peer=1",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire),core::str::from_utf8(cmd).unwrap(),accepted as u8,unsafe{NETWORK_PROBE.next_sequence()});
+            network_note(sb);true
+        },
         b"help" => {
             // ── section: basics ──
             serial_println!("[spindle.help.section] name=basics commands=6");
@@ -698,6 +707,11 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
+            sb.push(b"--- Network diagnostic ---");
+            sb.push(b"  net-probe    check fixed peer bytes");
+            sb.push(b"  net-status   show diagnostic state");
+            sb.push(b"  net-cancel   stop and release the probe");
+            sb.push(b"  net-retry    explicit fresh attempt");
             serial_println!("[spindle.help.command] name=help ok=1");
             serial_println!("[spindle.help.command] name=clear ok=1");
             serial_println!("[spindle.help.command] name=echo ok=1");
@@ -1988,6 +2002,11 @@ fn parse_probe_job(cmd:&[u8],args:&[u8])->Option<storage_probe::Job>{
  b"rmdoc"=>Job::Delete(id),b"mvdoc"=>Job::Rename(id,name(words.next()?)?),b"filldoc"|b"filldocx"=>Job::Fill(id,number(words.next()?)?,cmd==b"filldocx"),b"truncdoc"=>Job::Truncate(id,number(words.next()?)?),b"catdoc"|b"catdocx"=>Job::Verify(id,cmd==b"catdocx"),_=>return None}};
  if words.next().is_some()||!job.valid(){return None}Some(job)
 }
+fn network_note(sb:&mut Scrollback) {
+ let state=unsafe{NETWORK_PROBE.status()};let mut row=[0;64];let prefix=b"NET / ";row[..prefix.len()].copy_from_slice(prefix);row[prefix.len()..prefix.len()+state.len()].copy_from_slice(state.as_bytes());sb.push(&row[..prefix.len()+state.len()]);
+ unsafe{NETWORK_GENERATION=NETWORK_PROBE.status_generation();}
+ sex_pdx::serial_record!("[spindle.net.state] target={} task={} state={} busy={} generation={} fixed_peer=1 web=0",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire),state,unsafe{NETWORK_PROBE.busy()}as u8,unsafe{NETWORK_GENERATION});
+}
 fn probe_event(event:storage_probe::Event,sb:&mut Scrollback){
  let kind=match event.outcome{storage_probe::Outcome::Done=>"done",storage_probe::Outcome::Failed=>"failed",storage_probe::Outcome::Uncertain=>"uncertain",storage_probe::Outcome::Cancelled=>"cancelled"};
  sex_pdx::serial_record!("[spindle.probe.result] target={} kind={} job={:?} value={} error={} hash={:#x}",instance_pd(),kind,event.job,event.value,event.error,event.hash);
@@ -2074,6 +2093,9 @@ pub extern "C" fn _start() -> ! {
     assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(12,154)|(17,302)));
     INSTANCE_PD.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     INSTANCE_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
+    assert!(catalog.task_id!=0,"SPINDLE_EXACT_NETWORK_TASK");
+    assert_eq!(sex_pdx::device_network_config(sex_pdx::SLOT_NET),Err(sex_pdx::pci_command::DENIED),"SPINDLE_ROUTE_HAS_NO_NIC_METADATA");
+    sex_pdx::serial_record!("[spindle.net.idle] target={} task={} explicit_intent=1 nic_metadata=0",catalog.target_pd,catalog.task_id);
     unsafe{HISTORY_IO.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO=display_delivery::Outbox::new(catalog.target_pd);}
     sex_pdx::serial_record!("[spindle.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[spindle.init.start]");
@@ -2391,6 +2413,8 @@ pub extern "C" fn _start() -> ! {
     let mut presentation_pending=false;let mut presentation_sent=false;
     let mut storage_owner=0u8;
     loop {
+        unsafe{NETWORK_PROBE.advance(sex_pdx::get_ticks());}
+        if unsafe{NETWORK_GENERATION!=NETWORK_PROBE.status_generation()} {network_note(sb);unsafe{content_render(&line,sb);}}
         let display_result=unsafe{DISPLAY_IO.poll(4,|op|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op.opcode,op.surface,op.a,op.b).map(|_|()),|r|sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes))};
         if let Err(error)=display_result{sex_pdx::serial_record!("[spindle.display.denied] target={} status={}",instance_pd(),error);sex_pdx::task_finish(3);}
         if registration_pending{
@@ -2401,7 +2425,7 @@ pub extern "C" fn _start() -> ! {
         if storage_owner==2{if let Some(e)=unsafe{STORAGE_PROBE.step(sex_pdx::get_ticks(),|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_probe::OP,r.header(),r.a,r.b).map(|_|()))}{storage_owner=0;probe_event(e,sb);unsafe{content_render(&line,sb);}}}
         unsafe{HISTORY_STATUS.update(desktop_storage_state(storage_owner));HISTORY_STATUS.poll(|n|{let a=n.args();sex_pdx::pdx_call_checked(SLOT_SHELL,sex_pdx::spindle_status::OP,a[0],a[1],a[2]).map(|_|())});}
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         if msg.type_id==sex_pdx::spindle_view::OP {
@@ -2412,6 +2436,11 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::serial_record!("[spindle.view.accepted] target={} task={} sequence={} w={} h={} cols={} top_rows={} bottom_rows={} sender=3",instance_pd(),catalog.task_id,n.sequence,n.w,n.h,v.cols,v.rows[0],v.rows[1]);
                 unsafe{content_render(&line,sb);}
             }
+            continue;
+        }
+        if msg.type_id==1 && msg.caller_pd==13 {
+            sex_pdx::serial_record!("[spindle.net.reply] target={} task={} tag={} seq={} value={} observed=1",instance_pd(),catalog.task_id,msg.arg0>>56,(msg.arg0>>32)&sex_pdx::network_job::MAX_SEQ as u64,msg.arg0 as u32);
+            unsafe{NETWORK_PROBE.reply(msg.arg0,sex_pdx::get_ticks());}
             continue;
         }
         if msg.type_id==1 && msg.caller_pd==11{
@@ -2425,6 +2454,8 @@ pub extern "C" fn _start() -> ! {
         }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire)) {
+            let net_pending=unsafe{NETWORK_PROBE.busy()};unsafe{NETWORK_PROBE.close();}
+            sex_pdx::serial_record!("[spindle.net.closed] target={} task={} pending={} terminal=1 positive_release=0",instance_pd(),catalog.task_id,net_pending as u8);
             let was_pending=unsafe{STORAGE_PROBE.busy()};
             sex_pdx::serial_record!("[spindle.probe.closed] target={} pending={} terminal=1",instance_pd(),was_pending as u8);
             let discarded=unsafe{STORAGE_PROBE.close();HISTORY_STATUS.cancel();DISPLAY_IO.cancel()};
