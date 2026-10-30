@@ -4,7 +4,7 @@
 The host is the named endpoint itself. It neither forwards guest traffic nor
 provides a substitute verifier. No TLS key log or ephemeral secrets are saved.
 """
-import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,struct,subprocess,threading,time
+import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,struct,subprocess,tempfile,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
@@ -18,13 +18,35 @@ from check_dns_capture import query as dns_query,response as dns_response,inspec
 from check_nic_command import inspect as nic_check
 from check_self_wait import inspect as wait_check
 
-MODES=('ready','cancel','close')
+CERTIFICATE_MODES={'wrong-name':'WRONG_NAME_DER','expired':'EXPIRED_DER','future':'FUTURE_DER','client-only':'CLIENT_ONLY_DER','foreign-root':'FOREIGN_DER','corrupt-signature':'LEAF_DER'}
+TRANSPORT_MODES=('truncated-handshake','stall')
+REJECTION_MODES=tuple(CERTIFICATE_MODES)+('unsupported-version',)+TRANSPORT_MODES
+MODES=('ready','cancel','close')+REJECTION_MODES
 HOST='probe.sexos.test';LOCAL=bytes((10,0,2,15));PEER=bytes((10,0,2,2))
 REQUEST=b'SexOS guest encrypted request round93\n'
 RESPONSE=b'SexOS controlled encrypted reply round93\n'
 CIPHER='TLS_AES_128_GCM_SHA256'
 LABELS={'Pending':b'checking','Verified':b'peer verified','Unavailable':b'unavailable','Cancelled':b'cancelled','Uncertain':b'waiting receipt'}
 SCOPE='Controlled TLS1.3/P256/AES128 peer exchange through exact BOOT policy/seed/time, positively released fixed-name DNS and admitted duplex lease. Independent hostSSL receives the exact public request, sends the exact public response and unwrap verifies guest close_notify; PCAP independently checks actual TCP/TLS records and absence of those plaintext messages on46080. No host proxy, publicInternet/arbitrary endpoint, publicCA, physical/SMP/hostile-containment or general web-app claim.'
+
+def rejection_reason(mode):
+ return 'Some(Certificate)'if mode in CERTIFICATE_MODES else'Some(Handshake)'if mode=='unsupported-version'else'None'
+
+def fixture_der(root,mode):
+ symbol=CERTIFICATE_MODES.get(mode,'LEAF_DER');source=(Path(root)/'crates/sex-tls/src/probe_fixture.rs').read_text();match=re.search(r'pub const '+symbol+r'[^=]*=\s*&\[(.*?)\];',source,re.S)
+ if not match:raise ValueError('missing source-bound public DER fixture '+symbol)
+ data=bytes(int(x,16)for x in re.findall(r'0x([0-9a-fA-F]{2})',match[1]))
+ if mode=='corrupt-signature':data=data[:-1]+bytes([data[-1]^1])
+ return data
+
+def fixture_descriptor(root,mode):
+ data=fixture_der(root,mode)
+ return dict(symbol=CERTIFICATE_MODES.get(mode,'LEAF_DER'),der_sha256=hashlib.sha256(data).hexdigest(),signature_last_byte_flipped=mode=='corrupt-signature',public_test_key=True)
+
+def scope(mode):
+ if mode not in REJECTION_MODES:return SCOPE
+ evidence='Actual server certificate flight and guest Certificate failure'if mode in CERTIFICATE_MODES else'Actual unsupported-version fatal alert and guest Handshake failure'if mode=='unsupported-version'else'Bounded transport/timeout cleanup, without parser-EOF or certificate-rejection claim'
+ return evidence+'; exact BOOT/held-route policy, DNS, fresh seed/UTC and positive RELEASE before Unavailable. No guest authenticated peer, application request, publicInternet, publicCA or general browser claim.'
 
 def command_profile(command):
  return preparation_profile(command,'ready')
@@ -143,27 +165,53 @@ def inspect_wire(raw,peer_rows,mode):
   row=peer_rows[0];flow=tls[0]
   if row.get('mode')!=mode or row.get('sni')not in(None,HOST):raise ValueError('peer mode/SNI differs')
   if REQUEST in flow['outgoing']or RESPONSE in flow['incoming']or REQUEST in flow['incoming']or RESPONSE in flow['outgoing']:raise ValueError('public application plaintext escaped on TLS wire')
-  outgoing=tls_records(flow['outgoing']);incoming=tls_records(flow['incoming']);client=hello(outgoing[0],True)
+  outgoing=tls_records(flow['outgoing']);incoming=tls_records(flow['incoming'])if mode!='truncated-handshake'else[];client=hello(outgoing[0],True)
   if mode=='ready':
    if row.get('tls_version')!='TLSv1.3'or row.get('cipher')!=CIPHER or row.get('sni')!=HOST or row.get('request_hex')!=REQUEST.hex()or row.get('response_hex')!=RESPONSE.hex()or row.get('unwrap_completed')is not True:raise ValueError('independent actual SSL/application/close_notify proof absent')
    server=hello(incoming[0],False)
    if not any(r['type']==23 for r in outgoing)or not any(r['type']==23 for r in incoming):raise ValueError('missing encrypted TLS records in either direction')
    if not flow['fin_out']or not flow['fin_in']or flow['rst_out']or flow['rst_in']:raise ValueError('ready TLS flow lacks clean bilateral FIN')
+  elif mode in REJECTION_MODES:
+   if any(r['type']not in(20,21,22)for r in outgoing)or sum(r['type']==22 for r in outgoing)!=1:raise ValueError('rejected peer received guest encrypted/application or extra handshake records')
+   if any(r['type']==21 and(len(r['payload'])!=2 or r['payload'][0]!=2)for r in outgoing):raise ValueError('rejected peer sent malformed/nonfatal plaintext TLS alert')
+   if row.get('guest_bytes_after_flight')!=0:raise ValueError('negative endpoint observed extra guest bytes after flight')
+   if row.get('fixture')!=fixture_descriptor(Path(__file__).resolve().parents[1],mode):raise ValueError('wrong source-bound public rejection fixture')
+   if row.get('handshake_complete')is not False or row.get('application_bytes_received')!=0 or row.get('request_hex')or row.get('response_hex')or row.get('unwrap_completed')or row.get('tls_version'):raise ValueError('rejected peer fabricated completed handshake/application')
+   if row.get('sent_wire_bytes')!=len(flow['incoming'])or row.get('sent_wire_sha256')!=hashlib.sha256(flow['incoming']).hexdigest():raise ValueError('actual endpoint flight does not match independent PCAP')
+   if mode in CERTIFICATE_MODES:
+    server=hello(incoming[0],False)
+    if row.get('sni')!=HOST or row.get('handshake_started')is not True or not any(r['type']==23 for r in incoming)or row.get('server_flight_complete')is not True:raise ValueError('no actual controlled certificate handshake flight')
+   elif mode=='unsupported-version':
+    if len(incoming)!=1 or incoming[0]['type']!=21 or incoming[0]['payload']!=b'\x02\x46'or row.get('ssl_error_reason')!='UNSUPPORTED_PROTOCOL':raise ValueError('no actual unsupported-version fatal alert')
+    server=None
+   elif mode=='truncated-handshake':
+    prefix=flow['incoming']
+    if len(prefix)!=8 or prefix[:3]!=b'\x16\x03\x03'or int.from_bytes(prefix[3:5],'big')<=len(prefix)-5 or prefix[5]!=2 or row.get('truncated_bytes')!=8 or not isinstance(row.get('full_flight_bytes'),int)or row['full_flight_bytes']<=8:raise ValueError('missing exact intentionally incomplete actual ServerHello flight')
+    server=None
+   else:
+    if incoming or row.get('handshake_stalled')is not True:raise ValueError('timeout stall unexpectedly sent TLS data')
+    server=None
   else:
    if incoming or any(r['type']not in(20,22)for r in outgoing):raise ValueError('pending cancellation unexpectedly exchanged peer TLS/application records')
    if row.get('handshake_stalled')is not True or row.get('tls_version')or row.get('request_hex')or row.get('response_hex')or row.get('unwrap_completed'):raise ValueError('pending peer fabricated completed handshake/application')
    server=None
   joined.append(dict(ticket=flow['guest_port']-48000,guest_port=flow['guest_port'],peer_port=46080,syn=flow['syn'],client_hello=client,server_hello=server,outgoing_bytes=len(flow['outgoing']),incoming_bytes=len(flow['incoming']),outgoing_records=[{k:r[k]for k in('type','version','length')}for r in outgoing],incoming_records=[{k:r[k]for k in('type','version','length')}for r in incoming],fin_out=flow['fin_out'],fin_in=flow['fin_in'],rst_out=flow['rst_out'],rst_in=flow['rst_in']))
  except(ValueError,KeyError,IndexError,TypeError,struct.error)as exc:errors.append(str(exc));packets=locals().get('packets',0)
- return dict(ok=not errors,errors=errors,tcp_packets=packets,joins=joined,scope='Independent checksum/TCP reassembly and TLS Hello/outer-record bounds; encrypted application identity and guest close_notify established separately by actual endpoint OpenSSL, not decryption guesses or serial labels.')
+ return dict(ok=not errors,errors=errors,tcp_packets=packets,joins=joined,scope='Independent checksum/TCP reassembly and TLS Hello/outer-record bounds. Ready application identity/close_notify use actual endpoint OpenSSL. Negative modes join actual endpoint flight to PCAP and require guest exact failure/cleanup separately; truncated/stall prove bounded transport cleanup only.')
 
 class ControlledPeer:
  """Explicit loopback endpoint fixtures; no traffic forwarding or key logs."""
  def __init__(self,root,mode):
-  self.root=Path(root);self.mode=mode;self.stop=threading.Event();self.pending_hello=threading.Event();self.completed=threading.Event();self.errors=[];self.rows=[];self.dns=[];self.attempts=[];self.sockets=[];self.threads=[];self.live=[]
+  self.root=Path(root);self.mode=mode;self.stop=threading.Event();self.pending_hello=threading.Event();self.flight_sent=threading.Event();self.completed=threading.Event();self.errors=[];self.rows=[];self.dns=[];self.attempts=[];self.sockets=[];self.threads=[];self.live=[]
  def context(self):
   ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.minimum_version=ctx.maximum_version=ssl.TLSVersion.TLSv1_3;ctx.set_ecdh_curve('prime256v1');ctx.num_tickets=0;ctx.keylog_filename=None
-  fixture=self.root/'tests/fixtures/tls-controlled';ctx.load_cert_chain(str(fixture/'server.pem'),str(fixture/'server-PUBLIC-TEST-key.pem'))
+  fixture=self.root/'tests/fixtures/tls-controlled'
+  if self.mode=='unsupported-version':ctx.minimum_version=ctx.maximum_version=ssl.TLSVersion.TLSv1_2
+  if self.mode in CERTIFICATE_MODES:
+   # Public DER only; reuse the deliberately public scalar2 fixture key.
+   with tempfile.TemporaryDirectory(prefix='sexos-public-tls-')as directory:
+    pem=Path(directory)/'public-cert.pem';pem.write_text(ssl.DER_cert_to_PEM_cert(fixture_der(self.root,self.mode)));ctx.load_cert_chain(str(pem),str(fixture/'server-PUBLIC-TEST-key.pem'))
+  else:ctx.load_cert_chain(str(fixture/'server.pem'),str(fixture/'server-PUBLIC-TEST-key.pem'))
   def sni(sock,name,context):
    if name!=HOST:raise ssl.SSLError('unexpected controlled SNI')
    sock.controlled_sni=name
@@ -211,11 +259,12 @@ class ControlledPeer:
   sock=self.accept(listener)
   if sock is None:return
   row=dict(mode=self.mode,sni=None,handshake_stalled=False,tls_version=None,cipher=None,request_hex=None,response_hex=None,unwrap_completed=False);self.rows.append(row)
-  if self.mode!='ready':
+  if self.mode in('cancel','close','stall'):
    header=sock.recv(5,socket.MSG_PEEK|socket.MSG_WAITALL)
    if len(header)!=5 or header[0]!=22:raise ValueError('pending fixture did not observe a real guest ClientHello')
-   row['handshake_stalled']=True;self.pending_hello.set()
+   row.update(handshake_stalled=True,fixture=fixture_descriptor(self.root,self.mode),handshake_complete=False,application_bytes_received=0,guest_bytes_after_flight=0,sent_wire_bytes=0,sent_wire_sha256=hashlib.sha256(b'').hexdigest());self.pending_hello.set()
    self.stop.wait(160);sock.close();return
+  if self.mode in REJECTION_MODES:self.serve_rejected(sock,ctx,row);return
   wrapped=ctx.wrap_socket(sock,server_side=True,do_handshake_on_connect=False);self.live.append(wrapped);wrapped.do_handshake();row.update(sni=getattr(wrapped,'controlled_sni',None),tls_version=wrapped.version(),cipher=wrapped.cipher()[0])
   if row['tls_version']!='TLSv1.3'or row['cipher']!=CIPHER or row['sni']!=HOST:raise ValueError('wrong actual negotiated TLS profile')
   data=bytearray()
@@ -229,6 +278,32 @@ class ControlledPeer:
   while not self.stop.is_set():
    try:extra,_=listener.accept();extra.close();raise ValueError('unexpected extra TLS connection')
    except socket.timeout:pass
+ def serve_rejected(self,sock,ctx,row):
+  # MemoryBIO exposes the actual endpoint's public handshake flight for a
+  # byte-for-byte independent PCAP join. It never forwards guest traffic.
+  inbound=ssl.MemoryBIO();outbound=ssl.MemoryBIO();server=ctx.wrap_bio(inbound,outbound,server_side=True);sent=bytearray();sock.settimeout(.1)
+  row.update(fixture=fixture_descriptor(self.root,self.mode),handshake_started=False,handshake_complete=False,application_bytes_received=0,server_flight_complete=False,ssl_error_reason=None,guest_bytes_after_flight=0,sent_wire_bytes=0,sent_wire_sha256=hashlib.sha256(b'').hexdigest())
+  while not self.stop.is_set():
+   try:data=sock.recv(4096)
+   except socket.timeout:continue
+   except ConnectionResetError:row['transport_reset_observed']=True;break
+   if not data:row['transport_eof_observed']=True;break
+   if sent:
+    row['guest_bytes_after_flight']+=len(data);raise ValueError('negative endpoint received extra guest bytes after rejection flight')
+   inbound.write(data);row['handshake_started']=True
+   rejected=False
+   try:server.do_handshake();row['handshake_complete']=True;raise ValueError('negative endpoint unexpectedly completed TLS handshake')
+   except ssl.SSLWantReadError:pass
+   except ssl.SSLError as exc:row['ssl_error_reason']=exc.reason;rejected=True
+   flight=outbound.read()
+   if flight:
+    row['sni']=getattr(server,'controlled_sni',None)
+    if self.mode=='truncated-handshake':row['full_flight_bytes']=len(flight);row['truncated_bytes']=8;flight=flight[:8]
+    sock.sendall(flight);sent.extend(flight);row.update(sent_wire_bytes=len(sent),sent_wire_sha256=hashlib.sha256(sent).hexdigest(),server_flight_complete=self.mode!='truncated-handshake')
+    self.flight_sent.set()
+    if self.mode=='truncated-handshake':sock.shutdown(socket.SHUT_WR)
+   if rejected:break
+  sock.close();self.completed.set()
  def close(self):
   self.stop.set()
   for sock in self.sockets+self.live:
@@ -247,7 +322,7 @@ def load_contract(root):
   if literal not in view:raise ValueError('source-bound controlled peer chrome changed')
  for label in LABELS.values():
   if ('b"'+label.decode()+'"')not in app and ('b"'+label.decode()+'"')not in view:raise ValueError('source-bound controlled peer label changed')
- for name in('apps/kaleidoscope/src/tls_exchange.rs','crates/sex-pdx/src/network_job.rs','servers/sexnet/src/jobs.rs','servers/sexnet/src/main.rs','kernel/src/boot_network_state.rs','kernel/src/init.rs','crates/sex-net-config/src/lib.rs','tests/fixtures/tls-controlled/server.pem'):
+ for name in('apps/kaleidoscope/src/tls_exchange.rs','crates/sex-pdx/src/network_job.rs','servers/sexnet/src/jobs.rs','servers/sexnet/src/main.rs','kernel/src/boot_network_state.rs','kernel/src/init.rs','crates/sex-net-config/src/lib.rs','tests/fixtures/tls-controlled/server.pem','tests/fixtures/tls-controlled/server-PUBLIC-TEST-key.pem','crates/sex-tls/src/probe_fixture.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  return contract
 
@@ -343,6 +418,7 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
   assert len(auth)==trace.count('[browser.tls.peer.authenticated]')and len(responses)==trace.count('[browser.tls.peer.response]')and len(positive)==trace.count('[browser.tls.peer.released]'),'malformed/foreign peer success receipts'
   views=list(re.finditer(r'\[browser.tls.peer.view\] state=(Pending|Verified|Unavailable|Cancelled|Uncertain) controlled_profile=1 public_internet=0',trace));assert len(views)==trace.count('[browser.tls.peer.view]'),'unscoped/unknown peer status'
   assert any(v[1]=='Pending'for v in views),'no actual pending peer status'
+  if mode not in REJECTION_MODES:assert '[browser.tls.peer.rejected]'not in trace,'unexpected rejected receipt in successful/pending workflow'
   if mode=='ready':
    assert len(auth)==len(responses)==len(positive)==1,'real peer lacks authentication/AEAD response/positive RELEASE'
    assert responses[0][1]==hex(fingerprint(RESPONSE)),'response receipt differs from exact actual public plaintext'
@@ -354,6 +430,11 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
    if mode=='cancel':
     cancelled=re.search(rf'\[browser.tls.peer.cancelled\] ticket={ticket} positive_release=1 authenticated=0',trace);view=next((v for v in views if v[1]=='Cancelled'),None)
     assert cancelled and view and peer_admit.start()<cancelled.start()<view.start(),'Q missing actual positive cancel cleanup before Cancelled'
+   elif mode in REJECTION_MODES:
+    reason=re.escape(rejection_reason(mode));rejected=list(re.finditer(rf'\[browser.tls.peer.rejected\] ticket={ticket} positive_release=1 authenticated=0 failure={reason}(?=\r?$)',trace,re.M));unavailable=[v for v in views if v[1]=='Unavailable']
+    assert len(rejected)==trace.count('[browser.tls.peer.rejected]')==len(unavailable)==1,'missing/foreign/duplicate exact rejected reason/positive RELEASE/Unavailable'
+    assert peer_admit.start()<rejected[0].start()<unavailable[0].start(),'rejection published before positive cleanup RELEASE'
+    assert not any(v[1]in('Cancelled','Uncertain')for v in views),'negative qualification lacks certain terminal cleanup'
    else:
     close=re.search(r'\[browser.tls.peer.closed\] pending=1 terminal=1 owned_storage=erased',trace);ack=re.search(r'\[net.app.cleanup.ack\] target=15 task=15 client_leases=0 shared_cache=retained ok=1',trace)
     assert close and trace.count('[browser.tls.peer.closed]')==1 and ack and peer_admit.start()<close.start()<ack.start(),'Close missed actual pending TLS lease/cleanup'
@@ -362,7 +443,7 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
      assert marker in trace and close.start()<trace.index(marker)<ack.start(),'prerequisite retirement did not precede exact cleanupACK'
   joins.append(dict(ticket=ticket,dns_generation=generation,sequence=seq,task_bytes=task,private_bytes=private,initial_tls_bytes=initial,utc_snapshot=utc,policy_offset=policy.start(),prepared_offset=prep.start(),duplex_admitted_offset=admission.start(),client_admitted_offset=peer_admit.start(),authenticated=mode=='ready',dns_resolution=resolution))
  except(AssertionError,ValueError,KeyError,IndexError,TypeError,AttributeError)as exc:errors.append(str(exc))
- return dict(ok=not errors,errors=errors,joins=joins,scope=SCOPE)
+ return dict(ok=not errors,errors=errors,joins=joins,scope=scope(mode))
 
 def main():
  parser=argparse.ArgumentParser();parser.add_argument('--iso',required=True,type=Path);parser.add_argument('--source-disk',required=True,type=Path);parser.add_argument('--binding',required=True,type=Path);parser.add_argument('--out',required=True,type=Path);parser.add_argument('--mode',choices=MODES,default='ready');parser.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');parser.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');a=parser.parse_args()
@@ -374,7 +455,7 @@ def main():
  peer=ControlledPeer(root,a.mode);peer.start();disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';sock=Path('/tmp')/f'sex-tls-peer-{os.getpid()}.sock'
  command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}'];profile=command_profile(command)
  if not profile['ok']:raise RuntimeError(str(profile))
- host_start=time.time();manifest=dict(binding=binding,command=command,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),openssl_version=ssl.OPENSSL_VERSION,mode=a.mode,model=a.model,resolution=a.resolution,platform_profile=profile,target=target,host_utc_start=host_start,input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),pixel_source_sha256=contract['source_sha256'],tls_peer=dict(endpoint='127.0.0.1:46080',host_forwards=False,minimum_version='TLSv1.3',maximum_version='TLSv1.3',group='P-256',num_tickets=0,keylog_enabled=False,fixture='tests/fixtures/tls-controlled/server.pem',public_test_root=True))
+ host_start=time.time();manifest=dict(binding=binding,command=command,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),openssl_version=ssl.OPENSSL_VERSION,mode=a.mode,model=a.model,resolution=a.resolution,platform_profile=profile,target=target,host_utc_start=host_start,input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),pixel_source_sha256=contract['source_sha256'],tls_peer=dict(endpoint='127.0.0.1:46080',host_forwards=False,minimum_version='TLSv1.2'if a.mode=='unsupported-version'else'TLSv1.3',maximum_version='TLSv1.2'if a.mode=='unsupported-version'else'TLSv1.3',group='P-256',num_tickets=0,keylog_enabled=False,fixture=fixture_descriptor(root,a.mode),public_test_root=True))
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic();failure=None;pixels=[];actions=[];cleanup=None
  def text():return serial.read_text(errors='replace')if serial.exists()else''
  def health():
@@ -419,6 +500,10 @@ def main():
   start=len(text());q.key('y');wait(r'\[shell.browser.input\] code=21 down=1 slot=43 accepted=1',start);wait(r'\[browser.tls.peer.intent\] accepted=1 explicit=1 public_internet=0',start)
   if a.mode=='ready':
    wait(r'\[browser.tls.peer.view\] state=Verified controlled_profile=1 public_internet=0',start);event(peer.completed,'actual server SSL unwrap/guest close_notify');picture('Verified','peer-verified');actions.append(dict(action='actual_Y_completed_SSL_exchange',application_request_bytes=len(REQUEST),application_response_bytes=len(RESPONSE),server_unwrap_completed=True))
+  elif a.mode in REJECTION_MODES:
+   wait(r'\[browser.tls.peer.view\] state=Unavailable controlled_profile=1 public_internet=0',start)
+   if a.mode!='stall':event(peer.flight_sent,'actual negative endpoint public handshake flight sent')
+   picture('Unavailable','peer-unavailable');actions.append(dict(action='actual_Y_negative_endpoint',expected_failure=rejection_reason(a.mode),authenticated=False,transport_timeout_only=a.mode in TRANSPORT_MODES))
   else:
    event(peer.pending_hello,'actual pending guest ClientHello');wait(r'\[browser.tls.peer.admitted\] ticket=2 ',start);picture('Pending','peer-pending');boundary=len(text())
    if a.mode=='cancel':
@@ -436,7 +521,7 @@ def main():
   sock.unlink(missing_ok=True)
  manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['missing actual fixed-name DNS fixture']);exchange=inspect_exchange(trace,a.mode,wire,dns,raw,host_start,host_end);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
  (out/'peer-exchanges.json').write_text(json.dumps(dict(tls=peer.rows,dns=peer.dns,dns_send_attempts=peer.attempts,keylog_enabled=False,scope='Explicit actual endpoint public application observations only; no private/ephemeral TLS material captured.'),indent=2)+'\n')
- result=dict(ok=failure is None and not peer.errors and all(v['ok']for v in(wire,dns,exchange,authority,waiting)),error=failure,server_errors=peer.errors,mode=a.mode,binding=binding,wire=wire,dns=dns,exchange=exchange,authority=authority,self_wait=waiting,pixels=pixels,cleanup=cleanup,actions=actions,scope=SCOPE);(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+ result=dict(ok=failure is None and not peer.errors and all(v['ok']for v in(wire,dns,exchange,authority,waiting)),error=failure,server_errors=peer.errors,mode=a.mode,binding=binding,wire=wire,dns=dns,exchange=exchange,authority=authority,self_wait=waiting,pixels=pixels,cleanup=cleanup,actions=actions,scope=scope(a.mode));(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,mode=a.mode,authenticated=a.mode=='ready',tls=exchange['joins'])))
 

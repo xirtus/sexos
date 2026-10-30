@@ -40,6 +40,25 @@ impl Drop for Seed { fn drop(&mut self) { erase(&mut self.0); } }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State { Preparing, HelloPending, PeerAuthenticated, ExchangeVerified, Rejected }
+/// Public protocol classification only; contains no peer bytes or secrets.
+/// A transport timeout without a decoder result is deliberately not a failure
+/// class and cannot establish certificate/handshake rejection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure { Certificate, Signature, Handshake, Record, Application, Protocol }
+impl Failure {
+    fn from_error(error:TlsError)->Self {
+        match error {
+            TlsError::InvalidCertificate|TlsError::InvalidCertificateEntry|TlsError::InvalidCertificateRequest=>Self::Certificate,
+            TlsError::InvalidSignature|TlsError::InvalidSignatureScheme=>Self::Signature,
+            TlsError::MissingHandshake|TlsError::InvalidHandshake|TlsError::HandshakeAborted(..)|TlsError::AbortHandshake(..)
+                |TlsError::InvalidCipherSuite|TlsError::InvalidSupportedVersions|TlsError::InvalidSessionIdLength
+                |TlsError::InvalidExtensionsLength|TlsError::InvalidKeyShare=>Self::Handshake,
+            TlsError::InvalidRecord|TlsError::UnknownContentType|TlsError::DecodeError|TlsError::ParseError(_)=>Self::Record,
+            TlsError::InvalidApplicationData=>Self::Application,
+            _=>Self::Protocol,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Memory, Clock, Policy, Capacity, Terminal }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,7 +153,7 @@ impl CryptoProvider for Provider {
     fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Aes128GcmSha256>,TlsError> { Ok(&mut self.verifier) }
 }
 
-pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, stats:Stats }
+pub struct Session { task:Option<Task>, pipe:Rc<RefCell<Pipe>>, state:State, stats:Stats, failure:Option<Failure> }
 impl Session {
     /// Always erases the transferred caller seed, including rejected starts.
     /// Seconds are input data, not new time authority or an advancing clock.
@@ -188,7 +207,7 @@ impl Session {
         };
         let task=Task::new(future)?;
         let stats=Stats { task_bytes:task.layout.size(), private_bytes:task.layout.size()+core::mem::size_of::<Pipe>(), tx_bytes:0, utc_snapshot:seconds };
-        Ok(Self { task:Some(task),pipe,state:State::Preparing,stats })
+        Ok(Self { task:Some(task),pipe,state:State::Preparing,stats,failure:None })
     }
     /// One explicit poll, at most one512-byte transport copy. The caller must
     /// poll again on its own bounded turn; this driver has no hidden executor.
@@ -201,7 +220,10 @@ impl Session {
             // ciphertext until the caller receives positive WRITE receipts.
             self.task=None;self.state=State::ExchangeVerified;
           },
-          Poll::Ready(_)=>{self.task=None;self.pipe.borrow_mut().scrub();self.state=State::Rejected;},
+          Poll::Ready(result)=>{
+            self.failure=result.err().map(Failure::from_error);
+            self.task=None;self.pipe.borrow_mut().scrub();self.state=State::Rejected;
+          },
           Poll::Pending=>{
             let pipe=self.pipe.borrow();
             if pipe.authenticated {self.state=State::PeerAuthenticated;}
@@ -211,6 +233,7 @@ impl Session {
         self.stats.tx_bytes=self.pipe.borrow().tx_len; self.state
     }
     pub fn state(&self) -> State { self.state }
+    pub fn failure(&self) -> Option<Failure> { self.failure }
     pub fn stats(&self) -> Stats { self.stats }
     pub fn outgoing_len(&self)->usize {self.pipe.borrow().tx_len}
     pub fn incoming_capacity(&self)->usize {if self.task.is_some(){QUEUE_BYTES-self.pipe.borrow().rx_len}else{0}}
@@ -248,6 +271,7 @@ mod tests {
         assert!(wire[..n].windows(EXPECTED_NAME.len()).any(|w|w==EXPECTED_NAME.as_bytes()));
         for _ in 0..32 { assert_eq!(s.poll(),State::HelloPending); }
         assert_eq!(s.take_outgoing(&mut wire),0); // no replay or automatic retry
+        assert_eq!(s.failure(),None); // waiting is not a decoder rejection
     }
     #[test] fn invalid_time_always_consumes_and_erases_transferred_seed() {
         for now in [0,1_577_836_799,4_102_444_800,u32::MAX] {
@@ -261,8 +285,47 @@ mod tests {
         s.offer_incoming(&[22,3,3,0,4,255,0,0,0]).unwrap();
         for _ in 0..8 { s.poll(); }
         assert_eq!(s.state(),State::Rejected);assert_eq!(s.stats().tx_bytes,0);
+        assert_eq!(s.failure(),Some(Failure::Handshake));
+        for _ in 0..3 {assert_eq!(s.poll(),State::Rejected);assert_eq!(s.failure(),Some(Failure::Handshake));}
         assert_eq!(s.offer_incoming(&[0]),Err(Error::Terminal));
         assert!(s.pipe.borrow().rx.iter().chain(s.pipe.borrow().tx.iter()).all(|b|*b==0));
+    }
+    fn server_hello() -> alloc::vec::Vec<u8> {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let point=p256::SecretKey::from_slice(&[1;32]).unwrap().public_key().to_encoded_point(false);
+        let mut body=alloc::vec![3,3];body.extend_from_slice(&[7;32]);body.extend_from_slice(&[0,0x13,1,0]);
+        let mut ext=alloc::vec![0,43,0,2,3,4,0,51,0,69,0,23,0,65];ext.extend_from_slice(point.as_bytes());
+        body.extend_from_slice(&(ext.len()as u16).to_be_bytes());body.extend_from_slice(&ext);body
+    }
+    fn server_record(body:&[u8],claimed:usize)->alloc::vec::Vec<u8>{
+        let mut handshake=alloc::vec![2,0,(claimed>>8)as u8,claimed as u8];handshake.extend_from_slice(body);
+        let mut record=alloc::vec![22,3,3];record.extend_from_slice(&(handshake.len()as u16).to_be_bytes());record.extend_from_slice(&handshake);record
+    }
+    #[test] fn actual_owned_driver_rejects_unoffered_server_selections_before_authentication(){
+        for (offset,value)in[(0,2),(1,4),(34,1),(36,2),(37,1),(45,3),(53,24)]{
+            let mut s=prepared();let mut out=[0;QUEUE_BYTES];s.take_outgoing(&mut out);
+            let mut body=server_hello();body[offset]=value;
+            s.offer_incoming(&server_record(&body,body.len())).unwrap();
+            for _ in 0..16{s.poll();}
+            assert_eq!(s.state(),State::Rejected,"selection offset {offset}");
+            assert_eq!(s.failure(),Some(Failure::Handshake));assert_eq!(s.outgoing_len(),0);
+            assert!(s.task.is_none());assert!(s.pipe.borrow().rx.iter().chain(s.pipe.borrow().tx.iter()).all(|b|*b==0));
+        }
+    }
+    #[test] fn actual_owned_driver_checks_server_handshake_extent_and_waits_without_false_auth(){
+        let body=server_hello();
+        let mut good=prepared();let mut out=[0;QUEUE_BYTES];good.take_outgoing(&mut out);
+        good.offer_incoming(&server_record(&body,body.len())).unwrap();
+        for _ in 0..16{good.poll();}
+        assert!(!matches!(good.state(),State::Rejected|State::PeerAuthenticated|State::ExchangeVerified));assert_eq!(good.failure(),None);
+        let mut tail=server_record(&body,body.len());tail.push(0xff);
+        let length=(tail.len()-5)as u16;tail[3..5].copy_from_slice(&length.to_be_bytes());
+        let mut s=prepared();s.take_outgoing(&mut out);s.offer_incoming(&tail).unwrap();
+        for _ in 0..16{s.poll();}assert_eq!(s.state(),State::Rejected);assert_eq!(s.failure(),Some(Failure::Record));
+        for claimed in [body.len()-1,body.len()+1]{let mut s=prepared();s.take_outgoing(&mut out);
+            s.offer_incoming(&server_record(&body,claimed)).unwrap();for _ in 0..16{s.poll();}
+            assert_eq!(s.state(),State::Rejected);assert!(s.failure().is_some());
+        }
     }
     #[test] fn unknown_policy_consumes_seed_without_allocating_session() {
         for profile in [0,2,u32::MAX] {

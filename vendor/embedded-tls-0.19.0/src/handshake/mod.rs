@@ -208,7 +208,10 @@ impl<'a, CipherSuite: TlsCipherSuite> ServerHandshake<'a, CipherSuite> {
 
         let handshake = match handshake_type {
             //HandshakeType::ClientHello => {}
-            HandshakeType::ServerHello => ServerHandshake::ServerHello(ServerHello::parse(buf)?),
+            HandshakeType::ServerHello => {
+                let mut body=buf.slice(content_len as usize)?;
+                ServerHandshake::ServerHello(ServerHello::parse::<CipherSuite>(&mut body)?)
+            },
             HandshakeType::NewSessionTicket => {
                 ServerHandshake::NewSessionTicket(NewSessionTicket::parse(buf)?)
             }

@@ -207,9 +207,11 @@ impl<'a, CipherSuite: TlsCipherSuite> ServerRecord<'a, CipherSuite> {
             }
             ContentType::Handshake => {
                 let mut parse = ParseBuffer::new(data);
-                Ok(ServerRecord::Handshake(ServerHandshake::read(
-                    &mut parse, digest,
-                )?))
+                let handshake=ServerHandshake::read(&mut parse,digest)?;
+                // SexOS accepts one plaintext ServerHello. Encrypted handshake
+                // records have their separate coalesced-message decoder.
+                if !parse.is_empty() { return Err(TlsError::InvalidRecord); }
+                Ok(ServerRecord::Handshake(handshake))
             }
             ContentType::ApplicationData => {
                 let buf = CryptoBuffer::wrap_with_pos(data, data.len());

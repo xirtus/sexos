@@ -1,5 +1,5 @@
 """Independent public parser/checker fixtures, never guest or TLS-native proof."""
-import copy,json,ssl,struct,sys,unittest
+import copy,hashlib,json,socket,ssl,struct,sys,threading,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import tls_exchange_gate as gate
@@ -30,7 +30,7 @@ def capture(mode='ready',client=None,server=None,plaintext=False):
   if finished:frames.extend([packet(True,guest,port,101+len(outgoing),501+len(incoming),0x11),packet(False,port,guest,501+len(incoming),102+len(outgoing),0x11)])
  flow(46078,48001,gate.ECHO,gate.ECHO)
  frames.extend([packet(True,48001,46079,0,0,0,gate.dns_query(1),True),packet(False,46079,48001,0,0,0,gate.dns_response(1),True)])
- outgoing=hello()if client is None else client;incoming=b''if mode!='ready'else hello(False)+record(20,b'\1')+record(23,b'S'*33)if server is None else server
+ outgoing=hello()if client is None else client;incoming=server_wire(mode)if server is None else server
  if mode=='ready':outgoing+=record(23,b'C'*33)
  if plaintext:outgoing+=gate.REQUEST
  flow(46080,48002,outgoing,incoming,mode=='ready')
@@ -38,12 +38,21 @@ def capture(mode='ready',client=None,server=None,plaintext=False):
  for n,frame in enumerate(frames):raw+=struct.pack('<IIII',1,n,len(frame),len(frame))+frame
  return raw
 
+def server_wire(mode):
+ if mode=='ready'or mode in gate.CERTIFICATE_MODES:return hello(False)+record(20,b'\1')+record(23,b'S'*33)
+ if mode=='unsupported-version':return record(21,b'\x02\x46')
+ if mode=='truncated-handshake':return hello(False)[:8]
+ return b''
 def peer(mode='ready'):
- return [dict(mode=mode,sni=gate.HOST if mode=='ready'else None,handshake_stalled=mode!='ready',tls_version='TLSv1.3'if mode=='ready'else None,cipher=gate.CIPHER if mode=='ready'else None,request_hex=gate.REQUEST.hex()if mode=='ready'else None,response_hex=gate.RESPONSE.hex()if mode=='ready'else None,unwrap_completed=mode=='ready')]
+ row=dict(mode=mode,sni=gate.HOST if mode=='ready'else None,handshake_stalled=mode in('cancel','close','stall'),tls_version='TLSv1.3'if mode=='ready'else None,cipher=gate.CIPHER if mode=='ready'else None,request_hex=gate.REQUEST.hex()if mode=='ready'else None,response_hex=gate.RESPONSE.hex()if mode=='ready'else None,unwrap_completed=mode=='ready')
+ if mode in gate.REJECTION_MODES:
+  flight=server_wire(mode);row.update(fixture=gate.fixture_descriptor(ROOT,mode),handshake_complete=False,application_bytes_received=0,sent_wire_bytes=len(flight),sent_wire_sha256=hashlib.sha256(flight).hexdigest(),handshake_started=True,guest_bytes_after_flight=0,server_flight_complete=mode!='truncated-handshake',sni=gate.HOST if mode in gate.CERTIFICATE_MODES else None,ssl_error_reason='UNSUPPORTED_PROTOCOL'if mode=='unsupported-version'else None,truncated_bytes=8,full_flight_bytes=200)
+ return [row]
 def metadata(raw,mode='ready'):
  wire=gate.inspect_wire(raw,peer(mode),mode);assert wire['ok'],wire;flow=wire['joins'][0];syn=flow['syn'];rows=['[boot.entropy.source] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0','[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[boot.trust.policy] holder=13 task=13 slot=62 consumer=15 consumer_task=15 profile=1 root_bytes=376 runtime_mint=0','[boot.network.tls] holder=13 task=13 consumer=15 consumer_task=15 profile=1 peer_port=46080 origin=immutable_boot_profile runtime_mint=0','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.tls.peer.intent] accepted=1 explicit=1 public_internet=0','[trust.policy.snapshot] owner=15 task=15 seq=1 profile=1 root_bytes=376 origin=held_boot_grant',f'[clock.source.snapshot] pd=13 task=13 slot=61 seconds={UTC} attempts=1 precision=1 profile=q35_cmos_utc ordinal=1',f'[certificate.time.snapshot] owner=15 task=15 seq=1 seconds={UTC} source=q35_cmos_utc precision=1 receipt=retained','[entropy.seed.admitted] owner=15 task=15 ticket=1 bytes=32 source=held_boot_grant','[entropy.seed.progress] owner=Some(Identity { pd: 15, task: 15 }) ticket=1 state=Some(Ready) produced=32 consumed=0 failure=0 private=1','[entropy.seed.released] owner=15 task=15 ticket=1 service_payload=erased receipt=retained','[browser.trust.self_check] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',f"[browser.tls.prepared] task_bytes=11064 private_bytes=19280 read=4096 write=2048 tx_bytes={flow['outgoing_records'][0]['length']+5} utc_snapshot={UTC} authenticated=0 network=0",'[browser.dns.released] ticket=1 view=Answer([10, 0, 2, 2]) private_job=0','[net.job.resolved.admitted] owner=15 task=15 ticket=2 dns_generation=1 observed=100 expires=60000 now=101 fixed=1 at_begin=1','[net.job.duplex.admitted] owner=15 task=15 ticket=2 kind=10 ring=1024 tx_ring=4096 max_wire=32768 peer_port=46080 trust_profile=1 authority=held_boot_route','[browser.tls.peer.admitted] ticket=2 dns_generation=1 seq=40 task_bytes=11064 private_bytes=19280 profile=1 authority=held_route','[net.job.state] owner=Some(Identity { pd: 15, task: 15 }) ticket=2 state=Connecting',f"[net.job.egress.submit] ticket=2 sequence=12 length={syn['length']} hash={syn['hash']} scope=dma_admission_not_delivery",'[browser.tls.peer.view] state=Pending controlled_profile=1 public_internet=0']
  if mode=='ready':rows.extend(['[browser.tls.peer.authenticated] ticket=2 profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1',f'[browser.tls.peer.response] ticket=2 bytes={len(gate.RESPONSE)} hash={hex(gate.fingerprint(gate.RESPONSE))} authenticated=1 source=guest_aead',f"[browser.tls.peer.released] ticket=2 tx={flow['outgoing_bytes']} rx={flow['incoming_bytes']} request_bytes={len(gate.REQUEST)} response_bytes={len(gate.RESPONSE)} positive_release=1 authenticated=1 public_test_root=1",'[browser.tls.peer.view] state=Verified controlled_profile=1 public_internet=0'])
  elif mode=='cancel':rows.extend(['[browser.tls.peer.cancelled] ticket=2 positive_release=1 authenticated=0','[browser.tls.peer.view] state=Cancelled controlled_profile=1 public_internet=0'])
+ elif mode in gate.REJECTION_MODES:rows.extend([f'[browser.tls.peer.rejected] ticket=2 positive_release=1 authenticated=0 failure={gate.rejection_reason(mode)}','[browser.tls.peer.view] state=Unavailable controlled_profile=1 public_internet=0'])
  else:rows.extend(['[browser.tls.peer.closed] pending=1 terminal=1 owned_storage=erased','[trust.policy.retired] target=15 task=15 before_cleanup_ack=1','[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1','[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1'])
  return '\n'.join(rows)+'\n'
 
@@ -112,6 +121,73 @@ class ControlledTlsOracle(unittest.TestCase):
  def test_pending_close_requires_retirement_before_ack(self):
   text=metadata(capture('close'),'close')
   for old,new in [('pending=1 terminal=1','pending=0 terminal=1'),('owned_storage=erased','owned_storage=retained'),('[trust.policy.retired]','[missing.policy.retired]')]:self.assertFalse(self.inspect(text.replace(old,new),'close')['ok'])
+ def test_all_public_bad_certificates_load_same_existing_public_key(self):
+  hashes=set()
+  for mode in gate.CERTIFICATE_MODES:
+   ctx=gate.ControlledPeer(ROOT,mode).context();self.assertIsNone(ctx.keylog_filename);self.assertEqual(ctx.num_tickets,0);hashes.add(gate.fixture_descriptor(ROOT,mode)['der_sha256'])
+  self.assertEqual(len(hashes),6);original=gate.fixture_der(ROOT,'ready');corrupt=gate.fixture_der(ROOT,'corrupt-signature');self.assertEqual(original[:-1],corrupt[:-1]);self.assertEqual(original[-1]^1,corrupt[-1])
+ def test_negative_receipts_require_exact_reason_cleanup_and_order(self):
+  for mode in gate.REJECTION_MODES:
+   text=metadata(capture(mode),mode);reason=gate.rejection_reason(mode)
+   for old,new in [('ticket=2 positive_release=1 authenticated=0 failure=','ticket=99 positive_release=1 authenticated=0 failure='),('positive_release=1 authenticated=0 failure=','positive_release=0 authenticated=0 failure='),('failure='+reason,'failure=Some(Protocol)'),('[browser.tls.peer.rejected]','[missing.rejection]')]:self.assertFalse(self.inspect(text.replace(old,new),mode)['ok'],(mode,old))
+   lines=text.splitlines();lines[-1],lines[-2]=lines[-2],lines[-1];self.assertFalse(self.inspect('\n'.join(lines),mode)['ok'])
+   self.assertFalse(self.inspect(text+text.splitlines()[-2]+'\n',mode)['ok'])
+   self.assertFalse(self.inspect(text+'[browser.tls.peer.view] state=Verified controlled_profile=1 public_internet=0\n',mode)['ok'])
+  text=metadata(capture('wrong-name'),'wrong-name');self.assertFalse(self.inspect(text.replace('failure=Some(Certificate)','failure=None'),'wrong-name')['ok'])
+ def test_rejection_wire_requires_actual_fixture_flight_and_no_application(self):
+  for mode in gate.CERTIFICATE_MODES:
+   for key,value in [('fixture',{}),('sent_wire_sha256','0'*64),('handshake_started',False),('server_flight_complete',False),('handshake_complete',True),('application_bytes_received',38),('guest_bytes_after_flight',1),('request_hex',gate.REQUEST.hex())]:
+    rows=peer(mode);rows[0][key]=value;self.assertFalse(gate.inspect_wire(capture(mode),rows,mode)['ok'],(mode,key))
+   self.assertFalse(gate.inspect_wire(capture(mode,server=b''),peer(mode),mode)['ok'])
+   self.assertFalse(gate.inspect_wire(capture(mode,client=hello()+record(23,b'opaque encrypted app')),peer(mode),mode)['ok'])
+ def test_truncation_and_stall_are_transport_scope_not_certificate_claims(self):
+  for mode in gate.TRANSPORT_MODES:self.assertEqual(gate.rejection_reason(mode),'None');self.assertIn('without parser-EOF',gate.scope(mode));self.assertFalse(self.inspect(metadata(capture(mode),mode).replace('failure=None','failure=Some(Certificate)'),mode)['ok'])
+  for incoming in(b'',hello(False),hello(False)[:7],b'badbytes'):
+   rows=peer('truncated-handshake');rows[0].update(sent_wire_bytes=len(incoming),sent_wire_sha256=hashlib.sha256(incoming).hexdigest());self.assertFalse(gate.inspect_wire(capture('truncated-handshake',server=incoming),rows,'truncated-handshake')['ok'])
+ def test_unsupported_version_requires_actual_fatal_protocol_alert(self):
+  rows=peer('unsupported-version');rows[0]['ssl_error_reason']='UNEXPECTED_EOF_WHILE_READING';self.assertFalse(gate.inspect_wire(capture('unsupported-version'),rows,'unsupported-version')['ok'])
+  self.assertEqual(gate.ControlledPeer(ROOT,'unsupported-version').context().maximum_version,ssl.TLSVersion.TLSv1_2)
+ def test_actual_openssl_endpoint_observes_flight_without_guest_fin(self):
+  # Host endpoint mechanics only; real public flight, socket stays open.
+  endpoint=gate.ControlledPeer(ROOT,'wrong-name');server_sock,client_sock=socket.socketpair();client_sock.settimeout(3);row=peer('wrong-name')[0];errors=[]
+  def serve():
+   try:endpoint.serve_rejected(server_sock,endpoint.context(),row)
+   except Exception as exc:errors.append(repr(exc))
+  thread=threading.Thread(target=serve);thread.start();ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT);ctx.load_verify_locations(cafile=str(ROOT/'tests/fixtures/tls-controlled/root.pem'));ctx.minimum_version=ctx.maximum_version=ssl.TLSVersion.TLSv1_3;ctx.set_ecdh_curve('prime256v1');incoming=ssl.MemoryBIO();outgoing=ssl.MemoryBIO();client=ctx.wrap_bio(incoming,outgoing,server_side=False,server_hostname=gate.HOST)
+  try:
+   with self.assertRaises(ssl.SSLWantReadError):client.do_handshake()
+   client_sock.sendall(outgoing.read());self.assertTrue(endpoint.flight_sent.wait(3));flight=client_sock.recv(4096);self.assertEqual(len(flight),row['sent_wire_bytes']);self.assertEqual(hashlib.sha256(flight).hexdigest(),row['sent_wire_sha256']);self.assertFalse(endpoint.completed.wait(.35));self.assertTrue(thread.is_alive());self.assertEqual(row['guest_bytes_after_flight'],0);self.assertNotIn('transport_eof_observed',row)
+   incoming.write(flight)
+   with self.assertRaises(ssl.SSLCertVerificationError):client.do_handshake()
+   # Deliberately do not send the host client's alert or FIN. Cancellation
+   # qualification uses guest exact failure/RELEASE and the independent PCAP.
+  finally:endpoint.stop.set();thread.join(1);client_sock.close();endpoint.close()
+  self.assertFalse(thread.is_alive());self.assertFalse(errors,errors);self.assertGreater(row['sent_wire_bytes'],200);self.assertFalse(row['handshake_complete']);self.assertEqual(row['application_bytes_received'],0);self.assertEqual(row['sni'],gate.HOST)
+ def test_actual_negative_endpoint_rejects_extra_guest_bytes(self):
+  endpoint=gate.ControlledPeer(ROOT,'wrong-name');server_sock,client_sock=socket.socketpair();client_sock.settimeout(3);row=peer('wrong-name')[0];errors=[]
+  def serve():
+   try:endpoint.serve_rejected(server_sock,endpoint.context(),row)
+   except Exception as exc:errors.append(str(exc))
+  thread=threading.Thread(target=serve);thread.start();ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT);ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE;ctx.set_ecdh_curve('prime256v1');incoming=ssl.MemoryBIO();outgoing=ssl.MemoryBIO();client=ctx.wrap_bio(incoming,outgoing,server_side=False,server_hostname=gate.HOST)
+  try:
+   with self.assertRaises(ssl.SSLWantReadError):client.do_handshake()
+   client_sock.sendall(outgoing.read());self.assertTrue(endpoint.flight_sent.wait(3));client_sock.recv(4096);client_sock.sendall(b'extra');thread.join(1);self.assertFalse(thread.is_alive());self.assertEqual(row['guest_bytes_after_flight'],5);self.assertTrue(any('extra guest bytes'in e for e in errors))
+  finally:endpoint.stop.set();client_sock.close();server_sock.close();thread.join(1);endpoint.close()
+ def test_actual_openssl_unsupported_version_emits_fatal_alert(self):
+  endpoint=gate.ControlledPeer(ROOT,'unsupported-version');server_sock,client_sock=socket.socketpair();server_sock.settimeout(3);client_sock.settimeout(3);row=peer('unsupported-version')[0];errors=[]
+  def serve():
+   try:endpoint.serve_rejected(server_sock,endpoint.context(),row)
+   except Exception as exc:errors.append(repr(exc))
+  thread=threading.Thread(target=serve);thread.start();ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT);ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE;ctx.minimum_version=ctx.maximum_version=ssl.TLSVersion.TLSv1_3
+  try:
+   with self.assertRaises(ssl.SSLError):ctx.wrap_socket(client_sock,server_hostname=gate.HOST)
+  finally:client_sock.close();thread.join(5);endpoint.close()
+  self.assertFalse(thread.is_alive());self.assertFalse(errors,errors);self.assertEqual(row['ssl_error_reason'],'UNSUPPORTED_PROTOCOL');self.assertEqual(row['sent_wire_bytes'],7);self.assertFalse(row['handshake_complete']);self.assertEqual(row['application_bytes_received'],0)
+ def test_certificate_rejection_cannot_be_relabelled_or_mixed_with_success(self):
+  text=metadata(capture('expired'),'expired')
+  for line in('[browser.tls.peer.authenticated] ticket=2 profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1','[browser.tls.peer.response] ticket=99 bytes=41 hash=0x1 authenticated=1 source=guest_aead','[browser.tls.peer.rejected] ticket=2 positive_release=1 authenticated=0 failure=None'):
+   self.assertFalse(self.inspect(text+line+'\n','expired')['ok'])
+  self.assertFalse(self.inspect(metadata(capture())+'[browser.tls.peer.rejected] ticket=2 positive_release=1 authenticated=0 failure=None\n')['ok'])
  def test_complete_status_glyphs_and_trailing_erasure(self):
   for state in gate.LABELS:
    t=trace(state,self.c);r=gate.verify_peer_pixels(t,pixels(t,state,self.c),state,self.c,(1280,800));self.assertTrue(r['ok'],r)

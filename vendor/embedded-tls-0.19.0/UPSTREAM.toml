@@ -7,7 +7,7 @@ archive_url = "https://static.crates.io/crates/embedded-tls/embedded-tls-0.19.0.
 archive_sha256 = "6ff3c16c9cedcab3ef5c79fd46349152adbb98f997b937cb1ead7655f5c07e43"
 upstream_git = "865e1fd983c583228e3bbeb9f4996f1abc454ca3"
 original_members = 96
-scope = "Reject empty/all-padding TLSInnerPlaintext and unsupported post-handshake records without panic. No new TLS features, providers, protocols or authority."
+scope = "Reject empty/all-padding TLSInnerPlaintext and unsupported post-handshake records without panic. Require exact offered suite, TLS1.3/P256 ServerHello selections and message/extents; reject unsupported retries and duplicate/unoffered extensions. No new TLS features, providers, protocols or authority."
 manifest_normalization = "Retain Cargo.toml.upstream exactly. Remove only upstream host integration [[test]] entries and [dev-dependencies.*] from effective Cargo.toml. All normal/optional dependency and feature declarations remain identical."
 test_normalization = "Remove logging-only env_logger::init from upstream key_share unit setup; add a test-only harness of the identical actual vendor library source and existing enabled crypto dependency set, with scalar SHA2."
 patch = "SEXOS_PATCHES.patch"
@@ -83,8 +83,8 @@ upstream_bytes = 1972
 
 [[files]]
 path = "SEXOS_PATCHES.patch"
-sha256 = "cafd0823e5b33222608a6b9a1f9bf813519ff2b82ce75a6b7087cc8e9c0e5f57"
-bytes = 9960
+sha256 = "b9fd99b9859cde5dc1ef83cd4fd44c2df7a38ee080e338f27241d48502ca3bb4"
+bytes = 19096
 added = true
 
 [[files]]
@@ -395,8 +395,8 @@ upstream_bytes = 1782
 
 [[files]]
 path = "src/handshake/mod.rs"
-sha256 = "c577cb2c3cb91121d2f51f109646ecbd9404f1c6f8b3ad10ed43031d7b5970f3"
-bytes = 9259
+sha256 = "35aba331f1901f42d07e984fa1b0aafcc027c22a8a5a7bc6db269b76f83b7a38"
+bytes = 9375
 upstream_sha256 = "c577cb2c3cb91121d2f51f109646ecbd9404f1c6f8b3ad10ed43031d7b5970f3"
 upstream_bytes = 9259
 
@@ -409,8 +409,8 @@ upstream_bytes = 1031
 
 [[files]]
 path = "src/handshake/server_hello.rs"
-sha256 = "5b0c6b6e9059ef1210310e342f9e06984188a94c76e4ff09b2457d072cb8d064"
-bytes = 2751
+sha256 = "4e47f041738fc43c6a3ac6a8c644bc9dd83219f321e76a0943b29bc4d73b68f3"
+bytes = 7417
 upstream_sha256 = "5b0c6b6e9059ef1210310e342f9e06984188a94c76e4ff09b2457d072cb8d064"
 upstream_bytes = 2751
 
@@ -451,8 +451,8 @@ upstream_bytes = 4236
 
 [[files]]
 path = "src/record.rs"
-sha256 = "71446e4eaccee52f4416c472e3c13045d14b89348dffe1ed46a4e714ef415f8c"
-bytes = 7106
+sha256 = "da51768f11a09ad9097958e5ebd9152a90c353089a97b76386d5f74ddcfe9701"
+bytes = 7339
 upstream_sha256 = "71446e4eaccee52f4416c472e3c13045d14b89348dffe1ed46a4e714ef415f8c"
 upstream_bytes = 7106
 

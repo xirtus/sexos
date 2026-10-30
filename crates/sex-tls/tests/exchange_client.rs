@@ -158,3 +158,45 @@ fn until_kind(c:&mut exchange::Client,kind:u8,start:u64)->u64{
     c.cancel();assert_eq!(c.next_sequence(),seq);assert_eq!(c.ticket(),0);assert_eq!(c.stats(),None);assert_eq!((c.tx_bytes(),c.rx_bytes()),(0,0));assert!(!c.peer_authenticated());assert_eq!(c.view(),exchange::View::Cancelled);assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().calls.len(),calls);
     assert!(c.start(ready(),seq,3));turn(&mut c,10,true);assert_eq!(c.ticket(),2);c.cancel();assert_eq!(c.ticket(),2);finish_cleanup(&mut c,11);c.close();let ticket=c.ticket();c.cancel();assert_eq!(c.ticket(),ticket);assert_eq!(c.view(),exchange::View::Cancelled);
 }
+
+fn actual_tls_failure(c:&mut exchange::Client,start:u64)->u64{
+    let now=until_kind(c,network_job::START,start);c.reply(receipt(),now);
+    WORLD.lock().unwrap().as_mut().unwrap().wire.incoming=vec![22,3,3,0,4,255,0,0,0];
+    for at in now+1..now+100{
+        turn(c,at,false);
+        if c.failure().is_some(){return at;}
+        let pending={let guard=WORLD.lock().unwrap();let w=guard.as_ref().unwrap();w.synthetic.is_some()||w.machine.pending_reply().is_some()};
+        if pending{c.reply(receipt(),at);}
+    }
+    panic!("actual malformed TLS task produced no retained failure");
+}
+#[test]fn actual_tls_failure_reason_survives_scrub_and_positive_cancel_release(){
+    let _serial=SERIAL.lock().unwrap();reset();let mut c=exchange::Client::new();assert!(c.start(ready(),1,3));assert_eq!(c.failure(),None);
+    let now=actual_tls_failure(&mut c,0);let reason=c.failure().unwrap();assert_eq!(reason,sex_tls::Failure::Handshake);c.reject_prerequisites();assert_eq!(c.failure(),Some(reason));assert!(!c.start(ready(),c.next_sequence(),3));assert_eq!(c.failure(),Some(reason));assert!(c.private_scrubbed_for_test());assert!(c.busy());assert_ne!(c.view(),exchange::View::Verified);
+    c.cancel();assert_eq!(c.failure(),Some(reason));assert!(c.private_scrubbed_for_test());
+    c.reply(receipt(),now+1);let release_at=until_kind(&mut c,network_job::RELEASE,now+2);assert_eq!(c.failure(),Some(reason));assert!(c.busy());
+    c.reply(receipt(),release_at+1);assert!(!c.busy());assert_eq!(c.view(),exchange::View::Cancelled);assert_eq!(c.failure(),Some(reason));assert!(c.private_scrubbed_for_test());
+}
+#[test]fn retained_tls_reason_resets_on_new_attempt_idle_cancel_prerequisite_failure_and_close(){
+    let _serial=SERIAL.lock().unwrap();for reset_kind in 0..5{
+        reset();let mut c=exchange::Client::new();assert!(c.start(ready(),1,3));let now=actual_tls_failure(&mut c,0);c.reply(receipt(),now+1);finish_cleanup(&mut c,now+2);
+        assert!(c.failure().is_some());assert_eq!(c.view(),exchange::View::Unavailable);let seq=c.next_sequence();
+        match reset_kind{
+            0=>{assert!(c.start(ready(),seq,3));assert_eq!(c.failure(),None);c.cancel();},
+            1=>c.cancel(),2=>c.reject_prerequisites(),3=>c.close(),_=>{assert!(!c.start(ready(),seq,0));},
+        }
+        assert_eq!(c.failure(),None);assert_eq!(c.next_sequence(),seq);assert_ne!(c.view(),exchange::View::Verified);
+    }
+}
+#[test]fn transport_timeout_and_user_cancellation_never_invent_a_tls_failure_reason(){
+    let _serial=SERIAL.lock().unwrap();for timeout in [false,true]{reset();let mut c=exchange::Client::new();assert!(c.start(ready(),1,3));turn(&mut c,0,false);
+        if timeout{turn(&mut c,2000,false);assert_eq!(c.view(),exchange::View::Uncertain);}else{c.cancel();}
+        assert_eq!(c.failure(),None);c.reply(receipt(),2001);finish_cleanup(&mut c,2002);assert_eq!(c.failure(),None);assert_ne!(c.view(),exchange::View::Verified);
+    }
+}
+
+#[test]fn failed_released_attempt_cannot_supply_metadata_to_new_unadmitted_prerequisite_failure(){
+    let _serial=SERIAL.lock().unwrap();reset();let mut c=exchange::Client::new();assert!(c.start(ready(),10,3));let now=actual_tls_failure(&mut c,0);c.reply(receipt(),now+1);finish_cleanup(&mut c,now+2);
+    assert!(!c.busy());assert!(c.ticket()>0);assert!(c.stats().is_some());assert!(c.failure().is_some());assert!(c.tx_bytes()>0&&c.rx_bytes()>0);let seq=c.next_sequence();let calls=WORLD.lock().unwrap().as_ref().unwrap().calls.len();
+    c.reject_prerequisites();assert_eq!(c.view(),exchange::View::Unavailable);assert_eq!(c.ticket(),0);assert_eq!(c.stats(),None);assert_eq!(c.failure(),None);assert_eq!((c.tx_bytes(),c.rx_bytes()),(0,0));assert!(!c.peer_authenticated());assert!(c.private_scrubbed_for_test());assert_eq!(c.next_sequence(),seq);assert!(!c.busy());assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().calls.len(),calls);
+}

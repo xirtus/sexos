@@ -375,6 +375,7 @@ impl SexApp for App {
             self.peer_view=peer_view;
             if peer_view==tls_exchange::View::Verified{sex_pdx::serial_record!("[browser.tls.peer.released] ticket={} tx={} rx={} request_bytes={} response_bytes={} positive_release=1 authenticated=1 public_test_root=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),sex_tls::EXCHANGE_REQUEST.len(),sex_tls::EXCHANGE_RESPONSE.len());}
             if peer_view==tls_exchange::View::Cancelled&&peer_ticket!=0&&!self.exchange.busy(){sex_pdx::serial_record!("[browser.tls.peer.cancelled] ticket={} positive_release=1 authenticated={}",peer_ticket,self.exchange.peer_authenticated() as u8);}
+            if peer_view==tls_exchange::View::Unavailable&&peer_ticket!=0&&!self.exchange.busy(){sex_pdx::serial_record!("[browser.tls.peer.rejected] ticket={} positive_release=1 authenticated={} failure={:?}",peer_ticket,self.exchange.peer_authenticated() as u8,self.exchange.failure());}
             sex_pdx::serial_record!("[browser.tls.peer.view] state={:?} controlled_profile=1 public_internet=0",peer_view);
         }
         let view=self.probe.view();if view!=self.probe_view{self.probe_view=view;sex_pdx::serial_record!("[browser.net.job.view] state={:?} web=0",view);}

@@ -9,7 +9,7 @@ pub enum View{Idle,Pending,Verified,Unavailable,Cancelled,Uncertain}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum Step{Done,Begin,InitialWrite,Start,Active,Write,Status,Read,Finish,Cancel,Release,Held}
 pub struct Client{
-    session:Option<Session>,stats:Option<Stats>,step:Step,seq:u32,ticket:u32,last_ticket:u32,
+    session:Option<Session>,stats:Option<Stats>,failure:Option<sex_tls::Failure>,step:Step,seq:u32,ticket:u32,last_ticket:u32,
     generation:u32,initial:usize,tx:usize,rx:usize,produced:usize,chunk:[u8;8],chunk_len:usize,
     pending:Option<w::Request>,accepted:bool,deadline:u64,total:Option<u64>,last:u64,next_poll:u64,
     active:bool,finish:bool,complete:bool,prefer_read:bool,abort:bool,closed:bool,
@@ -17,7 +17,7 @@ pub struct Client{
 }
 fn erase(bytes:&mut[u8]){for byte in bytes{unsafe{core::ptr::write_volatile(byte,0)}}}
 impl Client{
-    pub const fn new()->Self{Self{session:None,stats:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
+    pub const fn new()->Self{Self{session:None,stats:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
         generation:0,initial:0,tx:0,rx:0,produced:0,chunk:[0;8],chunk_len:0,
         pending:None,accepted:false,deadline:0,total:None,last:0,next_poll:0,
         active:false,finish:false,complete:false,prefer_read:true,abort:false,closed:false,
@@ -26,6 +26,9 @@ impl Client{
     pub fn view(&self)->View{self.view}
     pub fn next_sequence(&self)->u32{self.seq}
     pub fn stats(&self)->Option<Stats>{self.stats}
+    /// Nonsensitive reason from this attempt's actual TLS task error only.
+    /// Transport timeout/cancellation alone never synthesizes a TLS diagnosis.
+    pub fn failure(&self)->Option<sex_tls::Failure>{self.failure}
     pub fn tx_bytes(&self)->usize{self.tx}
     pub fn rx_bytes(&self)->usize{self.rx}
     pub fn ticket(&self)->u32{self.last_ticket}
@@ -59,21 +62,25 @@ impl Client{
         else{self.step=Step::Held;self.view=View::Uncertain;}
     }
     fn failed(&mut self,uncertain:bool){self.abort=true;self.terminal=View::Unavailable;self.scrub();self.cleanup();if uncertain&&self.busy(){self.view=View::Uncertain;}}
+    fn clear_idle_metadata(&mut self){
+        self.failure=None;self.last_ticket=0;self.stats=None;self.tx=0;self.rx=0;self.produced=0;
+        self.authenticated=false;self.verified=false;self.generation=0;self.initial=0;
+    }
     /// A fresh prerequisite failure precedes any duplex admission. Preserve the
     /// route fence; never reset or scrub a busy lease or terminal incarnation.
     pub fn reject_prerequisites(&mut self){
         if self.closed||self.busy(){return;}
-        self.terminal=View::Unavailable;self.authenticated=false;self.verified=false;self.done();
+        self.clear_idle_metadata();self.terminal=View::Unavailable;self.done();
     }
     pub fn cancel(&mut self){
         if self.closed{return;}
         // No live lease means this is a new local cancellation, not a second
         // positive cleanup receipt for the preceding released attempt.
-        if !self.busy(){self.last_ticket=0;self.stats=None;self.tx=0;self.rx=0;self.produced=0;self.authenticated=false;self.verified=false;self.generation=0;self.initial=0;}
+        if !self.busy(){self.clear_idle_metadata();}
         self.abort=true;self.terminal=View::Cancelled;self.scrub();self.cleanup();
     }
     /// Parent retires the exact service incarnation. No PDX is issued here.
-    pub fn close(&mut self){self.closed=true;self.scrub();self.forget_request();self.ticket=0;self.step=Step::Done;self.active=false;self.total=None;self.view=View::Cancelled;self.terminal=View::Cancelled;}
+    pub fn close(&mut self){self.failure=None;self.closed=true;self.scrub();self.forget_request();self.ticket=0;self.step=Step::Done;self.active=false;self.total=None;self.view=View::Cancelled;self.terminal=View::Cancelled;}
     fn poll_session(&mut self){
         if !self.active||self.abort||self.verified{return;}
         let Some(session)=self.session.as_mut()else{self.failed(false);return;};
@@ -81,7 +88,10 @@ impl Client{
         match state{
             sex_tls::State::PeerAuthenticated=>{if !self.authenticated{self.authenticated=true;self.auth_event=true;}},
             sex_tls::State::ExchangeVerified=>{if !self.authenticated{self.authenticated=true;self.auth_event=true;}self.verified=true;self.verify_event=true;},
-            sex_tls::State::Rejected=>self.failed(false),
+            sex_tls::State::Rejected=>{
+                self.failure=session.failure();
+                self.failed(false);
+            },
             sex_tls::State::Preparing|sex_tls::State::HelloPending=>{},
         }
     }
