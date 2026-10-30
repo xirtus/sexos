@@ -1,4 +1,6 @@
-# SexOS daily-driver continuation: rounds 119–218
+> Superseded on30 October2026 by the user’s revised80–200 objective. Use [the active plan](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md). Entries201–218 are outside current scope; retained here as historical proposals.
+
+# Historical SexOS continuation proposal: rounds119–218
 
 Requested and reaffirmed 30 October 2026. Finish rounds19–118, then immediately continue with these100 substantive engineering rounds. Round118 is a checkpoint, not permission to stop. This is an execution queue, not completed work or a release promise. Current accepted implementation is through79; continue at80. The [live ledger](ALPHA_100_ROUND_CONTINUATION_2026_10_29.md) remains the acceptance record.
 
