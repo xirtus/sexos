@@ -1,0 +1,237 @@
+{
+  "round": 102,
+  "accepted": true,
+  "accepted_goal_rounds": 23,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 98,
+  "iso_sha256": "c020addd701971847de11681e8479d385477a2413cbe845404be186d0eb4e9e9",
+  "kernel_sha256": "6b207149fdb0b9633e97dad4b1756602beca453394ab4b638f453665e7586608",
+  "binding_sha256": "7dfe4fb92be673fc0678dfc127bcfa81f01aa0138380697109c3b1ec01c97445",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 560,
+  "runner_inputs": 525,
+  "checks": {
+    "master": "BUILD PASS / GREEN_MASTER",
+    "rust": [
+      {
+        "name": "service-custody",
+        "path": "/tmp/sexos-r102-d-frozen-service-custody.log",
+        "executions": 1734,
+        "sha256": "5ac7421a76ce8666b1b35f8d5198cca03e90f88ab85f0e28895b7729dc236387",
+        "scope": "Completed D frozen Rust checks reused by exact D/E production and Rust/shell input equivalence; launcher35 is separate from service-custody."
+      },
+      {
+        "name": "display",
+        "path": "/tmp/sexos-r102-d-frozen-display.log",
+        "executions": 46,
+        "sha256": "b18803205ccc9678337094247d61357edb98197b59d76fe51906efa695fc48f9",
+        "scope": "Completed D frozen Rust checks reused by exact D/E production and Rust/shell input equivalence; launcher35 is separate from service-custody."
+      },
+      {
+        "name": "launcher",
+        "path": "/tmp/sexos-r102-d-frozen-launcher.log",
+        "executions": 35,
+        "sha256": "554b7d2647c5f622864b646466c956da8fbc8bcb368083c7a9efee04dd7dc0e7",
+        "scope": "Completed D frozen Rust checks reused by exact D/E production and Rust/shell input equivalence; launcher35 is separate from service-custody."
+      }
+    ],
+    "rust_test_executions": 1815,
+    "rust_reuse_equivalence": {
+      "ok": true,
+      "production_identical": true,
+      "iso_identical": true,
+      "kernel_identical": true,
+      "rust_shell_inputs_identical": true,
+      "runner_changed": [
+        "scripts/http_content_gate.py",
+        "scripts/tests/test_http_reader_pixels.py"
+      ],
+      "reused_rust_counts": {
+        "service-custody": 1734,
+        "display": 46,
+        "launcher": 35
+      },
+      "rust_total": 1815,
+      "scope": "Final D frozen Rust checks remain exact because only two Python files changed in E. Final E Python and native checks rerun."
+    },
+    "python_tests": 730,
+    "python_log_sha256": "bce573978e64bb02b54d3190e9f81caed9b810cbd2ba577632729f1946023675",
+    "native_runs": 3,
+    "native_boots": 4,
+    "independent_frames": 69,
+    "root_replay_sha256": "ce94ac8ea4afcaca803841d6d78f61eb876ebe7d63b84c8527944a4fd7afe340",
+    "browser_binary_equivalence": {
+      "ok": true,
+      "iso_sha256": "c020addd701971847de11681e8479d385477a2413cbe845404be186d0eb4e9e9",
+      "extracted_browser_elf_sha256": "6cdabe3a474abbe25ce1857799f1d44097e06d97c7faade422d07cbd9c601e77",
+      "identical_to_accepted_round101_browser": true,
+      "accepted_prior_scalar_audit": {
+        "ok": true,
+        "iso_sha256": "d3a7896947758e00f69d77870ae22730ebfa0dbb4b3a6732b077e780b627763d",
+        "elf_sha256": "6cdabe3a474abbe25ce1857799f1d44097e06d97c7faade422d07cbd9c601e77",
+        "disassembly_sha256": "2cb9a535da3e2da2415a18d32f3bed12a9dc33fc73a1a2011591e274611fd02b",
+        "instructions": 88174,
+        "vector_or_fp_matches": [],
+        "scope": "Decoded ISO-extracted Browser operands and inspected floating-point/state mnemonics only; no runtime stack/register/cache-erasure, scheduler, hostile containment or whole-image instruction proof."
+      },
+      "scope": "Final102 ISO-extracted Browser is byte-identical to independently decoded accepted101 ELF; no new instruction decode or whole-image/other-app/FPU/context/hostile claim."
+    }
+  },
+  "qualification_runs": [
+    {
+      "name": "launcher-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r102-e-native-launcher-wide",
+      "driver": "/tmp/sexos-r102-e-native-launcher-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r102-e-native-launcher-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "source_binding_sha256": "7dfe4fb92be673fc0678dfc127bcfa81f01aa0138380697109c3b1ec01c97445",
+      "seconds": 33.39836424996611
+    },
+    {
+      "name": "launcher-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r102-e-native-launcher-compact",
+      "driver": "/tmp/sexos-r102-e-native-launcher-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/source/scripts/launcher_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r102-e-native-launcher-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768"
+      ],
+      "mode": "launcher-workspace",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "source_binding_sha256": "7dfe4fb92be673fc0678dfc127bcfa81f01aa0138380697109c3b1ec01c97445",
+      "seconds": 24.072404749924317
+    },
+    {
+      "name": "clipboard-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r102-e-native-clipboard-wide",
+      "driver": "/tmp/sexos-r102-e-native-clipboard-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r102-launcher-e-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r102-e-native-clipboard-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "source_binding_sha256": "7dfe4fb92be673fc0678dfc127bcfa81f01aa0138380697109c3b1ec01c97445",
+      "seconds": 34.16511795797851
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "label": "boot-wide",
+      "path": "assets/sexos-alpha-r102-2026-10-30-boot-wide.png",
+      "sha256": "a3af253a78a9499344e0777072fb7d037bda5cdabc4eed147e4602ee599f4d90",
+      "run": "launcher-wide",
+      "raw_ppm": "boot-clean.ppm",
+      "raw_sha256": "a3993936431c48e816eb796480827050a44c542690202de44fa3f255e5f25360",
+      "serial_bytes": 256398,
+      "serial_sha256": "4930fc5a444907fa62a755fec475ab0fb66547c082bec0da3c22d84d86469449"
+    },
+    {
+      "label": "brought-wide",
+      "path": "assets/sexos-alpha-r102-2026-10-30-brought-wide.png",
+      "sha256": "2c0abb3f56785e6c4d91540ce5813257c86d106642832d5e288ca2f2972d9a48",
+      "run": "launcher-wide",
+      "raw_ppm": "spindle-17-brought.ppm",
+      "raw_sha256": "bbf7804e659d152d1e64923e8d604cb7a9b959962fb079b6c96c9f3fb9e4d723",
+      "serial_bytes": 582399,
+      "serial_sha256": "8bc98dd9a5ab4dcb168f3cb1667ead950b739421cfcd77e596ea88ea0f629f92"
+    },
+    {
+      "label": "quil-compact",
+      "path": "assets/sexos-alpha-r102-2026-10-30-quil-compact.png",
+      "sha256": "b9f6c7fcb199dc29750c1aae20b6bdd377ef4759dca8170b219496f2dcbcf4c5",
+      "run": "launcher-compact",
+      "raw_ppm": "quil-9-brought.ppm",
+      "raw_sha256": "8d57997417b06e93baf4b64e1367838ba49d64b503219d4854a84467e61b56be",
+      "serial_bytes": 357634,
+      "serial_sha256": "a45c86fb721213bc0fa6b43ddf172bbdbe949e243f9d78406c127ca288add64e"
+    },
+    {
+      "label": "reserve-compact",
+      "path": "assets/sexos-alpha-r102-2026-10-30-reserve-compact.png",
+      "sha256": "ca797080ba4c65d83c64e40fff77b6cd8b1448ba370a56f998bf2e26bb76144a",
+      "run": "launcher-compact",
+      "raw_ppm": "launcher-exhausted.ppm",
+      "raw_sha256": "05a4e9cec08827e0f46a3026440a081de9a5819fe8d7da671d1d59b11c3fe3a0",
+      "serial_bytes": 603910,
+      "serial_sha256": "66438739f432ab61327f363554f9778f732d306c4b59f3d595b48976b7fbe895"
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r102-2026-10-30-qualified-raw.tar.gz",
+    "sha256": "4e600d53ebf9f2902635d8814738f61e87139339d6f28b5f4162c6777a338bc4",
+    "members": 1310,
+    "verified": true,
+    "bytes": 7003679
+  },
+  "failed_diagnostics": "B wide passed old app glyph checks but admitted screenshots with the old launcher overlay; B compact failed due to pointer occlusion. Both remain diagnostic only. Final E parks the pointer using actual movement receipts and requires distributed source-bound launcher ink erasure. Actual stale B images fail the new oracle. Candidate C failed on a fragmented legacy workspace-switch receipt; final sealed D emits it as one bounded record. The D clipboard regression then exposed an intact atomic Browser receipt following a foreign unfinished log fragment; E corrects the parser without reassembling fields and reruns the complete native cohort on the unchanged image.",
+  "limitations": [
+    "Native launcher proof covers Quil9, Spindle12 and BOOT-reserved17; successor Quil16/18 paths are actual-helper host checks only.",
+    "Queue pressure, hard denial, stale subject and bounded cancellation are host checks; no native hostile/backpressure certification.",
+    "The launcher erasure oracle is a controlled text-ink check across old menu lines with explicit same-color Linen overlap; no general whole-desktop absence or presentation acknowledgment claim.",
+    "Clipboard Save/cold recovery regression is wide-profile only on this image; no new sustained, public web/general CA, crash/power-loss, physical, SMP, hostile-containment or System Proven claim."
+  ],
+  "scope": "One substantive round: exact live-incarnation launcher/workspace actions and hidden pre-parent Spindle panes, qualified on one sealed image with two launcher profiles and affected clipboard recovery regression. GLOBAL_VAS, BOOT-only genesis and typed sex-pdx authority preserved; not Unix/POSIX."
+}

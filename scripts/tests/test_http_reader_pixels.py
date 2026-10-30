@@ -105,6 +105,18 @@ class ReaderPixels(unittest.TestCase):
   for wrong in(trace.replace('anchor=0 viewport=1','anchor=1 viewport=1'),trace.replace('anchor=0 viewport=1','anchor=0 viewport=2'),trace.replace('tls=0 retained_body_only=1','tls=1 retained_body_only=1'),trace.replace('retained_body_only=1','retained_body_only=0'),trace+position+'\n',trace.replace(position+'\n','')+position+'\n'):
    self.assertFalse(verify_reader_pixels(wrong,image,READER_BODY,strict)['ok'])
    self.assertFalse(verify_reader_pixels(wrong,image,READER_BODY,self.contract)['ok'])
+ def test_intact_position_after_unfinished_foreign_log_fragment_is_valid(self):
+  frame=self.frame();trace=self.trace(frame,position=True);token='[browser.reader.position]';raw=trace.replace(token,'[pdx.opcode.unknown] display type_id=0x15 caller='+token)
+  strict=dict(self.contract,reader_require_position=True)
+  self.assertTrue(verify_reader_pixels(raw,self.screen(frame),READER_BODY,strict)['ok'])
+ def test_split_fields_duplicate_and_unterminated_position_still_fail(self):
+  frame=self.frame();trace=self.trace(frame,position=True);position=next(line for line in trace.splitlines()if '[browser.reader.position]'in line);strict=dict(self.contract,reader_require_position=True)
+  for bad in(trace.replace('anchor=0 viewport=1','anchor=0[other] x=1\n viewport=1'),trace.replace(position,position+'\nnoise'+position),trace[:trace.index(position)]+position):
+   self.assertFalse(verify_reader_pixels(bad,self.screen(frame),READER_BODY,strict)['ok'])
+ def test_position_with_foreign_suffix_or_embedded_token_is_not_repaired(self):
+  frame=self.frame();trace=self.trace(frame,position=True);position=next(line for line in trace.splitlines()if '[browser.reader.position]'in line);strict=dict(self.contract,reader_require_position=True)
+  for bad in(trace.replace(position,position+'[other] x=1'),trace.replace('viewport=1 tls=0 retained_body_only=1','viewport=[browser.reader.position]1 tls=0 retained_body_only=1')):
+   self.assertFalse(verify_reader_pixels(bad,self.screen(frame),READER_BODY,strict)['ok'])
  def test_exact_frame_prefix_replays_original_snapshot_despite_later_clear(self):
   frame=self.frame();snapshot=self.trace(frame,position=True);record=dict(serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),requested_anchor=0)
   full=snapshot+'[browser.http.view] state=Cancelled tls=0\n';prefix=frame_prefix(full,record,reader=True)

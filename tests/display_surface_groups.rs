@@ -482,3 +482,114 @@ unsafe fn span_text_fill(index:usize) {
  }
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
 }}
+
+fn spindle_catalog(pd:u32)->Catalog {
+ assert!(matches!(pd,12|17));
+ Catalog{slot:if pd==12{39}else{50},target_pd:pd,task_id:pd,surface_id:if pd==12{154}else{302},coordinator_pd:3}
+}
+fn spindle_ids(pd:u32)->[u64;4] {if pd==12{[154,160,161,162]}else{[302,303,304,305]}}
+fn spindle_children(pd:u32)->[Surface;5] {
+ let mut surfaces=[SURFACE_EMPTY;5];
+ for(index,sid)in spindle_ids(pd).into_iter().enumerate(){
+  surfaces[index+1]=Surface{x:900+(index%2)as i32*200,y:500+(index/2)as i32*260,w:200,h:240,color:0xa10000+index as u32,
+   text_len:1,text_buf:{let mut bytes=[0;TEXT_BUF_CAP];bytes[0]=b'A'+index as u8;bytes},selection_start:0,selection_end:1,..surf(pd,sid)};
+ }
+ surfaces
+}
+#[test]fn exact_spindle_children_never_become_standalone_before_parent_at_either_profile(){
+ for(w,h)in[(1280,800),(1024,768)] {for pd in[12,17] {
+  let catalog=spindle_catalog(pd);let parent=catalog.frame_surface_id().unwrap();let mut g=FrameGroups::new();g.register(catalog);
+  let mut surfaces=spindle_children(pd);let before=surfaces;g.observe(&surfaces);g.fit_children(&mut surfaces);
+  for(index,child)in surfaces.iter().enumerate().skip(1){
+   assert!(!g.independent(child));assert_eq!(g.awaiting_parent(child),Some(parent));
+   assert_eq!((child.x,child.y,child.w,child.h),(before[index].x,before[index].y,before[index].w,before[index].h));
+   assert_eq!(child.text_buf,before[index].text_buf);assert_eq!(child.selection_end,1);
+   let(x,y,sw,sh)=surface_groups::rect(child,w,h);
+   for focus in[0,parent,child.surface_id]{
+    for(px,py)in[(x,y),(x+sw-1,y+sh-1)]{
+     assert!(g.winner(&surfaces,focus,px,py,w,h).is_none(),"pd={pd} pane={} focus={focus} framebuffer={w}x{h}",child.surface_id);
+     let mut row=g.row_winners(&surfaces,focus,py,w,h).unwrap();assert!(row.source(px).is_none());
+    }
+   }
+  }
+  // A parent record alone is not an observation. Before observe, it supplies
+  // its own body only; children remain unfit and cannot supply its content.
+  surfaces[0]=Surface{x:10,y:60,w:600,h:500,..surf(3,parent)};
+  assert_eq!(g.content(&surfaces[0],&surfaces,30,110,w,h).surface_id,parent);
+  assert_eq!(g.awaiting_parent(&surfaces[1]),Some(parent));
+ }}
+}
+#[test]fn spindle_parent_gate_does_not_reclassify_unknown_catalogs_wrong_owners_or_quil_early_surfaces(){
+ for(w,h)in[(1280,800),(1024,768)]{for pd in[12,17]{
+  let catalog=spindle_catalog(pd);let frame_id=catalog.frame_surface_id().unwrap();let mut g=FrameGroups::new();g.register(catalog);
+  let mut surfaces=spindle_children(pd);surfaces[0]=surf(99,frame_id);g.observe(&surfaces);g.fit_children(&mut surfaces);
+  for child in&surfaces[1..]{assert_eq!(g.awaiting_parent(child),Some(frame_id));assert!(!g.independent(child));}
+  assert!(g.independent(&surfaces[0]));assert_eq!(g.content(&surfaces[0],&surfaces,120,150,w,h).owner_pd,99);
+  for sid in spindle_ids(pd){let foreign=surf(99,sid);assert!(g.independent(&foreign));assert_eq!(g.awaiting_parent(&foreign),None);}
+  let unknown=surf(pd,999);assert!(g.independent(&unknown));assert_eq!(g.awaiting_parent(&unknown),None);
+  let absent=FrameGroups::new();assert!(absent.independent(&surf(pd,catalog.surface_id)));
+  let mut invalid=FrameGroups::new();invalid.register(Catalog{surface_id:999,..catalog});assert!(invalid.independent(&surf(pd,catalog.surface_id)));
+  surfaces[0]=Surface{active:false,..surf(3,frame_id)};g.observe(&surfaces);assert_eq!(g.awaiting_parent(&surfaces[1]),Some(frame_id));
+  let mut quil=FrameGroups::new();quil.register(cat(9));assert!(quil.independent(&surf(9,156)));assert_eq!(quil.awaiting_parent(&surf(9,156)),None);
+ }}
+}
+#[test]fn spindle_late_parent_hide_slot_reuse_and_recreation_keep_sticky_binding_and_inline_content(){
+ for(w,h)in[(1280,800),(1024,768)]{for pd in[12,17]{
+  let catalog=spindle_catalog(pd);let parent=catalog.frame_surface_id().unwrap();let mut g=FrameGroups::new();g.register(catalog);
+  let mut surfaces=spindle_children(pd);let before=surfaces;
+  for pass in 0..2 {
+   surfaces[0]=Surface{x:20+pass*40,y:60+pass*20,w:w as u32-100,h:h as u32-150,..surf(3,parent)};
+   g.observe(&surfaces);g.fit_children(&mut surfaces);let layout=spindle_view::Layout::new(surfaces[0].w,surfaces[0].h);
+   for(index,child)in surfaces.iter().enumerate().skip(1){
+    let pane=layout.panes[index-1];assert_eq!((child.x,child.y,child.w,child.h),(surfaces[0].x+pane.x as i32,surfaces[0].y+pane.y as i32,pane.w,pane.h));
+    assert_eq!(child.text_buf,before[index].text_buf);assert_eq!(child.color,before[index].color);assert_eq!((child.selection_start,child.selection_end),(0,1));
+    assert!(!g.independent(child));assert_eq!(g.awaiting_parent(child),None);
+    let(px,py)=(child.x as usize+child.w as usize/2,child.y as usize+child.h as usize/2);
+    let winner=g.winner(&surfaces,child.surface_id,px,py,w,h).unwrap();assert_eq!(winner.surface_id,parent);assert_eq!(g.content(winner,&surfaces,px,py,w,h).surface_id,child.surface_id);
+   }
+   surfaces[0]=SURFACE_EMPTY;g.observe(&surfaces);
+   for child in&surfaces[1..]{assert!(!g.independent(child));assert!(g.winner(&surfaces,child.surface_id,child.x as usize+10,child.y as usize+10,w,h).is_none());}
+   surfaces[0]=surf(99,777);g.observe(&surfaces);
+   assert!(surfaces[1..].iter().all(|child|!g.independent(child)));
+  }
+ }}
+}
+#[test]fn actual_scalar_and_scanline_compositors_erase_every_preparent_spindle_edge_sliver_without_present_bits(){unsafe{
+ for(w,h)in[(1280,800),(1024,768)]{for pd in[12,17]{for sid in spindle_ids(pd){
+  for(x,y)in[(w as i32-4,h as i32-3),(w as i32+64,h as i32+64)]{
+   SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(spindle_catalog(pd));
+   SURFACES[0]=Surface{x,y,w:200,h:200,text_len:1,text_buf:{let mut b=[0;TEXT_BUF_CAP];b[0]=b'X';b},..surf(pd,sid)};recompute_text_lines(&mut SURFACES[0]);
+   FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+   let(sx,sy,sw,sh)=surface_groups::rect(&SURFACES[0],w,h);
+   if x>=w as i32{assert_eq!((sw,sh),(1,1));}
+   for focus in[0,sid,spindle_catalog(pd).frame_surface_id().unwrap()]{for py in sy..sy+sh{
+    let mut row=FRAME_GROUPS.row_winners(&SURFACES,focus,py,w,h).unwrap();
+    for px in sx..sx+sw{
+     APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,focus),0xabcdef);assert_eq!(APP_PRESENT_BITS,0);
+     let source=row.source(px);assert!(source.is_none());assert_eq!(composite_pixel_source(px,py,w,h,0xabcdef,source),0xabcdef);assert_eq!(APP_PRESENT_BITS,0);
+    }
+   }}
+  }
+ }}}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}
+#[test]fn actual_late_parent_pixels_use_exact_panes_and_stop_immediately_when_parent_hides(){unsafe{
+ for(w,h)in[(1280,800),(1024,768)]{for pd in[12,17]{
+  let catalog=spindle_catalog(pd);let parent=catalog.frame_surface_id().unwrap();let mut scene=spindle_children(pd);
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];SURFACES[..5].copy_from_slice(&scene);FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(catalog);
+  scene[0]=Surface{x:20,y:60,w:w as u32-100,h:h as u32-150,chrome_flags:SURFACE_CHROME_TOP_BAR,..surf(3,parent)};SURFACES[0]=scene[0];
+  FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+  for slot in 1..5{recompute_text_lines(&mut SURFACES[slot]);let child=SURFACES[slot];let(px,py)=(child.x as usize+child.w as usize/2,child.y as usize+child.h as usize/2);
+   for focus in[0,parent,child.surface_id]{
+    APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,focus),child.color);assert_eq!(APP_PRESENT_BITS,native_pixel_bit(pd,child.surface_id));
+    let mut row=FRAME_GROUPS.row_winners(&SURFACES,focus,py,w,h).unwrap();let source=row.source(px).unwrap();assert_eq!(source.surface.surface_id,parent);assert_eq!(source.content.surface_id,child.surface_id);
+    APP_PRESENT_BITS=0;assert_eq!(composite_pixel_source(px,py,w,h,0xabcdef,Some(source)),child.color);assert_eq!(APP_PRESENT_BITS,native_pixel_bit(pd,child.surface_id));
+   }
+   // Wrong-owner content cannot borrow the held child group or native bits.
+   SURFACES[slot].owner_pd=99;APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,parent),SURFACES[0].color);assert_eq!(APP_PRESENT_BITS,0);SURFACES[slot]=child;
+  }
+  SURFACES[0].active=false;
+  for child in SURFACES[1..5].iter(){let(px,py)=(child.x as usize+10,child.y as usize+10);APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,child.surface_id),0xabcdef);assert_eq!(APP_PRESENT_BITS,0);}
+ }}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}

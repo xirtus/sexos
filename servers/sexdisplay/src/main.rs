@@ -3475,6 +3475,15 @@ pub extern "C" fn _start() -> ! {
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
                             if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
                                 recompute_text_lines(surface);
+                                if let Some(parent)=FRAME_GROUPS.awaiting_parent(surface) {
+                                    // One exact fixed child receipt per boot, never a pixel ACK.
+                                    static mut PARENT_GATE_RECORDED:u8=0;
+                                    let bit=match surface.surface_id {154=>1,160=>2,161=>4,162=>8,302=>16,303=>32,304=>64,305=>128,_=>0};
+                                    if bit!=0 && PARENT_GATE_RECORDED&bit==0 {
+                                        PARENT_GATE_RECORDED|=bit;
+                                        sex_pdx::serial_record!("[display.child.parent_gate] target={} surface={} parent={} observed=0 standalone=0 retained=1",surface.owner_pd,surface.surface_id,parent);
+                                    }
+                                }
                                 if surface.surface_id == 300 && surface.owner_pd == 15 {
                                     static ADMITTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
                                     if !ADMITTED.swap(true, core::sync::atomic::Ordering::Relaxed) {

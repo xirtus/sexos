@@ -118,12 +118,17 @@ def reader_frame(body,width,height,contract,anchor=0,expected_path=None):
 
 def reader_position(trace,layout_end,frame,tls,required=False):
  """Optional legacy fixture receipt; mandatory in fresh native100 probes."""
- tail=trace[layout_end:];records=list(re.finditer(r'^\[browser.reader.position\][^\r\n]*',tail,re.M))
+ # A bounded producer record can follow another producer's unfinished legacy
+ # fragment. Match its exact token/fields and newline without reconstructing
+ # any split fields or assuming all other log writers are atomic.
+ tail=trace[layout_end:];records=list(re.finditer(r'\[browser.reader.position\][^\r\n]*',tail))
  if not records:
   if required:raise ValueError('missing retained source-byte position receipt')
   return None
  if len(records)!=1:raise ValueError('duplicate/foreign current reader position receipt')
- record=records[0];match=re.fullmatch(r'\[browser.reader.position\] anchor=(\d+) viewport=(\d+) tls=(0|1) retained_body_only=1',record[0])
+ record=records[0]
+ if not re.match(r'\r?\n',tail[record.end():]):raise ValueError('unterminated retained reader position receipt')
+ match=re.fullmatch(r'\[browser.reader.position\] anchor=(\d+) viewport=(\d+) tls=(0|1) retained_body_only=1',record[0])
  if not match or tuple(map(int,match.groups()))!=(frame['source_anchor'],frame['viewport'],tls):raise ValueError('retained reader position differs from source/viewport/origin')
  applied=re.search(r'\[browser.view.applied\]',tail)
  if not applied or record.end()>=applied.start():raise ValueError('reader position not before actual current Applied')

@@ -1,6 +1,15 @@
 # Alpha continuation: 100 further engineering rounds
 
-## Current checkpoint: accepted round 101; next 102
+## Current checkpoint: accepted round 102; next 103
+
+The launcher names its actual live action: Open, Restore, Bring Here or Focus. Quil and Spindle reuse their held live incarnation and frame, preserve typed text across minimize/workspace moves, and retain only a bounded pending focus under Display backpressure. Reparent, restore and activation are not replayed. Exact lifecycle/catalog checks fence terminal subjects, and exhausted BOOT reserves remain visibly disabled. Spindle's eight sanctioned child panes stay hidden until their actual Shell parent exists, preventing startup slivers.
+
+Sealed ISO `c020addd701971847de11681e8479d385477a2413cbe845404be186d0eb4e9e9`, binding `7dfe4fb92be673fc0678dfc127bcfa81f01aa0138380697109c3b1ec01c97445`;560 production/525 runner inputs. BUILD/GREEN_MASTER, 1,815 frozen Rust executions (exact unchanged D/E Rust inputs), 730 frozen Python tests and four native boots pass. Both desktop sizes qualify Quil9 and Spindle12/17 launcher actions, preserved input, terminal cleanup and finite successor exhaustion; the wide clipboard/Save/cold-reopen regression also passes. Independent raw replay verifies69 screenshots and immutable serial prefixes, action/identity/custody joins and captured fixture wire bytes. See [evidence](assets/sexos-alpha-r102-2026-10-30-evidence.json).
+
+Next103 introduces distinct lowercase glyphs and full printable-ASCII coverage in the actual renderer, with finite source-bound font metrics and explicit unsupported cases.104 improves typography,105 encoding/input,106 bounded images/assets and107 navigation;108 qualifies a representative connected desktop session. Active80–200 progress:23/121 accepted;103–200 remain (98 substantive rounds).7 Open/23 Partial/System Proven false remain. GLOBAL_VAS, BOOT-only capability genesis, typed sex-pdx authority and exact terminal incarnations remain mandatory; SexOS is not Unix/POSIX.
+
+
+## Historical checkpoint: accepted round 101; next 102 at that time
 
 Browser and Quil now support keyboard selection and a finite capability-scoped clipboard over existing BOOT-sanctioned routes. Actual IPC sender task metadata accompanies the sender PD, and clients authenticate exact Shell3/task3. Full12288-byte Browser Copy replaces Quil’s selected draft atomically; capacity refusal and an empty clipboard after producer retirement preserve document bytes, caret and viewport. Save and user-selected cold reopen recover exact durable bytes. Status/name changes no longer scroll Quil’s unchanged document.
 

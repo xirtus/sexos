@@ -6,6 +6,26 @@ pub struct Identity { pub domain:u32, pub task:u32, pub surface:u64, pub coordin
 pub enum Evidence { Live, Dead { domain:u32, task:u32, required:u64, acked:u64 }, Retry, Invalid }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status { Running, Closing, Closed, Unavailable }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum LiveAction { Open, Restore, BringHere, Focus }
+impl LiveAction {
+    pub fn title(self,quil:bool)->&'static str {
+        match(self,quil){
+            (Self::Open,true)=>"Open Quil",(Self::Restore,true)=>"Restore Quil",(Self::BringHere,true)=>"Bring Here Quil",(Self::Focus,true)=>"Focus Quil",
+            (Self::Open,false)=>"Open Spindle",(Self::Restore,false)=>"Restore Spindle",(Self::BringHere,false)=>"Bring Here Spindle",(Self::Focus,false)=>"Focus Spindle",
+        }
+    }
+}
+/// Presentation data only. Callers still recheck the held exact live catalog
+/// before moving, restoring or focusing its existing frame.
+pub fn live_action(frame:Option<(u8,bool,bool)>,active:u8)->LiveAction {
+    match frame {
+        None=>LiveAction::Open,
+        Some((scene,_,_))if scene!=active=>LiveAction::BringHere,
+        Some((_,minimized,visible))if minimized||!visible=>LiveAction::Restore,
+        Some(_)=>LiveAction::Focus,
+    }
+}
 impl Status {
     pub fn presentation(self)->(bool,&'static str,&'static str) {
         match self {

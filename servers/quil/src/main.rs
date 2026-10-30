@@ -58,9 +58,7 @@ pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
 }
 
 // ── Quil Text Surface V1 Constants ───────────────────────────────────────────
-// Text rendering is NOT available in sexdisplay (no font subsystem).
-// Fill-rect visuals represent the text surface structure.
-// See docs/handoff/QUIL_MINIMAL_TEXT_SURFACE_BLOCKER_V1.md
+// Display commits bounded text and selection styling on Quil's owned surface.
 
 const OP_HID_EVENT: u64 = 0x202;
 const SURFACE_ID_QUIL: u64 = 201;
@@ -82,7 +80,7 @@ const SURFACE_H: u64 = 480;
 // Bounded, inline, no heap. Demo content for text surface V1.
 const QUIL_TITLE: &str = "Quil";
 const QUIL_TITLE_MAX_LEN: usize = 32;
-const QUIL_TEXT_INIT: &[u8] = b"Write a note in Quil.\nNew starts a document. Open uses Linen.\nSave names it; AS keeps a separate copy.\nCtrl N / O / S / A. Esc shows commands.";
+const QUIL_TEXT_INIT: &[u8] = b"Write a note in Quil.\nNew starts a document. Open uses Linen.\nCtrl N / O / S. Ctrl Shift S: Save As.\nCtrl A selects all. Ctrl C / X / V transfer.\nEsc shows commands.";
 // DISKFS_V4: 12 KiB spans 3 DiskFS content blocks (4096B each), clearing
 // the ">4KiB, grows across multiple storage units" bar with headroom
 // under the backend's 64KiB per-object cap.

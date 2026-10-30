@@ -24,3 +24,13 @@ fn id()->Identity {Identity{domain:9,task:91,surface:156,coordinator:3}}
  for count in [None,Some(0),Some(1),Some(2)]{assert_eq!(reserve_label("UNAVAILABLE",false,"incarnation_unverified",count),"UNAVAILABLE");}
  assert_eq!(reserve_label("RUNNING / FOCUS",true,"original_incarnation_live",Some(0)),"RUNNING / LAST INSTANCE");
 }
+
+#[test]fn live_actions_distinguish_open_restore_other_workspace_and_focus(){
+ assert_eq!(live_action(None,0),LiveAction::Open);
+ for active in 0..5{for scene in 0..5{for minimized in [false,true]{for visible in [false,true]{
+  let expected=if scene!=active{LiveAction::BringHere}else if minimized||!visible{LiveAction::Restore}else{LiveAction::Focus};
+  assert_eq!(live_action(Some((scene,minimized,visible)),active),expected);
+ }}}}
+ assert_eq!(LiveAction::BringHere.title(false),"Bring Here Spindle");assert_eq!(LiveAction::Restore.title(true),"Restore Quil");
+ for a in [LiveAction::Open,LiveAction::Restore,LiveAction::BringHere,LiveAction::Focus]{for quil in [false,true]{assert!(a.title(quil).len()<39);}}
+}

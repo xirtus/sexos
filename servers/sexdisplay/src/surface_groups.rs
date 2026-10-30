@@ -3,6 +3,11 @@
 use crate::surface_lifecycle::{Catalog, Surface, CATALOG_CAPACITY};
 #[derive(Clone, Copy)]
 struct Group { catalog: Catalog, frame_seen: bool }
+impl Group {
+    fn parent_required(&self) -> bool {
+        matches!((self.catalog.target_pd,self.catalog.surface_id),(12,154)|(17,302))
+    }
+}
 pub struct FrameGroups { groups: [Option<Group>; CATALOG_CAPACITY] }
 impl FrameGroups {
     pub const fn new() -> Self { Self { groups: [None; CATALOG_CAPACITY] } }
@@ -45,8 +50,18 @@ impl FrameGroups {
         self.groups.iter().flatten().any(|g| g.catalog.coordinator_pd == s.owner_pd
             && g.catalog.frame_surface_id() == Some(s.surface_id))
     }
+    /// Spindle's exact catalog children are retained data, never standalone
+    /// windows, even before the sanctioned Shell parent has first appeared.
+    /// Other groups retain their existing early-surface presentation policy.
     pub fn independent(&self, s: &Surface) -> bool {
-        s.active && !self.child_group(s).map_or(false, |g| g.frame_seen)
+        s.active && !self.child_group(s).map_or(false, |g| g.frame_seen || g.parent_required())
+    }
+    /// Admission diagnostic only. No visibility, fitting or PRESENT completion
+    /// follows from the existence of a catalog or an awaiting child.
+    pub fn awaiting_parent(&self, s: &Surface) -> Option<u64> {
+        if !s.active {return None;}
+        self.child_group(s).filter(|g|g.parent_required()&&!g.frame_seen)
+            .and_then(|g|g.catalog.frame_surface_id())
     }
     pub fn winner<'a>(&self, surfaces: &'a [Surface], focused: u64,
         x: usize, y: usize, w: usize, h: usize) -> Option<&'a Surface> {
