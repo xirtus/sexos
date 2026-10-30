@@ -16,6 +16,8 @@ pub mod app_lifecycle;
 pub mod network_job;
 pub mod network_dns;
 pub mod entropy_source;
+pub mod clock_source;
+pub mod certificate_time;
 pub mod entropy_seed;
 pub mod spindle_history;
 pub mod spindle_probe;
@@ -541,6 +543,17 @@ pub fn entropy_info(slot:u64)->Result<entropy_source::Info,u64>{
 pub fn entropy_word(slot:u64)->Result<entropy_source::Word,u64>{
     entropy_source::Word::decode(entropy_registers(slot,entropy_source::READ))
 }
+
+fn clock_registers(slot:u64,kind:u64)->[u64;5]{
+    let(status,a,b,c,d):(u64,u64,u64,u64,u64);
+    unsafe{core::arch::asm!("syscall",inlateout("rax")clock_source::SYS=>status,
+        in("rdi")slot,inlateout("rsi")kind=>a,inlateout("rdx")0u64=>b,
+        inlateout("r10")0u64=>c,inlateout("r8")0u64=>d,
+        out("rcx")_,out("r11")_,options(nostack));}
+    [status,a,b,c,d]
+}
+pub fn clock_info(slot:u64)->Result<clock_source::Info,u64>{clock_source::Info::decode(clock_registers(slot,clock_source::INFO))}
+pub fn clock_snapshot(slot:u64)->Result<clock_source::Snapshot,u64>{clock_source::Snapshot::decode(clock_registers(slot,clock_source::READ))}
 
 /// Inspect a boot paging capability without allocating or mapping anything.
 pub fn paging_info(slot: u64) -> Result<paging::PagingInfo, u64> {

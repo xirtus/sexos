@@ -59,3 +59,7 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_service.rs" -o "$TEST_DIR/e
 rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_client.rs" -o "$TEST_DIR/entropy-client-tests"
 "$TEST_DIR/entropy-client-tests"
 echo '[sexnet.entropy.host] PASS scope=actual_ABI_private_service_client_not_live_CPU_quality_or_authority'
+
+rustc --edition=2021 --test "$ROOT_DIR/tests/certificate_time_client.rs" -o "$TEST_DIR/certificate-time-tests"
+"$TEST_DIR/certificate-time-tests"
+echo '[sexnet.certificate.time.host] PASS scope=actual_UTC_ABI_source_decoder_broker_client_not_live_RTC_authenticity_or_TLS'

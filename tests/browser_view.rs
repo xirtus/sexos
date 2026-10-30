@@ -65,3 +65,13 @@ fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_
  for label in [b"secret bytes" as &[u8],b"ready\0",b"READY"]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_seed(text,Some(label)).is_none());}
  let text=compose(&[b'p';254],E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_seed(text,Some(b"checking")).is_none());
 }
+
+#[test]fn clock_snapshot_chrome_replaces_one_auxiliary_extent_without_clipping(){
+ let preview=body_text::build(&[b'z';192],&[]);
+ for label in [b"2026-10-30T13:45:07Z" as &[u8],b"checking",b"unavailable",b"waiting receipt",b"rollback; blocked",b"cancelled"]{
+  let before=compose(preview.as_bytes(),E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();let old=before.bytes;let base=before.len;
+  let after=browser_view::with_clock(before,label).unwrap();assert_eq!(&after.bytes[..base],&old[..base]);assert_eq!(after.len,base+64);assert!(after.len<=512);
+  let mut expected=b"\n\nCertificate time: ".to_vec();expected.extend_from_slice(label);expected.extend_from_slice(b"\nT sample  Q clear");assert_eq!(&after.bytes[base..base+64],&padded(&expected));assert!(after.bytes[after.len..].iter().all(|b|*b==b' '));
+ }
+ for label in [vec![b'x';25],vec![0],vec![0xff]]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_clock(text,&label).is_none());}
+}

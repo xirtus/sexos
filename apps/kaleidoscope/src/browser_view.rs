@@ -71,3 +71,14 @@ pub fn with_seed(mut text:Text,label:Option<&[u8]>)->Option<Text>{
  append(&mut text.bytes[..end],&mut at,b"\nE seed  Q clear")?;
  text.len=end;Some(text)
 }
+
+/// A public UTC query snapshot replaces the auxiliary64-byte status extent.
+/// Callers choose one auxiliary panel, so seed/time chrome cannot overflow.
+pub fn with_clock(mut text:Text,status:&[u8])->Option<Text>{
+ if status.len()>24||!readable(status){return None;}
+ let start=text.len;let end=start.checked_add(64)?;text.bytes.get_mut(start..end)?.fill(b' ');
+ let mut at=start;append(&mut text.bytes[..end],&mut at,b"\n\nCertificate time: ")?;
+ append(&mut text.bytes[..end],&mut at,status)?;
+ append(&mut text.bytes[..end],&mut at,b"\nT sample  Q clear")?;
+ text.len=end;Some(text)
+}

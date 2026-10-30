@@ -20,6 +20,7 @@ mod arp;
 mod jobs;
 mod dns_jobs;
 mod entropy;
+mod certificate_time;
 
 /// The held BOOT lifecycle grants establish exact current subject/task, never
 /// the app-supplied ticket. Err(LIVE) is the kernel's live-task attestation;
@@ -5203,6 +5204,9 @@ pub extern "C" fn _start() -> ! {
     let seed_source=sex_pdx::entropy_info(sex_pdx::entropy_source::SLOT).ok();
     sex_pdx::serial_record!("[sexnet.entropy.source] held={} available={} source=rdseed fallback=0 broker=private_seed32",seed_source.is_some()as u8,seed_source.is_some_and(|info|info.available)as u8);
     let mut seed=entropy::Machine::new();
+    let clock_source=sex_pdx::clock_info(sex_pdx::clock_source::SLOT).ok();
+    sex_pdx::serial_record!("[sexnet.clock.source] held={} source=q35_cmos_utc no_ticks_fallback=1 precision=1",clock_source.is_some()as u8);
+    let mut clock=certificate_time::Machine::new();
     let mut dns_changes=0u64;
     // Finite, non-reused job tickets retain their first submitted frame even
     // after an earlier stream consumed the device's ordinary sample budget.
@@ -5352,7 +5356,11 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){seed.retire(owner);}
             else if pdx_reply(owner.pd,word)==0{seed.reply_accepted();}else{seed.reply_deferred();}
         }
-        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some();
+        if let Some((owner,word))=clock.pending_reply(){
+            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){clock.retire(owner);}
+            else if pdx_reply(owner.pd,word)==0{clock.reply_accepted();}else{clock.reply_deferred();}
+        }
+        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some();
         let pending=preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
@@ -5376,6 +5384,8 @@ pub extern "C" fn _start() -> ! {
                     outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut()));
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
                     seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
+                    clock.retire(sex_pdx::clock_source::Identity{pd:notice.target_pd,task:notice.task_id});
+                    sex_pdx::serial_record!("[certificate.time.retired] target={} task={} before_cleanup_ack=1 high_water_retained=1",notice.target_pd,notice.task_id);
                     sex_pdx::serial_record!("[entropy.seed.retired] target={} task={} before_cleanup_ack=1 private_payload=erased",notice.target_pd,notice.task_id);
                     if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
                     sex_pdx::serial_record!("[net.dns.records.retired] target={} task={} remaining={} before_cleanup_ack=1",notice.target_pd,notice.task_id,dns.owned_records(jobs::Identity{pd:notice.target_pd,task:notice.task_id}));
@@ -5387,6 +5397,29 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if app_custody.is_retired(req.caller_pd) {continue}
+
+        if req.type_id==sex_pdx::certificate_time::OP{
+            let request=sex_pdx::certificate_time::Request::decode([req.arg0,req.arg1,req.arg2]);
+            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+                let identity=sex_pdx::clock_source::Identity{pd:owner.pd,task:owner.task};
+                let before=clock.snapshot();let mut sampled=false;
+                if !clock.handle(identity,request,clock_source,||{sampled=true;sex_pdx::clock_snapshot(sex_pdx::clock_source::SLOT)}){
+                    sex_pdx::serial_record!("[certificate.time.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);
+                }
+                if sampled{
+                    if let Some((target,word))=clock.pending_reply(){
+                        if target==identity{if let Ok(seconds)=sex_pdx::certificate_time::decode_reply(word,request.seq){
+                            sex_pdx::serial_record!("[certificate.time.snapshot] owner={} task={} seq={} seconds={} source=q35_cmos_utc precision=1 receipt=retained",owner.pd,owner.task,request.seq,seconds);
+                        }}
+                    }
+                }
+                if !before.rollback&&clock.snapshot().rollback{sex_pdx::serial_record!("[certificate.time.rollback] owner={} task={} seq={} blocked_until_boot=1 last_good_fallback=0",owner.pd,owner.task,request.seq);}
+            }else{
+                let seq=(req.arg0&sex_pdx::certificate_time::MAX_SEQ as u64)as u32;
+                if seq!=0{pdx_reply(req.caller_pd,sex_pdx::certificate_time::error(seq,sex_pdx::certificate_time::INVALID));}
+            }
+            continue;
+        }
 
         if req.type_id==sex_pdx::entropy_seed::OP{
             let request=sex_pdx::entropy_seed::Request::decode([req.arg0,req.arg1,req.arg2]);
