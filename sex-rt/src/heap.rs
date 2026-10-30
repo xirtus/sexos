@@ -8,6 +8,11 @@ use spin::Mutex;
 
 pub const HEAP_BYTES: usize = 64 * 1024;
 
+/// One coherent allocator snapshot. Byte usage includes allocator alignment and
+/// bookkeeping; these counts confer no frame, mapping or endpoint authority.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct Usage { pub used:usize, pub free:usize, pub total:usize }
+
 #[repr(C, align(4096))]
 struct AlignedBytes([u8; HEAP_BYTES]);
 
@@ -44,6 +49,11 @@ impl BoundedAllocator {
 
     pub fn init(&self) {
         self.ensure_initialized(&mut self.arena.heap.lock());
+    }
+
+    pub fn usage(&self)->Usage {
+        let mut heap=self.arena.heap.lock();self.ensure_initialized(&mut heap);
+        Usage{used:heap.used(),free:heap.free(),total:heap.size()}
     }
 }
 

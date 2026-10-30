@@ -6,10 +6,13 @@ use sex_pdx::network_job as w;
 use sex_tls::{Session,Stats};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum View{Idle,Pending,Verified,Unavailable,Cancelled,Uncertain}
+/// Diagnostic of one positively acknowledged RELEASE; not a new capability.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct Released{pub ticket:u32,pub outcome:View,pub authenticated:bool,pub document:bool,pub payload_bytes:usize}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum Step{Done,Begin,InitialWrite,Start,Active,Write,Status,Read,Finish,Cancel,Release,Held}
 pub struct Client{
-    session:Option<Session>,stats:Option<Stats>,document:Option<sex_tls::Document>,is_document:bool,document_received:usize,http_failure:Option<sex_tls::HttpError>,failure:Option<sex_tls::Failure>,step:Step,seq:u32,ticket:u32,last_ticket:u32,
+    released:Option<Released>,session:Option<Session>,stats:Option<Stats>,document:Option<sex_tls::Document>,is_document:bool,document_received:usize,http_failure:Option<sex_tls::HttpError>,failure:Option<sex_tls::Failure>,step:Step,seq:u32,ticket:u32,last_ticket:u32,
     generation:u32,initial:usize,tx:usize,rx:usize,produced:usize,chunk:[u8;8],chunk_len:usize,
     pending:Option<w::Request>,accepted:bool,deadline:u64,total:Option<u64>,last:u64,next_poll:u64,
     active:bool,finish:bool,complete:bool,prefer_read:bool,abort:bool,closed:bool,
@@ -17,15 +20,20 @@ pub struct Client{
 }
 fn erase(bytes:&mut[u8]){for byte in bytes{unsafe{core::ptr::write_volatile(byte,0)}}}
 impl Client{
-    pub const fn new()->Self{Self{session:None,stats:None,document:None,is_document:false,document_received:0,http_failure:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
+    pub const fn new()->Self{Self{released:None,session:None,stats:None,document:None,is_document:false,document_received:0,http_failure:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
         generation:0,initial:0,tx:0,rx:0,produced:0,chunk:[0;8],chunk_len:0,
         pending:None,accepted:false,deadline:0,total:None,last:0,next_poll:0,
         active:false,finish:false,complete:false,prefer_read:true,abort:false,closed:false,
         authenticated:false,auth_event:false,verified:false,verify_event:false,view:View::Idle,terminal:View::Unavailable}}
+    pub fn take_released(&mut self)->Option<Released>{self.released.take()}
     pub fn busy(&self)->bool{self.step!=Step::Done||self.ticket!=0}
     pub fn view(&self)->View{self.view}
     pub fn next_sequence(&self)->u32{self.seq}
     pub fn stats(&self)->Option<Stats>{self.stats}
+    pub fn allocated_payload_bytes(&self)->usize{
+        self.session.as_ref().map_or(0,Session::allocated_payload_bytes)
+            +if self.document.is_some(){sex_tls::MAX_DOCUMENT}else{0}
+    }
     /// Nonsensitive reason from this attempt's actual TLS task error only.
     /// Transport timeout/cancellation alone never synthesizes a TLS diagnosis.
     pub fn failure(&self)->Option<sex_tls::Failure>{self.failure}
@@ -91,7 +99,7 @@ impl Client{
         self.document=None;self.abort=true;self.terminal=View::Cancelled;self.scrub();self.cleanup();
     }
     /// Parent retires the exact service incarnation. No PDX is issued here.
-    pub fn close(&mut self){self.document=None;self.is_document=false;self.document_received=0;self.http_failure=None;self.failure=None;self.closed=true;self.scrub();self.forget_request();self.ticket=0;self.step=Step::Done;self.active=false;self.total=None;self.view=View::Cancelled;self.terminal=View::Cancelled;}
+    pub fn close(&mut self){self.released=None;self.document=None;self.is_document=false;self.document_received=0;self.http_failure=None;self.failure=None;self.closed=true;self.scrub();self.forget_request();self.ticket=0;self.step=Step::Done;self.active=false;self.total=None;self.view=View::Cancelled;self.terminal=View::Cancelled;}
     fn poll_session(&mut self){
         if !self.active||self.abort||self.verified{return;}
         let Some(session)=self.session.as_mut()else{self.failed(false);return;};
@@ -199,7 +207,10 @@ impl Client{
             },
             w::FINISH=>{if value!=0{self.failed(false);return;}self.finish=true;self.step=Step::Active;},
             w::CANCEL=>{if value!=0{self.hold_uncertain();}else{self.step=Step::Release;}},
-            w::RELEASE=>{if value!=0{self.hold_uncertain();}else{self.ticket=0;self.done();}},
+            w::RELEASE=>{if value!=0{self.hold_uncertain();}else{
+                let ticket=self.ticket;self.ticket=0;self.done();
+                self.released=Some(Released{ticket,outcome:self.view,authenticated:self.authenticated,document:self.is_document,payload_bytes:self.allocated_payload_bytes()});
+            }},
             _=>self.failed(false),
         }
     }

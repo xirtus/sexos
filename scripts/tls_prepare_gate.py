@@ -20,7 +20,7 @@ from check_disk_persistence import ppm_rgb
 from check_nonunix_target import inspect as target_check
 
 MODES=('ready','close','unsupported','invalid-year')
-LABELS={'Preparing':b'preparing','HelloPending':b'hello pending; no peer','Unavailable':b'unavailable','Cancelled':b'cancelled','Rejected':b'rejected','TimedOut':b'timed out'}
+LABELS={'Preparing':b'preparing','HelloPending':b'hello pending; no peer','Unavailable':b'unavailable','Cancelled':b'cancelled','Rejected':b'rejected','TimedOut':b'timed out','Uncertain':b'waiting receipt'}
 SCOPE='Actual L/Q private bounded TLS preparation, exact BOOT entropy/UTC/trust prerequisite receipts and controlled public certificate/name/time/signature fixture self-check, source-bound complete status glyphs and sole public startup Echo flow. private_bytes includes Pipe metadata; erased_payload_bytes counts only owned future plus8192 queue-array bytes. No seed/output bytes or derivatives captured; no TLS wire, handshake, peer authentication, public-CA trust, randomness quality, hostile containment, SMP or physical proof.'
 
 def command_profile(command,mode):

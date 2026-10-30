@@ -297,6 +297,13 @@ impl Session {
     pub fn is_document(&self)->bool{self.is_document}
     pub fn document_received(&self)->usize{self.pipe.borrow().document_received}
     pub fn owned_payload_bytes(&self)->usize{self.stats.task_bytes+2*QUEUE_BYTES+if self.is_document{MAX_DOCUMENT}else{0}}
+    /// Current owned allocation payload, excluding Rc/allocator metadata. The
+    /// future and document may already have been dropped or transferred; peak
+    /// Stats must not be used to claim they are still live.
+    pub fn allocated_payload_bytes(&self)->usize{
+        self.task.as_ref().map_or(0,|task|task.layout.size())+2*QUEUE_BYTES
+            +if self.pipe.borrow().document.is_some(){MAX_DOCUMENT}else{0}
+    }
     /// Transfers private byte custody only after authenticated framing and
     /// encrypted local close completion. No UI/endpoint authority is created.
     pub fn take_document(&mut self)->Option<Document>{

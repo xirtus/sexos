@@ -11,7 +11,7 @@ use network_probe::View as E;
 const PREVIEW:&[u8]=b"Kaleidoscope\nCached / sample network text\n\nHello sample.";
 #[test]fn tls_preparation_whole_extent_never_claims_authenticated_content(){
  let preview=body_text::build(&[b'z';192],&[]);
- for label in [b"preparing" as &[u8],b"hello pending; no peer",b"unavailable",b"cancelled",b"rejected",b"timed out"]{
+ for label in [b"preparing" as &[u8],b"hello pending; no peer",b"unavailable",b"cancelled",b"rejected",b"timed out",b"waiting receipt"]{
   let before=compose(preview.as_bytes(),E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();let base=before.len;let old=before.bytes;
   let after=browser_view::with_tls(before,Some(label)).unwrap();assert_eq!(&after.bytes[..base],&old[..base]);assert_eq!(after.len,base+64);
   let mut expected=b"\n\nTLS preparation: ".to_vec();expected.extend_from_slice(label);expected.extend_from_slice(b"\nL prep Q clear Y peer");assert_eq!(&after.bytes[base..base+64],&padded(&expected));assert!(after.bytes[after.len..].iter().all(|b|*b==b' '));

@@ -28,7 +28,8 @@ def command_profile(command,mode):
 
 def seed_contract(root):
  contract=load_pixel_contract(root);view=(root/'apps/kaleidoscope/src/browser_view.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text()
- if 'pub fn with_seed('not in view or 'start.checked_add(64)'not in view or 'browser_view::with_seed(text,seed_label(self.seed.view()))'not in app:raise ValueError('frozen whole64-byte seed extent contract changed')
+ if 'pub fn with_seed('not in view or 'start.checked_add(64)'not in view or 'browser_view::with_seed(text,seed_label(self.seed_view))'not in app:raise ValueError('frozen whole64-byte seed extent contract changed')
+ if 'if self.intent==Some(Intent::Seed)'not in app or 'else{self.seed.view()};if view!=self.seed_view{self.seed_view=view;'not in app:raise ValueError('queued seed status no longer joins actual client view')
  labels={key:ast.literal_eval(value)for key,value in re.findall(r'entropy_probe::View::(\w+)\s*=>\s*Some\((b"[^"\n]*")\)',app)}
  if labels!=LABELS:raise ValueError('source-bound seed labels differ')
  for literal in ('b"\\n\\nPrivate seed: "','b"\\nE seed  Q clear"'):

@@ -6,13 +6,14 @@ use crate::{clock_probe as clock, entropy_probe as entropy, trust_probe as trust
 use sex_tls::{Session, Stats};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum View { Idle,Preparing,HelloPending,Unavailable,Cancelled,Rejected,TimedOut }
+pub enum View { Idle,Preparing,HelloPending,Unavailable,Cancelled,Rejected,TimedOut,Uncertain }
 pub struct Probe {
     session:Option<Session>, view:View, closed:bool, deadline:Option<u64>, last:u64, profile:Option<u32>, self_check:Option<u32>, exchange:bool,document:bool,
 }
 impl Probe {
     pub const fn new()->Self { Self {session:None,view:View::Idle,closed:false,deadline:None,last:0,profile:None,self_check:None,exchange:false,document:false} }
     pub fn view(&self)->View {self.view}
+    pub fn allocated_payload_bytes(&self)->usize{self.session.as_ref().map_or(0,Session::allocated_payload_bytes)}
     /// Public controlled-fixture success, consumed once; never a peer receipt.
     pub fn take_self_check(&mut self)->Option<u32>{self.self_check.take()}
     pub fn busy(&self)->bool {matches!(self.view,View::Preparing|View::HelloPending)&&!self.closed}
@@ -107,5 +108,5 @@ impl Probe {
 }
 pub fn label(view:View)->Option<&'static[u8]> { match view {
     View::Idle=>None,View::Preparing=>Some(b"preparing"),View::HelloPending=>Some(b"hello pending; no peer"),
-    View::Unavailable=>Some(b"unavailable"),View::Cancelled=>Some(b"cancelled"),View::Rejected=>Some(b"rejected"),View::TimedOut=>Some(b"timed out"),
+    View::Unavailable=>Some(b"unavailable"),View::Cancelled=>Some(b"cancelled"),View::Rejected=>Some(b"rejected"),View::TimedOut=>Some(b"timed out"),View::Uncertain=>Some(b"waiting receipt"),
 } }

@@ -117,25 +117,32 @@ impl Harness{
     }
     fn released(&mut self){for _ in 0..15_000{self.turn(false);if !self.client.busy(){return;}}panic!("HTTPS cleanup not complete");}
 }
+fn positive_release(h:&mut Harness,outcome:exchange_client::View,authenticated:bool,payload:usize){
+    let r=h.client.take_released().expect("actual positive RELEASE receipt");
+    assert_eq!(r.ticket,h.client.ticket());assert_eq!(r.outcome,outcome);assert_eq!(r.authenticated,authenticated);assert!(r.document);assert_eq!(r.payload_bytes,payload);
+    assert_eq!(h.client.allocated_payload_bytes(),payload);assert_eq!(h.client.take_released(),None);
+}
 #[test]fn authenticated_full_document_stays_private_until_delayed_positive_release_then_q_erases(){
     let _serial=SERIAL.lock().unwrap();let(mut peer,stream)=Peer::start("good");let mut h=Harness::new(stream);
     loop{if h.turn(true){break;}}assert_eq!((h.auth,h.verified),(1,1));assert_eq!(h.client.retained_document_len(),MAX_DOCUMENT);assert_eq!(h.client.document_received(),MAX_DOCUMENT);assert!(h.client.document().is_empty());assert!(!h.client.has_document());assert_ne!(h.client.view(),exchange_client::View::Verified);
+    assert_eq!(h.client.allocated_payload_bytes(),8192+MAX_DOCUMENT);assert!(h.client.take_released().is_none());
     let calls=h.requests.len();for _ in 0..10{assert!(h.turn(true));assert_eq!(h.requests.len(),calls);assert!(h.client.document().is_empty());}
     let(_,word)=h.machine.pending_reply().unwrap();h.machine.reply_accepted();h.client.reply(word,h.now);assert_eq!(h.client.view(),exchange_client::View::Verified);assert!(h.client.has_document());assert_eq!(h.client.document(),body());assert!(h.client.document().ends_with(TAIL));assert_eq!(h.wire.finishes,1);assert_eq!(h.client.failure(),None);assert_eq!(h.client.http_failure(),None);
+    positive_release(&mut h,exchange_client::View::Verified,true,MAX_DOCUMENT);
     assert_eq!(h.requests.last().unwrap().kind,network_job::RELEASE);let finish=h.requests.iter().position(|r|r.kind==network_job::FINISH).unwrap();assert!(!h.requests[finish+1..].iter().any(|r|r.kind==network_job::WRITE));
-    let seq=h.client.next_sequence();h.client.cancel();assert_eq!(h.client.next_sequence(),seq);assert!(h.client.document().is_empty());assert_eq!(h.client.retained_document_len(),0);assert!(h.client.private_scrubbed_for_test());h.client.advance(h.now+2);assert!(CALLS.lock().unwrap().is_empty());peer.finish(true,false);
+    let seq=h.client.next_sequence();h.client.cancel();assert_eq!(h.client.next_sequence(),seq);assert!(h.client.document().is_empty());assert_eq!(h.client.retained_document_len(),0);assert_eq!(h.client.allocated_payload_bytes(),0);assert!(h.client.private_scrubbed_for_test());h.client.advance(h.now+2);assert!(CALLS.lock().unwrap().is_empty());peer.finish(true,false);
 }
 #[test]fn malformed_authenticated_http_never_exposes_a_body_and_positively_releases(){
     let _serial=SERIAL.lock().unwrap();for(mode,want)in[("dup-length",HttpError::DuplicateContentLength),("oversize",HttpError::BodyLimit),("mime",HttpError::UnsupportedContentType),("trailing",HttpError::TrailingData)]{
-        let(mut peer,stream)=Peer::start(mode);let mut h=Harness::new(stream);h.released();assert_eq!(h.client.view(),exchange_client::View::Unavailable,"{mode}");assert_eq!(h.client.failure(),Some(Failure::Application),"{mode}");assert_eq!(h.client.http_failure(),Some(want),"{mode}");assert_eq!((h.auth,h.verified),(1,0));assert!(h.client.peer_authenticated());assert!(h.client.document().is_empty());assert_eq!(h.client.retained_document_len(),0);assert!(h.client.private_scrubbed_for_test());assert!(h.machine.owner().is_none());assert!(h.wire.closed);assert_eq!(h.wire.finishes,0);assert!(h.requests.iter().any(|r|r.kind==network_job::CANCEL));assert_eq!(h.requests.last().unwrap().kind,network_job::RELEASE);peer.finish(false,false);println!("actual HTTPS {mode}: Application/{want:?}, no body, positive RELEASE");
+        let(mut peer,stream)=Peer::start(mode);let mut h=Harness::new(stream);h.released();positive_release(&mut h,exchange_client::View::Unavailable,true,0);assert_eq!(h.client.view(),exchange_client::View::Unavailable,"{mode}");assert_eq!(h.client.failure(),Some(Failure::Application),"{mode}");assert_eq!(h.client.http_failure(),Some(want),"{mode}");assert_eq!((h.auth,h.verified),(1,0));assert!(h.client.peer_authenticated());assert!(h.client.document().is_empty());assert_eq!(h.client.retained_document_len(),0);assert!(h.client.private_scrubbed_for_test());assert!(h.machine.owner().is_none());assert!(h.wire.closed);assert_eq!(h.wire.finishes,0);assert!(h.requests.iter().any(|r|r.kind==network_job::CANCEL));assert_eq!(h.requests.last().unwrap().kind,network_job::RELEASE);peer.finish(false,false);println!("actual HTTPS {mode}: Application/{want:?}, no body, positive RELEASE");
     }
 }
 #[test]fn truncated_authenticated_body_stays_private_and_explicit_cancel_releases_without_eof_claim(){
     let _serial=SERIAL.lock().unwrap();let(mut peer,stream)=Peer::start("truncated");let mut h=Harness::new(stream);while h.client.document_received()==0{h.turn(false);}assert!(h.client.document_received()<=256);assert!(h.client.document().is_empty());assert_eq!(h.client.retained_document_len(),0);assert_eq!(h.client.failure(),None);assert_eq!(h.client.http_failure(),None);
-    h.client.cancel();h.released();assert_eq!(h.client.view(),exchange_client::View::Cancelled);assert!(h.client.private_scrubbed_for_test());assert_eq!(h.client.failure(),None);assert_eq!(h.client.http_failure(),None);assert!(h.machine.owner().is_none());assert_eq!(h.wire.finishes,0);assert_eq!(h.verified,0);peer.finish(false,false);
+    h.client.cancel();h.released();positive_release(&mut h,exchange_client::View::Cancelled,true,0);assert_eq!(h.client.view(),exchange_client::View::Cancelled);assert!(h.client.private_scrubbed_for_test());assert_eq!(h.client.failure(),None);assert_eq!(h.client.http_failure(),None);assert!(h.machine.owner().is_none());assert_eq!(h.wire.finishes,0);assert_eq!(h.verified,0);peer.finish(false,false);
 }
 #[test]fn wrong_name_certificate_cannot_send_http_or_publish_a_document(){
-    let _serial=SERIAL.lock().unwrap();let(mut peer,stream)=Peer::start("wrong-name");let mut h=Harness::new(stream);h.released();assert_eq!(h.client.view(),exchange_client::View::Unavailable);assert_eq!(h.client.failure(),Some(Failure::Certificate));assert_eq!(h.client.http_failure(),None);assert_eq!((h.auth,h.verified),(0,0));assert!(!h.client.peer_authenticated());assert!(h.client.document().is_empty());assert!(h.client.private_scrubbed_for_test());assert!(h.machine.owner().is_none());peer.finish(false,true);
+    let _serial=SERIAL.lock().unwrap();let(mut peer,stream)=Peer::start("wrong-name");let mut h=Harness::new(stream);h.released();positive_release(&mut h,exchange_client::View::Unavailable,false,0);assert_eq!(h.client.view(),exchange_client::View::Unavailable);assert_eq!(h.client.failure(),Some(Failure::Certificate));assert_eq!(h.client.http_failure(),None);assert_eq!((h.auth,h.verified),(0,0));assert!(!h.client.peer_authenticated());assert!(h.client.document().is_empty());assert!(h.client.private_scrubbed_for_test());assert!(h.machine.owner().is_none());peer.finish(false,true);
 }
 #[test]fn terminal_close_scrubs_a_published_full_document_and_cannot_restart_or_issue_pdx(){
     let _serial=SERIAL.lock().unwrap();let(mut peer,stream)=Peer::start("good");let mut h=Harness::new(stream);h.released();assert_eq!(h.client.view(),exchange_client::View::Verified);assert_eq!(h.client.document(),body());let seq=h.client.next_sequence();h.client.close();assert_eq!(h.client.next_sequence(),seq);assert!(h.client.document().is_empty());assert_eq!(h.client.retained_document_len(),0);assert!(h.client.private_scrubbed_for_test());h.client.advance(h.now+2);assert!(CALLS.lock().unwrap().is_empty());assert_eq!(h.client.view(),exchange_client::View::Cancelled);peer.finish(true,false);
@@ -150,7 +157,7 @@ impl Harness{
 // parsing and encrypted close_notify. They prove erasure on cleanup uncertainty,
 // not a successful RELEASE or publication from an injected response.
 fn assert_private_cleanup_failure(h:&mut Harness){
-    assert_eq!(h.client.view(),exchange_client::View::Uncertain);assert!(h.client.busy());
+    assert_eq!(h.client.view(),exchange_client::View::Uncertain);assert!(h.client.busy());assert_eq!(h.client.take_released(),None);assert_eq!(h.client.allocated_payload_bytes(),0);
     assert!(h.client.document().is_empty());assert!(!h.client.has_document());
     assert_eq!(h.client.retained_document_len(),0);assert_eq!(h.client.retained_document_hash(),0);
     assert!(h.client.private_scrubbed_for_test());assert_eq!(h.client.failure(),None);assert_eq!(h.client.http_failure(),None);
@@ -188,7 +195,7 @@ fn assert_private_cleanup_failure(h:&mut Harness){
         // Wrong correlation cannot finish the accepted operation or expose its body.
         h.client.reply(network_job::reply(request.seq+1,0),h.now);assert_eq!(h.client.retained_document_len(),MAX_DOCUMENT);assert!(h.client.document().is_empty());
         if !reply_without_advance{h.client.advance(h.now+2000);assert_eq!(h.client.view(),exchange_client::View::Uncertain);assert_eq!(h.client.retained_document_len(),0);assert!(h.client.private_scrubbed_for_test());}
-        h.machine.reply_accepted();h.client.reply(positive,h.now+2000);
+        h.machine.reply_accepted();h.client.reply(positive,h.now+2000);positive_release(&mut h,exchange_client::View::Unavailable,true,0);
         assert!(!h.client.busy());assert_eq!(h.client.view(),exchange_client::View::Unavailable);assert_eq!(h.client.retained_document_len(),0);assert_eq!(h.client.retained_document_hash(),0);assert!(h.client.document().is_empty());assert!(h.client.private_scrubbed_for_test());
         h.client.advance(h.now+2001);assert_eq!(RELEASE_ATTEMPTS.lock().unwrap().len(),calls);assert!(CALLS.lock().unwrap().is_empty());peer.finish(true,false);
     }

@@ -130,3 +130,16 @@ fn separate_handles_share_one_arena_init_lock() {
     assert_ne!(first, second);
     unsafe { a.dealloc(first, layout); b.dealloc(second, layout); }
 }
+
+#[test]
+fn coherent_usage_preserves_live_bytes_and_returns_to_empty_after_reuse() {
+    let allocator=allocator();assert_eq!(allocator.usage(),heap::Usage{used:0,free:HEAP_BYTES,total:HEAP_BYTES});
+    let layout=Layout::from_size_align(27000,8).unwrap();
+    for _ in 0..64 {
+        let p=unsafe{allocator.alloc(layout)};assert!(!p.is_null());unsafe{core::ptr::write_bytes(p,0x95,layout.size());}
+        let usage=allocator.usage();assert!(usage.used>=layout.size());assert_eq!(usage.used+usage.free,usage.total);assert_eq!(usage.total,HEAP_BYTES);
+        assert_eq!(unsafe{core::slice::from_raw_parts(p,layout.size())},vec![0x95;layout.size()]);
+        unsafe{allocator.dealloc(p,layout);}
+        assert_eq!(allocator.usage().used,0);assert_eq!(allocator.usage().free,HEAP_BYTES);
+    }
+}
