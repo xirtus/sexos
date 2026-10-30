@@ -732,8 +732,26 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
 // Entry
 // --------------------------------------------------------------------------
 
+fn command_probe() {
+    use sex_pdx::pci_command as w;
+    // Read-only normal-profile probe. No device activation, ring or DMA work.
+    for (slot,set,clear) in [(0,0,0),((1u64<<32)|sex_pdx::SLOT_NIC,2,4),
+        (sex_pdx::SLOT_NIC,1,0),(sex_pdx::SLOT_NIC,1u64<<32,0),
+        (sex_pdx::SLOT_NIC,w::MEMORY as u64,w::MEMORY as u64)] {
+        assert_eq!(sex_pdx::device_command(slot,set,clear),Err(w::DENIED),"NIC_COMMAND_AUTHORITY_PROBE");
+    }
+    match sex_pdx::device_command(sex_pdx::SLOT_NIC,0,0) {
+        Ok(r)=>{
+            assert!(r.before==r.after&&!r.changed,"NIC_COMMAND_QUERY_MUTATION");
+            sex_pdx::serial_record!("[sexnet.nic.command.ready] before={} after={} requested_bits=0 changed=0 denied=5 ok=1",r.before,r.after);
+        },
+        Err(error)=>sex_pdx::serial_record!("[sexnet.nic.command.unavailable] status={} requested_bits=0 denied=5 ok=1",error),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    command_probe();
     let mut dma_pool = None;
     let raw = unsafe { sys_net_diag(0) };
     let status = (raw >> 32) as u32;

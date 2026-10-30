@@ -44,7 +44,7 @@ fn rejects_invalid_lend_destination_forms() {
 
 #[test]
 fn syscall_preflight_denies_aliases_and_invalid_lend_destinations() {
-    for number in [0, 28, 29, 43, 50, 51] {
+    for number in [0, 28, 29, 43, 50, 51, 68] {
         for selector in [1u64 << 32, (1u64 << 32) | 5, u64::MAX] {
             assert!(!valid_syscall_selectors(number, selector, 13));
         }
@@ -56,13 +56,13 @@ fn syscall_preflight_denies_aliases_and_invalid_lend_destinations() {
 
 #[test]
 fn syscall_preflight_preserves_existing_valid_calls() {
-    for number in [0, 28, 29, 43, 50, 51] {
+    for number in [0, 28, 29, 43, 50, 51, 68] {
         assert!(valid_syscall_selectors(number, 5, 13));
     }
     assert!(valid_syscall_selectors(0, 0, u64::MAX));
     assert!(valid_syscall_selectors(28, 0, u64::MAX));
     assert!(valid_syscall_selectors(29, 0, 0));
-    for number in [43, 50, 51] {
+    for number in [43, 50, 51, 68] {
         assert!(!valid_syscall_selectors(number, 0, 13));
     }
     // Unrelated raw memory interfaces retain their existing behavior.

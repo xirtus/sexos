@@ -190,6 +190,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 0
             }
             29 => 1,
+            68 => {
+                regs.rsi=0;regs.rdx=0;regs.r10=0;regs.r8=0;
+                sex_pdx::pci_command::DENIED
+            },
             _ => u64::MAX,
         };
         regs.rax = error;
@@ -494,6 +498,12 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         66 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             let reply=crate::app_resources::activation(pd,rdi,rsi);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
+        },
+
+        68 => {
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::pci_command::invoke(pd,rdi,rsi,rdx,r10,r8);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 

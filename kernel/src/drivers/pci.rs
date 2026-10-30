@@ -9,11 +9,7 @@ pub struct PciDevice {
 
 impl PciDevice {
     pub fn read_u32(&self, offset: u8) -> u32 {
-        let address: u32 = 0x80000000 | ((self.bus as u32) << 16) | ((self.dev as u32) << 11) | ((self.func as u32) << 8) | (offset as u32 & 0xFC);
-        unsafe {
-            x86_64::instructions::port::Port::new(0xCF8).write(address);
-            x86_64::instructions::port::Port::new(0xCFC).read()
-        }
+        unsafe { crate::hal::pci::pci_config_read(self.bus,self.dev,self.func,offset) }
     }
 }
 
@@ -61,13 +57,13 @@ pub fn bootstrap_drivers(sexdrive_pd_id: u32, sexdisplay_pd_id: u32) {
             if class == 0x01 && subclass == 0x08 { // NVMe
                 serial_println!("pci: Found NVMe at {:02x}:{:02x}.0", bus, dev);
                 if let Some(pd) = DOMAIN_REGISTRY.get(sexdrive_pd_id) {
-                    pd.grant(CapabilityData::Pci(crate::capability::PciCapData { bus, dev, func: 0, vendor_id: vendor, device_id: 0, bar0_view: None }));
+                    pd.grant(CapabilityData::Pci(crate::capability::PciCapData { bus, dev, func: 0, vendor_id: vendor, device_id: 0, bar0_view: None, command: None }));
                     crate::interrupts::register_irq_route(0x22, sexdrive_pd_id);
                 }
             } else if class == 0x03 { // GPU
                 serial_println!("pci: Found GPU at {:02x}:{:02x}.0", bus, dev);
                 if let Some(pd) = DOMAIN_REGISTRY.get(sexdisplay_pd_id) {
-                    pd.grant(CapabilityData::Pci(crate::capability::PciCapData { bus, dev, func: 0, vendor_id: vendor, device_id: 0, bar0_view: None }));
+                    pd.grant(CapabilityData::Pci(crate::capability::PciCapData { bus, dev, func: 0, vendor_id: vendor, device_id: 0, bar0_view: None, command: None }));
                     crate::interrupts::register_irq_route(0x23, sexdisplay_pd_id);
                 }
             }

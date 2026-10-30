@@ -44,3 +44,4 @@ assert 'bar0_view: Some(view)'in part
 PYMEM
 NIC_BOOT_MEMORY_SOURCE="$TEST_DIR/boot_memory.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/nic_boot_memory.rs" -o "$TEST_DIR/boot-memory"
 "$TEST_DIR/boot-memory" --test-threads=1
+bash "$ROOT_DIR/scripts/pci_command_host_gate.sh"

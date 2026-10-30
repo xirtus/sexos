@@ -165,12 +165,28 @@ pub fn init(drive: u32, display: u32, usb: u32, net: u32, files: u32) {
     // Fixed BOOT_DAG budget, not runtime allocation policy. Drivers may reserve
     // byte subregions within these grants; they cannot create frame authority.
     dma(usb, 1, 256 * 1024);
-    dma(net, 2, 256 * 1024);
+    dma(net, sex_pdx::pci_command::DMA_REGION_ID, sex_pdx::pci_command::DMA_BYTES);
     dma(drive, 3, 512 * 1024);
     paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, 4096, true);
     paired(drive, display, sex_pdx::SLOT_FRAME_REGION, 5, 3 * 1024 * 1024, false);
     if drive != 0 && files != 0 {
         negative_selftest(DOMAIN_REGISTRY.get(drive).unwrap(), DOMAIN_REGISTRY.get(files).unwrap());
+    }
+    if net != 0 {
+        let pd=DOMAIN_REGISTRY.get(net).expect("BOOT_NIC_PD_MISSING");
+        let fail=[sex_pdx::pci_command::DENIED,0,0,0,0];let mut denied=0;
+        for (slot,set,clear,a,b) in [(0,0,0,0,0),((1u64<<32)|sex_pdx::SLOT_NIC,0,0,0,0),
+            (sex_pdx::SLOT_NIC,1,0,0,0),(sex_pdx::SLOT_NIC,1u64<<32,0,0,0),
+            (sex_pdx::SLOT_NIC,2,2,0,0),(sex_pdx::SLOT_NIC,0,0,1,0),(sex_pdx::SLOT_NIC,0,0,0,1)] {
+            assert_eq!(crate::pci_command::invoke(pd,slot,set,clear,a,b),fail);denied+=1;
+        }
+        if files != 0 {
+            let other=DOMAIN_REGISTRY.get(files).unwrap();
+            for slot in [sex_pdx::SLOT_NIC,sex_pdx::SLOT_BLOCK] {
+                assert_eq!(crate::pci_command::invoke(other,slot,0,0,0,0),fail);denied+=1;
+            }
+        }
+        crate::serial_println!("[pci.command.negative.selftest] denied={} output_zero=1 runtime_mint=0 ok=1",denied);
     }
 }
 
@@ -226,6 +242,23 @@ pub fn nic_bar0(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->
     let(physical,actual_length)=dev.probe_boot_bar0()?;
     let length=crate::nic_boot::view_length(actual_length)?;
     Some(pci_view(pd,slot,physical,actual_length,length))
+}
+
+pub fn nic_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,view:RegionGrant)
+    -> sex_pdx::pci_command::Grant
+{
+    require_boot();
+    assert!(slot == sex_pdx::SLOT_NIC && crate::nic_boot::supported(dev.vendor_id,dev.device_id), "BOOT_NIC_COMMAND_SUBJECT");
+    assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_NIC_COMMAND_VIEW_ID");
+    assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
+        && view.length >= crate::nic_boot::REGISTERS_END && view.length <= 65536
+        && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_NIC_COMMAND_VIEW");
+    let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
+        vendor_id:dev.vendor_id,device_id:dev.device_id,allowed:sex_pdx::pci_command::NIC_BITS};
+    assert!(sex_pdx::pci_command::authorize(Some(&g),pd.id,0,0).is_ok(),"BOOT_NIC_COMMAND_GRANT");
+    crate::serial_println!("[boot.nic.command] pd={} slot={} bus={} device={} function={} vendor={} product={} allowed={} dma_region={} runtime_mint=0",
+        pd.id,slot,g.bus,g.device,g.function,g.vendor_id,g.device_id,g.allowed,sex_pdx::pci_command::DMA_REGION_ID);
+    g
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{

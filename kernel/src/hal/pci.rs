@@ -104,19 +104,56 @@ impl PciDevice {
     }
 }
 
-pub unsafe fn pci_config_read(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
-    // Legacy Port I/O
-    let address = ((bus as u32) << 16) | ((slot as u32) << 11) |
-                  ((func as u32) << 8) | (offset as u32 & 0xFC) | 0x8000_0000;
-    x86_64::instructions::port::Port::new(0xCF8).write(address);
+static PCI_CONFIG_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+fn config_address(bus:u8,slot:u8,func:u8,offset:u8)->u32 {
+    ((bus as u32)<<16)|((slot as u32)<<11)|((func as u32)<<8)|(offset as u32&0xfc)|0x8000_0000
+}
+
+fn config_locked<R>(operation:impl FnOnce()->R)->R {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let _guard=PCI_CONFIG_LOCK.lock();operation()
+    })
+}
+
+unsafe fn config_read_unlocked(bus:u8,slot:u8,func:u8,offset:u8)->u32 {
+    x86_64::instructions::port::Port::new(0xCF8).write(config_address(bus,slot,func,offset));
     x86_64::instructions::port::Port::new(0xCFC).read()
 }
 
-pub unsafe fn pci_config_write(bus: u8, slot: u8, func: u8, offset: u8, value: u32) {
-    let address = ((bus as u32) << 16) | ((slot as u32) << 11) |
-                  ((func as u32) << 8) | (offset as u32 & 0xFC) | 0x8000_0000;
-    x86_64::instructions::port::Port::new(0xCF8).write(address);
+unsafe fn config_write_unlocked(bus:u8,slot:u8,func:u8,offset:u8,value:u32) {
+    x86_64::instructions::port::Port::new(0xCF8).write(config_address(bus,slot,func,offset));
     x86_64::instructions::port::Port::new(0xCFC).write(value);
+}
+
+pub unsafe fn pci_config_read(bus:u8,slot:u8,func:u8,offset:u8)->u32 {
+    config_locked(||config_read_unlocked(bus,slot,func,offset))
+}
+
+pub unsafe fn pci_config_write(bus:u8,slot:u8,func:u8,offset:u8,value:u32) {
+    config_locked(||config_write_unlocked(bus,slot,func,offset,value))
+}
+
+/// Capability authorization precedes this bounded mechanism. One config lock
+/// covers identity/read/optional16-bit command write/readback. Status at+6 is
+/// never echoed through a32-bit write (its error fields are write-one-to-clear).
+pub(crate) fn apply_command(update:sex_pdx::pci_command::Update)->Result<sex_pdx::pci_command::Reply,u64> {
+    use sex_pdx::pci_command::{Reply,IO};
+    config_locked(||unsafe {
+        let g=update.grant();
+        if config_read_unlocked(g.bus,g.device,g.function,0) != (g.vendor_id as u32 | ((g.device_id as u32)<<16)) {
+            return Err(IO);
+        }
+        let before=config_read_unlocked(g.bus,g.device,g.function,4) as u16;
+        let expected=update.next(before);
+        if expected != before {
+            x86_64::instructions::port::Port::new(0xCF8).write(config_address(g.bus,g.device,g.function,4));
+            x86_64::instructions::port::Port::<u16>::new(0xCFC).write(expected);
+        }
+        let after=config_read_unlocked(g.bus,g.device,g.function,4) as u16;
+        if after != expected { return Err(IO); }
+        Ok(Reply {before,after,changed:before!=after})
+    })
 }
 
 pub fn enumerate_bus() -> Vec<PciDevice> {

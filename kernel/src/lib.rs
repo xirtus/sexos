@@ -25,6 +25,8 @@ pub mod capability;
 #[cfg(target_arch = "x86_64")]
 pub mod capability_slot;
 #[cfg(target_arch = "x86_64")]
+pub mod pci_command;
+#[cfg(target_arch = "x86_64")]
 pub mod boot_memory;
 pub mod boot_display_state;
 pub mod boot_display;

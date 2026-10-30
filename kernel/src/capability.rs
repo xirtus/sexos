@@ -48,6 +48,8 @@ pub struct SpawnCapData { pub max_pds: u32, pub allowed_pku_keys: u32 }
 pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u16, pub device_id: u16,
     /// Immutable BAR0 view assigned before capability sealing.
     pub bar0_view: Option<sex_pdx::memory_region::RegionGrant>,
+    /// Explicit BOOT-only command-bit permission; a BAR lease alone has none.
+    pub command: Option<sex_pdx::pci_command::Grant>,
 }
 
 pub struct DisplayHardwareLease {

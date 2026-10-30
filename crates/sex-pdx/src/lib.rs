@@ -463,6 +463,24 @@ pub const SLOT_DMA_REGION: u64 = 32;
 pub const SLOT_FRAME_REGION: u64 = 33;
 pub const SLOT_BLOCK_BUFFER: u64 = 17;
 
+/// Change only explicitly BOOT-sanctioned command bits on the held device.
+/// A hardware error may follow a partial mutation: inspect with set=clear=0;
+/// never silently retry a failed mutation.
+pub fn device_command(slot:u64,set:u64,clear:u64)->Result<pci_command::Reply,u64> {
+    let(status,before,after,changed,reserved):(u64,u64,u64,u64,u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") pci_command::SYS_COMMAND=>status,in("rdi")slot,
+        inlateout("rsi")set=>before,inlateout("rdx")clear=>after,
+        inlateout("r10")0u64=>changed,inlateout("r8")0u64=>reserved,
+        out("rcx")_,out("r11")_,options(nostack)); }
+    if status!=0 {
+        if before|after|changed|reserved!=0{return Err(pci_command::IO)}
+        return Err(status)
+    }
+    if before>u16::MAX as u64||after>u16::MAX as u64||changed>1||reserved!=0{return Err(pci_command::IO)}
+    Ok(pci_command::Reply{before:before as u16,after:after as u16,changed:changed!=0})
+}
+
 /// Inspect a boot paging capability without allocating or mapping anything.
 pub fn paging_info(slot: u64) -> Result<paging::PagingInfo, u64> {
     let (status, base, length, target, rights): (u64, u64, u64, u64, u64);
@@ -921,6 +939,7 @@ pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<DomainId, u64> {
 pub mod document;
 pub mod document_buffer;
 pub mod document_snapshot;
+pub mod pci_command;
 
 pub mod desktop_style;
 pub mod document_view;
