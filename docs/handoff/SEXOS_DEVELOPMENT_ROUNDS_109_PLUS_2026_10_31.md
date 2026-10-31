@@ -249,3 +249,26 @@ The [alpha evidence handoff](ALPHA_EVIDENCE_2026_10_31.md) and
 preserve the completed rehearsal separately from the live compact 1800-second
 run. That longer run and subsequent wide repeat require terminal results and
 independent replay. Inventory remains 2 Open / 28 Partial / System Proven false.
+
+## Independent civil-clock repaint milestone — 31 October
+
+Display now preserves every canonical clock admission/health renewal while
+requesting top-strip repaint only when the two rendered rows change. Other UI
+dirty causes survive. The native boot probe avoids a clock repaint request for
+207 of 228 admissions (90.8%); full compact/wide app workflows avoid 78.2%/77.5%.
+These are source-bound decision counts, not CPU or latency speedup claims.
+
+One new frozen image passes GREEN_MASTER, 42 registered checks with 2,630
+passing Rust test executions, 906 Python tests, two rejected compiled mutations,
+six native boots with 68 verified captures and fresh independent replay. Five
+exact ISO-extracted ELFs decode 229,004 instructions with zero inspected
+vector/FP matches. Only Display changes among production inputs; the kernel,
+ABI, source sampler and SASOS authority rules remain unchanged.
+
+The [repaint handoff](CIVIL_CLOCK_REPAINT_2026_10_31.md) and
+[machine evidence](assets/sexos-civil-clock-repaint-2026-10-31-evidence.json)
+preserve the qualified short workflows and measured decisions. Separate earlier
+image compact/wide 1800-second sessions remain live and excluded. Sustained
+acceptance on the optimized image and actual Quil pending-I/O terminal teardown
+still require qualification. Inventory stays 2 Open / 28 Partial / System Proven
+false; the physical/storage/reserve plan continues.

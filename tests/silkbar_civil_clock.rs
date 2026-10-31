@@ -26,7 +26,35 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
   let mut bar=DEFAULT_SILK_BAR;let before=bar.civil_clock;
   assert_eq!(handle_civil_clock_update(&mut bar,caller.0,caller.1,wire(State::Snapshot,MIN,1),0),Err(Reject::Publisher));assert_eq!(bar.civil_clock,before);assert!(!bar.civil_enabled);
  }
- let mut bar=DEFAULT_SILK_BAR;assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,1),0),Ok(Applied::New));assert!(bar.civil_enabled);
+ let mut bar=DEFAULT_SILK_BAR;assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,1),0),Ok((Applied::New,true)));assert!(bar.civil_enabled);
+}
+#[test]fn repeated_visible_seconds_refresh_health_without_requesting_repaint(){
+ let mut bar=DEFAULT_SILK_BAR;
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,1),10),Ok((Applied::New,true)));
+ assert!(!bar.civil_clock.health(10+HEALTH_TICKS-1));
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,2),10+HEALTH_TICKS-1),Ok((Applied::New,false)));
+ assert_eq!(bar.civil_clock.sequence(),2);assert_eq!(bar.civil_clock.seconds(),MIN);
+ assert!(!bar.civil_clock.health(10+HEALTH_TICKS));
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN+1,3),10+HEALTH_TICKS+1),Ok((Applied::New,true)));
+ let before=bar.civil_clock;
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN+1,3),10+2*HEALTH_TICKS),Ok((Applied::Duplicate,false)));
+ assert_eq!(bar.civil_clock,before);
+ assert!(bar.civil_clock.health(10+2*HEALTH_TICKS+1));
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN+1,4),10+2*HEALTH_TICKS+2),Ok((Applied::New,true)));
+}
+#[test]fn every_source_label_and_stale_recovery_change_requests_pixels(){
+ let mut bar=DEFAULT_SILK_BAR;
+ // Even equal initial Unknown glyphs must replace the legacy Demo chip.
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Unknown,0,1),0),Ok((Applied::New,true)));
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Unknown,0,2),0),Ok((Applied::New,false)));
+ for(seq,state,seconds)in[(3,State::Snapshot,MIN),(4,State::Unavailable,0),(6,State::Unknown,0),(7,State::Snapshot,MIN),(8,State::Rollback,0)]{
+  assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(state,seconds,seq),0),Ok((Applied::New,true)));
+  if seq==4 {assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Unavailable,0,5),0),Ok((Applied::New,false)));}
+ }
+ let mut bar=DEFAULT_SILK_BAR;
+ handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,1),0).unwrap();
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,u32::MAX),1),Ok((Applied::New,true)));
+ assert_eq!(bar.civil_clock.state(),State::Exhausted);
 }
 #[test]fn every_reserved_bit_and_version_state_alias_is_rejected_atomically(){
  let good=wire(State::Snapshot,MIN,1);let mut cases=Vec::new();

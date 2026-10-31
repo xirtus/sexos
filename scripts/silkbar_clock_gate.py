@@ -63,6 +63,34 @@ def inspect_publications(trace):
  assert '[sexdisplay.clock.civil.rejected]'not in trace,'unexpected native civil rejection'
  return admitted
 
+def repaint_metrics(trace):
+ """Join repaint decisions to real admissions; a decision is never a draw."""
+ admitted=inspect_publications(trace)
+ pattern=r'\[sexdisplay.clock.civil.applied\] pd=6 task=6 sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) seconds=(\d+) high_water=\d+ stale=0 source_known=[01] source=(?:q35_cmos_utc|unknown) precision=[01] snapshot_only=1 pixels=unconfirmed repaint=([01])(?=\n|$)'
+ updates=list(re.finditer(pattern,trace));assert len(updates)==len(admitted),'missing/malformed civil repaint decision'
+ stale=list(re.finditer(r'\[sexdisplay.clock.civil.stale\] sequence=(\d+) high_water=(\d+) state=Unknown seconds=0 stale=1 ticks=\d+ synthesized=0(?=\n|$)',trace))
+ assert len(stale)==trace.count('[sexdisplay.clock.civil.stale]'),'malformed civil health transition'
+ draws=list(re.finditer(r'\[display.civil.draw\] sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) seconds=(\d+) stale=([01]) pixels=written path=(?:full|strip) x=\d+ y=\d+ w=\d+ h=\d+(?=\n|$)',trace))
+ assert len(draws)==trace.count('[display.civil.draw]'),'malformed completed civil draw'
+ # Ordinary-image startup paints Unknown. Canonical receiver health may later
+ # hide Snapshot; merge those transitions before checking both renderer rows.
+ state,seconds,is_stale,sequence='Unknown',0,False,0;requested=0
+ def visible(s,t,old):return(s,t%86400 if s=='Snapshot'else 0,old if s=='Unknown'else False)
+ for _,kind,event in sorted([(m.start(),'update',m)for m in updates]+[(m.start(),'stale',m)for m in stale]+[(m.start(),'draw',m)for m in draws]):
+  if kind=='draw':
+   assert(int(event[1]),event[2],int(event[3]),bool(int(event[4])))==(sequence,state,seconds,is_stale),'completed draw differs from actual receiver/health state'
+  elif kind=='stale':
+   assert state=='Snapshot'and int(event[1])==sequence and int(event[2])==admitted[sequence]['high_water'],'unbound civil expiry'
+   state,seconds,is_stale='Unknown',0,True
+  else:
+   seq,new_state,new_seconds,redraw=int(event[1]),event[2],int(event[3]),int(event[4])
+   assert seq in admitted and admitted[seq]['offset']==event.start(),'repaint decision lacks actual admission'
+   changed=visible(state,seconds,is_stale)!=visible(new_state,new_seconds,False)
+   assert redraw==int(changed),'repaint decision differs from complete visible clock rows'
+   state,seconds,is_stale,sequence=new_state,new_seconds,False,seq;requested+=redraw
+ assert updates,'no civil admissions observed'
+ return dict(admissions=len(updates),clock_repaint_requests=requested,unchanged_admissions=len(updates)-requested,completed_civil_draws=len(draws),unchanged_fraction=(len(updates)-requested)/len(updates),scope='Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.')
+
 def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
  try:
   admitted=inspect_publications(trace);draws=list(re.finditer(r'\[display.civil.draw\] sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) seconds=(\d+) stale=([01]) pixels=written path=(full|strip) x=(\d+) y=(\d+) w=(\d+) h=(\d+)',trace));assert len(draws)==trace.count('[display.civil.draw]')and draws,'missing/malformed completed civil draw';draw=draws[-1];seq=int(draw[1]);state=draw[2];seconds=int(draw[3]);stale=bool(int(draw[4]));x,y,w,h=map(int,draw.groups()[5:]);width,height,raw=ppm_rgb(ppm,min_width=1,min_height=1)

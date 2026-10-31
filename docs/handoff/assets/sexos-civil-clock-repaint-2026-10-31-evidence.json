@@ -1,0 +1,331 @@
+{
+  "qualified_on_feature_branch": true,
+  "goal_complete": false,
+  "branch": "codex/civil-clock-redraw",
+  "base": "20c50957027e69c258b98e701ef1efab0d2563f6",
+  "production_delta": [
+    "servers/sexdisplay/src/main.rs"
+  ],
+  "iso_sha256": "9ad6768dcc70a0554999b5b2f57ceebcc0cd66e32500c1ceee79deb1e9ff8aca",
+  "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "binding_sha256": "ed62115bfe6e71bbf6263e6ea8481331d465dae474e3d32774daeaf257394cb8",
+  "production_inputs": 574,
+  "runner_inputs": 569,
+  "build": "GREEN_MASTER",
+  "registered_host_checks": 42,
+  "rust_test_executions": 2630,
+  "python_tests": 906,
+  "compiled_controls": {
+    "actual_authority_guard_removed_rejected": true,
+    "actual_redraw_suppression_removed_rejected": true,
+    "within_registered_host_gate": true,
+    "binaries_retained": false,
+    "exact_checker_and_test_inputs_retained": true
+  },
+  "native": {
+    "boots": 6,
+    "verified_captures": 68,
+    "workflow_boots": 2,
+    "workflow_captures": 40,
+    "invalid_source_boots": 2,
+    "invalid_source_captures": 8,
+    "tls_responsiveness_boots": 2,
+    "tls_responsiveness_captures": 20,
+    "independent_replay": true,
+    "workflow_acceptance": false
+  },
+  "repaint_metrics": {
+    "ok": true,
+    "binding": {
+      "path": "/tmp/sexos-civil-redraw-a-frozen/source-binding.json",
+      "sha256": "ed62115bfe6e71bbf6263e6ea8481331d465dae474e3d32774daeaf257394cb8",
+      "iso_sha256": "9ad6768dcc70a0554999b5b2f57ceebcc0cd66e32500c1ceee79deb1e9ff8aca",
+      "production_files": 574,
+      "runner_files": 569
+    },
+    "cohorts": [
+      {
+        "name": "boot-probe",
+        "serial": "/tmp/sexos-civil-redraw-a-build/serial.log",
+        "serial_sha256": "118a5d87db3b3d8c4385a1fab24c495f7c27d4cb30cc2a22f2830a0657e70455",
+        "admissions": 228,
+        "clock_repaint_requests": 21,
+        "unchanged_admissions": 207,
+        "unchanged_fraction": 0.9078947368421053,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 22
+      },
+      {
+        "name": "compact-workflow",
+        "serial": "/tmp/sexos-civil-redraw-a-compact-rehearsal/serial.log",
+        "serial_sha256": "9cb1a63e8a55a9f14d427693c5bd3eb2c0ffdeceafb57ca9b3f2d40582a5d219",
+        "admissions": 193,
+        "clock_repaint_requests": 42,
+        "unchanged_admissions": 151,
+        "unchanged_fraction": 0.7823834196891192,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 64
+      },
+      {
+        "name": "wide-workflow",
+        "serial": "/tmp/sexos-civil-redraw-a-wide-rehearsal/serial.log",
+        "serial_sha256": "2f919959faf6894d984da1139af4ab3d30d3668d18cd8f7ab3cd89585283ab97",
+        "admissions": 236,
+        "clock_repaint_requests": 53,
+        "unchanged_admissions": 183,
+        "unchanged_fraction": 0.7754237288135594,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 78
+      },
+      {
+        "name": "clock-invalid-year-wide",
+        "serial": "/tmp/sexos-civil-redraw-a-extra-native-clock-invalid-year-wide/serial.log",
+        "serial_sha256": "e6dd1f6b7ed1cec58ec1b3baf2851375f1481179673bc708b0386ff4f3d34bd7",
+        "admissions": 69,
+        "clock_repaint_requests": 1,
+        "unchanged_admissions": 68,
+        "unchanged_fraction": 0.9855072463768116,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 2
+      },
+      {
+        "name": "clock-invalid-year-compact",
+        "serial": "/tmp/sexos-civil-redraw-a-extra-native-clock-invalid-year-compact/serial.log",
+        "serial_sha256": "b3dc8321a6374b01bc22477e5e3d6a3998ee69583b7d1aedf93cad1d39788b12",
+        "admissions": 58,
+        "clock_repaint_requests": 1,
+        "unchanged_admissions": 57,
+        "unchanged_fraction": 0.9827586206896551,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 2
+      },
+      {
+        "name": "responsive-wide",
+        "serial": "/tmp/sexos-civil-redraw-a-extra-native-responsive-wide/serial.log",
+        "serial_sha256": "668b254e94fb2492b43b8ddf94cd05f6aeeeee40d1ee1b78cc9b9f573c7a1694",
+        "admissions": 92,
+        "clock_repaint_requests": 20,
+        "unchanged_admissions": 72,
+        "unchanged_fraction": 0.782608695652174,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 26
+      },
+      {
+        "name": "responsive-compact",
+        "serial": "/tmp/sexos-civil-redraw-a-extra-native-responsive-compact/serial.log",
+        "serial_sha256": "c02573e81379034b266e7cd4b1f96597f2c9cc7e41f09a5ee184d52eeb3b3f11",
+        "admissions": 80,
+        "clock_repaint_requests": 14,
+        "unchanged_admissions": 66,
+        "unchanged_fraction": 0.825,
+        "scope": "Exact held-source admissions and both-row repaint decisions. Completed draws may also follow other dirty causes. No input-latency, CPU-utilization or wall-time speedup claim.",
+        "completed_draw_receipts": 24
+      }
+    ],
+    "draw_receipt_semantics": "civil_clock_drawn deduplicates identical stamps. Completed-draw receipts are not a count of every top-strip redraw invocation.",
+    "scope": "Repaint decisions recomputed from chronological actual source admissions and health state, using both rendered rows. Source sampling cadence, source authority, model admission and health refresh remain. No CPU/input-latency/wall-time speedup or sustained-session claim."
+  },
+  "scalar": {
+    "elfs": 5,
+    "instructions": 229004,
+    "inspected_vector_fp_matches": 0,
+    "results": [
+      {
+        "name": "kaleidoscope",
+        "iso_path": "/apps/kaleidoscope",
+        "elf_sha256": "865f9224d399f21dad21fa3eddd2f6c8b5ec96563bed8facd1be5261b4521701",
+        "disassembly_sha256": "c924793eb3513f46c3b31bb689db0c7ff5406498c53ca42d41580f1382f2907b",
+        "instructions": 92168,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-civil-redraw-a-frozen/tested.iso",
+            "-extract",
+            "/apps/kaleidoscope",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/kaleidoscope.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/kaleidoscope.elf"
+          ]
+        ]
+      },
+      {
+        "name": "silk-shell",
+        "iso_path": "/servers/silk-shell",
+        "elf_sha256": "43f7373343aaec9c6c53720f4b4bc06f89cafb2cc230ddaaa5fcc11a7dd3f53e",
+        "disassembly_sha256": "20dd72434340a744c2593ce89e635042352444011b47f8406bc5de28f3c763ef",
+        "instructions": 88383,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-civil-redraw-a-frozen/tested.iso",
+            "-extract",
+            "/servers/silk-shell",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/silk-shell.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/silk-shell.elf"
+          ]
+        ]
+      },
+      {
+        "name": "sexdisplay",
+        "iso_path": "/servers/sexdisplay",
+        "elf_sha256": "36d1807adbb74ced1ca4148e3109c4893eb61a5d3cfc78cd8349b47c981c2203",
+        "disassembly_sha256": "bd639384455fb039bea2a1e2be12c0cdeaf4c52036fa0059b6c188bfb876f056",
+        "instructions": 26255,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-civil-redraw-a-frozen/tested.iso",
+            "-extract",
+            "/servers/sexdisplay",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/sexdisplay.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/sexdisplay.elf"
+          ]
+        ]
+      },
+      {
+        "name": "quil",
+        "iso_path": "/servers/quil",
+        "elf_sha256": "ce30ead90abb2798aa620ad2fb055028043c73706c5d88cad4d50e7326af67a9",
+        "disassembly_sha256": "c82659bd5862cfe27c85f7e5168cf15449f8c3c36e78a18e886009cd43fc7e42",
+        "instructions": 16918,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-civil-redraw-a-frozen/tested.iso",
+            "-extract",
+            "/servers/quil",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/quil.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/quil.elf"
+          ]
+        ]
+      },
+      {
+        "name": "silkbar",
+        "iso_path": "/servers/silkbar",
+        "elf_sha256": "fe9c8f8f9acfc143615bc70268af241f7ce877f4050c06d5463ff9f333fd2256",
+        "disassembly_sha256": "8590f087f1eaf24f09bc709af7a5bccd4f550353915226205cab1341c1a3e6e0",
+        "instructions": 5280,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-civil-redraw-a-frozen/tested.iso",
+            "-extract",
+            "/servers/silkbar",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/silkbar.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-civil-redraw-a-scalar-v2/silkbar.elf"
+          ]
+        ]
+      }
+    ],
+    "scope": "Five exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-civil-clock-repaint-2026-10-31-raw.tar.gz",
+    "sha256": "b7a25d0a50ace12a28dbf552258b57594e414a7cd8830c9f106086b95e66a1d7",
+    "bytes": 9428677,
+    "members": 1381,
+    "payload_manifest_sha256": "a454368c090bba333fa39d6ed2fc9d3308c7972a4495f216b23f2d59d5bff290",
+    "all_members_size_and_sha256_verified": true,
+    "disks": [
+      {
+        "path": "/tmp/sexos-civil-redraw-a-build/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-civil-redraw-a-compact-rehearsal/nvme.img",
+        "bytes": 1048576,
+        "sha256": "8702f2697e3b23e5beae3539b6a26e6a6f5ec6904e57e801f878b1443286a472",
+        "compressed_sha256": "d847fa1ef8692ec575dacfd747dc2d9ff735587a23f417d4137d09e9e69bbfbd"
+      },
+      {
+        "path": "/tmp/sexos-civil-redraw-a-wide-rehearsal/nvme.img",
+        "bytes": 1048576,
+        "sha256": "8702f2697e3b23e5beae3539b6a26e6a6f5ec6904e57e801f878b1443286a472",
+        "compressed_sha256": "d847fa1ef8692ec575dacfd747dc2d9ff735587a23f417d4137d09e9e69bbfbd"
+      },
+      {
+        "path": "/private/tmp/sexos-civil-redraw-a-extra-native-clock-invalid-year-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-civil-redraw-a-extra-native-clock-invalid-year-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-civil-redraw-a-extra-native-responsive-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "98cfe03df1f5d0395a92d96387cca58515b79f218137c6679fc5974bb92cba81",
+        "compressed_sha256": "9e41bf94ea6848a3d3d9d4a393c2e2444d30154f90f0e8fe4e6fbb3333214da9"
+      },
+      {
+        "path": "/private/tmp/sexos-civil-redraw-a-extra-native-responsive-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "98cfe03df1f5d0395a92d96387cca58515b79f218137c6679fc5974bb92cba81",
+        "compressed_sha256": "9e41bf94ea6848a3d3d9d4a393c2e2444d30154f90f0e8fe4e6fbb3333214da9"
+      }
+    ]
+  },
+  "diagnostics": "Initial scalar-wrapper tool discovery found no llvm-objdump in the pinned compiler sysroot; the successful v2 wrapper uses the existing installed decoder, recording its version and exact commands. Both wrapper/log inputs retained. No native attempt failed.",
+  "scope": "Only Display repaint selection changes. Fresh canonical source admissions still advance sequence/health; both actual text rows determine dirty state, preserving other dirty causes. Receipt counts deduplicate identical completed stamps and are not total top-strip render calls. Two short native workflows plus invalid-source/TLS regressions on this exact image; no sustained-alpha, CPU/latency speedup, physical/power-loss/SMP, global epoch replay or System Proven claim. The separately live compact/wide1800s cohorts use the earlier image and are excluded."
+}

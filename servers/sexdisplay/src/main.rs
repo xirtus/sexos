@@ -2701,14 +2701,20 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
 /// This is the actual IPC boundary for kind11. Do not send the new form
 /// through the legacy decoder's narrowing casts or caller-free apply_update.
 fn handle_civil_clock_update(bar:&mut SilkBar,caller_pd:u32,caller_task:u32,args:[u64;3],now:u64)
-    ->Result<silkbar_model::civil_clock::Applied,silkbar_model::civil_clock::Reject>{
+    ->Result<(silkbar_model::civil_clock::Applied,bool),silkbar_model::civil_clock::Reject>{
     use silkbar_model::civil_clock::Reject;
     let expected=sex_pdx::clock_source::STATUS_BAR;
     let min=u32::try_from(sex_pdx::clock_source::MIN_SECONDS).map_err(|_|Reject::Framing)?;
     let max=u32::try_from(sex_pdx::clock_source::MAX_SECONDS).map_err(|_|Reject::Framing)?;
-    let result=bar.civil_clock.receive((caller_pd,caller_task),(expected.pd,expected.task),args,min,max,now);
-    if result.is_ok(){bar.civil_enabled=true;}
-    result
+    let was_enabled=bar.civil_enabled;
+    let old_lines=civil_clock_lines(&bar.civil_clock);
+    let applied=bar.civil_clock.receive((caller_pd,caller_task),(expected.pd,expected.task),args,min,max,now)?;
+    bar.civil_enabled=true;
+    // New source receipts still refresh sequence and observation health. Only
+    // changed renderer bytes need pixels; repeated whole-second samples must
+    // not force an otherwise idle desktop to repaint the entire top strip.
+    let changed=!was_enabled || old_lines!=civil_clock_lines(&bar.civil_clock);
+    Ok((applied,changed))
 }
 fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> (bool, u32) {
     let kind = arg0 as u32;
@@ -3338,12 +3344,12 @@ pub extern "C" fn _start() -> ! {
                     // it rejects every high-word alias before changing state.
                     if msg.arg0 as u32==UpdateKind::SetCivilClock as u32{
                         match handle_civil_clock_update(&mut bar,msg.caller_pd,msg.caller_task,[msg.arg0,msg.arg1,msg.arg2],raw_ticks){
-                            Ok(silkbar_model::civil_clock::Applied::New)=>{
-                                needs_top_strip_redraw=true;
+                            Ok((silkbar_model::civil_clock::Applied::New,changed))=>{
+                                needs_top_strip_redraw|=changed;
                                 let source_known=matches!(bar.civil_clock.state(),silkbar_model::civil_clock::State::Snapshot|silkbar_model::civil_clock::State::Unavailable|silkbar_model::civil_clock::State::Rollback);
-                                sex_pdx::serial_record!("[sexdisplay.clock.civil.applied] pd={} task={} sequence={} state={:?} seconds={} high_water={} stale=0 source_known={} source={} precision={} snapshot_only=1 pixels=unconfirmed",msg.caller_pd,msg.caller_task,bar.civil_clock.sequence(),bar.civil_clock.state(),bar.civil_clock.seconds(),bar.civil_clock.high_water(),source_known as u8,if source_known{"q35_cmos_utc"}else{"unknown"},source_known as u8);
+                                sex_pdx::serial_record!("[sexdisplay.clock.civil.applied] pd={} task={} sequence={} state={:?} seconds={} high_water={} stale=0 source_known={} source={} precision={} snapshot_only=1 pixels=unconfirmed repaint={}",msg.caller_pd,msg.caller_task,bar.civil_clock.sequence(),bar.civil_clock.state(),bar.civil_clock.seconds(),bar.civil_clock.high_water(),source_known as u8,if source_known{"q35_cmos_utc"}else{"unknown"},source_known as u8,changed as u8);
                             },
-                            Ok(silkbar_model::civil_clock::Applied::Duplicate)=>{},
+                            Ok((silkbar_model::civil_clock::Applied::Duplicate,_))=>{},
                             Err(error)=>{
                                 static mut CIVIL_REJECT_BUDGET:u8=32;
                                 unsafe{if CIVIL_REJECT_BUDGET>0{CIVIL_REJECT_BUDGET-=1;sex_pdx::serial_record!("[sexdisplay.clock.civil.rejected] pd={} task={} reason={:?} effects=0",msg.caller_pd,msg.caller_task,error);}}
