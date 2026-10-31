@@ -42,10 +42,14 @@ impl Authority for Auth{
 }
 #[test]fn cooperative_close_requires_exact_boot_coordinator_and_original_task(){
  assert!(close_requested(OP_APP_CLOSE,3,[15,15,0],15,15));
- for(op,caller,args)in[(OP_APP_EXIT,3,[15,15,0]),(OP_APP_CLOSE,15,[15,15,0]),(OP_APP_CLOSE,0,[15,15,0]),(OP_APP_CLOSE,3,[(1<<32)|15,15,0]),(OP_APP_CLOSE,3,[15,(1<<32)|15,0]),(OP_APP_CLOSE,3,[15,15,1]),(OP_APP_CLOSE,3,[12,12,0])]{
+ for(op,caller,args)in[(OP_APP_EXIT,3,[15,15,0]),(OP_APP_CLOSE,15,[15,15,0]),(OP_APP_CLOSE,0,[15,15,0]),(OP_APP_CLOSE,3,[(1<<32)|15,15,0]),(OP_APP_CLOSE,3,[15,(1<<32)|15,0]),(OP_APP_CLOSE,3,[15,15,2]),(OP_APP_CLOSE,3,[15,15,u64::MAX]),(OP_APP_CLOSE,3,[12,12,0])]{
   assert!(!close_requested(op,caller,args,15,15));
  }
  assert!(!close_requested(OP_APP_CLOSE,3,[0,0,0],0,0));
+ // Ask (0) and the user's confirmation after a decline (1) are the only kinds.
+ assert_eq!(close_request(OP_APP_CLOSE,3,[15,15,0],15,15),Some(CLOSE_ASK));
+ assert_eq!(close_request(OP_APP_CLOSE,3,[15,15,1],15,15),Some(CLOSE_CONFIRMED));
+ assert_eq!(close_request(OP_APP_CLOSE,3,[15,15,2],15,15),None);
 }
 
 #[test]fn sixth_catalog_entry_retains_terminal_fence_independently(){

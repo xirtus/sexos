@@ -115,9 +115,19 @@ def run(c, seconds, acceptance=True, third_quil=False):
         {'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}
         for k,down in [('ctrl',True),('s',True),('s',False),('ctrl',False),
                        ('z',True),('z',False),('f11',True),('f11',False)]]})
-    wait(r'\[quil.document.close\] pending=1', start)
+    # Unsaved 'z' plus the admitted save: Quil declines the ordinary Close
+    # and keeps the work; only the user's second, confirmed Close discards.
+    wait(r'\[quil.close.declined\] dirty=1 ', start)
+    wait(r'\[shell.app.close.declined\] target=9 task=9 reason=unsaved next_close=confirmed', start)
+    record('dirty_close_declined', sent)
+    capture('close-declined', 'UNSAVED')
+    if re.search(r'\[quil.document.close\]', text()[start:]):raise RuntimeError('declined close still closed Quil')
+    confirm = len(text())
+    key('f11', r'\[quil.close.confirmed\] dirty=1 ')
+    closed = wait(r'\[quil.document.close\] pending=(\d)', confirm)
+    pending_at_close = int(closed[1])
     wait(r'\[sext.app.pool.ready\] target=9 .*ok=1', start)
-    record('pending_quil_close_to_zero_reuse', sent)
+    record('pending_quil_close_to_zero_reuse', sent, save_pending_at_confirmed_close=pending_at_close)
     key('grave_accent', r'\[shell.palette.item\] idx=0')
     key('j', r'\[shell.palette.select\] old=0 new=1')
     key('ret', r'\[shell.app.relaunch\] predecessor=9 successor=16 ')

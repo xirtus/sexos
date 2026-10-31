@@ -6,11 +6,21 @@ pub const OP_APP_EXIT: u64 = 0x107;
 pub const OP_APP_CLOSE: u64 = 0x108;
 pub const OP_APP_PRESENT: u64 = 0x109;
 pub const CLOSE_SLOTS: [usize;3] = [41,42,43];
+/// An app holding unsaved work may decline an ordinary close request once;
+/// the user's next Close for that incarnation is sent as confirmed.
+pub const OP_APP_CLOSE_DECLINED: u64 = 0x10A;
+pub const CLOSE_ASK: u64 = 0;
+pub const CLOSE_CONFIRMED: u64 = 1;
+pub const DECLINE_UNSAVED: u64 = 1;
 /// Cooperative app finish is authorized only by the static shell coordinator.
 /// Delivery is not death; services must still attest kernel custody separately.
+/// Returns CLOSE_ASK or CLOSE_CONFIRMED.
+pub fn close_request(opcode:u64,caller:u32,args:[u64;3],target:u32,task:u32)->Option<u64> {
+    (opcode==OP_APP_CLOSE && caller==3 && target!=0 && task!=0
+        && args[0]==target as u64 && args[1]==task as u64 && args[2]<=CLOSE_CONFIRMED).then_some(args[2])
+}
 pub fn close_requested(opcode:u64,caller:u32,args:[u64;3],target:u32,task:u32)->bool {
-    opcode==OP_APP_CLOSE && caller==3 && target!=0 && task!=0
-        && args==[target as u64,task as u64,0]
+    close_request(opcode,caller,args,target,task).is_some()
 }
 
 pub const SYS_INFO: u64 = 63;

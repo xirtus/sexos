@@ -178,9 +178,23 @@ unsafe fn shell_close_poll() {
         // Keep retry ownership until attested death, rate-limited by ticks.
         entry.attempted_close(tick);
         let accepted = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE,
-            entry.target as u64, entry.task as u64, 0).is_ok();
+            entry.target as u64, entry.task as u64, entry.close_kind()).is_ok();
         sex_pdx::serial_record!("[shell.app.close.send] target={} task={} slot={} tick={} accepted={}",entry.target,entry.task,slot,tick,accepted as u8);
     }
+}
+const _: () = assert!(app_custody::CLOSE_ASK==sex_pdx::app_lifecycle::CLOSE_ASK
+    && app_custody::CLOSE_CONFIRMED==sex_pdx::app_lifecycle::CLOSE_CONFIRMED
+    && app_custody::DECLINE_UNSAVED==sex_pdx::app_lifecycle::DECLINE_UNSAVED);
+/// An app's own decline of a pending ordinary close: unsaved work stays open
+/// and the user's next Close is sent as confirmed.
+unsafe fn shell_close_declined_receive(msg:&sex_pdx::PdxMessage)->bool {
+    if msg.type_id!=sex_pdx::app_lifecycle::OP_APP_CLOSE_DECLINED {return false;}
+    for entry in APP_CUSTODY.iter_mut().flatten() {
+        if entry.target==msg.caller_pd && entry.task==msg.caller_task && entry.decline_close(msg.caller_pd,[msg.arg0,msg.arg1,msg.arg2]) {
+            sex_pdx::serial_record!("[shell.app.close.declined] target={} task={} reason=unsaved next_close=confirmed",entry.target,entry.task);
+        }
+    }
+    true
 }
 unsafe fn shell_request_app_close(sid: u64) {
     if let Some(entry) = APP_CUSTODY.iter_mut().flatten().find(|e|e.owns_surface(sid)) {
@@ -19702,6 +19716,12 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         }
     }
     shell_request_app_close(surface_id);
+    // A document app may decline a Close to keep unsaved work. Its window
+    // stays until it agrees and dies; retirement then removes its tabs.
+    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)&&matches!(e.target,9|16|18)&&e.close_pending&&!e.dead) {
+        sex_pdx::serial_record!("[silk.close.deferred] sid={} reason=app_decides",surface_id);
+        return true;
+    }
     // A5: Check drag before lifecycle transition. Cancel drag on target surface.
     if let InteractionState::Dragging { surface_id: drag_sid, .. } = INTERACTION {
         if drag_sid == surface_id {
@@ -24902,6 +24922,7 @@ pub extern "C" fn _start() -> ! {
             if clipboard_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
+            if shell_close_declined_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
             if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {

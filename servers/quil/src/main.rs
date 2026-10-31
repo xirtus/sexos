@@ -100,6 +100,10 @@ static mut QUIL_BUFFER_LEN: usize = 0;
 static mut QUIL_UNICODE_INPUT: unicode_input::Input = unicode_input::Input::new();
 static mut QUIL_INPUT_NOTICE: Option<&'static [u8]> = None;
 static mut QUIL_FIND: find::Find = find::Find::new();
+/// A close decline owed to Shell, retried until admitted.
+static mut QUIL_CLOSE_DECLINE_PENDING: bool = false;
+/// Document revision the user was last warned about at Close.
+static mut QUIL_CLOSE_WARNED: Option<u64> = None;
 static mut QUIL_UNICODE_SNAPSHOT: Option<sex_pdx::text_selection::Snapshot> = None;
 /// LANE3: quil_persist_load stages a full reload here first and only
 /// copies into QUIL_BUFFER on complete success — a failed/partial reload
@@ -4216,6 +4220,7 @@ pub extern "C" fn _start() -> ! {
                 presentation_pending=false;presentation_sent=true;
             }
         }
+        unsafe{if QUIL_CLOSE_DECLINE_PENDING{match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::app_lifecycle::OP_APP_CLOSE_DECLINED,catalog.target_pd as u64,catalog.task_id as u64,sex_pdx::app_lifecycle::DECLINE_UNSAVED){Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},_=>QUIL_CLOSE_DECLINE_PENDING=false}}}
         if document_view_ready{if sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,catalog.target_pd as u64,catalog.task_id as u64,0).is_ok(){document_view_ready=false;}}
         unsafe{if DOCUMENT_OPEN{match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::OPEN_LINEN,catalog.target_pd as u64,catalog.task_id as u64,0){Ok(_)=>DOCUMENT_OPEN=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>DOCUMENT_OPEN=false}}}
         unsafe{DOCUMENT_WORKSPACE.poll(|args|sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::WORKSPACE_CHANGED,args[0],args[1],args[2]).map(|_|()));}
@@ -4234,8 +4239,22 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[app.surface.presented] target={} surface={} sequence=1 ok=1",catalog.target_pd,catalog.surface_id);
             continue;
         }
-        if msg.caller_task==3 && sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
-            [msg.arg0,msg.arg1,msg.arg2],QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire)) {
+        let close=if msg.caller_task==3 {sex_pdx::app_lifecycle::close_request(msg.type_id,msg.caller_pd,
+            [msg.arg0,msg.arg1,msg.arg2],QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire))}else{None};
+        // Unsaved edits or an in-flight save decline an ordinary close; only
+        // the user's confirmed Close discards them.
+        // A confirmed Close discards only what the user was warned about:
+        // edits made after the warning are declined again.
+        if close.is_some() && unsafe{(QUIL_DIRTY||DOCUMENT_IO.busy())&&(close==Some(sex_pdx::app_lifecycle::CLOSE_ASK)||QUIL_CLOSE_WARNED!=Some(QUIL_REVISION))} {
+            unsafe{
+                if QUIL_CLOSE_WARNED!=Some(QUIL_REVISION) {sex_pdx::serial_record!("[quil.close.declined] dirty={} pending={} revision={}",QUIL_DIRTY as u8,DOCUMENT_IO.busy() as u8,QUIL_REVISION);}
+                QUIL_CLOSE_WARNED=Some(QUIL_REVISION);QUIL_CLOSE_DECLINE_PENDING=true;QUIL_INPUT_NOTICE=Some(b"UNSAVED: CTRL S SAVES, F11 DISCARDS");
+                draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+            }
+            continue;
+        }
+        if close.is_some() {
+            if close==Some(sex_pdx::app_lifecycle::CLOSE_CONFIRMED) {unsafe{sex_pdx::serial_record!("[quil.close.confirmed] dirty={} pending={}",QUIL_DIRTY as u8,DOCUMENT_IO.busy() as u8);}}
             sex_pdx::serial_record!("[app.close.accepted] target={} task={} coordinator=3",QUIL_DOMAIN.load(core::sync::atomic::Ordering::Acquire),QUIL_TASK.load(core::sync::atomic::Ordering::Acquire));
             unsafe{sex_pdx::serial_record!("[quil.document.close] pending={}",DOCUMENT_IO.busy()as u8);DOCUMENT_WORKSPACE.close();DOCUMENT_IO.close();DOCUMENT_DISPLAY.close();DOCUMENT_NEXT_LOAD=None;DOCUMENT_OPEN=false;let clipboard_pending=QUIL_CLIPBOARD.pending();QUIL_CLIPBOARD.close();QUIL_SELECTION.clear();QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;QUIL_UNICODE_INPUT.clear();QUIL_UNICODE_SNAPSHOT=None;QUIL_INPUT_NOTICE=None;sex_pdx::serial_record!("[quil.clipboard.closed] pending={} payload_erased=1 selection_cleared=1",clipboard_pending as u8);}
             sex_pdx::task_finish(0);

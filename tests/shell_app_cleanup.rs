@@ -12,6 +12,7 @@ unsafe fn retired_once(){let want=vec![clipboard::Subject{pd:15,task:80}];assert
 pub mod app_lifecycle {
  pub const OP_APP_EXIT:u64=0x107;
  pub const OP_APP_CLOSE:u64=0x108;
+ pub const OP_APP_CLOSE_DECLINED:u64=0x10A;pub const CLOSE_ASK:u64=0;pub const CLOSE_CONFIRMED:u64=1;pub const DECLINE_UNSAVED:u64=1;
  pub struct Info {pub target_pd:u32,pub task_id:u32,pub required_mask:u64}
  pub fn info(_:usize)->Result<Info,u64> {unsafe {if super::INFO_STATUS!=0{return Err(super::INFO_STATUS)} Ok(Info{target_pd:super::INFO_TARGET,task_id:super::INFO_TASK,required_mask:31})}}
  pub fn ack(_:usize,_:u32)->Result<(),u64>{unsafe{assert!(super::PUBLISHED);assert!(super::APP_CUSTODY[0].unwrap().dead);assert!(super::APP_CUSTODY[0].unwrap().retired);super::ACKS+=1;if super::ACK_STATUS==0{Ok(())}else{Err(super::ACK_STATUS)}}}
@@ -99,3 +100,19 @@ fn browser_import_workspace_controls_require_exact_live_boot_incarnation(){
  for op in [0x273,0x202,0x15]{assert!(!e.allows_operation(op,[15,15,0]));}
  e.dead=true;for op in [0x274,0x279]{assert!(!e.allows_operation(op,[15,15,0]));}
 }
+
+#[test]fn unsaved_decline_ends_the_pending_close_and_next_close_is_confirmed(){unsafe{
+ reset();TICK=100;CLOSE_FAIL=false;CLOSE_SENDS.clear();
+ let mut e=APP_CUSTODY[0].unwrap();
+ assert!(!e.decline_close(15,[15,80,1]),"no pending close to decline");
+ shell_request_app_close(300);assert_eq!(CLOSE_SENDS,vec![(43,0x108,15,80,0)]);
+ e=APP_CUSTODY[0].unwrap();
+ for (caller,args) in [(9,[15,80,1]),(15,[15,81,1]),(15,[15,80,0]),(15,[15,80,2]),(15,[(1<<32)|15,80,1])]{let mut copy=e;assert!(!copy.decline_close(caller,args),"{caller} {args:?}");}
+ assert!(APP_CUSTODY[0].as_mut().unwrap().decline_close(15,[15,80,1]));
+ let e=APP_CUSTODY[0].unwrap();assert!(!e.close_pending&&e.close_declined&&!e.dead);
+ // No retry after a decline, and ordinary operations are allowed again.
+ TICK=1000;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),1);assert!(e.allows_operation(0xfa,[300,300,15<<8]));
+ shell_request_app_close(300);assert_eq!(CLOSE_SENDS[1],(43,0x108,15,80,1));
+ // The app may decline a confirmed close again for new unsaved work.
+ assert!(APP_CUSTODY[0].as_mut().unwrap().decline_close(15,[15,80,1]));
+}}
