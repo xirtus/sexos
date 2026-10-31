@@ -57,7 +57,7 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/browser_bitmap_delivery.rs" -o "$TE
 "$TEST_DIR/browser-bitmap-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset_presentation.rs" -o "$TEST_DIR/browser-asset-presentation-tests"
 "$TEST_DIR/browser-asset-presentation-tests"
-"$ROOT_DIR/scripts/browser_asset_fence_host_gate.sh"
+bash "$ROOT_DIR/scripts/browser_asset_fence_host_gate.sh"
 echo '[sexnet.asset.host] PASS scope=actual_bounded_decoder_view_outbox_and_display_stage_not_live_authority_or_pixels'
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/http_navigation.rs" -o "$TEST_DIR/http-navigation-tests"
 "$TEST_DIR/http-navigation-tests"
@@ -93,4 +93,4 @@ CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg 
   --manifest-path "$ROOT_DIR/vendor/embedded-tls-0.19.0/sexos-record-tests/Cargo.toml" --target "$HOST_TARGET" --lib
 echo '[sexnet.tls.records.host] PASS scope=actual_AEAD_empty_padding_truncation_and_unsupported_handshake_not_live_peer'
 
-"$ROOT_DIR/scripts/browser_text_host_gate.sh"
+bash "$ROOT_DIR/scripts/browser_text_host_gate.sh"

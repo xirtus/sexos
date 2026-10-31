@@ -1,0 +1,177 @@
+{
+  "qualified_on_feature_branch": true,
+  "global_goal_complete": false,
+  "branch": "codex/browser-sextime",
+  "committed_master_base": "f8058b31",
+  "round_number_unassigned": true,
+  "iso_sha256": "ab70c71599ff3000d5965e5c4b78c94c3af65e216a26f06a8992eff48c92cf0d",
+  "kernel_sha256": "57f9d80fd934c4e1e9eb1dde9c411926a34c65b549c62ccf3dc561eadb1dcef1",
+  "production_inputs": 571,
+  "runner_inputs": 556,
+  "bindings": {
+    "clock_c": "2c686ae78d13930376a0b1d0aa2d695898bc7b729ff413a6dbcd3a5e5bcc580b",
+    "host_and_connected_d": "b9e1be35b3b6be4ffeba1f70055b6b4d5d5b0b1e427b6a67cae268c619a52945"
+  },
+  "input_equivalence": {
+    "ok": true,
+    "production_identical": true,
+    "native_runners_helpers_python_and_rust_tests_identical": true,
+    "changed_runners": [
+      "scripts/sexnet_jobs_host_gate.sh"
+    ],
+    "iso_sha256": "ab70c71599ff3000d5965e5c4b78c94c3af65e216a26f06a8992eff48c92cf0d",
+    "kernel_sha256": "57f9d80fd934c4e1e9eb1dde9c411926a34c65b549c62ccf3dc561eadb1dcef1",
+    "binding_c_sha256": "2c686ae78d13930376a0b1d0aa2d695898bc7b729ff413a6dbcd3a5e5bcc580b",
+    "binding_d_sha256": "b9e1be35b3b6be4ffeba1f70055b6b4d5d5b0b1e427b6a67cae268c619a52945",
+    "scope": "Only a host Bash child invocation changed. Six C Clock native runs qualify this identical sealed image with byte-identical production/native/helper/test inputs; D runs the final host sweep/Python and fresh connected regressions. Each native manifest retains its original binding; no raw evidence is rewritten."
+  },
+  "build": "GREEN_MASTER",
+  "registered_host_checks": 40,
+  "rust_test_executions": 2581,
+  "python_tests": 851,
+  "compiled_calendar_controls_rejected": 2,
+  "native": {
+    "runs": 8,
+    "boots": 10,
+    "verified_captures": 46,
+    "raw_captures": 48,
+    "clock_runs": 6,
+    "clock_verified_captures": 12,
+    "close_raw_captures_without_pixel_absence_claim": 2,
+    "connected_runs": 2,
+    "connected_live_and_cold_boots": 4,
+    "connected_verified_captures": 34,
+    "independent_replay": true
+  },
+  "scalar_browser": {
+    "instructions": 92261,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Decoded the changed ISO-extracted Browser ELF and inspected vector operands/FP-state mnemonics only. No whole-image, runtime stack/register/cache erasure, scheduler or hostile-containment proof."
+  },
+  "release_gates_this_snapshot": {
+    "open": 4,
+    "partial": 26,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-browser-sextime-2026-10-31-qualified-raw.tar.gz",
+    "sha256": "5cca34120ec00e0728ad2418bb8eef2b9f7102143ba3f9fe52865208ef7cebc3",
+    "bytes": 18811164,
+    "members": 3802,
+    "payload_manifest_sha256": "47795a6971293c10846c8bcfa4635b8d1b39b27b4b2114f3e83db1af5cc4641c",
+    "all_members_size_and_sha256_verified": true,
+    "disks": [
+      {
+        "path": "/tmp/sexos-browser-sextime-b-build/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-clock-normal-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-clock-normal-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-clock-invalid-year-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-clock-invalid-year-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-clock-close-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-clock-close-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-d-native-connected-wide/recovery/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-d-native-connected-wide/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-d-native-connected-compact/recovery/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-d-native-connected-compact/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-b-native-clock-normal-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-browser-sextime-c-native-connected-wide/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-r100a-seed.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      }
+    ]
+  },
+  "screenshots": [
+    {
+      "path": "assets/sexos-browser-sextime-2026-10-31-clock-wide.png",
+      "sha256": "f9f409ef54a3b3fa38d495937569f81ce3a23eea5b4367140979ccdf1b10a8ff",
+      "source_ppm_sha256": "e778501f5eab2d75af3e8603b011ff65bde6cf14c138c06f020a5496ecbeb68b",
+      "pixel_identical": true,
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "path": "assets/sexos-browser-sextime-2026-10-31-clock-compact.png",
+      "sha256": "cc797420c26ffd5b3cd9f334d1d4910c0941707560a558d014e0a80d2f32ab14",
+      "source_ppm_sha256": "686db39e1f49b4ba16b6088960b87ac37eda84283c19607e8f454b1e5280b4da",
+      "pixel_identical": true,
+      "width": 1024,
+      "height": 768
+    },
+    {
+      "path": "assets/sexos-browser-sextime-2026-10-31-clock-cleared-wide.png",
+      "sha256": "5eb67b563ee6df1a963f5ac9a42719090f69e9d28195d31145cec3841293d391",
+      "source_ppm_sha256": "1f7da62b57187cca8084834c5c9490ecd6c2125c3483c54fc525e70b30d472a7",
+      "pixel_identical": true,
+      "width": 1280,
+      "height": 800
+    }
+  ],
+  "scope": "Existing validated last-query q35 CMOS UTC source displayed as Gregorian UTC, SexTime and Long Count; whole-body calendar foreground/erasure, exact display receipt and cold connected document/history regressions. Clock native modes use full-screen views at both desktop sizes; default/tiny tile geometry is actual-function host scope. C/D production/native/helper/Python/Rust inputs are identical, with only the host Bash child invocation changed; manifests retain original bindings. No integrated qualification of later primary UiIR/other commits, continuously live/authenticated physical/NTP clock, sustained newest-image alpha, public web/CA, physical/SMP, crash/power-loss, hostile containment or System Proven claim."
+}

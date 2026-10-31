@@ -4,6 +4,11 @@
 
 ## Summary
 
+This ledger's original HEAD, test counts and obligation inventory below describe
+the rounds 108–119 handoff. The independent Browser qualification appended at
+the end has its own exact image and scope. Later primary development is outside
+both snapshots.
+
 - **Round 108 is accepted.** The connected desktop session passes natively at both desktop sizes on a kernel identical to the checkpoint image, including same-image cold recovery and independent replay. Every failure on the way was a checker defect; production source did not change.
 - **Rounds 109–115 close or narrow seven authority blockers.** Two ambient kernel paths are gone (slot-0 framebuffer disclosure, kernel-privileged SyncCall). Replies now need an accepted invocation. Capability revocation is real and runs natively at app retirement. Three architectural obligations now have executable checks.
 - **Rounds 116, 118 and 119 add user features.** The SexTime calendar crate, Quil find (Ctrl+F) and a Spindle `sextime` calculator command.
@@ -147,3 +152,27 @@ python3 pku_parity_gate.py --iso /tmp/fz/tested.iso --disk <disk> --out /tmp/par
 ```
 
 When an ABI input changes, recompute `abi_version_hash` in `sexos_build_spec.toml` from the `ABI_INPUTS` list in `scripts/entrypoint_build.sh`, using bash.
+
+## Independent Browser SexTime milestone — 31 October
+
+The Browser T action now displays a bounded last-query Clock panel with Gregorian
+UTC, native SexTime seconds and Maya Long Count. Q clears its calendar values.
+Source/precision/snapshot labels remain explicit, and invalid or unavailable
+states remove stale dates. Rendering respects actual Reader/Copy precedence
+and joins each text frame to its immutable held Display receipt.
+
+Qualified on `codex/browser-sextime`, with committed primary base `f8058b31`:
+sealed GREEN_MASTER; 40 registered checks with 2,581 passing Rust test executions;
+851 Python tests; two rejected compiled calendar mutations; Browser ELF scan
+of 92,261 instructions with zero inspected vector/FP matches; eight native
+cohorts at both desktop sizes, 10 boots, 46 pixel-verified captures, independent
+raw replay. Two additional Close screenshots are observational only. Native
+Clock checks use full-screen views; default/tiny geometry has host scope.
+
+The [Clock handoff](BROWSER_SEXTIME_SNAPSHOT_2026_10_31.md) and
+[machine evidence](assets/sexos-browser-sextime-2026-10-31-evidence.json) identify
+the exact image, original C/D bindings, input equivalence, raw archive and
+diagnostics. Its frozen inventory remains 4 Open / 26 Partial / System Proven
+false. This is an independently named milestone, not a new numbered round or
+qualification of Claude's newer causal/dirty-close/UiIR work. Integrating and
+verifying newer primary commits is next.
