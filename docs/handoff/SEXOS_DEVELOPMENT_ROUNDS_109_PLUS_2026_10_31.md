@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–126
+# SexOS development: round 108 acceptance and rounds 109–130
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -48,6 +48,8 @@ The round numbers below are the order the work was done. They do not match the p
 | 126 | Reply bookkeeping never refuses an invocation (round 111 defect); Display heartbeat; stale wait checker | host regression, sealed, native both sizes + compact 1800 s | `c89ac1b5`, `754c0513`, `9e3348f9`, `3c02b10c` |
 | 127 | Quil header keeps the document name beside long notices | host + native (compact) | `b4382ea3` |
 | 128 | Long-session exhaustion audit after the reply-count bug | measured rates; no further fix needed today (see below) | — |
+| 129 | BOOT app incarnation catalog (`sex-pdx::app_catalog`), checked against the kernel boot plan | host gate + native (connected, all-incarnation rehearsal) | `d43e5347` |
+| 130 | Shell's app view tables, routes and admission checks driven by the catalog; second stale self-wait checker fix | host (pinned to old tables) + native both sizes | `4762329f`, `c3677532` |
 
 ## Round details
 
@@ -183,6 +185,21 @@ The reply-count defect was a finite counter that silently refused work. All chec
 | Shell/Display/UiIR sequences, kernel task/fault/generation counters | u64 | — | not reachable |
 
 None of these can exhaust in a day of real use, so no code changed. Two constraints carry forward. Autosave must not write every few seconds: at 3 s intervals with a full 12 KiB document, Quil's document sequence would exhaust in about 18 hours, so autosave should trigger on change with a floor of tens of seconds, or a per-session sequence rollover must exist first. And every remaining exhaustion path should report its state visibly, not degrade silently.
+
+### 129–130: toward a larger app reserve
+
+Apps are finite per boot. Browser cannot reopen after one Close, Spindle after two, and Quil after three, because every incarnation was hand-wired across about 130 sites. `sex-pdx::app_catalog` now describes each BOOT incarnation: domain/task, content and Shell surfaces, and lifecycle, close, activation and route slots. It is data only. A host gate checks it against the lifecycle constants and the kernel's boot plan, and pins it to the previous hand-wired tables.
+
+Already migrated to the catalog:
+
+- Shell custody, close/surface maps and view delivery
+- the dirty-close deferral
+- the launcher focus check
+- sexfiles' document-caller admission
+
+Still hand-wired: the kernel boot plan and grants, Display's surface tables, SexNet/Bell owner maps, and Spindle history.
+
+The plan from here: migrate those, then make the kernel's BOOT reservation loop over the catalog. After that, adding reserved incarnations, such as a reopenable Browser, becomes a data change with a known memory cost (about 69 private pages for each Quil incarnation).
 
 ## Verification state at handoff
 
