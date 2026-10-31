@@ -13,7 +13,7 @@ impl SectorIo for Disk{
  fn write(&mut self,lba:u64,data:&[u8;512])->Result<(),u32>{if self.tick().is_err(){if self.torn{let i=(lba-1808)as usize;self.stable[i][..37].copy_from_slice(&data[..37]);self.cache[i]=self.stable[i];}return Err(STORAGE)}self.cache[(lba-1808)as usize]=*data;Ok(())}
  fn sync(&mut self)->Result<(),u32>{self.tick()?;self.stable=self.cache.clone();Ok(())}
 }
-fn grant()->Grant{Grant{holder:11,logical:12,participants:[Participant{target:12,task:12},Participant{target:17,task:17}],base:1808,sectors:18}}
+fn grant()->Grant{Grant{holder:11,logical:12,participants:[Participant{target:12,task:12},Participant{target:17,task:17},Participant{target:24,task:24}],base:1808,sectors:18}}
 fn blob(owner:u32,text:&[u8])->Vec<u8>{let mut b=vec![0;24+2+text.len()];b[24..26].copy_from_slice(&(text.len()as u16).to_le_bytes());b[26..].copy_from_slice(text);let len=b.len();assert!(w::seal(&mut b,owner,1,len));b}
 fn maximum(owner:u32)->Vec<u8>{let mut bytes=vec![0;4096];let mut pos=24;let mut count=0;while pos<4096{let len=(4096-pos-2).min(256);bytes[pos..pos+2].copy_from_slice(&(len as u16).to_le_bytes());bytes[pos+2..pos+2+len].fill(b'x');pos+=2+len;count+=1;}assert!(w::seal(&mut bytes,owner,count,4096));bytes}
 fn generation(d:&mut Disk,bank:usize,value:u64){let h=&mut d.stable[bank*9];h[16..24].copy_from_slice(&value.to_le_bytes());h[48..56].fill(0);let hash=w::hash(h);h[48..56].copy_from_slice(&hash.to_le_bytes());d.cache=d.stable.clone();}
@@ -27,7 +27,7 @@ fn generation(d:&mut Disk,bank:usize,value:u64){let h=&mut d.stable[bank*9];h[16
  }}
 }
 #[test]fn every_first_save_crash_is_missing_or_complete_never_partial(){let new=blob(12,b"first save");let mut measure=Journal::new(Disk::new(),Some(grant()));measure.save(12,&new).unwrap();for point in 1..=measure.io.ops{let mut d=Disk::new();d.cut=Some(point);let mut j=Journal::new(d,Some(grant()));let _=j.save(12,&new);let mut reboot=Journal::new(j.io.crash(),Some(grant()));let mut out=[0;4096];match reboot.recover(12,&mut out){Ok(n)=>assert_eq!(&out[..n],&new),Err(e)=>assert_eq!(e,w::MISSING)}}}
-#[test]fn missing_misbound_and_cross_subject_grants_never_touch_disk(){for g in[None,Some(Grant{holder:7,..grant()}),Some(Grant{logical:9,..grant()}),Some(Grant{base:2047,..grant()}),Some(Grant{sectors:19,..grant()}),Some(Grant{participants:[Participant{target:12,task:0},Participant{target:17,task:17}],..grant()})]{let mut j=Journal::new(Disk::new(),g);assert_eq!(j.save(12,&blob(12,b"deny")),Err(w::DENIED));assert_eq!(j.io.ops,0);}let mut j=Journal::new(Disk::new(),Some(grant()));assert_eq!(j.recover(9,&mut[0;4096]),Err(w::DENIED));assert_eq!(j.io.ops,0);}
+#[test]fn missing_misbound_and_cross_subject_grants_never_touch_disk(){for g in[None,Some(Grant{holder:7,..grant()}),Some(Grant{logical:9,..grant()}),Some(Grant{base:2047,..grant()}),Some(Grant{sectors:19,..grant()}),Some(Grant{participants:[Participant{target:12,task:0},Participant{target:17,task:17},Participant{target:24,task:24}],..grant()})]{let mut j=Journal::new(Disk::new(),g);assert_eq!(j.save(12,&blob(12,b"deny")),Err(w::DENIED));assert_eq!(j.io.ops,0);}let mut j=Journal::new(Disk::new(),Some(grant()));assert_eq!(j.recover(9,&mut[0;4096]),Err(w::DENIED));assert_eq!(j.io.ops,0);}
 #[test]fn latest_corrupt_payload_falls_back_to_previous_complete_bank(){let mut j=Journal::new(Disk::new(),Some(grant()));let old=blob(12,b"keep old");j.save(12,&old).unwrap();j.save(17,&blob(17,b"new damaged")).unwrap();let mut d=j.io.crash();d.stable[10][25]^=1;d.cache=d.stable.clone();let mut reboot=Journal::new(d,Some(grant()));let mut out=[0;4096];let n=reboot.recover(12,&mut out).unwrap();assert_eq!(&out[24..n],&old[24..]);assert_eq!(reboot.last.unwrap().generation,1);}
 #[test]fn unknown_or_both_corrupt_headers_fail_closed_without_overwrite(){let mut d=Disk::new();d.stable[0][0]=1;d.cache=d.stable.clone();let mut j=Journal::new(d,Some(grant()));assert_eq!(j.save(12,&blob(12,b"no repair grant")),Err(w::CORRUPT));assert_eq!(j.io.stable[0][0],1);}
 #[test]fn shorter_and_maximum_snapshots_do_not_publish_trailing_bytes(){let mut j=Journal::new(Disk::new(),Some(grant()));let large=maximum(12);j.save(12,&large).unwrap();let small=blob(17,b"x");j.save(17,&small).unwrap();let mut out=[0xAA;4096];let n=j.recover(17,&mut out).unwrap();assert_eq!(&out[..n],&small);assert!(out[n..].iter().all(|b|*b==0));}
@@ -48,4 +48,18 @@ fn generation(d:&mut Disk,bank:usize,value:u64){let h=&mut d.stable[bank*9];h[16
  wrong.participants[1].task=171;
  let mut invalid=journal::RosterJournal::new(fallback.io.crash(),Some(wrong));assert_eq!(invalid.recover(12,&mut[0;4096]),Err(w::CORRUPT));
  let mut denied=journal::RosterJournal::new(Disk::new(),Some(g));assert_eq!(denied.save(25,&blob(25,b"foreign")),Err(w::DENIED));assert_eq!(denied.io.ops,0);
+}
+
+#[test]fn actual_three_incarnation_chain_retains_latest_writer_and_rejects_unknown_without_io(){
+ assert_eq!(app_catalog::SPINDLE_TARGETS,[12,17,24]);
+ assert_eq!(core::mem::size_of::<Grant>(),48);
+ let mut journal=Journal::new(Disk::new(),Some(grant()));
+ for (index,target) in [12,17,24].into_iter().enumerate(){
+  journal.save(target,&blob(target,b"actual three subject chain")).unwrap();
+  let record=journal.last.unwrap();assert_eq!((record.writer,record.task,record.generation),(target,target,index as u64+1));
+ }
+ let disk=journal.io.crash();let mut reboot=Journal::new(disk.clone(),Some(grant()));let mut out=[0;4096];
+ let n=reboot.recover(12,&mut out).unwrap();assert_eq!(reboot.last.unwrap().writer,24);assert_eq!(reboot.last.unwrap().task,24);assert_eq!(reboot.last.unwrap().generation,3);assert_eq!(w::validate(&out[..n],12),Ok(1));
+ let mut denied=Journal::new(disk,Some(grant()));let before=denied.io.stable.clone();
+ assert_eq!(denied.save(25,&blob(25,b"unknown")),Err(w::DENIED));assert_eq!(denied.recover(25,&mut[0;4096]),Err(w::DENIED));assert_eq!(denied.io.ops,0);assert_eq!(denied.io.stable,before);
 }

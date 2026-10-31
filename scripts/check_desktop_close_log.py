@@ -32,7 +32,7 @@ def responsiveness(text,after=0):
         evidence.append({'start':start,'backend':backend[0],'action':actions[-1][0],'commit':commit,'selected':selected,'current':currents[0][0]})
     return evidence
 
-def check(text, include_successor=False, include_spindle_successor=False, include_third_quil=False, additional_quil=()):
+def check(text, include_successor=False, include_spindle_successor=False, include_third_quil=False, additional_quil=(), additional_spindle=()):
     errors=[]
     records=records_from(text)
     def rows(name,target):
@@ -46,10 +46,12 @@ def check(text, include_successor=False, include_spindle_successor=False, includ
     if not presented or not any(f.get('surface')=='300' and f.get('scene')=='1' for _,f in presented):errors.append('native300 never presented')
     surfaces={15:300,9:156,12:154,16:301,17:302,18:307}
     close_slots={9:41,12:42,15:43,16:46,17:51,18:56}
-    if any(r['target']in surfaces for r in additional_quil):return ['duplicate additional cleanup subject']
-    for row in additional_quil:surfaces[row['target']]=row['surface'];close_slots[row['target']]=row['close']
+    additional=tuple(additional_quil)+tuple(additional_spindle)
+    if len({r['target']for r in additional})!=len(additional):return ['duplicate additional cleanup subject']
+    if any(r['target']in surfaces for r in additional):return ['duplicate additional cleanup subject']
+    for row in additional:surfaces[row['target']]=row['surface'];close_slots[row['target']]=row['close']
     final_pool=-1
-    for target,sid in [(15,300),(9,201),(12,153)]+([(16,301)] if include_successor else [])+([(17,306)] if include_spindle_successor else [])+([(18,307)] if include_third_quil else [])+[(r["target"],r["frame"])for r in additional_quil]:
+    for target,sid in [(15,300),(9,201),(12,153)]+([(16,301)] if include_successor else [])+([(17,306)] if include_spindle_successor else [])+([(18,307)] if include_third_quil else [])+[(r["target"],r["frame"])for r in additional]:
         # An app with unsaved work may decline ordinary Closes; each declined
         # request is followed by its exact decline before the next request,
         # and the final request is the one that tears the incarnation down.

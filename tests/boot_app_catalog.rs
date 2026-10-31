@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Actual pure BOOT validator over explicit eleven-subject kernel observations.
+//! Actual pure BOOT validator over explicit twelve-subject kernel observations.
 //! These are host observations, not native grant extraction or task admission.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
@@ -27,6 +27,7 @@ fn observed(target: u32) -> Observed {
         21 => (310, 9, 6, 20, true),
         22 => (311, 9, 7, 21, true),
         23 => (312, 9, 8, 22, true),
+        24 => (313, 12, 3, 17, true),
         _ => panic!("not a current BOOT subject"),
     };
     Observed {
@@ -52,8 +53,8 @@ fn row(target: u32) -> &'static Incarnation {
 }
 
 #[test]
-fn all_eleven_current_boot_subjects_validate_without_changing_observations() {
-    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+fn all_twelve_current_boot_subjects_validate_without_changing_observations() {
+    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     assert_eq!(validate_layout(&INCARNATIONS), Ok(()));
     for row in &INCARNATIONS {
         let actual = observed(row.target);
@@ -153,7 +154,7 @@ fn domain_routes_cannot_target_another_incarnation() {
 
 #[test]
 fn activation_presence_is_exact_for_originals_and_successors() {
-    for target in [16, 17, 18, 19, 20, 21, 22, 23] {
+    for target in [16, 17, 18, 19, 20, 21, 22, 23, 24] {
         let mut actual = observed(target);actual.activation = None;
         assert_eq!(validate(row(target), &actual, 3), Err(Error::MissingActivation));
     }
@@ -190,7 +191,7 @@ fn fabricated_catalog_rows_are_not_new_authority() {
 
 #[test]
 fn malformed_catalog_identity_order_and_slot_layouts_reject() {
-    let mutations: [(fn(&mut [Incarnation; 11]), Error); 11] = [
+    let mutations: [(fn(&mut [Incarnation; 12]), Error); 11] = [
         (|r| r[1].target = 9, Error::CatalogTarget),
         (|r| r[0].target = 0, Error::CatalogTarget),
         (|r| r[0].target = 3, Error::CatalogTarget),
@@ -257,4 +258,46 @@ fn final_reserve_requires_exact_eighth_lineage_task_and_routes() {
     assert_eq!(validate_layout(&rows),Err(Error::CatalogSlotAlias));
     let mut rows=INCARNATIONS;rows[10].ordinal=8;
     assert_eq!(validate_layout(&rows),Err(Error::CatalogOrder));
+}
+
+
+#[test]
+fn third_spindle_actual_grants_require_exact_lineage_task_routes_and_no_high_bit_aliases(){
+ let actual=observed(24);
+ assert_eq!((actual.target,actual.task,actual.content_surface,actual.logical_app,actual.incarnation,actual.predecessor,actual.dormant),(24,24,313,12,3,17,true));
+ assert_eq!(actual.shell_lifecycle,LifecycleGrant{target_pd:24,task_id:24,holder_pd:3,rights:QUERY|ACK,ack_bit:1});
+ assert_eq!(actual.self_catalog,LifecycleGrant{target_pd:24,task_id:24,holder_pd:24,rights:QUERY,ack_bit:0});
+ assert_eq!((actual.close_target,actual.route_target),(24,24));
+ assert_eq!(actual.activation,Some(ActivationGrant{holder:3,logical_app:12,incarnation:3,predecessor:17,predecessor_task:17,successor:24,successor_task:24}));
+ assert_eq!(validate(row(24),&actual,3),Ok(()));
+ let changes:[(fn(&mut Observed),Error);20]=[
+  (|o|o.target=24|(1u32<<31),Error::Target),
+  (|o|o.task=24|(1u32<<31),Error::Task),
+  (|o|o.task_domain=17,Error::TaskDomain),
+  (|o|o.task_domain_pointer_matches=false,Error::TaskDomainPointer),
+  (|o|o.content_surface=313|(1u64<<32),Error::ContentSurface),
+  (|o|o.logical_app=17,Error::LogicalApp),
+  (|o|o.incarnation=2,Error::IncarnationNumber),
+  (|o|o.predecessor=12,Error::Predecessor),
+  (|o|o.close_target=17,Error::CloseTarget),
+  (|o|o.route_target=24|(1u32<<31),Error::RouteTarget),
+  (|o|o.shell_lifecycle.target_pd=17,Error::ShellLifecycleTarget),
+  (|o|o.shell_lifecycle.task_id=24|(1u32<<31),Error::ShellLifecycleTask),
+  (|o|o.self_catalog.task_id=17,Error::SelfCatalogTask),
+  (|o|o.self_catalog.holder_pd=17,Error::SelfCatalogHolder),
+  (|o|o.activation.as_mut().unwrap().holder=17,Error::ActivationHolder),
+  (|o|o.activation.as_mut().unwrap().logical_app=17,Error::ActivationLogicalApp),
+  (|o|o.activation.as_mut().unwrap().incarnation=2,Error::ActivationIncarnation),
+  (|o|o.activation.as_mut().unwrap().predecessor=12,Error::ActivationPredecessor),
+  (|o|o.activation.as_mut().unwrap().predecessor_task=17|(1u32<<31),Error::ActivationPredecessorTask),
+  (|o|o.activation.as_mut().unwrap().successor_task=24|(1u32<<31),Error::ActivationSuccessorTask),
+ ];
+ for(change,error)in changes{let mut mutated=actual;change(&mut mutated);assert_eq!(validate(row(24),&mutated,3),Err(error));}
+ let slots:[fn(&mut Incarnation);4]=[
+  |row|row.lifecycle_slot=130|(1usize<<32),|row|row.close_slot=131|(1u64<<32),
+  |row|row.activation_slot=Some(132|(1usize<<32)),|row|row.route_slot=133|(1u64<<32),
+ ];
+ for change in slots{let mut rows=INCARNATIONS;change(&mut rows[11]);assert_eq!(validate_layout(&rows),Err(Error::CatalogSlot));}
+ let mut rows=INCARNATIONS;rows[11].activation_slot=Some(128);assert_eq!(validate_layout(&rows),Err(Error::CatalogSlotAlias));
+ let mut rows=INCARNATIONS;rows[11].ordinal=1;assert_eq!(validate_layout(&rows),Err(Error::CatalogOrder));
 }

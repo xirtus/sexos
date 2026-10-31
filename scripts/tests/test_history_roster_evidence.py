@@ -50,10 +50,11 @@ class HistoryRoster(unittest.TestCase):
     def check(self, text):
         return h.verify_boot_roster(self.root, text)
 
-    def test_actual_source_two_literal_spindles(self):
+    def test_actual_source_three_literal_spindles(self):
         self.assertEqual(h.source_spindles(ROOT), [
             dict(ordinal=0, target=12, surface=154, frame=153, lifecycle=39, close=42, activation=None, route=14),
             dict(ordinal=1, target=17, surface=302, frame=306, lifecycle=50, close=51, activation=49, route=52),
+            dict(ordinal=2, target=24, surface=313, frame=314, lifecycle=130, close=131, activation=132, route=133),
         ])
 
     def test_current_full_catalog_joins_only_exact_spindle_tasks(self):
@@ -68,9 +69,10 @@ class HistoryRoster(unittest.TestCase):
             extra += (f"[boot.app.catalog] target={target} task={target*10} surface={surface} logical={logical} "
                       f"incarnation={inc} predecessor={pred} lifecycle={lifecycle} close={close} route={route} "
                       f"dormant={dormant} grants_verified=1 data_only=1\n")
-        text = trace(self.rows).replace("[boot.app.catalog.complete] rows=2", extra + "[boot.app.catalog.complete] rows=11")
+        actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133)]
+        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=3", extra + "[boot.app.catalog.complete] rows=12")
         self.assertEqual(h.verify_boot_roster(ROOT, text)["participants"],
-                         [dict(target=12, task=120), dict(target=17, task=170)])
+                         [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240)])
 
     def test_two_and_three_unequal_tasks_join_writer(self):
         for rows in (ROWS[:2], ROWS):

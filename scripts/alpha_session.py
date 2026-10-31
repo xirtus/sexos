@@ -47,7 +47,7 @@ def submit_save(q, wait, start):
     wait(r"\[sexinput.ps2.scancode\] raw=0x9d(?:\s|$)",start)
 
 
-def run(c, seconds, acceptance=True, third_quil=False):
+def run(c, seconds, acceptance=True, third_quil=False, third_spindle=False):
     if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or seconds < (1800 if acceptance else 1):
         raise ValueError('alpha acceptance requires at least 1800 seconds')
     q, wait, text = (c[k] for k in ('q', 'wait', 'text'))
@@ -252,10 +252,14 @@ def run(c, seconds, acceptance=True, third_quil=False):
     offset = command('echo alpha17',17,r'\[spindle.instance.command\] target=17 .*name=echo ok=1')
     wait(r'\[spindle.history.receipt\] target=17 .*kind=saved .*error=0',offset)
     close(17,306)
+    third_spindle_fact=None
+    if third_spindle:
+        from spindle_reserve_probe import run as run_spindle_reserve
+        third_spindle_fact=run_spindle_reserve(c,close,command)
     refresh()
     key('j',r'\[shell.action.select_next_linen\] id=[1-9]\d*')
     from check_desktop_close_log import check
-    errors = check(text(),include_successor=True,include_spindle_successor=True,include_third_quil=third_quil,additional_quil=rows[3:]if third_quil else ())
+    errors = check(text(),include_successor=True,include_spindle_successor=True,include_third_quil=third_quil,additional_quil=rows[3:]if third_quil else (),additional_spindle=third_spindle_fact["catalog"][2:]if third_spindle_fact else ())
     if errors:
         raise RuntimeError('sustained cleanup: '+str(errors))
     return dict(evidence_version=2,acceptance=acceptance,elapsed_seconds=elapsed,cycles=cycle,samples=samples,
@@ -264,4 +268,4 @@ def run(c, seconds, acceptance=True, third_quil=False):
                 pending_quil_close=bool(pending_at_close),pending_spindle_close=True,
                 scope='pending-save unsaved Close guard; exact confirmed teardown state',
                 remaining_obligations=[] if pending_at_close else ['Quil pending-I/O terminal teardown'],
-                boot_successors=([16,17]+[row["target"]for row in rows[2:]]) if third_quil else [16,17],third_quil=third,cleanup_errors=errors)
+                boot_successors=([16,17]+([row["target"]for row in rows[2:]]if third_quil else [])+([row["target"]for row in third_spindle_fact["catalog"][2:]]if third_spindle_fact else [])),third_quil=third,third_spindle=third_spindle_fact,cleanup_errors=errors)

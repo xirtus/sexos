@@ -152,6 +152,10 @@ def boot_lifecycle_errors(result):
     errors=[];soak=result.get('soak') or {}
     third=soak.get('third_quil') or {}
     expected_successors=([16,17]+[step.get('target')for step in third['chain']])if 'chain'in third else ([16,17,18]if third else [16,17])
+    spindle=soak.get('third_spindle')or{}
+    if spindle:
+        expected_successors += [step.get('target')for step in spindle.get('chain',[])]
+        if not spindle.get('chain')or spindle.get('reserve_exhausted')is not True:errors.append('third Spindle needs exact activation/terminal exhaustion proof')
     if soak.get('boot_successors')!=expected_successors or soak.get('cleanup_errors')!=[]:
         errors.append('fresh BOOT successors and complete cleanup required')
     if third:
@@ -214,7 +218,9 @@ def inspect(path):
     text=(path/'serial.log').read_text(errors='replace')
     from quil_reserve_catalog import quil_catalog
     third=(result.get('soak')or{}).get('third_quil');rows=quil_catalog(pathlib.Path(__file__).resolve().parents[1])if third and 'chain'in third else []
-    errors+=cleanup_errors(text,include_successor=True,include_spindle_successor=True,include_third_quil=bool(third),additional_quil=rows[3:])
+    from history_roster_evidence import source_spindles
+    spindle_rows=source_spindles(pathlib.Path(__file__).resolve().parents[1])if(result.get('soak')or{}).get('third_spindle')else []
+    errors+=cleanup_errors(text,include_successor=True,include_spindle_successor=True,include_third_quil=bool(third),additional_quil=rows[3:],additional_spindle=spindle_rows[2:])
     if (result.get('soak')or{}).get('evidence_version')==2:
         errors+=quil_close_errors(result['soak'],text)
     errors+=terminal_pending_errors(text,include_quil=(result.get('soak')or{}).get('evidence_version',1)==1 or (result.get('soak')or{}).get('pending_quil_close')is True)
@@ -234,7 +240,7 @@ def inspect(path):
             errors.append('saved document bytes differ: '+expected['name'])
         documents.append(found)
     retirements=[dict(re.findall(r'([a-z_]+)=([^\s]+)',m)) for m in re.findall(r'\[app.private.retired\] ([^\r\n]+)',text)]
-    targets={9,12,15,16,17}|({18}if third else set())|{r['target']for r in rows[3:]}
+    targets={9,12,15,16,17}|({18}if third else set())|{r['target']for r in rows[3:]}|{r['target']for r in spindle_rows[2:]}
     pages=sum(int(r['pages']) for r in retirements if r.get('target')in map(str,targets) and r.get('task')==r.get('target'))
     return dict(ok=not errors,errors=errors,iso_sha256=digest,
                 elapsed_seconds=(result.get('soak')or{}).get('elapsed_seconds'),

@@ -6,15 +6,17 @@ from history_boot_fixture import boot
 
 def fixture():
     lines=[]
-    for pd in [12,17]:
-        if pd==17:lines.append('[spindle.history.receipt] target=17 task=17 kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4')
+    for pd in [12,17,24]:
+        if pd!=12:lines.append(f'[spindle.history.receipt] target={pd} task={pd} kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4')
         lines.extend([f'[files.history.open] target={pd} handle={pd} mode=save seq=2',f'[files.history.commit] target={pd} handle={pd} seq=10 bytes=40 hash=0xabc',f'[files.history.close] target={pd} handle={pd} seq=11 ok=1',f'[spindle.history.receipt] target={pd} task={pd} kind=saved handle={pd} bytes=40 count=1 hash=0xabc error=0'])
-        if pd==17:lines.extend(['[files.history.open] target=17 handle=18 mode=load seq=12','[files.history.close] target=17 handle=18 seq=25 ok=1','[spindle.history.receipt] target=17 task=17 kind=loaded handle=18 bytes=40 count=1 hash=0xabc error=0'])
+        if pd!=12:lines.extend([f'[files.history.open] target={pd} handle={pd+1} mode=load seq=12',f'[files.history.close] target={pd} handle={pd+1} seq=25 ok=1',f'[spindle.history.receipt] target={pd} task={pd} kind=loaded handle={pd+1} bytes=40 count=1 hash=0xabc error=0'])
         lines.extend([f'[files.history.retire] target={pd} staged=0 pending=0 terminal=1',f'[app.service.ack] target={pd} role=4',f'[app.private.retired] target={pd}'])
     return '\n'.join(lines)
 def durable_fixture():
-    text=fixture().replace('[spindle.history.receipt] target=17 task=17 kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4','[files.history.recovered] logical=12 source=12 source_task=12 target=17 generation=1 bytes=40 source_hash=0xabc owned_hash=0xabc data_hash=0x123 boot_grant=53')
-    for generation,pd in enumerate([12,17],1):
+    text=fixture()
+    for generation,predecessor,target in [(1,12,17),(2,17,24)]:
+        text=text.replace(f'[spindle.history.receipt] target={target} task={target} kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4',f'[files.history.recovered] logical=12 source={predecessor} source_task={predecessor} target={target} generation={generation} bytes=40 source_hash=0xabc owned_hash=0xabc data_hash=0x123 boot_grant=53')
+    for generation,pd in enumerate([12,17,24],1):
         text=text.replace(f'[files.history.commit] target={pd}',f'[files.history.durable] logical=12 target={pd} generation={generation} bytes=40 hash=0xabc barriers=3 readback=1\n[files.history.commit] target={pd}')
     return boot()+text
 class Check(unittest.TestCase):

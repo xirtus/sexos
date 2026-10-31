@@ -24,7 +24,7 @@ def contract(root):
  from https_asset_gate import script_dependencies
  paths=set(bar['source_sha256'])|set(launcher['source_sha256'])|set(script_dependencies(root,('scripts/quil_workflow_gate.py','scripts/alpha_evidence.py','scripts/tests/test_alpha_evidence.py')))
  paths.update(('servers/quil/src/main.rs','scripts/check_alpha_session.py'))
- return dict(font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,launcher=launcher,indicators=indicator_colors(root),reserve_focus={row['target']:row['frame']for row in quil_catalog(root)[2:]},source_sha256={p:sha(root/p)for p in sorted(paths)})
+ return dict(root=str(root),font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,launcher=launcher,indicators=indicator_colors(root),reserve_focus={row['target']:row['frame']for row in quil_catalog(root)[2:]},source_sha256={p:sha(root/p)for p in sorted(paths)})
 
 def require_inputs(root,binding,c):
  held=json.loads(Path(binding).read_text())
@@ -37,9 +37,13 @@ def verify_frame(prefix,ppm,c,resolution,kind='quil',expected='',target=9,region
   errors=quil_pixels(prefix,ppm,c['font'],expected,target=target,resolution=resolution)
   detail=None if errors else quil_view(prefix,target)
  elif kind=='linen':errors=linen_pixels(prefix,ppm,c['font'],resolution=resolution);detail=None
+ elif kind=='spindle':
+  from check_spindle_viewport_pixels import verify as spindle_pixels
+  prompt=expected if expected.startswith('> ')else None
+  errors=spindle_pixels(prefix,ppm,c['font'],target=target,require_prompt=prompt,require_echo=False,require_all_ink=False,resolution=resolution,root=c["root"],require_text=expected if prompt is None else None);detail=None
  elif kind=='launcher':
-  if target!=9 or expected!='Open Quil':raise ValueError('alpha exhausted launcher must select logical Quil')
-  detail=launcher_frame(prefix,ppm,dict(kind='launcher',target=9,name='launcher-exhausted',title=expected),c['launcher'],resolution);errors=[]
+  if (target,expected)not in((9,'Open Quil'),(12,'Open Spindle')):raise ValueError('alpha exhausted launcher must select the exact logical app')
+  detail=launcher_frame(prefix,ppm,dict(kind='launcher',target=target,name='launcher-exhausted',title=expected),c['launcher'],resolution);errors=[]
  elif kind=='empty':
   width,height,raw=ppm_rgb(ppm,min_width=1,min_height=1)
   if (width,height)!=tuple(resolution)or not isinstance(region,dict):raise ValueError('empty-region profile missing')
@@ -148,7 +152,7 @@ def replay(root,iso,binding,out):
   if p.is_symlink()or not p.resolve().is_relative_to(out)or sha(p)!=digest:raise ValueError('changed/unsafe alpha raw artifact: '+name)
  for name,key in(('seed.img.gz','input_disk_sha256'),('nvme.img.gz','final_disk_sha256')):
   if hashlib.sha256(gzip.decompress((out/name).read_bytes())).hexdigest()!=manifest[key]:raise ValueError('alpha disk bytes differ')
- text=serial_text(out/'serial.log');frames=index['frames']
+ text=serial_text(out/'serial.log');frames=index['frames'];reserve_spindles=[]
  if not 1<=len(frames)<=MAX_CAPTURES or len({f['screenshot']for f in frames})!=len(frames)or result['stages']!=frames:raise ValueError('alpha capture phase closure differs')
  previous=0;checked=[]
  for seq,frame in enumerate(frames,1):
@@ -166,11 +170,16 @@ def replay(root,iso,binding,out):
  if result.get('pending_io_close'):
   from pending_io_close import verify as pending_verify
   pending_verify(out,result['pending_io_close'],frames,text,command)
+ if bool(manifest['options'].get('third_spindle'))!=bool((result.get('soak')or{}).get('third_spindle')):raise ValueError('third Spindle option/result differs')
  from check_alpha_session import session_errors,boot_lifecycle_errors,quil_close_errors,cycle_errors,terminal_pending_errors
  if result.get('soak'):
   errors=quil_close_errors(result['soak'],text)+cycle_errors(result['soak'])+terminal_pending_errors(text,include_quil=result['soak']['pending_quil_close'])
   if errors:raise ValueError('alpha exact cycle/close evidence: '+str(errors))
   soak=result['soak'];cycles=soak['cycles'];windows=soak['cycle_windows'];body=result['documents'][1]['content'];suffix=(soak['third_quil'].get('append_count',1)if soak.get('third_quil')else 0)
+  if soak.get('third_spindle'):
+   from spindle_reserve_probe import verify as verify_spindle_reserve
+   from history_roster_evidence import source_spindles
+   reserve_spindles=source_spindles(root);verify_spindle_reserve(soak['third_spindle'],frames,text,reserve_spindles,out=out)
   if soak.get('third_quil'):
    from quil_reserve_catalog import quil_catalog
    reserve_rows=quil_catalog(root);verify_third_captures(soak['third_quil'],frames,text,reserve_rows)
@@ -193,7 +202,7 @@ def replay(root,iso,binding,out):
   if errors:raise ValueError('alpha rehearsal lifecycle: '+str(errors))
  from check_desktop_close_log import check as cleanup
  if result.get('soak'):
-  errors=cleanup(text,include_successor=True,include_spindle_successor=True,include_third_quil=bool(result['soak'].get('third_quil')),additional_quil=reserve_rows[3:]if result['soak'].get('third_quil')else ())
+  errors=cleanup(text,include_successor=True,include_spindle_successor=True,include_third_quil=bool(result['soak'].get('third_quil')),additional_quil=reserve_rows[3:]if result['soak'].get('third_quil')else (),additional_spindle=reserve_spindles[2:])
   if errors:raise ValueError('alpha terminal cleanup: '+str(errors))
  disk=gzip.decompress((out/'nvme.img.gz').read_bytes());documents=[]
  for expected in result['documents']:

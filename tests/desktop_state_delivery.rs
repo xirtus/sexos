@@ -163,8 +163,11 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
 
 #[test]fn all_catalog_surfaces_have_bounded_fair_full_retention_including_last_slot(){
  use linen_text_delivery::{Admission,DesktopStates,DESKTOP_SURFACES};
- assert_eq!(DESKTOP_SURFACES.len(),21);assert_eq!(DESKTOP_SURFACES[0],200);
- assert_eq!(&DESKTOP_SURFACES[1..],app_catalog::APP_SURFACES.as_slice());
+ // Independent current BOOT roster: Linen, twelve frames, then distinct
+ // content/panes. In particular 314 and all four third-Spindle panes exist.
+ assert_eq!(DESKTOP_SURFACES,[200,201,153,300,301,306,307,308,309,310,311,312,314,
+  156,154,160,161,162,302,303,304,305,313,315,316,317]);
+ assert_eq!(DESKTOP_SURFACES.len(),26);assert_eq!(app_catalog::COUNT,12);
  let mut states=DesktopStates::new();
  for &sid in &DESKTOP_SURFACES {assert!(DesktopStates::tracks(sid));states.observe(op(0xEC,sid),Admission::Full);}
  for sid in [0,999,152,u64::MAX] {assert!(!DesktopStates::tracks(sid));states.observe(op(0xEC,sid),Admission::Full);assert!(!states.pending_surface(sid));assert!(!states.ready(sid));}
@@ -191,6 +194,40 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
   match stale {0=>APP_CUSTODY[0].as_mut().unwrap().close_pending=true,
    1=>APP_CUSTODY[0].as_mut().unwrap().dead=true,_=>ALIVE=false}
   assert!(desktop_state_validate(op(0xEC,312)).is_none());
+  desktop_state_poll();assert!(CALLS.lock().unwrap().is_empty());assert!(!DESKTOP_STATES.pending());
+ }
+}}
+
+#[test]fn third_spindle_all_panes_use_exact_parent_geometry_and_gate_viewport_until_admitted(){
+ let _l=LOCK.lock().unwrap();unsafe{
+ reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(130,24,240,313));
+ for (sid,x,y) in [(313,18,86),(315,334,86),(316,18,268),(317,334,268)] {
+  let create=desktop_state_validate(op(0xEC,sid)).unwrap();
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(174<<32)|308});
+  assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
+  DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
+ }
+ assert!(!desktop_content_ready(314));
+ RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);4]);desktop_state_poll();
+ assert_eq!(CALLS.lock().unwrap().len(),4);assert!(!desktop_content_ready(314));
+ for sid in [313,315,316,317]{assert!(DESKTOP_STATES.pending_surface(sid));}
+ desktop_state_poll();desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(314));
+ let calls=CALLS.lock().unwrap();assert_eq!(&calls[..4],&calls[4..8]);drop(calls);
+ for sid in [313,315,316,317]{
+  DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(314));
+  DESKTOP_STATES.observe(op(0xFD,sid),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(314));
+  DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(314));
+ }
+}}
+#[test]fn third_spindle_retained_panes_reject_stale_parent_or_unbound_catalog_tuple_before_effect(){
+ let _l=LOCK.lock().unwrap();unsafe{
+ for stale in 0..8{
+  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(130,24,240,313));
+  for sid in [313,315,316,317]{assert!(desktop_state_validate(op(0xEC,sid)).is_some());DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
+  match stale{0=>APP_CUSTODY[0].as_mut().unwrap().close_pending=true,1=>APP_CUSTODY[0].as_mut().unwrap().dead=true,
+   2=>APP_CUSTODY=[None;3],3=>APP_CUSTODY[0].as_mut().unwrap().surface=302,
+   4=>ALIVE=false,5=>STATE=LifecycleState::Hidden,6=>MINIMIZED=true,_=>BOUNDS=Some((10,50,0,0))}
+  for sid in [313,315,316,317]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());}
   desktop_state_poll();assert!(CALLS.lock().unwrap().is_empty());assert!(!DESKTOP_STATES.pending());
  }
 }}

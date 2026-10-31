@@ -6,7 +6,8 @@ from network_contention_gate import frozen_binding
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',type=pathlib.Path);p.add_argument('--binding',required=True,type=pathlib.Path);p.add_argument('--check',action='store_true');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=0);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);p.add_argument('--pending-io-close',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',type=pathlib.Path);p.add_argument('--binding',required=True,type=pathlib.Path);p.add_argument('--check',action='store_true');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=0);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--third-spindle',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);p.add_argument('--pending-io-close',action='store_true');a=p.parse_args()
+ if a.third_spindle and not a.soak_seconds:p.error('third Spindle requires the complete lifecycle session')
  if a.pending_io_close and a.soak_seconds:p.error('pending device-I/O fixture is separate from sustained alpha')
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  root=pathlib.Path(__file__).resolve().parents[1];iso=a.iso.resolve(strict=True);out=a.out.resolve();binding_path=a.binding.resolve(strict=True)
@@ -19,7 +20,7 @@ def main():
  disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-quil-{os.getpid()}.sock';log=out/'serial.log';control_sock=pathlib.Path('/tmp')/f'sex-quil-control-{os.getpid()}.sock'
  command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-rtc',RTC,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.split('x')[0]+',yres='+a.resolution.split('x')[1],'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',a.model+',netdev=peer,mac=52:54:00:12:34:56']
  if a.pending_io_close:command+=['-qmp',f'unix:{control_sock},server=on,wait=off','-D',str(out/'device-trace.log'),'-msg','timestamp=on']
- manifest=dict(evidence_version=2,round=a.round,binding=bound,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=command,resolution=a.resolution,model=a.model,host_utc_start=time.time(),pixel_source_sha256=pixel_contract['source_sha256'],options=dict(soak_seconds=a.soak_seconds,rehearsal=a.rehearsal,find=a.find,typing_bursts=a.typing_bursts,workspace_refresh=a.workspace_refresh,third_quil=a.third_quil,toggle_stress=a.toggle_stress,pending_io_close=a.pending_io_close))
+ manifest=dict(evidence_version=2,round=a.round,binding=bound,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=command,resolution=a.resolution,model=a.model,host_utc_start=time.time(),pixel_source_sha256=pixel_contract['source_sha256'],options=dict(soak_seconds=a.soak_seconds,rehearsal=a.rehearsal,find=a.find,typing_bursts=a.typing_bursts,workspace_refresh=a.workspace_refresh,third_quil=a.third_quil,third_spindle=a.third_spindle,toggle_stress=a.toggle_stress,pending_io_close=a.pending_io_close))
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
  captures=Captures(out,pixel_contract,tuple(map(int,a.resolution.split('x'))));failure=None;started=time.monotonic()
@@ -179,7 +180,7 @@ def main():
   soak=None
   if a.soak_seconds:
    from alpha_session import run
-   try:soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil)
+   try:soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil,third_spindle=a.third_spindle)
    except Exception:
     # Diagnostic only: sample the live guest CPU state before teardown so a
     # wedged domain can be located by instruction address.

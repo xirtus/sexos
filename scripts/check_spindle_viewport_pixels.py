@@ -1,5 +1,7 @@
 """Native variable-size Spindle text: exact incarnation, geometry, payload and ink."""
 import re
+from pathlib import Path
+from history_roster_evidence import source_spindles, verify_boot_roster
 from check_desktop_pixels import glyph
 from check_disk_persistence import ppm_rgb
 
@@ -12,12 +14,37 @@ def layout(w,h):
     def rows(height):return min(6,1+(height-12-7*largest)//(9*largest))if height>=12+7*largest and cols else 0
     return [(8,36,left,top),(16+left,36,right,top),(8,by,left,bottom),(16+left,by,right,bottom)],cols,[rows(top),rows(bottom)]
 
-def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require_all_ink=True,resolution=None):
+def _source_grid(root,target):
+    rows=source_spindles(root)
+    row=next((row for row in rows if row['target']==target),None)
+    if row is None:raise ValueError('unknown catalog Spindle')
+    source=(Path(root)/'crates/sex-pdx/src/app_catalog.rs').read_text()
+    source=re.sub(r'/\*.*?\*/|//[^\n]*','',source,flags=re.S)
+    blocks=[block for block in re.findall(r'Incarnation\s*\{([^{}]*)\}',source)
+            if re.search(r'\bapp\s*:\s*App::Spindle\b',block)
+            and re.search(r'\btarget\s*:\s*'+str(target)+r'\s*,',block)]
+    if len(blocks)!=1:raise ValueError('missing exact literal Spindle grid')
+    match=re.search(r'\bchildren\s*:\s*&\[\s*([0-9,\s]*)\]',blocks[0])
+    if not match:raise ValueError('nonliteral Spindle grid children')
+    children=[int(value)for value in match[1].split(',')if value.strip()]
+    sids=[row['surface'],*children]
+    if len(children)!=3 or len(set(sids))!=4 or row['frame']in sids or any(not 0<sid<(1<<64)for sid in sids):
+        raise ValueError('Spindle grid requires three unique children')
+    return sids
+
+def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require_all_ink=True,resolution=None,root=None,require_text=None):
     try:
-        sids={12:[154,160,161,162],17:[302,303,304,305]}[target]
-        accepted=re.findall(rf'\[spindle.view.accepted\] target={target} task={target} sequence=(\d+) w=(\d+) h=(\d+) cols=(\d+) top_rows=(\d+) bottom_rows=(\d+) sender=3',text)
+        root=Path(__file__).resolve().parents[1]if root is None else Path(root)
+        sids=_source_grid(root,target)
+        roster=verify_boot_roster(root,text)
+        task=next((member['task']for member in roster['participants']if member['target']==target),None)
+        if task is None:raise ValueError('Spindle absent from held BOOT roster')
+        accepted=re.findall(rf'\[spindle.view.accepted\] target={target} task=(\d+) sequence=(\d+) w=(\d+) h=(\d+) cols=(\d+) top_rows=(\d+) bottom_rows=(\d+) sender=3(?=\r?\n|$)',text)
         if not accepted:raise ValueError('no authenticated current-incarnation viewport')
-        seq,w,h,cols,top,bottom=map(int,accepted[-1]);panes,expected_cols,rows=layout(w,h)
+        actual_task,seq,w,h,cols,top,bottom=map(int,accepted[-1])
+        if actual_task!=task:raise ValueError('viewport task differs from held BOOT roster')
+        if seq==0:raise ValueError('zero viewport sequence')
+        panes,expected_cols,rows=layout(w,h)
         if (cols,[top,bottom])!=(expected_cols,rows):raise ValueError('wrong viewport text capacity')
         views={int(sid):tuple(map(int,(x,y,w,h)))for sid,x,y,w,h in re.findall(rf'\[shell.app.viewport\] target={target} sid=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',text)if int(sid)in sids}
         if set(views)!=set(sids):raise ValueError('missing catalog viewport quadrants')
@@ -64,6 +91,11 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
             if mismatch:errors.append(f'sid{sid}: viewport glyph mismatch={mismatch}')
             if (require_all_ink or data.strip())and not ink:errors.append(f'sid{sid}: no viewport ink')
         if require_echo and not any(b'spindle17'in line for lines in rendered for line in lines):raise ValueError('missing native command echo')
+        if require_text is not None:
+            if not isinstance(require_text,str)or not require_text:raise ValueError('expected current text must be nonempty ASCII')
+            needle=require_text.encode('ascii')
+            current=[left+right for band in (0,2)for left,right in zip(rendered[band],rendered[band+1])]
+            if not any(needle in line for line in current):raise ValueError('missing expected current rendered text')
         prompt=(rendered[2][-1]+rendered[3][-1]).decode()if rendered[2]and rendered[3]else''
         if require_prompt and require_prompt not in prompt:raise ValueError('missing exact visible prompt')
         return errors
