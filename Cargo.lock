@@ -411,6 +411,7 @@ dependencies = [
  "sex-graphics",
  "sex-net-config",
  "sex-pdx",
+ "sex-time",
  "sex-tls",
  "silkclient",
  "spin",

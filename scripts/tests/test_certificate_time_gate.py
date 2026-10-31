@@ -1,6 +1,7 @@
 """Public UTC/checker fixtures only, never native RTC or rollback evidence."""
-import sys,unittest
+import contextlib,io,json,sys,tempfile,unittest
 from pathlib import Path
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import certificate_time_gate as gate
 from check_desktop_pixels import glyph
@@ -20,8 +21,8 @@ def metadata(mode='normal',pending=0):
  if mode=='close':lines.extend([f'[browser.clock.closed] target=15 task=15 pending={pending} terminal=1','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1','[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1'])
  return '\n'.join(lines)+'\n'
 def trace(state,c,w=900,h=650):
- n=len(c['prefix'])+50;base=n+258
- return f'[browser.preview.layout] bytes={n} newline=1 cached_or_sample=1\n[shell.document.viewport] target=15 task=15 surface=300 sequence=7 x=20 y=100 w={w} h={h} enqueued=1\n[browser.viewport] target=15 task=15 sequence=7 w={w} h={h} origin=held_shell\n[browser.clock.layout] base={base} bytes=64 viewport=7 state={state} pixels=unconfirmed\n[browser.view.applied] bytes={base+64} http=0 body_bytes=0 pixels=unconfirmed\n'
+ f=gate.calendar_frame(w,h,state,c);n=len(f['data']);digest=f['hash']
+ return f'[shell.document.viewport] target=15 task=15 surface=300 sequence=7 x=20 y=100 w={w} h={h} enqueued=1\n[browser.viewport] target=15 task=15 sequence=7 w={w} h={h} origin=held_shell\n[browser.clock.layout] bytes={n} hash={digest} cols={f["cols"]} rows={f["rows"]} viewport=7 state={state} snapshot_only=1 pixels=unconfirmed\n[browser.clock.applied] bytes={n} hash={digest} rows={f["rows"]} viewport=7 sequence=9 positive_ack=1\n'
 def pixels(text,state,c):
  g=gate.clock_geometry(text,state,c);raw=bytearray(1280*800*3);scale=g['scale'];color=c['color'].to_bytes(3,'big')
  for row in g['rows']:
@@ -72,6 +73,55 @@ class CertificateTimeOracle(unittest.TestCase):
   self.assertFalse(gate.verify_clock_pixels(trace('Cancelled',self.c),raw,'Cancelled',self.c)['ok'])
   self.assertFalse(gate.verify_clock_pixels(t,raw,f'Ready({SECONDS+1})',self.c)['ok'])
  def test_clipped_or_unapplied_clock_pixels_fail_without_skip(self):
-  for t in[trace('Cancelled',self.c,h=100),trace('Cancelled',self.c).replace('[browser.view.applied]','[not.applied]'),trace('Cancelled',self.c).replace('viewport=7','viewport=8')]:self.assertFalse(gate.verify_clock_pixels(t,b'','Cancelled',self.c)['ok'])
+  for t in[trace('Cancelled',self.c,h=100),trace('Cancelled',self.c).replace('[browser.clock.applied]','[not.applied]'),trace('Cancelled',self.c).replace('viewport=7','viewport=8')]:self.assertFalse(gate.verify_clock_pixels(t,b'','Cancelled',self.c)['ok'])
+ def test_independent_native_calendar_views_and_provenance(self):
+  f=gate.calendar_frame(640,375,f'Ready({SECONDS})',self.c);lines=[s.rstrip()for s in f['lines']]
+  self.assertEqual(lines[:4],[b'Clock / last query snapshot',b'2026-10-30T13:45:07Z',b'SexTime 437319907 s',b'Long Count 13.0.14.1.1'])
+  self.assertEqual(lines[4:8],[b'UTC day / GMT 584283',b'q35 CMOS / 1-second precision',b'Snapshot only / not live',b'T sample  Q clear'])
+ def test_calendar_measure_does_not_lose_rows_when_window_grows(self):
+  for w,h in[(1280,712),(1024,680),(640,375),(512,359)]:
+   with self.subTest(w=w):
+    f=gate.calendar_frame(w,h,f'Ready({SECONDS})',self.c);self.assertTrue(f['full_calendar']);self.assertLessEqual(f['cols'],63);self.assertGreaterEqual(f['rows'],8);self.assertLessEqual(len(f['data']),512)
+ def test_nonready_and_tiny_panels_never_retain_calendar_values(self):
+  for state in('Idle','Pending','Unavailable','Cancelled','Uncertain','Rollback','Ready(0)'):
+   f=gate.calendar_frame(640,375,state,self.c);self.assertNotIn(b'2026-10-30',f['data']);self.assertNotIn(b'437319907',f['data']);self.assertIsNone(f['utc_text'])
+  for w,h in[(200,100),(640,100),(0,0)]:
+   f=gate.calendar_frame(w,h,f'Ready({SECONDS})',self.c);self.assertFalse(f['full_calendar']);self.assertNotIn(b'2026-10-30',f['data']);self.assertNotIn(b'437319907',f['data'])
+ def test_exact_whole_frame_hash_and_applied_viewport_are_required(self):
+  state=f'Ready({SECONDS})';t=trace(state,self.c);raw=pixels(t,state,self.c)
+  for bad in[t.replace('positive_ack=1','positive_ack=0'),t.replace('sequence=9','sequence=0'),t.replace('rows=8 viewport=7 sequence','rows=7 viewport=7 sequence'),t.replace('hash=0x','hash=0xf',1)]:
+   self.assertFalse(gate.verify_clock_pixels(bad,raw,state,self.c)['ok'])
+ def test_final_glyph_row_fits_without_requiring_invisible_line_spacing(self):
+  state=f'Ready({SECONDS})';t=trace(state,self.c,w=640,h=176);self.assertEqual(len(gate.clock_geometry(t,state,self.c)['rows']),8)
+  self.assertTrue(gate.verify_clock_pixels(t,pixels(t,state,self.c),state,self.c)['ok'])
+  self.assertFalse(gate.calendar_frame(640,175,state,self.c)['full_calendar'])
+ def test_stale_ink_to_right_or_below_capped_calendar_measure_is_rejected(self):
+  state=f'Ready({SECONDS})';t=trace(state,self.c);raw=pixels(t,state,self.c);header=len(b'P6\n1280 800\n255\n');color=self.c['color'].to_bytes(3,'big')
+  for x,y in[(900,140),(40,700)]:
+   bad=bytearray(raw);at=header+(y*1280+x)*3;bad[at:at+3]=color
+   self.assertFalse(gate.verify_clock_pixels(t,bytes(bad),state,self.c)['ok'])
+ def test_cli_raw_check_needs_no_source_disk_and_never_starts_a_guest(self):
+  with tempfile.TemporaryDirectory()as name:
+   out=Path(name);iso=out/'tested.iso';binding=out/'source-binding.json';iso.write_bytes(b'fixture');binding.write_text('{}')
+   with patch.object(sys,'argv',['certificate_time_gate.py','--iso',str(iso),'--binding',str(binding),'--out',name,'--check']),patch.object(gate,'replay_evidence',return_value=dict(ok=True,mode='normal',captures=3))as replay,patch.object(gate.subprocess,'Popen',side_effect=AssertionError('read-only replay')),contextlib.redirect_stdout(io.StringIO()):gate.main()
+   self.assertEqual(replay.call_count,1)
+ def test_failed_native_result_cannot_be_relabelled_by_raw_replay(self):
+  with tempfile.TemporaryDirectory()as name:
+   out=Path(name);(out/'manifest.json').write_text(json.dumps({'error':'native attempt failed'}));(out/'result.json').write_text(json.dumps({'ok':False}))
+   with patch.object(gate,'frozen_binding',return_value={}),self.assertRaisesRegex(ValueError,'remains diagnostic'):gate.replay_evidence(ROOT,out/'tested.iso',out/'source-binding.json',out)
+ def test_capture_excludes_only_incomplete_trailing_utf8_and_matches_later_prefix(self):
+  with tempfile.TemporaryDirectory()as name:
+   p=Path(name)/'serial.log';prefix='[sample] café €\r\n';scalar='🙂'.encode()
+   for count in range(1,len(scalar)):
+    raw=prefix.encode()+scalar[:count];p.write_bytes(raw);text=gate.clock_serial_text(p);self.assertEqual(text,prefix.replace('\r\n','\n'));self.assertEqual(p.read_bytes(),raw)
+    frame=dict(serial_end=len(text),serial_sha256=gate.hashlib.sha256(text.encode()).hexdigest(),requested_anchor=None);p.write_bytes(prefix.encode()+scalar+b' done\r\n');self.assertEqual(gate.frame_prefix(gate.clock_serial_text(p),frame),text)
+   p.write_bytes(b'[bad]\xff\n')
+   with self.assertRaisesRegex(ValueError,'interior UTF-8'):gate.clock_serial_text(p)
+ def test_every_calendar_source_and_transitive_runner_must_be_sealed(self):
+  from https_asset_gate import script_dependencies
+  names=set(self.c['source_sha256'])|set(script_dependencies(ROOT,('scripts/certificate_time_gate.py','scripts/tests/test_certificate_time_gate.py')));hashes={n:gate.hashlib.sha256((ROOT/n).read_bytes()).hexdigest()for n in names};held=dict(sources=hashes.copy(),runner_sha256={});self.assertEqual(gate.require_clock_inputs(ROOT,held,self.c),hashes)
+  for name in('apps/kaleidoscope/src/clock_view.rs','crates/sex-time/src/lib.rs','scripts/certificate_time_gate.py','scripts/tests/test_certificate_time_gate.py','scripts/https_asset_gate.py'):
+   bad=dict(sources=hashes.copy(),runner_sha256={});bad['sources'].pop(name)
+   with self.subTest(name=name),self.assertRaisesRegex(ValueError,'dependency missing/changed'):gate.require_clock_inputs(ROOT,bad,self.c)
 
 if __name__=='__main__':unittest.main()

@@ -90,6 +90,7 @@ fn deliver(p:&mut probe::Client,now:u64) {p.reply(receipt(),now);}
 
 mod clock_probe{pub use super::probe::View;}
 #[path="../apps/kaleidoscope/src/clock_view.rs"]mod clock_view;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[test]fn utc_view_formats_real_calendar_bounds_and_stale_states_as_public_data(){
  for (seconds,expected)in[(clock_source::MIN_SECONDS as u32,"2020-01-01T00:00:00Z"),(clock_source::MAX_SECONDS as u32,"2099-12-31T23:59:59Z"),(1582934400,"2020-02-29T00:00:00Z"),(1793367907,"2026-10-30T13:45:07Z")]{let s=clock_view::status(probe::View::Ready(seconds)).unwrap();assert_eq!(&s.bytes[..s.len],expected.as_bytes());}
  for (view,expected)in[(probe::View::Pending,"checking"),(probe::View::Unavailable,"unavailable"),(probe::View::Cancelled,"cancelled"),(probe::View::Uncertain,"waiting receipt"),(probe::View::Rollback,"rollback; blocked"),(probe::View::Ready(0),"unavailable")]{let s=clock_view::status(view).unwrap();assert_eq!(&s.bytes[..s.len],expected.as_bytes());}
