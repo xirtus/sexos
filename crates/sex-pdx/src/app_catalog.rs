@@ -207,3 +207,18 @@ pub const fn spindle_grid(target:u32)->Option<[u64;4]>{
         }i+=1;
     }None
 }
+
+/// Every app frame/content/pane association used by bounded desktop delivery.
+/// Frames precede distinct content/panes. This inventory carries no authority.
+pub const APP_SURFACE_COUNT:usize={
+ let mut n=0;let mut i=0;while i<COUNT{let row=&INCARNATIONS[i];n+=1+if row.frame()!=row.surface{1}else{0};n+=row.children.len();i+=1;}n
+};
+pub const APP_SURFACES:[u64;APP_SURFACE_COUNT]={
+ let mut out=[0;APP_SURFACE_COUNT];let mut i=0;let mut n=0;
+ while i<COUNT{out[n]=INCARNATIONS[i].frame();n+=1;i+=1;}
+ i=0;while i<COUNT{let row=&INCARNATIONS[i];if row.frame()!=row.surface{out[n]=row.surface;n+=1;}let mut child=0;while child<row.children.len(){out[n]=row.children[child];n+=1;child+=1;}i+=1;}
+ out
+};
+const _:()={
+ let mut i=0;while i<APP_SURFACE_COUNT{assert!(APP_SURFACES[i]!=0&&APP_SURFACES[i]!=200);let mut j=0;while j<i{assert!(APP_SURFACES[i]!=APP_SURFACES[j]);j+=1;}i+=1;}
+};

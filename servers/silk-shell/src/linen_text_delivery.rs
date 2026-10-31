@@ -132,9 +132,18 @@ impl LatestOperation {
     }
 }
 
-/// Fixed BOOT frames and their nine app-owned child surfaces only. Observation preserves the actual
-/// transport result; a full-ring state operation is retried independently.
-pub const DESKTOP_SURFACES:[u64;16]=[200,201,153,300,301,306,307,156,154,160,161,162,302,303,304,305];
+/// Existing Linen plus every descriptive BOOT app frame/content/child surface.
+/// This finite tracking table grants nothing: the caller still validates actual
+/// lifecycle ownership before retrying each retained transport operation.
+pub const DESKTOP_SURFACES:[u64;1+sex_pdx::app_catalog::APP_SURFACE_COUNT]={
+    let mut surfaces=[0;1+sex_pdx::app_catalog::APP_SURFACE_COUNT];
+    surfaces[0]=200;
+    let mut i=0;
+    while i<sex_pdx::app_catalog::APP_SURFACE_COUNT {
+        surfaces[i+1]=sex_pdx::app_catalog::APP_SURFACES[i];i+=1;
+    }
+    surfaces
+};
 pub struct DesktopStates { slots: [Option<Operation>;DESKTOP_SURFACES.len()], chrome: [Option<Operation>;DESKTOP_SURFACES.len()], denied:[bool;DESKTOP_SURFACES.len()], cursor: usize }
 impl DesktopStates {
     pub const fn new() -> Self { Self { slots:[None;DESKTOP_SURFACES.len()],chrome:[None;DESKTOP_SURFACES.len()],denied:[false;DESKTOP_SURFACES.len()],cursor:0 } }
@@ -168,7 +177,7 @@ impl DesktopStates {
     pub fn poll(&mut self,budget:usize,mut validate:impl FnMut(Operation)->Option<Operation>,mut send:impl FnMut(Operation)->Admission) {
         let mut attempts=0;
         for _ in 0..DESKTOP_SURFACES.len() {
-            if attempts>=budget {break;}
+            if attempts>=budget.min(4) {break;}
             let index=self.cursor;self.cursor=(self.cursor+1)%DESKTOP_SURFACES.len();
             let Some(original)=self.slots[index] else {continue;};
             let Some(op)=validate(original) else {self.slots[index]=None;continue;};

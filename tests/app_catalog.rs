@@ -135,3 +135,9 @@ fn exact_new_reserve_rows_and_last_identity_have_no_aliases() {
     assert_eq!(app_catalog::count(App::Quil),8);
     assert!(by_target(24).is_none());
 }
+
+#[test]fn app_surface_inventory_covers_all_frames_content_and_panes_once(){
+ assert_eq!(app_catalog::APP_SURFACE_COUNT,20);
+ assert_eq!(app_catalog::APP_SURFACES,[201,153,300,301,306,307,308,309,310,311,312,156,154,160,161,162,302,303,304,305]);
+ for(i,sid)in app_catalog::APP_SURFACES.iter().enumerate(){assert!(!app_catalog::APP_SURFACES[..i].contains(sid));}
+}

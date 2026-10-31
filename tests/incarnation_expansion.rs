@@ -2,6 +2,9 @@
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
+#[path="../servers/silk-shell/src/linen_text_delivery.rs"]mod admission;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/document.rs"]pub mod document;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
@@ -66,4 +69,15 @@ impl documents::Backend for Backend{
  assert_eq!(replies,[(100,Ok(8)),(15,Err(document::DENIED))]);
  assert!(service.retire(100,&mut backend));let mut last=vec![];service.poll(|pd,v|{last.push((pd,document::decode_reply(v,1).unwrap()));0});assert_eq!(last,[(102,Ok(3))]);
  let foreign=document::Request{seq:2,object:2,..info};service.handle(102,true,foreign,&mut backend);let mut denied=None;service.poll(|pd,v|{assert_eq!(pd,102);denied=document::decode_reply(v,2);0});assert_eq!(denied,Some(Err(document::DENIED)));
+}
+
+#[test]fn future_frame_admission_retains_backpressure_until_ready(){
+ use admission::{DesktopStates,Operation,Admission};
+ let op=Operation{opcode:0xEC,surface:400,packed:1,control:0};
+ assert!(DesktopStates::tracks(400));let mut delivery=DesktopStates::new();
+ delivery.observe(op,Admission::Full);assert!(!delivery.ready(400));
+ let mut sent=Vec::new();delivery.poll(4,Some,|packet|{sent.push(packet);Admission::Accepted});
+ assert_eq!(sent,[op]);assert!(!delivery.ready(400));
+ delivery.poll(4,Some,|packet|{assert_eq!(packet.surface,400);assert_eq!(packet.opcode,0xFD);Admission::Accepted});
+ assert!(delivery.ready(400));
 }

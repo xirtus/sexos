@@ -46,6 +46,15 @@ def main():
    result=subprocess.run([str(binary),'--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
    if result.returncode!=101:raise RuntimeError('old viewport admission survived: '+result.stdout)
    print(f'[incarnation.policy.control] viewport_guard={index} old_allowlist_rejected_by_tests=1')
+  delivery=(root/'servers/silk-shell/src/linen_text_delivery.rs').read_text()
+  start=delivery.index('pub const DESKTOP_SURFACES');end=delivery.index('pub struct DesktopStates',start)
+  changed=delivery[:start]+'pub const DESKTOP_SURFACES:[u64;16]=[200,201,153,300,301,306,307,156,154,160,161,162,302,303,304,305];\n'+delivery[end:]
+  path=out/'old-frame-admission.rs';path.write_text(changed);old=json.dumps(str(root/'servers/silk-shell/src/linen_text_delivery.rs'));assert old in fixture
+  test.write_text(fixture.replace(old,json.dumps(str(path))));binary=out/'old-frame-admission-test'
+  subprocess.run(['rustc','--edition=2021','--test',str(test),'-o',str(binary)],check=True,env={**os.environ,'EXPANDED_SHELL_POLICY':str(shell)})
+  result=subprocess.run([str(binary),'--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+  if result.returncode!=101:raise RuntimeError('old desktop surfaces survived: '+result.stdout)
+  print('[incarnation.policy.control] old_frame_inventory_rejected_by_tests=1')
   print('[incarnation.policy] PASS expanded_quil_spindle_browser=1 actual_modules=1 scope=host_doubles_not_boot_authority')
 
 if __name__=='__main__':main()

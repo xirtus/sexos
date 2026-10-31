@@ -133,3 +133,64 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  DESKTOP_STATES.observe(op(0xFD,303),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(306));
  DESKTOP_STATES.observe(op(0xEC,303),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(306));
 }}
+
+
+#[test]fn newest_quil_create_and_chrome_full_block_actual_viewport_readiness_until_admitted(){
+ let _l=LOCK.lock().unwrap();unsafe{
+ reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(126,23,2300,312));
+ assert!(linen_text_delivery::DesktopStates::tracks(312));
+ RESULTS.lock().unwrap().push_back((ERR_SERVICE_NOT_READY,7));
+ assert_eq!(pdx_call(SLOT_DISPLAY,0xEC,312,1,2),(ERR_SERVICE_NOT_READY,7));
+ assert!(!desktop_content_ready(312));
+ pdx_call(SLOT_DISPLAY,0xFD,312,1,0x2300);
+ RESULTS.lock().unwrap().push_back((ERR_SERVICE_NOT_READY,8));
+ desktop_state_poll();assert!(!desktop_content_ready(312));
+ let create=*CALLS.lock().unwrap().last().unwrap();
+ assert_eq!(create,(SLOT_DISPLAY,0xEC,312,(50<<32)|10,(400<<32)|640));
+ desktop_state_poll();assert_eq!(CALLS.lock().unwrap().last(),Some(&create));
+ assert!(!desktop_content_ready(312)); // successful create still owns pending chrome
+ RESULTS.lock().unwrap().push_back((ERR_SERVICE_NOT_READY,9));desktop_state_poll();
+ let chrome=*CALLS.lock().unwrap().last().unwrap();
+ assert_eq!(chrome,(SLOT_DISPLAY,0xFD,312,1,0x2300));assert!(!desktop_content_ready(312));
+ desktop_state_poll();assert_eq!(CALLS.lock().unwrap().last(),Some(&chrome));assert!(desktop_content_ready(312));
+ DESKTOP_STATES.observe(op(0xEC,312),linen_text_delivery::Admission::Rejected(3));
+ assert!(!desktop_content_ready(312));
+ DESKTOP_STATES.observe(op(0xFD,312),linen_text_delivery::Admission::Accepted);
+ assert!(!desktop_content_ready(312)); // chrome cannot clear a rejected create
+ DESKTOP_STATES.observe(op(0xEC,312),linen_text_delivery::Admission::Accepted);
+ assert!(!desktop_content_ready(312));desktop_state_poll();assert!(desktop_content_ready(312));
+}}
+
+#[test]fn all_catalog_surfaces_have_bounded_fair_full_retention_including_last_slot(){
+ use linen_text_delivery::{Admission,DesktopStates,DESKTOP_SURFACES};
+ assert_eq!(DESKTOP_SURFACES.len(),21);assert_eq!(DESKTOP_SURFACES[0],200);
+ assert_eq!(&DESKTOP_SURFACES[1..],app_catalog::APP_SURFACES.as_slice());
+ let mut states=DesktopStates::new();
+ for &sid in &DESKTOP_SURFACES {assert!(DesktopStates::tracks(sid));states.observe(op(0xEC,sid),Admission::Full);}
+ for sid in [0,999,152,u64::MAX] {assert!(!DesktopStates::tracks(sid));states.observe(op(0xEC,sid),Admission::Full);assert!(!states.pending_surface(sid));assert!(!states.ready(sid));}
+ let mut seen=Vec::new();
+ for _ in 0..DESKTOP_SURFACES.len().div_ceil(4) {
+  let before=seen.len();states.poll(99,Some,|operation|{assert_eq!(operation,op(0xEC,operation.surface));seen.push(operation.surface);Admission::Full});
+  assert_eq!(seen.len()-before,4);
+ }
+ assert_eq!(&seen[..DESKTOP_SURFACES.len()],DESKTOP_SURFACES.as_slice());
+ let last=*DESKTOP_SURFACES.last().unwrap();let mut states=DesktopStates::new();
+ let create=op(0xEC,last);let chrome=linen_text_delivery::Operation{opcode:0xFD,surface:last,packed:17,control:29};
+ states.observe(create,Admission::Full);states.observe(chrome,Admission::Accepted);
+ for _ in 0..3 {let mut sent=0;states.poll(4,Some,|operation|{assert_eq!(operation,create);sent+=1;Admission::Full});assert_eq!(sent,1);assert!(!states.ready(last));}
+ states.poll(4,Some,|operation|{assert_eq!(operation,create);Admission::Accepted});assert!(!states.ready(last));
+ states.poll(4,Some,|operation|{assert_eq!(operation,chrome);Admission::Accepted});assert!(states.ready(last));assert!(!states.pending());
+}
+
+#[test]fn newest_quil_retained_geometry_is_revalidated_before_any_retry_effect(){
+ let _l=LOCK.lock().unwrap();unsafe{
+ for stale in 0..3 {
+  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(126,23,2300,312));
+  DESKTOP_STATES.observe(op(0xEC,312),linen_text_delivery::Admission::Full);
+  assert!(desktop_state_validate(op(0xEC,312)).is_some());
+  match stale {0=>APP_CUSTODY[0].as_mut().unwrap().close_pending=true,
+   1=>APP_CUSTODY[0].as_mut().unwrap().dead=true,_=>ALIVE=false}
+  assert!(desktop_state_validate(op(0xEC,312)).is_none());
+  desktop_state_poll();assert!(CALLS.lock().unwrap().is_empty());assert!(!DESKTOP_STATES.pending());
+ }
+}}
