@@ -1,0 +1,775 @@
+{
+  "qualified_catalog_clock_integration": true,
+  "full_os_goal_complete": false,
+  "source_commit": "63b2f118117f49d08202b9dafe49362221e1a9e2",
+  "main_parent": "8faeafbb43a925269831cfa1b47663b295282a5e",
+  "stack_parent": "1c9c64ec82e6eb5570222efc7b890b64841a79bd",
+  "iso_sha256": "7bea8af9c9cd506a498f13e955afaa8f3d60397adfb9c0f0addf578fd98a2fef",
+  "kernel_sha256": "30cbf36a7a672f2a123cfd0ab19e9b4de484f3d7dda55007d566f4b57b04fea8",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 576,
+  "runner_inputs": 578,
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "63b2f118117f49d08202b9dafe49362221e1a9e2",
+    "production": 576,
+    "runners": 578,
+    "unique": 1154
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2661,
+  "python_tests": 965,
+  "native": {
+    "workflow_boots": 18,
+    "sealed_probe_boots": 1,
+    "total_boots": 19,
+    "verified_workflow_captures": 138,
+    "groups": {
+      "clock_connected_tls": [
+        {
+          "name": "clock-normal-wide",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-clock-normal-wide",
+          "driver": "/tmp/sexos-catalog-integration-c-native-clock-normal-wide-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/clock-normal-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-clock-normal-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--mode",
+            "normal"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723309.982105708,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 17.265386249986477,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-normal-compact",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-clock-normal-compact",
+          "driver": "/tmp/sexos-catalog-integration-c-native-clock-normal-compact-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/clock-normal-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-clock-normal-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--mode",
+            "normal"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723327.288890458,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 10.4746799999848,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-invalid-year-wide",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-wide",
+          "driver": "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-wide-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/clock-invalid-year-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--mode",
+            "invalid-year"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723337.803394166,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 14.1364650829928,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-invalid-year-compact",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-compact",
+          "driver": "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-compact-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/clock-invalid-year-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--mode",
+            "invalid-year"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723351.977334541,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 10.43446112505626,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-close-wide",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-clock-close-wide",
+          "driver": "/tmp/sexos-catalog-integration-c-native-clock-close-wide-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/clock-close-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-clock-close-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--mode",
+            "close"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723362.450444083,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 9.766986541915685,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 0
+        },
+        {
+          "name": "clock-close-compact",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-clock-close-compact",
+          "driver": "/tmp/sexos-catalog-integration-c-native-clock-close-compact-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/clock-close-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-clock-close-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--mode",
+            "close"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723372.256776333,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 6.585434833075851,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 0
+        },
+        {
+          "name": "connected-wide",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-connected-wide",
+          "driver": "/tmp/sexos-catalog-integration-c-native-connected-wide-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/connected-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-connected-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723378.881343958,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 46.01281233294867,
+          "other_guests_after": [],
+          "boots": 2,
+          "verified_captures": 17
+        },
+        {
+          "name": "connected-compact",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-connected-compact",
+          "driver": "/tmp/sexos-catalog-integration-c-native-connected-compact-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/connected-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-connected-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723424.93166125,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 50.51996575004887,
+          "other_guests_after": [],
+          "boots": 2,
+          "verified_captures": 17
+        },
+        {
+          "name": "responsive-wide",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-responsive-wide",
+          "driver": "/tmp/sexos-catalog-integration-c-native-responsive-wide-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/responsive-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/tls_responsiveness_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-responsive-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723475.488225625,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 19.893387082964182,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 10
+        },
+        {
+          "name": "responsive-compact",
+          "status": 0,
+          "out": "/tmp/sexos-catalog-integration-c-native-responsive-compact",
+          "driver": "/tmp/sexos-catalog-integration-c-native-responsive-compact-driver.log",
+          "ports": "/tmp/sexos-catalog-integration-c-ports/responsive-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/tls_responsiveness_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-native-responsive-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 723495.420774791,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 14.683797499979846,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 10
+        }
+      ],
+      "pending_device": [
+        {
+          "profile": "compact",
+          "kind": "live",
+          "out": "/tmp/sexos-catalog-integration-c-pending-compact-live",
+          "driver": "/tmp/sexos-catalog-integration-c-pending-compact-live-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-pending-compact-live",
+            "--resolution",
+            "1024x768",
+            "--model",
+            "e1000",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--pending-io-close",
+            "--capture-profile"
+          ],
+          "status": 0,
+          "elapsed_seconds": 38.1239736659918,
+          "verified_captures": 12
+        },
+        {
+          "profile": "compact",
+          "kind": "cold",
+          "out": "/tmp/sexos-catalog-integration-c-pending-compact-cold",
+          "driver": "/tmp/sexos-catalog-integration-c-pending-compact-cold-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/pending_io_cold_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-pending-compact-cold",
+            "--resolution",
+            "1024x768",
+            "--model",
+            "e1000",
+            "--session",
+            "/tmp/sexos-catalog-integration-c-pending-compact-live"
+          ],
+          "status": 0,
+          "elapsed_seconds": 9.303092917078175,
+          "verified_captures": 1
+        },
+        {
+          "profile": "wide",
+          "kind": "live",
+          "out": "/tmp/sexos-catalog-integration-c-pending-wide-live",
+          "driver": "/tmp/sexos-catalog-integration-c-pending-wide-live-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-pending-wide-live",
+            "--resolution",
+            "1280x800",
+            "--model",
+            "e1000e",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--pending-io-close",
+            "--capture-profile"
+          ],
+          "status": 0,
+          "elapsed_seconds": 44.79128891695291,
+          "verified_captures": 12
+        },
+        {
+          "profile": "wide",
+          "kind": "cold",
+          "out": "/tmp/sexos-catalog-integration-c-pending-wide-cold",
+          "driver": "/tmp/sexos-catalog-integration-c-pending-wide-cold-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source/scripts/pending_io_cold_gate.py",
+            "--iso",
+            "/private/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-pending-wide-cold",
+            "--resolution",
+            "1280x800",
+            "--model",
+            "e1000e",
+            "--session",
+            "/tmp/sexos-catalog-integration-c-pending-wide-live"
+          ],
+          "status": 0,
+          "elapsed_seconds": 13.245844290941022,
+          "verified_captures": 1
+        }
+      ],
+      "find_relaunch": [
+        {
+          "profile": "compact",
+          "command": [
+            "python3",
+            "/tmp/sexos-catalog-integration-c-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-alpha-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find"
+          ],
+          "out": "/tmp/sexos-catalog-integration-c-alpha-compact",
+          "driver": "/tmp/sexos-catalog-integration-c-alpha-compact-driver.log",
+          "status": 0,
+          "seconds": 55.68036670796573,
+          "verified_captures": 21,
+          "fresh_replay": true
+        },
+        {
+          "profile": "wide",
+          "command": [
+            "python3",
+            "/tmp/sexos-catalog-integration-c-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-catalog-integration-c-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-catalog-integration-c-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-catalog-integration-c-alpha-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find"
+          ],
+          "out": "/tmp/sexos-catalog-integration-c-alpha-wide",
+          "driver": "/tmp/sexos-catalog-integration-c-alpha-wide-driver.log",
+          "status": 0,
+          "seconds": 66.57368991698604,
+          "verified_captures": 21,
+          "fresh_replay": true
+        }
+      ]
+    },
+    "boot_catalog_audit": {
+      "ok": true,
+      "boots": 19,
+      "workflow_boots": 18,
+      "sealed_probe_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-catalog-integration-build-c/serial.log",
+          "bytes": 496210,
+          "sha256": "43eb0ffae7209e62d596d613aee46ab9900d126335a91cc2aaa3a17c9caab8e2",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-clock-normal-wide/serial.log",
+          "bytes": 345677,
+          "sha256": "6d8c001fc309151571ff552d6c956ea2b046e1fadb09e0b5e94251aba047560b",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-clock-normal-compact/serial.log",
+          "bytes": 333580,
+          "sha256": "58d5260d88baeacef3beec2fd01fee6ba9bcf9ac6d50466266dbf2d70318a5af",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-wide/serial.log",
+          "bytes": 323247,
+          "sha256": "37ff9f8df4829632edb583dec2cd4571c318ec946e37268fec5a539191e2b922",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-clock-invalid-year-compact/serial.log",
+          "bytes": 321744,
+          "sha256": "662827321dbc51924b6586c928033eb84d7c481fd9c2e150b38c33371676cadf",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-clock-close-wide/serial.log",
+          "bytes": 290802,
+          "sha256": "5ad82bbd91d92e285161fc7de4f7a8f5b63fb36cb9125746e1740ac72fe2a61b",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-clock-close-compact/serial.log",
+          "bytes": 289695,
+          "sha256": "e24712e42692e9c6c4753083dceba43bb591fcc23e2f57a98f23f0cf08823a35",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-connected-wide/recovery/serial.log",
+          "bytes": 390288,
+          "sha256": "df2908391538730b78429eceb4b5860f24fd1f4c9b02e2a86f8c0e36f19740a9",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-connected-wide/session/serial.log",
+          "bytes": 692304,
+          "sha256": "f5fa6bf25f446e88c177c63035ae3e68d1bc5a178d03329c8de27364137ae942",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-connected-compact/recovery/serial.log",
+          "bytes": 379794,
+          "sha256": "6643a5664756eaec3c4fde471df1cdb3d492325e580d53375c3c6b2cc437f3e1",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-connected-compact/session/serial.log",
+          "bytes": 675226,
+          "sha256": "2f0a1ae75c4acd03c5c8c6f046dfa725d5bd6c0380d9b4752782556efbcc3419",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-responsive-wide/serial.log",
+          "bytes": 503667,
+          "sha256": "8663c808838f6ffe786b99e5e105898e045358c0a4fece6e871f04034bd73a01",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-native-responsive-compact/serial.log",
+          "bytes": 491536,
+          "sha256": "92d4fece84815c1dd720f32d6e187e298568bef6564652c3c3961e8ff274f0db",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-pending-compact-live/serial.log",
+          "bytes": 1062313,
+          "sha256": "a023683f974631857d7b9c71343ac048f1aeaa4ff85fdb5fa490d851eeff3ac6",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-pending-compact-cold/serial.log",
+          "bytes": 332582,
+          "sha256": "cac34c9a9bba78de7b2fd79fad0ed15b2b0f9c862064f7b0783f337fc4a73791",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-pending-wide-live/serial.log",
+          "bytes": 1079714,
+          "sha256": "db20cd0f1dd21d68cf79e21bd3b99989978ff5d4706a95d6f6d7dcc8d6b51529",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-pending-wide-cold/serial.log",
+          "bytes": 340797,
+          "sha256": "c256e69d07ae1cfa8b6b0a979928813a42728adf50a743e70abab1d912dac8d9",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-alpha-compact/serial.log",
+          "bytes": 1434708,
+          "sha256": "79f73b268f9cd572510e6b70a8d186d79d4f5008b93940c0a40b8efeef34f7cf",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-catalog-integration-c-alpha-wide/serial.log",
+          "bytes": 1462995,
+          "sha256": "2cedb27048697349cdcd482c62247febfef8a95fb30857b680e16ca3644f35fa",
+          "subjects": 6,
+          "preseal": true
+        }
+      ],
+      "scope": "Exact six native preseal receipts per boot, coupled to frozen runtime validator/source. Display child policy and broader grant closure are separate obligations."
+    },
+    "pending_device_fresh_replays": true,
+    "alpha_rehearsal_fresh_replays": true,
+    "new_image_1800s_acceptance": false
+  },
+  "scalar": {
+    "elfs": 5,
+    "instructions": 225385,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Five exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "diagnostics": {
+    "first_build": "ABI hash stale after source comment edit; rejected before guest",
+    "second_build": "GREEN before final task-context audit enhancement; not the final qualification",
+    "preflight": "One stale document BOOT source anchor failed; source drift detected while updating host hooks; superseded by frozen43-check run",
+    "first_freeze": "Incorrect kernel path; no source binding published; corrected retry froze exact C artifacts"
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-catalog-clock-integration-2026-10-31-raw.tar.gz",
+    "sha256": "cbef992bdd8ef2746060e18532b330929a0b99db787c3c1c4724ebcf76f0ffd6",
+    "bytes": 11679774,
+    "members": 1684,
+    "payload_manifest_sha256": "b7d139300b030483a2020d203886c0912ac1bc9d88da7977076541fd72a63528",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Round133 catalog and PR4-10 ancestry integrated. Actual preseal kernel app/task-context/grant/route/activation audit; lossless accepted reply accounting. Exact frozen virtual clock/connected/TLS/pending-device/cold/find/relaunch checks. Finite BOOT reserves remain. No runtime mint, process VAS/POSIX, general daily-driver, physical/power-loss/SMP/hostile containment/global epoch replay claim."
+}

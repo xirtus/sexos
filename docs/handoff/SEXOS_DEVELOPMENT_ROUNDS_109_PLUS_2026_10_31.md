@@ -432,3 +432,30 @@ retain original diagnostics separately from qualified evidence. Only host
 qualification code changes; production inputs, kernel, ABI and SASOS authority
 remain unchanged. Inventory stays 2 Open / 28 Partial / System Proven false;
 physical/storage/reserve and global epoch work continues.
+
+## Catalog/clock integration and completed paired soak — 31 October
+
+Round 133 and the full PR #4–#10 ancestry are integrated in `63b2f118`.
+BOOT compares all six catalog rows with actual app/task-context/grant/route and
+activation bindings before sealing. A lossless, registry-indexed reply ledger
+replaces silent 16-bit saturation/untracked accepted callers. Neither change
+creates runtime authority or changes the SASOS model.
+
+The [integration handoff](CATALOG_CLOCK_INTEGRATION_2026_10_31.md) records a
+sealed GREEN build, 43 host checks/2,661 passing Rust executions, 965 Python
+tests, 18 workflow boots/138 verified captures and fresh recovery replays.
+The sealed probe adds a nineteenth boot with all six preseal catalog receipts.
+Find/replace/undo, connected desktop, clock states, TLS responsiveness and
+pending-write Close/cold recovery pass at both sizes. New-image alpha runs are
+short rehearsals, not sustained acceptance.
+
+The formerly live optimized-image compact and wide sessions are now both
+terminal and independently replayed: 86 cycles/209 captures/~1800 seconds each,
+172 cycles/418 captures total. The [paired acceptance record](ALPHA_PAIRED_ACCEPTANCE_2026_10_31.md)
+binds every frozen input to `96f4436c`; its completed-save Close scope remains
+distinct from the separately qualified pending-device edge.
+
+Next: remove remaining catalog/capacity duplication, expand finite BOOT app
+reserves and exact service grants (including Browser relaunch), verify repeated
+reopen/exhaustion and launcher responsiveness, then sustain the expanded image.
+Inventory remains 2 Open / 28 Partial / System Proven false; goal active.

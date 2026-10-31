@@ -1,0 +1,214 @@
+{
+  "accepted_v2_sustained_workflow": true,
+  "full_os_goal_complete": false,
+  "source_commit": "96f4436c27a2b85400a7af3acf1bbe3014a17b16",
+  "iso_sha256": "9ad6768dcc70a0554999b5b2f57ceebcc0cd66e32500c1ceee79deb1e9ff8aca",
+  "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 574,
+  "runner_inputs": 569,
+  "registered_host_checks": 42,
+  "rust_test_executions": 2630,
+  "python_tests": 910,
+  "profiles": [
+    {
+      "profile": "compact",
+      "cycles": 86,
+      "verified_captures": 209,
+      "elapsed_seconds": 1800.0019254580839,
+      "active_elapsed_seconds": 510.08974757418036,
+      "idle_elapsed_seconds": 1289.9121778839035,
+      "documents": [
+        {
+          "bytes": 10,
+          "hash": "0xe41184b5fedbdf93",
+          "object": 3,
+          "name": "uialpha",
+          "content": "first note"
+        },
+        {
+          "bytes": 147,
+          "hash": "0x795bbedc2916b00f",
+          "object": 4,
+          "name": "uibeta",
+          "content": "first notebzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqt"
+        }
+      ],
+      "terminal_scope": "safe_completed_save_close",
+      "pending_device_close": false,
+      "remaining_obligations": [
+        "Quil pending-I/O terminal teardown"
+      ]
+    },
+    {
+      "profile": "wide",
+      "cycles": 86,
+      "verified_captures": 209,
+      "elapsed_seconds": 1800.0100170830265,
+      "active_elapsed_seconds": 511.25728304265067,
+      "idle_elapsed_seconds": 1288.7527340403758,
+      "documents": [
+        {
+          "bytes": 10,
+          "hash": "0xe41184b5fedbdf93",
+          "object": 3,
+          "name": "uialpha",
+          "content": "first note"
+        },
+        {
+          "bytes": 147,
+          "hash": "0x795bbedc2916b00f",
+          "object": 4,
+          "name": "uibeta",
+          "content": "first notebzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqt"
+        }
+      ],
+      "terminal_scope": "safe_completed_save_close",
+      "pending_device_close": false,
+      "remaining_obligations": [
+        "Quil pending-I/O terminal teardown"
+      ]
+    }
+  ],
+  "total_cycles": 172,
+  "total_verified_captures": 418,
+  "independent_source_and_replay_audit": {
+    "ok": true,
+    "commit": "96f4436c27a2b85400a7af3acf1bbe3014a17b16",
+    "frozen": "/tmp/sexos-alpha-launcher-b-frozen",
+    "binding_sha256": "ec74462e4f52c9ff19b47848a7716eac8a612848ad88f8a7016eb0e2d58943b8",
+    "checks": {
+      "bound_hashes": {
+        "production": 574,
+        "runners": 569,
+        "unique": 1143,
+        "git_mismatches": [],
+        "frozen_mismatches": []
+      },
+      "tested.iso": {
+        "sha256": "9ad6768dcc70a0554999b5b2f57ceebcc0cd66e32500c1ceee79deb1e9ff8aca",
+        "matches": true
+      },
+      "tested.kernel": {
+        "sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+        "matches": true
+      }
+    },
+    "runs": {
+      "compact": {
+        "ok": true,
+        "resolution": "1024x768",
+        "cycles": 86,
+        "captures": 209,
+        "elapsed_seconds": 1800.0019254580839,
+        "fresh_replay_seconds": 41.11241370893549,
+        "three_replays_identical": true,
+        "independent_replay": "/tmp/sexos-alpha-launcher-b-compact-1800-independent-replay.json",
+        "independent_replay_sha256": "d41516967fbed566b55ab069889902e41bb7cf7231af44267a2bde8267da329e",
+        "result_sha256": "4038d08acced19c082eb8ae5608141dc155514e488eb8eca6661744620edb20d",
+        "manifest_sha256": "1af132250a8762a422b5fc9ec386ca229fe9d14ec43e8fb8247dc38b4cfa3bed",
+        "pending_quil_close": false,
+        "quil_close": {
+          "attempt_start": 23161007,
+          "declined": 23165755,
+          "shell_declined": 23167136,
+          "declined_pending": 1,
+          "dirty_revision": 149,
+          "save_begin": 23161527,
+          "dirty_edit": 23164025,
+          "save_revision": 148,
+          "document": 4,
+          "snapshot_bytes": 146,
+          "snapshot_hash": "0xe5555af261c95241",
+          "confirm_start": 23181009,
+          "confirmed": 23182039,
+          "confirmed_pending": 0,
+          "document_close": 23182131,
+          "terminal_pending": 0,
+          "terminal_scope": "safe_completed_save_close",
+          "save_complete": {
+            "begin": 23161527,
+            "saved": 23169709,
+            "completed": 23169772,
+            "revision": 148,
+            "current_revision": 149,
+            "dirty": 1,
+            "bytes": 146,
+            "hash": "0xe5555af261c95241"
+          }
+        },
+        "cleanup_errors": [],
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "pending_device_evidence": false
+      },
+      "wide": {
+        "ok": true,
+        "resolution": "1280x800",
+        "cycles": 86,
+        "captures": 209,
+        "elapsed_seconds": 1800.0100170830265,
+        "fresh_replay_seconds": 39.544015583000146,
+        "three_replays_identical": true,
+        "independent_replay": "/tmp/sexos-alpha-launcher-b-wide-1800-independent-replay.json",
+        "independent_replay_sha256": "be5578e44d55fd341a9e767d4f228a35f68908bf919061381886dec5877ad679",
+        "result_sha256": "c5938a939c49db9a225c2c90a9e2864a728b86665bbe3d8178aa12525a1dd958",
+        "manifest_sha256": "0b99ebd48bb36e1887661074931289f8b9a0bebb41766b01ed1dbc3e108d2b86",
+        "pending_quil_close": false,
+        "quil_close": {
+          "attempt_start": 22282788,
+          "declined": 22288296,
+          "shell_declined": 22289383,
+          "declined_pending": 1,
+          "dirty_revision": 149,
+          "save_begin": 22283759,
+          "dirty_edit": 22286072,
+          "save_revision": 148,
+          "document": 4,
+          "snapshot_bytes": 146,
+          "snapshot_hash": "0xe5555af261c95241",
+          "confirm_start": 22302876,
+          "confirmed": 22305189,
+          "confirmed_pending": 0,
+          "document_close": 22305281,
+          "terminal_pending": 0,
+          "terminal_scope": "safe_completed_save_close",
+          "save_complete": {
+            "begin": 22283759,
+            "saved": 22292226,
+            "completed": 22292289,
+            "revision": 148,
+            "current_revision": 149,
+            "dirty": 1,
+            "bytes": 146,
+            "hash": "0xe5555af261c95241"
+          }
+        },
+        "cleanup_errors": [],
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "pending_device_evidence": false
+      }
+    },
+    "issues": [],
+    "build_provenance_revision": "20c50957027e69c258b98e701ef1efab0d2563f6",
+    "scope": "Historical optimized paired alpha: 1800-second accepted sustained runs, full immutable glyph/clock captures, completed-save Quil Close and exact terminal cleanup. No claim of pending-device WRITE across Quil Close; separate PR10 evidence required. Git blob equality proves cohort bytes at commit96f4436c despite original build provenance naming the earlier dirty build base. Not qualification of current integration."
+  },
+  "integrated_catalog_image_acceptance": false,
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-alpha-paired-1800-2026-10-31-raw.tar.gz",
+    "sha256": "e5dfed4a6a13a3221e0bade8ddcc667886f801e61a202404a4349632453e2dbe",
+    "bytes": 13100401,
+    "members": 1642,
+    "payload_manifest_sha256": "035f4940c931ef88b704e3e08f1a6df77fb98e797fa066ea165c766c62112cce",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Two terminal optimized-image1800s workflows. Completed-save Close only; separate pending-device qualification remains separately bound. Every frozen input matches96f4436c. Not qualification of the later catalog integration, physical/power-loss/SMP/global epoch replay or general daily-driver readiness."
+}
