@@ -68,10 +68,13 @@ disassemblies. Every archive member is size/hash verified.
 
 ## Continuing alpha work
 
-The separately running compact and wide 1800-second sessions use the earlier
-alpha-evidence image. Their live trees are excluded from this completed archive.
-Each needs terminal cleanup and fresh replay before acceptance. The optimized
-image needs its own sustained qualification before any latest-image claim.
+The separate compact and wide sessions initially used the earlier alpha image;
+their live trees were excluded from this completed archive. The compact attempt
+later failed a final launcher diagnostic wait after 84 cycles/1800 seconds and
+remains unaccepted. The [launcher-proof follow-up](ALPHA_LAUNCHER_PROOF_2026_10_31.md)
+qualifies a corrected runner and starts a fresh sustained session on this
+optimized image. The older wide session keeps its original cohort. Every long
+run needs terminal cleanup and fresh replay before acceptance.
 The next lifecycle target is native confirmed Close while Quil I/O is actually
 pending, with exact cancellation/reclamation evidence rather than completed-save
 receipts.

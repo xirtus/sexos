@@ -7,6 +7,7 @@ from check_quil_ui_pixels import verify as quil_pixels,view as quil_view
 from check_disk_persistence import ppm_rgb
 from check_document_disk import recover,fnv
 from silkbar_clock_gate import source_contract as bar_contract,verify_pixels as bar_pixels
+from launcher_workflow_gate import source_contract as launcher_contract,verify_frame as launcher_frame
 
 VERSION=2
 SERIAL_UNITS='UTF-8 decoded characters; universal newlines; replacement on decode error'
@@ -17,11 +18,11 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def serial_text(path):return Path(path).read_text(encoding='utf-8',errors='replace')
 
 def contract(root):
- root=Path(root);bar=bar_contract(root)
+ root=Path(root);bar=bar_contract(root);launcher=launcher_contract(root)
  from https_asset_gate import script_dependencies
- paths=set(bar['source_sha256'])|set(script_dependencies(root,('scripts/quil_workflow_gate.py','scripts/alpha_evidence.py','scripts/tests/test_alpha_evidence.py')))
+ paths=set(bar['source_sha256'])|set(launcher['source_sha256'])|set(script_dependencies(root,('scripts/quil_workflow_gate.py','scripts/alpha_evidence.py','scripts/tests/test_alpha_evidence.py')))
  paths.update(('servers/quil/src/main.rs','scripts/check_alpha_session.py'))
- return dict(font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,source_sha256={p:sha(root/p)for p in sorted(paths)})
+ return dict(font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,launcher=launcher,source_sha256={p:sha(root/p)for p in sorted(paths)})
 
 def require_inputs(root,binding,c):
  held=json.loads(Path(binding).read_text())
@@ -34,6 +35,9 @@ def verify_frame(prefix,ppm,c,resolution,kind='quil',expected='',target=9,region
   errors=quil_pixels(prefix,ppm,c['font'],expected,target=target,resolution=resolution)
   detail=None if errors else quil_view(prefix,target)
  elif kind=='linen':errors=linen_pixels(prefix,ppm,c['font'],resolution=resolution);detail=None
+ elif kind=='launcher':
+  if target!=9 or expected!='Open Quil':raise ValueError('alpha exhausted launcher must select logical Quil')
+  detail=launcher_frame(prefix,ppm,dict(kind='launcher',target=9,name='launcher-exhausted',title=expected),c['launcher'],resolution);errors=[]
  elif kind=='empty':
   width,height,raw=ppm_rgb(ppm,min_width=1,min_height=1)
   if (width,height)!=tuple(resolution)or not isinstance(region,dict):raise ValueError('empty-region profile missing')
@@ -77,6 +81,16 @@ def finish(out,manifest,src,captures,error=None):
  manifest['raw_sha256']={str(p.relative_to(out)):sha(p)for p in sorted(files)}
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 
+def verify_third_captures(third,frames,text):
+ for key,name,kind,target,expected in [('frame','third-quil-edit','quil',18,'t#'),('exhaustion_frame','third-quil-exhausted-launcher','launcher',9,'Open Quil')]:
+  selected=[f for f in frames if f['name']==name]
+  if len(selected)!=1 or selected[0]!=third.get(key)or(selected[0]['kind'],selected[0]['target'],selected[0]['expected'])!=(kind,target,expected):raise ValueError('third Quil lacks exact immutable '+key)
+ prefix=text[:third['exhaustion_frame']['serial_end']];finished=prefix.rfind('[task.finish] pd=18 task=18 reason=0 terminal=1')
+ selection=third.get('exhaustion_selection_offset');row=third.get('exhaustion_row_offset');layout=prefix.rfind('[launcher.text.view]')
+ if type(selection)is not int or type(row)is not int or not 0<=finished<selection<row<len(prefix)or not selection<layout<len(prefix)or prefix.rfind('[launcher.text.view]',selection,row)<=selection:raise ValueError('exhausted launcher lacks current post-retirement selection/layout')
+ if not re.match(r'\[shell.palette.select\] old=0 new=1(?=\n|$)',prefix[selection:])or not re.match(r'\[launcher.text.row\] index=1 row=1 name=Open Quil status=CLOSED / RESERVE EXHAUSTED(?=\n|$)',prefix[row:]):raise ValueError('exhausted launcher receipt offsets differ')
+ if not re.search(r'\[sext.app.pool.ready\] target=18 task=18 .*ok=1',prefix[finished:selection]):raise ValueError('exhausted launcher predates exact third-incarnation cleanup')
+
 def replay(root,iso,binding,out):
  root=Path(root).resolve();out=Path(out).resolve();iso=Path(iso).resolve();binding=Path(binding).resolve()
  c=contract(root);require_inputs(root,binding,c);manifest=json.loads((out/'manifest.json').read_text());result=json.loads((out/'result.json').read_text());index=json.loads((out/'captures.json').read_text())
@@ -113,6 +127,8 @@ def replay(root,iso,binding,out):
   errors=quil_close_errors(result['soak'],text)+cycle_errors(result['soak'])+terminal_pending_errors(text,include_quil=result['soak']['pending_quil_close'])
   if errors:raise ValueError('alpha exact cycle/close evidence: '+str(errors))
   soak=result['soak'];cycles=soak['cycles'];windows=soak['cycle_windows'];body=result['documents'][1]['content'];suffix=1 if soak.get('third_quil')else 0
+  if soak.get('third_quil'):
+   verify_third_captures(soak['third_quil'],frames,text)
   saved_body=body[:-suffix]if suffix else body;initial=saved_body[:-cycles]
   if saved_body!=initial+'q'*cycles:raise ValueError('alpha cycle edits differ from final durable payload')
   for window in windows:

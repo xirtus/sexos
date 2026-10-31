@@ -272,3 +272,27 @@ image compact/wide 1800-second sessions remain live and excluded. Sustained
 acceptance on the optimized image and actual Quil pending-I/O terminal teardown
 still require qualification. Inventory stays 2 Open / 28 Partial / System Proven
 false; the physical/storage/reserve plan continues.
+
+## Alpha launcher-proof correction — 31 October
+
+The first compact attempt completed 84 cycles over 1800.1757 seconds, then
+failed the final legacy launcher-exhaustion wait. It remains diagnostic, with
+an incomplete registry and explicit rejection by read-only replay. The runner
+now selects Quil's row, requires fresh atomic post-selection status and verifies
+the entire launcher through a uniquely retained frame and positive text Applied.
+Replay joins that frame and exact offsets to third-incarnation cleanup.
+
+Production is identical to the qualified repaint image. The corrected frozen
+runner passes 42 checks/2,630 Rust executions, 910 Python tests and compact/wide
+full rehearsals with 42 verified captures and fresh independent replay. The
+[launcher handoff](ALPHA_LAUNCHER_PROOF_2026_10_31.md) and
+[machine evidence](assets/sexos-alpha-launcher-proof-2026-10-31-evidence.json)
+retain both the failed original cohort and qualified correction. A corrected
+compact 1800-second run is live; the older wide run remains unchanged. Neither
+is accepted before its actual terminal result and replay.
+
+The next lifecycle work has a concrete
+[pending device-I/O Close plan](QUIL_PENDING_IO_CLOSE_PLAN_2026_10_31.md), using
+Quil's actual 12,288-byte logical limit, bounded runtime storage throttling and
+same-trace write/Close/completion ordering. It is still planned. Inventory stays
+2 Open / 28 Partial / System Proven false; no general daily-driver claim.

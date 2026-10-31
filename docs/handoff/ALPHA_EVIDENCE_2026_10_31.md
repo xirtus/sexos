@@ -67,12 +67,13 @@ The unchanged image hashes are:
 
 ## Work in progress
 
-The compact 1800-second session is running from the frozen runner cohort with
-find/replace, workspace refresh, the third Quil reserve and 16 typing bursts.
-It must finish active cycles, guarded Close, recovery and cleanup, then pass
-fresh replay before sustained-alpha acceptance can be recorded. Its live
-progress file and process handle are tracked separately; no elapsed intent or
-short rehearsal substitutes for its terminal result. The wide repeat follows.
+The original compact session completed 84 cycles over 1800.1757 seconds but
+failed its final launcher-exhaustion wait. It remains diagnostic and unaccepted.
+The [launcher-proof follow-up](ALPHA_LAUNCHER_PROOF_2026_10_31.md) preserves the
+failed attempt and qualifies a corrected runner with real selection and current
+launcher pixels. A fresh corrected compact session is running on the optimized
+image; the older wide session retains its original source/image/checker scope.
+Each needs terminal cleanup and fresh replay before sustained acceptance.
 
 The OS inventory remains **2 Open / 28 Partial / System Proven false**. This is
 an evidence/lifecycle improvement, not global execution-epoch replay or a general

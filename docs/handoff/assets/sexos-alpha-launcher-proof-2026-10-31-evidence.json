@@ -1,0 +1,71 @@
+{
+  "implementation_and_rehearsals_qualified": true,
+  "sustained_alpha_accepted": false,
+  "goal_complete": false,
+  "branch": "codex/alpha-launcher-proof",
+  "base": "c4a64f8c8e687b713b83903b07906c95153e4bc4",
+  "production_inputs_identical_to_civil_repaint_cohort": true,
+  "iso_sha256": "9ad6768dcc70a0554999b5b2f57ceebcc0cd66e32500c1ceee79deb1e9ff8aca",
+  "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "binding_sha256": "ec74462e4f52c9ff19b47848a7716eac8a612848ad88f8a7016eb0e2d58943b8",
+  "production_inputs": 574,
+  "runner_inputs": 569,
+  "registered_host_checks": 42,
+  "rust_test_executions": 2630,
+  "python_tests": 910,
+  "native": {
+    "boots": 2,
+    "verified_captures": 42,
+    "launcher_exhaustion_captures": 2,
+    "independent_replay": true,
+    "workflows": [
+      {
+        "profile": "compact",
+        "verified_captures": 21,
+        "acceptance": false,
+        "terminal_scope": "safe_completed_save_close",
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ]
+      },
+      {
+        "profile": "wide",
+        "verified_captures": 21,
+        "acceptance": false,
+        "terminal_scope": "safe_completed_save_close",
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ]
+      }
+    ]
+  },
+  "diagnostic_failed_a": {
+    "accepted": false,
+    "cycles": 84,
+    "elapsed_seconds": 1800.1757320410106,
+    "registry_complete": false,
+    "error": "timeout: \\[shell.palette.item\\] idx=1 .*status=CLOSED / RESERVE EXHAUSTED",
+    "raw_registry_captures": 204,
+    "negative_replay_exit": 1,
+    "scope": "Failed final legacy launcher wait; no full terminal cleanup or sustained acceptance."
+  },
+  "prior_image_qualification": {
+    "path": "assets/sexos-civil-clock-repaint-2026-10-31-evidence.json",
+    "sha256": "c0ece422faab000313a52dff461c95e18e2baa09fc1f6a1617146d487096c67d"
+  },
+  "archive": {
+    "path": "assets/sexos-alpha-launcher-proof-2026-10-31-raw.tar.gz",
+    "sha256": "b6058987d927a38ff90f23239dea31824aec0fdd6e735b406f4269d2660426aa",
+    "bytes": 14297377,
+    "members": 2628,
+    "payload_manifest_sha256": "6dcdabd00be91e80b0f59cd1483aab68d99ee9d042a86af41f3db8f29fb2d914",
+    "all_members_size_and_sha256_verified": true
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "scope": "Same optimized production image, corrected source-bound alpha runner. Real fresh selection after exact third-incarnation cleanup, atomic closed/exhausted row, positive text Applied and full launcher glyphs. Short rehearsals only. Original failed compact remains diagnostic; live older-wide and corrected-compact1800s outputs are excluded. Pending-I/O terminal Quil teardown, physical/storage and global epoch release gates remain."
+}

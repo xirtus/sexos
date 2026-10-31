@@ -54,7 +54,15 @@ def run(c,refresh,close):
     # Final visible status must report finite exhaustion rather than offer the
     # dead subject again. No command or diagnostic manufactures a fresh grant.
     key('grave_accent',r'\[shell.palette.item\] idx=0')
-    wait(r'\[shell.palette.item\] idx=1 .*status=CLOSED / RESERVE EXHAUSTED')
+    selection_start=len(text())
+    selection_pattern=r'\[shell.palette.select\] old=0 new=1(?=\r?\n|$)'
+    key('j',selection_pattern)
+    selection=wait(selection_pattern,selection_start)
+    row_start=selection_start+selection.end()
+    row=wait(r'\[launcher.text.row\] index=1 row=1 name=Open Quil status=CLOSED / RESERVE EXHAUSTED(?=\r?\n|$)',row_start)
+    exhaustion_frame=c['capture']('third-quil-exhausted-launcher','Open Quil',target=9,kind='launcher')
     key('esc',r'\[command_palette.close\]')
     return dict(target=18,surface=307,logical=9,incarnation=3,documents=loaded,
-                edited_and_saved=True,pixel_errors=[],frame=frame,terminal=True,reserve_exhausted=True)
+                edited_and_saved=True,pixel_errors=[],frame=frame,terminal=True,reserve_exhausted=True,
+                exhaustion_frame=exhaustion_frame,exhaustion_selection_offset=selection_start+selection.start(),
+                exhaustion_row_offset=row_start+row.start())
