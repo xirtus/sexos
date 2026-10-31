@@ -220,6 +220,8 @@ pub struct ProtectionDomain {
     pub main_task: AtomicPtr<crate::scheduler::Task>,
     pub trampoline_task: AtomicPtr<crate::scheduler::Task>,
     pub incoming_replies: Mutex<VecDeque<crate::ipc::messages::IpcReply>>,
+    /// Replies this domain owes, granted only by accepted invocations.
+    pub reply_credits: Mutex<crate::ipc::reply_credit::ReplyCredits>,
 }
 
 impl ProtectionDomain {
@@ -237,6 +239,7 @@ impl ProtectionDomain {
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
             incoming_replies: Mutex::new(VecDeque::with_capacity(1)),
+            reply_credits: Mutex::new(crate::ipc::reply_credit::ReplyCredits::new()),
         };
 
         // Slot 0 is an explicit syscall bridge, not an entry in this

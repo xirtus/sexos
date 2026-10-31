@@ -230,6 +230,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         let mut messages=0;while unsafe{(*target.message_ring).dequeue()}.is_some(){messages+=1;assert!(messages<=256,"APP_DRAIN_PRODUCER");}
         let mut signals=0;while unsafe{(*target.signal_ring).dequeue()}.is_some(){signals+=1;assert!(signals<=32,"APP_SIGNAL_PRODUCER");}
         crate::ipc::messages::IpcReply::erase_queue(&mut target.incoming_replies.lock());
+        target.reply_credits.lock().clear();
         app.retired=true;
         crate::serial_println!("[app.private.retired] target={} task={} pages={} bytes={} acked={} required={} all_flushed=1 pool_reusable=1 messages={} signals={} metadata=retained runtime_alloc=0",app.target,app.task,count,count*4096,app.acked,REQUIRED,messages,signals);
         Ok([0,app.pool,app.count as u64*4096,app.task as u64])

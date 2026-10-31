@@ -40,7 +40,7 @@
         "reply_sender"
       ],
       "gaps": [
-        "Sender provenance and occupied-slot retention are tested, but raw target-ID routing is not a return capability and does not bind replies to one outstanding invocation."
+        "Each accepted typed invocation now grants its callee one kernel-recorded reply to that caller, spent only on publication; a target ID alone cannot reply. Obligations are counted per caller, not bound to a specific invocation, so out-of-order replies within one caller remain indistinguishable; no native hostile-reply probe exists yet."
       ],
       "depends_on": [
         "PDX_SOLE_AUTHORITY"

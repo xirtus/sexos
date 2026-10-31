@@ -4,6 +4,8 @@
 #![allow(dead_code)]
 #[path="../kernel/src/ipc/messages.rs"] pub mod messages;
 #[path="../kernel/src/ipc/router.rs"] mod router;
+#[path="../kernel/src/ipc/reply_credit.rs"] mod reply_credit;
+#[macro_export] macro_rules! serial_println{($($t:tt)*)=>{{let _=format!($($t)*);}}}
 use std::{cell::Cell,collections::VecDeque,sync::{Mutex,MutexGuard,atomic::{AtomicPtr,AtomicUsize,Ordering}}};
 static SERIAL:Mutex<()>=Mutex::new(());
 static TARGET:AtomicPtr<Domain>=AtomicPtr::new(core::ptr::null_mut());
@@ -14,12 +16,14 @@ impl core::ops::Deref for ReplyGuard<'_>{type Target=VecDeque<messages::IpcReply
 impl core::ops::DerefMut for ReplyGuard<'_>{fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
 impl Drop for ReplyGuard<'_>{fn drop(&mut self){REPLY_HELD.with(|held|held.set(false));}}
 impl ReplyLock{fn lock(&self)->ReplyGuard<'_>{let guard=self.0.lock().unwrap();REPLY_HELD.with(|held|{assert!(!held.replace(true));});ReplyGuard(guard)}}
+struct CreditLock(Mutex<reply_credit::ReplyCredits>);
+impl CreditLock{fn lock(&self)->MutexGuard<'_,reply_credit::ReplyCredits>{self.0.lock().unwrap()}}
 struct Ring;
 impl Ring{fn enqueue(&self,_message:messages::MessageType)->Result<(),()>{Ok(())}}
-struct Domain{id:u32,incoming_replies:ReplyLock,main_task:AtomicPtr<scheduler::Task>,trampoline_task:AtomicPtr<scheduler::Task>,message_ring:*mut Ring}
+struct Domain{id:u32,incoming_replies:ReplyLock,reply_credits:CreditLock,main_task:AtomicPtr<scheduler::Task>,trampoline_task:AtomicPtr<scheduler::Task>,message_ring:*mut Ring}
 unsafe impl Sync for Domain{}
 unsafe impl Send for Domain{}
-fn domain(id:u32)->&'static Domain{Box::leak(Box::new(Domain{id,incoming_replies:ReplyLock(Mutex::new(VecDeque::new())),main_task:AtomicPtr::new(core::ptr::null_mut()),trampoline_task:AtomicPtr::new(core::ptr::null_mut()),message_ring:Box::into_raw(Box::new(Ring))}))}
+fn domain(id:u32)->&'static Domain{Box::leak(Box::new(Domain{id,incoming_replies:ReplyLock(Mutex::new(VecDeque::new())),reply_credits:CreditLock(Mutex::new(reply_credit::ReplyCredits::new())),main_task:AtomicPtr::new(core::ptr::null_mut()),trampoline_task:AtomicPtr::new(core::ptr::null_mut()),message_ring:Box::into_raw(Box::new(Ring))}))}
 thread_local!{
  static REPLY_HELD:Cell<bool>=const{Cell::new(false)};
  static CALLER:Cell<*const Domain>=const{Cell::new(core::ptr::null())};
@@ -62,10 +66,15 @@ mod scheduler{
   super::WAKES.fetch_add(1,super::Ordering::Relaxed);
  }
 }
-fn calling(sender:u32,task:u32){
+/// A sender with accepted invocations from PD15, as the kernel's typed
+/// enqueue path would have recorded them.
+fn calling(sender:u32,task:u32){calling_owed(sender,task,4)}
+fn calling_owed(sender:u32,task:u32,owed:u32){
  assert_ne!(sender,task,"task fixture must not alias the PD number");
- CALLER.with(|p|p.set(domain(sender)));CALLING_TASK.with(|current|current.set(Some((task,sender))));
+ let pd=domain(sender);for _ in 0..owed{assert!(pd.reply_credits.lock().grant(15));}
+ CALLER.with(|p|p.set(pd));CALLING_TASK.with(|current|current.set(Some((task,sender))));
 }
+fn owed()->u32{CALLER.with(|p|unsafe{p.get().as_ref().unwrap()}.reply_credits.lock().outstanding())}
 fn setup(sender:u32,task:u32)->&'static Domain{
  app_resources::ACCEPT.store(true,Ordering::Release);
  let pd=domain(15);pd.main_task.store(Box::into_raw(Box::new(scheduler::Task)),Ordering::Release);
@@ -128,4 +137,23 @@ fn setup(sender:u32,task:u32)->&'static Domain{
  assert_eq!(router::send_reply(15,7),Err(messages::IpcError::InvalidTarget));
  assert!(router::route_signal(14,15,1,3).is_err());
  assert!(pd.incoming_replies.lock().is_empty());assert_eq!(WAKES.load(Ordering::Relaxed),0);
+}
+
+#[test]fn target_id_without_accepted_invocation_cannot_reply(){
+ let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);calling_owed(14,301,0);
+ assert_eq!(router::send_reply(15,0xdeadbeef),Err(messages::IpcError::InvalidCapability));
+ assert!(pd.incoming_replies.lock().is_empty());assert_eq!(WAKES.load(Ordering::Relaxed),0);
+}
+#[test]fn one_invocation_permits_one_published_reply(){
+ let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);calling_owed(14,301,1);
+ router::send_reply(15,1).unwrap();assert_eq!(owed(),0);
+ messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();
+ assert_eq!(router::send_reply(15,2),Err(messages::IpcError::InvalidCapability));
+ assert!(pd.incoming_replies.lock().is_empty());assert_eq!(WAKES.load(Ordering::Relaxed),1);
+}
+#[test]fn full_slot_retry_keeps_its_obligation_until_publication(){
+ let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);router::send_reply(15,0x100).unwrap();calling_owed(10,777,1);
+ for _ in 0..5{assert_eq!(router::send_reply(15,0x200),Err(messages::IpcError::BufferFull));assert_eq!(owed(),1);}
+ messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();
+ router::send_reply(15,0x200).unwrap();assert_eq!(owed(),0);
 }

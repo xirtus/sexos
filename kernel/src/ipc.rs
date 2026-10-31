@@ -6,6 +6,7 @@ pub mod pagefault;
 pub mod router;
 pub mod state;
 pub mod sender;
+pub mod reply_credit;
 mod domain_registry;
 pub use domain_registry::DomainRegistry;
 
@@ -72,8 +73,7 @@ pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
 
 pub enum GraphEdge {
     AsyncEnqueue {
-        ring: *mut crate::ipc_ring::RingBuffer<crate::ipc::messages::MessageType, 256>,
-        task: *mut crate::scheduler::Task,
+        callee: &'static crate::capability::ProtectionDomain,
     },
     AsyncDequeue {
         ring: *mut crate::ipc_ring::RingBuffer<crate::ipc::messages::MessageType, 256>,
@@ -95,10 +95,7 @@ pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool
             if !crate::app_resources::accepts_ipc(id) {return Err(sex_pdx::ERR_SERVICE_NOT_READY);}
             if is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
             let pd = DOMAIN_REGISTRY.get(id).ok_or(sex_pdx::ERR_CAP_INVALID)?;
-            Ok(GraphEdge::AsyncEnqueue {
-                ring: pd.message_ring,
-                task: pd.main_task.load(Ordering::Acquire),
-            })
+            Ok(GraphEdge::AsyncEnqueue { callee: pd })
         },
         CapabilityData::MessageQueue => {
             if !is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
@@ -118,12 +115,21 @@ pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool
 
 pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32, caller_task: u32) -> Result<u64, u64> {
     match edge {
-        GraphEdge::AsyncEnqueue { ring, task } => {
+        GraphEdge::AsyncEnqueue { callee } => {
             if caller_task == 0 { return Err(sex_pdx::ERR_CAP_INVALID); }
             let msg = crate::ipc::messages::MessageType::IpcCall {
                 func_id: opcode, arg0, arg1, arg2, caller_pd, caller_task,
             };
-            unsafe { (*ring).enqueue(msg).map_err(|_| sex_pdx::ERR_SERVICE_NOT_READY)?; }
+            // The reply obligation exists before the call is visible, and is
+            // withdrawn if the call is not accepted.
+            let mut credits = callee.reply_credits.lock();
+            if !credits.grant(caller_pd) { return Err(sex_pdx::ERR_SERVICE_NOT_READY); }
+            if unsafe { (*callee.message_ring).enqueue(msg) }.is_err() {
+                credits.withdraw(caller_pd);
+                return Err(sex_pdx::ERR_SERVICE_NOT_READY);
+            }
+            drop(credits);
+            let task = callee.main_task.load(Ordering::Acquire);
             // Publish the event only after its payload is visible. A full ring
             // grants no wake; an accepted invocation retains its receiver's
             // pending event even across park/save/stack-release boundaries.
