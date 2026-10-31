@@ -51,7 +51,7 @@ for name in ['grant','paired','paired_at','init_documents']:
     parts.append(s[a:i])
 Path(sys.argv[1]).write_text('\n'.join(parts))
 init=Path('kernel/src/init.rs').read_text()
-assert init.index('boot_memory::init_documents(sexfiles_id, [quil_id, successor, quil_third])') < init.index('boot_memory::seal_all()')
+assert init.index('boot_memory::init_documents(sexfiles_id, sex_pdx::app_catalog::QUIL_TARGETS)') < init.index('boot_memory::seal_all()')
 PYDOCUMENT
 SEXOS_REGION_QUERY_RS="$TEST_DIR/query.rs" DOCUMENT_BOOT_SOURCE="$TEST_DIR/document_boot.rs" rustc --edition=2021 --test tests/document_boot_views.rs -o "$TEST_DIR/document-boot"
 "$TEST_DIR/document-boot"

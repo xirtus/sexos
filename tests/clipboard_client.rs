@@ -1,5 +1,6 @@
 //! Actual client/ABI, a finite malformed peer, and actual broker integration.
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"]
 mod app_lifecycle;

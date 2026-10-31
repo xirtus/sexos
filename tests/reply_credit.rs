@@ -2,7 +2,7 @@
 #[path = "../kernel/src/ipc/reply_credit.rs"]
 mod reply_credit;
 
-use reply_credit::{ReplyCredits, REPLY_CREDIT_CAPACITY};
+use reply_credit::{Grant, ReplyCredits, REPLY_CREDIT_CAPACITY};
 
 #[test]
 fn domain_id_without_invocation_cannot_reply() {
@@ -17,9 +17,9 @@ fn domain_id_without_invocation_cannot_reply() {
 #[test]
 fn each_accepted_invocation_permits_exactly_one_reply_to_its_caller() {
     let mut credits = ReplyCredits::new();
-    assert!(credits.grant(15));
-    assert!(credits.grant(15));
-    assert!(credits.grant(9));
+    assert_eq!(Grant::Added, credits.grant(15));
+    assert_eq!(Grant::Added, credits.grant(15));
+    assert_eq!(Grant::Added, credits.grant(9));
     assert!(!credits.holds(12), "another domain gains nothing");
     assert!(credits.consume(15));
     assert!(credits.consume(15));
@@ -32,49 +32,78 @@ fn each_accepted_invocation_permits_exactly_one_reply_to_its_caller() {
 #[test]
 fn withdrawn_reservation_grants_nothing() {
     let mut credits = ReplyCredits::new();
-    assert!(credits.grant(15));
+    assert_eq!(Grant::Added, credits.grant(15));
     credits.withdraw(15);
     assert!(!credits.holds(15));
     // Withdrawing an absent caller cannot underflow another entry.
-    assert!(credits.grant(9));
+    assert_eq!(Grant::Added, credits.grant(9));
     credits.withdraw(15);
     assert!(credits.holds(9));
     assert_eq!(credits.outstanding(), 1);
 }
 
 #[test]
-fn full_table_refuses_new_callers_without_evicting_existing_obligations() {
+fn all_legal_registry_callers_retain_independent_reply_rights() {
     let mut credits = ReplyCredits::new();
-    for caller in 1..=REPLY_CREDIT_CAPACITY as u32 {
-        assert!(credits.grant(caller));
+    for caller in 1..REPLY_CREDIT_CAPACITY as u32 {
+        assert_eq!(credits.grant(caller), Grant::Added);
     }
-    assert!(!credits.grant(5000));
-    assert!(!credits.holds(5000));
-    for caller in 1..=REPLY_CREDIT_CAPACITY as u32 {
+    assert_eq!(credits.outstanding(), (REPLY_CREDIT_CAPACITY - 1) as u128);
+    for caller in (1..REPLY_CREDIT_CAPACITY as u32).rev() {
         assert!(credits.holds(caller));
+        assert!(credits.consume(caller));
+        assert!(!credits.consume(caller));
     }
-    // An existing caller may still accumulate, and a freed entry is reused.
-    assert!(credits.grant(1));
-    assert!(credits.consume(2));
-    assert!(credits.grant(5000));
-    assert!(credits.consume(5000));
+    assert_eq!(credits.outstanding(), 0);
 }
 
 #[test]
-fn per_caller_count_saturates_by_refusal() {
+fn invalid_caller_ids_cannot_create_or_spend_any_rights() {
     let mut credits = ReplyCredits::new();
-    for _ in 0..u16::MAX {
-        assert!(credits.grant(15));
+    assert_eq!(credits.grant(3), Grant::Added);
+    for caller in [0, REPLY_CREDIT_CAPACITY as u32, u32::MAX] {
+        assert_eq!(credits.grant(caller), Grant::Full);
+        assert!(!credits.holds(caller));
+        assert!(!credits.consume(caller));
+        credits.withdraw(caller);
+        assert_eq!(credits.outstanding(), 1);
+        assert!(credits.holds(3));
     }
-    assert!(!credits.grant(15));
-    assert_eq!(credits.outstanding(), u16::MAX as u32);
+}
+
+#[test]
+fn hundred_thousand_accepted_invocations_all_remain_consumable() {
+    let mut credits = ReplyCredits::new();
+    for _ in 0..100_000 { assert_eq!(credits.grant(3), Grant::Added); }
+    assert_eq!(credits.outstanding(), 100_000);
+    for remaining in (0..100_000).rev() {
+        assert!(credits.consume(3));
+        assert_eq!(credits.outstanding(), remaining);
+    }
+    assert!(!credits.consume(3));
+    assert!(!credits.holds(3));
+    assert_eq!(credits.outstanding(), 0);
+}
+
+#[test]
+fn kernel_rejects_unrecordable_invocation_before_publication() {
+    let ipc = include_str!("../kernel/src/ipc.rs");
+    assert!(ipc.contains("pub const MAX_DOMAINS: usize = reply_credit::REPLY_CREDIT_CAPACITY;"));
+    let enqueue = ipc.split("GraphEdge::AsyncEnqueue { callee } =>").nth(1).unwrap().split("GraphEdge::AsyncDequeue").next().unwrap();
+    let grant = enqueue.find("credits.grant(caller_pd)").unwrap();
+    let full = enqueue.find("Grant::Full").unwrap();
+    let refuse = enqueue.find("return Err(sex_pdx::ERR_SERVICE_NOT_READY)").unwrap();
+    let publish = enqueue.find("(*callee.message_ring).enqueue(msg)").unwrap();
+    let withdraw = enqueue.find("credits.withdraw(caller_pd)").unwrap();
+    assert!(grant < full && full < refuse && refuse < publish && publish < withdraw);
+    assert_eq!(enqueue.matches("return Err(sex_pdx::ERR_SERVICE_NOT_READY)").count(), 2);
 }
 
 #[test]
 fn retired_callee_owes_nothing() {
     let mut credits = ReplyCredits::new();
     for caller in [3, 9, 15] {
-        assert!(credits.grant(caller));
+        assert_eq!(Grant::Added, credits.grant(caller));
     }
     credits.clear();
     for caller in [3, 9, 15] {

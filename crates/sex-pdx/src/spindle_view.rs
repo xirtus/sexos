@@ -27,7 +27,7 @@ impl Notice{
  pub fn args(self)->[u64;3]{[(self.task as u64)<<32|self.target as u64,(self.h as u64)<<32|self.w as u64,self.sequence]}
  pub fn decode(caller:u32,target:u32,task:u32,args:[u64;3],last:u64)->Option<Self>{
   let n=Self{target:args[0]as u32,task:(args[0]>>32)as u32,w:args[1]as u32,h:(args[1]>>32)as u32,sequence:args[2]};
-  if caller!=3||!matches!(target,12|17)||n.target!=target||n.task!=task||n.sequence<=last||n.w==0||n.h==0||n.w>4096||n.h>4096{return None}Some(n)
+  if caller!=3||!crate::app_catalog::is_spindle(target)||n.target!=target||n.task!=task||n.sequence<=last||n.w==0||n.h==0||n.w>4096||n.h>4096{return None}Some(n)
  }
 }
 /// One desired notice per fixed BOOT subject; full queues retain exact data.
@@ -35,7 +35,7 @@ pub struct Delivery{desired:Option<Notice>,last:Option<(u32,u32)>,sequence:u64,d
 impl Delivery{
  pub const fn new()->Self{Self{desired:None,last:None,sequence:0,dead:false}}
  pub fn queue(&mut self,target:u32,task:u32,w:u32,h:u32){
-  if self.dead||!matches!(target,12|17)||task==0||w==0||h==0||w>4096||h>4096{return}
+  if self.dead||!crate::app_catalog::is_spindle(target)||task==0||w==0||h==0||w>4096||h>4096{return}
   if self.desired.map(|n|(n.w,n.h)).or(self.last)==Some((w,h)){return}
   let Some(sequence)=self.sequence.checked_add(1)else{self.retire();return};self.sequence=sequence;self.desired=Some(Notice{target,task,w,h,sequence});
  }

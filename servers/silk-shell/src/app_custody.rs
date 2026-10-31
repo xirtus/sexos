@@ -23,11 +23,11 @@ impl Entry {
     }
     /// Fixed BOOT catalog association, not a caller-supplied ownership bind.
     pub fn shell_surface(&self) -> Option<u64> {
-        match (self.target, self.surface) { (9,156) => Some(201), (12,154) => Some(153), (17,302)=>Some(306), _ => None }
+        crate::app_catalog::by_surface(self.target, self.surface).and_then(|i| i.shell_surface)
     }
     pub fn owns_surface(&self, sid: u64) -> bool { self.surface == sid || self.shell_surface() == Some(sid) }
     pub fn close_slot(&self) -> Option<u64> {
-        match (self.target,self.surface) { (9,156)=>Some(41), (12,154)=>Some(42), (15,300)=>Some(43), (16,301)=>Some(46), (17,302)=>Some(51), (18,307)=>Some(56), _=>None }
+        crate::app_catalog::by_surface(self.target, self.surface).map(|i| i.close_slot)
     }
     pub fn request_close(&mut self) -> bool {
         if self.dead || self.close_slot().is_none() {return false}

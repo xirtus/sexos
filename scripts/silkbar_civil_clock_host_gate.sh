@@ -38,7 +38,7 @@ assert display.count(decision)==1
 (out/'lib.rs').write_text((root/'crates/silkbar-model/src/lib.rs').read_text())
 civil=(root/'crates/silkbar-model/src/civil_clock.rs').read_text();assert '||caller!=expected'in civil
 (out/'civil_clock.rs').write_text(civil.replace('||caller!=expected','',1))
-fixture=(root/'tests/silkbar_civil_clock.rs').read_text().replace('../crates/sex-pdx/src/clock_source.rs',str(root/'crates/sex-pdx/src/clock_source.rs')).replace('../crates/sex-pdx/src/desktop_style.rs',str(root/'crates/sex-pdx/src/desktop_style.rs'))
+fixture=(root/'tests/silkbar_civil_clock.rs').read_text().replace('../crates/sex-pdx/src/clock_source.rs',str(root/'crates/sex-pdx/src/clock_source.rs')).replace('../crates/sex-pdx/src/desktop_style.rs',str(root/'crates/sex-pdx/src/desktop_style.rs')).replace('../crates/sex-pdx/src/app_catalog.rs',str(root/'crates/sex-pdx/src/app_catalog.rs'))
 (out/'mutant.rs').write_text(fixture.replace('../crates/silkbar-model/src/lib.rs',str(out/'lib.rs')))
 PY
 SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc --edition=2021 --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/tests"

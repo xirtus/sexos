@@ -5,7 +5,7 @@ use crate::surface_lifecycle::{Catalog, Surface, CATALOG_CAPACITY};
 struct Group { catalog: Catalog, frame_seen: bool }
 impl Group {
     fn parent_required(&self) -> bool {
-        matches!((self.catalog.target_pd,self.catalog.surface_id),(12,154)|(17,302))
+        crate::app_catalog::by_surface(self.catalog.target_pd,self.catalog.surface_id).is_some_and(|i|!i.children.is_empty())
     }
 }
 pub struct FrameGroups { groups: [Option<Group>; CATALOG_CAPACITY] }
@@ -35,8 +35,8 @@ impl FrameGroups {
             let bx=frame.x.saturating_add(8); let by=frame.y.saturating_add(36);
             let bw=frame.w.saturating_sub(16); let bh=frame.h.saturating_sub(44);
             for child in surfaces.iter_mut().filter(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)) {
-                if matches!(g.catalog.target_pd,12|17) {
-                    let index=match child.surface_id {154|302=>0,160|303=>1,161|304=>2,_=>3};
+                if let Some(app)=crate::app_catalog::by_surface(g.catalog.target_pd,g.catalog.surface_id).filter(|i|!i.children.is_empty()) {
+                    let index=if child.surface_id==app.surface{0}else{app.children.iter().position(|c|*c==child.surface_id).map_or(3,|p|p+1)};
                     let p=sex_pdx::spindle_view::Layout::new(frame.w,frame.h).panes[index];
                     child.x=frame.x.saturating_add(p.x as i32);child.y=frame.y.saturating_add(p.y as i32);child.w=p.w;child.h=p.h;
                 } else { child.x=bx;child.y=by;child.w=bw;child.h=bh; }

@@ -4,6 +4,7 @@
 //! This is no native IPC authority, durable-save or pixel proof.
 #![allow(dead_code, unused_variables, static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path = "../crates/sex-pdx/src/text_encoding.rs"]
 pub mod text_encoding;
 #[macro_export]

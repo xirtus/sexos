@@ -179,7 +179,17 @@ def main():
   soak=None
   if a.soak_seconds:
    from alpha_session import run
-   soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil)
+   try:soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil)
+   except Exception:
+    # Diagnostic only: sample the live guest CPU state before teardown so a
+    # wedged domain can be located by instruction address.
+    samples=[]
+    for _ in range(40):
+     try:samples.append(str(q.cmd('human-monitor-command',{'command-line':'info registers'})))
+     except Exception as e:samples.append('error '+str(e));break
+     time.sleep(.1)
+    (out/'stall-registers.txt').write_text('\n=====\n'.join(samples))
+    raise
   stop_guest()
   if pending_io:
    from pending_io_close import BASELINE,SNAPSHOT

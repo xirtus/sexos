@@ -18,7 +18,7 @@ python3 - "$CALENDAR_ROOT" "$CALENDAR_DIR" <<'PY'
 from pathlib import Path
 import hashlib,json,sys
 root=Path(sys.argv[1]);out=Path(sys.argv[2]);source=(root/'apps/kaleidoscope/src/clock_view.rs').read_text();tests=(root/'tests/browser_calendar.rs').read_text()
-for name in ('clock_source.rs','desktop_style.rs'):
+for name in ('clock_source.rs','desktop_style.rs','app_catalog.rs'):
  p=out/'crates/sex-pdx/src'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((root/'crates/sex-pdx/src'/name).read_bytes())
 target=out/'tests';target.mkdir()
 controls=[('measure','.min(63)','.min(79)','both_tiles_and_fullscreen_keep_all_eight_rows_without_hidden_enlarge_loop'),
@@ -28,7 +28,7 @@ for name,old,new,test in controls:
  mutant=out/(name+'.rs');mutant.write_text(source.replace(old,new))
  path=target/(name+'.rs');path.write_text(tests.replace('#[path="../apps/kaleidoscope/src/clock_view.rs"]mod clock_view;','#[path='+json.dumps(str(mutant))+']mod clock_view;'))
  (out/(name+'.test')).write_text(test+'\n')
-(out/'sources.json').write_text(json.dumps({name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in ('apps/kaleidoscope/src/clock_view.rs','tests/browser_calendar.rs','crates/sex-time/src/lib.rs','crates/sex-pdx/src/clock_source.rs','crates/sex-pdx/src/desktop_style.rs')},indent=2)+'\n')
+(out/'sources.json').write_text(json.dumps({name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in ('apps/kaleidoscope/src/clock_view.rs','tests/browser_calendar.rs','crates/sex-time/src/lib.rs','crates/sex-pdx/src/clock_source.rs','crates/sex-pdx/src/desktop_style.rs','crates/sex-pdx/src/app_catalog.rs')},indent=2)+'\n')
 PY
 for CALENDAR_CONTROL in measure epoch; do
     rustc --edition=2021 --extern sex_time="$CALENDAR_DIR/libsex_time.rlib" --test "$CALENDAR_DIR/tests/$CALENDAR_CONTROL.rs" -o "$CALENDAR_DIR/$CALENDAR_CONTROL"

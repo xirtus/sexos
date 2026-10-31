@@ -122,16 +122,25 @@
         {
           "path": "servers/sexfiles/src/history_journal.rs",
           "anchor": "pub trait SectorIo"
+        },
+        {
+          "path": "crates/sex-pdx/src/app_catalog.rs",
+          "anchor": "pub const INCARNATIONS"
+        },
+        {
+          "path": "kernel/src/app_resources.rs",
+          "anchor": "pub fn audit_boot_catalog"
         }
       ],
       "checks": [
         "app_resources",
         "app_activation",
         "desktop_close_runtime",
-        "service_custody"
+        "service_custody",
+        "boot_app_catalog"
       ],
       "gaps": [
-        "One BOOT-reserved successor each for Quil and Spindle; no reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Guest pixel/persistence evidence is required separately from host mocks.",
+        "The current BOOT catalog reserves Quil9/16/18, Spindle12/17 and Browser15; no reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Runtime boot auditing checks actual grant tuples; child/frame ownership remains Display policy and native UI evidence is required separately.",
         "History recovery uses one BOOT-bound fixed journal and real block barriers; host fault injection and real two-boot evidence are required separately. Hardware power-loss validation, service-death timeouts and complete epoch replay remain open."
       ],
       "depends_on": [

@@ -2,6 +2,7 @@
 //! transport and the immutable kernel LIVE query are mocked.
 #![allow(dead_code, static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 #[macro_export]
 macro_rules! serial_record {

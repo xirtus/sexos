@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
@@ -24,6 +25,7 @@ fn items()->[Item<'static>;3]{[Item{id:1,name:b"notes.txt"},Item{id:2,name:b"ker
 
 mod integration {
     #![allow(dead_code,static_mut_refs)]
+    use crate::app_catalog;
     use super::desktop_content;
     use super::document_view;
     use super::linen_text_delivery;

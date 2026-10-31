@@ -539,6 +539,15 @@
         "scripts/silkbar_civil_clock_host_gate.sh"
       ],
       "scope": "Actual status-bar probe, source ABI, exact Display publisher/framing boundary, snapshot-only model, health/rollback/exhaustion and renderer glyphs with a removed-authority-guard control; not native source mapping, pixels or authenticated time."
+    },
+    {
+      "id": "boot_app_catalog",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/app_catalog_host_gate.sh"
+      ],
+      "scope": "Actual pure BOOT catalog witness validator and catalog/lifecycle consistency; source checks require init to audit actual subjects, held lifecycle/self/close/route/activation grants before seal. Native boot audit records are required separately; not frame-child genesis or general authority proof."
     }
   ],
   "invariants": [

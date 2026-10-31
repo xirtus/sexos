@@ -3,6 +3,7 @@
 //! model queries are mocked. No guest rendering is claimed by this harness.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;

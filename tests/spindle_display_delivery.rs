@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../apps/spindle/src/viewport.rs"]mod viewport;
 #[path="../apps/spindle/src/display_delivery.rs"]mod delivery;

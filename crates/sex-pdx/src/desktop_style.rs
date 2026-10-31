@@ -36,10 +36,8 @@ pub const fn native_indicator(surface:u64)->Option<u32>{
 pub const NATIVE_CANVAS:u32=0x000C1420;
 /// A family ID or hardware key does not establish this exact BOOT ownership.
 pub const fn native_canvas(owner:u32,surface:u64)->Option<u32>{
-    match(owner,surface){
-        (9,156)|(16,301)|(18,307)|(12,154|160|161|162)|(17,302|303|304|305)=>Some(NATIVE_CANVAS),
-        _=>None,
-    }
+    // Every Quil and Spindle content surface; Browser paints its own canvas.
+    if crate::app_catalog::native_pixel_bit(owner,surface)!=0&&!crate::app_catalog::is_browser(owner){Some(NATIVE_CANVAS)}else{None}
 }
 
 // IEC sRGB transfer function sampled at every 8-bit channel, rounded to

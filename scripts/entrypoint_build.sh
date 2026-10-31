@@ -35,6 +35,7 @@ ABI_INPUTS=(
   kernel/src/history_recovery.rs
   crates/sex-pdx/src/lib.rs
   crates/sex-pdx/src/uiir.rs
+  crates/sex-pdx/src/app_catalog.rs
   crates/sex-pdx/src/pagefault.rs
   crates/sex-pdx/src/display_ready.rs
   crates/sex-pdx/src/shell_ready.rs
@@ -60,9 +61,11 @@ ABI_INPUTS=(
   kernel/src/paging_state.rs
   kernel/src/app_resource_state.rs
   kernel/src/app_resources.rs
+  kernel/src/app_catalog_state.rs
   kernel/src/fault_transaction.rs
   kernel/src/ipc/messages.rs
   kernel/src/ipc.rs
+  kernel/src/ipc/reply_credit.rs
   kernel/src/ipc/sender.rs
   kernel/src/ipc/router.rs
 )

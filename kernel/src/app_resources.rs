@@ -130,6 +130,51 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
 pub fn activation_permitted(target:u32)->bool{
     !TARGETS.iter().enumerate().any(|(i,t)|t.load(Ordering::Acquire)==target && DORMANT[i].load(Ordering::Acquire))
 }
+/// Compare descriptive catalog data with actual BOOT-owned subjects and held
+/// grants before sealing or scheduling. Catalog lookup never grants authority.
+pub fn audit_boot_catalog(coordinator:u32){
+    boot();
+    let rows=&sex_pdx::app_catalog::INCARNATIONS;
+    crate::app_catalog_state::validate_layout(rows).expect("BOOT_CATALOG_LAYOUT");
+    let apps=APPS.lock();
+    assert_eq!(apps.iter().filter(|a|a.ready).count(),rows.len(),"BOOT_CATALOG_COUNT");
+    let shell=crate::ipc::DOMAIN_REGISTRY.get(coordinator).expect("BOOT_CATALOG_COORDINATOR");
+    let slot=|value:u64|u32::try_from(value).expect("BOOT_CATALOG_SLOT_RANGE");
+    for row in rows{
+        let index=apps.iter().position(|a|a.ready&&a.target==row.target).expect("BOOT_CATALOG_SUBJECT");
+        let app=&apps[index];
+        let pd=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_CATALOG_DOMAIN");
+        let main=pd.main_task.load(Ordering::Acquire);
+        assert!(!main.is_null()&&main as usize==app.main,"BOOT_CATALOG_MAIN");
+        let task=unsafe{&*main};
+        assert_eq!(app.task,task.id,"BOOT_CATALOG_CAPTURED_TASK");
+        let lifecycle=match shell.find_capability(slot(row.lifecycle_slot as u64)).map(|c|c.data){
+            Some(CapabilityData::AppLifecycle(g))=>g,_=>panic!("BOOT_CATALOG_LIFECYCLE")};
+        let self_catalog=match pd.find_capability(slot(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u64)).map(|c|c.data){
+            Some(CapabilityData::AppLifecycle(g))=>g,_=>panic!("BOOT_CATALOG_SELF")};
+        let domain=|at:u64|match shell.find_capability(slot(at)).map(|c|c.data){
+            Some(CapabilityData::Domain(target))=>target,_=>panic!("BOOT_CATALOG_DOMAIN_ROUTE")};
+        let activation=row.activation_slot.map(|at|match shell.find_capability(slot(at as u64)).map(|c|c.data){
+            Some(CapabilityData::AppActivation(g))=>g,_=>panic!("BOOT_CATALOG_ACTIVATION")});
+        let actual=crate::app_catalog_state::Observed{
+            target:pd.id,task:task.id,
+            task_domain:u32::try_from(task.context.pd_id).expect("BOOT_CATALOG_TASK_DOMAIN_RANGE"),
+            task_domain_pointer_matches:core::ptr::eq(task.context.pd_ptr,pd as *const _),
+            content_surface:app.surface,
+            logical_app:app.identity.logical_app,incarnation:app.identity.number,
+            predecessor:app.predecessor,coordinator:app.coordinator,
+            dormant:DORMANT[index].load(Ordering::Acquire),
+            dead:app.retired||TERMINAL[index].load(Ordering::Acquire)||task.state.snapshot().exited,
+            shell_lifecycle:lifecycle,self_catalog,close_target:domain(row.close_slot),
+            route_target:domain(row.route_slot),activation,
+        };
+        crate::app_catalog_state::validate(row,&actual,coordinator).expect("BOOT_CATALOG_ACTUAL_GRANTS");
+        crate::serial_println!("[boot.app.catalog] target={} task={} surface={} logical={} incarnation={} predecessor={} lifecycle={} close={} route={} dormant={} grants_verified=1 data_only=1",
+            row.target,task.id,app.surface,app.identity.logical_app,app.identity.number,app.predecessor,
+            row.lifecycle_slot,row.close_slot,row.route_slot,actual.dormant as u8);
+    }
+    crate::serial_println!("[boot.app.catalog.complete] rows={} actual_grants=1 runtime_mint=0",rows.len());
+}
 fn grant(pd:&ProtectionDomain,slot:u64)->Result<LifecycleGrant,u64>{
     let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(INVALID)?;
     match pd.find_capability(slot).map(|c|c.data){Some(CapabilityData::AppLifecycle(g))=>Ok(g),_=>Err(INVALID)}

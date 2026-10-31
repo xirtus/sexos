@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–119
+# SexOS development: round 108 acceptance and rounds 109–133
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -13,7 +13,8 @@ the explicitly identified cohorts.
 - **Rounds 109–115 close or narrow seven authority blockers.** Two ambient kernel paths are gone (slot-0 framebuffer disclosure, kernel-privileged SyncCall). Replies now need an accepted invocation. Capability revocation is real and runs natively at app retirement. Three architectural obligations now have executable checks.
 - **Rounds 116, 118 and 119 add user features.** The SexTime calendar crate, Quil find (Ctrl+F) and a Spindle `sextime` calculator command.
 - **Round 117 passes the 1800-second sustained alpha session** on the latest image at 1280x800. Its runner first needed five stale races fixed; none were OS defects.
-- **Obligation inventory: 4 open / 26 partial** (was 7 / 23). System Proven remains false.
+- **Rounds 120–126 (second batch).** Quil find & replace, a close guard that keeps unsaved Quil work, and the first BOOT-granted UiIR stream. The compact sustained session uncovered two real bugs: a Shell focus bound that acted as a hidden deadline, and a round 111 defect that silently cut Shell off from Display after about 28 minutes. Both are fixed, and **the 1800-second sustained alpha session now passes at both desktop sizes**. One attempt (121, sequences in the listen ABI) was backed out because it would break two project guards.
+- **Obligation inventory: 2 open / 28 partial** (was 7 / 23 at round 108). System Proven remains false.
 
 ### Evidence level
 
@@ -43,6 +44,20 @@ The round numbers below are the order the work was done. They do not match the p
 | 117 | Sustained 1800 s alpha session passes; five runner races fixed | native, 1 profile (wide), 80 cycles | `1ac9b3bc`, `5e054cb7`, `b649b519`, `d6608523` |
 | 118 | Quil Ctrl+F find | host + native (prompt pixels, forward/wrapped/missing receipts) | `fc23ccfc` |
 | 119 | Spindle `sextime <unix-seconds>` calculator | host + native (exact epoch record) | `8e482405` |
+| 120 | Compact (1024x768) sustained 1800 s session passes (83 cycles) | native, final image | evidence below |
+| 121 | Per-sender sequence in the listen ABI | **backed out, not committed**: needed r9, which the pipeline forbids | — |
+| 122 | Quil find & replace (Down/Up switch fields, exact-match only, undoable) | host (actual dispatch) + native at 1024x768 | `a0a9bbb1` |
+| 123 | Quil declines Close with unsaved work; window stays; next Close confirms | host + control-free checks + native (decline, intact window, confirm) | `42074deb` |
+| 124 | First BOOT-granted UiIR stream (Shell → Display), per-sender sequence + epochs | host + control, sealed, native both sizes | `e5b95eb0` |
+| 125 | Shell restore focus bounded by its tick deadline, not a poll count; cancel and content-blocker diagnostics | host regression + native soak | `f8058b31`, `bf86a0fc`, `1c54fbbf` |
+| 126 | Reply bookkeeping never refuses an invocation (round 111 defect); Display heartbeat; stale wait checker | host regression, sealed, native both sizes + compact 1800 s | `c89ac1b5`, `754c0513`, `9e3348f9`, `3c02b10c` |
+| 127 | Quil header keeps the document name beside long notices | host + native (compact) | `b4382ea3` |
+| 128 | Long-session exhaustion audit after the reply-count bug | measured rates; no further fix needed today (see below) | — |
+| 129 | BOOT app incarnation catalog (`sex-pdx::app_catalog`), checked against the kernel boot plan | host gate + native (connected, all-incarnation rehearsal) | `d43e5347` |
+| 130 | Shell's app view tables, routes and admission checks driven by the catalog; second stale self-wait checker fix | host (pinned to old tables) + native both sizes | `4762329f`, `c3677532` |
+| 131 | Display's frame, content, viewport-group and per-pixel owner tables driven by the catalog | host (16,000-pair equivalence) + native both sizes | `4b714ed5` |
+| 132 | sex-pdx clipboard, canvas, document-view and Spindle status/view policies driven by the catalog | host (equivalence) + 41/41 host checks + native both sizes | `3827a172` |
+| 133 | Kernel BOOT app reservation (successors, grants, activation chain, document buffers) built from the catalog | identical boot authority/grant records before and after; native both sizes | `3f403a14` |
 
 ## Round details
 
@@ -113,12 +128,96 @@ Host-measured times include QMP and screendump overhead and are not a hard real-
 
 [Result](assets/sexos-r117-alpha-1800s-2026-10-31-result.json.gz) (sha256 of the uncompressed JSON `4ffec7c95866638a50dedbf64422eae4d58b1dfbe21806cb2c0059093b72a4f9`), [raw serial/frames archive](assets/sexos-r117-alpha-1800s-2026-10-31-raw.tar.gz).
 
+## Rounds 120–125
+
+### 121: sequences stay out of the register ABI
+
+The first attempt stamped a per-sender sequence on each typed invocation and returned it from listen in r9. The sealed build refused it: `scripts/sexos_pipeline.sh` forbids r9 in IPC surfaces. That guard dates from commit `814d7437`. Before it, r9 carried a caller-chosen pointer that the kernel wrote a listen result into, and the guard keeps that raw-pointer side channel gone. Packing the sequence into rdi would instead weaken the task-ID alias guard. With Andreas's agreement, both guards stay and causal order moves to UiIR, where ARCHITECTURE.md §1.4–1.5 puts it. Round 124 implements that. Nothing from 121 was committed.
+
+### 122: find and replace
+
+In find mode, Down moves typing to a replacement field and Up back to the query. Tab stays with the desktop, because Shell uses it for focus. The prompt shows `Find: query > replacement`, with `#` after the active field. Enter in the replacement field replaces the selection only when it is exactly one match, as one ordinary undoable edit, then selects the next match. Native: [replace prompt](assets/sexos-r122-quil-replace-prompt-compact-2026-10-31.png).
+
+### 123: close guard
+
+Before this round, Close discarded unsaved Quil edits and cancelled an in-flight save without asking. Now:
+
+- Quil declines an ordinary Close while dirty or saving, through a new `OP_APP_CLOSE_DECLINED`.
+- Shell accepts the decline only from the exact live incarnation, only while its close is pending. It then stops retrying and marks the next Close as confirmed.
+- Quil discards only the revision the user was warned about, and declines again after further edits.
+- Shell no longer tears down a document app's window at F11. Retirement removes it when the app actually dies. The visible effect is a short delay between F11 and the window disappearing.
+- The close-log checker accepts extra close requests only when each is followed by its exact decline.
+
+Natively, the alpha runner sees the decline with the window intact (`close-declined` capture), then the confirmed close.
+
+### 124: first UiIR stream
+
+- **BOOT grant.** BOOT pairs Shell (PD 3) and Display (PD 1) through two zeroed, exact-peer regions: ring region 9, which only Shell writes, and cursor region 10, which only Display writes. Both sit at slots 96/97 on each side. Nothing is minted at runtime.
+- **Protocol (`sex-pdx::uiir`).** Records carry contiguous per-sender sequences and their commit epoch. A record is visible only after its epoch commits. The producer never overwrites unconsumed records and distrusts a cursor beyond its commits. The consumer stops at any gap, repeat or regressed epoch.
+- **Attach checks.** Both sides check region id, peer, rights and length before attaching.
+- **Current use.** Shell publishes committed focus transitions. Display checks them in order but renders nothing from them yet.
+- **Evidence.** Host tests include 200,000 records across threads; a compiled control fails. Natively, both sides attach and Display consumes in order through the connected session at both sizes.
+
+### 125, 126 and 120: two real bugs from the compact session
+
+The first compact 1800 s run stopped at cycle 79: Spindle restore focus was cancelled every time. Investigating it took four runs.
+
+1. **A poll count acting as a deadline (125).** Cancel reasons showed `reason=turns`: Shell counted every loop poll and gave up after 4096, inside the 2000-tick deadline. The tick deadline is now the real bound, and the poll count only catches a stalled clock.
+2. **Shell cut off from Display (126).** The next run failed the same way at the deadline. The new content-blocker record showed Spindle's frame state permanently pending, and from about 28 minutes in, Display committed nothing from any app. A Display heartbeat proved Display alive but receiving only SilkBar's messages. The cause was round 111. The kernel counted one reply obligation per accepted invocation and *refused the invocation* when a caller's count reached 65,535. Shell sends Display tens of thousands of one-way calls that are never answered, so after about 28 minutes every Shell→Display call was refused as not-ready. Wide sessions make fewer of these calls and never reached the cap.
+   - Reply bookkeeping now never refuses an invocation. A caller's count saturates, and replies stay authorized at the bound. A full table records no obligation for a new caller; it never refuses that caller's call. Only a full ring refuses.
+   - Regression tests drive 165,535 one-way invocations from one caller and pin that the enqueue path has exactly one refusal.
+3. **A stale wait checker.** Since round 105, sexdrive (task 2) waits one tick for NVMe completions. When a sampled park record landed on that task, the connected-session checker rejected a correct boot. It now accepts exactly that wait.
+
+The investigation also wasted one run: the stall sampler was written against the wrong QMP return type and recorded nothing.
+
+**Compact result: pass.** ISO `739f1e609eea70707333bb4bb409ec264eee5051ac802497da6c050ccff8c641`, production equal to HEAD. 83 cycles over 1800 s, then the full close/relaunch/reopen/cleanup sequence, including Quil's decline of the dirty Close with its window intact, then the confirmed close. Zero denied replies, zero focus cancels, UiIR in order through sequence 640, and the Display heartbeat shows Shell traffic to the end. [Result](assets/sexos-r120-alpha-1800s-compact-2026-10-31-result.json.gz) (uncompressed sha256 `353c5177c3baa2fa88a43012aad613505b0665d3cd15faa07db05b7b7fa5e9ad`), [raw archive](assets/sexos-r120-alpha-1800s-compact-2026-10-31-raw.tar.gz), [declined close](assets/sexos-r123-close-declined-compact-2026-10-31.png).
+
+| Latency (s), compact | n | p50 | p95 | max |
+|---|---:|---:|---:|---:|
+| Quil key receipt | 83 | 0.140 | 0.191 | 0.205 |
+| Quil key to verified pixels | 83 | 0.668 | 0.718 | 0.843 |
+| Warm save receipt | 83 | 0.171 | 0.199 | 0.214 |
+| Linen refresh | 168 | 0.144 | 0.193 | 0.235 |
+| Spindle storage stat | 83 | 1.918 | 1.962 | 1.972 |
+| Close to pool reuse | 3 | 0.384 | 0.452 | 0.452 |
+
+### 128: long-session exhaustion audit
+
+The reply-count defect was a finite counter that silently refused work. All checked or saturating counters in the kernel, services and apps were reviewed against rates measured in the compact 1800 s session:
+
+| Bound | Size | Measured rate | Exhausts after |
+|---|---|---|---|
+| Spindle history requests (per client, per boot) | 16.7M sequence | 43,202 in 30 min of heavy command use | ≈12 days at that rate |
+| Quil document requests (per client, per boot) | 16.7M sequence | ≈130–770 per save (2–12 KiB) | ≈22,000 full-size saves |
+| SexNet job tickets (per boot) | 17,535 | one per fetch | 17,535 fetches |
+| Shell/Display/UiIR sequences, kernel task/fault/generation counters | u64 | — | not reachable |
+
+None of these can exhaust in a day of real use, so no code changed. Two constraints carry forward. Autosave must not write every few seconds: at 3 s intervals with a full 12 KiB document, Quil's document sequence would exhaust in about 18 hours, so autosave should trigger on change with a floor of tens of seconds, or a per-session sequence rollover must exist first. And every remaining exhaustion path should report its state visibly, not degrade silently.
+
+### 129–130: toward a larger app reserve
+
+Apps are finite per boot. Browser cannot reopen after one Close, Spindle after two, and Quil after three, because every incarnation was hand-wired across about 130 sites. `sex-pdx::app_catalog` now describes each BOOT incarnation: domain/task, content and Shell surfaces, and lifecycle, close, activation and route slots. It is data only. A host gate checks it against the lifecycle constants and the kernel's boot plan, and pins it to the previous hand-wired tables.
+
+Already migrated to the catalog:
+
+- Shell custody, close/surface maps and view delivery
+- the dirty-close deferral
+- the launcher focus check
+- sexfiles' document-caller admission
+- Display's surface tables (131)
+- sex-pdx clipboard, canvas, document-view and Spindle policies (132)
+
+Still hand-wired: Quil/Spindle/Linen self-checks, Spindle history recovery (one successor) and sexfiles' save list. The kernel boot plan and grants moved to the catalog in round 133.
+
+The plan from here: migrate those, then make the kernel's BOOT reservation loop over the catalog. After that, adding reserved incarnations, such as a reopenable Browser, becomes a data change with a known memory cost (about 69 private pages for each Quil incarnation).
+
 ## Verification state at handoff
 
-- Sealed GREEN_MASTER on the final image; ABI hash updated for each ABI-input change. Production source at HEAD equals the 1800 s alpha image.
-- Six routine Rust host gates: 1,909 + 56 + 9 + 35 + 67 + 38 executions pass after round 111, plus the new authority, reply, revocation, single-VAS, SexTime, find and sextime gates.
-- Python runner suite: 841 tests pass (836 plus 5 for PKU parity).
-- `check_architectural_truth.py --run-host`: all 40 registered host/static checks pass. Two had been failing: `shell_app_cleanup` was stale before this work and fixed in 113, and the Quil clipboard harness was broken by 118 and fixed.
+- Sealed GREEN_MASTER on the final image; ABI hash updated for each ABI-input change. `crates/sex-pdx/src/uiir.rs` and `kernel/src/capability_table.rs` were added to the ABI input list.
+- The connected desktop session passes at both sizes on the final image, which includes 122–125.
+- Python runner suite: 842 tests pass.
+- `check_architectural_truth.py --run-host`: all 41 registered host/static checks pass on the final tree.
+- Sustained 1800 s sessions pass at **both sizes on the final image**: compact with 83 cycles (round 120), and wide with 80 cycles ([result](assets/sexos-r126-alpha-1800s-wide-final-2026-10-31-result.json.gz), uncompressed sha256 `de1a00342adb041e730413f9f7866b306349fdbc6215195e2cf577e2a1736afc`). The round 117 wide pass was on the round 119 image.
 
 ## Known pre-existing issues found
 
@@ -128,7 +227,8 @@ Host-measured times include QMP and screendump overhead and are not a hard real-
 
 ## Remaining release gates
 
-- **Open (4):** DETERMINISTIC_REPLAY, EPOCH_COMMIT, CAUSAL_DOMAIN_ORDER, UIIR_AUTHORIZED_STREAM. The epoch/UiIR transport and the recorder do not exist. Per-sender sequences need a listen ABI change: `PdxMessage` gains a field, which touches about 60 fixture literals.
+- **Open (2):** DETERMINISTIC_REPLAY and EPOCH_COMMIT. No recorder, replay or epoch engine exists.
+- **Newly partial:** CAUSAL_DOMAIN_ORDER and UIIR_AUTHORIZED_STREAM have one checked stream (Shell → Display focus). There is no compositor consumer and no further streams.
 - **Partial (26):** includes PDX_SOLE_AUTHORITY (slot-0 serial records remain an unsanctioned diagnostic channel), PKU_ENFORCEMENT_ONLY (no no-PKU hostile isolation), PDX_REVOCATION (no user-initiated or partial revocation, no revocation of others' capabilities naming a retired target), and the memory, scheduler and diskfs obligations listed in `spec/`.
 - **Not started:** physical target profile and boot (plan 110, 199–200), storage torn-write campaign (111, 155), larger BOOT reserve (159–163), SMP lanes (143–148) and epoch replay (129–138).
 - **Not claimed:** public web/CA, crash/power-loss, hostile-code containment, physical hardware, SMP, or a general daily driver.
@@ -137,8 +237,9 @@ Host-measured times include QMP and screendump overhead and are not a hard real-
 
 1. Re-qualify 109–119 under the 80–107 acceptance bar: freeze one cohort and run the full native regression set at both sizes, with raw archives.
 2. Wire SexTime into the Browser clock panel or SilkBar once a validated civil-time source is routed there. Unknown or synthetic sources must stay visible as such.
-3. Per-sender causal sequences (listen ABI v2) as the first CAUSAL_DOMAIN_ORDER step.
-4. Plan rows 110–116: physical profile, torn-write recovery, lifetimes and reserves.
+3. Grow UiIR: let Display drive one real rendering decision from the stream, then move a second Shell → Display path (e.g. desktop state) onto UiIR with epoch-gated commits.
+4. Quil autosave drafts (Andreas's suggestion). Write a draft through Quil's existing BOOT document route into one draft object it owns, without taking over the open document's identity, and offer recovery from Linen.
+5. Plan rows 110–116: physical profile, torn-write recovery, lifetimes and reserves.
 
 ## Reproducing
 

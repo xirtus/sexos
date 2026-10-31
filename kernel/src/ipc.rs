@@ -66,7 +66,7 @@ pub fn get_phase() -> BootPhase {
     unsafe { BOOT_CONTROLLER.phase() }
 }
 
-pub const MAX_DOMAINS: usize = 1024;
+pub const MAX_DOMAINS: usize = reply_credit::REPLY_CREDIT_CAPACITY;
 pub const LOCAL_NODE_ID: u32 = 1;
 
 pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
@@ -123,7 +123,14 @@ pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u
             // The reply obligation exists before the call is visible, and is
             // withdrawn if the call is not accepted.
             let mut credits = callee.reply_credits.lock();
-            if !credits.grant(caller_pd) { return Err(sex_pdx::ERR_SERVICE_NOT_READY); }
+            // Every accepted invocation retains one consumable reply right.
+            // The indexed table covers every legal registry caller; checked
+            // counter exhaustion refuses before publication, never silently
+            // discarding an accepted obligation.
+            let granted = credits.grant(caller_pd);
+            if granted == crate::ipc::reply_credit::Grant::Full {
+                return Err(sex_pdx::ERR_SERVICE_NOT_READY);
+            }
             if unsafe { (*callee.message_ring).enqueue(msg) }.is_err() {
                 credits.withdraw(caller_pd);
                 return Err(sex_pdx::ERR_SERVICE_NOT_READY);

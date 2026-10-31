@@ -2,7 +2,7 @@ use crate::ipc::messages::{MessageType, IpcReply, IpcError};
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::capabilities::engine::CapEngine;
 
-/// route_signal: Routes a POSIX signal to a target PD.
+/// Route a typed notification through the caller's held signal capability.
 /// IPCtax: Lock-free asynchronous delivery via message rings.
 pub fn route_signal(caller_pd_id: u32, target_pd_id: u32, signum: u8, cap_id: u64) -> Result<(), &'static str> {
     if !crate::app_resources::accepts_ipc(target_pd_id) {return Err("router: retired target");}

@@ -22,7 +22,7 @@ assert s.count('if palette_execute_selected() { toggle_command_palette(); }')==2
 assert 'PALETTE_TEXT.poll(4,display_admit)' in s
 assert 'palette_text_poll(); linen_text_poll();' in s
 print('[launcher.host] PASS scope=exact_incarnation_policy_and_static_successor_wiring_guest_activation_separate')
-names=['native_launcher_status','launcher_live_action','launcher_row_title','launcher_subject_live','launcher_action_record','launcher_queue_focus','launcher_palette_closed','launcher_focus_discard','launcher_focus_current','launcher_focus_retry_ready','launcher_focus_cancel','launcher_focus_poll','launcher_focus_existing','desktop_content_ready','desktop_state_poll','reparent_frame_to_scene','sync_scene_visibility']
+names=['native_launcher_status','launcher_live_action','launcher_row_title','launcher_subject_live','launcher_action_record','launcher_queue_focus','launcher_palette_closed','launcher_focus_discard','launcher_focus_current','launcher_focus_retry_ready','launcher_focus_cancel','launcher_focus_poll','launcher_focus_existing','desktop_content_ready','desktop_content_blocker','desktop_state_poll','reparent_frame_to_scene','sync_scene_visibility']
 parts=[]
 for name in names:
  found=re.findall(r'^(?:unsafe )?fn '+name+r'\b.*?^}',s,re.M|re.S)

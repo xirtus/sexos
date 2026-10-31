@@ -2,6 +2,7 @@
 //! Actual BOOT clipboard ABI and broker; host callbacks model only IPC admission.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
 #[path = "../crates/sex-pdx/src/text_selection.rs"] pub mod text_selection;

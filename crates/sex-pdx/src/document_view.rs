@@ -28,7 +28,8 @@ impl Layout {
         let cols = (w.saturating_sub(2 * s::INSET) / (s::ADVANCE * scale))
             .saturating_sub(1)
             .clamp(1, 79) as usize;
-        let top = if matches!(target,15|16|18) { 36 } else { s::TEXT_TOP };
+        // Frameless document holders draw their own top chrome band.
+        let top = if crate::app_catalog::app_of(target).is_some()&&!crate::app_catalog::has_shell_frame(target)&&!crate::app_catalog::is_spindle(target) { 36 } else { s::TEXT_TOP };
         let desired_toolbar = if cols >= 4 * TOOLBAR_CELL {
             1
         } else if cols >= 2 * TOOLBAR_CELL {
@@ -216,7 +217,7 @@ impl Delivery {
 pub const WORKSPACE_CHANGED: u64 = 0x279;
 pub struct WorkspaceRefresh { target:u32, task:u32, pending:bool, closed:bool }
 impl WorkspaceRefresh {
-    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!((matches!(target,9|16|18)&&task!=0)||(target==15&&task==15))}}
+    pub const fn new(target:u32,task:u32)->Self {Self{target,task,pending:false,closed:!((crate::app_catalog::is_quil(target)&&task!=0)||(crate::app_catalog::is_browser(target)&&task==target))}}
     pub fn changed(&mut self){if !self.closed{self.pending=true;}}
     pub fn pending(&self)->bool{self.pending&&!self.closed}
     pub fn close(&mut self){self.pending=false;self.closed=true;}

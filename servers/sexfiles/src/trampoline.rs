@@ -317,7 +317,8 @@ pub extern "C" fn trampoline_main() {
 /// The message authenticates a PD. Only its immutable kernel lifecycle grant
 /// supplies the task identity; a document request carries no replacement task.
 fn document_caller_live(caller:u32)->bool {
-    let(slot,surface)=match caller{9=>(38,156),16=>(45,301),18=>(54,307),15=>(40,300),_=>return false};
+    let Some(i)=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app!=sex_pdx::app_catalog::App::Spindle)else{return false};
+    let(slot,surface)=(i.lifecycle_slot,i.surface);
     let live=matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3)&&(caller!=15||c.task_id==15))
         && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE);
     if caller==15&&live{

@@ -4,6 +4,7 @@
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod state;
 use state::{Surface,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};
 const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX:usize=50;

@@ -1,6 +1,7 @@
 #![allow(dead_code,static_mut_refs)]
 #[path="../servers/silk-shell/src/launcher.rs"] mod launcher;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] mod app_catalog;
 static mut APP_CUSTODY:[Option<app_custody::Entry>;1]=[Some(app_custody::Entry::new(50,17,170,302))];
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 static mut INFO:Result<sex_pdx::app_lifecycle::ActivationInfo,u64>=Err(1);

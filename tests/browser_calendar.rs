@@ -3,6 +3,8 @@
 //! authenticity, syscall authority or native framebuffer claim is made here.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/app_catalog.rs"]
+mod app_catalog;
 #[path="../crates/sex-pdx/src/clock_source.rs"]pub mod clock_source;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 mod clock_probe {

@@ -19,6 +19,8 @@ static REGISTRY:[AtomicPtr<capability::ProtectionDomain>;32]=[const{AtomicPtr::n
 static WAKES:AtomicUsize=AtomicUsize::new(0);
 #[macro_export]macro_rules! serial_println{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}
 #[path="../kernel/src/app_resource_state.rs"]mod app_resource_state;
+#[path="../kernel/src/app_catalog_state.rs"]mod app_catalog_state;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/task_ownership.rs"]pub mod ownership;
 #[path="../kernel/src/ipc_ring.rs"]mod ring;
@@ -39,7 +41,7 @@ mod core_local{pub static INITIALIZED_CORES:crate::AtomicU32=crate::AtomicU32::n
 mod interrupts{pub static TICKS:crate::AtomicU64=crate::AtomicU64::new(0);}
 mod capability{
  use crate::*;
- #[derive(Clone,Copy)]pub enum CapabilityData{AppLifecycle(app_resource_state::LifecycleGrant),AppActivation(app_resource_state::ActivationGrant),Other}
+ #[derive(Clone,Copy)]pub enum CapabilityData{AppLifecycle(app_resource_state::LifecycleGrant),AppActivation(app_resource_state::ActivationGrant),Domain(u32),Other}
  #[derive(Clone,Copy)]pub struct Capability{pub id:u32,pub data:CapabilityData,pub cheri_meta:u64}
  pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub trampoline_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut ring::RingBuffer<messages::MessageType,256>,pub signal_ring:*mut ring::RingBuffer<u8,32>,pub incoming_replies:Mutex<VecDeque<messages::IpcReply>>,pub reply_credits:Mutex<reply_credit::ReplyCredits>,pub cap_table:*mut capability_table::CapabilityTable,caps:Mutex<Vec<(u32,CapabilityData)>>}
  impl ProtectionDomain{
@@ -142,7 +144,7 @@ fn fixture_elf()->Vec<u8>{
  assert_eq!(app_resources::status(shell,38,0),[0,15,15,31,31]);assert_eq!(app_resources::retire(pager,38),[RETRY,0,0,0]);
  paging::CLOSED.store(true,Ordering::Release);let before=*leaves;leaves[16]^=2;
  assert_eq!(app_resources::retire(pager,38),[DENIED,0,0,0]);assert_eq!(leaves[0],before[0]);assert!(FLUSHES.lock().is_empty());leaves[16]=before[16]|0x60;
- unsafe{(*target.message_ring).enqueue(messages::MessageType::Empty).unwrap();(*target.signal_ring).enqueue(3).unwrap();}target.incoming_replies.lock().push_back(messages::IpcReply{value:7,caller_pd:13,caller_task:213});assert!(target.reply_credits.lock().grant(13));
+ unsafe{(*target.message_ring).enqueue(messages::MessageType::Empty).unwrap();(*target.signal_ring).enqueue(3).unwrap();}target.incoming_replies.lock().push_back(messages::IpcReply{value:7,caller_pd:13,caller_task:213});assert_eq!(target.reply_credits.lock().grant(13),reply_credit::Grant::Added);
  let held=unsafe{&*target.cap_table};for _ in 0..3{held.insert(capability::CapabilityData::Other);}held.seal();assert!(!held.holds_none(|_|true));
  let result=[0,0x9000_0000,17*4096,15];assert_eq!(app_resources::retire(pager,38),result);assert_eq!(*leaves,[0;17]);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(unsafe{(*target.message_ring).len()},0);assert_eq!(unsafe{(*target.signal_ring).len()},0);assert!(target.incoming_replies.lock().is_empty());assert_eq!(target.reply_credits.lock().outstanding(),0);

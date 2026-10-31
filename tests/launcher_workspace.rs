@@ -3,6 +3,7 @@
 //! admission are finite host callbacks, not native authority or pixel proof.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../servers/silk-shell/src/launcher.rs"]mod launcher;
 #[path="../servers/silk-shell/src/app_custody.rs"]mod app_custody;
 use launcher::{Evidence,LiveAction};

@@ -28,14 +28,19 @@ for path in ['kernel/src/ipc.rs','kernel/src/ipc/router.rs']:
     assert 'app_resources::accepts_ipc(' in (r/path).read_text()
 assert 'app_resources::activation_permitted(' in (r/'kernel/src/scheduler.rs').read_text()
 assert 'load_elf(elf_path, pd_id, layout, domain_id)' in (r/'kernel/src/pd/create.rs').read_text()
-assert 'create_boot_domain(quil_module.path(),Some(16),16,9)' in (r/'kernel/src/init.rs').read_text()
-assert 'create_boot_domain(quil_module.path(),Some(18),18,9)' in (r/'kernel/src/init.rs').read_text()
-assert 'create_boot_domain(spindle_module.path(),Some(17),17,12)' in (r/'kernel/src/init.rs').read_text()
-# Verify the explicit aggregate budget and chain order in the actual genesis.
+# Creation, resource registration and predecessor bindings consume the same
+# bounded descriptive catalog. The registered boot_app_catalog check validates
+# actual extracted grant tuples; source anchors here only connect genesis.
 init=(r/'kernel/src/init.rs').read_text()
-assert 'plan_boot_apps(&[9, 12, 15, 16, 17, 18])' in init
-assert '(spindle_successor,302), (quil_third,307)' in init
-assert init.index('reserve_successor(quil_id,successor,') < init.index('reserve_successor(successor,quil_third,') < init.index('crate::boot_memory::seal_all()')
+assert 'create_boot_domain(module.path(),Some(incarnation.target),layout,pkey)' in init
+assert 'assert_eq!(created,incarnation.target,"BOOT_SUCCESSOR_IDENTITY")' in init
+assert 'plan_boot_apps(&sex_pdx::app_catalog::TARGETS)' in init
+assert 'crate::app_resources::init(sext_id, silkshell_id,' in init
+assert 'sex_pdx::app_catalog::CONTENT' in init
+assert 'sex_pdx::app_catalog::predecessor(incarnation)' in init
+reserve=init.index('reserve_successor(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect(')
+audit=init.index('crate::app_resources::audit_boot_catalog(silkshell_id);')
+assert reserve<audit<init.index('crate::boot_memory::seal_all()')
 assert 'MAX_APPS:usize=6;' in (r/'kernel/src/app_resource_state.rs').read_text()
 assert 'SLOTS: [usize; 6] = [38, 39, 40, 45, 50, 54]' in (r/'crates/sex-pdx/src/app_lifecycle.rs').read_text()
 assert 'CATALOG_CAPACITY: usize = 6;' in (r/'servers/sexdisplay/src/surface_lifecycle.rs').read_text()

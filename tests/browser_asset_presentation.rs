@@ -3,6 +3,7 @@
 //! Display Stage. Host transport callbacks establish no native pixel proof.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../apps/kaleidoscope/src/asset_view.rs"]mod asset_view;

@@ -71,10 +71,10 @@ mod scheduler{
 fn calling(sender:u32,task:u32){calling_owed(sender,task,4)}
 fn calling_owed(sender:u32,task:u32,owed:u32){
  assert_ne!(sender,task,"task fixture must not alias the PD number");
- let pd=domain(sender);for _ in 0..owed{assert!(pd.reply_credits.lock().grant(15));}
+ let pd=domain(sender);for _ in 0..owed{assert_eq!(pd.reply_credits.lock().grant(15),reply_credit::Grant::Added);}
  CALLER.with(|p|p.set(pd));CALLING_TASK.with(|current|current.set(Some((task,sender))));
 }
-fn owed()->u32{CALLER.with(|p|unsafe{p.get().as_ref().unwrap()}.reply_credits.lock().outstanding())}
+fn owed()->u128{CALLER.with(|p|unsafe{p.get().as_ref().unwrap()}.reply_credits.lock().outstanding())}
 fn setup(sender:u32,task:u32)->&'static Domain{
  app_resources::ACCEPT.store(true,Ordering::Release);
  let pd=domain(15);pd.main_task.store(Box::into_raw(Box::new(scheduler::Task)),Ordering::Release);

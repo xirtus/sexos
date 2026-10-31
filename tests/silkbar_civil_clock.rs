@@ -5,6 +5,8 @@
 extern crate self as sex_pdx;
 thread_local! {static DRAW_LOG:std::cell::RefCell<Vec<String>>=const{std::cell::RefCell::new(Vec::new())};}
 #[macro_export]macro_rules! serial_record {($($arg:tt)*)=>{DRAW_LOG.with(|l|l.borrow_mut().push(format!($($arg)*)))};}
+#[path = "../crates/sex-pdx/src/app_catalog.rs"]
+mod app_catalog;
 #[path="../crates/silkbar-model/src/lib.rs"]mod silkbar_model;
 #[path="../crates/sex-pdx/src/clock_source.rs"]pub mod clock_source;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;

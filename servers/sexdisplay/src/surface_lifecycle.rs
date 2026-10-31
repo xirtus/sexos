@@ -87,16 +87,10 @@ impl Catalog {
     /// Existing shell prototypes have a separate frame surface. This is a
     /// fixed boot subject association, activated only by the exact app grant.
     pub fn frame_surface_id(self) -> Option<u64> {
-        match (self.target_pd, self.surface_id) {
-            (9, 156) => Some(201),
-            (12, 154) => Some(153),
-            (17, 302) => Some(306),
-            _ => None,
-        }
+        crate::app_catalog::by_surface(self.target_pd, self.surface_id).and_then(|i| i.shell_surface)
     }
     pub fn is_content(self, sid: u64) -> bool {
-        self.surface_id == sid || ((self.target_pd, self.surface_id) == (12, 154) && matches!(sid, 160 | 161 | 162))
-            || ((self.target_pd,self.surface_id)==(17,302) && matches!(sid,303|304|305))
+        self.surface_id == sid || crate::app_catalog::is_content(self.target_pd, self.surface_id, sid)
     }
     fn contains(self, sid: u64) -> bool {
         self.is_content(sid) || self.frame_surface_id() == Some(sid)
@@ -113,7 +107,7 @@ struct Presentation { request: u64, phase: PresentPhase }
 impl Presentation { const EMPTY: Self = Self { request: 0, phase: PresentPhase::Idle }; }
 /// Fixed native content routes: no catalog scan in the per-pixel compositor.
 pub const fn native_pixel_bit(owner: u32, sid: u64) -> u8 {
-    match (owner, sid) { (9,156) => 1, (12,154|160|161|162) => 2, (15,300) => 4, (16,301) => 8, (17,302|303|304|305) => 16, (18,307) => 32, _ => 0 }
+    crate::app_catalog::native_pixel_bit(owner, sid)
 }
 pub struct Lifecycle { entries: [Option<Entry>; CATALOG_CAPACITY] }
 #[derive(Debug, Default, PartialEq, Eq)]

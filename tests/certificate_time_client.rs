@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Actual ABI, source validator, service machine and application client.
 extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/app_catalog.rs"]
+mod app_catalog;
 #[path="../crates/sex-pdx/src/clock_source.rs"]pub mod clock_source;
 #[path="../crates/sex-pdx/src/certificate_time.rs"]pub mod certificate_time;
 #[path="../servers/sexnet/src/certificate_time.rs"]mod broker;

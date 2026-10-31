@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;

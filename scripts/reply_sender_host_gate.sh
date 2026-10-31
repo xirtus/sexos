@@ -24,7 +24,7 @@ cp "$ROOT_DIR/kernel/src/ipc/router.rs" "$TEST_DIR/mutant/kernel/src/ipc/"
 cp "$ROOT_DIR/tests/reply_credit.rs" "$TEST_DIR/mutant/tests/"
 python3 - "$ROOT_DIR/kernel/src/ipc/reply_credit.rs" "$TEST_DIR/mutant/kernel/src/ipc/reply_credit.rs" <<'PY'
 import sys
-source=open(sys.argv[1]).read();old='        credit.count -= 1;\n'
+source=open(sys.argv[1]).read();old='        *count -= 1;\n'
 assert source.count(old)==1
 open(sys.argv[2],'w').write(source.replace(old,''))
 PY
