@@ -19,6 +19,11 @@ def durable_fixture():
     for generation,pd in enumerate([12,17,24],1):
         text=text.replace(f'[files.history.commit] target={pd}',f'[files.history.durable] logical=12 target={pd} generation={generation} bytes=40 hash=0xabc barriers=3 readback=1\n[files.history.commit] target={pd}')
     return boot()+text
+def prefix_fixture():
+    # Keep the complete three-participant BOOT grant; exercise only 12 -> 17.
+    return '\n'.join(line for line in durable_fixture().splitlines()
+                     if not ('target=24 ' in line or line.endswith('target=24'))
+                     or line.startswith('[boot.'))+'\n'
 class Check(unittest.TestCase):
     def test_complete_fixture(self):self.assertEqual(validate(fixture()),[])
     def test_enqueue_and_fake_completion_do_not_prove_commit(self):self.assertTrue(validate(fixture().replace('[files.history.commit]','[request.admitted]')))
@@ -35,4 +40,38 @@ class Check(unittest.TestCase):
     def test_durable_evidence_requires_real_barriers_readback_and_grant(self):
         for old,new in [('barriers=3','barriers=0'),('readback=1','readback=0'),('slot=53','slot=54'),('source_task=12','source_task=99'),('source_hash=0xabc','source_hash=0xdef'),('generation=2','generation=1')]:self.assertTrue(validate(durable_fixture().replace(old,new),durable=True),(old,new))
     def test_volatile_fixture_cannot_prove_durability(self):self.assertTrue(validate(fixture(),durable=True))
+    def test_explicit_prefix_under_complete_boot_roster(self):
+        for targets in [(12,17),[12,17]]:
+            self.assertEqual(validate(prefix_fixture(),durable=True,expected_targets=targets),[])
+        self.assertTrue(validate(prefix_fixture(),durable=True))
+        self.assertEqual(validate(durable_fixture(),durable=True,expected_targets=(12,17,24)),[])
+    def test_prefix_rejects_unknown_reordered_skipped_duplicate_or_non_sequence(self):
+        for targets in [(),[],(12,),(17,24),(12,24),(17,12),(12,17,17),
+                        (12,17,25),(12,17,24,25),{12,17},'12,17',(12,'17'),(True,17)]:
+            with self.subTest(targets=targets):
+                self.assertTrue(validate(prefix_fixture(),durable=True,expected_targets=targets))
+    def test_prefix_does_not_hide_later_subject_receipts(self):
+        self.assertTrue(validate(durable_fixture(),durable=True,expected_targets=(12,17)))
+        for kind in ['missing','saved','loaded']:
+            extra=f'[spindle.history.receipt] target=24 task=24 kind={kind} handle=24 bytes=40 count=1 hash=0xabc error=0\n'
+            self.assertTrue(validate(prefix_fixture()+extra,durable=True,expected_targets=(12,17)))
+    def test_prefix_still_requires_all_boot_tasks_and_exact_receipt_tasks(self):
+        for old,new in [
+            ('index=2 target=24 task=24','index=2 target=24 task=999'),
+            ('index=2 target=24 task=24','index=2 target=24'),
+            ('target=17 task=17 kind=saved','target=17 task=999 kind=saved'),
+            ('target=17 task=17 kind=loaded','target=17 kind=loaded'),
+            ('source_task=12','source_task=999'),
+        ]:
+            with self.subTest(old=old,new=new):
+                self.assertTrue(validate(prefix_fixture().replace(old,new),durable=True,expected_targets=(12,17)))
+        text='\n'.join(line for line in prefix_fixture().splitlines()
+                       if not line.startswith('[boot.history.participant] index=2'))+'\n'
+        self.assertTrue(validate(text,durable=True,expected_targets=(12,17)))
+    def test_prefix_accepts_distinct_held_task_namespace(self):
+        text=prefix_fixture()
+        for pd in [12,17,24]:
+            text=text.replace(f'target={pd} task={pd} ',f'target={pd} task={pd*10} ')
+        text=text.replace('source_task=12 ','source_task=120 ')
+        self.assertEqual(validate(text,durable=True,expected_targets=(12,17)),[])
 if __name__=='__main__':unittest.main()

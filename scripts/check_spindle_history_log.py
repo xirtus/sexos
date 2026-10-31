@@ -7,9 +7,20 @@ import re
 from pathlib import Path
 from history_roster_evidence import verify_boot_roster,source_spindles
 
-def validate(text,durable=False):
+def validate(text,durable=False,*,expected_targets=None):
     errors=[]
-    targets=[row["target"]for row in source_spindles(Path(__file__).resolve().parents[1])]
+    source_targets=[row["target"]for row in source_spindles(Path(__file__).resolve().parents[1])]
+    # A shorter regression must explicitly name the canonical successor prefix.
+    # This narrows exercised subjects, never the held BOOT roster validation.
+    if expected_targets is None:
+        targets=source_targets
+    elif (type(expected_targets) not in (tuple,list)
+          or not 2<=len(expected_targets)<=len(source_targets)
+          or any(type(target) is not int for target in expected_targets)
+          or list(expected_targets)!=source_targets[:len(expected_targets)]):
+        return ['expected targets must be a canonical BOOT successor prefix of at least two subjects']
+    else:
+        targets=list(expected_targets)
     rows=[]
     for m in re.finditer(r'\[(files\.history\.(?:open|commit|close|retire|durable|recovered)|spindle\.history\.receipt|app\.private\.retired|app\.service\.ack|boot\.history\.recovery)\] ([^\r\n]*)',text):
         rows.append((m.start(),m[1],dict(re.findall(r'(\w+)=([^\s]+)',m[2]))))
@@ -45,7 +56,7 @@ def validate(text,durable=False):
     roster=None
     grants=[]
     if durable:
-        grants=find('boot.history.recovery',holder=11,slot=53,logical=targets[0],participants=len(targets),version=1,base=1808,sectors=18,held_query_verified=1,runtime_mint=0)
+        grants=find('boot.history.recovery',holder=11,slot=53,logical=source_targets[0],participants=len(source_targets),version=1,base=1808,sectors=18,held_query_verified=1,runtime_mint=0)
         try:roster=verify_boot_roster(Path(__file__).resolve().parents[1],text)
         except ValueError as error:errors.append('invalid held BOOT history roster: '+str(error))
         generations=[int(r['generation'])for _,r in find('files.history.durable')if r.get('generation','').isdigit()]
@@ -61,7 +72,7 @@ def validate(text,durable=False):
             if recovery and not find('files.history.durable',logical=targets[0],target=predecessor,generation=recovery[0][1].get('generation'),hash=recovery[0][1].get('source_hash'),bytes=recovery[0][1].get('bytes')):errors.append('recovery did not match predecessor durable generation')
         elif len(missing)!=1 or not old or not saved or not old[0][0]<missing[0][0]<saved[0][0]:errors.append('fresh successor did not establish its own initially missing history')
         if not find('spindle.history.receipt',target=target,kind='loaded'):errors.append('successor never restored its private snapshot')
-    if any(r.get('target')not in {str(target)for target in targets}for _,r in receipts):errors.append('history receipt used non-BOOT subject')
+    if any(r.get('target')not in {str(target)for target in targets}for _,r in receipts):errors.append('history receipt used subject outside expected BOOT chain')
     if roster:
         tasks={str(p['target']):str(p['task'])for p in roster['participants']}
         if any(r.get('task')!=tasks.get(r.get('target'))for _,r in receipts):errors.append('history receipt task differs from held BOOT roster')

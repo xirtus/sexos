@@ -163,7 +163,7 @@ def main():
             time.sleep(.2)
         if spindle_errors:raise RuntimeError('Spindle grid pixels: '+'; '.join(spindle_errors))
         close(17,306)
-        history_failures=history_errors(text(),durable=True)
+        history_failures=history_errors(text(),durable=True,expected_targets=(12,17))
         (out/'history-log.json').write_text(json.dumps({'ok':not history_failures,'errors':history_failures},indent=2)+'\n')
         if history_failures:raise RuntimeError('history receipt joins: '+'; '.join(history_failures))
         (out/'spindle-relaunch.json').write_text(json.dumps({'ok':True,'predecessor':12,'successor':17,'task':17,'frame':306,'content':[302,303,304,305],'pixel_errors':spindle_errors,'scope':'real activation, native presentation, Linen observer, Bell notification, command echo glyphs and five-role private cleanup'},indent=2)+'\n')
