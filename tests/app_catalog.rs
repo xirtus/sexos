@@ -20,13 +20,22 @@ fn catalog_slots_equal_the_lifecycle_protocol_constants() {
 }
 
 #[test]
-fn catalog_targets_and_surfaces_equal_the_kernel_boot_plan() {
+fn kernel_boot_plan_is_built_from_the_catalog() {
     let init = include_str!("../kernel/src/init.rs");
-    let targets: Vec<String> = INCARNATIONS.iter().map(|i| i.target.to_string()).collect();
-    assert!(init.contains(&format!("plan_boot_apps(&[{}])", targets.join(", "))));
-    let names = ["quil_id", "spindle_id", "kaleido_id", "successor", "spindle_successor", "quil_third"];
-    let pairs: Vec<String> = INCARNATIONS.iter().zip(names).map(|(i, n)| format!("({},{})", n, i.surface)).collect();
-    assert!(init.contains(&format!("&[{}]", pairs.join(", "))), "kernel app_resources::init list differs");
+    for needle in ["plan_boot_apps(&sex_pdx::app_catalog::TARGETS)", "&sex_pdx::app_catalog::CONTENT,",
+                   "init_documents(sexfiles_id, sex_pdx::app_catalog::QUIL_TARGETS)",
+                   "for id in sex_pdx::app_catalog::TARGETS{", "sex_pdx::app_catalog::predecessor(incarnation)",
+                   "for slot in [incarnation.close_slot,incarnation.route_slot]{"] {
+        assert!(init.contains(needle), "{needle}");
+    }
+    // No successor identity is hand-wired in boot any more.
+    for stale in ["Some(16),16,9", "Some(17),17,12", "Some(18),18,9", "SUCCESSOR_CLOSE_SLOT", "QUIL_THIRD_ACTIVATION_SLOT"] {
+        assert!(!init.contains(stale), "{stale}");
+    }
+    assert_eq!(app_catalog::TARGETS, [9, 12, 15, 16, 17, 18]);
+    assert_eq!(app_catalog::CONTENT, [(9,156), (12,154), (15,300), (16,301), (17,302), (18,307)]);
+    let chain: Vec<(u32, u32)> = INCARNATIONS.iter().filter(|i| i.ordinal != 0).map(|i| (app_catalog::predecessor(i).unwrap().target, i.target)).collect();
+    assert_eq!(chain, [(9, 16), (12, 17), (16, 18)]);
 }
 
 #[test]

@@ -129,3 +129,37 @@ pub const fn has_shell_frame(target: u32) -> bool {
     }
     false
 }
+
+/// Every incarnation domain, for the kernel's BOOT plan.
+pub const TARGETS: [u32; INCARNATIONS.len()] = {
+    let mut out = [0; INCARNATIONS.len()];
+    let mut i = 0;
+    while i < INCARNATIONS.len() { out[i] = INCARNATIONS[i].target; i += 1; }
+    out
+};
+/// Every (domain, content surface) pair, for the kernel's resource catalog.
+pub const CONTENT: [(u32, u64); INCARNATIONS.len()] = {
+    let mut out = [(0, 0); INCARNATIONS.len()];
+    let mut i = 0;
+    while i < INCARNATIONS.len() { out[i] = (INCARNATIONS[i].target, INCARNATIONS[i].surface); i += 1; }
+    out
+};
+/// The boot (ordinal 0) incarnation of an app.
+pub fn boot_incarnation(app: App) -> &'static Incarnation {
+    INCARNATIONS.iter().find(|i| i.app == app && i.ordinal == 0).expect("catalog app without a boot incarnation")
+}
+/// The incarnation this one succeeds (same app, previous ordinal).
+pub fn predecessor(i: &Incarnation) -> Option<&'static Incarnation> {
+    let ordinal = i.ordinal.checked_sub(1)?;
+    INCARNATIONS.iter().find(|p| p.app == i.app && p.ordinal == ordinal)
+}
+/// Quil incarnation targets in ordinal order (document buffer clients).
+pub const QUIL_TARGETS: [u32; 3] = [9, 16, 18];
+const _: () = {
+    let mut i = 0; let mut q = 0;
+    while i < INCARNATIONS.len() {
+        if matches!(INCARNATIONS[i].app, App::Quil) { assert!(INCARNATIONS[i].target == QUIL_TARGETS[q]); q += 1; }
+        i += 1;
+    }
+    assert!(q == QUIL_TARGETS.len());
+};

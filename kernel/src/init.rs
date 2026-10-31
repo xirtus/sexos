@@ -43,7 +43,7 @@ pub fn init() {
 
     // Fixed Spawn Order (Deterministic IDs)
     let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet", "sext", "kaleidoscope"];
-    crate::app_resources::plan_boot_apps(&[9, 12, 15, 16, 17, 18]);
+    crate::app_resources::plan_boot_apps(&sex_pdx::app_catalog::TARGETS);
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -120,16 +120,21 @@ pub fn init() {
         }
     }
 
-    // Two finite fresh Quil incarnations. Layouts16/18 are distinct; key9 is
-    // reused only after the predecessor has no private translations/custody.
-    let quil_module=modules.modules().iter().find(|m|m.path().contains("quil")).expect("BOOT_QUIL_MODULE");
-    let successor=crate::pd::create::create_boot_domain(quil_module.path(),Some(16),16,9).expect("BOOT_QUIL_SUCCESSOR");
-    assert_eq!(successor,16);
-    let spindle_module=modules.modules().iter().find(|m|m.path().contains("spindle")).expect("BOOT_SPINDLE_MODULE");
-    let spindle_successor=crate::pd::create::create_boot_domain(spindle_module.path(),Some(17),17,12).expect("BOOT_SPINDLE_SUCCESSOR");
-    assert_eq!(spindle_successor,17);
-    let quil_third=crate::pd::create::create_boot_domain(quil_module.path(),Some(18),18,9).expect("BOOT_QUIL_THIRD");
-    assert_eq!(quil_third,18);
+    // Every BOOT-reserved successor incarnation in the app catalog, each with
+    // its own layout; the boot incarnation's hardware key is reused only after
+    // that predecessor has no private translations/custody.
+    use sex_pdx::app_catalog::{self as apps, App};
+    assert_eq!((quil_id,spindle_id,kaleido_id),(apps::boot_incarnation(App::Quil).target,apps::boot_incarnation(App::Spindle).target,apps::boot_incarnation(App::Browser).target),"BOOT_CATALOG_SPAWN_ORDER");
+    for incarnation in apps::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
+        let name=match incarnation.app{App::Quil=>"quil",App::Spindle=>"spindle",App::Browser=>"kaleidoscope"};
+        let module=modules.modules().iter().find(|m|m.path().contains(name)).expect("BOOT_SUCCESSOR_MODULE");
+        let key=apps::boot_incarnation(incarnation.app).target;
+        let (layout,pkey)=(u8::try_from(incarnation.target).expect("BOOT_SUCCESSOR_LAYOUT"),u8::try_from(key).expect("BOOT_SUCCESSOR_KEY"));
+        let created=crate::pd::create::create_boot_domain(module.path(),Some(incarnation.target),layout,pkey).expect("BOOT_SUCCESSOR");
+        assert_eq!(created,incarnation.target,"BOOT_SUCCESSOR_IDENTITY");
+    }
+    // Spindle's single successor also anchors Linen's observer and history recovery below.
+    let spindle_successor=apps::INCARNATIONS.iter().find(|i|i.app==App::Spindle&&i.ordinal==1).map(|i|i.target).expect("BOOT_SPINDLE_SUCCESSOR");
 
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
@@ -751,7 +756,7 @@ pub fn init() {
 
     // Final BOOT_DAG memory edges precede sealing and every task admission.
     crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
-    crate::boot_memory::init_documents(sexfiles_id, [quil_id, successor, quil_third]);
+    crate::boot_memory::init_documents(sexfiles_id, sex_pdx::app_catalog::QUIL_TARGETS);
     assert_eq!((silkshell_id, sexdisp_id), (sex_pdx::uiir::SHELL_PD, sex_pdx::uiir::DISPLAY_PD), "BOOT_UIIR_DOMAINS");
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
     assert!(sext_id != 0 && kaleido_id != 0 && sexbell_id != 0, "BOOT_PAGING_DOMAINS_MISSING");
@@ -782,33 +787,28 @@ pub fn init() {
         serial_println!("[boot.app.close.route] holder={} target={} slot={} runtime_mint=0",silkshell_id,target,slot);
     }
     crate::app_resources::init(sext_id, silkshell_id,
-        &[(quil_id,156), (spindle_id,154), (kaleido_id,300), (successor,301), (spindle_successor,302), (quil_third,307)],
+        &sex_pdx::app_catalog::CONTENT,
         [silkshell_id,sexdisp_id,sexfiles_id,sexnet_id,sexbell_id]);
-    let successor_pd=crate::ipc::DOMAIN_REGISTRY.get(successor).unwrap();
-    for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id)]{
-        successor_pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
-    }
+    // Each successor's service edges and Shell's close/route edges to it.
     let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).unwrap();
-    shell.grant_capability(sex_pdx::app_lifecycle::SUCCESSOR_CLOSE_SLOT,crate::capability::CapabilityData::Domain(successor));
-    shell.grant_capability(sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,crate::capability::CapabilityData::Domain(successor));
-    let spindle_successor_pd=crate::ipc::DOMAIN_REGISTRY.get(spindle_successor).unwrap();
-    for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_LINEN,linen_id),(sex_pdx::SLOT_BELL,sexbell_id)]{
-        spindle_successor_pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
+    for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
+        let pd=crate::ipc::DOMAIN_REGISTRY.get(incarnation.target).unwrap();
+        let spindle=incarnation.app==sex_pdx::app_catalog::App::Spindle;
+        for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_LINEN,linen_id),(sex_pdx::SLOT_BELL,sexbell_id)].into_iter().take(if spindle{5}else{3}){
+            // The storage slot may hold the image's own VFS node; nothing else may collide.
+            match pd.find_capability(slot as u32).map(|c|c.data) {
+                None=>{},
+                Some(crate::capability::CapabilityData::Node(_)) if slot==sex_pdx::SLOT_STORAGE=>{},
+                _=>panic!("BOOT_SUCCESSOR_ROUTE_COLLISION"),
+            }
+            pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
+        }
+        for slot in [incarnation.close_slot,incarnation.route_slot]{
+            assert!(shell.find_capability(slot as u32).is_none(),"BOOT_SUCCESSOR_SHELL_COLLISION");
+            shell.grant_capability(slot,crate::capability::CapabilityData::Domain(incarnation.target));
+        }
     }
-    shell.grant_capability(sex_pdx::app_lifecycle::SPINDLE_CLOSE_SLOT,crate::capability::CapabilityData::Domain(spindle_successor));
-    shell.grant_capability(sex_pdx::app_lifecycle::SPINDLE_ROUTE_SLOT,crate::capability::CapabilityData::Domain(spindle_successor));
-    let quil_third_pd=crate::ipc::DOMAIN_REGISTRY.get(quil_third).unwrap();
-    for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id)]{
-        if slot==sex_pdx::SLOT_STORAGE {
-            assert!(matches!(quil_third_pd.find_capability(slot as u32).map(|c|c.data),Some(crate::capability::CapabilityData::Node(_))),"BOOT_QUIL_THIRD_STORAGE_COLLISION");
-        }else{assert!(quil_third_pd.find_capability(slot as u32).is_none(),"BOOT_QUIL_THIRD_ROUTE_COLLISION");}
-        quil_third_pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
-    }
-    for slot in [sex_pdx::app_lifecycle::QUIL_THIRD_CLOSE_SLOT,sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT]{
-        assert!(shell.find_capability(slot as u32).is_none(),"BOOT_QUIL_THIRD_SHELL_COLLISION");
-        shell.grant_capability(slot,crate::capability::CapabilityData::Domain(quil_third));
-    }
-    for id in [quil_id,successor,spindle_id,spindle_successor,quil_third,kaleido_id]{
+    for id in sex_pdx::app_catalog::TARGETS{
         let pd=crate::ipc::DOMAIN_REGISTRY.get(id).unwrap();let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
         assert!(pd.find_capability(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u32).is_none(),"BOOT_SELF_CATALOG_COLLISION");
         pd.grant_capability(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
@@ -846,16 +846,18 @@ pub fn init() {
     // Two finite Spindle incarnations share only the fixed peer service edge.
     // This is BOOT genesis; neither app receives NIC metadata or config rights.
     assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");
-    for target in [spindle_id,spindle_successor] {
+    for target in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.app==sex_pdx::app_catalog::App::Spindle).map(|i|i.target) {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(target).expect("BOOT_SPINDLE_NETWORK_SUBJECT");
         assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_SPINDLE_NETWORK_COLLISION");
         pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
         let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
         serial_println!("[boot.spindle.net.route] target={} task={} slot=18 service={} fixed_peer=1 nic_metadata=0 runtime_mint=0",target,unsafe{(*task).id},sexnet_id);
     }
-    crate::app_resources::reserve_successor(quil_id,successor,silkshell_id,sex_pdx::app_lifecycle::ACTIVATION_SLOT);
-    crate::app_resources::reserve_successor(successor,quil_third,silkshell_id,sex_pdx::app_lifecycle::QUIL_THIRD_ACTIVATION_SLOT);
-    crate::app_resources::reserve_successor(spindle_id,spindle_successor,silkshell_id,sex_pdx::app_lifecycle::SPINDLE_ACTIVATION_SLOT);
+    // One-shot activation chain: each successor is bound to its exact predecessor.
+    for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
+        let predecessor=sex_pdx::app_catalog::predecessor(incarnation).expect("BOOT_SUCCESSOR_PREDECESSOR");
+        crate::app_resources::reserve_successor(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect("BOOT_SUCCESSOR_ACTIVATION_SLOT"));
+    }
     // Linen serves Spindle's existing async list/open/search route. A read-only
     // lifecycle observer fences queued requests after death without owning an ACK.
     let spindle=crate::ipc::DOMAIN_REGISTRY.get(spindle_id).expect("BOOT_SPINDLE_MISSING");
@@ -869,6 +871,7 @@ pub fn init() {
             task_id:unsafe{(*spindle_main).id},holder_pd:linen_id,
             rights:crate::app_resource_state::QUERY,ack_bit:0}));
     serial_println!("[boot.app.observer] holder={} target={} slot={} query=1 ack=0 retire=0",linen_id,spindle_id,observer_slot);
+    let spindle_successor_pd=crate::ipc::DOMAIN_REGISTRY.get(spindle_successor).unwrap();
     let successor_main=spindle_successor_pd.main_task.load(core::sync::atomic::Ordering::Acquire);
     linen.grant_capability(sex_pdx::app_lifecycle::SPINDLE_LIFECYCLE_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
         crate::app_resource_state::LifecycleGrant{target_pd:spindle_successor,task_id:unsafe{(*successor_main).id},holder_pd:linen_id,rights:crate::app_resource_state::QUERY,ack_bit:0}));
