@@ -25,6 +25,7 @@ fn items()->[Item<'static>;3]{[Item{id:1,name:b"notes.txt"},Item{id:2,name:b"ker
 
 mod integration {
     #![allow(dead_code,static_mut_refs)]
+    use crate::app_catalog;
     use super::desktop_content;
     use super::document_view;
     use super::linen_text_delivery;

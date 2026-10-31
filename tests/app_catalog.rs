@@ -51,3 +51,16 @@ fn lookups_require_the_exact_pair() {
     assert!(by_target(0).is_none() && by_target(3).is_none() && by_target(19).is_none());
     assert!([9, 16, 18].iter().all(|&t| is_document_app(t)) && ![12, 15, 17, 0].iter().any(|&t| is_document_app(t)));
 }
+
+#[test]
+fn shell_view_tables_equal_the_previous_hand_wired_order() {
+    // Shell's delivery arrays are positional; this pins the exact old order.
+    let docs: Vec<(u32, u64, u64)> = app_catalog::document_views().map(|i| (i.target, i.frame(), i.route_slot)).collect();
+    assert_eq!(docs, [(9, 201, 11), (16, 301, app_lifecycle::SUCCESSOR_ROUTE_SLOT), (18, 307, app_lifecycle::QUIL_THIRD_ROUTE_SLOT), (15, 300, app_lifecycle::CLOSE_SLOTS[2] as u64)]);
+    let spindle: Vec<(u32, u64, u64)> = app_catalog::spindle_views().map(|i| (i.target, i.frame(), i.route_slot)).collect();
+    assert_eq!(spindle, [(12, 153, 14), (17, 306, app_lifecycle::SPINDLE_ROUTE_SLOT)]);
+    assert_eq!(app_catalog::document_view_frame(201).map(|(i, v)| (i, v.target)), Some((0, 9)));
+    assert!(app_catalog::document_view_frame(156).is_none(), "content surface is not a frame");
+    let pdx = include_str!("../crates/sex-pdx/src/lib.rs");
+    assert!(pdx.contains("pub const SLOT_QUIL: u64 = 11;") && pdx.contains("pub const SLOT_SPINDLE: u64 = 14;"));
+}
