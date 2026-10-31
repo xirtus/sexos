@@ -1,0 +1,67 @@
+{
+  "implementation_and_rehearsal_qualified": true,
+  "sustained_alpha_accepted": false,
+  "goal_complete": false,
+  "branch": "codex/alpha-evidence",
+  "base": "73c06c82460f79032446e33dcc67976b2599edb5",
+  "iso_sha256": "79a48af561534484182f02cb641f38054962996c77f96f619e46a7bf4b9d2b3f",
+  "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "binding_sha256": "814007b5b32fa70ba3124e566c3d90dbc7ae8a0dd1e0a3087e922e6291dde7ba",
+  "production_inputs": 574,
+  "runner_inputs": 569,
+  "production_equivalence": {
+    "ok": true,
+    "production_inputs": 574,
+    "runner_inputs": 569,
+    "iso_sha256": "79a48af561534484182f02cb641f38054962996c77f96f619e46a7bf4b9d2b3f",
+    "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+    "changed_runner_inputs": [
+      "scripts/alpha_evidence.py",
+      "scripts/alpha_session.py",
+      "scripts/check_alpha_session.py",
+      "scripts/quil_third_probe.py",
+      "scripts/quil_workflow_gate.py",
+      "scripts/tests/test_alpha_evidence.py",
+      "scripts/tests/test_alpha_session.py",
+      "scripts/tests/test_probe_capture_contract.py",
+      "scripts/workspace_refresh_probe.py"
+    ]
+  },
+  "registered_host_checks": 42,
+  "rust_test_executions": 2628,
+  "python_tests": 902,
+  "native_rehearsal": {
+    "boots": 1,
+    "verified_captures": 20,
+    "resolution": "1024x768",
+    "acceptance": false,
+    "cycles": 1,
+    "active_elapsed_seconds": 3.8037539588985965,
+    "elapsed_seconds": 3.8046941249631345,
+    "boot_successors": [
+      16,
+      17,
+      18
+    ],
+    "terminal_quil_scope": "safe_completed_save_close",
+    "remaining_obligations": [
+      "Quil pending-I/O terminal teardown"
+    ],
+    "independent_replay": true
+  },
+  "archive": {
+    "path": "assets/sexos-alpha-evidence-rehearsal-2026-10-31-raw.tar.gz",
+    "sha256": "f98cc24e149a5a3d91508bab5cb89502a2ad98f6edc1637f6a107a785ed1fe4c",
+    "bytes": 5207669,
+    "members": 1229,
+    "payload_manifest_sha256": "39f92dded944c70ad4d77af7e99e8a698f779c58fde70cb6c9793f675987243d",
+    "all_members_size_and_sha256_verified": true
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "scope": "Same qualified production image, new frozen runner inputs. Unique immutable capture names/prefix hashes, exact glyphs including civil clock, explicit RTC and source binding, terminal disk captured after QEMUexit, honest pending-attempt vs terminal-close facts. Short rehearsal proves workflow/replay, not1800s alpha. The separately running compact1800s output is intentionally excluded."
+}

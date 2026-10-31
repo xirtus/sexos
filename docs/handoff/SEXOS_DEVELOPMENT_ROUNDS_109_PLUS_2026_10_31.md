@@ -229,3 +229,23 @@ identify exact source/image hashes, raw archive and diagnostics. Inventory stays
 2 Open / 28 Partial / System Proven false; no new general daily-driver claim.
 Next is the compact 1800-second latest-image alpha workflow, then wide repeat and
 repaint/source-traffic measurement, alongside the main physical/storage plan.
+
+## Independent alpha evidence milestone — 31 October
+
+The runner now retains every capture with unique sequence/name, exact serial
+prefix and source-bound glyph proof. Linen/third-Quil/minimize frames use the
+same registry. A read-only replay verifies all captures and exact terminal
+document bytes after QEMU exit. Close facts distinguish pending-save decline
+from actual terminal pending state; completed-save Close cannot claim pending
+teardown. Per-cycle IDs/windows prevent duplicate samples from becoming a soak.
+
+On the unchanged `73c06c82` production image, the new frozen runner cohort passes
+42 registered checks, 902 Python tests and the compact rehearsal with 20 immutable
+captures and fresh replay. The rehearsal is not sustained acceptance; observed
+Quil terminal pending0 explicitly leaves pending-I/O teardown unproved.
+
+The [alpha evidence handoff](ALPHA_EVIDENCE_2026_10_31.md) and
+[machine evidence](assets/sexos-alpha-evidence-rehearsal-2026-10-31-evidence.json)
+preserve the completed rehearsal separately from the live compact 1800-second
+run. That longer run and subsequent wide repeat require terminal results and
+independent replay. Inventory remains 2 Open / 28 Partial / System Proven false.

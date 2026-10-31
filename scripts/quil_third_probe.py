@@ -1,7 +1,5 @@
 """Actual third Quil activation, inherited workspace recovery, input and cleanup."""
 import re
-import time
-from check_quil_ui_pixels import verify
 
 def open_selected(c):
     """Serialize a real row Open through its actual completion, then load.
@@ -23,7 +21,7 @@ def open_selected(c):
     return dict(object=object_id,bytes=int(loaded[1]),hash=loaded[2])
 
 def run(c,refresh,close):
-    key,wait,text,q,focus=(c[k]for k in ('key','wait','text','q','focus'))
+    key,wait,text,focus=(c[k]for k in ('key','wait','text','focus'))
     start=len(text())
     key('grave_accent',r'\[shell.palette.item\] idx=0')
     key('j',r'\[shell.palette.select\] old=0 new=1')
@@ -45,13 +43,7 @@ def run(c,refresh,close):
     focus(307)
     key('t',r'\[quil.document.edit\]')
     # Validate actual glyphs from this exact new subject/surface, not an old view.
-    errors=['not painted'];end=time.monotonic()+90
-    while time.monotonic()<end:
-        q.cmd('screendump',{'filename':str(c['out']/'third-quil-edit.ppm')})
-        errors=verify(text(),(c['out']/'third-quil-edit.ppm').read_bytes(),c['font'],'t#',target=18,resolution=c['resolution'])
-        if not errors:break
-        time.sleep(.15)
-    if errors:raise RuntimeError('third Quil pixels: '+str(errors))
+    frame=c['capture']('third-quil-edit','t#',target=18)
     # Loaded notes start at the end; persist a useful edit through PD18's
     # own session and route. Existing expected bytes remain the disk oracle.
     second=c['second'];second['content']+='t'
@@ -65,4 +57,4 @@ def run(c,refresh,close):
     wait(r'\[shell.palette.item\] idx=1 .*status=CLOSED / RESERVE EXHAUSTED')
     key('esc',r'\[command_palette.close\]')
     return dict(target=18,surface=307,logical=9,incarnation=3,documents=loaded,
-                edited_and_saved=True,pixel_errors=errors,terminal=True,reserve_exhausted=True)
+                edited_and_saved=True,pixel_errors=[],frame=frame,terminal=True,reserve_exhausted=True)

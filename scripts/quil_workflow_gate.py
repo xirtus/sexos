@@ -1,23 +1,41 @@
 #!/usr/bin/env python3
 """Normal-image Quil document workflow through actual QMP input; never builds."""
-import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
+import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os,math
+from alpha_evidence import Captures,contract,require_inputs,verify_frame,finish,replay,RTC,serial_text
+from network_contention_gate import frozen_binding
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',type=pathlib.Path);p.add_argument('--binding',required=True,type=pathlib.Path);p.add_argument('--check',action='store_true');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=0);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);a=p.parse_args()
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
- iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
+ root=pathlib.Path(__file__).resolve().parents[1];iso=a.iso.resolve(strict=True);out=a.out.resolve();binding_path=a.binding.resolve(strict=True)
+ if a.check:print(json.dumps(replay(root,iso,binding_path,out),indent=2));return
+ if a.source_disk is None:p.error('native workflow needs --source-disk')
+ if not math.isfinite(a.soak_seconds)or not 0<=a.soak_seconds<=7200:p.error('soak seconds must be finite and0..7200')
+ src=a.source_disk.resolve(strict=True);out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
+ bound=frozen_binding(root,iso,binding_path);pixel_contract=contract(root);require_inputs(root,binding_path,pixel_contract);shutil.copyfile(binding_path,out/'source-binding.json')
  disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-quil-{os.getpid()}.sock';log=out/'serial.log'
- command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres='+a.resolution.split('x')[0]+',yres='+a.resolution.split('x')[1],'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
- (out/'manifest.json').write_text(json.dumps(dict(round=a.round,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=command),indent=2)+'\n')
+ command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-rtc',RTC,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.split('x')[0]+',yres='+a.resolution.split('x')[1],'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',a.model+',netdev=peer,mac=52:54:00:12:34:56']
+ manifest=dict(evidence_version=2,round=a.round,binding=bound,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=command,resolution=a.resolution,model=a.model,host_utc_start=time.time(),pixel_source_sha256=pixel_contract['source_sha256'],options=dict(soak_seconds=a.soak_seconds,rehearsal=a.rehearsal,find=a.find,typing_bursts=a.typing_bursts,workspace_refresh=a.workspace_refresh,third_quil=a.third_quil,toggle_stress=a.toggle_stress))
+ (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
- def text():return log.read_text(errors='replace')if log.exists()else''
+ captures=Captures(out,pixel_contract,tuple(map(int,a.resolution.split('x'))));failure=None;started=time.monotonic()
+ def text():return serial_text(log)if log.exists()else''
+ def stop_guest():
+  if proc.poll()is None:
+   proc.terminate()
+   try:proc.wait(timeout=10)
+   except subprocess.TimeoutExpired:proc.kill();proc.wait()
+ def health():
+  if proc.poll()is not None:raise RuntimeError('guest exited')
+  if time.monotonic()-started>a.soak_seconds+1200:raise TimeoutError('bounded whole alpha workflow exceeded')
+  if log.exists()and log.stat().st_size>64*1024*1024:raise RuntimeError('bounded alpha serial evidence exceeded')
+  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text()):raise RuntimeError('guest fault or diagnostic overflow')
  def wait(pattern,start=0,timeout=180):
   end=time.monotonic()+timeout
   while time.monotonic()<end:
-   if proc.poll()is not None:raise RuntimeError('guest exited')
-   v=text();m=re.search(pattern,v[start:])
+   health();v=text();m=re.search(pattern,v[start:])
    if m:return m
    if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at',v):raise RuntimeError('guest fault')
    time.sleep(.05)
@@ -29,7 +47,7 @@ def main():
    time.sleep(.1)
   q=QMP(sock)
   def key(k,pattern):
-   start=len(text());q.key(k);return wait(pattern,start)
+   start=len(text());q.key_sequence([k]);return wait(pattern,start)
   from desktop_focus import focus_surface
   def focus(sid):return focus_surface(sid,text,key)
   if a.resolution=='1024x768':
@@ -40,22 +58,21 @@ def main():
   from check_quil_ui_pixels import verify,view,wait_view
   from check_document_disk import recover
   font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text());resolution=tuple(map(int,a.resolution.split('x')));stages=[];capture_traces=[]
-  def capture(name,expected):
-   began=time.monotonic();end=began+90;errors=['not painted'];attempts=[]
+  stages=captures.frames
+  def capture(name,expected='',target=9,kind='quil',region=None):
+   began=time.monotonic();end=began+90;proof=dict(ok=False,errors=['not painted']);attempts=[];candidate=captures.candidate(name)
    while time.monotonic()<end:
-    before=time.monotonic();q.cmd('screendump',{'filename':str(out/(name+'.ppm'))});dumped=time.monotonic()
-    v=text();framebuffer=(out/(name+'.ppm')).read_bytes();read=time.monotonic()
-    errors=verify(v,framebuffer,font,expected,resolution=resolution);verified=time.monotonic()
-    if a.capture_profile:
-     attempts.append(dict(start_seconds=before-began,screendump_seconds=dumped-before,read_seconds=read-dumped,
-                          verify_seconds=verified-read,errors=errors[:8]))
-    if not errors:break
+    health();before=time.monotonic();q.cmd('screendump',{'filename':str(candidate)});dumped=time.monotonic();v=text();raw=candidate.read_bytes();read=time.monotonic()
+    try:proof=verify_frame(v,raw,pixel_contract,resolution,kind,expected,target,region)
+    except ValueError as error:proof=dict(ok=False,errors=[str(error)])
+    verified=time.monotonic()
+    if a.capture_profile:attempts.append(dict(start_seconds=before-began,screendump_seconds=dumped-before,read_seconds=read-dumped,verify_seconds=verified-read,errors=proof['errors'][:8]))
+    if proof['ok']:break
     time.sleep(.15)
    if a.capture_profile:
-    capture_traces.append(dict(name=name,passed=not errors,elapsed_seconds=time.monotonic()-began,attempts=attempts))
-    (out/'capture-profile.json').write_text(json.dumps(capture_traces,indent=2)+'\n')
-   if errors:raise RuntimeError(name+': '+str(errors))
-   stages.append(dict(name=name,view=view(v),pixel_errors=errors))
+    capture_traces.append(dict(name=name,passed=proof['ok'],elapsed_seconds=time.monotonic()-began,attempts=attempts));(out/'capture-profile.json').write_text(json.dumps(capture_traces,indent=2)+'\n')
+   if not proof['ok']:raise RuntimeError(name+': '+str(proof['errors']))
+   return captures.commit(name,candidate,v,proof,kind,expected,target,region,raw)
   def ctrl(k,pattern):
    # The chord's effect can precede its release under emulation. Wait for the
    # actual Ctrl break edge so later keys are never sent as Ctrl chords.
@@ -134,14 +151,7 @@ def main():
   focus(201)
   before_min=wait_view(text)
   key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('ret',r'\[silk.lifecycle.minimize.hidden\] sid=201 frame=\d+')
-  from check_disk_persistence import ppm_rgb
-  end=time.monotonic()+90
-  while True:
-   q.cmd('screendump',{'filename':str(out/'minimized.ppm')});width,height,pixels=ppm_rgb((out/'minimized.ppm').read_bytes(),min_width=1,min_height=1)
-   ink=sum(pixels[(y*width+x)*3:(y*width+x)*3+3]==b'\xe0\xf0\xff'for y in range(before_min['y'],before_min['y']+before_min['h'])for x in range(before_min['x'],before_min['x']+before_min['w']))
-   if ink==0:break
-   if time.monotonic()>end:raise RuntimeError('minimized Quil ink remains')
-   time.sleep(.15)
+  capture('minimized',kind='empty',region={k:before_min[k]for k in('x','y','w','h')})
   # Restore the existing live frame through the visible launcher action.
   key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('k',r'\[shell.palette.select\] old=8 new=7');key('ret',r'\[silk.lifecycle.restore.ok\] frame=\d+ sid=201');focus(201);capture('restored','first notebz#')
   input_latency=None
@@ -162,18 +172,18 @@ def main():
   if a.soak_seconds:
    from alpha_session import run
    soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil)
+  stop_guest()
   checked=[]
   for expected in [first,second]:
    r=recover(disk.read_bytes(),expected['object'])
    if r.pop('payload')!=expected['content'].encode():raise RuntimeError('native saved bytes differ')
    checked.append(r)
-  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,find=find,toggles=toggles,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
-  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
- except Exception as e:
+  result=dict(ok=True,acceptance=bool(a.soak_seconds>=1800 and not a.rehearsal),evidence_version=2,round=a.round,soak=soak,find=find,toggles=toggles,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
+  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+ except BaseException as e:
+  failure=type(e).__name__+': '+str(e)
   (out/'result.json').write_text(json.dumps(dict(ok=False,error=str(e)))+'\n');raise
  finally:
-  if proc.poll()is None:
-   try:proc.terminate();proc.wait(timeout=10)
-   except subprocess.TimeoutExpired:proc.kill();proc.wait()
-  sock.unlink(missing_ok=True)
+  stop_guest();sock.unlink(missing_ok=True);finish(out,manifest,src,captures,failure)
+ verified=replay(root,iso,binding_path,out);(out/'verification.json').write_text(json.dumps(verified,indent=2)+'\n');print(json.dumps(dict(ok=True,acceptance=verified['acceptance'],verified_captures=verified['verified_captures'],cycles=verified['cycles'])))
 if __name__=='__main__':main()
