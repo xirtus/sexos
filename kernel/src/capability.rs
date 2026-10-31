@@ -1,4 +1,3 @@
-use x86_64::VirtAddr;
 use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr, AtomicBool};
 use crate::cheri::SexCapability;
 use core::ptr;
@@ -30,7 +29,7 @@ pub struct MemLendCapData {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32, pub entry_point: VirtAddr }
+pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryCapData { pub cheri_cap: SexCapability, pub pku_key: u8 }

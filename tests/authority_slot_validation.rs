@@ -140,3 +140,17 @@ fn retired_ambient_display_disclosure_and_present_hook_deny() {
         assert_eq!(decode_bridge_op(number), None);
     }
 }
+
+#[test]
+fn no_capability_selects_kernel_privileged_code() {
+    // Integration source guard: the former SyncCall edge executed a
+    // capability-supplied address at kernel privilege. It must stay absent.
+    let ipc = include_str!("../kernel/src/ipc.rs");
+    let capability = include_str!("../kernel/src/capability.rs");
+    assert!(!ipc.contains("SyncCall"));
+    assert!(!ipc.contains("\"call {"));
+    assert!(ipc.contains("CapabilityData::IPC(_) => Err(sex_pdx::ERR_CAP_INVALID),"));
+    assert!(capability.contains("pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32 }"));
+    let traverse = ipc.split("pub fn traverse_edge(").nth(1).unwrap().split("pub fn safe_pdx_call(").next().unwrap();
+    assert!(!traverse.contains("asm!"));
+}

@@ -548,7 +548,7 @@
         "memory_regions"
       ],
       "gaps": [
-        "The slot-0 bridge is narrowed to three caller-scoped decoded operations (BOOT display query, bounded serial record, own init argument); privileged SyncCall, reply authentication and hostile native-code containment remain incomplete."
+        "The slot-0 bridge is narrowed to three caller-scoped decoded operations (BOOT display query, bounded serial record, own init argument); the kernel-privileged SyncCall edge is removed (IPC capabilities name targets only); reply authentication and hostile native-code containment remain incomplete."
       ],
       "depends_on": []
     },
@@ -620,7 +620,7 @@
         "memory_regions"
       ],
       "gaps": [
-        "Slot-0 serial records remain an unsanctioned diagnostic channel and privileged SyncCall remains; global SASOS addresses still need hostile native-code enforcement beyond query authorization."
+        "Slot-0 serial records remain an unsanctioned diagnostic channel; global SASOS addresses still need hostile native-code enforcement beyond query authorization."
       ],
       "depends_on": []
     },

@@ -1,6 +1,5 @@
 use crate::capability::CapabilityData;
 use core::sync::atomic::Ordering;
-use x86_64::VirtAddr;
 
 pub mod messages;
 pub mod pagefault;
@@ -71,25 +70,7 @@ pub const LOCAL_NODE_ID: u32 = 1;
 
 pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
 
-pub unsafe fn pdx_call(entry_point: VirtAddr, arg0: u64, arg1: u64, arg2: u64) -> u64 {
-    let result: u64;
-    core::arch::asm!(
-        "mov rdi, {arg0_val}",
-        "mov rsi, {arg1_val}",
-        "mov rdx, {arg2_val}",
-        "call {entry_val}",
-        entry_val = in(reg) entry_point.as_u64(),
-        arg0_val  = in(reg) arg0,
-        arg1_val  = in(reg) arg1,
-        arg2_val  = in(reg) arg2,
-        inout("rax") 0u64 => result,
-        out("rdx") _, out("rcx") _, out("rdi") _, out("rsi") _,
-    );
-    result
-}
-
 pub enum GraphEdge {
-    SyncCall     { entry_point: VirtAddr },
     AsyncEnqueue {
         ring: *mut crate::ipc_ring::RingBuffer<crate::ipc::messages::MessageType, 256>,
         task: *mut crate::scheduler::Task,
@@ -107,11 +88,9 @@ pub enum DequeueSource {
 
 pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool) -> Result<GraphEdge, u64> {
     match cap_data {
-        CapabilityData::IPC(data) => {
-            if !crate::app_resources::accepts_ipc(data.target_pd_id) {return Err(sex_pdx::ERR_SERVICE_NOT_READY);}
-            if is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
-            Ok(GraphEdge::SyncCall { entry_point: data.entry_point })
-        },
+        // An IPC capability names a target only. It never selects code for
+        // the kernel to execute; invocation is a typed Domain enqueue.
+        CapabilityData::IPC(_) => Err(sex_pdx::ERR_CAP_INVALID),
         CapabilityData::Domain(id) => {
             if !crate::app_resources::accepts_ipc(id) {return Err(sex_pdx::ERR_SERVICE_NOT_READY);}
             if is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
@@ -139,8 +118,6 @@ pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool
 
 pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32, caller_task: u32) -> Result<u64, u64> {
     match edge {
-        GraphEdge::SyncCall { entry_point } =>
-            unsafe { Ok(pdx_call(entry_point, arg0, arg1, arg2)) },
         GraphEdge::AsyncEnqueue { ring, task } => {
             if caller_task == 0 { return Err(sex_pdx::ERR_CAP_INVALID); }
             let msg = crate::ipc::messages::MessageType::IpcCall {
