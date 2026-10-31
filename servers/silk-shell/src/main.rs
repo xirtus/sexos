@@ -15962,7 +15962,7 @@ unsafe fn launcher_palette_closed(pending:Option<LauncherFocus>){
     if FOCUSED_SURFACE_ID==p.frame{
         match LAST_DISPLAY_FOCUS_RESULT{
             Some((frame,status))if frame==p.frame&&(status==0||status==sex_pdx::ERR_SERVICE_NOT_READY)=>p.requested=true,
-            _=>{launcher_focus_cancel(p);return},
+            _=>{launcher_focus_cancel(p,"palette_focus");return},
         }
     }
     LAUNCHER_FOCUS=Some(p);
@@ -15973,13 +15973,19 @@ unsafe fn launcher_focus_discard(){
     }
     LAUNCHER_FOCUS=None;
 }
-unsafe fn launcher_focus_current(p:LauncherFocus,now:u64)->bool{
-    APP_CUSTODY.iter().flatten().any(|e|e.target==p.target&&e.task==p.task
-        &&e.shell_surface().unwrap_or(e.surface)==p.frame&&!e.dead&&!e.retired&&!e.close_pending)
-        &&ACTIVE_SCENE_IDX==p.to&&FOCUSED_SURFACE_ID==p.expected_focus
-        &&frame_for_surface(p.frame).is_some_and(|fid|!frame_is_minimized(fid))
-        &&matches!(lifecycle_state(p.frame),Some(LifecycleState::Visible))
-        &&now>=p.last&&now.saturating_sub(p.start)<2000&&p.turns<4096
+unsafe fn launcher_focus_current(p:LauncherFocus,now:u64)->bool{launcher_focus_stale(p,now).is_none()}
+/// Why a queued focus no longer applies, if it does not.
+unsafe fn launcher_focus_stale(p:LauncherFocus,now:u64)->Option<&'static str>{
+    if !APP_CUSTODY.iter().flatten().any(|e|e.target==p.target&&e.task==p.task
+        &&e.shell_surface().unwrap_or(e.surface)==p.frame&&!e.dead&&!e.retired&&!e.close_pending){return Some("subject")}
+    if ACTIVE_SCENE_IDX!=p.to{return Some("workspace")}
+    if FOCUSED_SURFACE_ID!=p.expected_focus{return Some("user_focus")}
+    if !frame_for_surface(p.frame).is_some_and(|fid|!frame_is_minimized(fid)){return Some("minimized")}
+    if !matches!(lifecycle_state(p.frame),Some(LifecycleState::Visible)){return Some("not_visible")}
+    if now<p.last{return Some("clock")}
+    if now.saturating_sub(p.start)>=2000{return Some("deadline")}
+    if p.turns>=4096{return Some("turns")}
+    None
 }
 unsafe fn launcher_focus_retry_ready(sid:u64)->bool{
     let Some(mut p)=LAUNCHER_FOCUS else{return true};
@@ -15988,7 +15994,8 @@ unsafe fn launcher_focus_retry_ready(sid:u64)->bool{
     launcher_focus_current(p,sex_pdx::get_ticks())&&desktop_content_ready(sid)
         &&launcher_subject_live(p.target,p.task)==Some(true)
 }
-unsafe fn launcher_focus_cancel(p:LauncherFocus){
+unsafe fn launcher_focus_cancel(p:LauncherFocus,reason:&str){
+    sex_pdx::serial_record!("[launcher.focus.cancel] target={} frame={} reason={} turns={} elapsed={}",p.target,p.frame,reason,p.turns,sex_pdx::get_ticks().saturating_sub(p.start));
     LAUNCHER_FOCUS=None;
     if p.requested{DISPLAY_FOCUS.observe(p.frame,linen_text_delivery::Admission::Rejected(1));}
     launcher_action_record(p.target,p.frame,p.action,p.from,false,false);
@@ -15997,22 +16004,22 @@ unsafe fn launcher_focus_cancel(p:LauncherFocus){
 /// replayed. A changed user focus/workspace or exact lifecycle fence cancels.
 unsafe fn launcher_focus_poll(){
     let Some(mut p)=LAUNCHER_FOCUS else{return};let now=sex_pdx::get_ticks();p.turns=p.turns.saturating_add(1);
-    if !launcher_focus_current(p,now){launcher_focus_cancel(p);return}
+    if let Some(reason)=launcher_focus_stale(p,now){launcher_focus_cancel(p,reason);return}
     p.last=now;LAUNCHER_FOCUS=Some(p);
     match launcher_subject_live(p.target,p.task){
-        None=>return,Some(false)=>{launcher_focus_cancel(p);return},Some(true)=>{},
+        None=>return,Some(false)=>{launcher_focus_cancel(p,"subject_not_live");return},Some(true)=>{},
     }
     if !desktop_content_ready(p.frame){return}
     if !p.requested{
         LAST_DISPLAY_FOCUS_RESULT=None;
-        if !try_set_focus_inner(p.frame,false){launcher_focus_cancel(p);return}
+        if !try_set_focus_inner(p.frame,false){launcher_focus_cancel(p,"focus_request");return}
         p.requested=true;p.expected_focus=FOCUSED_SURFACE_ID;LAUNCHER_FOCUS=Some(p);
     }
     if !desktop_content_ready(p.frame){return}
     match LAST_DISPLAY_FOCUS_RESULT{
         Some((frame,0))if frame==p.frame=>{LAUNCHER_FOCUS=None;launcher_action_record(p.target,p.frame,p.action,p.from,false,true);},
         Some((frame,error))if frame==p.frame&&error==sex_pdx::ERR_SERVICE_NOT_READY=>{},
-        _=>{launcher_focus_cancel(p);},
+        _=>{launcher_focus_cancel(p,"display_result");},
     }
 }
 /// Only an exact held live incarnation may move its existing frame. None
