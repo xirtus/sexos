@@ -14,7 +14,10 @@ def inspect(text,active=True):
  if len(authority)!=1:errors.append('missing unique real Ring3 invalid-argument probes')
  if seals and any(m.start()<seals[0].start()for m in parks+expiries+authority):errors.append('timed wait precedes BOOT seal')
  for p in parks:
-  if int(p[1])not in(13,15) or int(p[2])!=2 or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
+  # SexNet (13) and Browser (15) poll every 2 ticks; since round 105 the
+  # sexdrive main task (2) waits 1 tick for NVMe completions. Park records
+  # are sampled (first four, then powers of two), so either may appear.
+  if (int(p[1]),int(p[2]))not in((13,2),(15,2),(2,1)) or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
  for e in expiries:
   if int(e[1])not in(13,15) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
  for r in returns:

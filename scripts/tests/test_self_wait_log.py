@@ -19,4 +19,11 @@ class SelfWait(unittest.TestCase):
  def test_duplicate_ordinals_seal_and_failed_guest(self):
   for extra in [BASE,LIVE.splitlines()[2]+'\n','KERNEL PANIC','BOOT_SELF_WAIT_AUTHORITY']:
    self.assertFalse(inspect(LIVE+extra)['ok'])
+
+ def test_sampled_sexdrive_nvme_wait_is_sanctioned_but_other_intervals_are_not(self):
+  # Round 105: sexdrive (task 2) waits one tick for NVMe completions.
+  drive='[scheduler.self_wait.park] task=2 ticks=1 deadline=3145 count=1024\n'
+  self.assertTrue(inspect(LIVE+drive)['ok'])
+  for bad in(drive.replace('ticks=1','ticks=2'),drive.replace('task=2','task=3'),drive.replace('deadline=3145','deadline=0')):
+   self.assertFalse(inspect(LIVE+bad)['ok'],bad)
 if __name__=='__main__':unittest.main()
