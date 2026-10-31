@@ -11,13 +11,13 @@ use std::sync::{Arc,atomic::{AtomicU64,Ordering::SeqCst}};
 #[repr(align(4096))]struct Storage([AtomicU64;2048]);
 impl Storage{fn new()->Self{Self([const{AtomicU64::new(0)};2048])}}
 fn region(s:&Storage,subject:u32,writer:bool)->Region{
- let index=match subject{9=>0,16=>1,18=>2,_=>panic!()};
- let g=RegionGrant{region_id:6+index,virtual_base:s.0.as_ptr() as u64,length:16384,rights:QUERY_VIEW|READ|if writer{WRITE}else{0},dma_base:None,peer_pd:Some(if writer{subject}else{11})};
+ let region_id=match subject{9=>6,16=>7,18=>8,19=>8192,20=>8193,21=>8194,22=>8195,23=>8196,_=>panic!()};
+ let g=RegionGrant{region_id,virtual_base:s.0.as_ptr() as u64,length:16384,rights:QUERY_VIEW|READ|if writer{WRITE}else{0},dma_base:None,peer_pd:Some(if writer{subject}else{11})};
  unsafe{Region::from_resolved(resolve_info(Some(&g)).unwrap(),resolve_view(Some(&g),ViewRequest{offset:0,length:16384,rights:g.rights}).unwrap(),subject,writer).unwrap()}
 }
 fn id(subject:u32,sequence:u32)->Identity{Identity{subject,sequence,object:3,generation:0x40001}}
 #[test]fn empty_tail_and_maximum_snapshots_copy_exactly_then_full_scrub(){
- for subject in [9,16,18]{for length in [0,1,7,8,9,12287,12288]{
+ for subject in [9,16,18,19,20,21,22,23]{for length in [0,1,7,8,9,12287,12288]{
   let s=Box::new(Storage::new());let mut writer=region(&s,subject,true);let reader=region(&s,subject,false);
   let bytes=(0..length).map(|i|(i%93+33)as u8).collect::<Vec<_>>();let name=*b"snapshot\0\0\0\0\0\0\0\0";
   writer.publish(id(subject,7),name,&bytes).unwrap();let mut out=[255;12288];let mut n=[255;16];reader.copy(id(subject,7),length,&mut out,&mut n).unwrap();
@@ -60,4 +60,28 @@ fn id(subject:u32,sequence:u32)->Identity{Identity{subject,sequence,object:3,gen
  });
  for _ in 0..160{let mut out=[0;12288];let mut name=[0;16];if reader.copy(id(9,7),12288,&mut out,&mut name).is_ok(){assert!(out.iter().all(|b|*b==b'A')||out.iter().all(|b|*b==b'B'));}}
  task.join().unwrap();let mut out=[0;12288];let mut name=[0;16];reader.copy(id(9,88),12288,&mut out,&mut name).unwrap();assert_eq!(out,[b'Z';12288]);assert_eq!(name,[b'Z';16]);
+}
+
+#[test]fn last_snapshot_uses_exact_disjoint_region_peer_and_rights(){
+ let expected=[(9,6),(16,7),(18,8),(19,8192),(20,8193),(21,8194),(22,8195),(23,8196)];
+ for (index,(subject,rid)) in expected.into_iter().enumerate(){
+  assert_eq!(app_catalog::QUIL_TARGETS[index],subject);assert_eq!(document_buffer::region_id(index),rid);
+ }
+ let s=Box::new(Storage::new());
+ for writer in [false,true]{
+  let rights=QUERY_VIEW|READ|if writer{WRITE}else{0};
+  let info=MemoryRegionInfo{region_id:8196,length:16384,rights,peer_pd:Some(if writer{23}else{11})};
+  let view=RegionView{region_id:8196,virtual_address:s.0.as_ptr()as u64,length:16384,dma_address:None};
+  assert!(unsafe{Region::from_resolved(info,view,23,writer)}.is_ok());
+  for bad in [MemoryRegionInfo{region_id:13,..info},MemoryRegionInfo{region_id:8195,..info},MemoryRegionInfo{peer_pd:Some(22),..info},MemoryRegionInfo{rights:rights^WRITE,..info},MemoryRegionInfo{rights:rights|DMA_ADDRESS,..info}]{
+   assert!(unsafe{Region::from_resolved(bad,view,23,writer)}.is_err());
+  }
+  assert!(unsafe{Region::from_resolved(info,RegionView{region_id:8195,..view},23,writer)}.is_err());
+  for subject in [22,24,15,23|(1<<31)]{assert!(unsafe{Region::from_resolved(info,view,subject,writer)}.is_err());}
+ }
+ assert!(s.0.iter().all(|word|word.load(SeqCst)==0));
+ let mut writer=region(&s,23,true);let reader=region(&s,23,false);
+ writer.publish(id(23,1),[0;16],b"last").unwrap();
+ let mut out=[255;12288];let mut name=[255;16];
+ assert!(reader.copy(id(22,1),4,&mut out,&mut name).is_err());assert_eq!(out,[0;12288]);assert_eq!(name,[0;16]);
 }

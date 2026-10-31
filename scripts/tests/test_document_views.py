@@ -7,10 +7,10 @@ from check_document_views import inspect
 
 def trace():
     lines = []
-    for index, client in enumerate([9, 16, 18]):
-        lines.extend([f'[boot.memory.region] pd=11 slot={64+index} region={6+index} bytes=16384 rights=7 peer={client}',
-                      f'[boot.memory.region] pd={client} slot=64 region={6+index} bytes=16384 rights=3 peer=11'])
-    lines.extend(['[boot.document.views] pairs=3 bytes_each=16384 total_bytes=49152 readonly=1 distinct=1 scrubbed=1 runtime_mint=0',
+    for index, client in enumerate([9, 16, 18, 19, 20, 21, 22, 23]):
+        lines.extend([f'[boot.memory.region] pd=11 slot={64+index} region={6+index if index<3 else 8192+index-3} bytes=16384 rights=7 peer={client}',
+                      f'[boot.memory.region] pd={client} slot=64 region={6+index if index<3 else 8192+index-3} bytes=16384 rights=3 peer=11'])
+    lines.extend(['[boot.document.views] pairs=8 bytes_each=16384 total_bytes=131072 readonly=1 distinct=1 scrubbed=1 runtime_mint=0',
                   '[boot.memory.authority.sealed] runtime_mint=0'])
     return '\n'.join(lines)
 
@@ -21,7 +21,7 @@ class DocumentViews(unittest.TestCase):
 
     def test_wrong_peer_rights_backing_budget_or_missing_scrub_fails(self):
         for before, after in [('peer=18', 'peer=16'), ('rights=3', 'rights=7'),
-                              ('region=8', 'region=7'), ('49152', '32768'), ('scrubbed=1', 'scrubbed=0')]:
+                              ('region=8', 'region=7'), ('131072', '32768'), ('scrubbed=1', 'scrubbed=0')]:
             self.assertFalse(inspect(trace().replace(before, after))['ok'])
 
     def test_missing_duplicate_late_or_faulted_evidence_fails(self):

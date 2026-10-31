@@ -43,7 +43,7 @@ const fn quil(ordinal: u8, target: u32, surface: u64, shell_surface: Option<u64>
 }
 
 /// Every BOOT-reserved app incarnation, in activation order per app.
-pub const INCARNATIONS: [Incarnation; 6] = [
+pub const INCARNATIONS: [Incarnation; 11] = [
     quil(0, 9, 156, Some(201), 38, 41, None, 11),
     Incarnation { app: App::Spindle, ordinal: 0, target: 12, surface: 154, shell_surface: Some(153), lifecycle_slot: 39, close_slot: 42, activation_slot: None, route_slot: 14, children: &[160, 161, 162] },
     // Browser's document notices share its BOOT close route.
@@ -51,6 +51,11 @@ pub const INCARNATIONS: [Incarnation; 6] = [
     quil(1, 16, 301, None, 45, 46, Some(44), 47),
     Incarnation { app: App::Spindle, ordinal: 1, target: 17, surface: 302, shell_surface: Some(306), lifecycle_slot: 50, close_slot: 51, activation_slot: Some(49), route_slot: 52, children: &[303, 304, 305] },
     quil(2, 18, 307, None, 54, 56, Some(55), 57),
+    quil(3, 19, 308, None, 110, 111, Some(112), 113),
+    quil(4, 20, 309, None, 114, 115, Some(116), 117),
+    quil(5, 21, 310, None, 118, 119, Some(120), 121),
+    quil(6, 22, 311, None, 122, 123, Some(124), 125),
+    quil(7, 23, 312, None, 126, 127, Some(128), 129),
 ];
 
 /// Compile-time storage sizing; descriptive catalog data never grants authority.

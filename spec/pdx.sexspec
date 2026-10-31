@@ -140,7 +140,7 @@
         "boot_app_catalog"
       ],
       "gaps": [
-        "The current BOOT catalog reserves Quil9/16/18, Spindle12/17 and Browser15; no reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Runtime boot auditing checks actual grant tuples; child/frame ownership remains Display policy and native UI evidence is required separately.",
+        "The current BOOT catalog reserves eight Quil incarnations 9/16/18/19/20/21/22/23, Spindle12/17 and Browser15; no reserve replenishment. Activation denies more than one initialized execution core; no cross-core TLB completion is implemented. Runtime boot auditing checks actual grant tuples; child/frame ownership remains Display policy and native UI evidence is required separately.",
         "History recovery uses one BOOT-bound fixed journal and real block barriers; host fault injection and real two-boot evidence are required separately. Hardware power-loss validation, service-death timeouts and complete epoch replay remain open."
       ],
       "depends_on": [

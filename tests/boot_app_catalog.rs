@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Actual pure BOOT validator over explicit six-subject kernel observations.
+//! Actual pure BOOT validator over explicit eleven-subject kernel observations.
 //! These are host observations, not native grant extraction or task admission.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
@@ -22,6 +22,11 @@ fn observed(target: u32) -> Observed {
         16 => (301, 9, 2, 9, true),
         17 => (302, 12, 2, 12, true),
         18 => (307, 9, 3, 16, true),
+        19 => (308, 9, 4, 18, true),
+        20 => (309, 9, 5, 19, true),
+        21 => (310, 9, 6, 20, true),
+        22 => (311, 9, 7, 21, true),
+        23 => (312, 9, 8, 22, true),
         _ => panic!("not a current BOOT subject"),
     };
     Observed {
@@ -47,8 +52,8 @@ fn row(target: u32) -> &'static Incarnation {
 }
 
 #[test]
-fn all_six_existing_boot_subjects_validate_without_changing_observations() {
-    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18]);
+fn all_eleven_current_boot_subjects_validate_without_changing_observations() {
+    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
     assert_eq!(validate_layout(&INCARNATIONS), Ok(()));
     for row in &INCARNATIONS {
         let actual = observed(row.target);
@@ -148,7 +153,7 @@ fn domain_routes_cannot_target_another_incarnation() {
 
 #[test]
 fn activation_presence_is_exact_for_originals_and_successors() {
-    for target in [16, 17, 18] {
+    for target in [16, 17, 18, 19, 20, 21, 22, 23] {
         let mut actual = observed(target);actual.activation = None;
         assert_eq!(validate(row(target), &actual, 3), Err(Error::MissingActivation));
     }
@@ -185,7 +190,7 @@ fn fabricated_catalog_rows_are_not_new_authority() {
 
 #[test]
 fn malformed_catalog_identity_order_and_slot_layouts_reject() {
-    let mutations: [(fn(&mut [Incarnation; 6]), Error); 11] = [
+    let mutations: [(fn(&mut [Incarnation; 11]), Error); 11] = [
         (|r| r[1].target = 9, Error::CatalogTarget),
         (|r| r[0].target = 0, Error::CatalogTarget),
         (|r| r[0].target = 3, Error::CatalogTarget),
@@ -220,10 +225,36 @@ fn same_subject_domain_route_alias_is_allowed_but_cross_subject_slot_alias_is_no
 
 #[test]
 fn matching_task_number_does_not_authorize_a_different_execution_domain() {
-    for target in [9, 16, 18] {
+    for target in [9, 16, 18, 19, 20, 21, 22, 23] {
         let mut actual = observed(target);actual.task_domain = 12;
         assert_eq!(validate(row(target), &actual, 3), Err(Error::TaskDomain));
         let mut actual = observed(target);actual.task_domain_pointer_matches = false;
         assert_eq!(validate(row(target), &actual, 3), Err(Error::TaskDomainPointer));
     }
+}
+
+#[test]
+fn final_reserve_requires_exact_eighth_lineage_task_and_routes() {
+    assert_eq!(validate(row(23), &observed(23), 3), Ok(()));
+    let changes: [(fn(&mut Observed), Error); 9] = [
+        (|o| o.target = 23 | (1 << 31), Error::Target),
+        (|o| o.task = 23 | (1 << 31), Error::Task),
+        (|o| o.content_surface = 312 | (1u64 << 32), Error::ContentSurface),
+        (|o| o.incarnation = 7, Error::IncarnationNumber),
+        (|o| o.predecessor = 18, Error::Predecessor),
+        (|o| o.close_target = 22, Error::CloseTarget),
+        (|o| o.route_target = 22, Error::RouteTarget),
+        (|o| o.activation.as_mut().unwrap().predecessor_task = 18, Error::ActivationPredecessorTask),
+        (|o| o.activation.as_mut().unwrap().successor_task = 23 | (1 << 31), Error::ActivationSuccessorTask),
+    ];
+    for (change,error) in changes {
+        let mut actual=observed(23);change(&mut actual);
+        assert_eq!(validate(row(23),&actual,3),Err(error));
+    }
+    let mut rows=INCARNATIONS;rows[10].route_slot=129 | (1u64 << 32);
+    assert_eq!(validate_layout(&rows),Err(Error::CatalogSlot));
+    let mut rows=INCARNATIONS;rows[10].activation_slot=Some(112);
+    assert_eq!(validate_layout(&rows),Err(Error::CatalogSlotAlias));
+    let mut rows=INCARNATIONS;rows[10].ordinal=8;
+    assert_eq!(validate_layout(&rows),Err(Error::CatalogOrder));
 }

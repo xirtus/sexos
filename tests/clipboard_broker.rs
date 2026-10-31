@@ -30,7 +30,7 @@ const Q2: Subject = Subject { pd: 16, task: 160 };
 const Q3: Subject = Subject { pd: 18, task: 180 };
 const SOURCE: Source = Source { generation: 7, revision: 11 };
 fn catalog(s: Subject) -> CatalogInfo {
-    CatalogInfo { target_pd: s.pd, task_id: s.task, surface_id: match s.pd { 9 => 156, 15 => 300, 16 => 301, 18 => 307, _ => 999 }, coordinator_pd: 3 }
+    CatalogInfo { target_pd: s.pd, task_id: s.task, surface_id: app_catalog::by_target(s.pd).map_or(999, |row| row.surface), coordinator_pd: 3 }
 }
 fn fresh() -> Broker { let mut b = Broker::new(); for s in [Q, B, Q2, Q3] { b.register(catalog(s)).unwrap(); } b }
 fn receive(b: &mut Broker, s: Subject, r: Request, now: u64) -> Result<(), Status> {
@@ -271,4 +271,65 @@ fn broker_step(b: &mut Broker, s: Subject, c: &mut clipboard_client::Client, now
     }
     let mut b=fresh();publish(&mut b,B,b"prior",0,true);let old=b.publication();let body="012345678901234€".as_bytes();let t=begin(&mut b,Q,body,1);write(&mut b,Q,t,&body[..16],1);
     assert_eq!(receive(&mut b,Q,Request::Publish{ticket:t,len:body.len(),hash:hash(body)},1),Err(Status::Invalid));assert_eq!(b.publication(),old);assert!(broker::clean(&b).0);
+}
+
+
+#[test] fn every_catalog_document_subject_registers_without_replacing_held_task_or_retirement() {
+    let mut b=Broker::new();
+    for &target in &app_catalog::DOCUMENT_TARGETS {
+        // Deliberately use a different task namespace: held catalog task wins.
+        let subject=Subject{pd:target,task:target+1000};
+        let c=catalog(subject);let p=b.register(c).unwrap();
+        assert_eq!(p.subject,subject);
+        assert_eq!(p.route,app_catalog::by_target(target).unwrap().close_slot);
+        let mut wrong=c;wrong.task_id+=1;assert_eq!(b.register(wrong),Err(Status::Denied));
+        wrong=c;wrong.surface_id+=10000;assert_eq!(b.register(wrong),Err(Status::Denied));
+        assert!(b.retire(subject));assert_eq!(b.register(c),Ok(p));
+        assert_eq!(b.issue(subject,Action::Copy,true,1),Err(Status::Denied));
+    }
+    for row in app_catalog::spindle_views(){assert_eq!(b.register(catalog(Subject{pd:row.target,task:row.target})),Err(Status::Denied));}
+}
+
+#[test] fn eighth_quil_exact_held_subject_receives_browser_copy_and_owns_its_publication() {
+    let newest=Subject{pd:23,task:2300};
+    assert_eq!(app_catalog::by_target(newest.pd).unwrap().ordinal,7);
+    let mut b=fresh();let p=b.register(catalog(newest)).unwrap();
+    assert_eq!((p.subject,p.surface,p.route,p.can_read),(newest,312,127,true));
+    assert_eq!(b.issue(Subject{pd:23,task:23},Action::Paste,true,1),Err(Status::Denied));
+    assert_eq!(b.issue(B,Action::Paste,true,1),Err(Status::Denied));
+    assert_eq!(b.issue(B,Action::Cut,true,1),Err(Status::Denied));
+    publish(&mut b,B,"exact browser bytes €".as_bytes(),1,true);let publication=b.publication().unwrap();
+    let ticket=read(&mut b,newest,1);
+    assert_eq!(read_all(&mut b,newest,ticket,publication.len,1),"exact browser bytes €".as_bytes());
+    receive(&mut b,newest,Request::Finish{ticket,generation:publication.generation,hash:publication.hash},1).unwrap();
+    status(admitted(&mut b,1)[0].1,Phase::Finish,Status::Ok);
+    publish(&mut b,newest,b"successor owns these bytes",1,true);let current=b.publication();
+    assert!(b.retire(Q));assert!(b.retire(B));assert_eq!(b.publication(),current);
+    assert!(b.retire(newest));assert!(b.publication().is_none());assert_eq!(broker::clean(&b),(true,true,true));
+    assert_eq!(b.register(catalog(newest)),Ok(p));assert_eq!(b.issue(newest,Action::Copy,true,1),Err(Status::Denied));
+}
+
+#[test] fn all_catalog_slots_get_fair_bounded_delivery_and_keep_exact_full_receipts() {
+    let mut b=Broker::new();let subjects:Vec<_>=app_catalog::DOCUMENT_TARGETS.iter().map(|&pd|Subject{pd,task:pd+1000}).collect();
+    let mut pending=Vec::new();
+    for &subject in &subjects {
+        b.register(catalog(subject)).unwrap();let ticket=b.issue(subject,Action::Copy,true,1).unwrap();
+        receive(&mut b,subject,Request::Cancel{ticket},1).unwrap();
+        let index=app_catalog::DOCUMENT_TARGETS.iter().position(|&pd|pd==subject.pd).unwrap();
+        pending.push(broker::packet(&b,index).unwrap());
+    }
+    let mut seen=Vec::new();
+    for _ in 0..subjects.len().div_ceil(4) {
+        assert!(b.poll(1,99,|p,packet|{
+            let index=subjects.iter().position(|s|*s==p.subject).unwrap();assert_eq!(packet,pending[index]);
+            seen.push(p.subject);Admission::Full
+        })<=4);
+    }
+    for (index,subject) in subjects.iter().enumerate(){assert!(seen.contains(subject));assert_eq!(broker::packet(&b,index),Some(pending[index]));}
+    let mut delivered=Vec::new();
+    while b.pending(){let attempts=b.poll(1,99,|p,packet|{
+        let index=subjects.iter().position(|s|*s==p.subject).unwrap();assert_eq!(packet,pending[index]);
+        assert!(!delivered.contains(&p.subject));delivered.push(p.subject);Admission::Accepted
+    });assert!((1..=4).contains(&attempts));}
+    assert_eq!(delivered.len(),subjects.len());
 }

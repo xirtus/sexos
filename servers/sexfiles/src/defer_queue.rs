@@ -4,7 +4,7 @@
 pub type Message = (u64, u32, u64, u64, u64);
 const EMPTY: Message = (0, 0, 0, 0, 0);
 const REQUESTS: usize = 8;
-const DOCUMENT_CLIENTS: usize = 3;
+const DOCUMENT_CLIENTS: usize = sex_pdx::app_catalog::DOCUMENT_TARGETS.len();
 const TOTAL_REQUESTS: usize = REQUESTS + DOCUMENT_CLIENTS * (sex_pdx::document::WINDOW + 1);
 const EXITS: usize = sex_pdx::app_lifecycle::SLOTS.len();
 pub struct Deferred {
@@ -39,12 +39,7 @@ impl Deferred {
         {
             return None;
         }
-        match m.1 {
-            9 => Some(0),
-            16 => Some(1),
-            18 => Some(2),
-            _ => None,
-        }
+        sex_pdx::app_catalog::DOCUMENT_TARGETS.iter().position(|&target| target == m.1)
     }
     fn cancellation_client(m: Message) -> Option<usize> {
         let i = Self::document_client(m)?;

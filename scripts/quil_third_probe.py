@@ -20,49 +20,46 @@ def open_selected(c):
     if loaded[0].startswith('[quil.document.result]'):return None
     return dict(object=object_id,bytes=int(loaded[1]),hash=loaded[2])
 
-def run(c,refresh,close):
+def run(c,refresh,close,rows=None):
+    """Exercise every remaining BOOT Quil, retaining legacy short-fixture support."""
     key,wait,text,focus=(c[k]for k in ('key','wait','text','focus'))
-    start=len(text())
-    key('grave_accent',r'\[shell.palette.item\] idx=0')
-    key('j',r'\[shell.palette.select\] old=0 new=1')
-    key('ret',r'\[shell.app.relaunch\] predecessor=16 successor=18 ')
-    wait(r'\[app.activation.committed\] logical=9 incarnation=3 predecessor=16 successor=18 .*runtime_mint=0',start)
-    wait(r'\[app.surface.presented\] target=18 surface=307 .*ok=1',start)
-    refresh()
-    loaded=[]
-    for expected in [c['first'],c['second']]:
-        focus(200)
-        for _ in range(20):
-            key('j',r'\[shell.action.select_next_linen\] id=\d+')
-            observed=open_selected(c)
-            if observed and observed['object']==expected['object']:
-                if (observed['bytes'],observed['hash'])!=(expected['bytes'],expected['hash']):raise RuntimeError('third incarnation document changed')
-                loaded.append(expected['object']);break
+    extended=rows is not None
+    chain=rows[2:]if extended else [dict(target=18,surface=307,frame=307,ordinal=2)]
+    steps=[];first_frame=None;first_loaded=None
+    for index,row in enumerate(chain):
+        target,surface,frame_id=row['target'],row['surface'],row['frame']
+        predecessor=rows[row['ordinal']-1]['target']if extended else 16
+        start=len(text())
+        key('grave_accent',r'\[shell.palette.item\] idx=0');key('j',r'\[shell.palette.select\] old=0 new=1')
+        key('ret',rf'\[shell.app.relaunch\] predecessor={predecessor} successor={target} ')
+        wait(rf'\[app.activation.committed\] logical=9 incarnation={row["ordinal"]+1} predecessor={predecessor} successor={target} .*runtime_mint=0',start)
+        wait(rf'\[app.surface.presented\] target={target} surface={surface} .*ok=1',start)
+        refresh();loaded=[]
+        for expected in [c['first'],c['second']]:
             focus(200)
-        else:raise RuntimeError('third incarnation selection unavailable')
-    focus(307)
-    key('t',r'\[quil.document.edit\]')
-    # Validate actual glyphs from this exact new subject/surface, not an old view.
-    frame=c['capture']('third-quil-edit','t#',target=18)
-    # Loaded notes start at the end; persist a useful edit through PD18's
-    # own session and route. Existing expected bytes remain the disk oracle.
-    second=c['second'];second['content']+='t'
-    offset=len(text());c['ctrl']('s',r'\[quil.document.saved\].*dirty=0')
-    m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(second['object']),offset)
-    second.update(bytes=int(m[1]),hash=m[2])
-    close(18,307)
-    # Final visible status must report finite exhaustion rather than offer the
-    # dead subject again. No command or diagnostic manufactures a fresh grant.
-    key('grave_accent',r'\[shell.palette.item\] idx=0')
-    selection_start=len(text())
+            for _ in range(20):
+                key('j',r'\[shell.action.select_next_linen\] id=\d+')
+                observed=open_selected(c)
+                if observed and observed['object']==expected['object']:
+                    if(observed['bytes'],observed['hash'])!=(expected['bytes'],expected['hash']):raise RuntimeError('reserve incarnation document changed')
+                    loaded.append(dict(observed));break
+                focus(200)
+            else:raise RuntimeError('reserve incarnation selection unavailable')
+        focus(frame_id);edit_start=len(text());key('t',r'\[quil.document.edit\]')
+        frame=c['capture']('third-quil-edit'if index==0 else f'reserve-quil-{target}-edit','t#',target=target)
+        second=c['second'];second['content']+='t'
+        offset=len(text());c['ctrl']('s',r'\[quil.document.saved\].*dirty=0')
+        m=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(second['object']),offset)
+        second.update(bytes=int(m[1]),hash=m[2]);saved=dict(second)
+        close_start=len(text());close(target,frame_id)
+        steps.append(dict(target=target,surface=surface,logical=9,incarnation=row['ordinal']+1,predecessor=predecessor,serial_start=start,edit_start=edit_start,save_start=offset,close_start=close_start,serial_end=len(text()),loaded=loaded,saved=saved,frame=frame))
+        if index==0:first_frame=frame;first_loaded=[d['object']for d in loaded]
+    # A fresh physical selection after the LAST cleanup must show exhaustion.
+    key('grave_accent',r'\[shell.palette.item\] idx=0');selection_start=len(text())
     selection_pattern=r'\[shell.palette.select\] old=0 new=1(?=\r?\n|$)'
-    key('j',selection_pattern)
-    selection=wait(selection_pattern,selection_start)
-    row_start=selection_start+selection.end()
+    key('j',selection_pattern);selection=wait(selection_pattern,selection_start);row_start=selection_start+selection.end()
     row=wait(r'\[launcher.text.row\] index=1 row=1 name=Open Quil status=CLOSED / RESERVE EXHAUSTED(?=\r?\n|$)',row_start)
-    exhaustion_frame=c['capture']('third-quil-exhausted-launcher','Open Quil',target=9,kind='launcher')
-    key('esc',r'\[command_palette.close\]')
-    return dict(target=18,surface=307,logical=9,incarnation=3,documents=loaded,
-                edited_and_saved=True,pixel_errors=[],frame=frame,terminal=True,reserve_exhausted=True,
-                exhaustion_frame=exhaustion_frame,exhaustion_selection_offset=selection_start+selection.start(),
-                exhaustion_row_offset=row_start+row.start())
+    exhaustion_frame=c['capture']('third-quil-exhausted-launcher','Open Quil',target=9,kind='launcher');key('esc',r'\[command_palette.close\]')
+    result=dict(target=18,surface=307,logical=9,incarnation=3,documents=first_loaded,edited_and_saved=True,pixel_errors=[],frame=first_frame,terminal=True,reserve_exhausted=True,exhaustion_frame=exhaustion_frame,exhaustion_selection_offset=selection_start+selection.start(),exhaustion_row_offset=row_start+row.start())
+    if extended:result.update(chain=steps,final_target=chain[-1]['target'],append_count=len(steps),catalog=rows)
+    return result

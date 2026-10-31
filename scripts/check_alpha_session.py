@@ -150,9 +150,11 @@ def cycle_errors(soak):
 def boot_lifecycle_errors(result):
     """Lifecycle joins also serve same-image reboot checks of short rehearsals."""
     errors=[];soak=result.get('soak') or {}
-    if soak.get('boot_successors') not in ([16,17],[16,17,18]) or soak.get('cleanup_errors')!=[]:
+    third=soak.get('third_quil') or {}
+    expected_successors=([16,17]+[step.get('target')for step in third['chain']])if 'chain'in third else ([16,17,18]if third else [16,17])
+    if soak.get('boot_successors')!=expected_successors or soak.get('cleanup_errors')!=[]:
         errors.append('fresh BOOT successors and complete cleanup required')
-    if soak.get('boot_successors')==[16,17,18]:
+    if third:
         third=soak.get('third_quil') or {}
         expected=dict(target=18,surface=307,logical=9,incarnation=3,edited_and_saved=True,
                       pixel_errors=[],terminal=True,reserve_exhausted=True)
@@ -210,7 +212,9 @@ def inspect(path):
     result=json.loads((path/'result.json').read_text())
     errors=session_errors(result)
     text=(path/'serial.log').read_text(errors='replace')
-    errors+=cleanup_errors(text,include_successor=True,include_spindle_successor=True,include_third_quil=(result.get('soak')or{}).get('boot_successors')==[16,17,18])
+    from quil_reserve_catalog import quil_catalog
+    third=(result.get('soak')or{}).get('third_quil');rows=quil_catalog(pathlib.Path(__file__).resolve().parents[1])if third and 'chain'in third else []
+    errors+=cleanup_errors(text,include_successor=True,include_spindle_successor=True,include_third_quil=bool(third),additional_quil=rows[3:])
     if (result.get('soak')or{}).get('evidence_version')==2:
         errors+=quil_close_errors(result['soak'],text)
     errors+=terminal_pending_errors(text,include_quil=(result.get('soak')or{}).get('evidence_version',1)==1 or (result.get('soak')or{}).get('pending_quil_close')is True)
@@ -230,7 +234,7 @@ def inspect(path):
             errors.append('saved document bytes differ: '+expected['name'])
         documents.append(found)
     retirements=[dict(re.findall(r'([a-z_]+)=([^\s]+)',m)) for m in re.findall(r'\[app.private.retired\] ([^\r\n]+)',text)]
-    targets={9,12,15,16,17}|({18}if(result.get('soak')or{}).get('boot_successors')==[16,17,18]else set())
+    targets={9,12,15,16,17}|({18}if third else set())|{r['target']for r in rows[3:]}
     pages=sum(int(r['pages']) for r in retirements if r.get('target')in map(str,targets) and r.get('task')==r.get('target'))
     return dict(ok=not errors,errors=errors,iso_sha256=digest,
                 elapsed_seconds=(result.get('soak')or{}).get('elapsed_seconds'),

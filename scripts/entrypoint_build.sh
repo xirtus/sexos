@@ -57,6 +57,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/document_view.rs
   crates/sex-pdx/src/document.rs
   crates/sex-pdx/src/document_buffer.rs
+  crates/sex-pdx/src/document_snapshot.rs
   kernel/src/boot_memory.rs
   crates/sex-pdx/src/spindle_probe.rs
   crates/sex-pdx/src/history_recovery.rs

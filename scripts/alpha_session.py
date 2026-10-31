@@ -231,7 +231,9 @@ def run(c, seconds, acceptance=True, third_quil=False):
     third=None
     if third_quil:
         from quil_third_probe import run as third_probe
-        third=third_probe(c,refresh,close)
+        from quil_reserve_catalog import quil_catalog,verify_boot_quil
+        rows=quil_catalog(c["root"]);verify_boot_quil(text(),rows)
+        third=third_probe(c,refresh,close,rows)
     close(15,300)
     # Prove pending Spindle job retirement and its separately reserved successor.
     focus(153)
@@ -253,7 +255,7 @@ def run(c, seconds, acceptance=True, third_quil=False):
     refresh()
     key('j',r'\[shell.action.select_next_linen\] id=[1-9]\d*')
     from check_desktop_close_log import check
-    errors = check(text(),include_successor=True,include_spindle_successor=True,include_third_quil=third_quil)
+    errors = check(text(),include_successor=True,include_spindle_successor=True,include_third_quil=third_quil,additional_quil=rows[3:]if third_quil else ())
     if errors:
         raise RuntimeError('sustained cleanup: '+str(errors))
     return dict(evidence_version=2,acceptance=acceptance,elapsed_seconds=elapsed,cycles=cycle,samples=samples,
@@ -262,4 +264,4 @@ def run(c, seconds, acceptance=True, third_quil=False):
                 pending_quil_close=bool(pending_at_close),pending_spindle_close=True,
                 scope='pending-save unsaved Close guard; exact confirmed teardown state',
                 remaining_obligations=[] if pending_at_close else ['Quil pending-I/O terminal teardown'],
-                boot_successors=[16,17,18] if third_quil else [16,17],third_quil=third,cleanup_errors=errors)
+                boot_successors=([16,17]+[row["target"]for row in rows[2:]]) if third_quil else [16,17],third_quil=third,cleanup_errors=errors)

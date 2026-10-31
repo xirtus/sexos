@@ -92,7 +92,7 @@ fn begin(s:&mut Service,b:&mut Store,seq:&mut u32,text:&[u8],bytes:&[u8])->(u8,u
  assert_eq!(rpc(&mut s,&mut b,9,req(1,w::INFO,2,0,0)),Ok(0x30001));assert_eq!(rpc(&mut s,&mut b,16,req(1,w::INFO,2,0,0)),Ok(0x30001));assert_eq!(rpc(&mut s,&mut b,18,req(1,w::INFO,2,0,0)),Ok(0x30001));
 }
 #[test]fn dead_or_unknown_subject_and_malformed_name_cannot_allocate(){
- let(mut s,mut b)=(Service::new(),Store::new());for pd in [0,3,12,17,19,u32::MAX]{let r=create(1,b"deny");assert_eq!(w::decode_reply(s.handle(pd,true,r,&mut b).unwrap(),1),Some(Err(w::DENIED)));}
+ let(mut s,mut b)=(Service::new(),Store::new());for pd in [0,3,12,17,24,u32::MAX]{let r=create(1,b"deny");assert_eq!(w::decode_reply(s.handle(pd,true,r,&mut b).unwrap(),1),Some(Err(w::DENIED)));}
  let r=create(1,b"deny");assert_eq!(w::decode_reply(s.handle(15,false,r,&mut b).unwrap(),1),Some(Err(w::DENIED)));
  for(seq,n)in [(1,b"bad/name".as_slice()),(2,b"".as_slice()),(3,b"bad\\name".as_slice())]{assert_eq!(rpc(&mut s,&mut b,15,create(seq,n)),Err(w::INVALID));}
  assert_eq!(b.fresh_creates,0);assert_eq!(b.legacy_creates,0);

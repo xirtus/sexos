@@ -15,15 +15,15 @@ fn full_ordinary_backlog_cannot_consume_kernel_terminal_capacity() {
         assert!(q.push(m));
     }
     assert!(!q.push((0x4D, 16, 99, 0, 0)));
-    for pd in [9, 12, 15, 16, 17, 18] {
+    for pd in [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23] {
         assert!(q.push((OP_APP_EXIT, 0, pd, pd, 0)));
     }
-    assert_eq!(q.len(), 14);
+    assert_eq!(q.len(), 19);
     // Replayed hints coalesce and cannot crowd out another terminal subject.
     for _ in 0..100 {
         assert!(q.push((OP_APP_EXIT, 0, 9, 9, 0)));
     }
-    for pd in [9, 12, 15, 16, 17, 18] {
+    for pd in [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23] {
         assert_eq!(q.pop(), Some((OP_APP_EXIT, 0, pd, pd, 0)));
     }
     for m in requests {
@@ -57,33 +57,33 @@ fn forged_or_wide_exit_payloads_have_no_priority_and_queue_is_reusable() {
 fn ordinary_pressure_cannot_steal_any_incarnation_document_window(){
  let mut q=queue::Deferred::new();let mut expected=vec![];
  for i in 0..8{let m=(0x99,12,i,0,0);assert!(q.push(m));expected.push(m);}
- for seq in 1..=4{for pd in [9,16,18]{let r=document::Request{seq,kind:document::READ,object:3,offset:(seq-1)*4,a:4,b:0};let m=(document::OP,pd,r.header(),r.a,r.b);assert!(q.push(m));expected.push(m);}}
- assert_eq!(q.len(),20);
- for pd in [9,16,18]{let r=document::Request{seq:5,kind:document::READ,object:3,offset:16,a:4,b:0};assert!(!q.push((document::OP,pd,r.header(),r.a,r.b)));}
+ for seq in 1..=4{for pd in [9,16,18,19,20,21,22,23,15]{let r=document::Request{seq,kind:document::READ,object:3,offset:(seq-1)*4,a:4,b:0};let m=(document::OP,pd,r.header(),r.a,r.b);assert!(q.push(m));expected.push(m);}}
+ assert_eq!(q.len(),44);
+ for pd in [9,16,18,19,20,21,22,23,15]{let r=document::Request{seq:5,kind:document::READ,object:3,offset:16,a:4,b:0};assert!(!q.push((document::OP,pd,r.header(),r.a,r.b)));}
  assert!(!q.push((0x99,12,8,0,0)));
- for pd in [9,12,15,16,17,18]{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}
- assert_eq!(q.len(),26);
- for pd in [9,12,15,16,17,18]{assert_eq!(q.pop(),Some((OP_APP_EXIT,0,pd,pd,0)));}
- for m in expected{assert_eq!(q.pop(),Some(m));assert!(q.push(m));assert_eq!(q.len(),20);}
+ for pd in [9,12,15,16,17,18,19,20,21,22,23]{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}
+ assert_eq!(q.len(),55);
+ for pd in [9,12,15,16,17,18,19,20,21,22,23]{assert_eq!(q.pop(),Some((OP_APP_EXIT,0,pd,pd,0)));}
+ for m in expected{assert_eq!(q.pop(),Some(m));assert!(q.push(m));assert_eq!(q.len(),44);}
  // The second pass preserves the same FIFO and restores all capacity.
- for _ in 0..20{assert!(q.pop().is_some());}assert_eq!(q.pop(),None);
+ for _ in 0..44{assert!(q.pop().is_some());}assert_eq!(q.pop(),None);
 }
 #[test]
 fn foreign_and_malformed_document_messages_cannot_take_reserved_capacity(){
  let mut q=queue::Deferred::new();let r=document::Request{seq:1,kind:document::INFO,object:3,offset:0,a:0,b:0};
- for pd in 20..28{assert!(q.push((document::OP,pd,r.header(),0,0)));}
+ for pd in [0,1,3,12,17,24,25,u32::MAX]{assert!(q.push((document::OP,pd,r.header(),0,0)));}
  assert!(!q.push((document::OP,9,0,0,0)));
- for pd in [9,16,18]{assert!(q.push((document::OP,pd,r.header(),0,0)));}
+ for pd in [9,16,18,19,20,21,22,23,15]{assert!(q.push((document::OP,pd,r.header(),0,0)));}
 }
 #[test]
 fn exact_abort_has_independent_capacity_after_all_data_and_ordinary_slots(){
  let mut q=queue::Deferred::new();let mut expected=vec![];
  for i in 0..8{let m=(0x99,12,i,0,0);assert!(q.push(m));expected.push(m);}
- for pd in [9,16,18]{for seq in 1..=4{let r=document::Request{seq,kind:document::WRITE,object:3,offset:(seq-1)*16,a:0,b:0};let m=(document::OP,pd,r.header(),0,0);assert!(q.push(m));expected.push(m);}}
- for pd in [9,16,18]{let r=document::Request{seq:5,kind:document::ABORT,object:0,offset:0,a:0,b:0};let m=(document::OP,pd,r.header(),0,0);assert!(q.push(m));assert!(q.push(m));expected.push(m);}
- assert_eq!(q.len(),23);
- for pd in [9,12,15,16,17,18]{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}assert_eq!(q.len(),29);
- for pd in [9,12,15,16,17,18]{assert_eq!(q.pop(),Some((OP_APP_EXIT,0,pd,pd,0)));}
+ for pd in [9,16,18,19,20,21,22,23,15]{for seq in 1..=4{let r=document::Request{seq,kind:document::WRITE,object:3,offset:(seq-1)*16,a:0,b:0};let m=(document::OP,pd,r.header(),0,0);assert!(q.push(m));expected.push(m);}}
+ for pd in [9,16,18,19,20,21,22,23,15]{let r=document::Request{seq:5,kind:document::ABORT,object:0,offset:0,a:0,b:0};let m=(document::OP,pd,r.header(),0,0);assert!(q.push(m));assert!(q.push(m));expected.push(m);}
+ assert_eq!(q.len(),53);
+ for pd in [9,12,15,16,17,18,19,20,21,22,23]{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}assert_eq!(q.len(),64);
+ for pd in [9,12,15,16,17,18,19,20,21,22,23]{assert_eq!(q.pop(),Some((OP_APP_EXIT,0,pd,pd,0)));}
  for m in expected{assert_eq!(q.pop(),Some(m));}assert_eq!(q.pop(),None);
 }
 #[test]
@@ -93,4 +93,33 @@ fn newer_abort_replaces_only_its_own_cancel_slot_at_latest_fifo_position(){
  assert!(q.push(abort(9,6)));assert_eq!(q.len(),3);assert!(!q.push(abort(9,4)));
  assert_eq!(q.pop(),Some(ordinary));assert_eq!(q.pop(),Some(abort(16,5)));assert_eq!(q.pop(),Some(abort(9,6)));assert_eq!(q.pop(),None);
  assert!(q.push(abort(9,7)));assert_eq!(q.pop(),Some(abort(9,7)));
+}
+
+#[test]
+fn last_quil_and_browser_keep_independent_abort_slots_at_absolute_capacity(){
+ let mut q=queue::Deferred::new();let mut expected=vec![];
+ // Independent current-BOOT golden: eight Quil incarnations plus Browser.
+ let owners=[9,16,18,19,20,21,22,23,15];
+ assert_eq!(document::WINDOW,4,"fixture pins the admitted wire window");
+ for n in 0..8{let m=(0x99,12,n,0,0);assert!(q.push(m));expected.push(m);}
+ for pd in owners{for seq in 1..=4{
+  let r=document::Request{seq,kind:document::WRITE,object:3,offset:(seq-1)*16,a:seq as u64,b:0};
+  let m=(document::OP,pd,r.header(),r.a,r.b);assert!(q.push(m));expected.push(m);
+ }}
+ let abort=|pd,seq|(document::OP,pd,document::Request{seq,kind:document::ABORT,object:0,offset:0,a:0,b:0}.header(),0,0);
+ for pd in owners{let m=abort(pd,5);assert!(q.push(m));expected.push(m);}
+ assert_eq!(q.len(),53);
+ for (pd,seq) in [(23,6),(15,7)]{
+  let old=abort(pd,5);let new=abort(pd,seq);
+  assert!(q.push(new));assert_eq!(q.len(),53);
+  expected.remove(expected.iter().position(|m|*m==old).unwrap());expected.push(new);
+  assert!(q.push(new),"exact repeated abort coalesces");
+  assert!(!q.push(old),"stale abort cannot displace the retained request");
+  let malformed=document::Request{seq:8,kind:document::ABORT,object:3,offset:0,a:0,b:0};
+  assert!(!q.push((document::OP,pd,malformed.header(),0,0)),"noncanonical abort cannot bypass full data window");
+ }
+ assert!(!q.push(abort(24,9)),"untracked subject has no reserved abort slot");
+ for m in expected{assert_eq!(q.pop(),Some(m));}
+ assert_eq!(q.pop(),None);
+ for pd in owners{let m=abort(pd,9);assert!(q.push(m));assert_eq!(q.pop(),Some(m));}
 }

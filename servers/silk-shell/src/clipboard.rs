@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Fixed BOOT participants and register-only text custody. Caller identity and
 // liveness come from the held lifecycle catalog, never from request arguments.
-use sex_pdx::{app_lifecycle::CatalogInfo, clipboard::*, text_selection::Source};
+use sex_pdx::{app_catalog::{DOCUMENT_COUNT, DOCUMENT_TARGETS}, app_lifecycle::CatalogInfo, clipboard::*, text_selection::Source};
 
 pub const TOTAL_TURNS: u32 = 65_536;
 pub const STALL_TURNS: u32 = 4_096;
@@ -71,7 +71,7 @@ struct Transaction {
 }
 
 pub struct Broker {
-    slots: [Slot; 4],
+    slots: [Slot; DOCUMENT_COUNT],
     transaction: Option<Transaction>,
     publication: Option<Publication>,
     stage: [u8; MAX_BYTES],
@@ -95,7 +95,7 @@ fn meta(ticket: u32, phase: Phase, status: Status, value: Option<Publication>) -
 impl Broker {
     pub const fn new() -> Self {
         Self {
-            slots: [const { Slot::new() }; 4], transaction: None, publication: None,
+            slots: [const { Slot::new() }; DOCUMENT_COUNT], transaction: None, publication: None,
             stage: [0; MAX_BYTES], committed: [0; MAX_BYTES], read_snapshot: [0; MAX_BYTES],
             ticket: 0, generation: 0, cursor: 0,
         }
@@ -103,7 +103,7 @@ impl Broker {
     /// Registration never replaces a catalog or clears a retirement fence.
     pub fn register(&mut self, catalog: CatalogInfo) -> Result<Participant, Status> {
         let p = Participant::from_catalog(catalog).ok_or(Status::Denied)?;
-        let index = match p.subject.pd { 9 => 0, 15 => 1, 16 => 2, 18 => 3, _ => return Err(Status::Denied) };
+        let index = DOCUMENT_TARGETS.iter().position(|target| *target == p.subject.pd).ok_or(Status::Denied)?;
         let slot = &mut self.slots[index];
         match slot.participant {
             Some(old) if old == p => Ok(old),
@@ -281,9 +281,9 @@ impl Broker {
     pub fn poll<F: FnMut(Participant, Packet) -> Admission>(&mut self, now: u64, budget: usize, mut send: F) -> usize {
         self.deadline(now, true);
         let mut attempts = 0;
-        for _ in 0..4 {
+        for _ in 0..DOCUMENT_COUNT {
             if attempts >= core::cmp::min(4, budget) { break; }
-            let index = self.cursor; self.cursor = (self.cursor + 1) % 4;
+            let index = self.cursor; self.cursor = (self.cursor + 1) % DOCUMENT_COUNT;
             let slot = &self.slots[index];
             let Some(pending) = slot.pending.as_ref() else { continue; };
             let participant = slot.participant.unwrap();

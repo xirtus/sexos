@@ -24,9 +24,9 @@ impl Region {
     pub unsafe fn from_resolved(info: m::MemoryRegionInfo, view: m::RegionView,
         subject: u32, writer: bool) -> Result<Self, u32>
     {
-        let index = match subject { 9 => 0, 16 => 1, 18 => 2, _ => return Err(w::DENIED) };
+        let index = crate::app_catalog::QUIL_TARGETS.iter().position(|target| *target == subject).ok_or(w::DENIED)?;
         let rights = m::QUERY_VIEW | m::READ | if writer { m::WRITE } else { 0 };
-        if info.region_id != b::FIRST_REGION_ID + index || view.region_id != info.region_id
+        if info.region_id != b::region_id(index) || view.region_id != info.region_id
             || info.length != b::BYTES || view.length != b::BYTES || info.rights != rights
             || info.peer_pd != Some(if writer { subject } else { 11 }) || view.dma_address.is_some()
             || view.virtual_address == 0 || view.virtual_address % 4096 != 0

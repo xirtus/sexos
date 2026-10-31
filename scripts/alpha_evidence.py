@@ -81,15 +81,41 @@ def finish(out,manifest,src,captures,error=None):
  manifest['raw_sha256']={str(p.relative_to(out)):sha(p)for p in sorted(files)}
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 
-def verify_third_captures(third,frames,text):
+def verify_third_captures(third,frames,text,rows=None):
+ last=18
+ if rows is not None:
+  from quil_reserve_catalog import verify_boot_quil
+  verify_boot_quil(text,rows)
+  chain=third.get('chain')
+  if not isinstance(chain,list)or len(chain)!=len(rows)-2 or third.get('catalog')!=rows or third.get('append_count')!=len(chain)or third.get('final_target')!=rows[-1]['target']:raise ValueError('incomplete source-bound reserve chain')
+  prior_end=0
+  for index,(step,row)in enumerate(zip(chain,rows[2:])):
+   identity=dict(target=row['target'],surface=row['surface'],logical=rows[0]['target'],incarnation=row['ordinal']+1,predecessor=rows[row['ordinal']-1]['target'])
+   if any(step.get(k)!=v for k,v in identity.items()):raise ValueError('reserve chain identity differs')
+   a,e,b,d,z=(step.get(k)for k in ('serial_start','edit_start','save_start','close_start','serial_end'))
+   if any(type(v)is not int for v in(a,e,b,d,z))or not prior_end<=a<e<b<d<z<=len(text):raise ValueError('reserve chain serial windows overlap or exceed trace')
+   prior_end=z;span=text[a:z];target=row['target'];surface=row['surface'];pre=identity['predecessor'];number=identity['incarnation']
+   if not re.search(rf'\[app.activation.committed\] logical=9 incarnation={number} predecessor={pre} successor={target} task={target} surface={surface} .*runtime_mint=0',text[a:e])or not re.search(rf'\[app.surface.presented\] target={target} surface={surface} .*ok=1',text[a:e]):raise ValueError('reserve lacks exact activation/presentation')
+   selected=[f for f in frames if f['name']==('third-quil-edit'if index==0 else f'reserve-quil-{target}-edit')]
+   if len(selected)!=1 or selected[0]!=step.get('frame')or(selected[0]['kind'],selected[0]['target'],selected[0]['expected'])!=('quil',target,'t#')or not e<selected[0]['serial_end']<=b:raise ValueError('reserve edit lacks exact immutable current frame')
+   saved=step.get('saved',{});body=saved.get('content','').encode('ascii');doc=saved.get('object');h=hex(fnv(body))
+   if saved.get('bytes')!=len(body)or saved.get('hash')!=h or not body.endswith(b't')or not re.search(rf'\[quil.persist.save.ok\] bytes={len(body)} hash={h} doc={doc}(?:\s|$)',text[b:d]):raise ValueError('reserve lacks exact saved immutable payload')
+   loads=step.get('loaded',[])
+   if len(loads)!=2 or loads[1].get('object')!=doc or(loads[1].get('bytes'),loads[1].get('hash'))!=(len(body)-1,hex(fnv(body[:-1]))):raise ValueError('reserve recovery differs from preceding save')
+   for load in loads:
+    if not re.search(rf'\[quil.persist.load.ok\] bytes={load["bytes"]} hash={load["hash"]} doc={load["object"]}(?:\s|$)',text[a:e]):raise ValueError('reserve lacks actual exact native load')
+   if index and (saved['content']!=chain[index-1]['saved']['content']+'t'or loads[0]!=chain[index-1]['loaded'][0]):raise ValueError('reserve durable generations are not continuous')
+   if not re.search(rf'\[task.finish\] pd={target} task={target} reason=0 terminal=1',text[d:z])or not re.search(rf'\[sext.app.pool.ready\] target={target} task={target} .*ok=1',text[d:z]):raise ValueError('reserve lacks actual terminal pool cleanup')
+  if chain[0]['frame']!=third.get('frame'):raise ValueError('first reserve frame differs')
+  last=rows[-1]['target']
  for key,name,kind,target,expected in [('frame','third-quil-edit','quil',18,'t#'),('exhaustion_frame','third-quil-exhausted-launcher','launcher',9,'Open Quil')]:
   selected=[f for f in frames if f['name']==name]
   if len(selected)!=1 or selected[0]!=third.get(key)or(selected[0]['kind'],selected[0]['target'],selected[0]['expected'])!=(kind,target,expected):raise ValueError('third Quil lacks exact immutable '+key)
- prefix=text[:third['exhaustion_frame']['serial_end']];finished=prefix.rfind('[task.finish] pd=18 task=18 reason=0 terminal=1')
+ prefix=text[:third['exhaustion_frame']['serial_end']];finished=prefix.rfind(f'[task.finish] pd={last} task={last} reason=0 terminal=1')
  selection=third.get('exhaustion_selection_offset');row=third.get('exhaustion_row_offset');layout=prefix.rfind('[launcher.text.view]')
  if type(selection)is not int or type(row)is not int or not 0<=finished<selection<row<len(prefix)or not selection<layout<len(prefix)or prefix.rfind('[launcher.text.view]',selection,row)<=selection:raise ValueError('exhausted launcher lacks current post-retirement selection/layout')
  if not re.match(r'\[shell.palette.select\] old=0 new=1(?=\n|$)',prefix[selection:])or not re.match(r'\[launcher.text.row\] index=1 row=1 name=Open Quil status=CLOSED / RESERVE EXHAUSTED(?=\n|$)',prefix[row:]):raise ValueError('exhausted launcher receipt offsets differ')
- if not re.search(r'\[sext.app.pool.ready\] target=18 task=18 .*ok=1',prefix[finished:selection]):raise ValueError('exhausted launcher predates exact third-incarnation cleanup')
+ if not re.search(rf'\[sext.app.pool.ready\] target={last} task={last} .*ok=1',prefix[finished:selection]):raise ValueError('exhausted launcher predates exact third-incarnation cleanup')
 
 def replay(root,iso,binding,out):
  root=Path(root).resolve();out=Path(out).resolve();iso=Path(iso).resolve();binding=Path(binding).resolve()
@@ -130,9 +156,10 @@ def replay(root,iso,binding,out):
  if result.get('soak'):
   errors=quil_close_errors(result['soak'],text)+cycle_errors(result['soak'])+terminal_pending_errors(text,include_quil=result['soak']['pending_quil_close'])
   if errors:raise ValueError('alpha exact cycle/close evidence: '+str(errors))
-  soak=result['soak'];cycles=soak['cycles'];windows=soak['cycle_windows'];body=result['documents'][1]['content'];suffix=1 if soak.get('third_quil')else 0
+  soak=result['soak'];cycles=soak['cycles'];windows=soak['cycle_windows'];body=result['documents'][1]['content'];suffix=(soak['third_quil'].get('append_count',1)if soak.get('third_quil')else 0)
   if soak.get('third_quil'):
-   verify_third_captures(soak['third_quil'],frames,text)
+   from quil_reserve_catalog import quil_catalog
+   reserve_rows=quil_catalog(root);verify_third_captures(soak['third_quil'],frames,text,reserve_rows)
   saved_body=body[:-suffix]if suffix else body;initial=saved_body[:-cycles]
   if saved_body!=initial+'q'*cycles:raise ValueError('alpha cycle edits differ from final durable payload')
   for window in windows:
@@ -152,7 +179,7 @@ def replay(root,iso,binding,out):
   if errors:raise ValueError('alpha rehearsal lifecycle: '+str(errors))
  from check_desktop_close_log import check as cleanup
  if result.get('soak'):
-  errors=cleanup(text,include_successor=True,include_spindle_successor=True,include_third_quil=result['soak']['boot_successors']==[16,17,18])
+  errors=cleanup(text,include_successor=True,include_spindle_successor=True,include_third_quil=bool(result['soak'].get('third_quil')),additional_quil=reserve_rows[3:]if result['soak'].get('third_quil')else ())
   if errors:raise ValueError('alpha terminal cleanup: '+str(errors))
  disk=gzip.decompress((out/'nvme.img.gz').read_bytes());documents=[]
  for expected in result['documents']:

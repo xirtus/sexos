@@ -5,9 +5,11 @@ import json
 import re
 from pathlib import Path
 from check_document_views import inspect as inspect_boot
+from quil_reserve_catalog import quil_catalog
 
 
 def inspect(text, required=(9,), minimum=1, require_cleanup=True):
+    clients={row['target']for row in quil_catalog(Path(__file__).resolve().parents[1])}
     errors = list(inspect_boot(text)['errors'])
     pattern = r'\[(files|quil)\.document\.snapshot\] caller=(\d+) object=(\d+) identity=(\d+) sequence=(\d+) bytes=(\d+) (?:published|validated)=1'
     publications = {}
@@ -17,7 +19,7 @@ def inspect(text, required=(9,), minimum=1, require_cleanup=True):
         pd, obj, identity, seq, length = map(int, raw)
         key = (pd, seq)
         payload = (obj, identity, length)
-        if pd not in (9, 16, 18) or not 2 <= obj < 15 or not 0 < seq <= 0xffffff or length > 12288:
+        if pd not in clients or not 2 <= obj < 15 or not 0 < seq <= 0xffffff or length > 12288:
             errors.append('invalid actual snapshot identity/length')
         if side == 'files':
             if key in publications:
@@ -32,14 +34,15 @@ def inspect(text, required=(9,), minimum=1, require_cleanup=True):
     if len(validations) < minimum or not set(required).issubset({pd for pd, _ in validations}):
         errors.append('required actual client snapshot validation missing')
     clears = {}
-    for match in re.finditer(r'\[files\.document\.snapshot\.clear\] caller=(9|16|18) bytes=16384 scrubbed=1', text):
-        clears.setdefault(int(match[1]), []).append(match.start())
+    for match in re.finditer(r'\[files\.document\.snapshot\.clear\] caller=(\d+) bytes=16384 scrubbed=1', text):
+        if int(match[1])in clients:clears.setdefault(int(match[1]), []).append(match.start())
     for (pd, _), (_, position) in publications.items():
         if not any(p > position for p in clears.get(pd, [])):
             errors.append('published backing never completely scrubbed')
     cleanups = 0
-    for match in re.finditer(r'\[files\.app\.cleanup\] target=(9|16|18) task=\d+ ', text):
+    for match in re.finditer(r'\[files\.app\.cleanup\] target=(\d+) task=\d+ ', text):
         pd = int(match[1])
+        if pd not in clients:continue
         previous = max((pos for (owner, _), (_, pos) in publications.items()
                         if owner == pd and pos < match.start()), default=-1)
         if not any(previous < p < match.start() for p in clears.get(pd, [])):
