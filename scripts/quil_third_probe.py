@@ -16,7 +16,10 @@ def open_selected(c):
     intent=re.search(r'\[linen.quil.disk_doc.intent\] object_id=\d+ path_id=(\d+) ok=1',c['text']()[offset:])
     if intent is None:return None
     object_id=int(intent[1])
-    loaded=c['wait'](r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(object_id)+r'(?:\s|$)',offset)
+    # A selected row that is not a supported document reports an explicit
+    # failed load; it is not the saved object being sought.
+    loaded=c['wait'](r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc='+str(object_id)+r'(?:\s|$)|\[quil.document.result\] outcome=Failed ',offset)
+    if loaded[0].startswith('[quil.document.result]'):return None
     return dict(object=object_id,bytes=int(loaded[1]),hash=loaded[2])
 
 def run(c,refresh,close):

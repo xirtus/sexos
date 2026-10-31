@@ -94,6 +94,9 @@ def run(c, seconds, acceptance=True, third_quil=False):
         command('disk-stat 0', 12, r'\[spindle.probe.result\] target=12 kind=done job=Stat\(0\).*error=0')
         record('spindle_stat', sent)
         offset = command('echo alpha', 12, r'\[spindle.instance.command\] target=12 .*name=echo ok=1')
+        if cycle == 1:
+            # The shipped SexTime calculator: exact conversion of a typed value.
+            command('sextime 1356048000', 12, r'\[spindle.sextime\] SexTime 0 s \| UTC 2012-12-21T00:00:00Z \| Long Count 13\.0\.0\.0\.0 \(GMT 584283\) ok=1')
         wait(r'\[spindle.history.receipt\] target=12 .*kind=saved .*error=0', offset)
         refresh()
         (out/'progress.json').write_text(json.dumps(dict(cycles=cycle, elapsed_seconds=time.monotonic()-started,
