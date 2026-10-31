@@ -262,6 +262,24 @@ impl Reader {
         let changed=next!=self.anchor;self.anchor=next;changed
     }
 
+    /// One HID report scrolls three visual rows per notch. At most 384 rows
+    /// are requested, and layout/source lookup each traverse the bounded
+    /// retained body once, independently of the step magnitude.
+    pub fn scroll_wheel(&mut self, body: &[u8], wheel: i8) -> bool {
+        if wheel == 0 { return false; }
+        let (cols,rows) = self.source_geometry(body);
+        let visible = rows.saturating_sub(3);
+        if cols == 0 || visible == 0 { return false; }
+        let body = content(body);
+        let info = layout(body,cols,visible,self.anchor);
+        let last = info.total.saturating_sub(visible);
+        let delta = -(wheel as i16) * 3;
+        let first = if delta < 0 { info.first.saturating_sub((-delta) as usize) }
+            else { info.first.saturating_add(delta as usize).min(last) };
+        self.anchor = offset_at(body,cols,first);
+        first != info.first
+    }
+
     pub fn navigate(&mut self, body: &[u8], action: Move) -> bool {
         let (cols,rows) = self.source_geometry(body);
         let visible = rows.saturating_sub(3);
@@ -353,6 +371,37 @@ fn put(frame: &mut Frame, row: usize, text: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn wheel_steps_clamp_and_reverse_without_changing_retained_utf8() {
+        let body=(0..1000).map(|n|format!("{n:04} café 中 😀\n")).collect::<String>();
+        let original=body.as_bytes().to_vec();
+        for wheel in i8::MIN..=i8::MAX {
+            let mut r=reader(624,706);
+            r.navigate(body.as_bytes(),Move::PageDown);
+            let prior=r.render(body.as_bytes());
+            let desired=(prior.first as i32-wheel as i32*3).clamp(0,(prior.total_lines-prior.body_rows)as i32)as usize;
+            let changed=r.scroll_wheel(body.as_bytes(),wheel);
+            let frame=r.render(body.as_bytes());
+            assert_eq!(frame.first,desired);assert_eq!(changed,desired!=prior.first);
+            assert!(body.is_char_boundary(r.source_anchor()));valid(&frame,624,706);
+            assert_eq!(body.as_bytes(),original);
+        }
+        let mut r=reader(624,706);
+        assert!(!r.scroll_wheel(body.as_bytes(),1));assert!(r.scroll_wheel(body.as_bytes(),-1));
+        assert_eq!(r.render(body.as_bytes()).first,3);assert!(r.scroll_wheel(body.as_bytes(),1));
+        assert_eq!(r.source_anchor(),0);
+        r.navigate(body.as_bytes(),Move::End);assert!(!r.scroll_wheel(body.as_bytes(),i8::MIN));
+        let end=r.render(body.as_bytes());assert_eq!(end.end,end.total_lines);
+    }
+    #[test] fn wheel_is_inert_without_visible_body_and_preserves_anchor_over_resize() {
+        let body=[b'x';MAX_BODY];let mut r=reader(82,160);r.scroll_wheel(&body,-3);
+        let anchor=r.source_anchor();assert_eq!(anchor,90);
+        for (w,h) in [(0,0),(160,43),(160,52),(160,61)] {
+            r.resize(w,h);assert!(!r.scroll_wheel(&body,-1));assert_eq!(r.source_anchor(),anchor);
+        }
+        r.resize(82,160);assert_eq!(r.render(&body).first,9);
+        assert!(!r.scroll_wheel(&body,0));assert_eq!(r.source_anchor(),anchor);
+        r.clear();assert!(!r.scroll_wheel(b"",-1));assert_eq!(r.source_anchor(),0);
+    }
     fn reader(w: u32,h: u32) -> Reader { let mut reader=Reader::new();reader.resize(w,h);reader }
     fn row(frame: &Frame,index: usize) -> &[u8] { frame.bytes[..frame.len].split(|b|*b==b'\n').nth(index).unwrap() }
     fn valid(frame: &Frame,w: u32,h: u32) {

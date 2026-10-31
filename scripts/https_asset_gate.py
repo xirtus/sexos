@@ -161,7 +161,10 @@ def source_contract(root):
  for literal in ('(raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)','const TABLET_RAW_MAX: i32 = 32767;','[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}'):
   if literal not in shell:raise ValueError('source-bound pointer normalization changed')
  input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);'
- if physical not in input_source or not input_source.index(physical)<input_source.index('pdx_call(SLOT_SHELL, OP_HID_EVENT, code, value, EV_KEY);',input_source.index(physical))or 'let code = (scancode & 0x7F) as u64;'not in input_source:raise ValueError('physical PS2 make receipt must be atomic and precede held Shell forwarding')
+ retained='input_arrival.ps2(&mut keyboard_outbox,scancode)'
+ if physical not in input_source or retained not in input_source or input_source.index(physical)>=input_source.index(retained):raise ValueError('physical PS2 make receipt must be atomic and precede retained key admission')
+ for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
+  if literal not in input_source:raise ValueError('retained physical key must drain through the actual held Shell route: '+literal)
  if 'min(4)'not in view or '0x00303860u32'not in display:raise ValueError('source-bound fit/background contract changed')
  return dict(source_sha256={n:hashlib.sha256(data).hexdigest()for n,data in sources.items()},font=font_from_source(display),base=list(BASE),pixel_hash=hex(PIXEL_HASH),body_hash=hex(fingerprint(BODY)),body_sha256=hashlib.sha256(BODY).hexdigest())
 

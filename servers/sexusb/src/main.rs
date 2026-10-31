@@ -112,7 +112,7 @@ struct BootMouseReport {
 }
 
 fn decode_boot_mouse_report(buf: &[u8], len: usize) -> Option<BootMouseReport> {
-    if len < 3 {
+    if len < 3 || len > buf.len() {
         return None;
     }
     let wheel = if len >= 4 { buf[3] as i8 } else { 0 };
@@ -127,9 +127,7 @@ fn decode_boot_mouse_report(buf: &[u8], len: usize) -> Option<BootMouseReport> {
 fn send_synthetic_mouse_frame(n: u32, buttons: u8, dx: i8, dy: i8) {
     let buf = [buttons, dx as u8, dy as u8, 0u8];
     if let Some(decoded) = decode_boot_mouse_report(&buf, 4) {
-        let packed_axes = (decoded.dx as u8 as u64)
-            | ((decoded.dy as u8 as u64) << 8)
-            | ((decoded.wheel as u8 as u64) << 16);
+        let packed_axes = pack_mouse_axes(&decoded);
         serial_println!(
             "[sexusb.synthetic.frame] n={} dx={} dy={} buttons={}",
             n, decoded.dx, decoded.dy, decoded.buttons
@@ -146,14 +144,16 @@ struct TabletReport {
     buttons: u8,
     abs_x: u16,
     abs_y: u16,
+    wheel: i8,
 }
 
-/// Decode QEMU usb-tablet HID report (5 bytes):
+/// Decode QEMU usb-tablet HID report (5 bytes, optional sixth wheel byte):
 ///   byte 0: buttons[2:0] (bit0=left, bit1=right, bit2=middle), padding[7:3]
 ///   byte 1-2: X absolute (little-endian u16, 0..32767)
 ///   byte 3-4: Y absolute (little-endian u16, 0..32767)
+///   byte 5, when received: signed relative wheel (positive = up)
 fn decode_tablet_report(buf: &[u8], len: usize) -> Option<TabletReport> {
-    if len < 5 {
+    if len < 5 || len > buf.len() {
         return None;
     }
     let abs_x = (buf[1] as u16) | ((buf[2] as u16) << 8);
@@ -162,7 +162,26 @@ fn decode_tablet_report(buf: &[u8], len: usize) -> Option<TabletReport> {
         buttons: buf[0] & 0x07,
         abs_x,
         abs_y,
+        wheel: if len >= 6 { buf[5] as i8 } else { 0 },
     })
+}
+
+fn pack_tablet_axes(report: &TabletReport) -> u64 {
+    (report.abs_x as u64) | ((report.abs_y as u64) << 16)
+        | (1u64 << 32) | ((report.wheel as u8 as u64) << 40)
+}
+
+fn pack_mouse_axes(report: &BootMouseReport) -> u64 {
+    (report.dx as u8 as u64) | ((report.dy as u8 as u64) << 8)
+        | ((report.wheel as u8 as u64) << 16)
+}
+
+// Nonbudgeted receipt of a decoded hardware wheel report, before IPC admission.
+fn record_device_wheel(slot: u32, bytes: u32, absolute: bool, wheel: i8, packed: u64) {
+    if wheel != 0 {
+        sex_pdx::serial_record!("[sexusb.wheel.device] slot={} bytes={} absolute={} delta={} packed={} up_positive=1",
+            slot, bytes, absolute as u8, wheel, packed);
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -261,7 +280,126 @@ static BOOTGRAPH_PROOF_MARKER_EMITTED: AtomicBool = AtomicBool::new(false);
 // Off by default for quiet production boot; set true for USB proof sessions.
 const HID_VERBOSE_RING_LOG: bool = false;
 
-fn send_report_to_sexinput(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
+// One main-task owner, separate reserved raw keyboard and pointer capacities.
+// Both preserve arrival order; hardware polling/rearming never waits on Full.
+struct UsbPointerOutbox {
+    words: [(u64,u64,u64);32], orders:[u64;32], head: usize, len: usize, stalled: u32,
+}
+impl UsbPointerOutbox {
+    const STALL_LIMIT: u32 = 4096;
+    const fn new() -> Self { Self { words:[(0,0,0);32],orders:[0;32],head:0,len:0,stalled:0 } }
+    fn push(&mut self, packet:(u64,u64,u64)) -> bool {
+        if self.len == self.words.len() { return false; }
+        self.words[(self.head+self.len)%self.words.len()] = packet;
+        self.len+=1; true
+    }
+    fn pop(&mut self) {
+        self.words[self.head]=(0,0,0);self.orders[self.head]=0;
+        self.head=(self.head+1)%self.words.len();self.len-=1;self.stalled=0;
+    }
+    fn poll(&mut self,send:impl FnMut(u64,u64,u64)->Result<bool,u64>) {
+        self.poll_budget(OP_USB_MOUSE_REPORT,&mut 4,true,send);
+    }
+    fn poll_budget(&mut self,op:u64,budget:&mut usize,allow_expiry:bool,mut send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
+        while *budget>0 {
+            if self.len==0 { break; }
+            let (a,b,c)=self.words[self.head];*budget-=1;
+            match send(a,b,c) {
+                Ok(true) => {if op==OP_USB_MOUSE_REPORT {record_wheel_admission(c);} self.pop();}
+                Ok(false) | Err(sex_pdx::ERR_SERVICE_NOT_READY) => {
+                    self.stalled=self.stalled.saturating_add(1);
+                    // Keyboard snapshots retain custody on Full; expiring a
+                    // key-up could leave an admitted modifier held forever.
+                    if op==OP_USB_KEYBOARD_REPORT || !allow_expiry || self.stalled < Self::STALL_LIMIT {return true;}
+                    sex_pdx::serial_record!("[sexusb.pointer.rejected] packed={} reason=stall_limit admitted=0",c);
+                    self.pop();return true;
+                }
+                Err(error) => {
+                    sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=transport error={} admitted=0",op,a,b,c,error);
+                    self.pop();return true;
+                }
+            }
+        }
+        self.len>0
+    }
+}
+static mut POINTER_OUTBOX: UsbPointerOutbox = UsbPointerOutbox::new();
+static mut KEYBOARD_OUTBOX: UsbPointerOutbox = UsbPointerOutbox::new();
+static mut INPUT_ARRIVAL: u64 = 0;
+
+fn record_wheel_admission(packed:u64) {
+    let absolute=packed & (1u64<<32)!=0;
+    let wheel=(packed >> if absolute {40}else{16}) as u8 as i8;
+    if wheel!=0 {
+        sex_pdx::serial_record!("[sexusb.wheel.admitted] absolute={} delta={} packed={} admitted=1",absolute as u8,wheel,packed);
+    }
+}
+
+fn poll_pointer_reports() {
+    // Hardware input retains one arrival order across reserved class capacities.
+    // Raw reports are indivisible IPC packets; each is admitted exactly once.
+    unsafe {
+        let keys=&mut *core::ptr::addr_of_mut!(KEYBOARD_OUTBOX);
+        let pointer=&mut *core::ptr::addr_of_mut!(POINTER_OUTBOX);
+        for _ in 0..4 {
+            if keys.len==0 && pointer.len==0 {break;}
+            let key_first=keys.len>0 && (pointer.len==0 || keys.orders[keys.head]<pointer.orders[pointer.head]);
+            let allow_expiry=keys.len==0;
+            let (outbox,op)=if key_first {( &mut *keys,OP_USB_KEYBOARD_REPORT)}else{(&mut *pointer,OP_USB_MOUSE_REPORT)};
+            let mut blocked=false;
+            let mut hard_failure=None;
+            outbox.poll_budget(op,&mut 1,allow_expiry,|a,b,c|{
+                let result=send_report_once(op,a,b,c);blocked=!matches!(result,Ok(true));
+                if let Err(error)=result {if error!=sex_pdx::ERR_SERVICE_NOT_READY {hard_failure=Some(error);}}
+                result
+            });
+            if let Some(error)=hard_failure {
+                sex_pdx::serial_record!("[sexusb.input.uncertain] error={} pointer={} keys={} dependent_input=erased",error,pointer.len,keys.len);
+                keys.words.fill((0,0,0));keys.orders.fill(0);keys.head=0;keys.len=0;keys.stalled=0;
+                pointer.words.fill((0,0,0));pointer.orders.fill(0);pointer.head=0;pointer.len=0;pointer.stalled=0;
+            }
+            if blocked {break;}
+        }
+    }
+}
+
+fn send_report_to_sexinput(op:u64,arg0:u64,arg1:u64,arg2:u64)->Result<bool,u64> {
+    if op!=OP_USB_MOUSE_REPORT && op!=OP_USB_KEYBOARD_REPORT {
+        return send_report_once(op,arg0,arg1,arg2);
+    }
+    if unsafe{*core::ptr::addr_of!(INPUT_ARRIVAL)==u64::MAX} {
+        sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=sequence_exhausted admitted=0",op);
+        return Err(sex_pdx::ERR_SERVICE_NOT_READY);
+    }
+    let keyboard=op==OP_USB_KEYBOARD_REPORT;
+    let pending=unsafe{(*core::ptr::addr_of!(KEYBOARD_OUTBOX)).len>0
+        || (*core::ptr::addr_of!(POINTER_OUTBOX)).len>0};
+    let outbox=unsafe { &mut *if keyboard {core::ptr::addr_of_mut!(KEYBOARD_OUTBOX)}
+        else{core::ptr::addr_of_mut!(POINTER_OUTBOX)} };
+    if !pending {
+        match send_report_once(op,arg0,arg1,arg2) {
+            Ok(true) => {if !keyboard{record_wheel_admission(arg2);}return Ok(true);}
+            Ok(false)|Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{}
+            Err(error)=>{
+                sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=transport error={} admitted=0",op,arg0,arg1,arg2,error);
+                return Err(error);
+            }
+        }
+    }
+    let next=unsafe{(*core::ptr::addr_of!(INPUT_ARRIVAL)).checked_add(1)};
+    let slot=(outbox.head+outbox.len)%outbox.words.len();
+    if let Some(order)=next {
+        if outbox.push((arg0,arg1,arg2)) {
+            outbox.orders[slot]=order;unsafe{INPUT_ARRIVAL=order;}return Ok(false);
+        }
+    }
+    {
+        sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=outbox_full_or_sequence admitted=0",op,arg0,arg1,arg2);
+        Err(sex_pdx::ERR_SERVICE_NOT_READY)
+    }
+}
+
+fn send_report_once(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
     if CAP_READY_SEXINPUT.load(Ordering::Relaxed) {
         return pdx_call_checked(SLOT_USB_SEXINPUT, op, arg0, arg1, arg2).map(|_| {
             if !ROUTE_READY_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
@@ -4180,6 +4318,8 @@ pub extern "C" fn _start() -> ! {
         let mut intr_completed_off: u64 = 0;
         let mut intr_wait_polls: usize = 0;
         while intr_wait_polls < HID_INTR_LIVENESS_BUDGET {
+            // At most four pending IPC attempts, then hardware/event progress.
+            poll_pointer_reports();
             intr_wait_polls += 1;
             hid_report_total_polls = hid_report_total_polls.wrapping_add(1);
             let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
@@ -4479,7 +4619,8 @@ pub extern "C" fn _start() -> ! {
 
                             if d2.role == HidRole::PointerTablet {
                                 if let Some(td) = decode_tablet_report(&s2_report, s2_actual as usize) {
-                                    let packed_axes = (td.abs_x as u64) | ((td.abs_y as u64) << 16) | (1u64 << 32);
+                                    let packed_axes = pack_tablet_axes(&td);
+                                    record_device_wheel(slot, s2_actual, true, td.wheel, packed_axes);
                                     serial_println!("[sexusb.slot2.forward.mouse] kind=tablet buttons=0x{:x} packed=0x{:x}",
                                         td.buttons, packed_axes);
                                     let _ = send_report_to_sexinput(
@@ -4493,9 +4634,8 @@ pub extern "C" fn _start() -> ! {
                                 }
                             } else if d2.role == HidRole::PointerMouse {
                                 if let Some(md) = decode_boot_mouse_report(&s2_report, s2_actual as usize) {
-                                    let packed_axes = (md.dx as u8 as u64)
-                                        | ((md.dy as u8 as u64) << 8)
-                                        | ((md.wheel as u8 as u64) << 16);
+                                    let packed_axes = pack_mouse_axes(&md);
+                                    record_device_wheel(slot, s2_actual, false, md.wheel, packed_axes);
                                     serial_println!("[sexusb.slot2.forward.mouse] kind=mouse buttons=0x{:x} packed=0x{:x}",
                                         md.buttons, packed_axes);
                                     let _ = send_report_to_sexinput(
@@ -4822,7 +4962,6 @@ pub extern "C" fn _start() -> ! {
             let rb2 = report_bytes[2];
             let rb3 = report_bytes[3];
             let rb4 = report_bytes[4];
-            let report_bytes = [rb0, rb1, rb2, rb3, rb4];
             // Dump raw bytes for first tablet report to verify data.
             if i == 0 && intr_actual >= 5 {
                 serial_println!("[sexusb.hid.tablet.raw] b0={:#x} b1={:#x} b2={:#x} b3={:#x} b4={:#x} actual={}",
@@ -4856,15 +4995,16 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 // Pass absolute coordinates directly. Set bit 32 of packed_axes to indicate absolute.
-                let packed_axes = (td.abs_x as u64) | ((td.abs_y as u64) << 16) | (1u64 << 32);
+                let packed_axes = pack_tablet_axes(&td);
+                record_device_wheel(en_slot_id, intr_actual, true, td.wheel, packed_axes);
                 // AP13: one-shot pack proof marker for tablet
                 unsafe {
                     static mut TABLET_PACK_PROOF_EMITTED: bool = false;
                     if !TABLET_PACK_PROOF_EMITTED {
                         TABLET_PACK_PROOF_EMITTED = true;
                         serial_println!(
-                            "[usb.mouse.report.pack] dx={} dy={} buttons={} wheel=0 is_abs=1 ok=1",
-                            td.abs_x, td.abs_y, td.buttons
+                            "[usb.mouse.report.pack] dx={} dy={} buttons={} wheel={} is_abs=1 ok=1",
+                            td.abs_x, td.abs_y, td.buttons, td.wheel
                         );
                     }
                 }
@@ -4975,7 +5115,6 @@ pub extern "C" fn _start() -> ! {
             let rb1 = report_bytes[1];
             let rb2 = report_bytes[2];
             let rb3 = report_bytes[3];
-            let report_bytes = [rb0, rb1, rb2, rb3];
             if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
                 // AP13: one-shot raw report proof marker for boot mouse
                 unsafe {
@@ -5038,9 +5177,8 @@ pub extern "C" fn _start() -> ! {
                         );
                     }
                 }
-                let packed_axes = (decoded.dx as u8 as u64)
-                    | ((decoded.dy as u8 as u64) << 8)
-                    | ((decoded.wheel as u8 as u64) << 16);
+                let packed_axes = pack_mouse_axes(&decoded);
+                record_device_wheel(en_slot_id, intr_actual, false, decoded.wheel, packed_axes);
                 // AP13: one-shot pack proof marker for boot mouse
                 unsafe {
                     static mut MOUSE_PACK_PROOF_EMITTED: bool = false;

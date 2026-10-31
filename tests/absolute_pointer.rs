@@ -6,6 +6,8 @@ macro_rules! serial_println{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 const EV_REL: u64 = 2;
 const EV_ABS: u64 = 3;
 const EV_BTN: u64 = 4;
+const EV_WHEEL: u64 = 5;
+#[path="../crates/sex-pdx/src/app_scroll.rs"]pub mod app_scroll;
 #[derive(Clone, Copy)]
 struct HidPointerRawReport {
     dx: i16,

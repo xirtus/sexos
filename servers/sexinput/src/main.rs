@@ -14,6 +14,7 @@ fn panic(_info: &PanicInfo) -> ! {
 static mut LAST_BUTTONS: u8 = 0;
 // Tracks the USB HID keycode from the previous keyboard report for press/release detection.
 static mut LAST_USB_KEY: u8 = 0;
+static mut LAST_USB_MODIFIERS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
@@ -81,11 +82,31 @@ struct HidPointerRawReport {
     is_abs: bool,
 }
 
+// BOOT fixed spawn order gives SexUSB its sole main task (PD5/task5).
+// No successor or runtime task creation is sanctioned for this input producer.
+fn usb_report_sender(req: &PdxMessage) -> bool {
+    req.caller_pd == 5 && req.caller_task == 5
+}
+
+fn decode_pointer_payload(buttons: u64, packed: u64) -> Option<HidPointerRawReport> {
+    if buttons > 7 { return None; }
+    let is_abs = packed & (1 << 32) != 0;
+    let allowed = if is_abs { 0x0000_ff01_ffff_ffff } else { 0x00ff_ffff };
+    if packed & !allowed != 0 { return None; }
+    let dx = if is_abs { (packed & 0xffff) as u16 as i16 }
+        else { packed as u8 as i8 as i16 };
+    let dy = if is_abs { ((packed >> 16) & 0xffff) as u16 as i16 }
+        else { (packed >> 8) as u8 as i8 as i16 };
+    if is_abs && (dx < 0 || dy < 0) { return None; }
+    let wheel = (packed >> if is_abs { 40 } else { 16 }) as u8 as i8;
+    Some(HidPointerRawReport { dx, dy, buttons: buttons as u8, wheel, is_abs })
+}
+
 /// Parse a boot-mouse-style 3-byte report, detect button edge transitions,
-/// and emit normalized EV_REL/EV_BTN events via the callback.
+/// and emit normalized position/button/wheel events via the callback.
 ///
 /// Transport-agnostic: callable from synthetic producer or future USB HID source.
-/// Returns the number of events emitted (0-4: 1 REL + up to 3 button edges).
+/// Returns at most 5 events: one position, three button edges, then one wheel.
 fn normalize_pointer_report_v1(
     report: HidPointerRawReport,
     last_buttons: &mut u8,
@@ -129,7 +150,6 @@ fn normalize_pointer_report_v1(
 
     // Emit BTN events AFTER ABS/REL so cursor position is current
     // before silk-shell processes the button click.
-    if changed != 0 { reason = "buttons"; }
     if changed != 0 {
         serial_println!(
             "[usb.hid.pointer.button] buttons={} left={} ok=1",
@@ -150,10 +170,208 @@ fn normalize_pointer_report_v1(
     }
     *last_buttons = buttons;
 
-    // V1 keeps wheel in the raw report model but does not emit wheel events yet.
-    let _ = report.wheel;
+    // Wheel follows position and all button edges; positive device steps mean up.
+    if let Some(scroll) = sex_pdx::app_scroll::Scroll::new(report.wheel) {
+        emit(scroll.wire(), 0, EV_WHEEL);
+        count += 1;
+    }
 
     count
+}
+
+// One main-loop owner; pointer batches and reserved keys share arrival order.
+// Each cursor advances only on admission; Full retains the exact unsent suffix.
+#[derive(Clone,Copy)]
+struct PointerBatch { words:[(u64,u64,u64);5], len:usize, next:usize, dx:i32, dy:i32, order:u64 }
+impl PointerBatch {
+    const fn new()->Self {Self{words:[(0,0,0);5],len:0,next:0,dx:0,dy:0,order:0}}
+}
+struct PointerOutbox {
+    batches:[PointerBatch;32], head:usize, len:usize, stalled:u32, sent_buttons:u8,
+}
+impl PointerOutbox {
+    const STALL_LIMIT:u32=4096;
+    const fn new()->Self {Self{batches:[PointerBatch::new();32],head:0,len:0,stalled:0,sent_buttons:0}}
+    fn available(&self)->usize {self.batches.len()-self.len}
+    fn push(&mut self, words:&[(u64,u64,u64)])->bool {
+        if words.len()>5 || self.available()==0 {return false;}
+        if words.is_empty() {return true;}
+        let slot=(self.head+self.len)%self.batches.len();
+        self.batches[slot].words[..words.len()].copy_from_slice(words);
+        self.batches[slot].len=words.len();
+        if words[0].2==EV_REL {
+            self.batches[slot].dx=words[0].0 as i32;self.batches[slot].dy=words[0].1 as i32;
+        }
+        self.len+=1; true
+    }
+    fn reject_all(&mut self,error:u64) {
+        sex_pdx::serial_record!("[sexinput.pointer.uncertain] reports={} error={} last_admitted_buttons={} button_recovery=unconfirmed pending=erased",
+            self.len,error,self.sent_buttons);
+        self.batches.fill(PointerBatch::new());self.head=0;self.len=0;self.stalled=0;
+    }
+    // True asks the caller to restore edge tracking to the last admitted state.
+    // Expiry/rejection erases all suffixes: no wheel can outlive its own position.
+    fn poll(&mut self,send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
+        self.poll_budget(4,true,send)
+    }
+    fn poll_budget(&mut self,budget:usize,allow_expiry:bool,mut send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
+        for _ in 0..budget {
+            if self.len==0 {break;}
+            let batch=&mut self.batches[self.head];
+            let (a,b,c)=batch.words[batch.next];
+            match send(a,b,c) {
+                Ok(true)=>{
+                    if c==EV_WHEEL {
+                        sex_pdx::serial_record!("[sexinput.wheel.normalized] delta={} word={} reserved={} class={} admitted=1 up_positive=1",a as i64,a,b,c);
+                    }
+                    if c==EV_BTN && (1..=3).contains(&a) {
+                        let bit=1u8<<((a-1) as u32);
+                        if b==1 {self.sent_buttons|=bit;}else{self.sent_buttons&=!bit;}
+                    }
+                    batch.words[batch.next]=(0,0,0);batch.next+=1;self.stalled=0;
+                    if batch.next==batch.len {
+                        // Existing liveness receipts now follow the whole actual admission.
+                        sex_pdx::serial_record!("[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",self.sent_buttons,batch.dx,batch.dy);
+                        sex_pdx::serial_record!("[usb.hid.pointer.pass] ok=1");
+                        sex_pdx::serial_record!("[sexinput.usb_mouse.shell_send.ok]");
+                        *batch=PointerBatch::new();self.head=(self.head+1)%self.batches.len();self.len-=1;
+                    }
+                }
+                Ok(false)|Err(ERR_SERVICE_NOT_READY)=>{
+                    self.stalled=self.stalled.saturating_add(1);
+                    if allow_expiry && self.stalled>=Self::STALL_LIMIT {self.reject_all(ERR_SERVICE_NOT_READY);return true;}
+                    break;
+                }
+                Err(error)=>{self.reject_all(error);return true;}
+            }
+        }
+        false
+    }
+}
+
+// Key custody is separate from pointer capacity. A retained key edge never
+// expires on Full: dropping a modifier suffix could leave Shell holding Control.
+#[derive(Clone,Copy)]
+struct KeyEdge { code:u8, down:u8, source:u8, modifiers:u8 }
+impl KeyEdge {
+    const fn empty()->Self {Self{code:0,down:0,source:0,modifiers:0}}
+}
+struct KeyboardOutbox { edges:[KeyEdge;128], orders:[u64;128], head:usize, len:usize }
+impl KeyboardOutbox {
+    const fn new()->Self {Self{edges:[KeyEdge::empty();128],orders:[0;128],head:0,len:0}}
+    fn available(&self)->usize {self.edges.len()-self.len}
+    fn push(&mut self,edges:&[KeyEdge])->bool {
+        if edges.len()>self.available() {return false;}
+        for edge in edges {
+            self.edges[(self.head+self.len)%self.edges.len()]=*edge;self.len+=1;
+        }
+        true
+    }
+    fn ps2(&mut self,raw:u64)->bool {
+        if raw>255 {return false;}
+        self.push(&[KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
+    }
+    fn usb(&mut self,key:u8,modifiers:u8,last_key:&mut u8,last_modifiers:&mut u8)->bool {
+        let mut edges=[KeyEdge::empty();10];let mut count=0;
+        let mut add=|code:u8,down:u8,mods:u8|{
+            edges[count]=KeyEdge{code,down,source:2,modifiers:mods};count+=1;
+        };
+        // Release the previous key under its old modifier state, then change
+        // modifier edges, then press the new key under the received snapshot.
+        if key!=*last_key && *last_key!=0 {
+            if let Some(code)=hid_to_ps2(*last_key) {add(code,0,*last_modifiers);}
+        }
+        let codes=[0x1d,0x2a,0x38,0x5b,0x61,0x36,0x64,0x5c];
+        let changed=modifiers^*last_modifiers;
+        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)==0 {add(codes[bit],0,modifiers);}}
+        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)!=0 {add(codes[bit],1,modifiers);}}
+        if key!=*last_key && key!=0 {
+            if let Some(code)=hid_to_ps2(key) {add(code,1,modifiers);}
+        }
+        if !self.push(&edges[..count]) {return false;}
+        *last_key=key;*last_modifiers=modifiers;true
+    }
+    fn reject_all(&mut self,error:u64) {
+        sex_pdx::serial_record!("[sexinput.key.uncertain] pending={} error={} modifier_recovery=unconfirmed",self.len,error);
+        self.edges.fill(KeyEdge::empty());self.orders.fill(0);self.head=0;self.len=0;
+    }
+    // True means no pointer work may use the remaining admission budget.
+    fn poll(&mut self,budget:&mut usize,mut send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
+        while self.len>0 && *budget>0 {
+            let edge=self.edges[self.head];*budget-=1;
+            match send(edge.code as u64,edge.down as u64,EV_KEY) {
+                Ok(true)=>{
+                    sex_pdx::serial_record!("[sexinput.key.send] code={} down={} mod={} source={} dst=6 ok=1 err=0",edge.code,edge.down,edge.modifiers,edge.source);
+                    if edge.source==1 {
+                        if edge.down==1 {sex_pdx::serial_record!("[input.keyboard.keydown.ok] code={} source=ps2",edge.code);}
+                        else {sex_pdx::serial_record!("[input.keyboard.keyup.ok] code={} source=ps2",edge.code);}
+                    }else{
+                        if edge.down==1 {sex_pdx::serial_record!("[input.keyboard.keydown.ok] code={} source=usb",edge.code);}
+                        else {sex_pdx::serial_record!("[input.keyboard.keyup.ok] code={} source=usb",edge.code);}
+                    }
+                    self.edges[self.head]=KeyEdge::empty();self.orders[self.head]=0;self.head=(self.head+1)%self.edges.len();self.len-=1;
+                }
+                Ok(false)|Err(ERR_SERVICE_NOT_READY)=>return true,
+                Err(error)=>{
+                    self.reject_all(error);return true;
+                }
+            }
+        }
+        self.len>0
+    }
+}
+
+// This counter is ordering data, not authority. No wrap or reuse is permitted.
+struct InputArrival { last:u64 }
+impl InputArrival {
+    const fn new()->Self {Self{last:0}}
+    fn pointer(&mut self,outbox:&mut PointerOutbox,words:&[(u64,u64,u64)])->bool {
+        let Some(order)=self.last.checked_add(1) else{return false;};
+        let slot=(outbox.head+outbox.len)%outbox.batches.len();
+        if !outbox.push(words) {return false;}
+        if !words.is_empty() {outbox.batches[slot].order=order;self.last=order;}
+        true
+    }
+    fn ps2(&mut self,outbox:&mut KeyboardOutbox,raw:u64)->bool {
+        let Some(order)=self.last.checked_add(1) else{return false;};
+        let slot=(outbox.head+outbox.len)%outbox.edges.len();
+        if !outbox.ps2(raw) {return false;}
+        outbox.orders[slot]=order;self.last=order;true
+    }
+    fn usb(&mut self,outbox:&mut KeyboardOutbox,key:u8,modifiers:u8,last_key:&mut u8,last_modifiers:&mut u8)->bool {
+        let Some(order)=self.last.checked_add(1) else{return false;};
+        let before=outbox.len;
+        if !outbox.usb(key,modifiers,last_key,last_modifiers) {return false;}
+        for i in before..outbox.len {outbox.orders[(outbox.head+i)%outbox.edges.len()]=order;}
+        self.last=order;true
+    }
+}
+
+// Separate reserved capacities, one causal arrival order. Later keys cannot
+// overtake an older click, and later pointer traffic cannot starve retained keys.
+fn poll_input_delivery(keys:&mut KeyboardOutbox,pointer:&mut PointerOutbox,
+    mut send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
+    let mut reset_buttons=false;
+    for _ in 0..4 {
+        if keys.len==0 && pointer.len==0 {break;}
+        let key_first=keys.len>0 && (pointer.len==0 || keys.orders[keys.head]<pointer.batches[pointer.head].order);
+        let mut blocked=false;
+        if key_first {
+            keys.poll(&mut 1,|a,b,c|{let result=send(a,b,c);blocked=!matches!(result,Ok(true));result});
+        }else{
+            // A queued key depends on this earlier position/click. Keep its
+            // unsent suffix on Full instead of changing the key's destination.
+            let mut failure=ERR_SERVICE_NOT_READY;
+            let reset=pointer.poll_budget(1,keys.len==0,|a,b,c|{
+                let result=send(a,b,c);blocked=!matches!(result,Ok(true));
+                if let Err(error)=result {failure=error;}result
+            });
+            if reset && keys.len>0 {keys.reject_all(failure);}
+            reset_buttons|=reset;
+        }
+        if blocked {break;}
+    }
+    reset_buttons
 }
 
 fn send_shell_hid_event(arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
@@ -280,6 +498,9 @@ pub extern "C" fn _start() -> ! {
         sys_set_state(SVC_STATE_LISTENING);
     }
 
+    let mut pointer_outbox = PointerOutbox::new();
+    let mut keyboard_outbox = KeyboardOutbox::new();
+    let mut input_arrival = InputArrival::new();
     let mut tick: u64 = 0;
     let mut drag_proof_stage: u8 = 0;
     let mut synth_click_stage: u8 = 0;
@@ -320,9 +541,23 @@ pub extern "C" fn _start() -> ! {
         }
 
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
-        if let Some(req) = pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
+        // Reserve enough key slots before consuming a possible USB snapshot.
+        // A final modifier-up must remain in the actual input ring on backpressure.
+        if let Some(req) = (if keyboard_outbox.available()>=10 {
+            pop_startup_message().or_else(|| pdx_try_listen_raw(0))
+        }else{None}) {
+            'input_message: {
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
-            if req.type_id == OP_USB_MOUSE_REPORT {
+            if (req.type_id == OP_USB_MOUSE_REPORT || req.type_id == OP_USB_KEYBOARD_REPORT)
+                && !usb_report_sender(&req) {
+                sex_pdx::serial_record!("[sexinput.usb.reject] caller={} task={} reason=sender",
+                    req.caller_pd, req.caller_task);
+                break 'input_message;
+            }
+            if req.type_id == OP_USB_MOUSE_REPORT && pointer_outbox.available() == 0 {
+                sex_pdx::serial_record!("[sexinput.pointer.rejected] packed={} reason=outbox_full_or_sequence admitted=0", req.arg2);
+            } else if req.type_id == OP_USB_MOUSE_REPORT {
+                'pointer_report: {
                 unsafe { REAL_USB_POINTER_SEEN = true; }
                 // Raw payload diagnostic: log exact arg1/arg2 before budgeted decode.
                 // Budget 64 covers init zero-report + first ~63 real reports.
@@ -348,85 +583,22 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
-                // Compatibility path: if producer already sends normalized HID event
-                // tuples in OP_USB_MOUSE_REPORT (class in arg0), forward as-is.
+                // Trusted legacy normalized packets join the same causal FIFO.
                 if cls == EV_REL || cls == EV_ABS || cls == EV_BTN {
-                    unsafe {
-                        static mut POINTER_MODE_BUDGET_COMPAT: u32 = 32;
-                        if POINTER_MODE_BUDGET_COMPAT > 0 {
-                            POINTER_MODE_BUDGET_COMPAT -= 1;
-                            let mode = if cls == EV_REL { "rel" } else if cls == EV_ABS { "abs" } else { "btn" };
-                            serial_println!(
-                                "[sexinput.pointer.mode] mode={} class={} a0={} a1={}",
-                                mode, cls, req.arg1 as i32, req.arg2 as i32
-                            );
-                        }
+                    if !input_arrival.pointer(&mut pointer_outbox,&[(req.arg1,req.arg2,cls)]) {
+                        sex_pdx::serial_record!("[sexinput.pointer.rejected] class={} reason=outbox_full_or_sequence admitted=0",cls);
                     }
-                    // ── Button edge proof markers ──
-                    if cls == EV_BTN {
-                        let pressed = req.arg1 != 0;
-                        if pressed {
-                            serial_println!("[sexinput.pointer.button.down] btn={} pressed=1", req.arg0);
-                        } else {
-                            serial_println!("[sexinput.pointer.button.up] btn={} pressed=0", req.arg0);
-                        }
-                    }
-                    unsafe {
-                        static mut SEXINPUT_POINTER_SEND_BUDGET: u32 = 2048;
-                        let rem = &mut SEXINPUT_POINTER_SEND_BUDGET;
-                        if *rem > 0 {
-                            *rem -= 1;
-                            serial_println!("[sexinput.pointer.send] class={} a0={} a1={}", cls, req.arg1 as i32, req.arg2 as i32);
-                        }
-                    }
-                    match send_shell_hid_event(req.arg1, req.arg2, cls) {
-                        Ok(true) => {}
-                        Ok(false) => continue,
-                        Err(err) => {
-                            unsafe {
-                                static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
-                                let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!(
-                                        "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
-                                        cls, req.arg1 as i32, req.arg2 as i32, err
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    continue;
+                    break 'pointer_report;
                 }
 
-                let buttons = req.arg1 as u8;
-                let packed = req.arg2;
-                let is_abs = ((packed >> 32) & 1) != 0;
-                let dx = if is_abs { (packed & 0xFFFF) as u16 as i16 } else { (packed as u8) as i8 as i16 };
-                let dy = if is_abs { ((packed >> 16) & 0xFFFF) as u16 as i16 } else { ((packed >> 8) as u8) as i8 as i16 };
-                let wheel = if is_abs { 0 } else { ((packed >> 16) as u8) as i8 };
-
-                // USB_HID_POINTER_PRODUCER_V1: validate before scaling.
-                // Abs coords must fit the 0..=32767 tablet range and button
-                // bits beyond 0x07 are undefined — drop the report here so
-                // garbage never reaches the shell. The delta clamp further
-                // down stays as the second line of defense.
-                let abs_range_bad = is_abs && ((dx as u16) > 32767 || (dy as u16) > 32767);
-                let buttons_bad = (buttons & !0x07) != 0;
-                if abs_range_bad || buttons_bad {
-                    unsafe {
-                        static mut USB_REPORT_REJECT_BUDGET: u32 = 16;
-                        let rem = &mut USB_REPORT_REJECT_BUDGET;
-                        if *rem > 0 {
-                            *rem -= 1;
-                            let reason = if abs_range_bad { "range" } else { "buttons" };
-                            serial_println!(
-                                "[sexinput.usb.report.reject] x={} y={} buttons={:#x} reason={}",
-                                dx as u16, dy as u16, buttons, reason
-                            );
-                        }
-                    }
-                    continue;
+                let Some(report) = (if cls == 0 { decode_pointer_payload(req.arg1, req.arg2) } else { None }) else {
+                    serial_println!("[sexinput.usb.report.reject] reason=noncanonical");
+                    break 'pointer_report;
+                };
+                let HidPointerRawReport { dx, dy, buttons, wheel, is_abs } = report;
+                if wheel != 0 {
+                    sex_pdx::serial_record!("[sexinput.wheel.received] caller={} task={} absolute={} delta={} packed={} up_positive=1",
+                        req.caller_pd, req.caller_task, is_abs as u8, wheel, req.arg2);
                 }
 
                 // TOUCHPAD_ABS_CONTACT_V1: single-contact model, marker-only.
@@ -545,8 +717,9 @@ pub extern "C" fn _start() -> ! {
                     wheel,
                     is_abs,
                 };
-                let mut normalized_events: [(u64, u64, u64); 4] = [(0, 0, 0); 4];
+                let mut normalized_events: [(u64, u64, u64); 5] = [(0, 0, 0); 5];
                 let mut norm_count: usize = 0;
+                let previous_buttons=unsafe { LAST_BUTTONS };
                 normalize_pointer_report_v1(
                     report,
                     unsafe { &mut *core::ptr::addr_of_mut!(LAST_BUTTONS) },
@@ -568,6 +741,7 @@ pub extern "C" fn _start() -> ! {
                             let (arg0, arg1, arg2) = normalized_events[i];
                             let cls_str = if arg2 == EV_REL { "EV_REL" }
                                 else if arg2 == EV_ABS { "EV_ABS" }
+                                else if arg2 == EV_WHEEL { "EV_WHEEL" }
                                 else { "EV_BTN" };
                             serial_println!(
                                 "[usb.mouse.normalizer.out] class={} code={} value={} ok=1",
@@ -616,133 +790,11 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
-                serial_println!("[sexinput.usb_mouse.shell_send.start]");
-                // Forward normalized HID events only (EV_BTN edges + EV_REL movement).
-                // OP_USB_MOUSE_REPORT is NOT forwarded — the HID EV_BTN handler in the shell
-                // handles click-to-focus, and EV_REL handles cursor movement + drag.
-                // This eliminates the dx/dy double-apply bug where both the USB handler
-                // and the HID EV_REL handler applied the same delta.
-                // The synthetic click-focus proof sends OP_USB_MOUSE_REPORT directly to the
-                // shell and is unaffected by this change.
-                let mut send_err: u64 = 0;
-                let mut pointer_emit_ok: bool = false;
-
-                for i in 0..norm_count {
-                    let (arg0, arg1, arg2) = normalized_events[i];
-                    unsafe {
-                        static mut SEXINPUT_POINTER_SEND_BUDGET: u32 = 2048;
-                        let rem = &mut SEXINPUT_POINTER_SEND_BUDGET;
-                        if *rem > 0 {
-                            *rem -= 1;
-                            serial_println!("[sexinput.pointer.send] class={} a0={} a1={}", arg2, arg0 as i32, arg1 as i32);
-                        }
-                    }
-                    // Budgeted marker for EV_REL emission to shell.
-                    if arg2 == 2 { // EV_REL
-                        unsafe {
-                            static mut HID_EMIT_REL_BUDGET: u32 = 16;
-                            let rem = &mut HID_EMIT_REL_BUDGET;
-                            if *rem > 0 {
-                                *rem -= 1;
-                                serial_println!("[sexinput.hid.emit.rel] n=0 dx={} dy={}", arg0 as i32, arg1 as i32);
-                            }
-                        }
-                    }
-                    match send_shell_hid_event(arg0, arg1, arg2) {
-                        Ok(true) => {}
-                        Ok(false) => continue,
-                        Err(err) => {
-                            if send_err == 0 {
-                                send_err = err;
-                            }
-                        }
-                    }
-                    }
-                    if norm_count == 0 {
-                        unsafe {
-                            static mut USB_POINTER_ZERO_DROP_BUDGET: u32 = 64;
-                            let rem = &mut USB_POINTER_ZERO_DROP_BUDGET;
-                            if *rem > 0 {
-                                *rem -= 1;
-                                serial_println!("[usb.pointer.zero_drop] buttons={} ok=1", buttons);
-                            }
-                        }
-                    }
-                if send_err == 0 {
-                    if norm_count > 0 {
-                        pointer_emit_ok = true;
-                        // Show actual emitted delta: find EV_REL in normalized events.
-                        // For abs path with no motion (button-only), show 0.
-                        let (marker_dx, marker_dy) = {
-                            let mut mdx = if is_abs { 0 } else { dx as i32 };
-                            let mut mdy = if is_abs { 0 } else { dy as i32 };
-                            for ni in 0..norm_count {
-                                if normalized_events[ni].2 == EV_REL {
-                                    mdx = normalized_events[ni].0 as i32;
-                                    mdy = normalized_events[ni].1 as i32;
-                                    break;
-                                }
-                            }
-                            (mdx, mdy)
-                        };
-                        serial_println!(
-                            "[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",
-                            buttons,
-                            marker_dx,
-                            marker_dy
-                        );
-                        if is_abs {
-                            unsafe {
-                                static mut DELTA_ONLY_PASS_EMITTED: bool = false;
-                                if !DELTA_ONLY_PASS_EMITTED {
-                                    DELTA_ONLY_PASS_EMITTED = true;
-                                    serial_println!("[usb.tablet.emit_delta_only.pass] ok=1");
-                                }
-                            }
-                        }
-                    }
-                    if send_err == 0 && (pointer_emit_ok || norm_count > 0) {
-                        unsafe {
-                            static mut USB_POINTER_PASS_EMITTED: bool = false;
-                            if !USB_POINTER_PASS_EMITTED {
-                                USB_POINTER_PASS_EMITTED = true;
-                                serial_println!("[usb.hid.pointer.pass] ok=1");
-                            }
-                        }
-                        serial_println!("[sexinput.usb_mouse.shell_send.ok]");
-                    } else {
-                        unsafe {
-                            static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
-                            let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
-                            if *rem > 0 {
-                                *rem -= 1;
-                                serial_println!(
-                                    "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
-                                    EV_REL,
-                                    dx as i32,
-                                    dy as i32,
-                                    send_err
-                                );
-                            }
-                        }
-                        serial_println!("[sexinput.usb_mouse.shell_send.fail] err={}", send_err);
-                    }
-                } else {
-                    unsafe {
-                        static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
-                        let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
-                        if *rem > 0 {
-                            *rem -= 1;
-                            serial_println!(
-                                "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
-                                EV_REL,
-                                dx as i32,
-                                dy as i32,
-                                send_err
-                            );
-                        }
-                    }
-                    serial_println!("[sexinput.usb_mouse.shell_send.fail] err={}", send_err);
+                // Batch admission is all-or-nothing; LAST_BUTTONS follows retained work.
+                if !input_arrival.pointer(&mut pointer_outbox,&normalized_events[..norm_count]) {
+                    unsafe { LAST_BUTTONS=previous_buttons; }
+                    sex_pdx::serial_record!("[sexinput.pointer.rejected] packed={} reason=outbox_full_or_sequence admitted=0",req.arg2);
+                }
                 }
             } else if req.type_id == OP_USB_KEYBOARD_REPORT {
                 // USB HID boot keyboard report via sexusb.
@@ -789,95 +841,20 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                // Forward mapped keys as EV_KEY to silk-shell using HID→PS/2 translation.
-                // Tracks single key (first slot only) for press/release edges.
-                unsafe {
-                    let prev = LAST_USB_KEY;
-                    let cur = keycode;
-                    if cur != prev {
-                        if prev != 0 {
-                            if let Some(sc) = hid_to_ps2(prev) {
-                                static mut KBD_KEY_EMIT_UP_BUDGET: u32 = 64;
-                                let rem = &mut KBD_KEY_EMIT_UP_BUDGET;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!("[sexinput.key.emit] code={} down=0 mod={}", sc, modifiers);
-                                }
-                                match send_shell_hid_event(sc as u64, 0, EV_KEY) {
-                                    Ok(sent) => {
-                                        serial_println!(
-                                            "[sexinput.key.send] code={} down=0 mod={} dst={} ok={} err=0",
-                                            sc, modifiers, SLOT_SHELL, sent as u8
-                                        );
-                                        static mut KEYUP_OK_BUDGET: u32 = 8;
-                                        if KEYUP_OK_BUDGET > 0 {
-                                            KEYUP_OK_BUDGET -= 1;
-                                            serial_println!("[input.keyboard.keyup.ok] code={} source=usb", sc);
-                                        }
-                                    }
-                                    Err(err) => {
-                                        serial_println!(
-                                            "[sexinput.key.send] code={} down=0 mod={} dst={} ok=0 err={:#x}",
-                                            sc, modifiers, SLOT_SHELL, err
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        if cur != 0 {
-                            if let Some(sc) = hid_to_ps2(cur) {
-                                // [usb.keyboard.to_hid] — one-shot proof marker
-                                unsafe {
-                                    static mut KBD_TO_HID_PROOF_EMITTED: bool = false;
-                                    if !KBD_TO_HID_PROOF_EMITTED {
-                                        KBD_TO_HID_PROOF_EMITTED = true;
-                                        serial_println!("[usb.keyboard.to_hid] key={} ev_key=1 ok=1", cur);
-                                    }
-                                }
-                                static mut KBD_EVKEY_BUDGET: u32 = 64;
-                                let rem = &mut KBD_EVKEY_BUDGET;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!("[sexinput.usb_kbd.evkey] hid=0x{:x} sc=0x{:x}", cur, sc);
-                                    serial_println!("[sexinput.key.emit] code={} down=1 mod={}", sc, modifiers);
-                                }
-                                match send_shell_hid_event(sc as u64, 1, EV_KEY) {
-                                    Ok(sent) => {
-                                        serial_println!(
-                                            "[sexinput.key.send] code={} down=1 mod={} dst={} ok={} err=0",
-                                            sc, modifiers, SLOT_SHELL, sent as u8
-                                        );
-                                        static mut KEYDOWN_OK_BUDGET: u32 = 8;
-                                        if KEYDOWN_OK_BUDGET > 0 {
-                                            KEYDOWN_OK_BUDGET -= 1;
-                                            serial_println!("[input.keyboard.keydown.ok] code={} source=usb", sc);
-                                        }
-                                    }
-                                    Err(err) => {
-                                        serial_println!(
-                                            "[sexinput.key.send] code={} down=1 mod={} dst={} ok=0 err={:#x}",
-                                            sc, modifiers, SLOT_SHELL, err
-                                        );
-                                    }
-                                }
-                            } else {
-                                static mut KBD_DROP_BUDGET: u32 = 16;
-                                let rem = &mut KBD_DROP_BUDGET;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!("[sexinput.usb_kbd.drop] hid=0x{:x} reason=unmapped", cur);
-                                }
-                            }
-                        }
-                        LAST_USB_KEY = cur;
-                    }
+                // Retain a whole physical report before advancing key/modifier state.
+                let retained=unsafe {input_arrival.usb(&mut keyboard_outbox,keycode,modifiers,
+                    &mut *core::ptr::addr_of_mut!(LAST_USB_KEY),
+                    &mut *core::ptr::addr_of_mut!(LAST_USB_MODIFIERS))};
+                if !retained {
+                    sex_pdx::serial_record!("[sexinput.key.rejected] source=usb key={} modifiers={} reason=outbox_full_or_sequence admitted=0",keycode,modifiers);
                 }
+            }
             }
         }
 
         // 1. Non-blocking poll for raw scancodes from kernel (SLOT_INPUT = 3)
         //    Non-blocking allows synthetic producer to run on idle ticks.
-        if let Some(req) = pdx_try_listen_raw(SLOT_INPUT) {
+        if let Some(req) = (if keyboard_outbox.available()>0 {pdx_try_listen_raw(SLOT_INPUT)}else{None}) {
             // Kernel RawInput is type 0x201, arg0 = scancode
             if req.type_id == 0x201 {
                 let scancode = req.arg0;
@@ -887,17 +864,8 @@ pub extern "C" fn _start() -> ! {
                 // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY
                 let value = if scancode & 0x80 == 0 { 1 } else { 0 };
                 let code = (scancode & 0x7F) as u64;
-                pdx_call(SLOT_SHELL, OP_HID_EVENT, code, value, EV_KEY);
-                unsafe {
-                    static mut PS2_KEY_OK_BUDGET: u32 = 16;
-                    if PS2_KEY_OK_BUDGET > 0 {
-                        PS2_KEY_OK_BUDGET -= 1;
-                        if value == 1 {
-                            serial_println!("[input.keyboard.keydown.ok] code={} source=ps2", code);
-                        } else {
-                            serial_println!("[input.keyboard.keyup.ok] code={} source=ps2", code);
-                        }
-                    }
+                if !input_arrival.ps2(&mut keyboard_outbox,scancode) {
+                    sex_pdx::serial_record!("[sexinput.key.rejected] source=ps2 raw={} reason=noncanonical_or_full admitted=0",scancode);
                 }
 
                 // 2b. Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
@@ -933,6 +901,12 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+        }
+
+        // Intake both physical key paths before draining the shared arrival order.
+        // Reserved key capacity and four total attempts prevent pointer starvation.
+        if poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event) {
+            unsafe {LAST_BUTTONS=pointer_outbox.sent_buttons;}
         }
 
         // 2c. Bounded one-shot keyboard cursor self-test.

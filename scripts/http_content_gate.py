@@ -84,6 +84,213 @@ def load_pixel_contract(root):
   request=literal('wire',r'const REQUEST: &\[u8\] = (b"[^"\n]*")'),color=number('app',r'self\.ui\.queue(?:_selected)?\(&text\.bytes\[\.\.text\.len\],(0x[0-9A-Fa-f]+)'),
   source_sha256={paths[key]:hashlib.sha256(value.encode()).hexdigest()for key,value in sources.items()})
 
+WHEEL_SCOPE='Actual QMP USB-tablet relative wheel bytes through BOOT SexUSB5/task5, Input4/task4, exact live Shell Browser15/task15 route43 and retained bounded reader. Three visual rows/notch, whole reader glyphs and endpoint clamps; hover/title/modal/closed rejection, finite burst with actual report coalescing observed, no navigation refetch. No physical hardware, arbitrary HID descriptors, queue-saturation or hostile-input isolation claim.'
+WHEEL_SERIAL_UNITS='UTF-8 decoded characters; universal newlines; replacement on decode error'
+
+def serial_text(path):
+ # Capture offsets and prefix hashes use text characters, never raw byte offsets.
+ # Keep the whole original serial file separately hashed in raw_sha256.
+ return Path(path).read_text(encoding='utf-8',errors='replace')
+
+WHEEL_PATTERNS={
+ 'device':r'\[sexusb.wheel.device\] slot=(\d+) bytes=(\d+) absolute=([01]) delta=(-?\d+) packed=(\d+) up_positive=1',
+ 'received':r'\[sexinput.wheel.received\] caller=(\d+) task=(\d+) absolute=([01]) delta=(-?\d+) packed=(\d+) up_positive=1',
+ 'normalized':r'\[sexinput.wheel.normalized\] delta=(-?\d+) word=(\d+) reserved=(\d+) class=(\d+) admitted=1 up_positive=1',
+ 'queued':r'\[shell.browser.wheel.queued\] pd=(\d+) task=(\d+) route=(\d+) wheel=(-?\d+) x=(-?\d+) y=(-?\d+) accepted=1 capacity=32',
+ 'delivered':r'\[shell.browser.wheel.delivered\] pd=(\d+) task=(\d+) route=(\d+) wheel=(-?\d+) accepted=1 status=0',
+ 'reader':r'\[browser.reader.wheel\] wheel=(-?\d+) before=(\d+) anchor=(\d+) changed=([01]) viewport=(\d+) retained_body_only=1',
+ 'rejected':r'\[shell.browser.wheel.rejected\] reason=target wheel=(-?\d+) x=(-?\d+) y=(-?\d+) effects=0'}
+WHEEL_PATTERNS={kind:pattern+r'(?=\r?\n|$)'for kind,pattern in WHEEL_PATTERNS.items()}
+WHEEL_TAGS={'device':'sexusb.wheel.device','received':'sexinput.wheel.received','normalized':'sexinput.wheel.normalized','queued':'shell.browser.wheel.queued','delivered':'shell.browser.wheel.delivered','reader':'browser.reader.wheel','rejected':'shell.browser.wheel.rejected'}
+WHEEL_PENDING_PLAN=[('pending-burst',-3,'pending'),('closed',-1,'closed')]
+WHEEL_PLAN=[('top',1,'body'),('down',-1,'body'),('up',1,'body'),('burst',-3,'body'),('end',-1,'body'),('outside',-1,'outside'),('title',-1,'title'),('modal',-1,'modal'),('closed',-1,'closed')]
+
+def load_wheel_contract(root):
+ root=Path(root);contract=load_pixel_contract(root)
+ files=('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/app_input.rs','crates/sex-pdx/src/app_scroll.rs','crates/sex-pdx/src/lib.rs')
+ source={name:(root/name).read_text()for name in files}
+ requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)','record_device_wheel(en_slot_id, intr_actual, true, td.wheel, packed_axes)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','if sid!=300{return None}','px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
+ for name,tokens in requirements.items():
+  for token in tokens:
+   if token not in source[name]:raise ValueError('wheel source contract changed: '+token)
+ reader=(root/'apps/kaleidoscope/src/document_reader.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text()
+ if 'let delta = -(wheel as i16) * 3;'not in reader or 'req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3'not in app or 'if !self.reading || self.asset_panel || self.import_panel { return; }'not in app:raise ValueError('actual bounded reader/exact Shell wheel guard changed')
+ from launcher_workflow_gate import source_contract as launcher_contract
+ contract['launcher']=launcher_contract(root);contract['source_sha256'].update(contract['launcher']['source_sha256']);contract['source_sha256'].update({name:hashlib.sha256(value.encode()).hexdigest()for name,value in source.items()});contract['reader_require_position']=True
+ return contract
+
+def wheel_move(frame,wheel):
+ if type(wheel)is not int or not -128<=wheel<=127 or wheel==0:raise ValueError('wheel must be canonical nonzero signed byte')
+ last=max(0,frame['total_lines']-frame['body_rows']);first=max(0,min(last,frame['first']-wheel*3))
+ return(frame['starts'][first]if frame['starts']else 0,first!=frame['first'])
+
+def wheel_rows(trace,kind):
+ matches=list(re.finditer(WHEEL_PATTERNS[kind],trace))
+ if len(matches)!=trace.count('['+WHEEL_TAGS[kind]+']'):raise ValueError('malformed/foreign wheel '+kind+' receipt')
+ return matches
+
+def wheel_viewport(trace):
+ notices=list(re.finditer(r'\[browser.viewport\] target=15 task=15 sequence=(\d+) w=(\d+) h=(\d+) origin=held_shell',trace))
+ if not notices:raise ValueError('wheel Browser held viewport missing')
+ viewport,w,h=map(int,notices[-1].groups());matches=re.findall(rf'\[shell.document.viewport\] target=15 task=15 surface=300 sequence={viewport} x=(-?\d+) y=(-?\d+) w={w} h={h} enqueued=1',trace)
+ if len(matches)!=1:raise ValueError('wheel viewport lacks exact queued geometry')
+ x,y=map(int,matches[0]);return dict(x=x,y=y,w=w,h=h),viewport
+
+def wheel_events(wheel):
+ if type(wheel)is not int or not 1<=abs(wheel)<=3:raise ValueError('finite real wheel burst must be1..3notches')
+ return[{'type':'btn','data':{'down':down,'button':'wheel-up'if wheel>0 else'wheel-down'}}for _ in range(abs(wheel))for down in(True,False)]
+
+def inspect_wheel_action(trace,action,body,contract,resolution):
+ start=action['serial_start'];end=action['serial_end'];returned=action['serial_qmp_return'];pointer=action['pointer_start']
+ if any(type(n)is not int for n in(start,end,returned,pointer))or not 0<=pointer<=start<=returned<=end<=len(trace):raise ValueError('wheel QMP/pointer window out of bounds')
+ if any(type(action.get(k))not in(int,float)for k in('host_start','host_qmp_return','host_end'))or not action['host_start']<=action['host_qmp_return']<=action['host_end']:raise ValueError('wheel QMP return clock window reversed')
+ wheel=action['wheel'];target=action['target'];x=action['x'];y=action['y'];before=action['before']
+ if any(type(n)is not int for n in(x,y,before,action['after']))or not 0<=before<=len(body):raise ValueError('wheel pointer/anchor metadata not bounded integers')
+ if type(wheel)is not int or not -127<=wheel<=127 or not wheel or target not in('body','pending','outside','title','modal','closed'):raise ValueError('invalid explicit wheel intent')
+ if action['transport']!='input-send-event'or action['events']!=wheel_events(wheel):raise ValueError('actual QMP wheel button request differs')
+ if not 0<=x<resolution[0]or not 0<=y<resolution[1]:raise ValueError('wheel pointer outside framebuffer')
+ rx=round(x*32767/(resolution[0]-1));ry=round(y*32767/(resolution[1]-1));sx=rx*(resolution[0]-1)//32767;sy=ry*(resolution[1]-1)//32767
+ normalization=rf'\[shell.abs.normalize\] raw_x={rx} raw_y={ry} sx={sx} sy={sy} accepted=(?:1 reason=ok|0 reason=duplicate_sample)'
+ if not re.search(normalization,trace[pointer:start]):raise ValueError('wheel lacks actual preceding normalized tablet position')
+ segment=trace[start:end];rows={kind:wheel_rows(segment,kind)for kind in WHEEL_PATTERNS};device=rows['device'];received=rows['received'];normalized=rows['normalized']
+ if not device or not len(device)==len(received)==len(normalized)or len(device)>abs(wheel):raise ValueError('wheel device/Input report custody missing/extra')
+ values=[int(m[4])for m in device]
+ if sum(values)!=wheel or any(v==0 or(v>0)!=(wheel>0)for v in values):raise ValueError('real USB wheel report sum/direction differs from QMP intent')
+ if target!='closed':
+  tile,viewport=wheel_viewport(trace[:start]);frame=None if target=='pending'else reader_geometry(trace[:start],body,contract,before);inside=tile['x']+8<=sx<tile['x']+tile['w']-8 and tile['y']+36<=sy<tile['y']+tile['h']-8
+  if frame is not None:
+   positions=list(re.finditer(r'\[browser.reader.position\] anchor=(\d+) viewport=(\d+) tls=0 retained_body_only=1',trace[:start]))
+   if not positions or tuple(map(int,positions[-1].groups()))!=(before,viewport):raise ValueError('wheel before-anchor differs from actual preceding reader position')
+  if target in('body','pending','modal')and not inside or target in('outside','title')and inside:raise ValueError('wheel target classification differs from actual Browser body')
+  if target=='title'and not(tile['x']<=sx<tile['x']+tile['w']and tile['y']<=sy<tile['y']+36):raise ValueError('title rejection not inside actual frame chrome')
+  if target=='modal':
+   from check_launcher_pixels import layout
+   modal,_=layout(trace[:start])
+   if not(modal['x']+8<=sx<modal['x']+modal['w']-8 and modal['y']+36<=sy<modal['y']+modal['h']-8)or trace[:start].rfind('[command_palette.close]')>trace[:start].rfind('[launcher.text.view]'):raise ValueError('modal wheel lacks actual overlapping open launcher')
+ else:
+  if not re.search(r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1',trace[:start]):raise ValueError('closed rejection precedes actual terminal cleanup')
+  frame=None;viewport=None
+ if target in('body','pending'):
+  if rows['rejected']or not len(rows['queued'])==len(rows['delivered'])==len(device)or len(rows['reader'])!=(len(device)if target=='body'else 0):raise ValueError('body/pending wheel did not preserve exact queued/delivered/App event policy')
+  if target=='pending'and ('[browser.reader.layout]'in segment or '[browser.reader.wheel]'in segment or not re.search(r'\[net.job.stream.drain\] owner=15 task=15 ticket=2 [^\n]*state_before=Receiving',trace[:start])):raise ValueError('pending wheel lacked actual Receiving or affected absent reader')
+ else:
+  if rows['queued']or rows['delivered']or rows['reader']or len(rows['rejected'])!=len(device):raise ValueError('outside/modal/closed wheel affected Browser')
+ anchor=before;events=[]
+ for i,(d,r,n,v)in enumerate(zip(device,received,normalized,values)):
+  expected_packed=rx|(ry<<16)|(1<<32)|((v&255)<<40)
+  if not 1<=int(d[1])<=255 or tuple(map(int,d.groups()[1:]))!=(6,1,v,expected_packed)or tuple(map(int,r.groups()))!=(5,5,1,v,expected_packed)or tuple(map(int,n.groups()))!=(v,v&0xffffffffffffffff,0,5):raise ValueError('wheel raw6-byte/packed/sign/exactUSBsender/class differs')
+  if not d.start()<r.start()<n.start():raise ValueError('wheel device/Input pre-forward order differs')
+  if target in('body','pending'):
+   q=rows['queued'][i];delivered=rows['delivered'][i]
+   if tuple(map(int,q.groups()))!=(15,15,43,v,sx,sy)or tuple(map(int,delivered.groups()))!=(15,15,43,v):raise ValueError('wheel queue changed exact live catalog target/route/coordinates')
+   if not r.start()<q.start()<delivered.start():raise ValueError('wheel held route queue/return order differs')
+   if target=='pending':continue
+   app=rows['reader'][i];current=reader_frame(body,tile['w'],tile['h'],contract,anchor);after,changed=wheel_move(current,v)
+   if tuple(map(int,app.groups()))!=(v,anchor,after,int(changed),viewport)or not r.start()<q.start()<app.start()or not q.start()<delivered.start():raise ValueError('wheel App anchor arithmetic/queued custody/order differs')
+   anchor=after;events.append(dict(wheel=v,before=int(app[2]),anchor=anchor,changed=changed,callee_before_shell_return=app.start()<delivered.start(),callee_before_input_return=app.start()<n.start()))
+  else:
+   rejected=rows['rejected'][i]
+   if tuple(map(int,rejected.groups()))!=(v,sx,sy)or rejected.start()<r.start():raise ValueError('wheel rejection coordinates/direction/order differ')
+ if action['after']!=anchor:raise ValueError('declared wheel action result differs from independent source-byte model')
+ return dict(ok=True,name=action['name'],target=target,wheel=wheel,reports=len(device),before=before,anchor=anchor,events=events)
+
+def inspect_wheel(trace,actions,body,contract,resolution,pending=False):
+ if [(a['name'],a['wheel'],a['target'])for a in actions]!=(WHEEL_PENDING_PLAN if pending else WHEEL_PLAN):raise ValueError('finite wheel action plan/order differs')
+ checks=[];previous=0
+ for action in actions:
+  if action['pointer_start']<previous:raise ValueError('wheel action windows overlap/reorder')
+  checks.append(inspect_wheel_action(trace,action,body,contract,resolution));previous=action['serial_end']
+ if not pending:
+  if actions[0]['before']!=0:raise ValueError('wheel Home clamp did not start at source zero')
+  for index in(1,2,3,5,6,7):
+   if actions[index]['before']!=actions[index-1]['after']:raise ValueError('wheel actions lost retained source continuity')
+  end_action=actions[4];tile,_=wheel_viewport(trace[:end_action['serial_start']]);last=reader_frame(body,tile['w'],tile['h'],contract,0);wanted=reader_move(last,'end')
+  if end_action['before']!=wanted or not re.search(r'\[shell.browser.input\] code=107 down=1 slot=43 accepted=1',trace[actions[3]['serial_end']:end_action['pointer_start']]):raise ValueError('bottom wheel clamp lacks actual End and independent final source row')
+ for kind in WHEEL_PATTERNS:
+  if len(wheel_rows(trace,kind))!=sum(len(wheel_rows(trace[a['serial_start']:a['serial_end']],kind))for a in actions):raise ValueError('wheel receipt outside actual QMP windows: '+kind)
+ suffix=trace[actions[0]['pointer_start']:]
+ if re.search(r'\[net\.dns\.egress\.submit\]|\[net\.job\.resolved\.admitted\]|\[browser.http.body\]|\[browser.dns.answer\]',suffix):raise ValueError('wheel/navigation refetched or emitted new owned source work')
+ cleanup=trace.find('[net.app.cleanup.ack] target=15 task=15',actions[0]['pointer_start'])
+ for m in re.finditer(r'\[net.job.egress.submit\] ticket=(\d+)',suffix):
+  at=actions[0]['pointer_start']+m.start()
+  if not pending or int(m[1])!=2 or cleanup>=0 and at>cleanup:raise ValueError('wheel emitted unowned/new/retired network work')
+ if pending and re.search(r'\[browser.http.body\]|\[browser.reader.layout\]',trace):raise ValueError('partial stream became a published reader')
+ return dict(ok=True,actions=checks,device_reports=sum(c['reports']for c in checks),scope=WHEEL_SCOPE)
+
+def wheel_frame_phases(actions,frames,pending=False):
+ by_name={f['screenshot'][:-4]:f for f in frames}
+ if len(by_name)!=len(frames):raise ValueError('duplicate wheel screenshot identity')
+ for index,action in enumerate(actions):
+  name='browser-wheel-'+action['name']
+  if action['name']=='end':name='browser-wheel-end-clamp'
+  if action['name']=='pending-burst':name='browser-wheel-pending'
+  if action['name']=='closed'and pending:name='browser-wheel-after-close'
+  frame=by_name.get(name)
+  boundary=actions[index+1]['pointer_start']if index+1<len(actions)else None
+  if frame is None or frame['serial_end']<action['serial_end']or boundary is not None and frame['serial_end']>boundary:raise ValueError('wheel screenshot outside actual action/capture phase')
+  if action['target']in('body','outside','title')and frame.get('requested_anchor')!=action['after']:raise ValueError('wheel pixels use an old/wrong source anchor')
+ if not pending:
+  modal=next(a for a in actions if a['name']=='modal');erased=by_name.get('browser-wheel-modal-erased');initial=by_name.get('browser-reader-initial');end=by_name.get('browser-wheel-end-entry');end_action=next(a for a in actions if a['name']=='end')
+  if not erased or erased['requested_anchor']!=modal['after']or erased['serial_end']<modal['serial_end']or not erased.get('launcher_erasure'):raise ValueError('modal restoration lacks unchanged reader/launcher erasure')
+  if not initial or initial['requested_anchor']!=0 or initial['serial_end']>actions[0]['pointer_start']:raise ValueError('wheel initial paint not before first real input')
+  if not end or end['requested_anchor']!=end_action['before']or end['serial_end']>end_action['pointer_start']:raise ValueError('End entry paint not before bottom clamp')
+ return True
+
+def verify_wheel_evidence(root,iso,binding,out):
+ from network_contention_gate import frozen_binding,cleanup_receipts
+ from launcher_workflow_gate import launcher_erased
+ from check_launcher_pixels import verify as launcher_pixels
+ from https_asset_gate import verify_parking
+ root=Path(root).resolve(strict=True);out=Path(out).resolve(strict=True);iso=Path(iso).resolve(strict=True);binding=Path(binding).resolve(strict=True);bound=frozen_binding(root,iso,binding);contract=load_wheel_contract(root);manifest=json.loads((out/'manifest.json').read_text());evidence=json.loads((out/'wheel-evidence.json').read_text())
+ if manifest.get('wheel')is not True or manifest.get('binding')!=bound or manifest['mode']not in('reader','stream','stream-close')or manifest['pixel_source_sha256']!=contract['source_sha256']:raise ValueError('wheel frozen image/source/mode binding differs')
+ command=manifest['command']
+ if command[command.index('-cdrom')+1]!=str(Path(iso).resolve())or command.count('usb-tablet,bus=xhci.0')!=1 or 'nec-usb-xhci,id=xhci'not in command:raise ValueError('actual QMP USB-tablet device path missing')
+ required={'serial.log','wire.pcap','endpoint-exchanges.json','dns-endpoint-exchanges.json'}|{f['screenshot']for f in evidence['reader_frames']+evidence['status_frames']+evidence['other_frames']}
+ if set(evidence['raw_sha256'])!=required:raise ValueError('wheel raw hash closure differs')
+ for name,wanted in evidence['raw_sha256'].items():
+  path=(out/name).resolve()
+  if not path.is_relative_to(out.resolve())or hashlib.sha256(path.read_bytes()).hexdigest()!=wanted:raise ValueError('wheel raw file differs: '+name)
+ if evidence.get('serial_offset_units',WHEEL_SERIAL_UNITS)!=WHEEL_SERIAL_UNITS or evidence.get('serial_prefix_hash_encoding','UTF-8')!='UTF-8':raise ValueError('wheel serial offset/hash convention differs')
+ trace=serial_text(out/'serial.log');resolution=tuple(map(int,manifest['resolution'].split('x')));body=STREAM_BODY if manifest['mode']in STREAM_MODES else READER_BODY
+ checks=inspect_wheel(trace,evidence['actions'],body,contract,resolution,manifest['mode']=='stream-close');pixels=[]
+ required_reader=[]if manifest['mode']=='stream-close'else ['browser-reader-initial','browser-wheel-top','browser-wheel-down','browser-wheel-up','browser-wheel-burst','browser-wheel-end-entry','browser-wheel-end-clamp','browser-wheel-outside','browser-wheel-title','browser-wheel-modal-erased','browser-wheel-home','browser-reader-pgdn','browser-reader-down','browser-reader-pgup','browser-reader-home','browser-reader-end','browser-reader-up','browser-reader-expanded','browser-reader-restored','browser-reader-resumed']
+ required_status=['browser-wheel-pending']if manifest['mode']=='stream-close'else['browser-http','browser-reader-overview','browser-reader-erased','browser-reader-cannot-reopen']
+ required_other=['browser-closed','browser-wheel-after-close']if manifest['mode']=='stream-close'else['browser-wheel-modal','browser-wheel-closed']
+ for group,names in [('reader_frames',required_reader),('status_frames',required_status),('other_frames',required_other)]:
+  if [r['screenshot']for r in evidence[group]]!=[name+'.ppm'for name in names]:raise ValueError('missing/reordered finite wheel frame set: '+group)
+ expected=evidence['reader_frames']+evidence['status_frames']+evidence['other_frames'];parked=evidence['parked_frames']
+ wheel_frame_phases(evidence['actions'],expected,manifest['mode']=='stream-close')
+ if len(parked)!=len(expected)or len({r['screenshot']for r in parked})!=len(expected)or any(r not in expected for r in parked):raise ValueError('parked frame set differs from complete pixel capture set')
+ if manifest['http_request_hex']!=contract['request'].hex()or manifest['http_body_hex']!=body.hex():raise ValueError('wheel source-defined HTTP fixture differs')
+ for frame in evidence['reader_frames']+evidence['status_frames']+evidence['other_frames']:
+  prefix=frame_prefix(trace,frame,frame in evidence['reader_frames']);image=(out/frame['screenshot']).read_bytes()
+  if hashlib.sha256(image).hexdigest()!=frame['screenshot_sha256']:raise ValueError('wheel screenshot SHA differs')
+  if frame in evidence['reader_frames']:
+   check=verify_reader_pixels(prefix,image,body,contract,frame['requested_anchor'],resolution)
+   if not check['ok']:raise ValueError(str(check['errors']))
+   if frame.get('launcher_erasure'):launcher_erased(prefix,image,contract['launcher'],resolution)
+  elif frame in evidence['status_frames']:
+   check=verify_http_pixels(prefix,image,frame['expected_view'],overview_preview(body),contract,resolution)
+   if not check['ok']:raise ValueError(str(check['errors']))
+  elif frame['kind']=='launcher':
+   errors=launcher_pixels(prefix,image,contract['font'],resolution)
+   if errors:raise ValueError(str(errors))
+  else:
+   width,height,_=ppm_rgb(image,min_width=1,min_height=1)
+   if(width,height)!=resolution:raise ValueError('closed framebuffer resolution differs')
+   check=cleanup_receipts(prefix,15,15,evidence['close_start'])
+  pixels.append(dict(name=frame['screenshot'],ok=True))
+ park_frames=[dict(name=f['screenshot'][:-4],serial_end=f['serial_end'])for f in evidence['parked_frames']]
+ verify_parking(trace,park_frames,evidence['parking'],resolution)
+ peer=json.loads((out/'endpoint-exchanges.json').read_text());dns_peer=json.loads((out/'dns-endpoint-exchanges.json').read_text());rows=peer['connections'];queries=dns_peer['queries']
+ if len(rows)!=2 or len(queries)!=1 or rows[0]['request_hex']!=ECHO.hex()or rows[0]['response_hex']!=ECHO.hex()or rows[1]['request_hex']!=contract['request'].hex()or rows[1]['response_hex']!=wire_response('stream'if manifest['mode']=='stream-close'else manifest['mode'],body).hex()or rows[0]['aborted']or rows[1]['aborted']!=(manifest['mode']=='stream-close'):raise ValueError('wheel introduced extra/changed controlled exchanges')
+ raw=(out/'wire.pcap').read_bytes();wire=capture(raw,[dict(payload_hex=r['request_hex'],response_hex=r['response_hex'],**({'aborted':True,'allow_empty_reply':True}if r['aborted']else{}))for r in rows],guest_ports=range(48001,65536),initiator='guest');dns=dns_capture(raw,'echo',dns_peer['response_send_attempts'],expected=[dict(ticket=r['ticket'],response_hex=r['response_hex'])for r in queries]);joins=resolution_joins(trace,raw,[(2,1)],dns);stream=stream_receipts(trace,[2],contract,[2]if manifest['mode']=='stream'else[],[2]if manifest['mode']in STREAM_MODES else[])
+ if manifest['mode']=='stream-close':
+  planned=wire_response('stream',body);end=planned.index(b'\r\n\r\n')+4+2048
+  if rows[1]['prefix_bytes']!=end or rows[1]['host_sent_prefix_hex']!=planned[:end].hex()or not 1024<=wire['connections'][1]['incoming_bytes']<=end:raise ValueError('pending wheel lacks actual bounded Receiving wire prefix')
+ if not all(r['ok']for r in(wire,dns,joins,stream,nic(trace,1,True,True))):raise ValueError('wheel fixed wire/DNS/admission/stream/authority regression')
+ return dict(ok=True,binding=bound,serial_offset_units=WHEEL_SERIAL_UNITS,serial_prefix_hash_encoding='UTF-8',wheel=checks,pixels=pixels,wire=wire,dns=dns,streaming=stream,scope=WHEEL_SCOPE)
+
 def overview_preview(body):
  """Independent overview contract: printable words,64 cells, ellipsis on loss."""
  words=bytes(32 if b<=32 or b==127 else b if b<127 else 63 for b in body).split()
@@ -230,10 +437,13 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expect
   return dict(ok=not errors,errors=errors,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']],checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)])
 
-def wait_reader_pixels(q,text,out,name,body,contract,anchor,health,timeout=30,resolution=None,expected_path=None):
+def wait_reader_pixels(q,text,out,name,body,contract,anchor,health,timeout=30,resolution=None,expected_path=None,extra_check=None):
  deadline=time.monotonic()+timeout;attempts=0;screenshot=out/(name+'.ppm');result=dict(ok=False,errors=['no reader screenshot']);snapshot=''
  while time.monotonic()<deadline:
   health();attempts+=1;q.cmd('screendump',{'filename':str(screenshot)});snapshot=text();result=verify_reader_pixels(snapshot,screenshot.read_bytes(),body,contract,anchor,resolution,expected_path)
+  if result['ok']and extra_check is not None:
+   try:extra_check(snapshot,screenshot.read_bytes())
+   except(ValueError,AssertionError)as exc:result.update(ok=False,errors=[str(exc)])
   if result['ok']:break
   time.sleep(.2)
  result.update(attempts=attempts,screenshot=screenshot.name,screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest()if screenshot.exists()else None,source_sha256=contract['source_sha256'],serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),requested_anchor=anchor,scope='Independent complete bounded controlled document model, exact positively released document ticket/path/length, actual held-shell tile/viewport, complete reader chrome/body/footer glyphs, padding/spare column and stale text-band erasure. Applied/layout markers alone cannot pass; no additional network authority.')
@@ -386,10 +596,20 @@ def stream_receipts(trace,tickets,contract,large_tickets=(),receiving_tickets=()
  return dict(ok=not errors,errors=errors,admissions=admitted,drains=drains,source_limits=dict(ring=expected[0],max_wire=expected[1],total_ticks=expected[2],idle_ticks=expected[3]),scope='Exact held-route kind9 admissions and sampled actual destructive READ custody; cumulative produced and strictly increasing consumed remain within the1024-byte ring. Complete endpoint bytes require separate exact PCAP reassembly; no exact max-wire drain sample or delivery claim.')
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--mode',choices=MODES,default='echo');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--mode',choices=MODES,default='echo');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');p.add_argument('--binding',type=Path);p.add_argument('--wheel',action='store_true');p.add_argument('--check',action='store_true');a=p.parse_args()
+ if a.wheel and a.binding is None:p.error('--wheel requires --binding')
+ if a.check:
+  if not a.wheel:p.error('--check requires --wheel')
+  print(json.dumps(verify_wheel_evidence(Path(__file__).resolve().parents[1],a.iso.resolve(strict=True),a.binding.resolve(strict=True),a.out.resolve(strict=True))));return
+ if a.wheel and a.mode not in('reader','stream','stream-close'):p.error('--wheel requires --mode reader, stream or stream-close')
+ if a.source_disk is None:p.error('native run requires --source-disk')
+ root=Path(__file__).resolve().parents[1];bound=None
+ if a.wheel:
+  from network_contention_gate import frozen_binding
+  bound=frozen_binding(root,a.iso.resolve(strict=True),a.binding.resolve(strict=True))
  iso=a.iso.resolve(strict=True);seed=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh evidence directory required')
- contract=load_pixel_contract(Path(__file__).resolve().parents[1]);request=contract['request'];response_body=STREAM_BODY if a.mode in STREAM_MODES else READER_BODY if a.mode=='reader'else BODY;overview=overview_preview(response_body)if a.mode in('reader',)+STREAM_MODES else BODY;disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
+ contract=load_wheel_contract(root)if a.wheel else load_pixel_contract(root);request=contract['request'];response_body=STREAM_BODY if a.mode in STREAM_MODES else READER_BODY if a.mode=='reader'else BODY;overview=overview_preview(response_body)if a.mode in('reader',)+STREAM_MODES else BODY;disk=out/'nvme.img';shutil.copyfile(seed,disk);serial=out/'serial.log';pcap=out/'wire.pcap';qmp=Path('/tmp')/f'sex-http-{os.getpid()}.sock'
  if a.mode in STREAM_MODES and (contract['wire_max_body']!=len(STREAM_BODY)or contract['reader_max_body']!=len(STREAM_BODY)):raise RuntimeError('source Client/reader stream body limit differs from fixture')
  count=1 if a.mode in DNS_MODES else 4 if a.mode=='switch'else 3 if a.mode in('cancel-retry','stream-cancel-retry')else 2
  dns_count=2 if a.mode in('switch','cancel-retry','stream-cancel-retry')else 1
@@ -491,8 +711,9 @@ def main():
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-vga','none','-device','VGA,xres='+a.resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{qmp},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
  authority_paths=('apps/kaleidoscope/src/dns_probe.rs','servers/sexnet/src/dns_jobs.rs','servers/sexnet/src/jobs.rs','servers/sexnet/src/main.rs','crates/sex-pdx/src/network_job.rs','crates/sex-net/src/dns_wire.rs')
  (out/'manifest.json').write_text(json.dumps(dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),command=cmd,mode=a.mode,model=a.model,resolution=a.resolution,qemu_version=subprocess.check_output(['qemu-system-x86_64','--version'],text=True),pixel_source_sha256=contract['source_sha256'],authority_source_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()for name in authority_paths},runner_sha256={name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()for name in('http_content_gate.py','check_tcp_capture.py','check_dns_capture.py')},http_request_hex=request.hex(),http_body_hex=response_body.hex(),scope='Actual H now obtains a fixed-name UDP DNS observation, positively releases it, then requests BEGIN_STREAM_RESOLVED kind9 under the existing held BOOT route and immutable HTTP endpoint policy. Real J/R/V/navigation/F11 keys, source-bound reader pages with actual ZoomToggle/restore where selected, loopback UDP46079/TCP46078 fixtures and full shared PCAP. No DNS authenticity, TTL wall-clock accuracy, new capability authority, TLS, public routing, HTML, redirect following or cache claim.'),indent=2)+'\n')
- proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);actions=[];pixel_results=[];reader_results=[];failure=None
- def text():return serial.read_text(errors='replace')if serial.exists()else''
+ manifest_path=out/'manifest.json';manifest=json.loads(manifest_path.read_text());manifest.update(wheel=a.wheel,binding=bound);manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
+ proc=subprocess.Popen(cmd,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);actions=[];pixel_results=[];reader_results=[];failure=None;wheel_actions=[];wheel_parking=[];wheel_parked=[];wheel_other=[];wheel_park_phase=0;wheel_close_start=None;wheel_need_erasure=False
+ def text():return serial_text(serial)if serial.exists()else''
  def health():
   if server_errors:raise RuntimeError(str(server_errors))
   if proc.poll()is not None:raise RuntimeError('guest exited')
@@ -519,7 +740,9 @@ def main():
    start=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':code}}}for code,down in [('alt',True),('tab',True),('tab',False),('alt',False)]]});wait(r'\[shell.app.switch\]',start)
   raise RuntimeError('actual AltTab did not focus Browser')
  def pixels(q,view,name):
-  result=wait_http_pixels(q,text,out,view,overview,contract,health,name,resolution=tuple(map(int,a.resolution.split('x'))));pixel_results.append(result)
+  if a.wheel:wheel_park(q,name)
+  result=wait_http_pixels(q,text,out,view,overview,contract,health,name,resolution=tuple(map(int,a.resolution.split('x'))));result['expected_view']=view;pixel_results.append(result)
+  if a.wheel:wheel_parked.append(result)
   if not result['ok']:raise RuntimeError('actual HTTP pixels: '+'; '.join(result['errors']))
  def ready(q,ticket,start,name):
   wait(rf'\[browser.http.body\] ticket={ticket} status=200 length={len(response_body)} hash={hex(fingerprint(response_body))} controlled_peer=1 tls=0',start)
@@ -528,19 +751,66 @@ def main():
  def resolution(ticket,generation,start):
   wait(rf'\[browser.dns.released\] ticket={generation} view=Answer\(\[10, 0, 2, 2\]\) private_job=0',start)
   wait(rf'\[net.job.resolved.admitted\] owner=15 task=15 ticket={ticket} dns_generation={generation} ',start)
+ def wheel_park(q,name):
+  nonlocal wheel_park_phase
+  from launcher_workflow_gate import pointer_park
+  pointer_park(q,tuple(map(int,a.resolution.split('x'))),text,wait,wheel_parking.append,wheel_park_phase);wheel_park_phase+=1;wheel_parking[-1].update(capture=name,serial_end=len(text()))
+ def wheel_other_picture(q,name,kind):
+  wheel_park(q,name);path=out/(name+'.ppm');deadline=time.monotonic()+25;error=None
+  while time.monotonic()<deadline:
+   health();q.cmd('screendump',{'filename':str(path)});snapshot=text()
+   try:
+    if kind=='launcher':
+     from check_launcher_pixels import verify as check_launcher
+     errors=check_launcher(snapshot,path.read_bytes(),contract['font'],tuple(map(int,a.resolution.split('x'))))
+     if errors:raise ValueError(str(errors))
+    else:
+     width,height,_=ppm_rgb(path.read_bytes(),min_width=1,min_height=1)
+     if(width,height)!=tuple(map(int,a.resolution.split('x'))):raise ValueError('closed resolution differs')
+    frame=dict(kind=kind,requested_anchor=None,screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest());wheel_other.append(frame);wheel_parked.append(frame);return frame
+   except(ValueError,AssertionError)as exc:error=str(exc);time.sleep(.1)
+  (out/'wheel-failed-frame.json').write_text(json.dumps(dict(name=name,error=error,serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest()),indent=2)+'\n');raise RuntimeError(error)
+ def wheel_send(q,name,wheel,target,before,x,y):
+  from launcher_workflow_gate import pointer_move
+  resolution=tuple(map(int,a.resolution.split('x')));pointer_start=len(text());pointer_move(q,x,y,resolution,text,wait,lambda row:None)
+  after=wheel_move(reader_geometry(text(),response_body,contract,before),wheel)[0]if target=='body'else before
+  event=dict(name=name,wheel=wheel,target=target,before=before,after=after,x=x,y=y,pointer_start=pointer_start,serial_start=len(text()),host_start=time.monotonic(),transport='input-send-event',events=wheel_events(wheel));wheel_actions.append(event)
+  q.cmd('input-send-event',{'events':event['events']});event.update(serial_qmp_return=len(text()),host_qmp_return=time.monotonic());deadline=time.monotonic()+30;error='no wheel receipts'
+  while time.monotonic()<deadline:
+   health();snapshot=text();event.update(serial_end=len(snapshot),host_end=time.monotonic())
+   try:check=inspect_wheel_action(snapshot,event,response_body,contract,resolution);return check['anchor']
+   except(ValueError,AssertionError,KeyError)as exc:error=str(exc);time.sleep(.02)
+  raise RuntimeError('real wheel action '+name+': '+error)
+ def wheel_body_point():
+  tile,_=wheel_viewport(text());return tile['x']+tile['w']-24,tile['y']+64
+ def wheel_close(q):
+  nonlocal wheel_close_start
+  from clipboard_workflow_gate import hardware_keys
+  from network_contention_gate import cleanup_receipts
+  wheel_close_start=len(text());hardware_keys(q,('f11',));wait(r'\[browser.http.closed\] pending=0 terminal=1',wheel_close_start);wait(r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1',wheel_close_start);cleanup_receipts(text(),15,15,wheel_close_start)
+  x,y=wheel_body_point();wheel_send(q,'closed',-1,'closed',0,x,y);wheel_other_picture(q,'browser-wheel-closed','closed')
  def reader_workflow(q):
+  nonlocal wheel_need_erasure
   contract['reader_require_position']=True
   anchor=0;start_network=len(text());original=None
   def paint(name):
    nonlocal anchor
-   result=wait_reader_pixels(q,text,out,name,response_body,contract,anchor,health,resolution=tuple(map(int,a.resolution.split('x'))));reader_results.append(result)
+   if a.wheel:wheel_park(q,name)
+   extra=None
+   if a.wheel and wheel_need_erasure:
+    from launcher_workflow_gate import launcher_erased
+    extra=lambda prefix,image:launcher_erased(prefix,image,contract['launcher'],tuple(map(int,a.resolution.split('x'))))
+   result=wait_reader_pixels(q,text,out,name,response_body,contract,anchor,health,resolution=tuple(map(int,a.resolution.split('x'))),extra_check=extra);reader_results.append(result)
    if not result['ok']:raise RuntimeError('actual reader pixels: '+'; '.join(result['errors']))
-   return reader_geometry(text(),response_body,contract,anchor)
-  def navigation(key,code):
+   if a.wheel:
+    if wheel_need_erasure:result['launcher_erasure']=True
+    wheel_parked.append(result)
+   return reader_geometry(text()[:result['serial_end']],response_body,contract,anchor)
+  def navigation(key,code,name=None):
    nonlocal anchor
    prior=reader_geometry(text(),response_body,contract,anchor);anchor=reader_move(prior,key)
    start=len(text());q.key(key);wait(rf'\[shell.browser.input\] code={code} down=1 slot=43 accepted=1',start)
-   frame=paint('browser-reader-'+key);actions.append(dict(action='actual_reader_'+key,first=frame['first'],end=frame['end'],source_anchor=anchor));return frame
+   frame=paint(name or'browser-reader-'+key);actions.append(dict(action='actual_reader_'+key,first=frame['first'],end=frame['end'],source_anchor=anchor));return frame
   def zoom(name):
    start=len(text());q.key('grave_accent');wait(r'\[shell.palette.item\] idx=0',start)
    for old,new in [(0,9),(9,8)]:
@@ -551,6 +821,26 @@ def main():
   start=len(text());q.key('v');wait(r'\[shell.browser.input\] code=47 down=1 slot=43 accepted=1',start)
   first=paint('browser-reader-initial');original=first['tile']
   if first['first']!=0 or first['source_bytes']!=len(response_body) or first['total_lines']<=first['body_rows']:raise RuntimeError('native reader fixture does not exercise full document pagination')
+  if a.wheel:
+   from clipboard_workflow_gate import hardware_keys
+   from check_launcher_pixels import layout as launcher_layout
+   x,y=wheel_body_point()
+   for name,delta in [('top',1),('down',-1),('up',1),('burst',-3)]:anchor=wheel_send(q,name,delta,'body',anchor,x,y);paint('browser-wheel-'+name)
+   navigation('end',107,'browser-wheel-end-entry');anchor=wheel_send(q,'end',-1,'body',anchor,x,y);paint('browser-wheel-end-clamp')
+   tile,_=wheel_viewport(text());anchor=wheel_send(q,'outside',-1,'outside',anchor,int(a.resolution.split('x')[0])-20,10);paint('browser-wheel-outside')
+   anchor=wheel_send(q,'title',-1,'title',anchor,tile['x']+tile['w']//2,tile['y']+14);paint('browser-wheel-title')
+   start=len(text());hardware_keys(q,('grave_accent',));wait(r'\[shell.palette.item\] idx=0',start)
+   deadline=time.monotonic()+15
+   while True:
+    try:modal,_=launcher_layout(text());break
+    except ValueError:
+     health()
+     if time.monotonic()>deadline:raise
+     time.sleep(.02)
+   left=max(tile['x']+8,modal['x']+8);right=min(tile['x']+tile['w']-8,modal['x']+modal['w']-8);top=max(tile['y']+36,modal['y']+36);bottom=min(tile['y']+tile['h']-8,modal['y']+modal['h']-8)
+   if left>=right or top>=bottom:raise RuntimeError('actual launcher does not overlap Browser body')
+   anchor=wheel_send(q,'modal',-1,'modal',anchor,(left+right)//2,(top+bottom)//2);wheel_other_picture(q,'browser-wheel-modal','launcher')
+   start=len(text());hardware_keys(q,('esc',));wait(r'\[command_palette.close\]',start);wheel_need_erasure=True;paint('browser-wheel-modal-erased');navigation('home',102,'browser-wheel-home')
   navigation('pgdn',109);navigation('down',108);navigation('pgup',104);navigation('home',102)
   end=navigation('end',107)
   if end['end']!=end['total_lines']or (STREAM_TAIL if a.mode in STREAM_MODES else READER_TAIL).decode()not in ''.join(reader_results[-1]['expected_rows'][2:-1]):raise RuntimeError('reader End lacks final full-document marker')
@@ -567,12 +857,15 @@ def main():
   if re.search(r'\[net\.(?:job|dns)\.egress\.submit\]|\[net\.job\.resolved\.admitted\]|\[browser.http.body\]|\[browser.dns.answer\]',text()[start_network:]):raise RuntimeError('reader navigation issued new owned network work')
   if len(rows)!=count or len(dns_rows)!=dns_count:raise RuntimeError('reader navigation changed actual peer exchange count')
   actions.append(dict(action='reader_local_navigation_only',http_connections=count,dns_queries=dns_count,cancelled_document_cannot_reopen=True))
+  if a.wheel:wheel_close(q)
  def close_pending(q,start,kind):
+  nonlocal wheel_close_start
+  if a.wheel:wheel_close_start=start
   began=time.monotonic();q.key('f11');wait(rf'\[browser.{kind}.closed\] pending=1 terminal=1',start);wait(r'\[sext.app.pool.ready\] target=15 .*ok=1',start)
   trace=text();roles={int(n)for n in re.findall(r'\[app.service.ack\] target=15 .*role=(\d+) ',trace[start:])};ack=trace.rfind('[net.app.cleanup.ack] target=15')
   retired=re.search(r'\[net.dns.records.retired\] target=15 task=15 remaining=0 before_cleanup_ack=1',trace[start:])
   if roles!={1,2,4,8,16}or ack<start or not retired or retired.start()+start>=ack or re.search(r'\[net\.(?:job|dns)\.egress\.submit\]',trace[ack:]):raise RuntimeError('pending Close lacks zero DNS records before ACK and terminal owned-egress cleanup')
-  q.cmd('screendump',{'filename':str(out/'browser-closed.ppm')});actions.append(dict(action='actual_f11_close_pending_'+kind,roles=sorted(roles),dns_records_remaining=0,seconds=time.monotonic()-began));pixel_results.append(dict(ok=True,skipped=True,reason='Browser terminally closed; no live HTTP status surface remains. All five cleanup roles, zero retained DNS records before network cleanup ACK, and wire evidence qualify Close.'))
+  wheel_other_picture(q,'browser-closed','closed')if a.wheel else q.cmd('screendump',{'filename':str(out/'browser-closed.ppm')});actions.append(dict(action='actual_f11_close_pending_'+kind,roles=sorted(roles),dns_records_remaining=0,seconds=time.monotonic()-began));pixel_results.append(dict(ok=True,skipped=True,reason='Browser terminally closed; no live HTTP status surface remains. All five cleanup roles, zero retained DNS records before network cleanup ACK, and wire evidence qualify Close.'))
  try:
   deadline=time.monotonic()+15
   while not qmp.exists():
@@ -610,7 +903,12 @@ def main():
     if time.monotonic()>deadline:raise TimeoutError('controlled stream prefix send not completed')
    wait_stream_drain(2,5120 if a.mode=='stream-reset'else 1024)
    if a.mode=='stream-reset':reset_after_drain.set()
-  if a.mode in('close','stream-close'):close_pending(q,len(text()),'http')
+  if a.mode in('close','stream-close'):
+   if a.wheel:
+    x,y=wheel_body_point();wheel_send(q,'pending-burst',-3,'pending',0,x,y);pixels(q,'Pending','browser-wheel-pending')
+   close_pending(q,len(text()),'http')
+   if a.wheel:
+    x,y=wheel_body_point();wheel_send(q,'closed',-1,'closed',0,x,y);wheel_other_picture(q,'browser-wheel-after-close','closed')
   elif a.mode in('cancel-retry','stream-cancel-retry'):
    start=len(text());began=time.monotonic();q.key('j');wait(r'\[browser.http.released\] ticket=2 view=Cancelled private_job=0',start);wait(r'\[browser.view.applied\] bytes=\d+ http=4 body_bytes=0 ',start);pixels(q,'Cancelled','browser-cancelled');actions.append(dict(action='actual_j_cancel',ticket=2,seconds=time.monotonic()-began));start=len(text());q.key('h');resolution(3,2,start);ready(q,3,start,'browser-http');actions.append(dict(action='actual_h_fresh_retry',ticket=3,dns_generation=2))
    if a.mode=='stream-cancel-retry':reader_workflow(q)
@@ -670,6 +968,12 @@ def main():
   header_len=wire_response('oversized',BODY,contract['wire_max_body']).index(b'\r\n\r\n')+4
   if validation['connections'][1]['incoming_bytes']<header_len:failure=failure or'oversized denial lacks captured complete invalid Content-Length header'
  result=dict(ok=failure is None and validation['ok']and dns_validation['ok']and joined['ok']and streaming['ok']and authority['ok']and not server_errors,error=failure,server_errors=server_errors,capture=validation,dns_capture=dns_validation,resolution_order=joined,streaming=streaming,authority=authority,pixels=pixel_results,reader_pixels=reader_results,actions=actions,scope='Actual H-driven fixed-name DNS query/answer and positive cleanup precede generation-bound HTTP admission under existing held BOOT authority and fixed endpoint policy. Exact first TCP SYN joins the admitted egress frame hash/length and follows the captured DNS answer. Denial modes require only baseline Echo TCP and no new HTTP-owned egress. Full HTTP/body pixels or explicit terminal Close qualify presentation/cleanup. Reader/stream modes additionally require complete2048/12288-byte full-document pages, actual navigation and geometry changes, overview return/reset, cancellation erasure and no new owned network work. No injected native expiry/rollback, DNS authenticity, wall-clock TTL accuracy, new capabilities, TLS, public web, HTML, cache or physical/SMP isolation claim.')
+ if a.wheel:
+  evidence=dict(serial_offset_units=WHEEL_SERIAL_UNITS,serial_prefix_hash_encoding='UTF-8',actions=wheel_actions,parking=wheel_parking,parked_frames=wheel_parked,reader_frames=reader_results,status_frames=[r for r in pixel_results if r.get('screenshot')],other_frames=wheel_other,close_start=wheel_close_start)
+  names={'serial.log','wire.pcap','endpoint-exchanges.json','dns-endpoint-exchanges.json'}|{r['screenshot']for r in evidence['reader_frames']+evidence['status_frames']+wheel_other};evidence['raw_sha256']={name:hashlib.sha256((out/name).read_bytes()).hexdigest()for name in names if(out/name).is_file()};(out/'wheel-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
+  if result['ok']:
+   try:result['wheel']=verify_wheel_evidence(root,iso,a.binding.resolve(strict=True),out)
+   except Exception as exc:result.update(ok=False,error='independent wheel replay: '+repr(exc))
  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,mode=a.mode,model=a.model,connections=len(rows))))

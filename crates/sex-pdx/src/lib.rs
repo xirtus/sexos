@@ -184,6 +184,7 @@ pub const EV_KEY: u64 = 1;
 pub const EV_REL: u64 = 2;
 pub const EV_ABS: u64 = 3;
 pub const EV_BTN: u64 = 4;
+pub const EV_WHEEL: u64 = app_scroll::CLASS;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -198,6 +199,7 @@ pub struct ShellEvent {
 ///   arg2=EV_REL (2): arg0=dx(i32),   arg1=dy(i32)   (relative delta)
 ///   arg2=EV_ABS (3): arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
 ///   arg2=EV_BTN (4): arg0=button,  arg1=1(dn)/0(up)
+///   arg2=EV_WHEEL (5): arg0=canonical signed i8 vertical steps, arg1=0
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     KeyDown(u8),
@@ -1043,4 +1045,5 @@ pub mod text_encoding;
 pub mod clipboard;
 pub mod clipboard_client;
 pub mod app_key;
+pub mod app_scroll;
 pub mod bitmap_batch;

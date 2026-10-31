@@ -19,7 +19,7 @@ use sex_pdx::{
     SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_SPINDLE, SLOT_STORAGE, SLOT_BELL, OP_QUIL_PING,
     OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE, OP_SILKBAR_UPDATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS, OP_BELL_NOTIFY,
-    SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
+    SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN, EV_WHEEL,
 };
 use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H,
     OPTION_CLOSE, OPTION_ZOOM, OPTION_MINIMIZE, OPTION_MOVE, SILKBAR_WORKSPACE_COUNT,
@@ -125,6 +125,12 @@ unsafe fn app_input_poll(){
             if item.destination.subject.pd==15&&status==0{
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot=43 accepted=1",key.code);
             }
+        },
+        app_input::Input::Scroll(scroll)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            sex_pdx::serial_record!("[shell.browser.wheel.delivered] pd={} task={} route={} wheel={} accepted={} status={}",item.destination.subject.pd,item.destination.subject.task,item.destination.route,scroll.vertical(),(status==0)as u8,status);
         },
     }
 }
@@ -9987,6 +9993,35 @@ unsafe fn flush_browser_input(){
 }
 
 static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
+/// Hover selects the exact live Browser incarnation once. Its held catalog
+/// route remains in APP_INPUT while admission is contended; focus never does.
+unsafe fn browser_wheel_destination()->Option<sex_pdx::clipboard::Participant>{
+    if COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE
+        || !matches!(INTERACTION,InteractionState::Idle) || POINTER_BUTTONS!=0 {return None;}
+    if POINTER_X<0 || POINTER_Y<0 || POINTER_X>=desktop_width() || POINTER_Y>=desktop_height(){return None}
+    let sid=match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None};
+    if sid!=300{return None}
+    let fid=frame_for_surface(sid)?;
+    if !frame_accepts_input(fid){return None}
+    let(x,y,w,h)=get_surface_bounds(sid)?;
+    let px=POINTER_X as i64;let py=POINTER_Y as i64;
+    if px<x as i64+8 || py<y as i64+36 || px>=x as i64+w as i64-8 || py>=y as i64+h as i64-8{return None}
+    let e=APP_CUSTODY.iter().flatten().find(|e|e.target==15&&e.owns_surface(sid)&&!e.dead&&!e.retired&&!e.close_pending)?;
+    let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
+    if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
+    sex_pdx::clipboard::Participant::from_catalog(c)
+}
+unsafe fn browser_wheel_input(word:u64,reserved:u64){
+    let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(word,reserved,EV_WHEEL)else{
+        sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=malformed effects=0");return;
+    };
+    let Some(destination)=browser_wheel_destination()else{
+        sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
+    };
+    let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
+    sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
+    app_input_poll();
+}
 /// Runs before native text routing in both HID paths. Alt remains owned by
 /// the desktop, so changing focus cannot leave a modifier held in the old app.
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
@@ -25080,6 +25115,8 @@ pub extern "C" fn _start() -> ! {
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN
+
+                    if event_class==EV_WHEEL {unsafe{browser_wheel_input(msg.arg0,msg.arg1);}continue;}
 
                     // Raw HID receive proof: log raw args before any EV dispatch.
                     // Budget 64 covers boot + first ~30 seconds of cursor movement.

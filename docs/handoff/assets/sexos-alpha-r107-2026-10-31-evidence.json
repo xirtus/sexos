@@ -1,0 +1,519 @@
+{
+  "round": 107,
+  "accepted": true,
+  "accepted_goal_rounds": 28,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 93,
+  "candidate": "D checker/source freeze over unchanged C image",
+  "iso_sha256": "d79dd4d7ee9f505b52878fcf87b6f2485b3a290e79a89dccc4835063ddce44a3",
+  "kernel_sha256": "71cafdf12676d9ecd661161074b4061a9ff380066e6606f6b15a4dac676cd725",
+  "binding_sha256": "d550dd4e359bc4dd2a74ccee6e456a3385013e9b72f8a81e81eb4818d62deb29",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 565,
+  "runner_inputs": 540,
+  "checks": {
+    "master": "GREEN_MASTER build C",
+    "rust": [
+      {
+        "gate": "service_custody_host_gate",
+        "exit_code": 0,
+        "seconds": 48.0455265409546,
+        "log": "/tmp/sexos-r107-c-frozen-service_custody_host_gate.log",
+        "rust_executions": 1866,
+        "python_tests": 0
+      },
+      {
+        "gate": "display_surface_groups_gate",
+        "exit_code": 0,
+        "seconds": 64.87591733399313,
+        "log": "/tmp/sexos-r107-c-frozen-display_surface_groups_gate.log",
+        "rust_executions": 56,
+        "python_tests": 0
+      },
+      {
+        "gate": "display_text_readability_gate",
+        "exit_code": 0,
+        "seconds": 0.34735662501771003,
+        "log": "/tmp/sexos-r107-c-frozen-display_text_readability_gate.log",
+        "rust_executions": 9,
+        "python_tests": 0
+      },
+      {
+        "gate": "launcher_host_gate",
+        "exit_code": 0,
+        "seconds": 1.0674591249553487,
+        "log": "/tmp/sexos-r107-c-frozen-launcher_host_gate.log",
+        "rust_executions": 35,
+        "python_tests": 0
+      },
+      {
+        "gate": "linen_text_delivery_gate",
+        "exit_code": 0,
+        "seconds": 1.8379097499419004,
+        "log": "/tmp/sexos-r107-c-frozen-linen_text_delivery_gate.log",
+        "rust_executions": 67,
+        "python_tests": 0
+      },
+      {
+        "gate": "sexdrive_dma_host_gate",
+        "exit_code": 0,
+        "seconds": 1.000916082994081,
+        "log": "/tmp/sexos-r107-c-frozen-sexdrive_dma_host_gate.log",
+        "rust_executions": 38,
+        "python_tests": 0
+      }
+    ],
+    "rust_test_executions": 2071,
+    "rust_equivalence_sha256": "0e9dfb89939e13d75f437523d178faefefea133ce05b5c32973d8ce26c33072d",
+    "rust_scope": "C frozen executions, exact C/D production/Rust test/shell-gate input equivalence; only two Python runners changed",
+    "python_tests": 811,
+    "python_log_sha256": "60be9564ceb4f39b49fc9fd49ec69e74d9c32426c2373067a0988872698ca3fa",
+    "native_runs": 8,
+    "native_boots": 10,
+    "independent_frames": 98,
+    "root_replay_sha256": "aa2046a11a1c41fea5fdc790c64b1d330de38ad1875b2263b8222943edbf4334",
+    "scalar_audit": {
+      "ok": true,
+      "iso_sha256": "d79dd4d7ee9f505b52878fcf87b6f2485b3a290e79a89dccc4835063ddce44a3",
+      "tool_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.99.0-nightly\n  Optimized build.\n\n\n  Registered Targets:\n    aarch64     - AArch64 (little endian)\n    aarch64_32  - AArch64 (little endian ILP32)\n    aarch64_be  - AArch64 (big endian)\n    amdgcn      - AMD GCN GPUs\n    arm         - ARM\n    arm64       - ARM64 (little endian)\n    arm64_32    - ARM64 (little endian ILP32)\n    armeb       - ARM (big endian)\n    avr         - Atmel AVR Microcontroller\n    bpf         - BPF (host endian)\n    bpfeb       - BPF (big endian)\n    bpfel       - BPF (little endian)\n    csky        - C-SKY\n    hexagon     - Hexagon\n    loongarch32 - 32-bit LoongArch\n    loongarch64 - 64-bit LoongArch\n    m68k        - Motorola 68000 family\n    mips        - MIPS (32-bit big endian)\n    mips64      - MIPS (64-bit big endian)\n    mips64el    - MIPS (64-bit little endian)\n    mipsel      - MIPS (32-bit little endian)\n    msp430      - MSP430 [experimental]\n    nvptx       - NVIDIA PTX 32-bit\n    nvptx64     - NVIDIA PTX 64-bit\n    ppc32       - PowerPC 32\n    ppc32le     - PowerPC 32 LE\n    ppc64       - PowerPC 64\n    ppc64le     - PowerPC 64 LE\n    r600        - AMD GPUs HD2XXX-HD6XXX\n    riscv32     - 32-bit RISC-V\n    riscv32be   - 32-bit big endian RISC-V\n    riscv64     - 64-bit RISC-V\n    riscv64be   - 64-bit big endian RISC-V\n    sparc       - Sparc\n    sparcel     - Sparc LE\n    sparcv9     - Sparc V9\n    systemz     - SystemZ\n    thumb       - Thumb\n    thumbeb     - Thumb (big endian)\n    wasm32      - WebAssembly 32-bit\n    wasm64      - WebAssembly 64-bit\n    x86         - 32-bit X86: Pentium-Pro and above\n    x86-64      - 64-bit X86: EM64T and AMD64\n    xtensa      - Xtensa 32\n",
+      "results": [
+        {
+          "name": "kaleidoscope",
+          "ok": true,
+          "iso_path": "/apps/kaleidoscope",
+          "elf_sha256": "6c17ae09d638481b3e704b1bca370296d8b04680ddbccad3fe2fce4a34b371da",
+          "disassembly_sha256": "ebe49c386b859585a1cfc19fb38ae58fe2596ccd9e809c4b7c3b1faac87d0e26",
+          "instructions": 90847,
+          "vector_or_fp_matches": [],
+          "commands": [
+            [
+              "xorriso",
+              "-osirrox",
+              "on",
+              "-indev",
+              "/tmp/sexos-alpha-r107-wheel-d-frozen/tested.iso",
+              "-extract",
+              "/apps/kaleidoscope",
+              "/tmp/sexos-r107-d-scalar/kaleidoscope.elf"
+            ],
+            [
+              "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+              "--disassemble",
+              "--no-show-raw-insn",
+              "--x86-asm-syntax=att",
+              "/tmp/sexos-r107-d-scalar/kaleidoscope.elf"
+            ]
+          ]
+        },
+        {
+          "name": "sexinput",
+          "ok": true,
+          "iso_path": "/servers/sexinput",
+          "elf_sha256": "f861759d294de3e09ba5d856e856a32df0704c1c87dfb6d918bbb2e82a9619b6",
+          "disassembly_sha256": "acd04b0f8cf46f4155a8e059e67cef47b158f812a5695b8e2385028f2b04300c",
+          "instructions": 5343,
+          "vector_or_fp_matches": [],
+          "commands": [
+            [
+              "xorriso",
+              "-osirrox",
+              "on",
+              "-indev",
+              "/tmp/sexos-alpha-r107-wheel-d-frozen/tested.iso",
+              "-extract",
+              "/servers/sexinput",
+              "/tmp/sexos-r107-d-scalar/sexinput.elf"
+            ],
+            [
+              "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+              "--disassemble",
+              "--no-show-raw-insn",
+              "--x86-asm-syntax=att",
+              "/tmp/sexos-r107-d-scalar/sexinput.elf"
+            ]
+          ]
+        },
+        {
+          "name": "sexusb",
+          "ok": true,
+          "iso_path": "/servers/sexusb",
+          "elf_sha256": "f3d1472cd828be35320a59ae79db48dbcb8129be1be13514c3ad43e005fbe698",
+          "disassembly_sha256": "fba19f0e27bba5853849da04d6d8e515e204aae672db7fa787499a39f1e0a716",
+          "instructions": 13240,
+          "vector_or_fp_matches": [],
+          "commands": [
+            [
+              "xorriso",
+              "-osirrox",
+              "on",
+              "-indev",
+              "/tmp/sexos-alpha-r107-wheel-d-frozen/tested.iso",
+              "-extract",
+              "/servers/sexusb",
+              "/tmp/sexos-r107-d-scalar/sexusb.elf"
+            ],
+            [
+              "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+              "--disassemble",
+              "--no-show-raw-insn",
+              "--x86-asm-syntax=att",
+              "/tmp/sexos-r107-d-scalar/sexusb.elf"
+            ]
+          ]
+        },
+        {
+          "name": "silk-shell",
+          "ok": true,
+          "iso_path": "/servers/silk-shell",
+          "elf_sha256": "f8fbe8e8ad16aee31d599614ceca2f70a24ccf74eac8a741d7d9767961504181",
+          "disassembly_sha256": "115a6d097514e25a76f06ce3114d5bfa3dd316236ba09143d9f8730e5e411eff",
+          "instructions": 87443,
+          "vector_or_fp_matches": [],
+          "commands": [
+            [
+              "xorriso",
+              "-osirrox",
+              "on",
+              "-indev",
+              "/tmp/sexos-alpha-r107-wheel-d-frozen/tested.iso",
+              "-extract",
+              "/servers/silk-shell",
+              "/tmp/sexos-r107-d-scalar/silk-shell.elf"
+            ],
+            [
+              "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+              "--disassemble",
+              "--no-show-raw-insn",
+              "--x86-asm-syntax=att",
+              "/tmp/sexos-r107-d-scalar/silk-shell.elf"
+            ]
+          ]
+        }
+      ],
+      "scope": "Decoded four changed ISO-extracted userland ELFs and inspected vector operands/FP-state mnemonics only. No whole-image, runtime stack/register/cache erasure, scheduler or hostile-containment proof."
+    },
+    "semantic_negative_controls": 4,
+    "semantic_controls_sha256": {
+      "/tmp/sexos-r107-browser-controls-a/result.json": "ccabdf09f71535a20bd3f99f02359d814e3b644a9ca6103908707f9ad25cd4be",
+      "/tmp/sexos-r107-order-controls-d/result.json": "ccb5b78979a99a02684b232b49a5bc11b93a470c8e1a21685293d43045acee77"
+    }
+  },
+  "qualification_runs": [
+    {
+      "name": "wheel-reader-wide",
+      "boots": 1,
+      "frames": 26,
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "mode": "reader",
+      "raw_archive_prefix": "native/wheel-reader-wide",
+      "result_sha256": "f6f701785215b632e25cc3a6d4fbb51e86f8cae51dcec541b9ed3bcf76c5ee69"
+    },
+    {
+      "name": "wheel-reader-compact",
+      "boots": 1,
+      "frames": 26,
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "mode": "reader",
+      "raw_archive_prefix": "native/wheel-reader-compact",
+      "result_sha256": "392931b8ed41ce2eb535e7c5269019c0d7c7fcc7f6ecbe09c39db74da84826aa"
+    },
+    {
+      "name": "wheel-stream-close-wide",
+      "boots": 1,
+      "frames": 3,
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "mode": "stream-close",
+      "raw_archive_prefix": "native/wheel-stream-close-wide",
+      "result_sha256": "f6b1aae73daf01fdc248c5be06080a2b7784a93fcb2eeb233ab5402a00ac1aaf"
+    },
+    {
+      "name": "wheel-stream-close-compact",
+      "boots": 1,
+      "frames": 3,
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "mode": "stream-close",
+      "raw_archive_prefix": "native/wheel-stream-close-compact",
+      "result_sha256": "3aa19c19906c175b5867389549b2ea6e626f50de2a3af56f754640e5aeb752ca"
+    },
+    {
+      "name": "asset-ready-wide",
+      "boots": 1,
+      "frames": 9,
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "mode": "ready",
+      "raw_archive_prefix": "native/asset-ready-wide",
+      "result_sha256": "6c01290a91f6a701ea357af5408a15adb6e87785e4d6bc3a729075b1420c6a05"
+    },
+    {
+      "name": "asset-ready-compact",
+      "boots": 1,
+      "frames": 9,
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "mode": "ready",
+      "raw_archive_prefix": "native/asset-ready-compact",
+      "result_sha256": "c09d752e3b87edb1fb216c35dc999caa6d0e2dc46e59bf32366c57b00532b615"
+    },
+    {
+      "name": "clipboard-wide",
+      "boots": 2,
+      "frames": 11,
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "mode": "clipboard-recovery",
+      "raw_archive_prefix": "native/clipboard-wide",
+      "result_sha256": "83f62699e4f562681ed872f5b1b82411c1e444983666b8a9d9980519c5d74b28"
+    },
+    {
+      "name": "clipboard-compact",
+      "boots": 2,
+      "frames": 11,
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "mode": "clipboard-recovery",
+      "raw_archive_prefix": "native/clipboard-compact",
+      "result_sha256": "83f62699e4f562681ed872f5b1b82411c1e444983666b8a9d9980519c5d74b28"
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "path": "assets/sexos-alpha-r107-2026-10-31-wheel-down-wide.png",
+      "sha256": "a766ab19545bb52b84056b31c665bc9922e62499fd1698b9ca2699dd1bbe5aa8",
+      "source_ppm": "/tmp/sexos-r107-d-native-wheel-reader-wide/browser-wheel-down.ppm",
+      "source_ppm_sha256": "fed7d92c2480328a866e278fa3bcbac6e59e2e89cb0be97f1ce7936ca8e18dab",
+      "width": 1280,
+      "height": 800,
+      "pixel_identical": true
+    },
+    {
+      "path": "assets/sexos-alpha-r107-2026-10-31-wheel-burst-wide.png",
+      "sha256": "36aea8fa38a5edb47a71d0c9402a9be21cc3f0d74c282b506bc6a35a066578e3",
+      "source_ppm": "/tmp/sexos-r107-d-native-wheel-reader-wide/browser-wheel-burst.ppm",
+      "source_ppm_sha256": "3b0cd7a1f0e742bbda896210e9a665fdbab8691fdc47bb9229b1fee5926283f3",
+      "width": 1280,
+      "height": 800,
+      "pixel_identical": true
+    },
+    {
+      "path": "assets/sexos-alpha-r107-2026-10-31-reader-zoom-wide.png",
+      "sha256": "26b1624168b0889f36c2728310061a39d872144035ffc1e11ade9dcb9def330f",
+      "source_ppm": "/tmp/sexos-r107-d-native-wheel-reader-wide/browser-reader-expanded.ppm",
+      "source_ppm_sha256": "6adc645e9a18fa3aa93b108b7f66ddff01e787e04d68f07b98e8141a771124be",
+      "width": 1280,
+      "height": 800,
+      "pixel_identical": true
+    },
+    {
+      "path": "assets/sexos-alpha-r107-2026-10-31-wheel-down-compact.png",
+      "sha256": "854dae9ccc6e6bd44849381e885d11bc28f561bbaf599f22d220319db44ee585",
+      "source_ppm": "/tmp/sexos-r107-d-native-wheel-reader-compact/browser-wheel-down.ppm",
+      "source_ppm_sha256": "867f0a33a4315483f9ca872714a2b1fad8c8a6fa7401a4f2869e8710318c251f",
+      "width": 1024,
+      "height": 768,
+      "pixel_identical": true
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r107-2026-10-31-qualified-raw.tar.gz",
+    "sha256": "03adc3273eb6dc92962235d028519a9b5b057a470f74499a3f57a458376dc6ef",
+    "bytes": 16692859,
+    "members": 2696,
+    "payload_manifest_sha256": "37c10f7170a594fff0a4c12c5118ce165b078394ade8bf1981f074188b704f6c",
+    "verified": true,
+    "raw_disks": [
+      {
+        "raw": "/tmp/sexos-alpha-r107-wheel-c-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r107-wheel-c-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-wheel-reader-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-wheel-reader-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-wheel-reader-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-wheel-reader-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-wheel-stream-close-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-wheel-stream-close-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-wheel-stream-close-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-wheel-stream-close-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-asset-ready-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-asset-ready-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-asset-ready-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-asset-ready-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-clipboard-wide/recovery/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-clipboard-wide/recovery/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-clipboard-wide/write/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-clipboard-wide/write/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-clipboard-compact/recovery/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-clipboard-compact/recovery/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-d-native-clipboard-compact/write/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-d-native-clipboard-compact/write/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r107-wheel-b-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r107-wheel-b-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r107-c-native-wheel-reader-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r107-c-native-wheel-reader-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": true,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r100a-seed.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r100a-seed.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created": false,
+        "uncompressed_verified": true
+      }
+    ]
+  },
+  "historical_diagnostics": [
+    {
+      "candidate": "A",
+      "accepted": false,
+      "result": "ABI inventory guard stopped before compilation; new app_scroll ABI then explicitly inventoried and hash updated"
+    },
+    {
+      "candidate": "B",
+      "accepted": false,
+      "result": "GREEN baseline superseded by independent pointer/key starvation and click-order review; image/kernel and build diagnostics retained; full B source closure was not frozen"
+    },
+    {
+      "candidate": "C native",
+      "accepted": false,
+      "result": "Original real wide workflow retained with its failed replay result; newline-normalized capture character offsets disagreed with raw-CRLF replay. Fresh D capture reruns qualify acceptance.",
+      "original_result_sha256": "1d669bf3e07a48b2f1aeb34606b0142bff05771c289d2f9ec536e64c16b8f61f",
+      "diagnostic_sha256": "218fac683c4c0c254aa08401eb2ae4c9241ada392f733b67ba1c7764470511ed"
+    },
+    {
+      "candidate": "initial order-control fixture",
+      "accepted": false,
+      "result": "Missing kernel source prevented compilation; retained as setup failure, not a semantic rejection"
+    }
+  ],
+  "limitations": [
+    "Wheel native qualification is the bounded2048-byte controlled plain-HTTP Reader at1280x800/e1000e and1024x768/e1000; pending Close uses a real bounded12288-byte stream prefix. Other app wheel support, arbitrary public web/HTML/JS and physical hardware remain unqualified.",
+    "Queue sizes and per-poll admission attempts are finite. Progress requires the held transport/scheduler to progress; no wall-clock responsiveness guarantee under a stopped peer. Pointer exhaustion/fault can leave button/modifier recovery unconfirmed until new hardware input; uncertainty is explicit.",
+    "Host callbacks prove actual decoders, ordering, custody and bounds, not native transport authority or hardware. Finite identifier exhaustion rejects new work without wrapping. Accepted prefixes are never replayed.",
+    "Wheel and image serial windows use explicitly labeled UTF-8 decoded, universal-newline character offsets and UTF-8 prefix hashes, separately joined to whole raw-file hashes. Clipboard prefixes retain their independent exact raw-byte convention.",
+    "Image regression retains the controlled48x48 QOI and lab-root endpoint limits. UTF8 clipboard preserves exact12288 source bytes and same-image cold recovery, not shaping, IME or broad filename/font support.",
+    "Four changed userland ELFs receive scoped vector/FP operand/mnemonic inspection. No whole-image, runtime stack/register/cache erasure, hostile containment, full deterministic replay, crash/power-loss, physical/SMP, sustained latest-image daily-driver or System Proven acceptance."
+  ],
+  "scope": "Actual USB tablet wheel reaches exact live Browser through existing BOOT-granted routes, with bounded canonical data, source-byte anchor and full current pixel joins. Reserved-capacity arrival-ordered raw and normalized queues preserve click/key causality and pre-effect Full custody. No runtime capability genesis or per-process VAS; SexOS remains a single-address-space microkernel OS."
+}

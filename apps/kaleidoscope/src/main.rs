@@ -131,6 +131,17 @@ impl App {
         self.selection_generation=generation;
         if self.selection.bind(sex_pdx::text_selection::Source{generation,revision:0},signature.1).is_ok(){self.selection_body=Some(signature);}
     }
+    fn scroll_input(&mut self,scroll:sex_pdx::app_scroll::Scroll){
+        if !self.reading || self.asset_panel || self.import_panel { return; }
+        let before=self.reader.source_anchor();
+        let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(b)=self.import_source.as_ref(){b.as_bytes()}else{self.importer.document().map_or(&[][..],|b|b.as_bytes())}}else{self.http.document()};
+        let changed=self.reader.scroll_wheel(body,scroll.vertical());
+        sex_pdx::serial_record!("[browser.reader.wheel] wheel={} before={} anchor={} changed={} viewport={} retained_body_only=1",scroll.vertical(),before,self.reader.source_anchor(),changed as u8,self.viewport_sequence);
+    }
+    fn receive_wheel(&mut self,req:&sex_pdx::PdxMessage){
+        if req.type_id!=0x202 || req.caller_pd!=3 || req.caller_task!=3 {return;}
+        if let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(req.arg0,req.arg1,req.arg2){self.scroll_input(scroll);}
+    }
     fn key_input(&mut self,key:sex_pdx::app_key::Key){
         self.sync_selection();
         if key.code==0x01&&unsafe{CLIPBOARD.pending()}{unsafe{CLIPBOARD.cancel(sex_pdx::get_ticks());}return}
@@ -618,6 +629,7 @@ impl SexApp for App {
             if req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3{
                 if let Some(key)=sex_pdx::app_key::Key::decode(req.arg0,req.arg1,req.arg2){self.key_input(key);}
             }
+            self.receive_wheel(&req);
 
         }
         self.clipboard_events();

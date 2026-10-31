@@ -1,6 +1,16 @@
 # Sustained alpha candidate and desktop continuation
 
-## Current checkpoint: accepted round 106; next 107
+## Current checkpoint: accepted round 107; next 108
+
+Browser now scrolls its retained document from actual USB tablet wheel reports. Each notch moves three visual rows, clamps at the document ends and preserves source-byte/scalar boundaries without fetching again. Both tablet paths retain the optional sixth byte; normalized events carry one canonical signed wheel value. Shell selects the visible Browser body under the pointer and retains its exact catalog incarnation and held route through contention. Panels, chrome, other surfaces and terminal targets cannot receive the scroll.
+
+The input path now retains pre-effect Full work in reserved-capacity queues while preserving click-before-key order: USB holds32 pointer and32 keyboard reports; Input holds32 pointer batches and128 key edges. Checked arrival IDs join the queues, and each retained-work poll attempts at most four sends. A whole modifier snapshot is retained before advancing its state; accepted prefixes never replay. Later pointer traffic cannot overtake a retained key, and keys cannot overtake an older focus click. Hard failure erases dependent unsent work with explicit uncertainty; button/modifier recovery is not fabricated. The existing BOOT InputRing supplies kernel PS/2 provenance, while USB PD5/task5, Shell PD3/task3 and live app ownership remain separately checked.
+
+Sealed ISO `d79dd4d7ee9f505b52878fcf87b6f2485b3a290e79a89dccc4835063ddce44a3`, binding `d550dd4e359bc4dd2a74ccee6e456a3385013e9b72f8a81e81eb4818d62deb29`;565 production/540 runner inputs. BUILD/GREEN_MASTER,2,071 frozen Rust executions with exact C/D Rust-input equivalence,811 frozen Python tests and four compiled semantic controls pass. Eight fresh native runs/ten boots qualify98 independently replayed captures at both desktop sizes: actual wheel/clamps/bursts, outside/title/launcher/terminal refusal, Zoom/restore, no refetch, Close during real pending streaming, image controls and exact12288-byte UTF-8 clipboard/Save/cold recovery. See [evidence](assets/sexos-alpha-r107-2026-10-31-evidence.json).
+
+Next108 qualifies one representative connected desktop session on the latest exact image;109 then reproduces the remaining alpha authority blockers. Active80–200 progress:28/121 accepted;108–200 remain (93 substantive rounds).7 Open/23 Partial/System Proven false remain. GLOBAL_VAS supplies addressing; BOOT alone creates capabilities; typed sex-pdx supplies authority, PKU enforces held authority and exact task incarnations remain mandatory. SexOS is not Unix/Linux/POSIX.
+
+## Historical checkpoint: accepted round 106; next 107 at that time
 
 Browser can inspect its retained decoded image in Fit or1:1 mode with F and A. Both modes center complete integer pixels below dedicated status, dimensions/scale and control rows; compact tiles retain the full shortcuts. Fit remains bounded to1–4x and1:1 uses one source pixel per framebuffer pixel. Unavailable dimensions, no retained image and an image that cannot fit have distinct labels. The retained pixels and existing held Browser surface authority serve every local mode change; controls do not fetch, decode again or mint authority.
 

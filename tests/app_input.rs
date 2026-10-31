@@ -5,6 +5,8 @@
 extern crate self as sex_pdx;
 #[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_key.rs"] pub mod app_key;
+#[path = "../crates/sex-pdx/src/app_scroll.rs"] pub mod app_scroll;
+pub const EV_WHEEL:u64=app_scroll::CLASS;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
 #[path = "../crates/sex-pdx/src/text_selection.rs"] pub mod text_selection;
 #[path = "../crates/sex-pdx/src/clipboard.rs"] pub mod clipboard;
@@ -22,7 +24,7 @@ fn participant(pd: u32, task: u32) -> Participant {
 }
 fn item(n: usize, destination: Participant) -> Item {
     Item { destination, input: if n%5==0 { Input::Clipboard(Action::Copy) } else {
-        Input::Key(Key { code: (n%255+1)as u8, shift: n%2!=0, control:n%3==0 }) } }
+        if n%3==0 { Input::Scroll(app_scroll::Scroll::new(if n%2==0{-1}else{1}).unwrap()) } else { Input::Key(Key { code: (n%255+1)as u8, shift: n%2!=0, control:n%3==0 }) } } }
 }
 fn drain(queue: &mut Queue) -> Vec<Item> {
     let mut result=Vec::new();while let Some(front)=queue.front() {result.push(front);queue.pop();}result
@@ -207,4 +209,14 @@ mod shell {
         let _lock=LOCK.lock().unwrap();unsafe{reset();assert!(desktop_shortcut(0x36,1));assert!(desktop_shortcut(0x1e,1));assert_eq!(SENT.len(),1);assert!(desktop_shortcut(0x1d,1));STATUS=ERR_SERVICE_NOT_READY;assert!(desktop_shortcut(0x2e,1));assert!(CLIPBOARD.outbox_pending());assert!(desktop_shortcut(0x4d,1));let expected=Item{destination:participant(9,9),input:Input::Key(Key{code:0x4d,shift:true,control:true})};assert_eq!(APP_INPUT.front(),Some(expected));assert!(desktop_shortcut(0x2e,0));
         FOCUSED_SURFACE_ID=300;STATUS=0;clipboard_poll();let intent_index=SENT.len()-1;assert_eq!((SENT[intent_index].0,SENT[intent_index].1),(41,clipboard::INTENT));app_input_poll();assert!(!APP_INPUT.pending());let(route,opcode,args)=*SENT.last().unwrap();assert_eq!((route,opcode),(41,OP_HID_EVENT));assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x4d,shift:true,control:true}));assert!(SENT.len()-1>intent_index);assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x36,0));assert!(desktop_shortcut(0x30,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,43);assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x30,shift:false,control:false}));}
     }
+}
+
+#[test]fn wheel_fifo_keeps_exact_subject_and_signed_payload_through_wrap_full_and_retire(){
+ let mut queue=Queue::new();let browser=participant(15,15);let other=participant(9,9);
+ let mut expected=Vec::new();
+ for n in 0..CAPACITY{let entry=Item{destination:if n%2==0{browser}else{other},input:Input::Scroll(app_scroll::Scroll::new((n as i8+1)*if n%2==0{-1}else{1}).unwrap())};assert!(queue.push(entry));expected.push(entry);}
+ assert!(!queue.push(Item{destination:browser,input:Input::Scroll(app_scroll::Scroll::new(-1).unwrap())}));
+ assert_eq!(queue.retire(Subject{pd:15,task:99}),0);
+ assert_eq!(queue.retire(browser.subject),CAPACITY/2);expected.retain(|entry|entry.destination!=browser);
+ assert_eq!(drain(&mut queue),expected);
 }

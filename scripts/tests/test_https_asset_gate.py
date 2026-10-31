@@ -106,6 +106,12 @@ class AssetFixture(unittest.TestCase):
   with self.assertRaises(ValueError):gate.decode_fixture(gate.BODY[:-1]+b'\2')
  def test_contract_binds_actual_resource_decoder_compositor_sources(self):
   c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
+ def test_contract_rejects_disconnected_raw_key_retention_or_held_drain(self):
+  path=ROOT/'servers/sexinput/src/main.rs';read=Path.read_bytes;original=read(path)
+  for old,new in [(b'sex_pdx::serial_record!("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
+   self.assertIn(old,original);mutated=original.replace(old,new)
+   with patch.object(Path,'read_bytes',lambda p:mutated if p==path else read(p)):
+    with self.assertRaises(ValueError):gate.source_contract(ROOT)
  def test_wire_profiles_bind_endpoint_body_and_no_plaintext(self):
   for mode in gate.MODES:self.assertTrue(gate.inspect_wire(capture(mode),rows(mode),mode)['ok'])
   for mutate in ('extra','plaintext'):
