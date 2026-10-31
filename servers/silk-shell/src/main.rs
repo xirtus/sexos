@@ -5461,6 +5461,22 @@ unsafe fn desktop_content_ready(frame:u64)->bool {
     desktop_content::children(frame,x,y,w,h).iter().flatten()
         .all(|child|child.w==0||child.h==0||DESKTOP_STATES.ready(child.sid))
 }
+/// The first condition keeping a frame's content from being ready, for
+/// diagnostics only; desktop_content_ready remains the decision.
+unsafe fn desktop_content_blocker(frame:u64)->(&'static str,u64) {
+    if DESKTOP_STATES.pending_surface(frame){return("frame_state_pending",frame)}
+    if !DESKTOP_STATES.ready(frame){return("frame_state_denied",frame)}
+    if !surface_is_alive(frame){return("frame_dead",frame)}
+    if !matches!(lifecycle_state(frame),Some(LifecycleState::Visible)){return("frame_not_visible",frame)}
+    if frame_for_surface(frame).map_or(false,|f|frame_is_minimized(f)){return("frame_minimized",frame)}
+    let Some((x,y,w,h))=get_surface_bounds(frame)else{return("no_bounds",frame)};
+    for child in desktop_content::children(frame,x,y,w,h).iter().flatten(){
+        if child.w==0||child.h==0{continue}
+        if DESKTOP_STATES.pending_surface(child.sid){return("child_state_pending",child.sid)}
+        if !DESKTOP_STATES.ready(child.sid){return("child_state_denied",child.sid)}
+    }
+    ("ready",0)
+}
 unsafe fn desktop_state_poll() {
     DESKTOP_STATES.poll(4,|op|desktop_state_validate(op),|op| {
         let(status,_)=raw_pdx_call(SLOT_DISPLAY,op.opcode,op.surface,op.packed,op.control);
@@ -16009,7 +16025,8 @@ unsafe fn launcher_focus_retry_ready(sid:u64)->bool{
         &&launcher_subject_live(p.target,p.task)==Some(true)
 }
 unsafe fn launcher_focus_cancel(p:LauncherFocus,reason:&str){
-    sex_pdx::serial_record!("[launcher.focus.cancel] target={} frame={} reason={} turns={} elapsed={}",p.target,p.frame,reason,p.turns,sex_pdx::get_ticks().saturating_sub(p.start));
+    let (blocker,sid)=desktop_content_blocker(p.frame);
+    sex_pdx::serial_record!("[launcher.focus.cancel] target={} frame={} reason={} turns={} elapsed={} requested={} content={} content_sid={} display_focus={:?}",p.target,p.frame,reason,p.turns,sex_pdx::get_ticks().saturating_sub(p.start),p.requested as u8,blocker,sid,LAST_DISPLAY_FOCUS_RESULT);
     LAUNCHER_FOCUS=None;
     if p.requested{DISPLAY_FOCUS.observe(p.frame,linen_text_delivery::Admission::Rejected(1));}
     launcher_action_record(p.target,p.frame,p.action,p.from,false,false);
