@@ -104,4 +104,20 @@ class RelativeTiles(unittest.TestCase):
         with self.assertRaises(ValueError):gate.vga_args('800x600')
 
 
+
+class BootProfile(unittest.TestCase):
+    def test_compact_selects_the_actual_limine_entry_before_guest_input(self):
+        events=[]
+        class Q:
+            def key(self,value):events.append(('key',value))
+        def wait(pattern,timeout):events.append(('wait',pattern,timeout))
+        gate.select_boot_profile(Q(),wait,'1024x768')
+        self.assertEqual(events,[('wait',r'SexOS compact 1024x768',10),('key','down'),('key','ret')])
+        events.clear();gate.select_boot_profile(Q(),wait,'1280x800');self.assertEqual(events,[])
+    def test_unknown_boot_profile_has_no_input_side_effect(self):
+        class Q:
+            def key(self,value):raise AssertionError('unexpected input')
+        def wait(*args,**kwargs):raise AssertionError('unexpected wait')
+        with self.assertRaises(ValueError):gate.select_boot_profile(Q(),wait,'800x600')
+
 if __name__=='__main__':unittest.main()

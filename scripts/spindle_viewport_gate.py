@@ -24,6 +24,12 @@ def parse_args(argv=None):
     if args.relative_tiles and incompatible:p.error('--relative-tiles supports BASIC only; incompatible: '+', '.join(incompatible))
     return args
 
+def select_boot_profile(q,wait,resolution):
+    if resolution not in RESOLUTIONS:raise ValueError('unsupported framebuffer resolution')
+    if resolution=='1024x768':
+        wait(r'SexOS compact 1024x768',timeout=10)
+        q.key('down');q.key('ret')
+
 def vga_args(resolution):
     if resolution not in RESOLUTIONS:raise ValueError('unsupported framebuffer resolution')
     return ['-vga','none','-device','VGA,xres='+resolution.replace('x',',yres=')]
@@ -90,7 +96,7 @@ def main():
             if time.monotonic()>deadline:raise RuntimeError('QMP unavailable')
             time.sleep(.1)
         relative={'tiled':None,'tiled_sequence':0,'after_zoom':0}
-        q=QMP(sock);font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text())
+        q=QMP(sock);select_boot_profile(q,wait,args.resolution);font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text())
         def key(code,pattern,timeout=30):start=len(text());q.key(code);return wait(pattern,start,timeout)
         def capture(name,prompt,small,output=None):
             deadline=time.monotonic()+90;errors=['not painted'];latest=None
