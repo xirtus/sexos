@@ -175,7 +175,7 @@ The investigation also wasted one run: the stall sampler was written against the
 - The connected desktop session passes at both sizes on the final image, which includes 122–125.
 - Python runner suite: 842 tests pass.
 - `check_architectural_truth.py --run-host`: all 41 registered host/static checks pass on the final tree.
-- Sustained 1800 s sessions: wide passes on the round 119 image (round 117); compact passes on the final image (round 120). The wide session has not been repeated on the final image, which now includes the round 126 kernel fix.
+- Sustained 1800 s sessions pass at **both sizes on the final image**: compact with 83 cycles (round 120), and wide with 80 cycles ([result](assets/sexos-r126-alpha-1800s-wide-final-2026-10-31-result.json.gz), uncompressed sha256 `de1a00342adb041e730413f9f7866b306349fdbc6215195e2cf577e2a1736afc`). The round 117 wide pass was on the round 119 image.
 
 ## Known pre-existing issues found
 
@@ -196,9 +196,8 @@ The investigation also wasted one run: the stall sampler was written against the
 1. Re-qualify 109–119 under the 80–107 acceptance bar: freeze one cohort and run the full native regression set at both sizes, with raw archives.
 2. Wire SexTime into the Browser clock panel or SilkBar once a validated civil-time source is routed there. Unknown or synthetic sources must stay visible as such.
 3. Grow UiIR: let Display drive one real rendering decision from the stream, then move a second Shell → Display path (e.g. desktop state) onto UiIR with epoch-gated commits.
-4. Re-run the wide 1800 s session on the final image.
-5. Quil autosave drafts (Andreas's suggestion). Write a draft through Quil's existing BOOT document route into one draft object it owns, without taking over the open document's identity, and offer recovery from Linen.
-6. Plan rows 110–116: physical profile, torn-write recovery, lifetimes and reserves.
+4. Quil autosave drafts (Andreas's suggestion). Write a draft through Quil's existing BOOT document route into one draft object it owns, without taking over the open document's identity, and offer recovery from Linen.
+5. Plan rows 110–116: physical profile, torn-write recovery, lifetimes and reserves.
 
 ## Reproducing
 
