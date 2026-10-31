@@ -4,6 +4,8 @@ extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/document.rs"]pub mod document;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/document_view.rs"]pub mod document_view;
 #[path="../servers/sexfiles/src/document.rs"]mod documents;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../apps/spindle/src/viewport.rs"]mod viewport;
@@ -35,6 +37,9 @@ include!(env!("EXPANDED_SHELL_POLICY"));
  INFO[last].as_mut().unwrap().task=1000;INFO[0]=Err(2);assert_eq!(app_activation_info(app_catalog::App::Quil,false),Err(2));
 }}
 #[test]fn future_spindle_grid_and_browser_policy_use_exact_catalog_pairs(){
+ let mut view=document_view::Delivery::new();view.queue(100,1000,320,240);let mut notice=None;
+ view.poll(true,true,|n|{notice=Some(n);Ok(())});let n=notice.expect("future Quil viewport queued");
+ assert!(document_view::Notice::decode(3,100,1000,n.args(),0).is_some());assert!(document_view::Notice::decode(3,100,18,n.args(),0).is_none());
  assert_eq!(app_catalog::DOCUMENT_TARGETS,[9,16,18,19,20,21,22,23,100,15,102]);
  let mut out=display_delivery::Outbox::new(101);out.create(0,0,123);let mut seen=vec![];out.poll(4,|op|{seen.push(op.surface);Ok(())},|_|{}).unwrap();assert_eq!(seen,[401]);
  assert!(linen::admit(101,0x42,Some(5)));assert!(!linen::admit(101,0x42,Some(2)));assert!(!linen::admit(102,0x42,Some(5)));

@@ -1004,3 +1004,59 @@ fn long_status_never_squeezes_the_document_name_below_eight_cells() {
     let header = t.bytes[..t.len].split(|&b| b == b'\n').next().unwrap();
     assert!(header.starts_with(b"a-very-l * UNSAVED") && header.len() <= l.cols, "{:?}", core::str::from_utf8(header));
 }
+
+
+#[test]
+fn all_document_incarnations_receive_exact_fresh_viewports_and_retain_full_notice() {
+    use document_view::{Delivery, Notice};
+    assert_eq!(app_catalog::DOCUMENT_TARGETS.len(),9);
+    assert!(app_catalog::DOCUMENT_TARGETS.contains(&23));
+    for &target in &app_catalog::DOCUMENT_TARGETS {
+        let task=target+1000;let mut delivery=Delivery::new();
+        delivery.queue(target,task,496,319);assert!(delivery.pending());
+        delivery.poll(true,false,|_|panic!("viewport consumer is not ready"));
+        let mut first=None;
+        for _ in 0..3 {delivery.poll(true,true,|n|{
+            assert_eq!((n.target,n.task,n.w,n.h,n.sequence),(target,task,496,319,1));
+            if let Some(previous)=first{assert_eq!(n,previous);}else{first=Some(n);}
+            Err(ERR_SERVICE_NOT_READY)
+        });assert!(delivery.pending());}
+        let first=first.unwrap();
+        assert_eq!(Notice::decode(3,target,task,first.args(),0),Some(first));
+        for (caller,expected_target,expected_task,last) in [
+            (target,target,task,0),(11,target,task,0),
+            (3,if target==9{23}else{9},task,0),
+            (3,target,target,0),(3,target,0,0),
+            (3,target,task,first.sequence),(3,target,task,u64::MAX),
+        ] {assert_eq!(Notice::decode(caller,expected_target,expected_task,first.args(),last),None);}
+        let mut changed=first;changed.task+=1;
+        assert_eq!(Notice::decode(3,target,task,changed.args(),0),None);
+        changed=first;changed.sequence=0;assert_eq!(Notice::decode(3,target,task,changed.args(),0),None);
+        delivery.poll(true,true,|n|{assert_eq!(n,first);Ok(())});assert!(!delivery.pending());
+        delivery.queue(target,task,496,319);assert!(!delivery.pending());
+        delivery.queue(target,task,640,335);
+        delivery.poll(true,true,|n|{
+            assert_eq!((n.target,n.task,n.w,n.h,n.sequence),(target,task,640,335,2));
+            assert_eq!(Notice::decode(3,target,task,n.args(),first.sequence),Some(n));Ok(())
+        });assert!(!delivery.pending());
+    }
+}
+
+#[test]
+fn invalid_geometry_membership_and_terminal_delivery_never_replace_valid_pending_notice() {
+    use document_view::{Delivery,Notice};
+    let mut delivery=Delivery::new();delivery.queue(23,2300,512,384);
+    for (target,task,w,h) in [(0,2300,640,480),(12,1200,640,480),(17,1700,640,480),
+        (24,2400,640,480),(u32::MAX,2300,640,480),(23,0,640,480),
+        (23,2300,0,384),(23,2300,512,0),(23,2300,4097,384),(23,2300,512,u32::MAX)] {
+        delivery.queue(target,task,w,h);
+        delivery.poll(true,true,|n|{
+            assert_eq!((n.target,n.task,n.w,n.h,n.sequence),(23,2300,512,384,1));Err(ERR_SERVICE_NOT_READY)
+        });assert!(delivery.pending());
+        let malformed=Notice{target,task,w,h,sequence:1};
+        assert_eq!(Notice::decode(3,target,task,malformed.args(),0),None);
+    }
+    delivery.poll(false,true,|_|panic!("retired incarnation must not send"));
+    assert!(!delivery.pending());delivery.queue(23,2300,640,480);
+    delivery.poll(true,true,|_|panic!("terminal delivery cannot reopen"));assert!(!delivery.pending());
+}

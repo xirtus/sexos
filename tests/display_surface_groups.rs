@@ -58,7 +58,7 @@ include!("fixtures/compositor_reference.rs");
 }
 #[test]fn actual_toolbar_titles_keep_lowercase_at_fixed_integer_metrics(){
  let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-14)/2;
- for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..])]{
+ for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..]),(308,&b"Quil"[..]),(309,&b"Quil"[..]),(310,&b"Quil"[..]),(311,&b"Quil"[..]),(312,&b"Quil"[..])]{
   for (column,byte)in title.iter().enumerate(){for y in 0..14 {for x in 0..12 {
    let ink=x/2<5&&FONT_ASCII_5X7[(*byte-32)as usize][y/2]&(1<<(4-x/2))!=0;
    assert_eq!(toolbar_title_fg_at(x0+column*12+x,y0+y,sid,0),if ink{Some(0xffffff)}else{None});

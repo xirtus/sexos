@@ -116,7 +116,7 @@ impl Notice {
             sequence: args[2],
         };
         if caller != 3
-            || !matches!(target, 9 | 15 | 16 | 18)
+            || !crate::app_catalog::DOCUMENT_TARGETS.contains(&target)
             || task == 0
             || n.target != target
             || n.task != task
@@ -149,7 +149,7 @@ impl Delivery {
     }
     pub fn queue(&mut self, target: u32, task: u32, w: u32, h: u32) {
         if self.dead
-            || !matches!(target, 9 | 15 | 16 | 18)
+            || !crate::app_catalog::DOCUMENT_TARGETS.contains(&target)
             || task == 0
             || w == 0
             || h == 0

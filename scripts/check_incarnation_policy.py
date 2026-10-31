@@ -35,6 +35,17 @@ def main():
   result=subprocess.run([str(mutant),'--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
   if result.returncode!=101:raise RuntimeError('original-browser-only regression survived: '+result.stdout)
   print('[incarnation.policy.control] original_browser_only_compile_rejected_by_tests=1')
+  view=(root/'crates/sex-pdx/src/document_view.rs').read_text();guard='!crate::app_catalog::DOCUMENT_TARGETS.contains(&target)';assert view.count(guard)==2
+  # Queue and decode must independently admit a future catalogued subject.
+  for index in [0,1]:
+   places=[m.start()for m in re.finditer(re.escape(guard),view)];start=places[index]
+   changed=view[:start]+'!matches!(target,9|15|16|18)'+view[start+len(guard):]
+   path=out/f'viewport-{index}.rs';path.write_text(changed);old=json.dumps(str(root/'crates/sex-pdx/src/document_view.rs'));assert old in fixture
+   test.write_text(fixture.replace(old,json.dumps(str(path))));binary=out/f'viewport-{index}-test'
+   subprocess.run(['rustc','--edition=2021','--test',str(test),'-o',str(binary)],check=True,env={**os.environ,'EXPANDED_SHELL_POLICY':str(shell)})
+   result=subprocess.run([str(binary),'--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+   if result.returncode!=101:raise RuntimeError('old viewport admission survived: '+result.stdout)
+   print(f'[incarnation.policy.control] viewport_guard={index} old_allowlist_rejected_by_tests=1')
   print('[incarnation.policy] PASS expanded_quil_spindle_browser=1 actual_modules=1 scope=host_doubles_not_boot_authority')
 
 if __name__=='__main__':main()
