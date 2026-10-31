@@ -527,7 +527,10 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
  def launcher(action):
   start=len(text());key('grave_accent',pattern=r'\[shell.palette.item\] idx=0');key('ret',pattern=rf'\[launcher.action\] target=12 task=12 frame=153 action={action} .*activated=0 queued=0 accepted=1 ok=1 pixels=unconfirmed');wait(r'\[command_palette.close\]',start)
  def close(target,sid):
-  focus(sid);start=len(text());evidence['closes'].append(dict(target=target,task=target,serial_start=start));key('f11',pattern=rf'\[sext.app.pool.ready\] target={target} task={target} .*ok=1');exact_cleanup(text(),target,target,start)
+  # The Close window is the actual F11 action's own serial boundary; a
+  # separate earlier sample raced background guest output.
+  focus(sid);key('f11',pattern=rf'\[sext.app.pool.ready\] target={target} task={target} .*ok=1');start=actions[-1]['serial_start']
+  evidence['closes'].append(dict(target=target,task=target,serial_start=start));exact_cleanup(text(),target,target,start)
  def reopen():
   focus(201);key('ctrl','o',pattern=r'\[shell.document.open\] target=9 linen=200');focus(200)
   for _ in range(40):
