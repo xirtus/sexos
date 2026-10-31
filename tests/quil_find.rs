@@ -67,3 +67,28 @@ fn quil_wiring_routes_keys_and_fences_paste() {
     assert!(find < control);
     assert!(main.contains("QUIL_SELECTION.move_to(source,found.start,false).is_ok()&&QUIL_SELECTION.move_to(source,found.end,true).is_ok()"));
 }
+
+#[test]
+fn replacement_field_is_separate_bounded_and_shown_in_the_prompt() {
+    let mut f = Find::new();
+    f.begin();
+    for b in *b"cat" { assert!(f.push(b)); }
+    f.set_field(find::Field::Replacement);
+    assert_eq!(f.field(), find::Field::Replacement);
+    for b in *b"dog" { assert!(f.push(b)); }
+    assert!(f.pop());
+    assert_eq!((f.query(), f.replacement()), (&b"cat"[..], &b"do"[..]));
+    let (prompt, len) = f.prompt();
+    assert_eq!(&prompt[..len], b"Find: cat > do#");
+    f.set_field(find::Field::Query);
+    let (prompt, len) = f.prompt();
+    assert_eq!(&prompt[..len], b"Find: cat# > do");
+    assert!(f.selection_matches(b"cat") && !f.selection_matches(b"ca") && !f.selection_matches(b"cats"));
+    for _ in 0..QUERY_MAX { f.push(b'x'); }
+    f.set_field(find::Field::Replacement);
+    for _ in 0..QUERY_MAX + 3 { f.push(b'y'); }
+    let (_, len) = f.prompt();
+    assert!(len <= find::PROMPT_MAX);
+    f.clear();
+    assert!(f.replacement().is_empty() && f.field() == find::Field::Query && !f.active());
+}

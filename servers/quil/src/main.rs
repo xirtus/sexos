@@ -227,6 +227,19 @@ fn quil_dispatch_stashed(word:u64,down:u64,class:u64,palette:&mut bool,row:&mut 
     if let Some(key)=sex_pdx::app_key::Key::decode(word,down,class){quil_dispatch_key(key,palette,row)}
     else if word<(1<<16){quil_dispatch_palette_key(word,down,palette,row)}
 }
+/// Replace the selection only when it is exactly one match of the query, as
+/// one undoable edit, then select the next match. A selection that is not a
+/// match is never edited; Enter then just finds.
+unsafe fn quil_replace_next() {
+    let Some(snapshot)=QUIL_SELECTION.snapshot() else{QUIL_INPUT_NOTICE=Some(b"FIND UNAVAILABLE");return};
+    let (start,end)=snapshot.range();
+    if !QUIL_FIND.selection_matches(&QUIL_BUFFER[start..end]) {quil_find_next();return}
+    let mut replacement=[0u8;find::QUERY_MAX];let len=QUIL_FIND.replacement().len();
+    replacement[..len].copy_from_slice(QUIL_FIND.replacement());
+    let applied=quil_replace((start,end),&replacement[..len]);
+    sex_pdx::serial_record!("[quil.replace] start={} old_bytes={} new_bytes={} applied={} revision={}",start,end-start,len,applied as u8,QUIL_REVISION);
+    if applied {quil_find_next();} else {QUIL_INPUT_NOTICE=Some(b"REPLACE NOT APPLIED");}
+}
 /// Select the next exact occurrence after the current selection, wrapping
 /// once to the start. The bound selection source fences stale documents.
 unsafe fn quil_find_next() {
@@ -272,6 +285,9 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 match key.code {
                     0x01=>{QUIL_FIND.clear();sex_pdx::serial_record!("[quil.find.mode] on=0 reason=escape");},
                     0x0e=>{QUIL_FIND.pop();},
+                    0x50=>QUIL_FIND.set_field(find::Field::Replacement),
+                    0x48=>QUIL_FIND.set_field(find::Field::Query),
+                    0x1c if QUIL_FIND.field()==find::Field::Replacement=>quil_replace_next(),
                     0x1c=>quil_find_next(),
                     code=>{if let Some(ch)=scancode_to_char(code as u64,key.shift){if !QUIL_FIND.push(ch){QUIL_INPUT_NOTICE=Some(b"FIND QUERY FULL");}}},
                 }
