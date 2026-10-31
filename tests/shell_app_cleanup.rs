@@ -3,6 +3,12 @@ extern crate self as sex_pdx;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
 #[macro_export] macro_rules! serial_record {($($t:tt)*)=>{let _=format_args!($($t)*);}}
 #[derive(Clone,Copy)] pub struct PdxMessage {type_id:u64,caller_pd:u32,arg0:u64,arg1:u64,arg2:u64}
+pub mod clipboard{#[derive(Clone,Copy,PartialEq,Eq,Debug)]pub struct Subject{pub pd:u32,pub task:u32}}
+/// Records every terminal clipboard/input retirement the cleanup performs.
+struct Retired(Vec<clipboard::Subject>);
+impl Retired{fn retire(&mut self,subject:clipboard::Subject){self.0.push(subject)}}
+static mut CLIPBOARD:Retired=Retired(Vec::new());static mut APP_INPUT:Retired=Retired(Vec::new());static mut CLIPBOARD_INTAKE:Retired=Retired(Vec::new());
+unsafe fn retired_once(){let want=vec![clipboard::Subject{pd:15,task:80}];assert_eq!(CLIPBOARD.0,want);assert_eq!(APP_INPUT.0,want);assert_eq!(CLIPBOARD_INTAKE.0,want);}
 pub mod app_lifecycle {
  pub const OP_APP_EXIT:u64=0x107;
  pub const OP_APP_CLOSE:u64=0x108;
@@ -43,12 +49,13 @@ unsafe fn reset(){
  HOVERED_FRAME_ID=10;HOVER_KIND=1;HOVERED_FRAME_LIGHT=1;TAB_DRAG_PENDING_FRAME_ID=10;DRAG_PENDING_TARGET=300;DRAG_PENDING_ACTIVE=true;DRAG_PENDING_KIND=3;
  INTERACTION=InteractionState::Dragging{surface_id:300};FOCUSED_SURFACE_ID=300;ACTIVE_SCENE_IDX=0;
  INFO_STATUS=0;INFO_TARGET=15;INFO_TASK=80;ACK_STATUS=0;ACKS=0;PUBLISHED=false;RETIRES=0;FOCUS_REF=300;BAR=300;
+ CLIPBOARD.0.clear();APP_INPUT.0.clear();CLIPBOARD_INTAKE.0.clear();
 }
 fn notice(caller:u32,target:u64,task:u64)->PdxMessage{PdxMessage{type_id:0x107,caller_pd:caller,arg0:target,arg1:task,arg2:0}}
-#[test]fn untrusted_hints_and_full_width_aliases_do_not_change_state(){unsafe{reset();for m in [notice(15,15,80),notice(0,15+(1<<32),80),notice(0,15,80+(1<<32)),notice(0,10,80)]{assert!(shell_lifecycle_hint(&m));assert!(!APP_CUSTODY[0].unwrap().pending);assert!(!PUBLISHED);assert_eq!(ACKS,0);}}}
+#[test]fn untrusted_hints_and_full_width_aliases_do_not_change_state(){unsafe{reset();for m in [notice(15,15,80),notice(0,15+(1<<32),80),notice(0,15,80+(1<<32)),notice(0,10,80)]{assert!(shell_lifecycle_hint(&m));assert!(!APP_CUSTODY[0].unwrap().pending);assert!(!PUBLISHED);assert_eq!(ACKS,0);}assert!(CLIPBOARD.0.is_empty()&&APP_INPUT.0.is_empty()&&CLIPBOARD_INTAKE.0.is_empty());}}
 #[test]fn hint_is_not_death_attestation(){unsafe{reset();INFO_STATUS=5;shell_lifecycle_hint(&notice(0,15,80));assert!(APP_CUSTODY[0].unwrap().pending);assert!(!APP_CUSTODY[0].unwrap().dead);assert!(!PUBLISHED);INFO_STATUS=0;INFO_TASK=81;shell_lifecycle_poll();assert!(!PUBLISHED);INFO_TASK=80;shell_lifecycle_poll();assert!(PUBLISHED);}}
-#[test]fn cleanup_removes_every_owned_tab_preserving_unrelated_frame_and_prototypes(){unsafe{reset();shell_lifecycle_hint(&notice(0,15,80));let f=FRAMES[0].unwrap();assert_eq!(f.tab_count,1);assert_eq!(f.active_tab,0);assert_eq!(f.tabs[0].unwrap().surface_id,205);assert!(f.tabs[1..].iter().all(Option::is_none));assert!(FRAMES[1].is_none());assert!(COLLAR_GRANTS[0].is_none());assert_eq!(COLLAR_GRANTS[1].unwrap().subject_id,205);assert_eq!(WINDOWS.len(),1);assert_eq!(WINDOWS[0].desc.window_id,2);assert_eq!(FOCUSED_SURFACE_ID,205);assert_eq!(FOCUS_REF,205);assert_eq!(BAR,205);assert_eq!(HOVERED_FRAME_ID,0);assert!(!DRAG_PENDING_ACTIVE);assert_eq!(INTERACTION,InteractionState::Idle);assert_eq!(ACKS,1);}}
-#[test]fn ack_retry_never_retires_or_frees_again(){unsafe{reset();ACK_STATUS=2;shell_lifecycle_hint(&notice(0,15,80));assert!(PUBLISHED);assert!(!APP_CUSTODY[0].unwrap().acked);assert_eq!(RETIRES,1);shell_lifecycle_poll();assert_eq!(RETIRES,1);ACK_STATUS=0;shell_lifecycle_poll();assert!(APP_CUSTODY[0].unwrap().acked);shell_lifecycle_hint(&notice(0,15,80));assert_eq!(ACKS,3);assert_eq!(RETIRES,1);}}
+#[test]fn cleanup_removes_every_owned_tab_preserving_unrelated_frame_and_prototypes(){unsafe{reset();shell_lifecycle_hint(&notice(0,15,80));let f=FRAMES[0].unwrap();assert_eq!(f.tab_count,1);assert_eq!(f.active_tab,0);assert_eq!(f.tabs[0].unwrap().surface_id,205);assert!(f.tabs[1..].iter().all(Option::is_none));assert!(FRAMES[1].is_none());assert!(COLLAR_GRANTS[0].is_none());assert_eq!(COLLAR_GRANTS[1].unwrap().subject_id,205);assert_eq!(WINDOWS.len(),1);assert_eq!(WINDOWS[0].desc.window_id,2);assert_eq!(FOCUSED_SURFACE_ID,205);assert_eq!(FOCUS_REF,205);assert_eq!(BAR,205);assert_eq!(HOVERED_FRAME_ID,0);assert!(!DRAG_PENDING_ACTIVE);assert_eq!(INTERACTION,InteractionState::Idle);assert_eq!(ACKS,1);retired_once();}}
+#[test]fn ack_retry_never_retires_or_frees_again(){unsafe{reset();ACK_STATUS=2;shell_lifecycle_hint(&notice(0,15,80));assert!(PUBLISHED);assert!(!APP_CUSTODY[0].unwrap().acked);assert_eq!(RETIRES,1);shell_lifecycle_poll();assert_eq!(RETIRES,1);ACK_STATUS=0;shell_lifecycle_poll();assert!(APP_CUSTODY[0].unwrap().acked);shell_lifecycle_hint(&notice(0,15,80));assert_eq!(ACKS,3);assert_eq!(RETIRES,1);retired_once();}}
 #[test]fn permanent_fence_rejects_queued_registration_after_retirement(){unsafe{reset();assert!(APP_CUSTODY[0].unwrap().allows(15,300,15));shell_lifecycle_hint(&notice(0,15,80));let e=APP_CUSTODY[0].unwrap();assert!(!e.allows(15,300,15));assert!(!e.allows(3,300,15));}}
 #[test]fn wrong_owner_surface_and_manifest_identity_denied(){let e=app_custody::Entry::new(38,15,80,300);assert!(!e.allows(9,300,15));assert!(!e.allows(15,205,15));assert!(!e.allows(15,300,9));assert!(!e.clone().finish_ack());}
 #[test]fn all_interaction_variants_and_no_focus_fallback(){unsafe{for state in [InteractionState::Resizing{surface_id:300},InteractionState::TabDragging{frame_id:10},InteractionState::ClickPending]{reset();INTERACTION=state;FRAMES[0].as_mut().unwrap().tabs[1]=None;shell_lifecycle_hint(&notice(0,15,80));assert_eq!(INTERACTION,InteractionState::Idle);assert_eq!(FOCUSED_SURFACE_ID,0);assert_eq!(FOCUS_REF,0);assert_eq!(BAR,0);}}}

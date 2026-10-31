@@ -17,4 +17,18 @@ pathlib.Path(sys.argv[2]).write_text('\n'.join(parts))
 PY
 SHELL_CLEANUP_SOURCE="$TEMP/production.rs" rustc --edition=2021 --test "$ROOT/tests/shell_app_cleanup.rs" -o "$TEMP/test"
 "$TEMP/test" --test-threads=1
-echo '[gate.shell_app_cleanup_host.result] PASS scope=production_retirement_and_ack_mock_transport'
+# Compiled control: cleanup that skips terminal input retirement must fail.
+python3 - "$TEMP/production.rs" "$TEMP/mutant.rs" <<'PY'
+import sys
+source=open(sys.argv[1]).read();old='APP_INPUT.retire(subject);'
+assert source.count(old)==1
+open(sys.argv[2],'w').write(source.replace(old,''))
+PY
+SHELL_CLEANUP_SOURCE="$TEMP/mutant.rs" rustc --edition=2021 --test "$ROOT/tests/shell_app_cleanup.rs" -o "$TEMP/mutant-test"
+set +e
+"$TEMP/mutant-test" --exact cleanup_removes_every_owned_tab_preserving_unrelated_frame_and_prototypes > "$TEMP/mutant.log" 2>&1
+MUTANT_STATUS=$?
+set -e
+if [[ "$MUTANT_STATUS" != 101 ]]; then cat "$TEMP/mutant.log"; echo '[gate.shell_app_cleanup_host.negative] FAIL'; exit 1; fi
+echo '[gate.shell_app_cleanup_host.negative] PASS skipped_input_retirement_rejected=1'
+echo '[gate.shell_app_cleanup_host.result] PASS scope=production_retirement_clipboard_input_and_ack_mock_transport'
