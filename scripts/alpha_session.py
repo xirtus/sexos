@@ -47,6 +47,15 @@ def submit_save(q, wait, start):
     wait(r"\[sexinput.ps2.scancode\] raw=0x9d(?:\s|$)",start)
 
 
+def finish_cycle(text, clock, cycle, started, cycle_start, serial_start, session_deadline):
+    """Include final serial observation in work; idle begins at this boundary."""
+    serial_end=len(text())
+    cycle_end=clock()
+    window=dict(cycle=cycle,start_seconds=cycle_start-started,
+                end_seconds=cycle_end-started,serial_start=serial_start,serial_end=serial_end)
+    return window,min(session_deadline,cycle_end+15)
+
+
 def run(c, seconds, acceptance=True, third_quil=False, third_spindle=False):
     if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or seconds < (1800 if acceptance else 1):
         raise ValueError('alpha acceptance requires at least 1800 seconds')
@@ -155,10 +164,9 @@ def run(c, seconds, acceptance=True, third_quil=False, third_spindle=False):
         (out/'progress.json').write_text(json.dumps(dict(cycles=cycle, elapsed_seconds=time.monotonic()-started,
             documents=[c['first'], second], last_activity='saved, Spindle stat/history, Linen refresh'))+'\n')
         print(f'[alpha.session.progress] cycles={cycle} elapsed={time.monotonic()-started:.1f}', flush=True)
-        cycle_windows.append(dict(cycle=cycle,start_seconds=cycle_start-started,
-            end_seconds=time.monotonic()-started,serial_start=cycle_serial_start,serial_end=len(text())))
+        window,end=finish_cycle(text,time.monotonic,cycle,started,cycle_start,cycle_serial_start,started+seconds)
+        cycle_windows.append(window)
         # At most 15 seconds deliberately idle between active cycles.
-        end = min(started+seconds, time.monotonic()+15)
         while time.monotonic() < end:
             time.sleep(min(.2, end-time.monotonic()))
     elapsed = time.monotonic()-started

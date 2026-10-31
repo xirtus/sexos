@@ -9,13 +9,66 @@ from history_roster_evidence import verify_boot_roster
 from check_spindle_viewport_pixels import verify
 from check_desktop_pixels import font_from_source
 
+
+RESOLUTIONS=('1024x768','1280x800')
+ADVANCED=('cursor','scroll','delivery','history','controls','desktop_status')
+
+def parse_args(argv=None):
+    p=argparse.ArgumentParser()
+    for name in ('iso','source-disk','out'):p.add_argument('--'+name,required=True,type=pathlib.Path)
+    for name in ADVANCED:p.add_argument('--'+name.replace('_','-'),action='store_true')
+    p.add_argument('--relative-tiles',action='store_true',help='basic workflow: compare tiled, enlarged and exactly restored layouts')
+    p.add_argument('--resolution',choices=RESOLUTIONS,default='1280x800')
+    args=p.parse_args(argv)
+    incompatible=[name.replace('_','-')for name in ADVANCED if getattr(args,name)]
+    if args.relative_tiles and incompatible:p.error('--relative-tiles supports BASIC only; incompatible: '+', '.join(incompatible))
+    return args
+
+def vga_args(resolution):
+    if resolution not in RESOLUTIONS:raise ValueError('unsupported framebuffer resolution')
+    return ['-vga','none','-device','VGA,xres='+resolution.replace('x',',yres=')]
+
+def accepted_layout(text):
+    """Newest complete canonical task12 record; never fall back past malformed data."""
+    records=[line for line in text.splitlines(keepends=True)if line.startswith('[spindle.view.accepted] target=12 ')]
+    if not records:return None
+    if not records[-1].endswith('\n'):raise ValueError('incomplete latest accepted viewport')
+    match=re.fullmatch(r'\[spindle.view.accepted\] target=12 task=12 sequence=(\d+) w=(\d+) h=(\d+) cols=(\d+) top_rows=(\d+) bottom_rows=(\d+) sender=3',records[-1].rstrip('\r\n'))
+    if not match:raise ValueError('malformed latest accepted viewport')
+    return [int(value)for value in match.groups()]
+
+def validate_relative_layout(record,resolution,phase,tiled=None,after_sequence=0):
+    """Pure relative geometry/freshness check, supplementary to the pixel oracle.
+
+    Record is (sequence,w,h,cols,top,bottom). Returned immutable five-field
+    geometry is cached only after the complete glyph/prompt check succeeds.
+    """
+    if resolution not in ((1024,768),(1280,800)):raise ValueError('unsupported framebuffer dimensions')
+    if phase not in ('tiled','expanded','restored'):raise ValueError('unknown relative layout phase')
+    if not isinstance(record,(list,tuple))or len(record)!=6 or any(type(v)is not int for v in record):raise ValueError('missing/malformed accepted layout')
+    sequence,w,h,cols,top,bottom=record
+    if type(after_sequence)is not int or after_sequence<0 or not after_sequence<sequence<1<<64:raise ValueError('stale/invalid viewport sequence')
+    if not 0<w<=resolution[0]or not 0<h<=resolution[1]-50:raise ValueError('viewport outside actual desktop')
+    if not 1<=cols<=20 or not 0<=top<=6 or not 1<=bottom<=6 or max(top,bottom)*(cols+1)>126:raise ValueError('invalid accepted text capacity')
+    shape=(w,h,cols,top,bottom)
+    if tiled is not None and (not isinstance(tiled,tuple)or len(tiled)!=5 or any(type(v)is not int for v in tiled)):raise ValueError('malformed cached tiled layout')
+    if phase=='tiled':
+        if w==resolution[0]and h==resolution[1]-50:raise ValueError('initial tiled layout already fills desktop')
+        if tiled is not None and shape!=tiled:raise ValueError('edited tiled layout changed')
+    else:
+        if tiled is None:raise ValueError('missing prior tiled layout')
+        if phase=='expanded'and not(w>=tiled[0]and h>=tiled[1]and(w>tiled[0]or h>tiled[1])):raise ValueError('expanded layout did not strictly enlarge tiled geometry')
+        if phase=='restored'and shape!=tiled:raise ValueError('restore differs from exact tiled layout')
+    return shape
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--cursor',action='store_true');p.add_argument('--scroll',action='store_true');p.add_argument('--delivery',action='store_true');p.add_argument('--history',action='store_true');p.add_argument('--controls',action='store_true');p.add_argument('--desktop-status',action='store_true');args=p.parse_args()
+    args=parse_args();resolution=tuple(map(int,args.resolution.split('x')));mode='relative-tiles'if args.relative_tiles else'legacy-height180'
+    print(f'[spindle.viewport.mode] mode={mode} resolution={args.resolution}',flush=True)
     iso=args.iso.resolve(strict=True);source=args.source_disk.resolve(strict=True);out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('output directory must be fresh')
     expected=decode_snapshot(source.read_bytes());disk=out/'nvme.img';shutil.copyfile(source,disk);log=out/'serial.log';sock=pathlib.Path('/tmp')/f'sex-view-{os.getpid()}.sock'
-    command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
-    manifest={'scenario':'cursor'if args.cursor else'scroll'if args.scroll else'delivery'if args.delivery else'viewport','iso_sha256':hashlib.sha256(iso.read_bytes()).hexdigest(),'source_disk':str(source),'input_disk_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'journal':expected,'command':command}
+    command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M',*vga_args(args.resolution),'-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
+    manifest={'scope':'auxiliary native captures; outer frozen runner supplies source/image binding; no standalone replay','layout_mode':mode,'relative_tiles':args.relative_tiles,'resolution':args.resolution,'scenario':'cursor'if args.cursor else'scroll'if args.scroll else'delivery'if args.delivery else'viewport','iso_sha256':hashlib.sha256(iso.read_bytes()).hexdigest(),'source_disk':str(source),'input_disk_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'journal':expected,'command':command}
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);stages=[]
     def text():return log.read_text(errors='replace')if log.exists()else''
     def wait(pattern,start=0,timeout=180):
@@ -36,24 +89,37 @@ def main():
         while not sock.exists():
             if time.monotonic()>deadline:raise RuntimeError('QMP unavailable')
             time.sleep(.1)
+        relative={'tiled':None,'tiled_sequence':0,'after_zoom':0}
         q=QMP(sock);font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text())
         def key(code,pattern,timeout=30):start=len(text());q.key(code);return wait(pattern,start,timeout)
         def capture(name,prompt,small,output=None):
             deadline=time.monotonic()+90;errors=['not painted'];latest=None
             while time.monotonic()<deadline:
                 q.cmd('screendump',{'filename':str(out/(name+'.ppm'))});value=text()
-                errors=verify(value,(out/(name+'.ppm')).read_bytes(),font,12,prompt,'spindle17'in prompt,False)
-                matches=re.findall(r'\[spindle.view.accepted\] target=12 task=12 sequence=(\d+) w=(\d+) h=(\d+) cols=(\d+) top_rows=(\d+) bottom_rows=(\d+) sender=3',value)
-                latest=list(map(int,matches[-1]))if matches else None
+                errors=verify(value,(out/(name+'.ppm')).read_bytes(),font,12,prompt,'spindle17'in prompt,False,resolution=resolution)
+                if args.relative_tiles:
+                    phase='expanded'if not small else'restored'if name=='small-restored'else'tiled'
+                    try:
+                        latest=accepted_layout(value)
+                        after=relative['after_zoom']if phase!='tiled'else max(0,relative['tiled_sequence']-1)
+                        shape=validate_relative_layout(latest,resolution,phase,relative['tiled'],after)
+                    except ValueError as error:
+                        latest=None;errors.append(str(error))
+                else:
+                    matches=re.findall(r'\[spindle.view.accepted\] target=12 task=12 sequence=(\d+) w=(\d+) h=(\d+) cols=(\d+) top_rows=(\d+) bottom_rows=(\d+) sender=3',value)
+                    latest=list(map(int,matches[-1]))if matches else None
                 if output and latest:
                     metadata=re.findall(rf'\[spindle.view.text\] target=12 sid=154 sequence={latest[0]} paint=(\d+) cols=\d+ rows=\d+ bytes=\d+',value)
                     pieces=re.findall(rf'\[spindle.view.bytes\] target=12 sid=154 seq={latest[0]} paint={metadata[-1]} off=\d+ hex=([0-9a-f]*)',value)if metadata else[]
                     if output.encode()not in b''.join(bytes.fromhex(part)for part in pieces):errors.append('wrong selected output row')
-                if not errors and latest and ((latest[2]<=180)==small):break
+                if not errors and latest and (args.relative_tiles or ((latest[2]<=180)==small)):break
                 time.sleep(.2)
-            if errors or not latest or ((latest[2]<=180)!=small):raise RuntimeError(name+': '+str(errors)+' layout='+str(latest))
+            if errors or not latest or (not args.relative_tiles and ((latest[2]<=180)!=small)):raise RuntimeError(name+': '+str(errors)+' layout='+str(latest))
+            if args.relative_tiles and relative['tiled']is None:
+                relative['tiled']=shape;relative['tiled_sequence']=latest[0]
             stages.append({'name':name,'layout':latest,'prompt':prompt,'expected_output':output,'pixel_errors':errors,'log_offset':len(value),'ppm_sha256':hashlib.sha256((out/(name+'.ppm')).read_bytes()).hexdigest()})
         def zoom():
+            if args.relative_tiles:relative['after_zoom']=stages[-1]['layout'][0]
             key('grave_accent',r'\[shell.palette.item\] idx=0')
             key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8')
             key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=153 ok=1')
@@ -127,7 +193,7 @@ def main():
         try:proc.wait(timeout=5)
         except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)
         if snapshot(disk.read_bytes(),verify_boot_roster(pathlib.Path(__file__).resolve().parents[1],text()))!=expected:raise RuntimeError('render/input mutated durable history')
-        (out/'result.json').write_text(json.dumps({'ok':True,'stages':stages,'recovered':recovered,'loaded':loaded,'journal_unchanged':True,'input_during_display_pending':bool(re.search(r'\[spindle.input.progress\] target=12 display_pending=1 ',text())),'display_close_cancelled':re.findall(r'\[spindle.display.cancelled\] target=12 panes=(\d+) pending=0',text()),'scope':'Actual native task12, durable data from prior image, small tile recall/edit, expand/unzoom preserving input; exact glyph pixels; no implicit handle/capability transfer'},indent=2)+'\n');print('[spindle.viewport.gate] PASS')
+        (out/'result.json').write_text(json.dumps({'ok':True,'layout_mode':mode,'resolution':args.resolution,'relative_tiled':relative['tiled'],'stages':stages,'recovered':recovered,'loaded':loaded,'journal_unchanged':True,'input_during_display_pending':bool(re.search(r'\[spindle.input.progress\] target=12 display_pending=1 ',text())),'display_close_cancelled':re.findall(r'\[spindle.display.cancelled\] target=12 panes=(\d+) pending=0',text()),'scope':'Actual native task12, durable data from prior image, small tile recall/edit, expand/unzoom preserving input; exact glyph pixels; no implicit handle/capability transfer'},indent=2)+'\n');print('[spindle.viewport.gate] PASS')
     except Exception as e:
         (out/'result.json').write_text(json.dumps({'ok':False,'errors':[str(e)],'stages':stages},indent=2)+'\n');raise
     finally:
