@@ -1,0 +1,613 @@
+{
+  "round": 140,
+  "qualified_boot_spindle_recovery_roster": true,
+  "actual_spindle_reserve_increased": false,
+  "full_os_goal_complete": false,
+  "source_commit": "93a505983cfc71b253e5f7bb974bcfd86257a632",
+  "main_parent": "85464b45",
+  "iso_sha256": "669ce912f1f43f93f543ba77484c0e825a0ee35012b60b8b3d1db015bbf6dcd6",
+  "kernel_sha256": "b01a0464c6b0d1d3d3afa90684ab0954b2889c1dadb45613c11ab17ba9d41a26",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "93a505983cfc71b253e5f7bb974bcfd86257a632",
+    "production": 576,
+    "runner": 589,
+    "unique": 1165,
+    "iso_sha256": "669ce912f1f43f93f543ba77484c0e825a0ee35012b60b8b3d1db015bbf6dcd6",
+    "kernel_sha256": "b01a0464c6b0d1d3d3afa90684ab0954b2889c1dadb45613c11ab17ba9d41a26"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2698,
+  "python_tests": 989,
+  "native": {
+    "qualified_boots": 8,
+    "sealed_probe_boots": 1,
+    "normal_workflow_boots": 6,
+    "auxiliary_cold_boots": 1,
+    "registry_verified_captures": 84,
+    "groups": {
+      "full_relaunch": [
+        {
+          "profile": "compact",
+          "command": [
+            "python3",
+            "/tmp/sexos-spindle-roster-a-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-spindle-roster-a-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-spindle-roster-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-spindle-roster-a-alpha-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find",
+            "--round",
+            "140"
+          ],
+          "out": "/tmp/sexos-spindle-roster-a-alpha-compact",
+          "driver": "/tmp/sexos-spindle-roster-a-alpha-compact-driver.log",
+          "status": 0,
+          "seconds": 104.0359674579231,
+          "verified_captures": 26,
+          "fresh_replay": true,
+          "history_roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "terminal_history": {
+            "bank": 0,
+            "generation": 7,
+            "source": 17,
+            "task": 17,
+            "logical": 12,
+            "size": 125,
+            "fingerprint": "0x221f352b58c2993e",
+            "count": 7,
+            "data_hash": "0x6d5627c8fe23e447"
+          }
+        },
+        {
+          "profile": "wide",
+          "command": [
+            "python3",
+            "/tmp/sexos-spindle-roster-a-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-spindle-roster-a-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-spindle-roster-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-spindle-roster-a-alpha-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find",
+            "--round",
+            "140"
+          ],
+          "out": "/tmp/sexos-spindle-roster-a-alpha-wide",
+          "driver": "/tmp/sexos-spindle-roster-a-alpha-wide-driver.log",
+          "status": 0,
+          "seconds": 116.1915484580677,
+          "verified_captures": 24,
+          "fresh_replay": true,
+          "history_roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "terminal_history": {
+            "bank": 0,
+            "generation": 5,
+            "source": 17,
+            "task": 17,
+            "logical": 12,
+            "size": 100,
+            "fingerprint": "0x42bc3a8884e91fc",
+            "count": 5,
+            "data_hash": "0x56862f17ef830905"
+          }
+        }
+      ],
+      "connected": [
+        {
+          "name": "connected-wide",
+          "status": 0,
+          "out": "/tmp/sexos-spindle-roster-a-native-connected-wide",
+          "driver": "/tmp/sexos-spindle-roster-a-native-connected-wide-driver.log",
+          "ports": "/tmp/sexos-spindle-roster-a-ports/connected-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-spindle-roster-a-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/private/tmp/sexos-spindle-roster-a-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-spindle-roster-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-spindle-roster-a-native-connected-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 732184.621024458,
+              "guests": [
+                {
+                  "pid": 16554,
+                  "age_seconds": 1596
+                },
+                {
+                  "pid": 16740,
+                  "age_seconds": 1476
+                }
+              ]
+            }
+          ],
+          "other_guests_before": [
+            {
+              "pid": 16554,
+              "age_seconds": 1596
+            },
+            {
+              "pid": 16740,
+              "age_seconds": 1476
+            }
+          ],
+          "seconds": 64.50400004105177,
+          "other_guests_after": [
+            {
+              "pid": 16554,
+              "age_seconds": 1661
+            },
+            {
+              "pid": 16740,
+              "age_seconds": 1541
+            }
+          ],
+          "boots": 2,
+          "verified_captures": 17
+        },
+        {
+          "name": "connected-compact",
+          "status": 0,
+          "out": "/tmp/sexos-spindle-roster-a-native-connected-compact",
+          "driver": "/tmp/sexos-spindle-roster-a-native-connected-compact-driver.log",
+          "ports": "/tmp/sexos-spindle-roster-a-ports/connected-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-spindle-roster-a-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/private/tmp/sexos-spindle-roster-a-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-spindle-roster-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-spindle-roster-a-native-connected-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 732249.167187916,
+              "guests": [
+                {
+                  "pid": 16554,
+                  "age_seconds": 1661
+                },
+                {
+                  "pid": 16740,
+                  "age_seconds": 1541
+                }
+              ]
+            }
+          ],
+          "other_guests_before": [
+            {
+              "pid": 16554,
+              "age_seconds": 1661
+            },
+            {
+              "pid": 16740,
+              "age_seconds": 1541
+            }
+          ],
+          "seconds": 55.408781959093176,
+          "other_guests_after": [
+            {
+              "pid": 16554,
+              "age_seconds": 1716
+            },
+            {
+              "pid": 16740,
+              "age_seconds": 1596
+            }
+          ],
+          "boots": 2,
+          "verified_captures": 17
+        }
+      ]
+    },
+    "all_parent_replays": true,
+    "connected_live_cold_replays": true,
+    "boot_roster_layout_audit": {
+      "ok": true,
+      "boots": 8,
+      "normal_workflow_boots": 6,
+      "sealed_probe_boots": 1,
+      "auxiliary_cold_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-spindle-roster-a-build/serial.log",
+          "bytes": 509092,
+          "sha256": "872767327148bba33752b218a893c839f4042c6faef0e71d03b6e2bc9a5b3227",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-last-writer-cold-aux-b/serial.log",
+          "bytes": 324812,
+          "sha256": "d58ca6107290938954c342accd55ef61e4391120c67e12377abda9bb0e7eb5fa",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-alpha-compact/serial.log",
+          "bytes": 2091318,
+          "sha256": "9b5c23112492338f7cfddbda4d83c7acedc22dde234ee1bd3089218e84b1f3c7",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-alpha-wide/serial.log",
+          "bytes": 2018590,
+          "sha256": "2793f7808097ea42229ef7ed9430362108e08661a29a2c5f55fc8af39b8f79d9",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-native-connected-wide/recovery/serial.log",
+          "bytes": 429852,
+          "sha256": "042acca7eeb60149e084a22efe758c12b7c71e9f543c339e2716b7c69801f684",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-native-connected-wide/session/serial.log",
+          "bytes": 716127,
+          "sha256": "1c77e0fc2b677b1da911d20a7c33305c12997709132476366d42c2d9638f412f",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-native-connected-compact/recovery/serial.log",
+          "bytes": 412668,
+          "sha256": "e6a094de431aad137ed8a1f37c63dbc60568f11785983f1b81294f0281c0f27b",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-roster-a-native-connected-compact/session/serial.log",
+          "bytes": 711335,
+          "sha256": "6d03bdf579027ddcbcb0919ddd000d4269f0bfbaa5039adcb4bfae07bafa71bc",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        }
+      ],
+      "scope": "Actual inserted history capability queried beforeseal; exact registered tasks and both family catalogs/layout. Two actual Spindles, no per-request task authentication."
+    },
+    "auxiliary_last_writer_cold": {
+      "ok": true,
+      "bound_parent_replayed": true,
+      "writer": {
+        "bank": 0,
+        "generation": 5,
+        "source": 17,
+        "task": 17,
+        "logical": 12,
+        "size": 100,
+        "fingerprint": "0x42bc3a8884e91fc",
+        "count": 5,
+        "data_hash": "0x56862f17ef830905"
+      },
+      "recall": "echo alpha17",
+      "stopped": true,
+      "final_disk_sha256": "d8b386fa8980ae1c1fa1b9a5749006669519d420629e2e2e43e53e7951f379c1",
+      "screenshot_sha256": "477e09c9bbaeb146c2a0b185e224d3f2fea152078da65fa6e04336715f5dd02b",
+      "standalone_readonly_replay": false,
+      "pixel_registry": false,
+      "scope": "Cold recovery from exact parent journal through held BOOT roster; fresh original handle, actual writer task, completed frame Zoom and visible Up recall. Bound parent replay only when binding is supplied; auxiliary observed native probe, no standalone read-only artifact replay."
+    },
+    "new_image_1800s_acceptance": false,
+    "connected_replay_scope": "Built-in stopped-artifact replay at both sizes; separate external replay commands applied to both alpha parents.",
+    "connected_separate_cli_replay": false
+  },
+  "layout": {
+    "actual_participants": 2,
+    "grant_bytes": 40,
+    "capability_data_bytes": 128,
+    "capability_bytes": 192,
+    "host_generic_grant_bytes": {
+      "two": 40,
+      "three": 48,
+      "eight": 88
+    },
+    "cap_table_record_growth_observed": false
+  },
+  "scalar": {
+    "elfs": 6,
+    "instructions": 254656,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Five exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "diagnostics": {
+    "auxiliary_a": "Wrong driver recall expectation echo spindle17; exact parent last command echo alpha17. Owned guest was stopped and original false result retained. Retry B uses decoded parent expectation on identical immutable source/image.",
+    "journal_preflight": "Wrong test oracle expected CORRUPT despite an authorized older bank; corrected to require valid older fallback and separately reject both wrong-task banks."
+  },
+  "limitations": {
+    "actual_spindles": [
+      12,
+      17
+    ],
+    "per_request_task_authenticated": false,
+    "app_startup_unequal_task_namespace_native": false,
+    "spindle_startup_task_equals_domain_check_remains": true,
+    "third_incarnation_native": false
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-spindle-recovery-roster-2026-10-31-raw.tar.gz",
+    "sha256": "6849275c1569d9a09fbc5191368d1554028638a625f27bbd9bb02a383f0c15a4",
+    "bytes": 14925689,
+    "members": 1495,
+    "payload_manifest_sha256": "0b95ee523a9178b3f49dcb3a280af3bb852a2b37d51bbe8badf41b08ef551f9d",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Owned bounded held recovery roster populated from actual BOOT main tasks and compared to inserted capability before seal. Catalog-sized history/probe sessions, fair2send pumps, private names/observers. Exact persisted BOOT main-task journal identity, no request-task authentication. Two actual Spindles; generic3/8 host controls and temp3 service catalogs are descriptive fixtures. Native full relaunch and connected live/cold use source-bound immutable replay; auxiliary last-writer cold is observed with bound parent but no standaloneartifactreplay. No runtime mint/processVAS/POSIX, native unequal-task app/thirdreserve/new1800s/physicalSMP/hostilecontainment/globalepoch or daily-driver acceptance claim."
+}

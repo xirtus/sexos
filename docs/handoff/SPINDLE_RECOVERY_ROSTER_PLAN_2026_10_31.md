@@ -63,3 +63,10 @@ transport propagation if its stronger authentication is claimed. Preserve the
 obligation inventory: **2 Open / 28 Partial / System Proven false**. Sustained
 virtual-machine sessions do not establish physical power-loss, SMP, hostile
 containment, global epoch/replay or unrestricted daily-driver readiness.
+
+
+Round140 implements the first phase; see the
+[qualified roster report](SPINDLE_RECOVERY_ROSTER_2026_10_31.md). The actual
+reserve remains two. The current app startup task/domain equality check and
+per-request caller-task propagation remain explicit follow-up work; native
+third-incarnation evidence has not been produced.

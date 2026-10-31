@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–139
+# SexOS development: round 108 acceptance and rounds 109–140
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -582,3 +582,28 @@ The report links member-verified raw evidence and the concrete
 [Spindle held-roster plan](SPINDLE_RECOVERY_ROSTER_PLAN_2026_10_31.md), including
 the caller-task transport boundary before stronger request-authentication claims.
 Inventory remains 2 Open / 28 Partial / System Proven false; goal active.
+
+
+## Round 140 — held BOOT recovery roster, two real Spindles
+
+[Round report](SPINDLE_RECOVERY_ROSTER_2026_10_31.md) implements the bounded owned
+history grant, populated from registered tasks and compared field by field with
+the actual inserted capability before sealing. Catalog-sized history/probe
+sessions, private names, observers and fair two-send pumps preserve existing
+custody and disk format. Journal task fields now come from that held roster.
+This is not per-request task authentication; Spindle app startup still couples
+its task/domain, so unequal IDs remain a roster/journal host claim.
+
+The sealed cohort passes 43 host checks / 2,698 Rust executions and 989 Python
+tests. Six normal workflow boots across both sizes pass bound replay with 84
+registry captures; sealed probe plus auxiliary bound-parent last-writer cold
+observation bring qualified boots to 8. Every boot audits the actual recovery
+grant, eleven catalog subjects and unchanged 40/128/192-byte grant/data/capability
+layout. Six exact ELF scans inspect 254,656 instructions without inspected
+vector/FP matches. The auxiliary cold probe has no standalone artifact replay;
+its earlier obsolete-recall failure is retained separately. The report links
+member-verified raw evidence and scopes all fixtures and observations.
+
+Next: app startup task/domain separation, then one third Spindle with complete
+native warm/cold cleanup/exhaustion. Two real Spindles and all release gaps
+remain: 2 Open / 28 Partial / System Proven false. Larger goal active.
