@@ -573,7 +573,7 @@
     {
       "id": "PKU_ENFORCEMENT_ONLY",
       "requirement": "PKU accelerates enforcement and never grants authority; authorization semantics survive its absence.",
-      "status": "open",
+      "status": "partial",
       "sources": [
         {
           "path": "ARCHITECTURE.md",
@@ -582,11 +582,17 @@
         {
           "path": "kernel/src/pku.rs",
           "anchor": "pub unsafe fn wrpkru"
+        },
+        {
+          "path": "scripts/pku_parity_gate.py",
+          "anchor": "def compare"
         }
       ],
-      "checks": [],
+      "checks": [
+        "capability_slots"
+      ],
       "gaps": [
-        "No paired PKU-on/off authorization proof; current trusted-but-faulty execution is not hostile-code isolation."
+        "Kernel-mediated authorization is source-guarded against hardware PKU state, and a paired native boot of one image (scripts/pku_parity_gate.py, run manually) yields identical boot/service-genesis authority records with and without PKU. Without PKU, hardware still does not stop direct user loads or stores anywhere in GLOBAL_VAS: no-PKU hostile-code isolation is absent and remains a release blocker."
       ],
       "depends_on": []
     },

@@ -154,3 +154,18 @@ fn no_capability_selects_kernel_privileged_code() {
     let traverse = ipc.split("pub fn traverse_edge(").nth(1).unwrap().split("pub fn safe_pdx_call(").next().unwrap();
     assert!(!traverse.contains("asm!"));
 }
+
+#[test]
+fn kernel_authorization_never_consults_hardware_pku_state() {
+    // PKU accelerates enforcement only. Kernel-mediated decisions use the
+    // domain's software key mask and page metadata, identical with PKU absent.
+    let syscalls = include_str!("../kernel/src/syscalls/mod.rs");
+    let validate = syscalls.split("fn validate_user_bytes(").nth(1).unwrap().split("\nfn ").next().unwrap();
+    assert!(validate.contains("pd.current_pkru_mask.load(Ordering::Acquire)"));
+    for source in [validate, include_str!("../kernel/src/ipc.rs"), include_str!("../kernel/src/ipc/router.rs"),
+                   include_str!("../kernel/src/capability_table.rs"), include_str!("../kernel/src/capability_slot.rs")] {
+        for hardware in ["rdpkru", "get_pkru", "PKU_ENABLED", "is_pku_supported"] {
+            assert!(!source.contains(hardware), "{hardware}");
+        }
+    }
+}

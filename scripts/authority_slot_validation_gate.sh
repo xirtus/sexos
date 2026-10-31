@@ -10,7 +10,9 @@ rustc --edition=2021 --test tests/authority_slot_validation.rs -o "$TEST_DIR/aut
 # Compiled control: restoring the retired ambient framebuffer disclosure must fail.
 mkdir -p "$TEST_DIR/mutant/kernel/src/syscalls" "$TEST_DIR/mutant/tests"
 cp kernel/src/syscalls/mod.rs "$TEST_DIR/mutant/kernel/src/syscalls/"
-cp kernel/src/ipc.rs kernel/src/capability.rs "$TEST_DIR/mutant/kernel/src/"
+cp kernel/src/ipc.rs kernel/src/capability.rs kernel/src/capability_table.rs "$TEST_DIR/mutant/kernel/src/"
+mkdir -p "$TEST_DIR/mutant/kernel/src/ipc"
+cp kernel/src/ipc/router.rs "$TEST_DIR/mutant/kernel/src/ipc/"
 python3 - "$ROOT_DIR/kernel/src/capability_slot.rs" "$TEST_DIR/mutant/kernel/src/capability_slot.rs" <<'PY'
 import sys
 source=open(sys.argv[1]).read();old='        0x12 => Some(BridgeOp::InitArg),\n'
