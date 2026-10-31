@@ -54,8 +54,9 @@ build, native regressions and static ELF scans.
 ## Continuing work
 
 A fresh corrected compact 1800-second session is running on this optimized
-image. The older wide session remains on its original frozen image/checker;
-its outcome must retain that scope. No completed active duration alone supplies
+image. The older wide session has since [completed and passed fresh replay](ALPHA_WIDE_ACCEPTANCE_2026_10_31.md)
+with 85 cycles and 206 captures on its original frozen image/checker.
+Its outcome retains that scope. No completed active duration alone supplies
 sustained acceptance. Require actual terminal cleanup and fresh replay, then
 qualify the corrected wide profile on the optimized image.
 

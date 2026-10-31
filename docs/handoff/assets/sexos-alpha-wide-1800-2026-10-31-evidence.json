@@ -1,0 +1,65 @@
+{
+  "accepted_v2_sustained_workflow": true,
+  "full_os_goal_complete": false,
+  "source_commit": "20c50957027e69c258b98e701ef1efab0d2563f6",
+  "current_optimized_image_acceptance": false,
+  "iso_sha256": "79a48af561534484182f02cb641f38054962996c77f96f619e46a7bf4b9d2b3f",
+  "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "binding_sha256": "814007b5b32fa70ba3124e566c3d90dbc7ae8a0dd1e0a3087e922e6291dde7ba",
+  "production_inputs": 574,
+  "runner_inputs": 569,
+  "registered_host_checks": 42,
+  "rust_test_executions": 2628,
+  "python_tests": 902,
+  "resolution": "1280x800",
+  "model": "e1000e",
+  "elapsed_seconds": 1809.0159803749993,
+  "active_elapsed_seconds": 547.5568434569286,
+  "idle_elapsed_seconds": 1261.4591369180707,
+  "cycles": 85,
+  "verified_captures": 206,
+  "independent_replay": true,
+  "documents": [
+    {
+      "bytes": 10,
+      "hash": "0xe41184b5fedbdf93",
+      "object": 3,
+      "name": "uialpha",
+      "content": "first note"
+    },
+    {
+      "bytes": 146,
+      "hash": "0xe5555df261c9575a",
+      "object": 4,
+      "name": "uibeta",
+      "content": "first notebzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqt"
+    }
+  ],
+  "terminal_scope": "safe_completed_save_close",
+  "pending_save_close_guard": true,
+  "pending_quil_close": false,
+  "pending_spindle_close": true,
+  "boot_successors": [
+    16,
+    17,
+    18
+  ],
+  "remaining_obligations": [
+    "Quil pending-I/O terminal teardown"
+  ],
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-alpha-wide-1800-2026-10-31-raw.tar.gz",
+    "sha256": "3a725a40bff0f700fdda53f4ccf25d29ad2f8d714d9cad4c0710cddc14fc2440",
+    "bytes": 8982435,
+    "members": 1414,
+    "payload_manifest_sha256": "ad00b31f6478097b303e045819ac5270d99faa2ce6d10f70b7d82a50c7a9c21f",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Completed older-image wide sustained workflow with85 distinct active cycles, bounded intentional idle,206 immutable source-bound pixel captures, exact durable documents, pending-save decline, completed-save confirmed Quil Close, BOOT successor recovery/cleanup and pending Spindle retirement. Every frozen input matches commit20c50957. Not optimized-image acceptance, actual Quil pending-device-I/O teardown, physical/power-loss/SMP, global epoch replay or general daily-driver qualification."
+}

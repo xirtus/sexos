@@ -296,3 +296,19 @@ The next lifecycle work has a concrete
 Quil's actual 12,288-byte logical limit, bounded runtime storage throttling and
 same-trace write/Close/completion ordering. It is still planned. Inventory stays
 2 Open / 28 Partial / System Proven false; no general daily-driver claim.
+
+## Earlier-image wide sustained acceptance — 31 October
+
+The original wide cohort finishes 85 distinct cycles over 1809.016 seconds,
+then completes cleanup and fresh replay of all 206 immutable captures. The
+[acceptance handoff](ALPHA_WIDE_ACCEPTANCE_2026_10_31.md) and
+[machine evidence](assets/sexos-alpha-wide-1800-2026-10-31-evidence.json)
+bind it to source `20c50957` and ISO `79a48af5`. Active/idle time is
+547.557/1261.459 seconds; this is a mixed session with bounded intentional idle.
+
+The version-2 workflow accepts pending-save decline followed by confirmed Close
+after exact save completion. Actual Quil pending-I/O terminal teardown remains
+explicitly unproved. This is neither optimized-image acceptance nor general
+daily-driver readiness. The corrected optimized-image compact run remains live;
+its terminal replay and a corrected wide repeat are still required. Inventory
+remains 2 Open / 28 Partial / System Proven false.

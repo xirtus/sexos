@@ -73,7 +73,9 @@ The [launcher-proof follow-up](ALPHA_LAUNCHER_PROOF_2026_10_31.md) preserves the
 failed attempt and qualifies a corrected runner with real selection and current
 launcher pixels. A fresh corrected compact session is running on the optimized
 image; the older wide session retains its original source/image/checker scope.
-Each needs terminal cleanup and fresh replay before sustained acceptance.
+The [older wide session has completed](ALPHA_WIDE_ACCEPTANCE_2026_10_31.md), with
+85 cycles and 206 captures passing terminal cleanup and fresh replay. The
+corrected optimized-image session still needs its own terminal qualification.
 
 The OS inventory remains **2 Open / 28 Partial / System Proven false**. This is
 an evidence/lifecycle improvement, not global execution-epoch replay or a general

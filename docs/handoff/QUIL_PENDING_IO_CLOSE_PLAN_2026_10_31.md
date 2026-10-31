@@ -17,6 +17,13 @@ save 12,286 ASCII bytes, append a distinct saved edit `q` to form a 12,287-byte
 immutable snapshot, then start Ctrl+S and append unsaved `z`. The final editor
 buffer is exactly 12,288 bytes. Never attempt to load 65,536 text bytes.
 
+Build the baseline through real Quil input: New, type six `x` characters,
+then eleven completed Select All / Copy / EOF / Paste doublings to 12,288
+bytes, followed by two Backspaces and Save As `pendclose`. Await actual
+clipboard publication/paste and durable-save receipts, then reopen through
+Linen. Spindle `filldoc`/`filldocx` are unsuitable: they write binary patterns
+without the QP01/QJ02 document wrapper, and Quil rejects their control/UTF-8 data.
+
 The larger number is physical journal storage: two 32,768-byte banks in a
 65,536-byte container, each with a 512-byte header and a payload bounded by
 `document::MAX`. A successful ordinary warm save grows that backing container.
