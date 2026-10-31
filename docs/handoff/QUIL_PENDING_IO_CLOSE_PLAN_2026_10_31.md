@@ -1,6 +1,8 @@
 # Next lifecycle proof: confirmed Quil Close during device I/O
 
-This is a planned native fixture, not a completed qualification. The current
+This plan has now been [implemented and qualified at both desktop sizes](PENDING_DEVICE_IO_CLOSE_2026_10_31.md)
+on one exact normal-image cohort, including independent cold recovery. The
+procedural design below is retained. The earlier sustained
 alpha workflow proves an ordinary pending-save decline followed by a confirmed
 Close after save completion. Application `pending=1` alone would still not prove
 that device I/O remained outstanding: a completed reply could be in transit.
@@ -75,7 +77,8 @@ Use one timestamped trace stream and require this order:
 3. Preferably the exact reconstructed `task.finish pd=9 task=9`.
 4. Matching WRITE completion enqueue, with no ambiguous CID reuse.
 
-Then require the existing exact-incarnation cleanup, private-frame zeroing,
+The implemented oracle also requires matching completion before the first exact
+pool-ready UART character. Then require exact-incarnation cleanup, private-frame zeroing,
 lease release and BOOT-reserved successor checks. Do not manufacture a draw
 receipt or treat a pending application flag as a device-completion observation.
 

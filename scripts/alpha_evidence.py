@@ -122,6 +122,10 @@ def replay(root,iso,binding,out):
  from clock_source_evidence import validate_clock_sources
  for s in validate_clock_sources(text):
   if not math.floor(manifest['host_utc_start'])-1<=int(s['seconds'])<=math.ceil(manifest['host_utc_end'])+1:raise ValueError('alpha civil snapshot outside actual host UTC bracket')
+ if bool(manifest['options'].get('pending_io_close'))!=bool(result.get('pending_io_close')):raise ValueError('pending fixture mode/result differs')
+ if result.get('pending_io_close'):
+  from pending_io_close import verify as pending_verify
+  pending_verify(out,result['pending_io_close'],frames,text,command)
  from check_alpha_session import session_errors,boot_lifecycle_errors,quil_close_errors,cycle_errors,terminal_pending_errors
  if result.get('soak'):
   errors=quil_close_errors(result['soak'],text)+cycle_errors(result['soak'])+terminal_pending_errors(text,include_quil=result['soak']['pending_quil_close'])

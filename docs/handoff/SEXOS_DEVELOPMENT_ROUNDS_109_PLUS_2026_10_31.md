@@ -312,3 +312,22 @@ explicitly unproved. This is neither optimized-image acceptance nor general
 daily-driver readiness. The corrected optimized-image compact run remains live;
 its terminal replay and a corrected wide repeat are still required. Inventory
 remains 2 Open / 28 Partial / System Proven false.
+
+## Pending device-I/O Close and recovery — 31 October
+
+The unchanged optimized image now passes actual virtual NVMe WRITE → confirmed
+Quil Close/task finish → matching completion → private-pool-ready ordering at
+both sizes. Each profile observes 286,720 zeroed/reused private bytes, five-role
+cleanup and BOOT successor recovery, then cold-boots exact terminal disk bytes
+and verifies journal identity/generation/bank/payload, native Open/load and pixels.
+This separately supplies the pending-device edge left unproved by completed-save
+Close in the sustained workflow. Cancellation does not imply rollback.
+
+One final frozen cohort passes four boots/26 verified captures, fresh replay,
+42 registered checks with 2,630 passing Rust executions and 964 Python tests.
+The [device-I/O handoff](PENDING_DEVICE_IO_CLOSE_2026_10_31.md) and
+[machine evidence](assets/sexos-pending-device-io-close-2026-10-31-evidence.json)
+retain original diagnostics separately from qualified evidence. Only host
+qualification code changes; production inputs, kernel, ABI and SASOS authority
+remain unchanged. Inventory stays 2 Open / 28 Partial / System Proven false;
+physical/storage/reserve and global epoch work continues.

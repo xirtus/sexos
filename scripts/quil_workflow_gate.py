@@ -6,7 +6,8 @@ from network_contention_gate import frozen_binding
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',type=pathlib.Path);p.add_argument('--binding',required=True,type=pathlib.Path);p.add_argument('--check',action='store_true');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=0);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',type=pathlib.Path);p.add_argument('--binding',required=True,type=pathlib.Path);p.add_argument('--check',action='store_true');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=0);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);p.add_argument('--pending-io-close',action='store_true');a=p.parse_args()
+ if a.pending_io_close and a.soak_seconds:p.error('pending device-I/O fixture is separate from sustained alpha')
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  root=pathlib.Path(__file__).resolve().parents[1];iso=a.iso.resolve(strict=True);out=a.out.resolve();binding_path=a.binding.resolve(strict=True)
  if a.check:print(json.dumps(replay(root,iso,binding_path,out),indent=2));return
@@ -15,9 +16,10 @@ def main():
  src=a.source_disk.resolve(strict=True);out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
  bound=frozen_binding(root,iso,binding_path);pixel_contract=contract(root);require_inputs(root,binding_path,pixel_contract);shutil.copyfile(binding_path,out/'source-binding.json')
- disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-quil-{os.getpid()}.sock';log=out/'serial.log'
+ disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-quil-{os.getpid()}.sock';log=out/'serial.log';control_sock=pathlib.Path('/tmp')/f'sex-quil-control-{os.getpid()}.sock'
  command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-rtc',RTC,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.split('x')[0]+',yres='+a.resolution.split('x')[1],'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',a.model+',netdev=peer,mac=52:54:00:12:34:56']
- manifest=dict(evidence_version=2,round=a.round,binding=bound,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=command,resolution=a.resolution,model=a.model,host_utc_start=time.time(),pixel_source_sha256=pixel_contract['source_sha256'],options=dict(soak_seconds=a.soak_seconds,rehearsal=a.rehearsal,find=a.find,typing_bursts=a.typing_bursts,workspace_refresh=a.workspace_refresh,third_quil=a.third_quil,toggle_stress=a.toggle_stress))
+ if a.pending_io_close:command+=['-qmp',f'unix:{control_sock},server=on,wait=off','-D',str(out/'device-trace.log'),'-msg','timestamp=on']
+ manifest=dict(evidence_version=2,round=a.round,binding=bound,iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=command,resolution=a.resolution,model=a.model,host_utc_start=time.time(),pixel_source_sha256=pixel_contract['source_sha256'],options=dict(soak_seconds=a.soak_seconds,rehearsal=a.rehearsal,find=a.find,typing_bursts=a.typing_bursts,workspace_refresh=a.workspace_refresh,third_quil=a.third_quil,toggle_stress=a.toggle_stress,pending_io_close=a.pending_io_close))
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
  captures=Captures(out,pixel_contract,tuple(map(int,a.resolution.split('x'))));failure=None;started=time.monotonic()
@@ -27,6 +29,8 @@ def main():
    proc.terminate()
    try:proc.wait(timeout=10)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
+ def kill_guest():
+  if proc.poll()is None:proc.kill()
  def health():
   if proc.poll()is not None:raise RuntimeError('guest exited')
   if time.monotonic()-started>a.soak_seconds+1200:raise TimeoutError('bounded whole alpha workflow exceeded')
@@ -168,22 +172,31 @@ def main():
    cancels=re.findall(r'\[launcher.focus.cancel\] [^\n]*',text())
    toggles=dict(round_trips=a.toggle_stress,cancels=cancels)
    if cancels:raise RuntimeError('cancelled launcher focus: '+str(cancels[:4]))
+  pending_io=None
+  if a.pending_io_close:
+   from pending_io_close import run as pending_run
+   pending_io=pending_run(locals())
   soak=None
   if a.soak_seconds:
    from alpha_session import run
    soak=run(locals(),a.soak_seconds,acceptance=not a.rehearsal,third_quil=a.third_quil)
   stop_guest()
+  if pending_io:
+   from pending_io_close import BASELINE,SNAPSHOT
+   durable=recover(disk.read_bytes(),pending_io['document']);payload=durable.pop('payload')
+   if payload not in (BASELINE,SNAPSHOT):raise ValueError('terminal pending fixture recovered partial/unsaved payload')
+   pending_io['terminal_document']=durable
   checked=[]
   for expected in [first,second]:
    r=recover(disk.read_bytes(),expected['object'])
    if r.pop('payload')!=expected['content'].encode():raise RuntimeError('native saved bytes differ')
    checked.append(r)
-  result=dict(ok=True,acceptance=bool(a.soak_seconds>=1800 and not a.rehearsal),evidence_version=2,round=a.round,soak=soak,find=find,toggles=toggles,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
+  result=dict(ok=True,acceptance=bool(a.soak_seconds>=1800 and not a.rehearsal),evidence_version=2,round=a.round,soak=soak,pending_io_close=pending_io,find=find,toggles=toggles,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
   (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  except BaseException as e:
   failure=type(e).__name__+': '+str(e)
   (out/'result.json').write_text(json.dumps(dict(ok=False,error=str(e)))+'\n');raise
  finally:
-  stop_guest();sock.unlink(missing_ok=True);finish(out,manifest,src,captures,failure)
+  stop_guest();sock.unlink(missing_ok=True);control_sock.unlink(missing_ok=True);finish(out,manifest,src,captures,failure)
  verified=replay(root,iso,binding_path,out);(out/'verification.json').write_text(json.dumps(verified,indent=2)+'\n');print(json.dumps(dict(ok=True,acceptance=verified['acceptance'],verified_captures=verified['verified_captures'],cycles=verified['cycles'])))
 if __name__=='__main__':main()
