@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–140
+# SexOS development: round 108 acceptance and rounds 109–141
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -607,3 +607,22 @@ member-verified raw evidence and scopes all fixtures and observations.
 Next: app startup task/domain separation, then one third Spindle with complete
 native warm/cold cleanup/exhaustion. Two real Spindles and all release gaps
 remain: 2 Open / 28 Partial / System Proven false. Larger goal active.
+
+
+## Round 141 — sustained acceptance with family appearance
+
+[Acceptance report](APPEARANCE_ALPHA_ACCEPTANCE_2026_10_31.md) records both terminal
+appearance-image sessions and fresh independent replays: 169 mixed-app cycles /
+382 immutable verified captures. Compact: 85 cycles over 1800.002870 seconds,
+192 captures; wide: 84 over 1805.537984, 190 captures. Both finish the eight-Quil
+chain, exact persistence/cleanup and launcher exhaustion; twelve later captures
+also check current family status and all indicator pixels.
+
+The binding remains af6a96c3 / ISO 2300c9cd / kernel 56df8882, with all 576 production +
+586 runner inputs matching committed Git blobs. Supporting host/Python/static
+checks remain scoped to that image. Its completed-save Close does not rewrite
+pending-device obligations. The newer recovery-roster image is distinct and has
+its own live sustained jobs. Member-verified evidence retains both source/image
+and terminal artifacts. Next: held startup identity without task/domain equality,
+then one third Spindle. Inventory stays 2 Open / 28 Partial / System Proven false;
+larger goal active.

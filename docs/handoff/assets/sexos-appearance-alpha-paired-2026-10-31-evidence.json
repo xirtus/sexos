@@ -1,0 +1,117 @@
+{
+  "round": 141,
+  "appearance_image_paired_sustained_accepted": true,
+  "full_os_goal_complete": false,
+  "source_commit": "af6a96c34be706cd9ac8a109b4a2e1ecd39e177c",
+  "iso_sha256": "2300c9cd9709c2c2469aabf32511d6bea341c7135e172fff5bbe2d30d3309550",
+  "kernel_sha256": "56df8882e1ad4c706a3e0e8ad798b0b429e54b85ce30444bf8bc30336bb7b6dc",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "af6a96c34be706cd9ac8a109b4a2e1ecd39e177c",
+    "production": 576,
+    "runner": 586,
+    "unique": 1162,
+    "iso_sha256": "2300c9cd9709c2c2469aabf32511d6bea341c7135e172fff5bbe2d30d3309550",
+    "kernel_sha256": "56df8882e1ad4c706a3e0e8ad798b0b429e54b85ce30444bf8bc30336bb7b6dc",
+    "production_changes_from_failed_a": [
+      "servers/silk-shell/src/main.rs"
+    ],
+    "same_runner_as_failed_a": true
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2685,
+  "python_tests": 977,
+  "native": {
+    "acceptance_boots": 2,
+    "cycles": 169,
+    "verified_captures": 382,
+    "profiles": [
+      {
+        "profile": "compact",
+        "cycles": 85,
+        "verified_captures": 192,
+        "elapsed_seconds": 1800.0028695829678,
+        "active_elapsed_seconds": 534.3771782097174,
+        "idle_elapsed_seconds": 1265.6256913732504,
+        "terminal_scope": "safe_completed_save_close",
+        "pending_device_close": false,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "all_eight_quil_finished": true,
+        "last_target": 23,
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 1,
+            "generation": 95,
+            "identity": 327681,
+            "bytes": 103,
+            "hash": "0xbe1d7c8263845aaa"
+          }
+        ],
+        "fresh_replay": true
+      },
+      {
+        "profile": "wide",
+        "cycles": 84,
+        "verified_captures": 190,
+        "elapsed_seconds": 1805.537984124967,
+        "active_elapsed_seconds": 559.2144700017525,
+        "idle_elapsed_seconds": 1246.3235141232144,
+        "terminal_scope": "safe_completed_save_close",
+        "pending_device_close": false,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "all_eight_quil_finished": true,
+        "last_target": 23,
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 0,
+            "generation": 94,
+            "identity": 327681,
+            "bytes": 102,
+            "hash": "0xf966f9393dc41f7f"
+          }
+        ],
+        "fresh_replay": true
+      }
+    ],
+    "all_fresh_replays": true
+  },
+  "support": {
+    "round138_same_image_evidence": "sexos-catalog-native-appearance-2026-10-31-evidence.json",
+    "pending_device_qualification_on_this_image": false,
+    "last_quil23_cold_recovery_on_this_image": false,
+    "newer_spindle_roster_image_accepted": false
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-appearance-alpha-paired-2026-10-31-raw.tar.gz",
+    "sha256": "047a791a6b36d187f3302a54907a73d60db48fbcceb3e85143efac1a797fd00a",
+    "bytes": 12944689,
+    "members": 1629,
+    "payload_manifest_sha256": "024c479903f9f3aecc1dda6ee0c3b5ce7b3a0c57488e252d77837f7f73c08e01",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Two terminal >=1800s mixed desktop workflows on the Round136 appearance eleven-subject/eightQuil production image, with actual input/save/load/history/refresh, complete BOOT successor chain, cleanup, final disk bytes and exhausted launcher. This appearance image is distinctfrom Round140 recovery-roster image. No relabelled pending-device close, power-loss, physical/SMP/hostile containment/global epoch or unrestricted daily-driver acceptance claim."
+}
