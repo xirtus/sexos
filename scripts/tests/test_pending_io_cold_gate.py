@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -250,3 +251,108 @@ class ColdEvidence(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ExplicitColdPolicy(unittest.TestCase):
+    def test_default_policy_delegates_to_unchanged_pending_contract(self):
+        args=tuple(Path('/held')/name for name in ('root','iso','binding','session'))
+        accepted=(b'seed',b'payload',{'document':5})
+        with patch.object(gate,'accepted_session',return_value=accepted) as session, patch.object(gate,'contract',return_value={'source_sha256':{}}) as contract:
+            self.assertEqual(gate.DEFAULT_POLICY.accepted_session(*args),accepted)
+            self.assertEqual(gate.DEFAULT_POLICY.contract(args[0]),{'source_sha256':{}})
+        session.assert_called_once_with(*args);contract.assert_called_once_with(args[0])
+        self.assertEqual(gate.DEFAULT_POLICY.frame_name,'pending-cold-recovered')
+        for payload in (gate.BASELINE,gate.SNAPSHOT):self.assertEqual(gate.DEFAULT_POLICY.expected(payload),'pendclose')
+
+    def test_alternate_policy_cannot_bypass_shared_source_binding_or_start_guest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();args=(root,root/'iso',root/'binding',root/'session',root/'out')
+            policy=SimpleNamespace(accepted_session=Mock(return_value=(b'seed',b'reserve',{})),
+                contract=Mock(return_value={'source_sha256':{'held':'hash'}}),expected=Mock(return_value='reserve'),frame_name='reserve-cold')
+            with patch.object(gate.alpha,'require_inputs',side_effect=ValueError('unbound source')) as require, patch.object(gate.subprocess,'Popen') as popen:
+                for call in (lambda:gate.run(*args,'1024x768','e1000e',policy=policy),lambda:gate.replay(*args,policy=policy)):
+                    with self.assertRaisesRegex(ValueError,'unbound source'):call()
+                self.assertEqual(require.call_count,2);popen.assert_not_called()
+            self.assertFalse(args[-1].exists())
+            self.assertEqual(policy.accepted_session.call_args.args,args[:4])
+            policy.contract.assert_called_with(root);policy.expected.assert_called_with(b'reserve')
+
+    def test_run_uses_explicit_frame_expectation_and_passes_same_policy_to_replay(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();out=root/'cold';payload=b'reserve text';raw,start=native(payload)
+            seed=disk_image(payload);chain={'document':5,'recovered':recovered_metadata(payload)}
+            c={'source_sha256':{'held':'hash'}}
+            policy=SimpleNamespace(accepted_session=Mock(return_value=(seed,payload,chain)),
+                contract=Mock(return_value=c),expected=Mock(return_value='reserve text'),frame_name='reserve-cold-frame')
+            stopped={'value':False};proc=Mock();proc.poll.side_effect=lambda:0 if stopped['value'] else None
+            proc.terminate.side_effect=lambda:stopped.update(value=True)
+            def spawn(*args,**kwargs):
+                (out/'serial.log').write_text(raw[:start]+'[shell.app.registered.reply] target=15 task=15 committed=1\n[linen.disk.publish.done]\n')
+                return proc
+            def append(value):
+                path=out/'serial.log';path.write_text(path.read_text()+value)
+            q=Mock();q.key_sequence.side_effect=lambda keys:append('[shell.action.select_next_linen] id=71\n')
+            def command(name,args):
+                self.assertEqual(name,'screendump');Path(args['filename']).write_bytes(b'fixture pixels')
+            q.cmd.side_effect=command
+            def opened(context):append(raw[start:]);return {'object':5}
+            captures=Mock(resolution=(1280,800));captures.candidate.return_value=out/'candidate.ppm';captures.commit.return_value={'name':policy.frame_name}
+            sock=Mock();sock.exists.return_value=True
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(gate.subprocess,'Popen',side_effect=spawn))
+                stack.enter_context(patch.object(gate.threading,'Timer'))
+                stack.enter_context(patch.object(gate,'QMP',return_value=q))
+                stack.enter_context(patch.object(gate,'focus_surface'))
+                stack.enter_context(patch.object(gate,'open_selected',side_effect=opened))
+                guest=stack.enter_context(patch.object(gate,'guest_command',return_value=(['fixture-qemu'],sock)))
+                require=stack.enter_context(patch.object(gate.alpha,'require_inputs'))
+                stack.enter_context(patch.object(gate.alpha,'frozen_binding',return_value={'held':'image'}))
+                stack.enter_context(patch.object(gate.alpha,'Captures',return_value=captures))
+                verify=stack.enter_context(patch.object(gate.alpha,'verify_frame',return_value={'ok':True}))
+                replay=stack.enter_context(patch.object(gate,'replay',return_value={'ok':True}))
+                self.assertEqual(gate.run(root,root/'iso',root/'binding',root/'session',out,'1280x800','e1000e',policy=policy),{'ok':True})
+            require.assert_called_once_with(root,root/'binding',c)
+            guest.assert_called_once_with(root/'iso',out,'1280x800','e1000e')
+            captures.candidate.assert_called_once_with(policy.frame_name)
+            self.assertEqual(verify.call_args.args[4:],('quil','reserve text',9))
+            self.assertEqual(captures.commit.call_args.args[0],policy.frame_name)
+            self.assertEqual(captures.commit.call_args.args[4:7],('quil','reserve text',9))
+            replay.assert_called_once_with(root,root/'iso',root/'binding',root/'session',out,policy=policy)
+            self.assertTrue(stopped['value']);self.assertEqual(gate.gzip.decompress((out/'nvme.img.gz').read_bytes()),seed)
+
+    def test_replay_uses_alternate_policy_without_guest_or_artifact_writes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();out=root/'cold';out.mkdir();payload=b'reserve text';seed=disk_image(payload)
+            text,start=native(payload);chain={'document':5,'recovered':recovered_metadata(payload)}
+            c={'source_sha256':{'held':'hash'}};binding={'held':'image'};proof={'ok':True}
+            policy=SimpleNamespace(accepted_session=Mock(return_value=(seed,payload,chain)),contract=Mock(return_value=c),expected=Mock(return_value='reserve text'),frame_name='reserve-cold-frame')
+            load=gate.native_load(text,start,len(text),5,payload,chain['recovered'])
+            frame=dict(sequence=1,name=policy.frame_name,kind='quil',target=9,expected='reserve text',region=None,
+                serial_end=len(text),source_sha256=c['source_sha256'],serial_sha256=gate.digest(text.encode()),
+                screenshot='recovered.ppm',screenshot_sha256=gate.digest(b'fixture pixels'),proof=proof)
+            (out/'serial.log').write_text(text);(out/'recovered.ppm').write_bytes(b'fixture pixels')
+            for name in ('seed.img.gz','nvme.img.gz'):(out/name).write_bytes(gzip.compress(seed))
+            (out/'captures.json').write_text(json.dumps(dict(version=gate.alpha.VERSION,complete=True,serial_offset_units=gate.alpha.SERIAL_UNITS,frames=[frame])))
+            (out/'result.json').write_text(json.dumps(dict(ok=True,load=load,frame=frame)))
+            command,_=gate.guest_command(root/'iso',out,'1024x768','e1000e')
+            manifest=dict(chain=chain,source_sha256=c['source_sha256'],binding=binding,stopped=True,error=None,
+                resolution='1024x768',model='e1000e',command=command,raw_sha256=gate.raw_files(out),final_disk_sha256=gate.digest(seed),host_utc_start=1,host_utc_end=2,elapsed_seconds=1)
+            (out/'manifest.json').write_text(json.dumps(manifest));before={p.name:p.read_bytes() for p in out.iterdir()}
+            with patch.object(gate.alpha,'require_inputs') as require, patch.object(gate.alpha,'frozen_binding',return_value=binding), patch.object(gate.alpha,'verify_frame',return_value=proof) as verify, patch.object(gate.subprocess,'Popen') as popen:
+                self.assertTrue(gate.replay(root,root/'iso',root/'binding',root/'session',out,policy=policy)['cold_recovery_verified'])
+                require.assert_called_once_with(root,root/'binding',c);popen.assert_not_called()
+                self.assertEqual(verify.call_args.args[4:],('quil','reserve text',9))
+                # A mismatched policy cannot borrow the accepted frame identity.
+                policy.frame_name='foreign-frame'
+                with self.assertRaisesRegex(ValueError,'frame identity'):gate.replay(root,root/'iso',root/'binding',root/'session',out,policy=policy)
+            self.assertEqual(before,{p.name:p.read_bytes() for p in out.iterdir()})
+
+    def test_any_nonprimary_quil_start_before_load_end_is_rejected(self):
+        text,start=native()
+        for target in (0,16,18,19,20,21,22,23,24,100,4294967295):
+            marker=f'[quil.incarnation.start] target={target} task={target} surface=308 fresh=1\n'
+            changed=text[:start]+marker+text[start:]
+            with self.subTest(target=target),self.assertRaisesRegex(ValueError,'fresh primary Quil'):
+                gate.native_load(changed,start,len(changed),5,gate.BASELINE,recovered_metadata())
+        later=text+'[quil.incarnation.start] target=19 task=19 surface=308 fresh=1\n'
+        self.assertEqual(gate.native_load(later,start,len(text),5,gate.BASELINE,recovered_metadata())['target'],9)

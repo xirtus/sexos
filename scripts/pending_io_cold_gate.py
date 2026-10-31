@@ -60,12 +60,37 @@ def accepted_session(root, iso, binding, session):
     return seed, payload, chain
 
 
+
+class PendingPolicy:
+    """Trusted caller policy; shared cold transport/evidence checks stay fixed.
+
+    Alternate source-bound workflows supply the same four members explicitly;
+    selecting a policy never changes guest authority or receipt validation.
+    """
+    frame_name = 'pending-cold-recovered'
+
+    @staticmethod
+    def accepted_session(root, iso, binding, session):
+        return accepted_session(root, iso, binding, session)
+
+    @staticmethod
+    def contract(root):
+        return contract(root)
+
+    @staticmethod
+    def expected(payload):
+        return 'pendclose'
+
+
+DEFAULT_POLICY = PendingPolicy()
+
+
 def native_load(text, start, end, document, payload, expected_recovered):
     if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text):
         raise ValueError('cold Open offsets outside serial log')
     if not re.search(r'\[quil.incarnation.start\] target=9 task=9 surface=156 fresh=1', text[:start]):
         raise ValueError('cold Open lacks fresh Quil9 incarnation')
-    if re.search(r'\[quil.incarnation.start\] target=(?:16|18) |\[task.finish\] pd=9 ', text[:end]):
+    if any(int(m[1]) != 9 for m in re.finditer(r'\[quil.incarnation.start\] target=(\d+)(?= )', text[:end])) or re.search(r'\[task.finish\] pd=9 ', text[:end]):
         raise ValueError('cold Open is not the fresh primary Quil')
     span = text[start:end]
     patterns = (
@@ -131,9 +156,11 @@ def raw_files(out):
             if p.is_file() and p.name not in ('manifest.json', 'verification.json', 'nvme.img')}
 
 
-def replay(root, iso, binding, session, out):
-    seed, payload, chain = accepted_session(root, iso, binding, session)
-    c = contract(root)
+def replay(root, iso, binding, session, out, policy=None):
+    policy = DEFAULT_POLICY if policy is None else policy
+    seed, payload, chain = policy.accepted_session(root, iso, binding, session)
+    c = policy.contract(root)
+    expected = policy.expected(payload)
     alpha.require_inputs(root, binding, c)
     out = Path(out).resolve()
     m = json.loads((out / 'manifest.json').read_text())
@@ -167,7 +194,7 @@ def replay(root, iso, binding, session, out):
     if index.get('version') != alpha.VERSION or index.get('complete') is not True or index.get('serial_offset_units') != alpha.SERIAL_UNITS or len(index['frames']) != 1:
         raise ValueError('cold immutable frame registry incomplete')
     frame = index['frames'][0]
-    if frame != result['frame'] or (frame['sequence'], frame['name'], frame['kind'], frame['target'], frame['expected'], frame['region']) != (1, 'pending-cold-recovered', 'quil', 9, 'pendclose', None):
+    if frame != result['frame'] or (frame['sequence'], frame['name'], frame['kind'], frame['target'], frame['expected'], frame['region']) != (1, policy.frame_name, 'quil', 9, expected, None):
         raise ValueError('cold frame identity differs')
     if not load['open_end'] <= frame['serial_end'] <= len(text) or frame['source_sha256'] != c['source_sha256']:
         raise ValueError('cold frame predates load or has foreign source')
@@ -175,7 +202,7 @@ def replay(root, iso, binding, session, out):
     screenshot = out / frame['screenshot']
     if screenshot.is_symlink() or not screenshot.resolve().is_relative_to(out) or digest(prefix.encode()) != frame['serial_sha256'] or alpha.sha(screenshot) != frame['screenshot_sha256']:
         raise ValueError('cold screenshot/prefix changed')
-    proof = alpha.verify_frame(prefix, screenshot.read_bytes(), c, tuple(map(int, m['resolution'].split('x'))), 'quil', 'pendclose', 9)
+    proof = alpha.verify_frame(prefix, screenshot.read_bytes(), c, tuple(map(int, m['resolution'].split('x'))), 'quil', expected, 9)
     if not proof['ok'] or proof != frame['proof']:
         raise ValueError('cold full glyph/clock proof differs')
     from clock_source_evidence import validate_clock_sources
@@ -188,9 +215,11 @@ def replay(root, iso, binding, session, out):
                 scope='Separate normal-image cold boot, exact live terminal disk seed, native Linen Open/Quil9 load and full Quil/civil-clock pixels. No rollback or general crash-consistency claim.')
 
 
-def run(root, iso, binding, session, out, resolution, model):
-    seed, payload, chain = accepted_session(root, iso, binding, session)
-    c = contract(root)
+def run(root, iso, binding, session, out, resolution, model, policy=None):
+    policy = DEFAULT_POLICY if policy is None else policy
+    seed, payload, chain = policy.accepted_session(root, iso, binding, session)
+    c = policy.contract(root)
+    expected = policy.expected(payload)
     alpha.require_inputs(root, binding, c)
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()):
@@ -265,7 +294,7 @@ def run(root, iso, binding, session, out, resolution, model):
         else:
             raise RuntimeError('cold document never selected through Linen')
         focus(201)
-        candidate = captures.candidate('pending-cold-recovered')
+        candidate = captures.candidate(policy.frame_name)
         until = time.monotonic() + 60
         while time.monotonic() < until:
             health()
@@ -273,11 +302,11 @@ def run(root, iso, binding, session, out, resolution, model):
             prefix = text()
             pixels = candidate.read_bytes()
             try:
-                proof = alpha.verify_frame(prefix, pixels, c, captures.resolution, 'quil', 'pendclose', 9)
+                proof = alpha.verify_frame(prefix, pixels, c, captures.resolution, 'quil', expected, 9)
             except ValueError:
                 proof = dict(ok=False)
             if proof['ok']:
-                frame = captures.commit('pending-cold-recovered', candidate, prefix, proof, 'quil', 'pendclose', 9, None, pixels)
+                frame = captures.commit(policy.frame_name, candidate, prefix, proof, 'quil', expected, 9, None, pixels)
                 break
             time.sleep(.15)
         else:
@@ -310,7 +339,7 @@ def run(root, iso, binding, session, out, resolution, model):
         captures.write(m['error'] is None and m['stopped'])
         m['raw_sha256'] = raw_files(out)
         (out / 'manifest.json').write_text(json.dumps(m, indent=2) + '\n')
-    return replay(root, iso, binding, session, out)
+    return replay(root, iso, binding, session, out, policy=policy)
 
 
 def main(argv=None):
