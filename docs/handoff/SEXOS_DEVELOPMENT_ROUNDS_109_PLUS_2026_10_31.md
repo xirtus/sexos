@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–138
+# SexOS development: round 108 acceptance and rounds 109–139
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -562,3 +562,23 @@ matches. Targeted appearance checks do not relabel earlier cold/pending or live
 sustained-alpha results as acceptance of this new image. Next: terminal sustained
 replays, then held BOOT Spindle recovery roster/task identities before expansion.
 Inventory remains 2 Open / 28 Partial / System Proven false.
+
+
+## Round 139 — sustained acceptance of the expanded-reserve image
+
+[Acceptance report](EXPANDED_RESERVE_ALPHA_ACCEPTANCE_2026_10_31.md) records two
+terminal sessions and fresh independent replays on round136's actual eight-Quil
+image: 168 mixed-app cycles and 380 verified captures. Compact runs 85 cycles /
+1805.666035 seconds / 192 captures; wide 83 /1806.147640 / 188. Each finishes the full
+BOOT chain through 23, exact save/load/cleanup and final exhausted launcher.
+
+The source/image binding remains 9287fa3e / ISO 33d25951 / kernel 3624ee30, with all
+576 production + 583 runner inputs matching committed Git blobs. Supporting host,
+Python and static-scan evidence remains scoped to that cohort. Completed-save
+Close does not overwrite its separate pending-I/O obligation; round136 supplies
+that edge and round137 the exact post-23 cold recovery on the same production.
+The newer appearance image is distinct and has its own live sustained jobs.
+The report links member-verified raw evidence and the concrete
+[Spindle held-roster plan](SPINDLE_RECOVERY_ROSTER_PLAN_2026_10_31.md), including
+the caller-task transport boundary before stronger request-authentication claims.
+Inventory remains 2 Open / 28 Partial / System Proven false; goal active.

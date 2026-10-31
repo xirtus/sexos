@@ -1,0 +1,113 @@
+{
+  "round": 139,
+  "expanded_image_paired_sustained_accepted": true,
+  "full_os_goal_complete": false,
+  "source_commit": "9287fa3e1f7c8d14ae4d460ddb6e6935a845d6ea",
+  "iso_sha256": "33d25951837bbf7fdb935d8c36185c9b9cea5f7d11169a66f51c3cd3a65d3bb0",
+  "kernel_sha256": "3624ee301ef8c3f7fec7cbaa58fd579f0d8196ae8094d806518aec2d9c756e71",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "9287fa3e1f7c8d14ae4d460ddb6e6935a845d6ea",
+    "production": 576,
+    "runner": 583,
+    "unique": 1159,
+    "iso_sha256": "33d25951837bbf7fdb935d8c36185c9b9cea5f7d11169a66f51c3cd3a65d3bb0",
+    "kernel_sha256": "3624ee301ef8c3f7fec7cbaa58fd579f0d8196ae8094d806518aec2d9c756e71"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2684,
+  "python_tests": 968,
+  "native": {
+    "acceptance_boots": 2,
+    "cycles": 168,
+    "verified_captures": 380,
+    "profiles": [
+      {
+        "profile": "compact",
+        "cycles": 85,
+        "verified_captures": 192,
+        "elapsed_seconds": 1805.6660354170017,
+        "active_elapsed_seconds": 544.2092989593511,
+        "idle_elapsed_seconds": 1261.4567364576505,
+        "terminal_scope": "safe_completed_save_close",
+        "pending_device_close": false,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "all_eight_quil_finished": true,
+        "last_target": 23,
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 1,
+            "generation": 95,
+            "identity": 327681,
+            "bytes": 103,
+            "hash": "0xbe1d7c8263845aaa"
+          }
+        ],
+        "fresh_replay": true
+      },
+      {
+        "profile": "wide",
+        "cycles": 83,
+        "verified_captures": 188,
+        "elapsed_seconds": 1806.147640125011,
+        "active_elapsed_seconds": 574.7460557078011,
+        "idle_elapsed_seconds": 1231.40158441721,
+        "terminal_scope": "safe_completed_save_close",
+        "pending_device_close": false,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "all_eight_quil_finished": true,
+        "last_target": 23,
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 1,
+            "generation": 93,
+            "identity": 327681,
+            "bytes": 101,
+            "hash": "0x1315b07385442f0c"
+          }
+        ],
+        "fresh_replay": true
+      }
+    ],
+    "all_fresh_replays": true
+  },
+  "support": {
+    "round136_same_image_evidence": "sexos-quil-eight-reserve-2026-10-31-evidence.json",
+    "pending_device_qualification_separate": true,
+    "last_quil23_cold_recovery_separate_round137_same_production": true,
+    "newer_appearance_image_accepted": false
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-expanded-alpha-paired-2026-10-31-raw.tar.gz",
+    "sha256": "d0c5f29716c2409506249e2d3c1226260ecf0585d80e59b20580ff8ae27433dc",
+    "bytes": 12889175,
+    "members": 1624,
+    "payload_manifest_sha256": "07390da32f3a615d3c885e47b355b0a602dd0483c97f180ac61332fc7b78560b",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Two terminal >=1800s mixed desktop workflows on the Round136 expanded eleven-subject/eightQuil production image, with actual input/save/load/history/refresh, complete BOOT successor chain, cleanup, final disk bytes and exhausted launcher. This olderimage is distinctfrom Round138 appearance image. No relabelled pending-device close, power-loss, physical/SMP/hostile containment/global epoch or unrestricted daily-driver acceptance claim."
+}
