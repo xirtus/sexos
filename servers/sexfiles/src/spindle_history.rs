@@ -1,18 +1,28 @@
-//! Two fixed BOOT subjects, private names and owner-checked RamFS leases.
+//! Catalogued BOOT subjects, private names and owner-checked RamFS leases.
 //! Staging is unpublished until complete snapshot validation + atomic swap.
-use sex_pdx::spindle_history::*;
+use sex_pdx::{app_catalog::{self,SPINDLE_COUNT,SPINDLE_TARGETS},spindle_history::*};
 use crate::history_journal::Store;
 use crate::{backends::{FsBackend,ramfs::RamFs},messages};
 #[derive(Clone,Copy,PartialEq,Eq)]enum Mode{Idle,Save,Load}
 struct Session{handle:u32,mode:Mode,bytes:[u8;MAX],len:usize,last:Option<Request>,receipt:u64,pending:Option<u64>,dead:bool}
 impl Session{const fn new()->Self{Self{handle:0,mode:Mode::Idle,bytes:[0;MAX],len:0,last:None,receipt:0,pending:None,dead:false}}}
-pub struct Service{sessions:[Session;2]}
+pub struct Service{sessions:[Session;SPINDLE_COUNT],cursor:usize}
 impl Service{
- pub const fn new()->Self{Self{sessions:[Session::new(),Session::new()]}}
- fn index(caller:u32)->Option<usize>{match caller{12=>Some(0),17=>Some(1),_=>None}}
+ pub const fn new()->Self{Self{sessions:[const{Session::new()};SPINDLE_COUNT],cursor:0}}
+ fn index(caller:u32)->Option<usize>{SPINDLE_TARGETS.iter().position(|target|*target==caller)}
  pub fn retire(&mut self,caller:u32){if let Some(i)=Self::index(caller){let s=&mut self.sessions[i];s.dead=true;s.pending=None;s.last=None;s.handle=0;s.mode=Mode::Idle;s.len=0;s.bytes.fill(0);sex_pdx::serial_record!("[files.history.retire] target={} staged=0 pending=0 terminal=1",caller);}}
  pub fn pending(&self)->bool{self.sessions.iter().any(|s|s.pending.is_some())}
- pub fn poll(&mut self,mut send:impl FnMut(u32,u64)->u64){for(i,s)in self.sessions.iter_mut().enumerate(){if let Some(value)=s.pending{if send(if i==0{12}else{17},value)==0{s.pending=None;}}}}
+ /// At most two reply attempts per turn; Full retains the exact receipt.
+ /// The cursor reaches every reserved subject without allocation or receive.
+ pub fn poll(&mut self,mut send:impl FnMut(u32,u64)->u64){
+  let mut attempts=0;
+  for _ in 0..SPINDLE_COUNT {
+   if attempts==2{break}
+   let index=self.cursor;self.cursor=(self.cursor+1)%SPINDLE_COUNT;
+   let s=&mut self.sessions[index];
+   if let Some(value)=s.pending{attempts+=1;if send(SPINDLE_TARGETS[index],value)==0{s.pending=None;}}
+  }
+ }
  pub fn handle(&mut self,fs:&RamFs,caller:u32,live:bool,header:u64,a:u64,b:u64,store:&mut impl Store)->Option<u64>{
   let req=Request::decode(header,a,b)?;let Some(i)=Self::index(caller)else{return Some(reply(req.seq,Err(DENIED)))};
   let s=&mut self.sessions[i];if s.dead||!live{return Some(reply(req.seq,Err(DENIED)))}
@@ -41,7 +51,7 @@ impl Service{
    },
    OPEN_SAVE|OPEN_LOAD=>{
     if r.a!=0||r.b!=0{return Err(INVALID)}if s.handle!=0{return Err(BUSY)}
-    let name:&[u8]=if caller==12{b"spindle-history-12"}else{b"spindle-history-17"};
+    let(name,len)=private_name(caller);let name=&name[..len];
     let raw=match fs.open(name,if r.kind==OPEN_SAVE{messages::RAMFS_O_CREATE}else{0},0,caller){
      Ok(h)=>h,Err(messages::ERR_NOT_FOUND) if r.kind==OPEN_LOAD=>{
       let len=store.recover(caller,&mut s.bytes)?;
@@ -75,7 +85,21 @@ impl Service{
 }
 /// Liveness derives from the exact BOOT lifecycle subject, never a key or name.
 pub fn live(caller:u32)->bool{
- let(slot,surface)=match caller{12=>(39,154),17=>(50,302),_=>return false};
+ let Some(row)=app_catalog::spindle_views().find(|row|row.target==caller)else{return false};
+ let(slot,surface)=(row.lifecycle_slot,row.surface);
  matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3))
   && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE)
+}
+
+
+/// Decimal owner data only: no user-selected name or peer reaches admission.
+/// Sixteen prefix bytes plus ten digits cover every u32 without truncation.
+/// RamFS keeps its own name-length bound; current BOOT domain IDs fit it.
+pub fn private_name(target:u32)->([u8;26],usize){
+ let mut name=[0;26];let prefix=b"spindle-history-";
+ name[..prefix.len()].copy_from_slice(prefix);
+ let mut digits=[0;10];let mut count=0;let mut value=target;
+ loop{digits[count]=b'0'+(value%10)as u8;count+=1;value/=10;if value==0{break}}
+ let mut i=0;while i<count{name[prefix.len()+i]=digits[count-1-i];i+=1;}
+ (name,prefix.len()+count)
 }

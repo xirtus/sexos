@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 pub const ERR_SERVICE_NOT_READY:u64=2;
 #[path="../crates/sex-pdx/src/spindle_probe.rs"]pub mod spindle_probe;
@@ -7,7 +8,7 @@ pub const ERR_SERVICE_NOT_READY:u64=2;
 #[path="../apps/spindle/src/storage_probe.rs"]mod client;
 use spindle_probe as w;use client::{Client,Job,Outcome};use service::{Backend,Service};
 #[derive(Default)]struct Fake{calls:usize}
-impl Backend for Fake{fn invoke(&mut self,caller:u32,r:w::Request)->Result<u32,u32>{assert!(matches!(caller,12|17));self.calls+=1;Ok(100+r.object as u32)}}
+impl Backend for Fake{fn invoke(&mut self,caller:u32,r:w::Request)->Result<u32,u32>{assert!(app_catalog::SPINDLE_TARGETS.contains(&caller));self.calls+=1;Ok(100+r.object as u32)}}
 fn req(seq:u32,id:u8)->w::Request{w::Request{seq,kind:w::STAT,object:id,offset:0,a:0,b:0}}
 fn rpc(s:&mut Service,b:&mut impl Backend,pd:u32,r:w::Request)->u64{if let Some(v)=s.handle(pd,true,r,b){return v}let mut result=None;s.poll(|p,v|{if p==pd{result=Some(v);0}else{1}});result.unwrap()}
 #[test]fn correlated_stat_returns_without_inline_receive(){let mut c=Client::new();let mut s=Service::new();let mut b=Fake::default();assert!(c.submit(Job::Stat(3)));let mut r=None;assert!(c.step(0,|v|{r=Some(v);Ok(())}).is_none());assert!(c.busy());let v=rpc(&mut s,&mut b,12,r.unwrap());assert!(c.receive(2,v).is_none());assert!(c.receive(11,w::reply(r.unwrap().seq+1,Ok(3))).is_none());let e=c.receive(11,v).unwrap();assert_eq!(e.outcome,Outcome::Done);assert_eq!(e.value,103);assert!(!c.busy());}
@@ -60,4 +61,57 @@ include!(env!("SPINDLE_PROBE_PARSE_SOURCE"));
  let mut s=Service::new();let mut b=Fake::default();let fresh=req(3,3);let v=rpc(&mut s,&mut b,12,fresh);
  assert!(s.handle(12,true,req(1,0),&mut b).is_none());s.poll(|_,got|{assert_eq!(w::decode_reply(got,1),Some(Err(w::STALE)));1});assert!(s.pending());s.poll(|_,_|0);
  assert!(s.handle(12,true,fresh,&mut b).is_none());s.poll(|_,got|{assert_eq!(got,v);1});assert!(s.pending());s.poll(|_,got|{assert_eq!(got,v);0});assert_eq!(b.calls,1);
+}
+
+
+#[derive(Default)]struct OwnedBackend{calls:Vec<(u32,u8)>,generations:std::collections::BTreeMap<u32,u32>}
+impl Backend for OwnedBackend{
+ fn invoke(&mut self,caller:u32,r:w::Request)->Result<u32,u32>{
+  assert!(app_catalog::SPINDLE_TARGETS.contains(&caller));self.calls.push((caller,r.kind));
+  let generation=self.generations.entry(caller).or_insert(1);
+  Ok(match r.kind{w::GENERATION=>*generation,w::WRITE=>{*generation+=1;16},_=>caller})
+ }
+}
+#[test]fn all_catalog_probe_receipts_keep_exact_owner_full_fairness_and_retirement(){
+ let mut s=Service::new();let mut b=OwnedBackend::default();let r=req(1,3);
+ for &caller in &app_catalog::SPINDLE_TARGETS{assert_eq!(s.handle(caller,true,r,&mut b),None);}
+ assert_eq!(b.calls.len(),app_catalog::SPINDLE_COUNT);
+ let mut seen=Vec::new();let mut receipts=std::collections::BTreeMap::new();
+ for _ in 0..app_catalog::SPINDLE_COUNT.div_ceil(2){let mut attempts=0;s.poll(|pd,value|{
+  attempts+=1;seen.push(pd);assert_eq!(w::decode_reply(value,1),Some(Ok(pd)));
+  if let Some(previous)=receipts.insert(pd,value){assert_eq!(previous,value);}1
+ });assert!(attempts<=2);}
+ for &caller in &app_catalog::SPINDLE_TARGETS{assert!(seen.contains(&caller));assert_eq!(s.handle(caller,true,r,&mut b),None);}
+ assert_eq!(b.calls.len(),app_catalog::SPINDLE_COUNT);
+ let retired=app_catalog::SPINDLE_TARGETS[0];s.retire(retired);
+ for _ in 0..app_catalog::SPINDLE_COUNT.div_ceil(2){let mut attempts=0;s.poll(|pd,value|{attempts+=1;assert_ne!(pd,retired);assert_eq!(value,receipts[&pd]);0});assert!(attempts<=2);}
+ assert!(!s.pending());assert_eq!(s.handle(retired,true,req(2,3),&mut b),Some(w::reply(2,Err(w::DENIED))));
+ for &caller in app_catalog::SPINDLE_TARGETS.iter().skip(1){assert_eq!(rpc(&mut s,&mut b,caller,r),receipts[&caller]);}
+ assert_eq!(b.calls.len(),app_catalog::SPINDLE_COUNT);
+}
+
+#[test]fn catalog_membership_does_not_bypass_live_guard_or_invoke_backend_for_unknown_domain(){
+ let mut s=Service::new();let mut b=OwnedBackend::default();let r=req(1,3);
+ for caller in [0,9,15,16,18,99,u32::MAX]{assert_eq!(s.handle(caller,true,r,&mut b),Some(w::reply(1,Err(w::DENIED))));}
+ for &caller in &app_catalog::SPINDLE_TARGETS{assert_eq!(s.handle(caller,false,r,&mut b),Some(w::reply(1,Err(w::DENIED))));}
+ assert!(b.calls.is_empty());assert!(!s.pending());
+}
+
+#[test]fn each_catalog_probe_keeps_own_generation_lease_abort_and_backend_caller(){
+ let mut s=Service::new();let mut b=OwnedBackend::default();let begin=w::Request{kind:w::BEGIN,..req(1,3)};
+ for &caller in &app_catalog::SPINDLE_TARGETS{assert_eq!(w::decode_reply(rpc(&mut s,&mut b,caller,begin),1),Some(Ok(caller)));}
+ let first=app_catalog::SPINDLE_TARGETS[0];*b.generations.get_mut(&first).unwrap()+=1;
+ for &caller in &app_catalog::SPINDLE_TARGETS{
+  let write=w::Request{seq:2,kind:w::WRITE,a:1,..begin};let start=b.calls.len();
+  let expected=if caller==first{Err(w::STALE)}else{Ok(16)};
+  assert_eq!(w::decode_reply(rpc(&mut s,&mut b,caller,write),2),Some(expected));
+  assert!(b.calls[start..].iter().all(|(pd,_)|*pd==caller));
+  assert_eq!(b.calls[start..].iter().filter(|(_,kind)|*kind==w::WRITE).count(),usize::from(caller!=first));
+  let calls=b.calls.len();rpc(&mut s,&mut b,caller,write);assert_eq!(b.calls.len(),calls);
+ }
+ let abort=w::Request{seq:3,kind:w::ABORT,object:0,..begin};
+ assert_eq!(w::decode_reply(rpc(&mut s,&mut b,first,abort),3),Some(Ok(0)));
+ assert_eq!(w::decode_reply(rpc(&mut s,&mut b,first,w::Request{seq:4,..begin}),4),Some(Ok(first)));
+ assert_eq!(w::decode_reply(rpc(&mut s,&mut b,first,abort),3),Some(Err(w::STALE)));
+ for &caller in app_catalog::SPINDLE_TARGETS.iter().skip(1){let read=w::Request{seq:3,kind:w::READ,a:1,..begin};assert_eq!(w::decode_reply(rpc(&mut s,&mut b,caller,read),3),Some(Ok(caller)));}
 }

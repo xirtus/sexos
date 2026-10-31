@@ -57,7 +57,7 @@ def one(trace,pattern):
  return values[0]
 
 def history_state(disk,required=True):
- try:meta=history.snapshot(disk)
+ try:meta=history.decode_snapshot(disk)
  except RuntimeError as exc:
   if required or str(exc)!='no committed boot A journal snapshot' or any(disk[1808*512:(1808+18)*512]):raise
   return dict(commands=[],generation=0)
@@ -277,7 +277,7 @@ def check_document(trace,disk,seed,recovery=False,expected=None):
  if opened.start()>=loads[0].start():raise ValueError('load preceded explicit Files UI')
  return meta
 
-def inspect_session(trace,peer,wire,raw,c,manifest,evidence,seed,disk,before_save=None):
+def inspect_session(trace,peer,wire,raw,c,manifest,evidence,seed,disk,before_save=None,root=None):
  cold=manifest['recovery'];expected=evidence.get('expected_document');doc=check_document(trace,disk,seed if cold else before_save,cold,expected);h=history_state(disk)
  if cold:
   no_cold_history_write(seed,disk)
@@ -316,8 +316,9 @@ def inspect_session(trace,peer,wire,raw,c,manifest,evidence,seed,disk,before_sav
   joined=http.resolution_joins(trace,raw,[(2,1),(3,2)],wire['dns']);mixed_drains(trace,raw)
   if not joined['ok']:raise ValueError(str(joined['errors']))
  history_proof=history_join(trace,h,cold)
- grant='[boot.history.recovery] holder=11 slot=53 logical=12 original=12 task=12 successor=17 successor_task=17 base=1808 sectors=18 runtime_mint=0'
- if trace.count(grant)!=1:raise ValueError('missing exact BOOT history recovery grant')
+ from history_roster_evidence import verify_boot_roster,verify_writer
+ roster=verify_boot_roster(Path(__file__).resolve().parents[1]if root is None else root,trace)
+ verify_writer(h,roster)
  cleanup=[]
  for close in evidence['closes']:
   if(close['target'],close['task'])not in((12,12),(15,15),(9,9)):raise ValueError('foreign cleanup subject')
@@ -450,7 +451,7 @@ def replay_boot(root,iso,binding,out,c=None):
  seed=gzip.decompress((out/'seed.img.gz').read_bytes());disk=gzip.decompress((out/'nvme.img.gz').read_bytes())
  if(sha(seed),sha(disk))!=(m['input_disk_sha256'],m['final_disk_sha256']):raise ValueError('exact raw seed/terminal disk chain differs')
  trace=http.serial_text(out/'serial.log');reject_faults(trace);raw=(out/'wire.pcap').read_bytes();wire=inspect_wire(raw,peer,c['text']['request'],cold);keys=verify_keys(trace,actions)
- joined=inspect_session(trace,peer,wire,raw,c,m,evidence,seed,disk,None if cold else gzip.decompress((out/'before-save.img.gz').read_bytes()))
+ joined=inspect_session(trace,peer,wire,raw,c,m,evidence,seed,disk,None if cold else gzip.decompress((out/'before-save.img.gz').read_bytes()),root=root)
  f11=[a for a in actions if a.get('kind')=='key'and a.get('keys')==['f11']]
  if len(f11)!=3 or any(a['serial_start']!=close['serial_start']for a,close in zip(f11,evidence['closes'])):raise ValueError('terminal cleanup lacks exact three non-replayed hardware Close windows')
  if len(evidence['wheel'])!=(0 if cold else 2):raise ValueError('missing/extra finite connected wheel actions')

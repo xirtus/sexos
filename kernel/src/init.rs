@@ -133,8 +133,6 @@ pub fn init() {
         let created=crate::pd::create::create_boot_domain(module.path(),Some(incarnation.target),layout,pkey).expect("BOOT_SUCCESSOR");
         assert_eq!(created,incarnation.target,"BOOT_SUCCESSOR_IDENTITY");
     }
-    // Spindle's single successor also anchors Linen's observer and history recovery below.
-    let spindle_successor=apps::INCARNATIONS.iter().find(|i|i.app==App::Spindle&&i.ordinal==1).map(|i|i.target).expect("BOOT_SPINDLE_SUCCESSOR");
 
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
@@ -872,25 +870,37 @@ pub fn init() {
     }
     // Linen serves Spindle's existing async list/open/search route. A read-only
     // lifecycle observer fences queued requests after death without owning an ACK.
-    let spindle=crate::ipc::DOMAIN_REGISTRY.get(spindle_id).expect("BOOT_SPINDLE_MISSING");
-    let spindle_main=spindle.main_task.load(core::sync::atomic::Ordering::Acquire);
-    assert!(!spindle_main.is_null());
     let linen=crate::ipc::DOMAIN_REGISTRY.get(linen_id).expect("BOOT_LINEN_MISSING");
-    let observer_slot=sex_pdx::app_lifecycle::SLOTS[1] as u64;
-    assert!(linen.find_capability(observer_slot as u32).is_none());
-    linen.grant_capability(observer_slot,crate::capability::CapabilityData::AppLifecycle(
-        crate::app_resource_state::LifecycleGrant {target_pd:spindle_id,
-            task_id:unsafe{(*spindle_main).id},holder_pd:linen_id,
-            rights:crate::app_resource_state::QUERY,ack_bit:0}));
-    serial_println!("[boot.app.observer] holder={} target={} slot={} query=1 ack=0 retire=0",linen_id,spindle_id,observer_slot);
-    let spindle_successor_pd=crate::ipc::DOMAIN_REGISTRY.get(spindle_successor).unwrap();
-    let successor_main=spindle_successor_pd.main_task.load(core::sync::atomic::Ordering::Acquire);
-    linen.grant_capability(sex_pdx::app_lifecycle::SPINDLE_LIFECYCLE_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
-        crate::app_resource_state::LifecycleGrant{target_pd:spindle_successor,task_id:unsafe{(*successor_main).id},holder_pd:linen_id,rights:crate::app_resource_state::QUERY,ack_bit:0}));
+    let mut history_participants=[sex_pdx::history_recovery::Participant::EMPTY;sex_pdx::app_catalog::SPINDLE_COUNT];
+    for(index,row)in sex_pdx::app_catalog::spindle_views().enumerate(){
+        let domain=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_HISTORY_DOMAIN");
+        let main=domain.main_task.load(core::sync::atomic::Ordering::Acquire);
+        assert!(!main.is_null(),"BOOT_HISTORY_MAIN_TASK");
+        let task=unsafe{(*main).id};
+        history_participants[index]=sex_pdx::history_recovery::Participant{target:row.target,task};
+        assert!(linen.find_capability(row.lifecycle_slot as u32).is_none(),"BOOT_HISTORY_OBSERVER_COLLISION");
+        linen.grant_capability(row.lifecycle_slot as u64,crate::capability::CapabilityData::AppLifecycle(
+            crate::app_resource_state::LifecycleGrant{target_pd:row.target,task_id:task,holder_pd:linen_id,
+                rights:crate::app_resource_state::QUERY,ack_bit:0}));
+        serial_println!("[boot.app.observer] holder={} target={} task={} slot={} query=1 ack=0 retire=0",linen_id,row.target,task,row.lifecycle_slot);
+    }
     let files=crate::ipc::DOMAIN_REGISTRY.get(sexfiles_id).expect("BOOT_HISTORY_FILES");
     assert!(files.find_capability(sex_pdx::history_recovery::SLOT as u32).is_none());
-    files.grant_capability(sex_pdx::history_recovery::SLOT as u64,crate::capability::CapabilityData::HistoryRecovery(sex_pdx::history_recovery::Grant{holder:sexfiles_id,logical:12,original:spindle_id,original_task:unsafe{(*spindle_main).id},successor:spindle_successor,successor_task:unsafe{(*successor_main).id},base:sex_pdx::SPINDLE_HISTORY_BASE_LBA,sectors:sex_pdx::SPINDLE_HISTORY_SECTORS}));
-    serial_println!("[boot.history.recovery] holder={} slot=53 logical=12 original=12 task=12 successor=17 successor_task=17 base={} sectors={} runtime_mint=0",sexfiles_id,sex_pdx::SPINDLE_HISTORY_BASE_LBA,sex_pdx::SPINDLE_HISTORY_SECTORS);
+    let history_grant=sex_pdx::history_recovery::Grant{holder:sexfiles_id,
+        logical:sex_pdx::app_catalog::SPINDLE_TARGETS[0],participants:history_participants,
+        base:sex_pdx::SPINDLE_HISTORY_BASE_LBA,sectors:sex_pdx::SPINDLE_HISTORY_SECTORS};
+    assert!(history_grant.valid(),"BOOT_HISTORY_ROSTER_INVALID");
+    files.grant_capability(sex_pdx::history_recovery::SLOT as u64,crate::capability::CapabilityData::HistoryRecovery(history_grant));
+    // Compare every published field with the capability actually inserted.
+    for kind in 0..history_participants.len()as u64+2 {
+        assert_eq!(crate::history_recovery::query(&files,sex_pdx::history_recovery::SLOT as u64,kind),history_grant.query(sexfiles_id,kind),"BOOT_HISTORY_HELD_QUERY_MISMATCH");
+    }
+    assert!(core::mem::size_of::<crate::capability::CapabilityData>()<=128,"BOOT_HISTORY_CAPABILITY_BUDGET");
+    serial_println!("[boot.history.layout] grant_bytes={} capability_data_bytes={} capability_bytes={} participants={} bounded=1",core::mem::size_of::<sex_pdx::history_recovery::Grant>(),core::mem::size_of::<crate::capability::CapabilityData>(),core::mem::size_of::<crate::capability::Capability>(),history_participants.len());
+    serial_println!("[boot.history.recovery] holder={} slot={} logical={} participants={} version={} base={} sectors={} held_query_verified=1 runtime_mint=0",sexfiles_id,sex_pdx::history_recovery::SLOT,history_grant.logical,history_participants.len(),sex_pdx::history_recovery::VERSION,history_grant.base,history_grant.sectors);
+    for(index,participant)in history_participants.iter().enumerate(){
+        serial_println!("[boot.history.participant] index={} target={} task={} holder={} immutable=1 runtime_mint=0",index,participant.target,participant.task,sexfiles_id);
+    }
     crate::app_resources::audit_boot_catalog(silkshell_id);
     crate::scheduler::seal_self_wait_inventory();
     crate::boot_memory::seal_all();

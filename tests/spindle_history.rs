@@ -20,8 +20,8 @@ include!(concat!(env!("APP_RESOURCE_TEST_DIR"),"/history.rs"));
 pub mod app_lifecycle{
  pub const LIVE:u64=5;pub use crate::lifecycle_protocol::CatalogInfo as Catalog;
  thread_local!{pub static BAD:std::cell::Cell<u8>=const{std::cell::Cell::new(0)};}
- pub fn catalog(slot:usize)->Result<Catalog,u64>{let(pd,surface)=match slot{39=>(12,154),50=>(17,302),_=>return Err(1)};let bad=BAD.get();Ok(Catalog{target_pd:if bad==1{12}else{pd},task_id:if bad==2{0}else if bad==6{pd*10}else{pd},surface_id:if bad==3{154}else{surface},coordinator_pd:if bad==4{7}else{3}})}
- pub fn info(_:usize)->Result<(),u64>{Err(if BAD.get()==5{2}else{LIVE})}
+ pub fn catalog(slot:usize)->Result<Catalog,u64>{let row=crate::app_catalog::spindle_views().find(|row|row.lifecycle_slot==slot).ok_or(1u64)?;let(pd,surface)=(row.target,row.surface);let bad=BAD.get();if bad==7{return Err(1)}Ok(Catalog{target_pd:if bad==1{pd+1}else{pd},task_id:if bad==2{0}else if bad==6{pd*10}else{pd},surface_id:if bad==3{surface+1}else{surface},coordinator_pd:if bad==4{7}else{3}})}
+ pub fn info(_:usize)->Result<(),u64>{if BAD.get()==8{Ok(())}else{Err(if BAD.get()==5{2}else{LIVE})}}
 }
 use spindle_history as w;use backends::FsBackend;use client::{Client,Event,Outcome};use ramfs::RamFs;use service::Service;
 fn rpc_store(s:&mut Service,fs:&RamFs,owner:u32,r:w::Request,store:&mut impl history_journal::Store)->u64{if let Some(v)=s.handle(fs,owner,true,r.header(),r.a,r.b,store){return v}let mut out=None;s.poll(|pd,v|{if pd==owner{out=Some(v);0}else{1}});out.expect("receipt")}
@@ -81,3 +81,48 @@ fn saved(fs:&RamFs,name:&[u8],owner:u32)->Vec<u8>{let h=fs.open(name,0,0,owner).
 #[test]fn load_retry_uses_current_revision_and_never_replays_late_old_data(){let fs=RamFs::new();let mut s=Service::new();let mut h=History::new();h.push(b"saved");let mut c=Client::new();c.init(17);c.save();drive(&mut c,&mut h,&mut s,&fs,17);c.load(&h);let mut r=None;c.step(&h,|v|{r=Some(v);Ok(())});let lost=rpc(&mut s,&fs,17,r.unwrap());c.cancel();drive(&mut c,&mut h,&mut s,&fs,17);h.push(b"new local");assert!(c.retry(&h));assert!(c.receive(lost,&mut h).is_none());assert_eq!(drive(&mut c,&mut h,&mut s,&fs,17)[0].outcome,Outcome::Loaded);assert_eq!(h.get(0),Some(&b"saved"[..]));}
 
 #[test]fn catalog_task_namespace_is_independent_of_domain(){app_lifecycle::BAD.set(6);assert!(service::live(12));assert!(service::live(17));app_lifecycle::BAD.set(0);}
+
+
+#[test]fn decimal_private_names_preserve_existing_names_without_truncation_or_collisions(){
+ let mut seen=std::collections::HashSet::new();
+ for target in [0,1,9,10,11,12,17,18,99,100,101,255,256,999,1000,99999999,100000000,u32::MAX]{
+  let(name,len)=service::private_name(target);assert_eq!(&name[..len],format!("spindle-history-{target}").as_bytes());
+  assert!(name[len..].iter().all(|byte|*byte==0));assert!(seen.insert(name[..len].to_vec()));
+ }
+ for row in app_catalog::spindle_views(){let(name,len)=service::private_name(row.target);assert!(len<=messages::RAMFS_MAX_NAME);assert!(name[..len].is_ascii());}
+}
+
+#[test]fn every_catalog_subject_keeps_own_pending_full_reply_and_retirement_fence(){
+ let fs=RamFs::new();let mut s=Service::new();let open=req(1,w::OPEN_SAVE,0,0);
+ for &target in &app_catalog::SPINDLE_TARGETS{assert!(s.handle(&fs,target,true,open.header(),0,0,&mut Volatile).is_none());}
+ let mut seen=Vec::new();let mut receipts=std::collections::BTreeMap::new();
+ for _ in 0..app_catalog::SPINDLE_COUNT.div_ceil(2){let mut attempts=0;s.poll(|pd,value|{
+  attempts+=1;seen.push(pd);let handle=w::decode_reply(value,1).unwrap().unwrap();assert_ne!(handle,0);
+  let(name,len)=service::private_name(pd);let probe=fs.open(&name[..len],0,0,pd).unwrap();assert_eq!(probe,handle as u64);
+  if let Some(previous)=receipts.insert(pd,value){assert_eq!(previous,value);}1
+ });assert!(attempts<=2);}
+ for &target in &app_catalog::SPINDLE_TARGETS{assert!(seen.contains(&target));assert!(s.handle(&fs,target,true,open.header(),0,0,&mut Volatile).is_none());}
+ let retired=app_catalog::SPINDLE_TARGETS[0];s.retire(retired);
+ for _ in 0..app_catalog::SPINDLE_COUNT.div_ceil(2){let mut attempts=0;s.poll(|pd,value|{attempts+=1;assert_ne!(pd,retired);assert_eq!(receipts[&pd],value);0});assert!(attempts<=2);}
+ assert!(!s.pending());
+ let denied=s.handle(&fs,retired,true,req(2,w::OPEN_SAVE,0,0).header(),0,0,&mut Volatile).unwrap();assert_eq!(w::decode_reply(denied,2),Some(Err(w::DENIED)));
+ for &target in app_catalog::SPINDLE_TARGETS.iter().skip(1){
+  let handle=w::decode_reply(receipts[&target],1).unwrap().unwrap();assert!(fs.stat(handle as u64,target).is_ok());
+  assert_eq!(w::decode_reply(rpc(&mut s,&fs,target,req(2,w::ABORT,0,0)),2),Some(Ok(0)));assert!(fs.stat(handle as u64,target).is_err());
+ }
+}
+
+#[test]fn only_catalog_spindle_subjects_admit_names_and_held_live_catalog_tasks(){
+ let fs=RamFs::new();let mut s=Service::new();let open=req(1,w::OPEN_SAVE,0,0);
+ for target in [0,9,15,16,18,99,u32::MAX]{
+  assert!(!service::live(target));let(name,len)=service::private_name(target);
+  assert_eq!(s.handle(&fs,target,true,open.header(),0,0,&mut Volatile),Some(w::reply(1,Err(w::DENIED))));assert!(fs.open(&name[..len],0,0,target).is_err());
+ }
+ for &target in &app_catalog::SPINDLE_TARGETS{
+  app_lifecycle::BAD.set(6);assert!(service::live(target)); // held task IDs may differ from PD IDs
+  for bad in [1,2,3,4,5,7,8]{app_lifecycle::BAD.set(bad);assert!(!service::live(target));}
+  app_lifecycle::BAD.set(0);assert!(service::live(target));
+  assert_eq!(s.handle(&fs,target,false,open.header(),0,0,&mut Volatile),Some(w::reply(1,Err(w::DENIED))));
+ }
+ app_lifecycle::BAD.set(0);assert!(!s.pending());
+}

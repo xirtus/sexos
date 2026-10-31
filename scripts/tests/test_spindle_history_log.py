@@ -2,6 +2,7 @@ import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from check_spindle_history_log import validate
+from history_boot_fixture import boot
 
 def fixture():
     lines=[]
@@ -15,7 +16,7 @@ def durable_fixture():
     text=fixture().replace('[spindle.history.receipt] target=17 task=17 kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4','[files.history.recovered] logical=12 source=12 source_task=12 target=17 generation=1 bytes=40 source_hash=0xabc owned_hash=0xabc data_hash=0x123 boot_grant=53')
     for generation,pd in enumerate([12,17],1):
         text=text.replace(f'[files.history.commit] target={pd}',f'[files.history.durable] logical=12 target={pd} generation={generation} bytes=40 hash=0xabc barriers=3 readback=1\n[files.history.commit] target={pd}')
-    return '[boot.history.recovery] holder=11 slot=53 logical=12 original=12 task=12 successor=17 successor_task=17 base=1808 sectors=18 runtime_mint=0\n'+text
+    return boot()+text
 class Check(unittest.TestCase):
     def test_complete_fixture(self):self.assertEqual(validate(fixture()),[])
     def test_enqueue_and_fake_completion_do_not_prove_commit(self):self.assertTrue(validate(fixture().replace('[files.history.commit]','[request.admitted]')))

@@ -4,7 +4,8 @@ Reads an existing durable history image; never builds or edits a source disk.
 """
 import argparse,hashlib,json,pathlib,re,shutil,subprocess,time,os
 from desktop_close_gate import QMP
-from spindle_durable_reboot_gate import snapshot
+from spindle_durable_reboot_gate import snapshot,decode_snapshot
+from history_roster_evidence import verify_boot_roster
 from check_spindle_viewport_pixels import verify
 from check_desktop_pixels import font_from_source
 
@@ -12,7 +13,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--cursor',action='store_true');p.add_argument('--scroll',action='store_true');p.add_argument('--delivery',action='store_true');p.add_argument('--history',action='store_true');p.add_argument('--controls',action='store_true');p.add_argument('--desktop-status',action='store_true');args=p.parse_args()
     iso=args.iso.resolve(strict=True);source=args.source_disk.resolve(strict=True);out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('output directory must be fresh')
-    expected=snapshot(source.read_bytes());disk=out/'nvme.img';shutil.copyfile(source,disk);log=out/'serial.log';sock=pathlib.Path('/tmp')/f'sex-view-{os.getpid()}.sock'
+    expected=decode_snapshot(source.read_bytes());disk=out/'nvme.img';shutil.copyfile(source,disk);log=out/'serial.log';sock=pathlib.Path('/tmp')/f'sex-view-{os.getpid()}.sock'
     command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown']
     manifest={'scenario':'cursor'if args.cursor else'scroll'if args.scroll else'delivery'if args.delivery else'viewport','iso_sha256':hashlib.sha256(iso.read_bytes()).hexdigest(),'source_disk':str(source),'input_disk_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'journal':expected,'command':command}
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);stages=[]
@@ -122,13 +123,17 @@ def main():
             wait(r'\[spindle.display.cancelled\] target=12 panes=\d+ pending=0')
             if not re.search(r'\[spindle.input.progress\] target=12 display_pending=1 ',text()):raise RuntimeError('no observed HID processing during pending display work')
             q.cmd('screendump',{'filename':str(out/'after-close.ppm')})
-        if snapshot(disk.read_bytes())!=expected:raise RuntimeError('render/input mutated durable history')
+        proc.terminate()
+        try:proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)
+        if snapshot(disk.read_bytes(),verify_boot_roster(pathlib.Path(__file__).resolve().parents[1],text()))!=expected:raise RuntimeError('render/input mutated durable history')
         (out/'result.json').write_text(json.dumps({'ok':True,'stages':stages,'recovered':recovered,'loaded':loaded,'journal_unchanged':True,'input_during_display_pending':bool(re.search(r'\[spindle.input.progress\] target=12 display_pending=1 ',text())),'display_close_cancelled':re.findall(r'\[spindle.display.cancelled\] target=12 panes=(\d+) pending=0',text()),'scope':'Actual native task12, durable data from prior image, small tile recall/edit, expand/unzoom preserving input; exact glyph pixels; no implicit handle/capability transfer'},indent=2)+'\n');print('[spindle.viewport.gate] PASS')
     except Exception as e:
         (out/'result.json').write_text(json.dumps({'ok':False,'errors':[str(e)],'stages':stages},indent=2)+'\n');raise
     finally:
-        proc.terminate()
-        try:proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:proc.kill();proc.wait()
+        if proc.poll()is None:
+            proc.terminate()
+            try:proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)
         sock.unlink(missing_ok=True)
 if __name__=='__main__':main()

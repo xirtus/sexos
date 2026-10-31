@@ -4,15 +4,18 @@ exchange; durable mode additionally requires BOOT, barriers and readback.
 Cross-boot proof uses spindle_durable_reboot_gate.py; no complete-system claim.
 """
 import re
+from pathlib import Path
+from history_roster_evidence import verify_boot_roster,source_spindles
 
 def validate(text,durable=False):
     errors=[]
+    targets=[row["target"]for row in source_spindles(Path(__file__).resolve().parents[1])]
     rows=[]
     for m in re.finditer(r'\[(files\.history\.(?:open|commit|close|retire|durable|recovered)|spindle\.history\.receipt|app\.private\.retired|app\.service\.ack|boot\.history\.recovery)\] ([^\r\n]*)',text):
         rows.append((m.start(),m[1],dict(re.findall(r'(\w+)=([^\s]+)',m[2]))))
     def find(tag,**wanted):return [(p,r)for p,t,r in rows if t==tag and all(r.get(k)==str(v)for k,v in wanted.items())]
     receipts=find('spindle.history.receipt')
-    for target in [12,17]:
+    for target in targets:
         completed=find('spindle.history.receipt',target=target,kind='saved')
         if not completed:errors.append(f'target{target}: no save completion')
         for pos,r in completed+find('spindle.history.receipt',target=target,kind='loaded'):
@@ -39,18 +42,27 @@ def validate(text,durable=False):
         files_ack=find('app.service.ack',target=target,role=4)
         if len(retired)!=1 or len(clean)!=1 or len(files_ack)!=1 or not clean[0][0]<files_ack[0][0]<retired[0][0]:errors.append(f'target{target}: history custody not discarded before files ACK/retirement')
         if retired and any(p>retired[0][0] for p,r in find('files.history.open',target=target)+find('files.history.commit',target=target)+find('spindle.history.receipt',target=target,kind='saved')):errors.append(f'target{target}: terminal subject used history again')
-    missing=find('spindle.history.receipt',target=17,kind='missing',handle=0,bytes=0,count=0)
-    old=find('app.private.retired',target=12)
-    saved=find('spindle.history.receipt',target=17,kind='saved')
-    loaded=find('spindle.history.receipt',target=17,kind='loaded')
+    roster=None
+    grants=[]
     if durable:
-        grants=find('boot.history.recovery',holder=11,slot=53,logical=12,original=12,task=12,successor=17,successor_task=17,base=1808,sectors=18,runtime_mint=0)
-        recovery=find('files.history.recovered',logical=12,source=12,source_task=12,target=17,generation=1,boot_grant=53)
-        if len(grants)!=1 or len(recovery)!=1 or not old or not saved or not grants[0][0]<old[0][0]<recovery[0][0]<saved[0][0]:errors.append('missing exact BOOT-sanctioned successor data recovery')
-        if recovery and not find('files.history.durable',logical=12,target=12,generation=1,hash=recovery[0][1].get('source_hash'),bytes=recovery[0][1].get('bytes')):errors.append('recovery did not match predecessor durable generation')
-        generations=[int(r['generation']) for p,r in find('files.history.durable') if r.get('generation','').isdigit()]
+        grants=find('boot.history.recovery',holder=11,slot=53,logical=targets[0],participants=len(targets),version=1,base=1808,sectors=18,held_query_verified=1,runtime_mint=0)
+        try:roster=verify_boot_roster(Path(__file__).resolve().parents[1],text)
+        except ValueError as error:errors.append('invalid held BOOT history roster: '+str(error))
+        generations=[int(r['generation'])for _,r in find('files.history.durable')if r.get('generation','').isdigit()]
         if generations!=sorted(set(generations)):errors.append('durable generations duplicate or reverse')
-    elif len(missing)!=1 or not old or not saved or not old[0][0]<missing[0][0]<saved[0][0]:errors.append('fresh successor did not establish its own initially missing history')
-    if not loaded:errors.append('successor never restored its private snapshot')
-    if any(r.get('target') not in {'12','17'}for _,r in receipts):errors.append('history receipt used non-BOOT subject')
+    for predecessor,target in zip(targets,targets[1:]):
+        missing=find('spindle.history.receipt',target=target,kind='missing',handle=0,bytes=0,count=0)
+        old=find('app.private.retired',target=predecessor)
+        saved=find('spindle.history.receipt',target=target,kind='saved')
+        if durable:
+            task=next((p['task']for p in roster['participants']if p['target']==predecessor),None)if roster else None
+            recovery=find('files.history.recovered',logical=targets[0],source=predecessor,source_task=task,target=target,boot_grant=53)
+            if len(grants)!=1 or len(recovery)!=1 or not old or not saved or not grants[0][0]<old[0][0]<recovery[0][0]<saved[0][0]:errors.append('missing exact BOOT-sanctioned successor data recovery')
+            if recovery and not find('files.history.durable',logical=targets[0],target=predecessor,generation=recovery[0][1].get('generation'),hash=recovery[0][1].get('source_hash'),bytes=recovery[0][1].get('bytes')):errors.append('recovery did not match predecessor durable generation')
+        elif len(missing)!=1 or not old or not saved or not old[0][0]<missing[0][0]<saved[0][0]:errors.append('fresh successor did not establish its own initially missing history')
+        if not find('spindle.history.receipt',target=target,kind='loaded'):errors.append('successor never restored its private snapshot')
+    if any(r.get('target')not in {str(target)for target in targets}for _,r in receipts):errors.append('history receipt used non-BOOT subject')
+    if roster:
+        tasks={str(p['target']):str(p['task'])for p in roster['participants']}
+        if any(r.get('task')!=tasks.get(r.get('target'))for _,r in receipts):errors.append('history receipt task differs from held BOOT roster')
     return errors

@@ -1,11 +1,15 @@
 import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from spindle_durable_reboot_gate import snapshot,fnv
+from spindle_durable_reboot_gate import snapshot as bound_snapshot,decode_snapshot,fnv
+from history_roster_evidence import verify_boot_roster
+from history_boot_fixture import boot
+ROSTER=verify_boot_roster(Path(__file__).resolve().parents[2],boot())
+def snapshot(disk):return bound_snapshot(disk,ROSTER)
 
-def bank(disk,index,generation=1,source=17,command=b'echo spindle17'):
+def bank(disk,index,generation=1,source=17,command=b'echo spindle17',task=None):
     payload=bytearray(26+len(command));payload[:4]=b'SHI1';payload[4:8]=source.to_bytes(4,'little');payload[8:10]=(1).to_bytes(2,'little');payload[10:12]=len(payload).to_bytes(2,'little');payload[24:26]=len(command).to_bytes(2,'little');payload[26:]=command;payload[16:24]=fnv(payload).to_bytes(8,'little')
-    h=bytearray(512);h[:8]=b'SEXHST01';h[8:12]=(12).to_bytes(4,'little');h[12:16]=(1).to_bytes(4,'little');h[16:24]=generation.to_bytes(8,'little');h[24:28]=source.to_bytes(4,'little');h[28:32]=source.to_bytes(4,'little');h[32:36]=len(payload).to_bytes(4,'little');h[40:48]=fnv(payload).to_bytes(8,'little');h[48:56]=fnv(h).to_bytes(8,'little');offset=(1808+index*9)*512;disk[offset:offset+512]=h;disk[offset+512:offset+512+len(payload)]=payload
+    h=bytearray(512);h[:8]=b'SEXHST01';h[8:12]=(12).to_bytes(4,'little');h[12:16]=(1).to_bytes(4,'little');h[16:24]=generation.to_bytes(8,'little');h[24:28]=source.to_bytes(4,'little');h[28:32]=(source if task is None else task).to_bytes(4,'little');h[32:36]=len(payload).to_bytes(4,'little');h[40:48]=fnv(payload).to_bytes(8,'little');h[48:56]=fnv(h).to_bytes(8,'little');offset=(1808+index*9)*512;disk[offset:offset+512]=h;disk[offset+512:offset+512+len(payload)]=payload
     return offset
 class Check(unittest.TestCase):
     def test_actual_layout_selects_latest_complete_snapshot(self):
@@ -25,4 +29,13 @@ class Check(unittest.TestCase):
     def test_conflicting_equal_generations_are_not_arbitrarily_accepted(self):
         disk=bytearray(2048*512);bank(disk,0,1,12);bank(disk,1,1,17)
         with self.assertRaises(RuntimeError):snapshot(disk)
+    def test_structural_data_does_not_admit_a_writer_without_exact_boot_task(self):
+        disk=bytearray(2048*512);bank(disk,0,3,17,task=170)
+        meta=decode_snapshot(disk);self.assertEqual(meta['task'],170)
+        with self.assertRaises(RuntimeError):snapshot(disk)
+        actual=verify_boot_roster(Path(__file__).resolve().parents[2],boot({12:120,17:170}))
+        self.assertEqual(bound_snapshot(disk,actual)['task'],170)
+        foreign=bytearray(2048*512);bank(foreign,0,3,24,task=240)
+        self.assertEqual(decode_snapshot(foreign)['source'],24)
+        with self.assertRaises(RuntimeError):bound_snapshot(foreign,actual)
 if __name__=='__main__':unittest.main()
