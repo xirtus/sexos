@@ -153,6 +153,7 @@ ABS_POINTER_PRODUCTION="$TEST_DIR/absolute.rs" rustc --edition=2021 --test tests
 "$TEST_DIR/absolute"
 bash "$ROOT_DIR/scripts/usb_wheel_host_gate.sh"
 bash "$ROOT_DIR/scripts/browser_wheel_host_gate.sh"
+bash "$ROOT_DIR/scripts/browser_reader_visibility_host_gate.sh"
 python3 - <<'PYPOLICY'
 from pathlib import Path
 s=Path('servers/silk-shell/src/main.rs').read_text()

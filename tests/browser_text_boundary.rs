@@ -43,6 +43,9 @@ impl App{
  import_panel:false,import_status:import_view::Status::NoDocument,import_editor:import_view::Editor::new(),https_panel:true,peer_panel:false,tls_panel:false,clock_panel:false,reading:true,reading_https:true,asset_panel:false,
  selection:text_selection::Selection::new(),body:bytes.to_vec(),resource_changes:0}}
  fn resources(&mut self,_:&str,_:bool){self.resource_changes+=1;}
+ // The visibility gate exercises actual clipboard quiescence; this text-only
+ // fixture models panel admission without claiming a clipboard transport.
+ fn show_import_panel(&mut self){self.import_panel=true;}
  fn reader_body(&self)->&[u8]{&self.body}
 }
 fn public_fingerprint(body:&[u8])->u64{body.iter().fold(0xcbf29ce484222325,|h,b|(h^*b as u64).wrapping_mul(0x100000001b3))}

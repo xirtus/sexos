@@ -123,8 +123,40 @@ impl App {
         unsafe{CLIPBOARD.cancel(sex_pdx::get_ticks());}
     }
     fn reader_body(&self)->&[u8]{if self.reading_https{self.https_body()}else{self.http.document()}}
+    // Match the rendered source, including overlay precedence and release state.
+    fn visible_reader(&self)->bool {
+        self.reading&&!self.asset_panel&&!self.import_panel
+            &&if self.reading_https{self.has_https_body()}else{self.http.view()==http_probe::View::Ready}
+    }
+    fn show_import_panel(&mut self){
+        if !self.import_panel {
+            let pending=unsafe{CLIPBOARD.pending()};
+            // This is fresh protocol quiescence, never rollback of an admitted
+            // publication. The broker may retain an already published snapshot.
+            unsafe{CLIPBOARD.cancel(sex_pdx::get_ticks());}
+            if pending{sex_pdx::serial_record!("[browser.clipboard.quiesce] reason=import_overlay private_scratch=erased publication_rollback=0");}
+        }
+        self.import_panel=true;
+    }
+    fn dismiss_import(&mut self,overview_if_empty:bool)->bool {
+        if !self.import_panel||self.import_editor.active||self.importer.busy()
+            ||self.importer.view()==document_import::View::Uncertain{return false;}
+        let https=if self.has_https_body(){true}
+            else if self.http.view()==http_probe::View::Ready{false}else{
+                if !overview_if_empty{return false;}
+                self.clear_selection();self.reader.clear();self.import_panel=false;self.reading=false;self.reading_https=false;
+                self.https_panel=false;self.peer_panel=false;self.tls_panel=false;self.clock_panel=false;
+                sex_pdx::serial_record!("[browser.import.dismissed] source=overview anchor=0 bytes=0 restored=0 network=0 selection_preserved=0");
+                return true;
+            };
+        self.import_panel=false;self.https_panel=https;self.peer_panel=false;self.tls_panel=false;self.clock_panel=false;
+        self.reading=true;self.reading_https=https;
+        sex_pdx::serial_record!("[browser.import.dismissed] source={} anchor={} bytes={} restored=1 network=0 selection_preserved=1",
+            if https{"https"}else{"http"},self.reader.source_anchor(),self.reader_body().len());
+        true
+    }
     fn sync_selection(&mut self){
-        if !self.reading{return}
+        if !self.visible_reader(){return}
         let body=self.reader_body();let signature=(self.reading_https,body.len(),public_fingerprint(body));
         if self.selection_body==Some(signature){return}
         let Some(generation)=self.selection_generation.checked_add(1)else{self.selection.clear();return};
@@ -132,7 +164,7 @@ impl App {
         if self.selection.bind(sex_pdx::text_selection::Source{generation,revision:0},signature.1).is_ok(){self.selection_body=Some(signature);}
     }
     fn scroll_input(&mut self,scroll:sex_pdx::app_scroll::Scroll){
-        if !self.reading || self.asset_panel || self.import_panel { return; }
+        if !self.visible_reader() { return; }
         let before=self.reader.source_anchor();
         let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(b)=self.import_source.as_ref(){b.as_bytes()}else{self.importer.document().map_or(&[][..],|b|b.as_bytes())}}else{self.http.document()};
         let changed=self.reader.scroll_wheel(body,scroll.vertical());
@@ -146,12 +178,12 @@ impl App {
         self.sync_selection();
         if key.code==0x01&&unsafe{CLIPBOARD.pending()}{unsafe{CLIPBOARD.cancel(sex_pdx::get_ticks());}return}
         if key.control {
-            if self.reading&&key.code==0x1e {if let Some(s)=self.selection.snapshot(){let _=self.selection.select_all(s.source());}}
+            if self.visible_reader()&&key.code==0x1e {if let Some(s)=self.selection.snapshot(){let _=self.selection.select_all(s.source());}}
             // Clipboard chords arrive as Shell-issued interactions. Unknown
             // Ctrl chords are consumed instead of invoking plain-C Cancel.
             return;
         }
-        if self.reading {
+        if self.visible_reader() {
             if let Some(s)=self.selection.snapshot(){
                 let source=s.source();
                 let moved=match key.code {
@@ -186,16 +218,19 @@ impl App {
             match event {
                 sex_pdx::clipboard_client::Event::Export{ticket,cut}=>{
                     let snapshot=self.selection.snapshot();
-                    if !cut&&self.reading&&snapshot.is_some(){
+                    if !cut&&self.visible_reader()&&snapshot.is_some(){
                         let snapshot=snapshot.unwrap();let(lo,hi)=snapshot.range();let body=self.reader_body();
                         let accepted=unsafe{CLIPBOARD.publish(ticket,snapshot.source(),&body[lo..hi],sex_pdx::get_ticks())};
                         sex_pdx::serial_record!("[browser.clipboard.copy] ticket={} generation={} revision={} start={} end={} bytes={} hash={:#x} accepted={}",ticket,snapshot.source().generation,snapshot.source().revision,lo,hi,hi-lo,public_fingerprint(&body[lo..hi]),accepted as u8);
-                    }else{unsafe{CLIPBOARD.decline(ticket,sex_pdx::clipboard_client::View::Unsupported,sex_pdx::get_ticks());}}
+                    }else{
+                        if !self.visible_reader(){sex_pdx::serial_record!("[browser.clipboard.refused] ticket={} reason=reader_hidden effects=0",ticket);}
+                        unsafe{CLIPBOARD.decline(ticket,sex_pdx::clipboard_client::View::Unsupported,sex_pdx::get_ticks());}
+                    }
                 },
                 sex_pdx::clipboard_client::Event::Published{ticket,len,generation,hash,..}=>sex_pdx::serial_record!("[browser.clipboard.published] ticket={} bytes={} generation={} hash={:#x} positive_ack=1",ticket,len,generation,hash),
                 sex_pdx::clipboard_client::Event::Paste{ticket}=>{unsafe{CLIPBOARD.decline(ticket,sex_pdx::clipboard_client::View::Unsupported,sex_pdx::get_ticks());}},
                 sex_pdx::clipboard_client::Event::Ready{..}=>{unsafe{CLIPBOARD.settle(false);}},
-                sex_pdx::clipboard_client::Event::Stopped{..}=>{},
+                sex_pdx::clipboard_client::Event::Stopped{ticket,view}=>sex_pdx::serial_record!("[browser.clipboard.stopped] ticket={} state={:?} payload_erased=1",ticket,view),
             }
         }
         unsafe{CLIPBOARD.poll(sex_pdx::get_ticks(),|packet|{
@@ -288,20 +323,20 @@ impl App {
     fn begin_import(&mut self){
         if self.asset_panel||self.exchange.resource_kind()==Some(sex_tls::Resource::ArtworkQoi){sex_pdx::serial_record!("[browser.import.rejected] reason=asset_not_text effects=0");return;}
 
-        if self.importer.view()==document_import::View::Uncertain{self.import_panel=true;self.import_status=import_view::Status::Uncertain;sex_pdx::serial_record!("[browser.import.blocked] uncertain=1 effects=0");return;}
+        if self.importer.view()==document_import::View::Uncertain{self.show_import_panel();self.import_status=import_view::Status::Uncertain;sex_pdx::serial_record!("[browser.import.blocked] uncertain=1 effects=0");return;}
         if self.importer.busy(){sex_pdx::serial_record!("[browser.import.blocked] pending=1 effects=0");return;}
         let import_bytes=if let Some(body)=self.import_source.as_ref(){body.as_bytes()}
             else if self.exchange.has_document(){self.exchange.document()}
             else{self.importer.document().map_or(&[][..],|body|body.as_bytes())};
         if !sex_pdx::text_encoding::valid_text(import_bytes){
-            self.import_panel=true;self.import_editor.cancel();self.import_status=import_view::Status::UnsupportedText;
+            self.show_import_panel();self.import_editor.cancel();self.import_status=import_view::Status::UnsupportedText;
             sex_pdx::serial_record!("[browser.import.rejected] reason=unsupported_text effects=0 source_preserved=1");return;
         }
         if self.import_source.is_none(){
             if let Some(body)=self.exchange.take_document_for_import(){self.import_ticket=self.exchange.ticket();self.import_source=Some(body);}
             else if let Some(body)=self.importer.take_document(){self.import_source=Some(body);}
         }
-        self.import_panel=true;
+        self.show_import_panel();
         if let Some(body)=self.import_source.as_ref(){
             self.https_panel=false;self.peer_panel=false;self.tls_panel=false;self.clock_panel=false;self.reading=false;self.reading_https=false;
             self.importer.clear(sex_pdx::get_ticks());self.import_editor.begin();self.import_status=import_view::Status::Naming;
@@ -320,11 +355,17 @@ impl App {
         sex_pdx::serial_record!("[browser.import.submit] name={} bytes={} hash={:#x} source_ticket={} accepted={} create_only=1",core::str::from_utf8(self.import_editor.as_bytes()).unwrap(),len,hash,self.import_ticket,accepted as u8);
         self.resources("change",true);
     }
+    fn navigate_reader(&mut self,code:u8){
+        if self.visible_reader(){let movement=match code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};if let Some(movement)=movement{let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().map_or(&[][..],|d|d.as_bytes())}}else{self.http.document()};self.reader.navigate(body,movement);}}
+    }
+    fn dismiss_import_key(&mut self,code:u8)->bool {
+        if self.import_panel&&matches!(code,0x2F|0x01){self.dismiss_import(code==0x01);true}else{false}
+    }
     fn key(&mut self,raw:u64){
         let Ok(code)=u8::try_from(raw)else{return;};
         if self.ui_failed{self.ui_failed=false;self.ui_retries=0;self.ui_dirty=true;}
         if self.import_editor.active{
-            match self.import_editor.key(code){import_view::Key::Submit=>self.submit_import(),import_view::Key::Cancel=>{self.import_status=import_view::Status::Cancelled;self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;},_=>{}}
+            match self.import_editor.key(code){import_view::Key::Submit=>self.submit_import(),import_view::Key::Cancel=>{self.import_status=import_view::Status::Cancelled;self.dismiss_import(true);},_=>{}}
             return;
         }
         if self.asset_panel&&matches!(code,0x1E|0x21){self.select_asset_mode(if code==0x1E{asset_view::Mode::Actual}else{asset_view::Mode::Fit});return;}
@@ -332,7 +373,7 @@ impl App {
         if code==0x18{
             if !self.importer.busy()||self.importer.view()==document_import::View::Uncertain{self.workspace.changed();self.files_pending=true;}else{sex_pdx::serial_record!("[browser.import.files.blocked] pending=1 effects=0");}return;
         }
-        if self.import_panel&&code==0x2F&&self.has_https_body(){self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;return;}
+        if self.dismiss_import_key(code){return;}
         if matches!(code,0x10|0x24){self.clear_selection();}
         if code==0x10&&(self.import_panel||self.importer.has_document()||self.import_source.is_some()||self.importer.busy()){
             self.import_editor.cancel();self.import_source=None;let _=self.importer.cancel(sex_pdx::get_ticks());self.import_panel=true;self.reading=false;self.reading_https=false;
@@ -352,7 +393,7 @@ impl App {
             0x2D=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::Dns|Intent::HttpDns|Intent::Http)){if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.http.cancel();}self.intent=None;}self.dns.cancel();},
             0x24=>{self.navigation.cancel();if matches!(self.intent,Some(Intent::HttpDns|Intent::Http)){self.intent=None;self.dns.cancel();}self.http.cancel();self.reading=false;self.reader.clear();},
             0x2F=>{if self.https_panel{if self.has_https_body(){self.reading=!self.reading;self.reading_https=self.reading;}}else if self.http.view()==http_probe::View::Ready{self.reading=!self.reading;self.reading_https=false;}},
-            code=>{if self.reading{let movement=match code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};if let Some(movement)=movement{let body=if self.reading_https{if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().map_or(&[][..],|d|d.as_bytes())}}else{self.http.document()};self.reader.navigate(body,movement);}}},
+            code=>self.navigate_reader(code),
         }}
     }
     fn waiting_receipt(&self)->bool{
@@ -780,11 +821,11 @@ impl SexApp for App {
             let metadata=text_delivery::Metadata{count:public_fingerprint(&f.bytes[..f.len])as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:1024|((self.import_status as u64)<<11)};
             if self.ui_last_len!=f.len||self.ui_last!=f.bytes||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.import.layout] state={:?} name={} bytes={} cols={} rows={} viewport={} hash={:#x} pixels=unconfirmed",self.import_status,core::str::from_utf8(self.import_editor.as_bytes()).unwrap(),f.len,f.cols,f.rows,self.viewport_sequence,metadata.count);}
             Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
-        }else if self.reading&&self.reading_https&&self.has_https_body(){
+        }else if self.visible_reader()&&self.reading_https{
             let body=if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().unwrap().as_bytes()};
             let f=self.reader.render_https_selected(body,sex_tls::HTTPS_PATH,self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:body.len(),first:f.first,rows:f.body_rows,selected:2|256|512}))
-        }else if self.reading&&self.http.view()==http_probe::View::Ready{
+        }else if self.visible_reader()&&!self.reading_https{
             let f=self.reader.render_path_selected(self.http.document(),self.http.document_path(),self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.http.document().len(),first:f.first,rows:f.body_rows,selected:http_view_code(self.http.view())|256}))
         }else{browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()).and_then(|text|{

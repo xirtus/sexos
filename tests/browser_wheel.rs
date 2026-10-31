@@ -16,12 +16,14 @@ struct Exchange(Option<Body>);impl Exchange{
  fn document(&self)->&[u8]{self.0.as_ref().map_or(&[],Body::as_bytes)}
 }
 struct Importer(Option<Body>);impl Importer{fn document(&self)->Option<&Body>{self.0.as_ref()}}
-struct Http(Body);impl Http{fn document(&self)->&[u8]{self.0.as_bytes()}}
+mod http_probe{#[derive(PartialEq)]pub enum View{Ready}}
+struct Http(Body);impl Http{fn document(&self)->&[u8]{self.0.as_bytes()}fn view(&self)->http_probe::View{http_probe::View::Ready}}
 struct App{
  reading:bool,reading_https:bool,asset_panel:bool,import_panel:bool,viewport_sequence:u64,
  reader:document_reader::Reader,exchange:Exchange,import_source:Option<Body>,importer:Importer,http:Http,
 }
-impl App{fn new()->Self{
+impl App{fn has_https_body(&self)->bool{self.exchange.has_document()||self.import_source.is_some()||self.importer.0.is_some()}
+ fn new()->Self{
  let body=Body((0..100).map(|n|format!("{n:03} café 中\n")).collect::<String>().into_bytes());
  let mut reader=document_reader::Reader::new();reader.resize(624,706);
  Self{reading:true,reading_https:false,asset_panel:false,import_panel:false,viewport_sequence:7,reader,exchange:Exchange(Some(body.clone())),import_source:Some(body.clone()),importer:Importer(Some(body.clone())),http:Http(body)}

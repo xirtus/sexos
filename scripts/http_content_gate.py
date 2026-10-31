@@ -114,7 +114,14 @@ def load_wheel_contract(root):
   for token in tokens:
    if token not in source[name]:raise ValueError('wheel source contract changed: '+token)
  reader=(root/'apps/kaleidoscope/src/document_reader.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text()
- if 'let delta = -(wheel as i16) * 3;'not in reader or 'req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3'not in app or 'if !self.reading || self.asset_panel || self.import_panel { return; }'not in app:raise ValueError('actual bounded reader/exact Shell wheel guard changed')
+ visible=re.findall(r'^    fn visible_reader\b.*?^    }',app,re.M|re.S)
+ scroll=re.findall(r'^    fn scroll_input\b.*?^    }',app,re.M|re.S)
+ if ('let delta = -(wheel as i16) * 3;'not in reader
+     or 'req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3'not in app
+     or len(visible)!=1 or len(scroll)!=1
+     or 'self.reading&&!self.asset_panel&&!self.import_panel'not in visible[0]
+     or 'if self.reading_https{self.has_https_body()}else{self.http.view()==http_probe::View::Ready}'not in visible[0]
+     or 'if !self.visible_reader() { return; }'not in scroll[0]):raise ValueError('actual bounded visible reader/exact Shell wheel guard changed')
  from launcher_workflow_gate import source_contract as launcher_contract
  contract['launcher']=launcher_contract(root);contract['source_sha256'].update(contract['launcher']['source_sha256']);contract['source_sha256'].update({name:hashlib.sha256(value.encode()).hexdigest()for name,value in source.items()});contract['reader_require_position']=True
  return contract

@@ -1,0 +1,55 @@
+{
+  "checkpoint_verified": true,
+  "round": 108,
+  "round_accepted": false,
+  "goal_status": "active",
+  "accepted_rounds": "80-107",
+  "accepted_count": 28,
+  "remaining_rounds": "108-200",
+  "remaining_count": 93,
+  "build": "GREEN_MASTER",
+  "production_inputs": 565,
+  "runner_inputs": 544,
+  "iso_sha256": "eca60551c788163bab5cf5f0963f1842b99b7f237a12d618874258e98c54d540",
+  "kernel_sha256": "71cafdf12676d9ecd661161074b4061a9ff380066e6606f6b15a4dac676cd725",
+  "binding_sha256": "a0048e464acac50de71e03fd8380c913a95a13651a0a00669b99a87e422647ee",
+  "rust_executions": 2104,
+  "python_a": 833,
+  "python_b": 836,
+  "compiled_guard_controls_rejected": 2,
+  "native_acceptance": false,
+  "native_diagnostic": {
+    "original_ok": false,
+    "reason": "checker demanded previous launcher before any launcher Open",
+    "raw_unchanged": true,
+    "corrected_guard_diagnostic_accepted": false
+  },
+  "archive": {
+    "path": "assets/sexos-alpha-r108-2026-10-31-checkpoint-raw.tar.gz",
+    "sha256": "79d6209876fd2498631c4d358e8e7bc15db52b406b26ff5b2c2698ffe21683b4",
+    "bytes": 10286261,
+    "members": 2279,
+    "payload_manifest_sha256": "11d142336bb8ee1541025381341616f3f2ad4e5c436ac8e4d61c647105c33eb8",
+    "all_members_size_and_sha256_verified": true,
+    "disks": [
+      {
+        "path": "/tmp/sexos-alpha-r108-connected-a-build/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-r108-a-native-connected-wide/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      }
+    ]
+  },
+  "release_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "scope": "Tested implementation checkpoint at explicit user commit/push request. Native A failed; corrected B native qualification remains pending. No completed108, alpha, hostile-containment, physical/SMP, crash/power-loss or general daily-driver claim."
+}

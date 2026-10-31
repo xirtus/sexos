@@ -1,5 +1,7 @@
 # SexOS active development plan: rounds80–200
 
+Round108 has a [tested implementation checkpoint](ROUND108_CHECKPOINT_2026_10_31.md), committed at the user’s request before corrected native qualification. It remains in progress and unaccepted; accepted counts and release gates below are unchanged.
+
 The user revised the active goal on30 October2026 to **121 substantive rounds,80–200**. This supersedes the previous19–118 plus119–218 scope. Through107 is accepted;28/121 rounds in the revised scope are complete and108–200 remain (93 rounds). Round107 adds real wheel scrolling and arrival-ordered input custody;108 qualifies an integrated connected desktop session. Entries201–218 in the earlier plan are historical proposals outside the current objective. No plan entry is completion evidence.
 
 

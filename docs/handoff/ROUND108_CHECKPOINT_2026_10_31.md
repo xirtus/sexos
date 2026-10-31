@@ -1,0 +1,20 @@
+# Round108 checkpoint — 31 October2026
+
+Round108 remains **in progress and unaccepted**. Accepted progress is still28/121 rounds (80–107);108–200 remain93 rounds. This checkpoint preserves tested implementation at the user’s explicit commit/push request, before corrected native qualification.7 Open/23 Partial/System Proven false remain.
+
+Browser now requires its actual visible, retained Reader source for selection, Copy, navigation and wheel input. An import status overlay cannot export hidden underlying text. Opening the overlay quiesces the real clipboard client through a new cancellation operation; it never rolls back or replays an accepted publication. V/Esc restores retained HTTP/HTTPS bytes, source anchor and selection without fetching again. Settled no-source Escape returns to overview; V stays put. Busy and Uncertain imports remain fenced. The rendered source uses the same predicate and cannot silently fall back from absent HTTPS to unrelated HTTP. Import hints expose the available return controls.
+
+The new connected-session runner uses real hardware input and explicit existing BOOT routes across Browser, Quil, Linen and Spindle. Its intended qualification includes a real authenticated image response held through Quil edits, image inspection/Clear, retained Reader scrolling and hidden-Copy refusal, exact2049-byte Save and user-selected reopen, durable Spindle history, same-incarnation workspace movement, orderly cleanup and exact same-image/disk cold recovery at both desktop sizes. These are intended qualification stages, **not completed native acceptance**. It preserves the separate1800-second/12-cycle sustained alpha policy.
+
+## Verified checkpoint
+
+- Fresh sealed BUILD/GREEN_MASTER passes. ISO `eca60551c788163bab5cf5f0963f1842b99b7f237a12d618874258e98c54d540`; kernel `71cafdf12676d9ecd661161074b4061a9ff380066e6606f6b15a4dac676cd725`.
+- Frozen A executes2,104 passing Rust tests across six host gates, including33 new visibility tests. Two compiled guard-removal controls fail as expected. These are test executions, not distinct guarantees of native authority.
+- Frozen A’s full Python suite passes833 tests. Final B changes only the connected Python runner and its tests; its own full Python suite passes836 tests, recorded in the checkpoint evidence. Production, Rust tests, shell gates and sealed image are byte-identical between A/B.
+- The changed ISO-extracted Browser ELF has91,044 decoded instructions and no inspected vector/FP matches. This is scoped instruction evidence, not whole-image, scheduler-context or erasure certification.
+- Native A reaches authenticated TLS and five actual Quil edits while the response is held, then fails its first screenshot because the checker incorrectly requires a past launcher before any launcher Open. Original result remains false and raw evidence unchanged. The corrected frame’s separate diagnostic is explicitly unaccepted.
+- B corrects that antecedent and explicitly returns to workspace0 after Spindle Close before closing Browser/Quil. Its24 focused checker tests pass. Corrected native qualification is pending at this checkpoint.
+
+See the [machine evidence](assets/sexos-alpha-r108-2026-10-31-checkpoint-evidence.json) and its size/hash-verified diagnostic archive. Continue fresh B native connected sessions at both sizes, affected HTTPS import/cold-recovery regressions, independent raw replay and honest acceptance audit before counting108. Then109 reproduces current alpha authority blockers.
+
+GLOBAL_VAS defines addressing only; BOOT alone sanctions capability genesis; typed sex-pdx remains runtime authority and PKU enforces held authority. No per-process address space, Unix/POSIX mechanism or runtime capability mint is introduced. No public-web/CA, sustained daily-driver, physical/SMP, crash/power-loss, hostile-containment or System Proven acceptance is claimed. The resource audit found no additional concrete heap leak or accepted-receipt replay defect; `resources.body_visible` remains an HTTPS-retained-body diagnostic, not a general HTTP visibility assertion.

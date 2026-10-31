@@ -43,6 +43,17 @@ class WheelChecker(unittest.TestCase):
  def test_source_binds_actual_usb_input_shell_reader_and_exact_task_abi(self):
   for name in('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','crates/sex-pdx/src/app_scroll.rs','apps/kaleidoscope/src/document_reader.rs'):
    self.assertEqual(self.contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
+ def test_source_guard_requires_released_visible_reader_before_wheel_effect(self):
+  original=Path.read_text;app=ROOT/'apps/kaleidoscope/src/main.rs'
+  for old,new in [('self.reading&&!self.asset_panel&&!self.import_panel','self.reading&&!self.asset_panel'),
+                  ('if self.reading_https{self.has_https_body()}else{self.http.view()==http_probe::View::Ready}','true'),
+                  ('if !self.visible_reader() { return; }','if !self.reading { return; }')]:
+   self.assertIn(old,original(app))
+   def changed(path,*args,**kwargs):
+    text=original(path,*args,**kwargs)
+    return text.replace(old,new)if path==app else text
+   with patch.object(Path,'read_text',changed),self.assertRaisesRegex(ValueError,'visible reader'):
+    gate.load_wheel_contract(ROOT)
  def test_serial_character_offsets_normalize_crlf_and_preserve_unicode_prefix_hash(self):
   import tempfile
   trace,action=self.fixture();prefix='[fixture] café € 🙂\n';expected=prefix+trace;row=dict(action)

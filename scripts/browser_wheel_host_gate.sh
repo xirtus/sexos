@@ -7,7 +7,7 @@ python3 - "$WHEEL_ROOT" "$WHEEL_TEMP/production.rs" <<'PY'
 from pathlib import Path
 import re,sys
 source=(Path(sys.argv[1])/'apps/kaleidoscope/src/main.rs').read_text();parts=[]
-for name in ('scroll_input','receive_wheel'):
+for name in ('visible_reader','scroll_input','receive_wheel'):
  found=re.findall(r'^    fn '+name+r'\b.*?^    }',source,re.M|re.S)
  assert len(found)==1,name
  parts+=found
