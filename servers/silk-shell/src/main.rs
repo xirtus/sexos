@@ -22291,7 +22291,7 @@ unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
         SURFACE_ID_SPINDLE => "Spindle",
         _ => "App",
     });
-    serial_println!(
+    sex_pdx::serial_record!(
         "[shell.silkbar.status.send] focus={} app={} tint={} bell={} ok=1 reason=focus_set",
         sid, app_label, ACTIVE_TINT_IDX, bell_ring_count()
     );
