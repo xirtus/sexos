@@ -5,6 +5,7 @@ mod document_exchange;
 mod view;
 mod unicode_input;
 mod display_delivery;
+mod find;
 use core::alloc::{GlobalAlloc, Layout};
 use sex_pdx::{pdx_call, pdx_listen_raw, pdx_try_listen_raw, sched_yield, serial_println, OP_QUIL_PING, OP_TEXT_DRAW, OP_TEXT_CLEAR, SLOT_DISPLAY, SLOT_STORAGE};
 
@@ -98,6 +99,7 @@ static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
 static mut QUIL_BUFFER_LEN: usize = 0;
 static mut QUIL_UNICODE_INPUT: unicode_input::Input = unicode_input::Input::new();
 static mut QUIL_INPUT_NOTICE: Option<&'static [u8]> = None;
+static mut QUIL_FIND: find::Find = find::Find::new();
 static mut QUIL_UNICODE_SNAPSHOT: Option<sex_pdx::text_selection::Snapshot> = None;
 /// LANE3: quil_persist_load stages a full reload here first and only
 /// copies into QUIL_BUFFER on complete success — a failed/partial reload
@@ -189,7 +191,8 @@ fn quil_clipboard_events(palette_active:bool) {
             },
             Event::Paste{ticket}=>{
                 QUIL_CLIPBOARD_ERROR=None;
-                if QUIL_NAME_MODE||palette_active||QUIL_UNICODE_INPUT.active() {QUIL_CLIPBOARD.decline(ticket,View::Unsupported,sex_pdx::get_ticks());continue}
+                // Find mode owns typed input; a found selection may still be copied.
+                if QUIL_NAME_MODE||palette_active||QUIL_UNICODE_INPUT.active()||QUIL_FIND.active() {QUIL_CLIPBOARD.decline(ticket,View::Unsupported,sex_pdx::get_ticks());continue}
                 let Some(snapshot)=QUIL_SELECTION.snapshot()else{QUIL_CLIPBOARD.decline(ticket,View::Cancelled,sex_pdx::get_ticks());continue};
                 QUIL_PASTE_SNAPSHOT=Some((ticket,snapshot));
                 sex_pdx::serial_record!("[quil.clipboard.intent] ticket={} action=paste generation={} revision={} start={} end={}",ticket,snapshot.source().generation,snapshot.source().revision,snapshot.range().0,snapshot.range().1);
@@ -224,6 +227,24 @@ fn quil_dispatch_stashed(word:u64,down:u64,class:u64,palette:&mut bool,row:&mut 
     if let Some(key)=sex_pdx::app_key::Key::decode(word,down,class){quil_dispatch_key(key,palette,row)}
     else if word<(1<<16){quil_dispatch_palette_key(word,down,palette,row)}
 }
+/// Select the next exact occurrence after the current selection, wrapping
+/// once to the start. The bound selection source fences stale documents.
+unsafe fn quil_find_next() {
+    let Some(snapshot)=QUIL_SELECTION.snapshot() else{QUIL_INPUT_NOTICE=Some(b"FIND UNAVAILABLE");return};
+    let (start,end)=snapshot.range();
+    let from=if start!=end{end}else{snapshot.caret()};
+    let query_bytes=QUIL_FIND.query().len();
+    match QUIL_FIND.next(&QUIL_BUFFER[..QUIL_BUFFER_LEN],from) {
+        Some(found)=>{
+            let source=quil_source();
+            let selected=QUIL_SELECTION.move_to(source,found.start,false).is_ok()&&QUIL_SELECTION.move_to(source,found.end,true).is_ok();
+            if selected {QUIL_CURSOR_POS=found.end;QUIL_GOAL_COL=usize::MAX;}
+            sex_pdx::serial_record!("[quil.find] query_bytes={} start={} end={} wrapped={} found=1 selected={}",query_bytes,found.start,found.end,found.wrapped as u8,selected as u8);
+            quil_selection_record();
+        },
+        None=>{QUIL_INPUT_NOTICE=Some(b"NOT FOUND");sex_pdx::serial_record!("[quil.find] query_bytes={} found=0",query_bytes);},
+    }
+}
 fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected_row:&mut u8) {
     // USB keycodes and retained PS/2 scan codes describe the same editor key.
     let code=match key.code{105=>0x4b,106=>0x4d,102=>0x47,107=>0x4f,103=>0x48,108=>0x50,104=>0x49,109=>0x51,111=>0x53,other=>other};
@@ -244,8 +265,25 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
             }
             draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);return
         }
+        if QUIL_FIND.active() {
+            // A control chord (New/Open/Save...) leaves find mode and proceeds.
+            if key.control {QUIL_FIND.clear();sex_pdx::serial_record!("[quil.find.mode] on=0 reason=chord");}
+            else {
+                match key.code {
+                    0x01=>{QUIL_FIND.clear();sex_pdx::serial_record!("[quil.find.mode] on=0 reason=escape");},
+                    0x0e=>{QUIL_FIND.pop();},
+                    0x1c=>quil_find_next(),
+                    code=>{if let Some(ch)=scancode_to_char(code as u64,key.shift){if !QUIL_FIND.push(ch){QUIL_INPUT_NOTICE=Some(b"FIND QUERY FULL");}}},
+                }
+                draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);return
+            }
+        }
         if key.control {
             match key.code {
+                0x21 if !QUIL_NAME_MODE&&!*palette_active=>{
+                    QUIL_FIND.begin();sex_pdx::serial_record!("[quil.find.mode] on=1 generation={} revision={}",QUIL_GENERATION,QUIL_REVISION);
+                    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+                },
                 0x16 if key.shift&&!QUIL_NAME_MODE&&!*palette_active=>{
                     QUIL_UNICODE_INPUT.begin();QUIL_UNICODE_SNAPSHOT=QUIL_SELECTION.snapshot();
                     sex_pdx::serial_record!("[quil.unicode.begin] generation={} revision={} effects=0",QUIL_GENERATION,QUIL_REVISION);
@@ -862,8 +900,10 @@ fn document_draw(buf: &[u8], palette: Option<u8>) {
             None
         };
         let (unicode_prompt,unicode_len)=QUIL_UNICODE_INPUT.prompt();
+        let (find_prompt,find_len)=QUIL_FIND.prompt();
         let input_status: &[u8]=if QUIL_UNICODE_INPUT.active(){&unicode_prompt[..unicode_len]}
             else if let Some(notice)=QUIL_INPUT_NOTICE {notice}
+            else if QUIL_FIND.active(){&find_prompt[..find_len]}
             else {quil_clipboard_status().unwrap_or(DOCUMENT_IO.status().as_bytes())};
         let text = view::render_selection(
             buf,
@@ -909,7 +949,7 @@ fn draw_text_lines(buf: &[u8]) {
     document_draw(buf, None);
 }
 fn document_action(action: u8, palette: &mut bool, row: &mut u8) {
-    unsafe{QUIL_CLIPBOARD_NOTICE=false;QUIL_UNICODE_INPUT.clear();QUIL_INPUT_NOTICE=None;QUIL_UNICODE_SNAPSHOT=None;}
+    unsafe{QUIL_CLIPBOARD_NOTICE=false;QUIL_UNICODE_INPUT.clear();QUIL_INPUT_NOTICE=None;QUIL_UNICODE_SNAPSHOT=None;QUIL_FIND.clear();}
     if action == sex_pdx::document_view::OPEN {
         unsafe {
             DOCUMENT_OPEN = true;

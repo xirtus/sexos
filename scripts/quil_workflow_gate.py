@@ -4,7 +4,7 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');a=p.parse_args()
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
@@ -86,6 +86,21 @@ def main():
   toolbar(2,r'\[shell.document.open\] target=9 linen=200');focus(201)
   toolbar(1,r'\[quil.new.ok\] bytes=0');typing('first note')
   capture('edited','first note#')
+  find=None
+  if a.find:
+   # Bounded find: actual Ctrl+F prompt pixels, then exact selection receipts
+   # for a forward match and a wrapped repeat. Selection pixels are not checked.
+   key('home',r'\[quil.cursor.move\] .*dir=home ok=1')
+   ctrl('f',r'\[quil.find.mode\] on=1 ');start=len(text());q.key_sequence(['n','o','t','e'])
+   wait(r'\[quil.text.view\] target=9 .*status=.*Find: note#',start);capture('find-prompt','Find: note#')
+   start=len(text());key('ret',r'\[quil.find\] query_bytes=4 start=6 end=10 wrapped=0 found=1 selected=1')
+   wait(r'\[quil.selection\] generation=\d+ revision=\d+ bytes=10 anchor=6 caret=10',start)
+   key('ret',r'\[quil.find\] query_bytes=4 start=6 end=10 wrapped=1 found=1 selected=1')
+   start=len(text());q.key_sequence(['z']);key('ret',r'\[quil.find\] query_bytes=5 found=0')
+   key('esc',r'\[quil.find.mode\] on=0 reason=escape');capture('find-closed','first note#')
+   # Typing over the found selection would replace it; collapse to the end.
+   key('end',r'\[quil.cursor.move\] old=10 new=10 len=10 dir=end ok=1')
+   find=dict(prompt=True,forward=dict(start=6,end=10,wrapped=False),repeat=dict(start=6,end=10,wrapped=True),missing='notez',pixels_checked=['find-prompt','find-closed'])
   ctrl('s',r'\[quil.name.mode\] on=1');typing('uialpha',True)
   automatic_lists=[]
   initial_count=int(re.findall(r'\[linen.remote.snapshot.ok\] count=(\d+)',text())[-1]) if a.workspace_refresh else 0
@@ -134,7 +149,7 @@ def main():
    r=recover(disk.read_bytes(),expected['object'])
    if r.pop('payload')!=expected['content'].encode():raise RuntimeError('native saved bytes differ')
    checked.append(r)
-  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
+  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,find=find,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
   (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
  except Exception as e:
   (out/'result.json').write_text(json.dumps(dict(ok=False,error=str(e)))+'\n');raise
