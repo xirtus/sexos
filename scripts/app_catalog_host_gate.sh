@@ -10,6 +10,7 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/app_catalog.rs" -o "$TEST_DIR/tests
 rustc --edition=2021 --test "$ROOT_DIR/tests/boot_app_catalog.rs" -o "$TEST_DIR/actual-grants"
 python3 "$ROOT_DIR/scripts/check_catalog_capacity.py"
 python3 "$ROOT_DIR/scripts/check_incarnation_policy.py"
+python3 "$ROOT_DIR/scripts/check_app_startup_identity.py"
 "$TEST_DIR/actual-grants"
 python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY'
 from pathlib import Path

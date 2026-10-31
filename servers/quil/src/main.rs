@@ -3154,12 +3154,18 @@ unsafe fn check_physical_keyboard_proof(scancode: u64) {
     }
 }
 
+/// Check only metadata from a successful held SELF_CATALOG query. The
+/// descriptive row lookup grants no authority and never infers a task ID.
+fn startup_incarnation(catalog:sex_pdx::app_lifecycle::CatalogInfo)->Option<&'static sex_pdx::app_catalog::Incarnation>{
+    let row=sex_pdx::app_catalog::by_surface(catalog.target_pd,catalog.surface_id)?;
+    if row.app!=sex_pdx::app_catalog::App::Quil || !catalog.is_subject(row.target,row.surface,3){return None;}
+    Some(row)
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("QUIL_SELF_AUTHORITY");
-    // Shared rows describe the held BOOT identity; they never confer authority.
-    let incarnation=sex_pdx::app_catalog::by_surface(catalog.target_pd,catalog.surface_id).expect("QUIL_CATALOG_IDENTITY");
-    assert!(incarnation.app==sex_pdx::app_catalog::App::Quil && catalog.task_id==incarnation.target && catalog.coordinator_pd==3,"QUIL_CATALOG_SUBJECT");
+    let incarnation=startup_incarnation(catalog).expect("QUIL_CATALOG_SUBJECT");
     unsafe{DOCUMENT_WORKSPACE=sex_pdx::document_view::WorkspaceRefresh::new(catalog.target_pd,catalog.task_id);}
     QUIL_DOMAIN.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     unsafe { assert!(DOCUMENT_IO.set_snapshot(sex_pdx::document_snapshot_view(catalog.target_pd,false).expect("QUIL_SNAPSHOT_AUTHORITY"))); }

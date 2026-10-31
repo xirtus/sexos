@@ -2109,12 +2109,18 @@ unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
     }
 }
 
+/// Check only metadata from a successful held SELF_CATALOG query. The
+/// descriptive row lookup grants no authority and never infers a task ID.
+fn startup_incarnation(catalog:sex_pdx::app_lifecycle::CatalogInfo)->Option<&'static sex_pdx::app_catalog::Incarnation>{
+    let row=sex_pdx::app_catalog::by_surface(catalog.target_pd,catalog.surface_id)?;
+    if row.app!=sex_pdx::app_catalog::App::Spindle || !catalog.is_subject(row.target,row.surface,3){return None;}
+    Some(row)
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("SPINDLE_SELF_AUTHORITY");
-    // Shared rows describe the held BOOT identity; they never confer authority.
-    let incarnation=sex_pdx::app_catalog::by_surface(catalog.target_pd,catalog.surface_id).expect("SPINDLE_CATALOG_IDENTITY");
-    assert!(incarnation.app==sex_pdx::app_catalog::App::Spindle && catalog.task_id==incarnation.target && catalog.coordinator_pd==3,"SPINDLE_CATALOG_SUBJECT");
+    let incarnation=startup_incarnation(catalog).expect("SPINDLE_CATALOG_SUBJECT");
     assert!(incarnation.children.len()==3,"SPINDLE_GRID_CHILDREN");
     INSTANCE_PD.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     INSTANCE_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
