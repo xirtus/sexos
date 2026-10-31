@@ -63,6 +63,7 @@ SPINDLE_SCROLL_SOURCE="$TEST_DIR/scroll.rs" rustc --edition=2021 --test tests/sp
 "$TEST_DIR/scroll"
 rustc --edition=2021 --test tests/spindle_status.rs -o "$TEST_DIR/status"
 "$TEST_DIR/status"
+python3 scripts/check_shell_spindle_status.py
 python3 - "$TEST_DIR/probe_parse.rs" <<'PYPARSE'
 import re,sys
 from pathlib import Path

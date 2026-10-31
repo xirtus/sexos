@@ -5313,19 +5313,21 @@ unsafe fn linen_render_static_ui() {
 }
 
 static mut LINEN_REPAINT_AFTER_CREATE: bool = false;
-static mut SPINDLE_HISTORY_STATUS:[sex_pdx::spindle_status::Receiver;app_catalog::SPINDLE_COUNT]={
- let mut out=[const{sex_pdx::spindle_status::Receiver::new(0,0)};app_catalog::SPINDLE_COUNT];let mut i=0;
- while i<app_catalog::SPINDLE_COUNT{let target=app_catalog::SPINDLE_TARGETS[i];out[i]=sex_pdx::spindle_status::Receiver::new(target,target);i+=1;}out
-};
+static mut SPINDLE_HISTORY_STATUS:[Option<sex_pdx::spindle_status::Receiver>;app_catalog::SPINDLE_COUNT]=[const{None};app_catalog::SPINDLE_COUNT];
 unsafe fn spindle_history_status_receive(msg:&sex_pdx::PdxMessage)->bool{
  if msg.type_id!=sex_pdx::spindle_status::OP{return false}
  let Some(index)=app_catalog::SPINDLE_TARGETS.iter().position(|target|*target==msg.caller_pd)else{return true};
- let live=APP_CUSTODY.iter().flatten().find(|e|e.target==msg.caller_pd).map_or(false,|e|{
-  if e.dead||e.retired||e.close_pending{SPINDLE_HISTORY_STATUS[index].retire();return false}
-  matches!(sex_pdx::app_lifecycle::catalog(e.slot),Ok(c) if (c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(e.target,e.task,e.surface,3))
-    &&sex_pdx::app_lifecycle::info(e.slot)==Err(sex_pdx::app_lifecycle::LIVE)
- });
- if SPINDLE_HISTORY_STATUS[index].accept(msg.caller_pd,live,[msg.arg0,msg.arg1,msg.arg2]){
+ let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==msg.caller_pd)else{return true};
+ if e.dead||e.retired||e.close_pending{
+  if let Some(receiver)=SPINDLE_HISTORY_STATUS[index].as_mut(){receiver.retire();}
+  return true;
+ }
+ let live=matches!(sex_pdx::app_lifecycle::catalog(e.slot),Ok(c) if (c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(e.target,e.task,e.surface,3))
+    &&sex_pdx::app_lifecycle::info(e.slot)==Err(sex_pdx::app_lifecycle::LIVE);
+ if !live||msg.caller_task!=e.task{return true}
+ // Bind once from held custody, never a caller-selected packed task or domain.
+ let receiver=SPINDLE_HISTORY_STATUS[index].get_or_insert_with(||sex_pdx::spindle_status::Receiver::new(e.target,e.task));
+ if receiver.accept(msg.caller_pd,live,[msg.arg0,msg.arg1,msg.arg2]){
   sex_pdx::serial_record!("[shell.spindle.status.accepted] target={} sequence={} state={} live=1",msg.caller_pd,msg.arg1,msg.arg2);
   if COMMAND_PALETTE_OPEN{palette_render_list();}
  }true
@@ -5335,7 +5337,7 @@ unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str
  let target=spindle_active_frame().map_or(app_catalog::boot_incarnation(app_catalog::App::Spindle).target,|(target,_)|target);
  let Some(index)=app_catalog::SPINDLE_TARGETS.iter().position(|candidate|*candidate==target)else{return fallback};
  use sex_pdx::spindle_status::State as S;
- match SPINDLE_HISTORY_STATUS[index].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY",Some(S::Saving|S::Queued)=>"SAVING HISTORY",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
+ match SPINDLE_HISTORY_STATUS[index].as_ref().and_then(|receiver|receiver.state()){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY",Some(S::Saving|S::Queued)=>"SAVING HISTORY",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
 }
 static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;app_catalog::DOCUMENT_COUNT]=[const{sex_pdx::document_view::Delivery::new()};app_catalog::DOCUMENT_COUNT];
 static mut DOCUMENT_POINTER_SEQUENCE:u64=0;

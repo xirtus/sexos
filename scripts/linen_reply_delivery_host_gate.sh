@@ -11,7 +11,7 @@ assert 'if !linen_reply_poll() { sched_yield(); continue; }' in s
 assert 'if !linen_request_allowed(msg.caller_pd,msg.type_id) { continue; }' in s
 assert 'app_lifecycle::info(slot)' in s
 assert 'app_catalog::by_target(caller).filter(|i|i.app==sex_pdx::app_catalog::App::Spindle)' in s
-assert 'c.target_pd==caller && c.task_id==task && c.surface_id==surface && c.coordinator_pd==3' in s
+assert 'c.is_subject(target,surface,3)' in s
 assert 'reply_delivery::legacy_reply(caller,value,pdx_reply)' in s
 assert 'SHELL_REPLY.poll(pdx_reply)' in s
 assert s.count('linen_reply(caller_pd,')>=10

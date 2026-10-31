@@ -42,9 +42,9 @@ fn linen_reply(caller:u32,value:u64) {
 fn linen_reply_poll()->bool { unsafe { SHELL_REPLY.poll(pdx_reply) } }
 fn linen_request_allowed(caller:u32,opcode:u64)->bool {
     let grant=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app==sex_pdx::app_catalog::App::Spindle).map(|i|(i.lifecycle_slot,i.target,i.surface));
-    let status=grant.and_then(|(slot,task,surface)|{
+    let status=grant.and_then(|(slot,target,surface)|{
         match sex_pdx::app_lifecycle::catalog(slot) {
-            Ok(c) if c.target_pd==caller && c.task_id==task && c.surface_id==surface && c.coordinator_pd==3=>{
+            Ok(c) if c.is_subject(target,surface,3)=>{
                 match sex_pdx::app_lifecycle::info(slot){Err(code)=>Some(code),Ok(_)=>Some(0)}
             },_=>None,
         }
