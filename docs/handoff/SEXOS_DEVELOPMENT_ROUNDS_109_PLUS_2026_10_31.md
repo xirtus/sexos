@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–145
+# SexOS development: round 108 acceptance and rounds 109–147
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -687,3 +687,27 @@ cap data128/full192. Catalog17/desktop51; lifecycle17+15=32 derives safely to34
 for the tested future Browser roster. All1,172 source blobs and archive members
 verified. No runtime mint, unbounded reuse or new-image sustained acceptance.
 Next: readable Spindle typography and BOOT Browser authority. Inventory unchanged.
+
+
+## Round 146 — readable Spindle tiles, exact restore and timing
+
+[Report](SPINDLE_READABLE_TILES_2026_11_01.md): exact Spindle panes use2× from128px;
+compact244px panes fit18 columns. Layout/Display glyph/wrap/damage and source-bound
+oracle agree. Both sizes pass tiled-edit-Zoom-exactrestore and stopped-frame
+audits; full8 desktop/cold29/connected regressions pass. Final348cc9ab:43 host /
+2,738 logged Rust +8 extracted lifecycle cases /1,037 Python;10 boots/112 registry
+captures +8 auxiliary viewport PPMs. All1,174 source blobs and raw members verified.
+Future cycle timing now reads serial before end timestamp and anchors idle to
+that boundary; strict bound unchanged. Original failed3-reserve wide remains
+rejected, compact accepted; all auxiliary setup failures retained. No guest was
+paused during coordinator-only TCP serialization. New image1800s remains open.
+
+## Round 147 — eight-reserve image paired sustained acceptance
+
+[Acceptance report](EIGHT_SPINDLE_ALPHA_ACCEPTANCE_2026_11_01.md) accepts the older Round145
+source502dda45/ISO8ad3339e, with256px font threshold and original conservative
+cycle-accounting implementation, not the newer readable-tile image. Both terminal
+>=1800s sessions pass fresh stopped-artifact replay:172 cycles/414 captures,
+all8 Quil/Spindle incarnations, cleanup and exact durable bytes. Scope/remaining
+obligations unchanged. Next implementation: held Browser identity and request
+metadata before any additional actual Browser reservation.

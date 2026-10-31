@@ -117,3 +117,13 @@ remains finite. Next implementation: readable2× small-tile Spindle text with
 source-bound layout/render/damage oracles; then Browser successors using the now
 explicit metadata budget and their own BOOT-held authority. Sustained evidence
 for the earlier three-reserve image continues independently; do not relabel it.
+
+
+Round146 completes readable2× tiles, matching source-bound rendering/oracles,
+native tiled/Zoom/exactrestore at both sizes and whole-desktop regressions.
+Future cycle timing was corrected without relaxing acceptance. Round147 accepts
+the distinct older eight-reserve image over paired1800s sessions; it does not
+accept the newer font/timing image. Next: follow the Browser authority plan,
+starting with held identity/task propagation while keeping only Browser15 actual.
+Catalog rows30/31 alone are unsafe until presentation/input and individual
+BOOT-held entropy/clock/trust/network/paging edges are ready.

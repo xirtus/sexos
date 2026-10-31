@@ -1,0 +1,42 @@
+{
+  "paired_accepted": false,
+  "source_commit": "c5bf51208562f1409e63065c5e23ab2285ac3a9a",
+  "iso_sha256": "04125208c9e62b649a920f98a77101ae31f9508a2505b226bae602a7e6cbf518",
+  "kernel_sha256": "926d85fffcb497e5aa598b63fec0bcbeba9aca35ba7d3f992b8565e6dd264932",
+  "coordinator_exit": 1,
+  "compact": {
+    "accepted": true,
+    "fresh_readonly_replay": true,
+    "elapsed_seconds": 1800.5469472080003,
+    "cycles": 86,
+    "verified_captures": 197
+  },
+  "wide": {
+    "accepted": false,
+    "recorded_result_ok": true,
+    "recorded_result_acceptance": true,
+    "final_replay_rejected": true,
+    "elapsed_seconds": 1800.000753832981,
+    "cycles": 84,
+    "candidate_captures": 193,
+    "reason": "excessive unaccounted idle time",
+    "active_seconds": 538.9060072063003,
+    "idle_seconds": 1261.0947466266807,
+    "idle_bound_seconds": 1261
+  },
+  "future_correction": {
+    "source_commit": "348cc9ab4d2988eb58c1e4dcacf8f7b4149d6ad7",
+    "read_final_snapshot_before_end_timestamp": true,
+    "anchor_idle_to_same_end": true,
+    "acceptance_bound_unchanged": true,
+    "old_wide_remains_rejected": true
+  },
+  "archive": {
+    "path": "assets/sexos-three-spindle-sustained-partial-2026-11-01-raw.tar.gz",
+    "sha256": "2abe0119cdeea12c17391798dc5ae71ba2845998a2d4d13db17d4dc8d13e0eab",
+    "bytes": 12915431,
+    "members": 1599,
+    "all_members_size_sha256_verified": true
+  },
+  "scope": "Original stopped three-reserve image: compact accepted; wide failed strict idle accounting despite recorded result flags. No paired or unrestricted daily-driver acceptance. All failed raw artifacts preserved; future harness correction does not relabel old evidence."
+}
