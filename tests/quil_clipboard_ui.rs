@@ -35,6 +35,8 @@ pub mod text_selection;
 pub mod view;
 #[path = "../servers/quil/src/unicode_input.rs"]
 pub mod unicode_input;
+#[path = "../servers/quil/src/find.rs"]
+pub mod find;
 pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 pub fn get_ticks() -> u64 {
     1
@@ -46,6 +48,7 @@ static mut QUIL_BUFFER_LEN: usize = 0;
 static mut QUIL_UNICODE_INPUT: unicode_input::Input = unicode_input::Input::new();
 static mut QUIL_UNICODE_SNAPSHOT: Option<text_selection::Snapshot> = None;
 static mut QUIL_INPUT_NOTICE: Option<&'static [u8]> = None;
+static mut QUIL_FIND: find::Find = find::Find::new();
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_REVISION: u64 = 0;
 static mut QUIL_GENERATION: u64 = 1;
@@ -419,4 +422,42 @@ fn unicode_digit_overflow_requires_recovery_and_cannot_commit_a_silent_prefix() 
     input.begin();input.key(0x12);input.clear();assert!(!input.active());
     input.begin();assert_eq!(input.key(0x1c),unicode_input::Action::Refused);
     assert_eq!(input.key(0x01),unicode_input::Action::Cancelled);
+}
+
+#[test]
+fn find_mode_selects_matches_owns_typed_input_and_never_edits() {
+    unsafe {
+        reset(b"alpha beta alpha");
+        QUIL_FIND.clear();
+        let before = (QUIL_REVISION, QUIL_BUFFER_LEN);
+        key(0x21, false, true); // Ctrl+F
+        assert!(QUIL_FIND.active());
+        for code in [0x1e, 0x26, 0x19, 0x23, 0x1e] { key(code, false, false); } // a l p h a
+        assert_eq!(QUIL_FIND.query(), b"alpha");
+        key(0x1c, false, false); // Enter
+        let first = QUIL_SELECTION.range().unwrap();
+        key(0x1c, false, false);
+        let second = QUIL_SELECTION.range().unwrap();
+        assert_ne!(first, second);
+        assert!([(0, 5), (11, 16)].contains(&first) && [(0, 5), (11, 16)].contains(&second));
+        // Typed text and Enter went to the query, never to the document.
+        assert_eq!((QUIL_REVISION, QUIL_BUFFER_LEN), before);
+        assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN], b"alpha beta alpha");
+        key(0x01, false, false); // Esc
+        assert!(!QUIL_FIND.active());
+        assert!(QUIL_FIND.query().is_empty());
+    }
+}
+
+#[test]
+fn control_chord_leaves_find_mode() {
+    unsafe {
+        reset(b"text");
+        QUIL_FIND.clear();
+        key(0x21, false, true);
+        key(0x14, false, false); // t
+        key(0x1e, false, true); // Ctrl+A select all
+        assert!(!QUIL_FIND.active());
+        assert_eq!(QUIL_SELECTION.range(), Some((0, 4)));
+    }
 }
