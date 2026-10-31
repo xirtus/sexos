@@ -24227,9 +24227,25 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell.ready]");
     serial_println!("[silkshell.ready]");
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
+    // First UiIR stream: committed focus transitions, one epoch per turn.
+    let mut uiir = match sex_pdx::uiir_producer(sex_pdx::uiir::DISPLAY_PD) {
+        Ok(p) => {sex_pdx::serial_record!("[uiir.shell.attached] peer={} ok=1",sex_pdx::uiir::DISPLAY_PD);Some(p)},
+        Err(e) => {sex_pdx::serial_record!("[uiir.shell.attached] peer={} ok=0 error={:#x}",sex_pdx::uiir::DISPLAY_PD,e);None},
+    };
+    let mut uiir_focus = 0u64;
 
     loop {
         unsafe {flush_browser_input();}
+        if let Some(stream)=uiir.as_mut() {
+            let focus=unsafe{FOCUSED_SURFACE_ID};
+            if focus!=uiir_focus {
+                match stream.push(sex_pdx::uiir::KIND_FOCUS,focus) {
+                    Ok(_)=>{uiir_focus=focus;stream.commit();},
+                    Err(sex_pdx::uiir::Error::Full)=>{},
+                    Err(e)=>{sex_pdx::serial_record!("[uiir.shell.error] {:?}",e);uiir=None;},
+                }
+            }
+        }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.

@@ -5,16 +5,22 @@
     {
       "id": "UIIR_AUTHORIZED_STREAM",
       "requirement": "UiIR is an epoch-gated data transport with sex-pdx-granted ring authority and ordered per-sender streams.",
-      "status": "open",
+      "status": "partial",
       "sources": [
         {
           "path": "ARCHITECTURE.md",
           "anchor": "### 1.4 UiIR"
+        },
+        {
+          "path": "kernel/src/boot_memory.rs",
+          "anchor": "pub fn init_uiir"
         }
       ],
-      "checks": [],
+      "checks": [
+        "uiir_stream"
+      ],
       "gaps": [
-        "The full documented active UiIR epoch transport is absent; unused ring code is not an implementation."
+        "Only the first stream exists: BOOT-paired Shell ring and Display cursor regions with exact peers and one writer per page, carrying focus transitions that Display checks but does not render from. No compositor pipeline, epoch engine, replay or further streams."
       ],
       "depends_on": [
         "PDX_SOLE_AUTHORITY",
