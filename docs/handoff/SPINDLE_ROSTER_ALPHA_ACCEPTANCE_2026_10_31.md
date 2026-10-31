@@ -25,8 +25,10 @@ Source `93a505983cfc71b253e5f7bb974bcfd86257a632` matches 1,165 distinct committ
 short-workflow cold17→12 recovery. These long-session disks were not themselves
 cold-reboot tested. Kernel/layout and BOOT authority are unchanged from Round 140.
 
-ISO SHA256: `669ce912f1f43f93f543ba77484c0e825a0ee35012b60b8b3d1db015bbf6dcd6`  
-Kernel SHA256: `b01a0464c6b0d1d3d3afa90684ab0954b2889c1dadb45613c11ab17ba9d41a26`  
+ISO SHA256: `669ce912f1f43f93f543ba77484c0e825a0ee35012b60b8b3d1db015bbf6dcd6`
+
+Kernel SHA256: `b01a0464c6b0d1d3d3afa90684ab0954b2889c1dadb45613c11ab17ba9d41a26`
+
 Architecture SHA256: `4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7`
 
 [Machine evidence](assets/sexos-spindle-roster-alpha-paired-2026-10-31-evidence.json)

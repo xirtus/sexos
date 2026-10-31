@@ -57,8 +57,10 @@ its production source hashes and kernel match the superseded positive A cohort.
 - All **1,171 distinct source/runner blobs** match the committed Git objects and
   immutable snapshot:576 production +595 runner files.
 
-ISO SHA256: `04125208c9e62b649a920f98a77101ae31f9508a2505b226bae602a7e6cbf518`  
-Kernel SHA256: `926d85fffcb497e5aa598b63fec0bcbeba9aca35ba7d3f992b8565e6dd264932`  
+ISO SHA256: `04125208c9e62b649a920f98a77101ae31f9508a2505b226bae602a7e6cbf518`
+
+Kernel SHA256: `926d85fffcb497e5aa598b63fec0bcbeba9aca35ba7d3f992b8565e6dd264932`
+
 Architecture SHA256: `4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7`
 
 [Machine evidence](assets/sexos-third-spindle-reserve-2026-10-31-evidence.json)
