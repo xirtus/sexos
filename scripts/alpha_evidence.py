@@ -5,6 +5,8 @@ from network_contention_gate import frozen_binding
 from check_desktop_pixels import font_from_source,verify as linen_pixels
 from check_quil_ui_pixels import verify as quil_pixels,view as quil_view
 from check_disk_persistence import ppm_rgb
+from app_switch_gate import indicator_colors,verify_indicator
+from quil_reserve_catalog import quil_catalog
 from check_document_disk import recover,fnv
 from silkbar_clock_gate import source_contract as bar_contract,verify_pixels as bar_pixels
 from launcher_workflow_gate import source_contract as launcher_contract,verify_frame as launcher_frame
@@ -22,7 +24,7 @@ def contract(root):
  from https_asset_gate import script_dependencies
  paths=set(bar['source_sha256'])|set(launcher['source_sha256'])|set(script_dependencies(root,('scripts/quil_workflow_gate.py','scripts/alpha_evidence.py','scripts/tests/test_alpha_evidence.py')))
  paths.update(('servers/quil/src/main.rs','scripts/check_alpha_session.py'))
- return dict(font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,launcher=launcher,source_sha256={p:sha(root/p)for p in sorted(paths)})
+ return dict(font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,launcher=launcher,indicators=indicator_colors(root),reserve_focus={row['target']:row['frame']for row in quil_catalog(root)[2:]},source_sha256={p:sha(root/p)for p in sorted(paths)})
 
 def require_inputs(root,binding,c):
  held=json.loads(Path(binding).read_text())
@@ -47,8 +49,20 @@ def verify_frame(prefix,ppm,c,resolution,kind='quil',expected='',target=9,region
   ink=sum(raw[(yy*width+xx)*3:(yy*width+xx)*3+3]==b'\xe0\xf0\xff'for yy in range(y,y+h)for xx in range(x,x+w));errors=[]if ink==0 else['minimized Quil foreground remains'];detail=dict(region=region,foreground_pixels=ink)
  else:raise ValueError('unsupported alpha capture kind')
  if errors:return dict(ok=False,errors=errors)
+ family=None
+ if kind=='quil'and target in c.get('reserve_focus',{}):
+  focus=c['reserve_focus'][target]
+  actual=re.findall(r'\[shell.focus.set\] id=(\d+)',prefix)
+  status=re.findall(r'\[shell.silkbar.status.send\] focus=(\d+) app=(\w+) tint=',prefix)
+  if not actual or int(actual[-1])!=focus or not status or status[-1]!=(str(focus),'Quil'):
+   return dict(ok=False,errors=['reserved Quil lacks current family focus/status'])
+  try:verify_indicator(ppm,focus,resolution,c['indicators'])
+  except RuntimeError as error:return dict(ok=False,errors=[str(error)])
+  family=dict(focus=focus,app='Quil',indicator=hex(c['indicators'][focus]))
  bar=bar_pixels(prefix,ppm,c['bar'],resolution,'Snapshot')
- return dict(ok=bar['ok'],errors=bar['errors'],kind=kind,view=detail,civil_clock=bar)
+ result=dict(ok=bar['ok'],errors=bar['errors'],kind=kind,view=detail,civil_clock=bar)
+ if family is not None:result['native_family']=family
+ return result
 
 class Captures:
  def __init__(self,out,c,resolution):

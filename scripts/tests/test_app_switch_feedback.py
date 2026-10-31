@@ -10,6 +10,11 @@ class SwitchFeedback(unittest.TestCase):
  def test_exact_same_redraw_focus_correlation(self):self.assertEqual(focus_observation(TRACE,153),dict(ordinal=17,kind='strip',seen=4))
  def test_expected_colors_come_from_actual_production_native_overrides(self):
   colors=indicator_colors(Path(__file__).resolve().parents[2]);self.assertEqual(colors[300],0x5ed9c3);self.assertEqual(colors[153],0x89b4fa);self.assertEqual(colors[302],colors[153]);self.assertEqual(colors['unknown'],0x444444)
+ def test_last_reserved_quil_keeps_its_family_focus_color(self):
+  colors=indicator_colors(Path(__file__).resolve().parents[2])
+  for surface in [308,309,310,311,312]:self.assertEqual(colors[surface],0xcba6f7)
+  raw=self.ppm(b'\xcb\xa6\xf7');verify_indicator(raw,312,(320,100),colors)
+  with self.assertRaises(RuntimeError):verify_indicator(self.ppm(b'\x44\x44\x44'),312,(320,100),colors)
  def test_unrelated_missing_or_clock_only_repaint_is_rejected(self):
   for text in [TRACE.replace('seen=4','seen=0'),TRACE.replace('focus=153\n','focus=201\n'),TRACE.replace('ordinal=17 kind=strip start','ordinal=18 kind=strip start'),TRACE.replace('kind=strip start','kind=full start')]:
    with self.assertRaises(RuntimeError):focus_observation(text,153)

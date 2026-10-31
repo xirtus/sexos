@@ -19,18 +19,38 @@ pub const fn scale(width: u32) -> u32 {
 
 /// Visual family classification only. Callers must independently attest live
 /// ownership before accepting any surface operation or routing input.
+const fn native_family(surface:u64)->Option<crate::app_catalog::App>{
+    let mut i=0;
+    while i<crate::app_catalog::COUNT {
+        let row=&crate::app_catalog::INCARNATIONS[i];
+        if row.frame()==surface||row.surface==surface{return Some(row.app);}
+        let mut child=0;
+        while child<row.children.len(){
+            if row.children[child]==surface{return Some(row.app);}
+            child+=1;
+        }
+        i+=1;
+    }
+    None
+}
 pub const fn native_label(surface:u64)->Option<&'static str>{
-    match surface {
-        156|201|301|307=>Some("Quil"),
-        153|154|160|161|162|302|303|304|305|306=>Some("Spindle"),
-        200=>Some("Linen"),300=>Some("Browser"),_=>None,
+    if surface==200{return Some("Linen");}
+    use crate::app_catalog::App;
+    match native_family(surface) {
+        Some(App::Quil)=>Some("Quil"),
+        Some(App::Spindle)=>Some("Spindle"),
+        Some(App::Browser)=>Some("Browser"),
+        None=>None,
     }
 }
 pub const fn native_indicator(surface:u64)->Option<u32>{
-    match surface {
-        156|201|301|307=>Some(0x00CBA6F7),
-        153|154|160|161|162|302|303|304|305|306=>Some(0x0089B4FA),
-        200=>Some(0x00A6E3A1),300=>Some(0x005ED9C3),_=>None,
+    if surface==200{return Some(0x00A6E3A1);}
+    use crate::app_catalog::App;
+    match native_family(surface) {
+        Some(App::Quil)=>Some(0x00CBA6F7),
+        Some(App::Spindle)=>Some(0x0089B4FA),
+        Some(App::Browser)=>Some(0x005ED9C3),
+        None=>None,
     }
 }
 pub const NATIVE_CANVAS:u32=0x000C1420;

@@ -34,6 +34,12 @@ def indicator_colors(root):
     for source in [fallback,native]:
         for ids,color in re.findall(r'([0-9|]+)\s*=>\s*Some\(0x([0-9A-Fa-f]+)\)',source):
             for sid in ids.split('|'):colors[int(sid)]=int(color,16)&0xffffff
+    families=dict((name,int(value,16)&0xffffff)for name,value in re.findall(r'Some\(App::(\w+)\)\s*=>\s*Some\(0x([0-9A-Fa-f]+)\)',native))
+    if families:
+        from quil_reserve_catalog import surface_families
+        for sid,family in surface_families(root).items():
+            if family not in families:raise RuntimeError('native family indicator missing')
+            colors[sid]=families[family]
     unknown=re.search(r'_\s*=>\s*Some\(0x([0-9A-Fa-f]+)\)',fallback)
     if not colors or not unknown:raise RuntimeError('indicator style declarations unavailable')
     colors['unknown']=int(unknown[1],16)&0xffffff

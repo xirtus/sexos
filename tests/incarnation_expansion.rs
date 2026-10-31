@@ -81,3 +81,12 @@ impl documents::Backend for Backend{
  delivery.poll(4,Some,|packet|{assert_eq!(packet.surface,400);assert_eq!(packet.opcode,0xFD);Admission::Accepted});
  assert!(delivery.ready(400));
 }
+
+#[test]fn future_native_labels_and_focus_colors_follow_visual_family_only(){
+ for(sid,label,color)in [(400,"Quil",0xcba6f7),(401,"Spindle",0x89b4fa),(402,"Spindle",0x89b4fa),(403,"Spindle",0x89b4fa),(404,"Spindle",0x89b4fa),(405,"Spindle",0x89b4fa),(406,"Browser",0x5ed9c3)]{
+  assert_eq!(desktop_style::native_label(sid),Some(label));assert_eq!(desktop_style::native_indicator(sid),Some(color));
+ }
+ assert_eq!(desktop_style::native_label(999),None);assert_eq!(desktop_style::native_indicator(999),None);
+ // Matching a visual family never authorizes a foreign owner to paint it.
+ assert_eq!(desktop_style::native_canvas(9,400),None);
+}

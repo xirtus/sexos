@@ -55,6 +55,14 @@ def main():
   result=subprocess.run([str(binary),'--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
   if result.returncode!=101:raise RuntimeError('old desktop surfaces survived: '+result.stdout)
   print('[incarnation.policy.control] old_frame_inventory_rejected_by_tests=1')
+  style=(root/'crates/sex-pdx/src/desktop_style.rs').read_text();guard='let row=&crate::app_catalog::INCARNATIONS[i];';assert style.count(guard)==1
+  changed=style.replace(guard,guard+'if row.target>18{i+=1;continue;}')
+  path=out/'old-family-inventory.rs';path.write_text(changed);old=json.dumps(str(root/'crates/sex-pdx/src/desktop_style.rs'));assert old in fixture
+  test.write_text(fixture.replace(old,json.dumps(str(path))));binary=out/'old-family-inventory-test'
+  subprocess.run(['rustc','--edition=2021','--test',str(test),'-o',str(binary)],check=True,env={**os.environ,'EXPANDED_SHELL_POLICY':str(shell)})
+  result=subprocess.run([str(binary),'--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+  if result.returncode!=101:raise RuntimeError('old visual family inventory survived: '+result.stdout)
+  print('[incarnation.policy.control] old_family_inventory_rejected_by_tests=1')
   print('[incarnation.policy] PASS expanded_quil_spindle_browser=1 actual_modules=1 scope=host_doubles_not_boot_authority')
 
 if __name__=='__main__':main()

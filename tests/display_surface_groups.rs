@@ -389,17 +389,39 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
  }
 }}
 #[test]fn visual_family_style_does_not_replace_exact_surface_ownership(){
- for sid in [156,201,301,307]{assert_eq!(desktop_style::native_label(sid),Some("Quil"));assert_eq!(desktop_style::native_indicator(sid),Some(0x00cba6f7));}
- for(owner,sid)in[(9,156),(16,301),(18,307)]{assert_eq!(desktop_style::native_canvas(owner,sid),Some(desktop_style::NATIVE_CANVAS));}
- for(owner,sid)in[(3,307),(9,307),(18,301),(17,156),(18,201)]{assert_eq!(desktop_style::native_canvas(owner,sid),None);}
- assert_eq!(desktop_style::native_label(999),None);
+ // Compile-time use remains valid; visual metadata never supplies an owner.
+ const NEWEST_LABEL:Option<&str>=desktop_style::native_label(312);
+ const NEWEST_INDICATOR:Option<u32>=desktop_style::native_indicator(312);
+ assert_eq!(NEWEST_LABEL,Some("Quil"));assert_eq!(NEWEST_INDICATOR,Some(0x00cba6f7));
+ for row in &app_catalog::INCARNATIONS {
+  let(label,color)=match row.app {
+   app_catalog::App::Quil=>("Quil",0x00cba6f7),
+   app_catalog::App::Spindle=>("Spindle",0x0089b4fa),
+   app_catalog::App::Browser=>("Browser",0x005ed9c3),
+  };
+  for sid in [row.frame(),row.surface].into_iter().chain(row.children.iter().copied()) {
+   assert_eq!(desktop_style::native_label(sid),Some(label),"sid={sid}");
+   assert_eq!(desktop_style::native_indicator(sid),Some(color),"sid={sid}");
+  }
+  for sid in std::iter::once(row.surface).chain(row.children.iter().copied()) {
+   let canvas=if row.app==app_catalog::App::Browser{None}else{Some(desktop_style::NATIVE_CANVAS)};
+   assert_eq!(desktop_style::native_canvas(row.target,sid),canvas);
+   assert_eq!(desktop_style::native_canvas(3,sid),None);
+   for other in app_catalog::INCARNATIONS.iter().filter(|other|other.target!=row.target){
+    assert_eq!(desktop_style::native_canvas(other.target,sid),None);
+   }
+  }
+  if row.shell_surface.is_some(){assert_eq!(desktop_style::native_canvas(row.target,row.frame()),None);}
+ }
+ assert_eq!(desktop_style::native_label(200),Some("Linen"));assert_eq!(desktop_style::native_indicator(200),Some(0x00a6e3a1));
+ for sid in [0,100,152,999,u64::MAX]{assert_eq!(desktop_style::native_label(sid),None);assert_eq!(desktop_style::native_indicator(sid),None);}
 }
 
 struct SilkBar;
 #[test]
 fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
  let bar=SilkBar;
- for sid in [201,301,307]{FOCUSED_SURFACE_ID=sid;for y in 22..26{for x in 155..159{assert_eq!(phase5_active_app_at(x,y,&bar),Some(0xCBA6F7));}}}
+ for sid in [201,301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;for y in 22..26{for x in 155..159{assert_eq!(phase5_active_app_at(x,y,&bar),Some(0xCBA6F7));}}}
  for sid in [153,306]{FOCUSED_SURFACE_ID=sid;assert_eq!(phase5_active_app_at(155,22,&bar),Some(0x89B4FA));}
  FOCUSED_SURFACE_ID=0;assert_eq!(phase5_active_app_at(155,22,&bar),None);
  FOCUSED_SURFACE_ID=307;assert_eq!(phase5_active_app_at(159,22,&bar),None);assert_eq!(phase5_active_app_at(155,26,&bar),None);
@@ -414,8 +436,8 @@ fn phase5_palette_dot_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==3&&y==0).t
 fn bar_color(_:usize,_:usize,_:&SilkBar)->u32{9}
 #[test]
 fn shared_full_and_incremental_strip_uses_current_focus(){unsafe{
- let bar=SilkBar;FOCUSED_SURFACE_ID=307;
- assert_eq!(top_strip_pixel(155,22,&bar),0xCBA6F7);
+ let bar=SilkBar;
+ for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(155,22,&bar),0xCBA6F7);}
  FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(155,22,&bar),0x89B4FA);
  FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(155,22,&bar),9);
  for (x,c)in [(0,1),(1,2),(2,3),(3,4),(4,9)]{assert_eq!(top_strip_pixel(x,0,&bar),c);}
