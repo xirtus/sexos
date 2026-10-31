@@ -5,9 +5,9 @@
 ## Summary
 
 This ledger's original HEAD, test counts and obligation inventory below describe
-the rounds 108–119 handoff. The independent Browser qualification appended at
-the end has its own exact image and scope. Later primary development is outside
-both snapshots.
+the rounds 108–119 handoff. The appended Browser milestone identifies its
+initial and integrated images separately. Later primary development is outside
+the explicitly identified cohorts.
 
 - **Round 108 is accepted.** The connected desktop session passes natively at both desktop sizes on a kernel identical to the checkpoint image, including same-image cold recovery and independent replay. Every failure on the way was a checker defect; production source did not change.
 - **Rounds 109–115 close or narrow seven authority blockers.** Two ambient kernel paths are gone (slot-0 framebuffer disclosure, kernel-privileged SyncCall). Replies now need an accepted invocation. Capability revocation is real and runs natively at app retirement. Three architectural obligations now have executable checks.
@@ -155,6 +155,8 @@ When an ABI input changes, recompute `abi_version_hash` in `sexos_build_spec.tom
 
 ## Independent Browser SexTime milestone — 31 October
 
+### Initial checkpoint `bf5de8db`
+
 The Browser T action now displays a bounded last-query Clock panel with Gregorian
 UTC, native SexTime seconds and Maya Long Count. Q clears its calendar values.
 Source/precision/snapshot labels remain explicit, and invalid or unavailable
@@ -175,4 +177,29 @@ the exact image, original C/D bindings, input equivalence, raw archive and
 diagnostics. Its frozen inventory remains 4 Open / 26 Partial / System Proven
 false. This is an independently named milestone, not a new numbered round or
 qualification of Claude's newer causal/dirty-close/UiIR work. Integrating and
-verifying newer primary commits is next.
+verifying newer primary commits was the next step at that checkpoint.
+
+### Integrated primary base `e5b95eb0`
+
+The independent branch now incorporates the committed launcher deadline fix,
+Quil dirty-close guard and BOOT-granted UiIR stream. A fresh single frozen
+cohort qualifies the combined image: GREEN_MASTER; 41 registered checks with
+2,590 passing Rust test executions; 854 Python tests; two rejected compiled
+calendar mutations with identical recorded inputs. Browser, Shell, Display and
+Quil ELF scans decode 222,704 instructions with zero inspected vector/FP matches.
+
+Clock native checks also restore the exact original tile after T/Q/T, preserving
+the second snapshot without a new query. Both default tile sizes keep the full
+calendar/provenance rows readable. All eight Clock/connected cohorts pass
+fresh independent replay: **10 boots, 50 verified captures, 52 raw screenshots**;
+two Close screenshots remain observational only. UiIR BOOT pairing, attachments
+and sampled committed focus records are observed across all ten boots, with
+per-stream scope and no rendering-authority/global-epoch claim.
+
+[Integrated evidence](assets/sexos-browser-sextime-integrated-2026-10-31-evidence.json)
+links the 1,420-member size/hash-verified archive. Its exact inventory is
+**2 Open / 28 Partial / System Proven false**, adopting the upstream Partial
+UiIR/causal scope. Global epoch commit and deterministic replay remain Open.
+Later primary commits and a sustained alpha on this newest image need fresh
+qualification. Next independent UI work is a BOOT-routed, nonblocking validated
+status-bar clock; the main physical/storage/lifetime/reserve plan continues.

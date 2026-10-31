@@ -82,6 +82,24 @@ class CertificateTimeOracle(unittest.TestCase):
   for w,h in[(1280,712),(1024,680),(640,375),(512,359)]:
    with self.subTest(w=w):
     f=gate.calendar_frame(w,h,f'Ready({SECONDS})',self.c);self.assertTrue(f['full_calendar']);self.assertLessEqual(f['cols'],63);self.assertGreaterEqual(f['rows'],8);self.assertLessEqual(len(f['data']),512)
+ def restore_fixture(self):
+  text='[shell.document.viewport] target=15 task=15 surface=300 sequence=2 x=640 y=425 w=640 h=375 enqueued=1\n[shell.window.action] action=ZoomToggle frame=13 sid=300 ok=1\n';captures=[];checked=[]
+  for phase in range(3):
+   text+=f'[capture] phase={phase}\n';captures.append(dict(serial_end=len(text)));checked.append(dict(geometry=dict(tile=dict(x=0,y=50,w=1280,h=750),viewport=3)))
+  text+='[shell.window.action] action=ZoomToggle frame=13 sid=300 ok=1\n[capture] phase=3\n';captures.append(dict(serial_end=len(text)));checked.append(dict(geometry=dict(tile=dict(x=640,y=425,w=640,h=375),viewport=4)))
+  return text,captures,checked
+ def test_actual_zoom_restore_requires_the_exact_initial_held_tile(self):
+  text,captures,checked=self.restore_fixture();proof=gate.verify_clock_restore(text,captures,checked,(1280,800));self.assertTrue(proof['ok']);self.assertEqual(proof['restored_viewport'],4)
+ def test_fullscreen_reuse_foreign_tile_and_missing_restore_action_fail(self):
+  for fault in('reused_full','foreign_tile','old_viewport','late_action','foreign_action','no_original'):
+   text,captures,checked=self.restore_fixture()
+   if fault=='reused_full':checked[3]['geometry']['tile']=checked[0]['geometry']['tile']
+   if fault=='foreign_tile':checked[3]['geometry']['tile']['x']=0
+   if fault=='old_viewport':checked[3]['geometry']['viewport']=3
+   if fault=='late_action':captures[3]['serial_end']=captures[2]['serial_end']+1
+   if fault=='foreign_action':text=text.replace('sid=300','sid=999',1)
+   if fault=='no_original':text=text.replace('target=15','target=99')
+   with self.subTest(fault=fault),self.assertRaisesRegex(ValueError,'clock'):gate.verify_clock_restore(text,captures,checked,(1280,800))
  def test_nonready_and_tiny_panels_never_retain_calendar_values(self):
   for state in('Idle','Pending','Unavailable','Cancelled','Uncertain','Rollback','Ready(0)'):
    f=gate.calendar_frame(640,375,state,self.c);self.assertNotIn(b'2026-10-30',f['data']);self.assertNotIn(b'437319907',f['data']);self.assertIsNone(f['utc_text'])

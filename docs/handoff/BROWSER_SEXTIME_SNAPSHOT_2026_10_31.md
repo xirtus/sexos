@@ -1,10 +1,12 @@
 # Browser SexTime snapshot panel
 
-31 October 2026. The Clock panel is qualified on `codex/browser-sextime`,
-including committed primary base `f8058b31`. This independent milestone has no
-round number: Claude owns rounds 120–123 and subsequent primary development.
-Later primary commits, including the first UiIR stream, are outside this tested
-image. Integration requires a fresh source binding and verification.
+31 October 2026. The Clock panel is qualified on `codex/browser-sextime`, now
+including committed primary base `e5b95eb0`: launcher deadline handling,
+Quil's dirty-close guard and the first BOOT-granted UiIR stream. Native checks
+also restore the Clock to its original small tile without another query.
+This independent milestone has no round number; Claude maintains the numbered
+primary ledger. Later primary commits need their own integration verification.
+The initial `bf5de8db` qualification and its original evidence remain below.
 
 The Browser T action now has a dedicated viewport-aware Clock panel. One
 validated last-query snapshot produces Gregorian UTC, SexTime seconds and
@@ -51,7 +53,7 @@ calendar glyphs, old ink across the Browser body and per-capture real pointer
 parking. Failed attempts remain diagnostic. Existing normal, invalid-year and
 Close modes are retained; the normal mode samples, clears and samples again.
 
-## Qualified image and verification
+## Initial checkpoint `bf5de8db` — primary base `f8058b31`
 
 Sealed GREEN_MASTER, with no production source drift during the build:
 
@@ -85,7 +87,7 @@ its two tracked 0644 child scripts are invoked through Bash in fresh checkouts.
 Original manifests and result files are preserved, with the explicit C/D input
 equivalence record; no evidence is relabelled under a replacement binding.
 
-## Evidence and diagnostics
+### Initial evidence and diagnostics
 
 [Machine evidence and scope](assets/sexos-browser-sextime-2026-10-31-evidence.json)
 links the [raw archive](assets/sexos-browser-sextime-2026-10-31-qualified-raw.tar.gz).
@@ -110,7 +112,7 @@ contains the three expected complete flows; the foreign source is not uniquely
 attributed. The final runs retain the same strict flow check and pass. Neither
 the other guest nor Claude's checkout was modified or stopped.
 
-## Remaining scope
+### Initial scope
 
 This snapshot's architectural inventory remains **4 Open / 26 Partial** and
 **System Proven false**. These are this branch's counts, not a report on the
@@ -119,10 +121,62 @@ through existing held routes. A continuously live/authenticated physical or
 network clock, newest-primary sustained alpha, public-web trust, physical
 hardware, SMP, crash/power-loss and hostile containment remain separate work.
 
-Next: integrate the newer primary commits in an isolated checkout, rebind and
-verify the resulting image, then add native Clock tile/resize transitions.
-Continue physical-profile, storage recovery and lifetime/reserve work from the
-main plan without assigning Claude's in-flight round numbers to this milestone.
+## Integrated qualification — primary base `e5b95eb0`
+
+One fresh E cohort binds the combined production source, all checkers and this
+sealed GREEN_MASTER image. Its 572 production inputs and 558 runner inputs
+match the final source bytes. No C/D input-equivalence substitution is needed.
+
+- ISO SHA-256: `49adf544ae131a823308d22a76cd870bcc4a9893c3a9aa27c64ce9d201ff00f8`.
+- Kernel SHA-256: `0b6a11ff799598046d4880f921fe9c216b8a4a292c1414137185748de9780011`.
+- All **41** registered host/static checks pass without source drift:
+  **2,590** passing Rust test executions. The Python suite passes **854** tests.
+- Both retained compiled calendar mutations are rejected and all five of their
+  recorded source inputs are byte-identical to this cohort's inputs.
+- The actual ISO-extracted Browser, Shell, Display and Quil ELFs contain
+  **222,704** decoded instructions with zero inspected vector/FP matches.
+  This remains a four-ELF static inspection, not whole-image or runtime erasure.
+
+Each normal/invalid-year Clock run now captures T, Q, fresh T and a real
+ZoomToggle restore. The final frame must use the exact original held-shell
+tile, a newer viewport and the same second snapshot. Reusing a full-screen
+frame, a foreign tile, an old viewport or an incomplete/missing restore action
+fails. No extra query is issued to make a retained date appear fresh. All four
+restores pass at the two desktop sizes, with all eight calendar/provenance rows
+readable in the default tiles. Tiny fallback remains actual-function host scope.
+
+Six Clock runs provide 16 verified captures and two observational Close
+screenshots. The connected live/cold regressions provide four boots and 34
+verified captures. Fresh independent replay accepts all eight cohorts:
+**10 boots, 50 pixel-verified captures, 52 raw screenshots**. BOOT's UiIR
+pairing, successful producer/consumer attachments and sampled committed focus
+records are observed in all ten boot logs. They establish no complete stream
+capture, rendering authority or global epoch protocol.
+
+[Integrated machine evidence](assets/sexos-browser-sextime-integrated-2026-10-31-evidence.json)
+links the [integrated raw archive](assets/sexos-browser-sextime-integrated-2026-10-31-raw.tar.gz).
+All **1,420** archive members were verified by size and SHA-256. Original
+bindings, build, wire, serial prefixes, PPMs, compressed disks, host/Python logs,
+ELFs/disassembly and replay coordinators are retained. An initial external
+replay wrapper used the wrong connected-result key/path; its diagnostic is
+preserved alongside the corrected fresh wrapper. A packager report-key typo
+was corrected before archive creation. Native evidence was unchanged.
+
+The actual restored [compact desktop](assets/sexos-browser-sextime-integrated-2026-10-31-clock-tile-compact.png)
+and [wide desktop](assets/sexos-browser-sextime-integrated-2026-10-31-clock-tile-wide.png)
+are pixel-identical exports of the native PPMs, with no cursor masks or edited
+guest pixels. The status-bar DEMO clock remains separate and synthetic.
+
+This image's inventory is **2 Open / 28 Partial / System Proven false**.
+`DETERMINISTIC_REPLAY` and global `EPOCH_COMMIT` remain Open. The adopted UiIR
+and per-stream causal work have Partial scope; the Clock panel does not close
+those obligations. Newest-image sustained alpha, physical/SMP, public-web/CA,
+authenticated time, crash/power-loss and hostile containment remain separate.
+
+Next independent UI work: replace the status-bar DEMO with validated time
+through explicit BOOT-held routes and bounded nonblocking probes, preserving
+unknown/source/precision states. Continue the main physical-profile, storage
+recovery and lifetime/reserve plan alongside Claude's numbered work.
 
 GLOBAL_VAS supplies addressing only, BOOT sanctions capability genesis,
 sex-pdx supplies runtime authority and PKU enforces held authority. SexOS is

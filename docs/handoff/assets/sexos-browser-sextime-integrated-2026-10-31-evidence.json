@@ -1,0 +1,306 @@
+{
+  "qualified_on_feature_branch": true,
+  "global_goal_complete": false,
+  "branch": "codex/browser-sextime",
+  "committed_master_base": "e5b95eb00285475209f59e54374c8e7a28957235",
+  "prior_qualified_checkpoint": "bf5de8db2171dbb0af75b92915caf447f894f968",
+  "round_number_unassigned": true,
+  "iso_sha256": "49adf544ae131a823308d22a76cd870bcc4a9893c3a9aa27c64ce9d201ff00f8",
+  "kernel_sha256": "0b6a11ff799598046d4880f921fe9c216b8a4a292c1414137185748de9780011",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "binding_sha256": "679734e79c7d254149c57b97e7d402f5fa4f0e3a2a96bbc6c0a913b33a94289f",
+  "production_inputs": 572,
+  "runner_inputs": 558,
+  "build": "GREEN_MASTER",
+  "registered_host_checks": 41,
+  "rust_test_executions": 2590,
+  "python_tests": 854,
+  "compiled_calendar_controls": {
+    "rejected": 2,
+    "retained_input_hashes_identical_to_current": {
+      "apps/kaleidoscope/src/clock_view.rs": "adf6af7057e3c1179548e54ec863ad709671adad433db96781e25df0aacfcc7b",
+      "tests/browser_calendar.rs": "daf249ebe9c31d6aff197e37859f32247b1cd8b05ba3460d2f9b3f017fef2ed1",
+      "crates/sex-time/src/lib.rs": "c732e5b60bd6fbc15c8ddf5454ba340d55b03bac5f8af329cce22847046030d8",
+      "crates/sex-pdx/src/clock_source.rs": "e956de393b6df261b6aa31a09e37f9928c77a47acbf2daead53e8863812195db",
+      "crates/sex-pdx/src/desktop_style.rs": "897135daad3a079994023df2d49eb17d3a66f54a61fcb2163307b48fa1084f14"
+    }
+  },
+  "native": {
+    "runs": 8,
+    "boots": 10,
+    "verified_captures": 50,
+    "raw_captures": 52,
+    "clock_runs": 6,
+    "clock_verified_captures": 16,
+    "clock_original_tile_restore_captures": 4,
+    "close_observational_raw_captures": 2,
+    "connected_runs": 2,
+    "connected_live_and_cold_boots": 4,
+    "connected_verified_captures": 34,
+    "independent_replay": true,
+    "uiir_boot_attachment_and_sampled_focus_records_observed_in_all_boots": true
+  },
+  "scalar": {
+    "elfs": 4,
+    "instructions": 222704,
+    "inspected_vector_fp_matches": 0,
+    "results": [
+      {
+        "name": "kaleidoscope",
+        "ok": true,
+        "iso_path": "/apps/kaleidoscope",
+        "elf_sha256": "1786a68f6c169b62981eedfa9637be3255cbcfe1fd4cb6f0a8808f7601d132a6",
+        "disassembly_sha256": "5d5fc100d3c69eabcc599570be05d87829a2aa930b94e9abb2c8fa80bcb7f9b3",
+        "instructions": 92168,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-browser-sextime-e-frozen/tested.iso",
+            "-extract",
+            "/apps/kaleidoscope",
+            "/tmp/sexos-browser-sextime-e-scalar/kaleidoscope.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-browser-sextime-e-scalar/kaleidoscope.elf"
+          ]
+        ]
+      },
+      {
+        "name": "silk-shell",
+        "ok": true,
+        "iso_path": "/servers/silk-shell",
+        "elf_sha256": "e0fb403c8edd500180a03d59335dce4f795b3feb33ed59b6e74ba7f012e8d26e",
+        "disassembly_sha256": "e18952d79aa1414d01cdbb4b8caf9b3d93d0e16853ff16cff88a1c96c4f16bfe",
+        "instructions": 88383,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-browser-sextime-e-frozen/tested.iso",
+            "-extract",
+            "/servers/silk-shell",
+            "/tmp/sexos-browser-sextime-e-scalar/silk-shell.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-browser-sextime-e-scalar/silk-shell.elf"
+          ]
+        ]
+      },
+      {
+        "name": "sexdisplay",
+        "ok": true,
+        "iso_path": "/servers/sexdisplay",
+        "elf_sha256": "78380f59b7e6290684dbe1d500b35b1f7ddf70a9e2634743e081e8ccdd193ea3",
+        "disassembly_sha256": "b61a943eb5ed6fdbf5319a30f3e596c1abb45f32317f106b07cd4eb74cab1e9d",
+        "instructions": 25235,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-browser-sextime-e-frozen/tested.iso",
+            "-extract",
+            "/servers/sexdisplay",
+            "/tmp/sexos-browser-sextime-e-scalar/sexdisplay.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-browser-sextime-e-scalar/sexdisplay.elf"
+          ]
+        ]
+      },
+      {
+        "name": "quil",
+        "ok": true,
+        "iso_path": "/servers/quil",
+        "elf_sha256": "f59446305a4084716ca9f141149dd165e1dcd3e046cb6d0fed8832121328a85f",
+        "disassembly_sha256": "46983f90576629b7f4bbc7966f680403fa5eed81b9fb92143f49adf9a4f1d59e",
+        "instructions": 16918,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-browser-sextime-e-frozen/tested.iso",
+            "-extract",
+            "/servers/quil",
+            "/tmp/sexos-browser-sextime-e-scalar/quil.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-browser-sextime-e-scalar/quil.elf"
+          ]
+        ]
+      }
+    ],
+    "scope": "Decoded the ISO-extracted Browser, Shell, Display and Quil ELFs and inspected vector operands/FP-state mnemonics only. No whole-image, runtime stack/register/cache erasure, scheduler or hostile-containment proof."
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false,
+    "inventory": {
+      "APP_RESOURCE_RETIREMENT": "partial",
+      "BOOT_SUCCESSOR_ACTIVATION": "partial",
+      "CAPABILITY_GENESIS": "partial",
+      "CAUSAL_DOMAIN_ORDER": "partial",
+      "CONTEXT_RELEASE": "partial",
+      "DETERMINISTIC_REPLAY": "open",
+      "DISK_ATOMICITY": "partial",
+      "DISK_EXTENT_CUSTODY": "partial",
+      "DISPLAY_COMMIT": "partial",
+      "EPOCH_COMMIT": "open",
+      "FAULT_BY_VALUE": "partial",
+      "GLOBAL_VAS_ADDRESSING": "partial",
+      "INPUT_STARTUP_ORDER": "partial",
+      "INPUT_TRANSPORT": "partial",
+      "LINEN_VIEW_IDENTITY": "partial",
+      "MEMORY_REGION_AUTHORITY": "partial",
+      "NO_AMBIENT_AUTHORITY": "partial",
+      "NO_PER_PROCESS_TABLES": "partial",
+      "PAGING_FAULT_RECOVERY": "partial",
+      "PAGING_SAFE_RECLAMATION": "partial",
+      "PDX_AUTHENTICATED_REPLY": "partial",
+      "PDX_REVOCATION": "partial",
+      "PDX_SLOT_IDENTITY": "partial",
+      "PDX_SOLE_AUTHORITY": "partial",
+      "PKU_ENFORCEMENT_ONLY": "partial",
+      "SCHEDULER_OWNERSHIP": "partial",
+      "TASK_EXIT_MEMORY_CLEANUP": "partial",
+      "UIIR_AUTHORIZED_STREAM": "partial",
+      "USERLAND_MEMORY_AUTHORITY": "partial",
+      "WAKE_LIFECYCLE": "partial"
+    }
+  },
+  "archive": {
+    "path": "assets/sexos-browser-sextime-integrated-2026-10-31-raw.tar.gz",
+    "sha256": "fb4155d5d63f1596f90fa8ac10a23c3b6e7e30f19df6239c2bc0f28dc59a06f3",
+    "bytes": 10595049,
+    "members": 1420,
+    "payload_manifest_sha256": "c294a27d470f09562a5fb623d7b4b971e989a19efa9aa71e784bfb63690d0c5f",
+    "all_members_size_and_sha256_verified": true,
+    "disks": [
+      {
+        "path": "/tmp/sexos-browser-sextime-e-build/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-clock-normal-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-clock-normal-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-clock-invalid-year-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-clock-invalid-year-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-clock-close-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-clock-close-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-connected-wide/recovery/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-connected-wide/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-connected-compact/recovery/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-browser-sextime-e-native-connected-compact/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/tmp/sexos-r100a-seed.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      }
+    ]
+  },
+  "screenshots": [
+    {
+      "path": "assets/sexos-browser-sextime-integrated-2026-10-31-clock-tile-wide.png",
+      "sha256": "3564e56174ef0c736408ddc7959415cbc42ae76440f22c1458d3c56bc7b49fe8",
+      "source_ppm_sha256": "94d2f043f6997138f986a7ac92c0358ba1b2f27e7a8ac265561d161c12ace3e8",
+      "pixel_identical": true,
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "path": "assets/sexos-browser-sextime-integrated-2026-10-31-clock-tile-compact.png",
+      "sha256": "f5f763c4366cd80022fe0037f52589b5d6cec4b146f6912e4dec01ae409a5546",
+      "source_ppm_sha256": "a0fdda6066ba3424b5c1c59f069bad033470dc94bb330f65be6297d21fe914ff",
+      "pixel_identical": true,
+      "width": 1024,
+      "height": 768
+    }
+  ],
+  "prior_evidence": {
+    "path": "assets/sexos-browser-sextime-2026-10-31-evidence.json",
+    "sha256": "24422b2f5a2ca68b676fe8cb18e73d72e1dc111706c1530be24070439c9cc130"
+  },
+  "diagnostics": "The first external E combined replay wrapper expected a nonexistent stored proof key and cold-directory name; original wrapper/log retained. Corrected fresh wrapper uses the existing connected replay result shape and recovery directory. Native source, manifests, captures and result files were unchanged.",
+  "scope": "One frozen E image/source/checker cohort integrates committed primary e5b95eb0. Clock normal/invalid-year runs restore exact original held-shell tiles after T/Q/T without another query; all four frames are pixel/receipt/source joined. Tiny fallback remains host scope. UiIR observations cover BOOT pairing, attachments and sampled committed focus records, not complete stream capture, rendering authority or global epochs. No later-primary, sustained-newest-image alpha, live/authenticated physical/NTP clock, public-web/CA, physical/SMP, power-loss/crash, hostile-containment, runtime register/cache erasure or System Proven claim."
+}

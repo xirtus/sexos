@@ -189,6 +189,19 @@ def inspect_clock(trace,mode,command,host_start,host_end):
  except(AssertionError,ValueError)as exc:errors.append(str(exc))
  return dict(ok=not errors,errors=errors,joins=joins,closed_pending=closed_pending,host_utc_bracket=dict(start=host_start,end=host_end,precision_slack_seconds=1),scope='Fresh exact source/service/client UTC snapshots under explicit trusted q35 host-clock configuration; independent Python UTC glyph conversion. No injected native rollback, NTP/authenticity, physical RTC, persistent cross-reboot floor or certificate validation proof.')
 
+def verify_clock_restore(trace,captures,checked,resolution):
+ """A fourth frame must restore the original held-shell tile, without T."""
+ if len(captures)!=4 or len(checked)!=4:raise ValueError('missing clock restore capture')
+ zooms=list(re.finditer(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',trace))
+ if len(zooms)!=2 or not(zooms[0].end()<=captures[0]['serial_end']<captures[2]['serial_end']<=zooms[1].start()and zooms[1].end()<=captures[3]['serial_end']):raise ValueError('clock restore lacks two actual ordered Zoom actions')
+ original=list(re.finditer(r'\[shell.document.viewport\] target=15 task=15 surface=300 sequence=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) enqueued=1',trace[:zooms[0].start()]))
+ if not original:raise ValueError('clock original tile has no held-shell notice')
+ tile=dict(zip(('x','y','w','h'),map(int,original[-1].groups()[1:])))
+ full=dict(x=0,y=50,w=resolution[0],h=resolution[1]-50)
+ if any(f['geometry']['tile']!=full for f in checked[:3])or checked[3]['geometry']['tile']!=tile or tile==full:raise ValueError('clock did not restore exact original tile')
+ if checked[3]['geometry']['viewport']<=checked[2]['geometry']['viewport']:raise ValueError('clock restore reused viewport')
+ return dict(ok=True,original_tile=tile,full_screen=full,full_viewport=checked[2]['geometry']['viewport'],restored_viewport=checked[3]['geometry']['viewport'],zoom_actions=2)
+
 def replay_evidence(root,iso,binding_path,out):
  """Read-only verification of terminal raw clock evidence in a fresh process."""
  from https_asset_gate import verify_parking
@@ -198,7 +211,7 @@ def replay_evidence(root,iso,binding_path,out):
  if manifest['binding']!=bound or manifest['pixel_source_sha256']!=contract['source_sha256']or manifest['serial_offset_units']!=SERIAL_UNITS:raise ValueError('clock source/image/prefix binding differs')
  command=manifest['command'];resolution=tuple(map(int,manifest['resolution'].split('x')));mode=manifest['mode']
  if command[command.index('-cdrom')+1]!=str(Path(iso).resolve())or command.count('VGA,xres='+manifest['resolution'].replace('x',',yres='))!=1 or command.count(manifest['model']+',netdev=peer,mac=52:54:00:12:34:56')!=1 or not command_profile(command,mode)['ok']:raise ValueError('actual clock device/image/RTC profile differs')
- captures=result['pixels'];names=['clock-first','clock-cleared','clock-second']if mode!='close'else[]
+ captures=result['pixels'];names=['clock-first','clock-cleared','clock-second','clock-tile']if mode!='close'else[]
  if [f['name']for f in captures]!=names:raise ValueError('missing/reordered clock capture phases')
  required={'serial.log','wire.pcap','endpoint-exchanges.json','actions.json','seed.img.gz','nvme.img.gz'}|{f['screenshot']for f in captures}
  if mode=='close':required.add('clock-closed.ppm')
@@ -217,7 +230,7 @@ def replay_evidence(root,iso,binding_path,out):
   if len(frame)>=42 and frame[12:14]==b'\x08\0'and frame[23]==17 and frame[26:30]==bytes([10,0,2,15]):
    at=14+(frame[14]&15)*4
    if int.from_bytes(frame[at+2:at+4],'big')==46079:raise ValueError('clock query emitted DNS')
- expected_states=([f'Ready({clock["joins"][0]["seconds"]})','Cancelled',f'Ready({clock["joins"][1]["seconds"]})']if mode=='normal'else['Unavailable','Cancelled','Unavailable'])if captures else[]
+ expected_states=([f'Ready({clock["joins"][0]["seconds"]})','Cancelled',f'Ready({clock["joins"][1]["seconds"]})',f'Ready({clock["joins"][1]["seconds"]})']if mode=='normal'else['Unavailable','Cancelled','Unavailable','Unavailable'])if captures else[]
  checked=[];previous=0
  for frame,state in zip(captures,expected_states):
   prefix=frame_prefix(trace,frame)
@@ -225,6 +238,7 @@ def replay_evidence(root,iso,binding_path,out):
   proof=verify_clock_pixels(prefix,(out/frame['screenshot']).read_bytes(),state,contract,resolution)
   if not proof['ok']:raise ValueError('clock raw pixels failed: '+str(proof['errors']))
   checked.append(dict(name=frame['name'],**proof));previous=frame['serial_end']
+ restored=verify_clock_restore(trace,captures,checked,resolution)if captures else None
  parks=[a for a in actions if a.get('kind')=='park']
  if captures:verify_parking(trace,captures,parks,resolution)
  cleanup=None
@@ -232,7 +246,7 @@ def replay_evidence(root,iso,binding_path,out):
   requests=list(re.finditer(r'\[shell.app.close.request\] target=15 task=15 surface=300',trace))
   if len(requests)!=1:raise ValueError('missing/duplicate exact Browser Close request')
   cleanup=cleanup_receipts(trace,15,15,requests[0].start())
- return dict(ok=True,binding=bound,mode=mode,captures=len(checked),pixels=checked,clock=clock,wire=wire,owners=owners,authority=authority,self_wait=waiting,cleanup=cleanup,scope='Fresh-process replay of exact clock source/service/client snapshots, Gregorian/SexTime/Long Count whole-body foreground and erasure, parked real pointer, raw wire and terminal disks. Calendar formatting changes no clock trust or wire epoch.')
+ return dict(ok=True,binding=bound,mode=mode,captures=len(checked),pixels=checked,clock=clock,restored_tile=restored,wire=wire,owners=owners,authority=authority,self_wait=waiting,cleanup=cleanup,scope='Fresh-process replay of exact clock source/service/client snapshots, Gregorian/SexTime/Long Count whole-body foreground and erasure, actual original-tile restoration without another query, parked real pointer, raw wire and terminal disks. Calendar formatting changes no clock trust or wire epoch.')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',type=Path);p.add_argument('--binding',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--mode',choices=['normal','invalid-year','close'],default='normal');p.add_argument('--model',choices=['e1000','e1000e'],default='e1000e');p.add_argument('--resolution',choices=['1280x800','1024x768'],default='1280x800');p.add_argument('--check',action='store_true');a=p.parse_args()
@@ -287,6 +301,10 @@ def main():
   raise TimeoutError(pattern)
  def key(code,pattern):
   start=len(text());q.key(code);return wait(pattern,start)
+ def zoom():
+  key('grave_accent',r'\[shell.palette.item\] idx=0')
+  for old,new in[(0,9),(9,8)]:key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
  def picture(state,name):
   nonlocal park_phase
   from launcher_workflow_gate import pointer_park
@@ -306,9 +324,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
-  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key);key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in[(0,9),(9,8)]:key('k',rf'\[shell.palette.select\] old={old} new={new}')
-  start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
+  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key);zoom()
   start=len(text());q.key('t');wait(r'\[shell.browser.input\] code=20 down=1 slot=43 accepted=1',start)
   if a.mode=='close':
    wait(r'\[certificate.time.snapshot\] owner=15 task=15 seq=1 seconds=\d+ source=q35_cmos_utc precision=1 receipt=retained',start,interval=.002);closed=len(text());q.key_sequence(['f11']);wait(r'\[browser.clock.closed\] target=15 task=15 pending=[01] terminal=1',closed);wait(r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1',closed);cleanup=cleanup_receipts(text(),15,15,closed);q.cmd('screendump',{'filename':str(out/'clock-closed.ppm')});actions.append(dict(action='actual_F11_after_retained_snapshot',pending_claim='Observed pending0or1 reported exactly; no race-dependent pending claim.'))
@@ -316,6 +332,7 @@ def main():
    expected=r'Ready\(\d+\)'if a.mode=='normal'else'Unavailable';first=wait(rf'\[browser.clock.view\] state=({expected}) source=q35_cmos_utc snapshot=1',start);picture(first[1],'clock-first')
    start=len(text());q.key('q');wait(r'\[shell.browser.input\] code=16 down=1 slot=43 accepted=1',start);wait(r'\[browser.clock.view\] state=Cancelled source=q35_cmos_utc snapshot=1',start);picture('Cancelled','clock-cleared');delay=time.monotonic();time.sleep(1.25);elapsed=time.monotonic()-delay
    start=len(text());q.key('t');second=wait(rf'\[browser.clock.view\] state=({expected}) source=q35_cmos_utc snapshot=1',start);picture(second[1],'clock-second');actions.append(dict(action='actual_T_Q_T',between_clear_and_next_query_seconds=elapsed));assert elapsed>=1.2
+   zoom();picture(second[1],'clock-tile');actions.append(dict(action='actual_zoom_restore',clock_query='retained_second_snapshot_no_new_T'))
  except Exception as exc:failure=repr(exc)
  finally:
   host_end=time.time();stop.set();listener.close();thread.join(timeout=1)
