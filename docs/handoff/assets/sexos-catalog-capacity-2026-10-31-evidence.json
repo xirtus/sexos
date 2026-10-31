@@ -1,0 +1,312 @@
+{
+  "round": 134,
+  "qualified_capacity_preparation": true,
+  "larger_actual_reserve": false,
+  "full_os_goal_complete": false,
+  "source_commit": "21e7a96031c6e3596080b4f4533ca9ecec568171",
+  "iso_sha256": "f854239c5053a2724f1d986361f97c59674273f7ec133a6cc634ce18fa0b8660",
+  "kernel_sha256": "bd2a3fec9fc36bb16d28c1f9773b8e29cbe6f7ed17506363ebf33949a1dfba54",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 576,
+  "runner_inputs": 579,
+  "committed_input_audit": {
+    "ok": true,
+    "commit": "21e7a96031c6e3596080b4f4533ca9ecec568171",
+    "production": 576,
+    "runner": 579,
+    "unique": 1155,
+    "unchanged_boot_authority_records": 63,
+    "comparison": "/tmp/sexos-catalog-integration-build-c/serial.log",
+    "authority_records": [
+      "[bootgraph.cap.grant from=kernel to=1 slot=SLOT_SHELL target=3 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=1 slot=SLOT_SILKBAR target=6 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SHELL_INPUT_READY target=4 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SHELL target=3 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SILKBAR target=6 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SEXSTORE target=8 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=4 slot=SLOT_INPUT target=input_ring ok=1]",
+      "[bootgraph.cap.grant from=kernel to=4 slot=SLOT_SHELL target=3 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=5 slot=9 target=4 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=6 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=6 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=7 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=7 slot=SLOT_STORAGE target=11 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_LINEN target=7 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_QUIL target=9 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=9 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=9 slot=SLOT_STORAGE target=11 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SPINDLE target=12 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=10 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_STORAGE target=11 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_LINEN target=7 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_SHELL target=3 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=11 slot=SLOT_BLOCK target=2 ok=1 optional=1]",
+      "[boot.memory.region] pd=5 slot=32 region=1 bytes=262144 rights=15 peer=0",
+      "[boot.memory.region] pd=13 slot=32 region=2 bytes=262144 rights=15 peer=0",
+      "[boot.memory.region] pd=2 slot=32 region=3 bytes=524288 rights=15 peer=0",
+      "[boot.memory.region] pd=11 slot=17 region=4 bytes=4096 rights=7 peer=2",
+      "[boot.memory.region] pd=2 slot=17 region=4 bytes=4096 rights=7 peer=11",
+      "[boot.memory.region] pd=2 slot=33 region=5 bytes=3145728 rights=7 peer=1",
+      "[boot.memory.region] pd=1 slot=33 region=5 bytes=3145728 rights=3 peer=2",
+      "[boot.memory.region] pd=11 slot=64 region=6 bytes=16384 rights=7 peer=9",
+      "[boot.memory.region] pd=9 slot=64 region=6 bytes=16384 rights=3 peer=11",
+      "[boot.memory.region] pd=11 slot=65 region=7 bytes=16384 rights=7 peer=16",
+      "[boot.memory.region] pd=16 slot=64 region=7 bytes=16384 rights=3 peer=11",
+      "[boot.memory.region] pd=11 slot=66 region=8 bytes=16384 rights=7 peer=18",
+      "[boot.memory.region] pd=18 slot=64 region=8 bytes=16384 rights=3 peer=11",
+      "[boot.memory.region] pd=3 slot=96 region=9 bytes=4096 rights=7 peer=1",
+      "[boot.memory.region] pd=1 slot=96 region=9 bytes=4096 rights=3 peer=3",
+      "[boot.memory.region] pd=1 slot=97 region=10 bytes=4096 rights=7 peer=3",
+      "[boot.memory.region] pd=3 slot=97 region=10 bytes=4096 rights=3 peer=1",
+      "[bootgraph.cap.grant from=kernel to=15 slot=SLOT_SEXT target=14 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=10 slot=SLOT_SEXT target=14 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=15 slot=SLOT_BELL target=10 ok=1]",
+      "[boot.app.resources] target=9 task=9 surface=156 slot=38 private_pages=70 private_bytes=286720 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=12 task=12 surface=154 slot=39 private_pages=94 private_bytes=385024 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=15 task=15 surface=300 slot=40 private_pages=151 private_bytes=618496 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=16 task=16 surface=301 slot=45 private_pages=70 private_bytes=286720 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=17 task=17 surface=302 slot=50 private_pages=94 private_bytes=385024 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=18 task=18 surface=307 slot=54 private_pages=70 private_bytes=286720 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.successor] logical=9 incarnation=2 predecessor=9 successor=16 task=16 surface=301 key=9 dormant=1 leaves=70 runtime_mint=0",
+      "[boot.app.successor] logical=12 incarnation=2 predecessor=12 successor=17 task=17 surface=302 key=12 dormant=1 leaves=94 runtime_mint=0",
+      "[boot.app.successor] logical=9 incarnation=3 predecessor=16 successor=18 task=18 surface=307 key=9 dormant=1 leaves=70 runtime_mint=0",
+      "[boot.app.catalog] target=9 task=9 surface=156 logical=9 incarnation=1 predecessor=0 lifecycle=38 close=41 route=11 dormant=0 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=12 task=12 surface=154 logical=12 incarnation=1 predecessor=0 lifecycle=39 close=42 route=14 dormant=0 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=15 task=15 surface=300 logical=15 incarnation=1 predecessor=0 lifecycle=40 close=43 route=43 dormant=0 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=16 task=16 surface=301 logical=9 incarnation=2 predecessor=9 lifecycle=45 close=46 route=47 dormant=1 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=17 task=17 surface=302 logical=12 incarnation=2 predecessor=12 lifecycle=50 close=51 route=52 dormant=1 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=18 task=18 surface=307 logical=9 incarnation=3 predecessor=16 lifecycle=54 close=56 route=57 dormant=1 grants_verified=1 data_only=1",
+      "[boot.app.catalog.complete] rows=6 actual_grants=1 runtime_mint=0"
+    ],
+    "host_checks": 43,
+    "rust_executions": 2663
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2663,
+  "python_tests": 965,
+  "capacity_controls": {
+    "compiled_rows": [
+      7,
+      64
+    ],
+    "compile_rejected_rows": [
+      65
+    ],
+    "actual_boot_incarnations": 6,
+    "current_authority_records_unchanged": 63,
+    "presentation_bits": 64,
+    "document_legacy_region_ids": [
+      6,
+      7,
+      8
+    ],
+    "further_document_region_base": 8192
+  },
+  "native": {
+    "workflow_boots": 6,
+    "sealed_probe_boots": 1,
+    "total_boots": 7,
+    "verified_captures": 76,
+    "groups": {
+      "native": [
+        {
+          "profile": "compact",
+          "status": 0,
+          "command": [
+            "python3",
+            "/tmp/sexos-capacity-a-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/tmp/sexos-capacity-a-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-capacity-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-capacity-a-connected-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768"
+          ],
+          "out": "/tmp/sexos-capacity-a-connected-compact",
+          "driver": "/tmp/sexos-capacity-a-connected-compact-driver.log",
+          "seconds": 50.44762141699903,
+          "boots": 2,
+          "verified_captures": 17
+        },
+        {
+          "profile": "wide",
+          "status": 0,
+          "command": [
+            "python3",
+            "/tmp/sexos-capacity-a-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/tmp/sexos-capacity-a-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-capacity-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-capacity-a-connected-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800"
+          ],
+          "out": "/tmp/sexos-capacity-a-connected-wide",
+          "driver": "/tmp/sexos-capacity-a-connected-wide-driver.log",
+          "seconds": 59.69321591593325,
+          "boots": 2,
+          "verified_captures": 17
+        }
+      ],
+      "alpha": [
+        {
+          "profile": "compact",
+          "command": [
+            "python3",
+            "/tmp/sexos-capacity-a-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-capacity-a-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-capacity-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-capacity-a-alpha-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find"
+          ],
+          "out": "/tmp/sexos-capacity-a-alpha-compact",
+          "driver": "/tmp/sexos-capacity-a-alpha-compact-driver.log",
+          "status": 0,
+          "seconds": 57.22038304200396,
+          "verified_captures": 21,
+          "fresh_replay": true
+        },
+        {
+          "profile": "wide",
+          "command": [
+            "python3",
+            "/tmp/sexos-capacity-a-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-capacity-a-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-capacity-a-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-capacity-a-alpha-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find"
+          ],
+          "out": "/tmp/sexos-capacity-a-alpha-wide",
+          "driver": "/tmp/sexos-capacity-a-alpha-wide-driver.log",
+          "status": 0,
+          "seconds": 67.09842366690282,
+          "verified_captures": 21,
+          "fresh_replay": true
+        }
+      ]
+    },
+    "boot_audit": {
+      "ok": true,
+      "boots": 7,
+      "workflow_boots": 6,
+      "sealed_probe_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-capacity-a-build/serial.log",
+          "bytes": 492791,
+          "sha256": "4f9932306b4bff8d4ff90fe9ce1db0d28d9354b6b799674b8acebc29465f6dc3",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-capacity-a-connected-compact/recovery/serial.log",
+          "bytes": 382546,
+          "sha256": "095622668e4ae27b72fd3df79086e2d9a8fd32251e0a82ed94469ea73799c198",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-capacity-a-connected-compact/session/serial.log",
+          "bytes": 669211,
+          "sha256": "80ee9debe4104ea091e9e1440757f9a9e40815be0f665b50993023ce223dd719",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-capacity-a-connected-wide/recovery/serial.log",
+          "bytes": 387332,
+          "sha256": "66eccf6b0b58d65f1d69a925010c82343f49031623a205e9a04f86e55ce3c4bd",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-capacity-a-connected-wide/session/serial.log",
+          "bytes": 676516,
+          "sha256": "887cca5ced9ec75218639622e99d90eea0b29f8f8733a60820d9e66ccce1835f",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-capacity-a-alpha-compact/serial.log",
+          "bytes": 1437642,
+          "sha256": "6ec450392260102fa9963e33de2cbb37f5c4bc2eab4931cfa5cadf84d8fc7a47",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-capacity-a-alpha-wide/serial.log",
+          "bytes": 1463437,
+          "sha256": "8e72087ccd7de0b702036992181f82560176c177f2e9f8846a8a648c106a1bd1",
+          "subjects": 6,
+          "preseal": true
+        }
+      ],
+      "scope": "Exact six native preseal receipts per boot, coupled to frozen runtime validator/source. Display child policy and broader grant closure are separate obligations."
+    },
+    "fresh_connected_and_alpha_replays": true,
+    "sustained_acceptance": false
+  },
+  "scalar": {
+    "elfs": 5,
+    "instructions": 225473,
+    "inspected_vector_fp_matches": 0
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-catalog-capacity-2026-10-31-raw.tar.gz",
+    "sha256": "2acd0660c536b08045bf442fddb38ae70c5b25f4c9add0716ede4fecc76c6740",
+    "bytes": 9198882,
+    "members": 1409,
+    "payload_manifest_sha256": "73662389340bb082823294fd74865e5376f40f902d2b6b6ccfe72a75202d1239",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Shared catalog-derived capacity, bounded presentation bits and future document namespace. Production BOOT authority unchanged; actual larger reserve/Browser successors, new-image pending-device/1800s, physical/SMP/hostile containment/global epoch and daily-driver acceptance remain outside this result."
+}

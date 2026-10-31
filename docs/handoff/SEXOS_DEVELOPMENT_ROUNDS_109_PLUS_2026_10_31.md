@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–133
+# SexOS development: round 108 acceptance and rounds 109–134
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -50,14 +50,15 @@ The round numbers below are the order the work was done. They do not match the p
 | 123 | Quil declines Close with unsaved work; window stays; next Close confirms | host + control-free checks + native (decline, intact window, confirm) | `42074deb` |
 | 124 | First BOOT-granted UiIR stream (Shell → Display), per-sender sequence + epochs | host + control, sealed, native both sizes | `e5b95eb0` |
 | 125 | Shell restore focus bounded by its tick deadline, not a poll count; cancel and content-blocker diagnostics | host regression + native soak | `f8058b31`, `bf86a0fc`, `1c54fbbf` |
-| 126 | Reply bookkeeping never refuses an invocation (round 111 defect); Display heartbeat; stale wait checker | host regression, sealed, native both sizes + compact 1800 s | `c89ac1b5`, `754c0513`, `9e3348f9`, `3c02b10c` |
+| 126 | Reply-admission ceiling removed (later saturation corrected in `63b2f118`); Display heartbeat; stale wait checker | host regression, sealed, native both sizes + compact 1800 s | `c89ac1b5`, `754c0513`, `9e3348f9`, `3c02b10c` |
 | 127 | Quil header keeps the document name beside long notices | host + native (compact) | `b4382ea3` |
-| 128 | Long-session exhaustion audit after the reply-count bug | measured rates; no further fix needed today (see below) | — |
+| 128 | Long-session exhaustion audit after the reply-count bug | historical rate audit; later exact reply-credit fix in `63b2f118` | — |
 | 129 | BOOT app incarnation catalog (`sex-pdx::app_catalog`), checked against the kernel boot plan | host gate + native (connected, all-incarnation rehearsal) | `d43e5347` |
 | 130 | Shell's app view tables, routes and admission checks driven by the catalog; second stale self-wait checker fix | host (pinned to old tables) + native both sizes | `4762329f`, `c3677532` |
 | 131 | Display's frame, content, viewport-group and per-pixel owner tables driven by the catalog | host (16,000-pair equivalence) + native both sizes | `4b714ed5` |
 | 132 | sex-pdx clipboard, canvas, document-view and Spindle status/view policies driven by the catalog | host (equivalence) + 41/41 host checks + native both sizes | `3827a172` |
 | 133 | Kernel BOOT app reservation (successors, grants, activation chain, document buffers) built from the catalog | identical boot authority/grant records before and after; native both sizes | `3f403a14` |
+| 134 | Catalog-derived lifecycle/document capacity; 64-bit presentation receipts; separate future document region namespace | synthetic7/64 consumers and 65 rejection;43 host/2,663 Rust/965 Python; sealed and native both sizes | `21e7a960` |
 
 ## Round details
 
@@ -209,7 +210,7 @@ Already migrated to the catalog:
 
 Still hand-wired: Quil/Spindle/Linen self-checks, Spindle history recovery (one successor) and sexfiles' save list. The kernel boot plan and grants moved to the catalog in round 133.
 
-The plan from here: migrate those, then make the kernel's BOOT reservation loop over the catalog. After that, adding reserved incarnations, such as a reopenable Browser, becomes a data change with a known memory cost (about 69 private pages for each Quil incarnation).
+The kernel reservation loop now consumes the catalog. Round134 derives shared capacity and document bounds, but further app/service self-checks, delivery/task/surface budgets and exact broker bindings still need migration before adding a reserved incarnation can be a data change. A reopenable Browser requires those actual BOOT-held edges as well as its private image.
 
 ## Verification state at handoff
 
@@ -458,4 +459,17 @@ distinct from the separately qualified pending-device edge.
 Next: remove remaining catalog/capacity duplication, expand finite BOOT app
 reserves and exact service grants (including Browser relaunch), verify repeated
 reopen/exhaustion and launcher responsiveness, then sustain the expanded image.
+Inventory remains 2 Open / 28 Partial / System Proven false; goal active.
+
+
+## Round 134: reservation storage follows the catalog
+
+The [capacity handoff](CATALOG_CAPACITY_2026_10_31.md) records source `21e7a960`:
+lifecycle and document bounds derive from the catalog; presentation receipts
+have 64 distinct bits with an explicit compile-time ceiling; future document
+regions avoid UiIR 9/10. Synthetic 7/64 consumers pass and 65 is rejected. All 43
+host checks/2,663 Rust executions and 965 Python tests pass, the sealed build is
+GREEN, and 63 BOOT authority records match the prior integrated image exactly.
+Native connected live/cold and app/find/relaunch workflows run at both sizes.
+The actual catalog remains six entries; larger reserves are still the next work.
 Inventory remains 2 Open / 28 Partial / System Proven false; goal active.
