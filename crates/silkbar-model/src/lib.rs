@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod civil_clock;
+
 // ── Geometry Constants (default positions for layout construction) ──────────
 
 pub const PANEL_X: usize = 80;
@@ -53,12 +55,13 @@ pub const LAYOUT_COUNT: usize = 11;
 
 /// ABI version for SilkBar model layout (not the PDX wire protocol).
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
+/// v5: added separate civil snapshot state and SetCivilClock(11).
 /// v4: added SetActiveApp(8), SetTintAccent(9), SetPaletteState(10); SilkBar
 ///     struct extended with active_app_sid, accent_tint_idx, palette_* fields.
 /// Consumers query `SILKBAR_ABI_VERSION` for PDX compatibility, not this value.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 /// Must equal `ABI_VERSION`. Checked by `validate_contract()` at startup.
-pub const SILK_DE_BAR_ABI_V1: u32 = 4;
+pub const SILK_DE_BAR_ABI_V1: u32 = 5;
 pub const SILK_DE_BAR_LAYOUT_V1: u32 = 11;
 pub const SILK_DE_BAR_THEME_V1: u32 = 10;
 pub const SILK_DE_REQUIRED_WORKSPACE_SLOTS: usize = WORKSPACE_COUNT;
@@ -78,9 +81,10 @@ pub const SILKBAR_CHIP_IDX_MAX: u8 = (MAX_CHIPS - 1) as u8;
 
 /// PDX-facing ABI version (u64 for register-width return).
 /// Distinct from `ABI_VERSION` (model layout version).
+/// v4: additive SetCivilClock(11), canonical version1 framing.
 /// v3: new UpdateKind variants 8/9/10 (SetActiveApp, SetTintAccent, SetPaletteState).
 /// Returned by `OP_SILKBAR_GET_ABI`. Consumers use this for PDX compat checks.
-pub const SILKBAR_ABI_VERSION: u64 = 3;
+pub const SILKBAR_ABI_VERSION: u64 = 4;
 
 /// Opcode: ping → returns 0 (connectivity check).
 pub const OP_SILKBAR_PING: u64 = 0xF0;
@@ -179,6 +183,9 @@ pub struct SilkBar {
     pub clock_hh: u8,
     pub clock_mm: u8,
     pub clock_ss: u8,
+    /// Explicit legacy Demo presentation versus bounded civil snapshots.
+    pub civil_enabled: bool,
+    pub civil_clock: civil_clock::CivilClock,
     /// Bitmask of selected-window options (OPTION_CLOSE|ZOOM|MINIMIZE|MOVE).
     /// Display-only — no action behavior in V1.
     pub selected_options_mask: u32,
@@ -383,6 +390,9 @@ pub enum UpdateKind {
     /// Command palette state: a=packed(open<<0 | selected<<1 | available<<9), b=0.
     /// silk-shell producer sends on palette toggle/selection change.
     SetPaletteState = 10,
+    /// Versioned source-bound UTC snapshots; only the exact-metadata receiver
+    /// may apply this form. Generic apply_update deliberately rejects it.
+    SetCivilClock = 11,
 }
 
 /// ABI-stable update message for mutating a `SilkBar` from a PDX caller.
@@ -482,7 +492,8 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
             true
         }
         4 => {
-            // SetClock: a=hh (0-23), b packed = (mm << 8) | ss
+            // SetClock is a legacy demonstration counter, never civil UTC.
+            if bar.civil_enabled {return false;}
             let hh = update.a.min(23) as u8;
             let mm = (update.b >> 8).min(59) as u8;
             let ss = (update.b as u8).min(59);
@@ -879,6 +890,8 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     clock_hh: 10,
     clock_mm: 42,
     clock_ss: 0,
+    civil_enabled: false,
+    civil_clock: civil_clock::CivilClock::new(),
     selected_options_mask: 0,
     bell_state: BellState {
         total_visible: 0,

@@ -283,6 +283,7 @@ fn clock_visible_monotonic_ok(prev: u32, curr: u32) -> bool {
 
 #[inline(always)]
 fn clock_canon_apply_to_bar(bar: &mut SilkBar) {
+    if bar.civil_enabled {return;}
     unsafe {
         bar.clock_hh = CLOCK_CANON_HH;
         bar.clock_mm = CLOCK_CANON_MM;
@@ -1352,7 +1353,57 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
 /// or `None` if it is background/not in the clock area.
 /// This is called inline during rendering to avoid a separate overlay pass
 /// that would create a tear window between bar-fill and clock-overlay.
+/// Two finite ASCII rows share the ordinary clock chip and renderer font.
+/// The wire seconds are already source-range checked; modulo is a UTC view of
+/// that one sample, never elapsed time or an estimate from rendering cadence.
+fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]{
+    use silkbar_model::civil_clock::State;
+    let mut lines=[[b' ';13];2];
+    let (first,second):(&[u8],&[u8])=match clock.state(){
+        State::Snapshot=>(b"UTC 00:00:00",b"q35 1s snap"),
+        State::Rollback=>(b"UTC blocked",b"q35 1s stop"),
+        State::Exhausted=>(b"UTC ended",b"src? prec?"),
+        State::Unavailable=>(b"UTC unknown",b"q35 1s fail"),
+        State::Unknown if clock.is_stale()=>(b"UTC stale",b"q35 1s old"),
+        State::Unknown=>(b"UTC unknown",b"src? prec?"),
+    };
+    lines[0][..first.len()].copy_from_slice(first);lines[1][..second.len()].copy_from_slice(second);
+    if clock.state()==State::Snapshot{
+        let day=clock.seconds()%86_400;
+        for(at,value)in[(4,day/3600),(7,day/60%60),(10,day%60)]{
+            lines[0][at]=b'0'+(value/10)as u8;lines[0][at+1]=b'0'+(value%10)as u8;
+        }
+    }
+    lines
+}
+fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar)->Option<u32>{
+    let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
+    if x<cx||x>=cx+cw||y<cy||y>=cy+ch{return None;}
+    let row=if (cy+1..cy+8).contains(&y){0}else if(cy+11..cy+18).contains(&y){1}else{return None;};
+    let col=(x-cx)/6;let px=(x-cx)%6;if col>=13||px>=5{return None;}
+    let lines=civil_clock_lines(&bar.civil_clock);let glyph=ascii_glyph_index(lines[row][col])?;
+    let py=y-(cy+if row==0{1}else{11});
+    ((FONT_ASCII_5X7[glyph][py]>>(4-px))&1!=0).then_some(DEFAULT_THEME.text)
+}
+/// One completed-frame observation per changed clock stamp. This is called
+/// only after the full/strip framebuffer writes and overlays finish. Accepted
+/// protocol updates remain unconfirmed until this path actually runs.
+fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
+    use silkbar_model::civil_clock::State;
+    if !bar.civil_enabled{return;}
+    let(x,y,cw,ch)=module_rect(bar,ModuleSlot::Clock);
+    if x.checked_add(cw).map_or(true,|right|right>w)||y.checked_add(ch).map_or(true,|bottom|bottom>h){return;}
+    let clock=&bar.civil_clock;
+    let stamp=(clock.sequence(),clock.state(),clock.seconds(),clock.is_stale(),w,h);
+    static mut LAST_CIVIL_DRAW:Option<(u32,State,u32,bool,usize,usize)>=None;
+    unsafe{
+        if LAST_CIVIL_DRAW==Some(stamp){return;}
+        LAST_CIVIL_DRAW=Some(stamp);
+    }
+    sex_pdx::serial_record!("[display.civil.draw] sequence={} state={:?} seconds={} stale={} pixels=written path={} x={} y={} w={} h={}",clock.sequence(),clock.state(),clock.seconds(),clock.is_stale()as u8,path,x,y,cw,ch);
+}
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    if bar.civil_enabled {return civil_clock_fg_at(x,y,bar);}
     const CLOCK_FG: u32 = DEFAULT_THEME.text;
     const CLOCK_PREFIX:&[u8]=b"DEMO ";
     const CLOCK_DIGIT_OFFSET:usize=30;
@@ -1544,6 +1595,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
     draw_launcher_panel(fb, w, h, total_pixels);
     report_app_presented();
     repaint_end("full", repaint_started);
+    civil_clock_drawn(bar,w,h,"full");
     true
 }
 
@@ -1663,7 +1715,7 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         unsafe {
             static mut CLOCK_REDRAW_BUDGET: u32 = 64;
             let b = &mut CLOCK_REDRAW_BUDGET;
-            if *b > 0 {
+            if *b > 0 && !bar.civil_enabled {
                 *b -= 1;
                 let src = if CLOCK_REDRAW_SOURCE == 1 { "fallback" } else { "silkbar" };
                 if hot_log() { serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
@@ -1758,6 +1810,7 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     draw_cursor_z_top(fb, w, h, total_pixels, false);
     draw_launcher_panel(fb, w, h, total_pixels);
     repaint_end("strip", repaint_started);
+    civil_clock_drawn(bar,w,h,"strip");
 }
 
 /// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
@@ -2645,6 +2698,18 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
     true
 }
 
+/// This is the actual IPC boundary for kind11. Do not send the new form
+/// through the legacy decoder's narrowing casts or caller-free apply_update.
+fn handle_civil_clock_update(bar:&mut SilkBar,caller_pd:u32,caller_task:u32,args:[u64;3],now:u64)
+    ->Result<silkbar_model::civil_clock::Applied,silkbar_model::civil_clock::Reject>{
+    use silkbar_model::civil_clock::Reject;
+    let expected=sex_pdx::clock_source::STATUS_BAR;
+    let min=u32::try_from(sex_pdx::clock_source::MIN_SECONDS).map_err(|_|Reject::Framing)?;
+    let max=u32::try_from(sex_pdx::clock_source::MAX_SECONDS).map_err(|_|Reject::Framing)?;
+    let result=bar.civil_clock.receive((caller_pd,caller_task),(expected.pd,expected.task),args,min,max,now);
+    if result.is_ok(){bar.civil_enabled=true;}
+    result
+}
 fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> (bool, u32) {
     let kind = arg0 as u32;
     let slot = (arg1 >> 32) as u8;
@@ -2832,8 +2897,15 @@ pub extern "C" fn _start() -> ! {
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = silkbar_model::for_desktop_width(unsafe{FB_W}as usize).unwrap_or(DEFAULT_SILK_BAR);
+    // Legacy software counters are available only through an explicit legacy
+    // build profile; normal pixels start Unknown before the first source read.
+    bar.civil_enabled=option_env!("SEXOS_LEGACY_DEMO_CLOCK").is_none();
     let clock_layout=&bar.layout[ModuleSlot::Clock as usize];
-    sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=30 width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
+    if bar.civil_enabled{
+        sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=UTC state=Unknown snapshot_only=1 x={} y={} w={} h={} width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
+    }else{
+        sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=30 width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
+    }
     let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
     let mut last_clock_tick = sex_pdx::get_ticks();
@@ -2955,6 +3027,10 @@ pub extern "C" fn _start() -> ! {
 
         let raw_ticks = sex_pdx::get_ticks();
         let sec_now = raw_ticks / 62;
+        if bar.civil_enabled&&bar.civil_clock.health(raw_ticks){
+            needs_top_strip_redraw=true;
+            sex_pdx::serial_record!("[sexdisplay.clock.civil.stale] sequence={} high_water={} state=Unknown seconds=0 stale=1 ticks={} synthesized=0",bar.civil_clock.sequence(),bar.civil_clock.high_water(),raw_ticks);
+        }
         // Lower staleness thresholds for slow emulation (TCG on M1).
         // 1200 loops at ~1ms each = 1.2s on native; 1200 loops on TCG can
         // take 30+ real seconds, making the clock appear frozen.
@@ -2962,7 +3038,7 @@ pub extern "C" fn _start() -> ! {
         const SILKBAR_STALE_REPEAT_MSGS: u32 = 20;
         let stale_no_msg = display_loop_counter.saturating_sub(last_silkbar_msg_loop) > SILKBAR_STALE_NO_MSG_LOOPS;
         let stale_repeats = repeated_silkbar_second_msgs > SILKBAR_STALE_REPEAT_MSGS;
-        if clock_from_silkbar && (stale_no_msg || stale_repeats) {
+        if !bar.civil_enabled && clock_from_silkbar && (stale_no_msg || stale_repeats) {
             clock_from_silkbar = false;
             repeated_silkbar_second_msgs = 0;
             unsafe {
@@ -2985,7 +3061,7 @@ pub extern "C" fn _start() -> ! {
         // New path uses raw_ticks (62 ticks/sec PIT) as a real-time gate.
         // On TCG (raw_ticks==0): synthetic cadence matching silkbar's threshold=16.
         // Cadence is NOT reset on handoff reject — post-reject independent cadence V8.
-        if !clock_from_silkbar {
+        if !bar.civil_enabled && !clock_from_silkbar {
             fallback_loops_since_advance = fallback_loops_since_advance.wrapping_add(1);
             let mut advance_fallback = false;
             /// Tracks whether this advance is synthetic (true) or real-tick-gated (false).
@@ -3193,7 +3269,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        if !stale_probe_done {
+        if !bar.civil_enabled && !stale_probe_done {
             let canonical_ss = unsafe { CLOCK_CANON_SS };
             if canonical_ss >= 2 {
                 stale_probe_done = true;
@@ -3258,6 +3334,24 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 silkbar_model::OP_SILKBAR_UPDATE => {
+                    // Compare the low kind only to select the strict decoder;
+                    // it rejects every high-word alias before changing state.
+                    if msg.arg0 as u32==UpdateKind::SetCivilClock as u32{
+                        match handle_civil_clock_update(&mut bar,msg.caller_pd,msg.caller_task,[msg.arg0,msg.arg1,msg.arg2],raw_ticks){
+                            Ok(silkbar_model::civil_clock::Applied::New)=>{
+                                needs_top_strip_redraw=true;
+                                let source_known=matches!(bar.civil_clock.state(),silkbar_model::civil_clock::State::Snapshot|silkbar_model::civil_clock::State::Unavailable|silkbar_model::civil_clock::State::Rollback);
+                                sex_pdx::serial_record!("[sexdisplay.clock.civil.applied] pd={} task={} sequence={} state={:?} seconds={} high_water={} stale=0 source_known={} source={} precision={} snapshot_only=1 pixels=unconfirmed",msg.caller_pd,msg.caller_task,bar.civil_clock.sequence(),bar.civil_clock.state(),bar.civil_clock.seconds(),bar.civil_clock.high_water(),source_known as u8,if source_known{"q35_cmos_utc"}else{"unknown"},source_known as u8);
+                            },
+                            Ok(silkbar_model::civil_clock::Applied::Duplicate)=>{},
+                            Err(error)=>{
+                                static mut CIVIL_REJECT_BUDGET:u8=32;
+                                unsafe{if CIVIL_REJECT_BUDGET>0{CIVIL_REJECT_BUDGET-=1;sex_pdx::serial_record!("[sexdisplay.clock.civil.rejected] pd={} task={} reason={:?} effects=0",msg.caller_pd,msg.caller_task,error);}}
+                            },
+                        }
+                        continue;
+                    }
+                    if bar.civil_enabled && msg.arg0 as u32==UpdateKind::SetClock as u32{continue;}
                     // For SetClock: capture old bar values and decode incoming
                     // BEFORE apply_update mutates bar. This gives accurate
                     // old vs incoming comparison in markers.
@@ -3455,7 +3549,7 @@ pub extern "C" fn _start() -> ! {
                         // Ensure clock shows nonzero seconds when bar is first
                         // rendered on the live framebuffer.  Fallback tick may
                         // not have fired yet, so force ss>=1 if still zero.
-                        if bar.clock_ss == 0 {
+                        if !bar.civil_enabled && bar.clock_ss == 0 {
                             bar.clock_ss = 1;
                             clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                         }

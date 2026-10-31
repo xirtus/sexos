@@ -10,7 +10,7 @@ SECONDS=1793367907
 def command(mode='normal'):
  return ['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-rtc',gate.RTC_INVALID if mode=='invalid-year'else gate.RTC_NORMAL]
 def metadata(mode='normal',pending=0):
- lines=['[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1']
+ lines=['[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[boot.silkbar.clock.source] holder=6 task=6 slot=61 consumer=6 consumer_task=6 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1']
  for seq in range(1,2 if mode=='close'else 3):
   lines.append('[browser.clock.intent] accepted=1 explicit=1 no_ticks_fallback=1')
   if mode=='invalid-year':lines.append('[browser.clock.view] state=Unavailable source=q35_cmos_utc snapshot=1')
@@ -62,6 +62,12 @@ class CertificateTimeOracle(unittest.TestCase):
   text=metadata('invalid-year');extra=f'[clock.source.snapshot] pd=13 task=13 slot=61 seconds={SECONDS} attempts=1 precision=1 profile=q35_cmos_utc ordinal=1\n'
   self.assertFalse(gate.inspect_clock(text+extra,'invalid-year',command('invalid-year'),SECONDS-5,SECONDS+5)['ok'])
   self.assertFalse(gate.inspect_clock(text.replace('no_ticks_fallback=1','no_ticks_fallback=0'),'invalid-year',command('invalid-year'),SECONDS-5,SECONDS+5)['ok'])
+ def test_global_ordinals_include_only_the_second_exact_boot_holder(self):
+  text=metadata().replace('ordinal=2','ordinal=3');needle=f'[clock.source.snapshot] pd=13 task=13 slot=61 seconds={SECONDS+1}'
+  bar=f'[clock.source.snapshot] pd=6 task=6 slot=61 seconds={SECONDS} attempts=1 precision=1 profile=q35_cmos_utc ordinal=2\n';text=text.replace(needle,bar+needle)
+  self.assertTrue(gate.inspect_clock(text,'normal',command(),SECONDS-5,SECONDS+5)['ok'])
+  for bad in(text.replace('pd=6 task=6 slot=61 seconds','pd=6 task=99 slot=61 seconds'),text.replace('ordinal=3','ordinal=4'),text.replace('attempts=1 precision=1 profile=q35_cmos_utc ordinal=2','attempts=5 precision=1 profile=q35_cmos_utc ordinal=2'),text.replace('[boot.silkbar.clock.source]','[missing.bar.grant]')):
+   self.assertFalse(gate.inspect_clock(bad,'normal',command(),SECONDS-5,SECONDS+5)['ok'])
  def test_close_requires_exact_cache_retirement_and_does_not_invent_pending(self):
   text=metadata('close')
   for bad in[text.replace('target=15 task=15 before_cleanup','target=15 task=99 before_cleanup'),text.replace('high_water_retained=1','high_water_retained=0'),text.replace('pending=0','pending=1')]:self.assertFalse(gate.inspect_clock(bad,'close',command(),SECONDS-5,SECONDS+5)['ok'])

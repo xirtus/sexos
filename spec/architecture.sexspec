@@ -530,6 +530,15 @@
         "scripts/uiir_host_gate.sh"
       ],
       "scope": "Production UiIR single-producer/single-consumer ring and cursor over host pages (order, epoch visibility, no overwrite, corruption, concurrency) plus BOOT grant and attach checks; not epoch replay or a rendering consumer."
+    },
+    {
+      "id": "silkbar_civil_clock",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/silkbar_civil_clock_host_gate.sh"
+      ],
+      "scope": "Actual status-bar probe, source ABI, exact Display publisher/framing boundary, snapshot-only model, health/rollback/exhaustion and renderer glyphs with a removed-authority-guard control; not native source mapping, pixels or authenticated time."
     }
   ],
   "invariants": [
@@ -645,12 +654,21 @@
         {
           "path": "kernel/src/ipc.rs",
           "anchor": "pub fn traverse_edge"
+        },
+        {
+          "path": "servers/sexdisplay/src/main.rs",
+          "anchor": "fn handle_civil_clock_update"
+        },
+        {
+          "path": "servers/silkbar/src/civil_clock.rs",
+          "anchor": "pub struct Probe"
         }
       ],
       "checks": [
         "capability_slots",
         "user_pointer",
-        "memory_regions"
+        "memory_regions",
+        "silkbar_civil_clock"
       ],
       "gaps": [
         "Slot-0 serial records remain an unsanctioned diagnostic channel; global SASOS addresses still need hostile native-code enforcement beyond query authorization."

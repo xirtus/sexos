@@ -1,0 +1,365 @@
+{
+  "qualified_on_feature_branch": true,
+  "global_goal_complete": false,
+  "branch": "codex/silkbar-civil-time",
+  "base": "876c30be591f7152fe6d9a27fc6e4be9901fb1f5",
+  "round_number_unassigned": true,
+  "iso_sha256": "79a48af561534484182f02cb641f38054962996c77f96f619e46a7bf4b9d2b3f",
+  "kernel_sha256": "7f2bb264bce9bf74945fd0a7df07efd338ad8c437e68859a5bdeb738297a5740",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "binding_sha256": "f25fa34d5ef886d11d79766f68c45eb084dfb02a647e8caf39c26c7d36304654",
+  "production_inputs": 574,
+  "runner_inputs": 566,
+  "build": "GREEN_MASTER",
+  "registered_host_checks": 42,
+  "rust_test_executions": 2628,
+  "python_tests": 880,
+  "compiled_controls": {
+    "positive_executions": 38,
+    "rejected": 2,
+    "source_sha256": {
+      "scripts/silkbar_civil_clock_host_gate.sh": "dde40377e44aeac6fb0e8d921521240decf4965197cbfcdf80231d4123b8c285",
+      "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+      "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+      "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+      "crates/sex-pdx/src/desktop_style.rs": "897135daad3a079994023df2d49eb17d3a66f54a61fcb2163307b48fa1084f14",
+      "servers/sexdisplay/src/main.rs": "6f2ee420ce5a4ebbfedd3700f4d6d1f170cbeecf66a0016c02abb09d9e421e8e",
+      "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+      "tests/silkbar_civil_clock.rs": "668f81d93dc8519766c42f1e5269220fbe27dc0b26c50ef0624c0ef244548017",
+      "tests/silkbar_clock_probe.rs": "282a5bb69cd06191ad705d7d8fdf31cc5230f067533d34eda465d6341f73305f"
+    },
+    "authority_guard_removed_exit": 101,
+    "occupied_outbox_guard_removed_exit": 101
+  },
+  "native": {
+    "cohorts": 10,
+    "boots": 12,
+    "verified_captures": 70,
+    "raw_captures": 72,
+    "civil_clock_cell_verified_captures": 22,
+    "positive_snapshot_clock_cells": 14,
+    "unavailable_clock_cells": 8,
+    "clock_runs": 6,
+    "clock_verified_captures": 16,
+    "connected_runs": 2,
+    "connected_live_cold_boots": 4,
+    "connected_verified_captures": 34,
+    "tls_responsive_runs": 2,
+    "tls_responsive_captures": 20,
+    "close_observational_raw_captures": 2,
+    "independent_replay": true
+  },
+  "scalar": {
+    "elfs": 5,
+    "instructions": 228757,
+    "inspected_vector_fp_matches": 0,
+    "results": [
+      {
+        "name": "kaleidoscope",
+        "ok": true,
+        "iso_path": "/apps/kaleidoscope",
+        "elf_sha256": "865f9224d399f21dad21fa3eddd2f6c8b5ec96563bed8facd1be5261b4521701",
+        "disassembly_sha256": "ad277b25701131c3652b2ad52c6995fac858d971cf79239562a16ee93efd7770",
+        "instructions": 92168,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-silkbar-clock-b-frozen/tested.iso",
+            "-extract",
+            "/apps/kaleidoscope",
+            "/tmp/sexos-silkbar-clock-b-scalar/kaleidoscope.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-silkbar-clock-b-scalar/kaleidoscope.elf"
+          ]
+        ]
+      },
+      {
+        "name": "silk-shell",
+        "ok": true,
+        "iso_path": "/servers/silk-shell",
+        "elf_sha256": "43f7373343aaec9c6c53720f4b4bc06f89cafb2cc230ddaaa5fcc11a7dd3f53e",
+        "disassembly_sha256": "066017b9e94205ee27d49cd34a18ea8155eeca59b446459f366ef28de20bbcd0",
+        "instructions": 88383,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-silkbar-clock-b-frozen/tested.iso",
+            "-extract",
+            "/servers/silk-shell",
+            "/tmp/sexos-silkbar-clock-b-scalar/silk-shell.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-silkbar-clock-b-scalar/silk-shell.elf"
+          ]
+        ]
+      },
+      {
+        "name": "sexdisplay",
+        "ok": true,
+        "iso_path": "/servers/sexdisplay",
+        "elf_sha256": "15015bcb3d1ebedeefb18ac47c2077dcfb2e0a54088f0acac9ba1bc714d1a1fc",
+        "disassembly_sha256": "9068d4c0e3d3feb701f4ca3a76f175c18ce675be0cb5b5446257bce7daa521d1",
+        "instructions": 26008,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-silkbar-clock-b-frozen/tested.iso",
+            "-extract",
+            "/servers/sexdisplay",
+            "/tmp/sexos-silkbar-clock-b-scalar/sexdisplay.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-silkbar-clock-b-scalar/sexdisplay.elf"
+          ]
+        ]
+      },
+      {
+        "name": "quil",
+        "ok": true,
+        "iso_path": "/servers/quil",
+        "elf_sha256": "ce30ead90abb2798aa620ad2fb055028043c73706c5d88cad4d50e7326af67a9",
+        "disassembly_sha256": "6b10bb8a4b3cb529ceae9205e409d6fd350b9c0922491dd34939be751335fda4",
+        "instructions": 16918,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-silkbar-clock-b-frozen/tested.iso",
+            "-extract",
+            "/servers/quil",
+            "/tmp/sexos-silkbar-clock-b-scalar/quil.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-silkbar-clock-b-scalar/quil.elf"
+          ]
+        ]
+      },
+      {
+        "name": "silkbar",
+        "ok": true,
+        "iso_path": "/servers/silkbar",
+        "elf_sha256": "fe9c8f8f9acfc143615bc70268af241f7ce877f4050c06d5463ff9f333fd2256",
+        "disassembly_sha256": "e1fd0792182858642fc53ce40c369a6840a3cfa55ae67819853cb3ded1b03561",
+        "instructions": 5280,
+        "vector_or_fp_matches": [],
+        "commands": [
+          [
+            "xorriso",
+            "-osirrox",
+            "on",
+            "-indev",
+            "/tmp/sexos-silkbar-clock-b-frozen/tested.iso",
+            "-extract",
+            "/servers/silkbar",
+            "/tmp/sexos-silkbar-clock-b-scalar/silkbar.elf"
+          ],
+          [
+            "/Users/xmacbookm5/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objdump",
+            "--disassemble",
+            "--no-show-raw-insn",
+            "--x86-asm-syntax=att",
+            "/tmp/sexos-silkbar-clock-b-scalar/silkbar.elf"
+          ]
+        ]
+      }
+    ],
+    "scope": "Decoded the ISO-extracted Browser, Shell, Display, Quil and SilkBar ELFs and inspected vector operands/FP-state mnemonics only. No whole-image, runtime stack/register/cache erasure, scheduler or hostile-containment proof."
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false,
+    "inventory": {
+      "APP_RESOURCE_RETIREMENT": "partial",
+      "BOOT_SUCCESSOR_ACTIVATION": "partial",
+      "CAPABILITY_GENESIS": "partial",
+      "CAUSAL_DOMAIN_ORDER": "partial",
+      "CONTEXT_RELEASE": "partial",
+      "DETERMINISTIC_REPLAY": "open",
+      "DISK_ATOMICITY": "partial",
+      "DISK_EXTENT_CUSTODY": "partial",
+      "DISPLAY_COMMIT": "partial",
+      "EPOCH_COMMIT": "open",
+      "FAULT_BY_VALUE": "partial",
+      "GLOBAL_VAS_ADDRESSING": "partial",
+      "INPUT_STARTUP_ORDER": "partial",
+      "INPUT_TRANSPORT": "partial",
+      "LINEN_VIEW_IDENTITY": "partial",
+      "MEMORY_REGION_AUTHORITY": "partial",
+      "NO_AMBIENT_AUTHORITY": "partial",
+      "NO_PER_PROCESS_TABLES": "partial",
+      "PAGING_FAULT_RECOVERY": "partial",
+      "PAGING_SAFE_RECLAMATION": "partial",
+      "PDX_AUTHENTICATED_REPLY": "partial",
+      "PDX_REVOCATION": "partial",
+      "PDX_SLOT_IDENTITY": "partial",
+      "PDX_SOLE_AUTHORITY": "partial",
+      "PKU_ENFORCEMENT_ONLY": "partial",
+      "SCHEDULER_OWNERSHIP": "partial",
+      "TASK_EXIT_MEMORY_CLEANUP": "partial",
+      "UIIR_AUTHORIZED_STREAM": "partial",
+      "USERLAND_MEMORY_AUTHORITY": "partial",
+      "WAKE_LIFECYCLE": "partial"
+    }
+  },
+  "archive": {
+    "path": "assets/sexos-silkbar-civil-clock-2026-10-31-raw.tar.gz",
+    "sha256": "57f72b2b924377ec45e96aa1af1a48420b19496118aa47e8ec64b8c655b10b75",
+    "bytes": 11859858,
+    "members": 1505,
+    "payload_manifest_sha256": "2d7256be996d74d1b41c98e0b7fab0fa424e9c0923906c674d218fc4e0fec62d",
+    "all_members_size_and_sha256_verified": true,
+    "disks": [
+      {
+        "path": "/tmp/sexos-silkbar-clock-b-build/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/tmp/sexos-silkbar-clock-a-build/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-clock-normal-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-clock-normal-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-clock-invalid-year-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-clock-invalid-year-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-clock-close-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-clock-close-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-connected-wide/recovery/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-connected-wide/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-connected-compact/recovery/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-connected-compact/session/nvme.img",
+        "bytes": 1048576,
+        "sha256": "04ad32aeb67aa8511781d6084f0cb8b4dfb8ab3f80ba627cd57ba626c04dfdbb",
+        "compressed_sha256": "38a6696b63e1fbde735a0b041e9230cd23e974ee91b35c38164e5118282a08a5"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-responsive-wide/nvme.img",
+        "bytes": 1048576,
+        "sha256": "98cfe03df1f5d0395a92d96387cca58515b79f218137c6679fc5974bb92cba81",
+        "compressed_sha256": "9e41bf94ea6848a3d3d9d4a393c2e2444d30154f90f0e8fe4e6fbb3333214da9"
+      },
+      {
+        "path": "/private/tmp/sexos-silkbar-clock-b-native-responsive-compact/nvme.img",
+        "bytes": 1048576,
+        "sha256": "98cfe03df1f5d0395a92d96387cca58515b79f218137c6679fc5974bb92cba81",
+        "compressed_sha256": "9e41bf94ea6848a3d3d9d4a393c2e2444d30154f90f0e8fe4e6fbb3333214da9"
+      },
+      {
+        "path": "/tmp/sexos-r100a-seed.img",
+        "bytes": 1048576,
+        "sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62"
+      }
+    ]
+  },
+  "screenshots": [
+    {
+      "path": "assets/sexos-silkbar-civil-clock-2026-10-31-compact.png",
+      "sha256": "41581304695c23cdfa3898adf02f88a762eba3bd5adbaf7afe3c7cbf121abe20",
+      "source_ppm_sha256": "ccd1dc20ba59b833800f265ca48e20b9124de5c7a6134229a3f4344b08ce4b07",
+      "pixel_identical": true,
+      "width": 1024,
+      "height": 768
+    },
+    {
+      "path": "assets/sexos-silkbar-civil-clock-2026-10-31-unavailable-compact.png",
+      "sha256": "5d910c355c7570f87f32e76c3355b2fbd6b2f82756b48d4ae47b99371c1a709f",
+      "source_ppm_sha256": "7ec4307b02ca61c9a35d2e1496a1b5d86dd282d16669b3cac2114c56c34f9df5",
+      "pixel_identical": true,
+      "width": 1024,
+      "height": 768
+    },
+    {
+      "path": "assets/sexos-silkbar-civil-clock-2026-10-31-after-browser-close-compact.png",
+      "sha256": "e1e271771c824bf4a73e94203fea66a12435e7269068ab7dab81adebaaadda69",
+      "source_ppm_sha256": "4f240707f63df929f3fb656ee0088e9d052b93ba3a6992cbab25f1fd4318d8a4",
+      "pixel_identical": true,
+      "width": 1024,
+      "height": 768
+    }
+  ],
+  "diagnostics": "First built guest ran without faults and published/admitted/drew actual civil snapshots, but the old boot CLOCK_GATE demanded legacy demo recv/redraw markers and returnedYELLOW. Updated strict civil log joins accept actual source/admission/completed-draw evidence; fresh buildB is GREEN. Complete atomic kernel source records may begin inside an interrupted older user serial line; strict complete-field/end/count/global validation remains. Preflight syntax/registration/fixture diagnostics retained; native cohorts had no failed attempts.",
+  "scope": "One frozen B cohort binds the exact BOOT self-consumer ClockSource grant6/task6, bounded immutable publication and exact Display sender/version/framing acceptance. Ticks/cadence only schedule reads or expire presentation; no UTC interpolation or last-good fallback. Native22 clock-cell proofs cover Snapshot/Unavailable at both widths, Browser independence and real TLS/Quil input/Save/Close progress; other states/backpressure/rollback/exhaustion have actual-function host scope. Clock wire retains existing epoch; no Unix/POSIX architecture introduced. No physical/authenticated/NTP time, persistent floor, newest-image1800s alpha, publicweb/CA, SMP, crash/power-loss, hostile containment, whole-image/runtime register/cache-erasure or System Proven claim."
+}

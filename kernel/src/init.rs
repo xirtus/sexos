@@ -833,6 +833,18 @@ pub fn init() {
         consumer:sex_pdx::clock_source::Identity{pd:kaleido_id,task:unsafe{(*consumer_task).id}},source:sex_pdx::clock_source::CMOS_UTC};
     seed_holder.grant_capability(sex_pdx::clock_source::SLOT,crate::capability::CapabilityData::ClockSource(clock_grant));
     serial_println!("[boot.clock.source] holder={} task={} slot={} consumer={} consumer_task={} source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0",sexnet_id,clock_grant.holder.task,sex_pdx::clock_source::SLOT,kaleido_id,clock_grant.consumer.task);
+    // Independent, exact BOOT source for the status-bar publisher. Its bounded
+    // read mechanism supplies explicit snapshots; neither timer cadence nor
+    // renderer fallback confers civil-time authority.
+    let bar_holder=crate::ipc::DOMAIN_REGISTRY.get(silkbar_id).expect("BOOT_BAR_CLOCK_HOLDER");
+    let bar_task=bar_holder.main_task.load(core::sync::atomic::Ordering::Acquire);
+    assert!(!bar_task.is_null(),"BOOT_BAR_CLOCK_TASK");
+    let bar_identity=sex_pdx::clock_source::Identity{pd:silkbar_id,task:unsafe{(*bar_task).id}};
+    assert_eq!(bar_identity,sex_pdx::clock_source::STATUS_BAR,"BOOT_BAR_CLOCK_ROLE");
+    assert!(bar_holder.find_capability(sex_pdx::clock_source::SLOT as u32).is_none(),"BOOT_BAR_CLOCK_SLOT_COLLISION");
+    bar_holder.grant_capability(sex_pdx::clock_source::SLOT,crate::capability::CapabilityData::ClockSource(
+        sex_pdx::clock_source::Grant{holder:bar_identity,consumer:bar_identity,source:sex_pdx::clock_source::CMOS_UTC}));
+    serial_println!("[boot.silkbar.clock.source] holder={} task={} slot={} consumer={} consumer_task={} source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0",bar_identity.pd,bar_identity.task,sex_pdx::clock_source::SLOT,bar_identity.pd,bar_identity.task);
     assert!(seed_holder.find_capability(sex_pdx::trust_source::SLOT as u32).is_none(),"BOOT_TRUST_SLOT_COLLISION");
     let trust_grant=sex_pdx::trust_source::Grant {
         holder:sex_pdx::trust_source::Identity {pd:sexnet_id,task:unsafe{(*holder_task).id}},

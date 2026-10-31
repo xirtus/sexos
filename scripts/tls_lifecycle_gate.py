@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Finite one-incarnation TLS/HTTPS command lifecycle and independent wire joins."""
+from clock_source_evidence import browser_clock_sources
 import argparse,hashlib,json,math,os,re,shutil,socket,ssl,subprocess,threading,time
 from pathlib import Path
 import https_document_gate as https
@@ -141,9 +142,9 @@ def resources(trace):
 def prerequisites(trace,contract,host_start,host_end):
  """Nine distinct source cycles: six B, two local L, final B."""
  starts=list(re.finditer(r'\[browser.command.started\] kind=(TlsDns|TlsPrepare) accepted=1',trace));assert len(starts)==trace.count('[browser.command.started]')==9 and [m[1]for m in starts]==['TlsDns']*6+['TlsPrepare']*2+['TlsDns'],'missing/duplicated/failed queued TLS command start'
- policies=list(re.finditer(r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace));sources=list(re.finditer(r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=([1-4]) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace));clocks=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace));seeds=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace));shared=list(re.finditer(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace));checks=list(re.finditer(r'\[browser.trust.self_check\] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',trace))
- for prefix,values in(('[trust.policy.snapshot]',policies),('[clock.source.snapshot]',sources),('[certificate.time.snapshot]',clocks),('[entropy.seed.admitted]',seeds),('[browser.tls.prepared]',shared),('[browser.trust.self_check]',checks)):assert len(values)==trace.count(prefix)==9,'source/preparation count differs from exact nine fresh cycles: '+prefix
- assert [int(m[1])for m in policies]==[int(m[1])for m in clocks]==[int(m[1])for m in seeds]==[int(m[3])for m in sources]==list(range(1,10)),'source sequence/ordinal reused, skipped or reordered'
+ policies=list(re.finditer(r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace));sources=browser_clock_sources(trace);assert len(sources)==9,'Browser clock source count differs';clocks=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace));seeds=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace));shared=list(re.finditer(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace));checks=list(re.finditer(r'\[browser.trust.self_check\] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',trace))
+ for prefix,values in(('[trust.policy.snapshot]',policies),('[certificate.time.snapshot]',clocks),('[entropy.seed.admitted]',seeds),('[browser.tls.prepared]',shared),('[browser.trust.self_check]',checks)):assert len(values)==trace.count(prefix)==9,'source/preparation count differs from exact nine fresh cycles: '+prefix
+ assert [int(m[1])for m in policies]==[int(m[1])for m in clocks]==[int(m[1])for m in seeds]==list(range(1,10)),'source sequence/ordinal reused, skipped or reordered'
  rows=[];previous_utc=0
  for index,(start,policy,source,clock,seed,prepared,check)in enumerate(zip(starts,policies,sources,clocks,seeds,shared,checks),1):
   task,private,initial,utc=map(int,prepared.groups());document=index not in(7,8);assert 0<task<=32768 and private==task+contract['pipe_bytes']+(12288 if document else 0)and private<49152 and 0<initial<=4096,'source-bound private preparation extent differs'

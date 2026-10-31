@@ -279,6 +279,48 @@ def order_gate(lines: List[str], ready_lines: Dict[str, int]) -> Tuple[GateResul
 
 def clock_gate(lines: List[str], strict_clock: bool) -> Tuple[GateResult, List[str]]:
     warnings: List[str] = []
+    trace = "\n".join(line.rstrip("\r\n") for line in lines)
+    # CIVIL evidence always selects the civil lane, including malformed or
+    # incomplete evidence. It must never be rescued by old DEMO receipts.
+    civil = any(prefix in trace for prefix in (
+        "[boot.silkbar.clock.source]", "[silkbar.civil.",
+        "[sexdisplay.clock.civil.", "[display.civil.",
+    )) or any("[sexdisplay.clock.presentation]" in line and
+              "[sexdisplay.clock.presentation] label=DEMO " not in line for line in lines)
+    if civil:
+        from silkbar_clock_gate import inspect_publications
+        try:
+            presentations = list(re.finditer(
+                r"\[sexdisplay.clock.presentation\] label=UTC state=Unknown snapshot_only=1 "
+                r"x=(\d+) y=(\d+) w=(\d+) h=(\d+) width=(\d+)\r?$", trace, re.MULTILINE))
+            assert len(presentations) == trace.count("[sexdisplay.clock.presentation]") == 1, "missing/malformed UTC presentation"
+            admitted = inspect_publications(trace)
+            draws = list(re.finditer(
+                r"\[display.civil.draw\] sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) "
+                r"seconds=(\d+) stale=([01]) pixels=written path=(full|strip) "
+                r"x=(\d+) y=(\d+) w=(\d+) h=(\d+)\r?$", trace, re.MULTILINE))
+            assert len(draws) == trace.count("[display.civil.draw]") and draws, "missing/malformed completed civil draw"
+            snapshot_draws = 0
+            for draw in draws:
+                sequence, state, seconds, stale = int(draw[1]), draw[2], int(draw[3]), int(draw[4])
+                assert presentations[0].start() < draw.start(), "civil draw precedes presentation"
+                assert int(draw[8]) > 0 and int(draw[9]) > 0, "empty civil draw"
+                if sequence == 0:
+                    assert (state, seconds, stale) == ("Unknown", 0, 0), "initial civil draw invents time"
+                    continue
+                receipt = admitted.get(sequence)
+                assert receipt and receipt['offset'] < draw.start(), "civil draw lacks prior exact admission"
+                if stale:
+                    assert (state, seconds, receipt['state']) == ("Unknown", 0, "Snapshot"), "stale civil draw retains/invents time"
+                else:
+                    assert (state, seconds) == (receipt['state'], receipt['seconds']), "civil draw differs from admission"
+                    snapshot_draws += state == "Snapshot"
+            assert snapshot_draws, "no admitted Snapshot with later completed draw"
+            assert "[sexdisplay.render.live.ok]" in trace, "missing sexdisplay.render.live.ok"
+            return GateResult("CLOCK_GATE", True,
+                f"CIVIL admitted/completed snapshots={snapshot_draws}; log receipts only, no pixel or authenticated-time proof"), warnings
+        except (AssertionError, ValueError, KeyError, IndexError, TypeError) as exc:
+            return GateResult("CLOCK_GATE", False, "CIVIL: " + str(exc)), warnings
     # Canonical V1 runtime chain.
     send_lines = find_all_lines(lines, "[silkbar.clock.send]")
     recv_lines = find_all_lines(lines, "[sexdisplay.clock.recv]")

@@ -1,6 +1,8 @@
 //! Compile the actual renderer functions and shared geometry, using public
 //! counter values only. Native presentation and time authority are separate.
 #[path="../crates/silkbar-model/src/lib.rs"]mod silkbar_model;
+extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_THEME,Action};
 include!(env!("DISPLAY_CLOCK_PRODUCTION"));
 const LABEL:[[u8;7];4]=[

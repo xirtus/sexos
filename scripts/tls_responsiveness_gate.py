@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Finite actual desktop progress during local TLS work and held HTTPS."""
+from clock_source_evidence import browser_clock_sources
+from silkbar_clock_gate import source_contract as civil_contract,verify_pixels as civil_pixels
 import argparse,gzip,hashlib,json,math,os,re,shutil,struct,subprocess,time
 from pathlib import Path
 import https_document_gate as https
@@ -39,6 +41,7 @@ def source_contract(root):
  color=re.search(r'pub const DEFAULT_THEME: Theme = Theme \{.*?text:\s*(0x[0-9A-Fa-f]+)',model,re.S)
  if not color:raise ValueError('clock theme unavailable')
  contract['clock']=dict(dimensions=dimensions,digits=digit_font,color=int(color[1],16)&0xffffff)
+ contract['civil_clock']=civil_contract(root);contract['source_sha256'].update(contract['civil_clock']['source_sha256'])
  contract['quil_initial']=bytes(match[1],'ascii').decode('unicode_escape').encode('ascii');contract['font']=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text())
  for name in('scripts/tls_responsiveness_gate.py','servers/quil/src/main.rs','crates/silkbar-model/src/lib.rs','scripts/check_quil_ui_pixels.py','scripts/check_document_disk.py','scripts/tls_lifecycle_gate.py','scripts/desktop_focus.py','scripts/desktop_close_gate.py','servers/silk-shell/src/main.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
@@ -60,9 +63,9 @@ def work_receipts(trace,prepared):
 
 def source_cycles(trace,contract,host_start,host_end):
  starts=list(re.finditer(r'\[browser.command.started\] kind=(TlsPrepare|TlsDns) accepted=1',trace));assert len(starts)==trace.count('[browser.command.started]')==3 and[m[1]for m in starts]==['TlsPrepare','TlsPrepare','TlsDns'],'lost/replayed explicit source command'
- policies=list(re.finditer(r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace));sources=list(re.finditer(r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=([1-4]) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace));clocks=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace));seeds=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace));prepared=list(re.finditer(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace));rows=[];previous=0
- for prefix,values in(('[trust.policy.snapshot]',policies),('[clock.source.snapshot]',sources),('[certificate.time.snapshot]',clocks),('[entropy.seed.admitted]',seeds),('[browser.tls.prepared]',prepared)):assert len(values)==trace.count(prefix)==3,'missing/foreign source/preparation: '+prefix
- assert [int(m[1])for m in policies]==[int(m[1])for m in clocks]==[int(m[1])for m in seeds]==[int(m[3])for m in sources]==[1,2,3],'fresh source ordinal/sequence reused or skipped'
+ policies=list(re.finditer(r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace));sources=browser_clock_sources(trace);assert len(sources)==3,'Browser clock source count differs';clocks=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace));seeds=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace));prepared=list(re.finditer(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace));rows=[];previous=0
+ for prefix,values in(('[trust.policy.snapshot]',policies),('[certificate.time.snapshot]',clocks),('[entropy.seed.admitted]',seeds),('[browser.tls.prepared]',prepared)):assert len(values)==trace.count(prefix)==3,'missing/foreign source/preparation: '+prefix
+ assert [int(m[1])for m in policies]==[int(m[1])for m in clocks]==[int(m[1])for m in seeds]==[1,2,3],'fresh source ordinal/sequence reused or skipped'
  for index,(start,policy,source,clock,seed,prep)in enumerate(zip(starts,policies,sources,clocks,seeds,prepared),1):
   task,private,initial,utc=map(int,prep.groups());document=index==3;assert 0<task<=32768 and private==task+contract['pipe_bytes']+(12288 if document else 0)and private<49152 and 0<initial<=4096,'bounded preparation allocation differs'
   assert utc==int(source[1])==int(clock[2])and previous<=utc and math.floor(host_start)-1<=utc<=math.ceil(host_end)+1,'UTC source/service/host bracket differs';previous=utc
@@ -198,17 +201,20 @@ def main():
  def record(action,start,sent,**fields):
   actions.append(dict(action=action,serial_start=start,serial_end=len(text()),host_seconds=time.monotonic()-sent,**fields))
  def picture(name,kind,expected=None):
+  if kind=='clock':
+   from launcher_workflow_gate import pointer_park
+   phase=sum(1 for event in actions if event.get('kind')=='park');pointer_park(q,resolution,text,wait,actions.append,phase);actions[-1].update(capture=name,serial_end=len(text()))
   path=out/(name+'.ppm');deadline=time.monotonic()+20;result=dict(ok=False,errors=['no frame']);sent=time.monotonic()
   while time.monotonic()<deadline:
-   health();q.cmd('screendump',{'filename':str(path)})
+   health();q.cmd('screendump',{'filename':str(path)});snapshot=text()
    if kind=='quil':
     snapshot=text();result=verify_quil_frame(snapshot,path.read_bytes(),expected,contract,resolution)
-   elif kind=='private':result=lifecycle.verify_private_pixels(text(),path.read_bytes(),expected,contract,resolution)
-   elif kind=='https':result=https.verify_status_pixels(text(),path.read_bytes(),expected,'partial-close',contract,resolution)
-   else:result=verify_demo_clock(text(),path.read_bytes(),contract,resolution)
+   elif kind=='private':result=lifecycle.verify_private_pixels(snapshot,path.read_bytes(),expected,contract,resolution)
+   elif kind=='https':result=https.verify_status_pixels(snapshot,path.read_bytes(),expected,'partial-close',contract,resolution)
+   else:result=civil_pixels(snapshot,path.read_bytes(),contract['civil_clock'],resolution,'Snapshot')
    if result['ok']:break
    time.sleep(.05)
-  result.update(kind=kind,screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),source_sha256=contract['source_sha256'],serial_end=len(text()),host_seconds=time.monotonic()-sent,expected=expected);pixels.append(result)
+  result.update(kind=kind,screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),source_sha256=contract['source_sha256'],serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),requested_anchor=None,host_seconds=time.monotonic()-sent,expected=expected);pixels.append(result)
   if not result['ok']:raise RuntimeError(str(result['errors']))
   return result
  def click_clock():
@@ -242,8 +248,8 @@ def main():
   if not route or len(route)>24:raise RuntimeError('actual Browser-to-Quil focus path unavailable')
   start=len(text());sent=time.monotonic();q.key_sequence(['b']+route+list(TOKEN.decode()));wait(r'\[quil.document.edit\].*bytes='+str(len(TOKEN)+len(contract['quil_initial']))+r'(?:\s|$)',start);record('B_and_queued_Quil_input',start,sent,focus_keys=route);wait(r'\[browser.https.progress\] ticket=2 body_received=1024 authenticated=1 body_visible=0',start);picture('quil-during-https','quil',TOKEN.decode());save(TOKEN+contract['quil_initial'],'save-during-https');picture('clock-held-https','clock')
   focus_surface(300,text,key);zoom();picture('https-held','https','Pending');start=len(text());sent=time.monotonic();q.key_sequence(['f11']);wait(r'\[browser.https.closed\] pending=1 terminal=1 owned_storage=erased body_visible=0',start);wait(r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1',start);cleanup=cleanup_receipts(text(),15,15,start);record('Close_partial',start,sent)
-  focus_surface(201,text,key);start=len(text());sent=time.monotonic();q.key_sequence(list(AFTER.decode()));wait(r'\[quil.document.edit\].*bytes='+str(len(TOKEN)+len(AFTER)+len(contract['quil_initial']))+r'(?:\s|$)',start);record('Quil_after_Close',start,sent);picture('quil-after-close','quil',(TOKEN+AFTER).decode());save(TOKEN+AFTER+contract['quil_initial'],'save-after-close');picture('clock-after-close','clock');clocks=[p['software_counter']for p in pixels if p['kind']=='clock']
-  if len(clocks)!=3 or len(set(clocks))<2:raise RuntimeError('actual DEMO clock pixels did not progress across workflow')
+  focus_surface(201,text,key);start=len(text());sent=time.monotonic();q.key_sequence(list(AFTER.decode()));wait(r'\[quil.document.edit\].*bytes='+str(len(TOKEN)+len(AFTER)+len(contract['quil_initial']))+r'(?:\s|$)',start);record('Quil_after_Close',start,sent);picture('quil-after-close','quil',(TOKEN+AFTER).decode());save(TOKEN+AFTER+contract['quil_initial'],'save-after-close');picture('clock-after-close','clock');clocks=[p['seconds']for p in pixels if p['kind']=='clock']
+  if len(clocks)!=3 or len(set(clocks))<2:raise RuntimeError('actual held-source civil snapshots did not progress across workflow')
  except Exception as exc:failure=repr(exc)
  finally:
   host_end=time.time();peer.stop.set()

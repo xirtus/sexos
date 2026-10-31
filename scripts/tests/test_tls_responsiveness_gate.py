@@ -70,7 +70,8 @@ class HeavyWorkReceipts(unittest.TestCase):
   for a,b in(('payload=0 seed_ready=1','payload=1 seed_ready=1'),('payload=0 seed_ready=1','payload=0 seed_ready=0'),('payload=20192 seed_ready=0','payload=20191 seed_ready=0'),('payload=20192 seed_ready=0','payload=20192 seed_ready=1')):
    with self.assertRaises(AssertionError):gate.work_receipts(text.replace(a,b,1),prepared)
  def test_fresh_sources_positive_seed_cleanup_and_host_clock(self):
-  text,_=source_trace();rows=gate.source_cycles(text,{'pipe_bytes':8248},UTC,UTC+5);self.assertEqual([r['document']for r in rows],[False,False,True])
+  from clock_source_evidence import BROWSER_GRANT
+  text,_=source_trace();text=BROWSER_GRANT+'\n'+text;rows=gate.source_cycles(text,{'pipe_bytes':8248},UTC,UTC+5);self.assertEqual([r['document']for r in rows],[False,False,True])
   for a,b in(('seq=2 profile=1','seq=1 profile=1'),('service_payload=erased','service_payload=retained'),('ordinal=2','ordinal=1'),('private_bytes=33248','private_bytes=33247')):
    changed=text.replace(a,b,1)
    if changed==text:continue

@@ -18,6 +18,8 @@ from check_desktop_pixels import glyph
 from check_disk_persistence import ppm_rgb
 from check_document_disk import fnv
 from http_content_gate import frame_prefix
+from clock_source_evidence import validate_clock_sources
+from silkbar_clock_gate import source_contract as bar_contract,verify_pixels as bar_pixels
 
 LABELS={'Pending':b'checking','Unavailable':b'unavailable','Cancelled':b'cancelled','Uncertain':b'waiting receipt','Rollback':b'rollback; blocked'}
 RTC_NORMAL='base=utc,clock=host,driftfix=none'
@@ -65,6 +67,7 @@ def clock_contract(root):
   contract[name.lower()]=int(match[1].replace('_',''))
  for name in('apps/kaleidoscope/Cargo.toml','apps/kaleidoscope/src/clock_view.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-time/src/lib.rs','crates/sex-time/Cargo.toml','crates/sex-pdx/src/clock_source.rs','crates/sex-pdx/src/certificate_time.rs','servers/sexnet/src/certificate_time.rs','kernel/src/clock_source.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+ contract['civil_clock']=bar_contract(root);contract['source_sha256'].update(contract['civil_clock']['source_sha256'])
  return contract
 
 def utc_label(state,contract):
@@ -157,19 +160,24 @@ def inspect_clock(trace,mode,command,host_start,host_end):
  errors=list(command_profile(command,mode)['errors']);joins=[];closed_pending=None
  try:
   assert trace.count('[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0')==1 and trace.count('[boot.clock.source]')==1,'wrong exact BOOT clock grant'
+  assert trace.count('[boot.silkbar.clock.source] holder=6 task=6 slot=61 consumer=6 consumer_task=6 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0')==1 and trace.count('[boot.silkbar.clock.source]')==1,'wrong exact BOOT status-bar clock grant'
   assert trace.count('[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1')==1,'raw source denial probes absent'
   assert trace.count('[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1')==1,'held source metadata absent or fallback selected'
   sources=list(re.finditer(r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=(\d+) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace));services=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace));ready=list(re.finditer(r'\[browser.clock.view\] state=Ready\((\d+)\) source=q35_cmos_utc snapshot=1',trace))
-  assert len(sources)==trace.count('[clock.source.snapshot]')and len(services)==trace.count('[certificate.time.snapshot]'),'foreign or malformed source/service identity'
+  validate_clock_sources(trace)
+  all_sources=list(re.finditer(r'\[clock.source.snapshot\] pd=(\d+) task=(\d+) slot=61 seconds=(\d+) attempts=(\d+) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace))
+  assert len(all_sources)==trace.count('[clock.source.snapshot]')and len(services)==trace.count('[certificate.time.snapshot]'),'foreign or malformed source/service identity'
+  assert all((int(s[1]),int(s[2]))in((6,6),(13,13))and 1<=int(s[4])<=4 and math.floor(host_start)-1<=int(s[3])<=math.ceil(host_end)+1 for s in all_sources),'ungranted source holder, attempt bound or UTC bracket differs'
+  assert [int(s[5])for s in all_sources]==list(range(1,len(all_sources)+1)),'global source ordinal gap, reuse or reorder'
   assert '[certificate.time.rollback]'not in trace,'unexpected rollback; native fixture does not inject rollback'
   assert '[entropy.source.sample]'not in trace and '[browser.entropy.intent]'not in trace,'clock query sampled unrelated entropy source'
   expected=1 if mode=='close'else 2;assert trace.count('[browser.clock.intent] accepted=1 explicit=1 no_ticks_fallback=1')==expected,'wrong explicit T count'
   if mode=='invalid-year':
-   assert not sources and not services and not ready,'invalid1999 civil date became positive clock snapshot'
+   assert not all_sources and not services and not ready,'invalid1999 civil date became positive clock snapshot'
    assert trace.count('[browser.clock.view] state=Unavailable source=q35_cmos_utc snapshot=1')==2,'invalid-year did not reject both explicit reads'
   else:
    assert len(sources)==len(services)==expected,'wrong fresh source/query count'
-   assert [int(m[3])for m in sources]==list(range(1,expected+1))and[int(m[1])for m in services]==list(range(1,expected+1)),'source ordinal or fresh request sequence reused'
+   assert[int(m[1])for m in services]==list(range(1,expected+1)),'fresh request sequence reused'
    for source,service in zip(sources,services):
     seconds=int(source[1]);assert 1<=int(source[2])<=4 and seconds==int(service[2]),'source attempt bound or seconds join differs'
     assert math.floor(host_start)-1<=seconds<=math.ceil(host_end)+1,'snapshot outside actual trusted host UTC bracket'
@@ -237,6 +245,9 @@ def replay_evidence(root,iso,binding_path,out):
   if frame['serial_end']<=previous or frame['expected']!=state or frame['screenshot']!=frame['name']+'.ppm':raise ValueError('clock capture reused/foreign phase')
   proof=verify_clock_pixels(prefix,(out/frame['screenshot']).read_bytes(),state,contract,resolution)
   if not proof['ok']:raise ValueError('clock raw pixels failed: '+str(proof['errors']))
+  civil=bar_pixels(prefix,(out/frame['screenshot']).read_bytes(),contract['civil_clock'],resolution,'Unavailable'if mode=='invalid-year'else'Snapshot')
+  if not civil['ok']or civil!=frame['civil_clock']:raise ValueError('status-bar raw pixels/source join differs: '+str(civil.get('errors')))
+  proof['civil_clock']=civil
   checked.append(dict(name=frame['name'],**proof));previous=frame['serial_end']
  restored=verify_clock_restore(trace,captures,checked,resolution)if captures else None
  parks=[a for a in actions if a.get('kind')=='park']
@@ -312,6 +323,9 @@ def main():
   end=time.monotonic()+20;path=out/(name+'.ppm');result=dict(ok=False,errors=['no frame'])
   while time.monotonic()<end:
    health();q.cmd('screendump',{'filename':str(path)});snapshot=text();result=verify_clock_pixels(snapshot,path.read_bytes(),state,contract,tuple(map(int,a.resolution.split('x'))))
+   if result['ok']:
+    result['civil_clock']=bar_pixels(snapshot,path.read_bytes(),contract['civil_clock'],tuple(map(int,a.resolution.split('x'))),'Unavailable'if a.mode=='invalid-year'else'Snapshot')
+    if not result['civil_clock']['ok']:result.update(ok=False,errors=result['civil_clock']['errors'])
    if result['ok']:break
    time.sleep(.1)
   result.update(name=name,screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),source_sha256=contract['source_sha256'],serial_end=len(snapshot),serial_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),requested_anchor=None);pixels.append(result);(out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n')

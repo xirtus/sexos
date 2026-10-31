@@ -7,7 +7,7 @@ python3 - "$ROOT" "$TMP/production.rs" <<'PY'
 from pathlib import Path
 import re,sys
 root=Path(sys.argv[1]);s=(root/'servers/sexdisplay/src/main.rs').read_text();parts=[]
-for name in ['module_rect','ascii_glyph_index','clock_fg_at']:
+for name in ['module_rect','ascii_glyph_index','civil_clock_lines','civil_clock_fg_at','clock_fg_at']:
  m=re.findall(r'^fn '+name+r'\b.*?^\}',s,re.M|re.S);assert len(m)==1,name;parts+=m
 for name in ['FONT','FONT_ASCII_5X7']:
  m=re.findall(r'^const '+name+r':.*?^\];',s,re.M|re.S);assert len(m)==1,name;parts+=m

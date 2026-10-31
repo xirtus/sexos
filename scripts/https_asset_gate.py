@@ -4,6 +4,7 @@
 Never builds. Endpoint sockets are public lab fixtures, not a forwarding proxy.
 State-publication ACKs are joined to raw framebuffer pixels, never called pixels.
 """
+from clock_source_evidence import browser_clock_sources
 import argparse,ast,hashlib,json,os,re,shutil,socket,subprocess,time
 from pathlib import Path
 import https_document_gate as https
@@ -182,7 +183,8 @@ def prerequisites(trace,intents,admitted,wire,host_start,host_end):
   if trace.count(marker)!=1 or trace.count(marker.split(']')[0]+']')!=1:raise ValueError('exact BOOT/raw source authority differs')
  if any(re.search(r'\b(?:key|keylog|traffic_secret|master_secret|seed_bytes|seed_value|secret)=',line)for line in trace.splitlines()if re.search(r'\[(?:browser\.(?:asset|tls|https)|entropy\.)',line)):raise ValueError('private TLS/seed material leaked to metadata')
  policies=records(trace,'[trust.policy.snapshot]',r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant')
- sources=records(trace,'[clock.source.snapshot]',r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=([1-4]) precision=1 profile=q35_cmos_utc ordinal=(\d+)')
+ try:sources=browser_clock_sources(trace)
+ except AssertionError as exc:raise ValueError(str(exc))from exc
  clocks=records(trace,'[certificate.time.snapshot]',r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained')
  seeds=records(trace,'[entropy.seed.admitted]',r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant')
  clean=records(trace,'[entropy.seed.released]',r'\[entropy.seed.released\] owner=15 task=15 ticket=(\d+) service_payload=erased receipt=retained')
@@ -193,7 +195,7 @@ def prerequisites(trace,intents,admitted,wire,host_start,host_end):
  previous=0
  for i,parts in enumerate(zip(intents,admitted,wire['joins'],policies,sources,clocks,seeds,clean,checks,prepared,duplex),1):
   intent,admit,flow,policy,source,clock,seed,release,check,prep,service=parts
-  if[int(policy[1]),int(source[3]),int(clock[1]),int(seed[1]),int(release[1]),int(service[1])]!=[i,i,i,i,i,i+1]:raise ValueError('prerequisite/duplex incarnation not fresh')
+  if[int(policy[1]),int(clock[1]),int(seed[1]),int(release[1]),int(service[1])]!=[i,i,i,i,i+1]:raise ValueError('prerequisite/duplex incarnation not fresh')
   seconds=int(source[1]);task,private,initial,utc=map(int,prep.groups())
   if seconds!=int(clock[2])or seconds!=utc or not host_start-1<=seconds<=host_end+2 or seconds<previous:raise ValueError('actual source/retained/prepared UTC differs')
   previous=seconds

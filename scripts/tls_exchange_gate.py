@@ -4,6 +4,7 @@
 The host is the named endpoint itself. It neither forwards guest traffic nor
 provides a substitute verifier. No TLS key log or ephemeral secrets are saved.
 """
+from clock_source_evidence import browser_clock_sources
 import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,struct,subprocess,tempfile,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -399,8 +400,8 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
   assert not any(re.search(r'\b(?:key|keylog|traffic_secret|master_secret|seed_bytes|seed_value|secret)=',line)for line in private_lines),'private TLS/seed material in metadata'
   intent=re.search(r'\[browser.tls.peer.intent\] accepted=1 explicit=1 public_internet=0',trace);assert intent and trace.count('[browser.tls.peer.intent]')==1,'missing exact actual Y intent'
   policy=re.search(r'\[trust.policy.snapshot\] owner=15 task=15 seq=1 profile=1 root_bytes=376 origin=held_boot_grant',trace);assert policy and trace.count('[trust.policy.snapshot]')==1 and intent.start()<policy.start(),'missing fresh exact policy query'
-  source=re.search(r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=([1-4]) precision=1 profile=q35_cmos_utc ordinal=1',trace);service=re.search(r'\[certificate.time.snapshot\] owner=15 task=15 seq=1 seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace)
-  assert source and service and trace.count('[clock.source.snapshot]')==trace.count('[certificate.time.snapshot]')==1 and source[1]==service[1]and policy.start()<source.start()<service.start(),'missing fresh exact UTC receipt'
+  sources=browser_clock_sources(trace);source=sources[0]if len(sources)==1 else None;service=re.search(r'\[certificate.time.snapshot\] owner=15 task=15 seq=1 seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace)
+  assert source and service and len(sources)==trace.count('[certificate.time.snapshot]')==1 and source[1]==service[1]and policy.start()<source.start()<service.start(),'missing fresh exact UTC receipt'
   assert math.floor(host_start)-1<=int(source[1])<=math.ceil(host_end)+1,'UTC outside actual trusted host bracket'
   seed=re.search(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=1 bytes=32 source=held_boot_grant',trace);produced=re.search(r'\[entropy.seed.progress\] owner=Some\(Identity \{ pd: 15, task: 15 \}\) ticket=1 state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace);released=re.search(r'\[entropy.seed.released\] owner=15 task=15 ticket=1 service_payload=erased receipt=retained',trace)
   assert seed and produced and released and trace.count('[entropy.seed.admitted]')==trace.count('[entropy.seed.released]')==1 and policy.start()<seed.start()<produced.start()<released.start(),'missing fresh produced32/positive seed cleanup'

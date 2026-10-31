@@ -4,6 +4,7 @@
 No TLS records leave the guest. Metadata and status pixels prove only this
 bounded foundation; they do not prove an authenticated or encrypted connection.
 """
+from clock_source_evidence import browser_clock_sources
 import argparse,hashlib,json,math,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -124,10 +125,10 @@ def inspect_tls(trace,mode,command,host_start,host_end):
   counts=[int(m[2])for m in samples];assert all(a<b for a,b in zip(counts,counts[1:])),'sample ordinal regressed'
   admitted=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace));releases=list(re.finditer(r'\[entropy.seed.released\] owner=15 task=15 ticket=(\d+) service_payload=erased receipt=retained',trace))
   for marker,values in (('[entropy.seed.admitted]',admitted),('[entropy.seed.released]',releases)):assert len(values)==trace.count(marker),'foreign/malformed private seed receipt'
-  sources=list(re.finditer(r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=(\d+) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace));services=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace))
-  for marker,values in (('[clock.source.snapshot]',sources),('[certificate.time.snapshot]',services)):assert len(values)==trace.count(marker),'foreign/malformed UTC receipt'
+  sources=browser_clock_sources(trace);services=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace))
+  assert len(services)==trace.count('[certificate.time.snapshot]'),'foreign/malformed UTC receipt'
   assert len(sources)==len(services),'source/service UTC count differs'
-  assert [int(m[3])for m in sources]==list(range(1,len(sources)+1))and[int(m[1])for m in services]==list(range(1,len(services)+1)),'UTC ordinal/query sequence reused'
+  assert [int(m[1])for m in services]==list(range(1,len(services)+1)),'UTC ordinal/query sequence reused'
   for source,service in zip(sources,services):
    assert 1<=int(source[2])<=4 and int(source[1])==int(service[2])and source.start()<service.start(),'wrong UTC attempt bound/join/order'
    assert math.floor(host_start)-1<=int(source[1])<=math.ceil(host_end)+1,'UTC outside actual trusted host bracket'

@@ -9,6 +9,7 @@ use silkbar_model::{
     SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX, DEFAULT_SILK_BAR,
 };
 use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
+mod civil_clock;
 
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
 const CLOCK_FORCE_STALL_PROOF_ENABLED: bool =
@@ -142,6 +143,7 @@ pub extern "C" fn _start() -> ! {
     // fall back to synthetic yield counting on QEMU TCG (get_ticks()==0).
     let mut last_clock_ticks: u64 = 0;
     let mut clock_source_logged: bool = false;
+    let mut civil = civil_clock::Probe::new();
     // Stale-real-tick fallback: if raw_ticks is nonzero but stops advancing
     // (observed under KVM where LAPIC fires once then stalls), switch to
     // synthetic cadence after STALE_REAL_TICK_FALLBACK_LOOPS passes.
@@ -568,6 +570,29 @@ pub extern "C" fn _start() -> ! {
         }
         let _ = STEADY_CLOCK_THRESHOLD; // reserved for real timer integration
         cadence_yields = 0;
+        // Queries and ordinary enqueue attempts are bounded and never wait for
+        // a reply. A full route retains the exact snapshot for the next cadence.
+        // The older counter below remains demonstration/liveness data only.
+        if !degraded && option_env!("SEXOS_LEGACY_DEMO_CLOCK").is_none() {
+            let mut observed = None;
+            let mut source_known = false;
+            if civil.stage(
+                || {let info=sex_pdx::clock_info(sex_pdx::clock_source::SLOT);source_known=info.is_ok_and(|i|i.consumer==sex_pdx::clock_source::STATUS_BAR&&i.source==sex_pdx::clock_source::CMOS_UTC);info},
+                || { let result=sex_pdx::clock_snapshot(sex_pdx::clock_source::SLOT);observed=Some(result);result },
+            ) {
+                let u=civil.pending().unwrap();
+                let (seconds,attempts)=observed.and_then(Result::ok).map_or((0,0),|s|(s.seconds,s.attempts));
+                sex_pdx::serial_record!("[silkbar.civil.sample] sequence={} state={} seconds={} observed_seconds={} attempts={} source_known={} profile=q35_cmos_utc precision=1 snapshot=1",u.sequence,u.state as u8,u.seconds,seconds,attempts,source_known as u8);
+            }
+            if let Some(u)=civil.pending() {
+                sex_pdx::serial_record!("[silkbar.civil.publish.try] sequence={} state={} seconds={} held_display=1",u.sequence,u.state as u8,u.seconds);
+                let status=send_update_status(u.encode());
+                if status==0 {
+                    civil.accepted();
+                    sex_pdx::serial_record!("[silkbar.civil.enqueued] sequence={} state={} seconds={} held_display=1",u.sequence,u.state as u8,u.seconds);
+                }
+            }
+        }
         {
             static mut CADENCE_DONE_BUDGET: u32 = 16;
             let b = unsafe { &mut CADENCE_DONE_BUDGET };

@@ -23,6 +23,8 @@ ABI_INPUTS=(
   crates/sex-pdx/src/network_job.rs
   crates/sex-pdx/src/entropy_source.rs
   crates/sex-pdx/src/clock_source.rs
+  crates/silkbar-model/src/lib.rs
+  crates/silkbar-model/src/civil_clock.rs
   crates/sex-pdx/src/trust_source.rs
   crates/sex-pdx/src/trust_policy.rs
   crates/sex-trust-config/src/lib.rs

@@ -203,3 +203,29 @@ UiIR/causal scope. Global epoch commit and deterministic replay remain Open.
 Later primary commits and a sustained alpha on this newest image need fresh
 qualification. Next independent UI work is a BOOT-routed, nonblocking validated
 status-bar clock; the main physical/storage/lifetime/reserve plan continues.
+
+## Independent status-bar civil-clock milestone — 31 October
+
+The normal status bar now displays BOOT-held q35 UTC snapshots with source,
+one-second precision and snapshot labels. Unknown/failure/stale/rollback/terminal
+states hide numeric time. Exact PD6/task6 admission, canonical framing and an
+immutable one-item publication outbox preserve authority and backpressure rules;
+ticks and demo counters supply no UTC. The existing source wire epoch remains
+unchanged, with full SexTime/calendar views available in Browser.
+
+Qualified on `codex/silkbar-civil-time`, based on `876c30be`: one frozen cohort,
+GREEN_MASTER, 42 registered checks with 2,628 passing Rust test executions,
+880 Python tests, two rejected retained compiled guard-removal controls. Five
+ISO-extracted application/service ELFs decode 228,757 instructions with zero
+inspected vector/FP matches. Ten native cohorts pass independent replay:
+12 boots, 70 verified captures, 72 raw screenshots; 22 captures verify the entire
+clock cell, with 14 positive snapshots and 8 unavailable views. Two Close
+screenshots are observational only. Real TLS work, Quil input/Save and Browser
+Close remain responsive in the tested workflows.
+
+The [status-bar handoff](SILKBAR_CIVIL_CLOCK_2026_10_31.md) and
+[machine evidence](assets/sexos-silkbar-civil-clock-2026-10-31-evidence.json)
+identify exact source/image hashes, raw archive and diagnostics. Inventory stays
+2 Open / 28 Partial / System Proven false; no new general daily-driver claim.
+Next is the compact 1800-second latest-image alpha workflow, then wide repeat and
+repaint/source-traffic measurement, alongside the main physical/storage plan.

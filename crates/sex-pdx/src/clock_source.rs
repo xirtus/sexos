@@ -21,6 +21,10 @@ pub const MAX_SECONDS: u64 = 4_102_444_799; // 2099-12-31T23:59:59Z
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity { pub pd: u32, pub task: u32 }
+/// The fixed BOOT role publishing civil-time snapshots to the status bar.
+/// BOOT checks both components before granting this role its own source.
+/// This tuple is protocol data; a runtime sender still needs its held route.
+pub const STATUS_BAR: Identity = Identity { pd: 6, task: 6 };
 impl Identity {
     pub const fn valid(self) -> bool { self.pd != 0 && self.task != 0 }
 }
