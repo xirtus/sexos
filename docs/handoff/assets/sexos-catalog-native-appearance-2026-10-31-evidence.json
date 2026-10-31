@@ -1,0 +1,278 @@
+{
+  "round": 138,
+  "qualified_catalog_family_appearance": true,
+  "full_os_goal_complete": false,
+  "source_commit": "af6a96c34be706cd9ac8a109b4a2e1ecd39e177c",
+  "main_parent": "a780da6c",
+  "iso_sha256": "2300c9cd9709c2c2469aabf32511d6bea341c7135e172fff5bbe2d30d3309550",
+  "kernel_sha256": "56df8882e1ad4c706a3e0e8ad798b0b429e54b85ce30444bf8bc30336bb7b6dc",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "af6a96c34be706cd9ac8a109b4a2e1ecd39e177c",
+    "production": 576,
+    "runner": 586,
+    "unique": 1162,
+    "iso_sha256": "2300c9cd9709c2c2469aabf32511d6bea341c7135e172fff5bbe2d30d3309550",
+    "kernel_sha256": "56df8882e1ad4c706a3e0e8ad798b0b429e54b85ce30444bf8bc30336bb7b6dc",
+    "production_changes_from_failed_a": [
+      "servers/silk-shell/src/main.rs"
+    ],
+    "same_runner_as_failed_a": true
+  },
+  "diagnostics": {
+    "native_a": "Failed atQuil22 because nonatomicShellstatus interleaved with otherdomains. Originalfrozenbuild/capturefailure retained. Bpublishesboundedatomicrecord andreruns strictproofs."
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2685,
+  "python_tests": 977,
+  "native": {
+    "workflow_boots": 2,
+    "sealed_probe_boots": 1,
+    "total_boots": 3,
+    "verified_workflow_captures": 50,
+    "fresh_replays": true,
+    "groups": [
+      {
+        "profile": "compact",
+        "command": [
+          "python3",
+          "/tmp/sexos-appearance-b-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-appearance-b-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-appearance-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-appearance-b-alpha-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "138"
+        ],
+        "out": "/tmp/sexos-appearance-b-alpha-compact",
+        "driver": "/tmp/sexos-appearance-b-alpha-compact-driver.log",
+        "status": 0,
+        "seconds": 104.72490829089656,
+        "verified_captures": 26,
+        "fresh_replay": true
+      },
+      {
+        "profile": "wide",
+        "command": [
+          "python3",
+          "/tmp/sexos-appearance-b-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-appearance-b-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-appearance-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-appearance-b-alpha-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "138"
+        ],
+        "out": "/tmp/sexos-appearance-b-alpha-wide",
+        "driver": "/tmp/sexos-appearance-b-alpha-wide-driver.log",
+        "status": 0,
+        "seconds": 114.52643045806326,
+        "verified_captures": 24,
+        "fresh_replay": true
+      }
+    ],
+    "late_quil_family_proofs": [
+      {
+        "profile": "compact",
+        "target": 18,
+        "family": {
+          "focus": 307,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "523c4a0423617768da18784d628f1c251fe5399af496f81cf2cf7dd3c072529a"
+      },
+      {
+        "profile": "compact",
+        "target": 19,
+        "family": {
+          "focus": 308,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "5144deeeb1d39c7c45e422c76ea2e5bf78d67648552d9838c8072470da6c20eb"
+      },
+      {
+        "profile": "compact",
+        "target": 20,
+        "family": {
+          "focus": 309,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "21926beb6274546f2441c9e1e1422f1cccbee9df86c9cca2dde2812cd36f60e4"
+      },
+      {
+        "profile": "compact",
+        "target": 21,
+        "family": {
+          "focus": 310,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "142eae587e2b598d31dae14359c67e4eb5c186bf5b0208473ba9d64164be6cde"
+      },
+      {
+        "profile": "compact",
+        "target": 22,
+        "family": {
+          "focus": 311,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "df91f9eff2ef22e4b7f0697165a102d59e20122e9f7cb42a75757a39658710ff"
+      },
+      {
+        "profile": "compact",
+        "target": 23,
+        "family": {
+          "focus": 312,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "f06a98d6341804d43e545f56af6ef42364567298bd7ad2f8a877e1a9de14b341"
+      },
+      {
+        "profile": "wide",
+        "target": 18,
+        "family": {
+          "focus": 307,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "dd87920c77311cffb33407179e1d76769a9132c941dd1c0b5b4b1a370ae8c9da"
+      },
+      {
+        "profile": "wide",
+        "target": 19,
+        "family": {
+          "focus": 308,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "2dc22a312ebafae6849b4a0df46af017dc8fcf81b424b189426c6399693276d6"
+      },
+      {
+        "profile": "wide",
+        "target": 20,
+        "family": {
+          "focus": 309,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "a7eb7442466be9ac741d76269ccba2eaec2ebe64116f1534e3a498dfe8e5d601"
+      },
+      {
+        "profile": "wide",
+        "target": 21,
+        "family": {
+          "focus": 310,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "bbc174b8c64cc7a77c1db3083aa262b0f09d1008df63d16a9440da32c5b7e7d5"
+      },
+      {
+        "profile": "wide",
+        "target": 22,
+        "family": {
+          "focus": 311,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "7a085a9aca3f59f3169162993b906757785c2b656f9fb2344f2e1bf4eb9092d0"
+      },
+      {
+        "profile": "wide",
+        "target": 23,
+        "family": {
+          "focus": 312,
+          "app": "Quil",
+          "indicator": "0xcba6f7"
+        },
+        "frame_sha256": "eca950f1fa513e1c775bc04ba1dada6fd63999a9d0bf97efde1611d245ce965d"
+      }
+    ],
+    "exact_indicator_pixels": 192,
+    "boot_catalog_audit": {
+      "ok": true,
+      "boots": 3,
+      "workflow_boots": 2,
+      "sealed_probe_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-appearance-b-build/serial.log",
+          "bytes": 507687,
+          "sha256": "198469ea1d9a404985d597fee87edd4c53ed4ecd625d82432aca7b0510591e71",
+          "subjects": 11,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-appearance-b-alpha-compact/serial.log",
+          "bytes": 2075153,
+          "sha256": "474747c8e6090b1179e954092d5449c3b90805cd0592b4feb3dadee2aedaa7df",
+          "subjects": 11,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-appearance-b-alpha-wide/serial.log",
+          "bytes": 2013112,
+          "sha256": "8204e9f7073e98bd420f3f5587a18f22dbe5e2375eb12fc37107dd8942534b1c",
+          "subjects": 11,
+          "preseal": true
+        }
+      ],
+      "scope": "Exact eleven independently spelled native preseal receipts per boot, coupled to frozen runtime grant/task validator and source. Not physical/SMP/hostile containment proof."
+    },
+    "new_image_1800s_acceptance": false
+  },
+  "scalar": {
+    "elfs": 5,
+    "instructions": 228399,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Five exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-catalog-native-appearance-2026-10-31-raw.tar.gz",
+    "sha256": "d6167b80308c61b4c7fef0f034265caf5e55e19108075b28bd666ef89798a85d",
+    "bytes": 14216857,
+    "members": 2596,
+    "payload_manifest_sha256": "e6b157a74b86ca9e5f6527e453000896b750442c9691b6f53ad4415e015767f0",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Catalog-derived const visual family classification of every app frame/content/pane, preserving original palette and held-owner canvas checks. Actual lateQuil18..23 current family status and all16 focus-dot pixels perframe atbothsizes, full8chain and cleanup/exhaustion, otherappfamilies covered byactualrenderer/expandedfuturefixtures. Caption glyph renderer itself unchanged. No authority/reserve growth, newpending/cold qualification onthisimage, new1800s, physical/SMP/hostile containment/global epoch or daily-driver acceptance claim."
+}

@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–137
+# SexOS development: round 108 acceptance and rounds 109–138
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -542,3 +542,23 @@ parent sessions and exact compressed disk ancestry; every member is hash checked
 Sustained alpha jobs are separate/live, not accepted here. Next: terminal alpha
 replays, native family captions/focus indicators, and Spindle history/recovery
 catalog migration. Inventory remains 2 Open / 28 Partial / System Proven false.
+
+
+## Round 138 — consistent catalog family status and focus appearance
+
+[Round report](CATALOG_NATIVE_APPEARANCE_2026_10_31.md) replaces fixed visual
+family IDs with bounded catalog associations, preserving original colors and
+held-owner checks. Newly reserved Quil frames report their family and show its
+mauve focus indicator. All late Quil captures now prove current family status
+and every dot pixel: twelve native family proofs across both sizes. The first
+attempt caught a nonatomic serial status record; its original failure remains
+archived, and the corrected atomic record passes the same strict checks.
+
+The final cohort passes 43 host checks / 2,685 Rust executions, 977 Python tests,
+sealed GREEN probe and both full eight-Quil chains with fresh replay. Three boots,
+50 verified captures; all eleven catalog subjects audited before sealing.
+Five exact ELF scans inspect 228,399 instructions with no inspected vector/FP
+matches. Targeted appearance checks do not relabel earlier cold/pending or live
+sustained-alpha results as acceptance of this new image. Next: terminal sustained
+replays, then held BOOT Spindle recovery roster/task identities before expansion.
+Inventory remains 2 Open / 28 Partial / System Proven false.
