@@ -503,6 +503,15 @@
         "scripts/app_activation_host_gate.sh"
       ],
       "scope": "Actual shell successor resolution with mocked register transport; static BOOT/runtime commit wiring. Actual kernel transitions and adversarial preflight run in app_resources; guest activation and glyphs remain separate."
+    },
+    {
+      "id": "no_per_process_tables",
+      "kind": "static",
+      "argv": [
+        "bash",
+        "scripts/no_per_process_tables_gate.sh"
+      ],
+      "scope": "Static scan of every workspace and arch Rust source: translation-root loads and mapper roots are confined to sanctioned reinstalls of the one boot root; process-model identifiers are absent. Not runtime translation, generated code or hostile-code evidence."
     }
   ],
   "invariants": [
@@ -667,16 +676,22 @@
     {
       "id": "NO_PER_PROCESS_TABLES",
       "requirement": "No per-process page tables or Linux-style process model may be introduced.",
-      "status": "open",
+      "status": "partial",
       "sources": [
         {
           "path": "ARCHITECTURE.md",
           "anchor": "## 0. System Model"
+        },
+        {
+          "path": "kernel/src/hal/x86_64.rs",
+          "anchor": "fn tlb_flush_local"
         }
       ],
-      "checks": [],
+      "checks": [
+        "no_per_process_tables"
+      ],
       "gaps": [
-        "Targeted review is not a repository-wide executable absence proof."
+        "The executable absence check is static source evidence over workspace members; it does not observe runtime CR3/TTBR values, generated or vendored code, or hostile native code."
       ],
       "depends_on": []
     },
