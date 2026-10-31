@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–135
+# SexOS development: round 108 acceptance and rounds 109–136
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -500,3 +500,26 @@ replays pass; sustained acceptance of this image is not claimed.
 Next: add actual Quil reserves and verify the entire extended reopen chain.
 Spindle journal/recovery and Browser identity/broker bindings still require work.
 Inventory remains 2 Open / 28 Partial / System Proven false; daily-driver goal active.
+
+
+## Round 136 — eight actual Quil reservations
+
+[Round report](QUIL_EIGHT_RESERVE_2026_10_31.md) records the expanded BOOT roster:
+eight Quil incarnations and seven reopens, with Spindle/Browser unchanged.
+Clipboard, deferred file windows, snapshot resolution, viewport admission and
+pending display-state storage now cover the larger actual roster. Native checks
+caught two independent old geometry inventories; original failures are preserved.
+
+One committed/frozen cohort passes 43 host checks / 2,684 Rust executions and
+968 Python tests. Both desktop sizes finish the entire eight-Quil chain with
+fresh replay, exact document loads/edit-saves, cleanup and launcher exhaustion.
+Connected and pending-I/O live/cold checks also pass at both sizes: eleven boots
+including the sealed probe, 112 verified workflow captures. Every boot audits
+all eleven catalog subjects before sealing. Five exact ELF scans inspect
+228,332 instructions with zero inspected vector/FP matches. The report links
+hash-verified raw evidence and states finite task/buffer/private-page budgets.
+
+Next: cold-boot the exact post-Quil23 disk, then qualify sustained alpha on this
+larger image; migrate remaining native captions/indicators before expanding
+Spindle history/recovery authority. Inventory remains 2 Open / 28 Partial /
+System Proven false. No unbounded relaunch or daily-driver acceptance claim.
