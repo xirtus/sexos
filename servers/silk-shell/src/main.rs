@@ -7398,8 +7398,44 @@ struct TombstoneEvent {
     tab_index: u8,
 }
 
-/// Maximum number of tracked lifecycle surfaces.
-const LIFECYCLE_MAX_SURFACES: usize = 32;
+/// Initial Shell metadata, including legacy descriptors without a mapped
+/// display surface. This inventory describes state; it grants no authority.
+const BOOT_LIFECYCLE_SURFACES: [(u64, LifecycleState); 17] = [
+    (SURFACE_ID_APP, LifecycleState::Allocated),
+    (SURFACE_ID_STATIC, LifecycleState::Allocated),
+    (SURFACE_ID_TEST3, LifecycleState::Allocated),
+    (SURFACE_ID_TEST4, LifecycleState::Allocated),
+    (SURFACE_ID_LINEN, LifecycleState::Visible),
+    (SURFACE_ID_QUIL, LifecycleState::Visible),
+    (SURFACE_ID_MESH, LifecycleState::Visible),
+    (SURFACE_ID_COLLAR, LifecycleState::Visible),
+    (SURFACE_ID_BELL_PLACEHOLDER, LifecycleState::Visible),
+    (SURFACE_ID_SPINDLE, LifecycleState::Visible),
+    (SURFACE_ID_CURSOR, LifecycleState::Mapped),
+    (SURFACE_ID_LAUNCHER, LifecycleState::Allocated),
+    (SURFACE_ID_STATUS, LifecycleState::Allocated),
+    (SURFACE_ID_CLOCK, LifecycleState::Allocated),
+    (SURFACE_ID_BELL, LifecycleState::Allocated),
+    (SURFACE_ID_SCENE_SETTINGS, LifecycleState::Allocated),
+    (SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated),
+];
+/// Every later native frame retains its metadata after terminal cleanup.
+/// Original Quil and Spindle frames are already in the initial inventory;
+/// Browser's original frame and every reserved successor are registered later.
+const fn native_lifecycle_surface_count() -> usize {
+    let mut count = 0;
+    let mut index = 0;
+    while index < app_catalog::COUNT {
+        let row = &app_catalog::INCARNATIONS[index];
+        if row.ordinal > 0 || matches!(row.app, app_catalog::App::Browser) {
+            count += 1;
+        }
+        index += 1;
+    }
+    count
+}
+/// Complete finite retained-metadata budget, not a simultaneous frame limit.
+const LIFECYCLE_MAX_SURFACES: usize = BOOT_LIFECYCLE_SURFACES.len() + native_lifecycle_surface_count();
 
 /// Lifecycle metadata for all tracked surfaces.
 /// Indexed linearly; searched by surface_id on access.
@@ -11471,33 +11507,15 @@ unsafe fn surface_is_lifecycle_focusable(sid: u64) -> bool {
 /// Register all known surfaces with appropriate initial lifecycle states.
 /// Called once at boot after frame initialization.
 unsafe fn lifecycle_init_all() {
-    // Legacy descriptors have no boot display surface. Keep them allocated
-    // until an explicit diagnostic/create path maps them; tiling is not genesis.
-    // The working desktop surfaces below start visible in the active scene.
-    lifecycle_register(SURFACE_ID_APP, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_STATIC, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_LINEN, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_QUIL, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_MESH, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_COLLAR, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_BELL_PLACEHOLDER, LifecycleState::Visible);
-    lifecycle_register(SURFACE_ID_SPINDLE, LifecycleState::Visible);
-    // Cursor — always present, no frame.
-    lifecycle_register(SURFACE_ID_CURSOR, LifecycleState::Mapped);
-    // Panel surfaces — start Allocated (inactive, toggled on demand).
-    lifecycle_register(SURFACE_ID_LAUNCHER, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_STATUS, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_CLOCK, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_BELL, LifecycleState::Allocated);
-    lifecycle_register(SURFACE_ID_SCENE_SETTINGS, LifecycleState::Allocated);
-    // Atlas overlay — starts Allocated (toggled by F10).
-    lifecycle_register(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
+    // Legacy descriptors remain allocated until an explicit mapping path;
+    // tiling and metadata registration are not capability genesis.
+    for &(sid, state) in &BOOT_LIFECYCLE_SURFACES {
+        lifecycle_register(sid, state);
+    }
     serial_println!("[lifecycle.state.init] lifecycle model initialized");
-    serial_println!("[silk.lifecycle.init] ok=1 surfaces=18 states=Visible|Mapped|Allocated");
+    serial_println!("[silk.lifecycle.init] ok=1 surfaces={} states=Visible|Mapped|Allocated", BOOT_LIFECYCLE_SURFACES.len());
     serial_println!("[silk.lifecycle.invariant.ok] all_surfaces_registered=1 generation_safe=1 static_table_full=0");
-    serial_println!("[silk.lifecycle.surface.live] ok=1 surfaces=18");
+    serial_println!("[silk.lifecycle.surface.live] ok=1 surfaces={}", BOOT_LIFECYCLE_SURFACES.len());
 }
 /// Returns true if the surface is shell-managed (draggable in V1).
 fn is_shell_surface(sid: u64) -> bool {

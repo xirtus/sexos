@@ -43,7 +43,7 @@ const fn quil(ordinal: u8, target: u32, surface: u64, shell_surface: Option<u64>
 }
 
 /// Every BOOT-reserved app incarnation, in activation order per app.
-pub const INCARNATIONS: [Incarnation; 12] = [
+pub const INCARNATIONS: [Incarnation; 17] = [
     quil(0, 9, 156, Some(201), 38, 41, None, 11),
     Incarnation { app: App::Spindle, ordinal: 0, target: 12, surface: 154, shell_surface: Some(153), lifecycle_slot: 39, close_slot: 42, activation_slot: None, route_slot: 14, children: &[160, 161, 162] },
     // Browser's document notices share its BOOT close route.
@@ -57,6 +57,11 @@ pub const INCARNATIONS: [Incarnation; 12] = [
     quil(6, 22, 311, None, 122, 123, Some(124), 125),
     quil(7, 23, 312, None, 126, 127, Some(128), 129),
     Incarnation { app: App::Spindle, ordinal: 2, target: 24, surface: 313, shell_surface: Some(314), lifecycle_slot: 130, close_slot: 131, activation_slot: Some(132), route_slot: 133, children: &[315, 316, 317] },
+    Incarnation { app: App::Spindle, ordinal: 3, target: 25, surface: 318, shell_surface: Some(319), lifecycle_slot: 134, close_slot: 135, activation_slot: Some(136), route_slot: 137, children: &[320, 321, 322] },
+    Incarnation { app: App::Spindle, ordinal: 4, target: 26, surface: 323, shell_surface: Some(324), lifecycle_slot: 138, close_slot: 139, activation_slot: Some(140), route_slot: 141, children: &[325, 326, 327] },
+    Incarnation { app: App::Spindle, ordinal: 5, target: 27, surface: 328, shell_surface: Some(329), lifecycle_slot: 142, close_slot: 143, activation_slot: Some(144), route_slot: 145, children: &[330, 331, 332] },
+    Incarnation { app: App::Spindle, ordinal: 6, target: 28, surface: 333, shell_surface: Some(334), lifecycle_slot: 146, close_slot: 147, activation_slot: Some(148), route_slot: 149, children: &[335, 336, 337] },
+    Incarnation { app: App::Spindle, ordinal: 7, target: 29, surface: 338, shell_surface: Some(339), lifecycle_slot: 150, close_slot: 151, activation_slot: Some(152), route_slot: 153, children: &[340, 341, 342] },
 ];
 
 /// Compile-time storage sizing; descriptive catalog data never grants authority.

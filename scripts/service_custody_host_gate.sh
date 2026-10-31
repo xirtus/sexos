@@ -195,7 +195,7 @@ from pathlib import Path
 s=Path('servers/silk-shell/src/main.rs').read_text()
 for number,name in [(100,'APP'),(101,'STATIC'),(102,'TEST3'),(103,'TEST4')]:
     assert f'static mut SURFACE_{number}_ALIVE: bool = false;' in s
-    assert f'lifecycle_register(SURFACE_ID_{name}, LifecycleState::Allocated);' in s
+    assert f'(SURFACE_ID_{name}, LifecycleState::Allocated),' in s
 assert s.count('desktop_shortcut(scancode,value)')==2
 for start,end in [('unsafe fn handle_hid_event(', '// ── Spindle text key passthrough'),('// ── Event-class dispatch','// ── Spindle focused-surface')]:
     part=s[s.index(start):s.index(end,s.index(start))]
@@ -229,4 +229,5 @@ bash scripts/quil_clipboard_host_gate.sh
 bash scripts/ipc_sender_host_gate.sh
 bash scripts/reply_sender_host_gate.sh
 bash scripts/sexnet_service_host_gate.sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_shell_lifecycle_capacity.py
 echo '[service.custody.host.gate] PASS scope=production_custody_ramfs_history_passive_network_with_mock_transport_authority_and_host_locks'

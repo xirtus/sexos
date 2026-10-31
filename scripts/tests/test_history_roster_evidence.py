@@ -50,11 +50,16 @@ class HistoryRoster(unittest.TestCase):
     def check(self, text):
         return h.verify_boot_roster(self.root, text)
 
-    def test_actual_source_three_literal_spindles(self):
+    def test_actual_source_eight_literal_spindles(self):
         self.assertEqual(h.source_spindles(ROOT), [
             dict(ordinal=0, target=12, surface=154, frame=153, lifecycle=39, close=42, activation=None, route=14),
             dict(ordinal=1, target=17, surface=302, frame=306, lifecycle=50, close=51, activation=49, route=52),
             dict(ordinal=2, target=24, surface=313, frame=314, lifecycle=130, close=131, activation=132, route=133),
+            dict(ordinal=3, target=25, surface=318, frame=319, lifecycle=134, close=135, activation=136, route=137),
+            dict(ordinal=4, target=26, surface=323, frame=324, lifecycle=138, close=139, activation=140, route=141),
+            dict(ordinal=5, target=27, surface=328, frame=329, lifecycle=142, close=143, activation=144, route=145),
+            dict(ordinal=6, target=28, surface=333, frame=334, lifecycle=146, close=147, activation=148, route=149),
+            dict(ordinal=7, target=29, surface=338, frame=339, lifecycle=150, close=151, activation=152, route=153),
         ])
 
     def test_current_full_catalog_joins_only_exact_spindle_tasks(self):
@@ -69,10 +74,10 @@ class HistoryRoster(unittest.TestCase):
             extra += (f"[boot.app.catalog] target={target} task={target*10} surface={surface} logical={logical} "
                       f"incarnation={inc} predecessor={pred} lifecycle={lifecycle} close={close} route={route} "
                       f"dormant={dormant} grants_verified=1 data_only=1\n")
-        actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133)]
-        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=3", extra + "[boot.app.catalog.complete] rows=12")
+        actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133),(3,25,318,319,134,135,136,137),(4,26,323,324,138,139,140,141),(5,27,328,329,142,143,144,145),(6,28,333,334,146,147,148,149),(7,29,338,339,150,151,152,153)]
+        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=8", extra + "[boot.app.catalog.complete] rows=17")
         self.assertEqual(h.verify_boot_roster(ROOT, text)["participants"],
-                         [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240)])
+                         [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240),dict(target=25,task=250),dict(target=26,task=260),dict(target=27,task=270),dict(target=28,task=280),dict(target=29,task=290)])
 
     def test_two_and_three_unequal_tasks_join_writer(self):
         for rows in (ROWS[:2], ROWS):

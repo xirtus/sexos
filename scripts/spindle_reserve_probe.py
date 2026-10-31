@@ -116,7 +116,7 @@ def verify(result,frames,text,rows,*,out=None):
     tasks={p['target']:p['task']for p in roster['participants']}
     chain=result.get('chain')
     if not isinstance(chain,list) or len(chain)!=len(rows)-2:raise ValueError('skipped reserve incarnation')
-    previous=0
+    previous=0;previous_terminal=None
     for step,row in zip(chain,rows[2:]):
         target=row['target'];task=tasks[target];pre=rows[row['ordinal']-1]['target'];pre_task=tasks[pre]
         identity=dict(target=target,task=task,surface=row['surface'],frame_id=row['frame'],predecessor=pre,logical=rows[0]['target'],incarnation=row['ordinal']+1)
@@ -129,6 +129,8 @@ def verify(result,frames,text,rows,*,out=None):
         prior=list(re.finditer(rf'\[files.history.durable\] logical=12 target={pre} generation=(\d+) bank=([01]) bytes=(\d+) hash=(0x[0-9a-f]+) barriers=3 readback=1'+END,text[:a]))
         if not prior:raise ValueError('missing predecessor durable history')
         p=prior[-1]
+        if previous_terminal is not None and (int(p[1]),int(p[2]),int(p[3]),p[4])!=(previous_terminal['generation'],previous_terminal['bank'],previous_terminal['bytes'],previous_terminal['hash']):
+            raise ValueError('successor did not recover predecessor terminal echo generation')
         recovery=_one(text,rf'\[files.history.recovered\] logical=12 source={pre} source_task={pre_task} target={target} generation={p[1]} bytes={p[3]} source_hash={p[4]} owned_hash=(0x[0-9a-f]+) data_hash=(0x[0-9a-f]+) boot_grant=53',a,b)
         loaded=_one(text,rf'\[spindle.history.receipt\] target={target} task={task} kind=loaded handle=([1-9]\d*) bytes={p[3]} count=(\d+) hash={recovery[1]} error=0',a,b)
         opened=_one(text,rf'\[files.history.open\] target={target} handle={loaded[1]} mode=load seq=([1-9]\d*)',a,b)
@@ -176,6 +178,17 @@ def verify(result,frames,text,rows,*,out=None):
         if net.get('peer_sha256')!=hashlib.sha256(raw).hexdigest() or net.get('peer_file')!=f'spindle-{target}-echo-peer.json':raise ValueError('peer transcript binding differs')
         if out is not None and (Path(out)/net['peer_file']).read_bytes()!=raw:raise ValueError('raw peer transcript differs')
         _frame(net['frame'],frames,text,'spindle',target,'NET / verified',n+verified.end(),e)
+        terminal=step.get('terminal_echo')
+        if not isinstance(terminal,dict):raise ValueError('missing terminal echo')
+        t,u=terminal.get('serial_start'),terminal.get('serial_end')
+        if terminal.get('command')!='echo alpha'+str(target) or type(t)is not int or type(u)is not int or not e<=t<u<=d:raise ValueError('terminal echo outside post-network/pre-close window')
+        _one(text,rf'\[spindle.instance.command\] target={target} task={task} name=echo ok=1',t,u)
+        terminal_saved=_save(text,target,task,t,u)
+        if terminal.get('saved')!=terminal_saved or terminal_saved['generation']<=net_saved['generation']:raise ValueError('terminal echo lacks fresh durable save')
+        # Nothing may replace the controlled final history before Close.
+        final_durable=list(re.finditer(rf'\[files.history.durable\] logical=12 target={target} [^\r\n]*'+END,text[t:d]))
+        if len(final_durable)!=1:raise ValueError('terminal echo is not final durable history')
+        previous_terminal=terminal_saved
         finished=_one(text,rf'\[task.finish\] pd={target} task={task} reason=0 terminal=1',d,z)
         ack_positions=[]
         for role,holder in [(1,3),(2,1),(4,11),(8,13),(16,10)]:
@@ -250,6 +263,11 @@ def run(c,close,command):
             wait(rf'\[spindle.history.receipt\] target={target} task={task} kind=saved .*error=0',begin)
             frame=c['capture'](f'reserve-spindle-{target}-network','NET / verified',kind='spindle',target=target)
         end=len(text());step['network']=dict(serial_start=begin,serial_end=end,peer=peer,peer_file=peer_file,peer_sha256=hashlib.sha256(peer_bytes(peer)).hexdigest(),frame=frame,saved=_save(text(),target,task,begin,end))
+        value='echo alpha'+str(target)
+        begin=command(value,target,rf'\[spindle.instance.command\] target={target} task={task} name=echo ok=1')
+        wait(rf'\[spindle.history.receipt\] target={target} task={task} kind=saved .*error=0',begin)
+        snapshot=text();end=len(snapshot)
+        step['terminal_echo']=dict(command=value,serial_start=begin,serial_end=end,saved=_save(snapshot,target,task,begin,end))
         step['close_start']=len(text());close(target,row['frame']);step['serial_end']=len(text());steps.append(step)
     exhaustion_start=len(text());key('grave_accent',r'\[shell.palette.item\] idx=0')
     row=wait(r'\[launcher.text.row\] index=0 row=0 name=Open Spindle status=CLOSED / RESERVE EXHAUSTED'+END,exhaustion_start)

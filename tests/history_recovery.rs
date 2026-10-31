@@ -18,7 +18,7 @@ use recovery::{Participant, RecoveryGrant};
 fn roster<const N: usize>(targets: [u32; N]) -> RecoveryGrant<N> {
     RecoveryGrant { holder: 11, logical: 12, participants: targets.map(|target| Participant { target, task: target * 10 }), base: 1808, sectors: 18 }
 }
-fn grant() -> recovery::Grant { roster([12, 17, 24]) }
+fn grant() -> recovery::Grant { roster([12, 17, 24, 25, 26, 27, 28, 29]) }
 fn body(raw: [u64; 5]) -> Result<[u64; 4], u64> {
     if raw[0] != 0 { assert_eq!(&raw[1..], &[0; 4]); Err(raw[0]) }
     else { Ok(raw[1..].try_into().unwrap()) }
@@ -27,23 +27,28 @@ fn decode<const N: usize>(g: RecoveryGrant<N>, targets: &[u32; N]) -> Result<Rec
     recovery::decode_for(11, 12, targets, |kind| body(g.query(11, kind)))
 }
 #[test]
-fn actual_catalog_three_and_kernel_query_roundtrip() {
-    assert_eq!(app_catalog::SPINDLE_TARGETS, [12, 17, 24]);
+fn actual_catalog_eight_and_kernel_query_roundtrip() {
+    assert_eq!(app_catalog::SPINDLE_TARGETS, [12, 17, 24, 25, 26, 27, 28, 29]);
     let pd = capability::ProtectionDomain { id: 11, value: Some(capability::CapabilityData::HistoryRecovery(grant())) };
-    assert_eq!(production::query(&pd, 53, 0), [0, 12, 11, 3, 1]);
+    assert_eq!(production::query(&pd, 53, 0), [0, 12, 11, 8, 1]);
     assert_eq!(production::query(&pd, 53, 1), [0, 1808, 18, 0, 0]);
     assert_eq!(production::query(&pd, 53, 2), [0, 12, 120, 0, 0]);
     assert_eq!(production::query(&pd, 53, 3), [0, 17, 170, 1, 0]);
     assert_eq!(production::query(&pd, 53, 4), [0, 24, 240, 2, 0]);
-    for kind in [5, u64::MAX] { assert_eq!(production::query(&pd, 53, kind), [1, 0, 0, 0, 0]); }
+    assert_eq!(production::query(&pd, 53, 5), [0, 25, 250, 3, 0]);
+    assert_eq!(production::query(&pd, 53, 6), [0, 26, 260, 4, 0]);
+    assert_eq!(production::query(&pd, 53, 7), [0, 27, 270, 5, 0]);
+    assert_eq!(production::query(&pd, 53, 8), [0, 28, 280, 6, 0]);
+    assert_eq!(production::query(&pd, 53, 9), [0, 29, 290, 7, 0]);
+    for kind in [10, u64::MAX] { assert_eq!(production::query(&pd, 53, kind), [1, 0, 0, 0, 0]); }
     let decoded = recovery::decode_for(11, 12, &app_catalog::SPINDLE_TARGETS, |kind| body(production::query(&pd, 53, kind))).unwrap();
     assert_eq!(decoded, grant());
 }
 #[test]
 fn missing_wrong_kind_holder_and_full_width_slots_are_denied() {
-    for id in [0, 12, 17, 24, 3] {
+    for id in [0, 12, 17, 24, 25, 26, 27, 28, 29, 3] {
         let pd = capability::ProtectionDomain { id, value: Some(capability::CapabilityData::HistoryRecovery(grant())) };
-        for kind in [0, 1, 2, 3, 4] { assert_eq!(production::query(&pd, 53, kind), [3, 0, 0, 0, 0]); }
+        for kind in 0..10 { assert_eq!(production::query(&pd, 53, kind), [3, 0, 0, 0, 0]); }
     }
     for value in [None, Some(capability::CapabilityData::Domain(11))] {
         let pd = capability::ProtectionDomain { id: 11, value };
@@ -72,7 +77,7 @@ fn generic_two_three_and_eight_rosters_preserve_middle_last_and_unequal_task_ids
 #[test]
 fn owned_roster_sizes_remain_bounded() {
     assert_eq!(core::mem::size_of::<Participant>(), 8);
-    assert_eq!(core::mem::size_of::<recovery::Grant>(), 48);
+    assert_eq!(core::mem::size_of::<recovery::Grant>(), 88);
     assert_eq!(core::mem::size_of::<RecoveryGrant<2>>(), 40);
     assert_eq!(core::mem::size_of::<RecoveryGrant<3>>(), 48);
     assert_eq!(core::mem::size_of::<RecoveryGrant<8>>(), 88);
@@ -83,11 +88,11 @@ fn invalid_grants_never_expose_metadata_or_participants() {
     let mut bad = vec![RecoveryGrant { holder: 0, ..g }, RecoveryGrant { logical: 0, ..g },
         RecoveryGrant { base: u64::MAX, ..g }, RecoveryGrant { sectors: 17, ..g }];
     for p in [Participant::EMPTY, Participant { target: 12, task: 999 }, Participant { target: 99, task: 120 }] {
-        for index in [1, 2] { let mut changed = g; changed.participants[index] = p; bad.push(changed); }
+        for index in [1, 4, 7] { let mut changed = g; changed.participants[index] = p; bad.push(changed); }
     }
     for g in bad {
         assert!(!g.valid()); assert_eq!(g.participant(12), None); assert!(!g.permits(11, 12, 120));
-        for kind in [0, 1, 2, 3, 4] { assert_eq!(g.query(11, kind), [3, 0, 0, 0, 0]); }
+        for kind in 0..10 { assert_eq!(g.query(11, kind), [3, 0, 0, 0, 0]); }
     }
     assert!(!roster::<0>([]).valid());
     assert!(!roster(core::array::from_fn::<_, 65, _>(|i| i as u32 + 1)).valid());
@@ -96,9 +101,9 @@ fn invalid_grants_never_expose_metadata_or_participants() {
 #[test]
 fn decoder_rejects_header_count_version_extent_and_reserved_corruption() {
     let g = grant();
-    for (kind, field, value) in [(0,0,17), (0,1,12), (0,2,1), (0,2,2), (0,2,4), (0,2,65), (0,3,0), (0,3,2),
+    for (kind, field, value) in [(0,0,17), (0,1,12), (0,2,1), (0,2,2), (0,2,3), (0,2,4), (0,2,7), (0,2,9), (0,2,65), (0,3,0), (0,3,2),
         (0,0,(1u64<<32)|12), (0,1,(1u64<<32)|11), (1,0,u64::MAX), (1,1,19), (1,2,1), (1,3,1)] {
-        let result = recovery::decode_for(11, 12, &[12, 17, 24], |k| {
+        let result = recovery::decode_for(11, 12, &[12, 17, 24, 25, 26, 27, 28, 29], |k| {
             let mut b = body(g.query(11, k))?; if k == kind { b[field] = value; } Ok(b)
         });
         assert!(result.is_err(), "accepted kind={kind} field={field} value={value}");
@@ -115,15 +120,15 @@ fn decoder_rejects_middle_last_identity_order_duplicate_and_high_bits() {
             assert!(result.is_err(), "accepted kind={kind} field={field} value={value}");
         }
     }
-    assert!(decode(grant(), &[17, 12, 24]).is_err());
-    assert!(decode(grant(), &[12, 12, 24]).is_err());
+    assert!(decode(grant(), &[17, 12, 24, 25, 26, 27, 28, 29]).is_err());
+    assert!(decode(grant(), &[12, 12, 24, 25, 26, 27, 28, 29]).is_err());
 }
 #[test]
 fn truncation_at_any_query_returns_error_without_partial_grant() {
-    let g = roster([12, 17, 24]);
-    for missing in 0..5 {
+    let g = grant();
+    for missing in 0..10 {
         let mut calls = Vec::new();
-        let result = recovery::decode_for(11, 12, &[12, 17, 24], |k| {
+        let result = recovery::decode_for(11, 12, &[12, 17, 24, 25, 26, 27, 28, 29], |k| {
             calls.push(k); if k == missing { Err(77) } else { body(g.query(11, k)) }
         });
         assert_eq!(result, Err(77));

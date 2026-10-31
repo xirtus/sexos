@@ -7,7 +7,7 @@ from check_desktop_pixels import font_from_source,glyph
 FONT=font_from_source((Path(__file__).resolve().parents[2]/'servers/sexdisplay/src/main.rs').read_text())
 def fixture(w=1280,h=134,target=12,task=None,caption=None):
     task=target if task is None else task
-    width,height=1280,800;data=bytearray(width*height*3);x,y=0,50;panes,cols,rows=layout(w,h);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317]}[target]
+    width,height=1280,800;data=bytearray(width*height*3);x,y=0,50;panes,cols,rows=layout(w,h);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317],25:[318,320,321,322],26:[323,325,326,327],27:[328,330,331,332],28:[333,335,336,337],29:[338,340,341,342]}[target]
     text=boot({target:task})+f'[spindle.view.accepted] target={target} task={task} sequence=2 w={w} h={h} cols={cols} top_rows={rows[0]} bottom_rows={rows[1]} sender=3\n'
     prompt=b'> echo spindle17'.ljust(cols*2)
     for i,(sid,(px,py,pw,ph))in enumerate(zip(sids,panes)):
@@ -47,7 +47,7 @@ class Check(unittest.TestCase):
     def test_empty_or_partial_hex_payload_is_not_a_paint(self):
         text,ppm=fixture();self.assertTrue(verify(text.replace('bytes=21','bytes=20'),ppm,FONT,12,None,False,False));self.assertTrue(verify(text.replace('hex=3e','hex=0'),ppm,FONT,12,None,False,False))
     def test_all_three_catalog_grids_and_unequal_held_task_have_exact_current_pixels(self):
-        for target,task in [(12,12),(17,17),(24,24),(24,240)]:
+        for target,task in [(12,12),(17,17),(24,24),(24,240),(25,250),(26,260),(27,270),(28,280),(29,290)]:
             text,ppm=fixture(640,134,target,task,caption='NET / verified')
             self.assertEqual(verify(text,ppm,FONT,target,'> echo spindle17',False,False,require_text='NET / verified'),[])
         text,ppm=fixture(640,134,24,240,caption='NET / verified across panes')
@@ -59,7 +59,7 @@ class Check(unittest.TestCase):
                         text.replace('sid=313','sid=302'),text.replace('sid=315 sequence=2','sid=315 sequence=1'),
                         text.replace('task=240 sequence=2','task=240 sequence=0')]:
             self.assertTrue(verify(changed,ppm,FONT,24,None,False,False))
-        self.assertTrue(verify(text,ppm,FONT,25,None,False,False))
+        self.assertTrue(verify(text,ppm,FONT,30,None,False,False))
         header,rgb=ppm.split(b'255\n',1);changed=bytearray(rgb);at=changed.index(b'\xe8\xff\xff');changed[at]=0xe7
         self.assertTrue(verify(text,header+b'255\n'+changed,FONT,24,None,False,False))
         # An unused physical text column may not retain old foreground ink.

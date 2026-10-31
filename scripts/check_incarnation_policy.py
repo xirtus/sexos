@@ -7,7 +7,7 @@ def main():
  root=Path(__file__).resolve().parents[1];catalog=(root/'crates/sex-pdx/src/app_catalog.rs').read_text();m=re.search(r'pub const INCARNATIONS: \[Incarnation; (\d+)\] = \[',catalog);assert m;end=catalog.index('\n];',m.end())
  extra='''
  quil(8,100,400,None,210,211,Some(212),213),
- Incarnation{app:App::Spindle,ordinal:3,target:101,surface:401,shell_surface:Some(402),lifecycle_slot:214,close_slot:215,activation_slot:Some(216),route_slot:217,children:&[403,404,405]},
+ Incarnation{app:App::Spindle,ordinal:8,target:101,surface:401,shell_surface:Some(402),lifecycle_slot:214,close_slot:215,activation_slot:Some(216),route_slot:217,children:&[403,404,405]},
  Incarnation{app:App::Browser,ordinal:1,target:102,surface:406,shell_surface:None,lifecycle_slot:218,close_slot:219,activation_slot:Some(220),route_slot:221,children:&[]},'''
  catalog=catalog[:end]+extra+catalog[end:];catalog=catalog[:m.start(1)]+str(int(m[1])+3)+catalog[m.end(1):]
  with tempfile.TemporaryDirectory(prefix='sexos-incarnation-policy-')as temp:
