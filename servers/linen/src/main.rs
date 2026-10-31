@@ -5,6 +5,7 @@
 mod session;
 mod sexobject;
 mod reply_delivery;
+use sex_pdx::app_catalog;
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -27,7 +28,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 
 static mut SHELL_REPLY: reply_delivery::ReplyDelivery = reply_delivery::ReplyDelivery::new();
 fn linen_reply(caller:u32,value:u64) {
-    if matches!(caller,12|17) {
+    if sex_pdx::app_catalog::is_spindle(caller) {
         // Legacy Spindle commands never await readback. Do not retain a reply
         // to an app that can exit, or block permanent shell snapshot service.
         reply_delivery::legacy_reply(caller,value,pdx_reply);
@@ -40,7 +41,7 @@ fn linen_reply(caller:u32,value:u64) {
 }
 fn linen_reply_poll()->bool { unsafe { SHELL_REPLY.poll(pdx_reply) } }
 fn linen_request_allowed(caller:u32,opcode:u64)->bool {
-    let grant=match caller {12=>Some((39,12,154)),17=>Some((50,17,302)),_=>None};
+    let grant=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app==sex_pdx::app_catalog::App::Spindle).map(|i|(i.lifecycle_slot,i.target,i.surface));
     let status=grant.and_then(|(slot,task,surface)|{
         match sex_pdx::app_lifecycle::catalog(slot) {
             Ok(c) if c.target_pd==caller && c.task_id==task && c.surface_id==surface && c.coordinator_pd==3=>{
@@ -49,7 +50,7 @@ fn linen_request_allowed(caller:u32,opcode:u64)->bool {
         }
     });
     let allowed=reply_delivery::admit(caller,opcode,status);
-    if caller==17{sex_pdx::serial_record!("[linen.spindle.authority] target=17 slot=50 op={} status={} allowed={}",opcode,status.unwrap_or(u64::MAX),allowed as u8);}
+    if let Some(i)=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app==sex_pdx::app_catalog::App::Spindle&&i.ordinal!=0){sex_pdx::serial_record!("[linen.spindle.authority] target={} slot={} op={} status={} allowed={}",caller,i.lifecycle_slot,opcode,status.unwrap_or(u64::MAX),allowed as u8);}
     allowed
 }
 

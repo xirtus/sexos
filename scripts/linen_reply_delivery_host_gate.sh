@@ -10,7 +10,7 @@ assert not re.search(r'\bpdx_reply\s*\(',s), 'unretained reply call remains'
 assert 'if !linen_reply_poll() { sched_yield(); continue; }' in s
 assert 'if !linen_request_allowed(msg.caller_pd,msg.type_id) { continue; }' in s
 assert 'app_lifecycle::info(slot)' in s
-assert '12=>Some((39,12,154)),17=>Some((50,17,302))' in s
+assert 'app_catalog::by_target(caller).filter(|i|i.app==sex_pdx::app_catalog::App::Spindle)' in s
 assert 'c.target_pd==caller && c.task_id==task && c.surface_id==surface && c.coordinator_pd==3' in s
 assert 'reply_delivery::legacy_reply(caller,value,pdx_reply)' in s
 assert 'SHELL_REPLY.poll(pdx_reply)' in s

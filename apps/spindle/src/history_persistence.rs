@@ -13,7 +13,7 @@ impl Status{pub fn name(self)->&'static str{match self{Self::Idle=>"idle",Self::
 pub struct Client{owner:u32,phase:Phase,seq:u32,request:Option<w::Request>,awaiting:bool,handle:u32,offset:usize,len:usize,count:usize,buf:[u8;w::MAX],revision:u64,dirty:bool,started:bool,last_tick:u64,ticks:u64,stall:u32,turns:u32,action:Option<Action>,retry_ready:bool}
 impl Client{
  pub const fn new()->Self{Self{owner:0,phase:Phase::Idle,seq:0,request:None,awaiting:false,handle:0,offset:0,len:0,count:0,buf:[0;w::MAX],revision:0,dirty:false,started:false,last_tick:0,ticks:0,stall:0,turns:0,action:None,retry_ready:false}}
- pub fn init(&mut self,owner:u32){assert!(matches!(owner,12|17));self.owner=owner;}
+ pub fn init(&mut self,owner:u32){assert!(sex_pdx::app_catalog::is_spindle(owner));self.owner=owner;}
  pub fn busy(&self)->bool{!matches!(self.phase,Phase::Idle|Phase::Uncertain|Phase::Poison)||self.dirty}
  pub fn status(&self)->Status{match self.phase{Phase::Uncertain=>Status::NeedsRetry,Phase::Poison=>Status::Denied,Phase::Abort=>Status::Cancelling,Phase::Idle if self.dirty=>Status::Queued,Phase::Idle if self.retry_ready=>Status::RetryReady,Phase::Idle=>Status::Idle,Phase::OpenLoad|Phase::Stat|Phase::Read|Phase::CloseLoad=>Status::Loading,_=>Status::Saving}}
  pub fn retry(&mut self,h:&History)->bool{if self.phase!=Phase::Idle||self.dirty||!self.retry_ready{return false}let Some(action)=self.action else{return false};self.retry_ready=false;match action{Action::Save=>self.save(),Action::Load=>self.load(h)}}

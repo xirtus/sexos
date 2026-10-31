@@ -1,5 +1,6 @@
 //! Service-owned immutable document snapshots, isolated by exact BOOT incarnation.
 use sex_pdx::document as w;
+use sex_pdx::app_catalog::{self, DOCUMENT_COUNT, DOCUMENT_TARGETS};
 pub trait Backend {
     fn identity(&mut self, id: u8) -> Result<u32, u32>;
     fn load(&mut self, id: u8, out: &mut [u8; w::MAX]) -> Result<usize, u32>;
@@ -28,8 +29,7 @@ pub trait Backend {
 /// Four data requests may be admitted on the existing BOOT route.
 /// Each owns its receipt slot before any backend or staging effect.
 const RECEIPTS: usize = w::WINDOW;
-/// Fixed service policy on existing BOOT routes; IDs are not grants.
-const CALLERS:[u32;4]=[9,16,18,15];
+// Participant indices isolate immutable BOOT incarnations; IDs are not grants.
 #[derive(Clone, Copy)]
 struct Receipt {
     request: w::Request,
@@ -87,22 +87,25 @@ impl Session {
     }
 }
 pub struct Service {
-    sessions: [Session; 4],
+    sessions: [Session; DOCUMENT_COUNT],
 }
 impl Service {
     pub const fn new() -> Self {
         Self {
-            sessions: [Session::new(), Session::new(), Session::new(), Session::new()],
+            sessions: [const { Session::new() }; DOCUMENT_COUNT],
         }
     }
     fn index(caller: u32) -> Option<usize> {
-        CALLERS.iter().position(|subject|*subject==caller)
+        DOCUMENT_TARGETS.iter().position(|subject|*subject==caller)
     }
     #[cfg(test)]
     pub fn browser_import_scrubbed(&self)->bool{
-        let s=&self.sessions[3];s.created.is_none()&&!s.bound&&!s.saving
-            &&s.commit.is_none()&&s.loading.is_none()&&s.bytes.iter().all(|b|*b==0)
-            &&s.name.iter().all(|b|*b==0)&&s.len==0&&s.written==0
+        DOCUMENT_TARGETS.iter().enumerate().all(|(index,target)|{
+            if !app_catalog::is_browser(*target){return true}
+            let s=&self.sessions[index];s.created.is_none()&&!s.bound&&!s.saving
+                &&s.commit.is_none()&&s.loading.is_none()&&s.bytes.iter().all(|b|*b==0)
+                &&s.name.iter().all(|b|*b==0)&&s.len==0&&s.written==0
+        })
     }
     pub fn pending(&self) -> bool {
         self.sessions
@@ -114,7 +117,7 @@ impl Service {
     pub fn progress(&mut self, b: &mut impl Backend) {
         for (i, s) in self.sessions.iter_mut().enumerate() {
             if let Some(r)=s.loading {
-                let caller=CALLERS[i];
+                let caller=DOCUMENT_TARGETS[i];
                 let result=if b.identity(s.object)!=Ok(s.generation){Err(w::STALE)}
                     else{b.load_step(caller,s.object,&mut s.bytes)};
                 match result{
@@ -142,7 +145,7 @@ impl Service {
                 break;
             }
             if let Some(r) = s.commit {
-                let caller = CALLERS[i];
+                let caller = DOCUMENT_TARGETS[i];
                 let result = if b.identity(s.object) != Ok(s.generation) {
                     Err(w::STALE)
                 } else {
@@ -182,7 +185,7 @@ impl Service {
                 };
                 // The legacy reply syscall returns 1 on Full. Every nonzero
                 // result retains the exact head and all subsequent receipts.
-                if send(CALLERS[i], v) != 0 {
+                if send(DOCUMENT_TARGETS[i], v) != 0 {
                     break;
                 }
                 s.pending.copy_within(1..s.pending_len, 0);
@@ -226,7 +229,7 @@ impl Service {
             return Ok(0);
         }
         if r.kind == w::CREATE {
-            if s.bound || (caller==15&&s.created.is_some()) || r.object != 0 || r.offset != 0 {
+            if s.bound || (app_catalog::is_browser(caller)&&s.created.is_some()) || r.object != 0 || r.offset != 0 {
                 return Err(w::BUSY);
             }
             let mut name = [0; 16];
@@ -241,16 +244,16 @@ impl Service {
             {
                 return Err(w::INVALID);
             }
-            if caller==15{
+            if app_catalog::is_browser(caller){
                 let(id,generation)=b.create_new(name)?;
                 if !(3..15).contains(&id)||generation==0{return Err(w::IO)}
                 s.created=Some((id,generation));
-                sex_pdx::serial_record!("[files.browser.import.created] target=15 object={} identity={} create_only=1",id,generation);
+                sex_pdx::serial_record!("[files.browser.import.created] target={} object={} identity={} create_only=1",caller,id,generation);
                 return Ok(id as u32);
             }
             return b.create(name).map(|id| id as u32);
         }
-        if caller==15{
+        if app_catalog::is_browser(caller){
             if !matches!(r.kind,w::INFO|w::BEGIN_SAVE|w::WRITE|w::COMMIT|w::END){return Err(w::DENIED)}
             let Some((object,generation))=s.created else{return Err(w::DENIED)};
             if r.object!=object{return Err(w::DENIED)}

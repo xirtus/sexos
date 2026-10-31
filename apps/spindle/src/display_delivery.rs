@@ -14,7 +14,7 @@ impl Pane{
 }
 pub struct Outbox{ids:[u64;4],panes:[Pane;4],cursor:usize,closed:bool}
 impl Outbox{
- pub const fn new(target:u32)->Self{let ids=match target{12=>[154,160,161,162],17=>[302,303,304,305],_=>[0;4]};Self{ids,panes:[Pane::EMPTY;4],cursor:0,closed:!matches!(target,12|17)}}
+ pub const fn new(target:u32)->Self{let grid=sex_pdx::app_catalog::spindle_grid(target);let ids=match grid{Some(ids)=>ids,None=>[0;4]};Self{ids,panes:[Pane::EMPTY;4],cursor:0,closed:grid.is_none()}}
  pub fn create(&mut self,index:usize,position:u64,size:u64){if self.closed||index>=4{return}let p=&mut self.panes[index];p.hidden=false;p.control=Some(Operation{opcode:0xEC,surface:self.ids[index],a:position,b:size});}
  pub fn destroy(&mut self,index:usize){if self.closed||index>=4{return}let p=&mut self.panes[index];p.discard();p.hidden=true;p.control=Some(Operation{opcode:0xEE,surface:self.ids[index],a:0,b:0});}
  pub fn text(&mut self,index:usize,text:Text,stamp:Stamp,color:u32){if self.closed||index>=4||text.len>text.bytes.len(){return}let p=&mut self.panes[index];if p.hidden{return}let batch=Batch::new(text,stamp,color);if p.active.is_none(){p.active=Some(batch)}else{p.latest=Some(batch)}}

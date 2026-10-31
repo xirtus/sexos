@@ -56,12 +56,14 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
     let bw=w.saturating_sub(16); let bh=h.saturating_sub(44);
     if bw==0 || bh==0 {return result}
     let bx=x.saturating_add(8);let by=y.saturating_add(36);
-    if frame==201 {result[0]=Some(Child{sid:156,x:bx,y:by,w:bw,h:bh});}
-    if matches!(frame,153|306) {
-        let view=sex_pdx::spindle_view::Layout::new(w,h);
-        for (i,sid) in (if frame==153 {[154,160,161,162]}else{[302,303,304,305]}).iter().enumerate() {
-            let p=view.panes[i];
-            result[i]=Some(Child{sid:*sid,x:x.saturating_add(p.x as i32),y:y.saturating_add(p.y as i32),w:p.w,h:p.h});
+    if let Some(row)=crate::app_catalog::INCARNATIONS.iter().find(|row|row.shell_surface==Some(frame)) {
+        match row.app {
+            crate::app_catalog::App::Quil=>{result[0]=Some(Child{sid:row.surface,x:bx,y:by,w:bw,h:bh});},
+            crate::app_catalog::App::Spindle=>if let Some(ids)=crate::app_catalog::spindle_grid(row.target){
+                let view=sex_pdx::spindle_view::Layout::new(w,h);
+                for(i,sid)in ids.iter().enumerate(){let p=view.panes[i];result[i]=Some(Child{sid:*sid,x:x.saturating_add(p.x as i32),y:y.saturating_add(p.y as i32),w:p.w,h:p.h});}
+            },
+            crate::app_catalog::App::Browser=>{},
         }
     }
     result
@@ -69,5 +71,11 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
 
 /// Immutable BOOT visual association, never caller-supplied authority.
 pub const fn parent_frame(child:u64)->Option<u64>{
-    match child {156=>Some(201),154|160|161|162=>Some(153),302|303|304|305=>Some(306),_=>None}
+    let mut index=0;while index<crate::app_catalog::COUNT {
+        let row=&crate::app_catalog::INCARNATIONS[index];
+        if let Some(frame)=row.shell_surface {
+            if row.surface==child{return Some(frame)}
+            let mut i=0;while i<row.children.len(){if row.children[i]==child{return Some(frame)}i+=1;}
+        }index+=1;
+    }None
 }

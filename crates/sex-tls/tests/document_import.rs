@@ -1,5 +1,6 @@
 //! Actual document ABI and service policy with an owned, observable test body.
 extern crate self as sex_pdx;
+#[path="../../sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../../sex-pdx/src/document.rs"] pub mod document;
 #[path="../../../servers/sexfiles/src/document.rs"] mod service;
 #[path="../../../servers/sexfiles/src/document_journal.rs"] mod journal;

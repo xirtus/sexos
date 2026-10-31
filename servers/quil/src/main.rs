@@ -3157,7 +3157,9 @@ unsafe fn check_physical_keyboard_proof(scancode: u64) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("QUIL_SELF_AUTHORITY");
-    assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(9,156)|(16,301)|(18,307)));
+    // Shared rows describe the held BOOT identity; they never confer authority.
+    let incarnation=sex_pdx::app_catalog::by_surface(catalog.target_pd,catalog.surface_id).expect("QUIL_CATALOG_IDENTITY");
+    assert!(incarnation.app==sex_pdx::app_catalog::App::Quil && catalog.task_id==incarnation.target && catalog.coordinator_pd==3,"QUIL_CATALOG_SUBJECT");
     unsafe{DOCUMENT_WORKSPACE=sex_pdx::document_view::WorkspaceRefresh::new(catalog.target_pd,catalog.task_id);}
     QUIL_DOMAIN.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     unsafe { assert!(DOCUMENT_IO.set_snapshot(sex_pdx::document_snapshot_view(catalog.target_pd,false).expect("QUIL_SNAPSHOT_AUTHORITY"))); }
@@ -3179,7 +3181,7 @@ pub extern "C" fn _start() -> ! {
         (56u64 << 32) | 1072u64,   // x=1072, y=56 (right column, under bar)
         (304u64 << 32) | 200u64);  // w=200, h=304
     serial_println!("[quil.surface.visible.ok] sid={}", quil_content_sid());
-    if matches!(catalog.target_pd,16|18) {
+    if incarnation.ordinal!=0 {
         // Register through the existing BOOT shell route. The shell owns
         // framing/geometry and acknowledges the exact fresh catalog subject.
         loop{
@@ -3992,7 +3994,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    if matches!(catalog.target_pd,16|18) {
+    if incarnation.ordinal!=0 {
         // The legacy startup fixture owns PD9's RamFS object. A successor
         // must not inherit that private lease; native DiskFS access remains
         // available through its own BOOT storage route.
@@ -4231,7 +4233,7 @@ pub extern "C" fn _start() -> ! {
         let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_WORKSPACE.pending()||DOCUMENT_OPEN||(QUIL_CLIPBOARD.pending()&&QUIL_CLIPBOARD.view()!=sex_pdx::clipboard_client::View::Uncertain)} {
             match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sched_yield();continue}}
         }else{pdx_listen_raw(0)};
-        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && matches!(catalog.target_pd,16|18) {
+        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && incarnation.ordinal!=0 {
             presentation_pending=true;continue;
         }
         if msg.type_id==1 && msg.caller_pd==1 && msg.arg0==256 && presentation_sent {

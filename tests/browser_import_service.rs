@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/document.rs"]pub mod document;
 #[path="../servers/sexfiles/src/document.rs"]mod service;
 use document as w;

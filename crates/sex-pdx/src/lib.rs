@@ -698,7 +698,7 @@ pub fn memory_region_full_view(slot: u64, rights: u8) -> Result<memory_region::R
 /// Resolve only the caller's existing BOOT document Region capability. Numeric
 /// subject/slot parameters cannot create a view or upgrade its rights.
 pub fn document_snapshot_view(subject: u32, writer: bool) -> Result<document_snapshot::Region, u32> {
-    let index = match subject { 9 => 0, 16 => 1, 18 => 2, _ => return Err(document::DENIED) };
+    let index = app_catalog::QUIL_TARGETS.iter().position(|target| *target == subject).ok_or(document::DENIED)?;
     let slot = if writer { document_buffer::PROVIDER_SLOTS[index] } else { document_buffer::CLIENT_SLOT };
     let rights = memory_region::QUERY_VIEW | memory_region::READ | if writer { memory_region::WRITE } else { 0 };
     let info = memory_region_info(slot).map_err(|_| document::DENIED)?;

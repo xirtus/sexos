@@ -2057,7 +2057,12 @@ fn history_event(event:history_persistence::Event,sb:&mut Scrollback){
 static INSTANCE_PD:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
 static INSTANCE_TASK:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
 fn instance_pd()->u32{INSTANCE_PD.load(core::sync::atomic::Ordering::Acquire)}
-fn grid_sids()->[u64;4]{if instance_pd()==17{[302,303,304,305]}else{[154,160,161,162]}}
+fn grid_sids()->[u64;4]{
+    // INSTANCE_PD is published only after the held self catalog is validated.
+    let incarnation=sex_pdx::app_catalog::by_target(instance_pd()).expect("SPINDLE_GRID_IDENTITY");
+    let [a,b,c]=incarnation.children else{panic!("SPINDLE_GRID_CHILDREN")};
+    [incarnation.surface,*a,*b,*c]
+}
 fn content_sid()->u64{grid_sids()[0]}
 const SURF_COLS: usize = 20; // sexdisplay CHARS_PER_LINE
 const SURF_ROWS: usize = 6;  // 120 of the 128 text bytes used
@@ -2107,7 +2112,10 @@ unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let catalog=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("SPINDLE_SELF_AUTHORITY");
-    assert!(catalog.coordinator_pd==3 && matches!((catalog.target_pd,catalog.surface_id),(12,154)|(17,302)));
+    // Shared rows describe the held BOOT identity; they never confer authority.
+    let incarnation=sex_pdx::app_catalog::by_surface(catalog.target_pd,catalog.surface_id).expect("SPINDLE_CATALOG_IDENTITY");
+    assert!(incarnation.app==sex_pdx::app_catalog::App::Spindle && catalog.task_id==incarnation.target && catalog.coordinator_pd==3,"SPINDLE_CATALOG_SUBJECT");
+    assert!(incarnation.children.len()==3,"SPINDLE_GRID_CHILDREN");
     INSTANCE_PD.store(catalog.target_pd,core::sync::atomic::Ordering::Release);
     INSTANCE_TASK.store(catalog.task_id,core::sync::atomic::Ordering::Release);
     assert!(catalog.task_id!=0,"SPINDLE_EXACT_NETWORK_TASK");
@@ -2426,7 +2434,7 @@ pub extern "C" fn _start() -> ! {
     unsafe { content_render(&line, sb) };
 
     serial_println!("[spindle.ready]");
-    let mut registration_pending=catalog.target_pd==17;
+    let mut registration_pending=incarnation.ordinal!=0;
     let mut presentation_pending=false;let mut presentation_sent=false;
     let mut storage_owner=0u8;
     loop {
@@ -2465,9 +2473,9 @@ pub extern "C" fn _start() -> ! {
             if let Some(event)=unsafe{HISTORY_IO.receive(msg.arg0,hist)}{storage_owner=0;history_event(event,sb);line.hist_nav=None;unsafe{content_render(&line,sb);}}
             continue;
         }
-        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && catalog.target_pd==17{presentation_pending=true;continue}
+        if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && incarnation.ordinal!=0{presentation_pending=true;continue}
         if msg.type_id==1 && msg.caller_pd==1 && msg.arg0==256 && presentation_sent{
-            presentation_sent=false;sex_pdx::serial_record!("[app.surface.presented] target=17 surface=302 sequence=1 ok=1");continue;
+            presentation_sent=false;sex_pdx::serial_record!("[app.surface.presented] target={} surface={} sequence=1 ok=1",catalog.target_pd,catalog.surface_id);continue;
         }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire)) {

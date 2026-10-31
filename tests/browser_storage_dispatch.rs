@@ -8,6 +8,7 @@ pub struct RwLock<T>(std::sync::RwLock<T>);
 impl<T> RwLock<T>{pub const fn new(v:T)->Self{Self(std::sync::RwLock::new(v))}pub fn read(&self)->std::sync::RwLockReadGuard<'_,T>{self.0.read().unwrap()}pub fn write(&self)->std::sync::RwLockWriteGuard<'_,T>{self.0.write().unwrap()}}
 mod backends{include!(concat!(env!("APP_RESOURCE_TEST_DIR"),"/backend_trait.rs"));}
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../servers/sexfiles/src/messages.rs"]mod messages;
 #[path="../servers/sexfiles/src/backends/ramfs.rs"]mod ramfs;
 use backends::FsBackend;

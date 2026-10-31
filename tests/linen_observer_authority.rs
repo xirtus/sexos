@@ -1,10 +1,11 @@
 #![allow(dead_code)]
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../servers/linen/src/reply_delivery.rs"]mod reply_delivery;
 use std::sync::Mutex;
 static LOCK:Mutex<()>=Mutex::new(());
 static mut CATALOG:Option<sex_pdx::app_lifecycle::CatalogInfo>=None;
 static mut STATUS:u64=5;
-mod sex_pdx {
+mod sex_pdx {pub use crate::app_catalog;
  #[macro_export]macro_rules! rec{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
  pub use crate::rec as serial_record;
  pub mod app_lifecycle{

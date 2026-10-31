@@ -8,13 +8,13 @@ from pathlib import Path
 import re,sys
 r=Path(sys.argv[1]);s=(r/'servers/silk-shell/src/main.rs').read_text()
 parts=[]
-for name in ['quil_activation_edge','quil_activation_info','quil_reserve_remaining','quil_reserve_label','quil_launcher_status','quil_route_slot','quil_has_focus']:
+for name in ['quil_activation_edge','app_activation_info','app_reserve_remaining','app_launcher_status','app_route_slot','quil_activation_info','quil_reserve_remaining','quil_reserve_label','quil_launcher_status','quil_route_slot','quil_has_focus']:
     found=re.findall(r'^fn '+name+r'\b.*?(?=\n(?:fn |unsafe fn |///))',s,re.M|re.S)
     assert len(found)==1,name
     parts.append(found[0])
 Path(sys.argv[2]).write_text('\n'.join(parts))
 parts=[]
-for name in ['spindle_activation_info','spindle_reserve_label','spindle_launcher_status','spindle_route_slot','spindle_has_focus']:
+for name in ['quil_activation_edge','app_activation_info','app_reserve_remaining','app_launcher_status','app_route_slot','spindle_activation_info','spindle_reserve_label','spindle_launcher_status','spindle_route_slot','spindle_active_frame','spindle_has_focus']:
     found=re.findall(r'^fn '+name+r'\b.*?(?=\n(?:fn |unsafe fn |///))',s,re.M|re.S)
     assert len(found)==1,name
     parts.append(found[0])

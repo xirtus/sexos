@@ -1,3 +1,4 @@
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../servers/linen/src/reply_delivery.rs"]mod reply_delivery;
 use reply_delivery::ReplyDelivery;
 #[test]fn buffer_full_retains_exact_response_until_accepted(){let mut r=ReplyDelivery::new();assert!(r.queue(3,0x12345678));for status in [2,2,1,2]{assert!(!r.poll(|pd,value|{assert_eq!((pd,value),(3,0x12345678));status}));assert!(r.pending());}assert!(r.poll(|pd,value|{assert_eq!((pd,value),(3,0x12345678));0}));assert!(!r.pending());assert!(r.poll(|_,_|panic!("duplicate delivery")));}

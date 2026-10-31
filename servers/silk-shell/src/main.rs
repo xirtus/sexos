@@ -5313,10 +5313,13 @@ unsafe fn linen_render_static_ui() {
 }
 
 static mut LINEN_REPAINT_AFTER_CREATE: bool = false;
-static mut SPINDLE_HISTORY_STATUS:[sex_pdx::spindle_status::Receiver;2]=[sex_pdx::spindle_status::Receiver::new(12,12),sex_pdx::spindle_status::Receiver::new(17,17)];
+static mut SPINDLE_HISTORY_STATUS:[sex_pdx::spindle_status::Receiver;app_catalog::SPINDLE_COUNT]={
+ let mut out=[const{sex_pdx::spindle_status::Receiver::new(0,0)};app_catalog::SPINDLE_COUNT];let mut i=0;
+ while i<app_catalog::SPINDLE_COUNT{let target=app_catalog::SPINDLE_TARGETS[i];out[i]=sex_pdx::spindle_status::Receiver::new(target,target);i+=1;}out
+};
 unsafe fn spindle_history_status_receive(msg:&sex_pdx::PdxMessage)->bool{
  if msg.type_id!=sex_pdx::spindle_status::OP{return false}
- let index=match msg.caller_pd{12=>0,17=>1,_=>return true};
+ let Some(index)=app_catalog::SPINDLE_TARGETS.iter().position(|target|*target==msg.caller_pd)else{return true};
  let live=APP_CUSTODY.iter().flatten().find(|e|e.target==msg.caller_pd).map_or(false,|e|{
   if e.dead||e.retired||e.close_pending{SPINDLE_HISTORY_STATUS[index].retire();return false}
   matches!(sex_pdx::app_lifecycle::catalog(e.slot),Ok(c) if (c.target_pd,c.task_id,c.surface_id,c.coordinator_pd)==(e.target,e.task,e.surface,3))
@@ -5329,11 +5332,12 @@ unsafe fn spindle_history_status_receive(msg:&sex_pdx::PdxMessage)->bool{
 }
 unsafe fn spindle_history_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
  if !available||reason!="original_incarnation_live"{return fallback}
- let target=if spindle_activation_info(false).map_or(false,|i|i.state==2){17}else{12};
+ let target=spindle_active_frame().map_or(app_catalog::boot_incarnation(app_catalog::App::Spindle).target,|(target,_)|target);
+ let Some(index)=app_catalog::SPINDLE_TARGETS.iter().position(|candidate|*candidate==target)else{return fallback};
  use sex_pdx::spindle_status::State as S;
- match SPINDLE_HISTORY_STATUS[if target==12{0}else{1}].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY",Some(S::Saving|S::Queued)=>"SAVING HISTORY",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
+ match SPINDLE_HISTORY_STATUS[index].state(){None=>"OPENING / HISTORY CHECK",Some(S::Ready)=>"RUNNING / FOCUS",Some(S::Loading)=>"LOADING HISTORY",Some(S::Saving|S::Queued)=>"SAVING HISTORY",Some(S::Cancelling)=>"CANCELLING HISTORY / FOCUS",Some(S::Uncertain)=>"HISTORY UNCERTAIN / CANCEL",Some(S::Denied)=>"HISTORY DENIED",Some(S::RetryReady)=>"HISTORY QUIESCENT / RETRY",Some(S::ProbeRunning)=>"DISK JOB / INPUT ACTIVE",Some(S::ProbeCancelling)=>"CANCELLING DISK JOB",Some(S::ProbeUncertain)=>"DISK UNCERTAIN / CANCEL",Some(S::ProbeReady)=>"DISK QUIESCENT / INSPECT",Some(S::ProbeDenied)=>"DISK ACCESS DENIED"}
 }
-static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;4]=[sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new(),sex_pdx::document_view::Delivery::new()];
+static mut DOCUMENT_VIEWS:[sex_pdx::document_view::Delivery;app_catalog::DOCUMENT_COUNT]=[const{sex_pdx::document_view::Delivery::new()};app_catalog::DOCUMENT_COUNT];
 static mut DOCUMENT_POINTER_SEQUENCE:u64=0;
 static mut DOCUMENT_POINTER:Option<(u64,u32,u8,u64)>=None;
 unsafe fn document_view_poll() {
@@ -5385,7 +5389,7 @@ unsafe fn document_view_poll() {
         });
     }
 }
-static mut SPINDLE_VIEWS:[sex_pdx::spindle_view::Delivery;2]=[sex_pdx::spindle_view::Delivery::new(),sex_pdx::spindle_view::Delivery::new()];
+static mut SPINDLE_VIEWS:[sex_pdx::spindle_view::Delivery;app_catalog::SPINDLE_COUNT]=[const{sex_pdx::spindle_view::Delivery::new()};app_catalog::SPINDLE_COUNT];
 static mut DISPLAY_FOCUS: linen_text_delivery::FocusDelivery = linen_text_delivery::FocusDelivery::new();
 static mut LAST_DISPLAY_FOCUS_RESULT:Option<(u64,u64)>=None;
 #[derive(Clone,Copy)]struct LauncherFocus {
@@ -11052,7 +11056,7 @@ fn emit_snapshot() {
 /// Duplicates the bounds match from point_in_surface to avoid refactoring it.
 unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
     if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(sid)) {return None;}
-    if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid || (e.target==17 && e.shell_surface()==Some(sid))) { return if e.dead { None } else { e.bounds }; }
+    if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid || e.is_successor_frame(sid)) { return if e.dead { None } else { e.bounds }; }
     match sid {
         SURFACE_ID_APP    => WINDOWS.get(1).map(|w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
         SURFACE_ID_STATIC => Some((SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H)),
@@ -11080,7 +11084,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             serial_println!("[shell.surface.dead.skip] id={} reason=inactive", sid);
             return false;
         }
-        if APP_CUSTODY.iter().flatten().any(|e| e.surface == sid || (e.target==17 && e.shell_surface()==Some(sid))) {
+        if APP_CUSTODY.iter().flatten().any(|e| e.surface == sid || e.is_successor_frame(sid)) {
             return get_surface_bounds(sid).map_or(false, |(x,y,w,h)| px >= x && py >= y && (px as i64) < x as i64 + w as i64 && (py as i64) < y as i64 + h as i64);
         }
         let (x, y, w, h) = match sid {
@@ -11117,7 +11121,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
 /// Returns true if the surface is alive (not destroyed).
 fn surface_is_alive(sid: u64) -> bool {
     unsafe { if APP_CUSTODY.iter().flatten().any(|e| (e.dead || e.close_pending) && e.owns_surface(sid)) { return false; } }
-    unsafe { if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid || (e.target==17 && e.shell_surface()==Some(sid))) { return !e.dead && e.bounds.is_some() && surface_is_lifecycle_live(sid); } }
+    unsafe { if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid || e.is_successor_frame(sid)) { return !e.dead && e.bounds.is_some() && surface_is_lifecycle_live(sid); } }
     match sid {
         SURFACE_ID_APP      => unsafe { SURFACE_100_ALIVE },
         SURFACE_ID_STATIC   => unsafe { SURFACE_101_ALIVE },
@@ -11504,7 +11508,7 @@ fn is_shell_surface(sid: u64) -> bool {
 /// they are rendered and toggled by the shell but never take focus.
 fn is_focusable_surface(sid: u64) -> bool {
     unsafe { if APP_CUSTODY.iter().flatten().any(|e| (e.dead || e.close_pending) && e.owns_surface(sid)) { return false; } }
-    unsafe { if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid || (e.target==17 && e.shell_surface()==Some(sid))) { return !e.dead && e.bounds.is_some(); } }
+    unsafe { if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.surface == sid || e.is_successor_frame(sid)) { return !e.dead && e.bounds.is_some(); } }
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
     || sid == SURFACE_ID_LINEN  // client surface managed as WM placeholder
@@ -13259,8 +13263,9 @@ unsafe fn open_quil_in_active_scene() -> bool {
         // Query replay through the same immutable grant. It must never enqueue
         // another task or remap private pages, even if UI execution repeats.
         if quil_activation_info(true)!=Ok(active){return false}
-        let predecessor=if active.successor==16{9}else{16};
-        let stale_slot=if predecessor==9{SLOT_QUIL}else{sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT};
+        let row=app_catalog::by_surface(active.successor,active.surface).expect("ACTIVATED_CATALOG_SUBJECT");
+        let previous=app_catalog::predecessor(row).expect("ACTIVATED_CATALOG_PREDECESSOR");
+        let predecessor=previous.target;let stale_slot=previous.route_slot;
         assert_eq!(raw_pdx_call(stale_slot,OP_QUIL_PING,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
         sex_pdx::serial_record!("[app.activation.negative] stale_predecessor_route=denied duplicate_activation=receipt ok=1");
         sex_pdx::serial_record!("[shell.app.relaunch] predecessor={} successor={} task={} surface={} receipt_replayed=1",predecessor,active.successor,active.task,active.surface);
@@ -14120,14 +14125,17 @@ unsafe fn open_spindle_in_active_scene() -> bool {
         launcher_focus_discard();
         let Ok(active)=spindle_activation_info(true) else{return false};
         if spindle_activation_info(true)!=Ok(active){return false}
-        assert_eq!(raw_pdx_call(SLOT_SPINDLE,0,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
+        let row=app_catalog::by_surface(active.successor,active.surface).expect("SPINDLE_ACTIVATED_CATALOG");
+        let previous=app_catalog::predecessor(row).expect("SPINDLE_ACTIVATED_PREDECESSOR");
+        assert_eq!(raw_pdx_call(previous.route_slot,0,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
         sex_pdx::serial_record!("[spindle.activation.negative] stale_predecessor_route=denied duplicate_activation=receipt ok=1");
-        sex_pdx::serial_record!("[shell.app.relaunch] predecessor=12 successor=17 task={} surface={} receipt_replayed=1",active.task,active.surface);
-        launcher_action_record(active.successor,306,launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
+        sex_pdx::serial_record!("[shell.app.relaunch] predecessor={} successor={} task={} surface={} receipt_replayed=1",previous.target,active.successor,active.task,active.surface);
+        launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         return true;
     }
     if instance.state==2{
-        if let Some(result)=launcher_focus_existing(17,306,None){return result}
+        let Some((target,frame))=spindle_active_frame()else{return false};
+        if let Some(result)=launcher_focus_existing(target,frame,None){return result}
         return true;
     }
     if instance.state==3 || !native_launcher_status(12).0{return false}
@@ -14190,8 +14198,8 @@ unsafe fn open_spindle_in_active_scene() -> bool {
 /// Toggle Spindle visibility in the active scene. If frame exists and is
 /// not minimized, minimize it. Otherwise open/un-minimize it.
 unsafe fn toggle_spindle() -> bool {
-    if spindle_activation_info(false).map_or(false,|i|i.state==2){
-        if let Some(fid)=frame_for_surface(306){
+    if let Some((_,frame))=spindle_active_frame(){
+        if let Some(fid)=frame_for_surface(frame){
             if !frame_is_minimized(fid){return minimize_frame(fid)}
         }
         return open_spindle_in_active_scene();
@@ -15946,7 +15954,10 @@ fn launcher_row_title(command:Command,fallback:&'static str)->&'static str{
     };
     let Some(i)=info else{return fallback};
     if i.state==1{return launcher::LiveAction::Open.title(quil)}
-    let target=if i.state==2{i.successor}else if quil&&i.successor==18{16}else if quil{9}else{12};
+    let target=if i.state==2{i.successor}else{
+        let Some(row)=app_catalog::by_target(i.successor)else{return fallback};
+        let Some(previous)=app_catalog::predecessor(row)else{return fallback};previous.target
+    };
     launcher_live_action(target).map_or(fallback,|a|a.title(quil))
 }
 /// An already accepted focus intent survives bounded held-query contention.
@@ -16097,71 +16108,69 @@ fn quil_activation_edge(slot:usize,target:u32,surface:u64,lifecycle:usize,commit
     if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface)||e.surface!=surface||i.state>3{return Err(a::DENIED)}
     Ok(i)
 }
-fn quil_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
+/// Iterate only the ordered BOOT grants. An error never skips a reservation.
+fn app_activation_info(app:app_catalog::App,commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
     use sex_pdx::app_lifecycle as a;
-    for(slot,target,surface,lifecycle)in[(a::ACTIVATION_SLOT,16,301,45),(a::QUIL_THIRD_ACTIVATION_SLOT,18,307,a::QUIL_THIRD_LIFECYCLE_SLOT)]{
-        let i=quil_activation_edge(slot,target,surface,lifecycle,false)?;
-        if target==16&&i.state==a::ACTIVATION_EXHAUSTED{continue;}
-        return if commit{quil_activation_edge(slot,target,surface,lifecycle,true)}else{Ok(i)};
+    for row in app_catalog::INCARNATIONS.iter().filter(|row|row.app==app&&row.ordinal!=0){
+        let slot=row.activation_slot.ok_or(a::DENIED)?;
+        let info=quil_activation_edge(slot,row.target,row.surface,row.lifecycle_slot,false)?;
+        if info.state==3&&row.ordinal as usize+1<app_catalog::count(app){continue}
+        return if commit{quil_activation_edge(slot,row.target,row.surface,row.lifecycle_slot,true)}else{Ok(info)};
     }Err(a::DENIED)
 }
-fn quil_reserve_remaining()->Option<u8>{
-    use sex_pdx::app_lifecycle as a;
-    let first=quil_activation_edge(a::ACTIVATION_SLOT,16,301,45,false).ok()?;
-    let third=quil_activation_edge(a::QUIL_THIRD_ACTIVATION_SLOT,18,307,a::QUIL_THIRD_LIFECYCLE_SLOT,false).ok()?;
-    launcher::quil_reserve(first.state,third.state)
+/// Reserve counts describe exact grant observations; they cannot activate a task.
+fn app_reserve_remaining(app:app_catalog::App)->Option<u8>{
+    let mut remaining=0u8;let mut previous=None;
+    for row in app_catalog::INCARNATIONS.iter().filter(|row|row.app==app&&row.ordinal!=0){
+        let info=quil_activation_edge(row.activation_slot?,row.target,row.surface,row.lifecycle_slot,false).ok()?;
+        if previous.is_some_and(|state|state!=3)&&info.state!=0{return None}
+        if info.state<=1{remaining=remaining.checked_add(1)?;}previous=Some(info.state);
+    }Some(remaining)
 }
-fn quil_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
-    launcher::reserve_label(fallback,available,reason,quil_reserve_remaining())
-}
-fn quil_launcher_status()->(bool,&'static str,&'static str){
-    match quil_activation_info(false){
-        Ok(i) if i.state==1=>(true,"REOPEN / RESERVED INSTANCE","boot_successor_ready"),
-        Ok(i) if i.state==2=>native_launcher_status(i.successor),
-        Ok(i) if i.state==3=>(false,"CLOSED / RESERVE EXHAUSTED","boot_reserve_exhausted"),
+fn app_launcher_status(app:app_catalog::App)->(bool,&'static str,&'static str){
+    match app_activation_info(app,false){
+        Ok(i)if i.state==1=>(true,"REOPEN / RESERVED INSTANCE","boot_successor_ready"),
+        Ok(i)if i.state==2=>native_launcher_status(i.successor),
+        Ok(i)if i.state==3=>(false,"CLOSED / RESERVE EXHAUSTED","boot_reserve_exhausted"),
         Ok(i)=>{
-            let status=native_launcher_status(if i.successor==16{9}else{16});
-            if status.2=="no_boot_successor" {(false,"CLEANING / PLEASE WAIT","predecessor_cleanup_pending")}else{status}
+            let Some(previous)=app_catalog::by_target(i.successor).and_then(app_catalog::predecessor)else{return launcher::Status::Unavailable.presentation()};
+            let status=native_launcher_status(previous.target);
+            if status.2=="no_boot_successor"{(false,"CLEANING / PLEASE WAIT","predecessor_cleanup_pending")}else{status}
         },
         Err(_)=>launcher::Status::Unavailable.presentation(),
     }
 }
-fn quil_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_QUIL || quil_activation_info(false).map_or(false,|i|i.state==2&&FOCUSED_SURFACE_ID==i.surface)}}
-fn quil_route_slot()->u64{
-    match quil_activation_info(false){
-        Ok(i) if i.state==2 && i.successor==16=>sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,
-        Ok(i) if i.state==2 && i.successor==18=>sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT,
-        _=>SLOT_QUIL,
+fn app_route_slot(app:app_catalog::App,fallback:u64)->u64{
+    match app_activation_info(app,false){
+        Ok(i)if i.state==2=>app_catalog::by_surface(i.successor,i.surface).filter(|row|row.app==app).map_or(fallback,|row|row.route_slot),
+        _=>fallback,
     }
 }
+fn quil_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{app_activation_info(app_catalog::App::Quil,commit)}
+fn quil_reserve_remaining()->Option<u8>{app_reserve_remaining(app_catalog::App::Quil)}
+fn quil_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
+    launcher::reserve_label(fallback,available,reason,quil_reserve_remaining())
+}
+fn quil_launcher_status()->(bool,&'static str,&'static str){app_launcher_status(app_catalog::App::Quil)}
+fn quil_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_QUIL || quil_activation_info(false).map_or(false,|i|i.state==2&&FOCUSED_SURFACE_ID==i.surface)}}
+fn quil_route_slot()->u64{app_route_slot(app_catalog::App::Quil,SLOT_QUIL)}
 
 // The second Spindle subject has its own fixed grant, surface group and route.
-fn spindle_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{
-    let i=sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::SPINDLE_ACTIVATION_SLOT,commit)?;
-    let e=unsafe{APP_CUSTODY.iter().flatten().find(|e|e.target==17&&e.slot==sex_pdx::app_lifecycle::SPINDLE_LIFECYCLE_SLOT).copied()}.ok_or(sex_pdx::app_lifecycle::DENIED)?;
-    if (i.successor,i.task,i.surface)!=(e.target,e.task,e.surface) || e.surface!=302 || i.state>3{return Err(sex_pdx::app_lifecycle::DENIED)}
-    Ok(i)
-}
+fn spindle_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{app_activation_info(app_catalog::App::Spindle,commit)}
 fn spindle_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
     // Preserve active I/O and recovery state labels over reserve information.
     if reason=="original_incarnation_live"&&fallback!="RUNNING / FOCUS"{return fallback;}
-    let count=spindle_activation_info(false).ok().map(|i|if i.state<=1{1}else{0});
+    let count=app_reserve_remaining(app_catalog::App::Spindle);
     launcher::reserve_label(fallback,available,reason,count)
 }
-fn spindle_launcher_status()->(bool,&'static str,&'static str){
-    match spindle_activation_info(false){
-        Ok(i) if i.state==1=>(true,"REOPEN / RESERVED INSTANCE","boot_successor_ready"),
-        Ok(i) if i.state==2=>native_launcher_status(17),
-        Ok(i) if i.state==3=>(false,"CLOSED / RESERVE EXHAUSTED","boot_reserve_exhausted"),
-        Ok(_)=>{let status=native_launcher_status(12);
-            if status.2=="no_boot_successor"{(false,"CLEANING / PLEASE WAIT","predecessor_cleanup_pending")}else{status}},
-        Err(_)=>launcher::Status::Unavailable.presentation(),
-    }
+fn spindle_launcher_status()->(bool,&'static str,&'static str){app_launcher_status(app_catalog::App::Spindle)}
+fn spindle_active_frame()->Option<(u32,u64)>{
+    let info=spindle_activation_info(false).ok()?;if info.state!=2{return None}
+    let row=app_catalog::by_surface(info.successor,info.surface).filter(|row|row.app==app_catalog::App::Spindle)?;
+    Some((row.target,row.frame()))
 }
-fn spindle_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_SPINDLE || (FOCUSED_SURFACE_ID==306 && spindle_activation_info(false).map_or(false,|i|i.state==2))}}
-fn spindle_route_slot()->u64{
-    if spindle_activation_info(false).map_or(false,|i|i.state==2){sex_pdx::app_lifecycle::SPINDLE_ROUTE_SLOT}else{SLOT_SPINDLE}
-}
+fn spindle_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_SPINDLE||spindle_activation_info(false).is_ok_and(|info|info.state==2&&app_catalog::by_surface(info.successor,info.surface).is_some_and(|row|FOCUSED_SURFACE_ID==row.frame()))}}
+fn spindle_route_slot()->u64{app_route_slot(app_catalog::App::Spindle,SLOT_SPINDLE)}
 
 fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
     match cmd {
@@ -16218,7 +16227,7 @@ unsafe fn palette_execute_selected() -> bool {
     let ok = match cmd {
         Command::FocusSpindle => {
             let open_ok = open_spindle_in_active_scene();
-            let sid = if open_ok {if spindle_activation_info(false).map_or(false,|i|i.state==2){306}else{SURFACE_ID_SPINDLE}} else { 0 };
+            let sid = if open_ok {spindle_active_frame().map_or(SURFACE_ID_SPINDLE,|(_,frame)|frame)}else{0};
             serial_println!(
                 "[shell.palette.focus.result] target=SPINDLE sid={} ok={}",
                 sid,
@@ -20246,7 +20255,7 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
         if child.w>0 && child.h>0 {pdx_call(SLOT_DISPLAY,0xEC,child.sid,
             ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
             ((child.h as u64)<<32)|child.w as u64);}
-        sex_pdx::serial_record!("[shell.app.viewport] target={} sid={} x={} y={} w={} h={}",if frame==201 {9}else if frame==306 {17}else{12},child.sid,child.x,child.y,child.w,child.h);
+        sex_pdx::serial_record!("[shell.app.viewport] target={} sid={} x={} y={} w={} h={}",APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)).map_or(0,|e|e.target),child.sid,child.x,child.y,child.w,child.h);
     }
 }
 
@@ -20256,7 +20265,7 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
 /// updated after resize operations).
 unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32) {
     if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(surface_id)) {return;}
-    if let Some(e) = APP_CUSTODY.iter_mut().flatten().find(|e| (e.surface == surface_id || (e.target==17 && e.shell_surface()==Some(surface_id))) && !e.dead) { e.bounds = Some((x,y,w,h)); }
+    if let Some(e) = APP_CUSTODY.iter_mut().flatten().find(|e| (e.surface == surface_id || e.is_successor_frame(surface_id)) && !e.dead) { e.bounds = Some((x,y,w,h)); }
     native_child_geometry(surface_id,x,y,w,h);
 
 
@@ -23033,7 +23042,16 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
     }
     let target = hit_test_at(px, py);
-    if buttons_val&1!=0{if let HitTarget::Surface(frame)=target{if matches!(frame,201|301|307){if let Some((x,y,w,h))=get_surface_bounds(frame){let(target,slot,cx,cy,vw,vh)=if frame==201{(9,SLOT_QUIL,x+8,y+36,w.saturating_sub(16),h.saturating_sub(44))}else if frame==301{(16,sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,x,y,w,h)}else{(18,sex_pdx::app_lifecycle::QUIL_THIRD_ROUTE_SLOT,x,y,w,h)};if let Some(action)=sex_pdx::document_view::Layout::new(target,vw,vh).hit(px.saturating_sub(cx)as u32,py.saturating_sub(cy)as u32){if let Some(sequence)=DOCUMENT_POINTER_SEQUENCE.checked_add(1){DOCUMENT_POINTER_SEQUENCE=sequence;if DOCUMENT_POINTER.is_none(){DOCUMENT_POINTER=Some((slot,target,action,sequence));}let _=try_set_focus(frame);return(HitTarget::Surface(frame),true);}}}}}}
+    if buttons_val&1!=0{if let HitTarget::Surface(frame)=target{
+        if let Some((_,row))=app_catalog::document_view_frame(frame).filter(|(_,row)|row.app==app_catalog::App::Quil){
+            if let Some((x,y,w,h))=get_surface_bounds(frame){
+                let(cx,cy,vw,vh)=if row.shell_surface.is_some(){(x+8,y+36,w.saturating_sub(16),h.saturating_sub(44))}else{(x,y,w,h)};
+                if let Some(action)=sex_pdx::document_view::Layout::new(row.target,vw,vh).hit(px.saturating_sub(cx)as u32,py.saturating_sub(cy)as u32){
+                    if let Some(sequence)=DOCUMENT_POINTER_SEQUENCE.checked_add(1){DOCUMENT_POINTER_SEQUENCE=sequence;if DOCUMENT_POINTER.is_none(){DOCUMENT_POINTER=Some((row.route_slot,row.target,action,sequence));}let _=try_set_focus(frame);return(HitTarget::Surface(frame),true);}
+                }
+            }
+        }
+    }}
 
     if CLICK_DRAG_PROOF_ENABLED {
         let (target_id, hit) = match target {
@@ -25522,7 +25540,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Spindle focused-surface: capture printable input + dispatch commands ──
                             // Consumes: Enter, Backspace, Escape, Space, alphanumeric.
                             // All other keys fall through to scancode_to_action unchanged.
-                            } else if FOCUSED_SURFACE_ID==306 && spindle_has_focus() && is_spindle_text_key(scancode) {
+                            } else if FOCUSED_SURFACE_ID!=SURFACE_ID_SPINDLE && spindle_has_focus() && is_spindle_text_key(scancode) {
                                 // Fresh subject gets only native dispatch, never predecessor YARN state.
                                 pdx_call(SLOT_SPINDLE,OP_HID_EVENT,scancode as u64,value,EV_KEY);
                                 mutated=true;

@@ -32,7 +32,7 @@ def source_contract(root):
  root=Path(root);c=launch.source_contract(root)
  paths=('crates/sex-pdx/src/document_view.rs','crates/sex-pdx/src/desktop_style.rs','servers/quil/src/view.rs','servers/quil/src/main.rs',
         'servers/quil/src/document_exchange.rs','servers/sexfiles/src/document.rs','servers/sexfiles/src/document_journal.rs','servers/sexfiles/src/vfs.rs',
-        'scripts/quil_readability_gate.py','scripts/tests/test_quil_readability_gate.py','scripts/https_import_gate.py','scripts/check_document_disk.py','scripts/desktop_close_gate.py','scripts/check_nonunix_target.py','scripts/tls_exchange_gate.py','crates/sex-pdx/src/text_encoding.rs','servers/quil/src/unicode_input.rs')
+        'scripts/quil_readability_gate.py','scripts/tests/test_quil_readability_gate.py','scripts/https_import_gate.py','scripts/check_document_disk.py','scripts/desktop_close_gate.py','scripts/check_nonunix_target.py','scripts/tls_exchange_gate.py','crates/sex-pdx/src/text_encoding.rs','servers/quil/src/unicode_input.rs','crates/sex-pdx/src/app_catalog.rs')
  src={name:(root/name).read_text()for name in paths};layout=src[paths[0]];style=src[paths[1]];view=src[paths[2]];client=src[paths[4]]
  def constant(source,name):
   m=re.search(r'pub const '+name+r':[^=]+=\s*(\d+)\s*;',source)
@@ -45,7 +45,7 @@ def source_contract(root):
  required=('pub fn header_rows','pub fn toolbar_per_row','self.header_rows() as u32 * s::LINE * self.scale','col / TOOLBAR_CELL','rows >= desired_toolbar + 2')
  if not all(x in layout for x in required)or 'l.header_rows() * (l.cols + 1)'not in view:raise ValueError('responsive shared layout/header wiring absent')
  if 'Phase::Commit => {\n                if v as usize != self.len'not in client or 'Phase::End => {\n                if v != 0'not in client:raise ValueError('positive exact COMMIT/END source binding differs')
- if 'msg.caller_pd==3&&msg.caller_task==3'not in src[paths[3]]or 'Layout::new(target,vw,vh).hit('not in (root/'servers/silk-shell/src/main.rs').read_text():raise ValueError('exact held toolbar input route absent')
+ if 'msg.caller_pd==3&&msg.caller_task==3'not in src[paths[3]]or any(anchor not in (root/'servers/silk-shell/src/main.rs').read_text()for anchor in ('document_view_frame(frame).filter(|(_,row)|row.app==app_catalog::App::Quil)','Layout::new(row.target,vw,vh).hit(')):raise ValueError('exact held toolbar input route absent')
  commands=re.search(r'let labels = \[(.*?)\];',view,re.S)
  if not commands:raise ValueError('missing command palette labels')
  c.update(cell=cell,toolbar_labels=labels,commands=[ast.literal_eval(x).decode()for x in re.findall(r'b"[^"\n]*"',commands[1])],

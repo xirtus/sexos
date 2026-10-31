@@ -1451,11 +1451,11 @@ fn handle_diskfs_rename(path_id: u64, name_lo: u64, name_hi: u64, buf_va: u64) -
 /// Typed document requests and trusted lifecycle notices dispatch separately.
 pub fn legacy_dispatch(type_id:u64,arg0:u64,arg1:u64,arg2:u64,caller_pd:u32,
     dispatch:impl FnOnce(u64,u64,u64,u64,u32)->u64)->u64{
-    if caller_pd==15&&!matches!(type_id,
+    if sex_pdx::app_catalog::is_browser(caller_pd)&&!matches!(type_id,
         messages::OP_RAMFS_OPEN|messages::OP_RAMFS_READ|messages::OP_RAMFS_WRITE|
         messages::OP_RAMFS_CLOSE|messages::OP_RAMFS_LIST|messages::OP_RAMFS_STAT|
         messages::OP_RAMFS_OBJECT_ID|messages::OP_RAMFS_READNAME){
-        sex_pdx::serial_record!("[files.browser.storage.denied] target=15 op={} profile=typed_import_or_owned_ramfs effects=0",type_id);
+        sex_pdx::serial_record!("[files.browser.storage.denied] target={} op={} profile=typed_import_or_owned_ramfs effects=0",caller_pd,type_id);
         return messages::ERR_PERM_DENIED as u64;
     }
     dispatch(type_id,arg0,arg1,arg2,caller_pd)
@@ -1920,7 +1920,7 @@ impl crate::document::Backend for DocumentBackend{
   Ok(())
  }
  fn clear_load(&mut self,caller:u32)->Result<(),u32>{
-  if !matches!(caller,9|16|18){return Ok(())}
+  if !sex_pdx::app_catalog::is_document_app(caller){return Ok(())}
   sex_pdx::document_snapshot_view(caller,true)?.clear()?;
   sex_pdx::serial_record!("[files.document.snapshot.clear] caller={} bytes=16384 scrubbed=1",caller);
   Ok(())

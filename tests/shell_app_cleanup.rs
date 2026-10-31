@@ -117,3 +117,10 @@ fn browser_import_workspace_controls_require_exact_live_boot_incarnation(){
  // The app may decline a confirmed close again for new unsaved work.
  assert!(APP_CUSTODY[0].as_mut().unwrap().decline_close(15,[15,80,1]));
 }}
+
+#[test]fn original_spindle_frame_keeps_its_pre_registration_geometry_path(){
+ let original=app_custody::Entry::new(39,12,12,154);assert_eq!(original.bounds,None);
+ assert!(original.owns_surface(153));assert!(!original.is_successor_frame(153));
+ let successor=app_custody::Entry::new(50,17,17,302);assert!(successor.is_successor_frame(306));assert!(!successor.is_successor_frame(153));
+ assert!(!app_custody::Entry::new(50,17,17,154).is_successor_frame(306));
+}

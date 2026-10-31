@@ -303,8 +303,9 @@ class HarnessTests(unittest.TestCase):
 import os, pathlib, signal, sys, time
 args = sys.argv[1:]
 log = args[args.index('-serial') + 1].removeprefix('file:')
-pathlib.Path(log).write_text(pathlib.Path(os.environ['FIXTURE']).read_text())
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 print('CURRENT_QEMU_DIAGNOSTIC', flush=True)
+pathlib.Path(log).write_text(pathlib.Path(os.environ['FIXTURE']).read_text())
 if os.environ['FAKE_MODE'] == 'exit_7':
     sys.exit(7)
 if os.environ['FAKE_MODE'] == 'exit_0':

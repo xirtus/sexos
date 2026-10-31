@@ -25,6 +25,12 @@ impl Entry {
     pub fn shell_surface(&self) -> Option<u64> {
         crate::app_catalog::by_surface(self.target, self.surface).and_then(|i| i.shell_surface)
     }
+    /// Successor frames acquire geometry through app registration. Original
+    /// Shell frames retain their existing pre-registration creation path.
+    pub fn is_successor_frame(&self,sid:u64)->bool {
+        crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|row|
+            row.app==crate::app_catalog::App::Spindle&&row.ordinal!=0&&row.shell_surface==Some(sid))
+    }
     pub fn owns_surface(&self, sid: u64) -> bool { self.surface == sid || self.shell_surface() == Some(sid) }
     pub fn close_slot(&self) -> Option<u64> {
         crate::app_catalog::by_surface(self.target, self.surface).map(|i| i.close_slot)
@@ -67,11 +73,11 @@ impl Entry {
             0xFA => args[0] == self.surface && args[1] != 0,
             // Document controls and read-only invalidation are exact, no-payload operations on
             // the existing BOOT orchestration edge, not ambient shell access.
-            0x275 => matches!(self.target,9|15|16|18) && args == [self.target as u64,self.task as u64,0],
-            0x274 | 0x279 => matches!(self.target,9|15|16|18) && (self.target!=15||self.task==15) && args == [self.target as u64,self.task as u64,0],
+            0x275 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app!=crate::app_catalog::App::Spindle) && args == [self.target as u64,self.task as u64,0],
+            0x274 | 0x279 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app!=crate::app_catalog::App::Spindle) && (!crate::app_catalog::is_browser(self.target)||self.task==self.target) && args == [self.target as u64,self.task as u64,0],
             // Existing Spindle launcher route selects a fixed shell action.
-            0x15 => matches!(self.target,12|17) && args[0] <= 7 && args[1] == 0 && args[2] == 0,
-            0 => matches!(self.target,12|17) && args == [0;3], // no-effect endpoint probe
+            0x15 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app==crate::app_catalog::App::Spindle) && args[0] <= 7 && args[1] == 0 && args[2] == 0,
+            0 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app==crate::app_catalog::App::Spindle) && args == [0;3], // no-effect endpoint probe
             _ => false,
         }
     }

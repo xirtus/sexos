@@ -141,9 +141,9 @@ def source_contract(root):
   for name in re.findall(r'Status::(\w+)',alternatives):hints[name]=ast.literal_eval('b"'+value+'"')
  default=re.search(r'_\s*=>\s*add\(b"((?:[^"\\]|\\.)*)"\)',view)
  if not default or not all(state in labels and state in hints for state in('Naming','Saved','Exists'))or 'pub bytes:[u8;512]'not in view or '.min(32)'not in view:raise ValueError('source-bound standalone import renderer changed')
- if 'w::END=>'not in client or 'self.finish(View::Saved,0)'not in client or 'create_new'not in service or 'caller==15'not in service:raise ValueError('source-bound create-only import/journal client changed')
+ if 'w::END=>'not in client or 'self.finish(View::Saved,0)'not in client or 'create_new'not in service or 'app_catalog::is_browser(caller)'not in service or 'DOCUMENT_TARGETS'not in service:raise ValueError('source-bound create-only import/journal client changed')
  contract['import_labels']=labels;contract['import_hints']=hints;contract['import_default_hint']=ast.literal_eval('b"'+default[1]+'"')
- for name in('scripts/https_import_gate.py','scripts/tests/test_https_import_gate.py','apps/kaleidoscope/src/document_import.rs','apps/kaleidoscope/src/import_view.rs','servers/sexfiles/src/document.rs','servers/sexfiles/src/document_journal.rs','servers/sexfiles/src/vfs.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/document_policy.rs','crates/sex-pdx/src/document.rs','crates/sex-pdx/src/document_view.rs','scripts/check_document_disk.py','scripts/check_quil_ui_pixels.py','scripts/check_desktop_pixels.py'):
+ for name in('scripts/https_import_gate.py','scripts/tests/test_https_import_gate.py','apps/kaleidoscope/src/document_import.rs','apps/kaleidoscope/src/import_view.rs','servers/sexfiles/src/document.rs','servers/sexfiles/src/document_journal.rs','servers/sexfiles/src/vfs.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/document_policy.rs','crates/sex-pdx/src/document.rs','crates/sex-pdx/src/document_view.rs','scripts/check_document_disk.py','scripts/check_quil_ui_pixels.py','scripts/check_desktop_pixels.py','crates/sex-pdx/src/app_catalog.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  return contract
 

@@ -179,3 +179,26 @@ pub const QUIL_TARGETS: [u32; QUIL_COUNT] = {
     }
     out
 };
+
+/// Positional service/storage budgets follow the same immutable participant set.
+pub const SPINDLE_COUNT: usize = count(App::Spindle);
+pub const DOCUMENT_COUNT: usize = count(App::Quil) + count(App::Browser);
+pub const SPINDLE_TARGETS: [u32; SPINDLE_COUNT] = {
+    let mut out=[0;SPINDLE_COUNT];let mut i=0;let mut n=0;
+    while i<COUNT {if matches!(INCARNATIONS[i].app,App::Spindle){out[n]=INCARNATIONS[i].target;n+=1;}i+=1;}out
+};
+pub const DOCUMENT_TARGETS: [u32; DOCUMENT_COUNT] = {
+    let mut out=[0;DOCUMENT_COUNT];let mut n=0;let mut family=0;
+    while family<2 {let mut i=0;while i<COUNT {
+        let selected=if family==0{matches!(INCARNATIONS[i].app,App::Quil)}else{matches!(INCARNATIONS[i].app,App::Browser)};
+        if selected{out[n]=INCARNATIONS[i].target;n+=1;}i+=1;
+    }family+=1;}out
+};
+/// Content panes of one catalogued Spindle. This describes association only.
+pub const fn spindle_grid(target:u32)->Option<[u64;4]>{
+    let mut i=0;while i<COUNT {let row=&INCARNATIONS[i];
+        if row.target==target&&matches!(row.app,App::Spindle)&&row.children.len()==3 {
+            return Some([row.surface,row.children[0],row.children[1],row.children[2]]);
+        }i+=1;
+    }None
+}

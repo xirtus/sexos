@@ -317,14 +317,19 @@ pub extern "C" fn trampoline_main() {
 /// The message authenticates a PD. Only its immutable kernel lifecycle grant
 /// supplies the task identity; a document request carries no replacement task.
 fn document_caller_live(caller:u32)->bool {
+    const _:()=assert!(sex_pdx::app_catalog::DOCUMENT_COUNT<=64);
     let Some(i)=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app!=sex_pdx::app_catalog::App::Spindle)else{return false};
+    let Some(index)=sex_pdx::app_catalog::DOCUMENT_TARGETS.iter().position(|target|*target==caller)else{return false};
     let(slot,surface)=(i.lifecycle_slot,i.surface);
-    let live=matches!(sex_pdx::app_lifecycle::catalog(slot),Ok(c) if c.is_subject(caller,surface,3)&&(caller!=15||c.task_id==15))
-        && sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE);
-    if caller==15&&live{
-        static AUDITED:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(false);
-        if !AUDITED.swap(true,core::sync::atomic::Ordering::Relaxed){
-            sex_pdx::serial_record!("[files.browser.import.profile] target=15 task=15 slot=40 surface=300 create_only=1 held_storage_route=1 runtime_mint=0");
+    let Ok(c)=sex_pdx::app_lifecycle::catalog(slot)else{return false};
+    let browser=i.app==sex_pdx::app_catalog::App::Browser;
+    if !c.is_subject(caller,surface,3)||(browser&&c.task_id!=i.target){return false}
+    let live=sex_pdx::app_lifecycle::info(slot)==Err(sex_pdx::app_lifecycle::LIVE);
+    if browser&&live{
+        static AUDITED:core::sync::atomic::AtomicU64=core::sync::atomic::AtomicU64::new(0);
+        let bit=1u64<<index;
+        if AUDITED.fetch_or(bit,core::sync::atomic::Ordering::Relaxed)&bit==0{
+            sex_pdx::serial_record!("[files.browser.import.profile] target={} task={} slot={} surface={} create_only=1 held_storage_route=1 runtime_mint=0",c.target_pd,c.task_id,slot,c.surface_id);
         }
     }
     live
