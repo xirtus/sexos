@@ -14,6 +14,27 @@ pub fn decode_pdx_slot(raw: u64) -> Option<u32> {
     if raw == 0 { Some(0) } else { decode_capability_slot(raw) }
 }
 
+/// The only operations reachable through slot 0 without a held capability.
+/// Each is caller-scoped: BOOT display data is checked against its sanctioned
+/// holder, init data is moved out of the calling task, and serial records are
+/// bounded diagnostics. Everything else, including the retired framebuffer
+/// disclosure (0xE3) and frame-present hook (0xBB), denies before effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BridgeOp {
+    BootDisplayQuery,
+    SerialRecord,
+    InitArg,
+}
+
+pub fn decode_bridge_op(number: u64) -> Option<BridgeOp> {
+    match number {
+        0xE6 => Some(BridgeOp::BootDisplayQuery),
+        69 => Some(BridgeOp::SerialRecord),
+        0x12 => Some(BridgeOp::InitArg),
+        _ => None,
+    }
+}
+
 pub fn decode_domain_id(raw: u64) -> Option<u32> {
     if raw < crate::ipc::MAX_DOMAINS as u64 {
         Some(raw as u32)

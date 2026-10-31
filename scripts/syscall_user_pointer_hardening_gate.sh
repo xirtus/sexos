@@ -69,16 +69,17 @@ row ingest_validates "$([ $? -eq 0 ] && echo 1 || echo 0)"
 grep -A10 'fn snapshot_resolve' "$SRC" | grep -q 'validate_user_bytes(out_ptr as u64, size, true)'
 row resolve_validates "$([ $? -eq 0 ] && echo 1 || echo 0)"
 
-# 10. PDX_GET_DISPLAY_INFO validates write access to DisplayInfo.
-grep -A6 '0xE3 =>' "$SRC" | grep -q 'validate_user_bytes(arg0, info_size, true)'
-row display_info_validates "$([ $? -eq 0 ] && echo 1 || echo 0)"
+# 10. The ambient PDX_GET_DISPLAY_INFO bridge (0xE3) is retired: slot 0 is
+# selected only through the decoded caller-scoped bridge operations.
+grep -q 'match decode_bridge_op(num)' "$SRC" && ! grep -q '0xE3 =>' "$SRC"
+row display_info_retired "$([ $? -eq 0 ] && echo 1 || echo 0)"
 
-# 11. raw_print enforces RAW_PRINT_MAX and validates read access.
+# 11. Serial records enforce RAW_PRINT_MAX and validate read access.
 grep -q 'RAW_PRINT_MAX' "$SRC"
 row raw_print_max_constant "$([ $? -eq 0 ] && echo 1 || echo 0)"
-grep -A8 '69 =>' "$SRC" | grep -q 'len > RAW_PRINT_MAX'
+grep -A8 'Some(BridgeOp::SerialRecord) =>' "$SRC" | grep -q 'len > RAW_PRINT_MAX'
 row raw_print_max_check "$([ $? -eq 0 ] && echo 1 || echo 0)"
-grep -A12 '69 =>' "$SRC" | grep -q 'validate_user_bytes(arg0, len, false)'
+grep -A12 'Some(BridgeOp::SerialRecord) =>' "$SRC" | grep -q 'validate_user_bytes(arg0, len, false)'
 row raw_print_validates "$([ $? -eq 0 ] && echo 1 || echo 0)"
 
 # ── Runtime rows (optional, need serial log) ────────────────────────────────

@@ -6,7 +6,7 @@ mod ipc {
 #[path = "../kernel/src/capability_slot.rs"]
 mod capability_slot;
 
-use capability_slot::{decode_capability_slot, decode_domain_id, decode_pdx_slot, valid_syscall_selectors};
+use capability_slot::{decode_bridge_op, BridgeOp, decode_capability_slot, decode_domain_id, decode_pdx_slot, valid_syscall_selectors};
 
 #[test]
 fn preserves_every_valid_capability_slot() {
@@ -85,6 +85,14 @@ fn dispatch_rejects_before_any_operation_side_effect() {
     assert!(!dispatch[..preflight].contains("GLOBAL_ALLOCATOR"));
     assert!(!dispatch[..preflight].contains("send_reply"));
     assert!(!dispatch[..preflight].contains(".dequeue("));
+    // Slot 0 has no ad hoc opcode arms: every bridge effect is selected by
+    // the tested decoder, and unknown operations deny.
+    let bridge = &dispatch[body..dispatch.find("crate::ipc::safe_pdx_call(slot").unwrap()];
+    assert!(bridge.contains("match decode_bridge_op(num)"));
+    assert!(bridge.contains("None => (sex_pdx::ERR_CAP_INVALID, 0),"));
+    for retired in ["0xE3", "0xBB", "FB_REQUEST", "FRAME_PRESENT"] {
+        assert!(!bridge.contains(retired), "{retired}");
+    }
 }
 
 #[test]
@@ -106,5 +114,29 @@ fn preserves_exact_registry_ids_including_reserved_zero() {
 fn rejects_reply_destinations_outside_registry_or_with_high_bits() {
     for id in [1024, 2048, (1u64 << 32) | 1, 1u64 << 32, u64::MAX] {
         assert_eq!(decode_domain_id(id), None, "destination {id}");
+    }
+}
+
+#[test]
+fn slot_zero_bridge_admits_only_caller_scoped_operations() {
+    let allowed = [(0xE6, BridgeOp::BootDisplayQuery), (69, BridgeOp::SerialRecord), (0x12, BridgeOp::InitArg)];
+    for number in 0..=0x1_0000u64 {
+        let expected = allowed.iter().find(|(n, _)| *n == number).map(|(_, op)| *op);
+        assert_eq!(decode_bridge_op(number), expected, "bridge op {number:#x}");
+    }
+    for (number, _) in allowed {
+        for high in [1u64 << 8, 1 << 32, 1 << 63] {
+            assert_eq!(decode_bridge_op(number | high), None);
+        }
+    }
+}
+
+#[test]
+fn retired_ambient_display_disclosure_and_present_hook_deny() {
+    assert_eq!(decode_bridge_op(0xE3), None);
+    assert_eq!(decode_bridge_op(0xBB), None);
+    // Legacy discovery/loader/window requests never had bridge authority.
+    for number in [0x10, 0x16, 0xDE, 0xDD, 0xDF, 0xE0, u64::MAX] {
+        assert_eq!(decode_bridge_op(number), None);
     }
 }

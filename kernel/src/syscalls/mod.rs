@@ -130,14 +130,6 @@ fn snapshot_resolve(handle: u64, out_ptr: *mut sex_pdx::SceneSnapshot) -> u64 {
     0u64
 }
 
-#[repr(C)]
-pub struct DisplayInfo {
-    pub virt_addr: u64,
-    pub width:     u32,
-    pub height:    u32,
-    pub pitch:     u32, // Pixels per row
-}
-
 /// Exact runtime region ABI, also exercised by the boot negative selftest.
 /// Failed replies expose no prior input or address register values.
 pub(crate) fn region_query(pd: &crate::capability::ProtectionDomain, number: u64,
@@ -210,31 +202,13 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let arg2 = r8;
 
             let (status, value) = if slot == 0 {
-                match num {
-                    0xE6 => {
+                use crate::capability_slot::{decode_bridge_op, BridgeOp};
+                match decode_bridge_op(num) {
+                    Some(BridgeOp::BootDisplayQuery) => {
                         let caller=crate::core_local::CoreLocal::get().current_pd_ref().id;
                         match crate::boot_display::query(caller,arg0,arg1,arg2){Some(value)=>(0,value),None=>(sex_pdx::ERR_CAP_INVALID,0)}
                     }
-                    0xE3 => { // PDX_GET_DISPLAY_INFO
-                        let ptr = arg0 as *mut DisplayInfo;
-                        let info_size = core::mem::size_of::<DisplayInfo>();
-                        if ptr.is_null() || !validate_user_bytes(arg0, info_size, true) {
-                            (sex_pdx::ERR_CAP_INVALID, 0)
-                        } else if let Some(fb_res) = crate::FB_REQUEST.response() {
-                            if let Some(fb) = fb_res.framebuffers().iter().next() {
-                                unsafe {
-                                    let fb_virt = fb.address() as u64;
-                                    let hhdm = crate::HHDM_REQUEST.response().unwrap().offset;
-                                    (*ptr).virt_addr = fb_virt - hhdm;
-                                    (*ptr).width = fb.width as u32;
-                                    (*ptr).height = fb.height as u32;
-                                    (*ptr).pitch = (fb.pitch / 4) as u32;
-                                }
-                                (0u64, 0u64)
-                            } else { (sex_pdx::ERR_CAP_INVALID, 0) }
-                        } else { (sex_pdx::ERR_CAP_INVALID, 0) }
-                    }
-                    69 => { // raw_print
+                    Some(BridgeOp::SerialRecord) => {
                         let ptr = arg0 as *const u8;
                         let len = arg1 as usize;
                         if len == 0 {
@@ -256,7 +230,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                             (0u64, 0u64)
                         }
                     }
-                    0x12 => { // pdx_get_init_arg
+                    Some(BridgeOp::InitArg) => {
                         let core_local = crate::core_local::CoreLocal::get();
                         let sched = &crate::scheduler::SCHEDULERS[core_local.core_id as usize];
                         let current_task_ptr = sched.current_task.load(core::sync::atomic::Ordering::Acquire);
@@ -276,11 +250,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                             } else { (sex_pdx::ERR_CAP_INVALID, 0) }
                         } else { (sex_pdx::ERR_CAP_INVALID, 0) }
                     }
-                    0xBB => { // Phase 2: FRAME_PRESENT debug hook
-                        crate::serial_println!("PD1: FRAME_PRESENT event");
-                        (0u64, 0u64)
-                    }
-                    _ => (sex_pdx::ERR_CAP_INVALID, 0),
+                    None => (sex_pdx::ERR_CAP_INVALID, 0),
                 }
             } else {
                 match crate::ipc::safe_pdx_call(slot, num, arg0, arg1, arg2) {
