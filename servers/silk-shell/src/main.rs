@@ -15984,7 +15984,7 @@ unsafe fn launcher_focus_stale(p:LauncherFocus,now:u64)->Option<&'static str>{
     if !matches!(lifecycle_state(p.frame),Some(LifecycleState::Visible)){return Some("not_visible")}
     if now<p.last{return Some("clock")}
     if now.saturating_sub(p.start)>=2000{return Some("deadline")}
-    if p.turns>=4096{return Some("turns")}
+    if p.turns>=4096{return Some("stalled_clock")}
     None
 }
 unsafe fn launcher_focus_retry_ready(sid:u64)->bool{
@@ -16003,7 +16003,11 @@ unsafe fn launcher_focus_cancel(p:LauncherFocus,reason:&str){
 /// Only focus remains pending. Reparent, restore and activation are never
 /// replayed. A changed user focus/workspace or exact lifecycle fence cancels.
 unsafe fn launcher_focus_poll(){
-    let Some(mut p)=LAUNCHER_FOCUS else{return};let now=sex_pdx::get_ticks();p.turns=p.turns.saturating_add(1);
+    // The deadline bounds the wait in ticks; turns only bound polls while the
+    // tick clock is not advancing. Counting every poll made a slow but live
+    // content commit exhaust the bound long before the deadline.
+    let Some(mut p)=LAUNCHER_FOCUS else{return};let now=sex_pdx::get_ticks();
+    if now>p.last{p.turns=0;}p.turns=p.turns.saturating_add(1);
     if let Some(reason)=launcher_focus_stale(p,now){launcher_focus_cancel(p,reason);return}
     p.last=now;LAUNCHER_FOCUS=Some(p);
     match launcher_subject_live(p.target,p.task){
