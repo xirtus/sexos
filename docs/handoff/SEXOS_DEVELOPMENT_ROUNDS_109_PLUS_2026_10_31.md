@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–141
+# SexOS development: round 108 acceptance and rounds 109–142
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -626,3 +626,23 @@ its own live sustained jobs. Member-verified evidence retains both source/image
 and terminal artifacts. Next: held startup identity without task/domain equality,
 then one third Spindle. Inventory stays 2 Open / 28 Partial / System Proven false;
 larger goal active.
+
+
+## Round 142 — held startup tasks without domain inference
+
+[Round report](HELD_STARTUP_IDENTITY_2026_10_31.md) follows actual held task IDs
+through Quil/Spindle startup, status SDK, Linen subject admission and Shell's
+receiver binding. Shell requires exact held custody/catalog/LIVE and authentic
+fresh sender task before binding. Four sets of extracted production-function/
+SDK tests and compiled controls reject equality shortcuts and validation bypass.
+File/deferred caller-task propagation and Browser migration remain outside scope;
+native BOOT IDs still coincide, so unequal runtime allocation is not claimed.
+
+The final B cohort passes 43 host checks / 2,716 Rust executions and 989 Python
+tests, sealed probe and both full relaunch profiles with fresh independent
+replay: three boots / 50 registry captures. Both actual Spindle statuses pass the
+stricter checks. Eight exact ELF scans inspect 290,390 instructions with no
+inspected vector/FP matches. All held recovery/catalog tuples precede sealing.
+The superseded positive A cohort and final B/control evidence are archived with
+verified member hashes. Next: one third BOOT Spindle with complete warm/cold and
+resource cleanup/exhaustion. Inventory stays 2 Open / 28 Partial / System Proven false.

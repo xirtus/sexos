@@ -1,0 +1,321 @@
+{
+  "round": 142,
+  "qualified_held_startup_task_policy": true,
+  "full_os_goal_complete": false,
+  "source_commit": "366cb211facbc06709f7e435fa18fccd7f15c336",
+  "main_parent": "e8327af3",
+  "iso_sha256": "425139ab2c9dcd7c43f7b2c89a70610d306578791a929f74165f21a22fc7561e",
+  "kernel_sha256": "c86f67462a081cc92255f17d648da2dfd6ffa6d4bf7cb13e1dbb9c903152b434",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "366cb211facbc06709f7e435fa18fccd7f15c336",
+    "production": 576,
+    "runner": 593,
+    "unique": 1169,
+    "iso_sha256": "425139ab2c9dcd7c43f7b2c89a70610d306578791a929f74165f21a22fc7561e",
+    "kernel_sha256": "c86f67462a081cc92255f17d648da2dfd6ffa6d4bf7cb13e1dbb9c903152b434"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2716,
+  "python_tests": 989,
+  "host_behavior": {
+    "actual_startup_functions": 2,
+    "startup_tests": 6,
+    "startup_compiled_mutants": 4,
+    "status_sdk_tests": 7,
+    "status_sdk_mutants": 2,
+    "linen_tests": 5,
+    "linen_mutants": 2,
+    "shell_receiver_tests": 8,
+    "shell_mutants": 4,
+    "independent_domain_task_metadata": true
+  },
+  "native": {
+    "sealed_probe_boots": 1,
+    "workflow_boots": 2,
+    "total_boots": 3,
+    "registry_verified_captures": 50,
+    "all_fresh_parent_replays": true,
+    "groups": [
+      {
+        "profile": "compact",
+        "command": [
+          "python3",
+          "/tmp/sexos-startup-b-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-startup-b-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-startup-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-startup-b-alpha-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "142"
+        ],
+        "out": "/tmp/sexos-startup-b-alpha-compact",
+        "driver": "/tmp/sexos-startup-b-alpha-compact-driver.log",
+        "status": 0,
+        "seconds": 95.09014912508428,
+        "verified_captures": 24,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 2,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 0,
+          "generation": 5,
+          "source": 17,
+          "task": 17,
+          "logical": 12,
+          "size": 100,
+          "fingerprint": "0x42bc3a8884e91fc",
+          "count": 5,
+          "data_hash": "0x56862f17ef830905"
+        }
+      },
+      {
+        "profile": "wide",
+        "command": [
+          "python3",
+          "/tmp/sexos-startup-b-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-startup-b-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-startup-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-startup-b-alpha-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "142"
+        ],
+        "out": "/tmp/sexos-startup-b-alpha-wide",
+        "driver": "/tmp/sexos-startup-b-alpha-wide-driver.log",
+        "status": 0,
+        "seconds": 114.33622229099274,
+        "verified_captures": 26,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 2,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 0,
+          "generation": 7,
+          "source": 17,
+          "task": 17,
+          "logical": 12,
+          "size": 125,
+          "fingerprint": "0x221f352b58c2993e",
+          "count": 7,
+          "data_hash": "0x6d5627c8fe23e447"
+        }
+      }
+    ],
+    "spindle_status_observations": [
+      {
+        "profile": "compact",
+        "accepted_spindle_subjects": [
+          12,
+          17
+        ],
+        "registry_captures": 24
+      },
+      {
+        "profile": "wide",
+        "accepted_spindle_subjects": [
+          12,
+          17
+        ],
+        "registry_captures": 26
+      }
+    ],
+    "boot_roster_layout_audit": {
+      "ok": true,
+      "boots": 3,
+      "normal_workflow_boots": 2,
+      "sealed_probe_boots": 1,
+      "auxiliary_cold_boots": 0,
+      "observations": [
+        {
+          "path": "/tmp/sexos-startup-b-build/serial.log",
+          "bytes": 475374,
+          "sha256": "0a356d5e2e2a0177209db84954bb2094606620c7a78a38eed41d3b08b1dbb644",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-startup-b-alpha-compact/serial.log",
+          "bytes": 1874866,
+          "sha256": "8c948cebcbe0b5f23af4c33134d41249d2a0ec362b66bdae1b3fa46b0fe813da",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-startup-b-alpha-wide/serial.log",
+          "bytes": 2038141,
+          "sha256": "94ad7f3e02f21317373780ad36bf141eef232f30f42260580985338d30123e26",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 2,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              }
+            ]
+          },
+          "grant_bytes": 40,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        }
+      ],
+      "scope": "Actual inserted history capability queried beforeseal; exact registered tasks and both family catalogs/layout. Two actual Spindles, no per-request task authentication."
+    },
+    "current_boot_task_ids_coincide_with_domain_ids": true,
+    "native_unequal_allocator": false,
+    "new_image_1800s_acceptance": false
+  },
+  "scalar": {
+    "elfs": 8,
+    "instructions": 290390,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Five exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "superseded": {
+    "source": "5e11ae61",
+    "scope": "A passed initial startup/status checks but review found downstream Linen/Shell task inference. B fixes complete path before publication; original source/positive runs retained, not claimed as final."
+  },
+  "limitations": {
+    "per_request_file_deferred_task_authentication": false,
+    "browser_task_namespace_migrated": false,
+    "third_spindle_reserved": false,
+    "native_unequal_allocator": false
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-held-startup-identity-2026-10-31-raw.tar.gz",
+    "sha256": "08d44c1f45e3395d6d5f5cea142588b98494489903e689be43ea36f4a815fee7",
+    "bytes": 21255109,
+    "members": 2721,
+    "payload_manifest_sha256": "acc78becbcd24389739a654bdcb30076a3663859611480528116e60a695777ed",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Quil/Spindle startup select metadata only after successful heldSELF query, preserve exact nonzero task, family/surface/coordinator checks. SDK status supports heldindependenttuples; Linen checksactualheldsubject/LIVE; Shell bindsReceiverfromexactheldcustody aftercatalog/LIVE+authenticatedfreshIPCcaller_task, never domainassynthesis. Actualcompiledhelpers/receivers tested againstunequalPDtasks; currentnativeIDscoincide andfullappchains/status pass. No runtime capabilitymint/processVAS/POSIX, generaldeferredtaskauth, nativeunequalallocator, thirdSpindle/new1800s/physicalSMP/hostilecontainment/globalepoch or daily-driver acceptance claim."
+}
