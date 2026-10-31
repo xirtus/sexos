@@ -4,7 +4,7 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os
 from desktop_close_gate import QMP
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',required=True,type=pathlib.Path);p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=17);p.add_argument('--resolution',default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);a=p.parse_args()
  if not 0<=a.typing_bursts<=100:p.error('typing bursts must be 0..100')
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
@@ -97,10 +97,18 @@ def main():
    wait(r'\[quil.selection\] generation=\d+ revision=\d+ bytes=10 anchor=6 caret=10',start)
    key('ret',r'\[quil.find\] query_bytes=4 start=6 end=10 wrapped=1 found=1 selected=1')
    start=len(text());q.key_sequence(['z']);key('ret',r'\[quil.find\] query_bytes=5 found=0')
-   key('esc',r'\[quil.find.mode\] on=0 reason=escape');capture('find-closed','first note#')
-   # Typing over the found selection would replace it; collapse to the end.
-   key('end',r'\[quil.cursor.move\] old=10 new=10 len=10 dir=end ok=1')
-   find=dict(prompt=True,forward=dict(start=6,end=10,wrapped=False),repeat=dict(start=6,end=10,wrapped=True),missing='notez',pixels_checked=['find-prompt','find-closed'])
+   # Replace: the selection 6..10 is exactly one match of "note".
+   start=len(text());q.key_sequence(['backspace','down','m','e','m','o'])
+   wait(r'\[quil.text.view\] target=9 .*status=.*Find: note > memo#',start);capture('replace-prompt','Find: note > memo#')
+   start=len(text());key('ret',r'\[quil.replace\] start=6 old_bytes=4 new_bytes=4 applied=1 ')
+   wait(r'\[quil.find\] query_bytes=4 found=0',start)
+   key('esc',r'\[quil.find.mode\] on=0 reason=escape');capture('replaced','first memo#')
+   # One undo restores the document for the rest of the workflow.
+   start=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'z'}],'hold-time':80})
+   wait(r'\[sexinput.ps2.scancode\] raw=0x9d(?=\n|$)',start);capture('find-closed','first note#')
+   # Typing over a selection would replace it; collapse to the end.
+   key('end',r'\[quil.cursor.move\] .* dir=end ok=1')
+   find=dict(prompt=True,forward=dict(start=6,end=10,wrapped=False),repeat=dict(start=6,end=10,wrapped=True),missing='notez',replace=dict(query='note',replacement='memo',start=6,undone=True),pixels_checked=['find-prompt','replace-prompt','replaced','find-closed'])
   ctrl('s',r'\[quil.name.mode\] on=1');typing('uialpha',True)
   automatic_lists=[]
   initial_count=int(re.findall(r'\[linen.remote.snapshot.ok\] count=(\d+)',text())[-1]) if a.workspace_refresh else 0
@@ -140,6 +148,16 @@ def main():
   if a.typing_bursts:
    from quil_input_latency import run as measure_input
    input_latency=measure_input(locals(),a.typing_bursts)
+  toggles=None
+  if a.toggle_stress:
+   # Alternate real focus between Quil and Spindle through the Spindle toggle;
+   # every round trip must end focused, with no cancelled restore focus.
+   for i in range(a.toggle_stress):
+    focus(153);focus(201)
+    if i%25==24:print(f'[toggle.stress.progress] round_trips={i+1}',flush=True)
+   cancels=re.findall(r'\[launcher.focus.cancel\] [^\n]*',text())
+   toggles=dict(round_trips=a.toggle_stress,cancels=cancels)
+   if cancels:raise RuntimeError('cancelled launcher focus: '+str(cancels[:4]))
   soak=None
   if a.soak_seconds:
    from alpha_session import run
@@ -149,7 +167,7 @@ def main():
    r=recover(disk.read_bytes(),expected['object'])
    if r.pop('payload')!=expected['content'].encode():raise RuntimeError('native saved bytes differ')
    checked.append(r)
-  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,find=find,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
+  result=dict(ok=True,acceptance=not a.rehearsal,round=a.round,soak=soak,find=find,toggles=toggles,automatic_lists=automatic_lists,input_latency=input_latency,cold_save_seconds=[cold_first,cold_second],iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),resolution=resolution,documents=[first,second],disk_documents=checked,stages=stages,keyboard=True,pointer=True,edit_during_save_dirty=True)
   (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
  except Exception as e:
   (out/'result.json').write_text(json.dumps(dict(ok=False,error=str(e)))+'\n');raise

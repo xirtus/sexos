@@ -461,3 +461,32 @@ fn control_chord_leaves_find_mode() {
         assert_eq!(QUIL_SELECTION.range(), Some((0, 4)));
     }
 }
+
+#[test]
+fn replace_edits_only_exact_matches_one_undoable_edit_at_a_time() {
+    unsafe {
+        reset(b"alpha beta alpha");
+        QUIL_FIND.clear();
+        key(0x21, false, true); // Ctrl+F
+        for code in [0x1e, 0x26, 0x19, 0x23, 0x1e] { key(code, false, false); } // alpha
+        key(0x50, false, false); // Down to the replacement field
+        for code in [0x18, 0x32, 0x12, 0x22, 0x1e] { key(code, false, false); } // omega
+        assert_eq!(QUIL_FIND.replacement(), b"omega");
+        let revision = QUIL_REVISION;
+        key(0x1c, false, false); // the selection is not a match yet: find only
+        assert_eq!(QUIL_REVISION, revision);
+        assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN], b"alpha beta alpha");
+        let first = QUIL_SELECTION.range().unwrap();
+        assert_eq!(&QUIL_BUFFER[first.0..first.1], b"alpha");
+        key(0x1c, false, false); // replace that match, select the next
+        assert_eq!(QUIL_REVISION, revision + 1);
+        key(0x1c, false, false);
+        assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN], b"omega beta omega");
+        key(0x1c, false, false); // no match left: nothing edited
+        assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN], b"omega beta omega");
+        assert_eq!(QUIL_REVISION, revision + 2);
+        key(0x01, false, false); // Esc
+        key(0x2c, false, true); // Ctrl+Z undoes one replacement
+        assert_eq!(&QUIL_BUFFER[..QUIL_BUFFER_LEN], b"omega beta alpha");
+    }
+}

@@ -7,7 +7,7 @@ python3 - "$ROOT_DIR" "$QUIL_TEST_DIR/actual_quil_clipboard.rs" <<'PY'
 from pathlib import Path
 import hashlib,re,sys
 source_path=Path(sys.argv[1])/'servers/quil/src/main.rs';source=source_path.read_text()
-names=('quil_source','quil_selection_bind','quil_selection_record','quil_selection_fence','quil_revision_changed','quil_fresh_source','quil_replace','quil_clipboard_status','quil_clipboard_events','quil_dispatch_key','quil_find_next','text_buffer_undo_push','text_buffer_undo','text_buffer_redo','mark_dirty','scancode_to_char')
+names=('quil_source','quil_selection_bind','quil_selection_record','quil_selection_fence','quil_revision_changed','quil_fresh_source','quil_replace','quil_clipboard_status','quil_clipboard_events','quil_dispatch_key','quil_find_next','quil_replace_next','text_buffer_undo_push','text_buffer_undo','text_buffer_redo','mark_dirty','scancode_to_char')
 def extract(name):
     matches=list(re.finditer(r'^(?:unsafe )?fn '+re.escape(name)+r'\s*\(',source,re.M))
     if len(matches)!=1:raise SystemExit('actual Quil function differs: '+name)
