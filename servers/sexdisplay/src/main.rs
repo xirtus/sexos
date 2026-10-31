@@ -3,6 +3,8 @@
 #![allow(static_mut_refs)]
 
 use sex_pdx::serial_println;
+static mut DISPLAY_LAST_OP: u64 = 0;
+static mut DISPLAY_LAST_CALLER: u32 = 0;
 use silkbar_model::{SilkBar, SilkBarUpdate, UpdateKind, apply_update, DEFAULT_SILK_BAR,
                     DEFAULT_THEME, ChipKind, ModuleSlot, validate_silkbar_contract, contract_fingerprint,
                     SILKBAR_ABI_VERSION, SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1,
@@ -2929,6 +2931,16 @@ pub extern "C" fn _start() -> ! {
             serial_println!("[display.ready.sent] to=silkbar version=1");
         }
         display_loop_counter = display_loop_counter.wrapping_add(1);
+        // Liveness record about every 6000 ticks: a wedged Display stops it,
+        // and the last opcode names the work it last accepted.
+        unsafe {
+            static mut HEARTBEAT_TICK: u64 = 0;
+            let now = sex_pdx::get_ticks();
+            if now.wrapping_sub(HEARTBEAT_TICK) >= 6000 {
+                HEARTBEAT_TICK = now;
+                sex_pdx::serial_record!("[display.heartbeat] ticks={} loops={} last_op={:#x} last_caller={}", now, display_loop_counter, DISPLAY_LAST_OP, DISPLAY_LAST_CALLER);
+            }
+        }
         // ── Per-cycle flags ──
         unsafe { REPAINT_SEEN=0; REPAINT_DRAINED=0; REPAINT_UPSERTS=0; REPAINT_FITTED_NOOPS=0; }
         let mut needs_surface_redraw = false;
@@ -3219,6 +3231,7 @@ pub extern "C" fn _start() -> ! {
             };
             drained += 1;
             unsafe {
+                DISPLAY_LAST_OP=msg.type_id;DISPLAY_LAST_CALLER=msg.caller_pd;
                 REPAINT_DRAINED=drained;
                 REPAINT_SEEN |= match msg.type_id {
                     0xEC=>1,0xEB=>2,0xED=>4,0xEE=>8,0xEF=>16,
