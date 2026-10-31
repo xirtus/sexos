@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–130
+# SexOS development: round 108 acceptance and rounds 109–132
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -50,6 +50,8 @@ The round numbers below are the order the work was done. They do not match the p
 | 128 | Long-session exhaustion audit after the reply-count bug | measured rates; no further fix needed today (see below) | — |
 | 129 | BOOT app incarnation catalog (`sex-pdx::app_catalog`), checked against the kernel boot plan | host gate + native (connected, all-incarnation rehearsal) | `d43e5347` |
 | 130 | Shell's app view tables, routes and admission checks driven by the catalog; second stale self-wait checker fix | host (pinned to old tables) + native both sizes | `4762329f`, `c3677532` |
+| 131 | Display's frame, content, viewport-group and per-pixel owner tables driven by the catalog | host (16,000-pair equivalence) + native both sizes | `4b714ed5` |
+| 132 | sex-pdx clipboard, canvas, document-view and Spindle status/view policies driven by the catalog | host (equivalence) + 41/41 host checks + native both sizes | `3827a172` |
 
 ## Round details
 
@@ -196,8 +198,10 @@ Already migrated to the catalog:
 - the dirty-close deferral
 - the launcher focus check
 - sexfiles' document-caller admission
+- Display's surface tables (131)
+- sex-pdx clipboard, canvas, document-view and Spindle policies (132)
 
-Still hand-wired: the kernel boot plan and grants, Display's surface tables, SexNet/Bell owner maps, and Spindle history.
+Still hand-wired: the kernel boot plan and grants, Quil/Spindle/Linen self-checks and sexfiles' save list.
 
 The plan from here: migrate those, then make the kernel's BOOT reservation loop over the catalog. After that, adding reserved incarnations, such as a reopenable Browser, becomes a data change with a known memory cost (about 69 private pages for each Quil incarnation).
 
