@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–134
+# SexOS development: round 108 acceptance and rounds 109–135
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -59,6 +59,7 @@ The round numbers below are the order the work was done. They do not match the p
 | 132 | sex-pdx clipboard, canvas, document-view and Spindle status/view policies driven by the catalog | host (equivalence) + 41/41 host checks + native both sizes | `3827a172` |
 | 133 | Kernel BOOT app reservation (successors, grants, activation chain, document buffers) built from the catalog | identical boot authority/grant records before and after; native both sizes | `3f403a14` |
 | 134 | Catalog-derived lifecycle/document capacity; 64-bit presentation receipts; separate future document region namespace | synthetic7/64 consumers and 65 rejection;43 host/2,663 Rust/965 Python; sealed and native both sizes | `21e7a960` |
+| 135 | Catalog-driven app identity, activation/routes, viewport storage and file/Linen admission | expanded9 host policy + two compiled regressions; corrected43 host/2,667 Rust/965 Python; native both sizes | `b21ca26b`, `add0c94e` |
 
 ## Round details
 
@@ -473,3 +474,29 @@ GREEN, and 63 BOOT authority records match the prior integrated image exactly.
 Native connected live/cold and app/find/relaunch workflows run at both sizes.
 The actual catalog remains six entries; larger reserves are still the next work.
 Inventory remains 2 Open / 28 Partial / System Proven false; goal active.
+
+
+## Round 135: runtime policy consumes the incarnation catalog
+
+The [policy handoff](INCARNATION_POLICY_2026_10_31.md) binds app self-identity,
+ordered activation/route selection, frame/viewport/input association and service
+participant storage to the descriptive catalog. Held lifecycle/Region queries
+still authorize access; Browser imports remain create-new-only and sessions,
+queued replies and retirement stay isolated per incarnation. The original
+Spindle frame keeps its pre-registration geometry path after a review-found
+regression was corrected before publication.
+
+Expanded hypothetical Quil100/Spindle101/Browser102 rows exercise actual policy
+modules with explicit doubles; compiled old-chain and Browser15-only regressions
+fail. The current BOOT roster stays six and 63 authority records remain identical.
+C's 43 host checks pass with 2,667 Rust executions; B's 965 Python tests pass. The
+native/Python and corrected-host snapshots have identical production/image and
+all native/Python inputs; only the host launcher guard differs. Original failed
+checks remain archived without being relabelled successful. The shared image
+passes 18 workflow boots/138 verified captures plus the sealed probe, with all
+six catalog receipts before sealing in each boot. Fresh app/pending-device
+replays pass; sustained acceptance of this image is not claimed.
+
+Next: add actual Quil reserves and verify the entire extended reopen chain.
+Spindle journal/recovery and Browser identity/broker bindings still require work.
+Inventory remains 2 Open / 28 Partial / System Proven false; daily-driver goal active.

@@ -1,0 +1,863 @@
+{
+  "round": 135,
+  "qualified_catalog_incarnation_policy": true,
+  "larger_actual_reserve": false,
+  "checker_cohort_audit": {
+    "ok": true,
+    "cohorts": [
+      {
+        "cohort": "b",
+        "commit": "b21ca26b1616ad3e460ed9d2a90558da02f424b9",
+        "production": 576,
+        "runners": 581,
+        "unique": 1157
+      },
+      {
+        "cohort": "c",
+        "commit": "add0c94e6ee0008651a5e3ab4f92fb726da41171",
+        "production": 576,
+        "runners": 581,
+        "unique": 1157
+      }
+    ],
+    "production_identical": true,
+    "runner_delta": [
+      "scripts/launcher_host_gate.sh"
+    ],
+    "native_and_python_inputs_identical": true,
+    "unchanged_authority_records": 63,
+    "authority_records": [
+      "[bootgraph.cap.grant from=kernel to=1 slot=SLOT_SHELL target=3 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=1 slot=SLOT_SILKBAR target=6 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SHELL_INPUT_READY target=4 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SHELL target=3 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SILKBAR target=6 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SEXSTORE target=8 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=4 slot=SLOT_INPUT target=input_ring ok=1]",
+      "[bootgraph.cap.grant from=kernel to=4 slot=SLOT_SHELL target=3 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=5 slot=9 target=4 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=6 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=6 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=7 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=7 slot=SLOT_STORAGE target=11 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_LINEN target=7 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_QUIL target=9 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=9 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=9 slot=SLOT_STORAGE target=11 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SPINDLE target=12 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=10 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_DISPLAY target=1 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_STORAGE target=11 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_BELL target=10 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_LINEN target=7 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=12 slot=SLOT_SHELL target=3 ok=1 optional=1]",
+      "[bootgraph.cap.grant from=kernel to=11 slot=SLOT_BLOCK target=2 ok=1 optional=1]",
+      "[boot.memory.region] pd=5 slot=32 region=1 bytes=262144 rights=15 peer=0",
+      "[boot.memory.region] pd=13 slot=32 region=2 bytes=262144 rights=15 peer=0",
+      "[boot.memory.region] pd=2 slot=32 region=3 bytes=524288 rights=15 peer=0",
+      "[boot.memory.region] pd=11 slot=17 region=4 bytes=4096 rights=7 peer=2",
+      "[boot.memory.region] pd=2 slot=17 region=4 bytes=4096 rights=7 peer=11",
+      "[boot.memory.region] pd=2 slot=33 region=5 bytes=3145728 rights=7 peer=1",
+      "[boot.memory.region] pd=1 slot=33 region=5 bytes=3145728 rights=3 peer=2",
+      "[boot.memory.region] pd=11 slot=64 region=6 bytes=16384 rights=7 peer=9",
+      "[boot.memory.region] pd=9 slot=64 region=6 bytes=16384 rights=3 peer=11",
+      "[boot.memory.region] pd=11 slot=65 region=7 bytes=16384 rights=7 peer=16",
+      "[boot.memory.region] pd=16 slot=64 region=7 bytes=16384 rights=3 peer=11",
+      "[boot.memory.region] pd=11 slot=66 region=8 bytes=16384 rights=7 peer=18",
+      "[boot.memory.region] pd=18 slot=64 region=8 bytes=16384 rights=3 peer=11",
+      "[boot.memory.region] pd=3 slot=96 region=9 bytes=4096 rights=7 peer=1",
+      "[boot.memory.region] pd=1 slot=96 region=9 bytes=4096 rights=3 peer=3",
+      "[boot.memory.region] pd=1 slot=97 region=10 bytes=4096 rights=7 peer=3",
+      "[boot.memory.region] pd=3 slot=97 region=10 bytes=4096 rights=3 peer=1",
+      "[bootgraph.cap.grant from=kernel to=15 slot=SLOT_SEXT target=14 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=10 slot=SLOT_SEXT target=14 ok=1]",
+      "[bootgraph.cap.grant from=kernel to=15 slot=SLOT_BELL target=10 ok=1]",
+      "[boot.app.resources] target=9 task=9 surface=156 slot=38 private_pages=70 private_bytes=286720 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=12 task=12 surface=154 slot=39 private_pages=94 private_bytes=385024 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=15 task=15 surface=300 slot=40 private_pages=151 private_bytes=618496 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=16 task=16 surface=301 slot=45 private_pages=70 private_bytes=286720 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=17 task=17 surface=302 slot=50 private_pages=94 private_bytes=385024 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.resources] target=18 task=18 surface=307 slot=54 private_pages=70 private_bytes=286720 required=31 pager=14 coordinator=3 metadata=retained",
+      "[boot.app.successor] logical=9 incarnation=2 predecessor=9 successor=16 task=16 surface=301 key=9 dormant=1 leaves=70 runtime_mint=0",
+      "[boot.app.successor] logical=12 incarnation=2 predecessor=12 successor=17 task=17 surface=302 key=12 dormant=1 leaves=94 runtime_mint=0",
+      "[boot.app.successor] logical=9 incarnation=3 predecessor=16 successor=18 task=18 surface=307 key=9 dormant=1 leaves=70 runtime_mint=0",
+      "[boot.app.catalog] target=9 task=9 surface=156 logical=9 incarnation=1 predecessor=0 lifecycle=38 close=41 route=11 dormant=0 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=12 task=12 surface=154 logical=12 incarnation=1 predecessor=0 lifecycle=39 close=42 route=14 dormant=0 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=15 task=15 surface=300 logical=15 incarnation=1 predecessor=0 lifecycle=40 close=43 route=43 dormant=0 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=16 task=16 surface=301 logical=9 incarnation=2 predecessor=9 lifecycle=45 close=46 route=47 dormant=1 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=17 task=17 surface=302 logical=12 incarnation=2 predecessor=12 lifecycle=50 close=51 route=52 dormant=1 grants_verified=1 data_only=1",
+      "[boot.app.catalog] target=18 task=18 surface=307 logical=9 incarnation=3 predecessor=16 lifecycle=54 close=56 route=57 dormant=1 grants_verified=1 data_only=1",
+      "[boot.app.catalog.complete] rows=6 actual_grants=1 runtime_mint=0"
+    ]
+  },
+  "full_os_goal_complete": false,
+  "source_commit": "add0c94e6ee0008651a5e3ab4f92fb726da41171",
+  "main_parent": "59ee314c4db9035480b68341636165168c4825c8",
+  "native_source_commit": "b21ca26b1616ad3e460ed9d2a90558da02f424b9",
+  "iso_sha256": "501b52d0b4c48f78badd939533f700872ee893e087c8053a0fa2eef31f2d41ae",
+  "kernel_sha256": "867d6ec0657cd5b0d1c379b7296a5ec63f88583ebe355f2537c573c72f557210",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 576,
+  "runner_inputs": 581,
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "add0c94e6ee0008651a5e3ab4f92fb726da41171"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2667,
+  "python_tests": 965,
+  "native": {
+    "workflow_boots": 18,
+    "sealed_probe_boots": 1,
+    "total_boots": 19,
+    "verified_workflow_captures": 138,
+    "groups": {
+      "clock_connected_tls": [
+        {
+          "name": "clock-normal-wide",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-clock-normal-wide",
+          "driver": "/tmp/sexos-policy-b-native-clock-normal-wide-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/clock-normal-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-clock-normal-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--mode",
+            "normal"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725909.6489205,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 14.409687375067733,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-normal-compact",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-clock-normal-compact",
+          "driver": "/tmp/sexos-policy-b-native-clock-normal-compact-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/clock-normal-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-clock-normal-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--mode",
+            "normal"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725924.098769583,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 10.739065499976277,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-invalid-year-wide",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-clock-invalid-year-wide",
+          "driver": "/tmp/sexos-policy-b-native-clock-invalid-year-wide-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/clock-invalid-year-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-clock-invalid-year-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--mode",
+            "invalid-year"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725934.877214958,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 14.155522166984156,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-invalid-year-compact",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-clock-invalid-year-compact",
+          "driver": "/tmp/sexos-policy-b-native-clock-invalid-year-compact-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/clock-invalid-year-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-clock-invalid-year-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--mode",
+            "invalid-year"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725949.071552208,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 11.3343186249258,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 4
+        },
+        {
+          "name": "clock-close-wide",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-clock-close-wide",
+          "driver": "/tmp/sexos-policy-b-native-clock-close-wide-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/clock-close-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-clock-close-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--mode",
+            "close"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725960.444192333,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 9.718199375085533,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 0
+        },
+        {
+          "name": "clock-close-compact",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-clock-close-compact",
+          "driver": "/tmp/sexos-policy-b-native-clock-close-compact-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/clock-close-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/certificate_time_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-clock-close-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--mode",
+            "close"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725970.202965833,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 6.64000295905862,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 0
+        },
+        {
+          "name": "connected-wide",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-connected-wide",
+          "driver": "/tmp/sexos-policy-b-native-connected-wide-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/connected-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-connected-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 725976.882226375,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 61.039761709049344,
+          "other_guests_after": [],
+          "boots": 2,
+          "verified_captures": 17
+        },
+        {
+          "name": "connected-compact",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-connected-compact",
+          "driver": "/tmp/sexos-policy-b-native-connected-compact-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/connected-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/connected_desktop_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-connected-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 726037.965888583,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 53.68349208298605,
+          "other_guests_after": [],
+          "boots": 2,
+          "verified_captures": 17
+        },
+        {
+          "name": "responsive-wide",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-responsive-wide",
+          "driver": "/tmp/sexos-policy-b-native-responsive-wide-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/responsive-wide",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/tls_responsiveness_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-responsive-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800"
+          ],
+          "profile": {
+            "label": "wide",
+            "model": "e1000e",
+            "resolution": "1280x800"
+          },
+          "observations": [
+            {
+              "host_monotonic": 726091.687773916,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 19.778071208042093,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 10
+        },
+        {
+          "name": "responsive-compact",
+          "status": 0,
+          "out": "/tmp/sexos-policy-b-native-responsive-compact",
+          "driver": "/tmp/sexos-policy-b-native-responsive-compact-driver.log",
+          "ports": "/tmp/sexos-policy-b-ports/responsive-compact",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/tls_responsiveness_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-native-responsive-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768"
+          ],
+          "profile": {
+            "label": "compact",
+            "model": "e1000",
+            "resolution": "1024x768"
+          },
+          "observations": [
+            {
+              "host_monotonic": 726111.505359958,
+              "guests": []
+            }
+          ],
+          "other_guests_before": [],
+          "seconds": 14.622752249939367,
+          "other_guests_after": [],
+          "boots": 1,
+          "verified_captures": 10
+        }
+      ],
+      "pending_device": [
+        {
+          "profile": "compact",
+          "kind": "live",
+          "out": "/tmp/sexos-policy-b-pending-compact-live",
+          "driver": "/tmp/sexos-policy-b-pending-compact-live-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-policy-b-pending-compact-live",
+            "--resolution",
+            "1024x768",
+            "--model",
+            "e1000",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--pending-io-close",
+            "--capture-profile"
+          ],
+          "status": 0,
+          "elapsed_seconds": 37.72163687495049,
+          "verified_captures": 12
+        },
+        {
+          "profile": "compact",
+          "kind": "cold",
+          "out": "/tmp/sexos-policy-b-pending-compact-cold",
+          "driver": "/tmp/sexos-policy-b-pending-compact-cold-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/pending_io_cold_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-policy-b-pending-compact-cold",
+            "--resolution",
+            "1024x768",
+            "--model",
+            "e1000",
+            "--session",
+            "/tmp/sexos-policy-b-pending-compact-live"
+          ],
+          "status": 0,
+          "elapsed_seconds": 9.302123458939604,
+          "verified_captures": 1
+        },
+        {
+          "profile": "wide",
+          "kind": "live",
+          "out": "/tmp/sexos-policy-b-pending-wide-live",
+          "driver": "/tmp/sexos-policy-b-pending-wide-live-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-policy-b-pending-wide-live",
+            "--resolution",
+            "1280x800",
+            "--model",
+            "e1000e",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--pending-io-close",
+            "--capture-profile"
+          ],
+          "status": 0,
+          "elapsed_seconds": 44.64597541606054,
+          "verified_captures": 12
+        },
+        {
+          "profile": "wide",
+          "kind": "cold",
+          "out": "/tmp/sexos-policy-b-pending-wide-cold",
+          "driver": "/tmp/sexos-policy-b-pending-wide-cold-driver.log",
+          "command": [
+            "python3",
+            "/private/tmp/sexos-policy-b-frozen/source/scripts/pending_io_cold_gate.py",
+            "--iso",
+            "/private/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/private/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--out",
+            "/tmp/sexos-policy-b-pending-wide-cold",
+            "--resolution",
+            "1280x800",
+            "--model",
+            "e1000e",
+            "--session",
+            "/tmp/sexos-policy-b-pending-wide-live"
+          ],
+          "status": 0,
+          "elapsed_seconds": 13.486206375062466,
+          "verified_captures": 1
+        }
+      ],
+      "find_relaunch": [
+        {
+          "profile": "compact",
+          "command": [
+            "python3",
+            "/tmp/sexos-policy-b-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-alpha-compact",
+            "--model",
+            "e1000",
+            "--resolution",
+            "1024x768",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find"
+          ],
+          "out": "/tmp/sexos-policy-b-alpha-compact",
+          "driver": "/tmp/sexos-policy-b-alpha-compact-driver.log",
+          "status": 0,
+          "seconds": 57.28167312499136,
+          "verified_captures": 21,
+          "fresh_replay": true
+        },
+        {
+          "profile": "wide",
+          "command": [
+            "python3",
+            "/tmp/sexos-policy-b-frozen/source/scripts/quil_workflow_gate.py",
+            "--iso",
+            "/tmp/sexos-policy-b-frozen/tested.iso",
+            "--binding",
+            "/tmp/sexos-policy-b-frozen/source-binding.json",
+            "--source-disk",
+            "/tmp/sexos-r100a-seed.img",
+            "--out",
+            "/tmp/sexos-policy-b-alpha-wide",
+            "--model",
+            "e1000e",
+            "--resolution",
+            "1280x800",
+            "--soak-seconds",
+            "20",
+            "--rehearsal",
+            "--third-quil",
+            "--capture-profile",
+            "--find"
+          ],
+          "out": "/tmp/sexos-policy-b-alpha-wide",
+          "driver": "/tmp/sexos-policy-b-alpha-wide-driver.log",
+          "status": 0,
+          "seconds": 66.3019164580619,
+          "verified_captures": 21,
+          "fresh_replay": true
+        }
+      ]
+    },
+    "boot_catalog_audit": {
+      "ok": true,
+      "boots": 19,
+      "workflow_boots": 18,
+      "sealed_probe_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-policy-b-build/serial.log",
+          "bytes": 495685,
+          "sha256": "b6b2ca9b682273add3915ca06bf403061cae287fd08cd70ac5d56c87e21d31cc",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-clock-normal-wide/serial.log",
+          "bytes": 336678,
+          "sha256": "c0706083e219de28621d6001f451e3972463a08471f633ff58e445fb6cdd65a8",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-clock-normal-compact/serial.log",
+          "bytes": 333417,
+          "sha256": "b41e770b20446a985c7f52043a25a1ec019d6cc6018f6e2dd10899b3ceff2918",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-clock-invalid-year-wide/serial.log",
+          "bytes": 322021,
+          "sha256": "e740c13299797adf3e4ec0d085bfd29311071eed1a828de7750abf9141083db4",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-clock-invalid-year-compact/serial.log",
+          "bytes": 322132,
+          "sha256": "950b5c99c82a22510a48794e4a475f0c6cb2c83257ab012ead75364d4987687c",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-clock-close-wide/serial.log",
+          "bytes": 289217,
+          "sha256": "14c7b2ee8181b9435cb30c3cfd8fab57eea7c3560984b9da707dfb068fe00dc6",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-clock-close-compact/serial.log",
+          "bytes": 287486,
+          "sha256": "1c5c66bd8658247abaf7e1723ded3890f45c69af6a668b5d58f0a9e5a6473a2f",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-connected-wide/recovery/serial.log",
+          "bytes": 393746,
+          "sha256": "752ef61b44ccdad31391421f88b402de28437a5db98358cae1970c8004ef79bb",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-connected-wide/session/serial.log",
+          "bytes": 683180,
+          "sha256": "69b3463f59f68f9056417a1e43f371176549b1abd0a1c90cdee308bfca171183",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-connected-compact/recovery/serial.log",
+          "bytes": 382241,
+          "sha256": "5eccaf2c69aeccb67810b93ecd48797efc286f0328fdeaa2fd3e411e3fd3740d",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-connected-compact/session/serial.log",
+          "bytes": 681955,
+          "sha256": "d665c103dc365b7d4c5ecd6c3a97a911592bc19ce861864c74eb8c0662ee3b1a",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-responsive-wide/serial.log",
+          "bytes": 499859,
+          "sha256": "76718d8fbf3d6b7e46a53b60f92cd4dd849b5d33b9a1bf7421e522ae794632b8",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-native-responsive-compact/serial.log",
+          "bytes": 489406,
+          "sha256": "38f84dc0b84f34104d88297315ba7e8048de147a9ebc8f910d47c00155ad377b",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-pending-compact-live/serial.log",
+          "bytes": 1059692,
+          "sha256": "b3caf4672a73f56b03e62c2a73cfa1f5091f4dbe7c4f46d4469419a943fa821e",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-pending-compact-cold/serial.log",
+          "bytes": 331708,
+          "sha256": "be675d5bc4e61dd3ef35574c07896191b0ad32ee3e0883430b2584ac48b5cbd8",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-pending-wide-live/serial.log",
+          "bytes": 1086122,
+          "sha256": "802152cfe443161915f4e2299e6194733f7991c9b1a00d95b4d1a79b73a67677",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-pending-wide-cold/serial.log",
+          "bytes": 336724,
+          "sha256": "6ca0be09006ba9140ee91d31404c97f334c8fb39c77ba0a3caba24d0c4a29eac",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-alpha-compact/serial.log",
+          "bytes": 1445219,
+          "sha256": "c0e481a285d686000aa234f20abe021099895bbff4ac4ef404f9cb532a16aa86",
+          "subjects": 6,
+          "preseal": true
+        },
+        {
+          "path": "/tmp/sexos-policy-b-alpha-wide/serial.log",
+          "bytes": 1466625,
+          "sha256": "1706d25a0fdcf9015a4beca9e522e79fe2f4bf80bf08d30a4a8d9f484c451c08",
+          "subjects": 6,
+          "preseal": true
+        }
+      ],
+      "scope": "Exact six native preseal receipts per boot, coupled to frozen runtime validator/source. Display child policy and broader grant closure are separate obligations."
+    },
+    "pending_device_fresh_replays": true,
+    "alpha_rehearsal_fresh_replays": true,
+    "new_image_1800s_acceptance": false
+  },
+  "scalar": {
+    "elfs": 5,
+    "instructions": 226072,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Five exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "diagnostics": {
+    "pre_review": "Build A GREEN but original-Spindle first-geometry regression found by review; not final",
+    "original_python": "Old literal-source anchors failed and fake-QEMU diagnostic published after ready; corrected with same behavior guards and deterministic publication order",
+    "host_b": "One stale launcher target17/frame306 guard failed. C changes only this host script; all production/native/Python inputs match, and final43host passes"
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-incarnation-policy-2026-10-31-raw.tar.gz",
+    "sha256": "fa08de8f88e01448c78bcd73ce0af796b53fdf317c03520b3a5a0d4b0169b874",
+    "bytes": 16516144,
+    "members": 2886,
+    "payload_manifest_sha256": "702f201018766fd22fdd826dc86fb57beff012bf5cb939c86659da8a8102bb3d",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Catalog-driven activation/app identity/routes and isolated document/Linen/file admission. Expanded9-row hostpolicy controls with held/kernel/backend doubles and compiled legacy regressions. Production6 roster/63 authority records unchanged. B native/Python plusC corrected host; onlyhostlauncher.sh differs. No runtime mint/processVAS/POSIX, larger actualreserve/newimage1800s, physical/SMP/hostile containment/global epoch or daily-driver acceptance claim."
+}
