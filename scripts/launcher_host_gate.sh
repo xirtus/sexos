@@ -47,11 +47,12 @@ assert 'try_set_focus_inner(sid,true)'in s
 assert 'if refresh_children {if let Some((x,y,w,h))=get_surface_bounds(sid)'in s
 assert 'ok=try_set_focus_inner(frame,false)'in s
 assert 'if !try_set_focus_inner(p.frame,false)'in s
-for name,target,surface in [('open_quil_in_active_scene','instance.successor','instance.surface'),('open_spindle_in_active_scene','17','306')]:
+for name,target,surface in [('open_quil_in_active_scene','instance.successor','instance.surface'),('open_spindle_in_active_scene','target','frame')]:
  body=re.findall(r'^unsafe fn '+name+r'\b.*?^}',s,re.M|re.S)[0]
  live=body.split('if instance.state==2',1)[1].split('if instance.state==3',1)[0]
  assert 'launcher_focus_existing('+target+','+surface+',None)'in live
  assert '(true)'not in live
+ if name=='open_spindle_in_active_scene':assert 'spindle_active_frame()'in live
 PY
 LAUNCHER_PRODUCTION="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/launcher_authority.rs" -o "$TEST_DIR/authority"
 "$TEST_DIR/authority"
