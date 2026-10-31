@@ -57,7 +57,10 @@ def main():
    if errors:raise RuntimeError(name+': '+str(errors))
    stages.append(dict(name=name,view=view(v),pixel_errors=errors))
   def ctrl(k,pattern):
-   start=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':k}],'hold-time':80});return wait(pattern,start)
+   # The chord's effect can precede its release under emulation. Wait for the
+   # actual Ctrl break edge so later keys are never sent as Ctrl chords.
+   start=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':k}],'hold-time':80});found=wait(pattern,start)
+   wait(r'\[sexinput.ps2.scancode\] raw=0x9d(?=\n|$)',start);return found
   def park_pointer():
    start=len(text())
    q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]})
