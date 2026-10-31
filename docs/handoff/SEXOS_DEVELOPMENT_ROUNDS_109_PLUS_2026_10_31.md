@@ -46,6 +46,8 @@ The round numbers below are the order the work was done. They do not match the p
 | 124 | First BOOT-granted UiIR stream (Shell → Display), per-sender sequence + epochs | host + control, sealed, native both sizes | `e5b95eb0` |
 | 125 | Shell restore focus bounded by its tick deadline, not a poll count; cancel and content-blocker diagnostics | host regression + native soak | `f8058b31`, `bf86a0fc`, `1c54fbbf` |
 | 126 | Reply bookkeeping never refuses an invocation (round 111 defect); Display heartbeat; stale wait checker | host regression, sealed, native both sizes + compact 1800 s | `c89ac1b5`, `754c0513`, `9e3348f9`, `3c02b10c` |
+| 127 | Quil header keeps the document name beside long notices | host + native (compact) | `b4382ea3` |
+| 128 | Long-session exhaustion audit after the reply-count bug | measured rates; no further fix needed today (see below) | — |
 
 ## Round details
 
@@ -168,6 +170,19 @@ The investigation also wasted one run: the stall sampler was written against the
 | Linen refresh | 168 | 0.144 | 0.193 | 0.235 |
 | Spindle storage stat | 83 | 1.918 | 1.962 | 1.972 |
 | Close to pool reuse | 3 | 0.384 | 0.452 | 0.452 |
+
+### 128: long-session exhaustion audit
+
+The reply-count defect was a finite counter that silently refused work. All checked or saturating counters in the kernel, services and apps were reviewed against rates measured in the compact 1800 s session:
+
+| Bound | Size | Measured rate | Exhausts after |
+|---|---|---|---|
+| Spindle history requests (per client, per boot) | 16.7M sequence | 43,202 in 30 min of heavy command use | ≈12 days at that rate |
+| Quil document requests (per client, per boot) | 16.7M sequence | ≈130–770 per save (2–12 KiB) | ≈22,000 full-size saves |
+| SexNet job tickets (per boot) | 17,535 | one per fetch | 17,535 fetches |
+| Shell/Display/UiIR sequences, kernel task/fault/generation counters | u64 | — | not reachable |
+
+None of these can exhaust in a day of real use, so no code changed. Two constraints carry forward. Autosave must not write every few seconds: at 3 s intervals with a full 12 KiB document, Quil's document sequence would exhaust in about 18 hours, so autosave should trigger on change with a floor of tens of seconds, or a per-session sequence rollover must exist first. And every remaining exhaustion path should report its state visibly, not degrade silently.
 
 ## Verification state at handoff
 
