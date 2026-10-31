@@ -24,6 +24,10 @@ class SelfWait(unittest.TestCase):
   # Round 105: sexdrive (task 2) waits one tick for NVMe completions.
   drive='[scheduler.self_wait.park] task=2 ticks=1 deadline=3145 count=1024\n'
   self.assertTrue(inspect(LIVE+drive)['ok'])
+  expiry='[scheduler.self_wait.expired] task=2 deadline=11220 now=11220 count=4096\n'
+  self.assertTrue(inspect(LIVE+expiry)['ok'])
+  self.assertFalse(inspect(LIVE+expiry.replace('task=2','task=3'))['ok'])
+  self.assertFalse(inspect(LIVE+expiry.replace('now=11220','now=11219'))['ok'])
   for bad in(drive.replace('ticks=1','ticks=2'),drive.replace('task=2','task=3'),drive.replace('deadline=3145','deadline=0')):
    self.assertFalse(inspect(LIVE+bad)['ok'],bad)
 if __name__=='__main__':unittest.main()

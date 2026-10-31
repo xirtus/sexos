@@ -19,7 +19,7 @@ def inspect(text,active=True):
   # are sampled (first four, then powers of two), so either may appear.
   if (int(p[1]),int(p[2]))not in((13,2),(15,2),(2,1)) or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
  for e in expiries:
-  if int(e[1])not in(13,15) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
+  if int(e[1])not in(13,15,2) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
