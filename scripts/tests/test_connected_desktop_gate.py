@@ -149,6 +149,9 @@ class ConnectedChecker(unittest.TestCase):
   c={'launcher_app_count':7,'launcher_count':10}
   with patch.object(gate.readability,'launcher_erased',return_value={'remaining':0})as erased:
    self.assertIsNone(gate.historical_launcher_erasure('[boot] normal=1\n',b'fixture',c,(1280,800)));self.assertEqual(erased.call_count,0)
+   linen_focus='[launcher.action] target=9 task=9 frame=201 action=Focus from=0 to=0 visible=1 focused=1 activated=0 queued=0 accepted=1 ok=1 pixels=unconfirmed\n'
+   self.assertIsNone(gate.historical_launcher_erasure(linen_focus,b'fixture',c,(1280,800)));self.assertEqual(erased.call_count,0)
+   with self.assertRaisesRegex(ValueError,'post-Spindle'):gate.historical_launcher_erasure(linen_focus,b'fixture',c,(1280,800),True)
    for trace in('[launcher.open] count=7 selected=0 ok=1\n','[shell.palette.item] idx=0\n','[launcher.text.view] x=400\n','[command_palette.close]\n','[launcher.open] count=oops\n'):
     with self.subTest(trace=trace),self.assertRaises(ValueError):gate.historical_launcher_erasure(trace,b'fixture',c,(1280,800))
    with self.assertRaisesRegex(ValueError,'post-Spindle'):gate.historical_launcher_erasure('',b'fixture',c,(1280,800),True)

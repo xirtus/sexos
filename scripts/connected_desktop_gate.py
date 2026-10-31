@@ -299,7 +299,10 @@ def inspect_session(trace,peer,wire,raw,c,manifest,evidence,seed,disk,before_sav
   if [int(m[2])for m in edits]!=list(range(1,len(DRAFT)+1)):raise ValueError('actual Quil typing did not complete during image response hold')
   held=evidence['network_wait'];row=peer['tls'][0]
   if not auth.start()<=held['serial_start']<held['serial_end']<=parsed.start()or not row['host_request_received']<=held['host_start']<=held['host_end']<row['host_response_release']:raise ValueError('actual endpoint response was not held through accepted Quil input')
-  appended=one(trace,rf'\[quil.document.edit\] revision=\d+ pending=0 bytes={len(FINAL)}(?=\s|$)')
+  # A later Linen reopen reports its loaded bytes with the same edit receipt;
+  # the append is the exact revision that the one 2049-byte Save carries.
+  saved=one(trace,rf'\[quil.document.begin\] kind=save object=\d+ revision=(\d+) bytes={len(FINAL)}(?=\s|$)')
+  appended=one(trace[:saved.start()],rf'\[quil.document.edit\] revision={saved[1]} pending=0 bytes={len(FINAL)}(?=\s|$)')
   if copied['paste_offset']>=appended.start():raise ValueError('append preceded atomic clipboard replacement')
   hidden=overlay_join(trace)
   if hidden['dismissed']>=copied['copy_offset']:raise ValueError('copy occurred before original retained reader returned')
@@ -336,7 +339,10 @@ def scene_return_join(trace,cleanup,cold=False):
  return True
 
 def historical_launcher_erasure(trace,image,c,resolution,required=False):
- tags=('launcher.open','shell.palette.open','launcher.text.view','launcher.text.row','launcher.text.admitted','shell.palette.item','launcher.action','command_palette.close')
+ # launcher.action is Shell's shared existing-app focus receipt: Linen's
+ # document open focuses Quil through it with no palette. Only palette
+ # records can leave launcher ink on screen.
+ tags=('launcher.open','shell.palette.open','launcher.text.view','launcher.text.row','launcher.text.admitted','shell.palette.item','command_palette.close')
  if not any('['+tag+']'in trace for tag in tags):
   if required:raise ValueError('post-Spindle frame lacks actual launcher antecedent')
   return None
@@ -457,7 +463,8 @@ def replay_boot(root,iso,binding,out,c=None):
   if len(http.wheel_rows(trace,kind))!=sum(len(http.wheel_rows(trace[a['serial_start']:a['serial_end']],kind))for a in evidence['wheel']):raise ValueError('extra wheel effect outside actual QMP windows')
  pixels=[];previous=0
  for frame in frames:
-  prefix=http.frame_prefix(trace,frame);end=frame['serial_end']
+  # Reader and Copy captures record the requested source anchor they followed.
+  prefix=http.frame_prefix(trace,frame,frame['kind']in('reader','copied'));end=frame['serial_end']
   if end<previous or sha((out/frame['screenshot']).read_bytes())!=frame['screenshot_sha256']:raise ValueError('frame/hash phase differs')
   frame_semantic(prefix,frame,joined['document'])
   if frame['name']in('reader-down','reader-up'):

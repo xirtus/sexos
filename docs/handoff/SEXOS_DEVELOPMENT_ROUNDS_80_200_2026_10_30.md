@@ -1,6 +1,6 @@
 # SexOS active development plan: rounds80–200
 
-Round108 has a [tested implementation checkpoint](ROUND108_CHECKPOINT_2026_10_31.md), committed at the user’s request before corrected native qualification. It remains in progress and unaccepted; accepted counts and release gates below are unchanged.
+Round108 is **accepted** (31 October2026): the corrected connected-session runner passes natively at both desktop sizes on a kernel identical to the [checkpoint](ROUND108_CHECKPOINT_2026_10_31.md) image, with same-image/terminal-disk cold recovery and independent replay. Production source is unchanged; three checker defects were fixed. See [round108 evidence](assets/sexos-alpha-r108-2026-10-31-evidence.json). Accepted80–108 (29/121);109–200 remain. Later rounds are recorded in [SEXOS_DEVELOPMENT_ROUNDS_109_PLUS_2026_10_31.md](SEXOS_DEVELOPMENT_ROUNDS_109_PLUS_2026_10_31.md).
 
 The user revised the active goal on30 October2026 to **121 substantive rounds,80–200**. This supersedes the previous19–118 plus119–218 scope. Through107 is accepted;28/121 rounds in the revised scope are complete and108–200 remain (93 rounds). Round107 adds real wheel scrolling and arrival-ordered input custody;108 qualifies an integrated connected desktop session. Entries201–218 in the earlier plan are historical proposals outside the current objective. No plan entry is completion evidence.
 

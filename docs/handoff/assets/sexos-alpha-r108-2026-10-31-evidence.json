@@ -1,0 +1,81 @@
+{
+  "round": 108,
+  "accepted": true,
+  "accepted_goal_rounds": "80-108",
+  "accepted_count": 29,
+  "remaining_goal_rounds": "109-200",
+  "remaining_count": 92,
+  "iso_sha256": "6d8b0ca8e0dd61e3922d5bdc917d2c7e0557ab219da945939ef22af203c83c6d",
+  "kernel_sha256": "71cafdf12676d9ecd661161074b4061a9ff380066e6606f6b15a4dac676cd725",
+  "binding_sha256": "971ed34358bd8a51345d357046004bf23351319552b0a666d9c4e3890ddc3c89",
+  "production_inputs": 565,
+  "runner_inputs": 544,
+  "checks": {
+    "master": "GREEN_MASTER",
+    "rust_host_gates": {
+      "service_custody_host_gate": 1899,
+      "display_surface_groups_gate": 56,
+      "display_text_readability_gate": 9,
+      "launcher_host_gate": 35,
+      "linen_text_delivery_gate": 67,
+      "sexdrive_dma_host_gate": 38
+    },
+    "rust_test_executions": 2104,
+    "python_tests": 836,
+    "independent_replay_check": "connected_desktop_gate --check ok on wide cohort"
+  },
+  "qualification_runs": [
+    {
+      "profile": "wide",
+      "resolution": "1280x800",
+      "model": "e1000e",
+      "ok": true,
+      "acceptance": "representative_connected_only",
+      "boots": 2,
+      "frames": 17,
+      "same_image": true,
+      "same_disk_state": true,
+      "result_sha256": "50d06d32f64d395712d3eb5151518e0ce56e1237aa85966e1bc75103f0de7881",
+      "result_archive": "sexos-alpha-r108-2026-10-31-connected-wide-result.json.gz",
+      "session_serial_sha256": "6e47be54d3ed8317b235c83e98ed4fed5468030a33513f4fca9a32e3cbf385e0",
+      "recovery_serial_sha256": "9574558490841801ae78c7e887e437cdc08390a061ac3646106b777abc8987ec"
+    },
+    {
+      "profile": "compact",
+      "resolution": "1024x768",
+      "model": "e1000",
+      "ok": true,
+      "acceptance": "representative_connected_only",
+      "boots": 2,
+      "frames": 17,
+      "same_image": true,
+      "same_disk_state": true,
+      "result_sha256": "d054f8e06192e402155faf2baf56a5299b45b25ebef9599c45b5db992b23a057",
+      "result_archive": "sexos-alpha-r108-2026-10-31-connected-compact-result.json.gz",
+      "session_serial_sha256": "12768d1a293e004c6a5c7d05e1c2b3ac473cd9a6709a1dda53d38c1b8ca26319",
+      "recovery_serial_sha256": "21a8977e2436bbc7892465c72f22c892f173562d03d1be1ea1cb2eba4cac1acf"
+    }
+  ],
+  "native_boots": 4,
+  "independent_frames": 34,
+  "production_changed_since_checkpoint": false,
+  "checker_defects_fixed": [
+    "launcher.action is the shared existing-app focus receipt; Linen reopen emits it without a palette, so it is no longer treated as launcher antecedent",
+    "append edit is joined to the exact revision carried by the single 2049-byte Save; the later Linen reopen load receipt is excluded",
+    "replay passes reader/copy frame anchors to frame_prefix"
+  ],
+  "diagnostics": {
+    "failed_attempts": [
+      "B wide: quil-reopened launcher antecedent (checker)",
+      "C wide+compact: duplicate 2049 edit receipt (checker)",
+      "D wide+compact: replay reader anchor (checker)"
+    ],
+    "note": "All earlier failures were in the checker after the guest produced the required frames; raw logs retained only in the session scratch area, not archived."
+  },
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "scope": "Representative connected session at both desktop sizes with same-image/terminal-disk cold recovery. Kernel identical to the 108 checkpoint image; ISO bytes differ only by packaging. Not full alpha (1800s/12-cycle policy), no public web/CA, physical/SMP, crash/power-loss or hostile isolation claim."
+}
