@@ -34,4 +34,5 @@ if "$TEST_DIR/guard-mutant" --exact domain_routes_cannot_target_another_incarnat
     echo '[app.catalog.negative] FAIL wrong-route mutant survived' >&2
     exit 1
 fi
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_startup_identity.py"
 echo '[app.catalog.result] PASS scope=actual_pure_grant_validator_and_boot_hook_not_native_grant_observation wrong_route_guard_removed_rejected=1'

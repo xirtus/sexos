@@ -55,3 +55,5 @@ echo '[sexnet.ethernet.host] PASS scope=actual_fixed_queue_driver_with_explicit_
 bash "$ROOT_DIR/scripts/sexnet_transport_host_gate.sh"
 
 bash "$ROOT_DIR/scripts/sexnet_jobs_host_gate.sh"
+
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_network_request_owner.py"

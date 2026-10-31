@@ -36,6 +36,15 @@ fn network_owner(caller:u32)->Option<jobs::Identity>{
     }
     None
 }
+/// Fresh requests must come from the actual kernel-stamped BOOT main task.
+/// Maintenance keeps using network_owner: it revalidates existing custody,
+/// rather than inventing an incoming request task from the domain identity.
+fn network_request_owner(caller:u32,caller_task:u32)->Option<jobs::Identity>{
+    if caller_task==0{return None;}
+    let owner=network_owner(caller)?;
+    if caller_task!=owner.task{return None;}
+    Some(owner)
+}
 struct ClientWire<'e,'a>(Option<&'e mut sex_net::Engine<'a>>,bool);
 impl jobs::Wire for ClientWire<'_,'_>{
     fn begin(&mut self,ticket:u32)->Result<(),u32>{let engine=self.0.as_mut().ok_or(sex_pdx::network_job::OFFLINE)?;let result=if self.1 {engine.begin_client_tls(ticket)}else{engine.begin_client(ticket)};result.map_err(|_|sex_pdx::network_job::IO)}
@@ -5409,7 +5418,7 @@ pub extern "C" fn _start() -> ! {
 
         if req.type_id==sex_pdx::trust_policy::OP{
             let request=sex_pdx::trust_policy::Request::decode([req.arg0,req.arg1,req.arg2]);
-            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+            if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 let identity=sex_pdx::trust_source::Identity{pd:owner.pd,task:owner.task};
                 let mut observed=None;
                 if !trust.handle(identity,request,||{
@@ -5430,7 +5439,7 @@ pub extern "C" fn _start() -> ! {
 
         if req.type_id==sex_pdx::certificate_time::OP{
             let request=sex_pdx::certificate_time::Request::decode([req.arg0,req.arg1,req.arg2]);
-            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+            if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 let identity=sex_pdx::clock_source::Identity{pd:owner.pd,task:owner.task};
                 let before=clock.snapshot();let mut sampled=false;
                 if !clock.handle(identity,request,clock_source,||{sampled=true;sex_pdx::clock_snapshot(sex_pdx::clock_source::SLOT)}){
@@ -5453,7 +5462,7 @@ pub extern "C" fn _start() -> ! {
 
         if req.type_id==sex_pdx::entropy_seed::OP{
             let request=sex_pdx::entropy_seed::Request::decode([req.arg0,req.arg1,req.arg2]);
-            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+            if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 let before=seed.snapshot();
                 let identity=sex_pdx::entropy_seed::Identity{pd:owner.pd,task:owner.task};
                 if !seed.handle(identity,request,sex_pdx::get_ticks(),seed_source){sex_pdx::serial_record!("[entropy.seed.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);}
@@ -5470,7 +5479,7 @@ pub extern "C" fn _start() -> ! {
 
         if req.type_id==sex_pdx::network_job::OP{
             let request=sex_pdx::network_job::Request::decode([req.arg0,req.arg1,req.arg2]);
-            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+            if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 let now=sex_pdx::get_ticks();
                 // DNS is data under the held route. It cannot expand this fixed
                 // controlled endpoint policy or mint any communication authority.
@@ -5514,7 +5523,7 @@ pub extern "C" fn _start() -> ! {
         }
         if req.type_id==sex_pdx::network_dns::OP{
             let request=sex_pdx::network_dns::Request::decode([req.arg0,req.arg1,req.arg2]);
-            if let (Some(owner),Ok(request))=(network_owner(req.caller_pd),request){
+            if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 if !dns.handle(owner,request,sex_pdx::get_ticks(),outbound.owner().is_some(),&mut DnsWire(transport.as_mut())){sex_pdx::serial_record!("[net.dns.request.backpressure] owner={} seq={} effects=0 pending_receipt=retained",owner.pd,request.seq);}
             }else{pdx_reply(req.caller_pd,sex_pdx::network_dns::error((req.arg0&0xFFFFFF)as u32,sex_pdx::network_dns::DENIED));}
             continue;

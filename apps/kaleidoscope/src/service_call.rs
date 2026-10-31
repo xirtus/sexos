@@ -5,6 +5,7 @@
 /// have no outstanding response while enqueueing; ordinary incoming messages
 /// are not consumed as replies to this not-yet-accepted request.
 pub fn enqueue(slot: u64, opcode: u64, args: [u64; 3]) -> Result<(), u64> {
+    let identity = crate::browser_identity();
     loop {
         let (status, _) = sex_pdx::pdx_call(slot, opcode, args[0], args[1], args[2]);
         match status {
@@ -12,7 +13,7 @@ pub fn enqueue(slot: u64, opcode: u64, args: [u64; 3]) -> Result<(), u64> {
             sex_pdx::ERR_SERVICE_NOT_READY => {
                 if let Some(message) = sex_pdx::pdx_try_listen_raw(0) {
                     if sex_pdx::app_lifecycle::close_requested(message.type_id,
-                        message.caller_pd, [message.arg0, message.arg1, message.arg2], 15, 15)
+                        message.caller_pd, [message.arg0, message.arg1, message.arg2], identity.target(), identity.task())
                     { sex_pdx::task_finish(0); }
                 }
                 sex_pdx::sys_yield();
@@ -23,6 +24,7 @@ pub fn enqueue(slot: u64, opcode: u64, args: [u64; 3]) -> Result<(), u64> {
 }
 
 pub fn request(slot: u64, caller: u32, opcode: u64, args: [u64; 3]) -> Result<u64, u64> {
+    let identity = crate::browser_identity();
     enqueue(slot, opcode, args)?;
     loop {
         let message = sex_pdx::pdx_listen_raw(0);
@@ -30,7 +32,7 @@ pub fn request(slot: u64, caller: u32, opcode: u64, args: [u64; 3]) -> Result<u6
             return Ok(message.arg0);
         }
         if sex_pdx::app_lifecycle::close_requested(message.type_id, message.caller_pd,
-            [message.arg0, message.arg1, message.arg2], 15, 15)
+            [message.arg0, message.arg1, message.arg2], identity.target(), identity.task())
         { sex_pdx::task_finish(0); }
     }
 }

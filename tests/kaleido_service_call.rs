@@ -2,6 +2,12 @@ extern crate self as sex_pdx;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 #[path="../apps/kaleidoscope/src/service_call.rs"] mod service_call;
+// Explicit original BOOT-tuple double for these legacy transport regressions.
+// Unequal held tasks are covered by browser_service_call.rs.
+#[derive(Clone,Copy)]struct Identity;
+impl Identity{fn target(self)->u32{15}fn task(self)->u32{15}}
+fn browser_identity()->Identity{Identity}
+
 #[derive(Clone,Copy)]
 pub struct PdxMessage {pub type_id:u64,pub caller_pd:u32,pub arg0:u64,pub arg1:u64,pub arg2:u64}
 #[derive(Default)]

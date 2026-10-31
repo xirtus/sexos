@@ -4,6 +4,7 @@
 extern crate alloc;
 mod paging_probe;
 mod service_call;
+mod incarnation;
 mod body_text;
 mod network_probe;
 mod dns_probe;
@@ -44,6 +45,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 const KALEIDO_SURFACE_ID: u64 = 300;
+// One BOOT main task initializes this immutable tuple before service effects.
+// Metadata is selected only from a successful held SELF_CATALOG query.
+static mut BOOT_BROWSER_IDENTITY: Option<incarnation::Identity> = None;
+pub(crate) fn browser_identity() -> incarnation::Identity {
+    unsafe { BOOT_BROWSER_IDENTITY }.expect("BROWSER_HELD_IDENTITY_BEFORE_SERVICE")
+}
+
 const SEXNET_DNS_RESOLVE: u64 = 0x20B;
 // Inline payload is private BOOT ELF storage, never an App::new stack copy.
 static mut CLIPBOARD:sex_pdx::clipboard_client::Client=sex_pdx::clipboard_client::Client::new();
@@ -419,6 +427,11 @@ impl App {
 
 impl SexApp for App {
     fn new(_pdx: u32) -> Self {
+        let identity=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("BROWSER_SELF_AUTHORITY");
+        let selected=incarnation::select(identity).expect("BROWSER_EXACT_BOOT_IDENTITY");
+        assert!((unsafe { BOOT_BROWSER_IDENTITY }).is_none(),"BROWSER_BOOT_IDENTITY_ONCE");
+        unsafe { BOOT_BROWSER_IDENTITY=Some(selected); }
+        sex_pdx::serial_record!("[browser.instance.held] target={} task={} surface={} ordinal={} coordinator=3 before_effects=1",selected.target(),selected.task(),selected.surface(),selected.ordinal());
         assert_eq!(sex_pdx::device_network_config(sex_pdx::SLOT_NET),Err(sex_pdx::pci_command::DENIED),"BROWSER_HAS_ROUTE_NOT_NIC_METADATA");
         sex_pdx::serial_record!("[browser.network.config.denied] slot=18 kind=route metadata=0");
         ALLOCATOR.init();
@@ -434,9 +447,9 @@ impl SexApp for App {
             assert_eq!(sex_pdx::trust_info(slot),Err(sex_pdx::trust_source::DENIED),"BROWSER_HAS_NO_RAW_TRUST_GRANT");
         }
         sex_pdx::serial_record!("[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1");
-        paging_probe::run();
-        let identity=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("BROWSER_SELF_AUTHORITY");
-        assert!(identity.is_subject(15,KALEIDO_SURFACE_ID,3),"BROWSER_EXACT_BOOT_IDENTITY");
+        // The existing mapping probe is BOOT-granted to the original only.
+        // Future reservations need their own paging authority before use.
+        if selected.is_original() { paging_probe::run(); }
         sex_pdx::serial_println!("[browser.slot.net.static_grant.begin]");
         let _value = service_call::request(sex_pdx::SLOT_NET, 13, 0x200, [0, 0, 0]).expect("NET warmup");
         let status = 0u64;
