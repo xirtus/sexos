@@ -4,6 +4,7 @@
 //! routing/authority/pixel evidence. The real FIFO, ABI and broker are included.
 #![allow(dead_code,static_mut_refs,unused_variables)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod lifecycle_abi;
 #[path="../crates/sex-pdx/src/app_scroll.rs"]pub mod app_scroll;
 #[path="../crates/sex-pdx/src/app_key.rs"]pub mod app_key;

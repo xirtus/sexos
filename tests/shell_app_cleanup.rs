@@ -1,5 +1,6 @@
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
 #[macro_export] macro_rules! serial_record {($($t:tt)*)=>{let _=format_args!($($t)*);}}
 #[derive(Clone,Copy)] pub struct PdxMessage {type_id:u64,caller_pd:u32,arg0:u64,arg1:u64,arg2:u64}

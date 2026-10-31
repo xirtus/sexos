@@ -4,6 +4,8 @@
 extern crate alloc;
 mod desktop_keys;
 mod app_custody;
+/// The BOOT incarnation catalog, at crate root for app_custody.
+use sex_pdx::app_catalog;
 mod document_policy;
 mod linen_async;
 mod desktop_content;
@@ -19735,7 +19737,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     shell_request_app_close(surface_id);
     // A document app may decline a Close to keep unsaved work. Its window
     // stays until it agrees and dies; retirement then removes its tabs.
-    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)&&matches!(e.target,9|16|18)&&e.close_pending&&!e.dead) {
+    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)&&sex_pdx::app_catalog::is_document_app(e.target)&&e.close_pending&&!e.dead) {
         sex_pdx::serial_record!("[silk.close.deferred] sid={} reason=app_decides",surface_id);
         return true;
     }

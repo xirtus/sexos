@@ -3,6 +3,7 @@
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod protocol;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 mod app_lifecycle {
  pub use crate::protocol::{CatalogInfo,LIVE};
  thread_local!{pub static BAD:std::cell::Cell<u8>=const{std::cell::Cell::new(0)};pub static CALLS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}

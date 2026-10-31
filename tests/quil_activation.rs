@@ -1,6 +1,7 @@
 #![allow(dead_code,static_mut_refs)]
 #[path="../servers/silk-shell/src/launcher.rs"] mod launcher;
 #[path="../servers/silk-shell/src/app_custody.rs"] mod app_custody;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] mod app_catalog;
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 use sex_pdx::app_lifecycle as a;
 static mut INFO:[Result<a::ActivationInfo,u64>;2]=[Err(1);2];
