@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–142
+# SexOS development: round 108 acceptance and rounds 109–144
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -646,3 +646,28 @@ inspected vector/FP matches. All held recovery/catalog tuples precede sealing.
 The superseded positive A cohort and final B/control evidence are archived with
 verified member hashes. Next: one third BOOT Spindle with complete warm/cold and
 resource cleanup/exhaustion. Inventory stays 2 Open / 28 Partial / System Proven false.
+
+
+## Round143 — third actual BOOT Spindle and complete cleanup
+
+[Qualified report](THIRD_SPINDLE_RESERVE_2026_10_31.md): actual12→17→24 at both
+sizes, held three-task history recovery, owned load/save/recall,33-byte storage
+create/fill/verify/delete, controlled1025-byte echo through positive RELEASE,
+four-pane glyphs, five-role Close/389,120-byte zeroed reusable private span and
+exhausted launcher. Exact last-writer24 journal cold-loads into fresh12.
+Final sourcec5bf5120:43 host checks /2,724 Rust /1,011 Python;8 qualified boots /
+92 registry captures plus separately observed auxiliary cold PPM. Eight ELF
+static scans and1,171 committed source blobs match the selected image. Earlier
+positive A and failing host goldens are retained. General deferred task auth,
+unbounded reuse and new-image1800s acceptance remain open.
+
+## Round144 — recovery-roster image paired sustained acceptance
+
+[Acceptance report](SPINDLE_ROSTER_ALPHA_ACCEPTANCE_2026_10_31.md): older source
+93a50598 /ISO669ce912 completes1800.003s compact and1809.050s wide:173 cycles,
+390 immutable captures, all eight Quil incarnations and both actual Spindles,
+cleanup and exact final disk bytes. Both pass fresh stopped-artifact replay.
+This accepts the Round140 image only; newer startup/third-reserve images remain
+separate. All archive members verified. Next: actual eight-Spindle reserve with
+explicit retained-lifecycle budget, then Browser relaunch authority and readable
+adaptive Spindle typography. Inventory remains2 Open /28 Partial /System Proven false.

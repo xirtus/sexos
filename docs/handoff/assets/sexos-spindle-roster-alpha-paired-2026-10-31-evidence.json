@@ -1,0 +1,114 @@
+{
+  "round": 144,
+  "recovery_roster_image_paired_sustained_accepted": true,
+  "full_os_goal_complete": false,
+  "source_commit": "93a505983cfc71b253e5f7bb974bcfd86257a632",
+  "iso_sha256": "669ce912f1f43f93f543ba77484c0e825a0ee35012b60b8b3d1db015bbf6dcd6",
+  "kernel_sha256": "b01a0464c6b0d1d3d3afa90684ab0954b2889c1dadb45613c11ab17ba9d41a26",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "93a505983cfc71b253e5f7bb974bcfd86257a632",
+    "production": 576,
+    "runner": 589,
+    "unique": 1165,
+    "iso_sha256": "669ce912f1f43f93f543ba77484c0e825a0ee35012b60b8b3d1db015bbf6dcd6",
+    "kernel_sha256": "b01a0464c6b0d1d3d3afa90684ab0954b2889c1dadb45613c11ab17ba9d41a26"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2698,
+  "python_tests": 989,
+  "native": {
+    "acceptance_boots": 2,
+    "cycles": 173,
+    "verified_captures": 390,
+    "profiles": [
+      {
+        "profile": "compact",
+        "cycles": 87,
+        "verified_captures": 196,
+        "elapsed_seconds": 1800.0029996660305,
+        "active_elapsed_seconds": 496.8820578766754,
+        "idle_elapsed_seconds": 1303.1209417893551,
+        "terminal_scope": "safe_completed_save_close",
+        "pending_device_close": false,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "all_eight_quil_finished": true,
+        "last_target": 23,
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 1,
+            "generation": 97,
+            "identity": 327681,
+            "bytes": 105,
+            "hash": "0xcce91c68d54f9378"
+          }
+        ],
+        "fresh_replay": true
+      },
+      {
+        "profile": "wide",
+        "cycles": 86,
+        "verified_captures": 194,
+        "elapsed_seconds": 1809.049743416952,
+        "active_elapsed_seconds": 532.6183365402976,
+        "idle_elapsed_seconds": 1276.4314068766544,
+        "terminal_scope": "safe_completed_save_close",
+        "pending_device_close": false,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "all_eight_quil_finished": true,
+        "last_target": 23,
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 0,
+            "generation": 96,
+            "identity": 327681,
+            "bytes": 104,
+            "hash": "0xa91dd7bbeeb69141"
+          }
+        ],
+        "fresh_replay": true
+      }
+    ],
+    "all_fresh_replays": true
+  },
+  "support": {
+    "round140_same_image_evidence": "sexos-spindle-recovery-roster-2026-10-31-evidence.json",
+    "pending_device_qualification_on_this_image": false,
+    "last_quil23_cold_recovery_on_this_image": false,
+    "newer_third_spindle_image_accepted": false,
+    "cold_spindle17_to12_same_image_qualified": true
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-spindle-roster-alpha-paired-2026-10-31-raw.tar.gz",
+    "sha256": "831878ce294536311542099b51ce686bacf159c3e4d615e56c95d46848362071",
+    "bytes": 12975310,
+    "members": 1640,
+    "payload_manifest_sha256": "ca0b6394a45f490d5d3b2d2094af40c93321d2fcb54fb9471a41300a90bdaa6e",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Two terminal >=1800s mixed desktop workflows on the Round140 two-Spindle recovery-roster production image, with actual input/save/load/history/refresh, all eight Quil incarnations, complete BOOT successor chain, cleanup, final disk bytes and exhausted launcher. This image is distinct from the later Round142 startup and Round143 third-reserve images. No relabelled pending-device close, power-loss, physical/SMP/hostile containment/global epoch or unrestricted daily-driver acceptance claim."
+}

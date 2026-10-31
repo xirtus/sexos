@@ -1,0 +1,1742 @@
+{
+  "round": 143,
+  "third_spindle_boot_reserve_qualified": true,
+  "full_os_goal_complete": false,
+  "source_commit": "c5bf51208562f1409e63065c5e23ab2285ac3a9a",
+  "catalog_commit": "521fa3de154156bfd8ac1f6bed6f7456a163258d",
+  "main_parent": "b99d4e84",
+  "iso_sha256": "04125208c9e62b649a920f98a77101ae31f9508a2505b226bae602a7e6cbf518",
+  "kernel_sha256": "926d85fffcb497e5aa598b63fec0bcbeba9aca35ba7d3f992b8565e6dd264932",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "c5bf51208562f1409e63065c5e23ab2285ac3a9a",
+    "production": 576,
+    "runner": 595,
+    "unique": 1171,
+    "iso_sha256": "04125208c9e62b649a920f98a77101ae31f9508a2505b226bae602a7e6cbf518",
+    "kernel_sha256": "926d85fffcb497e5aa598b63fec0bcbeba9aca35ba7d3f992b8565e6dd264932"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2724,
+  "python_tests": 1011,
+  "boot": {
+    "catalog_subjects": 12,
+    "spindle_targets": [
+      12,
+      17,
+      24
+    ],
+    "main_self_wait_tasks": 24,
+    "self_wait_capacity": 32,
+    "grant_bytes": 48,
+    "capability_data_bytes": 128,
+    "capability_bytes": 192,
+    "app_surfaces": 25,
+    "desktop_tracked_surfaces": 26
+  },
+  "native": {
+    "sealed_probe_boots": 1,
+    "alpha_boots": 2,
+    "connected_boots": 4,
+    "auxiliary_cold_boots": 1,
+    "total_qualified_boots": 8,
+    "registry_verified_captures": 92,
+    "alpha": [
+      {
+        "profile": "compact",
+        "command": [
+          "python3",
+          "/tmp/sexos-spindle-third-b-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-spindle-third-b-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-spindle-third-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-spindle-third-b-alpha-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--third-spindle",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "143"
+        ],
+        "out": "/tmp/sexos-spindle-third-b-alpha-compact",
+        "driver": "/tmp/sexos-spindle-third-b-alpha-compact-driver.log",
+        "status": 0,
+        "seconds": 98.43171375000384,
+        "verified_captures": 29,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 3,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            },
+            {
+              "target": 24,
+              "task": 24
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 1,
+          "generation": 14,
+          "source": 24,
+          "task": 24,
+          "logical": 12,
+          "size": 217,
+          "fingerprint": "0x620e36c6e5010010",
+          "count": 14,
+          "data_hash": "0x63dc2203611024b6"
+        }
+      },
+      {
+        "profile": "wide",
+        "command": [
+          "python3",
+          "/tmp/sexos-spindle-third-b-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-spindle-third-b-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-spindle-third-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-spindle-third-b-alpha-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--third-spindle",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "143"
+        ],
+        "out": "/tmp/sexos-spindle-third-b-alpha-wide",
+        "driver": "/tmp/sexos-spindle-third-b-alpha-wide-driver.log",
+        "status": 0,
+        "seconds": 113.95387662493158,
+        "verified_captures": 29,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 3,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            },
+            {
+              "target": 24,
+              "task": 24
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 1,
+          "generation": 14,
+          "source": 24,
+          "task": 24,
+          "logical": 12,
+          "size": 217,
+          "fingerprint": "0x620e36c6e5010010",
+          "count": 14,
+          "data_hash": "0x63dc2203611024b6"
+        }
+      }
+    ],
+    "connected": [
+      {
+        "name": "connected-wide",
+        "status": 0,
+        "out": "/tmp/sexos-spindle-third-b-native-connected-wide",
+        "driver": "/tmp/sexos-spindle-third-b-native-connected-wide-driver.log",
+        "ports": "/tmp/sexos-spindle-third-b-ports/connected-wide",
+        "command": [
+          "python3",
+          "/private/tmp/sexos-spindle-third-b-frozen/source/scripts/connected_desktop_gate.py",
+          "--iso",
+          "/private/tmp/sexos-spindle-third-b-frozen/tested.iso",
+          "--binding",
+          "/private/tmp/sexos-spindle-third-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-spindle-third-b-native-connected-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800"
+        ],
+        "profile": {
+          "label": "wide",
+          "model": "e1000e",
+          "resolution": "1280x800"
+        },
+        "observations": [
+          {
+            "host_monotonic": 736337.538370708,
+            "guests": []
+          }
+        ],
+        "other_guests_before": [],
+        "seconds": 60.451789917075075,
+        "other_guests_after": [],
+        "boots": 2,
+        "verified_captures": 17
+      },
+      {
+        "name": "connected-compact",
+        "status": 0,
+        "out": "/tmp/sexos-spindle-third-b-native-connected-compact",
+        "driver": "/tmp/sexos-spindle-third-b-native-connected-compact-driver.log",
+        "ports": "/tmp/sexos-spindle-third-b-ports/connected-compact",
+        "command": [
+          "python3",
+          "/private/tmp/sexos-spindle-third-b-frozen/source/scripts/connected_desktop_gate.py",
+          "--iso",
+          "/private/tmp/sexos-spindle-third-b-frozen/tested.iso",
+          "--binding",
+          "/private/tmp/sexos-spindle-third-b-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-spindle-third-b-native-connected-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768"
+        ],
+        "profile": {
+          "label": "compact",
+          "model": "e1000",
+          "resolution": "1024x768"
+        },
+        "observations": [
+          {
+            "host_monotonic": 736398.028310166,
+            "guests": []
+          }
+        ],
+        "other_guests_before": [],
+        "seconds": 51.16257837496232,
+        "other_guests_after": [],
+        "boots": 2,
+        "verified_captures": 17
+      }
+    ],
+    "third_observations": [
+      {
+        "profile": "compact",
+        "status_subjects": [
+          12,
+          17,
+          24
+        ],
+        "third": {
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "catalog": [
+            {
+              "ordinal": 0,
+              "target": 12,
+              "surface": 154,
+              "lifecycle": 39,
+              "close": 42,
+              "route": 14,
+              "frame": 153,
+              "activation": null
+            },
+            {
+              "ordinal": 1,
+              "target": 17,
+              "surface": 302,
+              "lifecycle": 50,
+              "close": 51,
+              "route": 52,
+              "frame": 306,
+              "activation": 49
+            },
+            {
+              "ordinal": 2,
+              "target": 24,
+              "surface": 313,
+              "lifecycle": 130,
+              "close": 131,
+              "route": 133,
+              "frame": 314,
+              "activation": 132
+            }
+          ],
+          "chain": [
+            {
+              "target": 24,
+              "task": 24,
+              "surface": 313,
+              "frame_id": 314,
+              "predecessor": 17,
+              "logical": 12,
+              "incarnation": 3,
+              "serial_start": 1946874,
+              "recovery": {
+                "source": 17,
+                "source_task": 17,
+                "generation": 7,
+                "bytes": 125,
+                "source_hash": "0x221f352b58c2993e",
+                "owned_hash": "0xa4e0ff324c9867f5",
+                "data_hash": "0x6d5627c8fe23e447",
+                "handle": 11,
+                "count": 7
+              },
+              "recall_start": 1965685,
+              "recall_frame": {
+                "sequence": 27,
+                "name": "reserve-spindle-24-recall",
+                "kind": "spindle",
+                "expected": "> echo alpha17",
+                "target": 24,
+                "region": null,
+                "screenshot": "frames/000027-reserve-spindle-24-recall.ppm",
+                "screenshot_sha256": "f7e4b14c37614da7deaa93354ab633e4ce36766bf61be02891a237845248c879",
+                "serial_end": 1977922,
+                "serial_sha256": "ece272d362c88707361fa34eb0235b1da1d3d38304d711448cae8c86cf84e5b3",
+                "source_sha256": {
+                  "apps/kaleidoscope/src/main.rs": "fdc963c5a700b497c9c5a5f0500d7645ca88abe0b0fd8c5769e07e4a219486fd",
+                  "apps/spindle/src/display_delivery.rs": "9c0ba21d3b4d01e043004e006bce58176bd294f9c675806a80f53cc129a8cd56",
+                  "apps/spindle/src/main.rs": "58c79ff66316220b536b1826ec024b9a06b19824f5c74e10ed4ff9c43d006278",
+                  "apps/spindle/src/viewport.rs": "e58d67d83ae49c0be34b668c8fea6a75dab3c5442e8e0ebaa20664cd65f3aceb",
+                  "crates/sex-pdx/src/app_lifecycle.rs": "95b5404b95fe2fa12107f960c022f2544191ab461db9acda2469095decee9e00",
+                  "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+                  "crates/sex-pdx/src/desktop_style.rs": "b79c66b3e4487377ba5387b25dcb46193e92606087921cd9aca55b82bc5e89fd",
+                  "crates/sex-pdx/src/spindle_view.rs": "6d49515e451e00797335352f0d232e3c076ff06dadbce3be068d17259eb5ad4a",
+                  "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+                  "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+                  "kernel/src/clock_source.rs": "4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd",
+                  "kernel/src/init.rs": "9559aa47d0c15e90620f43b18fb72ce4dc7683bfe4ba55413d4750906b159c58",
+                  "scripts/alpha_evidence.py": "069453ae20601e778598e786bbd4eb834dff91161df7062e63b3b02681de8c69",
+                  "scripts/alpha_session.py": "9b0af4cfa81913f6fb760620ef5b888dc0be66157c305b637308a531255aca1b",
+                  "scripts/app_switch_gate.py": "dcf67e400334afd6e2b64bcf19868b371424911f68bc9a44935035fd3ceb228e",
+                  "scripts/certificate_time_gate.py": "5f2e46336f178b7d1824ac8afe24dee9e540434de5ea6fd41e79e1196732bdcb",
+                  "scripts/check_alpha_session.py": "08d916455f9d36362d9ac36fb7d7ff6d7ba8c808c7b1f6a5c5a731dff920bda7",
+                  "scripts/check_app_activation_log.py": "283a0df40c36056411891c2968e7200822349b8d6cdce06c8fd27185fd8036c2",
+                  "scripts/check_desktop_close_log.py": "698e510244cf27e603af46c0c8ac6aea1aac13a20a2481ccce15e5634907c789",
+                  "scripts/check_desktop_pixels.py": "eb3dbe7b3a4e962865b3652f04e4ef152593c0a89a521523b2a79364477f0170",
+                  "scripts/check_disk_persistence.py": "8639d54ffb87b9083116f0ead907f1aad75f3876328785fd377698de0cd41b56",
+                  "scripts/check_dns_capture.py": "219e38d5937121440422ed266ae27b9bd53f9d90db5c43c1094a042ddb7fdedb",
+                  "scripts/check_document_disk.py": "6e85a2d1367d4dccd9d2b5aca4c171347f6a4c773040929732d24fb0e4b89ce6",
+                  "scripts/check_launcher_pixels.py": "33ef56ea3c1e0a7278a4f7cb1636972fcf6fb89035e24b66c55700be307377a7",
+                  "scripts/check_nic_command.py": "8bea3b2f6d4d52c21ebcf298386c5fe6181293899f9d266d512c79fbb458d413",
+                  "scripts/check_nic_discovery.py": "0c53edf1ec663c9b72f82ed4fd473121652547752ed39c6c55afdf5fa7c55e2b",
+                  "scripts/check_nonunix_target.py": "c80f9c30a93115c2069ad730b348e10a7fb4aae185c95c008d76c2f24f3d7aa6",
+                  "scripts/check_pending_io_trace.py": "172f0bbd39162cfb5b299dec095fb40917bc1bd4722eb807bd1e1331b058d7a6",
+                  "scripts/check_quil_ui_pixels.py": "ef427d509683c745b7c8a66d1cbc3ace1a694804d119ac6a9ba094460a8a41dc",
+                  "scripts/check_relaunch_pixels.py": "a49f6f8388d0020691d47cf1cc477ace11b5b618980ee52b527ac17162f46500",
+                  "scripts/check_self_wait.py": "e400bde0abd7dc2c8b27535fb4cd3e4449ee5112ba8b6dd986a332e54bc8162e",
+                  "scripts/check_spindle_history_log.py": "ee4d9c793e7953d42a3bbaac6c686745911429eb94b0b302a63591852b6725a4",
+                  "scripts/check_spindle_relaunch_pixels.py": "2e987c9768fd1bf0f2c81fc327d9d9344c0bb8d9db78fbaf8df9fe1770cfe4ce",
+                  "scripts/check_spindle_viewport_pixels.py": "8d2b7222917fea04956db5c0ca0a96735bf88823370cde5865ef40ee4b7feb7f",
+                  "scripts/check_tcp_capture.py": "02d0c891c5f71e3a774c4405f7fdd03fc7a17d79bf620e3bad365edc45fc0a90",
+                  "scripts/clipboard_workflow_gate.py": "3e09aebbf5a26f053d0f3eea3ac82dca4d7e433aa39ecf47639a87b4fa48686c",
+                  "scripts/clock_source_evidence.py": "03f23b2c900f0276876ca5cacc9f1c7054b463901d64b5aa8c423f098445dcbb",
+                  "scripts/desktop_close_gate.py": "b1264e2c6c81809cb2e3b47a8b51974809c44c5d1dcbfb7a976c53d925e9f58b",
+                  "scripts/desktop_focus.py": "56e6e155367d10ce02157ddf4254517a9a675d8d57184e80d2e0bdf34152eefd",
+                  "scripts/entropy_seed_gate.py": "3bfc7355ed324cc8b72b67a1b32b431d86b61a0224e7f1d3f58f77b0371403a5",
+                  "scripts/history_roster_evidence.py": "a9ac3aa254441f11d2c8b2029a054402bfc5118499c58f9695fb25d83f43a3e9",
+                  "scripts/http_content_gate.py": "cc6e6630e328facc1f47aabfd00d64326bed9ca89d3bc07bcdee8efdf5cf5012",
+                  "scripts/https_asset_gate.py": "ad0230467e9129d35fc014f4a2e4e095003abd1433993eba8a464f77d89f2454",
+                  "scripts/https_document_gate.py": "fe8dba9dbf60afa6e37b3a63a1320cbc43d285b0c97820e7105e530902235cdd",
+                  "scripts/https_import_gate.py": "e891f3d0214c17c1771d538d49df8a1d939d013b069259ef304cf0d6fcdc87d4",
+                  "scripts/launcher_workflow_gate.py": "cf0955db8f00ea18d120f39667f9bce5439f7df8cff4581bfc8526f7b2d76d91",
+                  "scripts/network_contention_gate.py": "a1969d23f7d715b27eeb076cd336dcaa4abe4db42eb22702b9ed44f0961fbafc",
+                  "scripts/pending_io_close.py": "fb547cc6c2ebf26dc92609b2c8cd17a5ad0e81f96fd84e7f3c1190ec89b777d3",
+                  "scripts/quil_input_latency.py": "2e4c7c13f42452da4c0d6fd33d4181fa20ceab711e2424c8f726728cac1f6ec6",
+                  "scripts/quil_reserve_catalog.py": "8b622a8e41f2a67021624d34397ec209cb23c0d6a7f97c6f623a100a74e8c97c",
+                  "scripts/quil_third_probe.py": "e2f1ca86c1d9d454edca4e84bf13b093428d61676f2416330b7564757623e731",
+                  "scripts/quil_workflow_gate.py": "88bda70de6ee9c25d6e90c5006ec75a7c98c433b5a870862d4e84bc1524ec728",
+                  "scripts/silkbar_clock_gate.py": "308dffa4772785558292fd3a79729f4427f44cae741fe1abc2d4c49a1ea3bd6d",
+                  "scripts/spindle_reserve_probe.py": "5b7db551238b1066934848f0efec74d8efffa6267fc4b915a69af4bbcf489c58",
+                  "scripts/tests/test_alpha_evidence.py": "9490fce4f3918ad8f65fb31e1dcc592cf53ab110c70baee28137d6da54c24a55",
+                  "scripts/tests/test_launcher_workflow_gate.py": "b8836f85bd6d83e5d3dd86ce28deaaf34a016e061dfce6b52fc972b43035f070",
+                  "scripts/tls_exchange_gate.py": "bc8393c6d9e8137ccf900b3aea8118fb593f9b900cd68ccce74dde66f91d600b",
+                  "scripts/tls_lifecycle_gate.py": "7894bed63cd7864aeca23bbc955a3ac73d7fc9650441da511a7817c85a8e6387",
+                  "scripts/tls_prepare_gate.py": "67e897363b2f3cc995ee0b103c4ea14d46e80690bf4e70228c21ef09be74d282",
+                  "scripts/tls_responsiveness_gate.py": "a888e4b5637ae9c6eac5ffc7a9d3e4b6dfdaee29f9a19c5951b51af97f14aa68",
+                  "scripts/workspace_refresh_probe.py": "5f47d504b88b6a33a0c31feb1e7cec04ec0c40c85d5bd90b4bcc74ddf34c063c",
+                  "servers/quil/src/main.rs": "9740e96347b5aa3665c3e04f2d2a8ed786badc15b29e0d3a92f699715be4fcaf",
+                  "servers/quil/src/view.rs": "547272812d2de2cd1af308ad8e3ce8fcecfe4606d123b25dc1b9526f52a56a8c",
+                  "servers/sexdisplay/src/main.rs": "06753f02f984d5fb1ea9ace16d8f7cfdedd81d6119d99c0d71df2ca1e84841b5",
+                  "servers/sexdisplay/src/surface_groups.rs": "628dfc494933e156cfe3c4ae6243cbfc28db6ca157a1917b7004cf7b71668a95",
+                  "servers/sexdisplay/src/surface_lifecycle.rs": "0d805ef4066627e529d8313a8f79048fb26d10e63077a974a800930750e773c8",
+                  "servers/silk-shell/src/desktop_content.rs": "ff2f25393c952b06d3d0dfe136090b927ba4952b1cfc8c0e62a9a66873070048",
+                  "servers/silk-shell/src/launcher.rs": "e3a8228b18e025b2cd567ab02c5eae19df7e582d719fc9e7192b4886f34612e8",
+                  "servers/silk-shell/src/main.rs": "551b4a51236446fc9f5cc10a8499b8afb5b3e62b35d3529be47f02704473a76f",
+                  "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+                  "servers/silkbar/src/main.rs": "c92fdc312dc71961eaa9f9c8e95aaf2f6006771227b56c547732788de1147247"
+                },
+                "proof": {
+                  "ok": true,
+                  "errors": [],
+                  "kind": "spindle",
+                  "view": null,
+                  "civil_clock": {
+                    "ok": true,
+                    "errors": [],
+                    "sequence": 481,
+                    "state": "Snapshot",
+                    "seconds": 1793485039,
+                    "stale": false,
+                    "lines": [
+                      "UTC 22:17:19",
+                      "q35 1s snap"
+                    ],
+                    "geometry": {
+                      "x": 928,
+                      "y": 18,
+                      "w": 80,
+                      "h": 22
+                    },
+                    "checked_pixels": 1760,
+                    "expected_ink_pixels": 246,
+                    "draw_offset": 1977142,
+                    "scope": "Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication."
+                  }
+                }
+              },
+              "recall_execute_start": 1978831,
+              "object": 6,
+              "commands": [
+                {
+                  "command": "echo alpha17",
+                  "serial_start": 1978831,
+                  "serial_end": 1985175,
+                  "saved": {
+                    "handle": 12,
+                    "bytes": 139,
+                    "count": 8,
+                    "hash": "0x48bbb56cae47b6fa",
+                    "generation": 8,
+                    "bank": 1
+                  }
+                },
+                {
+                  "command": "echo alpha24",
+                  "serial_start": 2006590,
+                  "serial_end": 2014404,
+                  "saved": {
+                    "handle": 13,
+                    "bytes": 153,
+                    "count": 9,
+                    "hash": "0x8f48504ad339ebfd",
+                    "generation": 9,
+                    "bank": 0
+                  }
+                },
+                {
+                  "command": "mkdoc thirdprobe",
+                  "serial_start": 2040486,
+                  "serial_end": 2053872,
+                  "saved": {
+                    "handle": 14,
+                    "bytes": 171,
+                    "count": 10,
+                    "hash": "0xa52b82106316d45c",
+                    "generation": 10,
+                    "bank": 1
+                  }
+                },
+                {
+                  "command": "filldocx 6 33",
+                  "serial_start": 2073443,
+                  "serial_end": 2090768,
+                  "saved": {
+                    "handle": 15,
+                    "bytes": 186,
+                    "count": 11,
+                    "hash": "0xe7683592273e8e57",
+                    "generation": 11,
+                    "bank": 0
+                  }
+                },
+                {
+                  "command": "catdocx 6",
+                  "serial_start": 2105196,
+                  "serial_end": 2120723,
+                  "saved": {
+                    "handle": 16,
+                    "bytes": 197,
+                    "count": 12,
+                    "hash": "0x5bf2c68b5e2d5526",
+                    "generation": 12,
+                    "bank": 1
+                  }
+                },
+                {
+                  "command": "rmdoc 6",
+                  "serial_start": 2130662,
+                  "serial_end": 2142828,
+                  "saved": {
+                    "handle": 17,
+                    "bytes": 206,
+                    "count": 13,
+                    "hash": "0x89cd244fd2a66c9e",
+                    "generation": 13,
+                    "bank": 0
+                  }
+                }
+              ],
+              "network": {
+                "serial_start": 2155177,
+                "serial_end": 2214980,
+                "peer": {
+                  "endpoint": [
+                    "127.0.0.1",
+                    46078
+                  ],
+                  "connections": [
+                    {
+                      "request_hex": "4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e",
+                      "response_hex": "4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e",
+                      "received": 1025,
+                      "sent": 1025,
+                      "remote": [
+                        "127.0.0.1",
+                        56618
+                      ]
+                    }
+                  ],
+                  "errors": [],
+                  "completed": true
+                },
+                "peer_file": "spindle-24-echo-peer.json",
+                "peer_sha256": "9840763d33056553ba48fda7f38f70a7de88716cb599ab330b4cdc9ecb334ae6",
+                "frame": {
+                  "sequence": 28,
+                  "name": "reserve-spindle-24-network",
+                  "kind": "spindle",
+                  "expected": "NET / verified",
+                  "target": 24,
+                  "region": null,
+                  "screenshot": "frames/000028-reserve-spindle-24-network.ppm",
+                  "screenshot_sha256": "4c82e10e31c716b3d9bc48c4639dd07afa253d998b9166c3824149dc4badb1db",
+                  "serial_end": 2211995,
+                  "serial_sha256": "631b695a8acf688e1122f0d596808e1dc906f5916fcbb9a4c7eafd7481e1a9c0",
+                  "source_sha256": {
+                    "apps/kaleidoscope/src/main.rs": "fdc963c5a700b497c9c5a5f0500d7645ca88abe0b0fd8c5769e07e4a219486fd",
+                    "apps/spindle/src/display_delivery.rs": "9c0ba21d3b4d01e043004e006bce58176bd294f9c675806a80f53cc129a8cd56",
+                    "apps/spindle/src/main.rs": "58c79ff66316220b536b1826ec024b9a06b19824f5c74e10ed4ff9c43d006278",
+                    "apps/spindle/src/viewport.rs": "e58d67d83ae49c0be34b668c8fea6a75dab3c5442e8e0ebaa20664cd65f3aceb",
+                    "crates/sex-pdx/src/app_lifecycle.rs": "95b5404b95fe2fa12107f960c022f2544191ab461db9acda2469095decee9e00",
+                    "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+                    "crates/sex-pdx/src/desktop_style.rs": "b79c66b3e4487377ba5387b25dcb46193e92606087921cd9aca55b82bc5e89fd",
+                    "crates/sex-pdx/src/spindle_view.rs": "6d49515e451e00797335352f0d232e3c076ff06dadbce3be068d17259eb5ad4a",
+                    "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+                    "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+                    "kernel/src/clock_source.rs": "4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd",
+                    "kernel/src/init.rs": "9559aa47d0c15e90620f43b18fb72ce4dc7683bfe4ba55413d4750906b159c58",
+                    "scripts/alpha_evidence.py": "069453ae20601e778598e786bbd4eb834dff91161df7062e63b3b02681de8c69",
+                    "scripts/alpha_session.py": "9b0af4cfa81913f6fb760620ef5b888dc0be66157c305b637308a531255aca1b",
+                    "scripts/app_switch_gate.py": "dcf67e400334afd6e2b64bcf19868b371424911f68bc9a44935035fd3ceb228e",
+                    "scripts/certificate_time_gate.py": "5f2e46336f178b7d1824ac8afe24dee9e540434de5ea6fd41e79e1196732bdcb",
+                    "scripts/check_alpha_session.py": "08d916455f9d36362d9ac36fb7d7ff6d7ba8c808c7b1f6a5c5a731dff920bda7",
+                    "scripts/check_app_activation_log.py": "283a0df40c36056411891c2968e7200822349b8d6cdce06c8fd27185fd8036c2",
+                    "scripts/check_desktop_close_log.py": "698e510244cf27e603af46c0c8ac6aea1aac13a20a2481ccce15e5634907c789",
+                    "scripts/check_desktop_pixels.py": "eb3dbe7b3a4e962865b3652f04e4ef152593c0a89a521523b2a79364477f0170",
+                    "scripts/check_disk_persistence.py": "8639d54ffb87b9083116f0ead907f1aad75f3876328785fd377698de0cd41b56",
+                    "scripts/check_dns_capture.py": "219e38d5937121440422ed266ae27b9bd53f9d90db5c43c1094a042ddb7fdedb",
+                    "scripts/check_document_disk.py": "6e85a2d1367d4dccd9d2b5aca4c171347f6a4c773040929732d24fb0e4b89ce6",
+                    "scripts/check_launcher_pixels.py": "33ef56ea3c1e0a7278a4f7cb1636972fcf6fb89035e24b66c55700be307377a7",
+                    "scripts/check_nic_command.py": "8bea3b2f6d4d52c21ebcf298386c5fe6181293899f9d266d512c79fbb458d413",
+                    "scripts/check_nic_discovery.py": "0c53edf1ec663c9b72f82ed4fd473121652547752ed39c6c55afdf5fa7c55e2b",
+                    "scripts/check_nonunix_target.py": "c80f9c30a93115c2069ad730b348e10a7fb4aae185c95c008d76c2f24f3d7aa6",
+                    "scripts/check_pending_io_trace.py": "172f0bbd39162cfb5b299dec095fb40917bc1bd4722eb807bd1e1331b058d7a6",
+                    "scripts/check_quil_ui_pixels.py": "ef427d509683c745b7c8a66d1cbc3ace1a694804d119ac6a9ba094460a8a41dc",
+                    "scripts/check_relaunch_pixels.py": "a49f6f8388d0020691d47cf1cc477ace11b5b618980ee52b527ac17162f46500",
+                    "scripts/check_self_wait.py": "e400bde0abd7dc2c8b27535fb4cd3e4449ee5112ba8b6dd986a332e54bc8162e",
+                    "scripts/check_spindle_history_log.py": "ee4d9c793e7953d42a3bbaac6c686745911429eb94b0b302a63591852b6725a4",
+                    "scripts/check_spindle_relaunch_pixels.py": "2e987c9768fd1bf0f2c81fc327d9d9344c0bb8d9db78fbaf8df9fe1770cfe4ce",
+                    "scripts/check_spindle_viewport_pixels.py": "8d2b7222917fea04956db5c0ca0a96735bf88823370cde5865ef40ee4b7feb7f",
+                    "scripts/check_tcp_capture.py": "02d0c891c5f71e3a774c4405f7fdd03fc7a17d79bf620e3bad365edc45fc0a90",
+                    "scripts/clipboard_workflow_gate.py": "3e09aebbf5a26f053d0f3eea3ac82dca4d7e433aa39ecf47639a87b4fa48686c",
+                    "scripts/clock_source_evidence.py": "03f23b2c900f0276876ca5cacc9f1c7054b463901d64b5aa8c423f098445dcbb",
+                    "scripts/desktop_close_gate.py": "b1264e2c6c81809cb2e3b47a8b51974809c44c5d1dcbfb7a976c53d925e9f58b",
+                    "scripts/desktop_focus.py": "56e6e155367d10ce02157ddf4254517a9a675d8d57184e80d2e0bdf34152eefd",
+                    "scripts/entropy_seed_gate.py": "3bfc7355ed324cc8b72b67a1b32b431d86b61a0224e7f1d3f58f77b0371403a5",
+                    "scripts/history_roster_evidence.py": "a9ac3aa254441f11d2c8b2029a054402bfc5118499c58f9695fb25d83f43a3e9",
+                    "scripts/http_content_gate.py": "cc6e6630e328facc1f47aabfd00d64326bed9ca89d3bc07bcdee8efdf5cf5012",
+                    "scripts/https_asset_gate.py": "ad0230467e9129d35fc014f4a2e4e095003abd1433993eba8a464f77d89f2454",
+                    "scripts/https_document_gate.py": "fe8dba9dbf60afa6e37b3a63a1320cbc43d285b0c97820e7105e530902235cdd",
+                    "scripts/https_import_gate.py": "e891f3d0214c17c1771d538d49df8a1d939d013b069259ef304cf0d6fcdc87d4",
+                    "scripts/launcher_workflow_gate.py": "cf0955db8f00ea18d120f39667f9bce5439f7df8cff4581bfc8526f7b2d76d91",
+                    "scripts/network_contention_gate.py": "a1969d23f7d715b27eeb076cd336dcaa4abe4db42eb22702b9ed44f0961fbafc",
+                    "scripts/pending_io_close.py": "fb547cc6c2ebf26dc92609b2c8cd17a5ad0e81f96fd84e7f3c1190ec89b777d3",
+                    "scripts/quil_input_latency.py": "2e4c7c13f42452da4c0d6fd33d4181fa20ceab711e2424c8f726728cac1f6ec6",
+                    "scripts/quil_reserve_catalog.py": "8b622a8e41f2a67021624d34397ec209cb23c0d6a7f97c6f623a100a74e8c97c",
+                    "scripts/quil_third_probe.py": "e2f1ca86c1d9d454edca4e84bf13b093428d61676f2416330b7564757623e731",
+                    "scripts/quil_workflow_gate.py": "88bda70de6ee9c25d6e90c5006ec75a7c98c433b5a870862d4e84bc1524ec728",
+                    "scripts/silkbar_clock_gate.py": "308dffa4772785558292fd3a79729f4427f44cae741fe1abc2d4c49a1ea3bd6d",
+                    "scripts/spindle_reserve_probe.py": "5b7db551238b1066934848f0efec74d8efffa6267fc4b915a69af4bbcf489c58",
+                    "scripts/tests/test_alpha_evidence.py": "9490fce4f3918ad8f65fb31e1dcc592cf53ab110c70baee28137d6da54c24a55",
+                    "scripts/tests/test_launcher_workflow_gate.py": "b8836f85bd6d83e5d3dd86ce28deaaf34a016e061dfce6b52fc972b43035f070",
+                    "scripts/tls_exchange_gate.py": "bc8393c6d9e8137ccf900b3aea8118fb593f9b900cd68ccce74dde66f91d600b",
+                    "scripts/tls_lifecycle_gate.py": "7894bed63cd7864aeca23bbc955a3ac73d7fc9650441da511a7817c85a8e6387",
+                    "scripts/tls_prepare_gate.py": "67e897363b2f3cc995ee0b103c4ea14d46e80690bf4e70228c21ef09be74d282",
+                    "scripts/tls_responsiveness_gate.py": "a888e4b5637ae9c6eac5ffc7a9d3e4b6dfdaee29f9a19c5951b51af97f14aa68",
+                    "scripts/workspace_refresh_probe.py": "5f47d504b88b6a33a0c31feb1e7cec04ec0c40c85d5bd90b4bcc74ddf34c063c",
+                    "servers/quil/src/main.rs": "9740e96347b5aa3665c3e04f2d2a8ed786badc15b29e0d3a92f699715be4fcaf",
+                    "servers/quil/src/view.rs": "547272812d2de2cd1af308ad8e3ce8fcecfe4606d123b25dc1b9526f52a56a8c",
+                    "servers/sexdisplay/src/main.rs": "06753f02f984d5fb1ea9ace16d8f7cfdedd81d6119d99c0d71df2ca1e84841b5",
+                    "servers/sexdisplay/src/surface_groups.rs": "628dfc494933e156cfe3c4ae6243cbfc28db6ca157a1917b7004cf7b71668a95",
+                    "servers/sexdisplay/src/surface_lifecycle.rs": "0d805ef4066627e529d8313a8f79048fb26d10e63077a974a800930750e773c8",
+                    "servers/silk-shell/src/desktop_content.rs": "ff2f25393c952b06d3d0dfe136090b927ba4952b1cfc8c0e62a9a66873070048",
+                    "servers/silk-shell/src/launcher.rs": "e3a8228b18e025b2cd567ab02c5eae19df7e582d719fc9e7192b4886f34612e8",
+                    "servers/silk-shell/src/main.rs": "551b4a51236446fc9f5cc10a8499b8afb5b3e62b35d3529be47f02704473a76f",
+                    "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+                    "servers/silkbar/src/main.rs": "c92fdc312dc71961eaa9f9c8e95aaf2f6006771227b56c547732788de1147247"
+                  },
+                  "proof": {
+                    "ok": true,
+                    "errors": [],
+                    "kind": "spindle",
+                    "view": null,
+                    "civil_clock": {
+                      "ok": true,
+                      "errors": [],
+                      "sequence": 503,
+                      "state": "Snapshot",
+                      "seconds": 1793485045,
+                      "stale": false,
+                      "lines": [
+                        "UTC 22:17:25",
+                        "q35 1s snap"
+                      ],
+                      "geometry": {
+                        "x": 928,
+                        "y": 18,
+                        "w": 80,
+                        "h": 22
+                      },
+                      "checked_pixels": 1760,
+                      "expected_ink_pixels": 252,
+                      "draw_offset": 2210982,
+                      "scope": "Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication."
+                    }
+                  }
+                },
+                "saved": {
+                  "handle": 18,
+                  "bytes": 217,
+                  "count": 14,
+                  "hash": "0x620e36c6e5010010",
+                  "generation": 14,
+                  "bank": 1
+                }
+              },
+              "close_start": 2214980,
+              "serial_end": 2226307
+            }
+          ],
+          "exhaustion_start": 2226307,
+          "exhaustion_row_offset": 2230633,
+          "exhaustion_frame": {
+            "sequence": 29,
+            "name": "third-spindle-exhausted-launcher",
+            "kind": "launcher",
+            "expected": "Open Spindle",
+            "target": 12,
+            "region": null,
+            "screenshot": "frames/000029-third-spindle-exhausted-launcher.ppm",
+            "screenshot_sha256": "4659c59b2097c9b53484cea48d40ef42b7b8a6479fee38376a64f184355929f3",
+            "serial_end": 2236647,
+            "serial_sha256": "28a1d6e200d6422cddea6f4127ae2593b9d04bb5c7ef23c5a645d9841445b714",
+            "source_sha256": {
+              "apps/kaleidoscope/src/main.rs": "fdc963c5a700b497c9c5a5f0500d7645ca88abe0b0fd8c5769e07e4a219486fd",
+              "apps/spindle/src/display_delivery.rs": "9c0ba21d3b4d01e043004e006bce58176bd294f9c675806a80f53cc129a8cd56",
+              "apps/spindle/src/main.rs": "58c79ff66316220b536b1826ec024b9a06b19824f5c74e10ed4ff9c43d006278",
+              "apps/spindle/src/viewport.rs": "e58d67d83ae49c0be34b668c8fea6a75dab3c5442e8e0ebaa20664cd65f3aceb",
+              "crates/sex-pdx/src/app_lifecycle.rs": "95b5404b95fe2fa12107f960c022f2544191ab461db9acda2469095decee9e00",
+              "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+              "crates/sex-pdx/src/desktop_style.rs": "b79c66b3e4487377ba5387b25dcb46193e92606087921cd9aca55b82bc5e89fd",
+              "crates/sex-pdx/src/spindle_view.rs": "6d49515e451e00797335352f0d232e3c076ff06dadbce3be068d17259eb5ad4a",
+              "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+              "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+              "kernel/src/clock_source.rs": "4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd",
+              "kernel/src/init.rs": "9559aa47d0c15e90620f43b18fb72ce4dc7683bfe4ba55413d4750906b159c58",
+              "scripts/alpha_evidence.py": "069453ae20601e778598e786bbd4eb834dff91161df7062e63b3b02681de8c69",
+              "scripts/alpha_session.py": "9b0af4cfa81913f6fb760620ef5b888dc0be66157c305b637308a531255aca1b",
+              "scripts/app_switch_gate.py": "dcf67e400334afd6e2b64bcf19868b371424911f68bc9a44935035fd3ceb228e",
+              "scripts/certificate_time_gate.py": "5f2e46336f178b7d1824ac8afe24dee9e540434de5ea6fd41e79e1196732bdcb",
+              "scripts/check_alpha_session.py": "08d916455f9d36362d9ac36fb7d7ff6d7ba8c808c7b1f6a5c5a731dff920bda7",
+              "scripts/check_app_activation_log.py": "283a0df40c36056411891c2968e7200822349b8d6cdce06c8fd27185fd8036c2",
+              "scripts/check_desktop_close_log.py": "698e510244cf27e603af46c0c8ac6aea1aac13a20a2481ccce15e5634907c789",
+              "scripts/check_desktop_pixels.py": "eb3dbe7b3a4e962865b3652f04e4ef152593c0a89a521523b2a79364477f0170",
+              "scripts/check_disk_persistence.py": "8639d54ffb87b9083116f0ead907f1aad75f3876328785fd377698de0cd41b56",
+              "scripts/check_dns_capture.py": "219e38d5937121440422ed266ae27b9bd53f9d90db5c43c1094a042ddb7fdedb",
+              "scripts/check_document_disk.py": "6e85a2d1367d4dccd9d2b5aca4c171347f6a4c773040929732d24fb0e4b89ce6",
+              "scripts/check_launcher_pixels.py": "33ef56ea3c1e0a7278a4f7cb1636972fcf6fb89035e24b66c55700be307377a7",
+              "scripts/check_nic_command.py": "8bea3b2f6d4d52c21ebcf298386c5fe6181293899f9d266d512c79fbb458d413",
+              "scripts/check_nic_discovery.py": "0c53edf1ec663c9b72f82ed4fd473121652547752ed39c6c55afdf5fa7c55e2b",
+              "scripts/check_nonunix_target.py": "c80f9c30a93115c2069ad730b348e10a7fb4aae185c95c008d76c2f24f3d7aa6",
+              "scripts/check_pending_io_trace.py": "172f0bbd39162cfb5b299dec095fb40917bc1bd4722eb807bd1e1331b058d7a6",
+              "scripts/check_quil_ui_pixels.py": "ef427d509683c745b7c8a66d1cbc3ace1a694804d119ac6a9ba094460a8a41dc",
+              "scripts/check_relaunch_pixels.py": "a49f6f8388d0020691d47cf1cc477ace11b5b618980ee52b527ac17162f46500",
+              "scripts/check_self_wait.py": "e400bde0abd7dc2c8b27535fb4cd3e4449ee5112ba8b6dd986a332e54bc8162e",
+              "scripts/check_spindle_history_log.py": "ee4d9c793e7953d42a3bbaac6c686745911429eb94b0b302a63591852b6725a4",
+              "scripts/check_spindle_relaunch_pixels.py": "2e987c9768fd1bf0f2c81fc327d9d9344c0bb8d9db78fbaf8df9fe1770cfe4ce",
+              "scripts/check_spindle_viewport_pixels.py": "8d2b7222917fea04956db5c0ca0a96735bf88823370cde5865ef40ee4b7feb7f",
+              "scripts/check_tcp_capture.py": "02d0c891c5f71e3a774c4405f7fdd03fc7a17d79bf620e3bad365edc45fc0a90",
+              "scripts/clipboard_workflow_gate.py": "3e09aebbf5a26f053d0f3eea3ac82dca4d7e433aa39ecf47639a87b4fa48686c",
+              "scripts/clock_source_evidence.py": "03f23b2c900f0276876ca5cacc9f1c7054b463901d64b5aa8c423f098445dcbb",
+              "scripts/desktop_close_gate.py": "b1264e2c6c81809cb2e3b47a8b51974809c44c5d1dcbfb7a976c53d925e9f58b",
+              "scripts/desktop_focus.py": "56e6e155367d10ce02157ddf4254517a9a675d8d57184e80d2e0bdf34152eefd",
+              "scripts/entropy_seed_gate.py": "3bfc7355ed324cc8b72b67a1b32b431d86b61a0224e7f1d3f58f77b0371403a5",
+              "scripts/history_roster_evidence.py": "a9ac3aa254441f11d2c8b2029a054402bfc5118499c58f9695fb25d83f43a3e9",
+              "scripts/http_content_gate.py": "cc6e6630e328facc1f47aabfd00d64326bed9ca89d3bc07bcdee8efdf5cf5012",
+              "scripts/https_asset_gate.py": "ad0230467e9129d35fc014f4a2e4e095003abd1433993eba8a464f77d89f2454",
+              "scripts/https_document_gate.py": "fe8dba9dbf60afa6e37b3a63a1320cbc43d285b0c97820e7105e530902235cdd",
+              "scripts/https_import_gate.py": "e891f3d0214c17c1771d538d49df8a1d939d013b069259ef304cf0d6fcdc87d4",
+              "scripts/launcher_workflow_gate.py": "cf0955db8f00ea18d120f39667f9bce5439f7df8cff4581bfc8526f7b2d76d91",
+              "scripts/network_contention_gate.py": "a1969d23f7d715b27eeb076cd336dcaa4abe4db42eb22702b9ed44f0961fbafc",
+              "scripts/pending_io_close.py": "fb547cc6c2ebf26dc92609b2c8cd17a5ad0e81f96fd84e7f3c1190ec89b777d3",
+              "scripts/quil_input_latency.py": "2e4c7c13f42452da4c0d6fd33d4181fa20ceab711e2424c8f726728cac1f6ec6",
+              "scripts/quil_reserve_catalog.py": "8b622a8e41f2a67021624d34397ec209cb23c0d6a7f97c6f623a100a74e8c97c",
+              "scripts/quil_third_probe.py": "e2f1ca86c1d9d454edca4e84bf13b093428d61676f2416330b7564757623e731",
+              "scripts/quil_workflow_gate.py": "88bda70de6ee9c25d6e90c5006ec75a7c98c433b5a870862d4e84bc1524ec728",
+              "scripts/silkbar_clock_gate.py": "308dffa4772785558292fd3a79729f4427f44cae741fe1abc2d4c49a1ea3bd6d",
+              "scripts/spindle_reserve_probe.py": "5b7db551238b1066934848f0efec74d8efffa6267fc4b915a69af4bbcf489c58",
+              "scripts/tests/test_alpha_evidence.py": "9490fce4f3918ad8f65fb31e1dcc592cf53ab110c70baee28137d6da54c24a55",
+              "scripts/tests/test_launcher_workflow_gate.py": "b8836f85bd6d83e5d3dd86ce28deaaf34a016e061dfce6b52fc972b43035f070",
+              "scripts/tls_exchange_gate.py": "bc8393c6d9e8137ccf900b3aea8118fb593f9b900cd68ccce74dde66f91d600b",
+              "scripts/tls_lifecycle_gate.py": "7894bed63cd7864aeca23bbc955a3ac73d7fc9650441da511a7817c85a8e6387",
+              "scripts/tls_prepare_gate.py": "67e897363b2f3cc995ee0b103c4ea14d46e80690bf4e70228c21ef09be74d282",
+              "scripts/tls_responsiveness_gate.py": "a888e4b5637ae9c6eac5ffc7a9d3e4b6dfdaee29f9a19c5951b51af97f14aa68",
+              "scripts/workspace_refresh_probe.py": "5f47d504b88b6a33a0c31feb1e7cec04ec0c40c85d5bd90b4bcc74ddf34c063c",
+              "servers/quil/src/main.rs": "9740e96347b5aa3665c3e04f2d2a8ed786badc15b29e0d3a92f699715be4fcaf",
+              "servers/quil/src/view.rs": "547272812d2de2cd1af308ad8e3ce8fcecfe4606d123b25dc1b9526f52a56a8c",
+              "servers/sexdisplay/src/main.rs": "06753f02f984d5fb1ea9ace16d8f7cfdedd81d6119d99c0d71df2ca1e84841b5",
+              "servers/sexdisplay/src/surface_groups.rs": "628dfc494933e156cfe3c4ae6243cbfc28db6ca157a1917b7004cf7b71668a95",
+              "servers/sexdisplay/src/surface_lifecycle.rs": "0d805ef4066627e529d8313a8f79048fb26d10e63077a974a800930750e773c8",
+              "servers/silk-shell/src/desktop_content.rs": "ff2f25393c952b06d3d0dfe136090b927ba4952b1cfc8c0e62a9a66873070048",
+              "servers/silk-shell/src/launcher.rs": "e3a8228b18e025b2cd567ab02c5eae19df7e582d719fc9e7192b4886f34612e8",
+              "servers/silk-shell/src/main.rs": "551b4a51236446fc9f5cc10a8499b8afb5b3e62b35d3529be47f02704473a76f",
+              "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+              "servers/silkbar/src/main.rs": "c92fdc312dc71961eaa9f9c8e95aaf2f6006771227b56c547732788de1147247"
+            },
+            "proof": {
+              "ok": true,
+              "errors": [],
+              "kind": "launcher",
+              "view": {
+                "title": "Open Spindle",
+                "status": "CLOSED / RESERVE EXHAUSTED",
+                "geometry": {
+                  "x": 400,
+                  "y": 200,
+                  "w": 480,
+                  "h": 280,
+                  "scale": 2,
+                  "selected": 0,
+                  "first": 0,
+                  "rows": 5
+                }
+              },
+              "civil_clock": {
+                "ok": true,
+                "errors": [],
+                "sequence": 516,
+                "state": "Snapshot",
+                "seconds": 1793485047,
+                "stale": false,
+                "lines": [
+                  "UTC 22:17:27",
+                  "q35 1s snap"
+                ],
+                "geometry": {
+                  "x": 928,
+                  "y": 18,
+                  "w": 80,
+                  "h": 22
+                },
+                "checked_pixels": 1760,
+                "expected_ink_pixels": 246,
+                "draw_offset": 2236516,
+                "scope": "Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication."
+              }
+            }
+          },
+          "reserve_exhausted": true
+        },
+        "terminal_history": {
+          "bank": 1,
+          "generation": 14,
+          "source": 24,
+          "task": 24,
+          "logical": 12,
+          "size": 217,
+          "fingerprint": "0x620e36c6e5010010",
+          "count": 14,
+          "data_hash": "0x63dc2203611024b6"
+        }
+      },
+      {
+        "profile": "wide",
+        "status_subjects": [
+          12,
+          17,
+          24
+        ],
+        "third": {
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "catalog": [
+            {
+              "ordinal": 0,
+              "target": 12,
+              "surface": 154,
+              "lifecycle": 39,
+              "close": 42,
+              "route": 14,
+              "frame": 153,
+              "activation": null
+            },
+            {
+              "ordinal": 1,
+              "target": 17,
+              "surface": 302,
+              "lifecycle": 50,
+              "close": 51,
+              "route": 52,
+              "frame": 306,
+              "activation": 49
+            },
+            {
+              "ordinal": 2,
+              "target": 24,
+              "surface": 313,
+              "lifecycle": 130,
+              "close": 131,
+              "route": 133,
+              "frame": 314,
+              "activation": 132
+            }
+          ],
+          "chain": [
+            {
+              "target": 24,
+              "task": 24,
+              "surface": 313,
+              "frame_id": 314,
+              "predecessor": 17,
+              "logical": 12,
+              "incarnation": 3,
+              "serial_start": 1961157,
+              "recovery": {
+                "source": 17,
+                "source_task": 17,
+                "generation": 7,
+                "bytes": 125,
+                "source_hash": "0x221f352b58c2993e",
+                "owned_hash": "0xa4e0ff324c9867f5",
+                "data_hash": "0x6d5627c8fe23e447",
+                "handle": 11,
+                "count": 7
+              },
+              "recall_start": 1973099,
+              "recall_frame": {
+                "sequence": 27,
+                "name": "reserve-spindle-24-recall",
+                "kind": "spindle",
+                "expected": "> echo alpha17",
+                "target": 24,
+                "region": null,
+                "screenshot": "frames/000027-reserve-spindle-24-recall.ppm",
+                "screenshot_sha256": "f3b747633c5b2e13f9b8f4219dcf30d7c0fb4998565035ed445c39407d8769fb",
+                "serial_end": 1989401,
+                "serial_sha256": "780ddd89f0f55fd5229e3ffe0a849e6d0716d43b2a70ed04df2d35d71153d08c",
+                "source_sha256": {
+                  "apps/kaleidoscope/src/main.rs": "fdc963c5a700b497c9c5a5f0500d7645ca88abe0b0fd8c5769e07e4a219486fd",
+                  "apps/spindle/src/display_delivery.rs": "9c0ba21d3b4d01e043004e006bce58176bd294f9c675806a80f53cc129a8cd56",
+                  "apps/spindle/src/main.rs": "58c79ff66316220b536b1826ec024b9a06b19824f5c74e10ed4ff9c43d006278",
+                  "apps/spindle/src/viewport.rs": "e58d67d83ae49c0be34b668c8fea6a75dab3c5442e8e0ebaa20664cd65f3aceb",
+                  "crates/sex-pdx/src/app_lifecycle.rs": "95b5404b95fe2fa12107f960c022f2544191ab461db9acda2469095decee9e00",
+                  "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+                  "crates/sex-pdx/src/desktop_style.rs": "b79c66b3e4487377ba5387b25dcb46193e92606087921cd9aca55b82bc5e89fd",
+                  "crates/sex-pdx/src/spindle_view.rs": "6d49515e451e00797335352f0d232e3c076ff06dadbce3be068d17259eb5ad4a",
+                  "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+                  "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+                  "kernel/src/clock_source.rs": "4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd",
+                  "kernel/src/init.rs": "9559aa47d0c15e90620f43b18fb72ce4dc7683bfe4ba55413d4750906b159c58",
+                  "scripts/alpha_evidence.py": "069453ae20601e778598e786bbd4eb834dff91161df7062e63b3b02681de8c69",
+                  "scripts/alpha_session.py": "9b0af4cfa81913f6fb760620ef5b888dc0be66157c305b637308a531255aca1b",
+                  "scripts/app_switch_gate.py": "dcf67e400334afd6e2b64bcf19868b371424911f68bc9a44935035fd3ceb228e",
+                  "scripts/certificate_time_gate.py": "5f2e46336f178b7d1824ac8afe24dee9e540434de5ea6fd41e79e1196732bdcb",
+                  "scripts/check_alpha_session.py": "08d916455f9d36362d9ac36fb7d7ff6d7ba8c808c7b1f6a5c5a731dff920bda7",
+                  "scripts/check_app_activation_log.py": "283a0df40c36056411891c2968e7200822349b8d6cdce06c8fd27185fd8036c2",
+                  "scripts/check_desktop_close_log.py": "698e510244cf27e603af46c0c8ac6aea1aac13a20a2481ccce15e5634907c789",
+                  "scripts/check_desktop_pixels.py": "eb3dbe7b3a4e962865b3652f04e4ef152593c0a89a521523b2a79364477f0170",
+                  "scripts/check_disk_persistence.py": "8639d54ffb87b9083116f0ead907f1aad75f3876328785fd377698de0cd41b56",
+                  "scripts/check_dns_capture.py": "219e38d5937121440422ed266ae27b9bd53f9d90db5c43c1094a042ddb7fdedb",
+                  "scripts/check_document_disk.py": "6e85a2d1367d4dccd9d2b5aca4c171347f6a4c773040929732d24fb0e4b89ce6",
+                  "scripts/check_launcher_pixels.py": "33ef56ea3c1e0a7278a4f7cb1636972fcf6fb89035e24b66c55700be307377a7",
+                  "scripts/check_nic_command.py": "8bea3b2f6d4d52c21ebcf298386c5fe6181293899f9d266d512c79fbb458d413",
+                  "scripts/check_nic_discovery.py": "0c53edf1ec663c9b72f82ed4fd473121652547752ed39c6c55afdf5fa7c55e2b",
+                  "scripts/check_nonunix_target.py": "c80f9c30a93115c2069ad730b348e10a7fb4aae185c95c008d76c2f24f3d7aa6",
+                  "scripts/check_pending_io_trace.py": "172f0bbd39162cfb5b299dec095fb40917bc1bd4722eb807bd1e1331b058d7a6",
+                  "scripts/check_quil_ui_pixels.py": "ef427d509683c745b7c8a66d1cbc3ace1a694804d119ac6a9ba094460a8a41dc",
+                  "scripts/check_relaunch_pixels.py": "a49f6f8388d0020691d47cf1cc477ace11b5b618980ee52b527ac17162f46500",
+                  "scripts/check_self_wait.py": "e400bde0abd7dc2c8b27535fb4cd3e4449ee5112ba8b6dd986a332e54bc8162e",
+                  "scripts/check_spindle_history_log.py": "ee4d9c793e7953d42a3bbaac6c686745911429eb94b0b302a63591852b6725a4",
+                  "scripts/check_spindle_relaunch_pixels.py": "2e987c9768fd1bf0f2c81fc327d9d9344c0bb8d9db78fbaf8df9fe1770cfe4ce",
+                  "scripts/check_spindle_viewport_pixels.py": "8d2b7222917fea04956db5c0ca0a96735bf88823370cde5865ef40ee4b7feb7f",
+                  "scripts/check_tcp_capture.py": "02d0c891c5f71e3a774c4405f7fdd03fc7a17d79bf620e3bad365edc45fc0a90",
+                  "scripts/clipboard_workflow_gate.py": "3e09aebbf5a26f053d0f3eea3ac82dca4d7e433aa39ecf47639a87b4fa48686c",
+                  "scripts/clock_source_evidence.py": "03f23b2c900f0276876ca5cacc9f1c7054b463901d64b5aa8c423f098445dcbb",
+                  "scripts/desktop_close_gate.py": "b1264e2c6c81809cb2e3b47a8b51974809c44c5d1dcbfb7a976c53d925e9f58b",
+                  "scripts/desktop_focus.py": "56e6e155367d10ce02157ddf4254517a9a675d8d57184e80d2e0bdf34152eefd",
+                  "scripts/entropy_seed_gate.py": "3bfc7355ed324cc8b72b67a1b32b431d86b61a0224e7f1d3f58f77b0371403a5",
+                  "scripts/history_roster_evidence.py": "a9ac3aa254441f11d2c8b2029a054402bfc5118499c58f9695fb25d83f43a3e9",
+                  "scripts/http_content_gate.py": "cc6e6630e328facc1f47aabfd00d64326bed9ca89d3bc07bcdee8efdf5cf5012",
+                  "scripts/https_asset_gate.py": "ad0230467e9129d35fc014f4a2e4e095003abd1433993eba8a464f77d89f2454",
+                  "scripts/https_document_gate.py": "fe8dba9dbf60afa6e37b3a63a1320cbc43d285b0c97820e7105e530902235cdd",
+                  "scripts/https_import_gate.py": "e891f3d0214c17c1771d538d49df8a1d939d013b069259ef304cf0d6fcdc87d4",
+                  "scripts/launcher_workflow_gate.py": "cf0955db8f00ea18d120f39667f9bce5439f7df8cff4581bfc8526f7b2d76d91",
+                  "scripts/network_contention_gate.py": "a1969d23f7d715b27eeb076cd336dcaa4abe4db42eb22702b9ed44f0961fbafc",
+                  "scripts/pending_io_close.py": "fb547cc6c2ebf26dc92609b2c8cd17a5ad0e81f96fd84e7f3c1190ec89b777d3",
+                  "scripts/quil_input_latency.py": "2e4c7c13f42452da4c0d6fd33d4181fa20ceab711e2424c8f726728cac1f6ec6",
+                  "scripts/quil_reserve_catalog.py": "8b622a8e41f2a67021624d34397ec209cb23c0d6a7f97c6f623a100a74e8c97c",
+                  "scripts/quil_third_probe.py": "e2f1ca86c1d9d454edca4e84bf13b093428d61676f2416330b7564757623e731",
+                  "scripts/quil_workflow_gate.py": "88bda70de6ee9c25d6e90c5006ec75a7c98c433b5a870862d4e84bc1524ec728",
+                  "scripts/silkbar_clock_gate.py": "308dffa4772785558292fd3a79729f4427f44cae741fe1abc2d4c49a1ea3bd6d",
+                  "scripts/spindle_reserve_probe.py": "5b7db551238b1066934848f0efec74d8efffa6267fc4b915a69af4bbcf489c58",
+                  "scripts/tests/test_alpha_evidence.py": "9490fce4f3918ad8f65fb31e1dcc592cf53ab110c70baee28137d6da54c24a55",
+                  "scripts/tests/test_launcher_workflow_gate.py": "b8836f85bd6d83e5d3dd86ce28deaaf34a016e061dfce6b52fc972b43035f070",
+                  "scripts/tls_exchange_gate.py": "bc8393c6d9e8137ccf900b3aea8118fb593f9b900cd68ccce74dde66f91d600b",
+                  "scripts/tls_lifecycle_gate.py": "7894bed63cd7864aeca23bbc955a3ac73d7fc9650441da511a7817c85a8e6387",
+                  "scripts/tls_prepare_gate.py": "67e897363b2f3cc995ee0b103c4ea14d46e80690bf4e70228c21ef09be74d282",
+                  "scripts/tls_responsiveness_gate.py": "a888e4b5637ae9c6eac5ffc7a9d3e4b6dfdaee29f9a19c5951b51af97f14aa68",
+                  "scripts/workspace_refresh_probe.py": "5f47d504b88b6a33a0c31feb1e7cec04ec0c40c85d5bd90b4bcc74ddf34c063c",
+                  "servers/quil/src/main.rs": "9740e96347b5aa3665c3e04f2d2a8ed786badc15b29e0d3a92f699715be4fcaf",
+                  "servers/quil/src/view.rs": "547272812d2de2cd1af308ad8e3ce8fcecfe4606d123b25dc1b9526f52a56a8c",
+                  "servers/sexdisplay/src/main.rs": "06753f02f984d5fb1ea9ace16d8f7cfdedd81d6119d99c0d71df2ca1e84841b5",
+                  "servers/sexdisplay/src/surface_groups.rs": "628dfc494933e156cfe3c4ae6243cbfc28db6ca157a1917b7004cf7b71668a95",
+                  "servers/sexdisplay/src/surface_lifecycle.rs": "0d805ef4066627e529d8313a8f79048fb26d10e63077a974a800930750e773c8",
+                  "servers/silk-shell/src/desktop_content.rs": "ff2f25393c952b06d3d0dfe136090b927ba4952b1cfc8c0e62a9a66873070048",
+                  "servers/silk-shell/src/launcher.rs": "e3a8228b18e025b2cd567ab02c5eae19df7e582d719fc9e7192b4886f34612e8",
+                  "servers/silk-shell/src/main.rs": "551b4a51236446fc9f5cc10a8499b8afb5b3e62b35d3529be47f02704473a76f",
+                  "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+                  "servers/silkbar/src/main.rs": "c92fdc312dc71961eaa9f9c8e95aaf2f6006771227b56c547732788de1147247"
+                },
+                "proof": {
+                  "ok": true,
+                  "errors": [],
+                  "kind": "spindle",
+                  "view": null,
+                  "civil_clock": {
+                    "ok": true,
+                    "errors": [],
+                    "sequence": 529,
+                    "state": "Snapshot",
+                    "seconds": 1793485154,
+                    "stale": false,
+                    "lines": [
+                      "UTC 22:19:14",
+                      "q35 1s snap"
+                    ],
+                    "geometry": {
+                      "x": 1090,
+                      "y": 18,
+                      "w": 80,
+                      "h": 22
+                    },
+                    "checked_pixels": 1760,
+                    "expected_ink_pixels": 249,
+                    "draw_offset": 1989257,
+                    "scope": "Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication."
+                  }
+                }
+              },
+              "recall_execute_start": 1990167,
+              "object": 6,
+              "commands": [
+                {
+                  "command": "echo alpha17",
+                  "serial_start": 1990167,
+                  "serial_end": 1996668,
+                  "saved": {
+                    "handle": 12,
+                    "bytes": 139,
+                    "count": 8,
+                    "hash": "0x48bbb56cae47b6fa",
+                    "generation": 8,
+                    "bank": 1
+                  }
+                },
+                {
+                  "command": "echo alpha24",
+                  "serial_start": 2017922,
+                  "serial_end": 2025730,
+                  "saved": {
+                    "handle": 13,
+                    "bytes": 153,
+                    "count": 9,
+                    "hash": "0x8f48504ad339ebfd",
+                    "generation": 9,
+                    "bank": 0
+                  }
+                },
+                {
+                  "command": "mkdoc thirdprobe",
+                  "serial_start": 2051232,
+                  "serial_end": 2062909,
+                  "saved": {
+                    "handle": 14,
+                    "bytes": 171,
+                    "count": 10,
+                    "hash": "0xa52b82106316d45c",
+                    "generation": 10,
+                    "bank": 1
+                  }
+                },
+                {
+                  "command": "filldocx 6 33",
+                  "serial_start": 2083323,
+                  "serial_end": 2100229,
+                  "saved": {
+                    "handle": 15,
+                    "bytes": 186,
+                    "count": 11,
+                    "hash": "0xe7683592273e8e57",
+                    "generation": 11,
+                    "bank": 0
+                  }
+                },
+                {
+                  "command": "catdocx 6",
+                  "serial_start": 2113267,
+                  "serial_end": 2128169,
+                  "saved": {
+                    "handle": 16,
+                    "bytes": 197,
+                    "count": 12,
+                    "hash": "0x5bf2c68b5e2d5526",
+                    "generation": 12,
+                    "bank": 1
+                  }
+                },
+                {
+                  "command": "rmdoc 6",
+                  "serial_start": 2139834,
+                  "serial_end": 2151043,
+                  "saved": {
+                    "handle": 17,
+                    "bytes": 206,
+                    "count": 13,
+                    "hash": "0x89cd244fd2a66c9e",
+                    "generation": 13,
+                    "bank": 0
+                  }
+                }
+              ],
+              "network": {
+                "serial_start": 2163392,
+                "serial_end": 2222415,
+                "peer": {
+                  "endpoint": [
+                    "127.0.0.1",
+                    46078
+                  ],
+                  "connections": [
+                    {
+                      "request_hex": "4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e",
+                      "response_hex": "4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e5f708192a3b4c5d6e7f8091a2b3c4d5e6f8091a2b3c4d5e6f708192a3b4c5d6e7f90a1b2c3d4e5f60718293a4b5c6d7e8fa0b1c2d3e4f5061728394a5b6c7d8e9fb0c1d2e3f405162738495a6b7c8d9eafc0d1e2f30415263748596a7b8c9daebfd0e1f2031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112233445566778899aabbccddeef00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263748596a7b8c9daebfc0d1e2f405162738495a6b7c8d9eafb0c1d2e3f5061728394a5b6c7d8e9fa0b1c2d3e4f60718293a4b5c6d7e8f90a1b2c3d4e",
+                      "received": 1025,
+                      "sent": 1025,
+                      "remote": [
+                        "127.0.0.1",
+                        56645
+                      ]
+                    }
+                  ],
+                  "errors": [],
+                  "completed": true
+                },
+                "peer_file": "spindle-24-echo-peer.json",
+                "peer_sha256": "c1d211775856669596433692ae2632223cf42ffb104a833e4f1de101407bae3f",
+                "frame": {
+                  "sequence": 28,
+                  "name": "reserve-spindle-24-network",
+                  "kind": "spindle",
+                  "expected": "NET / verified",
+                  "target": 24,
+                  "region": null,
+                  "screenshot": "frames/000028-reserve-spindle-24-network.ppm",
+                  "screenshot_sha256": "d973fed11b0b937a24cdbd1e6e176dd18978e601d20c317aa76f814a498df12a",
+                  "serial_end": 2220315,
+                  "serial_sha256": "c737537363760b7b328bdccc015748f3f977a71f81c0738c8a7f369b96404d62",
+                  "source_sha256": {
+                    "apps/kaleidoscope/src/main.rs": "fdc963c5a700b497c9c5a5f0500d7645ca88abe0b0fd8c5769e07e4a219486fd",
+                    "apps/spindle/src/display_delivery.rs": "9c0ba21d3b4d01e043004e006bce58176bd294f9c675806a80f53cc129a8cd56",
+                    "apps/spindle/src/main.rs": "58c79ff66316220b536b1826ec024b9a06b19824f5c74e10ed4ff9c43d006278",
+                    "apps/spindle/src/viewport.rs": "e58d67d83ae49c0be34b668c8fea6a75dab3c5442e8e0ebaa20664cd65f3aceb",
+                    "crates/sex-pdx/src/app_lifecycle.rs": "95b5404b95fe2fa12107f960c022f2544191ab461db9acda2469095decee9e00",
+                    "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+                    "crates/sex-pdx/src/desktop_style.rs": "b79c66b3e4487377ba5387b25dcb46193e92606087921cd9aca55b82bc5e89fd",
+                    "crates/sex-pdx/src/spindle_view.rs": "6d49515e451e00797335352f0d232e3c076ff06dadbce3be068d17259eb5ad4a",
+                    "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+                    "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+                    "kernel/src/clock_source.rs": "4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd",
+                    "kernel/src/init.rs": "9559aa47d0c15e90620f43b18fb72ce4dc7683bfe4ba55413d4750906b159c58",
+                    "scripts/alpha_evidence.py": "069453ae20601e778598e786bbd4eb834dff91161df7062e63b3b02681de8c69",
+                    "scripts/alpha_session.py": "9b0af4cfa81913f6fb760620ef5b888dc0be66157c305b637308a531255aca1b",
+                    "scripts/app_switch_gate.py": "dcf67e400334afd6e2b64bcf19868b371424911f68bc9a44935035fd3ceb228e",
+                    "scripts/certificate_time_gate.py": "5f2e46336f178b7d1824ac8afe24dee9e540434de5ea6fd41e79e1196732bdcb",
+                    "scripts/check_alpha_session.py": "08d916455f9d36362d9ac36fb7d7ff6d7ba8c808c7b1f6a5c5a731dff920bda7",
+                    "scripts/check_app_activation_log.py": "283a0df40c36056411891c2968e7200822349b8d6cdce06c8fd27185fd8036c2",
+                    "scripts/check_desktop_close_log.py": "698e510244cf27e603af46c0c8ac6aea1aac13a20a2481ccce15e5634907c789",
+                    "scripts/check_desktop_pixels.py": "eb3dbe7b3a4e962865b3652f04e4ef152593c0a89a521523b2a79364477f0170",
+                    "scripts/check_disk_persistence.py": "8639d54ffb87b9083116f0ead907f1aad75f3876328785fd377698de0cd41b56",
+                    "scripts/check_dns_capture.py": "219e38d5937121440422ed266ae27b9bd53f9d90db5c43c1094a042ddb7fdedb",
+                    "scripts/check_document_disk.py": "6e85a2d1367d4dccd9d2b5aca4c171347f6a4c773040929732d24fb0e4b89ce6",
+                    "scripts/check_launcher_pixels.py": "33ef56ea3c1e0a7278a4f7cb1636972fcf6fb89035e24b66c55700be307377a7",
+                    "scripts/check_nic_command.py": "8bea3b2f6d4d52c21ebcf298386c5fe6181293899f9d266d512c79fbb458d413",
+                    "scripts/check_nic_discovery.py": "0c53edf1ec663c9b72f82ed4fd473121652547752ed39c6c55afdf5fa7c55e2b",
+                    "scripts/check_nonunix_target.py": "c80f9c30a93115c2069ad730b348e10a7fb4aae185c95c008d76c2f24f3d7aa6",
+                    "scripts/check_pending_io_trace.py": "172f0bbd39162cfb5b299dec095fb40917bc1bd4722eb807bd1e1331b058d7a6",
+                    "scripts/check_quil_ui_pixels.py": "ef427d509683c745b7c8a66d1cbc3ace1a694804d119ac6a9ba094460a8a41dc",
+                    "scripts/check_relaunch_pixels.py": "a49f6f8388d0020691d47cf1cc477ace11b5b618980ee52b527ac17162f46500",
+                    "scripts/check_self_wait.py": "e400bde0abd7dc2c8b27535fb4cd3e4449ee5112ba8b6dd986a332e54bc8162e",
+                    "scripts/check_spindle_history_log.py": "ee4d9c793e7953d42a3bbaac6c686745911429eb94b0b302a63591852b6725a4",
+                    "scripts/check_spindle_relaunch_pixels.py": "2e987c9768fd1bf0f2c81fc327d9d9344c0bb8d9db78fbaf8df9fe1770cfe4ce",
+                    "scripts/check_spindle_viewport_pixels.py": "8d2b7222917fea04956db5c0ca0a96735bf88823370cde5865ef40ee4b7feb7f",
+                    "scripts/check_tcp_capture.py": "02d0c891c5f71e3a774c4405f7fdd03fc7a17d79bf620e3bad365edc45fc0a90",
+                    "scripts/clipboard_workflow_gate.py": "3e09aebbf5a26f053d0f3eea3ac82dca4d7e433aa39ecf47639a87b4fa48686c",
+                    "scripts/clock_source_evidence.py": "03f23b2c900f0276876ca5cacc9f1c7054b463901d64b5aa8c423f098445dcbb",
+                    "scripts/desktop_close_gate.py": "b1264e2c6c81809cb2e3b47a8b51974809c44c5d1dcbfb7a976c53d925e9f58b",
+                    "scripts/desktop_focus.py": "56e6e155367d10ce02157ddf4254517a9a675d8d57184e80d2e0bdf34152eefd",
+                    "scripts/entropy_seed_gate.py": "3bfc7355ed324cc8b72b67a1b32b431d86b61a0224e7f1d3f58f77b0371403a5",
+                    "scripts/history_roster_evidence.py": "a9ac3aa254441f11d2c8b2029a054402bfc5118499c58f9695fb25d83f43a3e9",
+                    "scripts/http_content_gate.py": "cc6e6630e328facc1f47aabfd00d64326bed9ca89d3bc07bcdee8efdf5cf5012",
+                    "scripts/https_asset_gate.py": "ad0230467e9129d35fc014f4a2e4e095003abd1433993eba8a464f77d89f2454",
+                    "scripts/https_document_gate.py": "fe8dba9dbf60afa6e37b3a63a1320cbc43d285b0c97820e7105e530902235cdd",
+                    "scripts/https_import_gate.py": "e891f3d0214c17c1771d538d49df8a1d939d013b069259ef304cf0d6fcdc87d4",
+                    "scripts/launcher_workflow_gate.py": "cf0955db8f00ea18d120f39667f9bce5439f7df8cff4581bfc8526f7b2d76d91",
+                    "scripts/network_contention_gate.py": "a1969d23f7d715b27eeb076cd336dcaa4abe4db42eb22702b9ed44f0961fbafc",
+                    "scripts/pending_io_close.py": "fb547cc6c2ebf26dc92609b2c8cd17a5ad0e81f96fd84e7f3c1190ec89b777d3",
+                    "scripts/quil_input_latency.py": "2e4c7c13f42452da4c0d6fd33d4181fa20ceab711e2424c8f726728cac1f6ec6",
+                    "scripts/quil_reserve_catalog.py": "8b622a8e41f2a67021624d34397ec209cb23c0d6a7f97c6f623a100a74e8c97c",
+                    "scripts/quil_third_probe.py": "e2f1ca86c1d9d454edca4e84bf13b093428d61676f2416330b7564757623e731",
+                    "scripts/quil_workflow_gate.py": "88bda70de6ee9c25d6e90c5006ec75a7c98c433b5a870862d4e84bc1524ec728",
+                    "scripts/silkbar_clock_gate.py": "308dffa4772785558292fd3a79729f4427f44cae741fe1abc2d4c49a1ea3bd6d",
+                    "scripts/spindle_reserve_probe.py": "5b7db551238b1066934848f0efec74d8efffa6267fc4b915a69af4bbcf489c58",
+                    "scripts/tests/test_alpha_evidence.py": "9490fce4f3918ad8f65fb31e1dcc592cf53ab110c70baee28137d6da54c24a55",
+                    "scripts/tests/test_launcher_workflow_gate.py": "b8836f85bd6d83e5d3dd86ce28deaaf34a016e061dfce6b52fc972b43035f070",
+                    "scripts/tls_exchange_gate.py": "bc8393c6d9e8137ccf900b3aea8118fb593f9b900cd68ccce74dde66f91d600b",
+                    "scripts/tls_lifecycle_gate.py": "7894bed63cd7864aeca23bbc955a3ac73d7fc9650441da511a7817c85a8e6387",
+                    "scripts/tls_prepare_gate.py": "67e897363b2f3cc995ee0b103c4ea14d46e80690bf4e70228c21ef09be74d282",
+                    "scripts/tls_responsiveness_gate.py": "a888e4b5637ae9c6eac5ffc7a9d3e4b6dfdaee29f9a19c5951b51af97f14aa68",
+                    "scripts/workspace_refresh_probe.py": "5f47d504b88b6a33a0c31feb1e7cec04ec0c40c85d5bd90b4bcc74ddf34c063c",
+                    "servers/quil/src/main.rs": "9740e96347b5aa3665c3e04f2d2a8ed786badc15b29e0d3a92f699715be4fcaf",
+                    "servers/quil/src/view.rs": "547272812d2de2cd1af308ad8e3ce8fcecfe4606d123b25dc1b9526f52a56a8c",
+                    "servers/sexdisplay/src/main.rs": "06753f02f984d5fb1ea9ace16d8f7cfdedd81d6119d99c0d71df2ca1e84841b5",
+                    "servers/sexdisplay/src/surface_groups.rs": "628dfc494933e156cfe3c4ae6243cbfc28db6ca157a1917b7004cf7b71668a95",
+                    "servers/sexdisplay/src/surface_lifecycle.rs": "0d805ef4066627e529d8313a8f79048fb26d10e63077a974a800930750e773c8",
+                    "servers/silk-shell/src/desktop_content.rs": "ff2f25393c952b06d3d0dfe136090b927ba4952b1cfc8c0e62a9a66873070048",
+                    "servers/silk-shell/src/launcher.rs": "e3a8228b18e025b2cd567ab02c5eae19df7e582d719fc9e7192b4886f34612e8",
+                    "servers/silk-shell/src/main.rs": "551b4a51236446fc9f5cc10a8499b8afb5b3e62b35d3529be47f02704473a76f",
+                    "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+                    "servers/silkbar/src/main.rs": "c92fdc312dc71961eaa9f9c8e95aaf2f6006771227b56c547732788de1147247"
+                  },
+                  "proof": {
+                    "ok": true,
+                    "errors": [],
+                    "kind": "spindle",
+                    "view": null,
+                    "civil_clock": {
+                      "ok": true,
+                      "errors": [],
+                      "sequence": 550,
+                      "state": "Snapshot",
+                      "seconds": 1793485162,
+                      "stale": false,
+                      "lines": [
+                        "UTC 22:19:22",
+                        "q35 1s snap"
+                      ],
+                      "geometry": {
+                        "x": 1090,
+                        "y": 18,
+                        "w": 80,
+                        "h": 22
+                      },
+                      "checked_pixels": 1760,
+                      "expected_ink_pixels": 253,
+                      "draw_offset": 2220191,
+                      "scope": "Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication."
+                    }
+                  }
+                },
+                "saved": {
+                  "handle": 18,
+                  "bytes": 217,
+                  "count": 14,
+                  "hash": "0x620e36c6e5010010",
+                  "generation": 14,
+                  "bank": 1
+                }
+              },
+              "close_start": 2222415,
+              "serial_end": 2234507
+            }
+          ],
+          "exhaustion_start": 2234507,
+          "exhaustion_row_offset": 2238833,
+          "exhaustion_frame": {
+            "sequence": 29,
+            "name": "third-spindle-exhausted-launcher",
+            "kind": "launcher",
+            "expected": "Open Spindle",
+            "target": 12,
+            "region": null,
+            "screenshot": "frames/000029-third-spindle-exhausted-launcher.ppm",
+            "screenshot_sha256": "8d23ad8c757aa0c6b63d9212a80fee0b3c9c7cf27520c6eba480c86bb5e6e26a",
+            "serial_end": 2245861,
+            "serial_sha256": "59b7d7a1a80a4e60df56c535d71ed3a80cef58e29867e80cb590ee6e5bbdf039",
+            "source_sha256": {
+              "apps/kaleidoscope/src/main.rs": "fdc963c5a700b497c9c5a5f0500d7645ca88abe0b0fd8c5769e07e4a219486fd",
+              "apps/spindle/src/display_delivery.rs": "9c0ba21d3b4d01e043004e006bce58176bd294f9c675806a80f53cc129a8cd56",
+              "apps/spindle/src/main.rs": "58c79ff66316220b536b1826ec024b9a06b19824f5c74e10ed4ff9c43d006278",
+              "apps/spindle/src/viewport.rs": "e58d67d83ae49c0be34b668c8fea6a75dab3c5442e8e0ebaa20664cd65f3aceb",
+              "crates/sex-pdx/src/app_lifecycle.rs": "95b5404b95fe2fa12107f960c022f2544191ab461db9acda2469095decee9e00",
+              "crates/sex-pdx/src/clock_source.rs": "d5dd8911a6a12930f3985b43b976eb5d47ac2bfa3326b078b00246a1f7b1ac6d",
+              "crates/sex-pdx/src/desktop_style.rs": "b79c66b3e4487377ba5387b25dcb46193e92606087921cd9aca55b82bc5e89fd",
+              "crates/sex-pdx/src/spindle_view.rs": "6d49515e451e00797335352f0d232e3c076ff06dadbce3be068d17259eb5ad4a",
+              "crates/silkbar-model/src/civil_clock.rs": "3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a",
+              "crates/silkbar-model/src/lib.rs": "09814965887cbe47a4a6d21e31c92028b8330211dc616c9a10ac7344a3240c06",
+              "kernel/src/clock_source.rs": "4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd",
+              "kernel/src/init.rs": "9559aa47d0c15e90620f43b18fb72ce4dc7683bfe4ba55413d4750906b159c58",
+              "scripts/alpha_evidence.py": "069453ae20601e778598e786bbd4eb834dff91161df7062e63b3b02681de8c69",
+              "scripts/alpha_session.py": "9b0af4cfa81913f6fb760620ef5b888dc0be66157c305b637308a531255aca1b",
+              "scripts/app_switch_gate.py": "dcf67e400334afd6e2b64bcf19868b371424911f68bc9a44935035fd3ceb228e",
+              "scripts/certificate_time_gate.py": "5f2e46336f178b7d1824ac8afe24dee9e540434de5ea6fd41e79e1196732bdcb",
+              "scripts/check_alpha_session.py": "08d916455f9d36362d9ac36fb7d7ff6d7ba8c808c7b1f6a5c5a731dff920bda7",
+              "scripts/check_app_activation_log.py": "283a0df40c36056411891c2968e7200822349b8d6cdce06c8fd27185fd8036c2",
+              "scripts/check_desktop_close_log.py": "698e510244cf27e603af46c0c8ac6aea1aac13a20a2481ccce15e5634907c789",
+              "scripts/check_desktop_pixels.py": "eb3dbe7b3a4e962865b3652f04e4ef152593c0a89a521523b2a79364477f0170",
+              "scripts/check_disk_persistence.py": "8639d54ffb87b9083116f0ead907f1aad75f3876328785fd377698de0cd41b56",
+              "scripts/check_dns_capture.py": "219e38d5937121440422ed266ae27b9bd53f9d90db5c43c1094a042ddb7fdedb",
+              "scripts/check_document_disk.py": "6e85a2d1367d4dccd9d2b5aca4c171347f6a4c773040929732d24fb0e4b89ce6",
+              "scripts/check_launcher_pixels.py": "33ef56ea3c1e0a7278a4f7cb1636972fcf6fb89035e24b66c55700be307377a7",
+              "scripts/check_nic_command.py": "8bea3b2f6d4d52c21ebcf298386c5fe6181293899f9d266d512c79fbb458d413",
+              "scripts/check_nic_discovery.py": "0c53edf1ec663c9b72f82ed4fd473121652547752ed39c6c55afdf5fa7c55e2b",
+              "scripts/check_nonunix_target.py": "c80f9c30a93115c2069ad730b348e10a7fb4aae185c95c008d76c2f24f3d7aa6",
+              "scripts/check_pending_io_trace.py": "172f0bbd39162cfb5b299dec095fb40917bc1bd4722eb807bd1e1331b058d7a6",
+              "scripts/check_quil_ui_pixels.py": "ef427d509683c745b7c8a66d1cbc3ace1a694804d119ac6a9ba094460a8a41dc",
+              "scripts/check_relaunch_pixels.py": "a49f6f8388d0020691d47cf1cc477ace11b5b618980ee52b527ac17162f46500",
+              "scripts/check_self_wait.py": "e400bde0abd7dc2c8b27535fb4cd3e4449ee5112ba8b6dd986a332e54bc8162e",
+              "scripts/check_spindle_history_log.py": "ee4d9c793e7953d42a3bbaac6c686745911429eb94b0b302a63591852b6725a4",
+              "scripts/check_spindle_relaunch_pixels.py": "2e987c9768fd1bf0f2c81fc327d9d9344c0bb8d9db78fbaf8df9fe1770cfe4ce",
+              "scripts/check_spindle_viewport_pixels.py": "8d2b7222917fea04956db5c0ca0a96735bf88823370cde5865ef40ee4b7feb7f",
+              "scripts/check_tcp_capture.py": "02d0c891c5f71e3a774c4405f7fdd03fc7a17d79bf620e3bad365edc45fc0a90",
+              "scripts/clipboard_workflow_gate.py": "3e09aebbf5a26f053d0f3eea3ac82dca4d7e433aa39ecf47639a87b4fa48686c",
+              "scripts/clock_source_evidence.py": "03f23b2c900f0276876ca5cacc9f1c7054b463901d64b5aa8c423f098445dcbb",
+              "scripts/desktop_close_gate.py": "b1264e2c6c81809cb2e3b47a8b51974809c44c5d1dcbfb7a976c53d925e9f58b",
+              "scripts/desktop_focus.py": "56e6e155367d10ce02157ddf4254517a9a675d8d57184e80d2e0bdf34152eefd",
+              "scripts/entropy_seed_gate.py": "3bfc7355ed324cc8b72b67a1b32b431d86b61a0224e7f1d3f58f77b0371403a5",
+              "scripts/history_roster_evidence.py": "a9ac3aa254441f11d2c8b2029a054402bfc5118499c58f9695fb25d83f43a3e9",
+              "scripts/http_content_gate.py": "cc6e6630e328facc1f47aabfd00d64326bed9ca89d3bc07bcdee8efdf5cf5012",
+              "scripts/https_asset_gate.py": "ad0230467e9129d35fc014f4a2e4e095003abd1433993eba8a464f77d89f2454",
+              "scripts/https_document_gate.py": "fe8dba9dbf60afa6e37b3a63a1320cbc43d285b0c97820e7105e530902235cdd",
+              "scripts/https_import_gate.py": "e891f3d0214c17c1771d538d49df8a1d939d013b069259ef304cf0d6fcdc87d4",
+              "scripts/launcher_workflow_gate.py": "cf0955db8f00ea18d120f39667f9bce5439f7df8cff4581bfc8526f7b2d76d91",
+              "scripts/network_contention_gate.py": "a1969d23f7d715b27eeb076cd336dcaa4abe4db42eb22702b9ed44f0961fbafc",
+              "scripts/pending_io_close.py": "fb547cc6c2ebf26dc92609b2c8cd17a5ad0e81f96fd84e7f3c1190ec89b777d3",
+              "scripts/quil_input_latency.py": "2e4c7c13f42452da4c0d6fd33d4181fa20ceab711e2424c8f726728cac1f6ec6",
+              "scripts/quil_reserve_catalog.py": "8b622a8e41f2a67021624d34397ec209cb23c0d6a7f97c6f623a100a74e8c97c",
+              "scripts/quil_third_probe.py": "e2f1ca86c1d9d454edca4e84bf13b093428d61676f2416330b7564757623e731",
+              "scripts/quil_workflow_gate.py": "88bda70de6ee9c25d6e90c5006ec75a7c98c433b5a870862d4e84bc1524ec728",
+              "scripts/silkbar_clock_gate.py": "308dffa4772785558292fd3a79729f4427f44cae741fe1abc2d4c49a1ea3bd6d",
+              "scripts/spindle_reserve_probe.py": "5b7db551238b1066934848f0efec74d8efffa6267fc4b915a69af4bbcf489c58",
+              "scripts/tests/test_alpha_evidence.py": "9490fce4f3918ad8f65fb31e1dcc592cf53ab110c70baee28137d6da54c24a55",
+              "scripts/tests/test_launcher_workflow_gate.py": "b8836f85bd6d83e5d3dd86ce28deaaf34a016e061dfce6b52fc972b43035f070",
+              "scripts/tls_exchange_gate.py": "bc8393c6d9e8137ccf900b3aea8118fb593f9b900cd68ccce74dde66f91d600b",
+              "scripts/tls_lifecycle_gate.py": "7894bed63cd7864aeca23bbc955a3ac73d7fc9650441da511a7817c85a8e6387",
+              "scripts/tls_prepare_gate.py": "67e897363b2f3cc995ee0b103c4ea14d46e80690bf4e70228c21ef09be74d282",
+              "scripts/tls_responsiveness_gate.py": "a888e4b5637ae9c6eac5ffc7a9d3e4b6dfdaee29f9a19c5951b51af97f14aa68",
+              "scripts/workspace_refresh_probe.py": "5f47d504b88b6a33a0c31feb1e7cec04ec0c40c85d5bd90b4bcc74ddf34c063c",
+              "servers/quil/src/main.rs": "9740e96347b5aa3665c3e04f2d2a8ed786badc15b29e0d3a92f699715be4fcaf",
+              "servers/quil/src/view.rs": "547272812d2de2cd1af308ad8e3ce8fcecfe4606d123b25dc1b9526f52a56a8c",
+              "servers/sexdisplay/src/main.rs": "06753f02f984d5fb1ea9ace16d8f7cfdedd81d6119d99c0d71df2ca1e84841b5",
+              "servers/sexdisplay/src/surface_groups.rs": "628dfc494933e156cfe3c4ae6243cbfc28db6ca157a1917b7004cf7b71668a95",
+              "servers/sexdisplay/src/surface_lifecycle.rs": "0d805ef4066627e529d8313a8f79048fb26d10e63077a974a800930750e773c8",
+              "servers/silk-shell/src/desktop_content.rs": "ff2f25393c952b06d3d0dfe136090b927ba4952b1cfc8c0e62a9a66873070048",
+              "servers/silk-shell/src/launcher.rs": "e3a8228b18e025b2cd567ab02c5eae19df7e582d719fc9e7192b4886f34612e8",
+              "servers/silk-shell/src/main.rs": "551b4a51236446fc9f5cc10a8499b8afb5b3e62b35d3529be47f02704473a76f",
+              "servers/silkbar/src/civil_clock.rs": "067c44c7e7d1585fa5a207aab62b3441f712f9d33f85832880fa926edbd8aa97",
+              "servers/silkbar/src/main.rs": "c92fdc312dc71961eaa9f9c8e95aaf2f6006771227b56c547732788de1147247"
+            },
+            "proof": {
+              "ok": true,
+              "errors": [],
+              "kind": "launcher",
+              "view": {
+                "title": "Open Spindle",
+                "status": "CLOSED / RESERVE EXHAUSTED",
+                "geometry": {
+                  "x": 400,
+                  "y": 200,
+                  "w": 480,
+                  "h": 280,
+                  "scale": 2,
+                  "selected": 0,
+                  "first": 0,
+                  "rows": 5
+                }
+              },
+              "civil_clock": {
+                "ok": true,
+                "errors": [],
+                "sequence": 558,
+                "state": "Snapshot",
+                "seconds": 1793485163,
+                "stale": false,
+                "lines": [
+                  "UTC 22:19:23",
+                  "q35 1s snap"
+                ],
+                "geometry": {
+                  "x": 1090,
+                  "y": 18,
+                  "w": 80,
+                  "h": 22
+                },
+                "checked_pixels": 1760,
+                "expected_ink_pixels": 253,
+                "draw_offset": 2244336,
+                "scope": "Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication."
+              }
+            }
+          },
+          "reserve_exhausted": true
+        },
+        "terminal_history": {
+          "bank": 1,
+          "generation": 14,
+          "source": 24,
+          "task": 24,
+          "logical": 12,
+          "size": 217,
+          "fingerprint": "0x620e36c6e5010010",
+          "count": 14,
+          "data_hash": "0x63dc2203611024b6"
+        }
+      }
+    ],
+    "cold": {
+      "observed": true,
+      "source": 24,
+      "task": 24,
+      "fresh_target": 12,
+      "recall": "net-probe",
+      "generation": 14,
+      "bytes": 217,
+      "standalone_artifact_replay": false,
+      "parent_source_bound_replayed": true
+    },
+    "boot_roster_layout_audit": {
+      "ok": true,
+      "boots": 8,
+      "normal_workflow_boots": 6,
+      "sealed_probe_boots": 1,
+      "auxiliary_cold_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-spindle-third-b-build/serial.log",
+          "bytes": 486815,
+          "sha256": "9f2c1babef2635358126f4e212cc0ced57501ed4f961cef19b5b2f955d1810e4",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-last-writer-cold-aux/serial.log",
+          "bytes": 324772,
+          "sha256": "63b26d5d92ea2f3d88ab63b8257d840fed9481235696b9893349d245937177a9",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-alpha-compact/serial.log",
+          "bytes": 2258931,
+          "sha256": "4777a186afebd6d3db02bc7b9aee9810fbbc8339c96ab0c9288347c874d71fda",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-alpha-wide/serial.log",
+          "bytes": 2268074,
+          "sha256": "886b67fbb29c65a293d6536819c534cb503b7c74a04e3b9bf891fe4adf0eaf1d",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-native-connected-wide/recovery/serial.log",
+          "bytes": 409531,
+          "sha256": "d32a0735fe53c2d1ec02e40dbc27a1d5e31963095b1701aa34c747f04629cc4e",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-native-connected-wide/session/serial.log",
+          "bytes": 695050,
+          "sha256": "f67ce410dde1e55af0526846b1074f5b7d350fee866e8a3856531d50069e37c1",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-native-connected-compact/recovery/serial.log",
+          "bytes": 404242,
+          "sha256": "e28f01d3527e4d1bbd629bcb73a2e44b076ae2375764c34b6ac8e95adb69377d",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-spindle-third-b-native-connected-compact/session/serial.log",
+          "bytes": 687493,
+          "sha256": "799a3ba5d80d771d59d63df2e53ae59951bed3ed263485c1ae183652fb8aeed0",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 3,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              }
+            ]
+          },
+          "grant_bytes": 48,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        }
+      ],
+      "scope": "Actual inserted history capability queried beforeseal; exact registered tasks and both family catalogs/layout. Three actual Spindles, no per-request task authentication."
+    },
+    "new_image_1800s_acceptance": false,
+    "positive_controlled_tcp_release": true,
+    "pcap_proof": false
+  },
+  "scalar": {
+    "elfs": 8,
+    "instructions": 291379,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Eight exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "superseded": {
+    "source": "521fa3de",
+    "production_sources_identical": true,
+    "alpha_boots": 2,
+    "registry_verified_captures": 58,
+    "all_fresh_replays": true,
+    "scope": "A three-incarnation native workflows and host checks passed; final B declares exact legacy history prefix without changing production sources. Original source/image/positive evidence and earlier failing host goldens retained."
+  },
+  "limitations": {
+    "finite_spindle_incarnations": 3,
+    "per_request_file_deferred_task_authentication": false,
+    "native_unequal_allocator": false,
+    "full_historical_desktop_close_gate_qualified": false
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-third-spindle-reserve-2026-10-31-raw.tar.gz",
+    "sha256": "30f2ee3db1f2bc69290adac02d5a126d10635a2cddbf83cb8ef8066846fa3f07",
+    "bytes": 19978656,
+    "members": 2908,
+    "payload_manifest_sha256": "25e50621a0ffd6898b209a9021d75af46bb35123fbaae6890a969ca9590bf05c",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "BOOT-only domain24 reservation, held three-participant history recovery, exact third relaunch/owned load/save, 33-byte storage create-fill-verify-delete, controlled1025-byte TCP echo through positive RELEASE, four-pane glyphs, five-role cleanup/389120-byte zeroed reusable private span and exhausted launcher. Both sizes use exact source/image immutable capture replay; cold24-to-fresh12 is an auxiliary observed probe with bound parent replay. No per-request deferred task authentication, unbounded relaunch, packet capture, native unequal task allocator, new1800s or unrestricted daily-driver acceptance claim."
+}

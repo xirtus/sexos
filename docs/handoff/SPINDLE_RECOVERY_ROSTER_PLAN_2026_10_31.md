@@ -70,3 +70,40 @@ Round140 implements the first phase; see the
 reserve remains two. The current app startup task/domain equality check and
 per-request caller-task propagation remain explicit follow-up work; native
 third-incarnation evidence has not been produced.
+
+
+## Progress after rounds140–144 and next work
+
+Round140 delivered the held generic recovery roster. Round142 removed remaining
+Quil/Spindle startup/task inference through the status/Linen/Shell path. Round143
+qualifies actual12→17→24, probes/network release and cold24→fresh12 recovery.
+Round144 accepts the distinct older two-Spindle image over paired1800s sessions.
+Per-request deferred caller-task authentication remains separate work.
+
+1. Grow the actual reserve to eight: proposed targets25–29, five-surface groups
+   starting318, and four-slot groups134–153. Expect17 catalog subjects,29/32
+   main self-waits,51 desktop tracked surfaces and an88-byte recovery grant.
+   Verify every actual inserted grant/layout before sealing. Shell's retained
+   lifecycle table reaches its32-record limit; derive/assert the complete budget
+   before spending it, with explicit last-slot and overflow controls.
+2. Extend the native reserve probe for every successor. Its current loop ends
+   history with `net-probe`, so later Up cannot expect an echo. Save and verify a
+   final distinctive echo before each Close. Cover all eight, exact last-writer
+   cold recovery, controlled peer release, no stale handles and exhaustion at
+   both sizes. Add reserves through BOOT data; do not create runtime authority.
+3. Complete separate sustained acceptance on each newly selected production
+   image. Keep prior images/results immutable and pending-I/O evidence distinct
+   from completed-save Close.
+4. Add BOOT-reserved Browser successors with their own bounded memory, network,
+   TLS/entropy/trust grants and exact retirement fences. First expand the
+   retained metadata budget explicitly; do not treat catalog membership or an
+   old Browser's capabilities as successor authority.
+5. Improve adaptive Spindle typography. At1024-wide side-by-side tiles the
+   current quadrant threshold selects tiny1× text despite substantial empty
+   space. Choose readable2× glyphs with fewer source-derived columns, retain the
+   prompt tail and exact unused-cell erasure, and prove small/large/Zoom layouts.
+6. Daily-driver reuse requires a designed bounded incarnation/generation cycle,
+   with BOOT-sanctioned transition authority and stale-reference rejection.
+   Finite reserves are useful progress, not unrestricted reuse or global-epoch
+   proof. Complete caller-task propagation and app-owned durable workflows as
+   explicit authority milestones, then repeat whole-desktop acceptance.
