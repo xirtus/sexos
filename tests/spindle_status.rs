@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 pub const ERR_SERVICE_NOT_READY:u64=2;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/spindle_status.rs"]mod wire;
 use wire::*;
 #[test]fn pending_status_coalesces_without_changing_identity(){let mut p=Publisher::new(17,17);p.update(State::Loading);let mut old=None;p.poll(|n|{old=Some(n);Err(ERR_SERVICE_NOT_READY)});assert!(p.pending());p.update(State::Saving);let mut r=Receiver::new(17,17);p.poll(|n|{assert_eq!(n.sequence,2);assert!(r.accept(17,true,n.args()));Ok(())});assert!(!p.pending());assert_eq!(r.state(),Some(State::Saving));assert!(!r.accept(17,true,old.unwrap().args()));}

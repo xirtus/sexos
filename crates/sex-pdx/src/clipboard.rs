@@ -24,7 +24,9 @@ impl Subject{pub const fn valid(self)->bool{self.pd!=0&&self.task!=0}}
 impl Participant{
  pub fn from_catalog(c:CatalogInfo)->Option<Self>{
   if !c.is_subject(c.target_pd,c.surface_id,3){return None}
-  let(route,can_read)=match(c.target_pd,c.surface_id){(9,156)=>(41,true),(15,300)=>(43,false),(16,301)=>(46,true),(18,307)=>(56,true),_=>return None};
+  // Quil incarnations may read; Browser may only copy. Routes are BOOT close routes.
+  let Some(i)=crate::app_catalog::by_surface(c.target_pd,c.surface_id).filter(|i|i.app!=crate::app_catalog::App::Spindle)else{return None};
+  let(route,can_read)=(i.close_slot,i.app==crate::app_catalog::App::Quil);
   Some(Self{subject:Subject{pd:c.target_pd,task:c.task_id},surface:c.surface_id,route,can_read})
  }
  pub fn allows(self,a:Action)->bool{match a{Action::Copy=>true,Action::Cut|Action::Paste=>self.can_read}}

@@ -107,3 +107,25 @@ pub const fn native_pixel_bit(owner: u32, sid: u64) -> u8 {
     }
     0
 }
+
+/// The app an exact incarnation domain belongs to (const for table setup).
+pub const fn app_of(target: u32) -> Option<App> {
+    let mut index = 0;
+    while index < INCARNATIONS.len() {
+        if INCARNATIONS[index].target == target { return Some(INCARNATIONS[index].app); }
+        index += 1;
+    }
+    None
+}
+pub const fn is_quil(target: u32) -> bool { matches!(app_of(target), Some(App::Quil)) }
+pub const fn is_spindle(target: u32) -> bool { matches!(app_of(target), Some(App::Spindle)) }
+pub const fn is_browser(target: u32) -> bool { matches!(app_of(target), Some(App::Browser)) }
+/// Whether this incarnation's content sits inside a separate Shell frame.
+pub const fn has_shell_frame(target: u32) -> bool {
+    let mut index = 0;
+    while index < INCARNATIONS.len() {
+        if INCARNATIONS[index].target == target { return INCARNATIONS[index].shell_surface.is_some(); }
+        index += 1;
+    }
+    false
+}

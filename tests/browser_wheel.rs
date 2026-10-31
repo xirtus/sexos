@@ -3,6 +3,7 @@
 //! Source accessors model custody; no native authority or pixel claim.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_scroll.rs"]pub mod app_scroll;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;

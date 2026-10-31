@@ -75,3 +75,25 @@ fn display_tables_equal_the_previous_hand_wired_ones() {
         assert_eq!(app_catalog::is_content(target, surface, sid), want, "{target}/{surface}/{sid}");
     }
 }
+
+#[test]
+fn sex_pdx_policy_helpers_equal_the_previous_hand_wired_sets() {
+    for t in 0..40u32 {
+        assert_eq!(app_catalog::is_quil(t), matches!(t, 9 | 16 | 18), "{t}");
+        assert_eq!(app_catalog::is_spindle(t), matches!(t, 12 | 17), "{t}");
+        assert_eq!(app_catalog::is_browser(t), t == 15, "{t}");
+        // document_view: frameless document holders used a 36-cell top band.
+        let frameless_doc = app_catalog::app_of(t).is_some() && !app_catalog::has_shell_frame(t) && !app_catalog::is_spindle(t);
+        assert_eq!(frameless_doc, matches!(t, 15 | 16 | 18), "{t}");
+        for s in 0..400u64 {
+            // desktop_style::native_canvas
+            let native = app_catalog::native_pixel_bit(t, s) != 0 && !app_catalog::is_browser(t);
+            let old = matches!((t, s), (9,156)|(16,301)|(18,307)|(12,154|160|161|162)|(17,302|303|304|305));
+            assert_eq!(native, old, "{t}/{s}");
+            // clipboard::Participant routes
+            let new = by_surface(t, s).filter(|i| i.app != App::Spindle).map(|i| (i.close_slot, i.app == App::Quil));
+            let old = match (t, s) { (9,156)=>Some((41,true)), (15,300)=>Some((43,false)), (16,301)=>Some((46,true)), (18,307)=>Some((56,true)), _=>None };
+            assert_eq!(new, old, "{t}/{s}");
+        }
+    }
+}

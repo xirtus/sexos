@@ -6,7 +6,7 @@ impl State{fn decode(v:u64)->Option<Self>{Some(match v{1=>Self::Ready,2=>Self::L
 impl Notice{pub fn args(self)->[u64;3]{[self.target as u64|((self.task as u64)<<32),self.sequence,self.state as u64]}}
 pub struct Publisher{target:u32,task:u32,sequence:u64,last:Option<State>,pending:Option<Notice>,closed:bool}
 impl Publisher{
- pub const fn new(target:u32,task:u32)->Self{Self{target,task,sequence:0,last:None,pending:None,closed:!(matches!(target,12|17)&&target==task)}}
+ pub const fn new(target:u32,task:u32)->Self{Self{target,task,sequence:0,last:None,pending:None,closed:!(crate::app_catalog::is_spindle(target)&&target==task)}}
  pub fn update(&mut self,state:State){if self.closed||self.last==Some(state){return}if self.sequence==u64::MAX{self.cancel();return}self.sequence+=1;self.last=Some(state);self.pending=Some(Notice{target:self.target,task:self.task,sequence:self.sequence,state});}
  // A verified shell viewport proves the receiver has bound this incarnation;
  // refresh a status that might have preceded its custody registration.
@@ -17,7 +17,7 @@ impl Publisher{
 }
 pub struct Receiver{target:u32,task:u32,sequence:u64,state:Option<State>,dead:bool}
 impl Receiver{
- pub const fn new(target:u32,task:u32)->Self{Self{target,task,sequence:0,state:None,dead:!(matches!(target,12|17)&&target==task)}}
+ pub const fn new(target:u32,task:u32)->Self{Self{target,task,sequence:0,state:None,dead:!(crate::app_catalog::is_spindle(target)&&target==task)}}
  pub fn state(&self)->Option<State>{self.state}
  pub fn retire(&mut self){self.dead=true;self.state=None;}
  /// `live` must come from the exact immutable kernel catalog and LIVE query,

@@ -6,6 +6,7 @@ extern crate alloc;
 extern crate self as sex_graphics;
 extern crate self as sex_tls;
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-graphics/src/qoi.rs"] pub mod qoi;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"] pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"] pub mod desktop_style;

@@ -3,6 +3,7 @@
 //! callbacks are host models, not capability or native delivery evidence.
 #![allow(dead_code, static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_key.rs"] pub mod app_key;
 #[path = "../crates/sex-pdx/src/app_scroll.rs"] pub mod app_scroll;

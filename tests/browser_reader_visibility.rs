@@ -4,6 +4,7 @@
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
 extern crate self as sex_tls;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
 #[path="../crates/sex-pdx/src/clipboard.rs"]pub mod clipboard;
 #[path="../crates/sex-pdx/src/clipboard_client.rs"]pub mod clipboard_client;
