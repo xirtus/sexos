@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–136
+# SexOS development: round 108 acceptance and rounds 109–137
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -523,3 +523,22 @@ Next: cold-boot the exact post-Quil23 disk, then qualify sustained alpha on this
 larger image; migrate remaining native captions/indicators before expanding
 Spindle history/recovery authority. Inventory remains 2 Open / 28 Partial /
 System Proven false. No unbounded relaunch or daily-driver acceptance claim.
+
+
+## Round 137 — cold recovery after Quil23
+
+[Round report](QUIL_RESERVE_COLD_RECOVERY_2026_10_31.md) closes the longer-chain
+cold-boot gap. Both completed eight-Quil terminal disks boot fresh Quil9 and
+recover the final save with exact journal identity/generation/bank/payload and
+completed viewport/clock pixels. The default pending-I/O cold path is requalified
+at both sizes too. Eight new boots, 80 verified captures and all fresh replays
+pass; all eleven catalog tuples precede sealing in every new boot.
+
+The kernel/ISO and all 576 production inputs are unchanged from round136.
+Four Python checker/test changes form a separately frozen, committed cohort;
+975 Python tests pass. Previous host/static production evidence is explicitly
+identified rather than relabelled. Source-bound raw evidence includes fresh
+parent sessions and exact compressed disk ancestry; every member is hash checked.
+Sustained alpha jobs are separate/live, not accepted here. Next: terminal alpha
+replays, native family captions/focus indicators, and Spindle history/recovery
+catalog migration. Inventory remains 2 Open / 28 Partial / System Proven false.

@@ -1,0 +1,373 @@
+{
+  "round": 137,
+  "qualified_last_incarnation_cold_recovery": true,
+  "full_os_goal_complete": false,
+  "source_commit": "9e0edd28f4e65eb0a1e6f145fb1e72d81cae4828",
+  "main_parent": "778cd1ab85e165f2d891d824817c72326d4ab962",
+  "iso_sha256": "33d25951837bbf7fdb935d8c36185c9b9cea5f7d11169a66f51c3cd3a65d3bb0",
+  "kernel_sha256": "3624ee301ef8c3f7fec7cbaa58fd579f0d8196ae8094d806518aec2d9c756e71",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "9e0edd28f4e65eb0a1e6f145fb1e72d81cae4828",
+    "production": 576,
+    "runner": 585,
+    "unique": 1161,
+    "iso_sha256": "33d25951837bbf7fdb935d8c36185c9b9cea5f7d11169a66f51c3cd3a65d3bb0",
+    "kernel_sha256": "3624ee301ef8c3f7fec7cbaa58fd579f0d8196ae8094d806518aec2d9c756e71",
+    "same_production_image_as_round136": true,
+    "runner_changes_from_round136": [
+      "scripts/pending_io_cold_gate.py",
+      "scripts/quil_reserve_cold_gate.py",
+      "scripts/tests/test_pending_io_cold_gate.py",
+      "scripts/tests/test_quil_reserve_cold_gate.py"
+    ]
+  },
+  "python_tests": 975,
+  "native": {
+    "total_new_boots": 8,
+    "verified_workflow_captures": 80,
+    "all_fresh_replays": true,
+    "groups": [
+      {
+        "profile": "compact",
+        "kind": "complete_reserve",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-parent-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--capture-profile",
+          "--find"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-parent-compact",
+        "driver": "/tmp/sexos-reserve-cold-a-parent-compact-driver.log",
+        "status": 0,
+        "elapsed_seconds": 96.33295504096895,
+        "fresh_replay": true,
+        "verified_captures": 26
+      },
+      {
+        "profile": "compact",
+        "kind": "last_save_cold",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/quil_reserve_cold_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-cold-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--session",
+          "/tmp/sexos-reserve-cold-a-parent-compact"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-cold-compact",
+        "driver": "/tmp/sexos-reserve-cold-a-cold-compact-driver.log",
+        "status": 0,
+        "elapsed_seconds": 14.099707624991424,
+        "fresh_replay": true,
+        "verified_captures": 1
+      },
+      {
+        "profile": "compact",
+        "kind": "pending_io",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-pending-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--pending-io-close",
+          "--capture-profile"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-pending-compact",
+        "driver": "/tmp/sexos-reserve-cold-a-pending-compact-driver.log",
+        "status": 0,
+        "elapsed_seconds": 42.168276375043206,
+        "fresh_replay": true,
+        "verified_captures": 12
+      },
+      {
+        "profile": "compact",
+        "kind": "pending_io_cold",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/pending_io_cold_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-pending-cold-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--session",
+          "/tmp/sexos-reserve-cold-a-pending-compact"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-pending-cold-compact",
+        "driver": "/tmp/sexos-reserve-cold-a-pending-cold-compact-driver.log",
+        "status": 0,
+        "elapsed_seconds": 10.896082542021759,
+        "fresh_replay": true,
+        "verified_captures": 1
+      },
+      {
+        "profile": "wide",
+        "kind": "complete_reserve",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-parent-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--capture-profile",
+          "--find"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-parent-wide",
+        "driver": "/tmp/sexos-reserve-cold-a-parent-wide-driver.log",
+        "status": 0,
+        "elapsed_seconds": 114.18170504190493,
+        "fresh_replay": true,
+        "verified_captures": 26
+      },
+      {
+        "profile": "wide",
+        "kind": "last_save_cold",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/quil_reserve_cold_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-cold-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--session",
+          "/tmp/sexos-reserve-cold-a-parent-wide"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-cold-wide",
+        "driver": "/tmp/sexos-reserve-cold-a-cold-wide-driver.log",
+        "status": 0,
+        "elapsed_seconds": 17.414707000018097,
+        "fresh_replay": true,
+        "verified_captures": 1
+      },
+      {
+        "profile": "wide",
+        "kind": "pending_io",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-pending-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--pending-io-close",
+          "--capture-profile"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-pending-wide",
+        "driver": "/tmp/sexos-reserve-cold-a-pending-wide-driver.log",
+        "status": 0,
+        "elapsed_seconds": 51.391868375008926,
+        "fresh_replay": true,
+        "verified_captures": 12
+      },
+      {
+        "profile": "wide",
+        "kind": "pending_io_cold",
+        "command": [
+          "python3",
+          "/tmp/sexos-reserve-cold-a-frozen/source/scripts/pending_io_cold_gate.py",
+          "--iso",
+          "/tmp/sexos-reserve-cold-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-reserve-cold-a-frozen/source-binding.json",
+          "--out",
+          "/tmp/sexos-reserve-cold-a-pending-cold-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--session",
+          "/tmp/sexos-reserve-cold-a-pending-wide"
+        ],
+        "out": "/tmp/sexos-reserve-cold-a-pending-cold-wide",
+        "driver": "/tmp/sexos-reserve-cold-a-pending-cold-wide-driver.log",
+        "status": 0,
+        "elapsed_seconds": 14.60918633302208,
+        "fresh_replay": true,
+        "verified_captures": 1
+      }
+    ],
+    "last_save_cold_proofs": [
+      {
+        "profile": "compact",
+        "chain": {
+          "session": "/private/tmp/sexos-reserve-cold-a-parent-compact",
+          "seed_sha256": "567bc6f034846ed2c3909c490ee15d0b2575422781f6ed31d2889c1e589e60fa",
+          "targets": [
+            9,
+            16,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "final_target": 23,
+          "document": 4,
+          "recovered": {
+            "bank": 0,
+            "generation": 12,
+            "identity": 327681,
+            "bytes": 20,
+            "hash": "0x1066708195bedecd"
+          },
+          "bytes": 20,
+          "hash": "0x1066708195bedecd",
+          "manifest_sha256": "aa4873b5ac704646858d0c6299aac2d1afcf3868c3af30dd3c5ebffa12959ed7",
+          "result_sha256": "0d06ba7b5403eaf662f63bdc1af7309ee96ef557398985f9ba04fea54edaf4b2"
+        },
+        "load": {
+          "open_start": 310179,
+          "open_end": 321392,
+          "load_offset": 320860,
+          "object": 4,
+          "bytes": 20,
+          "hash": "0x1066708195bedecd",
+          "target": 9
+        },
+        "frame": {
+          "name": "reserve-cold-recovered",
+          "sha256": "6859cd913bcfb5baee178ae220113e792853d4bb164bb8f749eca7a5c7464a04"
+        },
+        "fresh_replay": true
+      },
+      {
+        "profile": "wide",
+        "chain": {
+          "session": "/private/tmp/sexos-reserve-cold-a-parent-wide",
+          "seed_sha256": "567bc6f034846ed2c3909c490ee15d0b2575422781f6ed31d2889c1e589e60fa",
+          "targets": [
+            9,
+            16,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "final_target": 23,
+          "document": 4,
+          "recovered": {
+            "bank": 0,
+            "generation": 12,
+            "identity": 327681,
+            "bytes": 20,
+            "hash": "0x1066708195bedecd"
+          },
+          "bytes": 20,
+          "hash": "0x1066708195bedecd",
+          "manifest_sha256": "a5b1c48b31ea11833bab1d950ae423ff04291f2ef603f1e27a40093ad58635b2",
+          "result_sha256": "c2efaa30bc4901e4aa584bedf9a0624cb523625880f7539afaa0454a29efb00e"
+        },
+        "load": {
+          "open_start": 308030,
+          "open_end": 319242,
+          "load_offset": 318403,
+          "object": 4,
+          "bytes": 20,
+          "hash": "0x1066708195bedecd",
+          "target": 9
+        },
+        "frame": {
+          "name": "reserve-cold-recovered",
+          "sha256": "46ee0bfae2fd20eb33e246a5f901b79ee0e73c877495b68e720c26acf64f4811"
+        },
+        "fresh_replay": true
+      }
+    ]
+  },
+  "prior_production_qualification": {
+    "round": 136,
+    "source_commit": "9287fa3e1f7c8d14ae4d460ddb6e6935a845d6ea",
+    "same576_production_files": true,
+    "same_iso_kernel": true,
+    "registered_host_checks": 43,
+    "rust_test_executions": 2684,
+    "scalar_decoded_instructions": 228332,
+    "scope": "Existing production/host/static scan evidence. Four Python checker/test changes qualified here; host gates not rerun or relabelled as new."
+  },
+  "sustained_expanded_image_acceptance": false,
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-quil-reserve-cold-2026-10-31-raw.tar.gz",
+    "sha256": "3cd918902c848ee76d571950f9fefbb6a3e040ff2a5f6f74d1d8da8b16d132b2",
+    "bytes": 7453471,
+    "members": 1356,
+    "payload_manifest_sha256": "71a57f447eefca6d1731211ec0ca980d82616f9053874ea6bf95437180880dd7",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "New checker cohort, same qualified Round136 production image. Both complete eight-Quil terminal disks cold-boot into freshQuil9 and load the lastQuil23 save with exact journal identity/generation/bank/payload and full completed viewport/clock pixels. The default pending-device Close/cold path is requalified at bothsizes. Read-only replay opens no guest/device. No power-loss/crash-consistency, new1800s, physical/SMP/hostile containment/global epoch, unbounded relaunch or daily-driver acceptance claim."
+}
