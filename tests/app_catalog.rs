@@ -76,9 +76,9 @@ fn shell_view_tables_equal_the_previous_hand_wired_order() {
 
 #[test]
 fn display_tables_equal_the_previous_hand_wired_ones() {
-    let old = |owner: u32, sid: u64| -> u8 { match (owner, sid) { (9,156) => 1, (12,154|160|161|162) => 2, (15,300) => 4, (16,301) => 8, (17,302|303|304|305) => 16, (18,307) => 32, _ => 0 } };
+    let old = |owner: u32, sid: u64| -> u64 { match (owner, sid) { (9,156) => 1, (12,154|160|161|162) => 2, (15,300) => 4, (16,301) => 8, (17,302|303|304|305) => 16, (18,307) => 32, _ => 0 } };
     for owner in 0..40u32 { for sid in 0..400u64 { assert_eq!(app_catalog::native_pixel_bit(owner, sid), old(owner, sid), "{owner}/{sid}"); } }
-    const BIT: u8 = app_catalog::native_pixel_bit(17, 304);
+    const BIT: u64 = app_catalog::native_pixel_bit(17, 304);
     assert_eq!(BIT, 16, "usable in const context");
     for (target, surface, sid, want) in [(12,154,161,true),(12,154,303,false),(17,302,305,true),(9,156,201,false),(9,156,156,true)] {
         assert_eq!(app_catalog::is_content(target, surface, sid), want, "{target}/{surface}/{sid}");

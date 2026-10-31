@@ -74,7 +74,7 @@ pub const SURFACE_EMPTY: Surface = Surface {
     line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
 };
 
-pub const CATALOG_CAPACITY: usize = 6;
+pub const CATALOG_CAPACITY: usize = crate::app_catalog::COUNT;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Catalog {
     pub slot: usize,
@@ -106,7 +106,7 @@ enum PresentPhase { Idle, WaitingPixels, ReplyPending, Delivered }
 struct Presentation { request: u64, phase: PresentPhase }
 impl Presentation { const EMPTY: Self = Self { request: 0, phase: PresentPhase::Idle }; }
 /// Fixed native content routes: no catalog scan in the per-pixel compositor.
-pub const fn native_pixel_bit(owner: u32, sid: u64) -> u8 {
+pub const fn native_pixel_bit(owner: u32, sid: u64) -> u64 {
     crate::app_catalog::native_pixel_bit(owner, sid)
 }
 pub struct Lifecycle { entries: [Option<Entry>; CATALOG_CAPACITY] }
@@ -220,7 +220,7 @@ impl Lifecycle {
         self.entries.iter().flatten().any(|e| e.phase == Phase::Live && e.presentation.phase == PresentPhase::WaitingPixels)
     }
     /// Must follow a completed framebuffer pass; admission or active state is insufficient.
-    pub fn pixels_presented(&mut self, visible_bits: u8) {
+    pub fn pixels_presented(&mut self, visible_bits: u64) {
         for entry in self.entries.iter_mut().flatten() {
             if entry.phase == Phase::Live && entry.presentation.phase == PresentPhase::WaitingPixels
                 && visible_bits & native_pixel_bit(entry.catalog.target_pd, entry.catalog.surface_id) != 0 {

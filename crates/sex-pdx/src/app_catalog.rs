@@ -2,8 +2,8 @@
 //! The BOOT app incarnation catalog: one table every component reads instead
 //! of hand-wiring each incarnation. It describes what BOOT already grants; it
 //! is data, never authority. Each service still holds and checks its own
-//! BOOT capabilities, and the kernel's grants remain the truth that a host
-//! check compares this table against.
+//! BOOT capabilities. Before sealing, the kernel audits this table against
+//! its actual objects and held grants.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum App { Quil, Spindle, Browser }
@@ -53,6 +53,22 @@ pub const INCARNATIONS: [Incarnation; 6] = [
     quil(2, 18, 307, None, 54, 56, Some(55), 57),
 ];
 
+/// Compile-time storage sizing; descriptive catalog data never grants authority.
+pub const COUNT: usize = INCARNATIONS.len();
+/// Display's presentation receipt mask has one bit per reserved incarnation.
+pub const PRESENTATION_BITS: usize = u64::BITS as usize;
+const _: () = assert!(COUNT <= PRESENTATION_BITS);
+pub const fn count(app: App) -> usize {
+    let mut total = 0; let mut i = 0;
+    while i < COUNT { if INCARNATIONS[i].app as u8 == app as u8 { total += 1; } i += 1; }
+    total
+}
+pub const LIFECYCLE_SLOTS: [usize; COUNT] = {
+    let mut out = [0; COUNT]; let mut i = 0;
+    while i < COUNT { out[i] = INCARNATIONS[i].lifecycle_slot; i += 1; }
+    out
+};
+
 pub fn by_target(target: u32) -> Option<&'static Incarnation> {
     INCARNATIONS.iter().find(|i| i.target == target)
 }
@@ -90,7 +106,7 @@ pub fn is_content(target: u32, surface: u64, sid: u64) -> bool {
 /// One bit per incarnation (its catalog index) for an owner's content
 /// surface; 0 for anything else. Const so the per-pixel compositor pays no
 /// runtime scan.
-pub const fn native_pixel_bit(owner: u32, sid: u64) -> u8 {
+pub const fn native_pixel_bit(owner: u32, sid: u64) -> u64 {
     let mut index = 0;
     while index < INCARNATIONS.len() {
         let i = &INCARNATIONS[index];
@@ -154,12 +170,12 @@ pub fn predecessor(i: &Incarnation) -> Option<&'static Incarnation> {
     INCARNATIONS.iter().find(|p| p.app == i.app && p.ordinal == ordinal)
 }
 /// Quil incarnation targets in ordinal order (document buffer clients).
-pub const QUIL_TARGETS: [u32; 3] = [9, 16, 18];
-const _: () = {
-    let mut i = 0; let mut q = 0;
-    while i < INCARNATIONS.len() {
-        if matches!(INCARNATIONS[i].app, App::Quil) { assert!(INCARNATIONS[i].target == QUIL_TARGETS[q]); q += 1; }
+pub const QUIL_COUNT: usize = count(App::Quil);
+pub const QUIL_TARGETS: [u32; QUIL_COUNT] = {
+    let mut out = [0; QUIL_COUNT]; let mut i = 0; let mut q = 0;
+    while i < COUNT {
+        if matches!(INCARNATIONS[i].app, App::Quil) { out[q] = INCARNATIONS[i].target; q += 1; }
         i += 1;
     }
-    assert!(q == QUIL_TARGETS.len());
+    out
 };

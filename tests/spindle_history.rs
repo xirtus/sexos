@@ -2,6 +2,7 @@
 extern crate alloc;extern crate self as spin;extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 pub const SPINDLE_HISTORY_BASE_LBA:u64=1808;pub const SPINDLE_HISTORY_SECTORS:u64=18;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/history_recovery.rs"]pub mod history_recovery;
 #[path="../servers/sexfiles/src/history_journal.rs"]pub mod history_journal;
 struct Volatile;impl history_journal::Store for Volatile{fn save(&mut self,_:u32,_:&[u8])->Result<(),u32>{Ok(())}fn recover(&mut self,_:u32,_:&mut[u8;4096])->Result<usize,u32>{Err(spindle_history::MISSING)}}

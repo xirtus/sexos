@@ -122,7 +122,7 @@ static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGrou
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
-static mut APP_PRESENT_BITS: u8 = 0;
+static mut APP_PRESENT_BITS: u64 = 0;
 static APP300_PRESENTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 fn report_app_presented() {

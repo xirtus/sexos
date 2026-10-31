@@ -1,6 +1,7 @@
 //! Actual library syscall adapter; current-domain capability tables are mocks.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/document.rs"]pub mod document;
 #[path="../crates/sex-pdx/src/document_buffer.rs"]pub mod document_buffer;
 #[path="../crates/sex-pdx/src/document_snapshot.rs"]pub mod document_snapshot;

@@ -3,6 +3,7 @@
 //! layout; scheduler/PD boundary doubles do not establish native containment.
 #![allow(dead_code)]
 use std::sync::{Mutex,atomic::{AtomicPtr,AtomicU32,Ordering}};
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../kernel/src/ipc/sender.rs"]mod sender;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod app_lifecycle;
 include!(env!("IPC_MESSAGE_SOURCE"));

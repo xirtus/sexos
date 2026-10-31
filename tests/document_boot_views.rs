@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 extern crate self as sex_pdx;
 #[macro_export] macro_rules! serial_println { ($($t:tt)*) => {} }
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/memory_region.rs"] pub mod memory_region;
 #[path="../crates/sex-pdx/src/document_buffer.rs"] pub mod document_buffer;
 #[path="../kernel/src/capability_slot.rs"] pub mod capability_slot;

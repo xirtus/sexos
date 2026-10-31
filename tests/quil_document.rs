@@ -3,6 +3,7 @@ extern crate self as sex_pdx;
 #[macro_export]
 macro_rules! serial_record{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 pub const ERR_SERVICE_NOT_READY: u64 = 2;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path = "../crates/sex-pdx/src/memory_region.rs"] pub mod memory_region;
 #[path = "../crates/sex-pdx/src/document_buffer.rs"] pub mod document_buffer;
 #[path = "../crates/sex-pdx/src/document_snapshot.rs"] pub mod document_snapshot;

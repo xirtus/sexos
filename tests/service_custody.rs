@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod production;
 use production::*;use std::cell::Cell;
 struct Auth{catalog:CatalogInfo,info:Result<LifecycleInfo,u64>,ack:Result<(),u64>,queries:usize,acks:usize}

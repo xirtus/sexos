@@ -18,7 +18,7 @@ use surface_groups::FrameGroups;
 macro_rules! serial_println { ($($a:tt)*) => {} }
 static mut SURFACES:[Surface;MAX_SURFACES]=[SURFACE_EMPTY;MAX_SURFACES];
 static mut FRAME_GROUPS:FrameGroups=FrameGroups::new();
-static mut APP_PRESENT_BITS:u8=0;
+static mut APP_PRESENT_BITS:u64=0;
 static RENDER_FRAME_COUNTER:core::sync::atomic::AtomicU64=core::sync::atomic::AtomicU64::new(0);
 struct Tokens{frame_top_bar_color:u32,active_tab_color:u32,inactive_tab_color:u32,close_light_color:u32,minimize_light_color:u32,zoom_light_color:u32,frame_rim_color:u32}
 static DISPLAY_TOKENS:Tokens=Tokens{frame_top_bar_color:0x111111,active_tab_color:0x222222,inactive_tab_color:0x333333,close_light_color:0x444444,minimize_light_color:0x555555,zoom_light_color:0x666666,frame_rim_color:0x777777};

@@ -41,9 +41,9 @@ assert 'sex_pdx::app_catalog::predecessor(incarnation)' in init
 reserve=init.index('reserve_successor(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect(')
 audit=init.index('crate::app_resources::audit_boot_catalog(silkshell_id);')
 assert reserve<audit<init.index('crate::boot_memory::seal_all()')
-assert 'MAX_APPS:usize=6;' in (r/'kernel/src/app_resource_state.rs').read_text()
-assert 'SLOTS: [usize; 6] = [38, 39, 40, 45, 50, 54]' in (r/'crates/sex-pdx/src/app_lifecycle.rs').read_text()
-assert 'CATALOG_CAPACITY: usize = 6;' in (r/'servers/sexdisplay/src/surface_lifecycle.rs').read_text()
+assert 'MAX_APPS:usize=sex_pdx::app_catalog::COUNT;' in (r/'kernel/src/app_resource_state.rs').read_text()
+assert 'SLOTS: [usize; crate::app_catalog::COUNT] = crate::app_catalog::LIFECYCLE_SLOTS' in (r/'crates/sex-pdx/src/app_lifecycle.rs').read_text()
+assert 'CATALOG_CAPACITY: usize = crate::app_catalog::COUNT;' in (r/'servers/sexdisplay/src/surface_lifecycle.rs').read_text()
 for name,value in [('QUIL_THIRD_LIFECYCLE_SLOT',54),('QUIL_THIRD_ACTIVATION_SLOT',55),('QUIL_THIRD_CLOSE_SLOT',56),('QUIL_THIRD_ROUTE_SLOT',57)]:
     assert re.search(r'pub const '+name+r':(?:usize|u64)='+str(value)+r';',(r/'crates/sex-pdx/src/app_lifecycle.rs').read_text())
 print('[app.activation.wiring] PASS scope=static_reservation_and_commit_order')

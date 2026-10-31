@@ -93,8 +93,8 @@ pub fn init_uiir(producer: u32, consumer: u32) {
 /// Permanent BOOT budget, separate from reclaimable app-private pages. Each
 /// successor gets different backing and an immutable, exact provider peer.
 /// Runtime Load still uses scalar transport until snapshot publication exists.
-pub fn init_documents(files: u32, clients: [u32; 3]) {
-    use sex_pdx::document_buffer::{BYTES, CLIENT_SLOT, FIRST_REGION_ID, PROVIDER_SLOTS};
+pub fn init_documents(files: u32, clients: [u32; sex_pdx::document_buffer::CLIENT_COUNT]) {
+    use sex_pdx::document_buffer::{BYTES, CLIENT_SLOT, region_id, PROVIDER_SLOTS};
     require_boot();
     if files == 0 { return; }
     // Validate all subjects/slots before the first reservation or grant.
@@ -108,22 +108,22 @@ pub fn init_documents(files: u32, clients: [u32; 3]) {
     }
     for (index, client_id) in clients.into_iter().enumerate() {
         paired_at(files, client_id, PROVIDER_SLOTS[index], CLIENT_SLOT,
-            FIRST_REGION_ID + index as u32, BYTES, false);
+            region_id(index), BYTES, false);
     }
     document_selftest(files, clients);
 }
 
-fn document_selftest(files: u32, clients: [u32; 3]) {
-    use sex_pdx::document_buffer::{BYTES, CLIENT_SLOT, FIRST_REGION_ID, PROVIDER_SLOTS};
+fn document_selftest(files: u32, clients: [u32; sex_pdx::document_buffer::CLIENT_COUNT]) {
+    use sex_pdx::document_buffer::{BYTES, CLIENT_SLOT, region_id, PROVIDER_SLOTS};
     let provider = DOMAIN_REGISTRY.get(files).expect("DOCUMENT_TEST_PROVIDER_MISSING");
     let fail = [u64::MAX, 0, 0, 0, 0];
-    let mut views = [(0u64, 0u64); 3];
+    let mut views = [(0u64, 0u64); sex_pdx::document_buffer::CLIENT_COUNT];
     let mut pairs = 0;
     for (index, client_id) in clients.into_iter().enumerate() {
         if client_id == 0 { continue; }
         let client = DOMAIN_REGISTRY.get(client_id).expect("DOCUMENT_TEST_CLIENT_MISSING");
         let slot = PROVIDER_SLOTS[index];
-        let id = (FIRST_REGION_ID + index as u32) as u64;
+        let id = region_id(index) as u64;
         assert_eq!(crate::syscalls::region_query(provider, 55, slot, 0, 0, 0),
             [0, BYTES, (QUERY_VIEW | READ | WRITE) as u64, client_id as u64, id]);
         assert_eq!(crate::syscalls::region_query(client, 55, CLIENT_SLOT, 0, 0, 0),
@@ -137,7 +137,7 @@ fn document_selftest(files: u32, clients: [u32; 3]) {
             assert_eq!(crate::syscalls::region_query(client, 54, CLIENT_SLOT, 0, BYTES, rights as u64), fail);
         }
         assert_eq!(crate::syscalls::region_query(provider, 54, slot, 0, BYTES, (QUERY_VIEW | DMA_ADDRESS) as u64), fail);
-        for wrong_slot in [65, 66] {
+        for wrong_slot in PROVIDER_SLOTS.into_iter().filter(|slot| *slot != CLIENT_SLOT) {
             assert_eq!(crate::syscalls::region_query(client, 55, wrong_slot, 0, 0, 0), fail);
         }
         assert_eq!(crate::syscalls::region_query(client, 54, CLIENT_SLOT, BYTES - 1, 2, (QUERY_VIEW | READ) as u64), fail);

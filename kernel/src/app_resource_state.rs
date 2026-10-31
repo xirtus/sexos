@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pure authority and exact private-image leaf retirement mechanism.
-pub const MAX_APPS:usize=6;
+pub const MAX_APPS:usize=sex_pdx::app_catalog::COUNT;
 pub const MAX_PAGES:usize=512;
 pub const QUERY:u8=1;
 pub const ACK:u8=2;

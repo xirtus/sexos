@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../kernel/src/app_resource_state.rs"] mod production;
 use production::*;
 use std::cell::RefCell;
