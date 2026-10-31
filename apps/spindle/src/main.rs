@@ -94,6 +94,7 @@ static mut STORAGE_PROBE:storage_probe::Client=storage_probe::Client::new();
 mod viewport;
 mod scroll_view;
 mod display_delivery;
+mod sextime_command;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -704,6 +705,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  help         show this help");
             sb.push(b"  clear        clear scrollback");
             sb.push(b"  echo <msg>   print message");
+            sb.push(b"  sextime <n>  Unix seconds as SexTime/UTC/Long Count");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -822,6 +824,21 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"");
             sb.push(b"Type 'daily' for full daily-driver readiness summary.");
             sb.push(b"Type 'blockers' for known V1 limitations.");
+            true
+        }
+        b"sextime" => {
+            match sextime_command::parse(args).and_then(sextime_command::render) {
+                Some(lines) => {
+                    for (row, len) in lines.rows.iter().zip(lines.lens) { sb.push(&row[..len]); }
+                    let text = |i: usize| core::str::from_utf8(&lines.rows[i][..lines.lens[i]]).unwrap_or("?");
+                    sex_pdx::serial_record!("[spindle.sextime] {} | {} | {} ok=1", text(0), text(1), text(2));
+                }
+                None => {
+                    sb.push(b"usage: sextime <unix-seconds>");
+                    sb.push(b"Converts the number given; it does not read a clock.");
+                    sex_pdx::serial_record!("[spindle.sextime] ok=0 reason=usage");
+                }
+            }
             true
         }
         b"echo" => {
