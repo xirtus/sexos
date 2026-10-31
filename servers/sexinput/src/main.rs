@@ -881,7 +881,7 @@ pub extern "C" fn _start() -> ! {
             // Kernel RawInput is type 0x201, arg0 = scancode
             if req.type_id == 0x201 {
                 let scancode = req.arg0;
-                serial_println!("[sexinput.ps2.scancode] raw={:#x}", scancode);
+                sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);
 
                 // 2. Normalize and forward to silk-shell (SLOT_SHELL = 6)
                 // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY

@@ -55,6 +55,9 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset.rs" -o "$TEST_DIR/bro
 "$TEST_DIR/browser-asset-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_bitmap_delivery.rs" -o "$TEST_DIR/browser-bitmap-tests"
 "$TEST_DIR/browser-bitmap-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset_presentation.rs" -o "$TEST_DIR/browser-asset-presentation-tests"
+"$TEST_DIR/browser-asset-presentation-tests"
+"$ROOT_DIR/scripts/browser_asset_fence_host_gate.sh"
 echo '[sexnet.asset.host] PASS scope=actual_bounded_decoder_view_outbox_and_display_stage_not_live_authority_or_pixels'
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/http_navigation.rs" -o "$TEST_DIR/http-navigation-tests"
 "$TEST_DIR/http-navigation-tests"

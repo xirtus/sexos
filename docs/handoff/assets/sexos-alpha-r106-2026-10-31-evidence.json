@@ -1,0 +1,1354 @@
+{
+  "round": 106,
+  "accepted": true,
+  "accepted_goal_rounds": 27,
+  "total_goal_rounds": 121,
+  "remaining_goal_rounds": 94,
+  "candidate": "B",
+  "iso_sha256": "cc76f2108f0018e96e6982b57b28a696d0dc934ffaf323ef077e7ac22eda2003",
+  "kernel_sha256": "78b79d5b661e28f81c7455f83b58f97fc3fb9e4e2101fcace593a2dd64c96f71",
+  "binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "production_inputs": 564,
+  "runner_inputs": 534,
+  "checks": {
+    "master": "BUILD PASS / GREEN_MASTER",
+    "rust": [
+      {
+        "name": "service-custody",
+        "path": "/tmp/sexos-r106-b-frozen-service-custody.log",
+        "executions": 1803,
+        "sha256": "ccdb288d88e1e2018b10f3bc1e6fd11bfdf0bf55cf277c8f1c0d489ec1ee6dfc",
+        "scope": "Actual Rust custody/clipboard/editor/reader/network/asset functions with explicitly modeled callbacks; executions rather than unique-test deduplication."
+      },
+      {
+        "name": "display",
+        "path": "/tmp/sexos-r106-b-frozen-display.log",
+        "executions": 56,
+        "sha256": "93b95863b778d333c7495fe2856aaedf9021bec03fec2ac500d40d86f9e64a9b",
+        "scope": "Actual display Stage/scalar/scanline/damage and exact parent policy; native pixels are separate."
+      },
+      {
+        "name": "readability",
+        "path": "/tmp/sexos-r106-b-frozen-readability.log",
+        "executions": 9,
+        "sha256": "b03ebd82e5203358fb2cd79252aee46322cea442c2fe2c20ed644e71d9b0368f",
+        "scope": "Actual readable layout/contrast functions."
+      },
+      {
+        "name": "launcher",
+        "path": "/tmp/sexos-r106-b-frozen-launcher.log",
+        "executions": 35,
+        "sha256": "4f7474c20e9a8725445a32decd1e1d3a2d3191dd0bfe294c80e94b8097373ee9",
+        "scope": "Actual Shell action/workspace/admission callbacks."
+      },
+      {
+        "name": "text-pipeline",
+        "path": "/tmp/sexos-r106-b-frozen-text-pipeline.log",
+        "executions": 65,
+        "sha256": "5a8c568a6f30e86446dc2240cffdef09faf499db9bf7f8e1707ea94a5220ace3",
+        "scope": "Actual UTF8 Reader/shared Outbox/Display Stage/Applied with finite callbacks."
+      },
+      {
+        "name": "drive-wait",
+        "path": "/tmp/sexos-r106-b-frozen-drive-wait.log",
+        "executions": 38,
+        "sha256": "3199c533bc726165f2233f72e0a1fbf000d57b93714f94422148fd4c04405974",
+        "scope": "Four runtime NVMe completion paths/dispatch with fake ticks, CQEs and event words; callbacks are assumed to return."
+      }
+    ],
+    "rust_test_executions": 2006,
+    "python_tests": 786,
+    "python_log_sha256": "10be75e5726082060e804728849c50d0bb830646265e6694db990b1c3a2926a4",
+    "native_runs": 12,
+    "native_boots": 14,
+    "independent_frames": 48,
+    "root_replay_sha256": "f9fd840b6e89bab897f9e233e88b27d3d63cd2b1259f85fd1951517ba7069d95",
+    "scalar_audit": {
+      "ok": true,
+      "iso_sha256": "cc76f2108f0018e96e6982b57b28a696d0dc934ffaf323ef077e7ac22eda2003",
+      "elf_sha256": "0b3e865ac8436f3fef992db2ff3975c1dc3fbf53096e3c1085159e8caa1d8b7d",
+      "disassembly_sha256": "2bba7b21e0a9e440b1c7a6069f192f66ca17d95ca060d9864d6762b75328e257",
+      "instructions": 90435,
+      "vector_or_fp_matches": [],
+      "scope": "Decoded ISO-extracted Browser operands and inspected floating-point/state mnemonics only; no runtime stack/register/cache-erasure, scheduler, hostile containment or whole-image instruction proof."
+    },
+    "semantic_negative_controls": {
+      "ok": true,
+      "frozen_root": "/private/tmp/sexos-alpha-r106-images-b-frozen",
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "control_script_path": "/private/tmp/sexos-r106-b-semantic-controls.py",
+      "control_script_sha256": "136ce8a32fe76585f481d90477286dc78c0928263cc6b9f9cb5dbd4523a4226f",
+      "controls_count": 3,
+      "baseline_tests_passed": 4,
+      "mutant_tests_rejected": 4,
+      "frozen_inputs_verified": {
+        "apps/kaleidoscope/src/asset_view.rs": "8df819a4e73ba10494106d7a235e52fe86be0085353f08069de5681888ec7bb4",
+        "tests/browser_asset.rs": "aad38fac75adbf883fc770c15000a1103c2f8e0696103a00f171014637e660b6",
+        "crates/sex-graphics/src/qoi.rs": "b26f5a609f453dae74b5109b77e48724635f531ccb88e10699ce92112f46e705",
+        "crates/sex-pdx/src/bitmap_batch.rs": "7c9d30efb3618edebc483d9eae64275c4f8ccb77d6aaf2f810d31d88c142e14c",
+        "crates/sex-pdx/src/desktop_style.rs": "897135daad3a079994023df2d49eb17d3a66f54a61fcb2163307b48fa1084f14",
+        "apps/kaleidoscope/src/asset_decode.rs": "560b7317ca14a6b9cbec5b2065fd1af234af7ac371f9713fa7cce640db3451a5",
+        "apps/kaleidoscope/src/asset_presentation.rs": "09cef96f4b0dcd64a03b3b0d4f6dd0172e639126f57c861c2e847f8bbabf9b8d",
+        "tests/browser_asset_presentation.rs": "832c34207fd26a1a9e0989965a3b5cce5c2934cda894a9c7e25af5a71be6584f",
+        "apps/kaleidoscope/src/bitmap_delivery.rs": "e7fcf758c4aef9044773e5bf706c907d8b491770c53239dc8529ae789b08ad1c",
+        "servers/sexdisplay/src/bitmap_transaction.rs": "9729d7356389b9ae92562070f3a4701e5b62766ca3fe97cd3fcc4a9a05377cd9",
+        "apps/kaleidoscope/src/main.rs": "8507292159618a66bab838b5e5d0dcf382a8de0fcdc623aa2300e531ec83d966",
+        "tests/browser_asset_fence.rs": "d424067528d135e0fa1690ad3f20991687ce1ef793c56a2f18b45736805095d8",
+        "scripts/browser_asset_fence_host_gate.sh": "4a8672b2e51ade5c903ea2348f82ec7b8465ea6d68f8161ce6a726128bb0af91"
+      },
+      "controls": [
+        {
+          "name": "asset-centering",
+          "source_path": "apps/kaleidoscope/src/asset_view.rs",
+          "source_sha256": "8df819a4e73ba10494106d7a235e52fe86be0085353f08069de5681888ec7bb4",
+          "source_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-original-source.rs",
+          "source_fixture_sha256": "8df819a4e73ba10494106d7a235e52fe86be0085353f08069de5681888ec7bb4",
+          "fixture_path": "tests/browser_asset.rs",
+          "fixture_sha256": "aad38fac75adbf883fc770c15000a1103c2f8e0696103a00f171014637e660b6",
+          "original_test_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-original-test.rs",
+          "original_test_fixture_sha256": "aad38fac75adbf883fc770c15000a1103c2f8e0696103a00f171014637e660b6",
+          "baseline_module_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-original-source.rs",
+          "baseline_module_sha256": "8df819a4e73ba10494106d7a235e52fe86be0085353f08069de5681888ec7bb4",
+          "mutant_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant.rs",
+          "mutant_sha256": "fa0a5aa2925025944f0f11f017d4fbab6930dba0f688407e4f24e14af1f6e91e",
+          "mutation": {
+            "old": "let x=INSET+(available_w-image_w)/2;let y=top+(available_h-image_h)/2;",
+            "new": "let x=INSET;let y=top;",
+            "count": 1
+          },
+          "tests": [
+            "image_modes_center_complete_pixels_in_the_same_reserved_body"
+          ],
+          "baseline_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-baseline-fixture.rs",
+          "baseline_fixture_sha256": "09aae722a67fa30618f1d0d3fab0870f016769f1c4749c95f7ae49b192840d15",
+          "baseline": {
+            "compile": {
+              "returncode": 0,
+              "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-baseline-compile.log",
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "command": [
+                "rustc",
+                "--edition=2021",
+                "-A",
+                "dead_code",
+                "--test",
+                "/tmp/sexos-r106-b-semantic-controls/asset-centering-baseline-fixture.rs",
+                "-o",
+                "/tmp/sexos-r106-b-semantic-controls/asset-centering-baseline-tests"
+              ],
+              "environment": {}
+            },
+            "tests": [
+              {
+                "returncode": 0,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-baseline-image_modes_center_complete_pixels_in_the_same_reserved_body.log",
+                "log_sha256": "d8c717dcda437a65136679ce44b3c2065df613b14dcaf02f29a9c22fe6622775",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/asset-centering-baseline-tests",
+                  "--exact",
+                  "image_modes_center_complete_pixels_in_the_same_reserved_body",
+                  "--test-threads=1"
+                ],
+                "environment": {},
+                "name": "image_modes_center_complete_pixels_in_the_same_reserved_body"
+              }
+            ]
+          },
+          "mutant_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant-fixture.rs",
+          "mutant_fixture_sha256": "f30813ea706cdfbc0f4346f21abfaa25f29af7d2a48972d272892e32a7b6ef6a",
+          "mutant": {
+            "compile": {
+              "returncode": 0,
+              "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant-compile.log",
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "command": [
+                "rustc",
+                "--edition=2021",
+                "-A",
+                "dead_code",
+                "--test",
+                "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant-fixture.rs",
+                "-o",
+                "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant-tests"
+              ],
+              "environment": {}
+            },
+            "tests": [
+              {
+                "returncode": 101,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant-image_modes_center_complete_pixels_in_the_same_reserved_body.log",
+                "log_sha256": "2f291a66731af748aeca4dffc8deb627e42e85c80514bdacd858f6e84a3112bd",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/asset-centering-mutant-tests",
+                  "--exact",
+                  "image_modes_center_complete_pixels_in_the_same_reserved_body",
+                  "--test-threads=1"
+                ],
+                "environment": {},
+                "name": "image_modes_center_complete_pixels_in_the_same_reserved_body"
+              }
+            ]
+          },
+          "baseline_passed": true,
+          "negative_rejected": true
+        },
+        {
+          "name": "presentation-sequence-floor",
+          "source_path": "apps/kaleidoscope/src/asset_presentation.rs",
+          "source_sha256": "09cef96f4b0dcd64a03b3b0d4f6dd0172e639126f57c861c2e847f8bbabf9b8d",
+          "source_fixture_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-original-source.rs",
+          "source_fixture_sha256": "09cef96f4b0dcd64a03b3b0d4f6dd0172e639126f57c861c2e847f8bbabf9b8d",
+          "fixture_path": "tests/browser_asset_presentation.rs",
+          "fixture_sha256": "832c34207fd26a1a9e0989965a3b5cce5c2934cda894a9c7e25af5a71be6584f",
+          "original_test_fixture_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-original-test.rs",
+          "original_test_fixture_sha256": "832c34207fd26a1a9e0989965a3b5cce5c2934cda894a9c7e25af5a71be6584f",
+          "baseline_module_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-original-source.rs",
+          "baseline_module_sha256": "09cef96f4b0dcd64a03b3b0d4f6dd0172e639126f57c861c2e847f8bbabf9b8d",
+          "mutant_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant.rs",
+          "mutant_sha256": "8f256aa2fc8fccba97038b42a20601379d5db0d4f7d6e829da34de3d31d79784",
+          "mutation": {
+            "old": "|| sequence <= self.sequence_floor",
+            "new": "",
+            "count": 1
+          },
+          "tests": [
+            "stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation"
+          ],
+          "baseline_fixture_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-baseline-fixture.rs",
+          "baseline_fixture_sha256": "ccb8fd7d40dea0ac249c18b5bbedca8ed4e3923845a89d73ca11e27eecb6273e",
+          "baseline": {
+            "compile": {
+              "returncode": 0,
+              "log_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-baseline-compile.log",
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "command": [
+                "rustc",
+                "--edition=2021",
+                "-A",
+                "dead_code",
+                "--test",
+                "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-baseline-fixture.rs",
+                "-o",
+                "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-baseline-tests"
+              ],
+              "environment": {}
+            },
+            "tests": [
+              {
+                "returncode": 0,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-baseline-stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation.log",
+                "log_sha256": "f9256fda86adc96bacb320f3188ccc5cdcf3c4bd69ef221d8c79e2ac6d22419b",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-baseline-tests",
+                  "--exact",
+                  "stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation",
+                  "--test-threads=1"
+                ],
+                "environment": {},
+                "name": "stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation"
+              }
+            ]
+          },
+          "mutant_fixture_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant-fixture.rs",
+          "mutant_fixture_sha256": "1365efd9f4eeb6fbb3e57f2fe6e497e72a8cdddb71ff4dbb0fc3115ec8c05cd6",
+          "mutant": {
+            "compile": {
+              "returncode": 0,
+              "log_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant-compile.log",
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "command": [
+                "rustc",
+                "--edition=2021",
+                "-A",
+                "dead_code",
+                "--test",
+                "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant-fixture.rs",
+                "-o",
+                "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant-tests"
+              ],
+              "environment": {}
+            },
+            "tests": [
+              {
+                "returncode": 101,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant-stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation.log",
+                "log_sha256": "9d7e6af732bfda3144a613b1ae5a74ea9cb2c1408ca8682439f0958864d5b7be",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/presentation-sequence-floor-mutant-tests",
+                  "--exact",
+                  "stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation",
+                  "--test-threads=1"
+                ],
+                "environment": {},
+                "name": "stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation"
+              }
+            ]
+          },
+          "baseline_passed": true,
+          "negative_rejected": true
+        },
+        {
+          "name": "asset-peer-fence",
+          "source_path": "apps/kaleidoscope/src/main.rs",
+          "source_sha256": "8507292159618a66bab838b5e5d0dcf382a8de0fcdc623aa2300e531ec83d966",
+          "source_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-original-source.rs",
+          "source_fixture_sha256": "8507292159618a66bab838b5e5d0dcf382a8de0fcdc623aa2300e531ec83d966",
+          "fixture_path": "tests/browser_asset_fence.rs",
+          "fixture_sha256": "d424067528d135e0fa1690ad3f20991687ce1ef793c56a2f18b45736805095d8",
+          "original_test_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-original-test.rs",
+          "original_test_fixture_sha256": "d424067528d135e0fa1690ad3f20991687ce1ef793c56a2f18b45736805095d8",
+          "baseline_module_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-actual-methods.rs",
+          "baseline_module_sha256": "4c8816c0141a52e43de4b105636a2abad4847ab78d1f0ffe844a81e295ddc77e",
+          "mutant_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant.rs",
+          "mutant_sha256": "27f7ceffb6e81f5feb5913cf0ae02862ac24ca485e50e1cb57cbc5b46a41e0ed",
+          "mutation": {
+            "old": "if !self.asset_fenced{\n                match peer_view{",
+            "new": "if true{\n                match peer_view{",
+            "count": 1
+          },
+          "tests": [
+            "fenced_q_cancel_does_not_claim_display_clear",
+            "fenced_late_verified_never_adopts_or_reallocates_image_storage"
+          ],
+          "baseline_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-fixture.rs",
+          "baseline_fixture_sha256": "41c9a196bde3e9b94839405ed76bbb3dd3728966ddbfad6f631eda74e2cd78cb",
+          "baseline": {
+            "compile": {
+              "returncode": 0,
+              "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-compile.log",
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "command": [
+                "rustc",
+                "--edition=2021",
+                "-A",
+                "dead_code",
+                "--test",
+                "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-fixture.rs",
+                "-o",
+                "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-tests"
+              ],
+              "environment": {
+                "BROWSER_ASSET_FENCE": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-actual-methods.rs"
+              }
+            },
+            "tests": [
+              {
+                "returncode": 0,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-fenced_q_cancel_does_not_claim_display_clear.log",
+                "log_sha256": "060f7482d105a00fdaf4686db7f49c743ff08d0711c6918e6836d8d8c246067a",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-tests",
+                  "--exact",
+                  "fenced_q_cancel_does_not_claim_display_clear",
+                  "--test-threads=1"
+                ],
+                "environment": {
+                  "BROWSER_ASSET_FENCE": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-actual-methods.rs"
+                },
+                "name": "fenced_q_cancel_does_not_claim_display_clear"
+              },
+              {
+                "returncode": 0,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-fenced_late_verified_never_adopts_or_reallocates_image_storage.log",
+                "log_sha256": "593967b06755db21a4d4a2c8f3a30bb4dafaa56343d68fa5186d05dc1b42588f",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-baseline-tests",
+                  "--exact",
+                  "fenced_late_verified_never_adopts_or_reallocates_image_storage",
+                  "--test-threads=1"
+                ],
+                "environment": {
+                  "BROWSER_ASSET_FENCE": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-actual-methods.rs"
+                },
+                "name": "fenced_late_verified_never_adopts_or_reallocates_image_storage"
+              }
+            ]
+          },
+          "mutant_fixture_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-fixture.rs",
+          "mutant_fixture_sha256": "41c9a196bde3e9b94839405ed76bbb3dd3728966ddbfad6f631eda74e2cd78cb",
+          "mutant": {
+            "compile": {
+              "returncode": 0,
+              "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-compile.log",
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "command": [
+                "rustc",
+                "--edition=2021",
+                "-A",
+                "dead_code",
+                "--test",
+                "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-fixture.rs",
+                "-o",
+                "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-tests"
+              ],
+              "environment": {
+                "BROWSER_ASSET_FENCE": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant.rs"
+              }
+            },
+            "tests": [
+              {
+                "returncode": 101,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-fenced_q_cancel_does_not_claim_display_clear.log",
+                "log_sha256": "26c988c7fbbc97833cf1d7488fc50d1073de286ec46e95a55badfca0601da0a4",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-tests",
+                  "--exact",
+                  "fenced_q_cancel_does_not_claim_display_clear",
+                  "--test-threads=1"
+                ],
+                "environment": {
+                  "BROWSER_ASSET_FENCE": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant.rs"
+                },
+                "name": "fenced_q_cancel_does_not_claim_display_clear"
+              },
+              {
+                "returncode": 101,
+                "log_path": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-fenced_late_verified_never_adopts_or_reallocates_image_storage.log",
+                "log_sha256": "394ed1c49a5ca6b84d908906ffd64f821ca1fbd75e2985eedae5cf1161c5486b",
+                "command": [
+                  "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant-tests",
+                  "--exact",
+                  "fenced_late_verified_never_adopts_or_reallocates_image_storage",
+                  "--test-threads=1"
+                ],
+                "environment": {
+                  "BROWSER_ASSET_FENCE": "/tmp/sexos-r106-b-semantic-controls/asset-peer-fence-mutant.rs"
+                },
+                "name": "fenced_late_verified_never_adopts_or_reallocates_image_storage"
+              }
+            ]
+          },
+          "baseline_passed": true,
+          "negative_rejected": true
+        }
+      ],
+      "scope": "Three semantic controls against exact frozen round106A asset geometry, presentation sequence fence and actual extracted Browser peer methods. Six baseline/mutant host test compilations passed; four baseline exact tests passed and all four mutant exact tests failed with exit101. Mutations and absolute-path fixture rewrites exist only in copied /tmp files. No production or frozen file edited; no native, authority, pixel, storage, build or QEMU claim."
+    },
+    "semantic_controls_sha256": "3ee5f1e62413abf66ec1dcaa3b905eb29d9474ac1a9f0479f15e7b2599a0ef4b"
+  },
+  "qualification_runs": [
+    {
+      "name": "asset-ready-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-ready-wide",
+      "driver": "/tmp/sexos-r106-b-native-asset-ready-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-ready-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--mode",
+        "ready"
+      ],
+      "mode": "ready",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "frames": 9,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 27.330967708025128
+    },
+    {
+      "name": "asset-ready-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-ready-compact",
+      "driver": "/tmp/sexos-r106-b-native-asset-ready-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-ready-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--mode",
+        "ready"
+      ],
+      "mode": "ready",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "frames": 9,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 22.77010191604495
+    },
+    {
+      "name": "asset-wrong-mime-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-wrong-mime-wide",
+      "driver": "/tmp/sexos-r106-b-native-asset-wrong-mime-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-wrong-mime-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--mode",
+        "wrong-mime"
+      ],
+      "mode": "wrong-mime",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 9.101554082939401
+    },
+    {
+      "name": "asset-wrong-mime-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-wrong-mime-compact",
+      "driver": "/tmp/sexos-r106-b-native-asset-wrong-mime-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-wrong-mime-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--mode",
+        "wrong-mime"
+      ],
+      "mode": "wrong-mime",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 5.731921374914236
+    },
+    {
+      "name": "asset-invalid-qoi-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-invalid-qoi-wide",
+      "driver": "/tmp/sexos-r106-b-native-asset-invalid-qoi-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-invalid-qoi-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--mode",
+        "invalid-qoi"
+      ],
+      "mode": "invalid-qoi",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 11.03887379099615
+    },
+    {
+      "name": "asset-invalid-qoi-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-invalid-qoi-compact",
+      "driver": "/tmp/sexos-r106-b-native-asset-invalid-qoi-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-invalid-qoi-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--mode",
+        "invalid-qoi"
+      ],
+      "mode": "invalid-qoi",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 7.718963875086047
+    },
+    {
+      "name": "asset-partial-clear-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-partial-clear-wide",
+      "driver": "/tmp/sexos-r106-b-native-asset-partial-clear-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-partial-clear-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--mode",
+        "partial-clear"
+      ],
+      "mode": "partial-clear",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 8.967612874927
+    },
+    {
+      "name": "asset-partial-clear-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-partial-clear-compact",
+      "driver": "/tmp/sexos-r106-b-native-asset-partial-clear-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-partial-clear-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--mode",
+        "partial-clear"
+      ],
+      "mode": "partial-clear",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 5.763159082969651
+    },
+    {
+      "name": "asset-partial-close-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-partial-close-wide",
+      "driver": "/tmp/sexos-r106-b-native-asset-partial-close-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-partial-close-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--mode",
+        "partial-close"
+      ],
+      "mode": "partial-close",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 9.441227833041921
+    },
+    {
+      "name": "asset-partial-close-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-asset-partial-close-compact",
+      "driver": "/tmp/sexos-r106-b-native-asset-partial-close-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/https_asset_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-asset-partial-close-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--mode",
+        "partial-close"
+      ],
+      "mode": "partial-close",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 1,
+      "frames": 1,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 5.947664791019633
+    },
+    {
+      "name": "clipboard-wide",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-clipboard-wide",
+      "driver": "/tmp/sexos-r106-b-native-clipboard-wide-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-clipboard-wide",
+        "--model",
+        "e1000e",
+        "--resolution",
+        "1280x800",
+        "--text-profile",
+        "utf8"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800"
+      },
+      "boots": 2,
+      "frames": 11,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 38.947003457928076
+    },
+    {
+      "name": "clipboard-compact",
+      "status": 0,
+      "out": "/tmp/sexos-r106-b-native-clipboard-compact",
+      "driver": "/tmp/sexos-r106-b-native-clipboard-compact-driver.log",
+      "command": [
+        "python3",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source/scripts/clipboard_workflow_gate.py",
+        "--iso",
+        "/tmp/sexos-alpha-r106-images-b-frozen/tested.iso",
+        "--binding",
+        "/tmp/sexos-alpha-r106-images-b-frozen/source-binding.json",
+        "--source-disk",
+        "/tmp/sexos-r100a-seed.img",
+        "--out",
+        "/tmp/sexos-r106-b-native-clipboard-compact",
+        "--model",
+        "e1000",
+        "--resolution",
+        "1024x768",
+        "--text-profile",
+        "utf8"
+      ],
+      "mode": "clipboard-recovery",
+      "profile": {
+        "label": "compact",
+        "model": "e1000",
+        "resolution": "1024x768"
+      },
+      "boots": 2,
+      "frames": 11,
+      "source_binding_sha256": "28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8",
+      "seconds": 29.27667004102841
+    }
+  ],
+  "remaining_gates": {
+    "open": 7,
+    "partial": 23,
+    "system_proven": false
+  },
+  "screenshots": [
+    {
+      "label": "fit-wide",
+      "path": "assets/sexos-alpha-r106-2026-10-31-fit-wide.png",
+      "sha256": "3d5723ba2819927938691b3b0677db3952b97ea26f84ce47e1a74a046f30dabb",
+      "run": "asset-ready-wide",
+      "boot": "",
+      "raw_ppm": "initial-image.ppm",
+      "raw_sha256": "8a54dcad16001840cd1acfbfb4e7a9602c78b87c7cc9e4b7d39f750e8a033550",
+      "serial_prefix_length": 290430,
+      "serial_prefix_unit": "UTF8 characters after universal-newline normalization, matching captured checker model",
+      "serial_sha256": "1f3f996645185b7b76a4a02df3fc1691aee48c8e6c89a864984150d330b5ceb4",
+      "whole_serial_raw_sha256": "0ce5bec986290c721320aca8e3e7015f191a1529cf4310f6dfd8364045ae27a9",
+      "rgb_sha256": "c805cd42981d13965272d7925799c47ab69cea947587a02cacb2b9e6fe7a87ad",
+      "dimensions": [
+        1280,
+        800
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "actual-wide",
+      "path": "assets/sexos-alpha-r106-2026-10-31-actual-wide.png",
+      "sha256": "f43415ca190ba9a5ef20a068b21bb24ef3106f01fba5fa4569093840cb5308bb",
+      "run": "asset-ready-wide",
+      "boot": "",
+      "raw_ppm": "actual-image.ppm",
+      "raw_sha256": "ec1e898134fa791fc79726c6a0b150ca70dbce5450bf6cc4b7547cf61b75e57a",
+      "serial_prefix_length": 295692,
+      "serial_prefix_unit": "UTF8 characters after universal-newline normalization, matching captured checker model",
+      "serial_sha256": "d10ae427b3f112efd6911e1740ff9774975bb0bfb3b38c52146bddabe0fc77f1",
+      "whole_serial_raw_sha256": "0ce5bec986290c721320aca8e3e7015f191a1529cf4310f6dfd8364045ae27a9",
+      "rgb_sha256": "0a54890c0368c24f7d73420e6ec8dbf658eac8033fd2f7f34b6a7a525194f0db",
+      "dimensions": [
+        1280,
+        800
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "zoom-fit-compact",
+      "path": "assets/sexos-alpha-r106-2026-10-31-zoom-fit-compact.png",
+      "sha256": "d27b45eb122b06c419ae6853c6b38f8caee97e4efd7693a6f071bb1b6903d651",
+      "run": "asset-ready-compact",
+      "boot": "",
+      "raw_ppm": "zoomed-image.ppm",
+      "raw_sha256": "81c6865ec6c1661a5d6bda5277097a645f669855727ae121a677c3be2e66b0fd",
+      "serial_prefix_length": 340438,
+      "serial_prefix_unit": "UTF8 characters after universal-newline normalization, matching captured checker model",
+      "serial_sha256": "f0e26f0da6b193d5ecfbb94380d1387d5ff4914703d4362ab6864486f7feac05",
+      "whole_serial_raw_sha256": "80f8dd21f1d2169e08bdd578d0701bcebacbf6edd38d6bb903ac9592c393c1e6",
+      "rgb_sha256": "ee689fcbe2d119bffc1569d29c03149f4b8c0adaf1ca77eabc76d9ee8acf6e25",
+      "dimensions": [
+        1024,
+        768
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "restored-fit-compact",
+      "path": "assets/sexos-alpha-r106-2026-10-31-restored-fit-compact.png",
+      "sha256": "51199ba9b3ec62ae2a77f2b5c598f148307a855cd18817cd54141431623a3320",
+      "run": "asset-ready-compact",
+      "boot": "",
+      "raw_ppm": "restored-fit.ppm",
+      "raw_sha256": "3793718a78bdb2d608ceef87a36d2a0143dabde73f50b08ffbd7404c612f489d",
+      "serial_prefix_length": 366618,
+      "serial_prefix_unit": "UTF8 characters after universal-newline normalization, matching captured checker model",
+      "serial_sha256": "6893881ce90eb55231cf8390d7e847a1a6c120fae00b6ecec225bf4107de9b7d",
+      "whole_serial_raw_sha256": "80f8dd21f1d2169e08bdd578d0701bcebacbf6edd38d6bb903ac9592c393c1e6",
+      "rgb_sha256": "b0eb4ad29d159ea088450ffc034a3a44826c5f93d30c6b7b842e907760923891",
+      "dimensions": [
+        1024,
+        768
+      ],
+      "pixel_identical": true
+    },
+    {
+      "label": "cold-compact",
+      "path": "assets/sexos-alpha-r106-2026-10-31-cold-compact.png",
+      "sha256": "d12c0aae883e5869bcf2dd980efedea6169b659490256675a1950136741152b0",
+      "run": "clipboard-compact",
+      "boot": "recovery",
+      "raw_ppm": "quil-cold-reopened.ppm",
+      "raw_sha256": "ccb4d46d1cc5ef999777e3e7a910ab9ed8b70101e1f24d442e5a819ba2d45e4d",
+      "serial_prefix_length": 292536,
+      "serial_prefix_unit": "raw bytes",
+      "serial_sha256": "6d15b032e0948d26c06faeac8df51bcb574e01519ec40b5e8c25ede88ce3afa3",
+      "whole_serial_raw_sha256": "2e4e299e5bca2de586e76083eed5cd982c058ff1585f2790f93ad6a9a330ff07",
+      "rgb_sha256": "2600695ba1b1cc0747243e806bbc2de1783254d59424f9f3b51b359291af32bc",
+      "dimensions": [
+        1024,
+        768
+      ],
+      "pixel_identical": true
+    }
+  ],
+  "archive": {
+    "path": "assets/sexos-alpha-r106-2026-10-31-qualified-raw.tar.gz",
+    "sha256": "8d1a5126ab7b823fa01ab6b0fb6bfd06c974c7f9a4e1d3cf9775341489bff2fe",
+    "members": 2601,
+    "verified": true,
+    "bytes": 13612913,
+    "raw_disk_copies": [
+      {
+        "raw": "/tmp/sexos-alpha-r106-images-b-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r106-images-b-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-ready-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-ready-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-ready-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-ready-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-wrong-mime-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-wrong-mime-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-wrong-mime-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-wrong-mime-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-invalid-qoi-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-invalid-qoi-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-invalid-qoi-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-invalid-qoi-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-partial-clear-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-partial-clear-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-partial-clear-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-partial-clear-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-partial-close-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-partial-close-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-asset-partial-close-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-asset-partial-close-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-clipboard-wide/recovery/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-clipboard-wide/recovery/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-clipboard-wide/write/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-clipboard-wide/write/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-clipboard-compact/recovery/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-clipboard-compact/recovery/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-b-native-clipboard-compact/write/nvme.img",
+        "raw_sha256": "deb02e2a82d2f9dcbccc9c57b6ecba44a41fc8fb5257a62c031f133ace098a4b",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-b-native-clipboard-compact/write/nvme.img.gz",
+        "compressed_sha256": "690ca34acf7595c27e88a6c0d7aab87c72a3b6b38e3bea55634fa90b8bf93015",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-alpha-r106-images-a-build/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-alpha-r106-images-a-build/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-a-native-asset-ready-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-a-native-asset-ready-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-a-native-asset-ready-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-a-native-asset-ready-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-a-native-asset-wrong-mime-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-a-native-asset-wrong-mime-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-a-native-asset-wrong-mime-compact/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-a-native-asset-wrong-mime-compact/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r106-a-native-asset-invalid-qoi-wide/nvme.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r106-a-native-asset-invalid-qoi-wide/nvme.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      },
+      {
+        "raw": "/tmp/sexos-r100a-seed.img",
+        "raw_sha256": "fae54a444f3d7ce8f63d661006f24d803718f40262a32f60db390d59bdb7cb30",
+        "bytes": 1048576,
+        "compressed": "/tmp/sexos-r100a-seed.img.archive-copy.gz",
+        "compressed_sha256": "e5fc7ab5b7d42f5b515aea13c70e7ace2eee2860d595297b0b21faeee1ddcb62",
+        "created_after_terminal_checks": false,
+        "uncompressed_verified": true
+      }
+    ]
+  },
+  "historical_diagnostics": {
+    "scope": "All candidateA runs and helper replays are diagnostics only; its original invalid-QOI-wide result remains failed. FinalB uses a new sealed build with an atomic pre-forward PS2 producer, recorded QMP/physical/held-return windows and a fresh complete cohort.",
+    "production_differences": [
+      "servers/sexinput/src/main.rs"
+    ],
+    "runner_differences": [
+      "scripts/https_asset_gate.py",
+      "scripts/tests/test_https_asset_gate.py"
+    ],
+    "progress": [
+      {
+        "name": "asset-ready-wide",
+        "status": 0,
+        "out": "/tmp/sexos-r106-a-native-asset-ready-wide",
+        "driver": "/tmp/sexos-r106-a-native-asset-ready-wide-driver.log",
+        "command": [
+          "python3",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source/scripts/https_asset_gate.py",
+          "--iso",
+          "/tmp/sexos-alpha-r106-images-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-r106-a-native-asset-ready-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--mode",
+          "ready"
+        ],
+        "mode": "ready",
+        "profile": {
+          "label": "wide",
+          "model": "e1000e",
+          "resolution": "1280x800"
+        },
+        "boots": 1,
+        "frames": 9,
+        "source_binding_sha256": "83eeb4fdd23b3c47f631c051b8c9263675a9fc2a5689365b1e9b60ad1147f9d3",
+        "seconds": 27.79143820796162
+      },
+      {
+        "name": "asset-ready-compact",
+        "status": 0,
+        "out": "/tmp/sexos-r106-a-native-asset-ready-compact",
+        "driver": "/tmp/sexos-r106-a-native-asset-ready-compact-driver.log",
+        "command": [
+          "python3",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source/scripts/https_asset_gate.py",
+          "--iso",
+          "/tmp/sexos-alpha-r106-images-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-r106-a-native-asset-ready-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--mode",
+          "ready"
+        ],
+        "mode": "ready",
+        "profile": {
+          "label": "compact",
+          "model": "e1000",
+          "resolution": "1024x768"
+        },
+        "boots": 1,
+        "frames": 9,
+        "source_binding_sha256": "83eeb4fdd23b3c47f631c051b8c9263675a9fc2a5689365b1e9b60ad1147f9d3",
+        "seconds": 23.714996583061293
+      },
+      {
+        "name": "asset-wrong-mime-wide",
+        "status": 0,
+        "out": "/tmp/sexos-r106-a-native-asset-wrong-mime-wide",
+        "driver": "/tmp/sexos-r106-a-native-asset-wrong-mime-wide-driver.log",
+        "command": [
+          "python3",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source/scripts/https_asset_gate.py",
+          "--iso",
+          "/tmp/sexos-alpha-r106-images-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-r106-a-native-asset-wrong-mime-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--mode",
+          "wrong-mime"
+        ],
+        "mode": "wrong-mime",
+        "profile": {
+          "label": "wide",
+          "model": "e1000e",
+          "resolution": "1280x800"
+        },
+        "boots": 1,
+        "frames": 1,
+        "source_binding_sha256": "83eeb4fdd23b3c47f631c051b8c9263675a9fc2a5689365b1e9b60ad1147f9d3",
+        "seconds": 9.876437875092961
+      },
+      {
+        "name": "asset-wrong-mime-compact",
+        "status": 0,
+        "out": "/tmp/sexos-r106-a-native-asset-wrong-mime-compact",
+        "driver": "/tmp/sexos-r106-a-native-asset-wrong-mime-compact-driver.log",
+        "command": [
+          "python3",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source/scripts/https_asset_gate.py",
+          "--iso",
+          "/tmp/sexos-alpha-r106-images-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-r106-a-native-asset-wrong-mime-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--mode",
+          "wrong-mime"
+        ],
+        "mode": "wrong-mime",
+        "profile": {
+          "label": "compact",
+          "model": "e1000",
+          "resolution": "1024x768"
+        },
+        "boots": 1,
+        "frames": 1,
+        "source_binding_sha256": "83eeb4fdd23b3c47f631c051b8c9263675a9fc2a5689365b1e9b60ad1147f9d3",
+        "seconds": 6.2205704159568995
+      },
+      {
+        "name": "asset-invalid-qoi-wide",
+        "status": 1,
+        "out": "/tmp/sexos-r106-a-native-asset-invalid-qoi-wide",
+        "driver": "/tmp/sexos-r106-a-native-asset-invalid-qoi-wide-driver.log",
+        "command": [
+          "python3",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source/scripts/https_asset_gate.py",
+          "--iso",
+          "/tmp/sexos-alpha-r106-images-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-alpha-r106-images-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-r106-a-native-asset-invalid-qoi-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--mode",
+          "invalid-qoi"
+        ],
+        "mode": "invalid-qoi",
+        "profile": {
+          "label": "wide",
+          "model": "e1000e",
+          "resolution": "1280x800"
+        },
+        "boots": 1,
+        "frames": 1,
+        "source_binding_sha256": "83eeb4fdd23b3c47f631c051b8c9263675a9fc2a5689365b1e9b60ad1147f9d3",
+        "seconds": 12.020606999984011
+      }
+    ],
+    "diagnostics": [
+      {
+        "path": "/tmp/sexos-r106-a-postcall-order-diagnostic.json",
+        "sha256": "8065c49c80b6e131de21600977a9a64f5054e221d3287866c3e714cbedd6621c",
+        "accepted_native": false
+      },
+      {
+        "path": "/tmp/sexos-r106-a-invalid-qoi-helper-diagnostic.json",
+        "sha256": "e0bfb2a19746ad64d5eb7ba3e5b1c1c9512960f004c0e059c9fb93870beac48d",
+        "accepted_native": false
+      }
+    ]
+  },
+  "diagnostics_scope": "CandidateA full closure, four passing workflows and original failed invalid-QOI-wide workflow remain historical diagnostics without final acceptance. CandidateB has a fresh atomic-PS2 producer build and complete repeated cohort. Prior accepted105 evidence remains in its own committed archive.",
+  "limitations": [
+    "The finite source-defined 48x48 procedural QOI has straight alpha 0/128/255. Native evidence covers centered Fit/1:1 at 1280x800 and1024x768; tiny/no-fit views and exhaustion/fence edge cases are actual host-function scopes unless separately recorded.",
+    "Image controls reuse the same released/decoded immutable pixels. Eight presentation frames plus one clear per ready boot prove current glyphs/image/guard and former image rectangles intersecting the current owned body; this is not whole-desktop erasure or arbitrary-image safety.",
+    "TLS uses an immutable BOOT public lab root and fixed controlled endpoint. No public Internet/CA/arbitrary URL, host proxy, TLS-secret capture, physical hardware, SMP or hostile-content containment is qualified.",
+    "UTF8 clipboard regression preserves exact source bytes and same-image cold reopen; one scalar per cell/finite fallback font is not shaping, grapheme composition, normalization, IME, bidi or Unicode filenames.",
+    "Asset screenshot prefix lengths/hashes use the checker's universal-newline-normalized UTF8 character model, joined to whole raw serial hashes; these are not captured raw-byte prefix lengths. Clipboard prefixes separately use exact raw bytes.",
+    "The Browser scalar audit is ISO-extracted ELF operand/mnemonic inspection, not whole-image, runtime stack/register/cache erasure or hostile containment proof.",
+    "NVMe host evidence covers exactly four runtime waits with bounded elapsed ticks/yield and DMA quarantine; clock/yield callbacks must return. No whole-driver timing, crash/power-loss, full-system deterministic replay, sustained daily-driver or System Proven claim."
+  ],
+  "scope": "Retained authenticated QOI viewing with explicit F Fit/A 1:1 controls, centered bounded image geometry, complete source-font metrics/help and current-generation text/bitmap acknowledgments. Both desktop profiles retain pixels across A/F, Zoom/restore without new network fetches; controlled negative MIME/QOI/partial Q/Close and exact12288-byte UTF8 clipboard/Save/cold recovery regressions. GLOBAL_VAS, BOOT-only capability genesis and typed exact-incarnation sex-pdx remain; not Unix/POSIX."
+}

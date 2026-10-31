@@ -23,6 +23,7 @@ mod import_view;
 mod asset_view;
 mod asset_decode;
 mod bitmap_delivery;
+mod asset_presentation;
 #[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
 mod text_delivery;
 mod browser_command;
@@ -68,9 +69,8 @@ struct App {
     asset_peer_view:tls_exchange::View,
     image:asset_decode::Image,
     bitmap:bitmap_delivery::Outbox,
-    image_layout:Option<(sex_pdx::bitmap_batch::Geometry,u64)>,
+    asset_presentation:asset_presentation::Presentation,
     asset_fenced:bool,
-    asset_text_viewport:Option<u64>,
     importer:document_import::Client<sex_tls::Document>,
     import_source:Option<sex_tls::Document>,
     import_editor:import_view::Editor,
@@ -195,11 +195,48 @@ impl App {
         let view=unsafe{CLIPBOARD.view()};if view!=self.clipboard_view{self.clipboard_view=view;sex_pdx::serial_record!("[browser.clipboard.view] state={:?}",view);}
     }
     fn fence_asset(&mut self,reason:&str){
-        self.asset_fenced=true;self.asset_status=asset_view::Status::Uncertain;self.image.clear();
+        self.asset_fenced=true;self.asset_status=asset_view::Status::Uncertain;self.image.clear();self.bitmap.close();
+        let _=self.asset_presentation.invalidate();
+        self.exchange.cancel();
+        if matches!(self.intent,Some(Intent::TlsAssetDns|Intent::TlsStart)){
+            self.intent=None;self.dns.cancel();
+        }
+        let erased=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);
+        if erased>0{sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",erased);}
         sex_pdx::serial_record!("[browser.asset.fenced] reason={} accepted_replay=0 owned_storage=erased",reason);
     }
+    fn update_asset_peer(&mut self,peer_view:tls_exchange::View,peer_ticket:u32){
+            if peer_view!=self.asset_peer_view{
+                self.asset_peer_view=peer_view;
+                if !self.asset_fenced{
+                match peer_view{
+                    tls_exchange::View::Verified=>{if let Some(body)=self.exchange.take_asset(){
+                        let len=body.as_bytes().len();let hash=public_fingerprint(body.as_bytes());
+                        sex_pdx::serial_record!("[browser.asset.released] ticket={} tx={} rx={} body_bytes={} body_hash={:#x} positive_release=1 authenticated=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),len,hash);
+                        self.asset_status=if self.image.begin(body,peer_ticket).is_ok(){asset_view::Status::Decoding}else{sex_pdx::serial_record!("[browser.asset.rejected] reason=invalid_qoi_or_allocation effects=0 owned_storage=erased");asset_view::Status::Invalid};
+                    }},
+                    tls_exchange::View::Unavailable=>{self.image.clear();self.asset_status=asset_view::Status::Unavailable;},
+                    tls_exchange::View::Uncertain=>{self.image.clear();self.asset_status=asset_view::Status::Uncertain;},
+                    tls_exchange::View::Cancelled=>{if !self.bitmap.pending(){self.asset_status=asset_view::Status::Cleared;}},
+                    _=>{},
+                }
+                }
+                sex_pdx::serial_record!("[browser.asset.view] state={:?} controlled_profile=1 public_internet=0",peer_view);
+            }
+    }
+    fn select_asset_mode(&mut self,mode:asset_view::Mode){
+        if !self.asset_panel||self.asset_fenced{return;}
+        match self.asset_presentation.select(mode){
+            Ok(true)=>{
+                if !self.image.pixels().is_empty(){self.asset_status=asset_view::Status::Sending;}
+                sex_pdx::serial_record!("[browser.asset.presentation.intent] generation={} mode={:?} viewport={} ticket={} network=0",self.asset_presentation.generation(),mode,self.viewport_sequence,self.image.ticket);
+            },
+            Err(())=>self.fence_asset("presentation_sequence"),_=>{},
+        }
+    }
     fn clear_asset(&mut self)->bool {
-        let had=self.image_layout.take().is_some()||self.bitmap.pending()||!self.image.pixels().is_empty();
+        let had=self.asset_presentation.has_layout()||self.bitmap.pending()||!self.image.pixels().is_empty();
+        if self.asset_presentation.invalidate().is_err(){self.fence_asset("presentation_sequence");}
         self.image.clear();
         if had {
             if self.bitmap.clear(bitmap_delivery::Metadata{viewport:self.viewport_sequence,source:0}).is_err(){self.fence_asset("clear_sequence");self.exchange.cancel();}
@@ -212,7 +249,7 @@ impl App {
         if self.importer.busy(){sex_pdx::serial_record!("[browser.command.blocked] kind={:?} import_pending=1 accepted_replay=0",next);return false;}
         if self.importer.view()==document_import::View::Uncertain{sex_pdx::serial_record!("[browser.command.blocked] kind={:?} import_uncertain=1 accepted_replay=0",next);return false;}
         self.clear_selection();
-        self.clear_asset();if self.asset_fenced{return false;}self.asset_text_viewport=None;self.asset_ticket=0;self.asset_panel=next==Intent::TlsAssetDns;
+        self.clear_asset();if self.asset_fenced{return false;}self.asset_ticket=0;self.asset_panel=next==Intent::TlsAssetDns;
         if self.asset_panel{self.asset_status=asset_view::Status::Loading;self.asset_peer_view=tls_exchange::View::Idle;self.https_progress_logged=0;}
         self.importer.clear(sex_pdx::get_ticks());self.import_source=None;self.import_editor.cancel();self.import_panel=false;self.import_ticket=0;
         let n=browser_command::replace(&mut self.intent,next,&mut self.tls,&mut self.trust,&mut self.seed,&mut self.clock);
@@ -279,6 +316,7 @@ impl App {
             match self.import_editor.key(code){import_view::Key::Submit=>self.submit_import(),import_view::Key::Cancel=>{self.import_status=import_view::Status::Cancelled;self.import_panel=false;self.https_panel=true;self.reading=true;self.reading_https=true;},_=>{}}
             return;
         }
+        if self.asset_panel&&matches!(code,0x1E|0x21){self.select_asset_mode(if code==0x1E{asset_view::Mode::Actual}else{asset_view::Mode::Fit});return;}
         if code==0x17{self.begin_import();return;}
         if code==0x18{
             if !self.importer.busy()||self.importer.view()==document_import::View::Uncertain{self.workspace.changed();self.files_pending=true;}else{sex_pdx::serial_record!("[browser.import.files.blocked] pending=1 effects=0");}return;
@@ -482,7 +520,7 @@ impl SexApp for App {
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
         Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
-            asset_panel:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(),image_layout:None,asset_fenced:false,asset_text_viewport:None,
+            asset_panel:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(),asset_presentation:asset_presentation::Presentation::new(),asset_fenced:false,
             importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
             dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:tls_exchange::Client::new(),peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
@@ -517,7 +555,7 @@ impl SexApp for App {
                 sex_pdx::serial_record!("[browser.entropy.closed] target={} task={} pending={} terminal=1 private_payload=erased",self.identity.target_pd,self.identity.task_id,seed_pending as u8);
                 let import_pending=self.importer.busy();let accepted=self.importer.accepted();self.import_editor.cancel();self.import_source=None;self.importer.close();self.workspace.close();self.files_pending=false;
                 sex_pdx::serial_record!("[browser.import.closed] target={} task={} pending={} accepted={} terminal=1 owned_storage=erased",self.identity.target_pd,self.identity.task_id,import_pending as u8,accepted);
-                self.image.clear();self.bitmap.close();self.image_layout=None;
+                self.image.clear();self.bitmap.close();let _=self.asset_presentation.invalidate();
                 sex_pdx::serial_record!("[browser.asset.closed] pending={} terminal=1 owned_storage=erased",asset_pending as u8);
                 unsafe{CLIPBOARD.close();}self.selection.clear();self.selection_body=None;self.ui_last_selection=(0,0);
                 sex_pdx::serial_record!("[browser.clipboard.closed] target={} task={} owned_scratch=erased terminal=1",self.identity.target_pd,self.identity.task_id);
@@ -525,15 +563,15 @@ impl SexApp for App {
             }
             if req.type_id==sex_pdx::document_view::OP{
                 if let Some(n)=sex_pdx::document_view::Notice::decode(req.caller_pd,self.identity.target_pd,self.identity.task_id,[req.arg0,req.arg1,req.arg2],self.viewport_sequence){
-                    self.viewport_sequence=n.sequence;self.asset_text_viewport=None;self.reader.resize(n.w,n.h);self.import_viewport=(n.w,n.h);
+                    self.viewport_sequence=n.sequence;self.reader.resize(n.w,n.h);self.import_viewport=(n.w,n.h);
                     // A live recreation may have erased partial display staging.
                     // Replace unsent words with a higher Clear; accepted terminal
                     // operations retain their historical exact receipt first.
-                    if self.bitmap.pending()||self.image_layout.is_some(){
+                    if self.bitmap.pending()||self.asset_presentation.has_layout(){
                         if self.bitmap.clear(bitmap_delivery::Metadata{viewport:n.sequence,source:0}).is_err(){self.fence_asset("viewport_clear_sequence");}
-                        self.image_layout=None;
                         if !self.asset_fenced&&!self.image.pixels().is_empty(){self.asset_status=asset_view::Status::Sending;}
                     }
+                    if self.asset_presentation.invalidate().is_err(){self.fence_asset("presentation_sequence");}
                     // Recreated display slots discard old staging and ACKs.
                     // Preserve the outbox's monotonic sequence across cancel.
                     self.ui.cancel();self.ui_last.fill(0);self.ui_last_len=0;self.ui_metadata=None;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
@@ -554,19 +592,26 @@ impl SexApp for App {
                 if let Some(r)=self.bitmap.receive(req.caller_pd,req.arg0){
                     if let Some(g)=r.geometry{
                         sex_pdx::serial_record!("[browser.asset.applied] ticket={} viewport={} sequence={} x={} y={} width={} height={} scale={} hash={:#x} positive_ack=1 pixels=unconfirmed",r.metadata.source,r.metadata.viewport,r.sequence,g.x,g.y,g.width,g.height,g.scale,r.hash);
-                        if self.asset_panel&&r.metadata.source==self.image.ticket as u64&&r.metadata.viewport==self.viewport_sequence&&self.image_layout==Some((g,self.viewport_sequence)){self.asset_status=asset_view::Status::Ready;}
-                    }else{sex_pdx::serial_record!("[browser.asset.cleared] viewport={} sequence={} positive_ack=1",r.metadata.viewport,r.sequence);if self.asset_status==asset_view::Status::Clearing{self.asset_status=asset_view::Status::Cleared;}}
+                        if self.asset_panel&&!self.asset_fenced&&self.asset_presentation.applied(&r,self.viewport_sequence,self.image.ticket,sex_pdx::bitmap_batch::hash(self.image.pixels())){
+                            self.asset_status=asset_view::Status::Ready;
+                            sex_pdx::serial_record!("[browser.asset.presentation.ready] generation={} mode={:?} viewport={} ticket={} sequence={} hash={:#x} positive_ack=1 pixels=unconfirmed",self.asset_presentation.generation(),self.asset_presentation.mode(),self.viewport_sequence,self.image.ticket,r.sequence,r.hash);
+                        }
+                    }else{
+                        sex_pdx::serial_record!("[browser.asset.cleared] viewport={} sequence={} positive_ack=1",r.metadata.viewport,r.sequence);
+                        if self.asset_panel&&!self.asset_fenced&&self.asset_presentation.cleared(&r,self.viewport_sequence){self.asset_status=asset_view::Status::NoFit;}
+                        else if self.asset_status==asset_view::Status::Clearing{self.asset_status=asset_view::Status::Cleared;}
+                    }
                 }
 
                 if let Some(r)=self.ui.receive(req.caller_pd,req.arg0){
-                    if self.asset_panel&&r.metadata.selected&(1<<20)!=0&&r.metadata.first==self.viewport_sequence as usize{
-                        self.asset_text_viewport=Some(self.viewport_sequence);
+                    if self.asset_panel&&!self.asset_fenced&&r.metadata.selected&(1<<20)!=0&&self.asset_presentation.text_applied(r.metadata.count as u64,r.metadata.first as u64,self.viewport_sequence){
                         let a=sex_pdx::text_batch::Applied::decode(req.caller_pd,req.arg0).unwrap();
                         sex_pdx::serial_record!("[browser.asset.text.applied] viewport={} sequence={} bytes={} rows={} positive_ack=1 pixels=unconfirmed",r.metadata.first,a.sequence,r.bytes,r.metadata.rows);
+                        sex_pdx::serial_record!("[browser.asset.presentation.text] generation={} viewport={} sequence={} bytes={} rows={} positive_ack=1",r.metadata.count,r.metadata.first,a.sequence,r.bytes,r.metadata.rows);
                     }
 
                     if r.metadata.selected&1024!=0{let a=sex_pdx::text_batch::Applied::decode(req.caller_pd,req.arg0).unwrap();sex_pdx::serial_record!("[browser.import.applied] bytes={} hash={:#x} rows={} viewport={} state_code={} sequence={} positive_ack=1",r.bytes,r.metadata.count,r.metadata.rows,r.metadata.first,r.metadata.selected>>11,a.sequence);}
-                    sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,if r.metadata.selected&1024!=0{0}else{r.metadata.count});
+                    sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,if r.metadata.selected&((1<<20)|1024)!=0{0}else{r.metadata.count});
                 }
             }
             if sex_pdx::clipboard::response_opcode(req.type_id){unsafe{CLIPBOARD.receive(sex_pdx::clipboard::Subject{pd:req.caller_pd,task:req.caller_task},req.type_id,[req.arg0,req.arg1,req.arg2],sex_pdx::get_ticks());}}
@@ -656,21 +701,7 @@ impl SexApp for App {
             if self.waiting_receipt(){tls_exchange::View::Uncertain}else{tls_exchange::View::Pending}
         }else{self.exchange.view()};
         if self.asset_panel{
-            if peer_view!=self.asset_peer_view{
-                self.asset_peer_view=peer_view;
-                match peer_view{
-                    tls_exchange::View::Verified=>{if let Some(body)=self.exchange.take_asset(){
-                        let len=body.as_bytes().len();let hash=public_fingerprint(body.as_bytes());
-                        sex_pdx::serial_record!("[browser.asset.released] ticket={} tx={} rx={} body_bytes={} body_hash={:#x} positive_release=1 authenticated=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),len,hash);
-                        self.asset_status=if self.image.begin(body,peer_ticket).is_ok(){asset_view::Status::Decoding}else{sex_pdx::serial_record!("[browser.asset.rejected] reason=invalid_qoi_or_allocation effects=0 owned_storage=erased");asset_view::Status::Invalid};
-                    }},
-                    tls_exchange::View::Unavailable=>{self.image.clear();self.asset_status=asset_view::Status::Unavailable;},
-                    tls_exchange::View::Uncertain=>{self.image.clear();self.asset_status=asset_view::Status::Uncertain;},
-                    tls_exchange::View::Cancelled=>{if !self.bitmap.pending(){self.asset_status=asset_view::Status::Cleared;}},
-                    _=>{},
-                }
-                sex_pdx::serial_record!("[browser.asset.view] state={:?} controlled_profile=1 public_internet=0",peer_view);
-            }
+            self.update_asset_peer(peer_view,peer_ticket);
         }else if self.https_panel{
             if peer_view!=self.https_view{
                 self.https_view=peer_view;
@@ -701,16 +732,23 @@ impl SexApp for App {
             Ok(true)=>{self.asset_status=asset_view::Status::Sending;sex_pdx::serial_record!("[browser.asset.decoded] ticket={} width={} height={} pixels={} hash={:#x} bounded_turn=128",self.image.ticket,self.image.width,self.image.height,self.image.pixels().len(),sex_pdx::bitmap_batch::hash(self.image.pixels()));},
             Err(())=>{self.asset_status=asset_view::Status::Invalid;sex_pdx::serial_record!("[browser.asset.rejected] reason=invalid_qoi effects=0 owned_storage=erased");},_=>{},
         }
-        if self.asset_panel&&self.asset_text_viewport==Some(self.viewport_sequence)&&!self.image.pixels().is_empty()&&!self.bitmap.pending()&&!self.asset_fenced{
-            if let Some(g)=asset_view::geometry(self.import_viewport.0,self.import_viewport.1,self.image.width,self.image.height){
-                if self.image_layout!=Some((g,self.viewport_sequence)){
-                    if self.bitmap.queue(self.image.pixels(),g,bitmap_delivery::Metadata{viewport:self.viewport_sequence,source:self.image.ticket as u64}).is_ok(){
-                        self.image_layout=Some((g,self.viewport_sequence));self.asset_status=asset_view::Status::Sending;
-                        sex_pdx::serial_record!("[browser.asset.layout] ticket={} viewport={} x={} y={} width={} height={} scale={} hash={:#x} pixels=unconfirmed",self.image.ticket,self.viewport_sequence,g.x,g.y,g.width,g.height,g.scale,sex_pdx::bitmap_batch::hash(self.image.pixels()));
+        if self.asset_panel&&self.asset_presentation.can_queue(self.viewport_sequence)&&!self.image.pixels().is_empty()&&!self.bitmap.pending()&&!self.asset_fenced{
+            if let Some(g)=asset_view::geometry(self.import_viewport.0,self.import_viewport.1,self.image.width,self.image.height,self.asset_presentation.mode()){
+                    if let Ok(sequence)=self.bitmap.queue(self.image.pixels(),g,bitmap_delivery::Metadata{viewport:self.viewport_sequence,source:self.image.ticket as u64}){
+                        if self.asset_presentation.expect(g,self.viewport_sequence,self.image.ticket,sequence,sex_pdx::bitmap_batch::hash(self.image.pixels())){
+                            self.asset_status=asset_view::Status::Sending;
+                            sex_pdx::serial_record!("[browser.asset.layout] ticket={} viewport={} x={} y={} width={} height={} scale={} hash={:#x} pixels=unconfirmed",self.image.ticket,self.viewport_sequence,g.x,g.y,g.width,g.height,g.scale,sex_pdx::bitmap_batch::hash(self.image.pixels()));
+                            sex_pdx::serial_record!("[browser.asset.presentation.layout] generation={} mode={:?} viewport={} ticket={} sequence={} x={} y={} width={} height={} scale={} hash={:#x}",self.asset_presentation.generation(),self.asset_presentation.mode(),self.viewport_sequence,self.image.ticket,sequence,g.x,g.y,g.width,g.height,g.scale,sex_pdx::bitmap_batch::hash(self.image.pixels()));
+                        }else{self.fence_asset("presentation_queue");}
                     }else{self.fence_asset("image_queue");}
-                }
-            }else if self.image_layout.take().is_some(){if self.bitmap.clear(bitmap_delivery::Metadata{viewport:self.viewport_sequence,source:0}).is_err(){self.fence_asset("clipped_clear_sequence");}}
+            }else{
+                if let Ok(sequence)=self.bitmap.clear(bitmap_delivery::Metadata{viewport:self.viewport_sequence,source:0}){
+                    if !self.asset_presentation.expect_clear(self.viewport_sequence,sequence){self.fence_asset("clipped_presentation_queue");}
+                    if !self.asset_fenced{self.asset_status=asset_view::Status::Clearing;}
+                }else{self.fence_asset("clipped_clear_sequence");}
+            }
         }
+        if !self.asset_fenced{
         let bitmap_poll=self.bitmap.poll(self.image.pixels(),4,|request|{
             match sex_pdx::pdx_call_checked(sex_pdx::SLOT_DISPLAY,request.opcode,request.surface,request.packed,request.control){Ok(_)=>bitmap_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>bitmap_delivery::Admission::Full,Err(error)=>bitmap_delivery::Admission::Rejected(error)}
         });
@@ -718,12 +756,13 @@ impl SexApp for App {
             bitmap_delivery::Poll::Rejected(error)=>{self.fence_asset("display_rejected");sex_pdx::serial_record!("[browser.asset.display.rejected] error={} accepted_replay=0",error);},
             bitmap_delivery::Poll::InvalidPixels|bitmap_delivery::Poll::Closed=>self.fence_asset("invalid_display_state"),_=>{},
         }
+        }
         self.sync_selection();
         let mut visible_selection=(0,0);
         let mut reader_layout=None;
         let composed=if self.asset_panel{
-            let f=asset_view::render(self.import_viewport.0,self.import_viewport.1,self.asset_status);
-            Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:0,first:self.viewport_sequence as usize,rows:f.rows,selected:(1<<20)|((self.asset_status as u64)<<21)}))
+            let f=asset_view::render(self.import_viewport.0,self.import_viewport.1,self.asset_status,self.asset_presentation.mode(),self.image.width,self.image.height);
+            Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.asset_presentation.generation()as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:(1<<20)|((self.asset_status as u64)<<21)}))
         }else if self.import_panel{
             let f=import_view::render(self.import_viewport.0,self.import_viewport.1,self.import_status,self.import_editor.as_bytes());
             let metadata=text_delivery::Metadata{count:public_fingerprint(&f.bytes[..f.len])as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:1024|((self.import_status as u64)<<11)};

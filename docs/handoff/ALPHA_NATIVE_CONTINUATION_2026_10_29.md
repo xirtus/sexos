@@ -1,6 +1,17 @@
 # Sustained alpha candidate and desktop continuation
 
-## Current checkpoint: accepted round 105; next 106
+## Current checkpoint: accepted round 106; next 107
+
+Browser can inspect its retained decoded image in Fit or1:1 mode with F and A. Both modes center complete integer pixels below dedicated status, dimensions/scale and control rows; compact tiles retain the full shortcuts. Fit remains bounded to1–4x and1:1 uses one source pixel per framebuffer pixel. Unavailable dimensions, no retained image and an image that cannot fit have distinct labels. The retained pixels and existing held Browser surface authority serve every local mode change; controls do not fetch, decode again or mint authority.
+
+A finite presentation generation joins the actual viewport, source ticket, image hash and fresh outbox sequence. Current-generation text Applied precedes bitmap publication; only the matching bitmap Applied marks Ready. Mode changes, viewport changes and Clear invalidate readiness while the original outbox retains accepted historical COMMIT/CLEAR custody. No-fit queues one positively acknowledged clear barrier. Display failure fences the path, scrubs local pixels/unsent words and cancels prepared fetch work while preserving accepted cleanup correlation; late network events cannot claim Cleared or adopt new pixels.
+
+Sealed ISO `cc76f2108f0018e96e6982b57b28a696d0dc934ffaf323ef077e7ac22eda2003`, binding `28fc805dec3904d34ad95958003eec03fd68311282b92db7cf7a847aa5dd80c8`;564 production/534 runner inputs. BUILD/GREEN_MASTER, 2,006 frozen Rust executions and 786 Python tests pass. Twelve native runs/fourteen boots and48 independently checked captures qualify both desktop sizes: eight current image presentations/nine frames through A/F, Q/G, Zoom/restore with exactly two explicit HTTPS fetches; MIME/final-marker rejection and partial Clear/Close; and exact12288-byte UTF-8 clipboard/Save/cold reopen regressions. Three source-bound semantic controls reject removed centering, historical sequence rebinding and disabled fenced-peer protection. See [evidence](assets/sexos-alpha-r106-2026-10-31-evidence.json).
+
+Next107 carries real wheel input through the existing held routes into Browser reader scrolling, with exact target lifetime, bounded queued delivery and visible position feedback under I/O/repaint pressure;108 qualifies an integrated connected desktop session, and109 revisits the remaining alpha authority blockers with current evidence. Active80–200 progress:27/121 accepted;107–200 remain (94 substantive rounds).7 Open/23 Partial/System Proven false remain. One GLOBAL_VAS, BOOT-only capability genesis, typed sex-pdx access and exact terminal incarnations remain mandatory; SexOS is not Unix/POSIX.
+
+
+## Historical checkpoint: accepted round 105; next 106 at that time
 
 Browser documents, clipboard, Quil editing and named storage now preserve exact supported UTF-8 bytes. Scalar-safe wrapping, movement, selection, replacement and deletion retain byte offsets for correlation and capacity. Ctrl Shift U enters one Unicode scalar from hex digits as one undoable edit; its frozen selection and overflow guard prevent stale or partial insertion. Sixteen extra finite glyphs cover common accented letters, currency and arrows; other valid scalars have a visible fallback box while storage keeps their bytes. Unsupported encodings and forbidden controls are refused explicitly. Whole-payload validation lets scalars cross opaque IPC chunks without weakening source, incarnation, ticket or custody checks.
 
