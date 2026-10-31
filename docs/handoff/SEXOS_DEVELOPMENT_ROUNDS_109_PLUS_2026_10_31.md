@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–144
+# SexOS development: round 108 acceptance and rounds 109–145
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -671,3 +671,19 @@ This accepts the Round140 image only; newer startup/third-reserve images remain
 separate. All archive members verified. Next: actual eight-Spindle reserve with
 explicit retained-lifecycle budget, then Browser relaunch authority and readable
 adaptive Spindle typography. Inventory remains2 Open /28 Partial /System Proven false.
+
+
+## Round 145 — eight actual BOOT Spindles and retained lifecycle budget
+
+[Qualified report](EIGHT_SPINDLE_RESERVE_2026_10_31.md): actual eight-incarnation
+Spindle chain through 29, seven relaunches at both sizes, exact terminal history
+handoff, six new reserve probes per profile, positive controlled TCP release,
+current pane glyphs, all five-role cleanup/389,120-byte zero/reuse and exhaustion.
+Exact writer29 generation55/761-byte journal cold-loads into fresh12.
+Source502dda45: 43 host gates,2,730 gate-log Rust passes +8 extracted lifecycle
+cases, three rejected compiled mutants,1,017 Python;8 boots/112 registry captures.
+BOOT registers29/32 main self-waits and eight held history participants; grant88,
+cap data128/full192. Catalog17/desktop51; lifecycle17+15=32 derives safely to34
+for the tested future Browser roster. All1,172 source blobs and archive members
+verified. No runtime mint, unbounded reuse or new-image sustained acceptance.
+Next: readable Spindle typography and BOOT Browser authority. Inventory unchanged.

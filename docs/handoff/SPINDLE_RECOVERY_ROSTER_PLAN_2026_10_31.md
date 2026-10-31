@@ -107,3 +107,13 @@ Per-request deferred caller-task authentication remains separate work.
    Finite reserves are useful progress, not unrestricted reuse or global-epoch
    proof. Complete caller-task propagation and app-owned durable workflows as
    explicit authority milestones, then repeat whole-desktop acceptance.
+
+
+Round145 completes the actual eight-reserve phase and the exact32-entry retained
+lifecycle budget, with current/future extracted behavior controls. Both sizes
+exercise all seven transitions, final echoes, all twelve new-reserve controlled
+network releases, resource cleanup and cold29→fresh12 recovery. The reserve
+remains finite. Next implementation: readable2× small-tile Spindle text with
+source-bound layout/render/damage oracles; then Browser successors using the now
+explicit metadata budget and their own BOOT-held authority. Sustained evidence
+for the earlier three-reserve image continues independently; do not relabel it.
