@@ -2,6 +2,7 @@
 //! Production display registry and cleanup state; framebuffer commit is explicit,
 //! so these tests do not claim guest pixel writes or kernel quiescence proof.
 #![allow(dead_code)]
+#[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path = "../servers/sexdisplay/src/surface_lifecycle.rs"] mod production;
 use production::*;
 fn catalog(slot: usize, target: u32, sid: u64) -> Catalog {

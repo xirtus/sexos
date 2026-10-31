@@ -109,6 +109,8 @@ const MAX_RECTS: usize = 8;
 /// while active. Content belongs to that PD. The immutable catalog coordinator
 /// may manage geometry and hide its associated app/frame surfaces.
 mod surface_lifecycle;
+/// The BOOT incarnation catalog, at crate root for display modules.
+use sex_pdx::app_catalog;
 mod text_transaction;
 mod bitmap_transaction;
 mod fill_damage;
