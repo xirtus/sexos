@@ -142,7 +142,7 @@ fn fixture_elf()->Vec<u8>{
  assert_eq!(app_resources::status(shell,38,0),[0,15,15,31,31]);assert_eq!(app_resources::retire(pager,38),[RETRY,0,0,0]);
  paging::CLOSED.store(true,Ordering::Release);let before=*leaves;leaves[16]^=2;
  assert_eq!(app_resources::retire(pager,38),[DENIED,0,0,0]);assert_eq!(leaves[0],before[0]);assert!(FLUSHES.lock().is_empty());leaves[16]=before[16]|0x60;
- unsafe{(*target.message_ring).enqueue(messages::MessageType::Empty).unwrap();(*target.signal_ring).enqueue(3).unwrap();}target.incoming_replies.lock().push_back(messages::IpcReply{value:7,caller_pd:13,caller_task:213});assert!(target.reply_credits.lock().grant(13));
+ unsafe{(*target.message_ring).enqueue(messages::MessageType::Empty).unwrap();(*target.signal_ring).enqueue(3).unwrap();}target.incoming_replies.lock().push_back(messages::IpcReply{value:7,caller_pd:13,caller_task:213});assert_eq!(target.reply_credits.lock().grant(13),reply_credit::Grant::Added);
  let held=unsafe{&*target.cap_table};for _ in 0..3{held.insert(capability::CapabilityData::Other);}held.seal();assert!(!held.holds_none(|_|true));
  let result=[0,0x9000_0000,17*4096,15];assert_eq!(app_resources::retire(pager,38),result);assert_eq!(*leaves,[0;17]);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(unsafe{(*target.message_ring).len()},0);assert_eq!(unsafe{(*target.signal_ring).len()},0);assert!(target.incoming_replies.lock().is_empty());assert_eq!(target.reply_credits.lock().outstanding(),0);

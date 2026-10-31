@@ -2,8 +2,10 @@
 //! Kernel-recorded reply obligations. An accepted typed invocation from a
 //! caller grants its callee exactly one reply to that caller; nothing else
 //! does. A domain ID alone is therefore not a return capability. The table is
-//! finite and owned by the callee's protection domain: a full table refuses
-//! the invocation before enqueue instead of evicting another obligation.
+//! finite and owned by the callee's protection domain. Reply bookkeeping never
+//! refuses an invocation: most invocations are one-way and are never answered,
+//! so a caller's count saturates instead of failing, and a full table simply
+//! records no obligation for a new caller (that caller cannot be replied to).
 
 pub const REPLY_CREDIT_CAPACITY: usize = 32;
 
@@ -11,6 +13,16 @@ pub const REPLY_CREDIT_CAPACITY: usize = 32;
 struct Credit {
     caller: u32,
     count: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grant {
+    /// One more obligation recorded; withdraw it if the invocation fails.
+    Added,
+    /// Already at the bound: replies stay authorized, nothing to withdraw.
+    Saturated,
+    /// No slot for a new caller: no reply authority is created.
+    Untracked,
 }
 
 pub struct ReplyCredits {
@@ -22,17 +34,17 @@ impl ReplyCredits {
         Self { entries: [Credit { caller: 0, count: 0 }; REPLY_CREDIT_CAPACITY] }
     }
 
-    /// Reserve one reply for `caller` before its invocation is published.
-    /// False means no effect: the caller's invocation must not be enqueued.
-    pub fn grant(&mut self, caller: u32) -> bool {
+    /// Record one reply obligation for `caller` before its invocation is
+    /// published. Never a reason to refuse the invocation.
+    pub fn grant(&mut self, caller: u32) -> Grant {
         if let Some(credit) = self.entries.iter_mut().find(|c| c.count != 0 && c.caller == caller) {
-            if credit.count == u16::MAX { return false; }
+            if credit.count == u16::MAX { return Grant::Saturated; }
             credit.count += 1;
-            return true;
+            return Grant::Added;
         }
         match self.entries.iter_mut().find(|c| c.count == 0) {
-            Some(free) => { *free = Credit { caller, count: 1 }; true }
-            None => false,
+            Some(free) => { *free = Credit { caller, count: 1 }; Grant::Added }
+            None => Grant::Untracked,
         }
     }
 

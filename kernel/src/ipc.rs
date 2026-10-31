@@ -123,9 +123,10 @@ pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u
             // The reply obligation exists before the call is visible, and is
             // withdrawn if the call is not accepted.
             let mut credits = callee.reply_credits.lock();
-            if !credits.grant(caller_pd) { return Err(sex_pdx::ERR_SERVICE_NOT_READY); }
+            // Bookkeeping never refuses the call; only a full ring does.
+            let granted = credits.grant(caller_pd);
             if unsafe { (*callee.message_ring).enqueue(msg) }.is_err() {
-                credits.withdraw(caller_pd);
+                if granted == crate::ipc::reply_credit::Grant::Added { credits.withdraw(caller_pd); }
                 return Err(sex_pdx::ERR_SERVICE_NOT_READY);
             }
             drop(credits);
