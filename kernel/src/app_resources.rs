@@ -231,6 +231,11 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         let mut signals=0;while unsafe{(*target.signal_ring).dequeue()}.is_some(){signals+=1;assert!(signals<=32,"APP_SIGNAL_PRODUCER");}
         crate::ipc::messages::IpcReply::erase_queue(&mut target.incoming_replies.lock());
         target.reply_credits.lock().clear();
+        // The terminal incarnation's held authority is revoked, then checked
+        // empty against the actual table; nothing can refill a sealed table.
+        let revoked=unsafe{(*target.cap_table).revoke_all()};
+        assert!(unsafe{(*target.cap_table).holds_none(|_|true)},"APP_CAPS_RETAINED");
+        crate::serial_println!("[app.caps.revoked] target={} task={} revoked={} remaining=0",app.target,app.task,revoked);
         app.retired=true;
         crate::serial_println!("[app.private.retired] target={} task={} pages={} bytes={} acked={} required={} all_flushed=1 pool_reusable=1 messages={} signals={} metadata=retained runtime_alloc=0",app.target,app.task,count,count*4096,app.acked,REQUIRED,messages,signals);
         Ok([0,app.pool,app.count as u64*4096,app.task as u64])

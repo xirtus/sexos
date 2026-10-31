@@ -10,6 +10,7 @@ ABI_INPUTS=(
   kernel/src/interrupts.rs
   kernel/src/capability_slot.rs
   kernel/src/capability.rs
+  kernel/src/capability_table.rs
   kernel/src/boot_network_state.rs
   kernel/src/boot_network.rs
   kernel/src/pci_command.rs

@@ -24,6 +24,7 @@ pub mod cheri;
 pub mod capability;
 #[cfg(target_arch = "x86_64")]
 pub mod capability_slot;
+pub mod capability_table;
 #[cfg(target_arch = "x86_64")]
 pub mod pci_command;
 pub mod entropy_source;

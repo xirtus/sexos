@@ -24,6 +24,8 @@ static WAKES:AtomicUsize=AtomicUsize::new(0);
 #[path="../kernel/src/ipc_ring.rs"]mod ring;
 #[path="../kernel/src/ipc/messages.rs"]pub mod messages;
 #[path="../kernel/src/ipc/reply_credit.rs"]pub mod reply_credit;
+#[path="../kernel/src/capability_table.rs"]pub mod capability_table;
+extern crate alloc;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
 mod scheduler{
  pub use crate::ownership as task_ownership;
@@ -38,16 +40,16 @@ mod interrupts{pub static TICKS:crate::AtomicU64=crate::AtomicU64::new(0);}
 mod capability{
  use crate::*;
  #[derive(Clone,Copy)]pub enum CapabilityData{AppLifecycle(app_resource_state::LifecycleGrant),AppActivation(app_resource_state::ActivationGrant),Other}
- pub struct Capability{pub data:CapabilityData}
- pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub trampoline_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut ring::RingBuffer<messages::MessageType,256>,pub signal_ring:*mut ring::RingBuffer<u8,32>,pub incoming_replies:Mutex<VecDeque<messages::IpcReply>>,pub reply_credits:Mutex<reply_credit::ReplyCredits>,caps:Mutex<Vec<(u32,CapabilityData)>>}
+ #[derive(Clone,Copy)]pub struct Capability{pub id:u32,pub data:CapabilityData,pub cheri_meta:u64}
+ pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub trampoline_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut ring::RingBuffer<messages::MessageType,256>,pub signal_ring:*mut ring::RingBuffer<u8,32>,pub incoming_replies:Mutex<VecDeque<messages::IpcReply>>,pub reply_credits:Mutex<reply_credit::ReplyCredits>,pub cap_table:*mut capability_table::CapabilityTable,caps:Mutex<Vec<(u32,CapabilityData)>>}
  impl ProtectionDomain{
-  pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|(s,_)|*s==slot).map(|(_,data)|Capability{data:*data})}
+  pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|(s,_)|*s==slot).map(|(s,data)|Capability{id:*s,data:*data,cheri_meta:0})}
   pub fn grant_capability(&self,slot:u64,data:CapabilityData){self.caps.lock().push((slot as u32,data));}
   pub fn new(id:u32)->&'static Self{Self::new_key(id,id as u8)}
   pub fn new_key(id:u32,key:u8)->&'static Self{
    let task=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0x4000},state:ownership::TaskOwnership::new()}));
    let tramp=Box::into_raw(Box::new(scheduler::Task{id:id|0x8000,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0},state:ownership::TaskOwnership::new()}));
-   let pd=Box::leak(Box::new(Self{id,pku_key:key,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(reply_credit::ReplyCredits::new()),caps:Mutex::new(Vec::new())}));
+   let pd=Box::leak(Box::new(Self{id,pku_key:key,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(reply_credit::ReplyCredits::new()),cap_table:Box::into_raw(Box::new(capability_table::CapabilityTable::new())),caps:Mutex::new(Vec::new())}));
    unsafe{(*task).context.pd_ptr=pd;(*tramp).context.pd_ptr=pd;}
    REGISTRY[id as usize].store(pd,Ordering::Release);pd
   }
@@ -141,8 +143,10 @@ fn fixture_elf()->Vec<u8>{
  paging::CLOSED.store(true,Ordering::Release);let before=*leaves;leaves[16]^=2;
  assert_eq!(app_resources::retire(pager,38),[DENIED,0,0,0]);assert_eq!(leaves[0],before[0]);assert!(FLUSHES.lock().is_empty());leaves[16]=before[16]|0x60;
  unsafe{(*target.message_ring).enqueue(messages::MessageType::Empty).unwrap();(*target.signal_ring).enqueue(3).unwrap();}target.incoming_replies.lock().push_back(messages::IpcReply{value:7,caller_pd:13,caller_task:213});assert!(target.reply_credits.lock().grant(13));
+ let held=unsafe{&*target.cap_table};for _ in 0..3{held.insert(capability::CapabilityData::Other);}held.seal();assert!(!held.holds_none(|_|true));
  let result=[0,0x9000_0000,17*4096,15];assert_eq!(app_resources::retire(pager,38),result);assert_eq!(*leaves,[0;17]);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(unsafe{(*target.message_ring).len()},0);assert_eq!(unsafe{(*target.signal_ring).len()},0);assert!(target.incoming_replies.lock().is_empty());assert_eq!(target.reply_credits.lock().outstanding(),0);
+ assert!(held.holds_none(|_|true));for id in 1..=4{assert!(held.find(id).is_none());}
  assert_eq!(app_resources::retire(pager,38),result);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(ipc::DOMAIN_REGISTRY.get(15).unwrap().main_task.load(Ordering::Acquire),target.main_task.load(Ordering::Acquire));
  assert_eq!(app_resources::activation(shell,44,0),[0,16,16,301,1]);

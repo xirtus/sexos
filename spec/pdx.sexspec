@@ -49,16 +49,22 @@
     {
       "id": "PDX_REVOCATION",
       "requirement": "A sanctioned invalidation must prevent future invocation without fabricating new authority.",
-      "status": "open",
+      "status": "partial",
       "sources": [
         {
-          "path": "kernel/src/capability.rs",
-          "anchor": "pub fn verify_revocation"
+          "path": "kernel/src/capability_table.rs",
+          "anchor": "pub fn revoke"
+        },
+        {
+          "path": "kernel/src/app_resources.rs",
+          "anchor": "revoke_all()"
         }
       ],
-      "checks": [],
+      "checks": [
+        "capability_revocation"
+      ],
       "gaps": [
-        "verify_revocation is not a proven revocation mechanism; lifecycle and stale-handle protocol unspecified."
+        "Revocation removes slots after seal and app retirement revokes the terminal incarnation's whole table, checked empty; there is no user-initiated or partial revocation protocol, no revocation of capabilities other domains hold that name the retired target (routing is fenced instead), and no cross-core or native negative probe."
       ],
       "depends_on": [
         "CAPABILITY_GENESIS"

@@ -512,6 +512,15 @@
         "scripts/no_per_process_tables_gate.sh"
       ],
       "scope": "Static scan of every workspace and arch Rust source: translation-root loads and mapper roots are confined to sanctioned reinstalls of the one boot root; process-model identifiers are absent. Not runtime translation, generated code or hostile-code evidence."
+    },
+    {
+      "id": "capability_revocation",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/capability_revocation_host_gate.sh"
+      ],
+      "scope": "Production capability table compiled natively: post-seal revocation, no refill/mint, concurrent lookup and terminal-retirement wiring source; not native, cross-core or hostile-code evidence."
     }
   ],
   "invariants": [
@@ -591,7 +600,7 @@
           "anchor": "## 0. System Model"
         },
         {
-          "path": "kernel/src/capability.rs",
+          "path": "kernel/src/capability_table.rs",
           "anchor": "pub fn seal"
         },
         {
