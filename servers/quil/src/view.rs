@@ -73,8 +73,11 @@ pub fn render_selection(
             n += 1;
         }
     } else {
+        // The document name keeps up to eight cells ahead of a long status:
+        // a notice must never shrink "uibeta" to "u".
         let suffix = state.len().saturating_add(if dirty { 3 } else { 2 });
-        for &b in name.iter().take(header_limit.saturating_sub(suffix)) {
+        let name_cells = name.len().min(header_limit.saturating_sub(suffix).max(8));
+        for &b in name.iter().take(name_cells.min(header_limit)) {
             head[n] = b;
             n += 1;
         }

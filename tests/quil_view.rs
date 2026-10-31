@@ -986,3 +986,20 @@ fn one_four_byte_character_does_not_collapse_otherwise_ascii_viewport() {
     let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();
     assert!(text.lines().count()>=l.chrome_rows()+5);assert!(text.ends_with("🙂#"));assert!(t.len<=512);
 }
+
+#[test]
+fn long_status_never_squeezes_the_document_name_below_eight_cells() {
+    let l = Layout { w: 496, h: 315, scale: 2, cols: 39, rows: 17, top: 12, toolbar_rows: 1 };
+    let mut top = 0;
+    let t = view::render_selection(b"abc", 3, &mut top, l, b"uibeta", true, b"UNSAVED: CTRL S SAVES, F11 DISCARDS", None, None, None);
+    let header = t.bytes[..t.len].split(|&b| b == b'\n').next().unwrap();
+    assert!(header.starts_with(b"uibeta * UNSAVED"), "{:?}", core::str::from_utf8(header));
+    assert!(header.len() <= l.cols);
+    // When everything fits nothing changes.
+    let t = view::render_selection(b"abc", 3, &mut top, l, b"uibeta", false, b"READY", None, None, None);
+    assert!(t.bytes[..t.len].starts_with(b"uibeta READY\n"));
+    // A long name still yields to the width bound.
+    let t = view::render_selection(b"abc", 3, &mut top, l, b"a-very-long-document-name-indeed", true, b"UNSAVED: CTRL S SAVES, F11 DISCARDS", None, None, None);
+    let header = t.bytes[..t.len].split(|&b| b == b'\n').next().unwrap();
+    assert!(header.starts_with(b"a-very-l * UNSAVED") && header.len() <= l.cols, "{:?}", core::str::from_utf8(header));
+}
