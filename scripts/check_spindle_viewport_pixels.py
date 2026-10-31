@@ -5,9 +5,24 @@ from history_roster_evidence import source_spindles, verify_boot_roster
 from check_desktop_pixels import glyph
 from check_disk_persistence import ppm_rgb
 
-def layout(w,h):
+SCALE_SOURCE='crates/sex-pdx/src/spindle_view.rs'
+
+def _scale_threshold(root=None):
+    root=Path(__file__).resolve().parents[1]if root is None else Path(root)
+    try:source=(root/SCALE_SOURCE).read_text()
+    except OSError as error:raise ValueError('missing bound Spindle scale source')from error
+    source=re.sub(r'/\*.*?\*/|//[^\n]*','',source,flags=re.S)
+    declarations=list(re.finditer(r'\bfn\s+scale\s*\(',source))
+    # Deliberately support only the two sealed literal policies. No expression
+    # evaluation or fallback to the host checkout for a supplied frozen root.
+    pattern=r'\bpub\s+const\s+fn\s+scale\s*\(\s*width\s*:\s*u32\s*\)\s*->\s*u32\s*\{\s*if\s+width\s*>=\s*(128|256)\s*\{\s*2\s*\}\s*else\s*\{\s*1\s*\}\s*\}'
+    matches=list(re.finditer(pattern,source))
+    if len(declarations)!=1 or len(matches)!=1:raise ValueError('unsupported or ambiguous bound Spindle scale function')
+    return int(matches[0][1])
+
+def layout(w,h,root=None):
     bw=max(0,w-16);bh=max(0,h-44);left=max(0,bw-8)//2;right=max(0,bw-left-8)
-    scale=lambda width:2 if width>=256 else 1
+    threshold=_scale_threshold(root);scale=lambda width:2 if width>=threshold else 1
     largest=max(scale(left),scale(right));split=bh>=2*(12+7*largest)+8
     top=max(0,bh-8)//2 if split else 0;bottom=max(0,bh-top-8)if split else bh;by=36+(top+8 if split else 0)
     cols=min(20,max(0,min(max(0,left-16)//(6*scale(left)),max(0,right-16)//(6*scale(right)))-1))
@@ -44,7 +59,8 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         actual_task,seq,w,h,cols,top,bottom=map(int,accepted[-1])
         if actual_task!=task:raise ValueError('viewport task differs from held BOOT roster')
         if seq==0:raise ValueError('zero viewport sequence')
-        panes,expected_cols,rows=layout(w,h)
+        panes,expected_cols,rows=layout(w,h,root)
+        threshold=_scale_threshold(root)
         if (cols,[top,bottom])!=(expected_cols,rows):raise ValueError('wrong viewport text capacity')
         views={int(sid):tuple(map(int,(x,y,w,h)))for sid,x,y,w,h in re.findall(rf'\[shell.app.viewport\] target={target} sid=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',text)if int(sid)in sids}
         if set(views)!=set(sids):raise ValueError('missing catalog viewport quadrants')
@@ -65,7 +81,7 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         if set(records)!=set(sids):raise ValueError('missing exact current-layout text payloads')
         rendered=[];errors=[]
         for index,sid in enumerate(sids):
-            c,r,n,data=records[sid];px,py,pw,ph=panes[index];sx,sy=x+px,y+py;scale=2 if pw>=256 else 1;expected_rows=rows[index//2]
+            c,r,n,data=records[sid];px,py,pw,ph=panes[index];sx,sy=x+px,y+py;scale=2 if pw>=threshold else 1;expected_rows=rows[index//2]
             if expected_rows==0:
                 if (c,r,n,data)!=(0,0,0,b''):raise ValueError('collapsed pane retained text')
                 rendered.append([]);continue

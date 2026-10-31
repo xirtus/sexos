@@ -6,7 +6,8 @@ pub const MAX_TEXT:usize=126;
 pub struct Rect{pub x:u32,pub y:u32,pub w:u32,pub h:u32}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Layout{pub panes:[Rect;4],pub cols:usize,pub rows:[usize;2]}
-pub const fn scale(width:u32)->u32{if width>=256{2}else{1}}
+/// Spindle panes trade bounded columns for readable doubled glyphs from 128px.
+pub const fn scale(width:u32)->u32{if width>=128{2}else{1}}
 fn rows(height:u32,scale:u32)->usize{let usable=height.saturating_sub(12);if usable<7*scale{0}else{(1+(usable-7*scale)/(9*scale)).min(6)as usize}}
 impl Layout{
  pub fn new(w:u32,h:u32)->Self{

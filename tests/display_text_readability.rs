@@ -4,6 +4,8 @@
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
+pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod state;
 use state::{Surface,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};
@@ -59,4 +61,60 @@ fn surface(width:u32,text:&[u8])->Surface{
  for ch in [b'_',b'~']{let s=surface(200,&[ch]);let glyph=ascii_glyph_index(ch).unwrap();let mut pixels=0;
  for y in 0..7{for x in 0..5{let want=if (FONT_ASCII_5X7[glyph][y]>>(4-x))&1!=0{pixels+=1;Some(s.text_color)}else{None};assert_eq!(surface_text_fg_at(28+x,72+y,&s),want);}}assert!(pixels>0);}
  for ch in [0,10,31,127,128,255]{assert_eq!(ascii_glyph_index(ch),None);}
+}
+
+// Explicit BOOT groups: metadata selects rendering, never grants authority.
+const SPINDLE_PANES:[(u32,u64,[u64;4]);8]=[
+ (12,153,[154,160,161,162]),(17,306,[302,303,304,305]),
+ (24,314,[313,315,316,317]),(25,319,[318,320,321,322]),
+ (26,324,[323,325,326,327]),(27,329,[328,330,331,332]),
+ (28,334,[333,335,336,337]),(29,339,[338,340,341,342]),
+];
+fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
+ let mut s=surface(width,text);s.owner_pd=owner;s.surface_id=sid;recompute_text_lines(&mut s);s
+}
+#[test]fn only_exact_spindle_content_pairs_use_terminal_scale(){
+ for (owner,frame,panes) in SPINDLE_PANES {
+  for sid in panes {
+   for (width,want,cols) in [(127,1,18),(128,2,9),(244,2,19)] {
+    let s=owned_surface(owner,sid,width,b"A\nB");assert_eq!(surface_text_scale(&s),want,"{owner}/{sid}/{width}");assert_eq!(s.wrap_cols,cols);
+   }
+   for foreign in [0,3,9,15,owner|(1<<31)] {assert_eq!(surface_text_scale(&owned_surface(foreign,sid,244,b"A")),1);}
+   for (other,_,_) in SPINDLE_PANES {if other!=owner {assert_eq!(surface_text_scale(&owned_surface(other,sid,244,b"A")),1);}}
+   assert_eq!(surface_text_scale(&owned_surface(owner,sid|(1u64<<32),244,b"A")),1);
+  }
+  for frame_owner in [3,owner]{assert_eq!(surface_text_scale(&owned_surface(frame_owner,frame,244,b"A")),1);}
+ }
+ for (owner,sid) in [(9,156),(16,301),(18,307),(19,308),(20,309),(21,310),(22,311),(23,312),(15,300)]{
+  for (width,want) in [(127,1),(128,1),(244,1),(255,1),(256,2)]{assert_eq!(surface_text_scale(&owned_surface(owner,sid,width,b"A")),want);}
+ }
+}
+#[test]fn terminal_wrap_and_glyph_pixels_use_same_two_x_grid_at_244(){
+ for (owner,_,panes) in SPINDLE_PANES {for sid in panes {
+  let s=owned_surface(owner,sid,244,b"ABCDEFGHIJKLMNOPQRST\nZ");
+  assert_eq!(s.wrap_cols,19);assert_eq!(s.line_starts[1],19);
+  let glyph=ascii_glyph_index(b'A').unwrap();
+  for row in 0..7{for col in 0..5{
+   let want=if (FONT_ASCII_5X7[glyph][row]>>(4-col))&1!=0{Some(0x123456)}else{None};
+   for dy in 0..2{for dx in 0..2{assert_eq!(surface_text_fg_at(28+col*2+dx,72+row*2+dy,&s),want);}}
+  }}
+  for y in 72..86{for x in 38..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
+ }}
+}
+#[test]fn terminal_scaled_scalar_controls_and_selection_preserve_cell_boundaries(){
+ assert_eq!(scalar_glyph(9),[0;7]);
+ assert_eq!(scalar_glyph(1),[31,17,21,21,21,17,31]);
+ let text="é\t\u{1}A\nB".as_bytes();let mut s=owned_surface(29,342,244,text);
+ assert_eq!(s.cell_count,6);assert_eq!(&s.cell_starts[..6],&[0,2,3,4,5,6]);
+ assert_eq!(s.line_starts[1],6);assert_eq!(s.line_cells[1],5);
+ s.selection_start=0;s.selection_end=2;
+ for (cell,scalar) in [(0,0xe9),(1,9),(2,1),(3,65)] {
+  let glyph=scalar_glyph(scalar);
+  for row in 0..9 {for col in 0..6 {
+   let ink=row<7&&col<5&&(glyph[row]>>(4-col))&1!=0;
+   let want=if ink{Some(s.text_color)}else if cell==0{Some(0xff36577c)}else{None};
+   for dy in 0..2{for dx in 0..2{assert_eq!(surface_text_fg_at(28+cell*12+col*2+dx,72+row*2+dy,&s),want);}}
+  }}
+ }
+ for y in 72..90{for x in 76..88{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
 }

@@ -37,3 +37,81 @@ use spindle_view::*;
  d.poll(true,true,|n|{assert!(n.sequence>first);assert_eq!(n.task,170);Ok(())});
  d.retire();d.refresh();d.queue(17,170,640,335);assert!(!d.pending());
 }
+
+
+#[test]fn spindle_scale_boundary_and_compact_tile_have_independent_readability_goldens(){
+ assert_eq!(scale(0),1);assert_eq!(scale(127),1);assert_eq!(scale(128),2);
+ assert_eq!(scale(244),2);assert_eq!(scale(255),2);assert_eq!(scale(256),2);
+ let v=Layout::new(512,718);
+ assert_eq!(v.panes,[Rect{x:8,y:36,w:244,h:333},Rect{x:260,y:36,w:244,h:333},
+  Rect{x:8,y:377,w:244,h:333},Rect{x:260,y:377,w:244,h:333}]);
+ assert_eq!((v.cols,v.columns(),v.rows),(18,36,[6,6]));
+ let text=viewport::render(v,b"echo readable",0,0,|_|panic!());
+ assert!(text.iter().all(|t|t.len==114&&t.cols==18&&t.rows==6));
+}
+
+fn rendered_bottom_prompt(text:&[viewport::Text;4])->Vec<u8>{
+ let mut prompt=Vec::new();
+ for pane in &text[2..]{assert!(pane.rows>0);let start=(pane.rows-1)*(pane.cols+1);
+  prompt.extend_from_slice(&pane.bytes[start..start+pane.cols]);}
+ prompt
+}
+#[test]fn compact_prompt_home_middle_and_tail_keep_caret_and_exact_source_input(){
+ let command=b"echo abcdefghijklmnopqrstuvwxyz0123456789 abcdefghijklmnopqrstuvwxyz";
+ let original=*command;let v=Layout::new(512,335);assert_eq!(v.columns(),36);
+ let home=rendered_bottom_prompt(&viewport::render_at(v,command,0,0,0,|_|panic!()));
+ assert_eq!(&home[..3],b"> |");assert_eq!(&home[3..35],&command[..32]);assert_eq!(home[35],b'>');
+ let middle=rendered_bottom_prompt(&viewport::render_at(v,command,34,0,0,|_|panic!()));
+ assert_eq!(&middle[..3],b"> <");assert_eq!(&middle[3..34],&command[3..34]);assert_eq!(&middle[34..],b"|>");
+ let tail=rendered_bottom_prompt(&viewport::render_at(v,command,command.len(),0,0,|_|panic!()));
+ assert_eq!(&tail[..3],b"> <");assert_eq!(&tail[3..35],&command[command.len()-32..]);assert_eq!(tail[35],b'|');
+ for prompt in [home,middle,tail]{assert_eq!(prompt.iter().filter(|&&ch|ch==b'|').count(),1);}
+ assert_eq!(command,&original);
+}
+#[test]fn compact_zoom_and_restore_reconstruct_same_prompt_and_scrollback_at_each_caret(){
+ let command=b"echo abcdefghijklmnopqrstuvwxyz0123456789 abcdefghijklmnopqrstuvwxyz";
+ let original=*command;
+ for cursor in [0,34,command.len()]{
+  let render=|w|viewport::render_at(Layout::new(w,718),command,cursor,2,0,|i|
+   if i==0{b"first retained scrollback line"}else{b"second retained scrollback line"});
+  let compact=render(512);let zoom=render(1024);let restored=render(512);
+  assert_eq!(compact,restored);assert_ne!(compact,zoom);
+  assert!(compact.iter().all(|t|t.cols==18));assert!(zoom.iter().all(|t|t.cols==20));
+  assert_eq!(rendered_bottom_prompt(&compact).len(),36);assert_eq!(rendered_bottom_prompt(&zoom).len(),40);
+  for text in [&compact,&zoom]{let prompt=rendered_bottom_prompt(text);
+   assert_eq!(prompt.iter().filter(|&&ch|ch==b'|').count(),1);
+   assert!(text.iter().all(|t|t.len<=MAX_TEXT));}
+  assert_eq!(command,&original);
+ }
+}
+#[test]fn asymmetric_scale_boundary_and_short_tiles_keep_prompt_in_uncropped_lower_band(){
+ // Odd width279 straddles the scale boundary: left127 remains1x, right128
+ // uses2x. Both halves share the smaller safe column/row budget.
+ let narrow=Layout::new(278,90);assert_eq!((narrow.cols,narrow.rows),(17,[1,1]));
+ let asymmetric=Layout::new(279,104);
+ assert_eq!((asymmetric.panes[0].w,asymmetric.panes[1].w),(127,128));
+ assert_eq!((scale(127),scale(128)),(1,2));assert_eq!((asymmetric.cols,asymmetric.rows),(8,[1,1]));
+ let command=b"echo keep the complete command while the view becomes short";let original=*command;
+ for w in [279,280,512]{for h in 90..=103{
+  let v=Layout::new(w,h);assert_eq!(v.rows,[0,2]);
+  assert_eq!((v.panes[0].h,v.panes[1].h),(0,0));assert_eq!(v.panes[2].y,36);assert_eq!(v.panes[2].h,h-44);
+  let text=viewport::render_at(v,command,command.len(),0,0,|_|panic!());assert_eq!((text[0].len,text[1].len),(0,0));
+  let prompt=rendered_bottom_prompt(&text);assert_eq!(&prompt[..3],b"> <");assert_eq!(prompt.last(),Some(&b'|'));
+  for i in 2..4{let p=v.panes[i];let s=scale(p.w);assert!(8+v.cols as u32*6*s<=p.w);
+   assert!(12+(text[i].rows-1)as u32*9*s+7*s<=p.h);assert!(text[i].len<=MAX_TEXT);}
+  assert_eq!(command,&original);
+ }}
+ assert_eq!(Layout::new(512,104).rows,[1,1]);
+}
+#[test]fn readable_frames_keep_finite_text_limits_from_tiny_to_extreme_dimensions(){
+ for w in [0,1,16,120,127,128,278,279,280,512,1024,4096,u32::MAX]{
+  for h in [0,1,44,80,90,103,104,718,4096,u32::MAX]{
+   let v=Layout::new(w,h);assert!(v.cols<=20);assert!(v.rows.iter().all(|&n|n<=6));
+   let text=viewport::render_at(v,&[b'x';256],128,1,0,|_|b"retained output");
+   for t in text{assert!(t.len<=MAX_TEXT);if t.len>0{assert_eq!(t.len,t.rows*(t.cols+1));
+    assert!(t.bytes[..t.len].chunks_exact(t.cols+1).all(|row|row[t.cols]==b'\n'));}}
+  }
+ }
+ let largest=viewport::render(Layout::new(4096,4096),b"",0,0,|_|panic!());
+ assert!(largest.iter().all(|t|t.len==MAX_TEXT));
+}

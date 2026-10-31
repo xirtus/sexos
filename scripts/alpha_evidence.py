@@ -23,7 +23,7 @@ def contract(root):
  root=Path(root);bar=bar_contract(root);launcher=launcher_contract(root)
  from https_asset_gate import script_dependencies
  paths=set(bar['source_sha256'])|set(launcher['source_sha256'])|set(script_dependencies(root,('scripts/quil_workflow_gate.py','scripts/alpha_evidence.py','scripts/tests/test_alpha_evidence.py')))
- paths.update(('servers/quil/src/main.rs','scripts/check_alpha_session.py'))
+ paths.update(('servers/quil/src/main.rs','scripts/check_alpha_session.py','crates/sex-pdx/src/spindle_view.rs'))
  return dict(root=str(root),font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text()),bar=bar,launcher=launcher,indicators=indicator_colors(root),reserve_focus={row['target']:row['frame']for row in quil_catalog(root)[2:]},source_sha256={p:sha(root/p)for p in sorted(paths)})
 
 def require_inputs(root,binding,c):

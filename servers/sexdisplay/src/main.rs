@@ -1227,8 +1227,15 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -
 
 /// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column
 /// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
+/// Exact Spindle panes share the terminal layout scale for their narrower tiles.
 fn surface_text_scale(surf: &Surface) -> usize {
-    sex_pdx::desktop_style::scale(surf.w) as usize
+    if sex_pdx::app_catalog::is_spindle(surf.owner_pd)
+        && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0
+    {
+        sex_pdx::spindle_view::scale(surf.w) as usize
+    } else {
+        sex_pdx::desktop_style::scale(surf.w) as usize
+    }
 }
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
