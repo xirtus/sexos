@@ -521,6 +521,15 @@
         "scripts/capability_revocation_host_gate.sh"
       ],
       "scope": "Production capability table compiled natively: post-seal revocation, no refill/mint, concurrent lookup and terminal-retirement wiring source; not native, cross-core or hostile-code evidence."
+    },
+    {
+      "id": "uiir_stream",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/uiir_host_gate.sh"
+      ],
+      "scope": "Production UiIR single-producer/single-consumer ring and cursor over host pages (order, epoch visibility, no overwrite, corruption, concurrency) plus BOOT grant and attach checks; not epoch replay or a rendering consumer."
     }
   ],
   "invariants": [
@@ -745,7 +754,7 @@
     {
       "id": "CAUSAL_DOMAIN_ORDER",
       "requirement": "Cross-domain streams preserve explicit deterministic ordering with no hidden hardware input.",
-      "status": "open",
+      "status": "partial",
       "sources": [
         {
           "path": "ARCHITECTURE.md",
@@ -754,11 +763,17 @@
         {
           "path": "kernel/src/ipc/router.rs",
           "anchor": "send_reply"
+        },
+        {
+          "path": "crates/sex-pdx/src/uiir.rs",
+          "anchor": "pub fn poll"
         }
       ],
-      "checks": [],
+      "checks": [
+        "uiir_stream"
+      ],
       "gaps": [
-        "One-deep replies and current transport do not prove per-sender epoch streams."
+        "One BOOT-granted UiIR stream (Shell to Display) carries contiguous per-sender sequences and non-decreasing epochs that its consumer checks; sex-pdx invocations, replies and kernel notices carry no sequence, and no recorder or replay consumes the stream."
       ],
       "depends_on": [
         "DETERMINISTIC_REPLAY"

@@ -7,6 +7,7 @@
 #![no_std]
 
 pub mod pagefault;
+pub mod uiir;
 pub mod display_ready;
 pub mod shell_ready;
 pub mod memory_region;
@@ -703,6 +704,32 @@ pub fn document_snapshot_view(subject: u32, writer: bool) -> Result<document_sna
     let view = memory_region_view(slot, 0, document_buffer::BYTES, rights).map_err(|_| document::DENIED)?;
     // Only immutable current-domain syscall results reach this constructor.
     unsafe { document_snapshot::Region::from_resolved(info, view, subject, writer) }
+}
+
+/// Resolve this domain's BOOT UiIR ring and cursor views and check each is the
+/// exact stream region, with the exact peer and rights for `producer`'s role.
+/// Numeric slots cannot create or upgrade a view.
+fn uiir_views(producer: bool, peer: u32) -> Result<(u64, u64), u64> {
+    use memory_region::{QUERY_VIEW, READ, WRITE};
+    let (ring_rights, cursor_rights) = if producer { (QUERY_VIEW | READ | WRITE, QUERY_VIEW | READ) } else { (QUERY_VIEW | READ, QUERY_VIEW | READ | WRITE) };
+    let mut out = [0u64; 2];
+    for (index, (slot, region, rights, bytes)) in [(uiir::RING_SLOT, uiir::RING_REGION_ID, ring_rights, uiir::RING_BYTES),
+        (uiir::CURSOR_SLOT, uiir::CURSOR_REGION_ID, cursor_rights, uiir::CURSOR_BYTES)].into_iter().enumerate() {
+        let info = memory_region_info(slot)?;
+        if info.region_id != region || info.peer_pd != Some(peer) || info.rights != rights || info.length != bytes as u64 { return Err(ERR_CAP_INVALID); }
+        let view = memory_region_view(slot, 0, bytes as u64, rights)?;
+        if view.region_id != region || view.length != bytes as u64 { return Err(ERR_CAP_INVALID); }
+        out[index] = view.virtual_address;
+    }
+    Ok((out[0], out[1]))
+}
+pub fn uiir_producer(peer: u32) -> Result<uiir::Producer, u64> {
+    let (ring, cursor) = uiir_views(true, peer)?;
+    Ok(unsafe { uiir::Producer::attach(ring as *mut u8, cursor as *const u8) })
+}
+pub fn uiir_consumer(peer: u32) -> Result<uiir::Consumer, u64> {
+    let (ring, cursor) = uiir_views(false, peer)?;
+    Ok(unsafe { uiir::Consumer::attach(ring as *const u8, cursor as *mut u8) })
 }
 
 // ── MemLend buffer cap ABI (SEXBLOCK_BUFFER_LEND_CAP_IMPLEMENT_PHASE_A_V1) ──

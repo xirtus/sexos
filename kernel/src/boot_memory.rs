@@ -78,6 +78,18 @@ fn paired_at(first_id: u32, second_id: u32, first_slot: u64, second_slot: u64,
         dma_base: None, peer_pd: Some(first.id) });
 }
 
+/// The first UiIR stream: the producer may write its ring and only read the
+/// consumer's cursor; the consumer may only read the ring and write its
+/// cursor. Both are zeroed, exact-peer BOOT regions; nothing is minted later.
+pub fn init_uiir(producer: u32, consumer: u32) {
+    use sex_pdx::uiir::{RING_SLOT, CURSOR_SLOT, RING_REGION_ID, CURSOR_REGION_ID, RING_BYTES, CURSOR_BYTES};
+    require_boot();
+    if producer == 0 || consumer == 0 { return; }
+    paired_at(producer, consumer, RING_SLOT, RING_SLOT, RING_REGION_ID, RING_BYTES as u64, false);
+    paired_at(consumer, producer, CURSOR_SLOT, CURSOR_SLOT, CURSOR_REGION_ID, CURSOR_BYTES as u64, false);
+    crate::serial_println!("[boot.uiir.stream] producer={} consumer={} ring_region={} cursor_region={} runtime_mint=0", producer, consumer, RING_REGION_ID, CURSOR_REGION_ID);
+}
+
 /// Permanent BOOT budget, separate from reclaimable app-private pages. Each
 /// successor gets different backing and an immutable, exact provider peer.
 /// Runtime Load still uses scalar transport until snapshot publication exists.

@@ -178,9 +178,23 @@ unsafe fn shell_close_poll() {
         // Keep retry ownership until attested death, rate-limited by ticks.
         entry.attempted_close(tick);
         let accepted = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE,
-            entry.target as u64, entry.task as u64, 0).is_ok();
+            entry.target as u64, entry.task as u64, entry.close_kind()).is_ok();
         sex_pdx::serial_record!("[shell.app.close.send] target={} task={} slot={} tick={} accepted={}",entry.target,entry.task,slot,tick,accepted as u8);
     }
+}
+const _: () = assert!(app_custody::CLOSE_ASK==sex_pdx::app_lifecycle::CLOSE_ASK
+    && app_custody::CLOSE_CONFIRMED==sex_pdx::app_lifecycle::CLOSE_CONFIRMED
+    && app_custody::DECLINE_UNSAVED==sex_pdx::app_lifecycle::DECLINE_UNSAVED);
+/// An app's own decline of a pending ordinary close: unsaved work stays open
+/// and the user's next Close is sent as confirmed.
+unsafe fn shell_close_declined_receive(msg:&sex_pdx::PdxMessage)->bool {
+    if msg.type_id!=sex_pdx::app_lifecycle::OP_APP_CLOSE_DECLINED {return false;}
+    for entry in APP_CUSTODY.iter_mut().flatten() {
+        if entry.target==msg.caller_pd && entry.task==msg.caller_task && entry.decline_close(msg.caller_pd,[msg.arg0,msg.arg1,msg.arg2]) {
+            sex_pdx::serial_record!("[shell.app.close.declined] target={} task={} reason=unsaved next_close=confirmed",entry.target,entry.task);
+        }
+    }
+    true
 }
 unsafe fn shell_request_app_close(sid: u64) {
     if let Some(entry) = APP_CUSTODY.iter_mut().flatten().find(|e|e.owns_surface(sid)) {
@@ -15984,7 +15998,7 @@ unsafe fn launcher_focus_stale(p:LauncherFocus,now:u64)->Option<&'static str>{
     if !matches!(lifecycle_state(p.frame),Some(LifecycleState::Visible)){return Some("not_visible")}
     if now<p.last{return Some("clock")}
     if now.saturating_sub(p.start)>=2000{return Some("deadline")}
-    if p.turns>=4096{return Some("turns")}
+    if p.turns>=4096{return Some("stalled_clock")}
     None
 }
 unsafe fn launcher_focus_retry_ready(sid:u64)->bool{
@@ -16003,7 +16017,11 @@ unsafe fn launcher_focus_cancel(p:LauncherFocus,reason:&str){
 /// Only focus remains pending. Reparent, restore and activation are never
 /// replayed. A changed user focus/workspace or exact lifecycle fence cancels.
 unsafe fn launcher_focus_poll(){
-    let Some(mut p)=LAUNCHER_FOCUS else{return};let now=sex_pdx::get_ticks();p.turns=p.turns.saturating_add(1);
+    // The deadline bounds the wait in ticks; turns only bound polls while the
+    // tick clock is not advancing. Counting every poll made a slow but live
+    // content commit exhaust the bound long before the deadline.
+    let Some(mut p)=LAUNCHER_FOCUS else{return};let now=sex_pdx::get_ticks();
+    if now>p.last{p.turns=0;}p.turns=p.turns.saturating_add(1);
     if let Some(reason)=launcher_focus_stale(p,now){launcher_focus_cancel(p,reason);return}
     p.last=now;LAUNCHER_FOCUS=Some(p);
     match launcher_subject_live(p.target,p.task){
@@ -19698,6 +19716,12 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         }
     }
     shell_request_app_close(surface_id);
+    // A document app may decline a Close to keep unsaved work. Its window
+    // stays until it agrees and dies; retirement then removes its tabs.
+    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)&&matches!(e.target,9|16|18)&&e.close_pending&&!e.dead) {
+        sex_pdx::serial_record!("[silk.close.deferred] sid={} reason=app_decides",surface_id);
+        return true;
+    }
     // A5: Check drag before lifecycle transition. Cancel drag on target surface.
     if let InteractionState::Dragging { surface_id: drag_sid, .. } = INTERACTION {
         if drag_sid == surface_id {
@@ -24203,9 +24227,25 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell.ready]");
     serial_println!("[silkshell.ready]");
     let mut shell_ready_publisher = sex_pdx::shell_ready::ReadyPublisher::new();
+    // First UiIR stream: committed focus transitions, one epoch per turn.
+    let mut uiir = match sex_pdx::uiir_producer(sex_pdx::uiir::DISPLAY_PD) {
+        Ok(p) => {sex_pdx::serial_record!("[uiir.shell.attached] peer={} ok=1",sex_pdx::uiir::DISPLAY_PD);Some(p)},
+        Err(e) => {sex_pdx::serial_record!("[uiir.shell.attached] peer={} ok=0 error={:#x}",sex_pdx::uiir::DISPLAY_PD,e);None},
+    };
+    let mut uiir_focus = 0u64;
 
     loop {
         unsafe {flush_browser_input();}
+        if let Some(stream)=uiir.as_mut() {
+            let focus=unsafe{FOCUSED_SURFACE_ID};
+            if focus!=uiir_focus {
+                match stream.push(sex_pdx::uiir::KIND_FOCUS,focus) {
+                    Ok(_)=>{uiir_focus=focus;stream.commit();},
+                    Err(sex_pdx::uiir::Error::Full)=>{},
+                    Err(e)=>{sex_pdx::serial_record!("[uiir.shell.error] {:?}",e);uiir=None;},
+                }
+            }
+        }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
@@ -24898,6 +24938,7 @@ pub extern "C" fn _start() -> ! {
             if clipboard_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
+            if shell_close_declined_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
             if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {

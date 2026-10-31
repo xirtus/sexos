@@ -2899,9 +2899,26 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[sexdisplay.ready]");
     let mut ready_publisher = sex_pdx::display_ready::ReadyPublisher::new();
+    let mut uiir = match sex_pdx::uiir_consumer(sex_pdx::uiir::SHELL_PD) {
+        Ok(c) => {sex_pdx::serial_record!("[uiir.display.attached] peer={} ok=1",sex_pdx::uiir::SHELL_PD);Some(c)},
+        Err(e) => {sex_pdx::serial_record!("[uiir.display.attached] peer={} ok=0 error={:#x}",sex_pdx::uiir::SHELL_PD,e);None},
+    };
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
+        // Consume the Shell's committed UiIR records strictly in order. This
+        // first stream is observed and checked; it drives no rendering yet.
+        while let Some(stream)=uiir.as_mut() {
+            match stream.poll() {
+                Ok(Some(r))=>{
+                    if r.sequence<=3||r.sequence%64==0 {
+                        sex_pdx::serial_record!("[uiir.display.record] sequence={} epoch={} kind={} payload={} in_order=1",r.sequence,r.epoch,r.kind,r.payload);
+                    }
+                },
+                Ok(None)=>break,
+                Err(e)=>{sex_pdx::serial_record!("[uiir.display.error] consumed={} {:?}",stream.consumed(),e);uiir=None;},
+            }
+        }
         // Announce only after the initialized renderer can drain ordinary work.
         // Retry each full recipient at most once per pass; never block draining.
         let ready_sent = ready_publisher.poll();

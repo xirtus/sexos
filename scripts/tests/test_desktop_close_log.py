@@ -49,4 +49,11 @@ class Checks(unittest.TestCase):
         self.assertTrue(checker.check(fixture().replace('[linen.disk.rescan.skip] gen=3 reason=unchanged','')))
     def test_malformed_fields_fail_without_crash(self):
         for before,after in [('task=15','task=x'),('bytes=8192','bytes=x'),('role=4','role=x'),('removed=2','removed=x')]:self.assertTrue(checker.check(fixture().replace(before,after)))
+    def test_declined_unsaved_close_then_confirmed_close(self):
+        f=fixture();line=next(l for l in f.splitlines() if l.startswith('[shell.app.close.request] target=9 '))
+        declined=line+'\n[shell.app.close.declined] target=9 task=9 reason=unsaved next_close=confirmed\n'+line
+        self.assertEqual(checker.check(f.replace(line,declined,1)),[])
+        self.assertTrue(checker.check(f.replace(line,line+'\n'+line,1)),'two requests without a decline')
+        self.assertTrue(checker.check(f.replace(line,line+'\n[shell.app.close.declined] target=9 task=9 reason=unsaved next_close=confirmed',1)),'decline with no later request')
+
 if __name__=='__main__':unittest.main()

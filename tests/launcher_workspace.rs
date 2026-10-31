@@ -205,3 +205,13 @@ unsafe fn reset(target:u32,sid:u64,scene:u8,minimized:bool,visible:bool){
  assert_eq!(launcher_focus_existing(12,153,None),Some(true));let pending=LAUNCHER_FOCUS;STATUS=7;try_set_focus_inner(153,false);launcher_palette_closed(pending);
  assert!(LAUNCHER_FOCUS.is_none());let n=OPS.len();STATUS=0;READY[index(999)]=true;desktop_state_poll();launcher_focus_poll();assert_eq!(OPS.len(),n);
 }}
+
+#[test]fn slow_live_content_with_an_advancing_clock_waits_until_the_deadline_not_a_poll_count(){let _l=LOCK.lock().unwrap();unsafe{
+ // The 1800-second compact session: Spindle content took ~1100-1600 ticks
+ // to become ready and 4096 polls cancelled the restore focus first.
+ reset(12,153,0,false,true);READY[index(999)]=false;assert_eq!(launcher_focus_existing(12,153,None),Some(true));
+ // 15,992 polls, far beyond the old 4096 bound, as ticks advance to 1999.
+ for poll in 0..15_992u64{NOW=poll/8;launcher_focus_poll();assert!(LAUNCHER_FOCUS.is_some(),"poll {poll}");}
+ // A clock that stops advancing is still bounded by polls.
+ for _ in 0..4096{launcher_focus_poll();}assert!(LAUNCHER_FOCUS.is_none());
+}}

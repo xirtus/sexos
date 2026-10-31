@@ -46,7 +46,13 @@ def check(text, include_successor=False, include_spindle_successor=False, includ
     if not presented or not any(f.get('surface')=='300' and f.get('scene')=='1' for _,f in presented):errors.append('native300 never presented')
     final_pool=-1
     for target,sid in [(15,300),(9,201),(12,153)]+([(16,301)] if include_successor else [])+([(17,306)] if include_spindle_successor else [])+([(18,307)] if include_third_quil else []):
-        close=one('shell.app.close.request',target)
+        # An app with unsaved work may decline ordinary Closes; each declined
+        # request is followed by its exact decline before the next request,
+        # and the final request is the one that tears the incarnation down.
+        requests=rows('shell.app.close.request',target);declines=rows('shell.app.close.declined',target)
+        if not requests or len(requests)!=len(declines)+1:errors.append(f'shell.app.close.request target={target}: expected declines+1, got {len(requests)} requests/{len(declines)} declines');close=None
+        elif any(not requests[k][0]<declines[k][0]<requests[k+1][0] for k in range(len(declines))):errors.append(f'target{target}: decline outside its close request');close=None
+        else:close=requests[-1]
         # Kaleido's authenticated close handler directly finishes; only Quil
         # and Spindle emit the additional receiver diagnostic.
         accepted=one('app.close.accepted',target) if target!=15 else None
