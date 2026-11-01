@@ -49,6 +49,28 @@ def browser_rows(root):
  if plans!=sources.FUTURE_PLANS:raise ValueError('native reserve requires actual three-row Browser catalog')
  return [dict(target=p.target,surface=p.surface,lifecycle=p.lifecycle,entropy=p.entropy,clock=p.clock,trust=p.trust,
               ordinal=i,predecessor=0 if i==0 else plans[i-1].target,activation=None if i==0 else(156,160)[i-1])for i,p in enumerate(plans)]
+def tls_accounting(root):
+ """Match Session::Stats task/Pipe accounting, including Pipe's metadata.
+
+ L calls Probe::start(false,None), so Session::prepare owns no Document.
+ This is reported payload accounting, not allocator bookkeeping.
+ """
+ root=Path(root);backend=(root/'crates/sex-tls/src/lib.rs').read_text()
+ code=re.sub(r'\s+','',re.sub(r'//[^\n]*','',backend));values={}
+ for name,expected in [('RECORD_READ',4096),('RECORD_WRITE',2048),('QUEUE_BYTES',4096),('MAX_TASK_BYTES',32768),('PIPE_METADATA_BYTES',56)]:
+  found=re.findall(r'pub const '+name+r'\s*:\s*usize\s*=\s*([0-9_]+)\s*;',backend)
+  if len(found)!=1 or int(found[0].replace('_',''))!=expected:raise ValueError('unreviewed source TLS accounting: '+name)
+  values[name]=expected
+ for fragment in ('pubconstPIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES;',
+                  'const_:()=assert!(core::mem::size_of::<Pipe>()==PIPE_BYTES);',
+                  'private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()+ifresource.is_some(){MAX_DOCUMENT}else{0}'):
+  if fragment not in code:raise ValueError('source Session::Stats/Pipe formula changed')
+ probe=re.sub(r'\s+','',(root/'apps/kaleidoscope/src/tls_probe.rs').read_text())
+ if 'self.start_mode(policy,seed,time,now,false,None)'not in probe or 'Session::prepare(&mutbytes,seconds,profile)'not in probe:
+  raise ValueError('local TLS preparation resource accounting changed')
+ return dict(record_read=values['RECORD_READ'],record_write=values['RECORD_WRITE'],queue_bytes=values['QUEUE_BYTES'],
+             pipe_metadata_bytes=values['PIPE_METADATA_BYTES'],pipe_bytes=2*values['QUEUE_BYTES']+values['PIPE_METADATA_BYTES'],
+             max_task_bytes=values['MAX_TASK_BYTES'],max_private_bytes=49152)
 def source_contract(root):
  from https_asset_gate import script_dependencies
  root=Path(root)
@@ -56,11 +78,11 @@ def source_contract(root):
  'kernel/src/init.rs','kernel/src/app_resources.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs',
  'servers/sexnet/src/main.rs','servers/sexnet/src/source_binding.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs',
  'servers/silk-shell/src/main.rs','servers/silk-shell/src/launcher.rs','servers/sexdisplay/src/main.rs',
- 'apps/kaleidoscope/src/main.rs','apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/network_probe.rs',
+ 'apps/kaleidoscope/src/main.rs','apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/network_probe.rs','crates/sex-tls/src/lib.rs',
  'scripts/browser_reserve_gate.py','scripts/tests/test_browser_reserve_gate.py','scripts/browser_source_evidence.py',
  'scripts/tests/test_browser_source_evidence.py')
  paths=set(paths)|set(script_dependencies(root,('scripts/browser_reserve_gate.py','scripts/tests/test_browser_reserve_gate.py')))
- return dict(rows=browser_rows(root),source_sha256={name:sha((root/name).read_bytes())for name in sorted(paths)})
+ return dict(rows=browser_rows(root),tls_accounting=tls_accounting(root),source_sha256={name:sha((root/name).read_bytes())for name in sorted(paths)})
 def require_inputs(binding,contract):
  for name,digest in contract['source_sha256'].items():
   if binding.get('sources',{}).get(name,binding.get('runner_sha256',{}).get(name))!=digest:raise ValueError('source/checker missing from frozen cohort: '+name)
@@ -101,7 +123,7 @@ def cleanup(trace,row,start,end):
   if effect.start()>=positions[[r for r in roles].index(8)]:raise ValueError('source retirement after Net cleanup ACK')
  return dict(target=t,task=k,bytes=size,close_offset=start+requested.start(),finish_offset=start+finished.start(),pool_offset=start+pool.start(),roles=sorted(roles))
 
-def workload(trace,row,start,end,inventory):
+def workload(trace,row,start,end,inventory,accounting):
  t,k=row['target'],row['task'];window(trace,start,end)
  command=one(trace,r'\[browser.command.started\] kind=TlsPrepare accepted=1',start,end)
  policy=one(trace,rf'\[trust.policy.snapshot\] owner={t} task={k} seq=([1-9]\d*) profile=1 root_bytes=376 origin=held_boot_grant',start,end)
@@ -110,7 +132,7 @@ def workload(trace,row,start,end,inventory):
  ready=one(trace,rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: {t}, task: {k} \}}\) ticket={ticket} state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',start,end)
  release=one(trace,rf'\[entropy.seed.released\] owner={t} task={k} ticket={ticket} service_payload=erased receipt=retained',start,end)
  prepared=one(trace,r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',start,end)
- if not 0<int(prepared[1])<=32768 or int(prepared[2])!=int(prepared[1])+8192 or not 0<int(prepared[3])<=4096 or int(prepared[4])!=int(clock[2]):raise ValueError('local TLS bounds/source UTC differ')
+ if not 0<int(prepared[1])<=accounting['max_task_bytes'] or int(prepared[2])!=int(prepared[1])+accounting['pipe_bytes'] or int(prepared[2])>=accounting['max_private_bytes'] or not 0<int(prepared[3])<=accounting['queue_bytes'] or int(prepared[4])!=int(clock[2]):raise ValueError('local TLS bounds/source UTC differ')
  source=[r for r in sources.validate_clock_stream(trace,inventory)if r['consumer']==(t,k)and start<=r['offset']<end]
  if len(source)!=1 or source[0]['holder'][2]!=row['clock']or source[0]['seconds']!=int(clock[2]):raise ValueError('exact source/consumer clock join missing')
  if not command.start()<policy.start()<clock.start()<prepared.start()or not policy.start()<admitted.start()<ready.start()<release.start()<prepared.start()or not start+policy.start()<source[0]['offset']<start+clock.start():raise ValueError('typed source/preparation order differs')
@@ -129,6 +151,7 @@ def startup_echo(trace,row,start,end):
 
 def verify(trace,result,root):
  rows=browser_rows(root);inv=sources.validate_inventory(trace,sources.plans_from_catalog(root),require_version=True)
+ accounting=tls_accounting(root)
  boot_order(trace,root)
  sources.validate_clock_stream(trace,inv);sources.validate_entropy_stream(trace,inv)
  chain=result.get('chain')
@@ -148,7 +171,7 @@ def verify(trace,result,root):
   one(trace,rf'\[shell.app.registered.reply\] target={t} task={k} surface={s} committed=1',a,b)
   if not re.search(rf'\[shell.focus.set\] id={s}'+END,window(trace,a,b)):raise ValueError('missing current exact Browser focus')
   one(trace,rf'\[app.surface.presented\] target={t} surface={s} sequence=1 ok=1',a,b)
-  ticket=startup_echo(trace,row,a,b);proof=workload(trace,row,b,c,inv);closed=cleanup(trace,row,c,d)
+  ticket=startup_echo(trace,row,a,b);proof=workload(trace,row,b,c,inv,accounting);closed=cleanup(trace,row,c,d)
   joins.append(dict(identity=row,echo_ticket=ticket,workload=proof,cleanup=closed));previous=d
  start,end=result.get('exhaustion_start'),result.get('exhaustion_end');span=window(trace,start,end)
  if start<previous:raise ValueError('exhaustion precedes final cleanup')
@@ -279,7 +302,7 @@ def replay(root,iso,binding,out):
  root,out=Path(root),Path(out);contract=source_contract(root);bound=frozen_binding(root,Path(iso),Path(binding));require_inputs(json.loads(Path(binding).read_text()),contract)
  manifest=json.loads((out/'manifest.json').read_text());result=json.loads((out/'result.json').read_text())
  if manifest.get('error')is not None or result.get('ok')is not True or manifest.get('guest_exited')is not True:raise ValueError('failed/nonterminal attempt remains diagnostic')
- if manifest.get('binding')!=bound or manifest.get('source_sha256')!=contract['source_sha256']or manifest.get('serial_offset_units')!=SERIAL_UNITS:raise ValueError('frozen source/image or prefix convention differs')
+ if manifest.get('binding')!=bound or manifest.get('source_sha256')!=contract['source_sha256']or manifest.get('serial_offset_units')!=SERIAL_UNITS or manifest.get('tls_accounting')!=contract['tls_accounting']:raise ValueError('frozen source/image, accounting or prefix convention differs')
  command_profile(manifest.get('command'),iso,out,manifest.get('resolution'),manifest.get('model'))
  frames=result.get('frames',[]);names=[f'browser-{n}-prepared'for n in(15,30,31)]+['browser-reserve-exhausted']
  if [f.get('name')for f in frames]!=names:raise ValueError('missing/reordered/duplicate immutable captures')
@@ -326,7 +349,7 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
  write_gzip(out/'nvme.img',out/'seed.img.gz')
  serial=out/'serial.log';sock=Path('/tmp')/f'sex-browser-reserve-{os.getpid()}.sock';pcap=out/'wire.pcap'
  command=native_command(iso,out/'nvme.img',serial,sock,pcap,model,resolution)
- manifest=dict(binding=bound,source_sha256=contract['source_sha256'],serial_offset_units=SERIAL_UNITS,command=command,resolution=resolution,model=model,input_disk_sha256=input_hash,scope=SCOPE)
+ manifest=dict(binding=bound,source_sha256=contract['source_sha256'],tls_accounting=contract['tls_accounting'],serial_offset_units=SERIAL_UNITS,command=command,resolution=resolution,model=model,input_disk_sha256=input_hash,scope=SCOPE)
  frames=[];actions=[];result={};error=None;proc=None;q=None;started=time.monotonic();dimensions=tuple(map(int,resolution.split('x')))
  with echo_peer()as peer:
   try:

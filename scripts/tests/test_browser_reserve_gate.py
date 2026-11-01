@@ -40,7 +40,7 @@ def fixture():
   text+=f'[entropy.seed.admitted] owner={t} task={k} ticket={i+1} bytes=32 source=held_boot_grant\n'
   text+=f'[entropy.seed.progress] owner=Some(Identity {{ pd: {t}, task: {k} }}) ticket={i+1} state=Some(Ready) produced=32 consumed=0 failure=0 private=1\n'
   text+=f'[entropy.seed.released] owner={t} task={k} ticket={i+1} service_payload=erased receipt=retained\n'
-  text+=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18192 read=4096 write=2048 tx_bytes=100 utc_snapshot={utc} authenticated=0 network=0\n'
+  text+=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18248 read=4096 write=2048 tx_bytes=100 utc_snapshot={utc} authenticated=0 network=0\n'
   close_start=len(text);text+=cleanup_lines(row);result['chain'].append(dict(identity=row,start=start,work_start=begin,close_start=close_start,end=len(text)))
  result['exhaustion_start']=len(text);text+='[launcher.text.row] index=10 row=4 name=Open Browser status=CLOSED / RESERVE EXHAUSTED\n[launcher.execute.denied] idx=10 status=CLOSED / RESERVE EXHAUSTED reason=boot_reserve_exhausted\n';result['exhaustion_end']=len(text)
  return text,result
@@ -49,6 +49,8 @@ class BrowserReserve(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
   path=self.root/'crates/sex-pdx/src/app_catalog.rs';path.parent.mkdir(parents=True);path.write_text('pub const INCARNATIONS: [Incarnation; 3] = [];')
+  for name in('crates/sex-tls/src/lib.rs','apps/kaleidoscope/src/tls_probe.rs'):
+   path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
   for target,value in[(p,'browser_rows'),(p.sources,'plans_from_catalog')]:
    replacement=ROWS if value=='browser_rows'else e.FUTURE_PLANS
    patcher=patch.object(target,value,return_value=replacement);patcher.start();self.addCleanup(patcher.stop)
@@ -56,6 +58,25 @@ class BrowserReserve(unittest.TestCase):
  def test_complete_three_unequal_tasks_and_cumulative_cleanup(self):
   text,result=fixture();checked=self.verify(text,result)
   self.assertEqual(checked['targets'],[15,30,31]);self.assertEqual([s['identity']['task']for s in checked['joins']],[150,300,310]);self.assertFalse(checked['browser_pixels_qualified']);self.assertTrue(checked['reserve_exhausted'])
+ def test_preparation_counts_source_pipe_metadata_not_only_queue_arrays(self):
+  accounting=p.tls_accounting(self.root)
+  self.assertEqual(accounting['pipe_bytes'],2*accounting['queue_bytes']+accounting['pipe_metadata_bytes'])
+  self.assertEqual((accounting['pipe_bytes'],accounting['pipe_metadata_bytes']),(8248,56))
+  text,result=fixture();self.assertTrue(self.verify(text,result)['ok'])
+  # The previous fixture/oracle both omitted Pipe's56 metadata bytes.
+  with self.assertRaisesRegex(ValueError,'local TLS bounds/source UTC differ'):
+   self.verify(text.replace('task_bytes=10000 private_bytes=18248','task_bytes=10000 private_bytes=18192',1),result)
+  contract=p.source_contract(ROOT)
+  self.assertEqual(contract['tls_accounting'],accounting)
+  self.assertEqual(contract['source_sha256']['crates/sex-tls/src/lib.rs'],p.sha((ROOT/'crates/sex-tls/src/lib.rs').read_bytes()))
+ def test_unqualified_pipe_or_session_accounting_fails_before_trace_acceptance(self):
+  path=self.root/'crates/sex-tls/src/lib.rs';source=path.read_text()
+  for old,new in[('PIPE_METADATA_BYTES:usize=56','PIPE_METADATA_BYTES:usize=55'),
+                  ('2*QUEUE_BYTES+PIPE_METADATA_BYTES','2*QUEUE_BYTES'),
+                  ('private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()','private_bytes:task.layout.size()+2*QUEUE_BYTES')]:
+   self.assertIn(old,source);path.write_text(source.replace(old,new,1))
+   with self.subTest(old=old),self.assertRaises(ValueError):p.tls_accounting(self.root)
+  path.write_text(source)
  def test_missing_and_crossed_every_successor_identity(self):
   for index in[1,2]:
    for key,value in[('task',30),('surface',300),('predecessor',15),('target',15)]:
