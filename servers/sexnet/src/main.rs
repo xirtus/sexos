@@ -63,8 +63,8 @@ fn retain_source_denial(outbox:&mut source_denial::Outbox,kind:source_denial::Ki
     true
 }
 // Contended or unavailable lifecycle queries are not terminal proof. Keep the
-// retained error/floor until a live send or exact held terminal observation.
-fn source_denial_live(owner:source_denial::Identity)->Option<bool>{
+// retained receipt/lease until a live send or exact held terminal observation.
+fn source_receipt_live(owner:source_denial::Identity)->Option<bool>{
     use sex_pdx::app_lifecycle as a;
     let row=sex_pdx::app_catalog::by_target(owner.pd)?;
     for slot in a::SLOTS{
@@ -82,10 +82,58 @@ fn source_denial_live(owner:source_denial::Identity)->Option<bool>{
 }
 fn poll_source_denials(outbox:&mut source_denial::Outbox){
     if let Some((owner,word))=outbox.pending_reply(){
-        match source_denial_live(owner){
+        match source_receipt_live(owner){
             Some(false)=>{outbox.retire(owner);},
             Some(true) if pdx_reply(owner.pd,word)==0=>outbox.reply_accepted(),
             _=>outbox.reply_deferred(),
+        }
+    }
+}
+/// Preserve the active source lease during uncertain lifecycle queries. Its
+/// original deadline still applies; uncertainty never permits provider work.
+fn maintain_seed_source(seed:&mut entropy::Machine){
+    let before_seed=seed.snapshot();
+    if let Some(owner)=seed.owner(){
+        match source_receipt_live(source_denial::Identity{pd:owner.pd,task:owner.task}){
+            Some(false)=>{seed.retire(owner);},
+            Some(true)=>seed.advance(sex_pdx::get_ticks(),||sex_pdx::entropy_word(sex_pdx::entropy_source::SLOT).map(|word|word.value)),
+            None=>{seed.maintain_lease(sex_pdx::get_ticks());},
+        }
+    }
+    let after_seed=seed.snapshot();
+    if before_seed!=after_seed{sex_pdx::serial_record!("[entropy.seed.progress] owner={:?} ticket={} state={:?} produced={} consumed={} failure={} private=1",after_seed.owner,after_seed.ticket,after_seed.state,after_seed.produced,after_seed.consumed,after_seed.failure);}
+}
+/// Every pending word keeps its original identity and source-machine floor.
+/// A delayed query/Full rotates; only exact held terminal proof retires it.
+fn poll_source_receipts(seed:&mut entropy::Machine,clock:&mut certificate_time::Machine,trust:&mut trust_policy::Machine){
+    // Queries can outlast a lease. Select only owner metadata first, then
+    // recheck current ticks after liveness and before copying any secret word.
+    if let Some(owner)=seed.pending_owner(){
+        let live=source_receipt_live(source_denial::Identity{pd:owner.pd,task:owner.task});
+        seed.maintain_lease(sex_pdx::get_ticks());
+        match live{
+            Some(false)=>{seed.retire(owner);},
+            Some(true)=>{
+                if let Some((target,word))=seed.pending_reply(){
+                    if target==owner && pdx_reply(owner.pd,word)==0{seed.reply_accepted();}
+                    else{seed.reply_deferred();}
+                }
+            },
+            None=>seed.reply_deferred(),
+        }
+    }else{seed.maintain_lease(sex_pdx::get_ticks());}
+    if let Some((owner,word))=clock.pending_reply(){
+        match source_receipt_live(source_denial::Identity{pd:owner.pd,task:owner.task}){
+            Some(false)=>{clock.retire(owner);},
+            Some(true) if pdx_reply(owner.pd,word)==0=>clock.reply_accepted(),
+            _=>clock.reply_deferred(),
+        }
+    }
+    if let Some((owner,word))=trust.pending_reply(){
+        match source_receipt_live(source_denial::Identity{pd:owner.pd,task:owner.task}){
+            Some(false)=>{trust.retire(owner);},
+            Some(true) if pdx_reply(owner.pd,word)==0=>trust.reply_accepted(),
+            _=>trust.reply_deferred(),
         }
     }
 }
@@ -5305,13 +5353,7 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
         }
         if let Some(owner)=dns.owner(){if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}}
-        if let Some(owner)=seed.owner(){
-            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){seed.retire(owner);}
-        }
-        let before_seed=seed.snapshot();
-        seed.advance(sex_pdx::get_ticks(),||sex_pdx::entropy_word(sex_pdx::entropy_source::SLOT).map(|word|word.value));
-        let after_seed=seed.snapshot();
-        if before_seed!=after_seed{sex_pdx::serial_record!("[entropy.seed.progress] owner={:?} ticket={} state={:?} produced={} consumed={} failure={} private=1",after_seed.owner,after_seed.ticket,after_seed.state,after_seed.produced,after_seed.consumed,after_seed.failure);}
+        maintain_seed_source(&mut seed);
         // Released DNS observations retain no active socket. Check their exact
         // live identities and nominal-tick expiry even on transport-offline turns.
         dns.maintain_records(sex_pdx::get_ticks(),|owner|network_owner(owner.pd)==Some(owner));
@@ -5409,18 +5451,7 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}
             else if pdx_reply(owner.pd,word)==0{dns.reply_accepted();}else{dns.reply_deferred();}
         }
-        if let Some((owner,word))=seed.pending_reply(){
-            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){seed.retire(owner);}
-            else if pdx_reply(owner.pd,word)==0{seed.reply_accepted();}else{seed.reply_deferred();}
-        }
-        if let Some((owner,word))=clock.pending_reply(){
-            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){clock.retire(owner);}
-            else if pdx_reply(owner.pd,word)==0{clock.reply_accepted();}else{clock.reply_deferred();}
-        }
-        if let Some((owner,word))=trust.pending_reply(){
-            if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){trust.retire(owner);}
-            else if pdx_reply(owner.pd,word)==0{trust.reply_accepted();}else{trust.reply_deferred();}
-        }
+        poll_source_receipts(&mut seed,&mut clock,&mut trust);
         poll_source_denials(source_denials);
         let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
         let pending=preparing||polling||reply_pending||seed.busy();

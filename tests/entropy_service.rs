@@ -78,3 +78,64 @@ fn forbidden()->Result<u64,u64>{panic!("forbidden provider call")}
 #[test]fn retained_reply_round_robin_gives_other_owner_a_turn_without_overwrite(){
  let mut m=entropy::Machine::new();assert!(m.handle(OWNER,begin(1),1,INFO));let first=m.pending_reply();let foreign=Identity{pd:12,task:120};assert!(m.handle(foreign,begin(1),1,INFO));m.reply_deferred();assert!(m.pending_reply().unwrap().0==foreign);m.reply_accepted();assert!(m.pending_reply()==first);m.reply_accepted();
 }
+
+
+#[test]fn uncertain_liveness_retains_partial_seed_then_live_resume_preserves_exact_bytes(){
+ let(mut m,t)=started();let mut calls=0;
+ m.advance(2,||{calls+=1;Ok(0x1122334455667788)});
+ let before=m.snapshot();assert_eq!(before.produced,8);assert!(!m.private_scrubbed());
+ for now in[3,20,20]{m.maintain_lease(now);assert_eq!(m.snapshot(),before);assert!(m.pending_reply().is_none());assert_eq!(calls,1);}
+ for(n,word)in[0x99aabbccddeeff00,0x123456789abcdef0,0xfedcba9876543210].into_iter().enumerate(){
+  m.advance(21+n as u64,||{calls+=1;Ok(word)});
+ }
+ assert_eq!(calls,4);assert_eq!(m.snapshot().state,Some(State::Ready));
+ assert!(m.handle(OWNER,read(2,t,0,4),24,INFO));assert_eq!(reply(&mut m,2),Ok(0x55667788));
+ assert!(m.handle(OWNER,read(3,t,4,4),25,INFO));assert_eq!(reply(&mut m,3),Ok(0x11223344));
+}
+#[test]fn uncertain_ready_lease_preserves_full_read_then_expiry_or_rollback_redacts_pending_and_cache(){
+ for failure_tick in[0,2001]{
+ let(mut m,t)=started();collect(&mut m);let r=read(2,t,0,4);
+ assert!(m.handle(OWNER,r,7,INFO));let pending=m.pending_reply();let before=m.snapshot();
+ assert_eq!(a::decode_reply(pending.unwrap().1,2),Ok(0x05060701));
+ for now in[8,1000,2000]{m.maintain_lease(now);assert_eq!(m.snapshot(),before);assert_eq!(m.pending_reply(),pending);assert!(!m.private_scrubbed());}
+ m.maintain_lease(failure_tick);let failed=m.snapshot();
+ assert_eq!(failed.owner,Some(OWNER));assert_eq!(failed.ticket,t);assert_eq!(failed.state,Some(State::Failed));
+ assert_eq!(failed.failure,a::TIMEOUT);assert_eq!((failed.produced,failed.consumed),(0,0));assert!(m.private_scrubbed());
+ assert_eq!(a::decode_reply(m.pending_reply().unwrap().1,2),Err(a::INVALID));
+ assert!(m.handle(OWNER,r,2002,INFO));assert_eq!(a::decode_reply(m.pending_reply().unwrap().1,2),Err(a::INVALID));
+ m.reply_accepted();assert!(m.handle(OWNER,r,2003,INFO));assert_eq!(reply(&mut m,2),Err(a::INVALID));
+ m.advance(2004,forbidden);assert_eq!(m.snapshot(),failed);assert!(m.private_scrubbed());
+ }
+}
+#[test]fn uncertain_backward_tick_scrubs_without_allocating_secret_or_ticket(){
+ let(mut m,t)=started();m.advance(2,||Ok(0x0102030405060708));
+ m.maintain_lease(10);m.maintain_lease(9);
+ let failed=m.snapshot();assert_eq!(failed.state,Some(State::Failed));assert_eq!(failed.failure,a::TIMEOUT);
+ assert_eq!(failed.owner,Some(OWNER));assert_eq!(failed.ticket,t);assert_eq!(failed.produced,0);assert!(m.private_scrubbed());
+ for now in[0,11,u64::MAX]{m.maintain_lease(now);m.advance(now,forbidden);assert_eq!(m.snapshot(),failed);}
+ assert!(m.handle(OWNER,begin(2),12,INFO));assert_eq!(reply(&mut m,2),Err(a::BUSY));assert_eq!(m.snapshot(),failed);
+ assert!(m.handle(OWNER,held(3,a::RELEASE,t),13,None));assert_eq!(reply(&mut m,3),Ok(0));
+ assert!(m.handle(OWNER,begin(4),14,INFO));assert_eq!(reply(&mut m,4),Ok(t+1));
+ assert_eq!(m.snapshot().state,Some(State::Collecting));assert_eq!(m.snapshot().produced,0);
+}
+#[test]fn uncertain_maintenance_and_live_resume_never_extend_original_exact_deadline(){
+ let mut m=entropy::Machine::new();let start=50;let deadline=start+entropy::TOTAL_TICKS;
+ assert!(m.handle(OWNER,begin(1),start,INFO));let t=reply(&mut m,1).unwrap();let mut calls=0;
+ m.advance(51,||{calls+=1;Ok(7)});m.maintain_lease(deadline-2);
+ assert_eq!(m.snapshot().produced,8);assert_eq!(calls,1);
+ m.advance(deadline-1,||{calls+=1;Ok(8)});assert_eq!(calls,2);assert_eq!(m.snapshot().produced,16);
+ m.maintain_lease(deadline-1);assert_eq!(m.snapshot().state,Some(State::Collecting));
+ m.maintain_lease(deadline);assert_eq!(m.snapshot().state,Some(State::Failed));
+ assert_eq!(m.snapshot().failure,a::TIMEOUT);assert_eq!(m.snapshot().ticket,t);assert!(m.private_scrubbed());
+ m.advance(deadline,forbidden);assert_eq!(calls,2);
+}
+#[test]fn uncertain_maintenance_without_owner_or_after_failure_is_noop_including_receipts(){
+ let mut m=entropy::Machine::new();assert!(m.handle(OWNER,begin(1),1,None));
+ let before=m.snapshot();let pending=m.pending_reply();assert!(before.owner.is_none());
+ for now in[0,2001,u64::MAX]{m.maintain_lease(now);assert_eq!(m.snapshot(),before);assert_eq!(m.pending_reply(),pending);assert!(m.private_scrubbed());}
+ m.reply_accepted();assert!(m.handle(OWNER,begin(2),1,INFO));let t=reply(&mut m,2).unwrap();assert_eq!(t,1);
+ m.advance(2,||Ok(7));m.advance(3,||Err(entropy_source::IO));
+ assert!(m.handle(OWNER,read(3,t,0,4),4,INFO));let failed=m.snapshot();let error=m.pending_reply();
+ assert_eq!(failed.failure,a::IO);assert_eq!(a::decode_reply(error.unwrap().1,3),Err(a::IO));
+ for now in[0,5,u64::MAX]{m.maintain_lease(now);m.advance(now,forbidden);assert_eq!(m.snapshot(),failed);assert_eq!(m.pending_reply(),error);assert!(m.private_scrubbed());}
+}

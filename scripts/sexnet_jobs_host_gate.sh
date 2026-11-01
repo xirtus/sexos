@@ -66,6 +66,7 @@ echo '[sexnet.http.navigation.host] PASS scope=actual_bounded_path_history_and_c
 
 rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_service.rs" -o "$TEST_DIR/entropy-service-tests"
 "$TEST_DIR/entropy-service-tests"
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_entropy_lease.py" --root "$ROOT_DIR" --baseline-binary "$TEST_DIR/entropy-service-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_client.rs" -o "$TEST_DIR/entropy-client-tests"
 "$TEST_DIR/entropy-client-tests"
 echo '[sexnet.entropy.host] PASS scope=actual_ABI_private_service_client_not_live_CPU_quality_or_authority'

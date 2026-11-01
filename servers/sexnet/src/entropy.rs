@@ -40,6 +40,8 @@ impl Machine {
         Snapshot{owner:self.owner,ticket:self.ticket,state:self.state,produced:self.produced,consumed:self.consumed,failure:self.failure}
     }
     fn selected(&self)->Option<usize>{(0..OWNERS).map(|n|(self.cursor+n)%OWNERS).find(|i|self.pending[*i].is_some())}
+    /// Select metadata before a potentially contended liveness query; no seed word is copied.
+    pub fn pending_owner(&self)->Option<Identity>{self.selected().and_then(|i|self.pending[i].as_ref()).map(|r|r.owner)}
     pub fn pending_reply(&self)->Option<(Identity,u64)>{self.selected().and_then(|i|self.pending[i].as_ref()).map(|r|(r.owner,r.word))}
     pub fn reply_accepted(&mut self){if let Some(i)=self.selected(){clear(&mut self.pending[i]);self.cursor=(i+1)%OWNERS;}}
     pub fn reply_deferred(&mut self){if let Some(i)=self.selected(){self.cursor=(i+1)%OWNERS;}}
@@ -134,6 +136,11 @@ impl Machine {
             _=>Err(a::INVALID),
         }
     }
+    /// Preserve the original lease while current owner liveness is uncertain.
+    /// This checks expiry/backward ticks and scrubs on failure without invoking
+    /// a provider, allocating a ticket, or extending/resetting the deadline.
+    /// It does not attest that the held owner is live; only advance may collect.
+    pub fn maintain_lease(&mut self,now:u64){self.clock(now);}
     /// One provider invocation at most. Any provider error/repeated consecutive
     /// word ends this job; no automatic resampling, alternate source or fallback.
     /// Parent must attest the current live owner before calling advance.
