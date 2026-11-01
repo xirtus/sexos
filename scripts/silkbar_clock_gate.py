@@ -67,6 +67,7 @@ def _date_render_shape(display):
  assert header in(old,new),'unknown top-strip clock rendering shape'
  scene_backed=header==new
  prepared='fn render_prepared('in display
+ batched='fn raster_batch('in display
  assert not prepared or scene_backed,'prepared output requires an owned scene'
  for name in('civil_clock_fg_at','clock_fg_at'):
   helper=compact(_function(display,name))
@@ -82,7 +83,11 @@ def _date_render_shape(display):
   helper=compact(_function(display,name));cache='letclock_lines=civil_clock_lines(&'+bar+'.civil_clock);'
   assert helper.count(cache)==1 and helper.count('civil_clock_lines(')==1 and helper.count('letclock_lines=')==1,'missing/duplicate per-pass clock snapshot: '+name
   assert helper.index(cache)<helper.index('foryin0..'),'calendar snapshot moved into pixel iteration: '+name
-  if scene_backed:
+  if batched and name in('raster_full','raster_strip'):
+   assert 'scene:&scene::SceneSnapshot'in helper.split('{',1)[0],'batch raster must borrow the shared scene'
+   assert 'SceneLease::capture('not in helper and helper.count('letbar=&scene.bar;')==1,'batch raster recaptures or replaces its clock scene'
+   assert helper.index('letbar=&scene.bar;')<helper.index(cache),'batch clock binding follows formatting'
+  elif scene_backed:
    capture='letSome(lease)=SceneLease::capture('+('PROOF_W,PROOF_H,&proof_bar'if name=='top_strip_render_proof'else'w,h,bar')+')else{return'+('false'if name in('render','raster_full','raster_strip')else'')+';};'
    chain=capture+'letscene=lease.view();let'+bar+'=&scene.bar;'
    assert helper.count(chain)==1 and helper.count('SceneLease::capture(')==1,'missing/ambiguous scene-backed clock custody: '+name
@@ -92,7 +97,17 @@ def _date_render_shape(display):
    assert 'SceneLease::capture('not in helper and '=&scene.bar;'not in helper,'ambiguous archived clock rendering shape: '+name
   call=('clock_fg_at(x,y,&proof_bar,&clock_lines)'if name=='top_strip_render_proof'else'top_strip_pixel(x,y,bar,&clock_lines'+(',scene'if scene_backed else'')+')')
   assert helper.count(call)==1,'cached rows not passed to actual renderer: '+name
- if prepared:
+ if batched:
+  writer=compact(_function(display,'render_prepared'));batch=compact(_function(display,'raster_batch'))
+  capture='letSome(lease)=SceneLease::capture(w,h,bar)'
+  commit='preparation.commit(|pixels|publish_frame(fb,w,h,pixels))'
+  drawn='civil_clock_drawn(&scene.bar,w,h,plan.label());'
+  assert writer.count(capture)==1 and writer.count('letscene=lease.view();')==1,'one owned clock scene per batch'
+  assert writer.index(capture)<writer.index('raster_batch(&target,scene,plan)')<writer.index(commit)<writer.index(drawn),'batch clock custody/publication order'
+  assert 'if!'+commit+'{backup.restore();returnNone;}'in writer,'failed batch releases clock receipt'
+  assert 'ifplan.clock_dirty(){'+drawn+'}'in writer,'nonclock batch releases clock receipt'
+  assert batch.count('raster_full(target,scene)')==1 and batch.count('raster_strip(target,scene)')==1,'clock passes do not share the batch scene'
+ elif prepared:
   writer=compact(_function(display,'render_prepared'))
   commit='preparation.commit(|pixels|publish_frame(fb,w,h,pixels))'
   drawn='civil_clock_drawn(&captured_bar,w,h,paint.label());'
@@ -116,6 +131,7 @@ def source_contract(root):
    if 'fn render_prepared('in display:
     for name in('servers/sexdisplay/src/frame_output.rs','crates/sex-pdx/src/display_frames.rs','crates/sex-pdx/src/memory_region.rs'):
      texts[name]=(root/name).read_text()
+ if 'fn raster_batch('in display:texts['servers/sexdisplay/src/paint_batch.rs']=(root/'servers/sexdisplay/src/paint_batch.rs').read_text()
  dimensions={}
  for name in('CHIP_X3','CHIP_Y','CLOCK_W','CHIP_H'):
   m=re.search(r'pub const '+name+r': usize = (\d+);',model);assert m,'missing source-bound civil geometry';dimensions[name]=int(m[1])
@@ -124,7 +140,9 @@ def source_contract(root):
  for name in('MIN_SECONDS','MAX_SECONDS'):
   m=re.search(r'pub const '+name+r': u64 = ([\d_]+);',abi);assert m;bounds[name]=int(m[1].replace('_',''))
  assert 'pub const STATUS_BAR: Identity = Identity { pd: 6, task: 6 };'in abi
- if 'fn render_prepared('in display:
+ if 'fn raster_batch('in display:
+  assert 'ifplan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}'in re.sub(r'\s+','',_function(display,'render_prepared'))
+ elif 'fn render_prepared('in display:
   assert 'ifmatches!(paint,Paint::Full|Paint::Strip){civil_clock_drawn(&captured_bar,w,h,paint.label());}'in re.sub(r'\s+','',_function(display,'render_prepared'))
  else:
   assert 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display

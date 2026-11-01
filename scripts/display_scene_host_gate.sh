@@ -28,23 +28,23 @@ def wiring(s):
     guard='ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return'
     assert prepare.split('{',1)[1].startswith(guard+'false;}'),'cleanup preparation must fence before all service/state effects'
     assert finish.split('{',1)[1].startswith(guard+';}'),'cleanup completion must fence before all render/ACK/reply effects'
-    assert finish.index('render(')<finish.index('lifecycle.pixels_presented(')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack('),'render-return/commit/ACK order'
-    assert render=='fnrender(fb:*mutu32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Full)}','full wrapper must use complete prepared output'
-    prepared=compact(function(s,'render_prepared'))
-    assert prepared.index('store.prepare(')<prepared.index('letprepared={lettarget=preparation.target();')<prepared.index('preparation.commit(|pixels|publish_frame(fb,w,h,pixels))')<prepared.index('record_cursor_presented();')<prepared.index('report_app_presented();')<prepared.index('civil_clock_drawn('),'prepare/raster/publish/receipts order'
-    assert 'if!prepared{drop(preparation);backup.restore();returnfalse;}'in prepared and 'if!preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();returnfalse;}'in prepared
-    for name,paint in [('redraw_top_strip','Strip'),('redraw_surface_area','Area'),('redraw_cursor','Cursor')]:
-        assert 'render_prepared(fb,w,h,bar,Paint::'+paint+')'in compact(function(s,name))
-    assert 'render_prepared(fb,w,h,bar,Paint::Damage(rect))'in compact(function(s,'redraw_surface_damage'))
+    assert 'render('not in finish and 'render_prepared('not in finish and 'APP_PRESENT_BITS'not in finish,'completion may not render or rejoin live global pixel bits'
+    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack('),'full captured receipt/commit/ACK order'
+    assert render=='fnrender(fb:*mutu32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}','bootstrap full uses prepared publication'
+    prepared=compact(function(s,'render_prepared'));batch=compact(function(s,'raster_batch'))
+    assert prepared.index('ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{returnNone;}')<prepared.index('FRAME_OUTPUT.as_mut()'),'reject nested render before exclusive store borrow'
+    assert prepared.count('SceneLease::capture(')==1 and prepared.count('raster_batch(')==1 and prepared.count('preparation.commit(')==1,'one scene/preparation/publication per batch'
+    assert prepared.index('store.prepare(')<prepared.index('SceneLease::capture(')<prepared.index('letscene=lease.view();')<prepared.index('raster_batch(&target,scene,plan)')<prepared.index('preparation.commit(|pixels|publish_frame(fb,w,h,pixels))')<prepared.index('letpresent_bits=unsafe{APP_PRESENT_BITS};')<prepared.index('record_cursor_presented();')<prepared.index('report_app_presented();')<prepared.index('civil_clock_drawn('),'one owned scene covers raster/publish/posteffects'
+    assert prepared.endswith('Some(PublishedFrame{plan,present_bits,canon_ss})}') and not any(x in prepared for x in('mem::forget','ManuallyDrop','drop(lease)')),'lease stays ordinary scoped ownership through receipt construction'
+    assert 'requested.is_empty()||!valid_scanout('in prepared and 'if!prepared{drop(preparation);backup.restore();returnNone;}'in prepared
+    assert 'if!preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();returnNone;}'in prepared
+    assert 'SceneLease'not in batch and batch.count('restore_cursor_under(')==1 and batch.index('restore_cursor_under(')<batch.index('letbody=matchplan.content')<batch.index('plan.strip&&!raster_strip('),'one restore then body/strip from same scene'
+    for name in ['draw_atlas_cards_pass','draw_atlas_frame_previews_pass','draw_launcher_panel','draw_cursor_z_top']:assert batch.count(name+'(')==1,name+' at most once per batch'
+    assert batch.index('draw_launcher_panel(')<batch.index('draw_cursor_z_top('),'cursor last over launcher'
     assert 'for(index,pixel)inpixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),*pixel);}}'in compact(function(s,'publish_frame'))
-    for name in ['raster_full','raster_strip','raster_area','raster_damage','raster_cursor']:
+    for name in ['raster_full','raster_strip','raster_area','raster_damage']:
         body=compact(function(s,name))
-        assert body.count('SceneLease::capture(w,h,bar)')==1 and 'letSome(lease)=SceneLease::capture(w,h,bar)else{returnfalse;};letscene=lease.view();'in body,name+' immutable actual lease'
-        assert body.index('SceneLease::capture(')<body.rindex('draw_cursor_z_top('),name+' lease covers last cursor overlay'
-        if name!='raster_cursor':assert body.index('SceneLease::capture(')<body.rindex('draw_launcher_panel('),name+' lease covers last launcher overlay'
-        assert body.endswith('true}') and not any(x in body for x in('mem::forget','ManuallyDrop','drop(lease)','civil_clock_drawn(','report_app_presented(','record_cursor_presented(')),name+' scoped lease and no premature publication effects'
-    damage=compact(function(s,'raster_damage'));assert damage.index('returnraster_area(target,bar);')<damage.index('SceneLease::capture('),'damage fallback must not acquire nested lease'
-    assert not any(x in prepared for x in('mem::forget','ManuallyDrop')),'prepared backing may not escape commit/abort ownership'
+        assert 'scene:&scene::SceneSnapshot' in body and not any(x in body for x in('SceneLease','draw_cursor_z_top(','draw_launcher_panel(','draw_atlas_cards_pass(','draw_atlas_frame_previews_pass(','restore_cursor_under(','civil_clock_drawn(','report_app_presented(','record_cursor_presented(','render_prepared(')),name+' primitive may only paint borrowed target/scene'
     assert 'scrub_cursor_under();ifletSome(output)=FRAME_OUTPUT.as_mut(){output.scrub();}PREPARED_CURSOR=None;'in prepare,'cleanup must remove retained raster pixels and pending cursor metadata'
     assert lease.index('if(*core::ptr::addr_of!(RENDER_SCENE)).is_valid(){returnNone;}')<lease.index('letdestination=&mut*core::ptr::addr_of_mut!(RENDER_SCENE);'),'reject nested capture before creating an exclusive reference'
     assert 'impl Drop for SceneLease' in s and not re.search(r'#\[derive\([^\]]*(?:Clone|Copy)[^\]]*\)\]\s*struct SceneLease',s)
@@ -72,7 +72,7 @@ for name in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','scene_bar_blur_row
 parent_path=out/'parent.rs';parent_path.write_text('\n'.join(parent))
 lease=[]
 for name in ['RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID','RENDER_FRAME_COUNTER','TEXT_STAGES','TOKEN_BUF_CALL1_RECEIVED','TOKEN_BUF_OWNER','TOKEN_BUF_ARG0','TOKEN_BUF_ARG1','TOKEN_BUF_ARG2','CURSOR_UNDER_VALID','APP_PRESENT_BITS','CLOCK_CANON_SS','FRAME_OUTPUT','PREPARED_CURSOR']:lease.append(item(source,name))
-lease +=['#[derive(Clone,Copy)]\n'+block(source,'struct PreparedCursor{'),block(source,'struct SceneLease {'),block(source,'impl SceneLease {'),block(source,'impl Drop for SceneLease {'),function(source,'prepare_app_cleanup'),function(source,'finish_display_transactions')]
+lease +=[block(source,'struct PublishedFrame{'),'#[derive(Clone,Copy)]\n'+block(source,'struct PreparedCursor{'),block(source,'struct SceneLease {'),block(source,'impl SceneLease {'),block(source,'impl Drop for SceneLease {'),function(source,'prepare_app_cleanup'),function(source,'finish_display_transactions')]
 lease_source='\n'.join(lease);lease_path=out/'lease.rs';lease_path.write_text(lease_source)
 # Re-resolve ordinary module paths from the canonical repository tests folder,
 # even when a temporary proposed fixture is supplied before promotion.
@@ -101,7 +101,7 @@ for name,target,old,new,test in controls:
     compile_run(name,path if target=='scene'else scene_path,path if target=='lease'else lease_path,test,True)
     print('[display.scene.mutant] rejected='+name+' exact='+test)
 assert main_path.read_text()==source,'Main changed during host proof; rerun against a fixed source capture'
-proof=dict(ok=True,actual_cases=cases,compiled_runtime_mutants=len(controls),source_fence_controls=len(wiring_controls),scope='actual_Scene_Main_lease_cleanup_with_finite_service_and_renderer_boundaries_not_native_pixels_authority_or_epoch_closure',sha256={str(v):hashlib.sha256(v.read_bytes()).hexdigest()for v in[main_path,scene_path,groups_path,fixture_path,root/'servers/sexdisplay/src/frame_output.rs',root/'crates/sex-pdx/src/display_frames.rs',root/'crates/sex-pdx/src/memory_region.rs']})
+proof=dict(ok=True,actual_cases=cases,compiled_runtime_mutants=len(controls),source_fence_controls=len(wiring_controls),scope='actual_Scene_Main_lease_cleanup_with_finite_service_and_renderer_boundaries_not_native_pixels_authority_or_epoch_closure',sha256={str(v):hashlib.sha256(v.read_bytes()).hexdigest()for v in[main_path,scene_path,groups_path,fixture_path,root/'servers/sexdisplay/src/frame_output.rs',root/'crates/sex-pdx/src/display_frames.rs',root/'crates/sex-pdx/src/memory_region.rs',root/'servers/sexdisplay/src/paint_batch.rs',root/'servers/sexdisplay/src/damage.rs']})
 (out/'result.json').write_text(json.dumps(proof,indent=2)+'\n');print('[display.scene.host] PASS '+json.dumps(proof,sort_keys=True))
 if managed:managed.cleanup()
 PY

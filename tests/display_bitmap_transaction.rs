@@ -264,7 +264,8 @@ fn production_uses_owned_live_route_both_paint_branches_and_terminal_cleanup() {
     assert!(source.contains("BITMAP_STORES.reset_surface(owner, surface_id);"));
     let destroy=&source[source.find("                0xEE => {").unwrap()..source.find("                0xF5 => {").unwrap()];
     assert!(destroy.find("BITMAP_STORES.reset_surface(slot.owner_pd, target_id);").unwrap()<destroy.find("*slot = SURFACE_EMPTY;").unwrap());
-    assert!(source.find("finish_display_transactions(&mut lifecycle, &bar, fb_live);").unwrap()<source.find("BITMAP_STORES.poll_reply(sex_pdx::pdx_reply);").unwrap());
+    assert!(source.contains("pending_paint.complete(published.is_some());"));
+    assert!(source.find("finish_display_transactions(&mut lifecycle,published.as_ref());").unwrap()<source.find("BITMAP_STORES.poll_reply(sex_pdx::pdx_reply);").unwrap());
 }
 
 #[test]

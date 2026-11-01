@@ -8,6 +8,9 @@ pub const ERR_CAP_INVALID:u64=u64::MAX-3;
 pub use memory_region::MemoryRegionInfo;
 #[path="../crates/sex-pdx/src/display_frames.rs"]pub mod display_frames;
 #[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
+#[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
+#[path="../servers/sexdisplay/src/damage.rs"]mod damage;
+use paint_batch::{Content,Plan};
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod app_lifecycle_sdk;
 pub mod app_lifecycle{
@@ -139,25 +142,31 @@ static mut FB_H:u32=768;
 static mut LAST_REDRAWN_CLOCK_CANON_SS:u8=0;
 mod boundary{
  use super::*;
- #[derive(Default,Clone,Copy)]pub struct Counts{pub queries:usize,pub acks:usize,pub replies:usize,pub renders:usize,pub cursor_scrubs:usize,pub terminal:bool,pub fail_render:bool}
- static STATE:std::sync::Mutex<Counts>=std::sync::Mutex::new(Counts{queries:0,acks:0,replies:0,renders:0,cursor_scrubs:0,terminal:false,fail_render:false});
+ #[derive(Default,Clone,Copy)]pub struct Counts{pub queries:usize,pub acks:usize,pub replies:usize,pub renders:usize,pub cursor_scrubs:usize,pub terminal:bool,pub fail_render:bool,pub fail_ack:bool}
+ static STATE:std::sync::Mutex<Counts>=std::sync::Mutex::new(Counts{queries:0,acks:0,replies:0,renders:0,cursor_scrubs:0,terminal:false,fail_render:false,fail_ack:false});
  pub fn reset(){*STATE.lock().unwrap()=Counts::default();}
  pub fn get()->Counts{*STATE.lock().unwrap()}
  pub fn terminal(){STATE.lock().unwrap().terminal=true;}
+ pub fn fail_ack(value:bool){STATE.lock().unwrap().fail_ack=value;}
  pub fn fail_render(value:bool){STATE.lock().unwrap().fail_render=value;}
  pub fn rendering()->bool{let mut s=STATE.lock().unwrap();s.renders+=1;s.fail_render}
  pub fn cursor(){STATE.lock().unwrap().cursor_scrubs+=1;}
  pub fn info(slot:usize)->Result<app_lifecycle::LifecycleInfo,u64>{let mut s=STATE.lock().unwrap();s.queries+=1;assert_eq!(slot,40);if !s.terminal{return Err(app_lifecycle::LIVE)}Ok(app_lifecycle::LifecycleInfo{target_pd:15,task_id:150,required_mask:app_lifecycle::ROLE_DISPLAY,acked_mask:0})}
- pub fn ack(slot:usize,task:u32)->Result<(),u64>{assert_eq!((slot,task),(40,150));unsafe{assert_scrubbed(&*core::ptr::addr_of!(RENDER_SCENE));}STATE.lock().unwrap().acks+=1;Ok(())}
+ pub fn ack(slot:usize,task:u32)->Result<(),u64>{assert_eq!((slot,task),(40,150));unsafe{assert_scrubbed(&*core::ptr::addr_of!(RENDER_SCENE));}let mut state=STATE.lock().unwrap();if state.fail_ack{return Err(ERR_SERVICE_NOT_READY);}state.acks+=1;Ok(())}
  pub fn reply(_target:u32,_word:u64)->u64{unsafe{assert!(!(*core::ptr::addr_of!(RENDER_SCENE)).is_valid());}STATE.lock().unwrap().replies+=1;0}
 }
 pub fn pdx_reply(target:u32,word:u64)->u64{boundary::reply(target,word)}
 fn scrub_cursor_under(){boundary::cursor();}
-// Controlled renderer callback: execute the actual scoped lease and its Drop,
-// but no framebuffer/device access. Actual Main rendering is checked by gate.
-fn render(_fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{
- let fail=boundary::rendering();let Some(lease)=SceneLease::capture(w,h,bar)else{return false;};assert!(lease.view().is_valid());if fail{return false;}true
+// Controlled publication boundary: obtain/drop an actual scoped Scene lease,
+// then construct the descriptive receipt. No device write/native success is
+// claimed; the actual prepared-output pipeline has its own registered tests.
+fn rendered_receipt(plan:Plan,present_bits:u64,bar:&SilkBar)->Option<PublishedFrame>{
+ let fail=boundary::rendering();{
+  let lease=SceneLease::capture(1024,768,bar)?;assert!(lease.view().is_valid());if fail{return None;}
+ }
+ scene_scrubbed();Some(PublishedFrame{plan,present_bits,canon_ss:0})
 }
+
 fn reset_host_inputs(){
  boundary::reset();unsafe{assert!(!(*core::ptr::addr_of!(RENDER_SCENE)).is_valid());(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub();SURFACES.fill(SURFACE_EMPTY);FRAME_GROUPS=FrameGroups::new();DISPLAY_TOKENS=DEFAULT_RENDER_TOKENS;FOCUSED_SURFACE_ID=0;TOKEN_BUF_CALL1_RECEIVED=false;TOKEN_BUF_OWNER=0;CURSOR_UNDER_VALID=false;FRAME_OUTPUT=None;PREPARED_CURSOR=None;FB_W=1024;FB_H=768;}
  RENDER_FRAME_COUNTER.store(0,core::sync::atomic::Ordering::Relaxed);
@@ -219,7 +228,20 @@ impl Drop for HostFrameRegion{fn drop(&mut self){unsafe{FRAME_OUTPUT=None;std::a
  unsafe{SURFACES[0]=Surface{owner_pd:15,surface_id:300,active:true,text_len:1,..SURFACE_EMPTY};SURFACES[0].text_buf.fill(0x73);}
  let lease=SceneLease::capture(1024,768,&bar).unwrap();assert!(!prepare_app_cleanup(&mut lifecycle,&mut bar));assert_eq!(boundary::get().queries,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Live));assert_eq!(lease.view().surfaces[0].text_buf[511],0x73);assert!(!frames.zeroed());unsafe{assert!(PREPARED_CURSOR.is_some());}drop(lease);scene_scrubbed();
  assert!(prepare_app_cleanup(&mut lifecycle,&mut bar));assert!(frames.zeroed());unsafe{assert!(PREPARED_CURSOR.is_none());assert!(FRAME_OUTPUT.as_ref().unwrap().front_pixels().is_none());assert_eq!(FRAME_OUTPUT.as_ref().unwrap().generation(),2);}assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));assert_eq!(boundary::get().queries,1);
- let lease=SceneLease::capture(1024,768,&bar).unwrap();finish_display_transactions(&mut lifecycle,&bar,true);assert_eq!(boundary::get().renders,0);assert_eq!(boundary::get().acks,0);drop(lease);scene_scrubbed();
- finish_display_transactions(&mut lifecycle,&bar,false);assert_eq!(boundary::get().acks,0);boundary::fail_render(true);finish_display_transactions(&mut lifecycle,&bar,true);scene_scrubbed();assert_eq!(boundary::get().renders,1);assert_eq!(boundary::get().acks,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));
- boundary::fail_render(false);finish_display_transactions(&mut lifecycle,&bar,true);scene_scrubbed();assert_eq!(boundary::get().renders,2);assert_eq!(boundary::get().acks,1);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Acknowledged));finish_display_transactions(&mut lifecycle,&bar,true);assert_eq!(boundary::get().acks,1);
+ let full=rendered_receipt(Plan::full(),0,&bar).unwrap();let before=boundary::get().renders;
+ let lease=SceneLease::capture(1024,768,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&full));assert_eq!(boundary::get().renders,before);assert_eq!(boundary::get().acks,0);drop(lease);scene_scrubbed();
+ finish_display_transactions(&mut lifecycle,None);assert_eq!(boundary::get().acks,0);
+ let partial=rendered_receipt(Plan{content:Content::Area,strip:true},0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&partial));assert_eq!(boundary::get().acks,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));
+ boundary::fail_render(true);let failed=rendered_receipt(Plan::full(),0,&bar);assert!(failed.is_none());let before=boundary::get().renders;finish_display_transactions(&mut lifecycle,failed.as_ref());scene_scrubbed();assert_eq!(boundary::get().renders,before);assert_eq!(boundary::get().acks,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));
+ boundary::fail_render(false);let full=rendered_receipt(Plan::full(),0,&bar).unwrap();let before=boundary::get().renders;boundary::fail_ack(true);finish_display_transactions(&mut lifecycle,Some(&full));scene_scrubbed();assert_eq!(boundary::get().acks,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Committed));boundary::fail_ack(false);finish_display_transactions(&mut lifecycle,None);assert_eq!(boundary::get().renders,before);assert_eq!(boundary::get().acks,1);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Acknowledged));finish_display_transactions(&mut lifecycle,None);assert_eq!(boundary::get().acks,1);
+}
+
+#[test]fn actual_finish_uses_full_receipt_captured_bits_only_after_scene_release(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;
+ let mut lifecycle=surface_lifecycle::Lifecycle::new();assert!(lifecycle.register(Catalog{slot:40,target_pd:15,task_id:150,surface_id:300,coordinator_pd:3}));assert!(lifecycle.request_present(15,300,7,0));
+ let bit=surface_lifecycle::native_pixel_bit(15,300);assert_ne!(bit,0);
+ let absent=rendered_receipt(Plan::full(),0,&bar).unwrap();unsafe{APP_PRESENT_BITS=bit;}finish_display_transactions(&mut lifecycle,Some(&absent));assert_eq!(boundary::get().replies,0);assert!(lifecycle.needs_presentation());
+ let partial=rendered_receipt(Plan{content:Content::Area,strip:true},bit,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&partial));assert_eq!(boundary::get().replies,0);assert!(lifecycle.needs_presentation());
+ let full=rendered_receipt(Plan::full(),bit,&bar).unwrap();unsafe{APP_PRESENT_BITS=0;}let lease=SceneLease::capture(1024,768,&bar).unwrap();let before=boundary::get().renders;finish_display_transactions(&mut lifecycle,Some(&full));assert_eq!(boundary::get().replies,0);assert_eq!(boundary::get().renders,before);drop(lease);scene_scrubbed();
+ finish_display_transactions(&mut lifecycle,Some(&full));assert_eq!(boundary::get().replies,1);assert!(!lifecycle.needs_presentation());assert_eq!(boundary::get().renders,before);finish_display_transactions(&mut lifecycle,None);assert_eq!(boundary::get().replies,1);
 }

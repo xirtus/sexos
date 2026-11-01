@@ -16,10 +16,12 @@ def guards(s):
   a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
   while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
   return re.sub(r'\s+','',s[a:i])
+ batch=body('raster_batch');assert batch.count('restore_cursor_under(')==1 and batch.count('draw_cursor_z_top(')==1 and batch.count('draw_launcher_panel(')==1
+ assert batch.index('restore_cursor_under(')<batch.index('letbody=matchplan.content')<batch.index('raster_strip(target,scene)')<batch.index('draw_launcher_panel(')<batch.index('draw_cursor_z_top(')
+ assert 'draw_cursor_z_top(fb,w,h,total,true,scene);'in batch
  for name in ['raster_full','raster_strip','raster_area','raster_damage']:
-  b=body(name);assert b.index('draw_launcher_panel(')<b.index('draw_cursor_z_top('),name
-  assert re.search(r'draw_cursor_z_top\([^;]*,true,scene\);',b),name
- strip=body('raster_strip');assert strip.index('restore_cursor_under(')<strip.index('foryin0..51')<strip.index('draw_launcher_panel(')
+  primitive=body(name)
+  assert not any(call in primitive for call in('restore_cursor_under(','draw_cursor_z_top(','draw_launcher_panel(','SceneLease::capture(')),name+' must be a scene-borrowing primitive'
  draw=body('draw_cursor_z_top');assert 'scene.surfaces.iter()' in draw
  for forbidden in ['serial_println!','serial_record!','INPUT_TRACE_PRESENTS','INPUT_TRACE_DRAWS','LAST_COUNTED_DRAW_SEQ','record_cursor_presented(','report_app_presented(']:assert forbidden not in draw,forbidden
  prepare=body('render_prepared');assert prepare.index('preparation.commit(')<prepare.index('record_cursor_presented();')<prepare.index('report_app_presented();')
@@ -27,13 +29,19 @@ def guards(s):
  scrub=body('scrub_cursor_under');assert 'forpixelin&mutCURSOR_UNDER_SAVED{core::ptr::write_volatile(pixel,0);}'in scrub
  assert 'CURSOR_UNDER_VALID=false;'in scrub and 'CURSOR_UNDER_X=0;CURSOR_UNDER_Y=0;'in scrub
 guards(source)
-# Wrong production overlay order must fail the source guard independently.
-for name in ['raster_full','raster_strip','raster_area','raster_damage']:
- body=function(name);launcher=re.search(r'\s*draw_launcher_panel\([^;]+;',body)[0];cursor=re.search(r'\s*draw_cursor_z_top\([^;]+;',body)[0]
- altered=body.replace(launcher,'OVERLAY_SENTINEL',1).replace(cursor,launcher,1).replace('OVERLAY_SENTINEL',cursor,1)
- try:guards(source.replace(body,altered,1))
- except AssertionError:pass
- else:raise AssertionError('overlay counterexample accepted '+name)
+# Independently reject wrong order, omitted restore, duplicate cursor and a
+# per-pass overlay that would corrupt the shared cursor underlay.
+batch=function('raster_batch')
+launcher=re.search(r'\s*draw_launcher_panel\([^;]+;',batch)[0];cursor=re.search(r'\s*draw_cursor_z_top\([^;]+;',batch)[0]
+wrong=batch.replace(launcher,'OVERLAY_SENTINEL',1).replace(cursor,launcher,1).replace('OVERLAY_SENTINEL',cursor,1)
+restore='restore_cursor_under(fb,w,h,total);'
+assert batch.count(restore)==1
+strip=function('raster_strip');extra=strip.replace('    true\n}',cursor+'\n    true\n}',1);assert extra!=strip
+controls=[source.replace(batch,wrong,1),source.replace(batch,batch.replace(restore,'',1),1),source.replace(batch,batch.replace(cursor,cursor+cursor,1),1),source.replace(strip,extra,1)]
+for altered in controls:
+ try:guards(altered)
+ except (AssertionError,ValueError):pass
+ else:raise AssertionError('overlay counterexample accepted')
 parts=[]
 for prefix in ['MAX_FB_','FRAME_','FOCUS_SURFACE_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','BAR_BG_H','CURSOR_SURFACE_ID']:
  parts+=re.findall(r'^const '+prefix+r'[^\n]+',source,re.M)

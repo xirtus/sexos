@@ -71,6 +71,10 @@
         {
           "path": "crates/sex-pdx/src/display_frames.rs",
           "anchor": "pub struct FrameBacking"
+        },
+        {
+          "path": "servers/sexdisplay/src/paint_batch.rs",
+          "anchor": "pub struct Dirty"
         }
       ],
       "checks": [
@@ -88,7 +92,7 @@
         "display_cursor_output"
       ],
       "gaps": [
-        "Private prepared output and CPU publication do not establish transactional intake, atomic hardware frames, latch/interrupted-output recovery or complete replay."
+        "Coalesced output and captured full-frame completion do not establish transactional intake, atomic hardware frames, latch/interrupted-output recovery or complete replay."
       ],
       "depends_on": [
         "EPOCH_COMMIT"

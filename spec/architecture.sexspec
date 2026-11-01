@@ -751,7 +751,7 @@
       ],
       "checks": [],
       "gaps": [
-        "Display isolates composition inputs and prepares owned output before a CPU publication boundary; transactional intake/effect commit, framebuffer atomicity, interrupted-output recovery and system-wide epochs remain incomplete."
+        "Display coalesces retained output obligations into one immutable scene and prepared CPU publication per drain; transactional intake/effect ownership, framebuffer atomicity, interrupted-output recovery and system-wide epochs remain incomplete."
       ],
       "depends_on": []
     },

@@ -125,6 +125,7 @@ use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
 mod frame_output;
+mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
 // One Display-owned scratch scene. Intake cannot run concurrently with a
 // logical render in this single-task service. No producer/framebuffer pointer
@@ -1577,11 +1578,10 @@ fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 
-#[derive(Clone,Copy)]
-enum Paint{Full,Strip,Area,Damage(damage::Rect),Cursor}
-impl Paint{
-    fn label(self)->&'static str{match self{Self::Full=>"full",Self::Strip=>"strip",Self::Area=>"area",Self::Damage(_)=>"text",Self::Cursor=>"cursor"}}
-}
+use paint_batch::{Content,Plan};
+// Descriptive completion of this publication, not authority or a whole-system
+// epoch receipt. Lifecycle may consume only a successfully published Full.
+struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8}
 
 // Small output bookkeeping is tentative until the prepared frame is published.
 // Its retained pixel copy is erased before this invocation returns to cleanup.
@@ -1616,39 +1616,65 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{
     true
 }
 
-fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,paint:Paint)->bool{
-    if !valid_scanout(fb,w,h){return false;}
-    if !matches!(paint,Paint::Full)&&h<51{return false;}
-    let started=if matches!(paint,Paint::Cursor){0}else{repaint_begin()};
-    let captured_bar=*bar;
-    let backup=OutputBackup::capture();
-    let Some(store)=(unsafe{FRAME_OUTPUT.as_mut()})else{return false;};
-    if store.layout().width()!=w||store.layout().height()!=h{return false;}
-    let Some(mut preparation)=store.prepare(matches!(paint,Paint::Full))else{return false;};
-    unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}
-    let prepared={let target=preparation.target();match paint{
-        Paint::Full=>raster_full(&target,&captured_bar),Paint::Strip=>raster_strip(&target,&captured_bar),
-        Paint::Area=>raster_area(&target,&captured_bar),Paint::Damage(rect)=>raster_damage(&target,rect,&captured_bar),
-        Paint::Cursor=>raster_cursor(&target,&captured_bar)}};
-    if !prepared{drop(preparation);backup.restore();return false;}
-    if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return false;}
-    record_cursor_presented();
-    report_app_presented();
-    if !matches!(paint,Paint::Cursor){repaint_end(paint.label(),started);}
-    if matches!(paint,Paint::Full|Paint::Strip){civil_clock_drawn(&captured_bar,w,h,paint.label());}
+fn raster_batch(target:&frame_output::Target<'_>,scene:&scene::SceneSnapshot,plan:Plan)->bool{
+    if !scene.is_valid()||scene.width!=target.width()||scene.height!=target.height()||plan.is_empty(){return false;}
+    let (fb,w,h,total)=(target.pointer(),target.width(),target.height(),target.len());
+    if !plan.is_full(){restore_cursor_under(fb,w,h,total);}
+    let body=match plan.content{
+        Content::Full=>raster_full(target,scene),Content::Area=>raster_area(target,scene),
+        Content::Damage(rect)=>raster_damage(target,rect,scene),Content::None|Content::Cursor=>true};
+    if !body||plan.strip&&!raster_strip(target,scene){return false;}
+    if !plan.cursor_only(){
+        if plan.is_full()||matches!(plan.content,Content::Area)||plan.strip{
+            draw_atlas_cards_pass(fb,w,h,total,scene);
+            draw_atlas_frame_previews_pass(fb,w,h,total,scene);
+        }
+        draw_launcher_panel(fb,w,h,total,scene);
+    }
+    draw_cursor_z_top(fb,w,h,total,true,scene);
     true
 }
-fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Full)}
-fn redraw_top_strip(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Strip)}
-fn redraw_surface_area(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Area)}
-fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,rect:damage::Rect,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Damage(rect))}
-fn redraw_cursor(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Cursor)}
 
-fn raster_full(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Option<PublishedFrame>{
+    if requested.is_empty()||!valid_scanout(fb,w,h){return None;}
+    // Reject reentry before creating another exclusive frame-store reference.
+    if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}
+    let mut plan=requested.with_atlas(ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED||ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED);
+    if !plan.is_full()&&h<51{return None;}
+    let backup=OutputBackup::capture();
+    let Some(store)=(unsafe{FRAME_OUTPUT.as_mut()})else{return None;};
+    if store.layout().width()!=w||store.layout().height()!=h{return None;}
+    if store.front_pixels().is_none(){plan=Plan::full();}
+    let started=if plan.cursor_only(){0}else{repaint_begin()};
+    let Some(mut preparation)=store.prepare(plan.is_full())else{return None;};
+    if plan.is_full(){RENDER_FRAME_COUNTER.fetch_add(1,core::sync::atomic::Ordering::Relaxed);}
+    let Some(lease)=SceneLease::capture(w,h,bar)else{drop(preparation);backup.restore();return None;};
+    let scene=lease.view();
+    let canon_ss=unsafe{CLOCK_CANON_SS};
+    unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}
+    let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
+    if !prepared{drop(preparation);backup.restore();return None;}
+    if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return None;}
+    let present_bits=unsafe{APP_PRESENT_BITS};
+    record_cursor_presented();
+    report_app_presented();
+    if !plan.cursor_only(){repaint_end(plan.label(),started);}
+    if plan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}
+    unsafe{
+        static mut BATCH_LOG_BUDGET:u32=64;
+        if BATCH_LOG_BUDGET>0{BATCH_LOG_BUDGET-=1;
+            sex_pdx::serial_record!("[display.batch.published] generation={} content={} strip={} scene=1 prepare=1 publication=1",
+                store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::None=>"none"},plan.strip as u8);}
+    }
+    Some(PublishedFrame{plan,present_bits,canon_ss})
+}
+fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}
+
+fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) -> bool {
     let fb=target.pointer();
     let (w,h)=(target.width(),target.height());
     let pixels=target.len();
-    let frame = RENDER_FRAME_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let frame=scene.frame;
     // Budgeted marker: full-FB render invoked (proof of render entry + boundedness).
     unsafe {
         static mut FULL_RENDER_BUDGET: u32 = 8;
@@ -1688,13 +1714,10 @@ fn raster_full(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
         serial_println!("[sexdisplay.render.glass.r6] bar_alpha=196 chip_alpha=212 blur=1 pulse=1");
     }
 
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
-    let scene=lease.view();
     let bar=&scene.bar;
     let focused_id=scene.focus;
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
-    unsafe { APP_PRESENT_BITS = 0; }
     let clock_lines=civil_clock_lines(&bar.civil_clock);
     for y in 0..h {
         let mut row=if y>50 {unsafe{scene.groups.row_winners(&scene.surfaces,focused_id,y,w,h)}}else{None};
@@ -1714,17 +1737,13 @@ fn raster_full(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
             }
         }
     }
-    draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
-    draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
-    draw_launcher_panel(fb, w, h, total_pixels, scene);
-    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
     true
 }
 
 /// Redraw the top strip (rows 0..50) — bar background, workspace indicators, chips, and clock digits.
 /// Called for all SilkBar updates (clock, workspace active/urgent, chip visibility/kind).
 /// This is the only function that touches y<50 pixels after initial render.
-fn raster_strip(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+fn raster_strip(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) -> bool {
     let fb=target.pointer();
     let (w,h)=(target.width(),target.height());
 
@@ -1738,10 +1757,7 @@ fn raster_strip(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
         Some(v) => v,
         None => return false,
     };
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
-    let scene=lease.view();
     let bar=&scene.bar;
-    restore_cursor_under(fb,w,h,total_pixels);
     // [silk.live_topstrip.v2.fb_clear] REMOVED: writing raw desktop gradient over
     // the bar area before rendering the bar causes a visible black/purple flash
     // on every clock tick (the host displays the partial gradient before the bar
@@ -1927,19 +1943,15 @@ fn raster_strip(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
     // pixels, launcher panel, atlas cards, and frame preview content that the
     // initial render() placed above the bar, causing glitch artifacts across
     // the top chrome.
-    draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
-    draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
     // save_under=false: this path repaints only y<50; pixels under the
     // cursor (y>=51) still contain the drawn cursor — capturing here would
     // poison the save-under patch with cursor pixels.
-    draw_launcher_panel(fb, w, h, total_pixels, scene);
-    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
     true
 }
 
 /// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
 /// Never touches y<50 (SilkBar/clock/chips). Not a full render() call.
-fn raster_area(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) -> bool {
     let fb=target.pointer();
     let (w,h)=(target.width(),target.height());
 
@@ -1958,11 +1970,8 @@ fn raster_area(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
             if hot_log() { serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h); }
         }
     }
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
-    let scene=lease.view();
     let bar=&scene.bar;
     let focused_id=scene.focus;
-    unsafe { APP_PRESENT_BITS = 0; }
     for y in 50..h {
         let mut row=if y>50 {unsafe{scene.groups.row_winners(&scene.surfaces,focused_id,y,w,h)}}else{None};
         for x in 0..w {
@@ -1979,10 +1988,6 @@ fn raster_area(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
             }
         }
     }
-    draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
-    draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
-    draw_launcher_panel(fb, w, h, total_pixels, scene);
-    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
     true
 }
 
@@ -2001,21 +2006,18 @@ fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize
 
 /// Text-only redraw after a complete transaction. Restore the old cursor patch
 /// before touching damage, then capture its new background exactly once.
-fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, bar: &SilkBar) -> bool {
+fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &scene::SceneSnapshot) -> bool {
     let fb=target.pointer();
     let (w,h)=(target.width(),target.height());
 
     if w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return false; }
     if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return false; }
     if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
-        return raster_area(target,bar);
+        return raster_area(target,scene);
     }
     let Some(total) = w.checked_mul(h) else { return false; };
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
-    let scene=lease.view();
     let bar=&scene.bar;
     let focused=scene.focus;
-    unsafe { restore_cursor_under(fb,w,h,total); APP_PRESENT_BITS = 0; }
     for y in rect.y..rect.bottom {
         let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
         for x in rect.x..rect.right {
@@ -2025,8 +2027,6 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, bar: &Si
             unsafe { core::ptr::write_volatile(fb.add(y*w+x),color); }
         }
     }
-    draw_launcher_panel(fb,w,h,total, scene);
-    draw_cursor_z_top(fb,w,h,total,true, scene);
     true
 }
 
@@ -2068,18 +2068,7 @@ static mut CURSOR_UNDER_VALID: bool = false;
 /// Restore the framebuffer pixels saved beneath the last cursor draw.
 /// Mirrors draw_cursor_z_top bounds rules exactly: y<51 SilkBar zone never
 /// written, x/y clipped to fb dims, idx bounds-checked against total_pixels.
-fn raster_cursor(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
-    let fb=target.pointer();
-    let (w,h)=(target.width(),target.height());
 
-    if w==0 || h<51 || w>MAX_FB_W || h>MAX_FB_H{return false;}
-    let Some(total)=w.checked_mul(h)else{return false;};
-    let Some(lease)=SceneLease::capture(w,h,bar)else{return false;};
-    let scene=lease.view();
-    restore_cursor_under(fb,w,h,total);
-    draw_cursor_z_top(fb,w,h,total,true,scene);
-    true
-}
 
 /// Discard retained framebuffer-derived cursor pixels before cleanup custody
 /// can be acknowledged. A later draw saves only the removal scene's pixels.
@@ -3045,15 +3034,11 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
     changed
 }
 
-fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &SilkBar, fb_live: bool) {
+fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
-    let prepared = (0..surface_lifecycle::CATALOG_CAPACITY)
-        .any(|i| lifecycle.phase(i) == Some(surface_lifecycle::Phase::Prepared));
-    if (prepared || lifecycle.needs_presentation()) && fb_live
-        && unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, bar) } {
-        lifecycle.pixels_presented(unsafe { APP_PRESENT_BITS });
-        unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
+    if let Some(published)=published.filter(|frame|frame.plan.is_full()){
+        lifecycle.pixels_presented(published.present_bits);
         for index in 0..surface_lifecycle::CATALOG_CAPACITY {
             if lifecycle.scene_committed(index) {
                 let c = lifecycle.catalog(index).unwrap();
@@ -3150,6 +3135,9 @@ pub extern "C" fn _start() -> ! {
     let mut handoff_reject_ss: u8 = 0;
     let mut handoff_reject_streak: u8 = 0;
 
+    let mut pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);
+    let mut primary_receipt_pending=false;
+
     // Publish the BOOT-owned prepared frame before declaring first paint.
     assert!(unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar) },
         "DISPLAY_FIRST_FRAME_PUBLICATION");
@@ -3237,7 +3225,7 @@ pub extern "C" fn _start() -> ! {
         // Cursor moved this cycle but nothing else did: eligible for the
         // save-under fast path instead of a full surface composite.
         let mut cursor_only_moved = false;
-        let mut did_primary_fb_render = false;
+        let mut needs_full_redraw = false;
         let mut drained: usize = 0;
         if prepare_app_cleanup(&mut lifecycle, &mut bar) {
             needs_surface_redraw = true;
@@ -3783,12 +3771,9 @@ pub extern "C" fn _start() -> ! {
                             clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                         }
                         // Coalesce startup repaints into one clean first frame.
-                        did_primary_fb_render = unsafe {
-                            render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar)
-                        };
-                        if did_primary_fb_render {
-                            serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", unsafe{FB_W}, unsafe{FB_H});
-                        }
+                        // Defer publication until this entire drain has joined.
+                        needs_full_redraw=true;
+                        primary_receipt_pending=true;
                         // Keep strip repaint batched in post-drain redraws.
                         unsafe { CLOCK_REDRAW_SOURCE = if clock_from_silkbar { 0 } else { 1 }; }
                         needs_top_strip_redraw = true;
@@ -4359,45 +4344,34 @@ pub extern "C" fn _start() -> ! {
                     drained,
                     needs_surface_redraw as u8,
                     needs_top_strip_redraw as u8,
-                    did_primary_fb_render as u8); }
+                    needs_full_redraw as u8); }
             }
         }
 
-        let transaction_full_render = fb_live && (lifecycle.needs_presentation()
-            || (0..surface_lifecycle::CATALOG_CAPACITY)
-                .any(|i| lifecycle.phase(i) == Some(surface_lifecycle::Phase::Prepared)));
-        // ── Post-drain redraws ──
-        // Surface area: always redraw when needed, regardless of did_primary_fb_render.
-        // did_primary_fb_render becomes true on the OP_PRIMARY_FB cycle (which calls
-        // render() during drain), but needs_surface_redraw may be set by chrome flag
-        // updates draining in the same cycle. Without this, chrome updates are lost.
-        if needs_surface_redraw && !transaction_full_render {
+        let transaction_full_render=lifecycle.needs_presentation()
+            ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
+        let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
+        if needs_full_redraw||transaction_full_render{pending_paint.request_full();}
+        if needs_surface_redraw{pending_paint.request_area();}
+        if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}
+        if cursor_only_moved{pending_paint.request_cursor();}
+        if needs_top_strip_redraw{pending_paint.request_strip();}
+        let plan=pending_paint.plan(w,h);
+        let published=if fb_live&&!plan.is_empty(){
             clock_canon_apply_to_bar(&mut bar);
-            unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
-        } else if let Some(rect) = text_damage.rect().filter(|_| fb_live && !transaction_full_render) {
-            unsafe { redraw_surface_damage(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, rect, &bar); }
-        } else if cursor_only_moved && fb_live && !transaction_full_render {
-            // Cursor-only fast path: restore the 8x16 patch saved beneath
-            // the previous cursor draw, then draw at the new position (which
-            // re-saves). Latest cursor state wins — intermediate positions
-            // drained this cycle coalesce into one visible draw. Full
-            // composite still runs whenever any other surface changed.
-            unsafe {
-                let fb = FB_PTR as *mut u32;
-                let (w, h) = (FB_W as usize, FB_H as usize);
-                redraw_cursor(fb,w,h,&bar);
+            unsafe{render_prepared(FB_PTR as *mut u32,w,h,&bar,plan)}
+        }else{None};
+        // Only this completed publication discharges the retained requirements.
+        // The service performs no intake during prepare/publish/receipt handling.
+        pending_paint.complete(published.is_some());
+        if let Some(frame)=published.as_ref(){
+            if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
+            if primary_receipt_pending&&frame.plan.is_full(){
+                primary_receipt_pending=false;
+                serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}",w,h);
             }
         }
-        // Top strip: redraw when needed (clock tick, silkbar update).
-        if needs_top_strip_redraw && !transaction_full_render {
-            clock_canon_apply_to_bar(&mut bar);
-            if unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar) } {
-                unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
-            }
-        }
-
-        if transaction_full_render { clock_canon_apply_to_bar(&mut bar); }
-        finish_display_transactions(&mut lifecycle, &bar, fb_live);
+        finish_display_transactions(&mut lifecycle,published.as_ref());
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
         unsafe { BITMAP_STORES.poll_reply(sex_pdx::pdx_reply); }
 

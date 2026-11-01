@@ -341,7 +341,12 @@ fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER
 fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
-fn raster_area(_:&frame_output::Target<'_>,_:&SilkBar)->bool{panic!("unexpected full redraw");}
+#[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
+use paint_batch::{Content,Plan};
+static mut ATLAS_CALLS:usize=0;
+fn draw_atlas_cards_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
+fn draw_atlas_frame_previews_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
+fn civil_clock_lines(_:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]{TEST_CLOCK_LINES}
 #[test]
 fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacements(){
  for (x,y,w,h) in [(-30,-30,144,90),(0,0,220,150),(100,100,624,331),(950,750,624,331)] {
@@ -842,7 +847,7 @@ impl SceneLease {
  fn view(&self)->&scene::SceneSnapshot{&self.snapshot}
 }
 impl Drop for SceneLease {fn drop(&mut self){self.snapshot.scrub();}}
-// OutputBoundary: actual Store/Target and raster_damage, with a host-only CPU
+// OutputBoundary: actual Store/Target and raster_batch, with a host-only CPU
 // publication callback. This is not the Main wrapper/receipt/cleanup proof.
 #[path="../crates/sex-pdx/src/memory_region.rs"] pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
@@ -851,7 +856,8 @@ pub const ERR_CAP_INVALID:u64=0xFFFF_FFFF_FFFF_FFFC;
 #[path="../servers/sexdisplay/src/frame_output.rs"] mod frame_output;
 struct OutputBoundary{pointer:*mut u8,allocation:std::alloc::Layout}
 impl Drop for OutputBoundary{fn drop(&mut self){unsafe{std::alloc::dealloc(self.pointer,self.allocation);}}}
-fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,r:damage::Rect){unsafe{
+fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,r:damage::Rect){paint_output_batch(fb,w,h,Plan{content:Content::Damage(r),strip:false});}
+fn paint_output_batch(fb:*mut u32,w:usize,h:usize,plan:Plan){unsafe{
  let layout=display_frames::Layout::new(w as u64,h as u64,(w*4)as u64).unwrap();
  let allocation=std::alloc::Layout::from_size_align(layout.total_bytes()as usize,4096).unwrap();
  let pointer=std::alloc::alloc(allocation);assert!(!pointer.is_null());
@@ -869,8 +875,9 @@ fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,r:damage::Rect){unsafe{
  let mut baseline=store.prepare(true).unwrap();
  {let target=baseline.target();core::ptr::copy_nonoverlapping(fb,target.pointer(),target.len());}
  assert!(baseline.commit(|_|true));
- let mut preparation=store.prepare(false).unwrap();
- {let target=preparation.target();assert!(raster_damage(&target,r,&DEFAULT_SILK_BAR));}
+ let captured=capture_scene(w,h,FOCUSED_SURFACE_ID);
+ let mut preparation=store.prepare(plan.is_full()).unwrap();
+ {let target=preparation.target();assert!(raster_batch(&target,&captured,plan));}
  assert!(preparation.commit(|pixels|{core::ptr::copy_nonoverlapping(pixels.as_ptr(),fb,pixels.len());true}));
  report_app_presented();
  store.scrub();
@@ -911,4 +918,44 @@ fn captured_strip_focus_does_not_follow_later_global_focus(){unsafe{
  let next=capture_scene(1000,800,306);
  assert_eq!(phase5_active_app_at(155,22,&next.bar,&next),Some(0x89B4FA));
  FOCUSED_SURFACE_ID=saved;
+}}
+
+// The legacy reference computes body pixels independently. Strip glyph/color
+// sentinels are the established clock/bar boundary, not a replacement Scene.
+unsafe fn independent_batch_pixel(x:usize,y:usize,w:usize,h:usize)->u32{
+ if y<50{return match(x,y){(0,0)=>1,(1,0)=>2,(2,0)=>3,(3,0)=>4,_=>9};}
+ if y==50{return DEFAULT_THEME.panel_glow;}
+ legacy_reference_pixel(x,y,w,h,0)
+}
+unsafe fn combined_fixture()->(usize,usize,Vec<u32>){
+ let(w,h)=(320,260);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FOCUSED_SURFACE_ID=0;
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x345678,..surf(9,156)};
+ let mut pixels=vec![0;w*h];for y in 0..h{for x in 0..w{pixels[y*w+x]=independent_batch_pixel(x,y,w,h);}}
+ (w,h,pixels)
+}
+#[test]fn combined_area_strip_matches_independent_whole_frame_once(){unsafe{
+ let(w,h,mut pixels)=combined_fixture();SURFACES[0].color=0xabcdef;DAMAGE_ORDER.clear();ATLAS_CALLS=0;
+ paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Area,strip:true});
+ assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
+ for y in 0..h{for x in 0..w{assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"area/strip {x}/{y}");}}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
+}}
+#[test]fn combined_damage_strip_preserves_every_pixel_outside_changed_regions(){unsafe{
+ let(w,h,mut pixels)=combined_fixture();let old=pixels.clone();
+ fill_damage::update(&mut SURFACES[0],0,5,10,30,20,0x00f0e0d0).unwrap();
+ let rect=damage::Rect{x:25,y:80,right:55,bottom:100};DAMAGE_ORDER.clear();ATLAS_CALLS=0;
+ paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Damage(rect),strip:true});
+ assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
+ let mut changed=0;for y in 0..h{for x in 0..w{
+  assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"damage/strip {x}/{y}");
+  if y>=51&&!(x>=25&&x<55&&y>=80&&y<100){assert_eq!(pixels[y*w+x],old[y*w+x]);}
+  changed+=usize::from(pixels[y*w+x]!=old[y*w+x]);
+ }}assert_eq!(changed,30*20);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
+}}
+#[test]fn combined_cursor_strip_keeps_body_exact_and_finishes_overlays_once(){unsafe{
+ let(w,h,mut pixels)=combined_fixture();for pixel in &mut pixels[..51*w]{*pixel=0xdeadbeef;}let body=pixels[51*w..].to_vec();DAMAGE_ORDER.clear();ATLAS_CALLS=0;
+ paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Cursor,strip:true});
+ assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);assert_eq!(&pixels[51*w..],body.as_slice());
+ for y in 0..h{for x in 0..w{assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"cursor/strip {x}/{y}");}}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
 }}
