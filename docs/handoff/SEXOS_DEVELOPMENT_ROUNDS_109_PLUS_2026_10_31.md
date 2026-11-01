@@ -972,3 +972,24 @@ source blobs and1619 archive members verified; nine ELF scans323915 instructions
 zeroFP/vector. ABI66/hashff1d1346; architecture immutable. No current1800s/hardware/
 SMP acceptance;2Open/28Partial/SystemProvenfalse. Next162 sustained1800s mixed
 desktop+cold recovery;163 dense denial-cache equivalence, then launcher/clock UX.
+
+
+## Round 162 — sustained compact reserve desktop
+
+[Report](RESERVE_SUSTAINED_ALPHA_2026_11_01.md): unchanged Round161 source10b6eb7a
+and image pass compact1024×768/e1000 acceptance and fresh replay:1800.002482292s,
+87 cycles,497.528s active windows and1302.474s outside them, not continuous load.
+All16Quil/nineSpindle chains and finite exhaustion pass. Two cold boots recover
+last39/40 data under current BOOT grants; Quil recovery has a fresh replay,
+legacy Spindle recovery remains parent-bound with no standalone replay/pixel count.
+
+Three new boots,220 qualified captures:219 parent+one Quil cold. No new sealed
+build or host rerun;43host/3094loggedRust/1124Python remain previous same-image
+validation. Host receipt p95:keyboard135.416ms,save228.783ms, including observer
+trace/QMP/serial overhead; not guest latency or hard realtime. Three BOOT audits
+retain28apps/40mains/cap64,2465private pages and4040B public denial storage.
+No leak-absence or physical-free-frame claim. Archive1563members reopened
+and size/SHA verified; source/image and prior evidence keep their exact bindings.
+2Open/28Partial/SystemProvenfalse. Active80–200 plan follows documented dependency
+reordering; next163 exact-semantics dense public error cache before further budget
+expansion, then launcher/clock UX. Historical218 roadmap is not the active plan.
