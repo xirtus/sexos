@@ -53,11 +53,41 @@ unsafe fn clipboard_live(subject:sex_pdx::clipboard::Subject)->Option<bool> {
         _=>Some(false),
     }
 }
+/// Descriptive identity check only. The participant comes from a held catalog
+/// query; the captured Domain route remains the authority used at admission.
+fn app_input_association(p:sex_pdx::clipboard::Participant)->Option<&'static app_catalog::Incarnation>{
+    let row=app_catalog::by_surface(p.subject.pd,p.surface)?;
+    if !p.subject.valid() || row.close_slot!=p.route || row.app==app_catalog::App::Spindle
+        || p.can_read!=(row.app==app_catalog::App::Quil){return None}
+    Some(row)
+}
+fn browser_input_participant(p:sex_pdx::clipboard::Participant)->bool{
+    app_input_association(p).is_some_and(|row|row.app==app_catalog::App::Browser)
+}
+fn app_input_key_code(p:sex_pdx::clipboard::Participant,code:u8)->Option<u8>{
+    let row=app_input_association(p)?;
+    if row.app==app_catalog::App::Browser{browser_input::command(code)}else{Some(code)}
+}
+fn app_input_participant(e:&app_custody::Entry,c:sex_pdx::app_lifecycle::CatalogInfo)->Option<sex_pdx::clipboard::Participant>{
+    let row=app_catalog::by_surface(e.target,e.surface)?;
+    if e.dead || e.retired || e.close_pending || row.lifecycle_slot!=e.slot
+        || !c.is_sender(e.target,e.task) || !c.is_subject(e.target,e.surface,3){return None}
+    let p=sex_pdx::clipboard::Participant::from_catalog(c)?;
+    app_input_association(p)?;
+    Some(p)
+}
+/// Cached custody was established from this service's held lifecycle catalog.
+/// Match authenticated IPC task separately from the caller-controlled payload.
+fn document_view_sender(e:&app_custody::Entry,msg:&sex_pdx::PdxMessage)->bool{
+    e.target==msg.caller_pd && e.task!=0 && e.task==msg.caller_task
+        && app_catalog::document_view_index(e.target).is_some()
+        && msg.arg0==e.target as u64 && msg.arg1==e.task as u64 && msg.arg2==0
+        && !e.dead && !e.retired && !e.close_pending
+}
 unsafe fn focused_clipboard_participant()->Option<sex_pdx::clipboard::Participant>{
     let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(FOCUSED_SURFACE_ID)&&!e.dead&&!e.retired&&!e.close_pending)?;
     let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
-    if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
-    sex_pdx::clipboard::Participant::from_catalog(c)
+    app_input_participant(e,c)
 }
 unsafe fn clipboard_receive(msg:&sex_pdx::PdxMessage)->bool {
     if !sex_pdx::clipboard::request_opcode(msg.type_id){return false}
@@ -112,6 +142,7 @@ unsafe fn app_input_poll(){
     // transaction itself never blocks ordinary typing or Close.
     if CLIPBOARD.outbox_pending(){return}
     let Some(item)=APP_INPUT.front() else{return};
+    if app_input_association(item.destination).is_none(){APP_INPUT.pop();return}
     match clipboard_live(item.destination.subject){None=>return,Some(false)=>{APP_INPUT.pop();return},Some(true)=>{}}
     match item.input {
         app_input::Input::Clipboard(action)=>{
@@ -124,8 +155,8 @@ unsafe fn app_input_poll(){
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),1,EV_KEY);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
-            if item.destination.subject.pd==15&&status==0{
-                sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot=43 accepted=1",key.code);
+            if browser_input_participant(item.destination)&&status==0{
+                sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
         },
         app_input::Input::Scroll(scroll)=>{
@@ -5614,7 +5645,7 @@ static mut WORKSPACE_REFRESH_PENDING:[bool;sex_pdx::app_lifecycle::SLOTS.len()]=
 /// the immutable app/task catalog; actual liveness is checked before effects.
 unsafe fn workspace_refresh_receive(msg:&sex_pdx::PdxMessage)->bool {
     if msg.type_id!=sex_pdx::document_view::WORKSPACE_CHANGED {return false;}
-    let Some(index)=APP_CUSTODY.iter().position(|entry|entry.as_ref().map_or(false,|e|e.target==msg.caller_pd && e.allows_operation(msg.type_id,[msg.arg0,msg.arg1,msg.arg2]))) else {return true;};
+    let Some(index)=APP_CUSTODY.iter().position(|entry|entry.as_ref().map_or(false,|e|e.target==msg.caller_pd && e.allows_operation(msg.caller_task,msg.type_id,[msg.arg0,msg.arg1,msg.arg2]))) else {return true;};
     WORKSPACE_REFRESH_PENDING[index]=true;
     workspace_refresh_poll();
     true
@@ -10045,20 +10076,6 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
 }
 
 mod browser_input;
-static mut BROWSER_INPUT:browser_input::Queue=browser_input::Queue::new();
-unsafe fn flush_browser_input(){
-    let outcome=BROWSER_INPUT.poll(surface_is_alive(300),sex_pdx::ERR_SERVICE_NOT_READY,|code|{
-        // BOOT already gave shell this exact Domain edge to Browser for Close.
-        // Its existing invocation rights also authorize bounded keyboard data.
-        let(status,_)=pdx_call(sex_pdx::app_lifecycle::CLOSE_SLOTS[2]as u64,OP_HID_EVENT,code as u64,1,EV_KEY);
-        if status==0{Ok(())}else{Err(status)}
-    });
-    match outcome{
-        browser_input::Outcome::Sent(code)=>sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot=43 accepted=1",code),
-        browser_input::Outcome::Failed(error)=>sex_pdx::serial_record!("[shell.browser.input.failed] error={} retained=0",error),
-        _=>{},
-    }
-}
 
 static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
 /// Hover selects the exact live Browser incarnation once. Its held catalog
@@ -10068,16 +10085,15 @@ unsafe fn browser_wheel_destination()->Option<sex_pdx::clipboard::Participant>{
         || !matches!(INTERACTION,InteractionState::Idle) || POINTER_BUTTONS!=0 {return None;}
     if POINTER_X<0 || POINTER_Y<0 || POINTER_X>=desktop_width() || POINTER_Y>=desktop_height(){return None}
     let sid=match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None};
-    if sid!=300{return None}
     let fid=frame_for_surface(sid)?;
     if !frame_accepts_input(fid){return None}
     let(x,y,w,h)=get_surface_bounds(sid)?;
     let px=POINTER_X as i64;let py=POINTER_Y as i64;
     if px<x as i64+8 || py<y as i64+36 || px>=x as i64+w as i64-8 || py>=y as i64+h as i64-8{return None}
-    let e=APP_CUSTODY.iter().flatten().find(|e|e.target==15&&e.owns_surface(sid)&&!e.dead&&!e.retired&&!e.close_pending)?;
+    let e=APP_CUSTODY.iter().flatten().find(|e|e.surface==sid&&!e.dead&&!e.retired&&!e.close_pending)?;
     let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
-    if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
-    sex_pdx::clipboard::Participant::from_catalog(c)
+    let p=app_input_participant(e,c)?;
+    browser_input_participant(p).then_some(p)
 }
 unsafe fn browser_wheel_input(word:u64,reserved:u64){
     let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(word,reserved,EV_WHEEL)else{
@@ -10101,9 +10117,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     if modifier || value!=1{return true;}
                     // Desktop function keys retain their existing Shell actions.
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    let normalized=if destination.subject.pd==15 {
-                        let Some(c)=browser_input::command(code) else{return true};c
-                    }else{code};
+                    let Some(normalized)=app_input_key_code(destination,code) else{return true};
                     let key=APP_MODIFIERS.key(normalized);
                     let input=if key.control {
                         match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
@@ -24286,7 +24300,6 @@ pub extern "C" fn _start() -> ! {
     let mut uiir_focus = 0u64;
 
     loop {
-        unsafe {flush_browser_input();}
         if let Some(stream)=uiir.as_mut() {
             let focus=unsafe{FOCUSED_SURFACE_ID};
             if focus!=uiir_focus {
@@ -24977,7 +24990,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || BROWSER_INPUT.len()!=0 || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -24992,13 +25005,13 @@ pub extern "C" fn _start() -> ! {
             if shell_close_declined_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
-            if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {
+            if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.caller_task,msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {
                 sex_pdx::serial_record!("[shell.app.stale] target={} opcode={:#x} rejected=1", msg.caller_pd, msg.type_id);
                 continue;
             }
         }
-        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target as u64==msg.caller_pd as u64&&app_catalog::document_view_index(e.target).is_some()&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){let view=app_catalog::by_target(e.target).unwrap();let frame=view.frame();DOCUMENT_VIEWS[app_catalog::document_view_index(e.target).unwrap()].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
-        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|e.target as u64==msg.caller_pd as u64&&app_catalog::document_view_index(e.target).is_some()&&e.task as u64==msg.arg1&&msg.arg0==e.target as u64&&!e.dead&&!e.close_pending){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
+        if msg.type_id==sex_pdx::document_view::READY{unsafe{if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|document_view_sender(e,&msg)){let view=app_catalog::by_target(e.target).unwrap();let frame=view.frame();DOCUMENT_VIEWS[app_catalog::document_view_index(e.target).unwrap()].refresh();if let Some((x,y,w,h))=get_surface_bounds(frame){native_child_geometry(frame,x,y,w,h);}}}continue;}
+        if msg.type_id==sex_pdx::document_view::OPEN_LINEN{unsafe{if APP_CUSTODY.iter().flatten().any(|e|document_view_sender(e,&msg)){focus_or_open_linen();sex_pdx::serial_record!("[shell.document.open] target={} linen=200",msg.caller_pd);}}continue;}
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }

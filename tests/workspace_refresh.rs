@@ -19,6 +19,7 @@ mod linen_async;
 pub struct PdxMessage {
     pub type_id: u64,
     pub caller_pd: u32,
+    pub caller_task: u32,
     pub arg0: u64,
     pub arg1: u64,
     pub arg2: u64,
@@ -69,9 +70,14 @@ fn publisher_coalesces_full_uses_exact_boot_task_and_close_fences() {
         p.changed();
         assert!(!p.pending());
     }
-    let mut imported=document_view::WorkspaceRefresh::new(15,15);
-    imported.changed();imported.poll(|args|{assert_eq!(args,[15,15,0]);Ok(())});assert!(!imported.pending());
-    for wrong in [0,9,90,16,u32::MAX]{let mut p=document_view::WorkspaceRefresh::new(15,wrong);p.changed();assert!(!p.pending());}
+    for task in [15,150] {
+        let mut imported=document_view::WorkspaceRefresh::new(15,task);
+        imported.changed();let mut attempted=0;
+        for _ in 0..3 { imported.poll(|args|{attempted+=1;assert_eq!(args,[15,task as u64,0]);Err(ERR_SERVICE_NOT_READY)});assert!(imported.pending()); }
+        imported.poll(|args|{attempted+=1;assert_eq!(args,[15,task as u64,0]);Ok(())});assert_eq!(attempted,4);assert!(!imported.pending());
+        imported.poll(|_|panic!("accepted notice retransmitted"));
+    }
+    let mut zero=document_view::WorkspaceRefresh::new(15,0);zero.changed();assert!(!zero.pending());
     let mut p = document_view::WorkspaceRefresh::new(16, 160);
     p.changed();
     p.poll(|a| {
@@ -92,6 +98,8 @@ fn notice(caller: u32, args: [u64; 3]) -> PdxMessage {
     PdxMessage {
         type_id: document_view::WORKSPACE_CHANGED,
         caller_pd: caller,
+        // Explicit current fixture task; it never comes from notice payload.
+        caller_task: 90,
         arg0: args[0],
         arg1: args[1],
         arg2: args[2],
@@ -195,5 +203,17 @@ fn custody_retry_is_retained_without_effect_and_close_cancels_before_retry() {
         workspace_refresh_poll();
         assert!(!WORKSPACE_REFRESH_PENDING[0]);
         assert!(!LINEN_ASYNC.can_send());
+    }
+}
+
+#[test]
+fn canonical_workspace_payload_never_substitutes_for_actual_sender_task() {
+    let _l=LOCK.lock().unwrap();unsafe {
+        for actual_task in [0,9,91,u32::MAX] {
+            setup();let mut msg=notice(9,[9,90,0]);msg.caller_task=actual_task;
+            assert!(workspace_refresh_receive(&msg));assert!(!LINEN_ASYNC.can_send());
+            assert!(!WORKSPACE_REFRESH_PENDING.iter().any(|p|*p));
+        }
+        setup();assert!(workspace_refresh_receive(&notice(9,[9,90,0])));assert!(LINEN_ASYNC.can_send());
     }
 }

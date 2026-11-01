@@ -219,7 +219,7 @@ assert viewport.index('Notice::decode(')<viewport.index('DOCUMENT_DISPLAY.rebind
 restore=s[s.index('unsafe fn restore_minimized_frame('):s.index('unsafe fn native_child_geometry(')]
 assert restore.index('DOCUMENT_VIEWS[index].refresh();')<restore.index('set_frame_minimized(frame_id, false);')
 pending=s[s.index('if shell_ready_publisher.is_pending()'):s.index('pdx_listen_raw(0)',s.index('if shell_ready_publisher.is_pending()'))]
-for required in ['CURSOR_SEND_PENDING','WORKSPACE_REFRESH_PENDING.iter().any(|p|*p)','linen_text_can_progress()','APP_INPUT.pending()','CLIPBOARD_INTAKE.pending()','CLIPBOARD.pending()','BROWSER_INPUT.len()!=0']:
+for required in ['CURSOR_SEND_PENDING','WORKSPACE_REFRESH_PENDING.iter().any(|p|*p)','linen_text_can_progress()','APP_INPUT.pending()','CLIPBOARD_INTAKE.pending()','CLIPBOARD.pending()']:
  assert required in pending,required
 PYCURSOR
 CURSOR_DELIVERY_SOURCE="$TEST_DIR/cursor.rs" CURSOR_STATUS_SOURCE="$TEST_DIR/cursor_status.rs" rustc --edition=2021 --test tests/desktop_cursor_delivery.rs -o "$TEST_DIR/cursor"

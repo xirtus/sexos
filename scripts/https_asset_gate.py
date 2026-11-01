@@ -149,6 +149,43 @@ class AssetPeer(https.tls.ControlledPeer):
    try:extra,_=listener.accept();extra.close();raise ValueError('unrequested asset connection')
    except socket.timeout:pass
 
+# Exact canonical function locks for the captured-input variant. This is a
+# deliberately narrow source oracle, not a general Rust parser or authority proof.
+# Whitespace changes are harmless; semantic edits require a reviewed contract.
+HELD_INPUT_FUNCTIONS = {
+ 'app_input_association': '21e3872d5c900ec9b41b1d60624e3ff8747fa1e4be6cdbf7b4f942553dd95ca9',
+ 'browser_input_participant': 'eb3b6e8564de96a01a89189a8b1b2991ea0ca87fe1acbe2e67ac3d7c70acca00',
+ 'app_input_key_code': 'cca0e9a824f798e550504bbe5dab5340e775cfee579e1eff68759952e66fb49b',
+ 'app_input_participant': '11dfac740c94f7419cdb18bbf4582f6369b276f06e2e39f4bbd9d3ccd9df311d',
+ 'document_view_sender': '2715dd56b62c3c164587b3e2e4dea49ad6e416a73f945718cf5d406c537990bc',
+ 'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
+ 'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
+ 'app_input_poll': '331ce997486828ea3a70b001c70079e950c19a4e205970cac5f77382c60a8f00',
+ 'browser_wheel_destination': 'd4a63ab356feebcd3c44b160304ee9e2e6c9e96ddfb2987561a161103179df4d',
+ 'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
+}
+HELD_INPUT_DEPENDENCIES = ('crates/sex-pdx/src/app_catalog.rs',
+ 'crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/clipboard.rs',
+ 'servers/silk-shell/src/app_custody.rs','servers/silk-shell/src/app_input.rs',
+ 'servers/silk-shell/src/browser_input.rs')
+
+def shell_input_contract(shell):
+ compact=lambda value:re.sub(r'\s+','',value)
+ legacy='item.destination.subject.pd==15&&status==0'
+ current='browser_input_participant(item.destination)&&status==0'
+ text=compact(shell)
+ if legacy in text and current not in text and 'fnapp_input_association('not in text:
+  return False # Frozen archival literal wiring; original native15/300 contract.
+ if current not in text or legacy in text:
+  raise ValueError('Browser held input wiring missing or ambiguous')
+ for name,expected in HELD_INPUT_FUNCTIONS.items():
+  matches=re.findall(r'^(?:unsafe )?fn '+name+r'\b.*?^}',shell,re.M|re.S)
+  if len(matches)!=1 or hashlib.sha256(compact(matches[0]).encode()).hexdigest()!=expected:
+   raise ValueError('Browser held input function changed: '+name)
+ if text.count('e.allows_operation(msg.caller_task,msg.type_id,[msg.arg0,msg.arg1,msg.arg2])')!=2:
+  raise ValueError('Browser stamped task must reach both custody gates')
+ return True
+
 def source_contract(root):
  root=Path(root);sources={name:(root/name).read_bytes()for name in SOURCE_FILES};style=sources['crates/sex-pdx/src/desktop_style.rs'].decode();display=sources['servers/sexdisplay/src/main.rs'].decode();codec=sources['crates/sex-http/src/codec.rs'].decode();view=sources['apps/kaleidoscope/src/asset_view.rs'].decode()
  for literal in ('INSET: u32 = 8','LINE: u32 = 9','width >= 256'):
@@ -158,7 +195,15 @@ def source_contract(root):
  for literal in ('Mode { Fit, Actual }','columns(w)>=30','{4} else {5}','(chrome_rows(w)as u32)*LINE*scale(w)','Mode::Actual=>1','(available_w-image_w)/2','(available_h-image_h)/2','min(24)','512/(cols+1)', 'F Fit  A 1:1  G fetch  Q clear','QOI / controlled HTTPS lab root'):
   if literal not in view:raise ValueError('source-bound retained image/chrome contract changed: '+literal)
  shell=sources['servers/silk-shell/src/main.rs'].decode()
- if 'req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3'not in sources['apps/kaleidoscope/src/main.rs'].decode()or 'item.destination.subject.pd==15&&status==0'not in shell:raise ValueError('Browser actual exact Shell task/held return guard changed')
+ if 'req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3'not in sources['apps/kaleidoscope/src/main.rs'].decode():raise ValueError('Browser actual exact Shell task guard changed')
+ if shell_input_contract(shell):
+  sources.update({name:(root/name).read_bytes()for name in HELD_INPUT_DEPENDENCIES})
+  clipboard=re.sub(r'\s+','',sources['crates/sex-pdx/src/clipboard.rs'].decode())
+  custody=re.sub(r'\s+','',sources['servers/silk-shell/src/app_custody.rs'].decode())
+  if 'subject:Subject{pd:c.target_pd,task:c.task_id},surface:c.surface_id,route,can_read'not in clipboard or 'let(route,can_read)=(i.close_slot,i.app==crate::app_catalog::App::Quil);'not in clipboard:
+   raise ValueError('held participant task/surface/route construction changed')
+  if 'ifcaller_task==0||caller_task!=self.task||self.dead||self.close_pending{returnfalse;}'not in custody:
+   raise ValueError('actual stamped custody task guard changed')
  for literal in ('(raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)','const TABLET_RAW_MAX: i32 = 32767;','[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}'):
   if literal not in shell:raise ValueError('source-bound pointer normalization changed')
  input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);'

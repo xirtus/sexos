@@ -47,9 +47,9 @@ include!(env!("EXPANDED_SHELL_POLICY"));
  let mut out=display_delivery::Outbox::new(101);out.create(0,0,123);let mut seen=vec![];out.poll(4,|op|{seen.push(op.surface);Ok(())},|_|{}).unwrap();assert_eq!(seen,[401]);
  assert!(linen::admit(101,0x42,Some(5)));assert!(!linen::admit(101,0x42,Some(2)));assert!(!linen::admit(102,0x42,Some(5)));
  assert_eq!(desktop_content::parent_frame(405),Some(402));assert_eq!(desktop_content::parent_frame(406),None);
- let good=app_custody::Entry::new(218,102,102,406);assert!(good.allows_operation(0x275,[102,102,0]));
- assert!(!app_custody::Entry::new(218,102,102,400).allows_operation(0x275,[102,102,0]));
- assert!(!good.allows_operation(0x274,[15,15,0]));
+ let good=app_custody::Entry::new(218,102,102,406);assert!(good.allows_operation(102,0x275,[102,102,0]));
+ assert!(!app_custody::Entry::new(218,102,102,400).allows_operation(102,0x275,[102,102,0]));
+ assert!(!good.allows_operation(102,0x274,[15,15,0]));
 }
 struct Backend;
 impl documents::Backend for Backend{

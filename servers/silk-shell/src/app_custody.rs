@@ -67,14 +67,16 @@ impl Entry {
         true
     }
     /// A Domain endpoint grant does not confer every shell sub-operation.
-    pub fn allows_operation(&self, opcode: u64, args: [u64;3]) -> bool {
-        if self.dead || self.close_pending { return false; }
+    /// Caller PD must already select this held entry. The actual stamped task,
+    /// never an argument word or inferred PD, must also match before admission.
+    pub fn allows_operation(&self, caller_task: u32, opcode: u64, args: [u64;3]) -> bool {
+        if caller_task == 0 || caller_task != self.task || self.dead || self.close_pending { return false; }
         match opcode {
             0xFA => args[0] == self.surface && args[1] != 0,
             // Document controls and read-only invalidation are exact, no-payload operations on
             // the existing BOOT orchestration edge, not ambient shell access.
             0x275 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app!=crate::app_catalog::App::Spindle) && args == [self.target as u64,self.task as u64,0],
-            0x274 | 0x279 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app!=crate::app_catalog::App::Spindle) && (!crate::app_catalog::is_browser(self.target)||self.task==self.target) && args == [self.target as u64,self.task as u64,0],
+            0x274 | 0x279 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app!=crate::app_catalog::App::Spindle) && args == [self.target as u64,self.task as u64,0],
             // Existing Spindle launcher route selects a fixed shell action.
             0x15 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app==crate::app_catalog::App::Spindle) && args[0] <= 7 && args[1] == 0 && args[2] == 0,
             0 => crate::app_catalog::by_surface(self.target,self.surface).is_some_and(|i|i.app==crate::app_catalog::App::Spindle) && args == [0;3], // no-effect endpoint probe

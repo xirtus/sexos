@@ -62,14 +62,14 @@ fn notice(caller:u32,target:u64,task:u64)->PdxMessage{PdxMessage{type_id:0x107,c
 #[test]fn wrong_owner_surface_and_manifest_identity_denied(){let e=app_custody::Entry::new(38,15,80,300);assert!(!e.allows(9,300,15));assert!(!e.allows(15,205,15));assert!(!e.allows(15,300,9));assert!(!e.clone().finish_ack());}
 #[test]fn all_interaction_variants_and_no_focus_fallback(){unsafe{for state in [InteractionState::Resizing{surface_id:300},InteractionState::TabDragging{frame_id:10},InteractionState::ClickPending]{reset();INTERACTION=state;FRAMES[0].as_mut().unwrap().tabs[1]=None;shell_lifecycle_hint(&notice(0,15,80));assert_eq!(INTERACTION,InteractionState::Idle);assert_eq!(FOCUSED_SURFACE_ID,0);assert_eq!(FOCUS_REF,0);assert_eq!(BAR,0);}}}
 #[test]fn native_shell_aliases_are_exact_catalog_tuples(){assert_eq!(app_custody::Entry::new(38,9,80,156).shell_surface(),Some(201));assert_eq!(app_custody::Entry::new(39,12,81,154).shell_surface(),Some(153));assert_eq!(app_custody::Entry::new(39,15,81,154).shell_surface(),None);assert_eq!(app_custody::Entry::new(39,12,81,157).shell_surface(),None);assert!(!app_custody::Entry::new(40,15,82,300).owns_surface(205));}
-#[test]fn endpoint_does_not_authorize_input_pointer_or_other_shell_operations(){for target in [9,12,15]{let e=app_custody::Entry::new(38,target,80,300);for op in [0x14,0x202,0x203,0xfb,1,0xffff]{assert!(!e.allows_operation(op,[300,1,0]));}assert!(e.allows_operation(0xfa,[300,300,(target as u64)<<8]));assert!(!e.allows_operation(0xfa,[301,300,0]));}assert!(app_custody::buffer_sender(2));for caller in [0,3,9,12,15,u32::MAX]{assert!(!app_custody::buffer_sender(caller));}}
-#[test]fn spindle_preserves_only_bounded_existing_launcher_route(){let mut e=app_custody::Entry::new(39,12,81,154);for action in 0..8{assert!(e.allows_operation(0x15,[action,0,0]));}for args in [[8,0,0],[1<<32,0,0],[1,1,0],[1,0,1]]{assert!(!e.allows_operation(0x15,args));}assert!(!app_custody::Entry::new(40,15,82,300).allows_operation(0x15,[1,0,0]));e.dead=true;assert!(!e.allows_operation(0xfa,[154,154,12<<8]));assert!(!e.allows_operation(0x15,[1,0,0]));}
+#[test]fn endpoint_does_not_authorize_input_pointer_or_other_shell_operations(){for target in [9,12,15]{let e=app_custody::Entry::new(38,target,80,300);for op in [0x14,0x202,0x203,0xfb,1,0xffff]{assert!(!e.allows_operation(e.task,op,[300,1,0]));}assert!(e.allows_operation(e.task,0xfa,[300,300,(target as u64)<<8]));assert!(!e.allows_operation(e.task,0xfa,[301,300,0]));}assert!(app_custody::buffer_sender(2));for caller in [0,3,9,12,15,u32::MAX]{assert!(!app_custody::buffer_sender(caller));}}
+#[test]fn spindle_preserves_only_bounded_existing_launcher_route(){let mut e=app_custody::Entry::new(39,12,81,154);for action in 0..8{assert!(e.allows_operation(e.task,0x15,[action,0,0]));}for args in [[8,0,0],[1<<32,0,0],[1,1,0],[1,0,1]]{assert!(!e.allows_operation(e.task,0x15,args));}assert!(!app_custody::Entry::new(40,15,82,300).allows_operation(82,0x15,[1,0,0]));e.dead=true;assert!(!e.allows_operation(e.task,0xfa,[154,154,12<<8]));assert!(!e.allows_operation(e.task,0x15,[1,0,0]));}
 
 static mut TICK:u64=0;static mut CLOSE_FAIL:bool=false;static mut CLOSE_SENDS:Vec<(u64,u64,u64,u64,u64)>=Vec::new();
 pub fn get_ticks()->u64{unsafe{TICK}}
 fn pdx_call_checked(slot:u64,op:u64,a:u64,b:u64,c:u64)->Result<u64,u64>{unsafe{CLOSE_SENDS.push((slot,op,a,b,c));if CLOSE_FAIL{Err(2)}else{Ok(0)}}}
 #[test]fn successful_close_enqueue_is_not_exit_and_retries_until_attested_dead(){unsafe{reset();TICK=100;CLOSE_FAIL=false;CLOSE_SENDS.clear();shell_request_app_close(300);assert_eq!(CLOSE_SENDS,vec![(43,0x108,15,80,0)]);assert!(APP_CUSTODY[0].unwrap().close_pending);assert!(!APP_CUSTODY[0].unwrap().dead);assert_eq!(ACKS,0);for tick in 101..116{TICK=tick;shell_close_poll();}assert_eq!(CLOSE_SENDS.len(),1);TICK=116;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),2);shell_lifecycle_hint(&notice(0,15,80));TICK=1000;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),2);assert!(!APP_CUSTODY[0].unwrap().close_pending);}}
-#[test]fn full_close_queue_retains_intent_and_duplicate_ui_requests_do_not_flood(){unsafe{reset();TICK=0;CLOSE_FAIL=true;CLOSE_SENDS.clear();shell_request_app_close(300);for _ in 0..5{shell_request_app_close(300);}assert_eq!(CLOSE_SENDS.len(),1);TICK=16;CLOSE_FAIL=false;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),2);assert!(APP_CUSTODY[0].unwrap().close_pending);assert!(!APP_CUSTODY[0].unwrap().allows_operation(0xfa,[300,300,15<<8]));assert_eq!(ACKS,0);}}
+#[test]fn full_close_queue_retains_intent_and_duplicate_ui_requests_do_not_flood(){unsafe{reset();TICK=0;CLOSE_FAIL=true;CLOSE_SENDS.clear();shell_request_app_close(300);for _ in 0..5{shell_request_app_close(300);}assert_eq!(CLOSE_SENDS.len(),1);TICK=16;CLOSE_FAIL=false;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),2);assert!(APP_CUSTODY[0].unwrap().close_pending);assert!(!APP_CUSTODY[0].unwrap().allows_operation(APP_CUSTODY[0].unwrap().task,0xfa,[300,300,15<<8]));assert_eq!(ACKS,0);}}
 #[test]fn close_routes_derive_only_exact_boot_native_associations(){for (target,sid,slot) in [(9,156,41),(12,154,42),(15,300,43)]{let mut e=app_custody::Entry::new(38,target,80,sid);assert_eq!(e.close_slot(),Some(slot));assert!(e.request_close());}let mut wrong=app_custody::Entry::new(38,15,80,205);assert_eq!(wrong.close_slot(),None);assert!(!wrong.request_close());}
 
 static mut REG_REPLY_FAIL:bool=false;static mut REG_REPLIES:Vec<(u32,u64)>=Vec::new();
@@ -77,29 +77,40 @@ fn pdx_reply(target:u32,value:u64)->u64{unsafe{REG_REPLIES.push((target,value));
 #[test]fn registration_reply_retains_exact_identity_on_full_mailbox(){unsafe{reset();REG_REPLIES.clear();REG_REPLY_FAIL=true;APP_CUSTODY[0].as_mut().unwrap().registration_reply=true;shell_registration_reply_poll();assert!(APP_CUSTODY[0].unwrap().registration_reply);assert_eq!(REG_REPLIES,vec![(15,300)]);REG_REPLY_FAIL=false;shell_registration_reply_poll();assert!(!APP_CUSTODY[0].unwrap().registration_reply);shell_registration_reply_poll();assert_eq!(REG_REPLIES,vec![(15,300),(15,300)]);}}
 #[test]fn terminal_registration_never_replies_to_reclaimed_client(){unsafe{reset();APP_CUSTODY[0].as_mut().unwrap().registration_reply=true;shell_lifecycle_hint(&notice(0,15,80));REG_REPLIES.clear();shell_registration_reply_poll();assert!(REG_REPLIES.is_empty());}}
 
-#[test]fn quil_controls_require_exact_live_catalog_subject_and_arguments(){for target in[9,16]{let mut e=app_custody::Entry::new(38,target,target,if target==9{156}else{301});for op in[0x274,0x275,0x279]{assert!(e.allows_operation(op,[target as u64,target as u64,0]));for args in[[12,target as u64,0],[target as u64,99,0],[target as u64,target as u64,1]]{assert!(!e.allows_operation(op,args));}e.close_pending=true;assert!(!e.allows_operation(op,[target as u64,target as u64,0]));e.close_pending=false;}e.dead=true;assert!(!e.allows_operation(0x274,[target as u64,target as u64,0]));}assert!(!app_custody::Entry::new(39,12,12,154).allows_operation(0x274,[12,12,0]));}
+#[test]fn quil_controls_require_exact_live_catalog_subject_and_arguments(){for target in[9,16]{let mut e=app_custody::Entry::new(38,target,target,if target==9{156}else{301});for op in[0x274,0x275,0x279]{assert!(e.allows_operation(e.task,op,[target as u64,target as u64,0]));for args in[[12,target as u64,0],[target as u64,99,0],[target as u64,target as u64,1]]{assert!(!e.allows_operation(e.task,op,args));}e.close_pending=true;assert!(!e.allows_operation(e.task,op,[target as u64,target as u64,0]));e.close_pending=false;}e.dead=true;assert!(!e.allows_operation(e.task,0x274,[target as u64,target as u64,0]));}assert!(!app_custody::Entry::new(39,12,12,154).allows_operation(12,0x274,[12,12,0]));}
 
 #[test]
-fn browser_ready_is_exact_geometry_intent_without_document_control_authority() {
+fn browser_geometry_and_workspace_controls_preserve_unequal_held_task() {
  let mut e=app_custody::Entry::new(40,15,150,300);
- assert!(e.allows_operation(0x275,[15,150,0]));
- for args in [[15,15,0],[16,150,0],[15,0,0],[15,150,1]] { assert!(!e.allows_operation(0x275,args)); }
- for op in [0x274,0x279,0x273,0x202] { assert!(!e.allows_operation(op,[15,150,0])); }
- e.close_pending=true;assert!(!e.allows_operation(0x275,[15,150,0]));
- e.close_pending=false;e.dead=true;assert!(!e.allows_operation(0x275,[15,150,0]));
+ for op in [0x274,0x275,0x279] {
+  assert!(e.allows_operation(e.task,op,[15,150,0]));
+  for args in [[15,15,0],[16,150,0],[15,0,0],[15,150,1],[(1<<32)|15,150,0],[15,(1<<32)|150,0]] {
+   assert!(!e.allows_operation(e.task,op,args));
+  }
+  for stamped in [0,15,151,u32::MAX]{
+   assert!(!e.allows_operation(stamped,op,[15,150,0]),"payload cannot supply actual task");
+   assert!(!e.allows_operation(stamped,op,[15,stamped as u64,0]));
+  }
+  e.close_pending=true;assert!(!e.allows_operation(e.task,op,[15,150,0]));e.close_pending=false;
+ }
+ for op in [0x273,0x202,0x15] {assert!(!e.allows_operation(e.task,op,[15,150,0]));}
+ e.dead=true;for op in [0x274,0x275,0x279]{assert!(!e.allows_operation(e.task,op,[15,150,0]));}
 }
 
 #[test]
 fn browser_import_workspace_controls_require_exact_live_boot_incarnation(){
  let mut e=app_custody::Entry::new(40,15,15,300);
  for op in [0x274,0x279]{
-  assert!(e.allows_operation(op,[15,15,0]));
-  for args in [[15,150,0],[16,15,0],[15,0,0],[15,15,1],[15+(1<<32),15,0]]{assert!(!e.allows_operation(op,args));}
-  for task in [0,16,150,u32::MAX]{assert!(!app_custody::Entry::new(40,15,task,300).allows_operation(op,[15,task as u64,0]));}
-  e.close_pending=true;assert!(!e.allows_operation(op,[15,15,0]));e.close_pending=false;
+  assert!(e.allows_operation(e.task,op,[15,15,0]));
+  for args in [[15,150,0],[16,15,0],[15,0,0],[15,15,1],[15+(1<<32),15,0]]{assert!(!e.allows_operation(e.task,op,args));}
+  for stamped in [0,16,150,u32::MAX]{
+   assert!(!e.allows_operation(stamped,op,[15,15,0]));
+   assert!(!e.allows_operation(stamped,op,[15,stamped as u64,0]));
+  }
+  e.close_pending=true;assert!(!e.allows_operation(e.task,op,[15,15,0]));e.close_pending=false;
  }
- for op in [0x273,0x202,0x15]{assert!(!e.allows_operation(op,[15,15,0]));}
- e.dead=true;for op in [0x274,0x279]{assert!(!e.allows_operation(op,[15,15,0]));}
+ for op in [0x273,0x202,0x15]{assert!(!e.allows_operation(e.task,op,[15,15,0]));}
+ e.dead=true;for op in [0x274,0x279]{assert!(!e.allows_operation(e.task,op,[15,15,0]));}
 }
 
 #[test]fn unsaved_decline_ends_the_pending_close_and_next_close_is_confirmed(){unsafe{
@@ -112,7 +123,7 @@ fn browser_import_workspace_controls_require_exact_live_boot_incarnation(){
  assert!(APP_CUSTODY[0].as_mut().unwrap().decline_close(15,[15,80,1]));
  let e=APP_CUSTODY[0].unwrap();assert!(!e.close_pending&&e.close_declined&&!e.dead);
  // No retry after a decline, and ordinary operations are allowed again.
- TICK=1000;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),1);assert!(e.allows_operation(0xfa,[300,300,15<<8]));
+ TICK=1000;shell_close_poll();assert_eq!(CLOSE_SENDS.len(),1);assert!(e.allows_operation(e.task,0xfa,[300,300,15<<8]));
  shell_request_app_close(300);assert_eq!(CLOSE_SENDS[1],(43,0x108,15,80,1));
  // The app may decline a confirmed close again for new unsaved work.
  assert!(APP_CUSTODY[0].as_mut().unwrap().decline_close(15,[15,80,1]));
@@ -123,4 +134,32 @@ fn browser_import_workspace_controls_require_exact_live_boot_incarnation(){
  assert!(original.owns_surface(153));assert!(!original.is_successor_frame(153));
  let successor=app_custody::Entry::new(50,17,17,302);assert!(successor.is_successor_frame(306));assert!(!successor.is_successor_frame(153));
  assert!(!app_custody::Entry::new(50,17,17,154).is_successor_frame(306));
+}
+
+#[test]
+fn every_existing_fresh_operation_requires_actual_task_before_payload_admission(){
+ for e in [app_custody::Entry::new(40,15,150,300),app_custody::Entry::new(38,9,90,156),
+           app_custody::Entry::new(39,12,120,154)] {
+  let mut operations=vec![(0xFA,[e.surface,300,(e.target as u64)<<8])];
+  if e.target==12{operations.extend([(0x15,[1,0,0]),(0,[0;3])]);}
+  else{for op in [0x274,0x275,0x279]{operations.push((op,[e.target as u64,e.task as u64,0]));}}
+  for(op,args)in operations{
+   assert!(e.allows_operation(e.task,op,args));
+   for wrong in [0,e.target,e.task+1,u32::MAX]{
+    assert!(!e.allows_operation(wrong,op,args),"matching payload accepted foreign actual task {wrong}");
+    let mut forged=args;forged[1]=wrong as u64;assert!(!e.allows_operation(wrong,op,forged));
+   }
+   let mut closing=e;closing.close_pending=true;assert!(!closing.allows_operation(e.task,op,args));
+   let mut dead=e;dead.dead=true;assert!(!dead.allows_operation(e.task,op,args));
+  }
+ }
+}
+#[test]
+fn stamped_task_is_not_a_family_or_shell_suboperation_grant(){
+ let browser=app_custody::Entry::new(40,15,150,300);
+ let spindle=app_custody::Entry::new(39,12,120,154);
+ for op in [0x274,0x275,0x279]{assert!(!spindle.allows_operation(spindle.task,op,[12,120,0]));}
+ for op in [0,0x15,0x202,0x203,0xFB]{assert!(!browser.allows_operation(browser.task,op,[15,150,0]));}
+ let zero=app_custody::Entry::new(40,15,0,300);
+ for actual in [0,15,150]{assert!(!zero.allows_operation(actual,0xFA,[300,300,15<<8]));}
 }

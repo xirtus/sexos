@@ -43,6 +43,70 @@ class WheelChecker(unittest.TestCase):
  def test_source_binds_actual_usb_input_shell_reader_and_exact_task_abi(self):
   for name in('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','crates/sex-pdx/src/app_scroll.rs','apps/kaleidoscope/src/document_reader.rs'):
    self.assertEqual(self.contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
+ def test_held_contract_binds_sdk_identity_route_and_custody_sources(self):
+  for name in('crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/clipboard.rs','servers/silk-shell/src/app_custody.rs'):
+   self.assertEqual(self.contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
+ def source_mutation(self,path,old,new):
+  original=Path.read_text;target=ROOT/path;self.assertIn(old,original(target))
+  def changed(path,*args,**kwargs):
+   text=original(path,*args,**kwargs)
+   return text.replace(old,new)if path==target else text
+  with patch.object(Path,'read_text',changed),self.assertRaisesRegex(ValueError,r'wheel (?:held )?source'):
+   gate.load_wheel_contract(ROOT)
+ def test_held_source_rejects_wrong_task_route_family_slot_and_query_rewiring(self):
+  path='servers/silk-shell/src/main.rs'
+  for old,new in [
+   ('!c.is_sender(e.target,e.task)','!c.is_sender(e.target,e.target)'),
+   ('row.lifecycle_slot!=e.slot','row.lifecycle_slot!=40'),
+   ('row.close_slot!=p.route','row.route_slot!=p.route'),
+   ('row.app==app_catalog::App::Browser)','row.app==app_catalog::App::Quil)'),
+   ('let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;','let c=sex_pdx::app_lifecycle::catalog(40).ok()?;'),
+   ('let p=app_input_participant(e,c)?;','let p=sex_pdx::clipboard::Participant::from_catalog(c)?;'),
+   ('e.target==subject.pd && e.task==subject.task','e.target==subject.pd'),
+   ('e.dead || e.retired || e.close_pending','e.dead || e.retired'),
+   ('if status==sex_pdx::ERR_SERVICE_NOT_READY{return}','if status==sex_pdx::ERR_SERVICE_NOT_READY{APP_INPUT.pop();return}'),
+   ('item.destination.route,OP_HID_EVENT,scroll.wire()','43,OP_HID_EVENT,scroll.wire()'),
+   ('app_input::Item{destination,input:app_input::Input::Scroll(scroll)}','app_input::Item{destination:focused_clipboard_participant().unwrap(),input:app_input::Input::Scroll(scroll)}'),
+  ]:
+   with self.subTest(old=old):self.source_mutation(path,old,new)
+ def test_held_source_rejects_missing_duplicate_or_legacy_decoy_helpers(self):
+  for old,new in [
+   ('fn app_input_participant(','fn removed_participant('),
+   ('fn browser_input_participant(','fn browser_input_participant(p:u64)->bool{true}\nfn browser_input_participant('),
+   ('browser_input_participant(p).then_some(p)','if sid!=300{return None}Some(p)'),
+   ('app_input_association(p).is_some_and(|row|row.app==app_catalog::App::Browser)','true /* app_input_association(p).is_some_and(|row|row.app==app_catalog::App::Browser) */'),
+  ]:
+   with self.subTest(old=old):self.source_mutation('servers/silk-shell/src/main.rs',old,new)
+ def test_sdk_semantics_mutations_cannot_pass_only_main_tokens(self):
+  for path,old,new in [
+   ('crates/sex-pdx/src/app_lifecycle.rs','self.task_id==caller_task','self.target_pd==caller_task'),
+   ('crates/sex-pdx/src/app_lifecycle.rs','self.task_id!=0','self.task_id==self.target_pd'),
+   ('crates/sex-pdx/src/clipboard.rs','(i.close_slot,i.app==crate::app_catalog::App::Quil)','(i.route_slot,i.app==crate::app_catalog::App::Quil)'),
+   ('crates/sex-pdx/src/clipboard.rs','task:c.task_id','task:c.target_pd'),
+   ('crates/sex-pdx/src/app_catalog.rs','i.target == target && i.surface == surface','i.surface == surface'),
+   ('servers/silk-shell/src/app_input.rs','self.items[(self.head+self.len)%CAPACITY]=Some(item);','self.items[self.head]=Some(item);'),
+  ]:
+   with self.subTest(path=path,old=old):self.source_mutation(path,old,new)
+ def test_archival_literal_form_stays_source_bound_and_cannot_hide_bad_held_form(self):
+  # Assemble the independently spelled old source shape in a frozen-root read
+  # double. No current helper may silently fall back when it fails validation.
+  import re
+  original=Path.read_text;shell=ROOT/'servers/silk-shell/src/main.rs';old=original(shell)
+  for name in ('app_input_association','browser_input_participant','app_input_participant','app_input_key_code'):
+   old,count=re.subn(r'^fn '+name+r'\b.*?^}', '',old,flags=re.M|re.S);self.assertEqual(count,1)
+  old=old.replace('    let fid=frame_for_surface(sid)?;','    if sid!=300{return None}\n    let fid=frame_for_surface(sid)?;')
+  old=old.replace('e.surface==sid&&!e.dead&&!e.retired&&!e.close_pending','e.target==15&&e.owns_surface(sid)&&!e.dead&&!e.retired&&!e.close_pending')
+  old=old.replace('let p=app_input_participant(e,c)?;\n    browser_input_participant(p).then_some(p)',
+                  'if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}\n    sex_pdx::clipboard::Participant::from_catalog(c)')
+  old=old.replace('    if app_input_association(item.destination).is_none(){APP_INPUT.pop();return}\n','')
+  def changed(path,*args,**kwargs):return old if path==shell else original(path,*args,**kwargs)
+  with patch.object(Path,'read_text',changed):
+   contract=gate.load_wheel_contract(ROOT)
+   self.assertEqual(contract['source_sha256']['servers/silk-shell/src/main.rs'],hashlib.sha256(old.encode()).hexdigest())
+  old=old.replace('if sid!=300{return None}','if sid!=301{return None}')
+  with patch.object(Path,'read_text',changed),self.assertRaisesRegex(ValueError,r'wheel (?:held )?source'):
+   gate.load_wheel_contract(ROOT)
+
  def test_source_guard_requires_released_visible_reader_before_wheel_effect(self):
   original=Path.read_text;app=ROOT/'apps/kaleidoscope/src/main.rs'
   for old,new in [('self.reading&&!self.asset_panel&&!self.import_panel','self.reading&&!self.asset_panel'),

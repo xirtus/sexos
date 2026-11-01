@@ -105,7 +105,7 @@ class AssetFixture(unittest.TestCase):
   self.assertEqual(len(gate.BODY),11542);self.assertEqual(len(gate.REQUEST),93);self.assertEqual(gate.decode_fixture(gate.BODY),gate.rgba());self.assertEqual(set(gate.rgba()[3::4]),{0,128,255});self.assertIn(b'/art.qoi',gate.REQUEST);self.assertIn(b'Accept: image/qoi',gate.REQUEST)
   with self.assertRaises(ValueError):gate.decode_fixture(gate.BODY[:-1]+b'\2')
  def test_contract_binds_actual_resource_decoder_compositor_sources(self):
-  c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
+  c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
  def test_contract_rejects_disconnected_raw_key_retention_or_held_drain(self):
   path=ROOT/'servers/sexinput/src/main.rs';read=Path.read_bytes;original=read(path)
   for old,new in [(b'sex_pdx::serial_record!("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
@@ -503,3 +503,45 @@ class FrozenEvidence(unittest.TestCase):
      with self.assertRaises(ValueError):gate.verify_evidence(ROOT,iso,Path('unused'),out)
 
 if __name__=='__main__':unittest.main()
+
+class HeldInputSourceContract(unittest.TestCase):
+ def test_current_source_keeps_actual_pixels_and_hashes_held_dependencies(self):
+  contract=gate.source_contract(ROOT)
+  for name in gate.HELD_INPUT_DEPENDENCIES:
+   self.assertEqual(contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
+  self.assertEqual(contract['base'],list(gate.BASE))
+ def test_archival_literal_and_ambiguous_variants(self):
+  self.assertFalse(gate.shell_input_contract('if item.destination.subject.pd==15&&status==0{}'))
+  current=(ROOT/'servers/silk-shell/src/main.rs').read_text()
+  for source in [current+'\nif item.destination.subject.pd==15&&status==0{}',current.replace('browser_input_participant(item.destination)&&status==0','item.destination.subject.pd==15&&status==0'), '']:
+   with self.assertRaises(ValueError):gate.shell_input_contract(source)
+ def test_semantic_mutants_cannot_claim_bound_input(self):
+  current=(ROOT/'servers/silk-shell/src/main.rs').read_text()
+  mutations=[
+   ('row.app==app_catalog::App::Browser)','row.app==app_catalog::App::Quil)'),
+   ('row.close_slot!=p.route','false'),
+   ('!c.is_sender(e.target,e.task)','!c.is_sender(e.target,e.target)'),
+   ('let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;','let c=sex_pdx::app_lifecycle::catalog(40).ok()?;'),
+   ('pdx_call(item.destination.route,OP_HID_EVENT,key.wire()','pdx_call(43,OP_HID_EVENT,key.wire()'),
+   ('if status==sex_pdx::ERR_SERVICE_NOT_READY{return}','if status==sex_pdx::ERR_SERVICE_NOT_READY{APP_INPUT.pop();return}'),
+   ('e.task==msg.caller_task','e.task==msg.caller_pd'),
+   ('e.allows_operation(msg.caller_task,msg.type_id','e.allows_operation(msg.caller_pd,msg.type_id'),
+   ('app_input_association(p).is_some_and(|row|row.app==app_catalog::App::Browser)','true'),
+  ]
+  for old,new in mutations:
+   with self.subTest(old=old):
+    self.assertIn(old,current)
+    with self.assertRaises(ValueError):gate.shell_input_contract(current.replace(old,new,1))
+ def test_dependency_task_inference_and_route_rewire_fail_closed(self):
+  with tempfile.TemporaryDirectory()as tmp:
+   root=Path(tmp)
+   for name in set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES):
+    dst=root/name;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,dst)
+   path=root/'crates/sex-pdx/src/clipboard.rs';original=path.read_text()
+   for old,new in [('task:c.task_id','task:c.target_pd'),('i.close_slot,i.app','43,i.app')]:
+    self.assertIn(old,original);path.write_text(original.replace(old,new,1))
+    with self.assertRaises(ValueError):gate.source_contract(root)
+   path.write_text(original)
+   path=root/'servers/silk-shell/src/app_custody.rs';source=path.read_text();self.assertIn('caller_task != self.task',source)
+   path.write_text(source.replace('caller_task != self.task','caller_task != self.target',1))
+   with self.assertRaises(ValueError):gate.source_contract(root)

@@ -105,14 +105,113 @@ WHEEL_TAGS={'device':'sexusb.wheel.device','received':'sexinput.wheel.received',
 WHEEL_PENDING_PLAN=[('pending-burst',-3,'pending'),('closed',-1,'closed')]
 WHEEL_PLAN=[('top',1,'body'),('down',-1,'body'),('up',1,'body'),('burst',-3,'body'),('end',-1,'body'),('outside',-1,'outside'),('title',-1,'title'),('modal',-1,'modal'),('closed',-1,'closed')]
 
+def _wheel_compact(text):
+ # Reviewed Rust forms only; this is a fail-closed source-shape contract,
+ # complemented by compiled production-helper tests, not a Rust verifier.
+ return re.sub(r'\s+','',re.sub(r'//[^\n]*','',text))
+
+def _wheel_function(source,name):
+ clean=re.sub(r'//[^\n]*','',source)
+ matches=list(re.finditer(r'\b(?:pub\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+'+re.escape(name)+r'\b',clean))
+ if len(matches)!=1:raise ValueError('wheel held source missing/ambiguous function: '+name)
+ start=clean.index('{',matches[0].end());end=start+1;depth=1
+ while depth and end<len(clean):
+  depth+=(clean[end]=='{')-(clean[end]=='}');end+=1
+ if depth:raise ValueError('wheel held source truncated function: '+name)
+ return _wheel_compact(clean[start+1:end-1])
+
+def _wheel_shell_contract(source,root):
+ shell=source['servers/silk-shell/src/main.rs']
+ def expect(text,name,body):
+  if _wheel_function(text,name)!=_wheel_compact(body):raise ValueError('wheel held source contract changed: '+name)
+ common="""if COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE
+ || !matches!(INTERACTION,InteractionState::Idle) || POINTER_BUTTONS!=0 {return None;}
+ if POINTER_X<0 || POINTER_Y<0 || POINTER_X>=desktop_width() || POINTER_Y>=desktop_height(){return None}
+ let sid=match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None};"""
+ geometry="""let fid=frame_for_surface(sid)?; if !frame_accepts_input(fid){return None}
+ let(x,y,w,h)=get_surface_bounds(sid)?; let px=POINTER_X as i64;let py=POINTER_Y as i64;
+ if px<x as i64+8 || py<y as i64+36 || px>=x as i64+w as i64-8 || py>=y as i64+h as i64-8{return None}"""
+ held=any(re.search(r'\bfn\s+'+name+r'\b',shell)for name in ('app_input_association','browser_input_participant','app_input_participant'))
+ if held:
+  expect(shell,'browser_wheel_destination',common+geometry+"""
+   let e=APP_CUSTODY.iter().flatten().find(|e|e.surface==sid&&!e.dead&&!e.retired&&!e.close_pending)?;
+   let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
+   let p=app_input_participant(e,c)?;browser_input_participant(p).then_some(p)""")
+  expect(shell,'app_input_association',"""let row=app_catalog::by_surface(p.subject.pd,p.surface)?;
+   if !p.subject.valid() || row.close_slot!=p.route || row.app==app_catalog::App::Spindle || p.can_read!=(row.app==app_catalog::App::Quil){return None} Some(row)""")
+  expect(shell,'browser_input_participant',"app_input_association(p).is_some_and(|row|row.app==app_catalog::App::Browser)")
+  expect(shell,'app_input_participant',"""let row=app_catalog::by_surface(e.target,e.surface)?;
+   if e.dead || e.retired || e.close_pending || row.lifecycle_slot!=e.slot || !c.is_sender(e.target,e.task) || !c.is_subject(e.target,e.surface,3){return None}
+   let p=sex_pdx::clipboard::Participant::from_catalog(c)?;app_input_association(p)?;Some(p)""")
+  metadata=('crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/clipboard.rs','servers/silk-shell/src/app_custody.rs')
+  for path in metadata:source[path]=(root/path).read_text()
+  catalog,lifecycle,participant=(source[path]for path in metadata[:3])
+  expect(catalog,'by_surface','INCARNATIONS.iter().find(|i| i.target == target && i.surface == surface)')
+  # The native geometry/receipt oracle remains this actual single Browser.
+  rows=re.findall(r'Incarnation\s*\{\s*app:\s*App::Browser,([^}]+)\}',re.sub(r'//[^\n]*','',catalog))
+  if len(rows)!=1:raise ValueError('wheel held source native Browser roster differs')
+  for field,value in (('ordinal',0),('target',15),('surface',300),('lifecycle_slot',40),('close_slot',43),('route_slot',43)):
+   if re.findall(r'\b'+field+r':\s*(\d+)\b',rows[0])!=[str(value)]:raise ValueError('wheel held source native Browser '+field+' differs')
+  expect(lifecycle,'is_sender','caller_pd!=0 && caller_task!=0 && self.target_pd==caller_pd && self.task_id==caller_task')
+  expect(lifecycle,'is_subject',"""target!=0 && surface!=0 && coordinator!=0 && target!=coordinator && self.target_pd==target && self.task_id!=0 && self.surface_id==surface && self.coordinator_pd==coordinator""")
+  expect(participant,'valid','self.pd!=0&&self.task!=0')
+  expect(participant,'from_catalog',"""if !c.is_subject(c.target_pd,c.surface_id,3){return None}
+   let Some(i)=crate::app_catalog::by_surface(c.target_pd,c.surface_id).filter(|i|i.app!=crate::app_catalog::App::Spindle)else{return None};
+   let(route,can_read)=(i.close_slot,i.app==crate::app_catalog::App::Quil);
+   Some(Self{subject:Subject{pd:c.target_pd,task:c.task_id},surface:c.surface_id,route,can_read})""")
+ else:
+  # Explicit historical path for frozen roots; never a fallback after a held
+  # profile fails validation. It remains exact original Browser 15/surface300.
+  expect(shell,'browser_wheel_destination',common+'if sid!=300{return None}'+geometry+"""
+   let e=APP_CUSTODY.iter().flatten().find(|e|e.target==15&&e.owns_surface(sid)&&!e.dead&&!e.retired&&!e.close_pending)?;
+   let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
+   if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
+   sex_pdx::clipboard::Participant::from_catalog(c)""")
+ expect(shell,'browser_wheel_input',"""let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(word,reserved,EV_WHEEL)else{
+  sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=malformed effects=0");return;
+ };
+ let Some(destination)=browser_wheel_destination()else{
+  sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
+ };
+ let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
+ sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
+ app_input_poll();""")
+ expect(shell,'clipboard_live',"""let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==subject.pd && e.task==subject.task) else{return Some(false)};
+  if e.dead || e.retired || e.close_pending {return Some(false)}
+  match sex_pdx::app_lifecycle::catalog(e.slot) {
+   Ok(c) if c.is_sender(subject.pd,subject.task) && c.is_subject(e.target,e.surface,3)=>{},
+   Err(sex_pdx::app_lifecycle::RETRY)=>return None,_=>return Some(false),
+  }
+  match sex_pdx::app_lifecycle::info(e.slot) {
+   Err(sex_pdx::app_lifecycle::LIVE)=>Some(true),Err(sex_pdx::app_lifecycle::RETRY)=>None,_=>Some(false),
+  }""")
+ prefix='if CLIPBOARD.outbox_pending(){return}let Some(item)=APP_INPUT.front() else{return};'
+ if held:prefix+='if app_input_association(item.destination).is_none(){APP_INPUT.pop();return}'
+ prefix+='match clipboard_live(item.destination.subject){None=>return,Some(false)=>{APP_INPUT.pop();return},Some(true)=>{}}match item.input {'
+ poll=_wheel_function(shell,'app_input_poll')
+ tail="""app_input::Input::Scroll(scroll)=>{
+  let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL);
+  if status==sex_pdx::ERR_SERVICE_NOT_READY{return} APP_INPUT.pop();
+  sex_pdx::serial_record!("[shell.browser.wheel.delivered] pd={} task={} route={} wheel={} accepted={} status={}",item.destination.subject.pd,item.destination.subject.task,item.destination.route,scroll.vertical(),(status==0)as u8,status);
+ },}"""
+ if not poll.startswith(_wheel_compact(prefix)) or not poll.endswith(_wheel_compact(tail)) or poll.count('app_input::Input::Scroll(scroll)')!=1:raise ValueError('wheel held source captured delivery/Full custody changed')
+ # Queue has two push methods (input and clipboard intake); check the exact
+ # input implementation before the separately named Intake declaration.
+ fifo=source['servers/silk-shell/src/app_input.rs'].split('pub struct Intake',1)[0]
+ expect(fifo,'front','self.items[self.head]')
+ expect(fifo,'push',"""if self.len==CAPACITY || !item.destination.subject.valid() || item.destination.route==0 {return false;}
+ self.items[(self.head+self.len)%CAPACITY]=Some(item);self.len+=1;true""")
+ return 'held-participant'if held else'archival-literal'
+
 def load_wheel_contract(root):
  root=Path(root);contract=load_pixel_contract(root)
  files=('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/app_input.rs','crates/sex-pdx/src/app_scroll.rs','crates/sex-pdx/src/lib.rs')
  source={name:(root/name).read_text()for name in files}
- requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)','record_device_wheel(en_slot_id, intr_actual, true, td.wheel, packed_axes)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','if sid!=300{return None}','px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
+ requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)','record_device_wheel(en_slot_id, intr_actual, true, td.wheel, packed_axes)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
  for name,tokens in requirements.items():
   for token in tokens:
    if token not in source[name]:raise ValueError('wheel source contract changed: '+token)
+ _wheel_shell_contract(source,root)
  reader=(root/'apps/kaleidoscope/src/document_reader.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text()
  visible=re.findall(r'^    fn visible_reader\b.*?^    }',app,re.M|re.S)
  scroll=re.findall(r'^    fn scroll_input\b.*?^    }',app,re.M|re.S)

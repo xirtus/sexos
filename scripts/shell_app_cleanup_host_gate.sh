@@ -6,7 +6,7 @@ trap 'rm -rf "$TEMP"' EXIT
 python3 - "$ROOT" "$TEMP/production.rs" <<'PY'
 import pathlib,re,sys
 root=pathlib.Path(sys.argv[1]);source=(root/'servers/silk-shell/src/main.rs').read_text()
-assert 'e.target == msg.caller_pd && !e.allows_operation(msg.type_id, [msg.arg0,msg.arg1,msg.arg2])' in source
+assert 'e.target == msg.caller_pd && !e.allows_operation(msg.caller_task,msg.type_id, [msg.arg0,msg.arg1,msg.arg2])' in source
 assert 'if !app_custody::buffer_sender(msg.caller_pd) { continue; }' in source
 parts=[]
 for name in ['shell_retire_app_surface','shell_lifecycle_poll','shell_lifecycle_hint','shell_close_poll','shell_request_app_close','shell_registration_reply_poll']:
@@ -17,6 +17,7 @@ pathlib.Path(sys.argv[2]).write_text('\n'.join(parts))
 PY
 SHELL_CLEANUP_SOURCE="$TEMP/production.rs" rustc --edition=2021 --test "$ROOT/tests/shell_app_cleanup.rs" -o "$TEMP/test"
 "$TEMP/test" --test-threads=1
+python3 "$ROOT/scripts/check_shell_input_custody.py" --root "$ROOT" --cleanup-source "$TEMP/production.rs" --baseline-binary "$TEMP/test"
 # Compiled control: cleanup that skips terminal input retirement must fail.
 python3 - "$TEMP/production.rs" "$TEMP/mutant.rs" <<'PY'
 import sys
