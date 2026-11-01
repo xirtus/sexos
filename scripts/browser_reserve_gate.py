@@ -5,6 +5,9 @@ Hardware launcher/Close, actual held source inventory, three startup echo flows,
 local TLS preparation and complete cleanup precede each next reservation.
 Each held Browser is checked for complete TLS status pixels before Zoom, after
 Zoom, and after restore; matching metadata alone never proves pixels.
+Quiesced mode clears with Q; allocated-close keeps the local future live until
+F11, then joins owned-payload erasure and zero private heap through pool reuse.
+Host monotonic intervals are observations including QMP/transport/polling delay.
 The exhausted launcher is independently checked against every visible glyph.
 No public TLS handshake, arbitrary restart, runtime grants, process VAS or POSIX.
 """
@@ -33,6 +36,19 @@ KEYS={'grave_accent':0x29,'j':0x24,'k':0x25,'ret':0x1c,'l':0x26,'q':0x10,'f11':0
 ECHO=bytes((17*i+78)&255 for i in range(1025))
 SCOPE=__doc__.strip()
 MAX_DISK=512*1024*1024
+EVIDENCE_VERSION=2
+MODES=('quiesced','allocated-close')
+MONOTONIC_CLOCK='host time.monotonic_ns; observations include QMP, serial transport and polling'
+
+def mode_value(mode):
+ if not isinstance(mode,str)or mode not in MODES:raise ValueError('unknown explicit Browser close mode')
+ return mode
+def evidence_mode(manifest,result,requested):
+ mode_value(requested)
+ if not isinstance(manifest,dict)or not isinstance(result,dict):raise ValueError('malformed Browser evidence schema')
+ if manifest.get('evidence_version')!=EVIDENCE_VERSION or result.get('evidence_version')!=EVIDENCE_VERSION or manifest.get('options')!={'mode':requested}or result.get('mode')!=requested:
+  raise ValueError('Browser evidence schema/requested close mode differs; old evidence cannot be relabeled')
+ return requested
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def serial_text(path):
@@ -64,14 +80,15 @@ def tls_accounting(root):
   values[name]=expected
  for fragment in ('pubconstPIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES;',
                   'const_:()=assert!(core::mem::size_of::<Pipe>()==PIPE_BYTES);',
-                  'private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()+ifresource.is_some(){MAX_DOCUMENT}else{0}'):
+                  'private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()+ifresource.is_some(){MAX_DOCUMENT}else{0}',
+                  'pubfnowned_payload_bytes(&self)->usize{self.stats.task_bytes+2*QUEUE_BYTES+ifself.resource.is_some(){MAX_DOCUMENT}else{0}}'):
   if fragment not in code:raise ValueError('source Session::Stats/Pipe formula changed')
  probe=re.sub(r'\s+','',(root/'apps/kaleidoscope/src/tls_probe.rs').read_text())
  if 'self.start_mode(policy,seed,time,now,false,None)'not in probe or 'Session::prepare(&mutbytes,seconds,profile)'not in probe:
   raise ValueError('local TLS preparation resource accounting changed')
  return dict(record_read=values['RECORD_READ'],record_write=values['RECORD_WRITE'],queue_bytes=values['QUEUE_BYTES'],
              pipe_metadata_bytes=values['PIPE_METADATA_BYTES'],pipe_bytes=2*values['QUEUE_BYTES']+values['PIPE_METADATA_BYTES'],
-             max_task_bytes=values['MAX_TASK_BYTES'],max_private_bytes=49152)
+             queue_payload_bytes=2*values['QUEUE_BYTES'],max_task_bytes=values['MAX_TASK_BYTES'],max_private_bytes=49152)
 def source_contract(root):
  from https_asset_gate import script_dependencies
  root=Path(root)
@@ -139,7 +156,55 @@ def workload(trace,row,start,end,inventory,accounting):
  source=[r for r in sources.validate_clock_stream(trace,inventory)if r['consumer']==(t,k)and start<=r['offset']<end]
  if len(source)!=1 or source[0]['holder'][2]!=row['clock']or source[0]['seconds']!=int(clock[2]):raise ValueError('exact source/consumer clock join missing')
  if not command.start()<policy.start()<clock.start()<prepared.start()or not policy.start()<admitted.start()<ready.start()<release.start()<prepared.start()or not start+policy.start()<source[0]['offset']<start+clock.start():raise ValueError('typed source/preparation order differs')
- return dict(target=t,task=k,seed_ticket=ticket,utc=int(clock[2]),clock_source_offset=source[0]['offset'],prepared_offset=start+prepared.start(),authenticated_peer=False,network=False)
+ return dict(target=t,task=k,seed_ticket=ticket,utc=int(clock[2]),clock_source_offset=source[0]['offset'],prepared_offset=start+prepared.start(),task_bytes=int(prepared[1]),private_bytes=int(prepared[2]),owned_payload_bytes=int(prepared[1])+accounting['queue_payload_bytes'],authenticated_peer=False,network=False)
+
+def resource_rows(trace,start,end):
+ rows=[]
+ pattern=r'\[browser.resources\] reason=(command|change|clear|close) heap_used=(\d+) heap_free=(\d+) heap_total=(\d+) tls_payload=(\d+) tls_pending=([01]) route_busy=([01]) providers_busy=([01]) queued=(None|Some\(\w+\)) body_visible=([01])\n'
+ for match in re.finditer(r'^\[browser.resources\][^\n]*(?:\n|$)',window(trace,start,end),re.M):
+  exact=re.fullmatch(pattern,match[0])
+  if exact is None:raise ValueError('malformed/incomplete Browser resource receipt')
+  reason,used,free,total,payload,pending,route,providers,queued,body=exact.groups()
+  values=dict(used=int(used),free=int(free),total=int(total),payload=int(payload),pending=int(pending),route=int(route),providers=int(providers),body=int(body))
+  if values['total']!=65536 or values['used']+values['free']!=values['total']:raise ValueError('Browser private heap accounting differs')
+  rows.append(dict(values,reason=reason,queued=queued,offset=start+match.start(),end=start+match.end()))
+ return rows
+
+def allocated_close_evidence(trace,row,step,prepared):
+ """Local future custody only; source seed RELEASE already preceded Hello.
+
+ Anonymous TLS/resource records are admitted only in this exact held subject's
+ sequential phase, fenced by its typed Close, tagged client closes and finish.
+ They do not supply authority or prove pending transport/device I/O.
+ """
+ start,cut,end=(step[k]for k in('work_start','close_start','end'));t,k,s=(row[x]for x in('target','task','surface'))
+ prior=window(trace,prepared['prepared_offset'],cut)
+ views=list(re.finditer(r'\[browser.tls.view\] state=(\w+) authenticated=0 network=0'+END,prior))
+ if len(views)!=1 or prior.count('[browser.tls.view]')!=1 or any(m[1]!='HelloPending'for m in views):raise ValueError('allocated Close lost fresh HelloPending')
+ forbidden=r'\[browser.tls\.(?:erased|closed|transfer\w*)\]|\[browser\.(?:https.prepared|tls.peer)|\[browser.command\.(?:queued|started)\]|\[sexinput.ps2.scancode\] raw=0x10'+END
+ if re.search(forbidden,prior):raise ValueError('allocated Close followed Q/cancel/timeout/reprepare/transfer/erase')
+ resources=resource_rows(trace,start,end);before=[r for r in resources if r['offset']<cut]
+ if not before:raise ValueError('missing live allocated TLS resource receipt')
+ live=before[-1];payload=prepared['owned_payload_bytes']
+ if live['offset']<=prepared['prepared_offset']or live['reason']!='change'or not 0<payload<=live['used']<=65536 or (live['payload'],live['pending'],live['route'],live['providers'],live['queued'],live['body'])!=(payload,1,0,0,'None',0):raise ValueError('latest TLS resource snapshot is stale/quiesced/not allocated')
+ request=one(trace,rf'\[shell.app.close.request\] target={t} task={k} surface={s}',cut,end)
+ erased=one(trace,r'\[browser.tls.erased\] bytes=(\d+) owned_storage=1',cut,end)
+ closed=one(trace,r'\[browser.tls.closed\] pending=1 terminal=1 owned_storage=erased',cut,end)
+ finish=one(trace,rf'\[task.finish\] pd={t} task={k} reason=0 terminal=1',cut,end)
+ span=window(trace,cut,end)
+ if span.count('[browser.tls.erased]')!=1 or span.count('[browser.tls.closed]')!=1 or int(erased[1])!=payload or payload<=0:raise ValueError('allocated Close missing exact nonzero owned-payload erasure')
+ bindings=[]
+ for tag,suffix in(('trust',''),('clock',''),('entropy',' private_payload=erased')):
+  binding=one(trace,rf'\[browser.{tag}.closed\] target={t} task={k} pending=0 terminal=1{suffix}',cut,end);bindings.append(cut+binding.start())
+ clipboard=one(trace,rf'\[browser.clipboard.closed\] target={t} task={k} owned_scratch=erased terminal=1',cut,end)
+ after=[r for r in resources if r['offset']>=cut]
+ if len(after)!=1:raise ValueError('missing/duplicate/stale terminal close resource receipt')
+ zero=after[0]
+ if (zero['reason'],zero['used'],zero['free'],zero['payload'],zero['pending'],zero['route'],zero['providers'],zero['queued'],zero['body'])!=('close',0,65536,0,0,0,0,'None',0):raise ValueError('terminal allocated Close did not free isolated private heap/payload')
+ offsets=dict(request=cut+request.start(),erased=cut+erased.start(),closed=cut+closed.start(),clipboard=cut+clipboard.start(),resources=zero['offset'],finish=cut+finish.start())
+ if not offsets['request']<offsets['erased']<offsets['closed']<min(bindings)<=max(bindings)<offsets['clipboard']<offsets['resources']<offsets['finish']:raise ValueError('allocated Close/drop/client-close/resources/finish order differs')
+ if re.search(r'\[sexinput.ps2.scancode\] raw=0x10'+END,window(trace,start,end)):raise ValueError('allocated Close contains actual Q make')
+ return dict(mode='allocated-close',target=t,task=k,surface=s,task_bytes=prepared['task_bytes'],private_bytes=prepared['private_bytes'],erased_payload_bytes=payload,live_resources=live,zero_resources=zero,offsets=offsets,scope='retained local TLSfuture/owned queues; not pending transport/device I/O or register/cache erasure')
 
 def startup_echo(trace,row,start,end):
  from check_tcp_capture import fingerprint
@@ -152,7 +217,9 @@ def startup_echo(trace,row,start,end):
  if body.start()>=released.start():raise ValueError('startup echo verified before positive release')
  return ticket
 
-def verify(trace,result,root):
+def verify(trace,result,root,mode='quiesced'):
+ mode_value(mode)
+ if result.get('evidence_version')!=EVIDENCE_VERSION or result.get('mode')!=mode:raise ValueError('explicit Browser result schema/close mode differs')
  rows=browser_rows(root);inv=sources.validate_inventory(trace,sources.plans_from_catalog(root),require_version=True)
  accounting=tls_accounting(root)
  boot_order(trace,root)
@@ -175,14 +242,15 @@ def verify(trace,result,root):
   if not re.search(rf'\[shell.focus.set\] id={s}'+END,window(trace,a,b)):raise ValueError('missing current exact Browser focus')
   one(trace,rf'\[app.surface.presented\] target={t} surface={s} sequence=1 ok=1',a,b)
   ticket=startup_echo(trace,row,a,b);proof=workload(trace,row,b,c,inv,accounting);closed=cleanup(trace,row,c,d)
-  joins.append(dict(identity=row,echo_ticket=ticket,workload=proof,cleanup=closed));previous=d
+  pending=allocated_close_evidence(trace,row,step,proof)if mode=='allocated-close'else None
+  joins.append(dict(identity=row,echo_ticket=ticket,workload=proof,cleanup=closed,close_evidence=pending));previous=d
  start,end=result.get('exhaustion_start'),result.get('exhaustion_end');span=window(trace,start,end)
  if start<previous:raise ValueError('exhaustion precedes final cleanup')
  if not re.search(r'\[launcher.text.row\] index=10 row=\d+ name=Open Browser status=CLOSED / RESERVE EXHAUSTED'+END,span):raise ValueError('missing current exhausted Browser row')
  one(trace,r'\[launcher.execute.denied\] idx=10 status=CLOSED / RESERVE EXHAUSTED reason=boot_reserve_exhausted',start,end)
  commits=list(re.finditer(r'\[app.activation.committed\] logical=15 [^\n]*'+END,trace))
  if len(commits)!=2 or re.search(r'\[app.activation.committed\] logical=15 ',trace[start:]):raise ValueError('extra/replayed activation or activation after exhaustion')
- return dict(ok=True,targets=[r['target']for r in rows],joins=joins,reserve_exhausted=True,browser_pixels_qualified=False,scope=SCOPE)
+ return dict(ok=True,evidence_version=EVIDENCE_VERSION,mode=mode,targets=[r['target']for r in rows],joins=joins,reserve_exhausted=True,browser_pixels_qualified=False,scope=SCOPE)
 
 
 def palette(c):
@@ -196,19 +264,32 @@ def launch(c,row):
                 rf'\[app.surface.presented\] target={row["target"]} surface={row["surface"]} sequence=1 ok=1'+END,
                 rf'\[shell.focus.set\] id={row["surface"]}'+END]:c['wait'](pattern,start)
  return start
-def close(c,row):
+def close(c,row,mode='quiesced'):
  """Exact focused incarnation F11; no next launch until real all-role/pool fence."""
+ mode_value(mode)
  start=len(c['text']());c['key']('f11',rf'\[shell.app.close.request\] target={row["target"]} task={row["task"]} surface={row["surface"]}'+END)
- c['wait'](rf'\[sext.app.pool.ready\] target={row["target"]} task={row["task"]} bytes=\d+ zeroed=\d+ workspace_records=\d+ reused=1 zero_owner=sext ok=1'+END,start)
- end=len(c['text']());cleanup(c['text'](),row,start,end);return start,end
+ key_index=len(c['actions'])-1 if 'actions'in c else None
+ pool=c['wait'](rf'\[sext.app.pool.ready\] target={row["target"]} task={row["task"]} bytes=\d+ zeroed=\d+ workspace_records=\d+ reused=1 zero_owner=sext ok=1'+END,start)
+ observed_ns=time.monotonic_ns();trace=c['text']();end=len(trace);checked=cleanup(trace,row,start,end)
+ if mode=='allocated-close'and 'actions'in c:
+  key=c['actions'][key_index]
+  if key.get('kind')!='key'or key.get('key')!='f11':raise ValueError('Close lacks actual retained F11 observation')
+  c['actions'].append(dict(kind='browser_close',mode=mode,target=row['target'],task=row['task'],surface=row['surface'],key_index=key_index,
+   start=start,end=end,serial_sha256=sha(trace[:end].encode()),request_offset=checked['close_offset'],pool_offset=start+pool.start(),pool_end=start+pool.end(),
+   issued_ns=key['issued_ns'],request_observed_ns=key['receipt_observed_ns'],pool_observed_ns=observed_ns,
+   key_to_request_ns=key['receipt_observed_ns']-key['issued_ns'],key_to_pool_ns=observed_ns-key['issued_ns']))
+ elif mode=='allocated-close':raise ValueError('allocated Close needs retained hardware/timing actions')
+ return start,end
 
-def run(c):
+def run(c,mode='quiesced'):
  """Reusable operation context: root,text,wait,key,capture; caller owns QEMU/peer.
 
  key(code,pattern) must perform real hardware down/up plus a release barrier;
  capture(name,kind,target,expected) retains immutable raw PPM+serial prefixes.
  Caller must arrange the normal Browser startup echo peer for all3 identities.
  """
+ mode_value(mode)
+ if mode=='allocated-close'and not isinstance(c.get('actions'),list):raise ValueError('allocated Close needs shared retained actions')
  root=Path(c['root']);inv=sources.validate_inventory(c['text'](),sources.plans_from_catalog(root),require_version=True)
  chain=[]
  for expected in browser_rows(root):
@@ -231,14 +312,25 @@ def run(c):
    c['key']('ret',rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1 reason=ok'+END)
    viewport=c['wait'](rf'\[browser.viewport\] target={row["target"]} task={row["task"]} sequence=(\d+) w=\d+ h=\d+ origin=held_shell'+END,begin)
    paint_starts.append(begin);painted(f'browser-{row["target"]}-{phase}',begin,int(viewport[1]))
-  c['key']('q',r'\[browser.tls.view\] state=Cancelled authenticated=0 network=0'+END)
-  c['wait'](r'\[browser.resources\] reason=clear heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 [^\n]*'+END,work_start)
-  close_start,end=close(c,row);chain.append(dict(identity=row,start=start,work_start=work_start,close_start=close_start,end=end,paint_starts=paint_starts))
+  if mode=='quiesced':
+   c['key']('q',r'\[browser.tls.view\] state=Cancelled authenticated=0 network=0'+END)
+   c['wait'](r'\[browser.resources\] reason=clear heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 [^\n]*'+END,work_start)
+  else:
+   # Check the current snapshot immediately before the hardware request, not
+   # merely peak preparation statistics or a preceding screenshot.
+   now=c['text']();prepared=workload(now,row,work_start,len(now),inv,tls_accounting(root))
+   live=resource_rows(now,work_start,len(now))
+   if not live or live[-1]['payload']!=prepared['owned_payload_bytes']or live[-1]['pending']!=1:raise ValueError('TLS allocation expired/quiesced before physical Close')
+  close_start,end=close(c,row,mode);step=dict(identity=row,start=start,work_start=work_start,close_start=close_start,end=end,paint_starts=paint_starts)
+  if mode=='allocated-close':step['close_observation_index']=len(c['actions'])-1
+  chain.append(step)
  start=len(c['text']());palette(c);c['wait'](r'\[launcher.text.row\] index=10 row=\d+ name=Open Browser status=CLOSED / RESERVE EXHAUSTED'+END,start)
  c['capture']('browser-reserve-exhausted',kind='launcher',target=15,expected='Open Browser')
  c['key']('ret',r'\[launcher.execute.denied\] idx=10 status=CLOSED / RESERVE EXHAUSTED reason=boot_reserve_exhausted'+END)
- result=dict(chain=chain,exhaustion_start=start,exhaustion_end=len(c['text']()))
- verify(c['text'](),result,root);return result
+ result=dict(evidence_version=EVIDENCE_VERSION,mode=mode,chain=chain,exhaustion_start=start,exhaustion_end=len(c['text']()))
+ checked=verify(c['text'](),result,root,mode)
+ if mode=='allocated-close':result['close_evidence']=[j['close_evidence']for j in checked['joins']]
+ return result
 
 @contextmanager
 def echo_peer():
@@ -280,10 +372,52 @@ def verify_keys(trace,actions):
   start,end=action.get('start'),action.get('end');span=window(trace,start,end);key=action.get('key')
   if key not in KEYS or start<previous or action.get('transport')!='input-send-event':raise ValueError('key identity/order/transport differs')
   codes=[int(m[1],16)for m in re.finditer(r'\[sexinput.ps2.scancode\] raw=(0x[0-9a-f]+)'+END,span)]
-  if [code for code in codes if code<128]!=[KEYS[key]]or KEYS[key]|128 not in codes:raise ValueError('missing/extra physical make or missing release barrier')
+  if [code for code in codes if code<128]!=[KEYS[key]]or codes.count(KEYS[key]|128)!=1 or codes.index(KEYS[key])>=codes.index(KEYS[key]|128):raise ValueError('missing/extra/reversed physical make/release barrier')
   previous=end;count+=1
  if not count:raise ValueError('missing actual hardware input')
  return dict(ok=True,hardware_keys=count)
+
+def close_observations(trace,result,actions,proof,manifest):
+ """Replay host observations against their exact same-run raw serial cuts.
+
+ These intervals include QMP and polling delay. They are neither guest event
+ timestamps nor a universal scheduler/cryptographic latency guarantee.
+ """
+ if proof.get('mode')!='allocated-close':return dict(scope='quiesced mode; no allocated-close timing claim',rows=[])
+ def integer(value):return type(value)is int
+ if not isinstance(actions,list)or any(not isinstance(action,dict)for action in actions):raise ValueError('malformed retained hardware observations')
+ lower,upper=(manifest.get(k)for k in('host_monotonic_start_ns','host_monotonic_end_ns'))
+ if manifest.get('monotonic_clock')!=MONOTONIC_CLOCK or not integer(lower)or not integer(upper)or not 0<lower<=upper:raise ValueError('invalid same-run host monotonic observation bracket')
+ def cut(end,digest):
+  if not integer(end)or not 0<=end<=len(trace)or digest!=sha(trace[:end].encode()):raise ValueError('changed/out-of-bounds host observation serial prefix')
+ rows=[];used_keys=[];used_observations=[];previous=lower
+ for step,join in zip(result['chain'],proof['joins']):
+  index=step.get('close_observation_index')
+  if not integer(index)or not 0<=index<len(actions):raise ValueError('missing exact Close observation action')
+  observation=actions[index];key_index=observation.get('key_index')
+  if not integer(key_index)or not 0<=key_index<index:raise ValueError('invalid Close hardware action reference')
+  key=actions[key_index];row=step['identity'];effect=join['close_evidence'];offsets=effect['offsets'];target,task,surface=(row[k]for k in('target','task','surface'))
+  if observation.get('kind')!='browser_close'or observation.get('mode')!='allocated-close'or (observation.get('target'),observation.get('task'),observation.get('surface'))!=(target,task,surface):raise ValueError('Close observation subject/mode differs')
+  if key.get('kind')!='key'or key.get('key')!='f11'or any(not integer(key.get(k))for k in('start','end','receipt_offset','receipt_end','receipt_serial_end'))or not step['close_start']<=key['start']<key['end']<=step['end']:raise ValueError('Close lacks exact in-phase physical F11 action')
+  verify_keys(trace,[key])
+  expected=[dict(execute='input-send-event',arguments=dict(events=[dict(type='key',data=dict(down=down,key=dict(type='qcode',data='f11')))for down in(True,False)]))]
+  if key.get('qmp')!=expected:raise ValueError('Close hardware command differs from actual explicit down/up packet')
+  if key.get('receipt_pattern')!=rf'\[shell.app.close.request\] target={target} task={task} surface={surface}'+END:raise ValueError('Close key observed a different receipt')
+  request_end=trace.index('\n',offsets['request']);pool=join['cleanup']['pool_offset'];pool_end=trace.index('\n',pool)
+  if key.get('receipt_offset')!=offsets['request']or key.get('receipt_end')!=request_end or not key['start']<=key['receipt_offset']<key['receipt_end']<key['receipt_serial_end']<=key['end']:raise ValueError('F11 lacks the exact complete Close-request observation')
+  cut(key['start'],key.get('start_sha256'));cut(key['receipt_serial_end'],key.get('receipt_serial_sha256'));cut(key['end'],key.get('end_sha256'))
+  if (observation.get('start'),observation.get('end'),observation.get('request_offset'),observation.get('pool_offset'),observation.get('pool_end'))!=(step['close_start'],step['end'],offsets['request'],pool,pool_end):raise ValueError('Close observation raw offsets differ')
+  cut(observation['end'],observation.get('serial_sha256'))
+  issued,sent,request,completed,pool_ns=(key.get('issued_ns'),key.get('sent_ns'),key.get('receipt_observed_ns'),key.get('completed_ns'),observation.get('pool_observed_ns'))
+  if any(not integer(v)for v in(issued,sent,request,completed,pool_ns))or not previous<=issued<=sent<=request<=completed<=pool_ns<=upper:raise ValueError('invalid/reversed/cross-run host observation times')
+  if any(not integer(observation.get(k))for k in('issued_ns','request_observed_ns','key_to_request_ns','key_to_pool_ns'))or (observation.get('issued_ns'),observation.get('request_observed_ns'),observation.get('key_to_request_ns'),observation.get('key_to_pool_ns'))!=(issued,request,request-issued,pool_ns-issued):raise ValueError('recorded Close observation interval differs')
+  rows.append(dict(target=target,task=task,surface=surface,key_action_index=key_index,observation_index=index,key_to_request_ns=request-issued,key_to_pool_ns=pool_ns-issued,issued_ns=issued,request_observed_ns=request,pool_observed_ns=pool_ns,request_offset=offsets['request'],pool_offset=pool))
+  used_keys.append(key_index);used_observations.append(index);previous=pool_ns
+ if [i for i,a in enumerate(actions)if a.get('kind')=='key'and a.get('key')=='f11']!=used_keys or [i for i,a in enumerate(actions)if a.get('kind')=='browser_close']!=used_observations:raise ValueError('missing/extra/replayed semantic Close actions')
+ for code in('57','d7'):
+  edges=list(re.finditer(r'\[sexinput.ps2.scancode\] raw=0x'+code+r'(?=\n|$)',trace))
+  if len(edges)!=len(used_keys)or any(m.end()==len(trace)or not any(actions[i]['start']<=m.start()<actions[i]['end']for i in used_keys)for m in edges):raise ValueError('unrecorded/extra/truncated physical F11 edge')
+ return dict(clock=MONOTONIC_CLOCK,rows=rows,scope='same-run observed hardware-key to serial receipt/pool; includes QMP/transport/polling, not hard realtime')
 
 def write_gzip(source,target):
  with Path(source).open('rb')as raw,Path(target).open('xb')as file:
@@ -328,7 +462,7 @@ def command_profile(command,iso,out,resolution,model):
  expected=native_command(Path(iso),Path(out)/'nvme.img',Path(out)/'serial.log',sock,Path(out)/'wire.pcap',model,resolution)
  if command!=expected:raise ValueError('native source/device/RTC/CPU/image profile differs')
 
-def replay(root,iso,binding,out):
+def replay(root,iso,binding,out,mode='quiesced'):
  from check_disk_persistence import ppm_rgb
  from check_tcp_capture import inspect as tcp_capture
  from network_contention_gate import owner_joins
@@ -336,6 +470,7 @@ def replay(root,iso,binding,out):
  from check_desktop_pixels import font_from_source
  root,out=Path(root),Path(out);contract=source_contract(root);bound=frozen_binding(root,Path(iso),Path(binding));require_inputs(json.loads(Path(binding).read_text()),contract)
  manifest=json.loads((out/'manifest.json').read_text());result=json.loads((out/'result.json').read_text())
+ evidence_mode(manifest,result,mode)
  if manifest.get('error')is not None or result.get('ok')is not True or manifest.get('guest_exited')is not True:raise ValueError('failed/nonterminal attempt remains diagnostic')
  if manifest.get('binding')!=bound or manifest.get('source_sha256')!=contract['source_sha256']or manifest.get('serial_offset_units')!=SERIAL_UNITS or manifest.get('tls_accounting')!=contract['tls_accounting']:raise ValueError('frozen source/image, accounting or prefix convention differs')
  command_profile(manifest.get('command'),iso,out,manifest.get('resolution'),manifest.get('model'))
@@ -349,7 +484,9 @@ def replay(root,iso,binding,out):
  if disk_hash(out/'seed.img.gz')!=manifest['input_disk_sha256']or disk_hash(out/'nvme.img.gz')!=manifest['final_disk_sha256']:raise ValueError('terminal disk closure differs')
  trace=serial_text(out/'serial.log')
  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow|\[fault.kill\]',trace):raise ValueError('guest fault/diagnostic overflow')
- proof=verify(trace,result,root);actions=json.loads((out/'actions.json').read_text());keys=verify_keys(trace,actions)
+ proof=verify(trace,result,root,mode);actions=json.loads((out/'actions.json').read_text());keys=verify_keys(trace,actions)
+ if mode=='allocated-close'and result.get('close_evidence')!=[j['close_evidence']for j in proof['joins']]:raise ValueError('stored allocated Close evidence differs from independently replayed raw receipts')
+ observations=close_observations(trace,result,actions,proof,manifest)
  peer=json.loads((out/'endpoint.json').read_text())
  if peer.get('errors')!=[]or len(peer.get('rows',[]))!=3 or any(r.get('payload_hex')!=ECHO.hex()or r.get('response_hex')!=ECHO.hex()or(r.get('received'),r.get('sent'))!=(1025,1025)for r in peer['rows']):raise ValueError('exact startup echo endpoint closure differs')
  raw=(out/'wire.pcap').read_bytes();wire=tcp_capture(raw,peer['rows'],guest_ports=range(48001,65536),initiator='guest');owners=owner_joins(trace,raw,[(r['identity']['target'],r['identity']['task'])for r in result['chain']])
@@ -382,13 +519,14 @@ def replay(root,iso,binding,out):
    if not result['exhaustion_start']<frame['serial_end']<=result['exhaustion_end']:raise ValueError('stale exhaustion capture')
    pixels=launcher_pixels(prefix,ppm,font,resolution)
    if pixels:raise ValueError('exhausted whole-launcher glyphs failed: '+str(pixels))
- return dict(proof,wire=wire,owners=owners,hardware=keys,launcher_pixels_qualified=True,browser_pixels_qualified=True,captures=10)
+ return dict(proof,wire=wire,owners=owners,hardware=keys,close_observations=observations,launcher_pixels_qualified=True,browser_pixels_qualified=True,captures=10)
 
-def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
+def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e',mode='quiesced'):
  from tls_responsiveness_gate import native_command
  from launcher_workflow_gate import pointer_park
  from check_launcher_pixels import verify as launcher_pixels
  from check_desktop_pixels import font_from_source
+ mode_value(mode)
  root,iso,binding,seed,out=map(Path,(root,iso,binding,seed,out));out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise ValueError('fresh evidence directory required')
  contract=source_contract(root);bound=frozen_binding(root,iso,binding);require_inputs(json.loads(binding.read_text()),contract)
@@ -399,7 +537,7 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
  write_gzip(out/'nvme.img',out/'seed.img.gz')
  serial=out/'serial.log';sock=Path('/tmp')/f'sex-browser-reserve-{os.getpid()}.sock';pcap=out/'wire.pcap'
  command=native_command(iso,out/'nvme.img',serial,sock,pcap,model,resolution)
- manifest=dict(binding=bound,source_sha256=contract['source_sha256'],tls_accounting=contract['tls_accounting'],serial_offset_units=SERIAL_UNITS,command=command,resolution=resolution,model=model,input_disk_sha256=input_hash,scope=SCOPE)
+ manifest=dict(evidence_version=EVIDENCE_VERSION,options=dict(mode=mode),binding=bound,source_sha256=contract['source_sha256'],tls_accounting=contract['tls_accounting'],serial_offset_units=SERIAL_UNITS,command=command,resolution=resolution,model=model,input_disk_sha256=input_hash,scope=SCOPE,monotonic_clock=MONOTONIC_CLOCK,host_monotonic_start_ns=time.monotonic_ns())
  frames=[];actions=[];result={};error=None;proc=None;q=None;started=time.monotonic();dimensions=tuple(map(int,resolution.split('x')))
  with echo_peer()as peer:
   try:
@@ -419,9 +557,19 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
      time.sleep(.02)
     raise TimeoutError('Browser reserve receipt: '+pattern)
    def key(code,pattern):
-    begin=len(text());hardware_keys(q,(code,));match=wait(pattern,begin)
+    prefix=text();begin=len(prefix);issued_ns=time.monotonic_ns();requests=[]
+    class ObservedTransport:
+     def cmd(self,command,arguments):
+      requests.append(dict(execute=command,arguments=json.loads(json.dumps(arguments))))
+      return q.cmd(command,arguments)
+    hardware_keys(ObservedTransport(),(code,));sent_ns=time.monotonic_ns();match=wait(pattern,begin)
+    receipt_ns=time.monotonic_ns();receipt_prefix=text()
     wait(rf'\[sexinput.ps2.scancode\] raw={hex(KEYS[code]|128)}'+END,begin)
-    actions.append(dict(kind='key',key=code,start=begin,end=len(text()),transport='input-send-event'));return match
+    final_prefix=text();completed_ns=time.monotonic_ns()
+    actions.append(dict(kind='key',key=code,start=begin,end=len(final_prefix),transport='input-send-event',qmp=requests,
+     start_sha256=sha(prefix.encode()),end_sha256=sha(final_prefix.encode()),receipt_pattern=pattern,
+     receipt_offset=begin+match.start(),receipt_end=begin+match.end(),receipt_serial_end=len(receipt_prefix),receipt_serial_sha256=sha(receipt_prefix.encode()),
+     issued_ns=issued_ns,sent_ns=sent_ns,receipt_observed_ns=receipt_ns,completed_ns=completed_ns));return match
    font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text())
    def capture(name,kind,target,expected,window_start=None):
     pointer_park(q,dimensions,text,wait,actions.append,len(frames));path=out/(name+'.ppm');candidate=out/(name+'.candidate.ppm')
@@ -455,7 +603,7 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
    if resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);hardware_keys(q,('down',));hardware_keys(q,('ret',))
    wait(r'\[shell.app.registered.reply\] target=15 task=\d+ surface=300 committed=1'+END)
    wait(r'\[net.source.binding.held\] target=31 [^\n]*'+END)
-   result=run(dict(root=root,text=text,wait=wait,key=key,capture=capture));result.update(ok=True,frames=frames)
+   result=run(dict(root=root,text=text,wait=wait,key=key,capture=capture,actions=actions),mode);result.update(ok=True,frames=frames)
   except Exception as exc:error=safe_exception(exc)
   finally:
    if proc is not None and proc.poll()is None:
@@ -466,21 +614,21 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
    manifest['guest_exited']=proc is not None and proc.poll()is not None
  peer_data=dict(rows=peer['rows'],errors=peer['errors']);(out/'endpoint.json').write_text(json.dumps(peer_data,indent=2)+'\n')
  (out/'actions.json').write_text(json.dumps(actions,indent=2)+'\n');(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
- manifest.update(error=error,final_disk_sha256=sha((out/'nvme.img').read_bytes()))
+ manifest.update(error=error,final_disk_sha256=sha((out/'nvme.img').read_bytes()),host_monotonic_end_ns=time.monotonic_ns())
  write_gzip(out/'nvme.img',out/'nvme.img.gz')
  names=['serial.log','wire.pcap','endpoint.json','actions.json','seed.img.gz','nvme.img.gz','result.json']+[f['screenshot']for f in frames]
  manifest['raw_sha256']={name:sha((out/name).read_bytes())for name in names if(out/name).is_file()}
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  if error:raise RuntimeError(error)
- return replay(root,iso,binding,out)
+ return replay(root,iso,binding,out,mode)
 
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--iso',required=True,type=Path);p.add_argument('--binding',required=True,type=Path);p.add_argument('--out',required=True,type=Path)
- p.add_argument('--source-disk',type=Path);p.add_argument('--resolution',choices=('1024x768','1280x800'),default='1280x800');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--check',action='store_true');a=p.parse_args()
+ p.add_argument('--source-disk',type=Path);p.add_argument('--resolution',choices=('1024x768','1280x800'),default='1280x800');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--mode',choices=MODES,default='quiesced');p.add_argument('--check',action='store_true');a=p.parse_args()
  iso,binding,out=a.iso.resolve(strict=True),a.binding.resolve(strict=True),a.out.resolve()
- if a.check:result=replay(ROOT,iso,binding,out)
+ if a.check:result=replay(ROOT,iso,binding,out,a.mode)
  else:
   if a.source_disk is None:p.error('native Browser reserve needs --source-disk')
-  result=native(ROOT,iso,binding,a.source_disk.resolve(strict=True),out,a.resolution,a.model)
+  result=native(ROOT,iso,binding,a.source_disk.resolve(strict=True),out,a.resolution,a.model,a.mode)
  print(json.dumps(result,indent=2))
 if __name__=='__main__':main()

@@ -1,5 +1,7 @@
 """Synthetic parser controls only; no guest/BOOT/native success is asserted."""
 import copy
+import contextlib
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -24,10 +26,10 @@ def cleanup_lines(row):
  text+=f'[app.private.retired] target={t} task={k} pages=2 bytes=8192 acked=31 required=31 all_flushed=1 pool_reusable=1 messages=0 signals=0 metadata=retained runtime_alloc=0\n'
  return text+f'[sext.app.pool.ready] target={t} task={k} bytes=8192 zeroed=8192 workspace_records=0 reused=1 zero_owner=sext ok=1\n'
 
-def fixture():
+def fixture(mode='quiesced'):
  text=inventory(e.FUTURE_PLANS,True);at=text.index('[net.source.binding.held]')
  text=text[:at]+'[boot.app.catalog.complete] rows=3 actual_grants=1 runtime_mint=0\n[boot.memory.authority.sealed] runtime_alloc=0 runtime_map=capability_leaf runtime_mint=0\n[bootgraph.boot.handoff] target=sexdisplay id=1 entry=0x4000\n'+text[at:]
- result={'chain':[]};tasks={15:150,30:300,31:310}
+ result={'evidence_version':2,'mode':mode,'chain':[]};tasks={15:150,30:300,31:310}
  for i,base in enumerate(ROWS):
   row=dict(base,task=tasks[base['target']]);t,k,s=row['target'],row['task'],row['surface'];start=0 if i==0 else len(text)
   if i:text+=f'[app.activation.committed] logical=15 incarnation={i+1} predecessor={row["predecessor"]} successor={t} task={k} surface={s} pages=2 runtime_alloc=0 runtime_mint=0 bsp=1\n[shell.app.relaunch] predecessor={row["predecessor"]} successor={t} task={k} surface={s} receipt_replayed=1\n'
@@ -35,15 +37,42 @@ def fixture():
   from check_tcp_capture import fingerprint
   text+=f'[net.job.state] owner=Some(Identity {{ pd: {t}, task: {k} }}) ticket={i+1} from=Connecting to=Sending staged=1025 queued=1025 received=0 scope=private_job\n[browser.net.job.bytes] ticket={i+1} length=1025 hash={hex(fingerprint(p.ECHO))} exact=1 endpoint=controlled_peer tls=0 web=0\n[browser.net.job.released] ticket={i+1} view=Verified private_job=0\n'
   begin=len(text);utc=e.MIN_SECONDS+100+i
+  text+='[browser.resources] reason=command heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 tls_pending=0 route_busy=0 providers_busy=0 queued=Some(TlsPrepare) body_visible=0\n'
   text+=f'[browser.command.started] kind=TlsPrepare accepted=1\n[trust.policy.snapshot] owner={t} task={k} seq=1 profile=1 root_bytes=376 origin=held_boot_grant\n'
   text+=clock(13,130,row['clock'],utc,i+1)+success(t,k,1,utc)
   text+=f'[entropy.seed.admitted] owner={t} task={k} ticket={i+1} bytes=32 source=held_boot_grant\n'
   text+=f'[entropy.seed.progress] owner=Some(Identity {{ pd: {t}, task: {k} }}) ticket={i+1} state=Some(Ready) produced=32 consumed=0 failure=0 private=1\n'
   text+=f'[entropy.seed.released] owner={t} task={k} ticket={i+1} service_payload=erased receipt=retained\n'
   text+=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18248 read=4096 write=2048 tx_bytes=100 utc_snapshot={utc} authenticated=0 network=0\n'
-  close_start=len(text);text+=cleanup_lines(row);result['chain'].append(dict(identity=row,start=start,work_start=begin,close_start=close_start,end=len(text)))
+  if mode=='allocated-close':
+   text+='[browser.tls.view] state=HelloPending authenticated=0 network=0\n[browser.resources] reason=change heap_used=18300 heap_free=47236 heap_total=65536 tls_payload=18192 tls_pending=1 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
+  close_start=len(text);terminal=cleanup_lines(row)
+  if mode=='allocated-close':
+   tag=f'[task.finish] pd={t} task={k} reason=0 terminal=1\n'
+   effects='[browser.tls.erased] bytes=18192 owned_storage=1\n[browser.tls.closed] pending=1 terminal=1 owned_storage=erased\n'
+   for name,suffix in[('trust',''),('clock',''),('entropy',' private_payload=erased')]:effects+=f'[browser.{name}.closed] target={t} task={k} pending=0 terminal=1{suffix}\n'
+   effects+=f'[browser.clipboard.closed] target={t} task={k} owned_scratch=erased terminal=1\n[browser.resources] reason=close heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 tls_pending=0 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
+   terminal='[sexinput.ps2.scancode] raw=0x57\n'+terminal.replace(tag,effects+tag,1)+'[sexinput.ps2.scancode] raw=0xd7\n'
+  text+=terminal;result['chain'].append(dict(identity=row,start=start,work_start=begin,close_start=close_start,end=len(text)))
  result['exhaustion_start']=len(text);text+='[launcher.text.row] index=10 row=4 name=Open Browser status=CLOSED / RESERVE EXHAUSTED\n[launcher.execute.denied] idx=10 status=CLOSED / RESERVE EXHAUSTED reason=boot_reserve_exhausted\n';result['exhaustion_end']=len(text)
  return text,result
+
+def rewrite(trace,result,old,new):
+ """Change raw fixtures while preserving correct independent phase cuts."""
+ at=trace.index(old);stop=at+len(old);delta=len(new)-len(old);changed=copy.deepcopy(result)
+ def move(value):return value if value<=at else value+delta if value>=stop else at+len(new)
+ for step in changed['chain']:
+  for key in('start','work_start','close_start','end'):step[key]=move(step[key])
+ for key in('exhaustion_start','exhaustion_end'):changed[key]=move(changed[key])
+ return trace[:at]+new+trace[stop:],changed
+
+def timing_fixture(trace,result,proof):
+ actions=[];result=copy.deepcopy(result)
+ for index,(step,join)in enumerate(zip(result['chain'],proof['joins'])):
+  identity=step['identity'];target,task,surface=(identity[k]for k in('target','task','surface'));start,end=step['close_start'],step['end'];request=join['close_evidence']['offsets']['request'];request_end=trace.index('\n',request);pool=join['cleanup']['pool_offset'];pool_end=trace.index('\n',pool);issued=(index+1)*1000
+  key_index=len(actions);actions.append(dict(kind='key',key='f11',transport='input-send-event',start=start,end=end,start_sha256=p.sha(trace[:start].encode()),end_sha256=p.sha(trace[:end].encode()),receipt_pattern=rf'\[shell.app.close.request\] target={target} task={task} surface={surface}'+p.END,receipt_offset=request,receipt_end=request_end,receipt_serial_end=request_end+1,receipt_serial_sha256=p.sha(trace[:request_end+1].encode()),issued_ns=issued,sent_ns=issued+1,receipt_observed_ns=issued+2,completed_ns=issued+3,qmp=[dict(execute='input-send-event',arguments=dict(events=[dict(type='key',data=dict(down=down,key=dict(type='qcode',data='f11')))for down in(True,False)]))]))
+  step['close_observation_index']=len(actions);actions.append(dict(kind='browser_close',mode='allocated-close',target=target,task=task,surface=surface,key_index=key_index,start=start,end=end,serial_sha256=p.sha(trace[:end].encode()),request_offset=request,pool_offset=pool,pool_end=pool_end,issued_ns=issued,request_observed_ns=issued+2,pool_observed_ns=issued+4,key_to_request_ns=2,key_to_pool_ns=4))
+ return result,actions,dict(monotonic_clock=p.MONOTONIC_CLOCK,host_monotonic_start_ns=100,host_monotonic_end_ns=10000)
 
 class BrowserReserve(unittest.TestCase):
  def setUp(self):
@@ -54,10 +83,73 @@ class BrowserReserve(unittest.TestCase):
   for target,value in[(p,'browser_rows'),(p.sources,'plans_from_catalog')]:
    replacement=ROWS if value=='browser_rows'else e.FUTURE_PLANS
    patcher=patch.object(target,value,return_value=replacement);patcher.start();self.addCleanup(patcher.stop)
- def verify(self,text,result):return p.verify(text,result,self.root)
+ def verify(self,text,result,mode='quiesced'):return p.verify(text,result,self.root,mode)
  def test_complete_three_unequal_tasks_and_cumulative_cleanup(self):
   text,result=fixture();checked=self.verify(text,result)
   self.assertEqual(checked['targets'],[15,30,31]);self.assertEqual([s['identity']['task']for s in checked['joins']],[150,300,310]);self.assertFalse(checked['browser_pixels_qualified']);self.assertTrue(checked['reserve_exhausted'])
+ def test_allocated_close_all_three_requires_actual_owned_payload_not_pipe_metadata(self):
+  text,result=fixture('allocated-close');proof=self.verify(text,result,'allocated-close')
+  self.assertEqual(proof['mode'],'allocated-close')
+  for join in proof['joins']:
+   evidence=join['close_evidence'];self.assertEqual((evidence['task_bytes'],evidence['private_bytes'],evidence['erased_payload_bytes']),(10000,18248,18192));self.assertEqual(evidence['live_resources']['pending'],1);self.assertEqual(evidence['zero_resources']['used'],0)
+ def test_allocated_close_rejects_prior_q_expiry_reprepare_zero_and_wrong_erasure(self):
+  for old,new in[('state=HelloPending authenticated=0 network=0','state=TimedOut authenticated=0 network=0'),('state=HelloPending authenticated=0 network=0','state=Cancelled authenticated=0 network=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=18248'),('[browser.tls.closed] pending=1','[browser.tls.closed] pending=0'),('tls_payload=18192 tls_pending=1','tls_payload=0 tls_pending=0'),('reason=change heap_used=18300','reason=clear heap_used=18300')]:
+   text,result=fixture('allocated-close');bad,changed=rewrite(text,result,old,new)
+   with self.subTest(old=old,new=new),self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
+  for event in['[sexinput.ps2.scancode] raw=0x10\n','[browser.tls.erased] bytes=18192 owned_storage=1\n','[browser.command.queued] kind=TlsPrepare document=0 retained=1 accepted_replay=0\n']:
+   text,result=fixture('allocated-close');marker='[browser.resources] reason=change';bad,changed=rewrite(text,result,marker,event+marker)
+   with self.subTest(event=event),self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
+ def test_allocated_close_rejects_stale_crossed_and_nonzero_terminal_resources(self):
+  for old,new in[('reason=change heap_used=18300 heap_free=47236','reason=change heap_used=1 heap_free=65535'),('reason=close heap_used=0 heap_free=65536','reason=close heap_used=1 heap_free=65535'),('reason=close heap_used=0','reason=change heap_used=0'),('target=30 task=300 pending=0 terminal=1','target=30 task=30 pending=0 terminal=1'),('heap_total=65536 tls_payload=18192','heap_total=65536 target=31 task=310 tls_payload=18192')]:
+   text,result=fixture('allocated-close');bad,changed=rewrite(text,result,old,new)
+   with self.subTest(old=old),self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
+  text,result=fixture('allocated-close');live=next(line+'\n'for line in text.splitlines()if line.startswith('[browser.resources] reason=change'))
+  bad,changed=rewrite(text,result,live,'');marker='[browser.tls.prepared]';bad,changed=rewrite(bad,changed,marker,live+marker)
+  with self.assertRaisesRegex(ValueError,'stale/quiesced/not allocated'):self.verify(bad,changed,'allocated-close')
+ def test_allocated_close_rejects_early_pool_and_next_activation(self):
+  text,result=fixture('allocated-close');pool=next(line+'\n'for line in text.splitlines()if line.startswith('[sext.app.pool.ready]'))
+  bad,changed=rewrite(text,result,pool,'');marker='[task.finish] pd=15';bad,changed=rewrite(bad,changed,marker,pool+marker)
+  with self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
+  text,result=fixture('allocated-close');activation=next(line+'\n'for line in text.splitlines()if line.startswith('[app.activation.committed]'))
+  bad,changed=rewrite(text,result,activation,'');marker='[sext.app.pool.ready] target=15';bad,changed=rewrite(bad,changed,marker,activation+marker)
+  with self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
+ def test_explicit_mode_and_new_schema_cannot_relabel_quiesced_158(self):
+  good=dict(evidence_version=2,options=dict(mode='allocated-close'));result=dict(evidence_version=2,mode='allocated-close');self.assertEqual(p.evidence_mode(good,result,'allocated-close'),'allocated-close')
+  for manifest,record,requested in[({},result,'allocated-close'),(dict(good,evidence_version=1),result,'allocated-close'),(good,dict(result,mode='quiesced'),'allocated-close'),(good,result,'quiesced'),(dict(good,options={}),result,'allocated-close')]:
+   with self.subTest(manifest=manifest,record=record),self.assertRaises(ValueError):p.evidence_mode(manifest,record,requested)
+  text,result=fixture();result['mode']='allocated-close'
+  with self.assertRaises(ValueError):self.verify(text,result,'allocated-close')
+ def test_host_close_observations_join_exact_hardware_request_pool_and_raw_prefixes(self):
+  text,result=fixture('allocated-close');proof=self.verify(text,result,'allocated-close');result,actions,manifest=timing_fixture(text,result,proof)
+  observed=p.close_observations(text,result,actions,proof,manifest);self.assertEqual([r['task']for r in observed['rows']],[150,300,310]);self.assertEqual([r['key_to_pool_ns']for r in observed['rows']],[4,4,4]);self.assertIn('not hard realtime',observed['scope'])
+ def test_preexisting_close_request_cannot_be_claimed_by_later_hardware_f11(self):
+  text,result=fixture('allocated-close');edge='[sexinput.ps2.scancode] raw=0x57\n';request='[shell.app.close.request] target=15 task=150 surface=300\n'
+  bad,result=rewrite(text,result,edge+request,request+edge);proof=self.verify(bad,result,'allocated-close');result,actions,manifest=timing_fixture(bad,result,proof)
+  actions[0]['start']=actions[0]['receipt_end']+1;actions[0]['start_sha256']=p.sha(bad[:actions[0]['start']].encode())
+  self.assertTrue(p.verify_keys(bad,[actions[0]])['ok'])
+  with self.assertRaisesRegex(ValueError,'F11 lacks the exact complete'):p.close_observations(bad,result,actions,proof,manifest)
+ def test_reversed_f11_edges_reject_even_with_recomputed_serial_prefixes(self):
+  text,result=fixture('allocated-close');proof=self.verify(text,result,'allocated-close')
+  a=text.index('[sexinput.ps2.scancode] raw=0x57');b=text.index('[sexinput.ps2.scancode] raw=0xd7')
+  bad=text[:a]+text[a:b].replace('raw=0x57','raw=0xd7',1)+text[b:].replace('raw=0xd7','raw=0x57',1)
+  changed,actions,manifest=timing_fixture(bad,result,proof)
+  with self.assertRaisesRegex(ValueError,'reversed physical'):p.close_observations(bad,changed,actions,proof,manifest)
+ def test_host_observations_reject_forged_clock_cuts_subjects_and_non_f11(self):
+  text,result=fixture('allocated-close');proof=self.verify(text,result,'allocated-close');result,actions,manifest=timing_fixture(text,result,proof)
+  for index,key,value in[(0,'key','q'),(0,'issued_ns',True),(0,'start',True),(0,'issued_ns',float('nan')),(0,'receipt_observed_ns',999),(0,'receipt_serial_sha256','0'*64),(0,'receipt_serial_end',1),(0,'qmp',[dict(execute='send-key',arguments={})]),(1,'task',15),(1,'pool_observed_ns',999),(1,'key_to_pool_ns',True),(1,'key_to_pool_ns',1),(1,'serial_sha256','0'*64),(1,'key_index',True)]:
+   changed=copy.deepcopy(actions);changed[index][key]=value
+   with self.subTest(key=key,value=value),self.assertRaises(ValueError):p.close_observations(text,result,changed,proof,manifest)
+  with self.assertRaises(ValueError):p.close_observations(text,result,actions,proof,dict(manifest,host_monotonic_end_ns=1000))
+  with self.assertRaisesRegex(ValueError,'unrecorded/extra/truncated'):
+   p.close_observations(text+'[sexinput.ps2.scancode] raw=0x57\n',result,actions,proof,manifest)
+  changed=copy.deepcopy(actions);changed.append(copy.deepcopy(actions[0]))
+  with self.assertRaises(ValueError):p.close_observations(text,result,changed,proof,manifest)
+ def test_check_cli_forwards_explicit_mode_without_launching_guest(self):
+  iso=self.root/'fixture.iso';binding=self.root/'binding.json';out=self.root/'evidence';iso.write_bytes(b'iso');binding.write_text('{}')
+  for mode in('quiesced','allocated-close'):
+   argv=['browser_reserve_gate.py','--iso',str(iso),'--binding',str(binding),'--out',str(out),'--mode',mode,'--check']
+   with self.subTest(mode=mode),patch.object(sys,'argv',argv),patch.object(p,'replay',return_value=dict(ok=True,mode=mode))as replay,patch.object(p.subprocess,'Popen',side_effect=AssertionError('read-only check cannot launch')),contextlib.redirect_stdout(io.StringIO()):
+    p.main();replay.assert_called_once_with(p.ROOT,iso.resolve(),binding.resolve(),out.resolve(),mode)
  def test_preparation_counts_source_pipe_metadata_not_only_queue_arrays(self):
   accounting=p.tls_accounting(self.root)
   self.assertEqual(accounting['pipe_bytes'],2*accounting['queue_bytes']+accounting['pipe_metadata_bytes'])
