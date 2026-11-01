@@ -8,6 +8,7 @@ silkbar-model = { path = "../../crates/silkbar-model", default-features = false 
 sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
 sex-graphics = { path = "../../crates/sex-graphics", default-features = false }
 sex-rt = { path = "../../sex-rt" }
+sex-time = { path = "../../crates/sex-time", default-features = false }
 
 [features]
 default = ["no_std"]

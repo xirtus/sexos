@@ -19,7 +19,7 @@ fn wire(state:State,seconds:u32,sequence:u32)->[u64;3]{let u=Update{state,second
 fn receive(c:&mut CivilClock,args:[u64;3],now:u64)->Result<Applied,Reject>{c.receive(OWNER,OWNER,args,MIN,MAX,now)}
 fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
 #[test]fn initial_unknown_uses_no_old_demo_digits_and_encoder_keeps_16byte_shape(){
- let c=CivilClock::new();assert_eq!((c.state(),c.seconds(),c.sequence(),c.high_water(),c.is_stale()),(State::Unknown,0,0,0,false));assert_eq!(civil_clock_lines(&c),[ *b"UTC unknown  ",*b"src? prec?   "]);
+ let c=CivilClock::new();assert_eq!((c.state(),c.seconds(),c.sequence(),c.high_water(),c.is_stale()),(State::Unknown,0,0,0,false));assert_eq!(civil_clock_lines(&c),[ *b"UTC unknown  ",*b"Awaiting UTC "]);
  assert_eq!(core::mem::size_of::<SilkBarUpdate>(),16);
  for state in[State::Unknown,State::Snapshot,State::Unavailable,State::Rollback,State::Exhausted]{let seconds=if state==State::Snapshot{MIN}else{0};let args=wire(state,seconds,17);assert_eq!(args,[11,((0x10|state as u64)<<32)|seconds as u64,17]);}
 }
@@ -43,6 +43,15 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
  assert_eq!(bar.civil_clock,before);
  assert!(bar.civil_clock.health(10+2*HEALTH_TICKS+1));
  assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN+1,4),10+2*HEALTH_TICKS+2),Ok((Applied::New,true)));
+}
+#[test]fn same_clock_time_on_later_utc_day_requests_a_date_repaint(){
+ let mut bar=DEFAULT_SILK_BAR;
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN,1),0),Ok((Applied::New,true)));
+ let before=civil_clock_lines(&bar.civil_clock);
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN+86_400,2),1),Ok((Applied::New,true)));
+ let after=civil_clock_lines(&bar.civil_clock);assert_eq!(before[0],after[0]);assert_ne!(before[1],after[1]);
+ assert_eq!(text(&after[1]),"02 JAN 2020");
+ assert_eq!(handle_civil_clock_update(&mut bar,6,6,wire(State::Snapshot,MIN+86_400,3),2),Ok((Applied::New,false)));
 }
 #[test]fn every_source_label_and_stale_recovery_change_requests_pixels(){
  let mut bar=DEFAULT_SILK_BAR;
@@ -118,7 +127,7 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
     let col=(x-cx)/6;let px=(x-cx)%6;let glyph=(lines[row][col]-32)as usize;
     if px<5&&(FONT_ASCII_5X7[glyph][y-yy]>>(4-px))&1!=0{expected=Some(DEFAULT_THEME.text);}
    }}
-   assert_eq!(clock_fg_at(x,y,&bar),expected,"width{width} state{state:?} x{x} y{y}");
+   assert_eq!(clock_fg_at(x,y,&bar,&lines),expected,"width{width} state{state:?} x{x} y{y}");
   }}
  }}
 }
@@ -137,4 +146,48 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
  assert_eq!(DRAW_LOG.with(|l|l.borrow().len()),3);
  assert!(DRAW_LOG.with(|l|l.borrow()[2].contains("sequence=1 state=Unknown seconds=0 stale=1 pixels=written")));
  bar.civil_enabled=false;civil_clock_drawn(&bar,1280,800,"full");assert_eq!(DRAW_LOG.with(|l|l.borrow().len()),3);
+}
+
+
+#[test]fn date_caption_matches_independent_utc_calendar_vectors(){
+ // Literal seconds/captions generated independently with Python datetime UTC;
+ // exercise the actual formatter and receiver, not a copied calendar algorithm.
+ for(seconds,date,time)in[
+  (1577836800,"01 JAN 2020","UTC 00:00:00"),
+  (1580515200,"01 FEB 2020","UTC 00:00:00"),
+  (1583020800,"01 MAR 2020","UTC 00:00:00"),
+  (1585699200,"01 APR 2020","UTC 00:00:00"),
+  (1588291200,"01 MAY 2020","UTC 00:00:00"),
+  (1590969600,"01 JUN 2020","UTC 00:00:00"),
+  (1593561600,"01 JUL 2020","UTC 00:00:00"),
+  (1596240000,"01 AUG 2020","UTC 00:00:00"),
+  (1598918400,"01 SEP 2020","UTC 00:00:00"),
+  (1601510400,"01 OCT 2020","UTC 00:00:00"),
+  (1604188800,"01 NOV 2020","UTC 00:00:00"),
+  (1606780800,"01 DEC 2020","UTC 00:00:00"),
+  (1582934399,"28 FEB 2020","UTC 23:59:59"),
+  (1582934400,"29 FEB 2020","UTC 00:00:00"),
+  (1583020800,"01 MAR 2020","UTC 00:00:00"),
+  (1677628799,"28 FEB 2023","UTC 23:59:59"),
+  (1677628800,"01 MAR 2023","UTC 00:00:00"),
+  (1709164799,"28 FEB 2024","UTC 23:59:59"),
+  (1709164800,"29 FEB 2024","UTC 00:00:00"),
+  (1709251200,"01 MAR 2024","UTC 00:00:00"),
+  (1793491200,"01 NOV 2026","UTC 00:00:00"),
+  (4102444799,"31 DEC 2099","UTC 23:59:59"),
+ ]{
+  let mut c=CivilClock::new();receive(&mut c,wire(State::Snapshot,seconds,1),0).unwrap();
+  let lines=civil_clock_lines(&c);assert_eq!(text(&lines[0]),time);assert_eq!(text(&lines[1]),date);
+  assert_eq!(lines[1],civil_clock_date(seconds));assert_eq!(&lines[1][11..],b"  ");
+ }
+}
+#[test]fn every_unhealthy_state_erases_the_previous_date_and_keeps_source_bounds(){
+ for(state,caption)in[(State::Unknown,"Awaiting UTC"),(State::Unavailable,"Source error"),(State::Rollback,"Time blocked"),(State::Exhausted,"Updates ended")]{
+  let mut c=CivilClock::new();receive(&mut c,wire(State::Snapshot,1793491200,1),0).unwrap();assert_eq!(text(&civil_clock_lines(&c)[1]),"01 NOV 2026");
+  receive(&mut c,wire(state,0,2),1).unwrap();let lines=civil_clock_lines(&c);
+  assert_eq!(text(&lines[1]),caption);assert!(!lines[0].contains(&b':'));assert!(!lines[1].iter().any(u8::is_ascii_digit));
+ }
+ let mut c=CivilClock::new();receive(&mut c,wire(State::Snapshot,MIN,1),0).unwrap();assert!(c.health(HEALTH_TICKS+1));
+ assert_eq!(text(&civil_clock_lines(&c)[1]),"Sample stale");
+ for seconds in [MIN-1,MAX+1]{let mut c=CivilClock::new();assert!(receive(&mut c,wire(State::Snapshot,seconds,1),0).is_err());assert_eq!(text(&civil_clock_lines(&c)[1]),"Awaiting UTC");}
 }

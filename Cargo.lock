@@ -844,6 +844,7 @@ dependencies = [
  "sex-graphics",
  "sex-pdx",
  "sex-rt",
+ "sex-time",
  "silkbar-model",
 ]
 

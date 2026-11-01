@@ -12,8 +12,65 @@ from clock_source_evidence import validate_clock_sources
 
 STATES={0:'Unknown',1:'Snapshot',2:'Unavailable',3:'Rollback',4:'Exhausted'}
 
+# Fixed English presentation, independent of the guest formatter and locale.
+MONTHS=('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC')
+LEGACY_PROFILE='q35-caption-v1'
+DATE_PROFILE='date-caption-v1'
+
+def _function(source,name):
+ # These finite renderer helpers contain no braces in strings. Strip comments
+ # before balancing so documentation cannot alter the accepted function body.
+ source=re.sub(r'//[^\n]*','',source)
+ matches=list(re.finditer(r'\bfn '+re.escape(name)+r'\s*\(',source))
+ assert len(matches)==1,'missing/ambiguous renderer helper: '+name
+ start=matches[0].start();opening=source.index('{',matches[0].end());depth=1;at=opening+1
+ while depth and at<len(source):
+  depth+=(source[at]=='{')-(source[at]=='}');at+=1
+ assert depth==0,'unterminated renderer helper: '+name
+ return source[start:at]
+
+def _caption_profile(display):
+ lines=_function(display,'civil_clock_lines')
+ match=re.search(r'match clock\.state\(\)\s*\{(.*?)\n\s*\};',lines,re.S)
+ assert match,'unsupported civil state selector'
+ arm=re.compile(r'State::(Snapshot|Rollback|Exhausted|Unavailable|Unknown)(\s+if\s+clock\.is_stale\(\))?\s*=>\s*\(b"([^"]*)",\s*b"([^"]*)"\)\s*,')
+ found=list(arm.finditer(match[1]));assert re.sub(r'\s+','',arm.sub('',match[1]))=='','unknown civil state arm'
+ rows=[(m[1],bool(m[2]),m[3],m[4])for m in found]
+ first=[('Snapshot',False,'UTC 00:00:00'),('Rollback',False,'UTC blocked'),('Exhausted',False,'UTC ended'),('Unavailable',False,'UTC unknown'),('Unknown',True,'UTC stale'),('Unknown',False,'UTC unknown')]
+ legacy=['q35 1s snap','q35 1s stop','src? prec?','q35 1s fail','q35 1s old','src? prec?']
+ modern=['','Time blocked','Updates ended','Source error','Sample stale','Awaiting UTC']
+ expected=lambda captions:[(*a,b)for a,b in zip(first,captions)]
+ compact=lambda value:re.sub(r'\s+','',value)
+ if rows==expected(legacy):
+  assert 'civil_clock_date('not in lines,'ambiguous date formatter with legacy caption'
+  assert 'if bar.civil_enabled {return civil_clock_fg_at(x,y,bar);}'in display,'unknown legacy civil dispatch'
+  return LEGACY_PROFILE
+ assert rows==expected(modern),'unknown/ambiguous civil caption profile'
+ code=compact(lines)
+ assert 'ifclock.state()==State::Snapshot{lines[1]=civil_clock_date(clock.seconds());'in code,'date is not bound exclusively to the healthy snapshot'
+ assert code.count('civil_clock_date(')==1,'date formatter called more than once per snapshot'
+ date=_function(display,'civil_clock_date')
+ assert re.search(r'fn civil_clock_date\(seconds:u32\)->\[u8;13\]',date),'unsupported finite date signature'
+ assert 'sex_time::SexTimestamp::from_unix(seconds as i64,0)'in date and '.and_then(sex_time::Gregorian::from_timestamp)'in date,'date conversion not bound to actual sex-time API'
+ assert tuple(re.findall(r'b"([A-Z]{3})"',date))==MONTHS,'unknown/ambiguous English month table'
+ for name,result in(('civil_clock_fg_at','Option<u32>'),('clock_fg_at','Option<u32>'),('top_strip_pixel','u32')):
+  helper=compact(_function(display,name))
+  assert 'bar:&SilkBar,lines:&[[u8;13];2])->'+result in helper,'uncached civil pixel signature: '+name
+  assert 'civil_clock_lines('not in helper,'formatter invoked per pixel: '+name
+ assert 'ifbar.civil_enabled{returncivil_clock_fg_at(x,y,bar,lines);}'in compact(_function(display,'clock_fg_at')),'cached civil dispatch missing'
+ for name,bar in(('render','bar'),('redraw_top_strip','bar'),('top_strip_render_proof','proof_bar')):
+  helper=compact(_function(display,name));cache='letclock_lines=civil_clock_lines(&'+bar+'.civil_clock);'
+  assert helper.count(cache)==1 and helper.count('civil_clock_lines(')==1,'missing/duplicate per-pass clock snapshot: '+name
+  assert helper.index(cache)<helper.index('foryin0..'),'calendar snapshot moved into pixel iteration: '+name
+  assert ',&clock_lines)'in helper,'cached rows not passed to actual renderer: '+name
+ return DATE_PROFILE
+
 def source_contract(root):
  root=Path(root);names=['crates/silkbar-model/src/lib.rs','crates/silkbar-model/src/civil_clock.rs','crates/sex-pdx/src/clock_source.rs','kernel/src/clock_source.rs','kernel/src/init.rs','servers/silkbar/src/main.rs','servers/silkbar/src/civil_clock.rs','servers/sexdisplay/src/main.rs','scripts/silkbar_clock_gate.py','scripts/clock_source_evidence.py','scripts/browser_source_evidence.py','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/browser_sources.rs'];texts={n:(root/n).read_text()for n in names};model=texts[names[0]];display=texts['servers/sexdisplay/src/main.rs'];abi=texts['crates/sex-pdx/src/clock_source.rs']
+ profile=_caption_profile(display)
+ if profile==DATE_PROFILE:
+  for name in('servers/sexdisplay/Cargo.toml','crates/sex-time/Cargo.toml','crates/sex-time/src/lib.rs'):texts[name]=(root/name).read_text()
+  assert re.search(r'^sex-time\s*=\s*\{\s*path\s*=\s*"../../crates/sex-time",\s*default-features\s*=\s*false\s*\}',texts['servers/sexdisplay/Cargo.toml'],re.M),'Display calendar dependency not bound to local no_std sex-time'
  dimensions={}
  for name in('CHIP_X3','CHIP_Y','CLOCK_W','CHIP_H'):
   m=re.search(r'pub const '+name+r': usize = (\d+);',model);assert m,'missing source-bound civil geometry';dimensions[name]=int(m[1])
@@ -22,10 +79,22 @@ def source_contract(root):
  for name in('MIN_SECONDS','MAX_SECONDS'):
   m=re.search(r'pub const '+name+r': u64 = ([\d_]+);',abi);assert m;bounds[name]=int(m[1].replace('_',''))
  assert 'pub const STATUS_BAR: Identity = Identity { pd: 6, task: 6 };'in abi
- for literal in('UTC 00:00:00','q35 1s snap','UTC unknown','src? prec?','q35 1s fail','UTC stale','q35 1s old','UTC blocked','q35 1s stop','UTC ended'):
-  assert 'b"'+literal+'"'in display,'civil label changed: '+literal
- assert 'if bar.civil_enabled {return civil_clock_fg_at(x,y,bar);}'in display and 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display
- return dict(font=font_from_source(display),dimensions=dimensions,color=int(color[1],16)&0xffffff,bounds=bounds,source_sha256={n:hashlib.sha256(t.encode()).hexdigest()for n,t in texts.items()})
+ assert 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display
+ return dict(font=font_from_source(display),dimensions=dimensions,color=int(color[1],16)&0xffffff,bounds=bounds,caption_profile=profile,source_sha256={n:hashlib.sha256(t.encode()).hexdigest()for n,t in texts.items()})
+
+def expected_clock_lines(contract,state,seconds,stale=False):
+ profile=contract['caption_profile'];assert profile in(LEGACY_PROFILE,DATE_PROFILE),'unknown civil caption profile'
+ if state=='Snapshot':
+  assert type(seconds)is int and contract['bounds']['MIN_SECONDS']<=seconds<=contract['bounds']['MAX_SECONDS'],'snapshot outside validated source range'
+  date=datetime.datetime.fromtimestamp(seconds,datetime.timezone.utc)
+  first=f'UTC {date.hour:02d}:{date.minute:02d}:{date.second:02d}'
+  second='q35 1s snap'if profile==LEGACY_PROFILE else f'{date.day:02d} {MONTHS[date.month-1]} {date.year:04d}'
+  return first,second
+ assert seconds==0,'unhealthy civil state retained a numeric date'
+ if profile==LEGACY_PROFILE:
+  rows={'Unavailable':('UTC unknown','q35 1s fail'),'Rollback':('UTC blocked','q35 1s stop'),'Exhausted':('UTC ended','src? prec?'),'Unknown':('UTC stale','q35 1s old')if stale else('UTC unknown','src? prec?')}
+ else:rows={'Unavailable':('UTC unknown','Source error'),'Rollback':('UTC blocked','Time blocked'),'Exhausted':('UTC ended','Updates ended'),'Unknown':('UTC stale','Sample stale')if stale else('UTC unknown','Awaiting UTC')}
+ assert state in rows,'unknown civil state';return rows[state]
 
 def inspect_publications(trace):
  """Validate all present prefixes; a trailing staged/enqueued item may await draw."""
@@ -63,8 +132,10 @@ def inspect_publications(trace):
  assert '[sexdisplay.clock.civil.rejected]'not in trace,'unexpected native civil rejection'
  return admitted
 
-def repaint_metrics(trace):
+def repaint_metrics(trace,contract=None):
  """Join repaint decisions to real admissions; a decision is never a draw."""
+ if contract is None:contract=source_contract(Path(__file__).resolve().parents[1])
+ assert contract['caption_profile']in(LEGACY_PROFILE,DATE_PROFILE),'unknown repaint caption profile'
  admitted=inspect_publications(trace)
  pattern=r'\[sexdisplay.clock.civil.applied\] pd=6 task=6 sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) seconds=(\d+) high_water=\d+ stale=0 source_known=[01] source=(?:q35_cmos_utc|unknown) precision=[01] snapshot_only=1 pixels=unconfirmed repaint=([01])(?=\n|$)'
  updates=list(re.finditer(pattern,trace));assert len(updates)==len(admitted),'missing/malformed civil repaint decision'
@@ -75,7 +146,7 @@ def repaint_metrics(trace):
  # Ordinary-image startup paints Unknown. Canonical receiver health may later
  # hide Snapshot; merge those transitions before checking both renderer rows.
  state,seconds,is_stale,sequence='Unknown',0,False,0;requested=0
- def visible(s,t,old):return(s,t%86400 if s=='Snapshot'else 0,old if s=='Unknown'else False)
+ def visible(s,t,old):return(s,(t if contract['caption_profile']==DATE_PROFILE else t%86400)if s=='Snapshot'else 0,old if s=='Unknown'else False)
  for _,kind,event in sorted([(m.start(),'update',m)for m in updates]+[(m.start(),'stale',m)for m in stale]+[(m.start(),'draw',m)for m in draws]):
   if kind=='draw':
    assert(int(event[1]),event[2],int(event[3]),bool(int(event[4])))==(sequence,state,seconds,is_stale),'completed draw differs from actual receiver/health state'
@@ -102,13 +173,7 @@ def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
    a=admitted.get(seq);assert a and a['offset']<draw.start(),'draw lacks exact admitted source sequence'
    assert (state,seconds)==(a['state'],a['seconds'])if not stale else state=='Unknown'and seconds==0 and a['state']=='Snapshot','draw differs from admitted state'
   else:assert state=='Unknown'and seconds==0 and not stale,'initial clock invents civil time'
-  if state=='Snapshot':
-   assert contract['bounds']['MIN_SECONDS']<=seconds<=contract['bounds']['MAX_SECONDS'];first='UTC '+datetime.datetime.fromtimestamp(seconds,datetime.timezone.utc).strftime('%H:%M:%S');second='q35 1s snap'
-  elif state=='Unavailable':first,second='UTC unknown','q35 1s fail'
-  elif state=='Rollback':first,second='UTC blocked','q35 1s stop'
-  elif state=='Exhausted':first,second='UTC ended','src? prec?'
-  elif stale:first,second='UTC stale','q35 1s old'
-  else:first,second='UTC unknown','src? prec?'
+  first,second=expected_clock_lines(contract,state,seconds,stale)
   wanted=set()
   for row,text in enumerate((first,second)):
    for col,ch in enumerate(text):
@@ -120,5 +185,5 @@ def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
    for xx in range(w):
     at=((y+yy)*width+x+xx)*3;mismatches+=(raw[at:at+3]==color)!=((xx,yy)in wanted)
   assert wanted and not mismatches,'civil foreground/erasure mismatches='+str(mismatches)
-  return dict(ok=True,errors=[],sequence=seq,state=state,seconds=seconds,stale=stale,lines=[first,second],geometry=dict(x=x,y=y,w=w,h=h),checked_pixels=w*h,expected_ink_pixels=len(wanted),draw_offset=draw.start(),scope='Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication.')
+  return dict(ok=True,errors=[],caption_profile=contract['caption_profile'],sequence=seq,state=state,seconds=seconds,stale=stale,lines=[first,second],geometry=dict(x=x,y=y,w=w,h=h),checked_pixels=w*h,expected_ink_pixels=len(wanted),draw_offset=draw.start(),scope='Exact BOOT source/publication/admission/completed draw and full clock-cell foreground; snapshot precision1s, no interpolation or clock authentication.')
  except(AssertionError,ValueError,KeyError,IndexError,TypeError,OverflowError)as error:return dict(ok=False,errors=[str(error)])

@@ -877,8 +877,8 @@ fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar) -> Option<u32> {
 }
 
 /// Same visible top-strip content for full and incremental redraws.
-fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar) -> u32 {
-    if let Some(fg) = clock_fg_at(x, y, bar) { fg }
+fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2]) -> u32 {
+    if let Some(fg) = clock_fg_at(x, y, bar, lines) { fg }
     else if let Some(fg) = bell_badge_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
@@ -1361,26 +1361,38 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     if bit != 0 { Some(surf.text_color) } else { background }
 }
 
-/// Returns `Some(fg)` if pixel (x, y) is a clock-digit foreground pixel,
-/// or `None` if it is background/not in the clock area.
-/// This is called inline during rendering to avoid a separate overlay pass
-/// that would create a tear window between bar-fill and clock-overlay.
-/// Two finite ASCII rows share the ordinary clock chip and renderer font.
-/// The wire seconds are already source-range checked; modulo is a UTC view of
-/// that one sample, never elapsed time or an estimate from rendering cadence.
+/// Gregorian UTC caption derived only from the same accepted whole-second sample.
+/// Formatting is not a source query or an authority/range admission decision.
+fn civil_clock_date(seconds:u32)->[u8;13]{
+    const MONTHS:[[u8;3];12]=[*b"JAN",*b"FEB",*b"MAR",*b"APR",*b"MAY",*b"JUN",*b"JUL",*b"AUG",*b"SEP",*b"OCT",*b"NOV",*b"DEC"];
+    let unknown=*b"Date unknown ";
+    let Some(date)=sex_time::SexTimestamp::from_unix(seconds as i64,0)
+        .and_then(sex_time::Gregorian::from_timestamp) else{return unknown;};
+    if !(1..=9999).contains(&date.year){return unknown;}
+    let Some(month)=date.month.checked_sub(1).and_then(|m|MONTHS.get(m as usize)) else{return unknown;};
+    let mut line=[b' ';13];
+    line[0]=b'0'+date.day/10;line[1]=b'0'+date.day%10;
+    line[3..6].copy_from_slice(month);
+    let year=date.year as u32;
+    for(at,divisor)in[(7,1000),(8,100),(9,10),(10,1)]{line[at]=b'0'+(year/divisor%10)as u8;}
+    line
+}
+/// Two padded ASCII rows derived from the accepted sample/state. Renderers
+/// snapshot these once per pass, never recompute the calendar per pixel.
 fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]{
     use silkbar_model::civil_clock::State;
     let mut lines=[[b' ';13];2];
     let (first,second):(&[u8],&[u8])=match clock.state(){
-        State::Snapshot=>(b"UTC 00:00:00",b"q35 1s snap"),
-        State::Rollback=>(b"UTC blocked",b"q35 1s stop"),
-        State::Exhausted=>(b"UTC ended",b"src? prec?"),
-        State::Unavailable=>(b"UTC unknown",b"q35 1s fail"),
-        State::Unknown if clock.is_stale()=>(b"UTC stale",b"q35 1s old"),
-        State::Unknown=>(b"UTC unknown",b"src? prec?"),
+        State::Snapshot=>(b"UTC 00:00:00",b""),
+        State::Rollback=>(b"UTC blocked",b"Time blocked"),
+        State::Exhausted=>(b"UTC ended",b"Updates ended"),
+        State::Unavailable=>(b"UTC unknown",b"Source error"),
+        State::Unknown if clock.is_stale()=>(b"UTC stale",b"Sample stale"),
+        State::Unknown=>(b"UTC unknown",b"Awaiting UTC"),
     };
     lines[0][..first.len()].copy_from_slice(first);lines[1][..second.len()].copy_from_slice(second);
     if clock.state()==State::Snapshot{
+        lines[1]=civil_clock_date(clock.seconds());
         let day=clock.seconds()%86_400;
         for(at,value)in[(4,day/3600),(7,day/60%60),(10,day%60)]{
             lines[0][at]=b'0'+(value/10)as u8;lines[0][at+1]=b'0'+(value%10)as u8;
@@ -1388,12 +1400,12 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
     }
     lines
 }
-fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar)->Option<u32>{
+fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2])->Option<u32>{
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
     if x<cx||x>=cx+cw||y<cy||y>=cy+ch{return None;}
     let row=if (cy+1..cy+8).contains(&y){0}else if(cy+11..cy+18).contains(&y){1}else{return None;};
     let col=(x-cx)/6;let px=(x-cx)%6;if col>=13||px>=5{return None;}
-    let lines=civil_clock_lines(&bar.civil_clock);let glyph=ascii_glyph_index(lines[row][col])?;
+    let glyph=ascii_glyph_index(lines[row][col])?;
     let py=y-(cy+if row==0{1}else{11});
     ((FONT_ASCII_5X7[glyph][py]>>(4-px))&1!=0).then_some(DEFAULT_THEME.text)
 }
@@ -1414,8 +1426,8 @@ fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
     }
     sex_pdx::serial_record!("[display.civil.draw] sequence={} state={:?} seconds={} stale={} pixels=written path={} x={} y={} w={} h={}",clock.sequence(),clock.state(),clock.seconds(),clock.is_stale()as u8,path,x,y,cw,ch);
 }
-fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
-    if bar.civil_enabled {return civil_clock_fg_at(x,y,bar);}
+fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2]) -> Option<u32> {
+    if bar.civil_enabled {return civil_clock_fg_at(x,y,bar,lines);}
     const CLOCK_FG: u32 = DEFAULT_THEME.text;
     const CLOCK_PREFIX:&[u8]=b"DEMO ";
     const CLOCK_DIGIT_OFFSET:usize=30;
@@ -1583,11 +1595,12 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
     unsafe { APP_PRESENT_BITS = 0; }
+    let clock_lines=civil_clock_lines(&bar.civil_clock);
     for y in 0..h {
         let mut row=if y>50 {unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused_id,y,w,h)}}else{None};
         for x in 0..w {
             let c: u32 = if y < 50 {
-                top_strip_pixel(x, y, bar)
+                top_strip_pixel(x, y, bar, &clock_lines)
             } else if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
@@ -1796,10 +1809,11 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     }
     // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
     // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
+    let clock_lines=civil_clock_lines(&bar.civil_clock);
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                top_strip_pixel(x, y, bar)
+                top_strip_pixel(x, y, bar, &clock_lines)
             } else {
                 DEFAULT_THEME.panel_glow
             };
@@ -2012,11 +2026,12 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
     fill_bar_bg_buffer(PROOF_W as u32, PROOF_H as u32);
     blur_bar_bg_buffer_radius1(PROOF_W as u32, PROOF_H as u32);
 
+    let clock_lines=civil_clock_lines(&proof_bar.civil_clock);
     let mut any_nonzero = false;
     for y in 0..PROOF_H {
         for x in 0..PROOF_W {
             let c = if y < 50 {
-                if let Some(fg) = clock_fg_at(x, y, &proof_bar) {
+                if let Some(fg) = clock_fg_at(x, y, &proof_bar, &clock_lines) {
                     fg
                 } else if let Some(fg) = bell_badge_at(x, y, &proof_bar) {
                     fg

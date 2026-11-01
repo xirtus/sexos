@@ -16,14 +16,14 @@ const LABEL:[[u8;7];4]=[
 #[test]fn full_demo_prefix_is_visible_at_both_actual_widths(){
  for width in [1024,1280]{let bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,_,_)=module_rect(&bar,ModuleSlot::Clock);
   for y in 0..7{for x in 0..30{let cell=x/6;let px=x%6;let expected=cell<4&&px<5&&(LABEL[cell][y]>>(4-px))&1!=0;
-   assert_eq!(clock_fg_at(cx+x,cy+1+y,&bar),expected.then_some(DEFAULT_THEME.text),"width={width} x={x} y={y}");}}
+   assert_eq!(clock_fg_at(cx+x,cy+1+y,&bar,&civil_clock_lines(&bar.civil_clock)),expected.then_some(DEFAULT_THEME.text),"width={width} x={x} y={y}");}}
  }
 }
 #[test]fn whole_clock_stays_inside_chip_and_prefix_survives_counter_updates(){
  for width in [1024,1280]{let mut bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);assert!(cx+cw<=width&&cw>=76&&ch>=8);
   for value in [0,(23<<16)|(59<<8)|58]{bar.clock_hh=(value>>16)as u8;bar.clock_mm=(value>>8)as u8;bar.clock_ss=value as u8;
-   for y in cy..cy+ch{for x in cx..cx+cw{if y==cy||y>=cy+8||x>=cx+76{assert_eq!(clock_fg_at(x,y,&bar),None);}}}
-   assert!(clock_fg_at(cx,cy+1,&bar).is_some());assert!(clock_fg_at(cx+31,cy+1,&bar).is_some());
+   for y in cy..cy+ch{for x in cx..cx+cw{if y==cy||y>=cy+8||x>=cx+76{assert_eq!(clock_fg_at(x,y,&bar,&civil_clock_lines(&bar.civil_clock)),None);}}}
+   assert!(clock_fg_at(cx,cy+1,&bar,&civil_clock_lines(&bar.civil_clock)).is_some());assert!(clock_fg_at(cx+31,cy+1,&bar,&civil_clock_lines(&bar.civil_clock)).is_some());
   }
  }
 }

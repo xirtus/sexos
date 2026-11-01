@@ -7,7 +7,7 @@ python3 - "$CIVIL_ROOT" "$CIVIL_TEMP" <<'PY'
 from pathlib import Path
 import re,sys
 root=Path(sys.argv[1]);out=Path(sys.argv[2]);source=(root/'servers/sexdisplay/src/main.rs').read_text();parts=[]
-for name in ['module_rect','ascii_glyph_index','civil_clock_lines','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
+for name in ['module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
     values=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(values)==1,name;parts+=values
 for name in ['FONT','FONT_ASCII_5X7']:
     values=re.findall(r'^const '+name+r':.*?^\];',source,re.M|re.S);assert len(values)==1,name;parts+=values
@@ -23,16 +23,24 @@ assert 'if bar.civil_enabled && msg.arg0 as u32==UpdateKind::SetClock as u32{con
 assert 'if !bar.civil_enabled && !clock_from_silkbar {'in source
 assert 'bar.civil_enabled=option_env!("SEXOS_LEGACY_DEMO_CLOCK").is_none();'in source
 assert 'bar.civil_clock.health(raw_ticks)'in source
-composer=re.findall(r'^fn top_strip_pixel\b.*?^\}',source,re.M|re.S);assert len(composer)==1 and 'clock_fg_at(x, y, bar)'in composer[0]
-assert source.count('top_strip_pixel(x, y, bar)')==2
+composer=re.findall(r'^fn top_strip_pixel\b.*?^\}',source,re.M|re.S);assert len(composer)==1 and 'clock_fg_at(x, y, bar, lines)'in composer[0]
+assert source.count('top_strip_pixel(x, y, bar, &clock_lines)')==2
+for name in ['top_strip_pixel','clock_fg_at','civil_clock_fg_at']:
+    actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
+    assert 'civil_clock_lines('not in actual[0],name+' must use the render snapshot'
 for name,path in [('render','full'),('redraw_top_strip','strip')]:
     actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
+    assert actual[0].count('civil_clock_lines(&bar.civil_clock)')==1
+    assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index('top_strip_pixel(')
+    pixel_loop='for y in 0..h {'if name=='render'else'for y in 0..51 {'
+    assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index(pixel_loop)
     assert actual[0].index('core::ptr::write_volatile(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+path+'")')
     assert actual[0].index('draw_launcher_panel(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+path+'")')
 display='\n'.join(parts)+'\n';(out/'display.rs').write_text(display)
 decision='let changed=!was_enabled || old_lines!=civil_clock_lines(&bar.civil_clock);'
 assert display.count(decision)==1
 (out/'display-redraw-mutant.rs').write_text(display.replace(decision,'let changed=true;',1))
+(out/'display-date-redraw-mutant.rs').write_text(display.replace(decision,'let changed=!was_enabled || old_lines[0]!=civil_clock_lines(&bar.civil_clock)[0];',1))
 # Mutate the real receiver, not a substitute host implementation. The focused
 # authority regression must reject a model with its nonzero wrong-task guard removed.
 (out/'lib.rs').write_text((root/'crates/silkbar-model/src/lib.rs').read_text())
@@ -41,19 +49,25 @@ civil=(root/'crates/silkbar-model/src/civil_clock.rs').read_text();assert '||cal
 fixture=(root/'tests/silkbar_civil_clock.rs').read_text().replace('../crates/sex-pdx/src/clock_source.rs',str(root/'crates/sex-pdx/src/clock_source.rs')).replace('../crates/sex-pdx/src/desktop_style.rs',str(root/'crates/sex-pdx/src/desktop_style.rs')).replace('../crates/sex-pdx/src/app_catalog.rs',str(root/'crates/sex-pdx/src/app_catalog.rs'))
 (out/'mutant.rs').write_text(fixture.replace('../crates/silkbar-model/src/lib.rs',str(out/'lib.rs')))
 PY
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc --edition=2021 --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/tests"
+rustc --edition=2021 --crate-name sex_time --crate-type rlib "$CIVIL_ROOT/crates/sex-time/src/lib.rs" -o "$CIVIL_TEMP/libsex_time.rlib"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/tests"
 "$CIVIL_TEMP/tests"
 rustc --edition=2021 --crate-name silkbar_model --crate-type rlib "$CIVIL_ROOT/crates/silkbar-model/src/lib.rs" -o "$CIVIL_TEMP/libsilkbar_model.rlib"
 rustc --edition=2021 --extern silkbar_model="$CIVIL_TEMP/libsilkbar_model.rlib" --test "$CIVIL_ROOT/tests/silkbar_clock_probe.rs" -o "$CIVIL_TEMP/probe-tests"
 "$CIVIL_TEMP/probe-tests"
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-redraw-mutant.rs" rustc --edition=2021 --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/redraw-mutant"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-redraw-mutant.rs" rustc --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/redraw-mutant"
 if "$CIVIL_TEMP/redraw-mutant" repeated_visible_seconds_refresh_health_without_requesting_repaint; then
     echo '[silkbar.civil.host] FAIL redundant-redraw mutant survived' >&2
     exit 1
 fi
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc --edition=2021 --test "$CIVIL_TEMP/mutant.rs" -o "$CIVIL_TEMP/mutant"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-date-redraw-mutant.rs" rustc --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/date-redraw-mutant"
+if "$CIVIL_TEMP/date-redraw-mutant" same_clock_time_on_later_utc_day_requests_a_date_repaint; then
+    echo '[silkbar.civil.host] FAIL date-redraw mutant survived' >&2
+    exit 1
+fi
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_TEMP/mutant.rs" -o "$CIVIL_TEMP/mutant"
 if "$CIVIL_TEMP/mutant" actual_display_boundary_authenticates_both_identity_words_before_effect; then
     echo '[silkbar.civil.host] FAIL authority mutant survived' >&2
     exit 1
 fi
-echo '[silkbar.civil.host] PASS scope=actual_model_Display_boundary_glyphs_not_native_authority_or_pixels authority_guard_removed_rejected=1 redundant_redraw_mutant_rejected=1'
+echo '[silkbar.civil.host] PASS scope=actual_model_Display_boundary_glyphs_not_native_authority_or_pixels authority_guard_removed_rejected=1 redundant_redraw_mutant_rejected=1 date_redraw_mutant_rejected=1'
