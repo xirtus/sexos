@@ -951,3 +951,24 @@ contain 331,077 decoded instructions and zero FP/vector matches. No current
 sustained/physical/SMP acceptance. ABI66 unchanged; 2 Open /28 Partial /System
 Proven false. Next161: actual 16 Quil +9 Spindle +3 Browser, 40 mains, measured
 BOOT memory budget, compact public denial cache and full native exhaustion.
+
+
+## Round 161 — 16 Quil / nine Spindle / 40 actual mains
+
+[Report](RESERVE_GROWTH_2026_11_01.md): append eight Quil incarnations and one
+Spindle while preserving old 19 rows. Actual BOOT now grants 28 apps and registers
+40 mains under the 64-slot bound. No runtime mint/admission/process VAS. All 16
+Quil and nine Spindle chains pass at both sizes, including finite exhaustion and
+fresh replays; cold boots recover last Quil39 and Spindle40 data under held BOOT
+relationships. Browser stays three instances; both allocated-Close profiles pass.
+
+Source10b6eb7a: 43 frozen host checks (3,094 logged successful Rust executions),
+1,124 Python, 11 boots, 153 qualified captures. Alpha49/profile +connected17/profile
++Browser20 +last-Quil-cold1; legacy Spindle cold stays separate, no standalone
+replay/pixel count. New cache4040B stays under4KiB; legacy28-owner5384B mutant and
+four semantic defects rejected. Actual app private2465pages/10,096,640B; heap
+used11,850,832–11,851,216B of256MiB after seal, physical-free unmeasured. All1209
+source blobs and1619 archive members verified; nine ELF scans323915 instructions,
+zeroFP/vector. ABI66/hashff1d1346; architecture immutable. No current1800s/hardware/
+SMP acceptance;2Open/28Partial/SystemProvenfalse. Next162 sustained1800s mixed
+desktop+cold recovery;163 dense denial-cache equivalence, then launcher/clock UX.
