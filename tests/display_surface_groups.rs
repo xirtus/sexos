@@ -439,7 +439,8 @@ fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
 
 fn repaint_begin()->u64{0}
 fn repaint_end(_kind:&str,_started:u64){}
-fn clock_fg_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==0&&y==0).then_some(1)}
+const TEST_CLOCK_LINES:[[u8;13];2]=[[b'C';13],[b'D';13]];
+fn clock_fg_at(x:usize,y:usize,_:&SilkBar,lines:&[[u8;13];2])->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
 fn bell_badge_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==1&&y==0).then_some(2)}
 fn phase5_tint_swatch_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==2&&y==0).then_some(3)}
 fn phase5_palette_dot_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==3&&y==0).then_some(4)}
@@ -447,10 +448,10 @@ fn bar_color(_:usize,_:usize,_:&SilkBar)->u32{9}
 #[test]
 fn shared_full_and_incremental_strip_uses_current_focus(){unsafe{
  let bar=SilkBar;
- for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(155,22,&bar),0xCBA6F7);}
- FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(155,22,&bar),0x89B4FA);
- FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(155,22,&bar),9);
- for (x,c)in [(0,1),(1,2),(2,3),(3,4),(4,9)]{assert_eq!(top_strip_pixel(x,0,&bar),c);}
+ for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES),0xCBA6F7);}
+ FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES),0x89B4FA);
+ FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES),9);
+ for (x,c)in [(0,1),(1,2),(2,3),(3,4),(4,9)]{assert_eq!(top_strip_pixel(x,0,&bar,&TEST_CLOCK_LINES),c);}
 }}
 
 // Literal image-58 two-pass shader is an independent oracle. The row cache

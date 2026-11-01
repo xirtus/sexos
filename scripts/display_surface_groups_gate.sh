@@ -17,7 +17,7 @@ for name in ['clamp_surface','composite_pixel','composite_pixel_selected','compo
  parts.append(s[a:i])
 for name in ['render','redraw_top_strip']:
  a=s.index('fn '+name+'(');b=s.index('\nfn ',a+1)
- assert 'top_strip_pixel(x, y, bar)' in s[a:b]
+ assert 'top_strip_pixel(x, y, bar, &clock_lines)' in s[a:b]
 focus=s[s.index('                0xED => {'):s.index('                0xEE => {')]
 assert 'needs_top_strip_redraw |= changed;' in focus
 assert 'stage.retire(info.target_pd);'  in s and 'if !SURFACES[index].active { stage.reset(); }' in s
