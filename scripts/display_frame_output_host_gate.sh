@@ -51,6 +51,7 @@ def source_contract(text):
     assert startup.index('let mut pending_paint=')<service and 'Dirty::new('not in startup[service:],'pending state must survive service iterations'
     assert startup.count('let mut pending_paint=paint_batch::Dirty::new(')==1 and startup.index('let mut pending_paint=')<startup.index('for _drain_i')
     assert 'pending_paint.complete(published.is_some());'in startup and startup.index('render_prepared(')<startup.index('pending_paint.complete(')<startup.index('finish_display_transactions(&mut lifecycle,published.as_ref())')
+    assert 'lettransaction_full_render=typed_completion_needs_publication()||lifecycle.needs_presentation()'in compact(startup),'typed completions force Full independently of damage'
     primary=block(startup,'0x11 => {');assert 'needs_full_redraw=true;'in compact(primary) and 'primary_receipt_pending=true;'in compact(primary)
     assert 'letframe_backing=sex_pdx::display_frame_backing(frame_layout)'in compact(startup) and startup.index('sex_pdx::display_frame_backing(frame_layout)')<startup.index('FRAME_OUTPUT=Some(')<startup.index('render(FB_PTR')
     assert 'assert!(FRAME_OUTPUT.is_none(),"DISPLAY_FRAME_ALREADY_INITIALIZED")'in startup
@@ -60,13 +61,14 @@ def source_contract(text):
     assert 'lifecycle.pixels_presented(published.present_bits)'in finish
     assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack(')
     assert 'ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}'in finish
+    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('stage.release_after_publication()')<finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'typed release requires the same successful Full and dropped scene'
     # All physical FB_PTR conversions must be the startup wrapper, single batch
     # publisher, or the separate offscreen proof's unused pointer parameter.
     for line in text.splitlines():
         if re.search(r'FB_PTR\s+as\s+\*(?:mut|const)\s+u32',line):assert any(x in line for x in ['render(','render_prepared(','top_strip_render_proof(']),line
     return ['one-prepare-capture-publication','nested-guard-before-exclusive-store','immutable-scene-raster-primitives','one-cursor-tail-after-both-passes','post-copy-fence-and-effects','persistent-post-drain-plan','no-primary-in-drain-publication','held-acquisition-before-startup-render','scrub-before-receipt-driven-cleanup']
 wiring=source_contract(main)
-source_controls=[('missing-cleanup-scrub','if let Some(output)=FRAME_OUTPUT.as_mut(){output.scrub();}',''),('missing-nested-guard','if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}',''),('clear-failed-batch','pending_paint.complete(published.is_some());','pending_paint.complete(true);'),('missing-device-fence','asm!("sfence",options(nostack,preserves_flags))','asm!("nop",options(nostack,preserves_flags))'),('global-bits-rejoin','lifecycle.pixels_presented(published.present_bits);','lifecycle.pixels_presented(unsafe{APP_PRESENT_BITS});'),('reset-pending-per-drain','for _drain_i in 0..DRAIN_MAX {','pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);for _drain_i in 0..DRAIN_MAX {')]
+source_controls=[('missing-cleanup-scrub','if let Some(output)=FRAME_OUTPUT.as_mut(){output.scrub();}',''),('missing-nested-guard','if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}',''),('clear-failed-batch','pending_paint.complete(published.is_some());','pending_paint.complete(true);'),('missing-device-fence','asm!("sfence",options(nostack,preserves_flags))','asm!("nop",options(nostack,preserves_flags))'),('global-bits-rejoin','lifecycle.pixels_presented(published.present_bits);','lifecycle.pixels_presented(unsafe{APP_PRESENT_BITS});'),('reset-pending-per-drain','for _drain_i in 0..DRAIN_MAX {','pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);for _drain_i in 0..DRAIN_MAX {'),('missing-typed-full-request','typed_completion_needs_publication()||lifecycle.needs_presentation()','lifecycle.needs_presentation()')]
 for name,old,new in source_controls:
     altered=once(main,old,new)
     try:source_contract(altered)

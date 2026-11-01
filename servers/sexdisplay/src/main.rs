@@ -3013,7 +3013,7 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
             if let Some(removed) = lifecycle.prepare(index, info.target_pd, info.task_id, &mut SURFACES, &mut refs) {
                 BITMAP_STORES.retire(info.target_pd,info.task_id);
                 for (index,stage) in TEXT_STAGES.iter_mut().enumerate() {
-                    stage.retire(info.target_pd);
+                    stage.retire(info.target_pd,info.task_id);
                     if !SURFACES[index].active { stage.reset(); }
                 }
                 FOCUSED_SURFACE_ID = refs.focused_sid;
@@ -3034,10 +3034,27 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
     changed
 }
 
+fn typed_completion_needs_publication()->bool{
+    unsafe{TEXT_STAGES.iter().any(text_transaction::Stage::needs_publication)
+        ||BITMAP_STORES.needs_publication()}
+}
+
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
     if let Some(published)=published.filter(|frame|frame.plan.is_full()){
+        // This receipt belongs to the just-finished Main drain. No intake runs
+        // between its scene capture, CPU publication and completion handling.
+        // Full also settles no-op, hidden and empty updates; Applied remains a
+        // data-admission receipt, not proof that those bytes were visible.
+        let (text,bitmap)=unsafe{
+            let text=TEXT_STAGES.iter_mut()
+                .map(|stage|stage.release_after_publication() as usize).sum::<usize>();
+            (text,BITMAP_STORES.release_after_publication())
+        };
+        if text+bitmap>0{
+            sex_pdx::serial_record!("[display.typed.released] text={} bitmap={} full=1 scene_released=1 publication=1 pixels=unconfirmed",text,bitmap);
+        }
         lifecycle.pixels_presented(published.present_bits);
         for index in 0..surface_lifecycle::CATALOG_CAPACITY {
             if lifecycle.scene_committed(index) {
@@ -4102,7 +4119,7 @@ pub extern "C" fn _start() -> ! {
                     unsafe {
                         for (index, slot) in SURFACES.iter_mut().enumerate() {
                             if !slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd { continue; }
-                            if let Some((len,color,bytes)) = TEXT_STAGES[index].receive(msg.caller_pd,msg.arg0,request) {
+                            if let Some((len,color,bytes)) = TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request) {
                                 let mut changed = slot.text_len as usize != len || slot.text_color != color || slot.text_buf != *bytes;
                                 let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
                                 slot.text_buf = *bytes;
@@ -4348,7 +4365,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        let transaction_full_render=lifecycle.needs_presentation()
+        let transaction_full_render=typed_completion_needs_publication()||lifecycle.needs_presentation()
             ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
         if needs_full_redraw||transaction_full_render{pending_paint.request_full();}

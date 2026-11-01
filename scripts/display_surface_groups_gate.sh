@@ -47,7 +47,7 @@ for name in ['SILK_RENDER_PROOF_PROFILE_ENABLED','SILKBAR_PHASE3_RECEIVE_PROOF_E
  match=re.search(r'^const '+name+r':[^;]+;',s,re.M);assert match,name;parts.append(match[0])
 focus=s[s.index('                0xED => {'):s.index('                0xEE => {')]
 assert 'needs_top_strip_redraw |= changed;' in focus
-assert 'stage.retire(info.target_pd);'  in s and 'if !SURFACES[index].active { stage.reset(); }' in s
+assert 'stage.retire(info.target_pd,info.task_id);' in s and 'if !SURFACES[index].active { stage.reset(); }' in s
 assert 'if let Some(index)=vacant {' in s and 'TEXT_STAGES[index].reset();' in s and 'BITMAP_STORES.reset_surface(' in s
 destroy=s[s.index('                0xEE => {'):s.index('                0xF5 => {')]
 assert destroy.index('TEXT_STAGES[index].reset();')<destroy.index('*slot = SURFACE_EMPTY;')

@@ -100,6 +100,8 @@ fn assert_scrubbed(scene:&SceneSnapshot){
 }
 #[test]fn pending_bitmap_protocol_is_excluded_and_committed_pixels_are_owned(){
  let mut stores=Set::UNBOUND;let b=bind(15,150);assert!(stores.initialize_once(b));publish(&mut stores,b,1,0xff123456);
+ // Settle the prior transfer before deliberately staging the next one.
+ assert_eq!(stores.release_after_publication(),1);stores.poll_reply(|_,_|0);
  let mut scene=SceneSnapshot::EMPTY;assert!(capture(&mut scene,&[SURFACE_EMPTY;MAX_SURFACES],&FrameGroups::new(),&stores));
  assert_eq!(scene.bitmaps.sample(15,300,10,40),Some(0xff123456));
  stores.receive(15,150,300,Request::Begin{sequence:2,geometry:Geometry{x:10,y:40,width:1,height:1,scale:2}});
@@ -168,7 +170,7 @@ fn rendered_receipt(plan:Plan,present_bits:u64,bar:&SilkBar)->Option<PublishedFr
 }
 
 fn reset_host_inputs(){
- boundary::reset();unsafe{assert!(!(*core::ptr::addr_of!(RENDER_SCENE)).is_valid());(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub();SURFACES.fill(SURFACE_EMPTY);FRAME_GROUPS=FrameGroups::new();DISPLAY_TOKENS=DEFAULT_RENDER_TOKENS;FOCUSED_SURFACE_ID=0;TOKEN_BUF_CALL1_RECEIVED=false;TOKEN_BUF_OWNER=0;CURSOR_UNDER_VALID=false;FRAME_OUTPUT=None;PREPARED_CURSOR=None;FB_W=1024;FB_H=768;}
+ boundary::reset();unsafe{assert!(!(*core::ptr::addr_of!(RENDER_SCENE)).is_valid());(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub();SURFACES.fill(SURFACE_EMPTY);FRAME_GROUPS=FrameGroups::new();DISPLAY_TOKENS=DEFAULT_RENDER_TOKENS;FOCUSED_SURFACE_ID=0;TOKEN_BUF_CALL1_RECEIVED=false;TOKEN_BUF_OWNER=0;CURSOR_UNDER_VALID=false;BITMAP_STORES=Set::UNBOUND;TEXT_STAGES.fill(text_transaction::Stage::EMPTY);FRAME_OUTPUT=None;PREPARED_CURSOR=None;FB_W=1024;FB_H=768;}
  RENDER_FRAME_COUNTER.store(0,core::sync::atomic::Ordering::Relaxed);
 }
 fn scene_scrubbed(){unsafe{assert_scrubbed(&*core::ptr::addr_of!(RENDER_SCENE));}}
@@ -244,4 +246,47 @@ impl Drop for HostFrameRegion{fn drop(&mut self){unsafe{FRAME_OUTPUT=None;std::a
  let partial=rendered_receipt(Plan{content:Content::Area,strip:true},bit,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&partial));assert_eq!(boundary::get().replies,0);assert!(lifecycle.needs_presentation());
  let full=rendered_receipt(Plan::full(),bit,&bar).unwrap();unsafe{APP_PRESENT_BITS=0;}let lease=SceneLease::capture(1024,768,&bar).unwrap();let before=boundary::get().renders;finish_display_transactions(&mut lifecycle,Some(&full));assert_eq!(boundary::get().replies,0);assert_eq!(boundary::get().renders,before);drop(lease);scene_scrubbed();
  finish_display_transactions(&mut lifecycle,Some(&full));assert_eq!(boundary::get().replies,1);assert!(!lifecycle.needs_presentation());assert_eq!(boundary::get().renders,before);finish_display_transactions(&mut lifecycle,None);assert_eq!(boundary::get().replies,1);
+}
+
+
+// These direct Stage calls represent already-admitted stamped sender tuples.
+// The fixture does not replace or claim Main's separate caller authority checks.
+fn typed_text(index:usize,owner:u32,task:u32,sid:u64,sequence:u32,bytes:&[u8]){
+ unsafe{
+  let stage=&mut TEXT_STAGES[index];assert!(stage.receive(owner,task,sid,text_batch::Request::Begin{sequence,len:bytes.len(),color:0x123456}).is_none());
+  for(offset,chunk)in bytes.chunks(8).enumerate(){let mut data=[0;8];data[..chunk.len()].copy_from_slice(chunk);assert!(stage.receive(owner,task,sid,text_batch::Request::Chunk{sequence,offset:offset*8,count:chunk.len(),bytes:data}).is_none());}
+  assert!(stage.receive(owner,task,sid,text_batch::Request::Commit{sequence,hash:text_batch::hash(bytes)}).is_some());
+ }
+}
+fn typed_poll(mut send:impl FnMut(u32,u64)->u64){unsafe{for stage in &mut TEXT_STAGES{stage.poll_reply(&mut send);}BITMAP_STORES.poll_reply(&mut send);}}
+fn no_applied(){typed_poll(|_,_|panic!("Applied escaped before its full publication release"));}
+fn typed_bitmap_clear(sequence:u32){unsafe{assert!(BITMAP_STORES.receive(15,150,300,Request::Clear{sequence}).is_some());}}
+#[test]fn actual_typed_text_noop_empty_and_hidden_completion_force_publication(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();
+ for(sequence,bytes)in[(1u32,&b""[..]),(2,&b""[..]),(3,&b"hidden"[..])]{
+  assert!(!typed_completion_needs_publication());typed_text(0,9,90,156,sequence,bytes);
+  assert!(damage::Damage::new().rect().is_none());assert!(typed_completion_needs_publication());no_applied();
+  let receipt=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&receipt));assert!(!typed_completion_needs_publication());
+  let mut got=Vec::new();typed_poll(|owner,word|{got.push((owner,word));0});assert_eq!(got,[(9,text_batch::Applied{surface:156,sequence}.encode().unwrap())]);no_applied();
+ }
+}
+#[test]fn actual_typed_bitmap_empty_and_hidden_completion_force_publication(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();unsafe{assert!(BITMAP_STORES.initialize_once(bind(15,150)));}
+ for sequence in[1,2]{typed_bitmap_clear(sequence);assert!(typed_completion_needs_publication());no_applied();let receipt=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&receipt));assert!(!typed_completion_needs_publication());typed_poll(|owner,word|{assert_eq!((owner,word),(15,bitmap_batch::Applied{surface:300,sequence}.encode().unwrap()));0});}
+ unsafe{publish(&mut BITMAP_STORES,bind(15,150),3,0xffabcdef);BITMAP_STORES.reset_surface(15,300);}assert!(typed_completion_needs_publication());no_applied();let receipt=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&receipt));let mut words=Vec::new();typed_poll(|p,w|{words.push((p,w));0});assert_eq!(words,[(15,bitmap_batch::Applied{surface:300,sequence:3}.encode().unwrap())]);
+}
+#[test]fn actual_typed_completions_wait_for_full_scene_release_then_retry_independently(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();unsafe{assert!(BITMAP_STORES.initialize_once(bind(15,150)));}
+ typed_text(0,9,90,156,7,b"same admitted text");typed_bitmap_clear(11);assert!(typed_completion_needs_publication());no_applied();
+ finish_display_transactions(&mut lifecycle,None);no_applied();let partial=rendered_receipt(Plan{content:Content::Area,strip:true},0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&partial));no_applied();assert!(typed_completion_needs_publication());
+ boundary::fail_render(true);let failed=rendered_receipt(Plan::full(),0,&bar);assert!(failed.is_none());finish_display_transactions(&mut lifecycle,failed.as_ref());no_applied();boundary::fail_render(false);
+ let full=rendered_receipt(Plan::full(),0,&bar).unwrap();let lease=SceneLease::capture(1024,768,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&full));no_applied();assert!(typed_completion_needs_publication());drop(lease);scene_scrubbed();
+ finish_display_transactions(&mut lifecycle,Some(&full));assert!(!typed_completion_needs_publication());let renders=boundary::get().renders;let expected=[(9,text_batch::Applied{surface:156,sequence:7}.encode().unwrap()),(15,bitmap_batch::Applied{surface:300,sequence:11}.encode().unwrap())];
+ let mut attempts=Vec::new();typed_poll(|p,w|{attempts.push((p,w));if p==9{99}else{0}});assert_eq!(attempts,expected);assert!(!typed_completion_needs_publication());
+ for status in[1,u64::MAX,0]{let mut retry=Vec::new();finish_display_transactions(&mut lifecycle,None);typed_poll(|p,w|{retry.push((p,w));status});assert_eq!(retry,[expected[0]]);assert_eq!(boundary::get().renders,renders);}no_applied();
+}
+#[test]fn actual_terminal_cleanup_cancels_unreleased_typed_effects_before_ack(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();boundary::terminal();let mut bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();assert!(lifecycle.register(Catalog{slot:40,target_pd:15,task_id:150,surface_id:300,coordinator_pd:3}));unsafe{assert!(BITMAP_STORES.initialize_once(bind(15,150)));SURFACES[0]=Surface{owner_pd:15,surface_id:300,active:true,..SURFACE_EMPTY};}
+ typed_text(0,15,150,300,7,b"terminal private text");typed_bitmap_clear(11);assert!(typed_completion_needs_publication());no_applied();assert!(prepare_app_cleanup(&mut lifecycle,&mut bar));assert!(!typed_completion_needs_publication());no_applied();finish_display_transactions(&mut lifecycle,None);assert_eq!(boundary::get().acks,0);
+ let full=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&full));assert_eq!(boundary::get().acks,1);no_applied();assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Acknowledged));
 }

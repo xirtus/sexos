@@ -66,7 +66,7 @@ def wiring(source):
     text_order=['if!browser_text_binding_live(&lifecycle,msg.caller_pd,msg.caller_task,msg.arg0){continue;}',
                 'sex_pdx::text_batch::Request::decode(msg.type_id,msg.arg1,msg.arg2)',
                 'if!slot.active||slot.surface_id!=msg.arg0||slot.owner_pd!=msg.caller_pd{continue;}',
-                'ifletSome((len,color,bytes))=TEXT_STAGES[index].receive(msg.caller_pd,msg.arg0,request)',
+                'ifletSome((len,color,bytes))=TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request)',
                 '[display.text.committed]', '[display.browser.text.committed]']
     text_positions=[text_dispatch.index(value)for value in text_order]
     if text_positions!=sorted(text_positions):raise ValueError('Browser text guard/commit evidence order changed')
@@ -194,7 +194,7 @@ fn setup(target:u32,task:u32)->surface_lifecycle::Lifecycle {
 // require this guard before any actual typed-text Stage mutation in Main.
 fn deliver(l:&surface_lifecycle::Lifecycle,s:&mut text_transaction::Stage,pd:u32,task:u32,sid:u64,r:text_batch::Request)->bool {
     if !browser_text_binding_live(l,pd,task,sid){return false;}
-    s.receive(pd,sid,r).is_some()
+    s.receive(pd,task,sid,r).is_some()
 }
 fn begin()->text_batch::Request {text_batch::Request::Begin{sequence:1,len:2,color:0xffcdd6f4}}
 #[test]fn browser_text_accepts_actual_unequal_tasks_and_exact_commit() {
@@ -204,6 +204,7 @@ fn begin()->text_batch::Request {text_batch::Request::Begin{sequence:1,len:2,col
         assert!(!deliver(&l,&mut s,pd,task,sid,begin()));
         assert!(!deliver(&l,&mut s,pd,task,sid,text_batch::Request::Chunk{sequence:1,offset:0,count:2,bytes:*b"ok\0\0\0\0\0\0"}));
         assert!(deliver(&l,&mut s,pd,task,sid,text_batch::Request::Commit{sequence:1,hash:text_batch::hash(b"ok")}));
+        assert!(s.needs_publication());s.poll_reply(|_,_|panic!("unreleased completion"));assert!(s.release_after_publication());
         let mut count=0;s.poll_reply(|owner,word|{assert_eq!(owner,pd);assert_eq!(text_batch::Applied::decode(1,word).unwrap(),text_batch::Applied{surface:sid as u16,sequence:1});count+=1;0});assert_eq!(count,1);
     }
 }

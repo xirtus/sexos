@@ -97,14 +97,14 @@ fn every_partial_prefix_is_private_and_full_48_square_publishes_once() {
         for y in 0..g.height as i64 {for x in 0..g.width as i64 {
             assert_eq!(stage.sample(15,300,g.x as i64+x*g.scale as i64,g.y as i64+y*g.scale as i64),Some(pixels[y as usize*g.width as usize+x as usize]));
         }}
-        assert_eq!(receive(&mut stage,Request::Commit{sequence:1,hash:hash(&pixels)}),None);ack(&mut stage,1);
+        assert_eq!(receive(&mut stage,Request::Commit{sequence:1,hash:hash(&pixels)}),None);stage.release_after_publication();ack(&mut stage,1);
         stage.poll_reply(|_,_|panic!("receipt admitted already"));
         assert!(core::mem::size_of::<Stage>()<19000);assert_eq!(CAPACITY*4,9216);
     }
 }
 #[test]
 fn incomplete_bad_hash_and_conflicting_duplicates_keep_old_publication() {
-    for mode in 0..7 { let mut stage=bound_stage();let old=geometry(1,1,1);publish(&mut stage,1,old,&[0xff123456]);ack(&mut stage,1);
+    for mode in 0..7 { let mut stage=bound_stage();let old=geometry(1,1,1);publish(&mut stage,1,old,&[0xff123456]);stage.release_after_publication();ack(&mut stage,1);
         let new=geometry(3,1,1);begin(&mut stage,2,new);
         receive(&mut stage,Request::Chunk{sequence:2,offset:0,count:2,pixels:[1,2]});
         match mode {
@@ -120,12 +120,13 @@ fn incomplete_bad_hash_and_conflicting_duplicates_keep_old_publication() {
         chunks(&mut stage,2,&[1,2,3]);assert_eq!(receive(&mut stage,Request::Commit{sequence:2,hash:hash(&[1,2,3])}),None);
         assert_eq!(stage.geometry(),Some(old));assert_eq!(stage.sample(15,300,10,40),Some(0xff123456));
         stage.poll_reply(|_,_|panic!("invalid transaction has no receipt"));
-        publish(&mut stage,3,new,&[1,2,3]);ack(&mut stage,3);assert_eq!(stage.sample(15,300,12,40),Some(3));
+        publish(&mut stage,3,new,&[1,2,3]);stage.release_after_publication();ack(&mut stage,3);assert_eq!(stage.sample(15,300,12,40),Some(3));
     }
 }
 #[test]
 fn full_retains_exact_ack_no_republication_and_no_new_sequence_overtakes_it() {
     let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,7,g,&[0xffabcdef]);
+    assert!(stage.release_after_publication());
     let mut receipts=Vec::new();for _ in 0..4 {
         stage.poll_reply(|owner,word|{receipts.push((owner,word));u64::MAX});
         begin(&mut stage,8,geometry(2,1,1));assert_eq!(stage.sequence(),7);
@@ -133,18 +134,18 @@ fn full_retains_exact_ack_no_republication_and_no_new_sequence_overtakes_it() {
         assert_eq!(receive(&mut stage,Request::Commit{sequence:7,hash:hash(&[0xffabcdef])}),None);
         assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));
     }
-    assert_eq!(receipts.len(),4);assert!(receipts.iter().all(|r|*r==receipts[0]));ack(&mut stage,7);
+    assert_eq!(receipts.len(),4);assert!(receipts.iter().all(|r|*r==receipts[0]));stage.release_after_publication();ack(&mut stage,7);
     // A duplicate may repeat its retained completion, never its mutation.
-    assert_eq!(receive(&mut stage,Request::Commit{sequence:7,hash:hash(&[0xffabcdef])}),None);ack(&mut stage,7);
+    assert_eq!(receive(&mut stage,Request::Commit{sequence:7,hash:hash(&[0xffabcdef])}),None);stage.release_after_publication();ack(&mut stage,7);
     let change=receive(&mut stage,Request::Clear{sequence:8}).unwrap();assert_eq!((change.old,change.new),(Some(g),None));
-    assert_eq!(stage.sample(15,300,10,40),None);ack(&mut stage,8);
-    assert_eq!(receive(&mut stage,Request::Clear{sequence:8}),None);ack(&mut stage,8);
+    assert_eq!(stage.sample(15,300,10,40),None);stage.release_after_publication();ack(&mut stage,8);
+    assert_eq!(receive(&mut stage,Request::Clear{sequence:8}),None);stage.release_after_publication();ack(&mut stage,8);
     for stale in [Request::Begin{sequence:7,geometry:g},Request::Commit{sequence:7,hash:hash(&[0xffabcdef])},Request::Clear{sequence:7}] {assert_eq!(receive(&mut stage,stale),None);}
     assert!(stage.scrubbed());
 }
 #[test]
 fn foreign_sender_surface_and_late_chunks_cannot_change_or_clear_owned_state() {
-    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,1,g,&[0xffabcdef]);ack(&mut stage,1);
+    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,1,g,&[0xffabcdef]);stage.release_after_publication();ack(&mut stage,1);
     for (owner,sid) in [(0,300),(3,300),(9,300),(16,300),(15,301),(15,300|1<<32)] {
         for request in [Request::Begin{sequence:2,geometry:g},Request::Chunk{sequence:1,offset:0,count:1,pixels:[0,0]},Request::Commit{sequence:1,hash:0},Request::Clear{sequence:2}] {
             assert_eq!(stage.receive(owner,150,sid,request),None);assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));
@@ -157,32 +158,33 @@ fn foreign_sender_surface_and_late_chunks_cannot_change_or_clear_owned_state() {
 #[test]
 fn destroy_recreation_preserves_sequence_fence_and_retirement_permanently_erases() {
     let mut stage=bound_stage();let g=geometry(2,1,1);publish(&mut stage,4,g,&[0xffff0000,0x8000ff00]);
+    assert!(stage.release_after_publication());
     let mut old_receipts=Vec::new();stage.poll_reply(|owner,word|{old_receipts.push((owner,word));u64::MAX});
     stage.reset_surface(15,300);assert!(stage.pixels_scrubbed());assert!(!stage.scrubbed());
     begin(&mut stage,5,g);assert_eq!(stage.sequence(),4);assert_eq!(receive(&mut stage,Request::Clear{sequence:6}),None);
     stage.poll_reply(|owner,word|{assert_eq!((owner,word),old_receipts[0]);u64::MAX});
-    assert_eq!(stage.geometry(),None);ack(&mut stage,4);assert!(stage.scrubbed());
+    assert_eq!(stage.geometry(),None);stage.release_after_publication();ack(&mut stage,4);assert!(stage.scrubbed());
     for request in [Request::Begin{sequence:4,geometry:g},Request::Commit{sequence:4,hash:hash(&[0xffff0000,0x8000ff00])}] {assert_eq!(receive(&mut stage,request),None);}
     // A repeated exact completed COMMIT still returns only the historical ACK.
-    ack(&mut stage,4);assert!(stage.pixels_scrubbed());
-    assert_eq!(stage.geometry(),None);publish(&mut stage,5,g,&[0xffff0000,0x8000ff00]);ack(&mut stage,5);
+    stage.release_after_publication();ack(&mut stage,4);assert!(stage.pixels_scrubbed());
+    assert_eq!(stage.geometry(),None);publish(&mut stage,5,g,&[0xffff0000,0x8000ff00]);stage.release_after_publication();ack(&mut stage,5);
     begin(&mut stage,6,g);chunks(&mut stage,6,&[1,2]);stage.retire(15,150);assert!(stage.scrubbed());
     stage.reset_surface(15,300);
     for sequence in [6,7,u32::MAX] {begin(&mut stage,sequence,g);chunks(&mut stage,sequence,&[1,2]);assert_eq!(receive(&mut stage,Request::Commit{sequence,hash:hash(&[1,2])}),None);assert_eq!(receive(&mut stage,Request::Clear{sequence}),None);}
     stage.poll_reply(|_,_|panic!("retired receipt"));assert!(stage.scrubbed());
-    let mut completed=bound_stage();publish(&mut completed,1,g,&[1,2]);completed.poll_reply(|_,_|u64::MAX);
+    let mut completed=bound_stage();publish(&mut completed,1,g,&[1,2]);assert!(completed.release_after_publication());completed.poll_reply(|_,_|u64::MAX);
     completed.retire(15,150);completed.poll_reply(|_,_|panic!("retirement drops retained completion"));assert!(completed.scrubbed());
 }
 #[test]
 fn maximum_sequence_exhausts_without_wrap_and_clear_cannot_mutate_same_sequence() {
-    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,u32::MAX,g,&[0xffffffff]);ack(&mut stage,u32::MAX);
+    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,u32::MAX,g,&[0xffffffff]);stage.release_after_publication();ack(&mut stage,u32::MAX);
     assert_eq!(receive(&mut stage,Request::Clear{sequence:u32::MAX}),None);
     assert_eq!(stage.receive(15,150,300,Request::Clear{sequence:0}),None);
     begin(&mut stage,1,g);assert_eq!(stage.sample(15,300,10,40),Some(0xffffffff));
 }
 #[test]
 fn delayed_old_commit_and_clear_cannot_poison_a_fresh_newer_stage() {
-    let mut stage=bound_stage();let g=geometry(2,1,1);publish(&mut stage,1,g,&[0xff112233,0xff445566]);ack(&mut stage,1);
+    let mut stage=bound_stage();let g=geometry(2,1,1);publish(&mut stage,1,g,&[0xff112233,0xff445566]);stage.release_after_publication();ack(&mut stage,1);
     begin(&mut stage,2,g);chunks(&mut stage,2,&[0xff778899,0xffaabbcc]);
     for request in [Request::Commit{sequence:1,hash:hash(&[0xff112233,0xff445566])},
         Request::Commit{sequence:1,hash:0},Request::Begin{sequence:1,geometry:geometry(48,48,4)},
@@ -190,7 +192,7 @@ fn delayed_old_commit_and_clear_cannot_poison_a_fresh_newer_stage() {
         assert_eq!(receive(&mut stage,request),None);stage.poll_reply(|_,_|panic!("old attempt cannot create a newer receipt"));
     }
     assert_eq!(stage.sequence(),2);assert_eq!(receive(&mut stage,Request::Commit{sequence:2,hash:hash(&[0xff778899,0xffaabbcc])}).unwrap().new,Some(g));
-    ack(&mut stage,2);assert_eq!(stage.sample(15,300,10,40),Some(0xff778899));
+    stage.release_after_publication();ack(&mut stage,2);assert_eq!(stage.sample(15,300,10,40),Some(0xff778899));
 }
 #[test]
 fn exact_straight_alpha_scaled_sampling_and_viewport_clipping() {
@@ -203,7 +205,7 @@ fn exact_straight_alpha_scaled_sampling_and_viewport_clipping() {
         };assert_eq!(blend(rgba,base),expected);
     }}}
     let mut stage=bound_stage();let g=Geometry{x:0,y:0,..geometry(48,48,4)};
-    let pixels:Vec<_>=(0..g.len()).map(|i|0xff000000|i as u32).collect();publish(&mut stage,1,g,&pixels);ack(&mut stage,1);
+    let pixels:Vec<_>=(0..g.len()).map(|i|0xff000000|i as u32).collect();publish(&mut stage,1,g,&pixels);stage.release_after_publication();ack(&mut stage,1);
     for view in [Viewport{x:-30,y:20,width:200,height:200,inset:8,top:36},
         Viewport{x:70,y:70,width:35,height:48,inset:8,top:36},
         Viewport{x:0,y:0,width:7,height:7,inset:8,top:36},
@@ -223,14 +225,14 @@ fn exact_straight_alpha_scaled_sampling_and_viewport_clipping() {
 #[test]
 fn movement_resize_and_clear_damage_cover_every_changed_pixel() {
     let mut stage=bound_stage();let view=Viewport{x:-10,y:50,width:120,height:120,inset:8,top:36};
-    let a=Geometry{x:0,y:20,..geometry(20,20,2)};publish(&mut stage,1,a,&vec![0x8000ff00;a.len()]);ack(&mut stage,1);
+    let a=Geometry{x:0,y:20,..geometry(20,20,2)};publish(&mut stage,1,a,&vec![0x8000ff00;a.len()]);stage.release_after_publication();ack(&mut stage,1);
     let paint=|stage:&Stage,x,y|view.local(x,y).and_then(|(lx,ly)|stage.sample(15,300,lx,ly)).map_or(0x123456,|rgba|blend(rgba,0x123456));
     let mut before=Vec::new();for y in 0..180 {for x in 0..180 {before.push(paint(&stage,x,y));}}
     let b=Geometry{x:60,y:70,..geometry(12,12,3)};begin(&mut stage,2,b);chunks(&mut stage,2,&vec![0xffaa0011;b.len()]);
     let change=receive(&mut stage,Request::Commit{sequence:2,hash:hash(&vec![0xffaa0011;b.len()])}).unwrap();
     let mut damage=damage::Damage::new();damage.add(view.screen(change.old,180,180),180,180);damage.add(view.screen(change.new,180,180),180,180);
     let rect=damage.rect().unwrap();for y in 0..180 {for x in 0..180 {if before[y*180+x]!=paint(&stage,x,y){assert!(x>=rect.x&&x<rect.right&&y>=rect.y&&y<rect.bottom);}}}
-    ack(&mut stage,2);let change=receive(&mut stage,Request::Clear{sequence:3}).unwrap();assert_eq!(change.old,Some(b));assert_eq!(change.new,None);assert_eq!(stage.geometry(),None);
+    stage.release_after_publication();ack(&mut stage,2);let change=receive(&mut stage,Request::Clear{sequence:3}).unwrap();assert_eq!(change.old,Some(b));assert_eq!(change.new,None);assert_eq!(stage.geometry(),None);
     // Current viewport clips a retained bitmap after resize, without reinterpreting its pixels.
     assert!(Viewport{width:10,height:10,..view}.screen(Some(b),180,180).2==0);
 }
@@ -284,7 +286,7 @@ fn unbound_store_rejects_packets_before_effects_and_never_uses_first_message_bin
     // Unmatched packets/retirement hints cannot choose or permanently poison
     // the slot. Only the explicit held-query startup installation may bind it.
     assert!(stage.initialize_once(held_binding(150)));assert_eq!(stage.binding(),Some(held_binding(150)));
-    publish(&mut stage,1,g,&[9]);ack(&mut stage,1);
+    publish(&mut stage,1,g,&[9]);stage.release_after_publication();ack(&mut stage,1);
 }
 
 #[test]
@@ -292,7 +294,7 @@ fn initialization_never_rebinds_or_revives_after_reset_and_terminal_retirement()
     let mut stage=Stage::UNBOUND;let first=held_binding(150);let other_task=held_binding(151);
     assert!(stage.initialize_once(first));assert!(!stage.initialize_once(first));assert!(!stage.initialize_once(other_task));
     assert_eq!(stage.binding(),Some(first));
-    publish(&mut stage,1,geometry(1,1,1),&[0xff123456]);ack(&mut stage,1);
+    publish(&mut stage,1,geometry(1,1,1),&[0xff123456]);stage.release_after_publication();ack(&mut stage,1);
     stage.reset_surface(15,300);assert!(stage.pixels_scrubbed());assert_eq!(stage.sequence(),1);
     assert!(!stage.initialize_once(first));assert!(!stage.initialize_once(other_task));
     stage.retire(15,150);assert!(stage.scrubbed());assert_eq!(stage.binding(),Some(first));
@@ -309,7 +311,7 @@ fn initialization_never_rebinds_or_revives_after_reset_and_terminal_retirement()
 fn exact_held_task_is_required_before_each_operation_including_poisoning_chunks() {
     let g=geometry(1,1,1);let old=0xff123456;let next=0xffabcdef;
     for wrong_task in [0,15,151,u32::MAX]{for operation in 0..4 {
-        let mut stage=bound_stage();publish(&mut stage,1,g,&[old]);ack(&mut stage,1);
+        let mut stage=bound_stage();publish(&mut stage,1,g,&[old]);stage.release_after_publication();ack(&mut stage,1);
         if operation>0{begin(&mut stage,2,g);}
         if operation>1{chunks(&mut stage,2,&[next]);}
         let sequence=stage.sequence();
@@ -327,7 +329,7 @@ fn exact_held_task_is_required_before_each_operation_including_poisoning_chunks(
         // Rejected task metadata must not poison an otherwise complete exact
         // transaction, and an accepted-looking foreign COMMIT cannot publish.
         assert_eq!(receive(&mut stage,Request::Commit{sequence:2,hash:hash(&[next])}).unwrap().new,Some(g));
-        ack(&mut stage,2);assert_eq!(stage.sample(15,300,10,40),Some(next));
+        stage.release_after_publication();ack(&mut stage,2);assert_eq!(stage.sample(15,300,10,40),Some(next));
     }}
 }
 
@@ -335,6 +337,7 @@ fn exact_held_task_is_required_before_each_operation_including_poisoning_chunks(
 fn bound_full_historical_receipt_keeps_destination_and_sequence_after_reset() {
     let mut stage=bound_stage();let binding=held_binding(150);let g=geometry(1,1,1);
     publish(&mut stage,7,g,&[0xff112233]);
+    assert!(stage.release_after_publication());
     let expected=(15,Applied{surface:300,sequence:7}.encode().unwrap());
     for _ in 0..3{stage.poll_reply(|target,word|{assert_eq!((target,word),expected);99});}
     assert!(!stage.initialize_once(held_binding(151)));
@@ -349,6 +352,7 @@ fn bound_full_historical_receipt_keeps_destination_and_sequence_after_reset() {
     }
     stage.poll_reply(|target,word|{assert_eq!((target,word),expected);0});assert!(stage.scrubbed());
     let change=receive(&mut stage,Request::Clear{sequence:8}).unwrap();assert_eq!((change.old,change.new),(None,None));
+    assert!(stage.release_after_publication());
     stage.poll_reply(|target,word|{assert_eq!((target,word),(15,Applied{surface:300,sequence:8}.encode().unwrap()));0});
     assert!(stage.scrubbed());
 }
@@ -356,15 +360,137 @@ fn bound_full_historical_receipt_keeps_destination_and_sequence_after_reset() {
 #[test]
 fn wrong_task_retirement_cannot_erase_staging_publication_or_retained_completion() {
     let mut stage=bound_stage();let g=geometry(1,1,1);
-    publish(&mut stage,1,g,&[0xff123456]);ack(&mut stage,1);begin(&mut stage,2,g);chunks(&mut stage,2,&[0xffabcdef]);
+    publish(&mut stage,1,g,&[0xff123456]);stage.release_after_publication();ack(&mut stage,1);begin(&mut stage,2,g);chunks(&mut stage,2,&[0xffabcdef]);
     for (owner,task) in [(15,0),(15,15),(15,151),(0,150),(3,150),(u32::MAX,150)] {
         stage.retire(owner,task);assert_eq!(stage.sequence(),2);assert_eq!(stage.geometry(),Some(g));
         assert_eq!(stage.sample(15,300,10,40),Some(0xff123456));
     }
     receive(&mut stage,Request::Commit{sequence:2,hash:hash(&[0xffabcdef])}).unwrap();
-    stage.retire(15,15);assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));ack(&mut stage,2);
+    stage.retire(15,15);assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));stage.release_after_publication();ack(&mut stage,2);
     publish(&mut stage,3,g,&[0xff010203]);stage.retire(15,150);
     assert!(stage.scrubbed());assert_eq!(stage.sample(15,300,10,40),None);
     stage.poll_reply(|_,_|panic!("exact retirement removes pending completion"));
     assert!(!stage.initialize_once(held_binding(150)));
+}
+
+fn completed_request(stage: &mut Stage, clear: bool) -> Request {
+    if clear {
+        let request=Request::Clear{sequence:7};
+        assert_eq!(receive(stage,request).unwrap(),transaction::Change{old:None,new:None});
+        request
+    } else {
+        publish(stage,7,geometry(1,1,1),&[0xff123456]);
+        Request::Commit{sequence:7,hash:hash(&[0xff123456])}
+    }
+}
+
+#[test]
+fn unreleased_completion_cannot_reply_or_be_bypassed_by_duplicates() {
+    for clear in [false,true] {
+        let mut stage=bound_stage();let request=completed_request(&mut stage,clear);
+        // Failed/absent Full publication supplies no release. Neither an empty
+        // Clear nor repeated COMMIT may turn admission into settlement.
+        for _ in 0..4 {
+            assert!(stage.needs_publication());
+            assert_eq!(receive(&mut stage,request),None);
+            stage.poll_reply(|_,_|panic!("unreleased completion replied"));
+            begin(&mut stage,8,geometry(2,1,1));
+            assert_eq!(receive(&mut stage,Request::Clear{sequence:9}),None);
+            assert_eq!(stage.sequence(),7);
+        }
+        assert!(stage.release_after_publication());assert!(!stage.needs_publication());
+        assert!(!stage.release_after_publication());
+        let expected=(15,Applied{surface:300,sequence:7}.encode().unwrap());
+        let mut attempts=0;
+        for _ in 0..4 {
+            stage.poll_reply(|owner,word|{attempts+=1;assert_eq!((owner,word),expected);99});
+            begin(&mut stage,8,geometry(2,1,1));
+            assert_eq!(receive(&mut stage,Request::Clear{sequence:9}),None);
+            assert_eq!(stage.sequence(),7);assert!(!stage.needs_publication());
+        }
+        assert_eq!(attempts,4);ack(&mut stage,7);
+        assert!(!stage.release_after_publication());
+        stage.poll_reply(|_,_|panic!("publication replayed sent completion"));
+        assert_eq!(receive(&mut stage,request),None);
+        assert!(!stage.needs_publication());ack(&mut stage,7);
+        begin(&mut stage,8,geometry(1,1,1));assert_eq!(stage.sequence(),8);
+        assert!(!stage.needs_publication());assert!(!stage.release_after_publication());
+    }
+}
+
+#[test]
+fn reset_before_release_retains_custody_but_erases_every_pixel() {
+    for clear in [false,true] {for eligible in [false,true] {
+        let mut stage=bound_stage();let request=completed_request(&mut stage,clear);
+        if eligible {assert!(stage.release_after_publication());}
+        stage.reset_surface(15,300);
+        assert_eq!(stage.binding(),Some(held_binding(150)));
+        assert_eq!(stage.sequence(),7);assert!(stage.pixels_scrubbed());
+        assert!(!stage.scrubbed());assert_eq!(stage.needs_publication(),!eligible);
+        let mut snapshot=transaction::Published::EMPTY;stage.snapshot_into(&mut snapshot);
+        assert!(snapshot.pixels_scrubbed());assert_eq!(snapshot.geometry(),None);
+        assert_eq!(snapshot.sample(15,300,10,40),None);
+        assert_eq!(receive(&mut stage,request),None);
+        assert_eq!(stage.needs_publication(),!eligible);
+        if !eligible {stage.poll_reply(|_,_|panic!("reset released historical receipt early"));}
+        begin(&mut stage,8,geometry(1,1,1));assert_eq!(stage.sequence(),7);
+        assert_eq!(receive(&mut stage,Request::Clear{sequence:8}),None);
+        assert_eq!(stage.release_after_publication(),!eligible);
+        ack(&mut stage,7);assert!(stage.scrubbed());
+        // Sent history may requeue after reset, without replaying any payload.
+        stage.reset_surface(15,300);assert_eq!(receive(&mut stage,request),None);
+        assert!(!stage.needs_publication());ack(&mut stage,7);
+        assert!(stage.pixels_scrubbed());assert_eq!(stage.sample(15,300,10,40),None);
+    }}
+}
+
+#[test]
+fn terminal_retirement_cancels_unreleased_eligible_and_sent_history() {
+    for clear in [false,true] {for phase in 0..3 {
+        let mut stage=bound_stage();let request=completed_request(&mut stage,clear);
+        if phase>0 {assert!(stage.release_after_publication());}
+        if phase==2 {ack(&mut stage,7);}
+        stage.retire(15,15);assert_eq!(stage.needs_publication(),phase==0);
+        stage.retire(15,150);assert!(stage.scrubbed());
+        assert!(!stage.needs_publication());assert!(!stage.release_after_publication());
+        stage.reset_surface(15,300);assert_eq!(receive(&mut stage,request),None);
+        assert!(!stage.release_after_publication());
+        stage.poll_reply(|_,_|panic!("terminal history replied"));
+        assert_eq!(stage.sequence(),7);assert_eq!(stage.binding(),Some(held_binding(150)));
+    }}
+}
+
+#[test]
+fn independent_eligible_owner_progresses_while_other_receipt_is_full() {
+    let mut first=bound_stage();completed_request(&mut first,true);
+    let mut second=Stage::UNBOUND;
+    let binding=bitmap_binding::Binding::from_catalog(154,app_lifecycle::CatalogInfo{
+        target_pd:30,task_id:300,surface_id:343,coordinator_pd:3}).unwrap();
+    assert!(second.initialize_once(binding));
+    assert!(second.receive(30,300,343,Request::Clear{sequence:11}).is_some());
+    assert!(first.release_after_publication());assert!(second.release_after_publication());
+    let mut attempts=Vec::new();
+    for _ in 0..3 {
+        first.poll_reply(|owner,word|{attempts.push((owner,word));99});
+        second.poll_reply(|owner,word|{attempts.push((owner,word));0});
+    }
+    assert_eq!(attempts,vec![
+        (15,Applied{surface:300,sequence:7}.encode().unwrap()),
+        (30,Applied{surface:343,sequence:11}.encode().unwrap()),
+        (15,Applied{surface:300,sequence:7}.encode().unwrap()),
+        (15,Applied{surface:300,sequence:7}.encode().unwrap()),
+    ]);
+    assert!(!first.needs_publication());assert!(!second.needs_publication());
+    ack(&mut first,7);
+}
+
+#[test]
+fn unbound_incomplete_or_rejected_transfer_cannot_acquire_release() {
+    let mut unbound=Stage::UNBOUND;
+    assert!(!unbound.needs_publication());assert!(!unbound.release_after_publication());
+    let mut stage=bound_stage();begin(&mut stage,1,geometry(1,1,1));chunks(&mut stage,1,&[9]);
+    assert!(!stage.needs_publication());assert!(!stage.release_after_publication());
+    assert_eq!(receive(&mut stage,Request::Commit{sequence:1,hash:0}),None);
+    assert!(!stage.needs_publication());assert!(!stage.release_after_publication());
+    stage.poll_reply(|_,_|panic!("rejected transfer replied"));
 }

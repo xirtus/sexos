@@ -98,6 +98,8 @@ fn receipt(owner:u32,word:u64)->Applied{
   let change=packet(&mut stores,*b,Request::Commit{sequence:7,hash:hash(&[color(*b),color(*b)+1])}).unwrap();assert_eq!(change.old,None);
   assert_eq!(value(&stores,*b),Some(color(*b)));assert_eq!(stores.sample(b.target(),b.surface(),12,40),Some(color(*b)+1));
  }
+ assert!(stores.needs_publication());stores.poll_reply(|_,_|panic!("unreleased aggregate receipt"));
+ assert_eq!(stores.release_after_publication(),COUNT);assert!(!stores.needs_publication());assert_eq!(stores.release_after_publication(),0);
  let mut seen=Vec::new();stores.poll_reply(|owner,word|{assert_eq!(receipt(owner,word).sequence,7);seen.push(owner);0});
  assert_eq!(seen,all.iter().map(|b|b.target()).collect::<Vec<_>>());
  stores.poll_reply(|_,_|panic!("accepted receipts must not repeat"));
@@ -105,6 +107,7 @@ fn receipt(owner:u32,word:u64)->Applied{
 #[test]fn identical_payload_hash_and_sequence_still_produce_distinct_bound_receipts(){
  let mut stores=configured();let all=bindings();let pixels=[0xffabcdef,0x80123456];
  for b in &all{publish(&mut stores,*b,11,g(),&pixels);}
+ assert_eq!(stores.release_after_publication(),COUNT);
  let mut seen=Vec::new();stores.poll_reply(|owner,word|{assert_eq!(receipt(owner,word).sequence,11);seen.push((owner,word));u64::MAX});
  assert_eq!(seen.len(),COUNT);for(i,left)in seen.iter().enumerate(){for right in seen.iter().skip(i+1){assert_ne!(left.0,right.0);assert_ne!(left.1,right.1);}}
  stores.poll_reply(|_,_|0);let old=all[0];assert!(packet(&mut stores,old,Request::Clear{sequence:12}).is_some());
@@ -112,18 +115,20 @@ fn receipt(owner:u32,word:u64)->Applied{
 }
 #[test]fn full_owner_keeps_exact_destination_without_starving_other_stores(){
  let mut stores=configured();let all=bindings();for b in &all{publish(&mut stores,*b,7,g(),&[color(*b),color(*b)+1]);}
+ assert_eq!(stores.release_after_publication(),COUNT);
  let old=all[0];let mut first=Vec::new();stores.poll_reply(|owner,word|{first.push((owner,word));if owner==old.target(){u64::MAX}else{0}});
  assert_eq!(first.len(),COUNT);assert_eq!(first.iter().map(|v|v.0).collect::<Vec<_>>(),all.iter().map(|b|b.target()).collect::<Vec<_>>());
  for _ in 0..3{let mut seen=Vec::new();stores.poll_reply(|owner,word|{seen.push((owner,word));u64::MAX});assert_eq!(seen,vec![first[0]]);
   packet(&mut stores,old,Request::Begin{sequence:8,geometry:g()});assert_eq!(stores.sequence(old.target(),old.surface()),Some(7));assert_eq!(value(&stores,old),Some(color(old)));
  }
  for b in all.iter().skip(1){assert!(packet(&mut stores,*b,Request::Clear{sequence:8}).is_some());}
+ assert_eq!(stores.release_after_publication(),COUNT-1);
  let mut next=Vec::new();stores.poll_reply(|owner,word|{next.push((owner,receipt(owner,word).sequence));if owner==old.target(){u64::MAX}else{0}});
  assert_eq!(next.len(),COUNT);assert_eq!(next[0],(old.target(),7));for item in next.iter().skip(1){assert_eq!(item.1,8);}
  stores.poll_reply(|owner,word|{assert_eq!((owner,word),first[0]);0});
 }
 #[test]fn wrong_stamped_tasks_and_crossed_subjects_cannot_poison_or_publish_a_stage(){
- let mut stores=configured();let all=bindings();for b in &all{publish(&mut stores,*b,1,g(),&[color(*b),color(*b)+1]);}stores.poll_reply(|_,_|0);
+ let mut stores=configured();let all=bindings();for b in &all{publish(&mut stores,*b,1,g(),&[color(*b),color(*b)+1]);}stores.release_after_publication();stores.poll_reply(|_,_|0);
  for b in &all{packet(&mut stores,*b,Request::Begin{sequence:2,geometry:g()});chunks(&mut stores,*b,2,&[color(*b)+2,color(*b)+3]);
   let malicious=[Request::Begin{sequence:2,geometry:Geometry{width:1,..g()}},Request::Chunk{sequence:2,offset:0,count:2,pixels:[0,0]},Request::Commit{sequence:2,hash:0},Request::Clear{sequence:99}];
   for bad_task in[0,b.target(),b.task()+1,u32::MAX]{for request in malicious{assert_eq!(stores.receive(b.target(),bad_task,b.surface(),request),None);}}
@@ -139,6 +144,7 @@ fn receipt(owner:u32,word:u64)->Applied{
  assert_eq!(stores.initialized_count(),COUNT);assert_eq!(stores.binding_for(old.target(),old.surface()),Some(old));
  assert!(!stores.initialize_once(old));let replacement=Binding::from_catalog(old.slot(),app_lifecycle::CatalogInfo{target_pd:old.target(),task_id:old.task()+1,surface_id:old.surface(),coordinator_pd:3}).unwrap();assert!(!stores.initialize_once(replacement));
  stores.reset_surface(old.target(),old.surface());for request in requests(u32::MAX){assert_eq!(packet(&mut stores,old,request),None);}
+ assert_eq!(stores.release_after_publication(),COUNT-1);
  let mut seen=Vec::new();stores.poll_reply(|owner,word|{assert_ne!(owner,old.target());assert_eq!(receipt(owner,word).sequence,5);seen.push(owner);0});assert_eq!(seen.len(),COUNT-1);
  for b in all.into_iter().skip(1){assert_eq!(value(&stores,b),Some(color(b)));assert_eq!(stores.scrubbed(b.target(),b.surface()),Some(false));publish(&mut stores,b,6,g(),&[3,4]);assert_eq!(value(&stores,b),Some(3));}
  assert_eq!(stores.scrubbed(old.target(),old.surface()),Some(true));assert_eq!(stores.sequence(old.target(),old.surface()),Some(5));
@@ -149,6 +155,7 @@ fn receipt(owner:u32,word:u64)->Applied{
  assert_eq!(stores.sequence(old.target(),old.surface()),Some(7));assert_eq!(value(&stores,old),None);assert_eq!(stores.pixels_scrubbed(old.target(),old.surface()),Some(true));assert_eq!(stores.scrubbed(old.target(),old.surface()),Some(false));
  for b in all.iter().skip(1){assert_eq!(value(&stores,*b),Some(color(*b)));}
  packet(&mut stores,old,Request::Begin{sequence:8,geometry:g()});assert_eq!(stores.sequence(old.target(),old.surface()),Some(7));
+ assert!(stores.needs_publication());stores.poll_reply(|_,_|panic!("reset cannot release a historical receipt"));assert_eq!(stores.release_after_publication(),COUNT);
  let mut historical=None;stores.poll_reply(|owner,word|{if owner==old.target(){assert_eq!(receipt(owner,word).sequence,7);historical=Some((owner,word));u64::MAX}else{0}});
  stores.poll_reply(|owner,word|{assert_eq!(Some((owner,word)),historical);0});assert_eq!(stores.scrubbed(old.target(),old.surface()),Some(true));
  assert_eq!(packet(&mut stores,old,Request::Commit{sequence:7,hash:hash(&[color(old),color(old)+1])}),None);assert_eq!(value(&stores,old),None);
@@ -189,6 +196,7 @@ use bitmap_transaction::{Published,Stage};
  assert_eq!(image.binding_for(b.target(),b.surface()),Some(b));stores.poll_reply(|_,_|panic!("snapshot manufactured pending reply"));
  packet(&mut stores,b,Request::Commit{sequence:1,hash:hash(&[11,12])}).unwrap();
  assert!(stores.snapshot_into(&mut image));assert_eq!(image.sample(b.target(),b.surface(),10,40),Some(11));
+ assert!(stores.needs_publication());stores.poll_reply(|_,_|panic!("snapshot cannot release completion"));assert_eq!(stores.release_after_publication(),1);
  let mut replies=Vec::new();stores.poll_reply(|o,v|{replies.push((o,v));2});stores.poll_reply(|o,v|{assert_eq!(replies[0],(o,v));0});
  packet(&mut stores,b,Request::Begin{sequence:2,geometry:g()});chunks(&mut stores,b,2,&[21,22]);
  let mut pending=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut pending));assert_eq!(pending.sample(b.target(),b.surface(),10,40),Some(11));
@@ -198,9 +206,9 @@ use bitmap_transaction::{Published,Stage};
  assert_eq!(image.sample(b.target(),b.surface(),10,40),Some(11));
 }
 #[test]fn snapshot_is_owned_across_later_commit_clear_and_retirement(){
- let mut stores=configured();let b=bindings()[0];publish(&mut stores,b,1,g(),&[11,12]);stores.poll_reply(|_,_|0);
+ let mut stores=configured();let b=bindings()[0];publish(&mut stores,b,1,g(),&[11,12]);stores.release_after_publication();stores.poll_reply(|_,_|0);
  let mut old=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut old));
- publish(&mut stores,b,2,g(),&[21,22]);stores.poll_reply(|_,_|0);assert_eq!(old.sample(b.target(),b.surface(),10,40),Some(11));
+ publish(&mut stores,b,2,g(),&[21,22]);stores.release_after_publication();stores.poll_reply(|_,_|0);assert_eq!(old.sample(b.target(),b.surface(),10,40),Some(11));
  let mut current=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut current));assert_eq!(current.sample(b.target(),b.surface(),10,40),Some(21));
  packet(&mut stores,b,Request::Clear{sequence:3}).unwrap();assert!(stores.snapshot_into(&mut current));assert_eq!(current.sample(b.target(),b.surface(),10,40),None);assert!(current.pixels_scrubbed());assert_eq!(current.binding_for(b.target(),b.surface()),Some(b));
  stores.retire(b.target(),b.task());assert!(stores.snapshot_into(&mut current));assert!(current.matches_surface(b.target(),b.surface()));assert_eq!(current.sample(b.target(),b.surface(),10,40),None);

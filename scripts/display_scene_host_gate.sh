@@ -30,6 +30,11 @@ def wiring(s):
     assert finish.split('{',1)[1].startswith(guard+';}'),'cleanup completion must fence before all render/ACK/reply effects'
     assert 'render('not in finish and 'render_prepared('not in finish and 'APP_PRESENT_BITS'not in finish,'completion may not render or rejoin live global pixel bits'
     assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack('),'full captured receipt/commit/ACK order'
+    helper=compact(function(s,'typed_completion_needs_publication'))
+    assert 'TEXT_STAGES.iter().any(text_transaction::Stage::needs_publication)'in helper and '||BITMAP_STORES.needs_publication()'in helper,'typed completion forcing must include both stores'
+    assert 'lettransaction_full_render=typed_completion_needs_publication()||lifecycle.needs_presentation()'in compact(s),'actual Main must turn completion custody into full output work'
+    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('stage.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'text eligibility must follow Full receipt after initial scene fence'
+    assert finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'bitmap eligibility must follow same Full'
     assert render=='fnrender(fb:*mutu32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}','bootstrap full uses prepared publication'
     prepared=compact(function(s,'render_prepared'));batch=compact(function(s,'raster_batch'))
     assert prepared.index('ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{returnNone;}')<prepared.index('FRAME_OUTPUT.as_mut()'),'reject nested render before exclusive store borrow'
@@ -72,7 +77,7 @@ for name in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','scene_bar_blur_row
 parent_path=out/'parent.rs';parent_path.write_text('\n'.join(parent))
 lease=[]
 for name in ['RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID','RENDER_FRAME_COUNTER','TEXT_STAGES','TOKEN_BUF_CALL1_RECEIVED','TOKEN_BUF_OWNER','TOKEN_BUF_ARG0','TOKEN_BUF_ARG1','TOKEN_BUF_ARG2','CURSOR_UNDER_VALID','APP_PRESENT_BITS','CLOCK_CANON_SS','FRAME_OUTPUT','PREPARED_CURSOR']:lease.append(item(source,name))
-lease +=[block(source,'struct PublishedFrame{'),'#[derive(Clone,Copy)]\n'+block(source,'struct PreparedCursor{'),block(source,'struct SceneLease {'),block(source,'impl SceneLease {'),block(source,'impl Drop for SceneLease {'),function(source,'prepare_app_cleanup'),function(source,'finish_display_transactions')]
+lease +=[block(source,'struct PublishedFrame{'),'#[derive(Clone,Copy)]\n'+block(source,'struct PreparedCursor{'),block(source,'struct SceneLease {'),block(source,'impl SceneLease {'),block(source,'impl Drop for SceneLease {'),function(source,'prepare_app_cleanup'),function(source,'typed_completion_needs_publication'),function(source,'finish_display_transactions')]
 lease_source='\n'.join(lease);lease_path=out/'lease.rs';lease_path.write_text(lease_source)
 # Re-resolve ordinary module paths from the canonical repository tests folder,
 # even when a temporary proposed fixture is supplied before promotion.
@@ -96,12 +101,19 @@ def compile_run(name,scene,lease,exact=None,rejected=False):
     else:assert f'test result: ok. {cases} passed; 0 failed;'in text;print(text,end='')
 compile_run('actual',scene_path,lease_path)
 controls=[('surface-copy-omitted','scene','self.surfaces.copy_from_slice(surfaces);','/* omitted capture */','every_surface_slot_preserves_all_bytes_selection_layout_fill_and_cursor'),('scrub-length-only','scene','core::ptr::write_volatile(surface,SURFACE_EMPTY);','surface.text_len=0;','failed_bitmap_capture_scrubs_the_entire_old_scene'),('nested-recapture','lease','if (*core::ptr::addr_of!(RENDER_SCENE)).is_valid() { return None; }','/* recapture allowed */','actual_lease_rejects_nested_capture_without_changing_live_snapshot'),('drop-without-scrub','lease','(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub();','/* no drop scrub */','actual_lease_drop_early_return_and_host_unwind_scrub_owned_payload'),('prepare-during-lease','lease','if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return false;}','/* no preparation fence */','actual_cleanup_functions_withhold_effects_and_ack_until_render_lease_drops'),('finish-during-lease','lease','if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}','/* no completion fence */','actual_cleanup_functions_withhold_effects_and_ack_until_render_lease_drops')]
+controls +=[
+ ('typed-nonfull-release','lease','published.filter(|frame|frame.plan.is_full())','published','actual_typed_completions_wait_for_full_scene_release_then_retry_independently'),
+ ('typed-text-not-released','lease','stage.release_after_publication() as usize','0usize','actual_typed_completions_wait_for_full_scene_release_then_retry_independently'),
+ ('typed-bitmap-not-released','lease','BITMAP_STORES.release_after_publication()','0usize','actual_typed_completions_wait_for_full_scene_release_then_retry_independently'),
+ ('typed-helper-text-omitted','lease','TEXT_STAGES.iter().any(text_transaction::Stage::needs_publication)','false','actual_typed_text_noop_empty_and_hidden_completion_force_publication'),
+ ('typed-helper-bitmap-omitted','lease','BITMAP_STORES.needs_publication()','false','actual_typed_bitmap_empty_and_hidden_completion_force_publication'),
+]
 for name,target,old,new,test in controls:
     base=scene_path.read_text()if target=='scene'else lease_source;changed=once(base,old,new);path=out/(name+'-module.rs');path.write_text(changed)
     compile_run(name,path if target=='scene'else scene_path,path if target=='lease'else lease_path,test,True)
     print('[display.scene.mutant] rejected='+name+' exact='+test)
 assert main_path.read_text()==source,'Main changed during host proof; rerun against a fixed source capture'
-proof=dict(ok=True,actual_cases=cases,compiled_runtime_mutants=len(controls),source_fence_controls=len(wiring_controls),scope='actual_Scene_Main_lease_cleanup_with_finite_service_and_renderer_boundaries_not_native_pixels_authority_or_epoch_closure',sha256={str(v):hashlib.sha256(v.read_bytes()).hexdigest()for v in[main_path,scene_path,groups_path,fixture_path,root/'servers/sexdisplay/src/frame_output.rs',root/'crates/sex-pdx/src/display_frames.rs',root/'crates/sex-pdx/src/memory_region.rs',root/'servers/sexdisplay/src/paint_batch.rs',root/'servers/sexdisplay/src/damage.rs']})
+proof=dict(ok=True,actual_cases=cases,compiled_runtime_mutants=len(controls),source_fence_controls=len(wiring_controls),scope='actual_Scene_Main_lease_cleanup_with_finite_service_and_renderer_boundaries_not_native_pixels_authority_or_epoch_closure',sha256={str(v):hashlib.sha256(v.read_bytes()).hexdigest()for v in[main_path,scene_path,groups_path,fixture_path,root/'servers/sexdisplay/src/frame_output.rs',root/'crates/sex-pdx/src/display_frames.rs',root/'crates/sex-pdx/src/memory_region.rs',root/'servers/sexdisplay/src/paint_batch.rs',root/'servers/sexdisplay/src/damage.rs',root/'servers/sexdisplay/src/text_transaction.rs',root/'servers/sexdisplay/src/bitmap_transaction.rs',root/'servers/sexdisplay/src/bitmap_stores.rs']})
 (out/'result.json').write_text(json.dumps(proof,indent=2)+'\n');print('[display.scene.host] PASS '+json.dumps(proof,sort_keys=True))
 if managed:managed.cleanup()
 PY

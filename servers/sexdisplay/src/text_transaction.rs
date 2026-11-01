@@ -3,6 +3,9 @@ use sex_pdx::text_batch::{hash, selected_hash, Request, CAPACITY};
 #[derive(Clone, Copy)]
 pub struct Stage {
     owner: u32,
+    // Admitted multipart context correlation, not task-routed reply authority.
+    // Completion transport remains addressed to owner PD.
+    task: u32,
     sid: u64,
     sequence: u32,
     len: usize,
@@ -14,11 +17,13 @@ pub struct Stage {
     sealed: bool,
     poisoned: bool,
     reply_pending: bool,
+    reply_released: bool,
     bytes: [u8; CAPACITY],
 }
 impl Stage {
     pub const EMPTY: Self = Self {
         owner: 0,
+        task: 0,
         sid: 0,
         sequence: 0,
         len: 0,
@@ -30,6 +35,7 @@ impl Stage {
         sealed: false,
         poisoned: false,
         reply_pending: false,
+        reply_released: false,
         bytes: [0; CAPACITY],
     };
     pub fn diagnostic(&self)->(u32,u64,u32,usize,u64,bool,bool){(self.owner,self.sid,self.sequence,self.len,self.coverage,self.sealed,self.poisoned)}
@@ -51,17 +57,26 @@ impl Stage {
         let chunks = (self.len + 7) / 8;
         if chunks == 64 { u64::MAX } else { (1u64 << chunks) - 1 }
     }
-    pub fn retire(&mut self, owner: u32) {
-        if self.owner == owner {
+    pub fn retire(&mut self, owner: u32, task: u32) {
+        if (self.owner, self.task) == (owner, task) {
             self.reset();
         }
+    }
+    /// A sealed transaction still needs a successful Display publication.
+    pub fn needs_publication(&self) -> bool { self.reply_pending && !self.reply_released }
+    /// Main calls this only after successful publication and SceneLease release.
+    /// This changes eligibility, not the retained PD-routed reply's identity.
+    pub fn release_after_publication(&mut self) -> bool {
+        if !self.needs_publication() { return false; }
+        self.reply_released = true;
+        true
     }
     /// One retained completion attempt per display pass. Actual reply transport
     /// preserves sender identity. Legacy syscall 29 collapses Full and denial
     /// into nonzero status, so retain every nonzero result until admitted or
     /// authoritative surface/app cleanup cancels it. Never replay the mutation.
     pub fn poll_reply(&mut self, mut reply: impl FnMut(u32, u64) -> u64) {
-        if !self.reply_pending {
+        if !self.reply_pending || !self.reply_released {
             return;
         }
         let Ok(surface) = u16::try_from(self.sid) else {
@@ -78,17 +93,21 @@ impl Stage {
         };
         if reply(self.owner, value) == 0 {
             self.reply_pending = false;
+            self.reply_released = false;
         }
     }
     /// Caller identity and live surface ownership must already be attested by display.
-    /// A new (owner,sid) binding cannot consume a previous binding's partial bytes.
+    /// A new (owner,task,sid) binding cannot consume a previous binding's partial bytes.
     pub fn receive(
         &mut self,
         owner: u32,
+        task: u32,
         sid: u64,
         request: Request,
     ) -> Option<(usize, u32, &[u8; CAPACITY])> {
-        if owner == 0 || sid == 0 {
+        // Applied carries a 16-bit SID. Reject unencodable values before any
+        // staging/reset/poison effect; this is a wire bound, not surface authority.
+        if owner == 0 || task == 0 || sid == 0 || sid > u16::MAX as u64 {
             return None;
         }
         match request {
@@ -97,10 +116,13 @@ impl Stage {
                 len,
                 color,
             } => {
+                // Neither an unreleased nor a Full-retained completion may be
+                // replaced or poisoned by another Begin, even another tuple.
+                if self.reply_pending { return None; }
                 if sequence == 0 || len > CAPACITY {
                     return None;
                 }
-                if self.owner != owner || self.sid != sid {
+                if (self.owner, self.task, self.sid) != (owner, task, sid) {
                     self.reset();
                 }
                 if sequence < self.sequence {
@@ -115,6 +137,7 @@ impl Stage {
                 self.reset();
                 *self = Self {
                     owner,
+                    task,
                     sid,
                     sequence,
                     len,
@@ -128,7 +151,7 @@ impl Stage {
                 count,
                 bytes,
             } => {
-                if (self.owner, self.sid, self.sequence) != (owner, sid, sequence)
+                if (self.owner, self.task, self.sid, self.sequence) != (owner, task, sid, sequence)
                     || self.sealed
                     || self.poisoned
                 {
@@ -152,7 +175,7 @@ impl Stage {
                 self.coverage |= bit;
             }
             Request::Select { sequence, start, end } => {
-                if (self.owner, self.sid, self.sequence) != (owner, sid, sequence)
+                if (self.owner, self.task, self.sid, self.sequence) != (owner, task, sid, sequence)
                     || self.sealed || self.poisoned { return None; }
                 if self.coverage != self.complete() || start > end || end > self.len
                     || !sex_pdx::text_encoding::is_boundary(&self.bytes[..self.len],start)
@@ -170,7 +193,7 @@ impl Stage {
                 sequence,
                 hash: expected,
             } => {
-                if (self.owner, self.sid, self.sequence) != (owner, sid, sequence)
+                if (self.owner, self.task, self.sid, self.sequence) != (owner, task, sid, sequence)
                     || self.sealed
                     || self.poisoned
                 {

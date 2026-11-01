@@ -69,6 +69,15 @@ enum Completed {
     Bitmap(u64),
     Clear,
 }
+/// Completion custody is independent of pixel storage. A live reset can erase
+/// the image before its next Full boundary without stranding the sender.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompletionPhase {
+    None,
+    Unreleased,
+    Eligible,
+    Sent,
+}
 pub struct Stage {
     binding: Option<Binding>,
     sequence: u32,
@@ -79,7 +88,7 @@ pub struct Stage {
     published: [u32; CAPACITY],
     completed: Completed,
     poisoned: bool,
-    reply_pending: bool,
+    completion_phase: CompletionPhase,
     retired: bool,
 }
 fn erase(pixels: &mut [u32]) {
@@ -136,7 +145,7 @@ impl Stage {
         published: [0; CAPACITY],
         completed: Completed::None,
         poisoned: false,
-        reply_pending: false,
+        completion_phase: CompletionPhase::None,
         retired: false,
     };
     /// Copy only already committed pixels into preallocated scene backing.
@@ -175,9 +184,10 @@ impl Stage {
         self.erase_staging();
         self.poisoned = true;
     }
-    /// Live destroy/recreate erases every pixel while keeping the sequence
-    /// fence and any historical publication receipt awaiting admission. That
-    /// receipt attests a past state publication, never current visible pixels.
+    /// Live destroy/recreate erases every pixel while retaining the sequence,
+    /// completion fingerprint and receipt custody. An unreleased completion
+    /// still waits for a Full boundary processing this reset; an eligible one
+    /// remains historical. Neither receipt promises current visible pixels.
     pub fn reset_surface(&mut self, owner: u32, sid: u64) {
         if !self.matches_surface(owner, sid) {
             return;
@@ -195,7 +205,7 @@ impl Stage {
         }
         self.reset_surface(binding.target(), binding.surface());
         self.completed = Completed::None;
-        self.reply_pending = false;
+        self.completion_phase = CompletionPhase::None;
         self.retired = true;
     }
     pub fn geometry(&self) -> Option<Geometry> {
@@ -223,13 +233,14 @@ impl Stage {
                     }
                     return None;
                 }
-                if self.reply_pending {
+                if self.completion_pending() {
                     return None;
                 }
                 self.erase_staging();
                 self.sequence = sequence;
                 self.geometry = Some(geometry);
                 self.completed = Completed::None;
+                self.completion_phase = CompletionPhase::None;
                 self.poisoned = false;
             }
             Request::Chunk {
@@ -271,7 +282,7 @@ impl Stage {
                     return None;
                 }
                 if self.completed == Completed::Bitmap(expected) {
-                    self.reply_pending = true;
+                    self.requeue_eligible();
                     return None;
                 }
                 if self.poisoned || self.completed != Completed::None {
@@ -302,7 +313,7 @@ impl Stage {
                 self.published_geometry = Some(g);
                 self.erase_staging();
                 self.completed = Completed::Bitmap(expected);
-                self.reply_pending = true;
+                self.completion_phase = CompletionPhase::Unreleased;
                 return Some(Change { old, new: Some(g) });
             }
             Request::Clear { sequence } => {
@@ -311,11 +322,11 @@ impl Stage {
                 }
                 if sequence == self.sequence {
                     if self.completed == Completed::Clear {
-                        self.reply_pending = true;
+                        self.requeue_eligible();
                     }
                     return None;
                 }
-                if self.reply_pending {
+                if self.completion_pending() {
                     return None;
                 }
                 let old = self.published_geometry;
@@ -326,16 +337,37 @@ impl Stage {
                 self.published_geometry = None;
                 self.completed = Completed::Clear;
                 self.poisoned = false;
-                self.reply_pending = true;
+                self.completion_phase = CompletionPhase::Unreleased;
                 return Some(Change { old, new: None });
             }
         }
         None
     }
+    fn completion_pending(&self) -> bool {
+        matches!(self.completion_phase, CompletionPhase::Unreleased | CompletionPhase::Eligible)
+    }
+    fn requeue_eligible(&mut self) {
+        if matches!(self.completion_phase, CompletionPhase::Eligible | CompletionPhase::Sent) {
+            self.completion_phase = CompletionPhase::Eligible;
+        }
+    }
+    pub fn needs_publication(&self) -> bool {
+        !self.retired && self.binding.is_some()
+            && self.completion_phase == CompletionPhase::Unreleased
+    }
+    /// Display calls this only after a successful Full publication and after
+    /// releasing its SceneLease, with no intervening message intake. This
+    /// releases completion custody, not a visibility or hardware-latch claim.
+    /// Repeated boundaries never requeue an already delivered receipt.
+    pub fn release_after_publication(&mut self) -> bool {
+        if !self.needs_publication() { return false; }
+        self.completion_phase = CompletionPhase::Eligible;
+        true
+    }
     /// One attempt per display turn; every nonzero legacy reply status retains
     /// the same receipt. Publication is never replayed to obtain queue space.
     pub fn poll_reply(&mut self, mut reply: impl FnMut(u32, u64) -> u64) {
-        if !self.reply_pending || self.retired {
+        if self.completion_phase != CompletionPhase::Eligible || self.retired {
             return;
         }
         let Some(binding) = self.binding else { return; };
@@ -346,7 +378,7 @@ impl Stage {
         .encode()
         .unwrap();
         if reply(binding.target(), value) == 0 {
-            self.reply_pending = false;
+            self.completion_phase = CompletionPhase::Sent;
         }
     }
     /// Local coordinates only; the compositor independently clips to the actual
@@ -378,7 +410,7 @@ impl Stage {
     }
     #[cfg(test)]
     pub fn scrubbed(&self) -> bool {
-        self.pixels_scrubbed() && !self.reply_pending
+        self.pixels_scrubbed() && !self.completion_pending()
     }
 }
 /// Straight alpha over an opaque compositor pixel. RGB uses integer rounding;

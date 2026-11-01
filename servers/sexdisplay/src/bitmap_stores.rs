@@ -91,6 +91,17 @@ impl<const N:usize> Stores<N>{
     pub fn retire(&mut self,owner:u32,task:u32){
         for stage in &mut self.stages{stage.retire(owner,task);}
     }
+    /// Completion custody is independent of damage: an empty or hidden update
+    /// still waits for an output boundary. This is not a visibility assertion.
+    pub fn needs_publication(&self)->bool{
+        self.stages.iter().any(Stage::needs_publication)
+    }
+    /// Main calls this only after its successful Full publication and release
+    /// of the scene lease, with no intervening intake. No payload is replayed.
+    pub fn release_after_publication(&mut self)->usize{
+        self.stages.iter_mut().filter(|stage|stage.needs_publication())
+            .map(|stage|stage.release_after_publication() as usize).sum()
+    }
     /// At most N attempts per turn, one per Stage. Full at one owner never
     /// prevents another Stage's attempt or changes any receipt's destination.
     pub fn poll_reply(&mut self,mut send:impl FnMut(u32,u64)->u64){
