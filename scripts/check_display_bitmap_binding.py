@@ -65,16 +65,68 @@ def wiring(source):
     text_dispatch=compact(source[text_begin:text_end])
     text_order=['if!browser_text_binding_live(&lifecycle,msg.caller_pd,msg.caller_task,msg.arg0){continue;}',
                 'sex_pdx::text_batch::Request::decode(msg.type_id,msg.arg1,msg.arg2)',
+                'for(index,slot)inSURFACES.iter().enumerate()',
                 'if!slot.active||slot.surface_id!=msg.arg0||slot.owner_pd!=msg.caller_pd{continue;}',
-                'ifletSome((len,color,bytes))=TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request)',
-                '[display.text.committed]', '[display.browser.text.committed]']
+                'ifTEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request).is_some()',
+                'letpending=TEXT_STAGES[index].pending().expect("sealedtextcandidate");',
+                'letcontext=pending.context();', '[display.text.prepared]']
     text_positions=[text_dispatch.index(value)for value in text_order]
-    if text_positions!=sorted(text_positions):raise ValueError('Browser text guard/commit evidence order changed')
-    require(text_dispatch,'if sex_pdx::app_catalog::app_of(msg.caller_pd)==Some(sex_pdx::app_catalog::App::Browser)','Browser-only parallel marker')
-    require(text_dispatch,'"[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",msg.caller_pd,msg.arg0,sequence,len,changed as u8','unchanged historical marker')
-    require(text_dispatch,'"[display.browser.text.committed] target={} task={} surface={} paint={} bytes={} hash={} changed={} pixels=unconfirmed",msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','actual committed plain text hash and sender task')
-    if text_dispatch.index('[display.browser.text.committed]')>=text_dispatch.index('}elseifletsex_pdx::text_batch::Request::Commit'):
-        raise ValueError('Browser marker is not on successful commit branch')
+    if text_positions!=sorted(text_positions):raise ValueError('Browser text guard/seal evidence order changed')
+    require(text_dispatch,'"[display.text.prepared] target={} task={} surface={} paint={} bytes={} pixels=unconfirmed",context.owner(),context.task(),context.surface(),context.sequence(),pending.len()','exact sealed candidate diagnostic')
+    # Intake seals only. Canonical payload/layout and completion eligibility
+    # cannot change here, including through an indirect helper call.
+    for forbidden in ('apply_pending_text(', 'recompute_text_lines(', 'release_matching(',
+                      'release_after_publication(', 'text_buf', 'text_len', 'text_color',
+                      'selection_start', 'selection_end', 'SURFACES.iter_mut()',
+                      '[display.text.committed]', '[display.browser.text.committed]'):
+        if forbidden in text_dispatch:raise ValueError('typed intake changes canonical text or completion: '+forbidden)
+    commit=function(source,'commit_published_text');canonical=compact(commit)
+    commit_order=['for(index,context)incontexts.iter().copied().enumerate()',
+                  'letSome(context)=contextelse{continue;};',
+                  'letstage=&mutTEXT_STAGES[index];',
+                  'letSome(pending)=stage.pending()else{continue;};',
+                  'ifpending.context()!=context{continue;}',
+                  'letslot=&mutSURFACES[index];',
+                  'letlen=pending.len();',
+                  'if!apply_pending_text(slot,&pending){continue;}',
+                  'assert!(stage.release_matching(context));',
+                  '[display.text.committed]', '[display.browser.text.committed]']
+    commit_positions=[canonical.index(value)for value in commit_order]
+    if commit_positions!=sorted(commit_positions):raise ValueError('captured canonical text commit/release order changed')
+    require(commit,'if sex_pdx::app_catalog::app_of(context.owner())==Some(sex_pdx::app_catalog::App::Browser)','Browser-only canonical parallel marker')
+    require(commit,'"[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",context.owner(),context.surface(),context.sequence(),len,changed as u8','unchanged historical marker after canonical commit')
+    require(commit,'"[display.browser.text.committed] target={} task={} surface={} paint={} bytes={} hash={} changed={} pixels=unconfirmed",context.owner(),context.task(),context.surface(),context.sequence(),len,sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','actual canonical bytes hash and retained admitted task')
+    apply=function(source,'apply_pending_text')
+    require(apply,'if !slot.active||slot.owner_pd!=context.owner()||slot.surface_id!=context.surface()||pending.len()>TEXT_BUF_CAP{return false;}','canonical association recheck')
+    require(apply,'slot.text_buf.copy_from_slice(pending.bytes());','owned pending bytes canonical copy')
+    require(apply,'(slot.selection_start,slot.selection_end)=pending.selection();','same candidate selection copy')
+    require(apply,'recompute_text_lines(slot);','actual shared scalar layout recompute')
+    # The successful CPU publication carries contexts copied from the owned
+    # scene. These identities are descriptive, never newly minted authority.
+    prepared=function(source,'render_prepared');publication=compact(prepared)
+    publication_order=['SceneLease::capture(w,h,bar)', 'letscene=lease.view();',
+                       'raster_batch(&target,scene,plan)',
+                       'preparation.commit(|pixels|publish_frame(fb,w,h,pixels))',
+                       'lettext_contexts=scene.text_contexts;',
+                       'Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})']
+    publication_positions=[publication.index(value)for value in publication_order]
+    if publication_positions!=sorted(publication_positions):raise ValueError('captured text context/publication flow changed')
+    require(prepared,'if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return None;}','failed CPU publication withholds captured completion')
+    require(source,'destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h)','actual Stage inputs to owned scene')
+    finish=function(source,'finish_display_transactions');settlement=compact(finish)
+    settlement_order=['ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}',
+                      'ifletSome(published)=published.filter(|frame|frame.plan.is_full()){',
+                      'lettext=commit_published_text(&published.text_contexts);']
+    settlement_positions=[settlement.index(value)for value in settlement_order]
+    if settlement_positions!=sorted(settlement_positions):raise ValueError('canonical text commit escapes Scene/Full fence')
+    if source.count('commit_published_text(')!=2:raise ValueError('canonical text commit has unexpected entrypoint')
+    handoff=compact(start)
+    handoff_start=handoff.index('letpublished=iffb_live&&!plan.is_empty(){')
+    handoff_end=handoff.index('finish_display_transactions(&mutlifecycle,published.as_ref());',handoff_start)
+    if 'pdx_try_listen_raw(' in handoff[handoff_start:handoff_end]:
+        raise ValueError('new intake between captured publication and canonical commit')
+    for boundary in (prepared,commit,finish):
+        if 'pdx_try_listen_raw(' in boundary:raise ValueError('new intake inside text publication/commit boundary')
     cleanup=function(source,'prepare_app_cleanup');clean=compact(cleanup)
     require(cleanup,'let Ok(info)=sex_pdx::app_lifecycle::info(catalog.slot) else {continue;};','actual terminal proof query')
     require(cleanup,'if info.target_pd!=catalog.target_pd || info.task_id!=catalog.task_id || info.required_mask & sex_pdx::app_lifecycle::ROLE_DISPLAY==0 {continue;}','terminal proof tuple and role')
@@ -246,8 +298,13 @@ def check(root,out,main,binding,tests):
               ('BITMAP_STORES.initialize_once(binding)','BITMAP_STORES.initialize_once(binding) || BITMAP_STORES.initialize_once(binding)'),
               ('BITMAP_STORES.sequence(binding.target(),binding.surface())','BITMAP_STORES.sequence(15,300)'),
               ('if !browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0) { continue; }',''),
-              ('msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,','msg.caller_pd,msg.caller_pd,msg.arg0,sequence,len,'),
-              ('sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','0,changed as u8'))
+              ('context.owner(),context.task(),context.surface(),context.sequence(),len,','context.owner(),context.owner(),context.surface(),context.sequence(),len,'),
+              ('sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','0,changed as u8'),
+              ('if pending.context()!=context{continue;}',''),
+              ('published.filter(|frame|frame.plan.is_full())','published'),
+              ('if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}',''),
+              ('let text_contexts=scene.text_contexts;','let text_contexts=[None;MAX_SURFACES];'),
+              ('pending_paint.complete(published.is_some());','pending_paint.complete(published.is_some());let _=sex_pdx::pdx_try_listen_raw(0);'))
     for old,new in controls:
         changed=once(main_source,old,new)
         try:wiring(changed)
@@ -275,7 +332,7 @@ def check(root,out,main,binding,tests):
         changed=once(main_source,old,new)
         compile_run(out,name,text_fixture(root,binding,changed),exact=control,reject=True)
     result=dict(ok=True,metadata_tests=5,actual_live_helper_tests=3,compiled_binding_mutants_rejected=2,actual_browser_text_guard_tests=5,compiled_text_guard_mutants_rejected=3,
-                wiring_controls_rejected=len(controls),scope='actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels')
+                wiring_controls_rejected=len(controls),text_commit_wiring='sealed_candidate_owned_scene_successful_Full_then_canonical_commit_and_exact_release',scope='actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels')
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 
 

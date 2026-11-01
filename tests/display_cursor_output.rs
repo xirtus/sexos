@@ -18,9 +18,12 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../servers/sexdisplay/src/bitmap_stores.rs"]mod bitmap_stores;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"]mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"]mod surface_groups;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../servers/sexdisplay/src/text_transaction.rs"]mod text_transaction;
 #[path="../servers/sexdisplay/src/scene.rs"]mod scene;
 #[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
-use surface_lifecycle::{Surface,MAX_SURFACES,SURFACE_EMPTY};
+use surface_lifecycle::{Surface,MAX_SURFACES,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};
 use surface_groups::FrameGroups;
 use silkbar_model::{DEFAULT_THEME,DEFAULT_SILK_BAR};
 include!(env!("DISPLAY_CURSOR_SOURCE"));
@@ -63,7 +66,7 @@ impl Drop for OutputBoundary{fn drop(&mut self){self.store.scrub();}}
 fn capture((x,y):(i32,i32))->Box<scene::SceneSnapshot>{
  let mut surfaces=[SURFACE_EMPTY;MAX_SURFACES];surfaces[0]=Surface{active:true,owner_pd:3,surface_id:CURSOR_SURFACE_ID,x,y,w:8,h:16,..SURFACE_EMPTY};
  let mut captured=Box::new(scene::SceneSnapshot::EMPTY);
- assert!(captured.capture(&surfaces,&FrameGroups::new(),&bitmap_stores::Stores::UNBOUND,&DEFAULT_SILK_BAR,DEFAULT_RENDER_TOKENS,0,0,W,H));captured
+ assert!(captured.capture(&surfaces,&FrameGroups::new(),&bitmap_stores::Stores::UNBOUND,&[text_transaction::Stage::EMPTY;MAX_SURFACES],&DEFAULT_SILK_BAR,DEFAULT_RENDER_TOKENS,0,0,W,H));captured
 }
 fn background(x:usize,y:usize)->u32{0x00112200+(y as u32)*257+x as u32}
 fn underlay(x:usize,y:usize,menu:u32)->u32{if(20..100).contains(&x)&&(55..105).contains(&y){menu}else{background(x,y)}}

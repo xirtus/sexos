@@ -4,6 +4,9 @@
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../servers/sexdisplay/src/text_transaction.rs"]mod text_transaction;
+static mut TEXT_STAGES:[text_transaction::Stage;MAX_SURFACES]=[text_transaction::Stage::EMPTY;MAX_SURFACES];
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
 #[path="../servers/sexdisplay/src/bitmap_binding.rs"]mod bitmap_binding;
@@ -83,6 +86,7 @@ fn legacy_args(offset:usize,count:usize,color:u32)->u64{
 // HOST fixture reset only: production initializes static UNBOUND backing once
 // from its held query. No packet or compositor operation supplies a binding.
 unsafe fn reset_bitmap_stage(){
+ for stage in &mut TEXT_STAGES{stage.reset();}
  BITMAP_STORES=bitmap_stores::Stores::UNBOUND;
  let catalog=app_lifecycle::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3};
  assert!(BITMAP_STORES.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
@@ -841,7 +845,7 @@ fn reference_contrast(a:u32,b:u32)->f64{
 #[path="../servers/sexdisplay/src/scene.rs"] mod scene;
 fn capture_scene(w:usize,h:usize,focus:u64)->Box<scene::SceneSnapshot>{unsafe{
  let mut snapshot=Box::new(scene::SceneSnapshot::EMPTY);
- assert!(snapshot.capture(&SURFACES,&FRAME_GROUPS,&BITMAP_STORES,&DEFAULT_SILK_BAR,DISPLAY_TOKENS,focus,RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed),w,h));
+ assert!(snapshot.capture(&SURFACES,&FRAME_GROUPS,&BITMAP_STORES,&TEXT_STAGES,&DEFAULT_SILK_BAR,DISPLAY_TOKENS,focus,RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed),w,h));
  snapshot
 }}
 struct SceneLease { snapshot:Box<scene::SceneSnapshot> }
@@ -961,4 +965,98 @@ unsafe fn combined_fixture()->(usize,usize,Vec<u32>){
  assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);assert_eq!(&pixels[51*w..],body.as_slice());
  for y in 0..h{for x in 0..w{assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"cursor/strip {x}/{y}");}}
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
+}}
+
+
+// Actual register protocol + Stage seal, deliberately without publication or
+// Applied release. These are candidate pixels, not canonical text/receipt proof.
+unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selection:(usize,usize)){
+ use text_batch::Request;
+ let surface=SURFACES[index];
+ let mut admit=|request:Request|{
+  let(op,a,b)=request.wire();let decoded=Request::decode(op,a,b).unwrap();
+  TEXT_STAGES[index].receive(surface.owner_pd,task,surface.surface_id,decoded).is_some()
+ };
+ assert!(!admit(Request::Begin{sequence,len:text.len(),color:0xfffafafa}));
+ for(offset,chunk)in text.chunks(8).enumerate(){let mut bytes=[0;8];bytes[..chunk.len()].copy_from_slice(chunk);
+  assert!(!admit(Request::Chunk{sequence,offset:offset*8,count:chunk.len(),bytes}));
+ }
+ assert!(!admit(Request::Select{sequence,start:selection.0,end:selection.1}));
+ assert!(admit(Request::Commit{sequence,hash:text_batch::selected_hash(text,selection.0,selection.1).unwrap()}));
+ assert!(TEXT_STAGES[index].needs_publication());
+}
+
+#[test]fn pending_utf8_scene_pixels_preserve_canonical_text_selection_wrap_and_width_clipping(){unsafe{
+ for width in[128,400]{for focus in[0,300]{
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+  SURFACES[0]=Surface{x:20,y:70,w:width,h:160,text_len:3,text_color:0xff112233,..surf(15,300)};
+  SURFACES[0].text_buf[..3].copy_from_slice(b"OLD");recompute_text_lines(&mut SURFACES[0]);let canonical=SURFACES[0];
+  let bytes="é X abcdefghijklmnopqrs\nß Z".as_bytes();seal_pending_text(0,150,1,bytes,(0,4));
+  let snapshot=capture_scene(600,300,focus);let candidate=&snapshot.surfaces[0];
+  assert_eq!(&candidate.text_buf[..candidate.text_len as usize],bytes);
+  assert_eq!((candidate.selection_start,candidate.selection_end),(0,4));
+  assert_eq!(&candidate.cell_starts[..4],&[0,2,3,4]);
+  if width==128{assert_eq!(candidate.wrap_cols,18);assert_eq!(candidate.line_starts[1],19);}
+  assert_eq!(SURFACES[0].text_buf,canonical.text_buf);assert_eq!(SURFACES[0].text_len,3);
+  assert_eq!((SURFACES[0].text_color,SURFACES[0].selection_start,SURFACES[0].selection_end),(0xff112233,0,0));
+  assert_eq!(SURFACES[0].cell_starts,canonical.cell_starts);
+  let scale=if width==128{1}else{2};assert_eq!(surface_text_scale(candidate),scale);
+  let(tx,ty)=(28,82);let mut ink=0;
+  // Independent source-cell positions: multibyte é, selected blank, then X.
+  // Font bitmaps are the actual fixed ROM; layout/selection expectations here
+  // do not read the candidate's cell or line tables.
+  for(col,scalar)in['é',' ','X'].into_iter().enumerate(){for y in 0..9*scale{for x in 0..6*scale{
+   let rows=scalar_glyph(scalar as u32);
+   let marked=x/scale<5&&y/scale<7&&rows[y/scale]&(1<<(4-x/scale))!=0;
+   let expected=if marked{ink+=1;0xfffafafa}else{0xff36577c};
+   assert_eq!(composite_pixel(tx+col*6*scale+x,ty+y,600,300,0xabcdef,focus,&snapshot),expected,"width={width} focus={focus} col={col} x={x} y={y}");
+  }}}
+  assert!(ink>0);
+  assert_eq!(composite_pixel(20+width as usize,ty,600,300,0xabcdef,focus,&snapshot),0xabcdef);
+  // Source Stage remains unreleased; merely sampling a scene cannot emit Applied.
+  let mut replies=0;TEXT_STAGES[0].poll_reply(|_,_|{replies+=1;0});assert_eq!(replies,0);
+ }}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];reset_bitmap_stage();
+}}
+
+#[test]fn projected_scene_glyphs_are_owned_after_source_stage_and_canonical_surface_reset(){unsafe{
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:120,text_len:3,..surf(15,300)};
+ SURFACES[0].text_buf[..3].copy_from_slice(b"OLD");recompute_text_lines(&mut SURFACES[0]);
+ let text="é X\nß Z".as_bytes();seal_pending_text(0,150,7,text,(0,text.len()));
+ for focus in[0,300]{let mut snapshot=capture_scene(300,230,focus);
+  let before:Vec<_>=(70..190).flat_map(|y|(20..220).map(move|x|(x,y))).map(|(x,y)|composite_pixel(x,y,300,230,0xabcdef,focus,&snapshot)).collect();
+  TEXT_STAGES[0].reset();SURFACES[0]=SURFACE_EMPTY;
+  assert_eq!(&snapshot.surfaces[0].text_buf[..text.len()],text);
+  let after:Vec<_>=(70..190).flat_map(|y|(20..220).map(move|x|(x,y))).map(|(x,y)|composite_pixel(x,y,300,230,0xabcdef,focus,&snapshot)).collect();
+  assert_eq!(before,after);assert!(before.iter().any(|&pixel|pixel==0xfffafafa));
+  snapshot.scrub();assert!(!snapshot.is_valid());assert!(snapshot.surfaces[0].text_buf.iter().all(|&byte|byte==0));
+  if focus==0{SURFACES[0]=Surface{x:20,y:70,w:200,h:120,..surf(15,300)};seal_pending_text(0,150,7,text,(0,text.len()));}
+ }
+ reset_bitmap_stage();
+}}
+
+#[test]fn pending_child_text_projects_without_bypassing_parent_visibility_or_focus_clipping(){unsafe{
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();FRAME_GROUPS.register(cat(12));
+ SURFACES[1]=Surface{x:20,y:70,w:180,h:130,text_len:3,..surf(12,154)};
+ SURFACES[1].text_buf[..3].copy_from_slice(b"OLD");recompute_text_lines(&mut SURFACES[1]);
+ let text="é X".as_bytes();seal_pending_text(1,120,1,text,(0,text.len()));
+ FRAME_GROUPS.observe(&SURFACES);
+ for focus in[0,153,154]{let snapshot=capture_scene(400,300,focus);
+  assert_eq!(&snapshot.surfaces[1].text_buf[..text.len()],text);
+  for y in 70..200{for x in 20..200{assert_eq!(composite_pixel(x,y,400,300,0xabcdef,focus,&snapshot),0xabcdef);}}
+ }
+ SURFACES[0]=Surface{x:10,y:55,w:350,h:230,..surf(3,153)};FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
+ for focus in[0,153,154]{let snapshot=capture_scene(400,300,focus);let child=&snapshot.surfaces[1];let scale=surface_text_scale(child);
+  let(x,y)=(child.x as usize+8+6*scale,child.y as usize+12+8*scale);
+  assert_eq!(composite_pixel(x,y,400,300,0xabcdef,focus,&snapshot),0xff36577c);
+  let mut row=snapshot.groups.row_winners(&snapshot.surfaces,focus,y,400,300).unwrap();
+  assert_eq!(composite_pixel_source(x,y,400,300,0xabcdef,row.source(x),&snapshot),0xff36577c);
+  assert_eq!(&SURFACES[1].text_buf[..3],b"OLD");
+ }
+ SURFACES[0].active=false;
+ for focus in[0,153,154]{let snapshot=capture_scene(400,300,focus);let child=&snapshot.surfaces[1];
+  assert_eq!(composite_pixel(child.x as usize+8,child.y as usize+12,400,300,0xabcdef,focus,&snapshot),0xabcdef);
+ }
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}

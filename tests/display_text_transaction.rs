@@ -455,15 +455,55 @@ fn selected_full_capacity_and_retirement_clear_metadata_bytes_and_pending_receip
 #[test]
 fn production_dispatch_keeps_selection_owned_atomic_damaged_and_terminally_erased() {
     let source=include_str!("../servers/sexdisplay/src/main.rs");
-    let begin=source.find("                sex_pdx::text_batch::BEGIN |").unwrap();
-    let end=source[begin..].find("                // ── Text rendering opcodes").unwrap()+begin;
-    let route=&source[begin..end];
+    fn section<'a>(source:&'a str,start:&str,end:&str)->&'a str {
+        let begin=source.find(start).unwrap();
+        &source[begin..begin+source[begin..].find(end).unwrap()]
+    }
+    fn before(source:&str,first:&str,second:&str){
+        assert!(source.find(first).unwrap()<source.find(second).unwrap(),"{first} must precede {second}");
+    }
+    let route=section(source,"                sex_pdx::text_batch::BEGIN |","                // ── Text rendering opcodes");
     assert!(route.contains("sex_pdx::text_batch::SELECT"));
-    assert!(route.find("slot.owner_pd != msg.caller_pd").unwrap()<route.find("TEXT_STAGES[index].receive").unwrap());
-    assert!(route.find("if let Some((len,color,bytes))").unwrap()<route.find("slot.selection_start = selection_start").unwrap());
-    assert!(route.contains("TEXT_STAGES[index].selection()"));
-    assert!(route.contains("changed |= (slot.selection_start, slot.selection_end) != (selection_start, selection_end)"));
-    assert!(route.contains("text_damage.add(old_damage"));
+    assert!(route.contains("SURFACES.iter().enumerate()"));
+    assert!(!route.contains("iter_mut()"));
+    before(route,"browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0)","TEXT_STAGES[index].receive");
+    before(route,"!slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd","TEXT_STAGES[index].receive");
+    assert!(route.contains("TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request).is_some()"));
+    before(route,"TEXT_STAGES[index].receive","TEXT_STAGES[index].pending()");
+    before(route,"TEXT_STAGES[index].pending()","[display.text.prepared]");
+    for forbidden in ["slot.text_buf","slot.text_len","slot.text_color","slot.selection_start","slot.selection_end","recompute_text_lines", "apply_pending_text", "text_damage.add", "release_", "[display.text.committed]", "[display.browser.text.committed]"] {
+        assert!(!route.contains(forbidden),"typed intake must not mutate/settle canonical text: {forbidden}");
+    }
+    let apply=section(source,"fn apply_pending_text(","fn legacy_text_clear(");
+    before(apply,"slot.owner_pd!=context.owner()","slot.text_buf.copy_from_slice(pending.bytes())");
+    before(apply,"slot.surface_id!=context.surface()","slot.text_buf.copy_from_slice(pending.bytes())");
+    before(apply,"slot.text_buf.copy_from_slice(pending.bytes())","(slot.selection_start,slot.selection_end)=pending.selection()");
+    before(apply,"(slot.selection_start,slot.selection_end)=pending.selection()","recompute_text_lines(slot)");
+    let commit=section(source,"fn commit_published_text(","fn finish_display_transactions(");
+    before(commit,"stage.pending()","if pending.context()!=context{continue;}");
+    before(commit,"if pending.context()!=context{continue;}","if !apply_pending_text(slot,&pending){continue;}");
+    before(commit,"if !apply_pending_text(slot,&pending){continue;}","assert!(stage.release_matching(context))");
+    before(commit,"assert!(stage.release_matching(context))","[display.text.committed]");
+    before(commit,"assert!(stage.release_matching(context))","[display.browser.text.committed]");
+    assert!(!commit.contains("release_after_publication"));
+    assert!(source.contains("text_contexts:[Option<text_transaction::Context>;MAX_SURFACES]"));
+    let lease=section(source,"struct SceneLease", "static mut FOCUSED_SURFACE_ID");
+    assert!(lease.contains("destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,"));
+    assert!(lease.contains("impl Drop for SceneLease"));
+    assert!(lease.contains("(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub()"));
+    let render=section(source,"fn render_prepared(","fn render(fb:");
+    before(render,"SceneLease::capture(w,h,bar)","let scene=lease.view()");
+    before(render,"preparation.commit(|pixels|publish_frame(fb,w,h,pixels))","let text_contexts=scene.text_contexts;");
+    before(render,"let text_contexts=scene.text_contexts;","Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})");
+    let finish=section(source,"fn finish_display_transactions(","pub extern \"C\" fn _start()");
+    before(finish,"(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()","published.filter(|frame|frame.plan.is_full())");
+    before(finish,"published.filter(|frame|frame.plan.is_full())","commit_published_text(&published.text_contexts)");
+    for(start,end,helper)in[("                0xFA => {","                0xFB => {","legacy_text_clear(slot)"),
+        ("                0xFB => {","                0xFC => {","legacy_text_draw(slot,msg.arg1,msg.arg2)")] {
+        let legacy=section(source,start,end);
+        before(legacy,"slot.owner_pd != msg.caller_pd","if TEXT_STAGES[index].needs_publication() { break; }");
+        before(legacy,"if TEXT_STAGES[index].needs_publication() { break; }",helper);
+    }
     let lifecycle=include_str!("../servers/sexdisplay/src/surface_lifecycle.rs");
     assert!(lifecycle.contains("surface.erase_selection();\n                *surface = SURFACE_EMPTY;"));
     assert!(lifecycle.contains("write_volatile(&mut self.selection_start, 0)"));
@@ -627,4 +667,107 @@ fn unencodable_surface_ids_cannot_mutate_partial_or_either_completion_phase(){
     let mut stage=Stage::EMPTY;seal_empty(&mut stage,16,160,u16::MAX as u64,1);
     assert!(stage.release_after_publication());let mut attempts=0;
     stage.poll_reply(|owner,word|{attempts+=1;assert_eq!(owner,16);assert_eq!(text_batch::Applied::decode(1,word).unwrap().surface,u16::MAX);0});assert_eq!(attempts,1);
+}
+
+#[test]
+fn pending_view_exposes_only_sealed_exact_utf8_payload_and_captured_metadata() {
+    let mut stage=Stage::EMPTY;
+    let text="1234567é€😀\t\nlast".as_bytes();
+    let mut input=text.to_vec();
+    assert!(stage.pending().is_none());begin(&mut stage,17,input.len());
+    assert!(stage.pending().is_none());
+    for(i,part)in input.chunks(8).enumerate(){
+        chunk(&mut stage,17,i*8,part);assert!(stage.pending().is_none());
+    }
+    selected(&mut stage,17,7,16);assert!(stage.pending().is_none());
+    let digest=text_batch::selected_hash(&input,7,16).unwrap();
+    assert!(stage.receive(9,90,156,Request::Commit{sequence:17,hash:digest}).is_some());
+    // The view borrows owned Stage bytes, never the producer's source buffer.
+    input.fill(b'z');
+    let before=stage.diagnostic();
+    let context=stage.pending().unwrap().context();
+    for _ in 0..3 {
+        let pending=stage.pending().unwrap();
+        assert_eq!(pending.context(),context);
+        assert_eq!((context.owner(),context.task(),context.surface(),context.sequence()),(9,90,156,17));
+        assert_eq!(pending.len(),text.len());assert_eq!(pending.color(),0xffe0f0ff);
+        assert_eq!(pending.selection(),(7,16));
+        assert_eq!(&pending.bytes()[..pending.len()],text);
+        assert!(pending.bytes()[pending.len()..].iter().all(|&byte|byte==0));
+        assert_eq!(stage.diagnostic(),before);assert!(stage.needs_publication());
+    }
+    stage.poll_reply(|_,_|panic!("view read released completion"));
+    assert!(stage.release_matching(context));assert!(stage.pending().is_none());
+    let mut attempts=0;stage.poll_reply(|owner,word|{
+        attempts+=1;assert_eq!(owner,9);
+        assert_eq!(text_batch::Applied::decode(1,word).unwrap(),text_batch::Applied{surface:156,sequence:17});0
+    });assert_eq!(attempts,1);assert!(stage.pending().is_none());
+}
+
+#[test]
+fn pending_context_cross_stage_release_rejects_each_changed_identity_field() {
+    for(owner,task,sid,sequence)in[(16,90,156,3),(9,91,156,3),(9,90,301,3),(9,90,156,4)]{
+        let(mut first,mut other)=(Stage::EMPTY,Stage::EMPTY);
+        seal_empty(&mut first,9,90,156,3);seal_empty(&mut other,owner,task,sid,sequence);
+        let first_context=first.pending().unwrap().context();
+        let other_context=other.pending().unwrap().context();
+        let(before_first,before_other)=(first.diagnostic(),other.diagnostic());
+        assert_ne!(first_context,other_context);
+        assert!(!first.release_matching(other_context));assert!(!other.release_matching(first_context));
+        assert_eq!(first.diagnostic(),before_first);assert_eq!(other.diagnostic(),before_other);
+        assert!(first.needs_publication());assert!(other.needs_publication());
+        first.poll_reply(|_,_|panic!("crossed context released first"));
+        other.poll_reply(|_,_|panic!("crossed context released other"));
+        assert_eq!(first.pending().unwrap().len(),0);assert_eq!(first.pending().unwrap().selection(),(0,0));
+        assert!(first.pending().unwrap().bytes().iter().all(|&byte|byte==0));
+        assert!(first.release_matching(first_context));assert!(!first.release_matching(first_context));
+        assert!(other.pending().is_some());assert!(other.release_matching(other_context));
+    }
+}
+
+#[test]
+fn pending_view_and_matching_release_are_unavailable_after_release_reset_or_retirement() {
+    for action in 0..3 {
+        let mut stage=Stage::EMPTY;begin(&mut stage,5,1);chunk(&mut stage,5,0,b"a");
+        assert!(stage.receive(9,90,156,Request::Commit{sequence:5,hash:hash(b"a")}).is_some());
+        let context=stage.pending().unwrap().context();
+        stage.retire(9,9);assert_eq!(stage.pending().unwrap().context(),context);
+        match action {
+            0=>assert!(stage.release_after_publication()),
+            1=>stage.reset(),
+            _=>stage.retire(9,90),
+        }
+        assert!(stage.pending().is_none());assert!(!stage.release_matching(context));
+        assert!(!stage.needs_publication());
+        if action==0 {
+            let mut attempts=0;
+            stage.poll_reply(|owner,word|{attempts+=1;assert_eq!(owner,9);assert_eq!(text_batch::Applied::decode(1,word).unwrap().sequence,5);1});
+            assert_eq!(attempts,1);assert!(stage.pending().is_none());
+            stage.reset();
+        } else {stage.poll_reply(|_,_|panic!("canceled pending view completed"));}
+        // Normal slot reuse remains allowed by existing Stage semantics; old
+        // descriptive metadata cannot release this different captured tuple.
+        seal_empty(&mut stage,16,160,301,1);
+        assert!(!stage.release_matching(context));assert!(stage.pending().is_some());
+    }
+}
+
+#[test]
+fn incomplete_poisoned_or_malformed_text_never_produces_a_pending_view() {
+    for mode in 0..4 {
+        let mut stage=Stage::EMPTY;
+        let text:&[u8]=if mode==2 {b"\xff"}else{b"\xc3\xa9"};
+        begin(&mut stage,1,text.len());
+        if mode!=0 {chunk(&mut stage,1,0,text);}
+        if mode==3 {selected(&mut stage,1,1,2);}
+        let digest=match mode {
+            1=>0,
+            3=>text_batch::selected_hash(text,1,2).unwrap(),
+            _=>hash(text),
+        };
+        assert!(stage.pending().is_none());
+        assert!(stage.receive(9,90,156,Request::Commit{sequence:1,hash:digest}).is_none());
+        assert!(stage.pending().is_none());assert!(!stage.needs_publication());
+        stage.poll_reply(|_,_|panic!("invalid pending text receipt"));
+    }
 }

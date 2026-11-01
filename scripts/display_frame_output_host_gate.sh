@@ -33,7 +33,8 @@ def source_contract(text):
     assert c.index('preparation.commit(')<c.index('record_cursor_presented();')<c.index('report_app_presented();')<c.index('civil_clock_drawn(')
     assert 'ifplan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}'in c
     assert not any(x in c for x in ['drop(lease)','mem::forget','ManuallyDrop'])
-    assert 'Some(PublishedFrame{plan,present_bits,canon_ss})'in c
+    assert 'Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})'in c
+    assert 'lettext_contexts=scene.text_contexts;'in c and c.index('preparation.commit(')<c.index('lettext_contexts=scene.text_contexts;'),'receipt copies captured metadata only after successful output'
     for name in ['raster_full','raster_strip','raster_area','raster_damage']:
         b=fn(text,name)
         assert "target: &frame_output::Target<'_>"in b and 'scene: &scene::SceneSnapshot'in b and 'let fb=target.pointer();'in b
@@ -61,7 +62,7 @@ def source_contract(text):
     assert 'lifecycle.pixels_presented(published.present_bits)'in finish
     assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack(')
     assert 'ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}'in finish
-    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('stage.release_after_publication()')<finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'typed release requires the same successful Full and dropped scene'
+    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('commit_published_text(&published.text_contexts)')<finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'typed release requires the same successful Full and dropped scene'
     # All physical FB_PTR conversions must be the startup wrapper, single batch
     # publisher, or the separate offscreen proof's unused pointer parameter.
     for line in text.splitlines():
@@ -81,7 +82,7 @@ def item(name):
 def derived(needle):
     prefix=main[:main.index(needle)];match=re.search(r'(#\[derive\([^\n]+\)\])\s*$',prefix);assert match,'missing actual derive '+needle
     return match[1]+'\n'+block(main,needle)
-parts=[item(n)for n in ['CURSOR_ARROW_W','CURSOR_ARROW_H','CURSOR_UNDER_SAVED','CURSOR_UNDER_X','CURSOR_UNDER_Y','CURSOR_UNDER_VALID','PREPARED_CURSOR','RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID']]
+parts=[item(n)for n in ['CURSOR_ARROW_W','CURSOR_ARROW_H','CURSOR_UNDER_SAVED','CURSOR_UNDER_X','CURSOR_UNDER_Y','CURSOR_UNDER_VALID','PREPARED_CURSOR','RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','TEXT_STAGES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID']]
 parts+=[derived('struct PreparedCursor{'),block(main,'struct PublishedFrame{'),block(main,'struct OutputBackup{'),block(main,'impl OutputBackup{'),block(main,'impl Drop for OutputBackup{'),block(main,'struct SceneLease {'),block(main,'impl SceneLease {'),block(main,'impl Drop for SceneLease {')]
 parts+=[fn(main,n)for n in ['valid_scanout','raster_batch','render_prepared','render']]
 parts+=[fn(main,'publish_frame').replace('fn publish_frame(', 'fn actual_publish_frame(',1)]
@@ -92,7 +93,8 @@ parts+=['fn actual_attempt(pending_paint:&mut Dirty,fb_live:bool,w:usize,h:usize
 production='\n\n'.join(parts)+'\n';production_path=out/'actual-main-pipeline.rs';production_path.write_text(production)
 parent=[item(n)for n in ['MAX_FB_W','MAX_FB_H','BAR_BG_H','FOCUS_SURFACE_COLOR','FRAME_RIM_COLOR','FRAME_TOP_BAR_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','FRAME_LIGHT_CLOSE_COLOR','FRAME_LIGHT_MINIMIZE_COLOR','FRAME_LIGHT_ZOOM_COLOR','DEFAULT_RENDER_TOKENS']]
 parent+=['#[derive(Clone, Copy)]\n#[repr(C)]\n'+block(main,'struct RenderTokensV1 {')]
-parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg']]
+parent+=['use surface_lifecycle::{TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};']
+parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text']]
 parent+=[fn(main,'scene_bar_blur_rows').replace('fn scene_bar_blur_rows(', 'fn actual_scene_bar_blur_rows(',1)]
 parent_path=out/'actual-scene-parent.rs';parent_path.write_text('\n\n'.join(parent))
 acquire_path=out/'actual-sdk-acquisition.rs';acquire_path.write_text('pub '+fn(sdk,'display_frame_backing')+'\n');(out/'main-source.rs').write_text(main)
@@ -103,6 +105,7 @@ def invoke(cmd,name,env=None):
     (out/(name+'.log')).write_text('$ '+' '.join(map(str,cmd))+'\n'+r.stdout+r.stderr)
     return r
 inputs=[Path(os.environ['OUTPUT_GATE_PATH']).resolve(strict=True),main_path,sdk_path,fixture,root/'tests/display_frames.rs',root/'tests/display_frame_output.rs',root/'kernel/src/memory/va_allocator.rs',root/'servers/sexdisplay/src/frame_output.rs',root/'servers/sexdisplay/src/damage.rs',root/'crates/sex-pdx/src/display_frames.rs',root/'crates/sex-pdx/src/memory_region.rs']+sorted((root/'crates/silkbar-model/src').rglob('*.rs'))
+inputs += [root/n for n in ['servers/sexdisplay/src/text_transaction.rs','crates/sex-pdx/src/text_batch.rs','crates/sex-pdx/src/text_encoding.rs']]
 inputs += [root/n for n in ['tests/display_paint_batch.rs','servers/sexdisplay/src/paint_batch.rs','servers/sexdisplay/src/scene.rs','servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs','servers/sexdisplay/src/bitmap_binding.rs','servers/sexdisplay/src/bitmap_transaction.rs','servers/sexdisplay/src/bitmap_stores.rs','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/bitmap_batch.rs','crates/sex-pdx/src/desktop_style.rs','crates/sex-pdx/src/spindle_view.rs']]
 input_hashes={str(v):hashlib.sha256(v.read_bytes()).hexdigest()for v in inputs}
 lib=out/'libsilkbar_model.rlib';r=invoke(['rustc','--edition=2021','--crate-name','silkbar_model','--crate-type','rlib',str(root/'crates/silkbar-model/src/lib.rs'),'-o',str(lib)],'model.compile');assert r.returncode==0,r.stderr
@@ -125,7 +128,7 @@ def compile_test(name,text,pipeline=production_path,case=None,expect_failure=Fal
 counts={}
 for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',8),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',8)]:
     counts[name]=compile_test(name,(root/file).read_text(),count=expected)
-fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=9)
+fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=10)
 # Unforgeable ownership discipline is a type property, not a native authority
 # test. Require the intended diagnostic, never arbitrary compiler failure.
 control_prefix='''#![allow(dead_code)]\n#[path="../crates/sex-pdx/src/memory_region.rs"]mod memory_region;\npub use memory_region::MemoryRegionInfo;\npub const ERR_CAP_INVALID:u64=0xFFFF_FFFF_FFFF_FFFC;\n#[path="../crates/sex-pdx/src/display_frames.rs"]mod display_frames;\n'''
@@ -139,7 +142,8 @@ controls=[
  ('omit-raster-rollback','if !prepared{drop(preparation);backup.restore();return None;}','if !prepared{drop(preparation);return None;}','every_body_failure_restores_bookkeeping_and_retains_front'),
  ('recapture','let scene=lease.view();','drop(lease);let lease=SceneLease::capture(w,h,bar).unwrap();let scene=lease.view();','actual_combined_batches_publish_once_with_one_immutable_scene'),
  ('drop-strip-pass','if !body||plan.strip&&!raster_strip(target,scene){return false;}','if !body{return false;}','actual_combined_batches_publish_once_with_one_immutable_scene'),
- ('clear-failed-main','pending_paint.complete(published.is_some());','pending_paint.complete(true);','failed_second_pass_preserves_dirty_and_retry_merges_exact_work')]
+ ('clear-failed-main','pending_paint.complete(published.is_some());','pending_paint.complete(true);','failed_second_pass_preserves_dirty_and_retry_merges_exact_work'),
+ ('lost-candidate-context','let text_contexts=scene.text_contexts;','let text_contexts=[None;MAX_SURFACES];','failed_output_keeps_canonical_text_and_success_carries_owned_candidate_context')]
 for name,old,new,case in controls:
     path=out/(name+'-actual-main.rs');path.write_text(once(production,old,new))
     compile_test(name,fixture_text,pipeline=path,case=case,expect_failure=True)

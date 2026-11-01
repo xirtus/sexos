@@ -42,6 +42,9 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../servers/sexdisplay/src/bitmap_binding.rs"]mod bitmap_binding;
 #[path="../servers/sexdisplay/src/bitmap_transaction.rs"]mod bitmap_transaction;
 #[path="../servers/sexdisplay/src/bitmap_stores.rs"]mod bitmap_stores;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../servers/sexdisplay/src/text_transaction.rs"]mod text_transaction;
 #[path="../servers/sexdisplay/src/scene.rs"]mod scene;
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
 use paint_batch::{Content,Plan,Dirty};
@@ -143,7 +146,7 @@ impl Harness{
   MODE=mode;RASTERS=0;COPY_ATTEMPTS=0;PUBLICATIONS=0;TARGET_ADDR=0;CAPTURES=0;CURSORS=0;SCENE_ADDR=0;EVENTS.clear();BEFORE=self.scanout.clone();
   let effective=if FRAME_OUTPUT.as_ref().unwrap().front_pixels().is_none(){Plan::full()}else{p};
   EXPECTED_PLAN=Some(effective);AFTER=expected_pixels(BEFORE.clone(),effective);FB_W=W as u32;FB_H=H as u32;
-  SURFACES.fill(SURFACE_EMPTY);SURFACES[0].color=0x1234;
+  SURFACES.fill(SURFACE_EMPTY);SURFACES[0].color=0x1234;TEXT_STAGES.fill(text_transaction::Stage::EMPTY);
   CURSOR_UNDER_SAVED.fill(0x44);CURSOR_UNDER_X=2;CURSOR_UNDER_Y=3;CURSOR_UNDER_VALID=true;
   APP_PRESENT_BITS=7;PREPARED_CURSOR=Some(PreparedCursor{x:4,y:5,seq:6,shell_tick:7});RENDER_FRAME_COUNTER.store(42,Ordering::Relaxed);
  }}
@@ -200,3 +203,29 @@ fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|
 #[test]fn acquisition_uses_exact_slot_and_extent_and_rejects_foreign_descriptors(){let _l=LOCK.lock().unwrap();let h=Harness::new();unsafe{
  assert_eq!(QUERIES,[(98,u64::MAX,0,0),(98,0,h.layout.total_bytes(),7)]);for mode in 1..=8{QUERY_MODE=mode;QUERIES.clear();assert!(matches!(display_frame_backing(h.layout),Err(ERR_CAP_INVALID)));assert_eq!(QUERIES,if mode==1{vec![(98,u64::MAX,0,0)]}else{vec![(98,u64::MAX,0,0),(98,0,h.layout.total_bytes(),7)]});}assert_eq!(h.generation(),0);assert!(h.front().is_none());
 }}
+
+#[test]fn failed_output_keeps_canonical_text_and_success_carries_owned_candidate_context(){
+ let _single=LOCK.lock().unwrap();let mut h=Harness::new();
+ for mode in[1,2,0]{
+  h.setup(Plan::full(),mode);
+  let context=unsafe{
+   SURFACES[0].active=true;SURFACES[0].owner_pd=9;SURFACES[0].surface_id=156;
+   SURFACES[0].w=200;SURFACES[0].h=120;SURFACES[0].text_len=3;SURFACES[0].text_buf[..3].copy_from_slice(b"old");
+   let stage=&mut TEXT_STAGES[0];let bytes="éA\nß".as_bytes();
+   stage.receive(9,90,156,text_batch::Request::Begin{sequence:7,len:bytes.len(),color:0xff123456});
+   let mut word=[0;8];word[..bytes.len()].copy_from_slice(bytes);
+   stage.receive(9,90,156,text_batch::Request::Chunk{sequence:7,offset:0,count:bytes.len(),bytes:word});
+   assert!(stage.receive(9,90,156,text_batch::Request::Commit{sequence:7,hash:text_batch::hash(bytes)}).is_some());
+   stage.pending().unwrap().context()
+  };
+  let receipt=h.call(Plan::full());
+  unsafe{
+   assert_eq!(&SURFACES[0].text_buf[..3],b"old");assert_eq!(SURFACES[0].text_len,3);
+   assert!(TEXT_STAGES[0].needs_publication());TEXT_STAGES[0].poll_reply(|_,_|panic!("render must not commit or release text"));
+   assert!(!RENDER_SCENE.is_valid());assert!(RENDER_SCENE.text_contexts.iter().all(Option::is_none));
+  }
+  if mode==0{
+   let receipt=receipt.unwrap();assert_eq!(receipt.text_contexts[0],Some(context));assert!(receipt.text_contexts[1..].iter().all(Option::is_none));
+  }else{assert!(receipt.is_none());assert_eq!(h.generation(),0);}
+ }
+}

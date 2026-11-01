@@ -140,7 +140,7 @@ impl SceneLease {
             if (*core::ptr::addr_of!(RENDER_SCENE)).is_valid() { return None; }
             let destination = &mut *core::ptr::addr_of_mut!(RENDER_SCENE);
             let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
-            if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, bar,
+            if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,
                 DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h) { return None; }
         }
         Some(Self { _single_task: core::marker::PhantomData })
@@ -1346,6 +1346,20 @@ fn recompute_text_lines(surf: &mut Surface) {
 }
 
 // These mutate text data only; dispatch admits the exact live surface owner.
+fn apply_pending_text(slot:&mut Surface,pending:&text_transaction::Pending<'_>)->bool{
+    let context=pending.context();
+    // Main already attested the sender and live Surface at intake. This is
+    // candidate association under that policy, not another grant or task=PD.
+    if !slot.active||slot.owner_pd!=context.owner()||slot.surface_id!=context.surface()
+        ||pending.len()>TEXT_BUF_CAP{return false;}
+    slot.text_buf.copy_from_slice(pending.bytes());
+    slot.text_len=pending.len() as u16;
+    slot.text_color=pending.color();
+    (slot.selection_start,slot.selection_end)=pending.selection();
+    recompute_text_lines(slot);
+    true
+}
+
 fn legacy_text_clear(slot:&mut Surface)->bool{
     let changed=slot.text_len!=0 || slot.selection_start!=0 || slot.selection_end!=0;
     slot.erase_selection();
@@ -1581,7 +1595,8 @@ fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 use paint_batch::{Content,Plan};
 // Descriptive completion of this publication, not authority or a whole-system
 // epoch receipt. Lifecycle may consume only a successfully published Full.
-struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8}
+struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8,
+    text_contexts:[Option<text_transaction::Context>;MAX_SURFACES]}
 
 // Small output bookkeeping is tentative until the prepared frame is published.
 // Its retained pixel copy is erased before this invocation returns to cleanup.
@@ -1666,7 +1681,10 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
             sex_pdx::serial_record!("[display.batch.published] generation={} content={} strip={} scene=1 prepare=1 publication=1",
                 store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::None=>"none"},plan.strip as u8);}
     }
-    Some(PublishedFrame{plan,present_bits,canon_ss})
+    // Copy only descriptive transaction identities. The payload remains owned
+    // by this scene, which ordinary scope Drop scrubs before Main commits text.
+    let text_contexts=scene.text_contexts;
+    Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})
 }
 fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}
 
@@ -3039,6 +3057,36 @@ fn typed_completion_needs_publication()->bool{
         ||BITMAP_STORES.needs_publication()}
 }
 
+fn commit_published_text(contexts:&[Option<text_transaction::Context>;MAX_SURFACES])->usize{
+    let mut committed=0;
+    for(index,context)in contexts.iter().copied().enumerate(){
+        let Some(context)=context else{continue;};
+        unsafe{
+            let stage=&mut TEXT_STAGES[index];
+            let Some(pending)=stage.pending()else{continue;};
+            if pending.context()!=context{continue;}
+            let slot=&mut SURFACES[index];
+            let len=pending.len();
+            let changed=slot.text_len as usize!=len||slot.text_color!=pending.color()
+                ||slot.text_buf!=*pending.bytes()
+                ||(slot.selection_start,slot.selection_end)!=pending.selection();
+            if !apply_pending_text(slot,&pending){continue;}
+            // Closed intake and immutable pending bytes make this exact match
+            // stable through canonical commit. This metadata grants no route.
+            assert!(stage.release_matching(context));
+            committed+=1;
+            sex_pdx::serial_record!("[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",
+                context.owner(),context.surface(),context.sequence(),len,changed as u8);
+            if sex_pdx::app_catalog::app_of(context.owner())==Some(sex_pdx::app_catalog::App::Browser){
+                sex_pdx::serial_record!("[display.browser.text.committed] target={} task={} surface={} paint={} bytes={} hash={} changed={} pixels=unconfirmed",
+                    context.owner(),context.task(),context.surface(),context.sequence(),len,
+                    sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8);
+            }
+        }
+    }
+    committed
+}
+
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
@@ -3047,11 +3095,8 @@ fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, pub
         // between its scene capture, CPU publication and completion handling.
         // Full also settles no-op, hidden and empty updates; Applied remains a
         // data-admission receipt, not proof that those bytes were visible.
-        let (text,bitmap)=unsafe{
-            let text=TEXT_STAGES.iter_mut()
-                .map(|stage|stage.release_after_publication() as usize).sum::<usize>();
-            (text,BITMAP_STORES.release_after_publication())
-        };
+        let text=commit_published_text(&published.text_contexts);
+        let bitmap=unsafe{BITMAP_STORES.release_after_publication()};
         if text+bitmap>0{
             sex_pdx::serial_record!("[display.typed.released] text={} bitmap={} full=1 scene_released=1 publication=1 pixels=unconfirmed",text,bitmap);
         }
@@ -4117,31 +4162,15 @@ pub extern "C" fn _start() -> ! {
                     if !browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0) { continue; }
                     let Some(request) = sex_pdx::text_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
                     unsafe {
-                        for (index, slot) in SURFACES.iter_mut().enumerate() {
+                        for (index, slot) in SURFACES.iter().enumerate() {
                             if !slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd { continue; }
-                            if let Some((len,color,bytes)) = TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request) {
-                                let mut changed = slot.text_len as usize != len || slot.text_color != color || slot.text_buf != *bytes;
-                                let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
-                                slot.text_buf = *bytes;
-                                let (selection_start, selection_end) = TEXT_STAGES[index].selection();
-                                changed |= (slot.selection_start, slot.selection_end) != (selection_start, selection_end);
-                                slot.selection_start = selection_start;
-                                slot.selection_end = selection_end;
-                                slot.text_len = len as u16;
-                                slot.text_color = color;
-                                recompute_text_lines(slot);
-                                if changed {
-                                    text_damage.add(old_damage,FB_W as usize,FB_H as usize);
-                                    text_damage.add(text_surface_damage(slot,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
-                                }
-                                if let sex_pdx::text_batch::Request::Commit { sequence, .. } = request {
-                                    sex_pdx::serial_record!("[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",msg.caller_pd,msg.arg0,sequence,len,changed as u8);
-                                    if sex_pdx::app_catalog::app_of(msg.caller_pd) == Some(sex_pdx::app_catalog::App::Browser) {
-                                        sex_pdx::serial_record!("[display.browser.text.committed] target={} task={} surface={} paint={} bytes={} hash={} changed={} pixels=unconfirmed",
-                                            msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,
-                                            sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8);
-                                    }
-                                }
+                            if TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request).is_some() {
+                                // Commit seals a candidate; canonical Surface text is
+                                // unchanged until its captured Full publication succeeds.
+                                let pending=TEXT_STAGES[index].pending().expect("sealed text candidate");
+                                let context=pending.context();
+                                sex_pdx::serial_record!("[display.text.prepared] target={} task={} surface={} paint={} bytes={} pixels=unconfirmed",
+                                    context.owner(),context.task(),context.surface(),context.sequence(),pending.len());
                             } else if let sex_pdx::text_batch::Request::Commit{sequence,..}=request {
                                 static mut INCOMPLETE_BUDGET:u8=16;
                                 if INCOMPLETE_BUDGET>0 {
@@ -4160,7 +4189,7 @@ pub extern "C" fn _start() -> ! {
                     let sid = msg.arg0;
                     if sid == 0 { continue; }
                     unsafe {
-                        for slot in SURFACES.iter_mut() {
+                        for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if slot.active && slot.surface_id == sid {
                                 if slot.owner_pd != msg.caller_pd {
                                     let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -4170,6 +4199,8 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
+                                // Atomic candidate custody fences mixed legacy writes.
+                                if TEXT_STAGES[index].needs_publication() { break; }
                                 let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
                                 if legacy_text_clear(slot){text_damage.add(old_damage,FB_W as usize,FB_H as usize);}
                                 break;
@@ -4186,7 +4217,7 @@ pub extern "C" fn _start() -> ! {
                     let sid = msg.arg0;
                     if sid == 0 { continue; }
                     unsafe {
-                        for slot in SURFACES.iter_mut() {
+                        for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if slot.active && slot.surface_id == sid {
                                 if slot.owner_pd != msg.caller_pd {
                                     let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -4196,6 +4227,8 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     break;
                                 }
+                                // Atomic candidate custody fences mixed legacy writes.
+                                if TEXT_STAGES[index].needs_publication() { break; }
                                 let old_damage=text_surface_damage(slot,FB_W as usize,FB_H as usize);
                                 if legacy_text_draw(slot,msg.arg1,msg.arg2){
                                     text_damage.add(old_damage,FB_W as usize,FB_H as usize);

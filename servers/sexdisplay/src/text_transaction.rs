@@ -1,5 +1,38 @@
 //! Display-private staging. Nothing in a partial transaction changes visible text.
 use sex_pdx::text_batch::{hash, selected_hash, Request, CAPACITY};
+/// Captured multipart identity, descriptive only. Main must keep intake closed
+/// between capture, publication and release. This is not a capability or a
+/// replay-resistant token across arbitrary resets/reuse of the same tuple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Context {
+    owner: u32,
+    task: u32,
+    surface: u64,
+    sequence: u32,
+}
+impl Context {
+    pub const fn owner(&self) -> u32 { self.owner }
+    pub const fn task(&self) -> u32 { self.task }
+    pub const fn surface(&self) -> u64 { self.surface }
+    pub const fn sequence(&self) -> u32 { self.sequence }
+}
+/// Read-only borrowed view of this Stage's sealed, unreleased inline payload.
+/// Projection must copy into Display-owned scene backing; no producer pointer
+/// or additional authority is introduced by this view.
+pub struct Pending<'a> {
+    context: Context,
+    len: usize,
+    color: u32,
+    selection: (u16, u16),
+    bytes: &'a [u8; CAPACITY],
+}
+impl<'a> Pending<'a> {
+    pub const fn context(&self) -> Context { self.context }
+    pub const fn len(&self) -> usize { self.len }
+    pub const fn color(&self) -> u32 { self.color }
+    pub const fn selection(&self) -> (u16, u16) { self.selection }
+    pub const fn bytes(&self) -> &'a [u8; CAPACITY] { self.bytes }
+}
 #[derive(Clone, Copy)]
 pub struct Stage {
     owner: u32,
@@ -64,6 +97,23 @@ impl Stage {
     }
     /// A sealed transaction still needs a successful Display publication.
     pub fn needs_publication(&self) -> bool { self.reply_pending && !self.reply_released }
+    pub fn pending(&self) -> Option<Pending<'_>> {
+        if !self.sealed || self.poisoned || !self.needs_publication() { return None; }
+        Some(Pending {
+            context: Context { owner: self.owner, task: self.task, surface: self.sid, sequence: self.sequence },
+            len: self.len,
+            color: self.color,
+            selection: self.selection(),
+            bytes: &self.bytes,
+        })
+    }
+    /// Release only the still-unreleased context captured for this publication.
+    /// The same closed-intake/SceneLease boundary as release_after_publication
+    /// is required; tuple matching alone is not proof that rendering occurred.
+    pub fn release_matching(&mut self, context: Context) -> bool {
+        if !self.pending().is_some_and(|pending| pending.context() == context) { return false; }
+        self.release_after_publication()
+    }
     /// Main calls this only after successful publication and SceneLease release.
     /// This changes eligibility, not the retained PD-routed reply's identity.
     pub fn release_after_publication(&mut self) -> bool {
