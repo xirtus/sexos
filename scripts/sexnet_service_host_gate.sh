@@ -60,3 +60,5 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_network_request_owner
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_source_denial.py" --root "$ROOT_DIR"
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_source_receipt_custody.py" --root "$ROOT_DIR"
+
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_source_binding.py" --root "$ROOT_DIR"

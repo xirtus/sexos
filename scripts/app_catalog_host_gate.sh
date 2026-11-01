@@ -35,4 +35,5 @@ if "$TEST_DIR/guard-mutant" --exact domain_routes_cannot_target_another_incarnat
     exit 1
 fi
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_startup_identity.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_sources.py" --root "$ROOT_DIR"
 echo '[app.catalog.result] PASS scope=actual_pure_grant_validator_and_boot_hook_not_native_grant_observation wrong_route_guard_removed_rejected=1'

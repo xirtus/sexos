@@ -4,6 +4,45 @@ use x86_64::VirtAddr;
 pub static mut SEXDISPLAY_PD_ID: u32 = 0;
 const SLOT_USB_SEXINPUT: u64 = 9;
 
+// Pure typed INFO over actual BOOT table readback, never a fabricated runtime context.
+fn browser_source_task(pd:&crate::capability::ProtectionDomain)->u32 {
+    let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
+    assert!(!task.is_null(),"BOOT_SOURCE_MAIN_TASK");
+    assert_eq!(unsafe{(*task).context.pd_ptr},pd as *const _,"BOOT_SOURCE_TASK_CONTEXT");
+    let id=unsafe{(*task).id};assert!(id!=0,"BOOT_SOURCE_TASK_ZERO");id
+}
+fn browser_source_grants(holder:&crate::capability::ProtectionDomain,plan:sex_pdx::browser_sources::Plan)
+ ->(sex_pdx::entropy_source::Grant,sex_pdx::clock_source::Grant,sex_pdx::trust_source::Grant){
+    let row=sex_pdx::app_catalog::by_surface(plan.target(),plan.surface()).expect("BOOT_SOURCE_CATALOG");
+    assert_eq!(row.app,sex_pdx::app_catalog::App::Browser,"BOOT_SOURCE_FAMILY");
+    assert_eq!(row.lifecycle_slot,plan.lifecycle_slot(),"BOOT_SOURCE_LIFECYCLE_SLOT");
+    let consumer=crate::ipc::DOMAIN_REGISTRY.get(plan.target()).expect("BOOT_SOURCE_CONSUMER");
+    let(ht,ct)=(browser_source_task(holder),browser_source_task(consumer));
+    assert_eq!(crate::app_resources::status(holder,plan.lifecycle_slot() as u64,1),
+        [0,plan.target() as u64,ct as u64,plan.surface(),3],"BOOT_SOURCE_HELD_CATALOG");
+    (sex_pdx::entropy_source::Grant{holder:sex_pdx::entropy_source::Identity{pd:holder.id,task:ht},consumer:sex_pdx::entropy_source::Identity{pd:plan.target(),task:ct},source:sex_pdx::entropy_source::RDSEED},
+     sex_pdx::clock_source::Grant{holder:sex_pdx::clock_source::Identity{pd:holder.id,task:ht},consumer:sex_pdx::clock_source::Identity{pd:plan.target(),task:ct},source:sex_pdx::clock_source::CMOS_UTC},
+     sex_pdx::trust_source::Grant{holder:sex_pdx::trust_source::Identity{pd:holder.id,task:ht},consumer:sex_pdx::trust_source::Identity{pd:plan.target(),task:ct},profile:sex_pdx::trust_config::PROFILE})
+}
+fn verify_browser_source_grants(holder:&crate::capability::ProtectionDomain,plan:sex_pdx::browser_sources::Plan){
+    use crate::capability::CapabilityData;
+    let expected=browser_source_grants(holder,plan);
+    let read=|raw|holder.find_capability(crate::capability_slot::decode_capability_slot(raw).expect("BOOT_SOURCE_SLOT_WIDTH")).expect("BOOT_SOURCE_READBACK").data;
+    let CapabilityData::EntropySource(entropy)=read(plan.entropy_slot())else{panic!("BOOT_SOURCE_ENTROPY_KIND")};
+    let CapabilityData::ClockSource(clock)=read(plan.clock_slot())else{panic!("BOOT_SOURCE_CLOCK_KIND")};
+    let CapabilityData::TrustPolicy(trust)=read(plan.trust_slot())else{panic!("BOOT_SOURCE_TRUST_KIND")};
+    assert_eq!(entropy,expected.0,"BOOT_SOURCE_ENTROPY_READBACK");
+    assert_eq!(clock,expected.1,"BOOT_SOURCE_CLOCK_READBACK");
+    assert_eq!(trust,expected.2,"BOOT_SOURCE_TRUST_READBACK");
+    let available=unsafe{core::arch::x86_64::__cpuid(0).eax>=7&&core::arch::x86_64::__cpuid_count(7,0).ebx&(1<<18)!=0};
+    let ei=sex_pdx::entropy_source::Info::decode(sex_pdx::entropy_source::invoke(Some(&entropy),expected.0.holder,sex_pdx::entropy_source::INFO,[0;3],||available,||panic!("BOOT_INFO_SAMPLED_ENTROPY"))).expect("BOOT_SOURCE_ENTROPY_INFO");
+    assert_eq!(ei,sex_pdx::entropy_source::Info{consumer:expected.0.consumer,available},"BOOT_SOURCE_ENTROPY_METADATA");
+    let ci=sex_pdx::clock_source::Info::decode(sex_pdx::clock_source::invoke(Some(&clock),expected.1.holder,sex_pdx::clock_source::INFO,[0;3],||panic!("BOOT_INFO_SAMPLED_CLOCK"))).expect("BOOT_SOURCE_CLOCK_INFO");
+    assert_eq!(ci,sex_pdx::clock_source::Info{consumer:expected.1.consumer,source:sex_pdx::clock_source::CMOS_UTC},"BOOT_SOURCE_CLOCK_METADATA");
+    let ti=sex_pdx::trust_source::Info::decode(sex_pdx::trust_source::invoke(Some(&trust),expected.2.holder,sex_pdx::trust_source::INFO,[0;3])).expect("BOOT_SOURCE_TRUST_INFO");
+    assert_eq!(ti,sex_pdx::trust_source::Info{consumer:expected.2.consumer,profile:sex_pdx::trust_config::PROFILE,root_bytes:sex_pdx::trust_config::ROOT_DER.len(),version:sex_pdx::trust_config::VERSION},"BOOT_SOURCE_TRUST_METADATA");
+}
+
 pub fn init() {
     // Advance boot phase to allow registry insertion
     unsafe { crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::RegistryBuild); }
@@ -812,25 +851,31 @@ pub fn init() {
         pd.grant_capability(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT as u64,crate::capability::CapabilityData::AppLifecycle(
             crate::app_resource_state::LifecycleGrant{target_pd:id,task_id:unsafe{(*task).id},holder_pd:id,rights:crate::app_resource_state::QUERY,ack_bit:0}));
     }
-    // Only the existing network service owns the sanctioned source mechanism.
-    // Its consumer tuple is immutable data; Browser receives no source grant.
+    // All plans describe actual catalog Browsers. Preflight all slots before writing.
+    assert_eq!(crate::ipc::BOOT_PHASE.load(core::sync::atomic::Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"BOOT_SOURCE_GENESIS_PHASE");
+    assert_eq!(sexnet_id,13,"BOOT_SOURCE_HOLDER");
     let seed_holder=crate::ipc::DOMAIN_REGISTRY.get(sexnet_id).expect("BOOT_SEED_HOLDER");
-    let seed_consumer=crate::ipc::DOMAIN_REGISTRY.get(kaleido_id).expect("BOOT_SEED_CONSUMER");
-    let holder_task=seed_holder.main_task.load(core::sync::atomic::Ordering::Acquire);
-    let consumer_task=seed_consumer.main_task.load(core::sync::atomic::Ordering::Acquire);
-    assert!(!holder_task.is_null()&&!consumer_task.is_null(),"BOOT_SEED_EXACT_TASKS");
-    assert!(seed_holder.find_capability(sex_pdx::entropy_source::SLOT as u32).is_none(),"BOOT_SEED_SLOT_COLLISION");
-    let seed_grant=sex_pdx::entropy_source::Grant{
-        holder:sex_pdx::entropy_source::Identity{pd:sexnet_id,task:unsafe{(*holder_task).id}},
-        consumer:sex_pdx::entropy_source::Identity{pd:kaleido_id,task:unsafe{(*consumer_task).id}},source:sex_pdx::entropy_source::RDSEED};
-    seed_holder.grant_capability(sex_pdx::entropy_source::SLOT,crate::capability::CapabilityData::EntropySource(seed_grant));
-    serial_println!("[boot.entropy.source] holder={} task={} slot={} consumer={} consumer_task={} source=rdseed attempts={} runtime_mint=0",sexnet_id,seed_grant.holder.task,sex_pdx::entropy_source::SLOT,kaleido_id,seed_grant.consumer.task,sex_pdx::entropy_source::ATTEMPTS);
-    assert!(seed_holder.find_capability(sex_pdx::clock_source::SLOT as u32).is_none(),"BOOT_CLOCK_SLOT_COLLISION");
-    let clock_grant=sex_pdx::clock_source::Grant{
-        holder:sex_pdx::clock_source::Identity{pd:sexnet_id,task:unsafe{(*holder_task).id}},
-        consumer:sex_pdx::clock_source::Identity{pd:kaleido_id,task:unsafe{(*consumer_task).id}},source:sex_pdx::clock_source::CMOS_UTC};
-    seed_holder.grant_capability(sex_pdx::clock_source::SLOT,crate::capability::CapabilityData::ClockSource(clock_grant));
-    serial_println!("[boot.clock.source] holder={} task={} slot={} consumer={} consumer_task={} source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0",sexnet_id,clock_grant.holder.task,sex_pdx::clock_source::SLOT,kaleido_id,clock_grant.consumer.task);
+    assert_eq!(sex_pdx::browser_sources::PLANS.len(),sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser),"BOOT_SOURCE_PLAN_COVERAGE");
+    for(index,plan)in sex_pdx::browser_sources::PLANS.iter().copied().enumerate(){
+        let _=browser_source_grants(seed_holder,plan);
+        assert!(!sex_pdx::browser_sources::PLANS[..index].iter().any(|p|p.target()==plan.target()||p.surface()==plan.surface()),"BOOT_SOURCE_PLAN_DUPLICATE");
+        let slots=[plan.entropy_slot(),plan.clock_slot(),plan.trust_slot()];
+        for(at,slot)in slots.into_iter().enumerate(){
+            let decoded=crate::capability_slot::decode_capability_slot(slot).expect("BOOT_SOURCE_SLOT_WIDTH");
+            assert!(!slots[..at].contains(&slot),"BOOT_SOURCE_SLOT_DUPLICATE");
+            assert!(!sex_pdx::browser_sources::PLANS[..index].iter().any(|p|[p.entropy_slot(),p.clock_slot(),p.trust_slot()].contains(&slot)),"BOOT_SOURCE_PLAN_SLOT_COLLISION");
+            assert!(seed_holder.find_capability(decoded).is_none(),"BOOT_SOURCE_SLOT_OCCUPIED");
+        }
+    }
+    for plan in sex_pdx::browser_sources::PLANS.iter().copied(){
+        let(seed_grant,clock_grant,trust_grant)=browser_source_grants(seed_holder,plan);
+        seed_holder.grant_capability(plan.entropy_slot(),crate::capability::CapabilityData::EntropySource(seed_grant));
+        seed_holder.grant_capability(plan.clock_slot(),crate::capability::CapabilityData::ClockSource(clock_grant));
+        seed_holder.grant_capability(plan.trust_slot(),crate::capability::CapabilityData::TrustPolicy(trust_grant));
+        verify_browser_source_grants(seed_holder,plan);
+        serial_println!("[boot.entropy.source] holder={} task={} slot={} consumer={} consumer_task={} source=rdseed attempts={} runtime_mint=0",sexnet_id,seed_grant.holder.task,plan.entropy_slot(),plan.target(),seed_grant.consumer.task,sex_pdx::entropy_source::ATTEMPTS);
+        serial_println!("[boot.clock.source] holder={} task={} slot={} consumer={} consumer_task={} source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0",sexnet_id,clock_grant.holder.task,plan.clock_slot(),plan.target(),clock_grant.consumer.task);
+    }
     // Independent, exact BOOT source for the status-bar publisher. Its bounded
     // read mechanism supplies explicit snapshots; neither timer cadence nor
     // renderer fallback confers civil-time authority.
@@ -843,16 +888,13 @@ pub fn init() {
     bar_holder.grant_capability(sex_pdx::clock_source::SLOT,crate::capability::CapabilityData::ClockSource(
         sex_pdx::clock_source::Grant{holder:bar_identity,consumer:bar_identity,source:sex_pdx::clock_source::CMOS_UTC}));
     serial_println!("[boot.silkbar.clock.source] holder={} task={} slot={} consumer={} consumer_task={} source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0",bar_identity.pd,bar_identity.task,sex_pdx::clock_source::SLOT,bar_identity.pd,bar_identity.task);
-    assert!(seed_holder.find_capability(sex_pdx::trust_source::SLOT as u32).is_none(),"BOOT_TRUST_SLOT_COLLISION");
-    let trust_grant=sex_pdx::trust_source::Grant {
-        holder:sex_pdx::trust_source::Identity {pd:sexnet_id,task:unsafe{(*holder_task).id}},
-        consumer:sex_pdx::trust_source::Identity {pd:kaleido_id,task:unsafe{(*consumer_task).id}},
-        profile:sex_pdx::trust_config::PROFILE};
-    seed_holder.grant_capability(sex_pdx::trust_source::SLOT,crate::capability::CapabilityData::TrustPolicy(trust_grant));
-    serial_println!("[boot.trust.policy] holder={} task={} slot={} consumer={} consumer_task={} profile={} root_bytes={} runtime_mint=0",sexnet_id,trust_grant.holder.task,sex_pdx::trust_source::SLOT,kaleido_id,trust_grant.consumer.task,trust_grant.profile,sex_pdx::trust_config::ROOT_DER.len());
-    assert_eq!(sex_pdx::network_config::HOST_NAME,sex_pdx::trust_config::EXPECTED_NAME.as_bytes(),"BOOT_TLS_EXPECTED_NAME");
-    assert!(sex_pdx::network_config::Config::CONTROLLED.tls_endpoint().is_some(),"BOOT_TLS_ENDPOINT_PROFILE");
-    serial_println!("[boot.network.tls] holder={} task={} consumer={} consumer_task={} profile=1 peer_port=46080 origin=immutable_boot_profile runtime_mint=0",sexnet_id,trust_grant.holder.task,kaleido_id,trust_grant.consumer.task);
+    for plan in sex_pdx::browser_sources::PLANS.iter().copied(){
+        let(_,_,trust_grant)=browser_source_grants(seed_holder,plan);
+        serial_println!("[boot.trust.policy] holder={} task={} slot={} consumer={} consumer_task={} profile={} root_bytes={} runtime_mint=0",sexnet_id,trust_grant.holder.task,plan.trust_slot(),plan.target(),trust_grant.consumer.task,trust_grant.profile,sex_pdx::trust_config::ROOT_DER.len());
+        assert_eq!(sex_pdx::network_config::HOST_NAME,sex_pdx::trust_config::EXPECTED_NAME.as_bytes(),"BOOT_TLS_EXPECTED_NAME");
+        assert!(sex_pdx::network_config::Config::CONTROLLED.tls_endpoint().is_some(),"BOOT_TLS_ENDPOINT_PROFILE");
+        serial_println!("[boot.network.tls] holder={} task={} consumer={} consumer_task={} profile=1 peer_port=46080 origin=immutable_boot_profile runtime_mint=0",sexnet_id,trust_grant.holder.task,plan.target(),trust_grant.consumer.task);
+    }
     // Two finite Spindle incarnations share only the fixed peer service edge.
     // This is BOOT genesis; neither app receives NIC metadata or config rights.
     assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");
@@ -903,6 +945,10 @@ pub fn init() {
     }
     crate::app_resources::audit_boot_catalog(silkshell_id);
     crate::scheduler::seal_self_wait_inventory();
+    for plan in sex_pdx::browser_sources::PLANS.iter().copied(){
+        verify_browser_source_grants(seed_holder,plan);
+        serial_println!("[boot.browser.sources.readback] holder={} target={} entropy={} clock={} trust={} late_before_seal=1 typed_info=1 runtime_context=0",sexnet_id,plan.target(),plan.entropy_slot(),plan.clock_slot(),plan.trust_slot());
+    }
     crate::boot_memory::seal_all();
 
     serial_println!("init: Revoking kernel write access...");

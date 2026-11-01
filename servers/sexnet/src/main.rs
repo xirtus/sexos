@@ -23,6 +23,7 @@ mod entropy;
 mod certificate_time;
 mod trust_policy;
 mod source_denial;
+mod source_binding;
 // One BOOT Net main task owns this fixed error-only backing. No large stack
 // temporary or provider state is created while denying unsupported requests.
 static mut SOURCE_DENIALS:source_denial::Outbox=source_denial::Outbox::new();
@@ -49,11 +50,30 @@ fn network_request_owner(caller:u32,caller_task:u32)->Option<jobs::Identity>{
     if caller_task!=owner.task{return None;}
     Some(owner)
 }
+// Every association is assembled before dispatch from this holder's actual
+// typed INFO and lifecycle queries. Slots and identities never come from wire.
+fn load_source_bindings()->[Option<source_binding::Binding>;sex_pdx::browser_sources::BROWSER_COUNT]{
+    core::array::from_fn(|index|{
+        let plan=sex_pdx::browser_sources::PLANS[index];
+        let binding=source_binding::Binding::from_held(plan,
+            (plan.lifecycle_slot(),sex_pdx::app_lifecycle::catalog(plan.lifecycle_slot())),
+            (plan.entropy_slot(),sex_pdx::entropy_info(plan.entropy_slot())),
+            (plan.clock_slot(),sex_pdx::clock_info(plan.clock_slot())),
+            (plan.trust_slot(),sex_pdx::trust_info(plan.trust_slot())));
+        sex_pdx::serial_record!("[sexnet.entropy.source] held={} available={} source=rdseed fallback=0 broker=private_seed32",binding.is_some()as u8,binding.is_some_and(|b|b.entropy_info().available)as u8);
+        sex_pdx::serial_record!("[sexnet.clock.source] held={} source=q35_cmos_utc no_ticks_fallback=1 precision=1",binding.is_some()as u8);
+        if let Some(b)=binding{
+            sex_pdx::serial_record!("[net.source.binding.held] target={} task={} surface={} lifecycle_slot={} entropy_slot={} clock_slot={} trust_slot={} before_dispatch=1",
+                b.target(),b.task(),b.plan().surface(),b.plan().lifecycle_slot(),b.entropy_slot(),b.clock_slot(),b.trust_slot());
+        }else{sex_pdx::serial_record!("[net.source.binding.unavailable] target={} fallback=0",plan.target());}
+        binding
+    })
+}
 // This partitions retained receipt budgets; it grants no source authority.
 // Typed source INFO still authenticates the exact consumer/profile inside the
 // existing machines. The caller was already authenticated against held custody.
 fn source_receipt_member(owner:jobs::Identity)->bool{
-    owner.pd!=0 && owner.task!=0 && sex_pdx::app_catalog::is_browser(owner.pd)
+    owner.pd!=0 && owner.task!=0 && sex_pdx::browser_sources::by_target(owner.pd).is_some()
 }
 fn retain_source_denial(outbox:&mut source_denial::Outbox,kind:source_denial::Kind,owner:jobs::Identity,seq:u32)->bool{
     if source_receipt_member(owner){return false;}
@@ -91,12 +111,12 @@ fn poll_source_denials(outbox:&mut source_denial::Outbox){
 }
 /// Preserve the active source lease during uncertain lifecycle queries. Its
 /// original deadline still applies; uncertainty never permits provider work.
-fn maintain_seed_source(seed:&mut entropy::Machine){
+fn maintain_seed_source(seed:&mut entropy::Machine,source_bindings:&[Option<source_binding::Binding>]){
     let before_seed=seed.snapshot();
     if let Some(owner)=seed.owner(){
         match source_receipt_live(source_denial::Identity{pd:owner.pd,task:owner.task}){
             Some(false)=>{seed.retire(owner);},
-            Some(true)=>seed.advance(sex_pdx::get_ticks(),||sex_pdx::entropy_word(sex_pdx::entropy_source::SLOT).map(|word|word.value)),
+            Some(true)=>seed.advance(sex_pdx::get_ticks(),||source_binding::lookup(source_bindings,owner.pd,owner.task).ok_or(sex_pdx::entropy_source::DENIED).and_then(|b|sex_pdx::entropy_word(b.entropy_slot())).map(|word|word.value)),
             None=>{seed.maintain_lease(sex_pdx::get_ticks());},
         }
     }
@@ -5304,11 +5324,8 @@ pub extern "C" fn _start() -> ! {
     let mut outbound=jobs::Machine::new();
     let mut outbound_changes=0u64;
     let mut dns=dns_jobs::Machine::new();
-    let seed_source=sex_pdx::entropy_info(sex_pdx::entropy_source::SLOT).ok();
-    sex_pdx::serial_record!("[sexnet.entropy.source] held={} available={} source=rdseed fallback=0 broker=private_seed32",seed_source.is_some()as u8,seed_source.is_some_and(|info|info.available)as u8);
+    let source_bindings=load_source_bindings();
     let mut seed=entropy::Machine::new();
-    let clock_source=sex_pdx::clock_info(sex_pdx::clock_source::SLOT).ok();
-    sex_pdx::serial_record!("[sexnet.clock.source] held={} source=q35_cmos_utc no_ticks_fallback=1 precision=1",clock_source.is_some()as u8);
     let mut clock=certificate_time::Machine::new();
     let mut trust=trust_policy::Machine::new();
     let mut dns_changes=0u64;
@@ -5353,7 +5370,7 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
         }
         if let Some(owner)=dns.owner(){if network_owner(owner.pd)!=Some(owner){dns.retire(owner,&mut DnsWire(transport.as_mut()));}}
-        maintain_seed_source(&mut seed);
+        maintain_seed_source(&mut seed,&source_bindings);
         // Released DNS observations retain no active socket. Check their exact
         // live identities and nominal-tick expiry even on transport-offline turns.
         dns.maintain_records(sex_pdx::get_ticks(),|owner|network_owner(owner.pd)==Some(owner));
@@ -5498,10 +5515,11 @@ pub extern "C" fn _start() -> ! {
             let request=sex_pdx::trust_policy::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 if retain_source_denial(source_denials,source_denial::Kind::Trust,owner,request.seq){continue;}
+                let binding=source_binding::lookup(&source_bindings,owner.pd,owner.task).copied();
                 let identity=sex_pdx::trust_source::Identity{pd:owner.pd,task:owner.task};
                 let mut observed=None;
                 if !trust.handle(identity,request,||{
-                    let result=sex_pdx::trust_info(sex_pdx::trust_source::SLOT);
+                    let result=binding.map_or(Err(sex_pdx::trust_source::DENIED),|b|sex_pdx::trust_info(b.trust_slot()));
                     observed=result.ok();result
                 }){
                     sex_pdx::serial_record!("[trust.policy.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);
@@ -5520,9 +5538,10 @@ pub extern "C" fn _start() -> ! {
             let request=sex_pdx::certificate_time::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 if retain_source_denial(source_denials,source_denial::Kind::CertificateTime,owner,request.seq){continue;}
+                let binding=source_binding::lookup(&source_bindings,owner.pd,owner.task).copied();
                 let identity=sex_pdx::clock_source::Identity{pd:owner.pd,task:owner.task};
                 let before=clock.snapshot();let mut sampled=false;
-                if !clock.handle(identity,request,clock_source,||{sampled=true;sex_pdx::clock_snapshot(sex_pdx::clock_source::SLOT)}){
+                if !clock.handle(identity,request,binding.map(|b|b.clock_info()),||{sampled=true;binding.map_or(Err(sex_pdx::clock_source::DENIED),|b|sex_pdx::clock_snapshot(b.clock_slot()))}){
                     sex_pdx::serial_record!("[certificate.time.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);
                 }
                 if sampled{
@@ -5544,9 +5563,10 @@ pub extern "C" fn _start() -> ! {
             let request=sex_pdx::entropy_seed::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
                 if retain_source_denial(source_denials,source_denial::Kind::Entropy,owner,request.seq){continue;}
+                let binding=source_binding::lookup(&source_bindings,owner.pd,owner.task).copied();
                 let before=seed.snapshot();
                 let identity=sex_pdx::entropy_seed::Identity{pd:owner.pd,task:owner.task};
-                if !seed.handle(identity,request,sex_pdx::get_ticks(),seed_source){sex_pdx::serial_record!("[entropy.seed.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);}
+                if !seed.handle(identity,request,sex_pdx::get_ticks(),binding.map(|b|b.entropy_info())){sex_pdx::serial_record!("[entropy.seed.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);}
                 let after=seed.snapshot();
                 if after.owner==Some(identity)&&before.ticket!=after.ticket{sex_pdx::serial_record!("[entropy.seed.admitted] owner={} task={} ticket={} bytes=32 source=held_boot_grant",owner.pd,owner.task,after.ticket);}
                 let released=seed.pending_reply().is_some_and(|(target,word)|target==identity&&sex_pdx::entropy_seed::decode_reply(word,request.seq)==Ok(0));

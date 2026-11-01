@@ -8,6 +8,7 @@
 
 pub mod pagefault;
 pub mod app_catalog;
+pub mod browser_sources;
 pub mod uiir;
 pub mod display_ready;
 pub mod shell_ready;
