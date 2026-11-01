@@ -1,8 +1,7 @@
 //! One display-owned Browser bitmap. Partial or rejected transfers never alter
 //! published pixels. No allocation, shared pointer, new surface or capability.
+use crate::bitmap_binding::Binding;
 use sex_pdx::bitmap_batch::{hash, Applied, Geometry, Request, CAPACITY};
-const OWNER: u32 = 15;
-const SURFACE: u64 = 300;
 const COVERAGE_WORDS: usize = (CAPACITY / 2 + 63) / 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Change {
@@ -71,6 +70,7 @@ enum Completed {
     Clear,
 }
 pub struct Stage {
+    binding: Option<Binding>,
     sequence: u32,
     geometry: Option<Geometry>,
     published_geometry: Option<Geometry>,
@@ -90,7 +90,8 @@ fn erase(pixels: &mut [u32]) {
     }
 }
 impl Stage {
-    pub const EMPTY: Self = Self {
+    pub const UNBOUND: Self = Self {
+        binding: None,
         sequence: 0,
         geometry: None,
         published_geometry: None,
@@ -102,6 +103,23 @@ impl Stage {
         reply_pending: false,
         retired: false,
     };
+    /// Install metadata once into existing static backing. This never creates
+    /// a large temporary, clears retirement, or infers identity from a packet.
+    pub fn initialize_once(&mut self, binding: Binding) -> bool {
+        if self.binding.is_some() || self.retired {
+            return false;
+        }
+        self.binding = Some(binding);
+        true
+    }
+    /// Retained descriptive metadata, including after terminal retirement.
+    pub const fn binding(&self) -> Option<Binding> {
+        self.binding
+    }
+    /// Internal compositor/reset association, not live-task admission.
+    pub fn matches_surface(&self, owner: u32, sid: u64) -> bool {
+        self.binding.is_some_and(|binding| binding.target() == owner && binding.surface() == sid)
+    }
     fn erase_staging(&mut self) {
         erase(&mut self.pixels);
         self.coverage.fill(0);
@@ -114,7 +132,7 @@ impl Stage {
     /// fence and any historical publication receipt awaiting admission. That
     /// receipt attests a past state publication, never current visible pixels.
     pub fn reset_surface(&mut self, owner: u32, sid: u64) {
-        if (owner, sid) != (OWNER, SURFACE) {
+        if !self.matches_surface(owner, sid) {
             return;
         }
         self.erase_staging();
@@ -123,11 +141,12 @@ impl Stage {
         self.published_geometry = None;
         self.poisoned = true;
     }
-    pub fn retire(&mut self, owner: u32) {
-        if owner != OWNER {
+    pub fn retire(&mut self, owner: u32, task: u32) {
+        let Some(binding) = self.binding else { return; };
+        if self.retired || !binding.matches_retirement(owner, task) {
             return;
         }
-        self.reset_surface(OWNER, SURFACE);
+        self.reset_surface(binding.target(), binding.surface());
         self.completed = Completed::None;
         self.reply_pending = false;
         self.retired = true;
@@ -141,8 +160,9 @@ impl Stage {
     /// The caller also attests an active owned surface and its live BOOT
     /// incarnation before dispatch. This finite store independently restricts
     /// its sole binding, and terminal retirement cannot be reset by a message.
-    pub fn receive(&mut self, owner: u32, sid: u64, request: Request) -> Option<Change> {
-        if self.retired || (owner, sid) != (OWNER, SURFACE) {
+    pub fn receive(&mut self, owner: u32, caller_task: u32, sid: u64, request: Request) -> Option<Change> {
+        let binding = self.binding?;
+        if self.retired || !binding.admits(owner, caller_task, sid) {
             return None;
         }
         match request {
@@ -271,20 +291,21 @@ impl Stage {
         if !self.reply_pending || self.retired {
             return;
         }
+        let Some(binding) = self.binding else { return; };
         let value = Applied {
-            surface: SURFACE as u16,
+            surface: binding.surface() as u16,
             sequence: self.sequence,
         }
         .encode()
         .unwrap();
-        if reply(OWNER, value) == 0 {
+        if reply(binding.target(), value) == 0 {
             self.reply_pending = false;
         }
     }
     /// Local coordinates only; the compositor independently clips to the actual
     /// winning surface/body and framebuffer before calling this function.
     pub fn sample(&self, owner: u32, sid: u64, x: i64, y: i64) -> Option<u32> {
-        if self.retired || (owner, sid) != (OWNER, SURFACE) {
+        if self.retired || !self.matches_surface(owner, sid) {
             return None;
         }
         let g = self.published_geometry?;

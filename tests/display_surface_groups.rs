@@ -5,8 +5,10 @@
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
+#[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
+#[path="../servers/sexdisplay/src/bitmap_binding.rs"]mod bitmap_binding;
 #[path="../servers/sexdisplay/src/bitmap_transaction.rs"]mod bitmap_transaction;
-static mut BITMAP_STAGE:bitmap_transaction::Stage=bitmap_transaction::Stage::EMPTY;
+static mut BITMAP_STAGE:bitmap_transaction::Stage=bitmap_transaction::Stage::UNBOUND;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
@@ -78,17 +80,24 @@ fn legacy_draw_reference(slot:&mut Surface,packed:u64,arg2:u64){
 fn legacy_args(offset:usize,count:usize,color:u32)->u64{
  (offset as u64&0xff)|((offset as u64&0xf00)<<4)|((count as u64)<<8)|((color as u64)<<32)
 }
+// HOST fixture reset only: production initializes static UNBOUND backing once
+// from its held query. No packet or compositor operation supplies a binding.
+unsafe fn reset_bitmap_stage(){
+ BITMAP_STAGE=bitmap_transaction::Stage::UNBOUND;
+ let catalog=app_lifecycle::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3};
+ assert!(BITMAP_STAGE.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
+}
 unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->bitmap_transaction::Change{
  use bitmap_batch::Request;
- assert!(BITMAP_STAGE.receive(15,300,Request::Begin{sequence,geometry:g}).is_none());
+ assert!(BITMAP_STAGE.receive(15,15,300,Request::Begin{sequence,geometry:g}).is_none());
  for(offset,pair)in pixels.chunks(2).enumerate(){let mut data=[0;2];data[..pair.len()].copy_from_slice(pair);
-  assert!(BITMAP_STAGE.receive(15,300,Request::Chunk{sequence,offset:offset*2,count:pair.len(),pixels:data}).is_none());
+  assert!(BITMAP_STAGE.receive(15,15,300,Request::Chunk{sequence,offset:offset*2,count:pair.len(),pixels:data}).is_none());
  }
- let change=BITMAP_STAGE.receive(15,300,Request::Commit{sequence,hash:bitmap_batch::hash(pixels)}).unwrap();
+ let change=BITMAP_STAGE.receive(15,15,300,Request::Commit{sequence,hash:bitmap_batch::hash(pixels)}).unwrap();
  BITMAP_STAGE.poll_reply(|owner,word|{assert_eq!(owner,15);assert_eq!(bitmap_batch::Applied::decode(1,word).unwrap().sequence,sequence);0});change
 }
 #[test]fn actual_browser_bitmap_blends_over_fill_under_text_in_both_compositor_branches(){unsafe{
- SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();BITMAP_STAGE=bitmap_transaction::Stage::EMPTY;
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
  SURFACES[0]=Surface{chrome_flags:SURFACE_CHROME_TOP_BAR,..surf(15,300)};
  fill_damage::update(&mut SURFACES[0],0,0,0,400,300,0x204060).unwrap();
  let before=[composite_pixel(120,120,600,500,0,0),composite_pixel(120,120,600,500,0,300)];
@@ -105,16 +114,16 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
  SURFACES[0].owner_pd=9;assert_eq!(composite_pixel(170,180,600,500,0,0),0x204060);SURFACES[0].owner_pd=15;
  SURFACES[1]=Surface{color:0xabcdef,..surf(8,888)};assert_eq!(composite_pixel(170,180,600,500,0,888),0xabcdef);
  SURFACES[1]=Surface{color:0x987654,..surf(3,152)};assert_eq!(composite_pixel(170,180,600,500,0,300),0x987654);
- SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();BITMAP_STAGE=bitmap_transaction::Stage::EMPTY;
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
 #[test]fn actual_bitmap_move_clear_and_resize_damage_match_full_compositor_pixels(){unsafe{
- let(w,h)=(320,260);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();BITMAP_STAGE=bitmap_transaction::Stage::EMPTY;
+ let(w,h)=(320,260);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
  SURFACES[0]=Surface{x:20,y:70,w:200,h:150,..surf(15,300)};
  let a=bitmap_batch::Geometry{x:10,y:20,width:40,height:20,scale:1};publish_bitmap(1,a,&vec![0x8000ff00;a.len()]);
  let mut framebuffer=vec![0;w*h];for y in 0..h{for x in 0..w{framebuffer[y*w+x]=composite_pixel(x,y,w,h,bg(y,h),0);}}
  for sequence in 2..=3{
   let change=if sequence==2{let b=bitmap_batch::Geometry{x:120,y:40,width:20,height:30,scale:2};publish_bitmap(sequence,b,&vec![0xffaa0011;b.len()])}
-   else{BITMAP_STAGE.receive(15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
+   else{BITMAP_STAGE.receive(15,15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
   let mut d=damage::Damage::new();d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
   FOCUSED_SURFACE_ID=0;DAMAGE_ORDER.clear();redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,d.rect().unwrap());
   assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);
@@ -131,7 +140,7 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
    if selected==Some(300){let in_image=x-20<192&&y-70<192;assert_eq!(color,if in_image{0xffff00ff}else{0x123456});}else{assert_eq!(color,0x123);}
   }}
  }
- SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();BITMAP_STAGE=bitmap_transaction::Stage::EMPTY;
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
 unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32{
  let selected=FRAME_GROUPS.winner(&SURFACES,focus,x,y,w,h).map(|s|s.surface_id);
@@ -532,7 +541,7 @@ unsafe fn span_text_fill(index:usize) {
  s.selection_end=1;assert!(legacy_text_draw(&mut s,b'X' as u64,legacy_args(0,1,0xfffafafa)));assert_eq!(s.selection_end,0);
 }
 #[test]fn selection_only_changes_match_full_and_incremental_compositor_and_clear_old_pixels(){unsafe{
- for focus in[0,300]{let(w,h)=(320,260);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();BITMAP_STAGE=bitmap_transaction::Stage::EMPTY;
+ for focus in[0,300]{let(w,h)=(320,260);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
  SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x123456,text_len:16,text_color:0xfffafafa,..surf(15,300)};
  SURFACES[0].text_buf[..16].copy_from_slice(b"alpha beta\ngamma");recompute_text_lines(&mut SURFACES[0]);
  let mut actual=vec![0;w*h];for y in 0..h{for x in 0..w{actual[y*w+x]=composite_pixel(x,y,w,h,bg(y,h),focus);}}

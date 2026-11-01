@@ -48,4 +48,5 @@ DISPLAY_COMPOSITION_SOURCE="$TEST_DIR/production.rs" rustc --edition=2021 --test
 "$TEST_DIR/tests" --test-threads=1
 rustc --edition=2021 --test "$ROOT_DIR/tests/display_bitmap_transaction.rs" -o "$TEST_DIR/bitmap-tests"
 "$TEST_DIR/bitmap-tests" --test-threads=1
+python3 "$ROOT_DIR/scripts/check_display_bitmap_binding.py" --root "$ROOT_DIR"
 echo '[gate.display_surface_groups.result] PASS scope=actual_compositor_pixels_and_production_catalog_not_guest_screenshot'

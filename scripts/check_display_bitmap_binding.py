@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Held Display bitmap metadata and cached-live host checks, not BOOT grants.
+
+Source wiring is inspected; actual Binding tests and the extracted live helper
+with the actual Lifecycle module are compiled. No guest/Display pixel claim.
+"""
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+ROOT=Path(__file__).resolve().parents[1]
+INFERENCE_TEST='actual_browser_catalog_and_unequal_task_bind_exactly'
+SENDER_TEST='exact_sender_tuple_and_retirement_require_actual_task_not_domain'
+
+
+def compact(source):return re.sub(r'\s+','',source)
+
+
+def function(source,name):
+    matches=re.findall(r'^fn '+name+r'\b.*?^}',source,re.M|re.S)
+    if len(matches)!=1:raise ValueError('expected one actual '+name)
+    return matches[0]
+
+
+def require(source,fragment,label):
+    if compact(fragment)not in compact(source):raise ValueError('missing '+label)
+
+
+def wiring(source):
+    require(source,'static mut BITMAP_STAGE: bitmap_transaction::Stage = bitmap_transaction::Stage::UNBOUND;','unbound static backing')
+    if source.count('BITMAP_STAGE.initialize_once(')!=1:raise ValueError('bitmap initialization must occur exactly once')
+    if source.count('bitmap_binding::Binding::from_catalog(')!=1:raise ValueError('unexpected packet-time/repeated bitmap constructor')
+    load=function(source,'load_lifecycle_catalog');body=compact(load)
+    ordered=['sex_pdx::app_lifecycle::catalog(slot)',
+             'lifecycle.register(surface_lifecycle::Catalog{',
+             'bitmap_binding::Binding::from_catalog(slot,c)',
+             'BITMAP_STAGE.initialize_once(binding)']
+    indices=[body.index(value)for value in ordered]
+    if indices!=sorted(indices):raise ValueError('held query/registration/binding/initialization order changed')
+    require(load,'for slot in sex_pdx::app_lifecycle::SLOTS','held slot inventory')
+    require(load,'slot, target_pd:c.target_pd, task_id:c.task_id, surface_id:c.surface_id, coordinator_pd:c.coordinator_pd','held registry tuple')
+    require(load,'if sex_pdx::app_catalog::by_surface(c.target_pd,c.surface_id).is_some_and(|row|row.app==sex_pdx::app_catalog::App::Browser)','exact Browser source association')
+    require(load,'assert!(unsafe { BITMAP_STAGE.initialize_once(binding) },"display bitmap startup installed once");','startup installation failure fence')
+    require(load,'assert!(mandatory,"missing display lifecycle catalog");','missing held Browser refusal')
+    start=source[source.index('pub extern "C" fn _start()'):]
+    if compact(start).index('letmutlifecycle=load_lifecycle_catalog();')>=compact(start).index('sex_pdx::pdx_try_listen_raw(0)'):
+        raise ValueError('bitmap binding must precede dispatch intake')
+    begin=source.index('                sex_pdx::bitmap_batch::BEGIN |')
+    end=source.index('                sex_pdx::text_batch::BEGIN |',begin)
+    dispatch=compact(source[begin:end])
+    guards=['BITMAP_STAGE.binding()',
+            'if!binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)||!bitmap_binding_live(&lifecycle,binding){continue;}',
+            'sex_pdx::bitmap_batch::Request::decode(msg.type_id,msg.arg1,msg.arg2)',
+            's.active&&s.surface_id==msg.arg0&&s.owner_pd==msg.caller_pd',
+            'BITMAP_STAGE.receive(msg.caller_pd,msg.caller_task,msg.arg0,request)']
+    positions=[dispatch.index(value)for value in guards]
+    if positions!=sorted(positions):raise ValueError('bitmap dispatch guard order changed')
+    cleanup=function(source,'prepare_app_cleanup');clean=compact(cleanup)
+    require(cleanup,'let Ok(info)=sex_pdx::app_lifecycle::info(catalog.slot) else {continue;};','actual terminal proof query')
+    require(cleanup,'if info.target_pd!=catalog.target_pd || info.task_id!=catalog.task_id || info.required_mask & sex_pdx::app_lifecycle::ROLE_DISPLAY==0 {continue;}','terminal proof tuple and role')
+    prepare='lifecycle.prepare(index,info.target_pd,info.task_id,&mutSURFACES,&mutrefs)'
+    retire='BITMAP_STAGE.retire(info.target_pd,info.task_id);'
+    if clean.index(prepare)>=clean.index(retire):raise ValueError('bitmap retirement precedes exact prepared proof')
+    require(cleanup,retire,'proof task retirement')
+    sample=function(source,'bitmap_color')
+    require(sample,'!surf.active || !(unsafe { BITMAP_STAGE.matches_surface(surf.owner_pd,surf.surface_id) })','internal bound sampling association')
+    require(sample,'BITMAP_STAGE.sample(surf.owner_pd,surf.surface_id,x,y)','bound sample inputs')
+    return function(source,'bitmap_binding_live')
+
+
+def once(source,old,new):
+    if source.count(old)!=1:raise ValueError('missing/ambiguous exact mutation site: '+old)
+    return source.replace(old,new,1)
+
+
+def metadata_fixture(root,tests,binding):
+    replaced=0
+    def path(match):
+        nonlocal replaced
+        original=Path(match[1]);name=match[3]
+        if name=='bitmap_binding':target=binding;replaced+=1
+        elif name in ('app_catalog','app_lifecycle'):target=root/'crates/sex-pdx/src'/(name+'.rs')
+        else:target=(tests.parent/original).resolve(strict=True)
+        return '#[path='+json.dumps(str(target))+']'+match[2]
+    value=re.sub(r'#\[path\s*=\s*"([^"\n]+)"\s*\](\s*(?:pub\s+)?mod\s+(\w+)\s*;)',path,tests.read_text())
+    if replaced!=1:raise ValueError('metadata fixture must include one actual Binding')
+    return value
+
+
+def compile_run(out,name,fixture,exact=None,reject=False):
+    source=out/(name+'.rs');source.write_text(fixture);binary=out/name
+    result=subprocess.run(['rustc','--edition=2021','--test',str(source),'-o',str(binary)],capture_output=True,text=True,timeout=30)
+    (out/(name+'.compile.log')).write_text(result.stdout+result.stderr)
+    if result.returncode:raise ValueError(name+': actual/mutant must compile; see '+str(out/(name+'.compile.log')))
+    args=[str(binary),'--test-threads=1']
+    if exact:args+=['--exact',exact]
+    result=subprocess.run(args,capture_output=True,text=True,timeout=30)
+    output=result.stdout+result.stderr;(out/(name+'.log')).write_text(output)
+    if result.returncode!=(101 if reject else 0):raise ValueError(name+': unexpected test result')
+    if exact and (f'test {exact} ... '+('FAILED'if reject else'ok')not in output or 'running 1 test'not in output):raise ValueError(name+': exact control did not execute')
+    return output
+
+
+def live_fixture(root,binding,helper):
+    header='''#![allow(dead_code)]
+extern crate self as sex_pdx;
+'''
+    for name,path in [('app_catalog',root/'crates/sex-pdx/src/app_catalog.rs'),
+                      ('app_lifecycle',root/'crates/sex-pdx/src/app_lifecycle.rs'),
+                      ('bitmap_binding',binding),('surface_lifecycle',root/'servers/sexdisplay/src/surface_lifecycle.rs')]:
+        header+='#[path='+json.dumps(str(path))+']pub mod '+name+';\n'
+    return header+helper+r'''
+fn held()->bitmap_binding::Binding {
+    bitmap_binding::Binding::from_catalog(40,app_lifecycle::CatalogInfo{
+        target_pd:15,task_id:150,surface_id:300,coordinator_pd:3}).unwrap()
+}
+fn row()->surface_lifecycle::Catalog {
+    surface_lifecycle::Catalog{slot:40,target_pd:15,task_id:150,surface_id:300,coordinator_pd:3}
+}
+#[test]fn actual_live_helper_accepts_exact_cached_unequal_task() {
+    let mut lifecycle=surface_lifecycle::Lifecycle::new();assert!(lifecycle.register(row()));
+    assert!(bitmap_binding_live(&lifecycle,held()));assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Live));
+}
+#[test]fn actual_live_helper_rejects_missing_or_any_wrong_cached_tuple() {
+    assert!(!bitmap_binding_live(&surface_lifecycle::Lifecycle::new(),held()));
+    let original=row();
+    for changed in [surface_lifecycle::Catalog{slot:41,..original},
+                    surface_lifecycle::Catalog{target_pd:16,..original},
+                    surface_lifecycle::Catalog{task_id:15,..original},
+                    surface_lifecycle::Catalog{task_id:151,..original},
+                    surface_lifecycle::Catalog{surface_id:301,..original},
+                    surface_lifecycle::Catalog{coordinator_pd:7,..original}] {
+        let mut lifecycle=surface_lifecycle::Lifecycle::new();assert!(lifecycle.register(changed));
+        assert!(!bitmap_binding_live(&lifecycle,held()),"mismatched cache accepted: {changed:?}");
+    }
+}
+#[test]fn actual_live_helper_refuses_prepared_committed_and_acknowledged() {
+    let mut lifecycle=surface_lifecycle::Lifecycle::new();assert!(lifecycle.register(row()));
+    let mut surfaces=[];let mut refs=surface_lifecycle::SceneRefs::default();
+    assert_eq!(lifecycle.prepare(0,15,150,&mut surfaces,&mut refs),Some(0));
+    assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));assert!(!bitmap_binding_live(&lifecycle,held()));
+    assert!(lifecycle.scene_committed(0));assert!(!bitmap_binding_live(&lifecycle,held()));
+    assert!(lifecycle.acknowledge(0,15,150));assert!(!bitmap_binding_live(&lifecycle,held()));
+}
+'''
+
+
+def check(root,out,main,binding,tests):
+    main_source=main.read_text();helper=wiring(main_source)
+    # Verify source-wiring controls independently of mutation construction.
+    controls=(('binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)','binding.admits(msg.caller_pd,msg.caller_pd,msg.arg0)'),
+              ('BITMAP_STAGE.retire(info.target_pd,info.task_id);','BITMAP_STAGE.retire(info.target_pd,info.target_pd);'),
+              ('BITMAP_STAGE.matches_surface(surf.owner_pd, surf.surface_id)','BITMAP_STAGE.matches_surface(15, 300)'))
+    for old,new in controls:
+        changed=once(main_source,old,new)
+        try:wiring(changed)
+        except (ValueError,IndexError):pass
+        else:raise ValueError('unbound main-wiring control survived: '+old)
+    output=compile_run(out,'metadata',metadata_fixture(root,tests,binding))
+    if '5 passed; 0 failed'not in output:raise ValueError('expected five actual metadata tests')
+    output=compile_run(out,'actual-live-helper',live_fixture(root,binding,helper))
+    if '3 passed; 0 failed'not in output:raise ValueError('expected three actual live-helper tests')
+    actual=binding.read_text()
+    for name,old,new,control in (
+        ('task-inferred-from-pd','task: catalog.task_id,','task: catalog.target_pd,',INFERENCE_TEST),
+        ('caller-task-guard-removed',' && caller_task == self.task','',SENDER_TEST),
+    ):
+        mutant=out/(name+'-binding.rs');mutant.write_text(once(actual,old,new))
+        compile_run(out,name,metadata_fixture(root,tests,mutant),exact=control,reject=True)
+    result=dict(ok=True,metadata_tests=5,actual_live_helper_tests=3,compiled_binding_mutants_rejected=2,
+                wiring_controls_rejected=len(controls),scope='actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels')
+    (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root',type=Path,default=ROOT)
+    parser.add_argument('--out',type=Path,help='new evidence directory')
+    parser.add_argument('--main',type=Path,help='explicit draft Display main override')
+    parser.add_argument('--binding',type=Path,help='explicit draft Binding override')
+    parser.add_argument('--tests',type=Path,help='explicit draft metadata tests override')
+    args=parser.parse_args();root=args.root.resolve(strict=True)
+    source=(args.main or root/'servers/sexdisplay/src/main.rs').resolve(strict=True)
+    binding=(args.binding or root/'servers/sexdisplay/src/bitmap_binding.rs').resolve(strict=True)
+    tests=(args.tests or root/'tests/display_bitmap_binding.rs').resolve(strict=True)
+    if args.out:
+        args.out.mkdir(parents=True,exist_ok=False);result=check(root,args.out.resolve(),source,binding,tests)
+    else:
+        with tempfile.TemporaryDirectory(prefix='sexos-display-bitmap-binding-')as directory:
+            result=check(root,Path(directory),source,binding,tests)
+    print('[display.bitmap.binding] PASS '+json.dumps(result,sort_keys=True))
+
+
+if __name__=='__main__':main()

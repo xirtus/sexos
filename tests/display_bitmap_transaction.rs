@@ -2,15 +2,27 @@
 //! bitmap implementation or success inferred from an enqueue result.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
+#[path="../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
+#[path="../servers/sexdisplay/src/bitmap_binding.rs"] mod bitmap_binding;
 #[path = "../crates/sex-pdx/src/bitmap_batch.rs"] pub mod bitmap_batch;
 #[path = "../servers/sexdisplay/src/bitmap_transaction.rs"] mod transaction;
 #[path = "../servers/sexdisplay/src/damage.rs"] mod damage;
 use bitmap_batch::{hash, Applied, Geometry, Request, CAPACITY};
 use transaction::{blend, Stage, Viewport};
+fn held_binding(task:u32)->bitmap_binding::Binding {
+    bitmap_binding::Binding::from_catalog(40,app_lifecycle::CatalogInfo{
+        target_pd:15,task_id:task,surface_id:300,coordinator_pd:3}).unwrap()
+}
+fn bound_stage()->Stage {
+    let mut stage=Stage::UNBOUND;
+    assert!(stage.initialize_once(held_binding(150)));
+    stage
+}
 fn geometry(width: u8, height: u8, scale: u8) -> Geometry { Geometry { x: 10, y: 40, width, height, scale } }
 fn receive(stage: &mut Stage, request: Request) -> Option<transaction::Change> {
     let (op, a, b) = request.wire();
-    stage.receive(15, 300, Request::decode(op, a, b).unwrap())
+    stage.receive(15, 150, 300, Request::decode(op, a, b).unwrap())
 }
 fn begin(stage: &mut Stage, sequence: u32, geometry: Geometry) {
     assert_eq!(receive(stage, Request::Begin { sequence, geometry }), None);
@@ -73,7 +85,7 @@ fn malformed_reserved_bits_width_aliases_and_noncanonical_chunks_are_rejected() 
 fn every_partial_prefix_is_private_and_full_48_square_publishes_once() {
     println!("[display.bitmap.host.storage] stage_bytes={} pixel_payload_bytes={} capacity={}",core::mem::size_of::<Stage>(),2*CAPACITY*4,CAPACITY);
     for g in [geometry(1,1,1),geometry(3,1,2),geometry(47,47,3),geometry(48,48,4)] {
-        let pixels:Vec<_>=(0..g.len()).map(|i|0x80000000|i as u32).collect();let mut stage=Stage::EMPTY;
+        let pixels:Vec<_>=(0..g.len()).map(|i|0x80000000|i as u32).collect();let mut stage=bound_stage();
         begin(&mut stage,1,g);
         for (i,input) in pixels.chunks(2).enumerate() {
             let mut pair=[0;2];pair[..input.len()].copy_from_slice(input);
@@ -92,7 +104,7 @@ fn every_partial_prefix_is_private_and_full_48_square_publishes_once() {
 }
 #[test]
 fn incomplete_bad_hash_and_conflicting_duplicates_keep_old_publication() {
-    for mode in 0..7 { let mut stage=Stage::EMPTY;let old=geometry(1,1,1);publish(&mut stage,1,old,&[0xff123456]);ack(&mut stage,1);
+    for mode in 0..7 { let mut stage=bound_stage();let old=geometry(1,1,1);publish(&mut stage,1,old,&[0xff123456]);ack(&mut stage,1);
         let new=geometry(3,1,1);begin(&mut stage,2,new);
         receive(&mut stage,Request::Chunk{sequence:2,offset:0,count:2,pixels:[1,2]});
         match mode {
@@ -100,8 +112,8 @@ fn incomplete_bad_hash_and_conflicting_duplicates_keep_old_publication() {
             1=>{chunks(&mut stage,2,&[1,2,3]);},
             2=>{receive(&mut stage,Request::Chunk{sequence:2,offset:0,count:2,pixels:[4,2]});},
             3=>{begin(&mut stage,2,geometry(2,1,1));},
-            4=>{stage.receive(15,300,Request::Chunk{sequence:2,offset:0,count:usize::MAX,pixels:[0;2]});},
-            5=>{stage.receive(15,300,Request::Chunk{sequence:2,offset:usize::MAX,count:1,pixels:[0;2]});},
+            4=>{stage.receive(15,150,300,Request::Chunk{sequence:2,offset:0,count:usize::MAX,pixels:[0;2]});},
+            5=>{stage.receive(15,150,300,Request::Chunk{sequence:2,offset:usize::MAX,count:1,pixels:[0;2]});},
             _=>{receive(&mut stage,Request::Chunk{sequence:2,offset:2,count:2,pixels:[3,0]});},
         }
         assert_eq!(receive(&mut stage,Request::Commit{sequence:2,hash:0}),None);
@@ -113,7 +125,7 @@ fn incomplete_bad_hash_and_conflicting_duplicates_keep_old_publication() {
 }
 #[test]
 fn full_retains_exact_ack_no_republication_and_no_new_sequence_overtakes_it() {
-    let mut stage=Stage::EMPTY;let g=geometry(1,1,1);publish(&mut stage,7,g,&[0xffabcdef]);
+    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,7,g,&[0xffabcdef]);
     let mut receipts=Vec::new();for _ in 0..4 {
         stage.poll_reply(|owner,word|{receipts.push((owner,word));u64::MAX});
         begin(&mut stage,8,geometry(2,1,1));assert_eq!(stage.sequence(),7);
@@ -132,19 +144,19 @@ fn full_retains_exact_ack_no_republication_and_no_new_sequence_overtakes_it() {
 }
 #[test]
 fn foreign_sender_surface_and_late_chunks_cannot_change_or_clear_owned_state() {
-    let mut stage=Stage::EMPTY;let g=geometry(1,1,1);publish(&mut stage,1,g,&[0xffabcdef]);ack(&mut stage,1);
+    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,1,g,&[0xffabcdef]);ack(&mut stage,1);
     for (owner,sid) in [(0,300),(3,300),(9,300),(16,300),(15,301),(15,300|1<<32)] {
         for request in [Request::Begin{sequence:2,geometry:g},Request::Chunk{sequence:1,offset:0,count:1,pixels:[0,0]},Request::Commit{sequence:1,hash:0},Request::Clear{sequence:2}] {
-            assert_eq!(stage.receive(owner,sid,request),None);assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));
+            assert_eq!(stage.receive(owner,150,sid,request),None);assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));
         }
     }
     receive(&mut stage,Request::Chunk{sequence:1,offset:0,count:1,pixels:[0,0]});
     assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));
-    stage.reset_surface(9,300);stage.retire(9);assert_eq!(stage.geometry(),Some(g));
+    stage.reset_surface(9,300);stage.retire(9,90);assert_eq!(stage.geometry(),Some(g));
 }
 #[test]
 fn destroy_recreation_preserves_sequence_fence_and_retirement_permanently_erases() {
-    let mut stage=Stage::EMPTY;let g=geometry(2,1,1);publish(&mut stage,4,g,&[0xffff0000,0x8000ff00]);
+    let mut stage=bound_stage();let g=geometry(2,1,1);publish(&mut stage,4,g,&[0xffff0000,0x8000ff00]);
     let mut old_receipts=Vec::new();stage.poll_reply(|owner,word|{old_receipts.push((owner,word));u64::MAX});
     stage.reset_surface(15,300);assert!(stage.pixels_scrubbed());assert!(!stage.scrubbed());
     begin(&mut stage,5,g);assert_eq!(stage.sequence(),4);assert_eq!(receive(&mut stage,Request::Clear{sequence:6}),None);
@@ -154,23 +166,23 @@ fn destroy_recreation_preserves_sequence_fence_and_retirement_permanently_erases
     // A repeated exact completed COMMIT still returns only the historical ACK.
     ack(&mut stage,4);assert!(stage.pixels_scrubbed());
     assert_eq!(stage.geometry(),None);publish(&mut stage,5,g,&[0xffff0000,0x8000ff00]);ack(&mut stage,5);
-    begin(&mut stage,6,g);chunks(&mut stage,6,&[1,2]);stage.retire(15);assert!(stage.scrubbed());
+    begin(&mut stage,6,g);chunks(&mut stage,6,&[1,2]);stage.retire(15,150);assert!(stage.scrubbed());
     stage.reset_surface(15,300);
     for sequence in [6,7,u32::MAX] {begin(&mut stage,sequence,g);chunks(&mut stage,sequence,&[1,2]);assert_eq!(receive(&mut stage,Request::Commit{sequence,hash:hash(&[1,2])}),None);assert_eq!(receive(&mut stage,Request::Clear{sequence}),None);}
     stage.poll_reply(|_,_|panic!("retired receipt"));assert!(stage.scrubbed());
-    let mut completed=Stage::EMPTY;publish(&mut completed,1,g,&[1,2]);completed.poll_reply(|_,_|u64::MAX);
-    completed.retire(15);completed.poll_reply(|_,_|panic!("retirement drops retained completion"));assert!(completed.scrubbed());
+    let mut completed=bound_stage();publish(&mut completed,1,g,&[1,2]);completed.poll_reply(|_,_|u64::MAX);
+    completed.retire(15,150);completed.poll_reply(|_,_|panic!("retirement drops retained completion"));assert!(completed.scrubbed());
 }
 #[test]
 fn maximum_sequence_exhausts_without_wrap_and_clear_cannot_mutate_same_sequence() {
-    let mut stage=Stage::EMPTY;let g=geometry(1,1,1);publish(&mut stage,u32::MAX,g,&[0xffffffff]);ack(&mut stage,u32::MAX);
+    let mut stage=bound_stage();let g=geometry(1,1,1);publish(&mut stage,u32::MAX,g,&[0xffffffff]);ack(&mut stage,u32::MAX);
     assert_eq!(receive(&mut stage,Request::Clear{sequence:u32::MAX}),None);
-    assert_eq!(stage.receive(15,300,Request::Clear{sequence:0}),None);
+    assert_eq!(stage.receive(15,150,300,Request::Clear{sequence:0}),None);
     begin(&mut stage,1,g);assert_eq!(stage.sample(15,300,10,40),Some(0xffffffff));
 }
 #[test]
 fn delayed_old_commit_and_clear_cannot_poison_a_fresh_newer_stage() {
-    let mut stage=Stage::EMPTY;let g=geometry(2,1,1);publish(&mut stage,1,g,&[0xff112233,0xff445566]);ack(&mut stage,1);
+    let mut stage=bound_stage();let g=geometry(2,1,1);publish(&mut stage,1,g,&[0xff112233,0xff445566]);ack(&mut stage,1);
     begin(&mut stage,2,g);chunks(&mut stage,2,&[0xff778899,0xffaabbcc]);
     for request in [Request::Commit{sequence:1,hash:hash(&[0xff112233,0xff445566])},
         Request::Commit{sequence:1,hash:0},Request::Begin{sequence:1,geometry:geometry(48,48,4)},
@@ -190,7 +202,7 @@ fn exact_straight_alpha_scaled_sampling_and_viewport_clipping() {
             }word
         };assert_eq!(blend(rgba,base),expected);
     }}}
-    let mut stage=Stage::EMPTY;let g=Geometry{x:0,y:0,..geometry(48,48,4)};
+    let mut stage=bound_stage();let g=Geometry{x:0,y:0,..geometry(48,48,4)};
     let pixels:Vec<_>=(0..g.len()).map(|i|0xff000000|i as u32).collect();publish(&mut stage,1,g,&pixels);ack(&mut stage,1);
     for view in [Viewport{x:-30,y:20,width:200,height:200,inset:8,top:36},
         Viewport{x:70,y:70,width:35,height:48,inset:8,top:36},
@@ -210,7 +222,7 @@ fn exact_straight_alpha_scaled_sampling_and_viewport_clipping() {
 }
 #[test]
 fn movement_resize_and_clear_damage_cover_every_changed_pixel() {
-    let mut stage=Stage::EMPTY;let view=Viewport{x:-10,y:50,width:120,height:120,inset:8,top:36};
+    let mut stage=bound_stage();let view=Viewport{x:-10,y:50,width:120,height:120,inset:8,top:36};
     let a=Geometry{x:0,y:20,..geometry(20,20,2)};publish(&mut stage,1,a,&vec![0x8000ff00;a.len()]);ack(&mut stage,1);
     let paint=|stage:&Stage,x,y|view.local(x,y).and_then(|(lx,ly)|stage.sample(15,300,lx,ly)).map_or(0x123456,|rgba|blend(rgba,0x123456));
     let mut before=Vec::new();for y in 0..180 {for x in 0..180 {before.push(paint(&stage,x,y));}}
@@ -228,12 +240,115 @@ fn production_uses_owned_live_route_both_paint_branches_and_terminal_cleanup() {
     for branch in ["c = fill_rect_color(surf, x, y, surf.color);\n        c = bitmap_color(surf, x, y, c);", "c = fill_rect_color(content, x, y, content.color);\n            c = bitmap_color(content, x, y, c);"] {assert!(source.contains(branch));}
     let branch=&source[source.find("                sex_pdx::bitmap_batch::BEGIN |").unwrap()..];
     let branch=&branch[..branch.find("                sex_pdx::text_batch::BEGIN |").unwrap()];
-    assert!(branch.find("msg.caller_pd != 15 || msg.arg0 != 300").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
+    assert!(branch.find("binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
     assert!(branch.find("s.active && s.surface_id == msg.arg0 && s.owner_pd == msg.caller_pd").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
+    assert!(branch.contains("BITMAP_STAGE.receive(msg.caller_pd, msg.caller_task, msg.arg0, request)"));
+    assert!(branch.find("bitmap_binding_live(&lifecycle,binding)").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
     assert!(source.contains("0x27A | 0x27B | 0x27C | 0x27D | 0x28B)\n                    && !lifecycle.sid_live(msg.arg0)"));
-    assert!(source.contains("BITMAP_STAGE.retire(info.target_pd);"));
+    assert!(source.contains("BITMAP_STAGE.retire(info.target_pd,info.task_id);"));
     assert!(source.contains("BITMAP_STAGE.reset_surface(owner, surface_id);"));
     let destroy=&source[source.find("                0xEE => {").unwrap()..source.find("                0xF5 => {").unwrap()];
     assert!(destroy.find("BITMAP_STAGE.reset_surface(slot.owner_pd, target_id);").unwrap()<destroy.find("*slot = SURFACE_EMPTY;").unwrap());
     assert!(source.find("finish_display_transactions(&mut lifecycle, &bar, fb_live);").unwrap()<source.find("BITMAP_STAGE.poll_reply(sex_pdx::pdx_reply);").unwrap());
+}
+
+#[test]
+fn unbound_store_rejects_packets_before_effects_and_never_uses_first_message_binding() {
+    let mut stage=Stage::UNBOUND;let g=geometry(1,1,1);
+    assert_eq!(stage.binding(),None);assert!(!stage.matches_surface(15,300));
+    for request in [Request::Begin{sequence:1,geometry:g},
+                    Request::Chunk{sequence:1,offset:usize::MAX,count:usize::MAX,pixels:[9,9]},
+                    Request::Commit{sequence:1,hash:hash(&[9])},Request::Clear{sequence:u32::MAX}] {
+        assert_eq!(stage.receive(15,150,300,request),None);
+        assert_eq!(stage.binding(),None);assert_eq!(stage.sequence(),0);
+        assert_eq!(stage.geometry(),None);assert!(stage.scrubbed());
+    }
+    stage.reset_surface(15,300);stage.retire(15,150);
+    assert_eq!(stage.sample(15,300,10,40),None);stage.poll_reply(|_,_|panic!("unbound receipt"));
+    // Unmatched packets/retirement hints cannot choose or permanently poison
+    // the slot. Only the explicit held-query startup installation may bind it.
+    assert!(stage.initialize_once(held_binding(150)));assert_eq!(stage.binding(),Some(held_binding(150)));
+    publish(&mut stage,1,g,&[9]);ack(&mut stage,1);
+}
+
+#[test]
+fn initialization_never_rebinds_or_revives_after_reset_and_terminal_retirement() {
+    let mut stage=Stage::UNBOUND;let first=held_binding(150);let other_task=held_binding(151);
+    assert!(stage.initialize_once(first));assert!(!stage.initialize_once(first));assert!(!stage.initialize_once(other_task));
+    assert_eq!(stage.binding(),Some(first));
+    publish(&mut stage,1,geometry(1,1,1),&[0xff123456]);ack(&mut stage,1);
+    stage.reset_surface(15,300);assert!(stage.pixels_scrubbed());assert_eq!(stage.sequence(),1);
+    assert!(!stage.initialize_once(first));assert!(!stage.initialize_once(other_task));
+    stage.retire(15,150);assert!(stage.scrubbed());assert_eq!(stage.binding(),Some(first));
+    stage.reset_surface(15,300);
+    assert!(!stage.initialize_once(first));assert!(!stage.initialize_once(other_task));
+    for task in [150,151]{for request in [Request::Begin{sequence:2,geometry:geometry(1,1,1)},
+        Request::Chunk{sequence:2,offset:0,count:1,pixels:[1,0]},Request::Commit{sequence:2,hash:hash(&[1])},Request::Clear{sequence:3}] {
+        assert_eq!(stage.receive(15,task,300,request),None);assert_eq!(stage.sequence(),1);assert!(stage.scrubbed());
+    }}
+    stage.poll_reply(|_,_|panic!("retirement cannot manufacture fresh completion"));
+}
+
+#[test]
+fn exact_held_task_is_required_before_each_operation_including_poisoning_chunks() {
+    let g=geometry(1,1,1);let old=0xff123456;let next=0xffabcdef;
+    for wrong_task in [0,15,151,u32::MAX]{for operation in 0..4 {
+        let mut stage=bound_stage();publish(&mut stage,1,g,&[old]);ack(&mut stage,1);
+        if operation>0{begin(&mut stage,2,g);}
+        if operation>1{chunks(&mut stage,2,&[next]);}
+        let sequence=stage.sequence();
+        let request=match operation {
+            0=>Request::Begin{sequence:2,geometry:geometry(2,1,1)},
+            1=>Request::Chunk{sequence:2,offset:0,count:1,pixels:[0,0]},
+            2=>Request::Commit{sequence:2,hash:hash(&[next])},
+            _=>Request::Clear{sequence:3},
+        };
+        assert_eq!(stage.receive(15,wrong_task,300,request),None);
+        assert_eq!(stage.sequence(),sequence);assert_eq!(stage.geometry(),Some(g));
+        assert_eq!(stage.sample(15,300,10,40),Some(old));stage.poll_reply(|_,_|panic!("wrong task receipt"));
+        if operation==0{begin(&mut stage,2,g);}
+        if operation<=1{chunks(&mut stage,2,&[next]);}
+        // Rejected task metadata must not poison an otherwise complete exact
+        // transaction, and an accepted-looking foreign COMMIT cannot publish.
+        assert_eq!(receive(&mut stage,Request::Commit{sequence:2,hash:hash(&[next])}).unwrap().new,Some(g));
+        ack(&mut stage,2);assert_eq!(stage.sample(15,300,10,40),Some(next));
+    }}
+}
+
+#[test]
+fn bound_full_historical_receipt_keeps_destination_and_sequence_after_reset() {
+    let mut stage=bound_stage();let binding=held_binding(150);let g=geometry(1,1,1);
+    publish(&mut stage,7,g,&[0xff112233]);
+    let expected=(15,Applied{surface:300,sequence:7}.encode().unwrap());
+    for _ in 0..3{stage.poll_reply(|target,word|{assert_eq!((target,word),expected);99});}
+    assert!(!stage.initialize_once(held_binding(151)));
+    stage.reset_surface(15,343);stage.reset_surface(3,300);
+    assert_eq!(stage.sample(15,300,10,40),Some(0xff112233));
+    stage.reset_surface(15,300);assert!(stage.pixels_scrubbed());assert_eq!(stage.sequence(),7);
+    stage.retire(15,151);assert_eq!(stage.binding(),Some(binding));
+    for _ in 0..3 {
+        assert_eq!(receive(&mut stage,Request::Clear{sequence:8}),None);
+        assert_eq!(stage.sequence(),7);assert_eq!(stage.geometry(),None);
+        stage.poll_reply(|target,word|{assert_eq!((target,word),expected);u64::MAX});
+    }
+    stage.poll_reply(|target,word|{assert_eq!((target,word),expected);0});assert!(stage.scrubbed());
+    let change=receive(&mut stage,Request::Clear{sequence:8}).unwrap();assert_eq!((change.old,change.new),(None,None));
+    stage.poll_reply(|target,word|{assert_eq!((target,word),(15,Applied{surface:300,sequence:8}.encode().unwrap()));0});
+    assert!(stage.scrubbed());
+}
+
+#[test]
+fn wrong_task_retirement_cannot_erase_staging_publication_or_retained_completion() {
+    let mut stage=bound_stage();let g=geometry(1,1,1);
+    publish(&mut stage,1,g,&[0xff123456]);ack(&mut stage,1);begin(&mut stage,2,g);chunks(&mut stage,2,&[0xffabcdef]);
+    for (owner,task) in [(15,0),(15,15),(15,151),(0,150),(3,150),(u32::MAX,150)] {
+        stage.retire(owner,task);assert_eq!(stage.sequence(),2);assert_eq!(stage.geometry(),Some(g));
+        assert_eq!(stage.sample(15,300,10,40),Some(0xff123456));
+    }
+    receive(&mut stage,Request::Commit{sequence:2,hash:hash(&[0xffabcdef])}).unwrap();
+    stage.retire(15,15);assert_eq!(stage.sample(15,300,10,40),Some(0xffabcdef));ack(&mut stage,2);
+    publish(&mut stage,3,g,&[0xff010203]);stage.retire(15,150);
+    assert!(stage.scrubbed());assert_eq!(stage.sample(15,300,10,40),None);
+    stage.poll_reply(|_,_|panic!("exact retirement removes pending completion"));
+    assert!(!stage.initialize_once(held_binding(150)));
 }

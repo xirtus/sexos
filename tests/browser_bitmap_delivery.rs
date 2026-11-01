@@ -1,6 +1,10 @@
 //! Browser outbox against the actual register ABI and display-owned Stage.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
+#[path="../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
+#[path="../servers/sexdisplay/src/bitmap_binding.rs"] mod bitmap_binding;
+
 // Explicit host-only bindings; no future Browser or Display authority is
 // created. The actual Stage below continues to admit only current15/300.
 mod incarnation {
@@ -15,15 +19,27 @@ mod incarnation {
 }
 const ORIGINAL:incarnation::Identity=incarnation::Identity::new(15,150,300);
 const FUTURE:incarnation::Identity=incarnation::Identity::new(30,300,343);
-#[path = "../crates/sex-pdx/src/bitmap_batch.rs"]
+#[path="../crates/sex-pdx/src/bitmap_batch.rs"]
 pub mod bitmap_batch;
-#[path = "../apps/kaleidoscope/src/bitmap_delivery.rs"]
+#[path="../apps/kaleidoscope/src/bitmap_delivery.rs"]
 mod production;
-#[path = "../servers/sexdisplay/src/bitmap_transaction.rs"]
+#[path="../servers/sexdisplay/src/bitmap_transaction.rs"]
 mod transaction;
 use bitmap_batch::{hash, Applied, Geometry, Request};
 use production::{Admission, Metadata, Operation, Outbox, Poll, QueueError, Receipt};
 use transaction::Stage;
+
+// Explicit current held-catalog fixture. Client incarnation doubles above are
+// separate: future-client tests never initialize the actual Stage for30/31.
+fn bound_stage()->Stage {
+    let mut stage=Stage::UNBOUND;
+    let catalog=app_lifecycle::CatalogInfo {
+        target_pd:15,task_id:15,surface_id:300,coordinator_pd:3,
+    };
+    assert!(stage.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
+    stage
+}
+
 
 fn geometry(width: u8) -> Geometry {
     Geometry {
@@ -45,7 +61,7 @@ fn request(op: Operation) -> Request {
     Request::decode(op.opcode, op.packed, op.control).unwrap()
 }
 fn deliver(stage: &mut Stage, op: Operation) -> Option<transaction::Change> {
-    stage.receive(15, op.surface, request(op))
+    stage.receive(15, 15, op.surface, request(op))
 }
 fn receipt(stage: &mut Stage, out: &mut Outbox) -> Receipt {
     let mut done = None;
@@ -81,7 +97,7 @@ fn actual_odd_pixel_transaction_publishes_once_and_only_exact_ack_completes() {
     let pixels = [0xff123456, 0x80010203, 0x00010203];
     let mut out = Outbox::new(ORIGINAL);
     assert_eq!(out.queue(&pixels, geometry(3), metadata(1)), Ok(1));
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     let mut visible = 0;
     let ops = submit(&mut stage, &mut out, &pixels);
     for op in &ops {
@@ -154,7 +170,7 @@ fn full_at_every_operation_boundary_preserves_exact_request_without_publication_
     let pixels = [1, 2, 3, 4, 5];
     for boundary in 0..5 {
         let mut out = Outbox::new(ORIGINAL);
-        let mut stage = Stage::EMPTY;
+        let mut stage = bound_stage();
         out.queue(&pixels, geometry(5), metadata(1)).unwrap();
         let mut ops = Vec::new();
         let mut blocked = None;
@@ -231,7 +247,7 @@ fn clear_abandons_every_unsent_image_prefix_and_never_reads_scrubbed_pixels() {
     let pixels = [1, 2, 3, 4, 5];
     for accepted_prefix in 0..5 {
         let mut out = Outbox::new(ORIGINAL);
-        let mut stage = Stage::EMPTY;
+        let mut stage = bound_stage();
         out.queue(&pixels, geometry(5), metadata(1)).unwrap();
         for _ in 0..accepted_prefix {
             out.poll(&pixels, 1, |op| {
@@ -271,7 +287,7 @@ fn clear_abandons_every_unsent_image_prefix_and_never_reads_scrubbed_pixels() {
 fn clear_after_accepted_commit_keeps_old_correlation_and_then_erases() {
     let pixels = [0xff112233];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     submit(&mut stage, &mut out, &pixels);
     assert_eq!(out.clear(metadata(2)), Ok(2));
@@ -306,7 +322,7 @@ fn clear_after_accepted_commit_keeps_old_correlation_and_then_erases() {
 fn reflow_while_waiting_coalesces_only_desired_and_old_ack_is_historical() {
     let pixels = [1, 2];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     let old = geometry(2);
     out.queue(&pixels, old, metadata(1)).unwrap();
     submit(&mut stage, &mut out, &pixels);
@@ -341,7 +357,7 @@ fn reflow_while_waiting_coalesces_only_desired_and_old_ack_is_historical() {
 fn new_queue_after_old_ack_replaces_unstarted_desired_without_stale_replay() {
     let pixels = [1];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     submit(&mut stage, &mut out, &pixels);
     out.queue(
@@ -374,7 +390,7 @@ fn clear_overrides_queued_reflow_before_or_after_old_commit_ack() {
     for ack_first in [false, true] {
         let pixels = [1];
         let mut out = Outbox::new(ORIGINAL);
-        let mut stage = Stage::EMPTY;
+        let mut stage = bound_stage();
         out.queue(&pixels, geometry(1), metadata(1)).unwrap();
         submit(&mut stage, &mut out, &pixels);
         out.queue(
@@ -409,7 +425,7 @@ fn clear_overrides_queued_reflow_before_or_after_old_commit_ack() {
 fn reset_erases_display_pixels_but_does_not_reinterpret_retained_ack() {
     let pixels = [0xffabcdef];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     submit(&mut stage, &mut out, &pixels);
     stage.reset_surface(15, 300);
@@ -435,7 +451,7 @@ fn known_send_rejection_never_completes_and_new_higher_begin_recovers() {
     let pixels = [1, 2, 3];
     for boundary in 0..4 {
         let mut out = Outbox::new(ORIGINAL);
-        let mut stage = Stage::EMPTY;
+        let mut stage = bound_stage();
         out.queue(&pixels, geometry(3), metadata(1)).unwrap();
         for _ in 0..boundary {
             out.poll(&pixels, 1, |op| {
@@ -471,7 +487,7 @@ fn known_send_rejection_never_completes_and_new_higher_begin_recovers() {
 fn rejected_active_preserves_latest_reflow_for_explicit_recovery() {
     let pixels = [1];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     out.queue(
         &pixels,
@@ -517,7 +533,7 @@ fn malformed_pixels_are_never_sent_and_do_not_destroy_valid_queued_batch() {
         out.queue(&[1], geometry(2), metadata(2)),
         Err(QueueError::InvalidPixels)
     );
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     submit(&mut stage, &mut out, &pixels);
     assert_eq!(receipt(&mut stage, &mut out).metadata, metadata(1));
 }
@@ -526,7 +542,7 @@ fn malformed_pixels_are_never_sent_and_do_not_destroy_valid_queued_batch() {
 fn changed_pixels_after_full_are_rejected_before_retry_and_can_be_cleared() {
     let pixels = [1, 2, 3];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(3), metadata(1)).unwrap();
     out.poll(&pixels, 1, |op| {
         deliver(&mut stage, op);
@@ -549,7 +565,7 @@ fn changed_pixels_after_full_are_rejected_before_retry_and_can_be_cleared() {
 fn completed_chunks_allow_drop_before_commit_or_receipt() {
     let pixels = [1];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     out.poll(&pixels, 2, |op| {
         deliver(&mut stage, op);
@@ -571,7 +587,7 @@ fn close_fences_partial_full_waiting_and_clear_without_false_completion() {
     let pixels = [1];
     for prefix in 0..=4 {
         let mut out = Outbox::new(ORIGINAL);
-        let mut stage = Stage::EMPTY;
+        let mut stage = bound_stage();
         out.queue(&pixels, geometry(1), metadata(1)).unwrap();
         for _ in 0..prefix.min(3) {
             out.poll(&pixels, 1, |op| {
@@ -596,7 +612,7 @@ fn close_fences_partial_full_waiting_and_clear_without_false_completion() {
             0
         });
         // Local close does not forge display erasure; lifecycle retirement does.
-        stage.retire(15);
+        stage.retire(15,15);
         assert!(stage.scrubbed());
     }
 }
@@ -605,7 +621,7 @@ fn close_fences_partial_full_waiting_and_clear_without_false_completion() {
 fn sequences_exhaust_without_wrap_or_replaying_last_accepted_mutation() {
     let pixels = [1];
     let mut out = Outbox::with_sequence_floor(ORIGINAL, u32::MAX - 1);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     assert_eq!(out.queue(&pixels, geometry(1), metadata(1)), Ok(u32::MAX));
     submit(&mut stage, &mut out, &pixels);
     assert_eq!(out.clear(metadata(2)), Err(QueueError::SequenceExhausted));
@@ -627,7 +643,7 @@ fn sequences_exhaust_without_wrap_or_replaying_last_accepted_mutation() {
 fn sequence_exhaustion_preserves_reserved_clear_but_stops_unsent_image() {
     let pixels = [1];
     let mut out = Outbox::with_sequence_floor(ORIGINAL, u32::MAX - 2);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     submit(&mut stage, &mut out, &pixels);
     assert_eq!(out.clear(metadata(2)), Ok(u32::MAX));
@@ -659,7 +675,7 @@ fn sequence_exhaustion_preserves_reserved_clear_but_stops_unsent_image() {
 #[test]
 fn repeated_same_clear_is_coalesced_and_full_clear_is_retained_exactly() {
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     assert_eq!(out.clear(metadata(1)), Ok(1));
     assert_eq!(out.clear(metadata(1)), Ok(1));
     let mut held = None;
@@ -685,7 +701,7 @@ fn repeated_same_clear_is_coalesced_and_full_clear_is_retained_exactly() {
 fn early_duplicate_old_and_future_receipts_cannot_complete_active_work() {
     let pixels = [1];
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, geometry(1), metadata(1)).unwrap();
     let word = |sequence| {
         Applied {
@@ -716,7 +732,7 @@ fn early_duplicate_old_and_future_receipts_cannot_complete_active_work() {
 #[test]
 fn clear_while_clear_ack_is_held_keeps_both_original_correlations() {
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.clear(metadata(1)).unwrap();
     submit(&mut stage, &mut out, &[]);
     assert_eq!(out.clear(metadata(2)), Ok(2));
@@ -758,7 +774,7 @@ fn maximum_asset_stays_finite_without_internal_image_copy() {
         ..geometry(1)
     };
     let mut out = Outbox::new(ORIGINAL);
-    let mut stage = Stage::EMPTY;
+    let mut stage = bound_stage();
     out.queue(&pixels, g, metadata(1)).unwrap();
     let ops = submit(&mut stage, &mut out, &pixels);
     assert_eq!(ops.len(), 1154);
@@ -777,7 +793,7 @@ fn viewport_reset_clear_barrier_restarts_partial_and_accepted_transactions() {
     for mode in 0..5 {
         let pixels = [0xff123456, 0x80123456, 0x00123456];
         let mut out = Outbox::new(ORIGINAL);
-        let mut stage = Stage::EMPTY;
+        let mut stage = bound_stage();
         out.queue(&pixels, geometry(3), metadata(1)).unwrap();
         submit(&mut stage, &mut out, &pixels);
         receipt(&mut stage, &mut out);
