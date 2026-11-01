@@ -159,6 +159,95 @@ fn tls_rows(f:&browser_view::TlsFrame)->Vec<&str>{if f.len==0{Vec::new()}else{co
  let mut new_paint=0;while new_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();let committed=stage.receive(30,300,343,req);if let text_batch::Request::Commit{sequence,..}=req{assert_eq!(committed.unwrap().0,next.len);new_paint=sequence;}Admission::Accepted});}
  assert!(out.receive(1,wire).is_none());stage.poll_reply(|_,_|panic!("unreleased resized panel"));assert!(stage.release_after_publication());
  let mut reply=None;stage.poll_reply(|owner,word|{assert_eq!((owner,word),(30,text_batch::Applied{surface:343,sequence:new_paint}.encode().unwrap()));reply=out.receive(1,word);0});assert_eq!(reply.unwrap().metadata,desired);
- // Cancellation on a later resize does not revive the previous sequence.
+ // Explicit terminal cancellation does not revive the previous sequence.
  assert!(out.queue_selected(&first.bytes[..first.len],0xcdd6f4,old,(0,0)));out.cancel();assert!(out.receive(1,wire).is_none());
+}
+
+
+#[test]
+fn live_viewport_keeps_delayed_commit_until_published_receipt_then_latest_clock() {
+    use text_delivery::{Admission, Metadata, Outbox, Poll};
+    let mut out = Outbox::atomic(300);
+    let mut stage = display_transaction::Stage::EMPTY;
+    let old_bytes = b"old viewport panel";
+    let old = Metadata { count: text_batch::hash(old_bytes) as usize, first: 7, rows: 1, selected: 1 << 24 };
+    assert!(out.queue(old_bytes, 0xcdd6f4, old));
+    let mut delayed_commit = None;
+    assert_eq!(out.poll(128, |op| {
+        let req = text_batch::Request::decode(op.opcode, op.packed, op.control).unwrap();
+        if let text_batch::Request::Commit { .. } = req {
+            // Transport admission precedes actual Display dispatch.
+            delayed_commit = Some(req);
+        } else {
+            assert!(stage.receive(15, 150, op.surface, req).is_none());
+        }
+        Admission::Accepted
+    }), Poll::Pending);
+    assert!(!stage.needs_publication());
+    let delayed_commit = delayed_commit.unwrap();
+    let old_paint = match delayed_commit { text_batch::Request::Commit { sequence, .. } => sequence, _ => unreachable!() };
+
+    // Model three live viewport updates, each invalidating the UI cache and
+    // queuing a fresh 511-byte clock panel without cancelling the active batch.
+    // Payloads are transport fixtures, not pixel or clock-composer evidence.
+    let mut latest_bytes = [b' '; 511];
+    let mut latest = old;
+    for viewport in 8..=10 {
+        latest_bytes.fill(b'A' + (viewport - 8) as u8);
+        latest_bytes[..18].copy_from_slice(b"Certificate time: ");
+        latest = Metadata { count: text_batch::hash(&latest_bytes) as usize, first: viewport, rows: 8, selected: 1 << 24 };
+        assert!(out.queue(&latest_bytes, 0xcdd6f4, latest));
+        assert_eq!(out.poll(128, |_| panic!("new operation before historical Applied")), Poll::Pending);
+    }
+    let (len, _, bytes) = stage.receive(15, 150, 300, delayed_commit).unwrap();
+    assert_eq!(&bytes[..len], old_bytes);
+    stage.poll_reply(|_, _| panic!("reply before old output publication"));
+    assert!(stage.release_after_publication());
+    let old_word = text_batch::Applied { surface: 300, sequence: old_paint }.encode().unwrap();
+    for _ in 0..3 {
+        let mut attempts = 0;
+        stage.poll_reply(|owner, word| {
+            assert_eq!((owner, word), (15, old_word));
+            attempts += 1;
+            ERR_SERVICE_NOT_READY
+        });
+        assert_eq!(attempts, 1);
+        assert!(!stage.needs_publication());
+        assert_eq!(out.poll(128, |_| panic!("Full receipt must retain historical active batch")), Poll::Pending);
+    }
+    stage.poll_reply(|owner, word| {
+        assert_eq!((owner, word), (15, old_word));
+        let receipt = out.receive(1, word).unwrap();
+        assert_eq!((receipt.metadata, receipt.bytes), (old, old_bytes.len()));
+        0
+    });
+    let mut begin_count = 0;
+    let mut commits = 0;
+    assert_eq!(out.poll(128, |op| {
+        let req = text_batch::Request::decode(op.opcode, op.packed, op.control).unwrap();
+        if let text_batch::Request::Begin { sequence, .. } = req {
+            assert!(sequence > old_paint);
+            begin_count += 1;
+        }
+        if let Some((len, _, bytes)) = stage.receive(15, 150, op.surface, req) {
+            assert_eq!(len, 511);
+            assert_eq!(&bytes[..len], &latest_bytes);
+            commits += 1;
+        }
+        Admission::Accepted
+    }), Poll::Pending);
+    assert_eq!((begin_count, commits), (1, 1));
+    assert!(out.receive(1, old_word).is_none());
+    stage.poll_reply(|_, _| panic!("reply before latest output publication"));
+    assert!(stage.release_after_publication());
+    let mut received = false;
+    stage.poll_reply(|owner, word| {
+        assert_eq!(owner, 15);
+        let receipt = out.receive(1, word).unwrap();
+        assert_eq!((receipt.metadata, receipt.bytes), (latest, 511));
+        received = true;
+        0
+    });
+    assert!(received);
+    assert_eq!(out.poll(128, |_| panic!("superseded viewport reappeared")), Poll::Idle);
 }

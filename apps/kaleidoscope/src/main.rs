@@ -639,9 +639,9 @@ impl SexApp for App {
                         if !self.asset_fenced&&!self.image.pixels().is_empty(){self.asset_status=asset_view::Status::Sending;}
                     }
                     if self.asset_presentation.invalidate().is_err(){self.fence_asset("presentation_sequence");}
-                    // Recreated display slots discard old staging and ACKs.
-                    // Preserve the outbox's monotonic sequence across cancel.
-                    self.ui.cancel();self.ui_last.fill(0);self.ui_last_len=0;self.ui_metadata=None;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
+                    // A live viewport preserves the immutable active upload and
+                    // its historical receipt; refreshed content coalesces as latest.
+                    self.ui_last.fill(0);self.ui_last_len=0;self.ui_metadata=None;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
                     sex_pdx::serial_record!("[browser.viewport] target={} task={} sequence={} w={} h={} origin=held_shell",n.target,n.task,n.sequence,n.w,n.h);
                 }
             }

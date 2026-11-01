@@ -46,6 +46,24 @@ python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY_BROWSER_TLS'
 import json,os,re,subprocess,sys
 from pathlib import Path
 root,out=map(Path,sys.argv[1:]);main=(root/'apps/kaleidoscope/src/main.rs').read_text();panel=(root/'apps/kaleidoscope/src/browser_view.rs').read_text();fixture=root/'tests/browser_view.rs'
+def viewport_block(source):
+ start=source.index('            if req.type_id==sex_pdx::document_view::OP{')
+ end=source.index('            if req.type_id==1&&req.caller_pd==11',start)
+ return source[start:end]
+def viewport_custody(source):
+ body=re.sub(r'\s+','',re.sub(r'//[^\n]*','',viewport_block(source)))
+ if 'self.ui.cancel()'in body:raise ValueError('live viewport may not abandon an admitted text batch')
+ for required in ['self.ui_last.fill(0)','self.ui_metadata=None','self.ui_dirty=true']:
+  if required not in body:raise ValueError('viewport must queue fresh layout after draining its historical completion')
+viewport_custody(main)
+for name,old,new in [('cancel-admitted','self.ui_last.fill(0)','self.ui.cancel();self.ui_last.fill(0)'),('lost-current-layout','self.ui_dirty=true','self.ui_dirty=false')]:
+ block=viewport_block(main)
+ if block.count(old)!=1:raise ValueError('ambiguous viewport custody control')
+ bad=main.replace(block,block.replace(old,new,1),1)
+ try:viewport_custody(bad)
+ except ValueError:pass
+ else:raise ValueError('viewport source defect survived '+name)
+print('[browser.viewport.custody] PASS source_controls=2 scope=actual_live_notice_preserves_active_and_invalidates_layout_cache_not_native_pixels',flush=True)
 def once(source,old,new):
  if source.count(old)!=1:raise ValueError('missing/ambiguous exact TLS mutation site: '+old)
  return source.replace(old,new,1)
@@ -60,16 +78,16 @@ def helpers(source):
   if depth:raise ValueError('incomplete actual Main helper: '+name)
   extracted.append(source[start:end])
  return '\n'.join(extracted)+'\n'
-def compile_case(name,main_source,panel_path):
+def compile_case(name,main_source,panel_path,fixture_override=None):
  helper=out/(name+'-main-helpers.rs');helper.write_text(helpers(main_source))
  env=dict(os.environ,BROWSER_TLS_MAIN=str(helper));source_path=fixture
- if panel_path is not None:
+ if panel_path is not None or fixture_override is not None:
   def path(match):
    actual=(fixture.parent/match[1]).resolve(strict=True)
-   if actual==(root/'apps/kaleidoscope/src/browser_view.rs').resolve():actual=panel_path
+   if panel_path is not None and actual==(root/'apps/kaleidoscope/src/browser_view.rs').resolve():actual=panel_path
    return '#[path='+json.dumps(str(actual))+']'
-  source=re.sub(r'#\[path\s*=\s*"([^"\n]+)"\s*\]',path,fixture.read_text())
-  if str(panel_path)not in source:raise ValueError('fixture does not include actual Browser panel')
+  source=re.sub(r'#\[path\s*=\s*"([^"\n]+)"\s*\]',path,fixture_override if fixture_override is not None else fixture.read_text())
+  if panel_path is not None and str(panel_path)not in source:raise ValueError('fixture does not include actual Browser panel')
   source_path=out/(name+'-fixture.rs');source_path.write_text(source)
  binary=out/name
  result=subprocess.run(['rustc','--edition=2021','--extern','sex_net_config='+str(out/'libsex_net_config.rlib'),'--test',str(source_path),'-o',str(binary)],env=env,capture_output=True,text=True,timeout=60)
@@ -93,7 +111,9 @@ path=out/'browser-panel-missing-bottom-rim.rs';path.write_text(mutant_panel)
 run_case('browser-panel-missing-bottom-rim',compile_case('browser-panel-missing-bottom-rim',main,path),'tls_rim_and_height_boundaries_use_explicit_fallback',True)
 mutant_main=once(main,'first:viewport as usize','first:0');(out/'browser-main-wrong-queued-viewport.rs').write_text(mutant_main)
 run_case('browser-main-wrong-queued-viewport',compile_case('browser-main-wrong-queued-viewport',mutant_main,None),'tls_every_state_replaces_old_status_with_exact_whole_lines',True)
-print('[browser.tls.panel.host] PASS cases='+normal[1]+' compiled_controls=2 scope=actual_panel_main_metadata_outbox_display_stage_not_native_pixels_or_authority',flush=True)
+cancelled=once(fixture.read_text(),'    for viewport in 8..=10 {','    for viewport in 8..=10 { out.cancel();')
+run_case('browser-live-viewport-cancel',compile_case('browser-live-viewport-cancel',main,None,cancelled),'live_viewport_keeps_delayed_commit_until_published_receipt_then_latest_clock',True)
+print('[browser.tls.panel.host] PASS cases='+normal[1]+' compiled_controls=3 scope=actual_panel_main_metadata_outbox_display_stage_not_native_pixels_or_authority',flush=True)
 PY_BROWSER_TLS
 echo '[sexnet.http.client.host] PASS scope=actual_client_ABI_job_codec_and_pure_view_not_live_authority_or_pixels'
 
