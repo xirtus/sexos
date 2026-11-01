@@ -771,3 +771,20 @@ storage/parent-bound writer29 cold recovery. All1,184 blobs and1,530 archive mem
 verified; nine ELFs/325,243 decoded instructions, zero inspected vector/FP matches.
 Next152: preserve captured Shell input while removing fixed Browser classification,
 unused singleton queue and task==PD custody restriction. Inventory unchanged.
+
+
+## Round 152 — captured Shell input and independent tasks
+
+[Report](BROWSER_INPUT_CUSTODY_2026_11_01.md): active input retains its held
+PD/task/SID/route through Full/focus/old-custody loss, with catalog Browser
+classification and no legacy singleton. Fresh app operations and viewport controls
+check stamped task; SDK workspace publisher preserves independent nonzero task.
+Source3f189cb3:43 frozen checks,2,794 logged Rust+18 nested cases=2,812 executions,
+1,051Python. Actual29-case input/22-case cleanup fixtures and custody mutations
+pass; current/archival pixel contracts stay bound to exact source. Eightboots /
+112 captures pass bothsizes/full8 chains/TLSimage/storage/cleanup/writer29 cold.
+All1,185 blobs and1,533 archive members verified; nine ELFs/325,651 decoded
+instructions, zero inspected vector/FP matches. ABI source hash575a6a0e over65
+ordered inputs; no new actual Browser reservations. Next153: isolate unsupported
+source denial receipts; then154 per-consumer BOOT source grants/selection.
+Inventory unchanged; no new-image1800s or native unequal-task claim.
