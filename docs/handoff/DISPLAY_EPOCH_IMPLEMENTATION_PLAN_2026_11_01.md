@@ -1,12 +1,12 @@
 # Display epoch implementation: next substantive slice
 
-Implementation plan based on the Display source in candidate `a84043d0` (unchanged from Round 163). Revalidate call sites after the planned clock work. This document records work still to implement; it closes neither EPOCH_COMMIT nor DETERMINISTIC_REPLAY.
+This plan began from candidate `a84043d0` (unchanged from Round 163). The baseline gap below is historical; later checkpoints record the implemented slices. Revalidate current call sites for each next slice. Neither EPOCH_COMMIT nor DETERMINISTIC_REPLAY is closed.
 
 ## Required final state and actual gap
 
 ARCHITECTURE.md:43–53 requires *all* state to derive from `(epoch_id, input_stream, capability_graph)`, including hardware snapshots, with `snapshot → transform → swap → commit` and no out-of-boundary in-place mutation. Sections1.4/1.5 require epoch-gated UiIR visibility and per-sender causal ordering; the success criterion additionally requires tear-free presentation, deterministic drops, interruption recovery and replay from epoch zero. `spec/architecture.sexspec` correctly leaves both obligations open.
 
-Current Display does not meet this contract:
+At the original baseline, Display did not meet this contract (the later checkpoints supersede individual implementation details):
 
 - `servers/sexdisplay/src/main.rs:120–125` holds mutable global text stages, bitmap stores, frame groups and surfaces; handlers directly modify these, bar/theme/focus/cursor state. Typed text commits replace surface contents; `bitmap_transaction.rs:253–255` replaces published pixels immediately. Their staging prevents partial individual transfers, not cross-operation/cross-sender epochs.
 - `main.rs:3029` drains/checks UiIR records but explicitly does not render them. Its stream epoch is not the Display transaction boundary.
@@ -83,3 +83,34 @@ Begin must not erase an older completion under Full. Do not tie startup/control
 transport readiness indiscriminately to pixels. Full transactional source state,
 causal/replay inputs, hardware latching and interrupted-output recovery remain
 required later; completion-effect custody alone closes none of those obligations.
+
+
+## Round169 checkpoint and next canonical text boundary
+
+[Round169](TYPED_DISPLAY_COMPLETION_CUSTODY_2026_11_01.md) qualifies retained
+text/bitmap completion custody: successful Full CPU publication and scoped scene
+release precede eligibility; absent/failed/partial output releases nothing.
+Empty, hidden and unchanged updates force settlement, while eligible transport
+retries require no rendering or mutation replay. Exact text task context is
+correlation under existing surface authority, not task-routed reply isolation.
+Live bitmap reset keeps historical custody while erasing pixels; terminal proof
+cancels it. Browser now retains an admitted text batch across live resize and
+coalesces the newest layout behind its exact Applied. The native-wide race that
+exposed this is retained diagnostically; the corrected image qualifies freshly.
+
+Next170: typed text candidate projection into owned SceneSnapshot, followed by
+canonical Surface text/selection/layout commit only after successful publication
+and lease release. Preserve pending bytes on failure. Reuse actual UTF8/selection
+layout routines; validate active owner/SID and retained task/sequence context.
+Do not copy an entire captured Surface back over independent geometry/chrome.
+A same-drain later legacy0xFA/0xFB must not be overwritten by an earlier typed
+candidate: define ordered supersession or explicitly fence that crossover.
+Reset/rebind/terminal cancellation must invalidate the candidate and its effects.
+Move committed diagnostics to actual canonical commit, with honest gate updates.
+
+Then reduce conservative Full settlement only with explicit candidate identity
+and output coverage proof, including no-visible-change settlement, and measure
+actual input/Close responsiveness. Bitmap/bar/other raw intake transactionality,
+causal input capture, interrupted output, hardware latch and replay remain further
+work. Current Full settlement is not a performance or complete-epoch claim.
+2Open/28Partial/SystemProvenfalse. GLOBAL_VAS, BOOT genesis, sex-pdx and PKU remain.

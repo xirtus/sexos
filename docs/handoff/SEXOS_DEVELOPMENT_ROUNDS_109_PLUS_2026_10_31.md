@@ -1214,3 +1214,46 @@ mutable beforecommit. No fullEpoch/replay/latch/Alpha1800/performance/hardware/
 SMP/physical erasure claim.2Open/28Partial/SystemProvenfalse. GLOBAL_VAS,
 BOOT-onlygenesis,sex-pdxauthority andPKUenforcement unchanged.
 169–200 remain32 substantive rounds underactive80–200 plan.
+
+
+## Round 169 — typed completion custody and live resize handoff
+
+[Report](TYPED_DISPLAY_COMPLETION_CUSTODY_2026_11_01.md): source78227603.
+Typed text/bitmap Commit and Clear retain unreleased completion custody until
+successful Full CPU publication and SceneLease drop. No-op/empty/hidden/reset
+work forces settlement. Failed/absent/partial output releases nothing. Eligible
+reply Full retains exact metadata without rendering or replaying mutation;
+newer text Begin cannot overwrite either pending phase. Actual task context and
+16-bit SID validation precede mutation; PD-shared reply authority is unchanged.
+Live bitmap reset scrubs pixels but retains custody; exact terminal retirement
+cancels it. Browser live resize now keeps an admitted immutable batch and queues
+the newest desired layout, resolving the delayed-Commit race exposed natively.
+
+All46 frozen host checks/1,132 Python pass, with3,198 logged successful Rust
+executions (repeated fixtures, not unique/exhaustive count). ActualStage20text/
+22bitmap; MainScene16/11compiled defects/2source controls. Browser21cases/
+3compiled controls includes old-cancel regression;2callsite controls. Existing
+compositor49,cursor5/2controls and frame38/9runtime/4compiler/7source controls.
+Eleven qualified boots/70captures pass fresh CLI/full-clock API replay across
+bothprofiles:16clock,34connected/recovery,20Browser. All11 BOOT inventories and
+aggregate typed-release witnesses pass, without sender-to-visible-pixel claim.
+
+Failed A host-fixture migration, B native-wide live cancellation and packaging
+symbol-schema preflight remain UNQUALIFIED with exact sources/logs/captures.
+No failed artifacts overwritten. Two diagnostic sealed boots+six B native boots
+add8diagnostic boots/36retained captures; current qualified cohort is independent.
+All1,224sourcefiles/12,256,106bytes matchGit.581/586production unchanged,
+5changed/noadds; kernel26bace17 and ABI67hash3b98b233 byte-identical168.
+Nine ISO ELFs325,157instructions/0matchedFP-vector. DisplayELF288,680(+1,960),
+textstages9,088(+128),bitmapstores55,992/scene59,584/store88 unchanged.
+Framebuddy8MiB/heapused11,851,408/appprivate2465pages remain; physicalfree
+unmeasured and budgets are not additive disjoint RAM. Measured prologues unchanged,
+excluding transitive/interrupt/dynamic stack. Raw24,161,453bytes/4,332members,
+SHA b27c0a926b5c59684b118981f9b1451c7b3c5cce84e96fc14b3d62182addbabf,
+independently reopened and every member size/SHA verified.
+
+Next170 canonical text candidate projection/commit, then coverage-proved lower
+cost settlement and remaining source/causal/interruption/hardware/replay work.
+Full settlement may cost more; no speedup/Alpha1800/daily-driver/hardware/SMP/
+physical-erasure/full-epoch claim.2Open/28Partial/SystemProvenfalse; SASOS rules
+unchanged. Accepted80–169=90/121;170–200 remain31 substantive rounds.
