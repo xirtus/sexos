@@ -4,7 +4,7 @@ import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import tls_prepare_gate as gate
-from check_desktop_pixels import glyph
+from test_tls_panel_pixels import case as panel_case
 ROOT=Path(__file__).resolve().parents[2]
 SECONDS=1793367907
 
@@ -24,24 +24,10 @@ def metadata(mode='ready',pending=1):
   if mode=='close':lines.extend([f'[browser.tls.erased] bytes={18192 if pending else 0} owned_storage=1',f'[browser.tls.closed] pending={pending} terminal=1 owned_storage=erased','[browser.trust.closed] target=15 task=15 pending=0 terminal=1','[trust.policy.retired] target=15 task=15 before_cleanup_ack=1','[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1','[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1'])
   elif seq==1:lines.extend([f'[browser.tls.erased] bytes={18192 if mode=="ready"else 0} owned_storage=1','[browser.tls.view] state=Cancelled authenticated=0 network=0'])
  return '\n'.join(lines)+'\n'
-def trace(state,c,w=900,h=650):
- n=len(c['prefix'])+50;base=n+258
- return f'[browser.preview.layout] bytes={n} newline=1 cached_or_sample=1\n[shell.document.viewport] target=15 task=15 surface=300 sequence=7 x=20 y=100 w={w} h={h} enqueued=1\n[browser.viewport] target=15 task=15 sequence=7 w={w} h={h} origin=held_shell\n[browser.tls.layout] base={base} bytes=64 viewport=7 state={state} pixels=unconfirmed\n[browser.view.applied] bytes={base+64} http=0 body_bytes=0 pixels=unconfirmed\n'
-def pixels(text,state,c):
- g=gate.tls_geometry(text,state,c);raw=bytearray(1280*800*3);scale=g['scale'];color=c['color'].to_bytes(3,'big')
- for row in g['rows']:
-  for col,ch in enumerate(row['text']):
-   for gy,bits in enumerate(glyph(c['font'],ch)):
-    for gx in range(5):
-     if bits&(1<<(4-gx)):
-      for dy in range(scale):
-       for dx in range(scale):
-        x=row['x']+(col*c['advance']+gx)*scale+dx;y=row['y']+gy*scale+dy;at=(y*1280+x)*3;raw[at:at+3]=color
- return b'P6\n1280 800\n255\n'+raw
 
 class TlsPreparationOracle(unittest.TestCase):
  @classmethod
- def setUpClass(cls):cls.c=gate.load_pixel_contract(ROOT)
+ def setUpClass(cls):cls.c=gate.tls_contract(ROOT)
  def inspect(self,text,mode='ready'):return gate.inspect_tls(text,mode,command(mode),SECONDS-5,SECONDS+5)
  def test_actual_source_contract_binds_tls_backend_and_prerequisites(self):
   c=gate.tls_contract(ROOT)
@@ -101,9 +87,23 @@ class TlsPreparationOracle(unittest.TestCase):
    self.assertEqual(r['trust_policy']['self_checks'],2)
  def test_whole_status_labels_and_padding_pixels(self):
   for state in gate.LABELS:
-   t=trace(state,self.c);r=gate.verify_tls_pixels(t,pixels(t,state,self.c),state,self.c,(1280,800));self.assertTrue(r['ok'],r)
+   text,raw,window,_=panel_case(state=state)
+   # Original target15 API resolves its unequal actual held task itself.
+   result=gate.verify_tls_pixels(text,raw,state,self.c,(320,260),window=window)
+   self.assertTrue(result['ok'],result);self.assertEqual(result['geometry']['consumer'],dict(target=15,task=150,surface=300))
  def test_stale_hello_ink_clipping_and_unapplied_extent_fail(self):
-  t=trace('HelloPending',self.c);raw=pixels(t,'HelloPending',self.c);self.assertFalse(gate.verify_tls_pixels(trace('Cancelled',self.c),raw,'Cancelled',self.c)['ok'])
-  for t in[trace('HelloPending',self.c,h=100),trace('HelloPending',self.c).replace('[browser.view.applied]','[missing.applied]'),trace('HelloPending',self.c).replace('viewport=7','viewport=8')]:self.assertFalse(gate.verify_tls_pixels(t,b'','HelloPending',self.c)['ok'])
+  text,raw,window,_=panel_case();cancelled,_,cancel_window,_=panel_case(state='Cancelled')
+  self.assertFalse(gate.verify_tls_pixels(cancelled,raw,'Cancelled',self.c,window=cancel_window)['ok'])
+  for bad in(text.replace('h=180','h=100'),text.replace('[browser.tls.applied]','[missing.applied]'),text.replace('viewport=5','viewport=8')):
+   self.assertFalse(gate.verify_tls_pixels(bad,raw,'HelloPending',self.c,window=(window[0],len(bad)))['ok'])
+ def test_public_frame_hashes_do_not_relax_private_receipt_privacy(self):
+  public='[browser.tls.layout] target=15 task=15 surface=300 viewport=5 w=244 h=180 bytes=493 hash=17206912897812530802 cols=37 rows=13 state_code=2 complete=1 pixels=unconfirmed\n[browser.tls.applied] target=15 task=15 surface=300 viewport=5 bytes=493 hash=17206912897812530802 cols=37 rows=13 state_code=2 complete=1 sequence=7 positive_ack=1 pixels=unconfirmed\n'
+  # Protocol workflow remains the original15 fixture; public frame scalars add
+  # no entropy/future bytes and make no additional protocol authority claim.
+  text=metadata()+public;result=self.inspect(text);self.assertTrue(result['ok'],result)
+  for extra in (' secret=1',' seed_bytes=32',' fingerprint=123'):
+   bad=text.replace('pixels=unconfirmed','pixels=unconfirmed'+extra,1)
+   self.assertFalse(self.inspect(bad)['ok'])
+  for bad in(text.replace('bytes=493','bytes=492'),text.replace('state_code=2','state_code=8'),text.replace('task=15 surface=300','task=015 surface=300'),text.replace('task=15 surface=300','task=150 surface=300'),text.replace('surface=300 viewport=5','surface=343 viewport=5')):self.assertFalse(self.inspect(bad)['ok'])
 
 if __name__=='__main__':unittest.main()

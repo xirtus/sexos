@@ -5,6 +5,41 @@ use crate::{dns_probe,http_probe,network_probe};
 
 pub struct Text { pub bytes:[u8;512], pub len:usize }
 
+/// Presentation metadata only; this tag grants no service or surface access.
+pub const TLS_TAG:u64=1<<25;
+pub struct TlsFrame { pub bytes:[u8;512], pub len:usize, pub cols:usize, pub rows:usize, pub complete:bool }
+
+/// Dedicated local-preparation snapshot. Every logical line is either fully
+/// wrapped or replaced by an explicit small-tile message; status/help never
+/// disappear beneath the older overview's fixed padding. One spare physical
+/// column keeps each newline before automatic renderer wrapping. At most
+/// 63 columns,24 rows,512 bytes; the last row has no trailing newline.
+pub fn tls_panel(w:u32,h:u32,label:Option<&[u8]>)->Option<TlsFrame>{
+ use sex_pdx::desktop_style::{scale,ADVANCE,GLYPH_HEIGHT,INSET,LINE};
+ let label=label?;
+ if !matches!(label,b"preparing"|b"hello pending; no peer"|b"unavailable"|b"cancelled"|b"rejected"|b"timed out"|b"waiting receipt"){return None;}
+ let factor=scale(w);let top=28+INSET;
+ let cols=(w.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1).min(63)as usize;
+ // The compositor paints the bottom INSET-pixel frame rim after its canvas.
+ // Count only rows whose complete seven-pixel glyph remains above that rim.
+ let rows=if cols==0||h<top+GLYPH_HEIGHT*factor+INSET{0}else{1+(h-top-GLYPH_HEIGHT*factor-INSET)/(LINE*factor)}as usize;
+ let rows=rows.min(24).min(if cols==0{0}else{512/(cols+1)});
+ let mut frame=TlsFrame{bytes:[0;512],len:0,cols,rows,complete:false};
+ if rows==0{return Some(frame);}
+ frame.len=rows*(cols+1)-1;frame.bytes[..frame.len].fill(b' ');
+ for row in 0..rows-1{frame.bytes[row*(cols+1)+cols]=b'\n';}
+ let lines:[&[u8];5]=[b"Kaleidoscope / TLS",b"TLS preparation:",label,b"Local only / no peer",b"L prep Q clear Y peer"];
+ let needed:usize=lines.iter().map(|line|(line.len()+cols-1)/cols).sum();
+ if needed<=rows{
+  frame.complete=true;let mut row=0;
+  for line in lines{for chunk in line.chunks(cols){let at=row*(cols+1);frame.bytes[at..at+chunk.len()].copy_from_slice(chunk);row+=1;}}
+ }else{
+  let hint:&[u8]=if cols>=12{b"Enlarge tile"}else{b"..."};let n=hint.len().min(cols);frame.bytes[..n].copy_from_slice(&hint[..n]);
+  if rows>1&&cols>=16{let at=cols+1;frame.bytes[at..at+16].copy_from_slice(b"TLS / local only");}
+ }
+ Some(frame)
+}
+
 fn readable(bytes:&[u8])->bool { bytes.iter().all(|b|*b==b'\n'||(b' '..=b'~').contains(b)) }
 fn append(out:&mut[u8],at:&mut usize,bytes:&[u8])->Option<()> {
  let end=at.checked_add(bytes.len())?;out.get_mut(*at..end)?.copy_from_slice(bytes);*at=end;Some(())

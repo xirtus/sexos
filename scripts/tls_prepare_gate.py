@@ -8,6 +8,7 @@ from clock_source_evidence import browser_clock_sources
 import browser_source_evidence as source_evidence
 import argparse,hashlib,json,math,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
+from dataclasses import dataclass
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
 from network_contention_gate import frozen_binding,owner_joins,cleanup_receipts,MAX_PCAP
@@ -32,10 +33,35 @@ def command_profile(command,mode):
  errors.extend(clock_profile(command,'invalid-year'if mode=='invalid-year'else'normal')['errors'])
  return dict(ok=not errors,errors=errors,scope='Exact explicit CPU/UTC emulator profiles; neither source authenticity nor runtime authority proof.')
 
+@dataclass(frozen=True)
+class Consumer:
+ target:int
+ task:int
+ surface:int
+
+
+def consumer_context(trace,target=15,*,task=None,root=None,plans=None,require_version=True):
+ """Select metadata only after validating every held source and global stream."""
+ root=Path(root)if root is not None else Path(__file__).resolve().parents[1]
+ plans=tuple(plans)if plans is not None else source_evidence.plans_from_catalog(root)
+ inventory=source_evidence.validate_inventory(trace,plans,require_version=require_version)
+ source_evidence.validate_entropy_stream(trace,inventory)
+ source_evidence.validate_clock_stream(trace,inventory)
+ selected=inventory['roster'].get(target)
+ if selected is None or task is not None and task!=selected['task']:raise ValueError('TLS consumer differs from held source inventory')
+ return Consumer(target,selected['task'],selected['plan'].surface)
+
+
+def _consumer(trace,consumer=None,**options):
+ if consumer is not None and not isinstance(consumer,Consumer):raise ValueError('invalid TLS consumer context')
+ actual=consumer_context(trace,15 if consumer is None else consumer.target,**options)
+ if consumer is not None and consumer!=actual:raise ValueError('TLS consumer task/surface differs from held inventory')
+ return actual
+
 def tls_contract(root):
  contract=load_pixel_contract(root);app=(root/'apps/kaleidoscope/src/main.rs').read_text();view=(root/'apps/kaleidoscope/src/browser_view.rs').read_text();probe=(root/'apps/kaleidoscope/src/tls_probe.rs').read_text();backend=(root/'crates/sex-tls/src/lib.rs').read_text()
- if 'pub fn with_tls('not in view or 'browser_view::with_tls(text,'not in app or 'start.checked_add(64)'not in view:raise ValueError('source-bound whole64-byte TLS extent changed')
- for literal in ('b"\\n\\nTLS preparation: "','b"\\nL prep Q clear Y peer"'):
+ if 'pub fn tls_panel('not in view or 'browser_view::tls_panel('not in app:raise ValueError('source-bound viewport TLS panel absent')
+ for literal in ('b"Kaleidoscope / TLS"','b"TLS preparation:"','b"Local only / no peer"','b"L prep Q clear Y peer"','b"Enlarge tile"','b"TLS / local only"'):
   if literal not in view:raise ValueError('source-bound TLS chrome changed')
  for label in LABELS.values():
   if ('b"'+label.decode()+'"')not in probe:raise ValueError('source-bound TLS label changed')
@@ -43,7 +69,7 @@ def tls_contract(root):
   match=re.search(r'pub const '+name+r': usize = ([0-9_]+);',backend)
   if not match or int(match[1].replace('_',''))!=expected:raise ValueError('source-bound TLS capacity changed: '+name)
  if 'pub const PIPE_METADATA_BYTES:usize=56;'not in backend or 'size_of::<Pipe>()==PIPE_BYTES'not in backend:raise ValueError('source-bound Pipe accounting changed')
- names=['scripts/browser_source_evidence.py','scripts/clock_source_evidence.py','crates/sex-pdx/src/browser_sources.rs','crates/sex-pdx/src/app_catalog.rs','apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/trust_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-pdx/src/trust_source.rs','crates/sex-pdx/src/trust_policy.rs','kernel/src/trust_source.rs','servers/sexnet/src/trust_policy.rs','crates/sex-trust-config/Cargo.toml','crates/sex-trust-config/src/lib.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
+ names=['scripts/tls_prepare_gate.py','scripts/http_content_gate.py','apps/kaleidoscope/src/incarnation.rs','servers/silk-shell/src/linen_text_delivery.rs','crates/sex-pdx/src/text_batch.rs','scripts/browser_source_evidence.py','scripts/clock_source_evidence.py','crates/sex-pdx/src/browser_sources.rs','crates/sex-pdx/src/app_catalog.rs','apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/trust_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-pdx/src/trust_source.rs','crates/sex-pdx/src/trust_policy.rs','kernel/src/trust_source.rs','servers/sexnet/src/trust_policy.rs','crates/sex-trust-config/Cargo.toml','crates/sex-trust-config/src/lib.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
  for name in names:
   path=root/name
   if path.is_file():contract['source_sha256'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
@@ -57,59 +83,135 @@ def tls_contract(root):
  if not re.search(r'EXPECTED_NAME\s*:\s*&str\s*=\s*"probe\.sexos\.test";',policy):raise ValueError('source-bound expected controlled name changed')
  root_der=re.search(r'pub const ROOT_DER[^=]*=\s*&\[(.*?)\];',policy,re.S)
  if not root_der or len(re.findall(r'0x[0-9a-fA-F]{2}',root_der[1]))!=376:raise ValueError('source-bound controlled root extent changed')
+ renderer=(root/'servers/sexdisplay/src/main.rs').read_text()
+ rim=re.search(r'const FRAME_RIM_PX: usize = (\d+);',renderer)
+ canvas=re.search(r'let color = if surface_id & 1 == 0 \{ (0x[0-9a-fA-F]+)u32 \} else \{ (0x[0-9a-fA-F]+)u32 \};',renderer)
+ if not rim or int(rim[1])!=8 or not canvas:raise ValueError('TLS content canvas/rim source changed')
+ contract.update(tls_rim=int(rim[1]),tls_canvas_even=int(canvas[1],16),tls_canvas_odd=int(canvas[2],16))
  return contract
 
-def tls_geometry(trace,expected,contract):
- layouts=list(re.finditer(r'\[browser.tls.layout\] base=(\d+) bytes=64 viewport=(\d+) state=(\w+) pixels=unconfirmed',trace))
- if not layouts or layouts[-1][3]!=expected:raise ValueError('wrong latest TLS layout')
- marker=layouts[-1];base,sequence=int(marker[1]),int(marker[2]);previews=re.findall(r'\[browser.preview.layout\] bytes=(\d+) newline=1 cached_or_sample=1',trace)
- if not previews:raise ValueError('missing actual preview extent')
- length=int(previews[-1]);prefix=contract['prefix']
- if base!=length+258 or not len(prefix)<length<=192:raise ValueError('TLS extent differs from complete source-bound overview')
- queued=re.findall(rf'\[shell.document.viewport\] target=15 task=15 surface=300 sequence={sequence} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) enqueued=1',trace);accepted=re.findall(rf'\[browser.viewport\] target=15 task=15 sequence={sequence} w=(\d+) h=(\d+) origin=held_shell',trace)
- if len(queued)!=1 or not accepted:raise ValueError('missing exact held-shell TLS viewport')
- x,y,w,h=map(int,queued[0])
- if(w,h)!=tuple(map(int,accepted[-1])):raise ValueError('viewport geometry differs')
- if not re.search(rf'\[browser.view.applied\] bytes={base+64} http=0 body_bytes=0 pixels=unconfirmed',trace[marker.end():]):raise ValueError('missing positive complete Applied after TLS layout')
- preceding=prefix+b'?'*(length-len(prefix))+contract['echo']['Verified'].ljust(64,b' ')+(contract['dns_prefix']+contract['dns']['Idle']+contract['dns_footer']).ljust(64,b' ')+(contract['http_prefix']+contract['http']['Idle']+contract['http_footer']).ljust(64,b' ')+b'\n\n'+b' '*64
- if len(preceding)!=base:raise ValueError('source overview changed')
- status=(b'\n\nTLS preparation: '+LABELS[expected]+b'\nL prep Q clear Y peer').ljust(64,b' ')
- if len(status)!=64:raise ValueError('TLS status overflow')
- data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(80,max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
- for index,byte in enumerate(data):
-  if byte==10:starts.append(index+1);column=0
-  else:
-   column+=1
-   if column>=cols and index+1<len(data):starts.append(index+1);column=0
- if len(starts)>contract['max_rows']:raise ValueError('TLS exceeds renderer row table')
- rows=[]
- for row,start in enumerate(starts):
-  if start<=base:continue
-  end=starts[row+1]if row+1<len(starts)else len(data);py=y+contract['top']+row*contract['line']*scale
-  if py+contract['line']*scale>y+h:raise ValueError('TLS status clipped')
-  rows.append(dict(row=row,text=data[start:end].rstrip(b'\n').decode(),x=x+contract['inset'],y=py))
- if not any('TLS preparation:'in row['text']for row in rows):raise ValueError('full TLS label not visible')
- return dict(tile=dict(x=x,y=y,w=w,h=h),base=base,viewport=sequence,scale=scale,columns=cols,rows=rows,status_text=LABELS[expected].decode())
+TLS_STATES={'Idle':0,'Preparing':1,'HelloPending':2,'Unavailable':3,'Cancelled':4,'Rejected':5,'TimedOut':6,'Uncertain':7}
 
-def verify_tls_pixels(trace,ppm,expected,contract,resolution=None):
+def _fingerprint(data):
+ value=14695981039346656037
+ for byte in data:value=((value^byte)*1099511628211)&((1<<64)-1)
+ return value
+
+def tls_panel_frame(width,height,expected,contract):
+ """Independent logical-line model; no production panel code is executed."""
+ if expected not in TLS_STATES or expected=='Idle':raise ValueError('inactive/unknown TLS panel state')
+ if any(type(n)is not int or n<0 or n>0xffffffff for n in(width,height)):raise ValueError('invalid TLS viewport extent')
+ scale=2 if width>=contract['scale_threshold']else 1
+ columns=min(63,max(0,(width-2*contract['inset'])//(contract['advance']*scale)-1))
+ rows=0 if columns==0 or height-contract['tls_rim']<contract['top']+7*scale else min(24,512//(columns+1),1+(height-contract['tls_rim']-contract['top']-7*scale)//(contract['line']*scale))
+ logical=[b'Kaleidoscope / TLS',b'TLS preparation:',LABELS[expected],b'Local only / no peer',b'L prep Q clear Y peer']
+ wrapped=[] if columns==0 else [line[at:at+columns]for line in logical for at in range(0,len(line),columns)]
+ complete=bool(columns and rows>=len(wrapped))
+ content=[b'']*rows
+ if complete:content[:len(wrapped)]=wrapped
+ elif rows:
+  content[0]=(b'Enlarge tile'if columns>=12 else b'...')[:columns]
+  if columns>=16 and rows>1:content[1]=b'TLS / local only'
+ data=b'\n'.join(line.ljust(columns,b' ')for line in content)
+ return dict(data=data,bytes=len(data),hash=_fingerprint(data),columns=columns,rows=rows,scale=scale,complete=complete,text_rows=[line.ljust(columns,b' ')for line in content],state_code=TLS_STATES[expected])
+
+def _tls_records(trace,tag,body):
+ matches=list(re.finditer(r'\['+re.escape(tag)+r'\] '+body+r'(?=\r?\n)',trace))
+ if len(matches)!=trace.count('['+tag+']'):raise ValueError('malformed '+tag+' receipt')
+ for match in matches:
+  for name,value in match.groupdict().items():
+   if not re.fullmatch(r'0|[1-9][0-9]*|-[1-9][0-9]*',value)or not -(1<<31)<=int(value)<(1<<64)or(name not in('x','y')and int(value)<0):raise ValueError('noncanonical '+tag+' numeric field')
+ return matches
+
+def _capture_window(trace,window):
+ if window is None:return 0,len(trace)
+ if not isinstance(window,tuple)or len(window)!=2 or any(type(n)is not int for n in window)or not 0<=window[0]<window[1]<=len(trace):raise ValueError('invalid explicit TLS capture window')
+ return window
+
+def tls_geometry(trace,expected,contract,*,consumer=None,capture_window=None,window=None,root=None,plans=None,require_version=True,require_complete=True):
+ consumer=_consumer(trace,consumer,root=root,plans=plans,require_version=require_version)
+ if capture_window is not None and window is not None:raise ValueError('duplicate TLS capture window arguments')
+ start,end=_capture_window(trace,capture_window if window is None else window);target,task,surface=consumer.target,consumer.task,consumer.surface
+ identity=r'target=(?P<target>\d+) task=(?P<task>\d+) surface=(?P<surface>\d+) viewport=(?P<viewport>\d+) '
+ payload=r'bytes=(?P<bytes>\d+) hash=(?P<hash>\d+) cols=(?P<cols>\d+) rows=(?P<rows>\d+) state_code=(?P<state>\d+) complete=(?P<complete>[01]) '
+ layouts=_tls_records(trace,'browser.tls.layout',identity+r'w=(?P<w>\d+) h=(?P<h>\d+) '+payload+r'pixels=unconfirmed')
+ applied=_tls_records(trace,'browser.tls.applied',identity+payload+r'sequence=(?P<sequence>\d+) positive_ack=1 pixels=unconfirmed')
+ def owned(m):return tuple(int(m[k])for k in('target','task','surface'))==(target,task,surface)
+ candidates=[m for m in layouts if owned(m)and start<=m.start()and m.end()<=end]
+ if not candidates:raise ValueError('no fresh exact-consumer TLS layout in capture window')
+ layout=candidates[-1];viewport=int(layout['viewport']);width,height=int(layout['w']),int(layout['h'])
+ if not viewport:raise ValueError('TLS layout has no held viewport')
+ model=tls_panel_frame(width,height,expected,contract)
+ if require_complete and not model['complete']:raise ValueError('TLS panel requires larger tile; fallback does not qualify status')
+ def same_payload(m):
+  return (int(m['viewport']),int(m['bytes']),int(m['hash']),int(m['cols']),int(m['rows']),int(m['state']),int(m['complete']))==(viewport,model['bytes'],model['hash'],model['columns'],model['rows'],model['state_code'],int(model['complete']))
+ if not same_payload(layout):raise ValueError('TLS layout differs from independently reconstructed payload')
+ # Whole trace remains available: reject conflicting same-generation metadata,
+ # and never borrow a later viewport/receipt from another incarnation.
+ same_generation=[m for m in layouts if owned(m)and int(m['viewport'])==viewport and int(m['hash'])==model['hash'] and m.start()<end]
+ if any(not same_payload(m)or(int(m['w']),int(m['h']))!=(width,height)for m in same_generation):raise ValueError('conflicting immutable TLS layout')
+ notices=_tls_records(trace,'browser.viewport',r'target=(?P<target>\d+) task=(?P<task>\d+) sequence=(?P<sequence>\d+) w=(?P<w>\d+) h=(?P<h>\d+) origin=held_shell')
+ own_notices=[m for m in notices if(int(m['target']),int(m['task']))==(target,task)and m.end()<=end]
+ exact=[m for m in own_notices if int(m['sequence'])==viewport]
+ if len(exact)!=1 or not own_notices or own_notices[-1]is not exact[0]or exact[0].end()>layout.start():raise ValueError('TLS uses missing/duplicate/stale held viewport')
+ if(int(exact[0]['w']),int(exact[0]['h']))!=(width,height):raise ValueError('TLS viewport extent changed')
+ queued=_tls_records(trace,'shell.document.viewport',r'target=(?P<target>\d+) task=(?P<task>\d+) surface=(?P<surface>\d+) sequence=(?P<sequence>\d+) x=(?P<x>-?\d+) y=(?P<y>-?\d+) w=(?P<w>\d+) h=(?P<h>\d+) enqueued=1')
+ queue=[m for m in queued if tuple(int(m[k])for k in('target','task','surface','sequence'))==(target,task,surface,viewport)and m.end()<=end]
+ if len(queue)!=1 or(int(queue[0]['w']),int(queue[0]['h']))!=(width,height):raise ValueError('TLS viewport lacks exact queued Shell geometry')
+ # The Shell logs the positive enqueue return after its callee can run;
+ # no caller-return-before-callee ordering is invented here.
+ receipts=[m for m in applied if owned(m)and layout.end()<=m.start()and m.end()<=end and same_payload(m)]
+ if len(receipts)!=1:raise ValueError('missing/duplicate exact immutable TLS Applied receipt')
+ receipt=receipts[0];paint=int(receipt['sequence'])
+ if not 0<paint<=0xffffffff:raise ValueError('invalid TLS paint sequence')
+ commits=_tls_records(trace,'display.browser.text.committed',r'target=(?P<target>\d+) task=(?P<task>\d+) surface=(?P<surface>\d+) paint=(?P<paint>\d+) bytes=(?P<bytes>\d+) hash=(?P<hash>\d+) changed=[01] pixels=unconfirmed')
+ owned_commits=[m for m in commits if owned(m)and m.end()<=end]
+ commit=[m for m in owned_commits if int(m['paint'])==paint]
+ if len(commit)!=1 or int(commit[0]['bytes'])!=model['bytes']or int(commit[0]['hash'])!=model['hash']or not layout.end()<=commit[0].start()<receipt.start():raise ValueError('TLS Applied lacks exact validated Display commit')
+ if owned_commits[-1]is not commit[0]:raise ValueError('TLS capture follows a superseding Display commit')
+ if any(owned(m)and receipt.end()<m.start()<end for m in applied):raise ValueError('TLS capture follows a superseding Applied receipt')
+ if '[browser.tls.closed]'in trace[layout.end():end]or re.search(rf'\[(?:net\.app\.cleanup\.ack|app\.private\.retired|sext\.app\.pool\.ready)\][^\n]*target={target} task={task}\b',trace[layout.end():end]):raise ValueError('TLS capture is after terminal consumer cleanup')
+ x,y=int(queue[0]['x']),int(queue[0]['y'])
+ rows=[dict(row=i,text=text.decode('ascii'),x=x+contract['inset'],y=y+contract['top']+i*contract['line']*model['scale'])for i,text in enumerate(model['text_rows'])]
+ return dict(consumer=dict(target=target,task=task,surface=surface),tile=dict(x=x,y=y,w=width,h=height),viewport=viewport,scale=model['scale'],columns=model['columns'],rows=rows,bytes=model['bytes'],hash=hex(model['hash']),complete=model['complete'],state_code=model['state_code'],status_text=LABELS[expected].decode(),paint=paint,layout_offset=layout.start(),display_commit_offset=commit[0].start(),applied_offset=receipt.start(),capture_window=(start,end))
+
+def verify_tls_pixels(trace,ppm,expected,contract,resolution=None,**options):
  try:
-  geometry=tls_geometry(trace,expected,contract);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=geometry['tile'];scale=geometry['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatch=0
+  geometry=tls_geometry(trace,expected,contract,**options);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=geometry['tile'];scale=geometry['scale'];checked=ink=mismatch=0
   if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong framebuffer resolution')
   if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('TLS viewport outside framebuffer')
-  for row in geometry['rows']:
-   for col in range(geometry['columns']):
-    bitmap=glyph(contract['font'],row['text'][col])if col<len(row['text'])else(0,)*7
-    for gy in range(contract['line']):
-     for gx in range(contract['advance']):
-      on=gy<7 and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
-      for dy in range(scale):
-       for dx in range(scale):
-        px=row['x']+(col*contract['advance']+gx)*scale+dx;py=row['y']+gy*scale+dy;actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;mismatch+=actual!=on;checked+=1;ink+=on
-  errors=[]if not mismatch else[f'full TLS glyph/padding/erasure mismatches={mismatch}']
-  if not ink:errors.append('empty expected TLS ink')
-  return dict(ok=not errors,errors=errors,expected=expected,geometry=geometry,checked_pixels=checked,expected_ink_pixels=ink)
+  foreground=contract['color'].to_bytes(3,'big');background=(contract['tls_canvas_even']if geometry['consumer']['surface']%2==0 else contract['tls_canvas_odd']).to_bytes(3,'big')
+  # Cover the entire unobscured content canvas, including blank cells, gutters,
+  # and the area below the bounded payload. Clip padding at the actual canvas.
+  left=tile['x']+contract['inset'];right=tile['x']+tile['w']-contract['inset'];top=tile['y']+contract['top'];bottom=tile['y']+tile['h']-contract['tls_rim']
+  for py in range(top,max(top,bottom)):
+   row_index=(py-top)//(contract['line']*scale);gy=((py-top)//scale)%contract['line']
+   text=geometry['rows'][row_index]['text']if row_index<len(geometry['rows'])else''
+   for px in range(left,max(left,right)):
+    column=(px-left)//(contract['advance']*scale);gx=((px-left)//scale)%contract['advance']
+    on=column<len(text)and gy<7 and gx<5 and bool(glyph(contract['font'],text[column])[gy]&(1<<(4-gx)))
+    actual=pixels[(py*width+px)*3:(py*width+px)*3+3];mismatch+=actual!=(foreground if on else background);checked+=1;ink+=on
+  errors=[]if not mismatch else[f'full TLS glyph/canvas/erasure mismatches={mismatch}']
+  if not ink:errors.append('no visible TLS panel glyph capacity')
+  return dict(ok=not errors,errors=errors,expected=expected,geometry=geometry,checked_pixels=checked,expected_ink_pixels=ink,glyph_cells=sum(len(row['text'])for row in geometry['rows']),nonspace_glyphs=sum(char!=' 'for row in geometry['rows']for char in row['text']),status_qualified=not errors and geometry['complete'])
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
+
+def _public_tls_frame_metadata(line,inventory):
+ # Only the two source-bound public text-frame schemas may carry a frame hash.
+ # No generic hash allowance applies to private TLS/entropy receipts.
+ identity=r'target=(?P<target>\d+) task=(?P<task>\d+) surface=(?P<surface>\d+) viewport=(?P<viewport>\d+) '
+ payload=r'bytes=(?P<bytes>\d+) hash=(?P<hash>\d+) cols=(?P<cols>\d+) rows=(?P<rows>\d+) state_code=(?P<state>\d+) complete=[01] '
+ for tag,body in(('browser.tls.layout',identity+r'w=(?P<w>\d+) h=(?P<h>\d+) '+payload+'pixels=unconfirmed'),('browser.tls.applied',identity+payload+r'sequence=(?P<paint>\d+) positive_ack=1 pixels=unconfirmed')):
+  if not line.startswith('['+tag+'] '):continue
+  try:records=_tls_records(line+'\n',tag,body)
+  except ValueError:return False
+  if len(records)!=1:return False
+  values={key:int(value)for key,value in records[0].groupdict().items()}
+  member=inventory['roster'].get(values['target'])
+  if member is None or(values['task'],values['surface'])!=(member['task'],member['plan'].surface):return False
+  return all(values[key]>0 for key in('target','task','surface','viewport'))and values['state']<=7 and values['cols']<=63 and values['rows']<=24 and values['bytes']==max(0,values['rows']*(values['cols']+1)-1)and values['bytes']<=512 and('paint'not in values or 0<values['paint']<=0xffffffff)
+ return False
 
 def inspect_tls(trace,mode,command,host_start,host_end,*,root=None,plans=None,require_version=False):
  errors=list(command_profile(command,mode)['errors']);joins=[];trust_joins=[];closed_pending=None
@@ -126,7 +228,7 @@ def inspect_tls(trace,mode,command,host_start,host_end,*,root=None,plans=None,re
   assert trace.count('[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1')==len(plans) and trace.count('[sexnet.clock.source]')==len(plans),'wrong held clock source metadata'
   assert trace.count(f'[sexnet.entropy.source] held=1 available={0 if mode=="unsupported"else 1} source=rdseed fallback=0 broker=private_seed32')==len(plans) and trace.count('[sexnet.entropy.source]')==len(plans),'wrong actual source availability/fallback'
   private_lines=[line for line in trace.splitlines()if re.search(r'\[(?:browser\.tls|browser\.entropy|entropy\.|sexnet\.entropy|boot\.entropy)',line)]
-  assert not any(re.search(r'\b(?:hash|fingerprint|word|value|hex|seed_bytes|seed_value|sample_value|data|secret|random)=',line)for line in private_lines),'secret-bearing private metadata field'
+  assert not any(re.search(r'\b(?:hash|fingerprint|word|value|hex|seed_bytes|seed_value|sample_value|data|secret|random)=',line)for line in private_lines if not _public_tls_frame_metadata(line,inventory)),'secret-bearing private metadata field'
   samples=list(re.finditer(rf'\[entropy.source.sample\] pd={holder} task={holder_task} slot={selected["plan"].entropy} source=rdseed attempts=(\d+) count=(\d+) private=1',trace))
   assert all(1<=int(m[1])<=8 for m in samples),'unbounded source attempts'
   counts=[int(m[2])for m in samples];assert all(a<b for a,b in zip(counts,counts[1:])),'sample ordinal regressed'
@@ -257,7 +359,7 @@ def main():
  def picture(state,name):
   end=time.monotonic()+20;path=out/(name+'.ppm');result=dict(ok=False,errors=['no frame'])
   while time.monotonic()<end:
-   health();q.cmd('screendump',{'filename':str(path)});result=verify_tls_pixels(text(),path.read_bytes(),state,contract,tuple(map(int,a.resolution.split('x'))))
+   health();capture_end=len(text());q.cmd('screendump',{'filename':str(path)});full_trace=text();result=verify_tls_pixels(full_trace,path.read_bytes(),state,contract,tuple(map(int,a.resolution.split('x'))),window=(start,capture_end),root=root)
    if result['ok']:break
    time.sleep(.1)
   result.update(screenshot=path.name,screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),source_sha256=contract['source_sha256']);pixels.append(result);(out/(name+'-pixels.json')).write_text(json.dumps(result,indent=2)+'\n')

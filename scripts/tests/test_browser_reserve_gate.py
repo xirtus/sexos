@@ -132,4 +132,33 @@ class BrowserReserve(unittest.TestCase):
  def test_contract_requires_every_source_and_runner_hash(self):
   c=dict(source_sha256={'a':'11','b':'22'});p.require_inputs(dict(sources={'a':'11'},runner_sha256={'b':'22'}),c)
   with self.assertRaises(ValueError):p.require_inputs(dict(sources={'a':'11'},runner_sha256={}),c)
+class CapturedPaintBoundaries(unittest.TestCase):
+ def frame(self,before,after):return dict(serial_end=len(before),serial_sha256=p.sha(before.encode()),post_serial_end=len(after),post_serial_sha256=p.sha(after.encode()))
+ def test_late_receipt_cannot_qualify_an_earlier_screendump(self):
+  row=dict(target=30,task=300,surface=343);before='[browser.tls.layout] target=30 task=300 surface=343\n'
+  after=before+'[clock.source.snapshot] unrelated civil update\n'
+  self.assertEqual(p.capture_fence(after,self.frame(before,after),row),after)
+  for event in ('[browser.tls.applied] target=30 task=300 surface=343\n','[display.browser.text.committed] target=30 task=300 surface=343\n','[browser.viewport] target=30 task=300 sequence=6\n','[browser.tls.view] state=Cancelled\n','[shell.focus.set] id=201\n'):
+   changed=before+event
+   with self.subTest(event=event),self.assertRaises(ValueError):p.capture_fence(changed,self.frame(before,changed),row)
+ def test_post_capture_prefix_is_immutable_and_bounded(self):
+  text='public frame\n';row=dict(target=31,task=310,surface=344);frame=self.frame(text,text)
+  for key,value in [('post_serial_end',len(text)+1),('post_serial_end',-1),('post_serial_sha256','0'*64),('serial_sha256','0'*64)]:
+   changed={**frame,key:value}
+   with self.subTest(key=key,value=value),self.assertRaises(ValueError):p.capture_fence(text,changed,row)
+ def test_resize_requires_exact_zoom_and_enter_but_allows_late_caller_return(self):
+  row=dict(target=30,task=300,surface=343)
+  view='[browser.viewport] target=30 task=300 sequence=6 w=1024 h=718 origin=held_shell\n'
+  zoom='[shell.window.action] action=ZoomToggle frame=20 sid=343 ok=1\n'
+  text=view+zoom+'layout\n';geometry=dict(viewport=6,tile=dict(w=1024,h=718),layout_offset=len(view+zoom))
+  actions=[dict(kind='key',key='ret',start=0,end=len(view+zoom))]
+  self.assertEqual(p.resize_evidence(text,row,0,len(text),geometry,actions)['viewport_offset'],0)
+  prefix='unrelated immutable history\n'*100;offset=len(prefix);shifted={**geometry,'layout_offset':geometry['layout_offset']+offset};shifted_actions=[{**a,'start':a['start']+offset,'end':a['end']+offset}for a in actions]
+  proof=p.resize_evidence(prefix+text,row,offset,offset+len(text),shifted,shifted_actions)
+  self.assertEqual(proof['viewport_offset'],offset);self.assertEqual(proof['zoom_offset'],offset+len(view))
+  for changed in (text.replace(zoom,''),text.replace('sid=343','sid=300'),text+zoom):
+   with self.subTest(changed=changed),self.assertRaises(ValueError):p.resize_evidence(changed,row,0,len(changed),geometry,actions)
+  for invalid in ([],actions*2,[dict(kind='key',key='ret',start=len(view+zoom),end=len(text))]):
+   with self.subTest(actions=invalid),self.assertRaises(ValueError):p.resize_evidence(text,row,0,len(text),geometry,invalid)
+
 if __name__=='__main__':unittest.main()

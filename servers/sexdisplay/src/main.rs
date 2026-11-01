@@ -2843,6 +2843,14 @@ fn bitmap_binding_live(lifecycle:&surface_lifecycle::Lifecycle,binding:bitmap_bi
     false
 }
 
+// Browser text shares the immutable held identity used by its bitmap store.
+// Other text producers retain their existing surface-owner admission policy.
+fn browser_text_binding_live(lifecycle: &surface_lifecycle::Lifecycle, owner: u32, task: u32, sid: u64) -> bool {
+    if sex_pdx::app_catalog::app_of(owner) != Some(sex_pdx::app_catalog::App::Browser) { return true; }
+    let Some(binding) = (unsafe { BITMAP_STORES.binding_for(owner, sid) }) else { return false; };
+    binding.admits(owner, task, sid) && bitmap_binding_live(lifecycle, binding)
+}
+
 fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut SilkBar) -> bool {
     let mut changed = false;
     for index in 0..surface_lifecycle::CATALOG_CAPACITY {
@@ -3933,6 +3941,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::SELECT | sex_pdx::text_batch::COMMIT => {
+                    if !browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0) { continue; }
                     let Some(request) = sex_pdx::text_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
                     unsafe {
                         for (index, slot) in SURFACES.iter_mut().enumerate() {
@@ -3954,6 +3963,11 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 if let sex_pdx::text_batch::Request::Commit { sequence, .. } = request {
                                     sex_pdx::serial_record!("[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",msg.caller_pd,msg.arg0,sequence,len,changed as u8);
+                                    if sex_pdx::app_catalog::app_of(msg.caller_pd) == Some(sex_pdx::app_catalog::App::Browser) {
+                                        sex_pdx::serial_record!("[display.browser.text.committed] target={} task={} surface={} paint={} bytes={} hash={} changed={} pixels=unconfirmed",
+                                            msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,
+                                            sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8);
+                                    }
                                 }
                             } else if let sex_pdx::text_batch::Request::Commit{sequence,..}=request {
                                 static mut INCOMPLETE_BUDGET:u8=16;

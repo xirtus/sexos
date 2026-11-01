@@ -39,8 +39,62 @@ echo '[sexnet.dns.client.host] PASS scope=actual_client_with_private_job_peer_no
 
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/http_probe.rs" -o "$TEST_DIR/http-client-tests"
 "$TEST_DIR/http-client-tests"
-rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/browser_view.rs" -o "$TEST_DIR/browser-view-tests"
-"$TEST_DIR/browser-view-tests"
+# The fixture includes actual Main metadata helpers, freshly extracted here.
+# Runtime controls must compile and fail their exact named test; neither a
+# missing mutation site nor a compiler error qualifies as rejection evidence.
+python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY_BROWSER_TLS'
+import json,os,re,subprocess,sys
+from pathlib import Path
+root,out=map(Path,sys.argv[1:]);main=(root/'apps/kaleidoscope/src/main.rs').read_text();panel=(root/'apps/kaleidoscope/src/browser_view.rs').read_text();fixture=root/'tests/browser_view.rs'
+def once(source,old,new):
+ if source.count(old)!=1:raise ValueError('missing/ambiguous exact TLS mutation site: '+old)
+ return source.replace(old,new,1)
+def helpers(source):
+ extracted=[]
+ for name in ('tls_view_code','tls_frame_metadata'):
+  matches=list(re.finditer(r'^fn '+name+r'\(',source,re.M))
+  if len(matches)!=1:raise ValueError('missing/ambiguous actual Main helper: '+name)
+  start=matches[0].start();brace=source.index('{',start);depth=1;end=brace+1
+  while depth and end<len(source):
+   depth+=(source[end]=='{')-(source[end]=='}');end+=1
+  if depth:raise ValueError('incomplete actual Main helper: '+name)
+  extracted.append(source[start:end])
+ return '\n'.join(extracted)+'\n'
+def compile_case(name,main_source,panel_path):
+ helper=out/(name+'-main-helpers.rs');helper.write_text(helpers(main_source))
+ env=dict(os.environ,BROWSER_TLS_MAIN=str(helper));source_path=fixture
+ if panel_path is not None:
+  def path(match):
+   actual=(fixture.parent/match[1]).resolve(strict=True)
+   if actual==(root/'apps/kaleidoscope/src/browser_view.rs').resolve():actual=panel_path
+   return '#[path='+json.dumps(str(actual))+']'
+  source=re.sub(r'#\[path\s*=\s*"([^"\n]+)"\s*\]',path,fixture.read_text())
+  if str(panel_path)not in source:raise ValueError('fixture does not include actual Browser panel')
+  source_path=out/(name+'-fixture.rs');source_path.write_text(source)
+ binary=out/name
+ result=subprocess.run(['rustc','--edition=2021','--extern','sex_net_config='+str(out/'libsex_net_config.rlib'),'--test',str(source_path),'-o',str(binary)],env=env,capture_output=True,text=True,timeout=60)
+ (out/(name+'.compile.log')).write_text(result.stdout+result.stderr)
+ if result.returncode:raise ValueError(name+': fixture must compile; '+result.stderr[-6000:])
+ return binary
+def run_case(name,binary,test=None,reject=False):
+ command=[str(binary),'--test-threads=1']+(['--exact',test]if test else[])
+ result=subprocess.run(command,capture_output=True,text=True,timeout=60);text=result.stdout+result.stderr
+ (out/(name+'.log')).write_text(text);print(text,end='',flush=True)
+ if reject:
+  if result.returncode!=101 or 'running 1 test'not in text or 'test '+test+' ... FAILED'not in text:raise ValueError(name+': exact compiled TLS defect was not rejected at runtime')
+ elif result.returncode:raise ValueError(name+': actual TLS fixture failed')
+ return text
+baseline=compile_case('browser-view-tests',main,None);text=run_case('browser-view-tests',baseline)
+normal=re.search(r'test result: ok\. (\d+) passed; 0 failed;',text)
+if not normal:raise ValueError('missing normal TLS fixture result')
+mutant_panel=once(panel,'h<top+GLYPH_HEIGHT*factor+INSET','h<top+GLYPH_HEIGHT*factor')
+mutant_panel=once(mutant_panel,'h-top-GLYPH_HEIGHT*factor-INSET','h-top-GLYPH_HEIGHT*factor')
+path=out/'browser-panel-missing-bottom-rim.rs';path.write_text(mutant_panel)
+run_case('browser-panel-missing-bottom-rim',compile_case('browser-panel-missing-bottom-rim',main,path),'tls_rim_and_height_boundaries_use_explicit_fallback',True)
+mutant_main=once(main,'first:viewport as usize','first:0');(out/'browser-main-wrong-queued-viewport.rs').write_text(mutant_main)
+run_case('browser-main-wrong-queued-viewport',compile_case('browser-main-wrong-queued-viewport',mutant_main,None),'tls_every_state_replaces_old_status_with_exact_whole_lines',True)
+print('[browser.tls.panel.host] PASS cases='+normal[1]+' compiled_controls=2 scope=actual_panel_main_metadata_outbox_display_stage_not_native_pixels_or_authority',flush=True)
+PY_BROWSER_TLS
 echo '[sexnet.http.client.host] PASS scope=actual_client_ABI_job_codec_and_pure_view_not_live_authority_or_pixels'
 
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/resolved_http.rs" -o "$TEST_DIR/resolved-http-tests"

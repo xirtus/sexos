@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Standalone tests compile the actual pure Browser snapshot composer.
+extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 mod network_probe { #[derive(Clone,Copy)]pub enum View {Pending,Verified,Unavailable,Cancelled,Uncertain} }
 mod dns_probe { #[derive(Clone,Copy)]pub enum View {Idle,Pending,Answer([u8;4]),Unavailable,Cancelled,Uncertain} }
 mod http_probe { #[derive(Clone,Copy)]pub enum View {Idle,Pending,Ready,Unavailable,Cancelled,Uncertain} }
@@ -93,4 +96,66 @@ fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_
   let mut expected=b"\n\nHTTPS / lab root: ".to_vec();expected.extend_from_slice(label);expected.extend_from_slice(b"\nB fetch V read Q clear");assert_eq!(&after.bytes[base..base+64],&padded(&expected));assert!(after.len<=512);
  }
  for label in [b"public web" as &[u8],b"ready\0",b"unavailable"]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Cancelled,&[0;64]).unwrap();assert!(browser_view::with_https(text,label).is_none());}
+}
+
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../servers/silk-shell/src/linen_text_delivery.rs"]mod text_delivery;
+#[path="../servers/sexdisplay/src/text_transaction.rs"]mod display_transaction;
+pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+mod tls_probe{#[derive(Clone,Copy)]pub enum View{Idle,Preparing,HelloPending,Unavailable,Cancelled,Rejected,TimedOut,Uncertain}}
+
+// Compile the current production Main helpers; the registered gate extracts
+// them fresh, including for the compiled wrong-viewport control.
+include!(env!("BROWSER_TLS_MAIN"));
+
+fn tls_rows(f:&browser_view::TlsFrame)->Vec<&str>{if f.len==0{Vec::new()}else{core::str::from_utf8(&f.bytes[..f.len]).unwrap().split('\n').map(str::trim_end).collect()}}
+#[test]fn tls_actual_small_and_expanded_tiles_have_complete_status_and_help(){
+ for(w,h,cols,rows,len)in[(512,359,40,12,491),(640,375,51,9,467),(1024,718,63,8,511),(1280,750,63,8,511)]{
+  let f=browser_view::tls_panel(w,h,Some(b"hello pending; no peer")).unwrap();assert!(f.complete);assert_eq!((f.cols,f.rows,f.len),(cols,rows,len));
+  assert_eq!(&tls_rows(&f)[..5],&["Kaleidoscope / TLS","TLS preparation:","hello pending; no peer","Local only / no peer","L prep Q clear Y peer"]);
+  assert!(tls_rows(&f)[5..].iter().all(|line|line.is_empty()));assert!(f.bytes[f.len..].iter().all(|b|*b==0));
+ }
+}
+#[test]fn tls_every_state_replaces_old_status_with_exact_whole_lines(){
+ for(label,view,code)in[(b"preparing" as &[u8],tls_probe::View::Preparing,1),(b"hello pending; no peer",tls_probe::View::HelloPending,2),(b"unavailable",tls_probe::View::Unavailable,3),(b"cancelled",tls_probe::View::Cancelled,4),(b"rejected",tls_probe::View::Rejected,5),(b"timed out",tls_probe::View::TimedOut,6),(b"waiting receipt",tls_probe::View::Uncertain,7)]{
+  let f=browser_view::tls_panel(512,359,Some(label)).unwrap();assert!(f.complete);assert_eq!(tls_rows(&f)[2].as_bytes(),label);
+  let m=tls_frame_metadata(&f,123,view);assert_eq!(m.count as u64,text_batch::hash(&f.bytes[..f.len]));assert_eq!((m.first,m.rows),(123,12));assert_eq!((m.selected>>26)&7,code);assert_eq!((m.selected>>29)&1,1);assert_eq!((m.selected>>30)&63,40);assert_eq!(m.selected&((1<<20)|(1<<24)|1024),0);
+ }
+ assert_eq!(tls_view_code(tls_probe::View::Idle),0);
+}
+#[test]fn tls_narrow_wrap_retains_every_logical_byte(){
+ let f=browser_view::tls_panel(128,500,Some(b"hello pending; no peer")).unwrap();assert!(f.complete);assert_eq!(f.cols,17);
+ let lines=tls_rows(&f);assert_eq!(&lines[..9],&["Kaleidoscope / TL","S","TLS preparation:","hello pending; no"," peer","Local only / no p","eer","L prep Q clear Y","peer"]);
+}
+#[test]fn tls_rim_and_height_boundaries_use_explicit_fallback(){
+ for h in[58,76,94,112,121,122,129]{let f=browser_view::tls_panel(512,h,Some(b"hello pending; no peer")).unwrap();assert!(!f.complete);assert_eq!(tls_rows(&f)[0],"Enlarge tile");assert!(!core::str::from_utf8(&f.bytes[..f.len]).unwrap().contains("hello pending"));}
+ let f=browser_view::tls_panel(512,130,Some(b"hello pending; no peer")).unwrap();assert!(f.complete);assert_eq!(f.rows,5);
+ assert_eq!(browser_view::tls_panel(512,57,Some(b"preparing")).unwrap().len,0);
+ let f=browser_view::tls_panel(256,130,Some(b"hello pending; no peer")).unwrap();assert!(!f.complete);assert_eq!(f.cols,19);
+ assert!(browser_view::tls_panel(256,184,Some(b"hello pending; no peer")).unwrap().complete);
+}
+#[test]fn tls_all_measures_stay_inside_physical_canvas_and512_bytes(){
+ for w in[0,1,15,16,17,20,40,80,127,128,255,256,512,640,1024,1280,u32::MAX]{for h in[0,1,35,36,49,50,57,58,75,76,121,122,129,130,184,359,375,768,u32::MAX]{
+  let f=browser_view::tls_panel(w,h,Some(b"hello pending; no peer")).unwrap();assert!(f.len<=512&&f.cols<=63&&f.rows<=24);
+  if f.rows==0{assert_eq!(f.len,0);assert!(!f.complete);continue;}
+  assert_eq!(f.len,f.rows*(f.cols+1)-1);let s=desktop_style::scale(w);assert!(36+(f.rows as u32-1)*9*s+7*s<=h-8);
+  for row in 0..f.rows-1{assert_eq!(f.bytes[row*(f.cols+1)+f.cols],b'\n');}assert_ne!(f.bytes[f.len-1],b'\n');assert!(f.bytes[f.len..].iter().all(|b|*b==0));
+ }}
+}
+#[test]fn tls_unsupported_labels_never_enter_panel(){for label in[None,Some(b"peer verified" as &[u8]),Some(b"hello\npeer"),Some(b"authenticated"),Some(b"")]{assert!(browser_view::tls_panel(512,359,label).is_none());}}
+#[test]fn tls_real_outbox_stage_retains_original_metadata_and_rejects_late_zoom_ack(){
+ use text_delivery::{Outbox,Admission,Poll};let mut out=Outbox::atomic(343);let mut stage=display_transaction::Stage::EMPTY;
+ let first=browser_view::tls_panel(512,359,Some(b"preparing")).unwrap();let old=tls_frame_metadata(&first,7,tls_probe::View::Preparing);assert!(out.queue_selected(&first.bytes[..first.len],0xcdd6f4,old,(0,0)));
+ let mut deferred=None;assert_eq!(out.poll(1,|op|{deferred=Some(op);Admission::Full}),Poll::Deferred);
+ assert_eq!(out.poll(1,|op|{assert_eq!(Some(op),deferred);let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();stage.receive(30,343,req);Admission::Accepted}),Poll::Pending);
+ let mut old_paint=0;
+ while old_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();let committed=stage.receive(30,343,req);if let text_batch::Request::Commit{sequence,hash}=req{assert_eq!(hash,old.count as u64);assert_eq!(committed.unwrap().0,first.len);old_paint=sequence;}Admission::Accepted});}
+ let next=browser_view::tls_panel(1024,718,Some(b"hello pending; no peer")).unwrap();let desired=tls_frame_metadata(&next,8,tls_probe::View::HelloPending);assert!(out.queue_selected(&next.bytes[..next.len],0xcdd6f4,desired,(0,0)));
+ let wire=text_batch::Applied{surface:343,sequence:old_paint}.encode().unwrap();assert!(out.receive(2,wire).is_none());assert!(out.receive(1,text_batch::Applied{surface:344,sequence:old_paint}.encode().unwrap()).is_none());
+ let receipt=out.receive(1,wire).unwrap();assert_eq!(receipt.metadata,old);assert_ne!(receipt.metadata,desired);assert_eq!(receipt.bytes,first.len);
+ let mut new_paint=0;while new_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();stage.receive(30,343,req);if let text_batch::Request::Commit{sequence,..}=req{new_paint=sequence;}Admission::Accepted});}
+ assert!(out.receive(1,wire).is_none());let reply=out.receive(1,text_batch::Applied{surface:343,sequence:new_paint}.encode().unwrap()).unwrap();assert_eq!(reply.metadata,desired);
+ // Cancellation on a later resize does not revive the previous sequence.
+ assert!(out.queue_selected(&first.bytes[..first.len],0xcdd6f4,old,(0,0)));out.cancel();assert!(out.receive(1,wire).is_none());
 }

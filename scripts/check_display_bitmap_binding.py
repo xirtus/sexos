@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Held Display bitmap metadata and cached-live host checks, not BOOT grants.
 
-Source wiring is inspected; actual Binding tests and the extracted live helper
-with the actual Lifecycle module are compiled. No guest/Display pixel claim.
+Source wiring is inspected; actual Binding tests and extracted live/text guards
+with actual Lifecycle, Stores and text Stage modules are compiled. No guest or
+Display pixel claim. Text guards apply only to catalogued Browser subjects.
 """
 import argparse
 import json
@@ -59,6 +60,21 @@ def wiring(source):
     positions=[dispatch.index(value)for value in guards]
     if positions!=sorted(positions):raise ValueError('bitmap dispatch guard order changed')
     require(dispatch,'let sequence=BITMAP_STORES.sequence(binding.target(),binding.surface()).expect("committed bitmap remains bound");','exact committed owner sequence')
+    text_begin=source.index('                sex_pdx::text_batch::BEGIN |')
+    text_end=source.index('                // ── Text rendering opcodes (V1)',text_begin)
+    text_dispatch=compact(source[text_begin:text_end])
+    text_order=['if!browser_text_binding_live(&lifecycle,msg.caller_pd,msg.caller_task,msg.arg0){continue;}',
+                'sex_pdx::text_batch::Request::decode(msg.type_id,msg.arg1,msg.arg2)',
+                'if!slot.active||slot.surface_id!=msg.arg0||slot.owner_pd!=msg.caller_pd{continue;}',
+                'ifletSome((len,color,bytes))=TEXT_STAGES[index].receive(msg.caller_pd,msg.arg0,request)',
+                '[display.text.committed]', '[display.browser.text.committed]']
+    text_positions=[text_dispatch.index(value)for value in text_order]
+    if text_positions!=sorted(text_positions):raise ValueError('Browser text guard/commit evidence order changed')
+    require(text_dispatch,'if sex_pdx::app_catalog::app_of(msg.caller_pd)==Some(sex_pdx::app_catalog::App::Browser)','Browser-only parallel marker')
+    require(text_dispatch,'"[display.text.committed] target={} surface={} paint={} bytes={} changed={} pixels=unconfirmed",msg.caller_pd,msg.arg0,sequence,len,changed as u8','unchanged historical marker')
+    require(text_dispatch,'"[display.browser.text.committed] target={} task={} surface={} paint={} bytes={} hash={} changed={} pixels=unconfirmed",msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','actual committed plain text hash and sender task')
+    if text_dispatch.index('[display.browser.text.committed]')>=text_dispatch.index('}elseifletsex_pdx::text_batch::Request::Commit'):
+        raise ValueError('Browser marker is not on successful commit branch')
     cleanup=function(source,'prepare_app_cleanup');clean=compact(cleanup)
     require(cleanup,'let Ok(info)=sex_pdx::app_lifecycle::info(catalog.slot) else {continue;};','actual terminal proof query')
     require(cleanup,'if info.target_pd!=catalog.target_pd || info.task_id!=catalog.task_id || info.required_mask & sex_pdx::app_lifecycle::ROLE_DISPLAY==0 {continue;}','terminal proof tuple and role')
@@ -149,6 +165,74 @@ fn row()->surface_lifecycle::Catalog {
 '''
 
 
+
+def text_fixture(root,binding,main_source):
+    header='#![allow(dead_code,static_mut_refs)]\nextern crate self as sex_pdx;\n'
+    for name,path in [('app_catalog',root/'crates/sex-pdx/src/app_catalog.rs'),
+                      ('app_lifecycle',root/'crates/sex-pdx/src/app_lifecycle.rs'),
+                      ('bitmap_batch',root/'crates/sex-pdx/src/bitmap_batch.rs'),
+                      ('text_batch',root/'crates/sex-pdx/src/text_batch.rs'),
+                      ('text_encoding',root/'crates/sex-pdx/src/text_encoding.rs'),
+                      ('bitmap_binding',binding),
+                      *[(name,root/'servers/sexdisplay/src'/(name+'.rs')) for name in
+                        ('bitmap_transaction','bitmap_stores','surface_lifecycle','text_transaction')]]:
+        header+='#[path='+json.dumps(str(path))+']pub mod '+name+';\n'
+    header+='static mut BITMAP_STORES:bitmap_stores::Stores<{app_catalog::count(app_catalog::App::Browser)}>=bitmap_stores::Stores::UNBOUND;\n'
+    header+=function(main_source,'bitmap_binding_live')+'\n'+function(main_source,'browser_text_binding_live')
+    return header+r'''
+fn setup(target:u32,task:u32)->surface_lifecycle::Lifecycle {
+    unsafe { BITMAP_STORES=bitmap_stores::Stores::UNBOUND; }
+    let row=app_catalog::INCARNATIONS.iter().find(|r|r.target==target).unwrap();
+    let c=app_lifecycle::CatalogInfo{target_pd:target,task_id:task,surface_id:row.surface,coordinator_pd:3};
+    let binding=bitmap_binding::Binding::from_catalog(row.lifecycle_slot,c).unwrap();
+    assert!(unsafe { BITMAP_STORES.initialize_once(binding) });
+    let mut l=surface_lifecycle::Lifecycle::new();
+    assert!(l.register(surface_lifecycle::Catalog{slot:row.lifecycle_slot,target_pd:target,task_id:task,surface_id:row.surface,coordinator_pd:3}));l
+}
+// The actual Main guard and Stage execute here; wiring checks independently
+// require this guard before any actual typed-text Stage mutation in Main.
+fn deliver(l:&surface_lifecycle::Lifecycle,s:&mut text_transaction::Stage,pd:u32,task:u32,sid:u64,r:text_batch::Request)->bool {
+    if !browser_text_binding_live(l,pd,task,sid){return false;}
+    s.receive(pd,sid,r).is_some()
+}
+fn begin()->text_batch::Request {text_batch::Request::Begin{sequence:1,len:2,color:0xffcdd6f4}}
+#[test]fn browser_text_accepts_actual_unequal_tasks_and_exact_commit() {
+    for (pd,task,sid) in [(15,150,300),(30,300,343),(31,310,344)] {
+        let l=setup(pd,task);let mut s=text_transaction::Stage::EMPTY;
+        assert!(browser_text_binding_live(&l,pd,task,sid));
+        assert!(!deliver(&l,&mut s,pd,task,sid,begin()));
+        assert!(!deliver(&l,&mut s,pd,task,sid,text_batch::Request::Chunk{sequence:1,offset:0,count:2,bytes:*b"ok\0\0\0\0\0\0"}));
+        assert!(deliver(&l,&mut s,pd,task,sid,text_batch::Request::Commit{sequence:1,hash:text_batch::hash(b"ok")}));
+        let mut count=0;s.poll_reply(|owner,word|{assert_eq!(owner,pd);assert_eq!(text_batch::Applied::decode(1,word).unwrap(),text_batch::Applied{surface:sid as u16,sequence:1});count+=1;0});assert_eq!(count,1);
+    }
+}
+fn no_effect(l:&surface_lifecycle::Lifecycle,pd:u32,task:u32,sid:u64) {
+    let mut s=text_transaction::Stage::EMPTY;let before=s.diagnostic();
+    assert!(!browser_text_binding_live(l,pd,task,sid));
+    assert!(!deliver(l,&mut s,pd,task,sid,begin()));assert_eq!(s.diagnostic(),before);
+    s.poll_reply(|_,_|panic!("denial exposed receipt"));
+}
+#[test]fn browser_text_wrong_task_has_no_stage_effect() {
+    let l=setup(15,150);for task in [0,15,151,300]{no_effect(&l,15,task,300);}
+}
+#[test]fn browser_text_missing_foreign_surface_or_owner_has_no_effect() {
+    let l=setup(15,150);
+    for (pd,task,sid) in [(15,150,0),(15,150,343),(15,150,344),(30,300,343),(30,300,300),(31,310,300)] {no_effect(&l,pd,task,sid);}
+}
+#[test]fn browser_text_stale_held_tuple_and_terminal_have_no_effect() {
+    let mut l=setup(15,150);let mut surfaces=[];let mut refs=surface_lifecycle::SceneRefs::default();
+    assert_eq!(l.prepare(0,15,150,&mut surfaces,&mut refs),Some(0));no_effect(&l,15,150,300);
+    assert!(l.scene_committed(0));no_effect(&l,15,150,300);
+    assert!(l.acknowledge(0,15,150));no_effect(&l,15,150,300);
+    for task in [15,151] {let mut stale=surface_lifecycle::Lifecycle::new();assert!(stale.register(surface_lifecycle::Catalog{slot:40,target_pd:15,task_id:task,surface_id:300,coordinator_pd:3}));no_effect(&stale,15,150,300);}
+    no_effect(&surface_lifecycle::Lifecycle::new(),15,150,300);
+}
+#[test]fn browser_text_leaves_other_producers_policy_unchanged() {
+    let l=setup(15,150);for pd in [3,9,12,18]{assert!(browser_text_binding_live(&l,pd,0,200));}
+}
+'''
+
+
 def check(root,out,main,binding,tests):
     main_source=main.read_text();helper=wiring(main_source)
     # Verify source-wiring controls independently of mutation construction.
@@ -158,7 +242,10 @@ def check(root,out,main,binding,tests):
               ('BITMAP_STORES.binding_for(msg.caller_pd,msg.arg0)','BITMAP_STORES.binding_for(15,300)'),
               ('assert_eq!(unsafe { BITMAP_STORES.initialized_count() },sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser),"missing display Browser bitmap binding");',''),
               ('BITMAP_STORES.initialize_once(binding)','BITMAP_STORES.initialize_once(binding) || BITMAP_STORES.initialize_once(binding)'),
-              ('BITMAP_STORES.sequence(binding.target(),binding.surface())','BITMAP_STORES.sequence(15,300)'))
+              ('BITMAP_STORES.sequence(binding.target(),binding.surface())','BITMAP_STORES.sequence(15,300)'),
+              ('if !browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0) { continue; }',''),
+              ('msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,','msg.caller_pd,msg.caller_pd,msg.arg0,sequence,len,'),
+              ('sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','0,changed as u8'))
     for old,new in controls:
         changed=once(main_source,old,new)
         try:wiring(changed)
@@ -175,7 +262,17 @@ def check(root,out,main,binding,tests):
     ):
         mutant=out/(name+'-binding.rs');mutant.write_text(once(actual,old,new))
         compile_run(out,name,metadata_fixture(root,tests,mutant),exact=control,reject=True)
-    result=dict(ok=True,metadata_tests=5,actual_live_helper_tests=3,compiled_binding_mutants_rejected=2,
+    text_output=compile_run(out,'actual-browser-text-guard',text_fixture(root,binding,main_source))
+    if '5 passed; 0 failed'not in text_output:raise ValueError('expected five actual Browser text guard tests')
+    text_mutants=(
+        ('text-wrong-task','binding.admits(owner, task, sid)','binding.admits(owner, binding.task(), sid)','browser_text_wrong_task_has_no_stage_effect'),
+        ('text-stale-held','&& bitmap_binding_live(lifecycle, binding)','&& true','browser_text_stale_held_tuple_and_terminal_have_no_effect'),
+        ('text-missing-binding','BITMAP_STORES.binding_for(owner, sid) }) else { return false; }','BITMAP_STORES.binding_for(owner, sid) }) else { return true; }','browser_text_missing_foreign_surface_or_owner_has_no_effect'),
+    )
+    for name,old,new,control in text_mutants:
+        changed=once(main_source,old,new)
+        compile_run(out,name,text_fixture(root,binding,changed),exact=control,reject=True)
+    result=dict(ok=True,metadata_tests=5,actual_live_helper_tests=3,compiled_binding_mutants_rejected=2,actual_browser_text_guard_tests=5,compiled_text_guard_mutants_rejected=3,
                 wiring_controls_rejected=len(controls),scope='actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels')
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 

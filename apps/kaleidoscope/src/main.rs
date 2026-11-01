@@ -679,7 +679,13 @@ impl SexApp for App {
 
                     if r.metadata.selected&1024!=0{let a=sex_pdx::text_batch::Applied::decode(req.caller_pd,req.arg0).unwrap();sex_pdx::serial_record!("[browser.import.applied] bytes={} hash={:#x} rows={} viewport={} state_code={} sequence={} positive_ack=1",r.bytes,r.metadata.count,r.metadata.rows,r.metadata.first,r.metadata.selected>>11,a.sequence);}
                     if r.metadata.selected==(1<<24){let a=sex_pdx::text_batch::Applied::decode(req.caller_pd,req.arg0).unwrap();sex_pdx::serial_record!("[browser.clock.applied] bytes={} hash={:#x} rows={} viewport={} sequence={} positive_ack=1",r.bytes,r.metadata.count,r.metadata.rows,r.metadata.first,a.sequence);}
-                    sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,if r.metadata.selected&((1<<24)|(1<<20)|1024)!=0{0}else{r.metadata.count});
+                    if r.metadata.selected&browser_view::TLS_TAG!=0{
+                        // Every presentation field comes from this accepted
+                        // Batch, even if a newer state/viewport is now desired.
+                        let a=sex_pdx::text_batch::Applied::decode(req.caller_pd,req.arg0).unwrap();
+                        sex_pdx::serial_record!("[browser.tls.applied] target={} task={} surface={} viewport={} bytes={} hash={} cols={} rows={} state_code={} complete={} sequence={} positive_ack=1 pixels=unconfirmed",self.identity.target_pd,self.identity.task_id,self.identity.surface_id,r.metadata.first,r.bytes,r.metadata.count,(r.metadata.selected>>30)&63,r.metadata.rows,(r.metadata.selected>>26)&7,(r.metadata.selected>>29)&1,a.sequence);
+                    }
+                    sex_pdx::serial_record!("[browser.view.applied] bytes={} http={} body_bytes={} pixels=unconfirmed",r.bytes,r.metadata.selected,if r.metadata.selected&((1<<24)|(1<<20)|1024|browser_view::TLS_TAG)!=0{0}else{r.metadata.count});
                 }
             }
             if sex_pdx::clipboard::response_opcode(req.type_id){unsafe{CLIPBOARD.receive(sex_pdx::clipboard::Subject{pd:req.caller_pd,task:req.caller_task},req.type_id,[req.arg0,req.arg1,req.arg2],sex_pdx::get_ticks());}}
@@ -829,6 +835,7 @@ impl SexApp for App {
         self.sync_selection();
         let mut visible_selection=(0,0);
         let mut reader_layout=None;
+        let mut tls_layout=None;
         let composed=if self.asset_panel{
             let f=asset_view::render(self.import_viewport.0,self.import_viewport.1,self.asset_status,self.asset_presentation.mode(),self.image.width,self.image.height);
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.asset_presentation.generation()as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:(1<<20)|((self.asset_status as u64)<<21)}))
@@ -849,6 +856,14 @@ impl SexApp for App {
             let metadata=text_delivery::Metadata{count:public_fingerprint(&f.bytes[..f.len])as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:1<<24};
             if self.ui_last_len!=f.len||self.ui_last!=f.bytes||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.clock.layout] bytes={} hash={:#x} cols={} rows={} viewport={} state={:?} snapshot_only=1 pixels=unconfirmed",f.len,metadata.count,f.cols,f.rows,self.viewport_sequence,self.clock_view);}
             Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
+        }else if self.tls_panel&&!self.https_panel&&!self.peer_panel&&self.tls_view!=tls_probe::View::Idle{
+            browser_view::tls_panel(self.import_viewport.0,self.import_viewport.1,tls_probe::label(self.tls_view)).map(|f|{
+                // Existing immutable outbox metadata binds the positive ACK to
+                // this exact frame. Width/height join through its held viewport.
+                let metadata=tls_frame_metadata(&f,self.viewport_sequence,self.tls_view);
+                tls_layout=Some(self.import_viewport);
+                (browser_view::Text{bytes:f.bytes,len:f.len},metadata)
+            })
         }else{browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()).and_then(|text|{
             if self.https_panel{browser_view::with_https(text,https_label(self.https_view,self.exchange.failure(),self.exchange.http_failure()))}
             else if self.peer_panel{browser_view::with_peer(text,peer_label(self.peer_view))}
@@ -873,7 +888,6 @@ impl SexApp for App {
             }
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&self.https_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
-            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&self.tls_panel&&self.tls_view!=tls_probe::View::Idle&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.tls_view);}
             if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed_view).is_some()&&self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.entropy.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.seed_view);
             }
@@ -882,7 +896,12 @@ impl SexApp for App {
                 if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.https_body().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}sex_pdx::serial_record!("[browser.reader.position] anchor={} viewport={} tls={} retained_body_only=1",self.reader.source_anchor(),self.viewport_sequence,self.reading_https as u8);}
             }
             if self.ui_dirty&&!self.ui_failed{
-                if self.ui.queue_selected(&text.bytes[..text.len],0x00CDD6F4,metadata,visible_selection){self.ui_dirty=false;}
+                if self.ui.queue_selected(&text.bytes[..text.len],0x00CDD6F4,metadata,visible_selection){
+                    if let Some((w,h))=tls_layout{
+                        sex_pdx::serial_record!("[browser.tls.layout] target={} task={} surface={} viewport={} w={} h={} bytes={} hash={} cols={} rows={} state_code={} complete={} pixels=unconfirmed",self.identity.target_pd,self.identity.task_id,self.identity.surface_id,metadata.first,w,h,text.len,metadata.count,(metadata.selected>>30)&63,metadata.rows,(metadata.selected>>26)&7,(metadata.selected>>29)&1);
+                    }
+                    self.ui_dirty=false;
+                }
             }
         }
         if let text_delivery::Poll::Rejected(error)=self.ui.poll(4,|op|{
@@ -904,6 +923,13 @@ fn seed_label(view:entropy_probe::View)->Option<&'static[u8]>{match view{
 }}
 
 fn http_view_code(view:http_probe::View)->u64{match view{http_probe::View::Idle=>0,http_probe::View::Pending=>1,http_probe::View::Ready=>2,http_probe::View::Unavailable=>3,http_probe::View::Cancelled=>4,http_probe::View::Uncertain=>5}}
+fn tls_view_code(view:tls_probe::View)->u64{match view{tls_probe::View::Idle=>0,tls_probe::View::Preparing=>1,tls_probe::View::HelloPending=>2,tls_probe::View::Unavailable=>3,tls_probe::View::Cancelled=>4,tls_probe::View::Rejected=>5,tls_probe::View::TimedOut=>6,tls_probe::View::Uncertain=>7}}
+fn tls_frame_metadata(frame:&browser_view::TlsFrame,viewport:u64,view:tls_probe::View)->text_delivery::Metadata{
+    // Private presentation tags occupy disjoint fields: state26..28,
+    // complete29,columns30..35. Geometry authority still comes from Shell.
+    text_delivery::Metadata{count:sex_pdx::text_batch::hash(&frame.bytes[..frame.len])as usize,first:viewport as usize,rows:frame.rows,
+        selected:browser_view::TLS_TAG|(tls_view_code(view)<<26)|((frame.complete as u64)<<29)|((frame.cols as u64)<<30)}
+}
 
 #[cfg(app_resource_cleanup_proof)]
 fn full_resource_cleanup_proof()->! {

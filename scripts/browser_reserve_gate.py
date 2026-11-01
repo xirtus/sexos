@@ -3,7 +3,8 @@
 
 Hardware launcher/Close, actual held source inventory, three startup echo flows,
 local TLS preparation and complete cleanup precede each next reservation.
-Browser screenshots are retained raw, explicitly NOT a Browser glyph proof.
+Each held Browser is checked for complete TLS status pixels before Zoom, after
+Zoom, and after restore; matching metadata alone never proves pixels.
 The exhausted launcher is independently checked against every visible glyph.
 No public TLS handshake, arbitrary restart, runtime grants, process VAS or POSIX.
 """
@@ -28,7 +29,7 @@ from network_contention_gate import frozen_binding,MAX_PCAP
 ROOT=Path(__file__).resolve().parents[1]
 SERIAL_UNITS='strict UTF-8 decoded complete-scalar prefix; universal newlines; character offsets; UTF-8 prefix SHA256'
 END=r'(?=\n)'
-KEYS={'grave_accent':0x29,'j':0x24,'ret':0x1c,'l':0x26,'q':0x10,'f11':0x57}
+KEYS={'grave_accent':0x29,'j':0x24,'k':0x25,'ret':0x1c,'l':0x26,'q':0x10,'f11':0x57}
 ECHO=bytes((17*i+78)&255 for i in range(1025))
 SCOPE=__doc__.strip()
 MAX_DISK=512*1024*1024
@@ -82,6 +83,8 @@ def source_contract(root):
  'scripts/browser_reserve_gate.py','scripts/tests/test_browser_reserve_gate.py','scripts/browser_source_evidence.py',
  'scripts/tests/test_browser_source_evidence.py')
  paths=set(paths)|set(script_dependencies(root,('scripts/browser_reserve_gate.py','scripts/tests/test_browser_reserve_gate.py')))
+ from tls_prepare_gate import tls_contract
+ paths.update(tls_contract(root)['source_sha256'])
  return dict(rows=browser_rows(root),tls_accounting=tls_accounting(root),source_sha256={name:sha((root/name).read_bytes())for name in sorted(paths)})
 def require_inputs(binding,contract):
  for name,digest in contract['source_sha256'].items():
@@ -215,10 +218,22 @@ def run(c):
   work_start=len(c['text']());c['key']('l',r'\[browser.command.started\] kind=TlsPrepare accepted=1'+END)
   c['wait'](r'\[browser.tls.view\] state=HelloPending authenticated=0 network=0'+END,work_start)
   c['wait'](r'\[browser.tls.prepared\] [^\n]* authenticated=0 network=0'+END,work_start)
-  c['capture'](f'browser-{row["target"]}-prepared',kind='browser',target=row['target'],expected='HelloPending')
+  paint_starts=[work_start]
+  def painted(name,begin,viewport=None):
+   stamp=rf'\[browser.tls.applied\] target={row["target"]} task={row["task"]} surface={row["surface"]} viewport='+(str(viewport)if viewport is not None else r'\d+')
+   c['wait'](stamp+r' [^\r\n]*state_code=2 complete=1 sequence=\d+ positive_ack=1 pixels=unconfirmed'+END,begin)
+   return c['capture'](name,kind='browser_tls',target=row['target'],expected='HelloPending',window_start=begin)
+  painted(f'browser-{row["target"]}-prepared',work_start)
+  from quil_workflow_gate import palette_commands,palette_select
+  commands=palette_commands(root)
+  for phase in ('expanded','restored'):
+   begin=len(c['text']());palette_select(c['key'],'ZoomToggle',commands)
+   c['key']('ret',rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1'+END)
+   viewport=c['wait'](rf'\[browser.viewport\] target={row["target"]} task={row["task"]} sequence=(\d+) w=\d+ h=\d+ origin=held_shell'+END,begin)
+   paint_starts.append(begin);painted(f'browser-{row["target"]}-{phase}',begin,int(viewport[1]))
   c['key']('q',r'\[browser.tls.view\] state=Cancelled authenticated=0 network=0'+END)
   c['wait'](r'\[browser.resources\] reason=clear heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 [^\n]*'+END,work_start)
-  close_start,end=close(c,row);chain.append(dict(identity=row,start=start,work_start=work_start,close_start=close_start,end=end))
+  close_start,end=close(c,row);chain.append(dict(identity=row,start=start,work_start=work_start,close_start=close_start,end=end,paint_starts=paint_starts))
  start=len(c['text']());palette(c);c['wait'](r'\[launcher.text.row\] index=10 row=\d+ name=Open Browser status=CLOSED / RESERVE EXHAUSTED'+END,start)
  c['capture']('browser-reserve-exhausted',kind='launcher',target=15,expected='Open Browser')
  c['key']('ret',r'\[launcher.execute.denied\] idx=10 status=CLOSED / RESERVE EXHAUSTED reason=boot_reserve_exhausted'+END)
@@ -283,6 +298,26 @@ def frame_prefix(trace,frame):
  if type(end)is not int or not 0<end<=len(trace)or frame.get('serial_sha256')!=sha(trace[:end].encode()):raise ValueError('capture prefix differs')
  return trace[:end]
 
+def capture_fence(trace,frame,row):
+ """Bound qualification before screendump; reject changes during the capture."""
+ before=frame.get('serial_end');after=frame.get('post_serial_end')
+ frame_prefix(trace,frame)
+ if not isinstance(after,int)or isinstance(after,bool)or not before<=after<=len(trace)or sha(trace[:after].encode())!=frame.get('post_serial_sha256'):raise ValueError('invalid post-capture prefix fence')
+ span=trace[before:after];target,task,surface=row['target'],row['task'],row['surface']
+ for tag in ('browser.viewport','browser.tls.layout','browser.tls.applied','display.browser.text.committed','shell.document.viewport'):
+  if re.search(re.escape('['+tag+']')+rf' target={target}\b',span):raise ValueError('Browser frame superseded during screendump')
+ if '[browser.tls.view]'in span or re.search(r'\[shell.focus.set\] id=\d+'+END,span)or re.search(rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={surface}\b',span):raise ValueError('Browser state/focus superseded during screendump')
+ return trace[:after]
+
+def resize_evidence(trace,row,start,end,geometry,actions):
+ """Caller-return log may follow callee viewport; both must be in this phase."""
+ zoom=one(trace,rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1',start,end)
+ view=one(trace,rf'\[browser.viewport\] target={row["target"]} task={row["task"]} sequence={geometry["viewport"]} w={geometry["tile"]["w"]} h={geometry["tile"]["h"]} origin=held_shell',start,end)
+ if start+view.start()>=geometry['layout_offset']:raise ValueError('resize frame lacks prior accepted viewport')
+ enters=[a for a in actions if a.get('kind')=='key'and a.get('key')=='ret'and start<=a.get('start',-1)<a.get('end',-1)<=end]
+ if len(enters)!=1 or not enters[0]['start']<=start+zoom.start()<start+zoom.end()<=enters[0]['end']:raise ValueError('Zoom receipt lacks exact physical Enter gesture')
+ return dict(zoom_offset=start+zoom.start(),viewport_offset=start+view.start(),enter_start=enters[0]['start'])
+
 def command_profile(command,iso,out,resolution,model):
  from tls_responsiveness_gate import native_command
  if not isinstance(command,list)or any(not isinstance(v,str)for v in command):raise ValueError('malformed native command')
@@ -304,7 +339,7 @@ def replay(root,iso,binding,out):
  if manifest.get('error')is not None or result.get('ok')is not True or manifest.get('guest_exited')is not True:raise ValueError('failed/nonterminal attempt remains diagnostic')
  if manifest.get('binding')!=bound or manifest.get('source_sha256')!=contract['source_sha256']or manifest.get('serial_offset_units')!=SERIAL_UNITS or manifest.get('tls_accounting')!=contract['tls_accounting']:raise ValueError('frozen source/image, accounting or prefix convention differs')
  command_profile(manifest.get('command'),iso,out,manifest.get('resolution'),manifest.get('model'))
- frames=result.get('frames',[]);names=[f'browser-{n}-prepared'for n in(15,30,31)]+['browser-reserve-exhausted']
+ frames=result.get('frames',[]);names=[f'browser-{n}-{phase}'for n in(15,30,31)for phase in('prepared','expanded','restored')]+['browser-reserve-exhausted']
  if [f.get('name')for f in frames]!=names:raise ValueError('missing/reordered/duplicate immutable captures')
  expected={'serial.log','wire.pcap','endpoint.json','actions.json','seed.img.gz','nvme.img.gz','result.json'}|{f['screenshot']for f in frames}
  if set(manifest.get('raw_sha256',{}))!=expected:raise ValueError('terminal raw closure differs')
@@ -314,7 +349,7 @@ def replay(root,iso,binding,out):
  if disk_hash(out/'seed.img.gz')!=manifest['input_disk_sha256']or disk_hash(out/'nvme.img.gz')!=manifest['final_disk_sha256']:raise ValueError('terminal disk closure differs')
  trace=serial_text(out/'serial.log')
  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow|\[fault.kill\]',trace):raise ValueError('guest fault/diagnostic overflow')
- proof=verify(trace,result,root);keys=verify_keys(trace,json.loads((out/'actions.json').read_text()))
+ proof=verify(trace,result,root);actions=json.loads((out/'actions.json').read_text());keys=verify_keys(trace,actions)
  peer=json.loads((out/'endpoint.json').read_text())
  if peer.get('errors')!=[]or len(peer.get('rows',[]))!=3 or any(r.get('payload_hex')!=ECHO.hex()or r.get('response_hex')!=ECHO.hex()or(r.get('received'),r.get('sent'))!=(1025,1025)for r in peer['rows']):raise ValueError('exact startup echo endpoint closure differs')
  raw=(out/'wire.pcap').read_bytes();wire=tcp_capture(raw,peer['rows'],guest_ports=range(48001,65536),initiator='guest');owners=owner_joins(trace,raw,[(r['identity']['target'],r['identity']['task'])for r in result['chain']])
@@ -323,16 +358,31 @@ def replay(root,iso,binding,out):
  for index,frame in enumerate(frames):
   prefix=frame_prefix(trace,frame);ppm=(out/frame['screenshot']).read_bytes()
   if sha(ppm)!=frame['screenshot_sha256']or ppm_rgb(ppm,min_width=1,min_height=1)[:2]!=resolution:raise ValueError('capture hash/framebuffer differs')
-  if index<3:
-   step=result['chain'][index]
-   if frame.get('target')!=step['identity']['target']or frame.get('kind')!='browser'or frame.get('pixels_qualified')is not False or not step['work_start']<frame['serial_end']<=step['close_start']:raise ValueError('raw Browser capture mislabeled/stale or falsely pixel-qualified')
+  if index<9:
+   from tls_prepare_gate import consumer_context,tls_contract,verify_tls_pixels
+   step=result['chain'][index//3];row=step['identity'];starts=step.get('paint_starts')
+   if not isinstance(starts,list)or len(starts)!=3 or starts[0]!=step['work_start']or not starts[0]<starts[1]<starts[2]<step['close_start']:raise ValueError('missing ordered independent paint windows')
+   begin=starts[index%3];limit=starts[index%3+1]if index%3<2 else step['close_start']
+   if frame.get('target')!=row['target']or frame.get('kind')!='browser_tls'or frame.get('pixels_qualified')is not True or frame.get('window_start')!=begin or not begin<frame['serial_end']<=limit:raise ValueError('Browser TLS capture mislabeled/stale or falsely qualified')
    current=re.findall(r'\[shell.focus.set\] id=(\d+)'+END,prefix)
-   if not current or int(current[-1])!=step['identity']['surface']:raise ValueError('raw Browser capture lacks exact current focus')
+   if not current or int(current[-1])!=row['surface']:raise ValueError('Browser TLS capture lacks exact current focus')
+   capture_fence(trace,frame,row)
+   consumer=consumer_context(trace,row['target'],task=row['task'],root=root)
+   pixels=verify_tls_pixels(trace,ppm,'HelloPending',tls_contract(root),resolution,consumer=consumer,window=(begin,frame['serial_end']),root=root)
+   if not pixels.get('status_qualified')or json.loads(json.dumps(pixels))!=frame.get('proof'):raise ValueError('Browser TLS pixel proof changed or incomplete')
+   if index%3:
+    resize_evidence(trace,row,begin,frame['serial_end'],pixels['geometry'],actions)
+    before=frames[index-1]['proof']['geometry']
+    if pixels['geometry']['viewport']<=before['viewport']or pixels['geometry']['paint']<=before['paint']:raise ValueError('resize reuses stale viewport/paint')
+    if index%3==1 and (pixels['geometry']['tile']['w'],pixels['geometry']['tile']['h'])==(before['tile']['w'],before['tile']['h']):raise ValueError('Zoom did not change Browser extent')
+   if index%3==2:
+    original=frames[index-2]['proof']['geometry']['tile'];restored=pixels['geometry']['tile']
+    if restored!=original:raise ValueError('restored Browser tile differs')
   else:
    if not result['exhaustion_start']<frame['serial_end']<=result['exhaustion_end']:raise ValueError('stale exhaustion capture')
    pixels=launcher_pixels(prefix,ppm,font,resolution)
    if pixels:raise ValueError('exhausted whole-launcher glyphs failed: '+str(pixels))
- return dict(proof,wire=wire,owners=owners,hardware=keys,launcher_pixels_qualified=True,captures=4)
+ return dict(proof,wire=wire,owners=owners,hardware=keys,launcher_pixels_qualified=True,browser_pixels_qualified=True,captures=10)
 
 def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
  from tls_responsiveness_gate import native_command
@@ -373,17 +423,28 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e'):
     wait(rf'\[sexinput.ps2.scancode\] raw={hex(KEYS[code]|128)}'+END,begin)
     actions.append(dict(kind='key',key=code,start=begin,end=len(text()),transport='input-send-event'));return match
    font=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text())
-   def capture(name,kind,target,expected):
+   def capture(name,kind,target,expected,window_start=None):
     pointer_park(q,dimensions,text,wait,actions.append,len(frames));path=out/(name+'.ppm');candidate=out/(name+'.candidate.ppm')
     deadline=time.monotonic()+45
     while True:
-     health();q.cmd('screendump',{'filename':str(candidate)});prefix=text();raw=candidate.read_bytes()
-     errors=launcher_pixels(prefix,raw,font,dimensions)if kind=='launcher'else[]
+     health();prefix=text();q.cmd('screendump',{'filename':str(candidate)});post=text();raw=candidate.read_bytes()
+     pixels=None
+     if kind=='browser_tls':
+      from tls_prepare_gate import consumer_context,tls_contract,verify_tls_pixels
+      try:
+       consumer=consumer_context(post,target,root=root)
+       fence=dict(serial_end=len(prefix),serial_sha256=sha(prefix.encode()),post_serial_end=len(post),post_serial_sha256=sha(post.encode()))
+       capture_fence(post,fence,dict(target=consumer.target,task=consumer.task,surface=consumer.surface))
+       pixels=verify_tls_pixels(post,raw,expected,tls_contract(root),dimensions,consumer=consumer,window=(window_start,len(prefix)),root=root)
+       errors=[]if pixels.get('status_qualified')else pixels.get('errors')or['TLS status not complete']
+      except (ValueError,AssertionError)as exc:errors=[str(exc)]
+     else:errors=launcher_pixels(prefix,raw,font,dimensions)if kind=='launcher'else['unknown capture kind']
      if not errors:break
      if time.monotonic()>=deadline:raise ValueError(str(errors))
      time.sleep(.1)
     with path.open('xb')as file:file.write(raw)
-    candidate.unlink();frame=dict(name=name,kind=kind,target=target,expected=expected,screenshot=path.name,screenshot_sha256=sha(raw),serial_end=len(prefix),serial_sha256=sha(prefix.encode()),pixels_qualified=kind=='launcher')
+    candidate.unlink();frame=dict(name=name,kind=kind,target=target,expected=expected,screenshot=path.name,screenshot_sha256=sha(raw),serial_end=len(prefix),serial_sha256=sha(prefix.encode()),post_serial_end=len(post),post_serial_sha256=sha(post.encode()),pixels_qualified=True)
+    if kind=='browser_tls':frame.update(window_start=window_start,proof=json.loads(json.dumps(pixels)))
     frames.append(frame);return frame
    deadline=time.monotonic()+20
    while not sock.exists():
