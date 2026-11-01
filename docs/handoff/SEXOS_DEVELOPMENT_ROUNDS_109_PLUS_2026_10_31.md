@@ -911,3 +911,22 @@ is preserved. Incomplete Aattempt staysunqualified. Inventory remains2Open/
 Next159: Close while localTLSfuture is stillallocated across15→30→31, preserve
 original deadlines and distinguish erasedpayload(task+8192) from privatebytes
 (task+8248). Then sustainedunifieddesktop/cold recovery and31/32task headroom.
+
+
+## Round 159 — Close with an allocated local TLS future
+
+[Report](BROWSER_ALLOCATED_CLOSE_2026_11_01.md): explicit schema2 allocated-close
+andquiescedmodes, actualF11causality, liveT+8192payload→nonzeroerasure/pending1→
+zeroresources→finish→fiveACK31→retired/zeroedpool→sanctionedsuccessor. T+8248private
+includes56Pipe metadata; erasure excludesmetadata/allocator/register/cache scope.
+Deadlines unchanged; noQ/timeout/reprepare accepted as allocatedClose.
+
+Sourcec78007be:fiveboots/fourmode-profilefreshreplays,40qualifiedcaptures,6allocated
+Closes.43frozenhostchecks3077loggedRust+27nested=3104;1109Python. All1209sourceblobs
+and1430archivemembers size/SHAverified;9ISOELFs331077decodedinstructions/zeroFPvector.
+All582productionblobs/kernel identical158; prior desktop bindings stayoriginal,
+no currentdesktop/sustainedacceptance relabel. Hostobservedkey→request5.57–35.44ms,
+key→pool403.34–1034.67ms includesQMP/serial/polling, notguestlatency/hardRT.
+Atomicmid-line resource counterexample staysunqualified. ABI66/hash12d218c6;
+2Open/28Partial/SystemProvenfalse. Next160:explicitBOOTmaincapacity64, unchanged
+catalog, boundedscan/sealing/exactpointer/overflow/wake checks beforemore reserves.
