@@ -28,10 +28,10 @@ fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind:
     assert_eq!(OWNERS_PER_KIND,app_catalog::COUNT);assert_eq!(TOTAL_SLOTS,3*app_catalog::COUNT);
     println!("[source.denial.host.storage] bytes={} slots={} owners_per_kind={}",core::mem::size_of::<Outbox>(),TOTAL_SLOTS,OWNERS_PER_KIND);
     // Independent compact-layout budget for the 64-bit host/guest profile:
-    // each slot is 48 bytes; the round-robin cursor is 8 bytes. At planned 28
-    // descriptive participants this is 4040 bytes, still strictly below 4KiB.
+    // each slot is 16 bytes; the round-robin cursor is 8 bytes. At 64
+    // descriptive participants this is 3080 bytes, still strictly below 4KiB.
     assert_eq!(core::mem::size_of::<usize>(),8);
-    assert_eq!(core::mem::size_of::<Outbox>(),48*TOTAL_SLOTS+8);
+    assert_eq!(core::mem::size_of::<Outbox>(),16*TOTAL_SLOTS+8);
     assert!(core::mem::size_of::<Outbox>()<4096);
 }
 #[test]fn every_kind_uses_actual_typed_error_word_and_finite_sequence(){
@@ -60,11 +60,12 @@ fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind:
         }
     }
 }
-#[test]fn all_eight_unsupported_spindles_and_protocols_receive_fair_full_retained_turns(){
-    let mut out=Outbox::new();let targets=[12,17,24,25,26,27,28,29];
+#[test]fn all_nine_unsupported_spindles_and_protocols_receive_fair_full_retained_turns(){
+    let mut out=Outbox::new();let targets=[12,17,24,25,26,27,28,29,40];
     for kind in KINDS{for pd in targets{assert!(out.deny(kind,Identity{pd,task:pd*10},1));}}
-    let mut first=Vec::new();for _ in 0..24{first.push(out.pending_reply().unwrap());out.reply_deferred();}
-    assert_eq!(first.iter().map(|(id,word)|(id.pd,id.task,*word)).collect::<std::collections::HashSet<_>>().len(),24);
+    let mut first=Vec::new();for _ in 0..27{first.push(out.pending_reply().unwrap());out.reply_deferred();}
+    assert_eq!(first.iter().map(|(id,word)|(id.pd,id.task,*word)).collect::<std::collections::HashSet<_>>().len(),27);
+    assert_eq!(first.iter().filter(|(id,_)|*id==Identity{pd:40,task:400}).count(),3);
     for expected in &first{assert_eq!(out.pending_reply(),Some(*expected));out.reply_deferred();}
     for expected in &first{assert_eq!(out.pending_reply(),Some(*expected));out.reply_accepted();}
     assert!(out.pending_reply().is_none());
@@ -103,7 +104,7 @@ fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind:
     }
 }
 
-#[test]fn eight_denial_callers_leave_all_three_actual_authorized_machines_and_clock_health_untouched(){
+#[test]fn nine_denial_callers_leave_all_three_actual_authorized_machines_and_clock_health_untouched(){
     let mut denied_out=Outbox::new();
     let e_owner=entropy_source::Identity{pd:15,task:150};
     let c_owner=clock_source::Identity{pd:15,task:150};
@@ -123,7 +124,7 @@ fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind:
     let entropy_pending=e.pending_reply();let time_pending=c.pending_reply();let trust_pending=t.pending_reply();
     // This is a host composition test: the parent route must choose this lane
     // after held identity + typed decode; the outbox has no Machine reference.
-    for pd in [12,17,24,25,26,27,28,29]{for kind in KINDS{
+    for pd in [12,17,24,25,26,27,28,29,40]{for kind in KINDS{
         assert!(denied_out.deny(kind,Identity{pd,task:pd*10},1));
     }}
     assert_eq!(e.snapshot(),entropy_before);assert_eq!(c.snapshot(),time_before);
@@ -131,7 +132,7 @@ fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind:
     assert_eq!((clock_calls,trust_calls),(1,1));assert!(e.private_scrubbed());
     // No unsupported identity consumed any of the six normal owner fences.
     // Exact retire(false) is an observable probe of the actual private caches.
-    for pd in [12,17,24,25,26,27,28,29]{
+    for pd in [12,17,24,25,26,27,28,29,40]{
         assert!(!e.retire(entropy_source::Identity{pd,task:pd*10}));
         assert!(!c.retire(clock_source::Identity{pd,task:pd*10}));
         assert!(!t.retire(trust_source::Identity{pd,task:pd*10}));
@@ -154,7 +155,7 @@ fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind:
     }));
     let rollback=c.snapshot();assert_eq!(rollback,clock::Snapshot{high_water:Some(seconds),rollback:true});
     assert_eq!(certificate_time::decode_reply(c.pending_reply().unwrap().1,2),Err(certificate_time::ROLLBACK));
-    for pd in [12,17,24,25,26,27,28,29]{assert!(denied_out.retire(Identity{pd,task:pd*10}));}
+    for pd in [12,17,24,25,26,27,28,29,40]{assert!(denied_out.retire(Identity{pd,task:pd*10}));}
     assert_eq!(c.snapshot(),rollback);assert_eq!((clock_calls,trust_calls),(2,1));
     assert_eq!(t.pending_reply(),trust_pending);assert!(denied_out.pending_reply().is_none());
 }

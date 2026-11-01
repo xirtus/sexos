@@ -18,6 +18,9 @@ impl Kind {
     const fn index(self) -> usize {
         match self { Self::Entropy => 0, Self::CertificateTime => 1, Self::Trust => 2 }
     }
+    const fn from_index(index: usize) -> Option<Self> {
+        match index { 0 => Some(Self::Entropy), 1 => Some(Self::CertificateTime), 2 => Some(Self::Trust), _ => None }
+    }
     fn valid_sequence(self, seq: u32) -> bool {
         match self {
             Self::Entropy => seq != 0 && seq <= entropy_seed::MAX_SEQ,
@@ -46,16 +49,17 @@ impl Kind {
 pub const OWNERS_PER_KIND: usize = sex_pdx::app_catalog::COUNT;
 pub const TOTAL_SLOTS: usize = 3 * OWNERS_PER_KIND;
 const _: () = assert!(OWNERS_PER_KIND > 0);
-#[derive(Clone, Copy)]
-struct Receipt { seq: u32, word: u64 }
+// Zero is outside every admitted identity/sequence namespace. The three
+// protocol partitions are immutable; a pending slot's word is reconstructed
+// from its sequence and stable latest-DENIED floor, never source/private data.
 #[derive(Clone, Copy)]
 struct Slot {
-    owner: Option<Identity>,
-    cached_seq: Option<u32>,
-    pending: Option<Receipt>,
+    owner: Identity,
+    cached_seq: u32,
+    pending_seq: u32,
 }
 impl Slot {
-    const EMPTY: Self = Self { owner: None, cached_seq: None, pending: None };
+    const EMPTY: Self = Self { owner: Identity { pd: 0, task: 0 }, cached_seq: 0, pending_seq: 0 };
 }
 pub struct Outbox { slots: [Slot; TOTAL_SLOTS], cursor: usize }
 impl Outbox {
@@ -66,35 +70,32 @@ impl Outbox {
         if !owner.valid() || !kind.valid_sequence(seq) { return false; }
         let start = kind.index() * OWNERS_PER_KIND;
         let partition = &self.slots[start..start + OWNERS_PER_KIND];
-        let Some(relative) = partition.iter().position(|slot| slot.owner == Some(owner))
-            .or_else(|| partition.iter().position(|slot| slot.owner.is_none())) else { return false; };
+        let Some(relative) = partition.iter().position(|slot| slot.owner == owner)
+            .or_else(|| partition.iter().position(|slot| slot.owner.pd == 0)) else { return false; };
         let slot = &mut self.slots[start + relative];
-        if let Some(pending) = slot.pending { return pending.seq == seq; }
-        // The cache always denotes the latest DENIED, so its typed word is
-        // deterministic from this partition and sequence. Only the exact
-        // pending receipt needs a retained word (it may instead be STALE).
-        let receipt = Receipt { seq, word: match slot.cached_seq {
-            Some(cached) if seq < cached => kind.stale(seq),
-            _ => kind.denied(seq),
-        } };
-        slot.owner = Some(owner);
-        slot.pending = Some(receipt);
-        // A stale error is retained for delivery but never replaces the latest
-        // DENIED cache/floor, including at the protocol's last finite sequence.
-        if slot.cached_seq.is_none_or(|cached| seq > cached) { slot.cached_seq = Some(seq); }
+        // The pending guard must precede any floor update. Otherwise a
+        // rejected newer request could change a Full-retained DENIED to STALE.
+        if slot.pending_seq != 0 { return slot.pending_seq == seq; }
+        slot.owner = owner;
+        if seq > slot.cached_seq { slot.cached_seq = seq; }
+        slot.pending_seq = seq;
         true
     }
     fn selected(&self) -> Option<usize> {
         (0..TOTAL_SLOTS).map(|offset| (self.cursor + offset) % TOTAL_SLOTS)
-            .find(|&index| self.slots[index].pending.is_some())
+            .find(|&index| self.slots[index].pending_seq != 0)
     }
     pub fn pending_reply(&self) -> Option<(Identity, u64)> {
-        let slot = &self.slots[self.selected()?];
-        Some((slot.owner?, slot.pending?.word))
+        let index = self.selected()?;
+        let slot = &self.slots[index];
+        let kind = Kind::from_index(index / OWNERS_PER_KIND)?;
+        if !slot.owner.valid() || slot.cached_seq == 0 || slot.pending_seq > slot.cached_seq { return None; }
+        let word = if slot.pending_seq < slot.cached_seq { kind.stale(slot.pending_seq) } else { kind.denied(slot.pending_seq) };
+        Some((slot.owner, word))
     }
     pub fn reply_accepted(&mut self) {
         if let Some(index) = self.selected() {
-            self.slots[index].pending = None;
+            self.slots[index].pending_seq = 0;
             self.cursor = (index + 1) % TOTAL_SLOTS;
         }
     }
@@ -109,7 +110,7 @@ impl Outbox {
         if !owner.valid() { return false; }
         let mut removed = false;
         for slot in &mut self.slots {
-            if slot.owner == Some(owner) { *slot = Slot::EMPTY; removed = true; }
+            if slot.owner == owner { *slot = Slot::EMPTY; removed = true; }
         }
         removed
     }
