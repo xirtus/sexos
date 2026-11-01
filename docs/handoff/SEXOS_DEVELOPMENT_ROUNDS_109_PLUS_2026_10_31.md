@@ -1138,3 +1138,43 @@ then transactional intake/effect commit under the Display implementation plan.
 GLOBAL_VAS, BOOT-only genesis, sex-pdx authority, PKU enforcement and exact
 terminal incarnation ownership remain mandatory. Active80–200 continues;
 167–200 remain34 substantive rounds.
+
+## Round 167 — BOOT-owned frame preparation and CPU publication
+
+[Report](PRIVATE_FRAME_PUBLICATION_2026_11_01.md): source0c185625, one BOOT
+Display-only Region98/11 and two actual-geometry spans. Both profiles reserve
+8MiB physical buddy backing; compact maps6MiB and wide8,192,000bytes. Generic
+PD-held Region54/55 remains sole authority; no task-isolation/new syscall/capkind
+or runtime allocator is claimed. Actual zero/leaf/key/readback/negative-dispatch
+checks precede seal. Shared VA reservation now fails checked overflow/exhaustion.
+
+All five render paths prepare a disjoint candidate from the committed baseline
+and publish through one complete checked CPU copy plus SFENCE. Presentation
+effects follow success; failed preparation restores cursor/APP/frame bookkeeping.
+Cleanup scrubs BOTH retained spans/padding before removal-frame custody ACK.
+Cursor follows launcher consistently; strip restores and recaptures its underlay.
+Actual cursor5cases/2mutants/4source controls; frame27cases/3runtime mutants/
+4compiler controls/4source controls. Existing compositor46 and scene11/6mutants
+remain. Host doubles retain explicit scope; complete epoch/replay is not proved.
+
+All46 frozen host checks and1,132 Python tests pass; retained stdout logs count
+3,179 successful Rust executions, including repeated SDK fixtures, while frame
+case counts also appear in separate JSON proof. Eleven boots/70captures pass
+fresh strict replay:16clock,34connected/cold recovery,20Browser. All11 BOOT
+logs join private frame genesis and held views before first paint. Preflight
+clock-source guard, original BOOT-parser and unexecuted pin-edit diagnostics
+remain UNQUALIFIED; no extra/restarted native guest is counted.
+
+All1,222 source blobs/12,187,477bytes match Git;577/583prior production files
+unchanged,6changed+2added. ABI67 hash3b98b233; kernel changes to26bace17.
+Nine ISO ELFs324,777 decoded instructions/0matchedFP-vector; actualSFENCE.
+Display ELF285,704bytes, -5,184; static scene59,584/store88. BOOT heap used
+11,851,408(+192), physicalfree unmeasured; appprivate2465pages unchanged.
+Measured prologues exclude transitive stack/interrupts; budgets are not disjoint
+RAM totals. Raw11,424,751bytes/1,627members independently reopened/size-SHA
+verified. No speedup/tear-free/Alpha/1800s/hardware/SMP/full-epoch claim.
+
+Next168 one captured scene/prepared publication per desktop update batch, then
+transactional input/effect ownership and interrupted-output/hardware/replay work.
+GLOBAL_VAS, BOOT-only genesis, sex-pdx authority and PKU enforcement remain
+unchanged.2Open/28Partial/SystemProvenfalse.168–200 remain33 substantive rounds.

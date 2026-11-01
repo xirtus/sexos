@@ -53,3 +53,17 @@ latching exists. Candidate/effect intake and complete replay remain subsequent
 required work, preserving causal input order, Full uncertainty, exact owners and
 cleanup custody. Current source still computes legacy blur scratch; eliminating
 that measured redundant work can improve responsiveness alongside this boundary.
+
+## Round167 checkpoint and next batch boundary
+
+[Round167](PRIVATE_FRAME_PUBLICATION_2026_11_01.md) qualifies geometry-sized
+BOOT-held private backing, disjoint preparation/abort, one checked CPU output
+function and post-publication presentation bookkeeping. Each current rendering
+invocation still has its own scene/publication. Round168 must coalesce one
+post-drain content/cursor/clock update batch into one captured scene and one
+publication, preserving partial-baseline correctness and exact cleanup effects.
+Avoid recapturing mutable globals between passes of the same batch or publishing
+an intermediate cursor/content frame before its strip update. Transactional
+intake/effect commit, unified causal/replay inputs, interrupted-output recovery
+and hardware latching remain required afterward; two private frames and SFENCE
+close none of these complete-system obligations.
