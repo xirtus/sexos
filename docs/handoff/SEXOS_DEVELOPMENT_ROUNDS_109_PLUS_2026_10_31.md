@@ -885,3 +885,29 @@ Next158: identity/frame-correlated, viewport-aware Browser TLS panels and exact
 per-incarnation glyph qualification; current small-tile panels clip, six raw
 images remain unqualified. Then pending-operation Close/reopen stress and a
 sustained unified desktop/cold recovery run, with31/32 task headroom reviewed.
+
+
+## Round 158 — viewport-aware Browser TLS panels
+
+[Report](BROWSER_TLS_PANELS_2026_11_01.md): bounded TLS status/help fits actual
+small tiles and expanded views; explicit tiny fallback is not complete-status
+qualification. Immutable queued identity/viewport/payload metadata and positive
+Applied paint join an actual Display commit. Browser text requires the held
+caller task before Stage mutation. Old text marker/other text/fill scope stays
+unchanged. No new IPC authority, wire ABI, process VAS or R9 transport.
+
+Source21ef9420:43 frozen host checks,3077 logged Rust+27 nested=3104 executions;
+1098Python. Tenboots pass both3×3 Browser pixel profiles, both8-Quil/8-Spindle
+rehearsals, four connected warm/cold boots and parent-bound writer29 cold. Fresh
+Browser/Alpha replay passes.132 qualified captures include18 TLS panels+2launcher
+and112desktop/connected; auxiliarycoldPPM remainsseparate/no standalone replay.
+All1209sourceblobs/1594archivemembers matchsize/SHA. Nine ISOELFs/331077 decoded
+instructions,zeroFP/vector matches; static scope only. ABI66/hash12d218c6 unchanged.
+
+Pre-screendump receipt fences, during-capture supersession checks, absolute phase
+offsets and exact Zoom/Enter joins reject stale evidence; caller-return ordering
+is preserved. Incomplete Aattempt staysunqualified. Inventory remains2Open/
+28Partial/SystemProvenfalse; no publicwebtrust/current sustainedalpha claimed.
+Next159: Close while localTLSfuture is stillallocated across15→30→31, preserve
+original deadlines and distinguish erasedpayload(task+8192) from privatebytes
+(task+8248). Then sustainedunifieddesktop/cold recovery and31/32task headroom.
