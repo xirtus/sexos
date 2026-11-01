@@ -319,8 +319,8 @@ def main():
  def key(code,pattern):
   start=len(text());q.key(code);return wait(pattern,start)
  def zoom():
-  key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in[(0,9),(9,8)]:key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  from quil_workflow_gate import palette_commands,palette_select
+  palette_select(key,'ZoomToggle',palette_commands(root))
   start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
  def picture(state,name):
   nonlocal park_phase

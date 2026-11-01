@@ -239,8 +239,8 @@ def run_boot(root,iso,binding,seed,out,contract,model,resolution_text,recovery=F
  def key(code,pattern):start=len(text());q.key(code);return wait(pattern,start)
  def record(name,start,sent,**extra):actions.append(dict(action=name,serial_start=start,serial_end=len(text()),host_seconds=time.monotonic()-sent,**extra))
  def zoom(sid):
-  key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  from quil_workflow_gate import palette_commands,palette_select
+  palette_select(key,'ZoomToggle',palette_commands(root))
   start=len(text());q.key('ret');wait(rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={sid} ok=1',start)
   if sid==300:wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
  def picture(name,kind,state=None,object_id=None,anchor=0,expected_name=NAME):

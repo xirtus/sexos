@@ -107,6 +107,21 @@ def inspect_wire(raw,peer_rows,mode):
  except(AssertionError,ValueError,KeyError,TypeError,IndexError)as exc:errors.append(str(exc));packets=locals().get('packets',0)
  return dict(ok=not errors,errors=errors,joins=joins,tcp_packets=packets,scope='Independent checksum/TCP/Hello/outer-record framing and absence of public HTTP plaintext. Actual endpoint SSL establishes decrypted HTTP bytes; serial labels alone never establish authentication. Malformed/partial/certificate-negative modes make no TLS close_notify or TCP FIN claim.')
 
+def palette_source_hashes(root):
+ """Bind the shared selector's complete local Python import closure and catalog."""
+ root=Path(root);pending=['scripts/quil_workflow_gate.py'];found={}
+ while pending:
+  name=pending.pop()
+  if name in found:continue
+  data=(root/name).read_bytes();found[name]=hashlib.sha256(data).hexdigest()
+  for node in ast.walk(ast.parse(data)):
+   modules=[a.name for a in node.names]if isinstance(node,ast.Import)else[node.module]if isinstance(node,ast.ImportFrom)and node.module else[]
+   for module in modules:
+    path='scripts/'+module.split('.')[0]+'.py'
+    if(root/path).is_file()and path not in found:pending.append(path)
+ found['servers/silk-shell/src/main.rs']=hashlib.sha256((root/'servers/silk-shell/src/main.rs').read_bytes()).hexdigest()
+ return found
+
 def load_contract(root):
  root=Path(root);contract=http.load_pixel_contract(root);contract['source_sha256'].update(tls.load_contract(root)['source_sha256']);contract.update(request=REQUEST,reader_header=HEADER,reader_path=b' /welcome',dynamic_reader_path=False);contract['reader_footers']=contract['https_reader_footers']
  # The independent body is public checker data, not a guest startup fixture.
@@ -122,6 +137,7 @@ def load_contract(root):
  if not meta or int(meta[1])!=56 or 'core::mem::size_of::<Pipe>()==PIPE_BYTES'not in source or 'PIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES'not in source:raise ValueError('source-bound x86_64 Pipe metadata/compile assertion differs')
  path=re.search(r'pub const HTTPS_PATH[^=]*=\s*(b"[^"\n]*");',source)
  if not path or ast.literal_eval(path[1])!=b'/welcome':raise ValueError('source-bound HTTPS document path differs')
+ contract['source_sha256'].update(palette_source_hashes(root))
  contract['pipe_bytes']=8192+int(meta[1]);return contract
 
 def source_inventory(trace,*,root=None,plans=None,require_version=False):
@@ -306,6 +322,7 @@ def verify_status_pixels(trace,ppm,expected,mode,contract,resolution=None):
  except(ValueError,KeyError,IndexError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
 def main():
+ from quil_workflow_gate import palette_commands,palette_select
  parser=argparse.ArgumentParser();parser.add_argument('--iso',required=True,type=Path);parser.add_argument('--source-disk',required=True,type=Path);parser.add_argument('--binding',required=True,type=Path);parser.add_argument('--out',required=True,type=Path);parser.add_argument('--mode',choices=MODES,default='ready');parser.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');parser.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');a=parser.parse_args()
  root=Path(__file__).resolve().parents[1];iso=a.iso.resolve(strict=True);seed=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh HTTPS evidence directory required')
@@ -354,8 +371,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
-  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key);key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key);palette_select(key,'ZoomToggle',palette_commands(root))
   boundary=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',boundary);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',boundary)
   boundary=len(text());q.key('b');wait(r'\[shell.browser.input\] code=48 down=1 slot=43 accepted=1',boundary);wait(r'\[browser.https.intent\] accepted=1 explicit=1 public_internet=0',boundary)
   if a.mode=='ready':
@@ -372,8 +388,7 @@ def main():
    if resumed['geometry']['source_anchor']!=retained:raise RuntimeError('HTTPS overview/reopen lost requested source anchor')
    original=resumed['geometry']['tile'];prior_viewport=resumed['geometry']['viewport']
    for name in('https-reader-restored-tile','https-reader-zoom-roundtrip'):
-    key('grave_accent',r'\[shell.palette.item\] idx=0')
-    for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+    palette_select(key,'ZoomToggle',palette_commands(root))
     start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
     shot=picture(name,'reader',anchor=anchor)
     if shot['geometry']['source_anchor']!=retained:raise RuntimeError('HTTPS Zoom/restoration changed requested source anchor')

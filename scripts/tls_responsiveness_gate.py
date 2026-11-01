@@ -230,8 +230,8 @@ def main():
    start=len(text());sent=time.monotonic();q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(resolution[0]-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(resolution[1]-1))}}]});wait(r'\[shell.pointer.abs\]|\[silk-shell.pointer.recv\].*class=|\[shell.abs.normalize\]',start);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]});wait(r'\[shell.clock.'+expected+r'.ok\] id=0x94',start);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});record('clock_panel_'+expected,start,sent)
   start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
  def zoom():
-  key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  from quil_workflow_gate import palette_commands,palette_select
+  palette_select(key,'ZoomToggle',palette_commands(root))
   start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
  def save(payload,name):
   start=len(text());sent=time.monotonic();q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'s'}],'hold-time':80});receipt=wait(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=2',start)

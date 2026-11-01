@@ -5,6 +5,36 @@ from alpha_evidence import Captures,contract,require_inputs,verify_frame,finish,
 from network_contention_gate import frozen_binding
 from desktop_close_gate import QMP
 
+def palette_commands(root):
+ """Read descriptive command order from the sealed Shell source."""
+ source=(pathlib.Path(root)/'servers/silk-shell/src/main.rs').read_text()
+ declarations=re.findall(r'\bconst COMMAND_LIST:\s*\[CommandDef;\s*(\d+)\]\s*=\s*\[(.*?)\n\];',source,re.S)
+ if len(declarations)!=1:raise ValueError('missing/ambiguous actual palette command catalog')
+ count,body=declarations[0];body=re.sub(r'//[^\n]*','',body)
+ row=r'CommandDef\s*\{\s*command:\s*Command::(\w+),\s*name:\s*"([^"\\\r\n]+)"\s*,?\s*\}'
+ commands=tuple(re.findall(row,body))
+ if re.sub(row,'',body).strip(' \r\n\t,')or not 1<=int(count)<=255 or len(commands)!=int(count):raise ValueError('incomplete/malformed palette command catalog')
+ if len({c for c,_ in commands})!=len(commands)or len({label for _,label in commands})!=len(commands):raise ValueError('ambiguous palette commands/labels')
+ legacy=(('FocusSpindle','Open Spindle'),('FocusQuil','Open Quil'),('FocusLinen','Open Linen'),('FocusAtlas','Open Atlas'),
+         ('FocusBell','Open Bell'),('FocusCollar','Open Collar'),('FocusMesh','Open Mesh'),('RestoreMinimized','Restore Minimized'),
+         ('ZoomToggle','Zoom Toggle'),('MinimizeFocused','Minimize Focused'))
+ if commands[:len(legacy)]!=legacy:raise ValueError('existing palette indices/labels changed')
+ return commands
+
+def palette_select(key,command,commands):
+ """Open at0, then wait for every exact transition to the source-bound row."""
+ matches=[i for i,(name,_)in enumerate(commands)if name==command]
+ if len(matches)!=1 or not 1<=len(commands)<=255:raise ValueError('missing/ambiguous requested palette command')
+ target=matches[0];count=len(commands);end=r'(?=\r?\n)'
+ key('grave_accent',rf'\[shell.palette.open\] ok=1 selected=0 count={count}'+end)
+ step,code=(1,'j')if target<=count-target else(-1,'k')
+ selected=0
+ while selected!=target:
+  following=(selected+step)%count
+  key(code,rf'\[shell.palette.select\] old={selected} new={following}'+end)
+  selected=following
+ return target
+
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=pathlib.Path);p.add_argument('--source-disk',type=pathlib.Path);p.add_argument('--binding',required=True,type=pathlib.Path);p.add_argument('--check',action='store_true');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--out',required=True,type=pathlib.Path);p.add_argument('--round',type=int,default=0);p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--soak-seconds',type=float,default=0);p.add_argument('--rehearsal',action='store_true');p.add_argument('--typing-bursts',type=int,default=0);p.add_argument('--workspace-refresh',action='store_true');p.add_argument('--third-quil',action='store_true');p.add_argument('--third-spindle',action='store_true');p.add_argument('--capture-profile',action='store_true');p.add_argument('--find',action='store_true');p.add_argument('--toggle-stress',type=int,default=0);p.add_argument('--pending-io-close',action='store_true');a=p.parse_args()
  if a.third_spindle and not a.soak_seconds:p.error('third Spindle requires the complete lifecycle session')
@@ -16,7 +46,7 @@ def main():
  if not math.isfinite(a.soak_seconds)or not 0<=a.soak_seconds<=7200:p.error('soak seconds must be finite and0..7200')
  src=a.source_disk.resolve(strict=True);out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
- bound=frozen_binding(root,iso,binding_path);pixel_contract=contract(root);require_inputs(root,binding_path,pixel_contract);shutil.copyfile(binding_path,out/'source-binding.json')
+ bound=frozen_binding(root,iso,binding_path);pixel_contract=contract(root);require_inputs(root,binding_path,pixel_contract);commands=palette_commands(root);shutil.copyfile(binding_path,out/'source-binding.json')
  disk=out/'nvme.img';shutil.copyfile(src,disk);sock=pathlib.Path('/tmp')/f'sex-quil-{os.getpid()}.sock';log=out/'serial.log';control_sock=pathlib.Path('/tmp')/f'sex-quil-control-{os.getpid()}.sock'
  command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-rtc',RTC,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.split('x')[0]+',yres='+a.resolution.split('x')[1],'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',a.model+',netdev=peer,mac=52:54:00:12:34:56']
  if a.pending_io_close:command+=['-qmp',f'unix:{control_sock},server=on,wait=off','-D',str(out/'device-trace.log'),'-msg','timestamp=on']
@@ -151,14 +181,14 @@ def main():
   toolbar(3,r'\[quil.document.saved\].*dirty=0');capture('pointer-saved','uibeta')
   m=re.findall(r'\[quil.persist.save.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',text())[-1];second.update(bytes=int(m[0]),hash=m[1],content='first notebz')
   # Real geometry changes, then minimize and restore through ordinary controls.
-  key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=201 ok=1');capture('zoomed','first notebz#')
-  key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=201 ok=1');capture('retiled','first notebz#')
+  palette_select(key,'ZoomToggle',commands);key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=201 ok=1');capture('zoomed','first notebz#')
+  palette_select(key,'ZoomToggle',commands);key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=201 ok=1');capture('retiled','first notebz#')
   focus(201)
   before_min=wait_view(text)
-  key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('ret',r'\[silk.lifecycle.minimize.hidden\] sid=201 frame=\d+')
+  palette_select(key,'MinimizeFocused',commands);key('ret',r'\[silk.lifecycle.minimize.hidden\] sid=201 frame=\d+')
   capture('minimized',kind='empty',region={k:before_min[k]for k in('x','y','w','h')})
   # Restore the existing live frame through the visible launcher action.
-  key('grave_accent',r'\[shell.palette.item\] idx=0');key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8');key('k',r'\[shell.palette.select\] old=8 new=7');key('ret',r'\[silk.lifecycle.restore.ok\] frame=\d+ sid=201');focus(201);capture('restored','first notebz#')
+  palette_select(key,'RestoreMinimized',commands);key('ret',r'\[silk.lifecycle.restore.ok\] frame=\d+ sid=201');focus(201);capture('restored','first notebz#')
   input_latency=None
   if a.typing_bursts:
    from quil_input_latency import run as measure_input

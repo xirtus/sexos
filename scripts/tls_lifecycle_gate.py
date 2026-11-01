@@ -367,8 +367,8 @@ def main():
   if not result['ok']:raise RuntimeError(str(result['errors']))
   return result
  def zoom():
-  key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  from quil_workflow_gate import palette_commands,palette_select
+  palette_select(key,'ZoomToggle',palette_commands(root))
   start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
  def fetch(attempt):
   start=len(text());q.key('b');wait(r'\[shell.browser.input\] code=48 down=1 slot=43 accepted=1',start);ticket=TLS_TICKETS[attempt-1];wait(rf'\[browser.https.admitted\] ticket={ticket} ',start);event(peer.sent[attempt],'actual lifecycle response sent')

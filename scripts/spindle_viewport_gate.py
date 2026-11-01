@@ -8,6 +8,7 @@ from spindle_durable_reboot_gate import snapshot,decode_snapshot
 from history_roster_evidence import verify_boot_roster
 from check_spindle_viewport_pixels import verify
 from check_desktop_pixels import font_from_source
+from quil_workflow_gate import palette_commands,palette_select
 
 
 RESOLUTIONS=('1024x768','1280x800')
@@ -70,6 +71,7 @@ def validate_relative_layout(record,resolution,phase,tiled=None,after_sequence=0
 def main():
     args=parse_args();resolution=tuple(map(int,args.resolution.split('x')));mode='relative-tiles'if args.relative_tiles else'legacy-height180'
     print(f'[spindle.viewport.mode] mode={mode} resolution={args.resolution}',flush=True)
+    commands=palette_commands(pathlib.Path(__file__).resolve().parents[1])
     iso=args.iso.resolve(strict=True);source=args.source_disk.resolve(strict=True);out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('output directory must be fresh')
     expected=decode_snapshot(source.read_bytes());disk=out/'nvme.img';shutil.copyfile(source,disk);log=out/'serial.log';sock=pathlib.Path('/tmp')/f'sex-view-{os.getpid()}.sock'
@@ -126,8 +128,7 @@ def main():
             stages.append({'name':name,'layout':latest,'prompt':prompt,'expected_output':output,'pixel_errors':errors,'log_offset':len(value),'ppm_sha256':hashlib.sha256((out/(name+'.ppm')).read_bytes()).hexdigest()})
         def zoom():
             if args.relative_tiles:relative['after_zoom']=stages[-1]['layout'][0]
-            key('grave_accent',r'\[shell.palette.item\] idx=0')
-            key('k',r'\[shell.palette.select\] old=0 new=9');key('k',r'\[shell.palette.select\] old=9 new=8')
+            palette_select(key,'ZoomToggle',commands)
             key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=153 ok=1')
         recovered=wait(r'\[files.history.recovered\] logical=12 source=17 source_task=17 target=12 generation=(\d+) bytes=(\d+) source_hash=(0x[0-9a-f]+) owned_hash=(0x[0-9a-f]+) data_hash=(0x[0-9a-f]+) boot_grant=53').groups()
         if (int(recovered[0]),int(recovered[1]),recovered[2],recovered[4])!=(expected['generation'],expected['size'],expected['fingerprint'],expected['data_hash']):raise RuntimeError('wrong durable source')

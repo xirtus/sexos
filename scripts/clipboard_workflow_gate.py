@@ -554,8 +554,8 @@ def run_boot(root,iso,binding,seed,out,contract,model,resolution_text,recovery=F
  def zoom():
   nonlocal reader_min_viewport
   previous=browser_viewport_sequence(text())
-  key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  from quil_workflow_gate import palette_commands,palette_select
+  palette_select(key,'ZoomToggle',palette_commands(root))
   after=len(text());key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1')
   deadline=time.monotonic()+90;last='no fresh viewport'
   while time.monotonic()<deadline:

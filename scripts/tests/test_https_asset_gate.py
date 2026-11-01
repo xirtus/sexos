@@ -106,7 +106,7 @@ class AssetFixture(unittest.TestCase):
   self.assertEqual(len(gate.BODY),11542);self.assertEqual(len(gate.REQUEST),93);self.assertEqual(gate.decode_fixture(gate.BODY),gate.rgba());self.assertEqual(set(gate.rgba()[3::4]),{0,128,255});self.assertIn(b'/art.qoi',gate.REQUEST);self.assertIn(b'Accept: image/qoi',gate.REQUEST)
   with self.assertRaises(ValueError):gate.decode_fixture(gate.BODY[:-1]+b'\2')
  def test_contract_binds_actual_resource_decoder_compositor_sources(self):
-  c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
+  c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES)|set(gate.https.palette_source_hashes(ROOT)));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
  def test_contract_rejects_disconnected_raw_key_retention_or_held_drain(self):
   path=ROOT/'servers/sexinput/src/main.rs';read=Path.read_bytes;original=read(path)
   for old,new in [(b'sex_pdx::serial_record!("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
@@ -353,7 +353,7 @@ def key_fixture(mode='ready',post=True,compact=False):
  trace='';actions=[];tick=1;menu_k=0
  if compact:
   for code in ('down','ret'):actions.append(dict(key=code,code=gate.KEY_CODES[code],kind='boot',transport='send-key',serial_start=0,serial_qmp_return=0,serial_end=0,host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
- keys=['g','a','f','i','q','g','grave_accent','k','k','ret','a','grave_accent','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
+ keys=['g','a','f','i','q','g','grave_accent','k','k','k','ret','a','grave_accent','k','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
  for code in keys:
   start=len(trace);number=gate.KEY_CODES[code];trace+=f'[sexinput.ps2.scancode] raw={hex(number)}\n'
   if code in gate.BROWSER_EFFECTS:
@@ -361,8 +361,8 @@ def key_fixture(mode='ready',post=True,compact=False):
    held=f'[shell.browser.input] code={number} down=1 slot=43 accepted=1\n';trace+=effects[code]+held if post else held+effects[code]
   else:
    if code=='k':
-    old,new=(0,9)if menu_k%2==0 else(9,8);trace+=f'[shell.palette.select] old={old} new={new}\n';menu_k+=1
-   else:trace+=dict(grave_accent='[shell.palette.item] idx=0\n',k='[shell.palette.select] old=0 new=9\n',ret='[shell.window.action] action=ZoomToggle frame=9 sid=300 ok=1\n',f11='[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n')[code]
+    old,new=((0,10),(10,9),(9,8))[menu_k%3];trace+=f'[shell.palette.select] old={old} new={new}\n';menu_k+=1
+   else:trace+=dict(grave_accent='[shell.palette.open] ok=1 selected=0 count=11\n',k='[shell.palette.select] old=0 new=9\n',ret='[shell.window.action] action=ZoomToggle frame=9 sid=300 ok=1\n',f11='[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n')[code]
   trace+=f'[sexinput.ps2.scancode] raw={hex(number|128)}\n';actions.append(dict(key=code,code=number,kind='browser'if code in gate.BROWSER_EFFECTS else'close'if code=='f11'else'menu',transport='input-send-event',serial_start=start,serial_qmp_return=start,serial_end=len(trace),host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
  return trace,[dict(serial_end=len(trace))],actions
 
@@ -378,6 +378,15 @@ class PhysicalKeyCausality(unittest.TestCase):
    for post in (False,True):
     for compact in (False,True):
      trace,frames,actions=key_fixture(mode,post,compact);result=gate.verify_key_actions(trace,frames,actions,mode,'1024x768'if compact else'1280x800');self.assertTrue(result['ok']);self.assertEqual(result['checks'][0]['callee_before_caller_receipt'],post)
+ def test_old_palette_count_or_transition_cannot_authorize_zoom(self):
+  for compact in(False,True):
+   trace,_,actions=key_fixture('ready',compact=compact)
+   for action_index,old,new in[(6,'count=11','count=10'),(7,'old=0 new=10','old=0 new=9')]:
+    index=action_index+(2 if compact else 0)
+    self.assertIn(old,trace[actions[index]['serial_start']:actions[index]['serial_end']])
+    changed,frames,rows=change_key_fixture(trace,actions,index,lambda chunk:chunk.replace(old,new))
+    with self.subTest(compact=compact,old=old),self.assertRaises(ValueError):
+     gate.verify_key_actions(changed,frames,rows,'ready','1024x768'if compact else'1280x800')
  def test_actual_hardware_helper_records_qmp_return_and_waits_for_both_receipts(self):
   order=[];actions=[]
   class Q:
@@ -536,7 +545,7 @@ class HeldInputSourceContract(unittest.TestCase):
  def test_dependency_task_inference_and_route_rewire_fail_closed(self):
   with tempfile.TemporaryDirectory()as tmp:
    root=Path(tmp)
-   for name in set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES):
+   for name in set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES)|set(gate.https.palette_source_hashes(ROOT)):
     dst=root/name;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,dst)
    path=root/'crates/sex-pdx/src/clipboard.rs';original=path.read_text()
    for old,new in [('task:c.task_id','task:c.target_pd'),('i.close_slot,i.app','43,i.app')]:

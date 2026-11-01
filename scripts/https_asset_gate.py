@@ -212,7 +212,7 @@ def source_contract(root):
  for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
   if literal not in input_source:raise ValueError('retained physical key must drain through the actual held Shell route: '+literal)
  if 'min(4)'not in view or '0x00303860u32'not in display:raise ValueError('source-bound fit/background contract changed')
- return dict(source_sha256={n:hashlib.sha256(data).hexdigest()for n,data in sources.items()},font=font_from_source(display),base=list(BASE),pixel_hash=hex(PIXEL_HASH),body_hash=hex(fingerprint(BODY)),body_sha256=hashlib.sha256(BODY).hexdigest())
+ return dict(source_sha256={**{n:hashlib.sha256(data).hexdigest()for n,data in sources.items()},**https.palette_source_hashes(root)},font=font_from_source(display),base=list(BASE),pixel_hash=hex(PIXEL_HASH),body_hash=hex(fingerprint(BODY)),body_sha256=hashlib.sha256(BODY).hexdigest())
 
 def binding_check(root,iso,path):
  result=frozen_binding(root,iso,path);held=json.loads(Path(path).read_text())
@@ -512,7 +512,7 @@ def validate_frame_stages(trace,mode,frames):
   for code in(30,33):
    if len(re.findall(rf'\[shell.browser.input\] code={code} down=1 slot=43 accepted=1',trace))!=2:raise ValueError('extra retained control key')
 
-KEY_CODES={'g':34,'a':30,'f':33,'i':23,'q':16,'grave_accent':41,'k':37,'ret':28,'tab':15,'scroll_lock':70,'f11':87,'down':80}
+KEY_CODES={'g':34,'a':30,'f':33,'i':23,'q':16,'grave_accent':41,'k':37,'j':36,'ret':28,'tab':15,'scroll_lock':70,'f11':87,'down':80}
 BROWSER_EFFECTS={'g':r'\[browser.asset.intent\] accepted=1 explicit=1 public_internet=0','a':r'\[browser.asset.presentation.intent\] generation=\d+ mode=Actual viewport=\d+ ticket=\d+ network=0','f':r'\[browser.asset.presentation.intent\] generation=\d+ mode=Fit viewport=\d+ ticket=\d+ network=0','i':r'\[browser.import.rejected\] reason=asset_not_text effects=0','q':r'\[browser.asset.clear.intent\] pending=[01] owned_storage=erased'}
 PHYSICAL=r'\[sexinput.ps2.scancode\] raw=(0x[0-9a-f]+)(?=\r?\n|$)'
 
@@ -524,7 +524,7 @@ def capture_key_action(q,code,pattern,text,wait,record):
  if code in BROWSER_EFFECTS:wait(BROWSER_EFFECTS[code],start);wait(rf'\[shell.browser.input\] code={KEY_CODES[code]} down=1 slot=43 accepted=1',start)
  result=wait(pattern,start);action.update(serial_end=len(text()),host_end=time.monotonic());return result
 
-def verify_key_actions(trace,frames,actions,mode,resolution):
+def verify_key_actions(trace,frames,actions,mode,resolution,*,root=None):
  """Actual QMP window -> pre-forward PS2 make -> handler; return may race.
 
  Shell logs accepted after pdx_call. Its callee may already have run: the
@@ -532,7 +532,12 @@ def verify_key_actions(trace,frames,actions,mode,resolution):
  before that callee. The indivisible PS2 make precedes forwarding in source.
  """
  if not isinstance(actions,list)or not actions:raise ValueError('actual QMP key windows missing')
- final=frames[-1]['serial_end'];previous=0;live=[];makes=[];held=[];checks=[];menu_k=0
+ from quil_workflow_gate import palette_commands
+ commands=palette_commands(Path(root)if root is not None else Path(__file__).resolve().parents[1]);count=len(commands);target=next(i for i,(command,_)in enumerate(commands)if command=='ZoomToggle')
+ step,menu_code=(1,'j')if target<=count-target else(-1,'k');menu_path=[];selected=0
+ while selected!=target:
+  following=(selected+step)%count;menu_path.append((selected,following));selected=following
+ final=frames[-1]['serial_end'];previous=0;live=[];makes=[];held=[];checks=[];menu_at=None
  for action in actions:
   code=action.get('key');kind=action.get('kind');start=action.get('serial_start');returned=action.get('serial_qmp_return');end=action.get('serial_end')
   if code not in KEY_CODES or action.get('code')!=KEY_CODES[code]or kind not in('boot','browser','menu','close'):raise ValueError('foreign QMP key/action kind')
@@ -557,13 +562,21 @@ def verify_key_actions(trace,frames,actions,mode,resolution):
    checks.append(dict(key=code,physical=make,handler=start+handlers[0].start(),held_return=start+accepted[0].start(),callee_before_caller_receipt=handlers[0].start()<accepted[0].start()))
   else:
    if code in BROWSER_EFFECTS or(kind=='close')!=(code=='f11'):raise ValueError('Browser key lacks held-route join')
-   patterns={'grave_accent':r'\[shell.palette.item\] idx=0','k':r'\[shell.palette.select\] old=(?:0|9) new=(?:9|8)','ret':r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1','tab':r'\[shell.focus.set\] id=\d+','scroll_lock':r'\[shell.action.spindle\] toggle','f11':r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1'}
-   if code=='k':
-    old,new=(0,9)if menu_k%2==0 else(9,8);patterns[code]=rf'\[shell.palette.select\] old={old} new={new}';menu_k+=1
+   patterns={'ret':r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1','tab':r'\[shell.focus.set\] id=\d+','scroll_lock':r'\[shell.action.spindle\] toggle','f11':r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1'}
+   if code=='grave_accent':
+    if menu_at is not None:raise ValueError('palette reopened before completed selection')
+    menu_at=0;patterns[code]=rf'\[shell.palette.open\] ok=1 selected=0 count={count}(?=\r?\n)'
+   elif code in('j','k'):
+    if code!=menu_code or menu_at is None or menu_at>=len(menu_path):raise ValueError('unexpected palette direction or transition')
+    old,new=menu_path[menu_at];menu_at+=1;patterns[code]=rf'\[shell.palette.select\] old={old} new={new}(?=\r?\n)'
+   elif code=='ret':
+    if menu_at!=len(menu_path):raise ValueError('Zoom Enter before source-bound palette selection')
+    menu_at=None
    if code not in patterns or not re.search(patterns[code],trace[make:end]):raise ValueError('menu/Close key lacks actual post-make semantic handler')
  first=live.index('g')if'g'in live else len(live)
  if any(code not in('tab','scroll_lock')for code in live[:first]):raise ValueError('unplanned startup focus input')
- expected=['g','a','f','i','q','g','grave_accent','k','k','ret','a','grave_accent','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
+ zoom_keys=['grave_accent']+[menu_code]*len(menu_path)+['ret']
+ expected=['g','a','f','i','q','g']+zoom_keys+['a']+zoom_keys+['f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
  if live[first:]!=expected:raise ValueError('finite physical key action order differs')
  boots=[a['key']for a in actions if a['kind']=='boot']
  if boots!=(['down','ret']if resolution=='1024x768'else[]):raise ValueError('boot-menu hardware request profile differs')
@@ -614,7 +627,7 @@ def verify_evidence(root,iso,binding,evidence):
  joins=inspect_trace(trace,mode,wire,raw,manifest['host_utc_start'],manifest['host_utc_end'],contract,dns);shots=[]
  validate_frame_stages(trace,mode,manifest['frames'])
  parking=verify_parking(trace,manifest['frames'],manifest['actions'],tuple(map(int,manifest['resolution'].split('x'))))
- key_actions=verify_key_actions(trace,manifest['frames'],manifest['key_actions'],mode,manifest['resolution'])
+ key_actions=verify_key_actions(trace,manifest['frames'],manifest['key_actions'],mode,manifest['resolution'],root=root)
  for shot in manifest['frames']:
   prefix=trace[:shot['serial_end']]
   if hashlib.sha256(prefix.encode()).hexdigest()!=shot['serial_sha256']:raise ValueError('frame/serial boundary differs')
@@ -630,6 +643,7 @@ def verify_evidence(root,iso,binding,evidence):
  return dict(ok=True,binding=bound,mode=mode,wire=wire,trace=joins,pixels=shots,pointer_parking=parking,key_actions=key_actions,authority=authority,self_wait=waiting,target=target,scope=SCOPE)
 
 def main():
+ from quil_workflow_gate import palette_commands,palette_select
  p=argparse.ArgumentParser();p.add_argument('--iso',type=Path,required=True);p.add_argument('--binding',type=Path,required=True);p.add_argument('--source-disk',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--mode',choices=MODES,default='ready');p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');a=p.parse_args();root=Path(__file__).resolve().parents[1];iso=a.iso.resolve(strict=True);binding=a.binding.resolve(strict=True);seed=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise ValueError('fresh native asset evidence directory required')
  bound=binding_check(root,iso,binding);contract=source_contract(root);target=target_check(root)
@@ -685,12 +699,10 @@ def main():
     boundary=len(text());key(code,r'\[browser.asset.presentation.intent\]');wait(r'\[browser.asset.presentation.ready\].*ticket=2 ',boundary);picture(name,True)
    key('i',r'\[browser.import.rejected\] reason=asset_not_text effects=0');boundary=len(text());key('q',r'\[browser.asset.clear.intent\]');wait(r'\[browser.asset.cleared\].*positive_ack=1',boundary);picture('cleared-image')
    boundary=len(text());key('g',r'\[browser.asset.intent\] accepted=1');wait(r'\[browser.asset.presentation.ready\].*ticket=3 ',boundary);picture('fresh-image',True)
-   key('grave_accent',r'\[shell.palette.item\] idx=0')
-   for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+   palette_select(key,'ZoomToggle',palette_commands(root))
    boundary=len(text());key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1');wait(r'\[browser.asset.presentation.ready\].*ticket=3 ',boundary);picture('zoomed-image',True)
    boundary=len(text());key('a',r'\[browser.asset.presentation.intent\]');wait(r'\[browser.asset.presentation.ready\].*ticket=3 ',boundary);picture('zoomed-actual',True)
-   key('grave_accent',r'\[shell.palette.item\] idx=0')
-   for old,new in((0,9),(9,8)):key('k',rf'\[shell.palette.select\] old={old} new={new}')
+   palette_select(key,'ZoomToggle',palette_commands(root))
    boundary=len(text());key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1');wait(r'\[browser.asset.presentation.ready\].*ticket=3 ',boundary);picture('restored-actual',True)
    boundary=len(text());key('f',r'\[browser.asset.presentation.intent\]');wait(r'\[browser.asset.presentation.ready\].*ticket=3 ',boundary);picture('restored-fit',True)
   elif a.mode.startswith('partial-'):

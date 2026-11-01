@@ -25,7 +25,7 @@ STREAM_BODY=(b''.join((b' '*48 if n%11==10 else(f'{n:03d} SEXOS STREAM LINE / SO
 assert len(STREAM_BODY)==12288
 
 def load_pixel_contract(root):
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs','text_encoding':'crates/sex-pdx/src/text_encoding.rs'}
+ paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs','text_encoding':'crates/sex-pdx/src/text_encoding.rs','palette_navigation':'scripts/quil_workflow_gate.py','palette_catalog':'servers/silk-shell/src/main.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
  if not re.fullmatch(r'(?s)\s*//[^\n]*\n//! Source-path facade:[^#]*#\[path="\.\./\.\./\.\./crates/sex-http/src/codec\.rs"\]\s*mod codec;\s*pub use self::codec::\*;\s*',sources['wire_facade']):raise ValueError('production HTTP facade no longer uses the single shared codec')
  if '#![no_std]'not in sources['wire_lib']or 'pub use codec::*;'not in sources['wire_lib']or 'mod codec;'not in sources['wire_lib']:raise ValueError('shared HTTP no_std library binding changed')
@@ -918,9 +918,10 @@ def main():
    start=len(text());q.key(key);wait(rf'\[shell.browser.input\] code={code} down=1 slot=43 accepted=1',start)
    frame=paint(name or'browser-reader-'+key);actions.append(dict(action='actual_reader_'+key,first=frame['first'],end=frame['end'],source_anchor=anchor));return frame
   def zoom(name):
-   start=len(text());q.key('grave_accent');wait(r'\[shell.palette.item\] idx=0',start)
-   for old,new in [(0,9),(9,8)]:
-    start=len(text());q.key('k');wait(rf'\[shell.palette.select\] old={old} new={new}',start)
+   from quil_workflow_gate import palette_commands,palette_select
+   def palette_key(code,pattern):
+    start=len(text());q.key(code);return wait(pattern,start)
+   palette_select(palette_key,'ZoomToggle',palette_commands(root))
    start=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',start)
    wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',start)
    frame=paint(name);actions.append(dict(action='actual_palette_'+name,tile=frame['tile'],source_anchor=anchor));return frame

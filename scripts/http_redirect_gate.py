@@ -159,8 +159,8 @@ def main():
   result=wait_http_pixels(q,text,out,view,overview_preview(STREAM_BODY),contract,health,name,resolution=resolution);pixels.append(result)
   if not result['ok']:raise RuntimeError(str(result['errors']))
  def zoom():
-  key('grave_accent',r'\[shell.palette.item\] idx=0')
-  for old,new in[(0,9),(9,8)]:key('k',rf'\[shell.palette.select\] old={old} new={new}')
+  from quil_workflow_gate import palette_commands,palette_select
+  palette_select(key,'ZoomToggle',palette_commands(root))
   key('ret',r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1');wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',zoom_start[0])
  try:
   end=time.monotonic()+15
