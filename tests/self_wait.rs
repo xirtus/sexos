@@ -18,3 +18,96 @@ fn attached()->TaskOwnership{let s=TaskOwnership::new();assert!(s.activate());as
 
 #[test]fn deadline_wake_cannot_authorize_unresolved_fault_retry(){let s=attached();let d=Deadline::new();assert_eq!(d.arm(10,1),Some(11));assert_eq!(s.park_fault(0),ParkResult::Blocked);assert!(d.take_due(11).is_some());s.wake();assert!(!s.resume_attached(0));assert!(s.snapshot().fault_blocked);assert_eq!(s.try_admit::<()>(||panic!("unresolved fault admitted")),Admission::NotRunnable);}
 #[test]fn claimed_old_expiry_does_not_remove_a_later_arm(){let d=Deadline::new();assert_eq!(d.arm(10,1),Some(11));assert_eq!(d.take_due(11),Some(11));assert_eq!(d.arm(12,2),Some(14));assert_eq!(d.take_due(13),None);assert_eq!(d.take_due(14),Some(14));}
+
+#[test]
+fn boot_main_capacity_is_literal_64() {
+    // Independent reviewed bound, deliberately not derived from the constant.
+    assert_eq!(wait::BOOT_MAIN_CAPACITY, 64);
+    let table=BootInventory::<u64,{wait::BOOT_MAIN_CAPACITY}>::new();
+    let mut tasks=Box::new([0u64;65]);
+    for index in [31,32,63] {
+        tasks[index]=10_000+index as u64;
+        assert!(table.register(index,&mut tasks[index]));
+    }
+    assert!(!table.register(64,&mut tasks[64]));
+    assert!(!table.register(0,std::ptr::null_mut()));
+    assert!(!table.register(0,&mut tasks[31]));
+    assert!(!table.register(31,&mut tasks[0]));
+    assert!(table.seal());
+    assert!(!table.register(0,&mut tasks[0]));
+    assert!(!table.seal());
+    for index in [31,32,63] { assert!(table.contains(&mut tasks[index])); }
+    assert!(!table.contains(&mut tasks[64]));
+}
+
+#[test]
+fn all_64_registered_pointers_are_visited_once_in_slot_order() {
+    let table=BootInventory::<u64,{wait::BOOT_MAIN_CAPACITY}>::new();
+    let mut tasks=Box::new([0u64;65]);
+    let mut expected=Vec::new();
+    for index in 0..64 {
+        tasks[index]=70_000+index as u64*10;
+        let pointer=&mut tasks[index] as *mut u64;
+        assert!(table.register(index,pointer));expected.push(pointer);
+    }
+    assert!(!table.register(64,&mut tasks[64]));
+    table.visit(|_|panic!("unsealed inventory published"));
+    assert!(table.seal());
+    let mut actual=Vec::new();table.visit(|pointer|actual.push(pointer));
+    assert_eq!(actual.len(),64);assert_eq!(actual,expected);
+    assert_eq!(actual.iter().copied().collect::<std::collections::HashSet<_>>().len(),64);
+    for pointer in actual { assert!(table.contains(pointer)); }
+}
+
+#[test]
+fn sparse_inventory_visits_only_actual_registered_upper_slots() {
+    let table=BootInventory::<u64,{wait::BOOT_MAIN_CAPACITY}>::new();
+    let mut tasks=Box::new([101u64,202,303,404]);
+    // Register out of order; iteration must follow slots, not insertion order.
+    assert!(table.register(63,&mut tasks[2]));
+    assert!(table.register(31,&mut tasks[0]));
+    assert!(table.register(32,&mut tasks[1]));
+    assert!(table.seal());
+    let expected=vec![&mut tasks[0] as *mut u64,&mut tasks[1],&mut tasks[2]];
+    let mut actual=Vec::new();table.visit(|pointer|{assert!(!pointer.is_null());actual.push(pointer)});
+    assert_eq!(actual,expected);
+    assert!(!table.contains(&mut tasks[3]));
+}
+
+struct TimedOwner { deadline:Deadline, state:TaskOwnership }
+#[test]
+fn upper_slots_preserve_cancellation_single_wake_and_terminal_custody() {
+    for index in [31,32,63] {
+        for mode in 0..3 {
+            let mut task=Box::new(TimedOwner{deadline:Deadline::new(),state:attached()});
+            let pointer=&mut *task as *mut TimedOwner;
+            let table=BootInventory::<TimedOwner,{wait::BOOT_MAIN_CAPACITY}>::new();
+            assert!(table.register(index,pointer));assert!(table.seal());
+            assert_eq!(task.deadline.arm(100,64),Some(164));
+            assert_eq!(task.state.park(0),ParkResult::Blocked);
+            assert!(task.state.begin_switch_out(0));
+            assert!(unsafe{task.state.release_after_stack_switch(0)});
+            if mode==1 { task.deadline.cancel(); }
+            // Deliberately retain a due deadline for the exit case: even a
+            // late claimed timer cannot resurrect this terminal identity.
+            if mode==2 { task.state.exit(); }
+            let mut fired=0;
+            for now in [163,164,164,200] {
+                table.visit(|p|unsafe{
+                    assert_eq!(p,pointer);
+                    if (*p).deadline.take_due(now).is_some(){fired+=1;(*p).state.wake();}
+                });
+            }
+            assert_eq!(fired,if mode==1{0}else{1});
+            if mode==0 {
+                assert_eq!(task.state.try_admit(||Ok::<(),()>(())),Admission::Published);
+                assert_eq!(task.state.try_admit::<()>(||panic!("duplicate token")),Admission::NotRunnable);
+                assert!(task.state.begin_dispatch(0));assert!(task.state.attach(0));
+                assert_eq!(task.state.snapshot().phase,Phase::Attached);
+            } else {
+                assert_eq!(task.state.try_admit::<()>(||panic!("cancelled/exited task admitted")),Admission::NotRunnable);
+                if mode==2 {assert!(task.state.snapshot().exited);}
+            }
+        }
+    }
+}

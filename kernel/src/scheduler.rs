@@ -43,7 +43,7 @@ pub mod task_exit;
 #[path = "self_wait.rs"]
 pub mod self_wait;
 // Main-task addresses are registered once by BOOT, never from a syscall.
-static SELF_WAIT_TASKS:self_wait::BootInventory<Task,32>=self_wait::BootInventory::new();
+static SELF_WAIT_TASKS:self_wait::BootInventory<Task,{self_wait::BOOT_MAIN_CAPACITY}>=self_wait::BootInventory::new();
 static TIMED_PARKS:AtomicU64=AtomicU64::new(0);
 static TIMER_WAKES:AtomicU64=AtomicU64::new(0);
 pub use task_exit::{register_paging_exit_watch, validate_dead_target, acknowledge_dead_cleanup, poll_paging_exit_notifications};
@@ -748,7 +748,7 @@ pub fn seal_self_wait_inventory(){
         }
     }
     assert!(SELF_WAIT_TASKS.seal(),"BOOT_SELF_WAIT_SEAL");
-    serial_println!("[boot.self_wait.sealed] tasks={} capacity=32 max_ticks=64 runtime_registration=0",count);
+    serial_println!("[boot.self_wait.sealed] tasks={} capacity={} max_ticks={} runtime_registration=0",count,self_wait::BOOT_MAIN_CAPACITY,self_wait::MAX_TICKS);
 }
 
 pub fn bootstrap_enqueue_all_domains() -> usize {

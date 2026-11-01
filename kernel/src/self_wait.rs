@@ -2,6 +2,10 @@
 //! Bounded own-task deadlines and an immutable BOOT task inventory.
 //! No allocation, target lookup, task activation or authority creation.
 use core::sync::atomic::{AtomicBool,AtomicPtr,AtomicU64,Ordering};
+/// Fixed BOOT main-task slots, including dormant reserved incarnations.
+/// GLOBAL_VAS addresses are retained exactly; this is not runtime task admission.
+/// Timer polling visits at most this many slots, with no allocation or registry lock.
+pub const BOOT_MAIN_CAPACITY:usize=64;
 pub const MAX_TICKS:u64=64;
 pub struct Deadline{at:AtomicU64}
 impl Deadline{
