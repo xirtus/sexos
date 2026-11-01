@@ -10,12 +10,21 @@ use crate::{bitmap_stores::{PublishedStores,Stores},surface_groups::FrameGroups,
 use silkbar_model::{SilkBar,DEFAULT_SILK_BAR};
 const BROWSERS:usize=sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser);
 
+/// Required candidate text pixels, descriptive only; not publication authority.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum TextCoverage{NoPixels,Body(crate::damage::Rect)}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct TextProjection{
+    pub(super) context:crate::text_transaction::Context,
+    pub(super) coverage:TextCoverage,
+}
+
 /// Deliberately neither Copy nor Clone: large owned payload stays in its fixed
 /// Display backing. No framebuffer, producer pointer, receipt, or Stage lives here.
 pub struct SceneSnapshot {
     pub(super) surfaces:[Surface;MAX_SURFACES],
     // Descriptive captured multipart contexts, never reply authority.
-    pub(super) text_contexts:[Option<crate::text_transaction::Context>;MAX_SURFACES],
+    pub(super) text_projections:[Option<TextProjection>;MAX_SURFACES],
     pub(super) groups:FrameGroups,
     pub(super) bitmaps:PublishedStores<BROWSERS>,
     pub(super) bar:SilkBar,
@@ -30,7 +39,7 @@ pub struct SceneSnapshot {
 impl SceneSnapshot {
     /// Initialize existing static storage directly; never return a captured
     /// aggregate or construct a second large image on the service stack.
-    pub const EMPTY:Self=Self{surfaces:[SURFACE_EMPTY;MAX_SURFACES],text_contexts:[None;MAX_SURFACES],groups:FrameGroups::new(),
+    pub const EMPTY:Self=Self{surfaces:[SURFACE_EMPTY;MAX_SURFACES],text_projections:[None;MAX_SURFACES],groups:FrameGroups::new(),
         bitmaps:PublishedStores::EMPTY,bar:DEFAULT_SILK_BAR,tokens:DEFAULT_RENDER_TOKENS,
         focus:0,frame:0,blur_rows:[0;crate::BAR_BG_H],width:0,height:0,valid:false};
 
@@ -55,7 +64,8 @@ impl SceneSnapshot {
                 let surface=&mut self.surfaces[index];
                 if !surface.active||surface.owner_pd!=context.owner()||surface.surface_id!=context.surface()
                     ||!crate::apply_pending_text(surface,&pending){self.scrub();return false;}
-                self.text_contexts[index]=Some(context);
+                let coverage=crate::text_projection_requirement(&surfaces[index],surface,width,height);
+                self.text_projections[index]=Some(TextProjection{context,coverage});
             }
         }
         self.groups=*groups;self.bar=*bar;self.tokens=tokens;
@@ -75,7 +85,7 @@ impl SceneSnapshot {
         for surface in &mut self.surfaces{
             unsafe{core::ptr::write_volatile(surface,SURFACE_EMPTY);}
         }
-        for context in &mut self.text_contexts{unsafe{core::ptr::write_volatile(context,None);}}
+        for context in &mut self.text_projections{unsafe{core::ptr::write_volatile(context,None);}}
         self.bitmaps.scrub();
         self.groups=FrameGroups::new();self.bar=DEFAULT_SILK_BAR;
         self.tokens=DEFAULT_RENDER_TOKENS;self.focus=0;self.frame=0;self.width=0;self.height=0;

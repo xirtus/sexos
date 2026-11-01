@@ -50,7 +50,9 @@ a=source.index('const CURSOR_ARROW_W:');b=source.index('\n];',a)+3;parts.append(
 a=source.index('static mut CURSOR_UNDER_SAVED:');b=source.index('\n',source.index('static mut CURSOR_UNDER_VALID:',a));parts.append(source[a:b])
 a=source.index('#[derive(Clone,Copy)]\nstruct PreparedCursor');b=source.index('\nfn record_cursor_presented',a);parts.append(source[a:b])
 for name in ['INPUT_TRACE_LAST_SEQ','INPUT_TRACE_LAST_SHELL_TICK']:parts.append(re.search(r'^static mut '+name+r':[^\n]+',source,re.M)[0])
-for name in ['scene_bar_blur_rows','surface_text_scale','recompute_text_lines','apply_pending_text','bg','vertical_gradient_xrgb','lerp_color_xrgb','draw_cursor_z_top','restore_cursor_under','scrub_cursor_under']:parts.append(function(name))
+for name in ['SURFACE_CHROME_TOP_BAR']:
+ match=re.search(r'^const '+name+r':[^;]+;',source,re.M);assert match;parts.append(match[0])
+for name in ['scene_bar_blur_rows','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement','bg','vertical_gradient_xrgb','lerp_color_xrgb','draw_cursor_z_top','restore_cursor_under','scrub_cursor_under']:parts.append(function(name))
 actual='\n'.join(parts);module=out/'actual.rs';module.write_text(actual)
 rlib=out/'libsilkbar_model.rlib';subprocess.run(['rustc','--edition=2021','--crate-type=rlib','--crate-name','silkbar_model',str(root/'crates/silkbar-model/src/lib.rs'),'-o',str(rlib)],check=True)
 def run(name,code,exact=None):

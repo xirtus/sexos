@@ -21,6 +21,7 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 #[path="../servers/sexdisplay/src/text_transaction.rs"]mod text_transaction;
+#[path="../servers/sexdisplay/src/damage.rs"]mod damage;
 #[path="../servers/sexdisplay/src/scene.rs"]mod scene;
 #[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
 use surface_lifecycle::{Surface,MAX_SURFACES,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};

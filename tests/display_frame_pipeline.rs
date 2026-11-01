@@ -76,7 +76,7 @@ fn device()->Vec<u32>{unsafe{core::slice::from_raw_parts(FB_PTR as *const u32,W*
 fn repaint_begin()->u64{event("begin");41}
 // Observer calls the extracted actual CPU-copy function unchanged; counting
 // callback entries/success does not substitute for checking complete device bytes.
-fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{unsafe{COPY_ATTEMPTS+=1;}let ok=actual_publish_frame(fb,w,h,pixels);if ok{unsafe{PUBLICATIONS+=1;}event("cpu-copy");}ok}
+fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{unsafe{COPY_ATTEMPTS+=1;}unsafe{if MODE==5{FB_W+=1;}}let ok=actual_publish_frame(fb,w,h,pixels);if ok{unsafe{PUBLICATIONS+=1;}event("cpu-copy");}ok}
 fn completed_effect(s:&str){unsafe{
  assert_eq!((COPY_ATTEMPTS,PUBLICATIONS),(1,1));assert_eq!(CURSORS,1,"effects before final raster overlay");assert_eq!(CAPTURES,1,"exactly one actual Scene capture");
  assert!(RENDER_SCENE.is_valid(),"lease must remain live through publication effects");
@@ -126,6 +126,7 @@ fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene:
  CURSORS+=1;assert_eq!(device(),BEFORE);fb.add(len-1).write(0xee);mutate_bookkeeping();}event("cursor-raster");}
 fn rect()->damage::Rect{damage::Rect{x:1,y:51,right:4,bottom:53}}
 fn expected_pixels(mut base:Vec<u32>,p:Plan)->Vec<u32>{
+ if p.settle_only(){return base;}
  match p.content{Content::Full=>base.fill(0x22),Content::Area=>base[50*W..].fill(0x33),Content::Damage(r)=>for y in r.y..r.bottom{for x in r.x..r.right{base[y*W+x]=0x44;}},_=>{}}
  if p.strip{base[..51*W].fill(0x66);}if !p.cursor_only(){base[W*H-2]=0xdd;}base[W*H-1]=0xee;base
 }
@@ -222,10 +223,52 @@ fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|
   unsafe{
    assert_eq!(&SURFACES[0].text_buf[..3],b"old");assert_eq!(SURFACES[0].text_len,3);
    assert!(TEXT_STAGES[0].needs_publication());TEXT_STAGES[0].poll_reply(|_,_|panic!("render must not commit or release text"));
-   assert!(!RENDER_SCENE.is_valid());assert!(RENDER_SCENE.text_contexts.iter().all(Option::is_none));
+   assert!(!RENDER_SCENE.is_valid());assert!(RENDER_SCENE.text_projections.iter().all(Option::is_none));
   }
   if mode==0{
-   let receipt=receipt.unwrap();assert_eq!(receipt.text_contexts[0],Some(context));assert!(receipt.text_contexts[1..].iter().all(Option::is_none));
+   let receipt=receipt.unwrap();assert_eq!(receipt.text_projections[0].unwrap().context,context);assert!(receipt.text_projections[1..].iter().all(Option::is_none));
   }else{assert!(receipt.is_none());assert_eq!(h.generation(),0);}
  }
+}
+
+#[test]fn pure_settle_preserves_device_underlay_and_effect_state_then_carries_no_pixels_projection(){
+ let _single=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let old=h.front();let device=h.scanout.clone();
+ for mode in[5,0]{
+  let plan=Plan{content:Content::Settle,strip:false};h.setup(plan,mode);
+  unsafe{
+   SURFACES[0]=Surface{active:true,owner_pd:9,surface_id:156,x:1000,y:1000,w:200,h:120,color:0x1234,..SURFACE_EMPTY};
+   TEXT_STAGES[0].receive(9,90,156,text_batch::Request::Begin{sequence:9,len:1,color:0xff123456});
+   TEXT_STAGES[0].receive(9,90,156,text_batch::Request::Chunk{sequence:9,offset:0,count:1,bytes:[b'x',0,0,0,0,0,0,0]});
+   assert!(TEXT_STAGES[0].receive(9,90,156,text_batch::Request::Commit{sequence:9,hash:text_batch::hash(b"x")}).is_some());
+  }
+  let receipt=h.call(plan);
+  unsafe{
+   assert_eq!((RASTERS,CURSORS,COPY_ATTEMPTS),(0,0,1));
+   assert!(CURSOR_UNDER_SAVED.iter().all(|v|*v==0x44));assert_eq!((CURSOR_UNDER_X,CURSOR_UNDER_Y,CURSOR_UNDER_VALID),(2,3,true));
+   assert_eq!(APP_PRESENT_BITS,7);let cursor=PREPARED_CURSOR.unwrap();assert_eq!((cursor.x,cursor.y,cursor.seq,cursor.shell_tick),(4,5,6,7));
+   assert_eq!(RENDER_FRAME_COUNTER.load(Ordering::Relaxed),42);assert_eq!(SURFACES[0].text_len,0);assert!(TEXT_STAGES[0].needs_publication());
+   assert!(!EVENTS.iter().any(|v|v=="restore"||v=="launcher"||v=="cursor-raster"||v=="begin"||v.ends_with("-effect")||v.starts_with("civil:")||v.starts_with("timing:")));
+   assert!(!RENDER_SCENE.is_valid());
+  }
+  assert_eq!(h.front(),old);assert_eq!(h.scanout,device);
+  if mode==5{assert!(receipt.is_none());assert_eq!(h.generation(),1);unsafe{assert_eq!(PUBLICATIONS,0);}}
+  else{let receipt=receipt.unwrap();assert!(receipt.plan.settle_only());assert_eq!(receipt.present_bits,0);assert_eq!(receipt.text_projections[0].unwrap().coverage,scene::TextCoverage::NoPixels);assert_eq!(h.generation(),2);}
+ }
+}
+#[test]fn no_front_settle_uses_full_bootstrap_instead_of_an_uninitialized_identity(){
+ let _single=LOCK.lock().unwrap();let mut h=Harness::new();let plan=Plan{content:Content::Settle,strip:false};h.setup(plan,0);let receipt=h.call(plan).unwrap();assert!(receipt.plan.is_full());assert_eq!(h.generation(),1);unsafe{assert_eq!((RASTERS,CURSORS,PUBLICATIONS),(1,1,1));}
+}
+#[test]fn actual_text_join_derives_visible_damage_no_pixels_and_tiny_full_fallback(){
+ let _single=LOCK.lock().unwrap();let h=Harness::new();h.setup(Plan::full(),0);
+ unsafe{
+  SURFACES[0]=Surface{active:true,owner_pd:9,surface_id:156,x:0,y:40,w:19,h:53,color:0x1234,..SURFACE_EMPTY};
+  TEXT_STAGES[0].receive(9,90,156,text_batch::Request::Begin{sequence:1,len:1,color:0xff123456});
+  TEXT_STAGES[0].receive(9,90,156,text_batch::Request::Chunk{sequence:1,offset:0,count:1,bytes:[b'x',0,0,0,0,0,0,0]});
+  TEXT_STAGES[0].receive(9,90,156,text_batch::Request::Commit{sequence:1,hash:text_batch::hash(b"x")}).unwrap();
+ }
+ let mut visible=Dirty::new(W,H);join_pending_text(&mut visible,W,H);assert_eq!(visible.plan(W,H),Plan{content:Content::Damage(damage::Rect{x:0,y:52,right:19,bottom:53}),strip:false});
+ unsafe{SURFACES[0].x=1000;SURFACES[0].y=1000;}
+ let mut hidden=Dirty::new(W,H);join_pending_text(&mut hidden,W,H);assert!(hidden.plan(W,H).settle_only());
+ let mut tiny=Dirty::new(W,50);join_pending_text(&mut tiny,W,50);assert!(tiny.plan(W,50).is_full());
+ unsafe{assert_eq!(SURFACES[0].text_len,0);assert!(TEXT_STAGES[0].needs_publication());}
 }

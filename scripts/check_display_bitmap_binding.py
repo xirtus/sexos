@@ -81,8 +81,11 @@ def wiring(source):
                       '[display.text.committed]', '[display.browser.text.committed]'):
         if forbidden in text_dispatch:raise ValueError('typed intake changes canonical text or completion: '+forbidden)
     commit=function(source,'commit_published_text');canonical=compact(commit)
-    commit_order=['for(index,context)incontexts.iter().copied().enumerate()',
-                  'letSome(context)=contextelse{continue;};',
+    commit_order=['for(index,projection)inpublished.text_projections.iter().copied().enumerate()',
+                  'letSome(projection)=projectionelse{continue;};',
+                  'ifletscene::TextCoverage::Body(required)=projection.coverage{',
+                  'if!published.plan.covers_body(required){continue;}',
+                  'letcontext=projection.context;',
                   'letstage=&mutTEXT_STAGES[index];',
                   'letSome(pending)=stage.pending()else{continue;};',
                   'ifpending.context()!=context{continue;}',
@@ -107,18 +110,34 @@ def wiring(source):
     publication_order=['SceneLease::capture(w,h,bar)', 'letscene=lease.view();',
                        'raster_batch(&target,scene,plan)',
                        'preparation.commit(|pixels|publish_frame(fb,w,h,pixels))',
-                       'lettext_contexts=scene.text_contexts;',
-                       'Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})']
+                       'lettext_projections=scene.text_projections;',
+                       'Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})']
     publication_positions=[publication.index(value)for value in publication_order]
     if publication_positions!=sorted(publication_positions):raise ValueError('captured text context/publication flow changed')
     require(prepared,'if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return None;}','failed CPU publication withholds captured completion')
     require(source,'destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h)','actual Stage inputs to owned scene')
     finish=function(source,'finish_display_transactions');settlement=compact(finish)
     settlement_order=['ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}',
-                      'ifletSome(published)=published.filter(|frame|frame.plan.is_full()){',
-                      'lettext=commit_published_text(&published.text_contexts);']
+                      'ifletSome(published)=published{',
+                      'lettext=commit_published_text(published);']
     settlement_positions=[settlement.index(value)for value in settlement_order]
-    if settlement_positions!=sorted(settlement_positions):raise ValueError('canonical text commit escapes Scene/Full fence')
+    if settlement_positions!=sorted(settlement_positions):raise ValueError('covered canonical text commit escapes Scene/publication fence')
+    require(finish,'let bitmap=if published.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0};','bitmap settlement remains Full-only')
+    require(finish,'if published.plan.is_full(){lifecycle.pixels_presented(published.present_bits);for index in 0..surface_lifecycle::CATALOG_CAPACITY {if lifecycle.scene_committed(index) {','lifecycle visibility/cleanup remains Full-only')
+    require(finish,'"[display.typed.released] text={} bitmap={} full={} scene_released=1 publication=1 pixels=unconfirmed",text,bitmap,published.plan.is_full() as u8','actual publication kind diagnostic')
+    require(source,'text_projections:[Option<scene::TextProjection>;MAX_SURFACES]','captured context and coverage receipt')
+    requirement=function(source,'text_projection_requirement')
+    require(requirement,'required.add(text_surface_damage(old,w,h),w,h);required.add(text_surface_damage(new,w,h),w,h);','old and new clipped text damage union')
+    require(requirement,'old.text_buf==new.text_buf&&old.text_len==new.text_len&&old.text_color==new.text_color&&(old.selection_start,old.selection_end)==(new.selection_start,new.selection_end)&&old.line_starts==new.line_starts&&old.cell_starts==new.cell_starts&&old.line_cells==new.line_cells&&old.cell_count==new.cell_count&&old.line_count==new.line_count&&old.wrap_cols==new.wrap_cols','actual payload, selection and derived layout comparison')
+    join=function(source,'join_pending_text')
+    require(join,'let Some(pending)=stage.pending()else{continue;};','sealed-only pending requirement')
+    require(join,'if h<51{paint.request_full();continue;}','tiny geometry Full promotion')
+    require(join,'if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED||ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED{paint.request_area();continue;}','atlas body coverage promotion')
+    require(join,'let original=&SURFACES[index];let mut candidate=*original;','private temporary projection')
+    require(join,'if !apply_pending_text(&mut candidate,&pending){paint.request_full();continue;}','invalid candidate fail closed')
+    require(join,'match text_projection_requirement(original,&candidate,w,h){scene::TextCoverage::NoPixels=>paint.request_settle(),scene::TextCoverage::Body(rect)=>paint.request_damage(rect,w,h),}','explicit no-pixel settlement and body requirement')
+    require(start,'let transaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));','bitmap and lifecycle Full obligation')
+    require(start,'if needs_top_strip_redraw{pending_paint.request_strip();}if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}let plan=pending_paint.plan(w,h);','pending projection joins after drain flags before final plan')
     if source.count('commit_published_text(')!=2:raise ValueError('canonical text commit has unexpected entrypoint')
     handoff=compact(start)
     handoff_start=handoff.index('letpublished=iffb_live&&!plan.is_empty(){')
@@ -301,10 +320,12 @@ def check(root,out,main,binding,tests):
               ('context.owner(),context.task(),context.surface(),context.sequence(),len,','context.owner(),context.owner(),context.surface(),context.sequence(),len,'),
               ('sex_pdx::text_batch::hash(&slot.text_buf[..len]),changed as u8','0,changed as u8'),
               ('if pending.context()!=context{continue;}',''),
-              ('published.filter(|frame|frame.plan.is_full())','published'),
+              ('if published.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0}','unsafe{BITMAP_STORES.release_after_publication()}'),
               ('if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}',''),
-              ('let text_contexts=scene.text_contexts;','let text_contexts=[None;MAX_SURFACES];'),
-              ('pending_paint.complete(published.is_some());','pending_paint.complete(published.is_some());let _=sex_pdx::pdx_try_listen_raw(0);'))
+              ('let text_projections=scene.text_projections;','let text_projections=[None;MAX_SURFACES];'),
+              ('pending_paint.complete(published.is_some());','pending_paint.complete(published.is_some());let _=sex_pdx::pdx_try_listen_raw(0);'),
+              ('if !published.plan.covers_body(required){continue;}',''),
+              ('if !published.plan.covers_body(required){continue;}','if !true{continue;}'))
     for old,new in controls:
         changed=once(main_source,old,new)
         try:wiring(changed)
@@ -332,7 +353,7 @@ def check(root,out,main,binding,tests):
         changed=once(main_source,old,new)
         compile_run(out,name,text_fixture(root,binding,changed),exact=control,reject=True)
     result=dict(ok=True,metadata_tests=5,actual_live_helper_tests=3,compiled_binding_mutants_rejected=2,actual_browser_text_guard_tests=5,compiled_text_guard_mutants_rejected=3,
-                wiring_controls_rejected=len(controls),text_commit_wiring='sealed_candidate_owned_scene_successful_Full_then_canonical_commit_and_exact_release',scope='actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels')
+                wiring_controls_rejected=len(controls),text_commit_wiring='sealed_candidate_owned_scene_covered_publication_then_canonical_commit_and_exact_release_bitmap_lifecycle_Full_only',scope='actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels')
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 
 

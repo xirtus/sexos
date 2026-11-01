@@ -344,8 +344,12 @@ const ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED:bool=false;
 static mut FOCUSED_SURFACE_ID:u64=0;
 static mut DAMAGE_ORDER:Vec<&str>=Vec::new();
 fn bg(_:usize,_:usize)->u32{0x123}
-fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER.push("restore");}}
-fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");}}
+// Cursor save-under is a declared callback boundary in this pixel fixture.
+// Its sentinel catches entry during pure Settle; actual Main cursor storage and
+// publication effects are tested separately by the frame-output/scene gates.
+static mut CURSOR_UNDERLAY_SENTINEL:[u32;4]=[0;4];
+fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
+fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");CURSOR_UNDERLAY_SENTINEL[1]=0;}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
@@ -886,7 +890,7 @@ fn paint_output_batch(fb:*mut u32,w:usize,h:usize,plan:Plan){unsafe{
  let mut preparation=store.prepare(plan.is_full()).unwrap();
  {let target=preparation.target();assert!(raster_batch(&target,&captured,plan));}
  assert!(preparation.commit(|pixels|{core::ptr::copy_nonoverlapping(pixels.as_ptr(),fb,pixels.len());true}));
- report_app_presented();
+ if !plan.settle_only(){report_app_presented();}
  store.scrub();
  // Store drops before OutputBoundary deallocates its mapped lifetime.
 }}
@@ -1059,4 +1063,67 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   assert_eq!(composite_pixel(child.x as usize+8,child.y as usize+12,400,300,0xabcdef,focus,&snapshot),0xabcdef);
  }
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+}}
+
+
+#[test]fn identity_settle_preserves_baseline_pixels_and_bypasses_cursor_underlay_and_overlays(){unsafe{
+ let(w,h)=(320,240);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();FOCUSED_SURFACE_ID=0;
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:130,text_len:4,text_color:0xfffafafa,..surf(15,300)};
+ SURFACES[0].text_buf[..4].copy_from_slice(b"same");recompute_text_lines(&mut SURFACES[0]);
+ seal_pending_text(0,15,1,b"same",(0,0));let candidate=capture_scene(w,h,0);
+ assert_eq!(candidate.text_projections[0].unwrap().coverage,scene::TextCoverage::NoPixels);
+ // Arbitrary existing pixels include a retained cursor-shaped patch and its
+ // independently retained callback underlay, rather than a freshly rendered
+ // expected scene. Identity publication must not change any of these values.
+ let mut pixels:Vec<_>=(0..w*h).map(|i|0xff000000|((i as u32).wrapping_mul(0x12345)&0xffffff)).collect();
+ for y in 100..116{pixels[y*w+80]=0xffffffff;}let baseline=pixels.clone();
+ CURSOR_UNDERLAY_SENTINEL=[0x123456,0xabcdef,0x876543,0x102030];let underlay=CURSOR_UNDERLAY_SENTINEL;
+ let bits=APP_PRESENT_BITS;let frame=RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
+ DAMAGE_ORDER.clear();ATLAS_CALLS=0;
+ paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Settle,strip:false});
+ assert_eq!(pixels,baseline);assert_eq!(CURSOR_UNDERLAY_SENTINEL,underlay);
+ assert!(DAMAGE_ORDER.is_empty());assert_eq!(ATLAS_CALLS,0);assert_eq!(APP_PRESENT_BITS,bits);
+ assert_eq!(RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed),frame);
+ assert!(TEXT_STAGES[0].needs_publication());
+ // Combining the same candidate with real strip work must retain the ordinary
+ // cursor/overlay tail. Settle cannot suppress another output obligation.
+ let body=pixels[51*w..].to_vec();DAMAGE_ORDER.clear();
+ paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Settle,strip:true});
+ assert_eq!(&pixels[51*w..],body.as_slice());assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+}}
+
+#[test]fn pending_text_coverage_damage_matches_independent_pixels_for_shorter_empty_growing_and_selection_updates(){unsafe{
+ let(w,h)=(320,240);
+ let cases:[(&[u8],(u16,u16),&[u8],(usize,usize));4]=[
+  (b"AB\nCD\nEF",(0,8),b"Z",(0,0)),
+  (b"AB\nCD\nEF",(0,0),b"",(0,0)),
+  (b"",(0,0),b"AB\nCD\nEF",(0,8)),
+  (b"A X",(0,3),b"A X",(0,0))];
+ for focus in[0,300]{for(old,selection,new,new_selection)in cases{
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();FOCUSED_SURFACE_ID=focus;
+  SURFACES[0]=Surface{x:20,y:70,w:128,h:130,text_len:old.len()as u16,text_color:0xfffafafa,selection_start:selection.0,selection_end:selection.1,..surf(15,300)};
+  SURFACES[0].text_buf[..old.len()].copy_from_slice(old);recompute_text_lines(&mut SURFACES[0]);let canonical=SURFACES[0];
+  let mut pixels:Vec<_>=(0..h).flat_map(|y|(0..w).map(move|x|(x,y))).map(|(x,y)|legacy_reference_pixel(x,y,w,h,focus)).collect();let before=pixels.clone();
+  // Construct the independent expected replacement directly. Neither expected
+  // pixels nor expected geometry use apply_pending_text/coverage requirements.
+  let mut expected_surface=canonical;expected_surface.text_buf.fill(0);expected_surface.text_buf[..new.len()].copy_from_slice(new);
+  expected_surface.text_len=new.len()as u16;expected_surface.selection_start=new_selection.0 as u16;expected_surface.selection_end=new_selection.1 as u16;recompute_text_lines(&mut expected_surface);
+  SURFACES[0]=expected_surface;
+  let expected:Vec<_>=(0..h).flat_map(|y|(0..w).map(move|x|(x,y))).map(|(x,y)|legacy_reference_pixel(x,y,w,h,focus)).collect();
+  SURFACES[0]=canonical;seal_pending_text(0,15,1,new,new_selection);
+  let candidate=capture_scene(w,h,focus);let projection=candidate.text_projections[0].unwrap();
+  let scene::TextCoverage::Body(required)=projection.coverage else{panic!("changed text did not retain body obligation");};
+  assert!(required.right-required.x<=128);assert!(required.bottom-required.y<=27);
+  DAMAGE_ORDER.clear();paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Damage(required),strip:false});
+  assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
+  assert_eq!(pixels,expected,"focus={focus} old={old:?} new={new:?}");
+  let changed=pixels.iter().zip(&before).filter(|(a,b)|a!=b).count();assert!(changed>0);
+  // A literal formerly occupied third row must erase on short/empty updates;
+  // the replacement's rectangle alone cannot establish this result.
+  if old==b"AB\nCD\nEF"{assert!(before[100*w..109*w].iter().any(|&p|p==0xfffafafa));assert!(pixels[100*w..109*w].iter().all(|&p|p!=0xfffafafa));}
+  for y in 0..h{for x in 0..w{if x<required.x||x>=required.right||y<required.y||y>=required.bottom{assert_eq!(pixels[y*w+x],before[y*w+x]);}}}
+  assert_eq!(SURFACES[0].text_buf,canonical.text_buf);assert_eq!(SURFACES[0].text_len,canonical.text_len);assert!(TEXT_STAGES[0].needs_publication());
+ }}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();FOCUSED_SURFACE_ID=0;
 }}

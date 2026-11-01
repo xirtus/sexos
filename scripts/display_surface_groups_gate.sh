@@ -13,7 +13,7 @@ for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
 parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H|BAR_BG_W_CAP|FOCUS_SURFACE_COLOR|TAB_ACTIVE_COLOR|TAB_INACTIVE_COLOR)[^\n]+',s,re.M)
 a=s.index('#[derive(Clone, Copy)]\n#[repr(C)]\nstruct RenderTokensV1');b=s.index('\nstatic mut DISPLAY_TOKENS:',a)
 parts.append(s[a:b])
-for name in ['scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+for name in ['scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
  part=s[a:i]
@@ -38,6 +38,10 @@ assert prepared.count('SceneLease::capture(')==1 and prepared.count('preparation
 assert 'store.prepare(plan.is_full())' in prepared and 'raster_batch(&target,scene,plan)' in prepared
 assert prepared.index('SceneLease::capture(')<prepared.index('raster_batch(')<prepared.index('preparation.commit(')<prepared.index('report_app_presented();')
 batch=re.sub(r'\s+','',function('raster_batch'))
+assert 'ifplan.settle_only(){returntrue;}' in batch
+assert batch.index('ifplan.settle_only(){returntrue;}')<batch.index('restore_cursor_under(')
+assert 'if!settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}' in prepared
+assert 'if!settle_only{record_cursor_presented();report_app_presented();' in prepared
 assert batch.count('restore_cursor_under(')==1 and batch.count('draw_cursor_z_top(')==1 and batch.count('draw_launcher_panel(')==1
 assert batch.index('restore_cursor_under(')<batch.index('raster_damage(')<batch.index('raster_strip(')<batch.index('draw_launcher_panel(')<batch.index('draw_cursor_z_top(')
 assert 'draw_cursor_z_top(fb,w,h,total,true,scene);'in batch

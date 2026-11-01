@@ -55,7 +55,7 @@ fn capture(scene:&mut SceneSnapshot,surfaces:&[Surface;MAX_SURFACES],groups:&Fra
 }
 fn assert_scrubbed(scene:&SceneSnapshot){
  assert!(!scene.is_valid());assert_eq!((scene.focus,scene.frame,scene.width,scene.height),(0,0,0,0));assert!(scene.blur_rows.iter().all(|row|*row==0));
- assert!(scene.text_contexts.iter().all(Option::is_none));
+ assert!(scene.text_projections.iter().all(Option::is_none));
  assert!(scene.bitmaps.pixels_scrubbed());
  for s in &scene.surfaces{
   assert!(!s.active);assert_eq!((s.owner_pd,s.surface_id,s.text_len,s.selection_start,s.selection_end,s.cell_count,s.line_count),(0,0,0,0,0,0,0));
@@ -164,11 +164,11 @@ fn scrub_cursor_under(){boundary::cursor();}
 // then construct the descriptive receipt. No device write/native success is
 // claimed; the actual prepared-output pipeline has its own registered tests.
 fn rendered_receipt(plan:Plan,present_bits:u64,bar:&SilkBar)->Option<PublishedFrame>{
- let fail=boundary::rendering();let text_contexts={
+ let fail=boundary::rendering();let text_projections={
   let lease=SceneLease::capture(1024,768,bar)?;assert!(lease.view().is_valid());if fail{return None;}
-  lease.view().text_contexts
+  lease.view().text_projections
  };
- scene_scrubbed();Some(PublishedFrame{plan,present_bits,canon_ss:0,text_contexts})
+ scene_scrubbed();Some(PublishedFrame{plan,present_bits,canon_ss:0,text_projections})
 }
 
 fn reset_host_inputs(){
@@ -280,9 +280,9 @@ fn typed_bitmap_clear(sequence:u32){unsafe{assert!(BITMAP_STORES.receive(15,150,
 }
 #[test]fn actual_typed_completions_wait_for_full_scene_release_then_retry_independently(){
  let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();unsafe{assert!(BITMAP_STORES.initialize_once(bind(15,150)));}
- unsafe{SURFACES[0]=Surface{owner_pd:9,surface_id:156,active:true,w:200,h:100,..SURFACE_EMPTY};}
+ unsafe{SURFACES[0]=Surface{owner_pd:9,surface_id:156,active:true,y:100,w:200,h:100,..SURFACE_EMPTY};}
  typed_text(0,9,90,156,7,b"same admitted text");typed_bitmap_clear(11);assert!(typed_completion_needs_publication());no_applied();
- finish_display_transactions(&mut lifecycle,None);no_applied();let partial=rendered_receipt(Plan{content:Content::Area,strip:true},0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&partial));no_applied();assert!(typed_completion_needs_publication());
+ finish_display_transactions(&mut lifecycle,None);no_applied();let partial=rendered_receipt(Plan{content:Content::Cursor,strip:false},0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&partial));no_applied();assert!(typed_completion_needs_publication());
  boundary::fail_render(true);let failed=rendered_receipt(Plan::full(),0,&bar);assert!(failed.is_none());finish_display_transactions(&mut lifecycle,failed.as_ref());no_applied();boundary::fail_render(false);unsafe{assert_eq!(SURFACES[0].text_len,0);assert!(SURFACES[0].text_buf.iter().all(|b|*b==0));}
  let full=rendered_receipt(Plan::full(),0,&bar).unwrap();let lease=SceneLease::capture(1024,768,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&full));no_applied();assert!(typed_completion_needs_publication());drop(lease);scene_scrubbed();
  finish_display_transactions(&mut lifecycle,Some(&full));assert!(!typed_completion_needs_publication());unsafe{assert_eq!(&SURFACES[0].text_buf[..18],b"same admitted text");assert_eq!(SURFACES[0].text_len,18);}let renders=boundary::get().renders;let expected=[(9,text_batch::Applied{surface:156,sequence:7}.encode().unwrap()),(15,bitmap_batch::Applied{surface:300,sequence:11}.encode().unwrap())];
@@ -305,7 +305,7 @@ fn capture_pending(scene:&mut SceneSnapshot,surfaces:&[Surface;MAX_SURFACES],tex
  scene.capture(surfaces,&FrameGroups::new(),&Set::UNBOUND,texts,&silkbar_model::DEFAULT_SILK_BAR,DEFAULT_RENDER_TOKENS,0,23,1024,768)
 }
 fn text_surface(owner:u32,sid:u64)->Surface{
- let mut s=Surface{owner_pd:owner,surface_id:sid,active:true,w:200,h:100,text_len:3,..SURFACE_EMPTY};s.text_buf[..3].copy_from_slice(b"old");s
+ let mut s=Surface{owner_pd:owner,surface_id:sid,active:true,y:100,w:200,h:100,text_len:3,..SURFACE_EMPTY};s.text_buf[..3].copy_from_slice(b"old");s
 }
 #[test]fn pending_text_projection_owns_utf8_selection_layout_without_canonical_mutation(){
  let mut surfaces=[SURFACE_EMPTY;MAX_SURFACES];surfaces[0]=text_surface(9,156);
@@ -314,16 +314,16 @@ fn text_surface(owner:u32,sid:u64)->Surface{
  assert_eq!(&surfaces[0].text_buf[..3],b"old");assert_eq!(surfaces[0].text_len,3);assert_eq!(surfaces[0].cell_count,0);
  let s=&scene.surfaces[0];assert_eq!(&s.text_buf[..6],"éA\nß".as_bytes());assert_eq!(s.text_len,6);assert!(s.text_buf[6..].iter().all(|b|*b==0));assert_eq!((s.selection_start,s.selection_end),(0,3));assert_eq!(s.text_color,0xff123456);
  assert_eq!((s.cell_count,s.line_count,s.wrap_cols),(4,2,30));assert_eq!(&s.cell_starts[..4],&[0,2,3,4]);assert_eq!(&s.line_starts[..2],&[0,4]);assert_eq!(&s.line_cells[..2],&[0,3]);
- let c=scene.text_contexts[0].unwrap();assert_eq!((c.owner(),c.task(),c.surface(),c.sequence()),(9,90,156,7));assert!(scene.text_contexts[1..].iter().all(Option::is_none));
- texts[0].reset();surfaces[0].text_buf.fill(b'X');assert_eq!(&scene.surfaces[0].text_buf[..6],"éA\nß".as_bytes());assert_eq!(scene.text_contexts[0],Some(c));scene.scrub();assert_scrubbed(&scene);
+ let projection=scene.text_projections[0].unwrap();let c=projection.context;assert_eq!((c.owner(),c.task(),c.surface(),c.sequence()),(9,90,156,7));assert!(scene.text_projections[1..].iter().all(Option::is_none));
+ texts[0].reset();surfaces[0].text_buf.fill(b'X');assert_eq!(&scene.surfaces[0].text_buf[..6],"éA\nß".as_bytes());assert_eq!(scene.text_projections[0],Some(projection));scene.scrub();assert_scrubbed(&scene);
 }
 #[test]fn pending_text_projection_covers_first_and_last_slots_in_one_owned_scene(){
  let mut surfaces=[SURFACE_EMPTY;MAX_SURFACES];let mut texts=[text_transaction::Stage::EMPTY;MAX_SURFACES];let last=MAX_SURFACES-1;
  for(index,owner,task,sid,bytes)in[(0,9,90,156,&b"first"[..]),(last,15,150,300,&b"last"[..])]{surfaces[index]=text_surface(owner,sid);pending_text(&mut texts[index],owner,task,sid,11+index as u32,bytes,(0,0));}
- let mut scene=SceneSnapshot::EMPTY;assert!(capture_pending(&mut scene,&surfaces,&texts));assert_eq!(&scene.surfaces[0].text_buf[..5],b"first");assert_eq!(&scene.surfaces[last].text_buf[..4],b"last");assert_eq!(scene.text_contexts.iter().flatten().count(),2);
- for index in[0,last]{assert_eq!(scene.text_contexts[index],Some(texts[index].pending().unwrap().context()));assert_eq!(&surfaces[index].text_buf[..3],b"old");texts[index].poll_reply(|_,_|panic!("capture is not publication"));}
+ let mut scene=SceneSnapshot::EMPTY;assert!(capture_pending(&mut scene,&surfaces,&texts));assert_eq!(&scene.surfaces[0].text_buf[..5],b"first");assert_eq!(&scene.surfaces[last].text_buf[..4],b"last");assert_eq!(scene.text_projections.iter().flatten().count(),2);
+ for index in[0,last]{assert_eq!(scene.text_projections[index].unwrap().context,texts[index].pending().unwrap().context());assert_eq!(&surfaces[index].text_buf[..3],b"old");texts[index].poll_reply(|_,_|panic!("capture is not publication"));}
  // Equal canonical bytes still need a context and publication, not a changed-only result.
- surfaces[0]=scene.surfaces[0];assert!(capture_pending(&mut scene,&surfaces,&texts));assert!(scene.text_contexts[0].is_some());
+ surfaces[0]=scene.surfaces[0];assert!(capture_pending(&mut scene,&surfaces,&texts));assert!(scene.text_projections[0].is_some());
 }
 #[test]fn unmatched_pending_text_fails_closed_and_scrubs_prior_and_partial_projection(){
  for mismatch in 0..4{
@@ -339,7 +339,7 @@ fn text_surface(owner:u32,sid:u64)->Surface{
   let mut surfaces=[SURFACE_EMPTY;MAX_SURFACES];surfaces[0]=text_surface(9,156);let mut texts=[text_transaction::Stage::EMPTY;MAX_SURFACES];pending_text(&mut texts[0],9,90,156,7,b"candidate",(0,0));
   texts[0].retire(9,9);assert!(texts[0].pending().is_some());
   match cancel{0=>texts[0].reset(),1=>texts[0].retire(9,90),_=>{let context=texts[0].pending().unwrap().context();assert!(texts[0].release_matching(context));}}
-  assert!(texts[0].pending().is_none());let mut scene=SceneSnapshot::EMPTY;assert!(capture_pending(&mut scene,&surfaces,&texts));assert!(scene.text_contexts.iter().all(Option::is_none));assert_eq!(&scene.surfaces[0].text_buf[..3],b"old");
+  assert!(texts[0].pending().is_none());let mut scene=SceneSnapshot::EMPTY;assert!(capture_pending(&mut scene,&surfaces,&texts));assert!(scene.text_projections.iter().all(Option::is_none));assert_eq!(&scene.surfaces[0].text_buf[..3],b"old");
  }
 }
 
@@ -351,7 +351,8 @@ fn text_surface(owner:u32,sid:u64)->Surface{
   let expected:&[u8]=if case<3{
    let mut other=text_transaction::Stage::EMPTY;pending_text(&mut other,9,if case==0{91}else{90},156,if case==1{8}else{7},b"foreign",(0,0));
    let context=other.pending().unwrap().context();
-   if case==2{stale.text_contexts[0]=None;stale.text_contexts[1]=Some(context);}else{stale.text_contexts[0]=Some(context);}
+   let mut projection=stale.text_projections[0].unwrap();projection.context=context;
+   if case==2{stale.text_projections[0]=None;stale.text_projections[1]=Some(projection);}else{stale.text_projections[0]=Some(projection);}
    b"candidate"
   }else{
    unsafe{if case==3{TEXT_STAGES[0].reset();}else{TEXT_STAGES[0].retire(9,90);}}
@@ -365,4 +366,38 @@ fn text_surface(owner:u32,sid:u64)->Surface{
   unsafe{assert_eq!(SURFACES[0].text_len as usize,expected.len());assert_eq!(&SURFACES[0].text_buf[..expected.len()],expected);assert!(TEXT_STAGES[0].pending().is_none());}
   let mut replies=0;typed_poll(|owner,word|{assert_eq!((owner,word),(9,text_batch::Applied{surface:156,sequence:if case<3{7}else{8}}.encode().unwrap()));replies+=1;0});assert_eq!(replies,1);
  }
+}
+
+#[test]fn actual_partial_text_publication_covers_shortened_old_bounds_before_commit(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();
+ for(original,replacement)in[(&b"a\nb\nc\nd\ne\nf"[..],&b"x"[..]),(&b"a\nb\nc\nd\ne\nf"[..],&b""[..]),(&b"x"[..],&b"a\nb\nc\nd\ne\nf"[..])]{
+  reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();
+  unsafe{SURFACES[0]=Surface{owner_pd:9,surface_id:156,active:true,x:20,y:100,w:200,h:100,text_len:original.len()as u16,text_color:0x123456,..SURFACE_EMPTY};SURFACES[0].text_buf[..original.len()].copy_from_slice(original);recompute_text_lines(&mut SURFACES[0]);}
+  typed_text(0,9,90,156,41,replacement);
+  // One-row-only damage misses either the old erased rows or the new grown rows.
+  let insufficient=rendered_receipt(Plan{content:Content::Damage(damage::Rect{x:20,y:112,right:220,bottom:121}),strip:false},0,&bar).unwrap();
+  assert_eq!(insufficient.text_projections[0].unwrap().coverage,scene::TextCoverage::Body(damage::Rect{x:20,y:112,right:220,bottom:166}));
+  finish_display_transactions(&mut lifecycle,Some(&insufficient));no_applied();
+  unsafe{assert_eq!(&SURFACES[0].text_buf[..original.len()],original);assert!(TEXT_STAGES[0].needs_publication());}
+  let complete=rendered_receipt(Plan{content:Content::Damage(damage::Rect{x:20,y:112,right:220,bottom:166}),strip:false},0,&bar).unwrap();
+  finish_display_transactions(&mut lifecycle,Some(&complete));
+  unsafe{assert_eq!(SURFACES[0].text_len as usize,replacement.len());assert_eq!(&SURFACES[0].text_buf[..replacement.len()],replacement);assert!(SURFACES[0].text_buf[replacement.len()..].iter().all(|b|*b==0));}
+  let mut replies=0;typed_poll(|owner,word|{assert_eq!((owner,word),(9,text_batch::Applied{surface:156,sequence:41}.encode().unwrap()));replies+=1;0});assert_eq!(replies,1);
+ }
+}
+
+#[test]fn actual_settle_requires_explicit_matching_no_pixels_projection_and_keeps_bitmap_pending(){
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let bar=silkbar_model::DEFAULT_SILK_BAR;let mut lifecycle=surface_lifecycle::Lifecycle::new();
+ unsafe{SURFACES[0]=text_surface(9,156);SURFACES[0].text_color=0x123456;recompute_text_lines(&mut SURFACES[0]);assert!(BITMAP_STORES.initialize_once(bind(15,150)));}
+ typed_text(0,9,90,156,51,b"old");typed_bitmap_clear(61);
+ let plan=Plan{content:Content::Settle,strip:false};
+ let mut absent=rendered_receipt(plan,0,&bar).unwrap();assert_eq!(absent.text_projections[0].unwrap().coverage,scene::TextCoverage::NoPixels);absent.text_projections[0]=None;
+ finish_display_transactions(&mut lifecycle,Some(&absent));no_applied();unsafe{assert!(TEXT_STAGES[0].needs_publication());}
+ let mut crossed=rendered_receipt(plan,0,&bar).unwrap();let mut other=text_transaction::Stage::EMPTY;pending_text(&mut other,9,91,156,51,b"old",(0,0));crossed.text_projections[0].as_mut().unwrap().context=other.pending().unwrap().context();
+ finish_display_transactions(&mut lifecycle,Some(&crossed));no_applied();unsafe{assert!(TEXT_STAGES[0].needs_publication());}
+ let exact=rendered_receipt(plan,0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&exact));
+ unsafe{assert!(!TEXT_STAGES[0].needs_publication());assert_eq!(SURFACES[0].text_len,3);assert_eq!(&SURFACES[0].text_buf[..3],b"old");}
+ let mut replies=Vec::new();typed_poll(|owner,word|{replies.push((owner,word));0});assert_eq!(replies,[(9,text_batch::Applied{surface:156,sequence:51}.encode().unwrap())]);
+ assert!(typed_completion_needs_publication());no_applied();
+ let full=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&full));let mut bitmap_replies=Vec::new();typed_poll(|owner,word|{bitmap_replies.push((owner,word));0});assert_eq!(bitmap_replies,[(15,bitmap_batch::Applied{surface:300,sequence:61}.encode().unwrap())]);assert!(!typed_completion_needs_publication());
 }

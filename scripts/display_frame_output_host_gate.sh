@@ -33,8 +33,8 @@ def source_contract(text):
     assert c.index('preparation.commit(')<c.index('record_cursor_presented();')<c.index('report_app_presented();')<c.index('civil_clock_drawn(')
     assert 'ifplan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}'in c
     assert not any(x in c for x in ['drop(lease)','mem::forget','ManuallyDrop'])
-    assert 'Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})'in c
-    assert 'lettext_contexts=scene.text_contexts;'in c and c.index('preparation.commit(')<c.index('lettext_contexts=scene.text_contexts;'),'receipt copies captured metadata only after successful output'
+    assert 'Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})'in c
+    assert 'lettext_projections=scene.text_projections;'in c and c.index('preparation.commit(')<c.index('lettext_projections=scene.text_projections;'),'receipt copies captured metadata only after successful output'
     for name in ['raster_full','raster_strip','raster_area','raster_damage']:
         b=fn(text,name)
         assert "target: &frame_output::Target<'_>"in b and 'scene: &scene::SceneSnapshot'in b and 'let fb=target.pointer();'in b
@@ -52,7 +52,8 @@ def source_contract(text):
     assert startup.index('let mut pending_paint=')<service and 'Dirty::new('not in startup[service:],'pending state must survive service iterations'
     assert startup.count('let mut pending_paint=paint_batch::Dirty::new(')==1 and startup.index('let mut pending_paint=')<startup.index('for _drain_i')
     assert 'pending_paint.complete(published.is_some());'in startup and startup.index('render_prepared(')<startup.index('pending_paint.complete(')<startup.index('finish_display_transactions(&mut lifecycle,published.as_ref())')
-    assert 'lettransaction_full_render=typed_completion_needs_publication()||lifecycle.needs_presentation()'in compact(startup),'typed completions force Full independently of damage'
+    assert 'lettransaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()'in compact(startup),'bitmap/lifecycle force Full'
+    assert 'iftyped_completion_needs_publication(){join_pending_text(&mutpending_paint,w,h);}'in compact(startup),'captured text work derives before plan'
     primary=block(startup,'0x11 => {');assert 'needs_full_redraw=true;'in compact(primary) and 'primary_receipt_pending=true;'in compact(primary)
     assert 'letframe_backing=sex_pdx::display_frame_backing(frame_layout)'in compact(startup) and startup.index('sex_pdx::display_frame_backing(frame_layout)')<startup.index('FRAME_OUTPUT=Some(')<startup.index('render(FB_PTR')
     assert 'assert!(FRAME_OUTPUT.is_none(),"DISPLAY_FRAME_ALREADY_INITIALIZED")'in startup
@@ -60,16 +61,19 @@ def source_contract(text):
     store=(root/'servers/sexdisplay/src/frame_output.rs').read_text();assert 'self.erase(0);self.erase(1);'in fn(store,'scrub')
     finish=compact(fn(text,'finish_display_transactions'));assert 'render('not in finish and 'render_prepared('not in finish and 'APP_PRESENT_BITS'not in finish
     assert 'lifecycle.pixels_presented(published.present_bits)'in finish
-    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack(')
+    assert 'ifpublished.plan.is_full(){lifecycle.pixels_presented(published.present_bits);'in finish and finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack(')
     assert 'ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}'in finish
-    assert finish.index('published.filter(|frame|frame.plan.is_full())')<finish.index('commit_published_text(&published.text_contexts)')<finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'typed release requires the same successful Full and dropped scene'
+    assert 'commit_published_text(published)'in finish and 'letbitmap=ifpublished.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0};'in finish,'covered text and Full-only bitmap under scene fence'
+    assert 'if!published.plan.covers_body(required){continue;}'in compact(fn(text,'commit_published_text'))
+    assert 'if!settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}'in c and 'if!settle_only{record_cursor_presented();report_app_presented();'in c,'Settle withholds cursor/app effects'
+    assert batch.index('ifplan.settle_only(){returntrue;}')<batch.index('restore_cursor_under('),'Settle identity before overlays'
     # All physical FB_PTR conversions must be the startup wrapper, single batch
     # publisher, or the separate offscreen proof's unused pointer parameter.
     for line in text.splitlines():
         if re.search(r'FB_PTR\s+as\s+\*(?:mut|const)\s+u32',line):assert any(x in line for x in ['render(','render_prepared(','top_strip_render_proof(']),line
     return ['one-prepare-capture-publication','nested-guard-before-exclusive-store','immutable-scene-raster-primitives','one-cursor-tail-after-both-passes','post-copy-fence-and-effects','persistent-post-drain-plan','no-primary-in-drain-publication','held-acquisition-before-startup-render','scrub-before-receipt-driven-cleanup']
 wiring=source_contract(main)
-source_controls=[('missing-cleanup-scrub','if let Some(output)=FRAME_OUTPUT.as_mut(){output.scrub();}',''),('missing-nested-guard','if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}',''),('clear-failed-batch','pending_paint.complete(published.is_some());','pending_paint.complete(true);'),('missing-device-fence','asm!("sfence",options(nostack,preserves_flags))','asm!("nop",options(nostack,preserves_flags))'),('global-bits-rejoin','lifecycle.pixels_presented(published.present_bits);','lifecycle.pixels_presented(unsafe{APP_PRESENT_BITS});'),('reset-pending-per-drain','for _drain_i in 0..DRAIN_MAX {','pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);for _drain_i in 0..DRAIN_MAX {'),('missing-typed-full-request','typed_completion_needs_publication()||lifecycle.needs_presentation()','lifecycle.needs_presentation()')]
+source_controls=[('missing-cleanup-scrub','if let Some(output)=FRAME_OUTPUT.as_mut(){output.scrub();}',''),('missing-nested-guard','if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}',''),('clear-failed-batch','pending_paint.complete(published.is_some());','pending_paint.complete(true);'),('missing-device-fence','asm!("sfence",options(nostack,preserves_flags))','asm!("nop",options(nostack,preserves_flags))'),('global-bits-rejoin','lifecycle.pixels_presented(published.present_bits);','lifecycle.pixels_presented(unsafe{APP_PRESENT_BITS});'),('reset-pending-per-drain','for _drain_i in 0..DRAIN_MAX {','pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);for _drain_i in 0..DRAIN_MAX {'),('missing-typed-coverage-join','if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}','')]
 for name,old,new in source_controls:
     altered=once(main,old,new)
     try:source_contract(altered)
@@ -84,17 +88,17 @@ def derived(needle):
     return match[1]+'\n'+block(main,needle)
 parts=[item(n)for n in ['CURSOR_ARROW_W','CURSOR_ARROW_H','CURSOR_UNDER_SAVED','CURSOR_UNDER_X','CURSOR_UNDER_Y','CURSOR_UNDER_VALID','PREPARED_CURSOR','RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','TEXT_STAGES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID']]
 parts+=[derived('struct PreparedCursor{'),block(main,'struct PublishedFrame{'),block(main,'struct OutputBackup{'),block(main,'impl OutputBackup{'),block(main,'impl Drop for OutputBackup{'),block(main,'struct SceneLease {'),block(main,'impl SceneLease {'),block(main,'impl Drop for SceneLease {')]
-parts+=[fn(main,n)for n in ['valid_scanout','raster_batch','render_prepared','render']]
+parts+=[fn(main,n)for n in ['valid_scanout','raster_batch','render_prepared','render','typed_completion_needs_publication','join_pending_text']]
 parts+=[fn(main,'publish_frame').replace('fn publish_frame(', 'fn actual_publish_frame(',1)]
 # Exact Main plan/render/completion statements; only the host function boundary
 # supplies the same local variables. No copied pending-work policy in the test.
 start=main.index('let plan=pending_paint.plan(w,h);');end=main.index('pending_paint.complete(published.is_some());',start)+len('pending_paint.complete(published.is_some());')
 parts+=['fn actual_attempt(pending_paint:&mut Dirty,fb_live:bool,w:usize,h:usize,mut bar:&mut SilkBar)->Option<PublishedFrame>{\n'+main[start:end]+'\npublished\n}']
 production='\n\n'.join(parts)+'\n';production_path=out/'actual-main-pipeline.rs';production_path.write_text(production)
-parent=[item(n)for n in ['MAX_FB_W','MAX_FB_H','BAR_BG_H','FOCUS_SURFACE_COLOR','FRAME_RIM_COLOR','FRAME_TOP_BAR_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','FRAME_LIGHT_CLOSE_COLOR','FRAME_LIGHT_MINIMIZE_COLOR','FRAME_LIGHT_ZOOM_COLOR','DEFAULT_RENDER_TOKENS']]
+parent=[item(n)for n in ['MAX_FB_W','MAX_FB_H','BAR_BG_H','FOCUS_SURFACE_COLOR','FRAME_RIM_COLOR','FRAME_TOP_BAR_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','FRAME_LIGHT_CLOSE_COLOR','FRAME_LIGHT_MINIMIZE_COLOR','FRAME_LIGHT_ZOOM_COLOR','DEFAULT_RENDER_TOKENS','SURFACE_CHROME_TOP_BAR','FRAME_TOP_BAR_HEIGHT_PX']]
 parent+=['#[derive(Clone, Copy)]\n#[repr(C)]\n'+block(main,'struct RenderTokensV1 {')]
 parent+=['use surface_lifecycle::{TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};']
-parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text']]
+parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement']]
 parent+=[fn(main,'scene_bar_blur_rows').replace('fn scene_bar_blur_rows(', 'fn actual_scene_bar_blur_rows(',1)]
 parent_path=out/'actual-scene-parent.rs';parent_path.write_text('\n\n'.join(parent))
 acquire_path=out/'actual-sdk-acquisition.rs';acquire_path.write_text('pub '+fn(sdk,'display_frame_backing')+'\n');(out/'main-source.rs').write_text(main)
@@ -126,9 +130,9 @@ def compile_test(name,text,pipeline=production_path,case=None,expect_failure=Fal
         if count is not None:assert int(match[1])==count,(name,match[1],count)
         return int(match[1])
 counts={}
-for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',8),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',8)]:
+for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',8),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',13)]:
     counts[name]=compile_test(name,(root/file).read_text(),count=expected)
-fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=10)
+fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=13)
 # Unforgeable ownership discipline is a type property, not a native authority
 # test. Require the intended diagnostic, never arbitrary compiler failure.
 control_prefix='''#![allow(dead_code)]\n#[path="../crates/sex-pdx/src/memory_region.rs"]mod memory_region;\npub use memory_region::MemoryRegionInfo;\npub const ERR_CAP_INVALID:u64=0xFFFF_FFFF_FFFF_FFFC;\n#[path="../crates/sex-pdx/src/display_frames.rs"]mod display_frames;\n'''
@@ -143,7 +147,10 @@ controls=[
  ('recapture','let scene=lease.view();','drop(lease);let lease=SceneLease::capture(w,h,bar).unwrap();let scene=lease.view();','actual_combined_batches_publish_once_with_one_immutable_scene'),
  ('drop-strip-pass','if !body||plan.strip&&!raster_strip(target,scene){return false;}','if !body{return false;}','actual_combined_batches_publish_once_with_one_immutable_scene'),
  ('clear-failed-main','pending_paint.complete(published.is_some());','pending_paint.complete(true);','failed_second_pass_preserves_dirty_and_retry_merges_exact_work'),
- ('lost-candidate-context','let text_contexts=scene.text_contexts;','let text_contexts=[None;MAX_SURFACES];','failed_output_keeps_canonical_text_and_success_carries_owned_candidate_context')]
+ ('lost-candidate-context','let text_projections=scene.text_projections;','let text_projections=[None;MAX_SURFACES];','failed_output_keeps_canonical_text_and_success_carries_owned_candidate_context'),
+ ('settle-raster-effects','if plan.settle_only(){return true;}','/* no identity bypass */','pure_settle_preserves_device_underlay_and_effect_state_then_carries_no_pixels_projection'),
+ ('settle-state-reset','if !settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}','unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}','pure_settle_preserves_device_underlay_and_effect_state_then_carries_no_pixels_projection'),
+ ('settle-presentation-effects','if !settle_only{\n        record_cursor_presented();','if true{\n        record_cursor_presented();','pure_settle_preserves_device_underlay_and_effect_state_then_carries_no_pixels_projection')]
 for name,old,new,case in controls:
     path=out/(name+'-actual-main.rs');path.write_text(once(production,old,new))
     compile_test(name,fixture_text,pipeline=path,case=case,expect_failure=True)

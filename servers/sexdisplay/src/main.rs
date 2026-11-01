@@ -1360,6 +1360,45 @@ fn apply_pending_text(slot:&mut Surface,pending:&text_transaction::Pending<'_>)-
     true
 }
 
+fn text_projection_requirement(old:&Surface,new:&Surface,w:usize,h:usize)->scene::TextCoverage{
+    // Both values describe the same admitted Surface association. Compare the
+    // actual derived layout too, rather than assuming its cache is current.
+    if old.text_buf==new.text_buf&&old.text_len==new.text_len&&old.text_color==new.text_color
+        &&(old.selection_start,old.selection_end)==(new.selection_start,new.selection_end)
+        &&old.line_starts==new.line_starts&&old.cell_starts==new.cell_starts
+        &&old.line_cells==new.line_cells&&old.cell_count==new.cell_count
+        &&old.line_count==new.line_count&&old.wrap_cols==new.wrap_cols{
+        return scene::TextCoverage::NoPixels;
+    }
+    // Old bounds are essential when shortening/clearing text or selection.
+    // Do not optimize hidden parents/occlusion: these clipped geometric bounds
+    // conservatively include every possible changed body text pixel.
+    let mut required=damage::Damage::new();
+    required.add(text_surface_damage(old,w,h),w,h);
+    required.add(text_surface_damage(new,w,h),w,h);
+    match required.rect(){Some(rect)=>scene::TextCoverage::Body(rect),None=>scene::TextCoverage::NoPixels}
+}
+
+fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
+    unsafe{
+        for(index,stage)in TEXT_STAGES.iter().enumerate(){
+            let Some(pending)=stage.pending()else{continue;};
+            // Existing preview modes can display a second view of these bytes.
+            // Keep their broader body obligation rather than infer occlusion.
+            if h<51{paint.request_full();continue;}
+            if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED||ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED{
+                paint.request_area();continue;
+            }
+            let original=&SURFACES[index];let mut candidate=*original;
+            if !apply_pending_text(&mut candidate,&pending){paint.request_full();continue;}
+            match text_projection_requirement(original,&candidate,w,h){
+                scene::TextCoverage::NoPixels=>paint.request_settle(),
+                scene::TextCoverage::Body(rect)=>paint.request_damage(rect,w,h),
+            }
+        }
+    }
+}
+
 fn legacy_text_clear(slot:&mut Surface)->bool{
     let changed=slot.text_len!=0 || slot.selection_start!=0 || slot.selection_end!=0;
     slot.erase_selection();
@@ -1596,7 +1635,7 @@ use paint_batch::{Content,Plan};
 // Descriptive completion of this publication, not authority or a whole-system
 // epoch receipt. Lifecycle may consume only a successfully published Full.
 struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8,
-    text_contexts:[Option<text_transaction::Context>;MAX_SURFACES]}
+    text_projections:[Option<scene::TextProjection>;MAX_SURFACES]}
 
 // Small output bookkeeping is tentative until the prepared frame is published.
 // Its retained pixel copy is erased before this invocation returns to cleanup.
@@ -1633,11 +1672,14 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{
 
 fn raster_batch(target:&frame_output::Target<'_>,scene:&scene::SceneSnapshot,plan:Plan)->bool{
     if !scene.is_valid()||scene.width!=target.width()||scene.height!=target.height()||plan.is_empty(){return false;}
+    // Verified no-pixel text work republishes the committed baseline. Do not
+    // disturb cursor underlay or infer any app/cursor/clock presentation effect.
+    if plan.settle_only(){return true;}
     let (fb,w,h,total)=(target.pointer(),target.width(),target.height(),target.len());
     if !plan.is_full(){restore_cursor_under(fb,w,h,total);}
     let body=match plan.content{
         Content::Full=>raster_full(target,scene),Content::Area=>raster_area(target,scene),
-        Content::Damage(rect)=>raster_damage(target,rect,scene),Content::None|Content::Cursor=>true};
+        Content::Damage(rect)=>raster_damage(target,rect,scene),Content::None|Content::Settle|Content::Cursor=>true};
     if !body||plan.strip&&!raster_strip(target,scene){return false;}
     if !plan.cursor_only(){
         if plan.is_full()||matches!(plan.content,Content::Area)||plan.strip{
@@ -1655,36 +1697,39 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     // Reject reentry before creating another exclusive frame-store reference.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}
     let mut plan=requested.with_atlas(ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED||ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED);
-    if !plan.is_full()&&h<51{return None;}
+    if !plan.is_full()&&h<51{plan=Plan::full();}
     let backup=OutputBackup::capture();
     let Some(store)=(unsafe{FRAME_OUTPUT.as_mut()})else{return None;};
     if store.layout().width()!=w||store.layout().height()!=h{return None;}
     if store.front_pixels().is_none(){plan=Plan::full();}
-    let started=if plan.cursor_only(){0}else{repaint_begin()};
+    let settle_only=plan.settle_only();
+    let started=if plan.cursor_only()||settle_only{0}else{repaint_begin()};
     let Some(mut preparation)=store.prepare(plan.is_full())else{return None;};
     if plan.is_full(){RENDER_FRAME_COUNTER.fetch_add(1,core::sync::atomic::Ordering::Relaxed);}
     let Some(lease)=SceneLease::capture(w,h,bar)else{drop(preparation);backup.restore();return None;};
     let scene=lease.view();
     let canon_ss=unsafe{CLOCK_CANON_SS};
-    unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}
+    if !settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}
     let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return None;}
-    let present_bits=unsafe{APP_PRESENT_BITS};
-    record_cursor_presented();
-    report_app_presented();
-    if !plan.cursor_only(){repaint_end(plan.label(),started);}
+    let present_bits=if settle_only{0}else{unsafe{APP_PRESENT_BITS}};
+    if !settle_only{
+        record_cursor_presented();
+        report_app_presented();
+        if !plan.cursor_only(){repaint_end(plan.label(),started);}
+    }
     if plan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}
     unsafe{
         static mut BATCH_LOG_BUDGET:u32=64;
         if BATCH_LOG_BUDGET>0{BATCH_LOG_BUDGET-=1;
             sex_pdx::serial_record!("[display.batch.published] generation={} content={} strip={} scene=1 prepare=1 publication=1",
-                store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::None=>"none"},plan.strip as u8);}
+                store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::Settle=>"settle",Content::None=>"none"},plan.strip as u8);}
     }
     // Copy only descriptive transaction identities. The payload remains owned
     // by this scene, which ordinary scope Drop scrubs before Main commits text.
-    let text_contexts=scene.text_contexts;
-    Some(PublishedFrame{plan,present_bits,canon_ss,text_contexts})
+    let text_projections=scene.text_projections;
+    Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})
 }
 fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}
 
@@ -3057,10 +3102,14 @@ fn typed_completion_needs_publication()->bool{
         ||BITMAP_STORES.needs_publication()}
 }
 
-fn commit_published_text(contexts:&[Option<text_transaction::Context>;MAX_SURFACES])->usize{
+fn commit_published_text(published:&PublishedFrame)->usize{
     let mut committed=0;
-    for(index,context)in contexts.iter().copied().enumerate(){
-        let Some(context)=context else{continue;};
+    for(index,projection)in published.text_projections.iter().copied().enumerate(){
+        let Some(projection)=projection else{continue;};
+        if let scene::TextCoverage::Body(required)=projection.coverage{
+            if !published.plan.covers_body(required){continue;}
+        }
+        let context=projection.context;
         unsafe{
             let stage=&mut TEXT_STAGES[index];
             let Some(pending)=stage.pending()else{continue;};
@@ -3090,21 +3139,23 @@ fn commit_published_text(contexts:&[Option<text_transaction::Context>;MAX_SURFAC
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
-    if let Some(published)=published.filter(|frame|frame.plan.is_full()){
+    if let Some(published)=published{
         // This receipt belongs to the just-finished Main drain. No intake runs
         // between its scene capture, CPU publication and completion handling.
-        // Full also settles no-op, hidden and empty updates; Applied remains a
-        // data-admission receipt, not proof that those bytes were visible.
-        let text=commit_published_text(&published.text_contexts);
-        let bitmap=unsafe{BITMAP_STORES.release_after_publication()};
+        // Typed text requires captured coverage; bitmap/lifecycle retain Full.
+        // Applied remains data admission, not proof those bytes were visible.
+        let text=commit_published_text(published);
+        let bitmap=if published.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0};
         if text+bitmap>0{
-            sex_pdx::serial_record!("[display.typed.released] text={} bitmap={} full=1 scene_released=1 publication=1 pixels=unconfirmed",text,bitmap);
+            sex_pdx::serial_record!("[display.typed.released] text={} bitmap={} full={} scene_released=1 publication=1 pixels=unconfirmed",text,bitmap,published.plan.is_full() as u8);
         }
-        lifecycle.pixels_presented(published.present_bits);
-        for index in 0..surface_lifecycle::CATALOG_CAPACITY {
-            if lifecycle.scene_committed(index) {
-                let c = lifecycle.catalog(index).unwrap();
-                sex_pdx::serial_record!("[display.app.cleanup.committed] target={} task={} scene=1", c.target_pd, c.task_id);
+        if published.plan.is_full(){
+            lifecycle.pixels_presented(published.present_bits);
+            for index in 0..surface_lifecycle::CATALOG_CAPACITY {
+                if lifecycle.scene_committed(index) {
+                    let c = lifecycle.catalog(index).unwrap();
+                    sex_pdx::serial_record!("[display.app.cleanup.committed] target={} task={} scene=1", c.target_pd, c.task_id);
+                }
             }
         }
     }
@@ -4398,7 +4449,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        let transaction_full_render=typed_completion_needs_publication()||lifecycle.needs_presentation()
+        let transaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()
             ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
         if needs_full_redraw||transaction_full_render{pending_paint.request_full();}
@@ -4406,6 +4457,7 @@ pub extern "C" fn _start() -> ! {
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
+        if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
         let plan=pending_paint.plan(w,h);
         let published=if fb_live&&!plan.is_empty(){
             clock_canon_apply_to_bar(&mut bar);
