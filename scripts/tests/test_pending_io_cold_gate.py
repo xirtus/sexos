@@ -1,4 +1,5 @@
 """Cold recovery rejects stale native receipts and broken live-disk ancestry."""
+from source_boot_fixture import complete as complete_source_fixture
 import contextlib
 import gzip
 import io
@@ -323,7 +324,7 @@ class ExplicitColdPolicy(unittest.TestCase):
     def test_replay_uses_alternate_policy_without_guest_or_artifact_writes(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve();out=root/'cold';out.mkdir();payload=b'reserve text';seed=disk_image(payload)
-            text,start=native(payload);chain={'document':5,'recovered':recovered_metadata(payload)}
+            text,start=native(payload);prefix=complete_source_fixture('');text=prefix+text;start+=len(prefix);chain={'document':5,'recovered':recovered_metadata(payload)}
             c={'source_sha256':{'held':'hash'}};binding={'held':'image'};proof={'ok':True}
             policy=SimpleNamespace(accepted_session=Mock(return_value=(seed,payload,chain)),contract=Mock(return_value=c),expected=Mock(return_value='reserve text'),frame_name='reserve-cold-frame')
             load=gate.native_load(text,start,len(text),5,payload,chain['recovered'])

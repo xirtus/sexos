@@ -61,7 +61,7 @@ impl Effects{
  for id in 0..32{for op in [messages::OP_DISKFS_SELECT,messages::OP_DISKFS_WRITE,messages::OP_DISKFS_READ,messages::OP_DISKFS_READ_V2,messages::OP_DISKFS_TRUNCATE,messages::OP_DISKFS_DELETE,messages::OP_DISKFS_RENAME,messages::OP_DISKFS_CREATE]{assert_eq!(legacy_dispatch(op,id,u64::MAX,u64::MAX,15,|op,a,b,c,pd|state.dispatch(op,a,b,c,pd)),messages::ERR_PERM_DENIED as u64);assert_eq!(state,before);}}
 }
 #[test]fn caller_zero_quil_linen_spindle_and_other_identities_keep_exact_existing_dispatch(){
- for caller in [0,3,7,9,12,16,17,18,31,u32::MAX]{let mut state=Effects::default();
+ for caller in [0,3,7,9,12,16,17,18,32,u32::MAX]{let mut state=Effects::default();
   for op in [0x30,0x38,0x3E,0x42,0x47,0x49,u64::MAX]{let got=legacy_dispatch(op,3,5,7,caller,|op,a,b,c,pd|state.dispatch(op,a,b,c,pd));assert_eq!(got,op.wrapping_add(3+5+7).wrapping_add(caller as u64));}
   assert_eq!(state.calls,7);assert_eq!(state.counter,7);assert_eq!(state.selection,Some(3));
  }

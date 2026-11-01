@@ -5,10 +5,15 @@ from pathlib import Path
 
 def main():
  root=Path(__file__).resolve().parents[1];catalog=(root/'crates/sex-pdx/src/app_catalog.rs').read_text();m=re.search(r'pub const INCARNATIONS: \[Incarnation; (\d+)\] = \[',catalog);assert m;end=catalog.index('\n];',m.end())
+ # Independent current roster expectation. Synthetic policy rows are descriptive
+ # host metadata; they neither create grants nor assign/infer registered tasks.
+ browsers=re.findall(r'Incarnation\s*\{\s*app:\s*App::Browser,\s*ordinal:\s*(\d+),\s*target:\s*(\d+),\s*surface:\s*(\d+),',catalog)
+ assert int(m[1])==19 and browsers==[('0','15','300'),('1','30','343'),('2','31','344')], 'current source roster changed'
+
  extra='''
  quil(8,100,400,None,210,211,Some(212),213),
  Incarnation{app:App::Spindle,ordinal:8,target:101,surface:401,shell_surface:Some(402),lifecycle_slot:214,close_slot:215,activation_slot:Some(216),route_slot:217,children:&[403,404,405]},
- Incarnation{app:App::Browser,ordinal:1,target:102,surface:406,shell_surface:None,lifecycle_slot:218,close_slot:219,activation_slot:Some(220),route_slot:221,children:&[]},'''
+ Incarnation{app:App::Browser,ordinal:3,target:102,surface:406,shell_surface:None,lifecycle_slot:218,close_slot:219,activation_slot:Some(220),route_slot:221,children:&[]},'''
  catalog=catalog[:end]+extra+catalog[end:];catalog=catalog[:m.start(1)]+str(int(m[1])+3)+catalog[m.end(1):]
  with tempfile.TemporaryDirectory(prefix='sexos-incarnation-policy-')as temp:
   out=Path(temp);cp=out/'catalog.rs';cp.write_text(catalog);source=(root/'servers/silk-shell/src/main.rs').read_text();parts=[]
@@ -18,8 +23,22 @@ def main():
    parts.append(source[a:i])
   shell=out/'shell.rs';shell.write_text('\n'.join(parts));fixture=(root/'tests/incarnation_expansion.rs').read_text()
   fixture=re.sub(r'#\[path="(\.\./[^"]+)"\]',lambda m:'#[path='+json.dumps(str(cp if m[1].endswith('/app_catalog.rs')else(root/m[1][3:]).resolve()))+']',fixture)
+  fixture+=r'''
+#[test]fn explicit_expanded_lineage_preserves_actual_three_browser_rows(){
+ assert_eq!(app_catalog::COUNT,22);
+ let browsers:Vec<_>=app_catalog::INCARNATIONS.iter().filter(|r|r.app==app_catalog::App::Browser)
+  .map(|r|(r.ordinal,r.target,r.surface,r.lifecycle_slot,r.close_slot,r.activation_slot,r.route_slot)).collect();
+ assert_eq!(browsers,[(0,15,300,40,43,None,43),(1,30,343,154,155,Some(156),157),
+  (2,31,344,158,159,Some(160),161),(3,102,406,218,219,Some(220),221)]);
+ for(target,predecessor)in[(100,23),(101,29),(102,31)]{
+  let row=app_catalog::by_target(target).expect("explicit synthetic row");
+  assert_eq!(app_catalog::predecessor(row).map(|r|r.target),Some(predecessor));
+ }
+}
+'''
+
   test=out/'test.rs';test.write_text(fixture);binary=out/'tests';subprocess.run(['rustc','--edition=2021','--test',str(test),'-o',str(binary)],check=True,env={**os.environ,'EXPANDED_SHELL_POLICY':str(shell)});subprocess.run([str(binary),'--test-threads=1'],check=True)
-  # Compiled regressions must fail: stopping at the former third incarnation
+  # Compiled regressions must fail: stopping at the former last Quil incarnation
   # or applying Browser restrictions only to the original hard-coded caller.
   original_shell=shell.read_text()
   for name,changed in [('old_chain',original_shell.replace('row.app==app&&row.ordinal!=0','row.app==app&&row.ordinal!=0&&row.target!=100'))]:

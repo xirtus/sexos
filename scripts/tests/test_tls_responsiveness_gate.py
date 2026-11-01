@@ -1,6 +1,7 @@
 """Public parser/pixel/disk fixtures; never native responsiveness evidence."""
 import copy,re,struct,sys,unittest
 from pathlib import Path
+from source_boot_fixture import complete
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import tls_responsiveness_gate as gate
@@ -8,8 +9,8 @@ import test_https_document_gate as fixture
 from test_tls_lifecycle_gate import snapshot
 ROOT=Path(__file__).resolve().parents[2];UTC=fixture.fixture.UTC
 
-def source_trace():
- text='';prepared=[]
+def source_trace(include_inventory=True):
+ text=complete('')if include_inventory else'';prepared=[]
  for index in range(1,4):
   kind='TlsDns'if index==3 else'TlsPrepare';doc=int(index==3);task=25000 if doc else 12000;private=task+8248+12288*doc;utc=UTC+index
   text+=f'[browser.command.queued] kind={kind} document={doc} retained=1 accepted_replay=0\n'+snapshot('command',queued='Some('+kind+')')+f'[browser.command.started] kind={kind} accepted=1\n'
@@ -25,11 +26,11 @@ def source_trace():
  return text,prepared
 
 def metadata():
- base=fixture.metadata('partial-close');text='\n'.join(base.splitlines()[:7])+'\n'+source_trace()[0]+base[base.index('[browser.dns.released]'):]
+ base=fixture.metadata('partial-close');text=''.join(line for line in base.splitlines(keepends=True)if any('['+tag+']'in line for tag in ('boot.network.tls','browser.trust.source.denied','browser.entropy.source.denied','browser.clock.source.denied')))+source_trace(include_inventory=False)[0]+base[base.index('[browser.dns.released]'):]
  text+='[shell.browser.input] code=38 down=1 slot=43 accepted=1\n'*2+'[shell.browser.input] code=16 down=1 slot=43 accepted=1\n'*2+'[shell.browser.input] code=48 down=1 slot=43 accepted=1\n'
  text=text.replace('[browser.https.progress] ticket=2', '[net.job.stream.drain] owner=15 task=15 ticket=2 produced=512 consumed=4 buffered=508 ring=1024 state_before=Receiving receipt=retained not_delivery=1\n[browser.https.progress] ticket=2')
  first=gate.TOKEN+b'init';second=gate.TOKEN+gate.AFTER+b'init';save=lambda p:f'[quil.document.edit] revision={len(p)} pending=0 bytes={len(p)}\n[quil.persist.save.ok] bytes={len(p)} hash={hex(gate.fnv(p))} doc=2\n'
- text=text.replace('[browser.https.closed]',save(first)+'[browser.https.closed]');closed='[browser.https.closed] pending=1 terminal=1 owned_storage=erased body_visible=0\n';text=text.replace(closed,closed+snapshot('close'));return text+save(second)
+ text=text.replace('[browser.https.closed]',save(first)+'[browser.https.closed]');closed='[browser.https.closed] pending=1 terminal=1 owned_storage=erased body_visible=0\n';text=text.replace(closed,closed+snapshot('close'));return complete(text+save(second))
 
 def clock_fixture(contract,width=1280,stamp=(10,42,7)):
  d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width);y=d['CHIP_Y'];height=800 if width==1280 else 768;raw=bytearray(width*height*3);color=contract['clock']['color'].to_bytes(3,'big')
@@ -70,13 +71,12 @@ class HeavyWorkReceipts(unittest.TestCase):
   for a,b in(('payload=0 seed_ready=1','payload=1 seed_ready=1'),('payload=0 seed_ready=1','payload=0 seed_ready=0'),('payload=20192 seed_ready=0','payload=20191 seed_ready=0'),('payload=20192 seed_ready=0','payload=20192 seed_ready=1')):
    with self.assertRaises(AssertionError):gate.work_receipts(text.replace(a,b,1),prepared)
  def test_fresh_sources_positive_seed_cleanup_and_host_clock(self):
-  from clock_source_evidence import BROWSER_GRANT
-  text,_=source_trace();text=BROWSER_GRANT+'\n'+text;rows=gate.source_cycles(text,{'pipe_bytes':8248},UTC,UTC+5);self.assertEqual([r['document']for r in rows],[False,False,True])
+  text,_=source_trace();rows=gate.source_cycles(text,{'pipe_bytes':8248},UTC,UTC+5);self.assertEqual([r['document']for r in rows],[False,False,True])
   for a,b in(('seq=2 profile=1','seq=1 profile=1'),('service_payload=erased','service_payload=retained'),('ordinal=2','ordinal=1'),('private_bytes=33248','private_bytes=33247')):
    changed=text.replace(a,b,1)
    if changed==text:continue
-   with self.assertRaises(AssertionError):gate.source_cycles(changed,{'pipe_bytes':8248},UTC,UTC+5)
-  with self.assertRaises(AssertionError):gate.source_cycles(text,{'pipe_bytes':8248},UTC+100,UTC+110)
+   with self.assertRaises((AssertionError,ValueError)):gate.source_cycles(changed,{'pipe_bytes':8248},UTC,UTC+5)
+  with self.assertRaises((AssertionError,ValueError)):gate.source_cycles(text,{'pipe_bytes':8248},UTC+100,UTC+110)
 
 class ProgressAndCustody(unittest.TestCase):
  def check(self,text):

@@ -1,6 +1,7 @@
 """Public checker fixtures only; synthetic PCAP/PPM never native acceptance."""
 import copy,hashlib,json,os,re,select,shutil,socket,struct,subprocess,sys,tempfile,threading,time,unittest
 from pathlib import Path
+from source_boot_fixture import complete
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import https_asset_gate as gate
@@ -98,7 +99,7 @@ def metadata(mode='ready'):
     mask=0
     for role,holder in[(1,3),(2,1),(4,11),(8,13),(16,10)]:mask|=role;text+=f'[app.service.ack] target=15 task=15 holder={holder} role={role} acked={mask} required=31\n'
     text+='[net.dns.records.retired] target=15 task=15 remaining=0 before_cleanup_ack=1\n[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1\n[app.private.retired] target=15 task=15 pages=1 bytes=4096 acked=31 required=31 all_flushed=1 pool_reusable=1\n[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n'
- return text,wire,raw
+ return complete(text),wire,raw
 
 class AssetFixture(unittest.TestCase):
  def test_fixed_qoi_and_mixed_alpha_source(self):

@@ -22,7 +22,7 @@ fn triple(plan:Plan)->[u64;3]{[plan.entropy_slot(),plan.clock_slot(),plan.trust_
 #[test]fn actual_catalog_only_controls_number_and_order_not_candidate_source_slot_count(){
  let rows:Vec<_>=app_catalog::INCARNATIONS.iter().filter(|row|row.app==App::Browser).collect();
  assert_eq!(BROWSER_COUNT,rows.len());assert_eq!(PLANS.len(),rows.len());
- #[cfg(not(browser_source_catalog))]{assert_eq!(BROWSER_COUNT,1);assert!(by_target(30).is_none());assert!(by_target(31).is_none());}
+ #[cfg(not(browser_source_catalog))]{assert_eq!(BROWSER_COUNT,3);assert!(by_target(30).is_some());assert!(by_target(31).is_some());}
  for(index,row)in rows.iter().enumerate(){let plan=*by_index(index).unwrap();
   assert_eq!(plan.target(),row.target);assert_eq!(plan.surface(),row.surface);assert_eq!(plan.lifecycle_slot(),row.lifecycle_slot);
   assert_eq!(by_target(row.target),Some(&plan));assert_eq!(row.ordinal as usize,index);

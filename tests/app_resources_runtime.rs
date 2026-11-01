@@ -47,6 +47,10 @@ mod capability{
  impl ProtectionDomain{
   pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|(s,_)|*s==slot).map(|(s,data)|Capability{id:*s,data:*data,cheri_meta:0})}
   pub fn grant_capability(&self,slot:u64,data:CapabilityData){self.caps.lock().push((slot as u32,data));}
+  // Fault injection into the finite host capability table; never a guest API.
+  pub fn replace_capability_for_test(&self,slot:u32,data:CapabilityData){
+   let mut caps=self.caps.lock();let existing=caps.iter_mut().find(|e|e.0==slot).expect("held test slot");existing.1=data;
+  }
   pub fn new(id:u32)->&'static Self{Self::new_key(id,id as u8)}
   pub fn new_key(id:u32,key:u8)->&'static Self{
    let task=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0x4000},state:ownership::TaskOwnership::new()}));
@@ -208,4 +212,76 @@ fn fixture_elf()->Vec<u8>{
  assert_eq!(app_resources::retire(pager,45)[0],0);assert_eq!(*spindle_next_leaves,[0;17]);
  assert_eq!(app_resources::activation(shell,49,1),[0,17,17,302,3]);
 
+}
+
+
+#[test]
+fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
+ // Each case runs in its own host process: the actual production BOOT registry
+ // and APPS backing are one-shot and must not be reset/rebound by a test helper.
+ const CASE:&str="SEXOS_CATALOG_CAPTURE_CASE";
+ let Ok(case)=std::env::var(CASE)else{
+  for case in ["valid","forged-predecessor-grant","wrong-current-pointer","replaced-main","changed-task"]{
+   let output=std::process::Command::new(std::env::current_exe().unwrap())
+    .args(["--exact","actual_boot_capture_joins_independent_registered_predecessor_tasks","--test-threads=1","--nocapture"])
+    .env(CASE,case).output().unwrap();
+   assert!(output.status.success(),"case {case}: {}{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+  }
+  return;
+ };
+ use capability::{ProtectionDomain,CapabilityData};use app_resource_state::{LifecycleGrant,QUERY};
+ assert_eq!(app_catalog::TARGETS,[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]);
+ for pd in 1..=31{
+  let key=app_catalog::by_target(pd).map_or(pd as u8,|r|app_catalog::boot_incarnation(r.app).target as u8);
+  let domain=ProtectionDomain::new_key(pd,key);
+  // Deliberately distinct task namespace, with the actual context pointer
+  // established by new_key. The production capturer reads these Task objects.
+  unsafe{(*domain.main_task.load(Ordering::Acquire)).id=pd*10;}
+ }
+ assert_eq!(REGISTRY.iter().filter(|p|!p.load(Ordering::Acquire).is_null()).count(),31);
+ app_resources::plan_boot_apps(&app_catalog::TARGETS);
+ let mut owned_leaves=Vec::new();
+ for(index,row)in app_catalog::INCARNATIONS.iter().enumerate(){
+  let key=app_catalog::boot_incarnation(row.app).target as u8;
+  let base=0x4000_0000+index as u64*0x10_0000;let top=base+0x3_0000;
+  let mut leaves=Box::new([0u64;17]);
+  for page in 0..17{let va=if page==0{base}else{top-65536+(page as u64-1)*4096};
+   leaves[page]=(0x10_0000+index as u64*0x2_0000+page as u64*4096)|5|((key as u64)<<59);
+   LEAVES.lock().insert(va,&mut leaves[page]as *mut u64 as usize);
+  }
+  app_resources::capture_boot_image(row.target,key,&fixture_elf(),base,top).unwrap();owned_leaves.push(leaves);
+ }
+ app_resources::init(14,3,&app_catalog::CONTENT,[3,1,11,13,10]);
+ let shell=ipc::DOMAIN_REGISTRY.get(3).unwrap();
+ for row in app_catalog::INCARNATIONS{
+  let pd=ipc::DOMAIN_REGISTRY.get(row.target).unwrap();let actual_task=unsafe{(*pd.main_task.load(Ordering::Acquire)).id};
+  pd.grant_capability(app_lifecycle::SELF_CATALOG_SLOT as u64,CapabilityData::AppLifecycle(LifecycleGrant{target_pd:row.target,task_id:actual_task,holder_pd:row.target,rights:QUERY,ack_bit:0}));
+  for slot in [row.close_slot,row.route_slot]{if let Some(cap)=shell.find_capability(slot as u32){assert!(matches!(cap.data,CapabilityData::Domain(target)if target==row.target));}else{shell.grant_capability(slot,CapabilityData::Domain(row.target));}}
+  if let Some(predecessor)=app_catalog::predecessor(&row){app_resources::reserve_successor(predecessor.target,row.target,3,row.activation_slot.unwrap());}
+ }
+ let original=ipc::DOMAIN_REGISTRY.get(15).unwrap();
+ match case.as_str(){
+  "valid"=>{},
+  "forged-predecessor-grant"=>{let CapabilityData::AppActivation(mut grant)=shell.find_capability(156).unwrap().data else{panic!("actual activation grant")};
+   assert_eq!((grant.predecessor,grant.predecessor_task,grant.successor,grant.successor_task),(15,150,30,300));
+   grant.predecessor_task=15;shell.replace_capability_for_test(156,CapabilityData::AppActivation(grant));},
+  "wrong-current-pointer"=>unsafe{(*original.main_task.load(Ordering::Acquire)).context.pd_ptr=ipc::DOMAIN_REGISTRY.get(30).unwrap();},
+  "replaced-main"=>{original.main_task.store(ipc::DOMAIN_REGISTRY.get(30).unwrap().main_task.load(Ordering::Acquire),Ordering::Release);},
+  "changed-task"=>unsafe{(*original.main_task.load(Ordering::Acquire)).id=151;},
+  _=>panic!("unrecognized isolated capture case"),
+ }
+ let checked=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||app_resources::audit_boot_catalog(3)));
+ assert_eq!(checked.is_ok(),case=="valid","actual production capture case={case}");
+ if let Err(payload)=checked{
+  let message=payload.downcast_ref::<String>().map(String::as_str).or_else(||payload.downcast_ref::<&str>().copied()).expect("diagnostic panic");
+  let expected=match case.as_str(){
+   "forged-predecessor-grant"=>"ActivationPredecessorTask",
+   "wrong-current-pointer"=>"TaskDomainPointer",
+   "replaced-main"=>"BOOT_CATALOG_MAIN",
+   "changed-task"=>"BOOT_CATALOG_CAPTURED_TASK",
+   _=>unreachable!(),
+  };
+  assert!(message.contains(expected),"case {case} failed for an unrelated reason: {message}");
+ }
+ assert_eq!(owned_leaves.len(),19);
 }

@@ -68,16 +68,24 @@ class HistoryRoster(unittest.TestCase):
                   (16,301,9,2,9,45,46,47,1), (18,307,9,3,16,54,56,57,1),
                   (19,308,9,4,18,110,111,113,1), (20,309,9,5,19,114,115,117,1),
                   (21,310,9,6,20,118,119,121,1), (22,311,9,7,21,122,123,125,1),
-                  (23,312,9,8,22,126,127,129,1)]
+                  (23,312,9,8,22,126,127,129,1),
+                  (30,343,15,2,15,154,155,157,1), (31,344,15,3,30,158,159,161,1)]
         extra = ""
         for target, surface, logical, inc, pred, lifecycle, close, route, dormant in others:
             extra += (f"[boot.app.catalog] target={target} task={target*10} surface={surface} logical={logical} "
                       f"incarnation={inc} predecessor={pred} lifecycle={lifecycle} close={close} route={route} "
                       f"dormant={dormant} grants_verified=1 data_only=1\n")
         actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133),(3,25,318,319,134,135,136,137),(4,26,323,324,138,139,140,141),(5,27,328,329,142,143,144,145),(6,28,333,334,146,147,148,149),(7,29,338,339,150,151,152,153)]
-        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=8", extra + "[boot.app.catalog.complete] rows=17")
+        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=8", extra + "[boot.app.catalog.complete] rows=19")
         self.assertEqual(h.verify_boot_roster(ROOT, text)["participants"],
                          [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240),dict(target=25,task=250),dict(target=26,task=260),dict(target=27,task=270),dict(target=28,task=280),dict(target=29,task=290)])
+        # New Browser rows do not turn any Browser task into a Spindle writer.
+        roster=h.verify_boot_roster(ROOT,text)
+        for writer in (dict(source=30,task=300,logical=12),dict(source=31,task=310,logical=12),dict(source=29,task=29,logical=12)):
+            with self.assertRaises(ValueError):h.verify_writer(writer,roster)
+        with self.assertRaises(ValueError):
+            h.verify_boot_roster(ROOT,text.replace('[boot.history.participant] index=7 target=29 task=290',
+                                                  '[boot.history.participant] index=7 target=29 task=29'))
 
     def test_two_and_three_unequal_tasks_join_writer(self):
         for rows in (ROWS[:2], ROWS):

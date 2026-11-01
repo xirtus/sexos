@@ -44,8 +44,9 @@ def future_catalog(source):
     rows='''
     Incarnation { app: App::Browser, ordinal: 1, target: 30, surface: 343, shell_surface: None, lifecycle_slot: 154, close_slot: 155, activation_slot: Some(156), route_slot: 157, children: &[] },
     Incarnation { app: App::Browser, ordinal: 2, target: 31, surface: 344, shell_surface: None, lifecycle_slot: 158, close_slot: 159, activation_slot: Some(160), route_slot: 161, children: &[] },'''
-    source=source[:end]+rows+source[end:]
-    return source[:match.start(1)]+str(int(match[1])+2)+source[match.end(1):]
+    additions=[line for line in rows.splitlines()if line.strip()and line.strip()not in {v.strip()for v in source.splitlines()}]
+    source=source[:end]+('\n'+'\n'.join(additions)if additions else '')+source[end:]
+    return source[:match.start(1)]+str(int(match[1])+len(additions))+source[match.end(1):]
 
 
 def fixture_source(root,module):
@@ -100,7 +101,7 @@ def check(root,out):
     module=(root/MODULE).resolve(strict=True);source=module.read_text();static_backing(source)
     future=future_catalog((root/CATALOG).read_text());future_path=out/'future-catalog.rs';future_path.write_text(future)
     actual=compile_fixture(root,out,'actual',module)
-    measured=storage_measure(run_fixture(out,'actual',actual),1)
+    measured=storage_measure(run_fixture(out,'actual',actual),3)
     expanded=compile_fixture(root,out,'future',module,future_path)
     storage_measure(run_fixture(out,'future',expanded),3)
     target=once(future,'ordinal: 2, target: 31','ordinal: 2, target: 30')
@@ -133,7 +134,7 @@ def check(root,out):
     result=dict(ok=True,actual_case_executions=10,future_case_executions=10,
                 ambiguity_runtime_controls=2,compiled_mutants_rejected=3,
                 stores1_bytes=measured[0],stores3_bytes=measured[1],stage_bytes=measured[2],
-                current_catalog_browsers=1,future_host_catalog_browsers=3,
+                current_catalog_browsers=3,future_host_catalog_browsers=3,
                 scope='actual_Stage_Binding_SDK_host_composition_not_future_BOOT_grants_or_native_pixels')
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 

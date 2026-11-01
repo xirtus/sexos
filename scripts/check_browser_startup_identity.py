@@ -26,7 +26,8 @@ def check(root,out):
  rows='''
     Incarnation { app: App::Browser, ordinal: 1, target: 30, surface: 343, shell_surface: None, lifecycle_slot: 154, close_slot: 155, activation_slot: Some(156), route_slot: 157, children: &[] },
     Incarnation { app: App::Browser, ordinal: 2, target: 31, surface: 344, shell_surface: None, lifecycle_slot: 158, close_slot: 159, activation_slot: Some(160), route_slot: 161, children: &[] },'''
- catalog=catalog[:end]+rows+catalog[end:];catalog=catalog[:match.start(1)]+str(int(match[1])+2)+catalog[match.end(1):];cp=out/'future-catalog.rs';cp.write_text(catalog)
+ additions=[line for line in rows.splitlines()if line.strip()and line.strip()not in {v.strip()for v in catalog.splitlines()}];count=len(additions)
+ catalog=catalog[:end]+('\n'+'\n'.join(additions)if additions else '')+catalog[end:];catalog=catalog[:match.start(1)]+str(int(match[1])+count)+catalog[match.end(1):];cp=out/'future-catalog.rs';cp.write_text(catalog)
  run(root,out,'future',fixture,{'BROWSER_INCARNATION_CATALOG':str(cp)},['--cfg','browser_incarnation_catalog'])
  helper=root/'apps/kaleidoscope/src/incarnation.rs';text=helper.read_text()
  for name,old,new in [('task-equals-domain','task: c.task_id','task: row.target'),('missing-held-subject',' || !c.is_subject(row.target, row.surface, 3)','')]:

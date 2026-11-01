@@ -1009,7 +1009,7 @@ fn long_status_never_squeezes_the_document_name_below_eight_cells() {
 #[test]
 fn all_document_incarnations_receive_exact_fresh_viewports_and_retain_full_notice() {
     use document_view::{Delivery, Notice};
-    assert_eq!(app_catalog::DOCUMENT_TARGETS.len(),9);
+    assert_eq!(app_catalog::DOCUMENT_TARGETS.len(),11);
     assert!(app_catalog::DOCUMENT_TARGETS.contains(&23));
     for &target in &app_catalog::DOCUMENT_TARGETS {
         let task=target+1000;let mut delivery=Delivery::new();

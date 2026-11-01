@@ -14076,6 +14076,7 @@ enum Command {
     RestoreMinimized = 7,
     ZoomToggle = 8,
     MinimizeFocused = 9,
+    FocusBrowser = 10,
 }
 
 /// Static display info for each command in the palette.
@@ -14085,7 +14086,7 @@ struct CommandDef {
 }
 
 /// Daily-driver commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 10] = [
+const COMMAND_LIST: [CommandDef; 11] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusQuil, name: "Open Quil" },
     CommandDef { command: Command::FocusLinen, name: "Open Linen" },
@@ -14096,6 +14097,7 @@ const COMMAND_LIST: [CommandDef; 10] = [
     CommandDef { command: Command::RestoreMinimized, name: "Restore Minimized" },
     CommandDef { command: Command::ZoomToggle, name: "Zoom Toggle" },
     CommandDef { command: Command::MinimizeFocused, name: "Minimize Focused" },
+    CommandDef { command: Command::FocusBrowser, name: "Open Browser" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -15743,6 +15745,7 @@ fn command_kind_color(cmd: Command) -> u32 {
         Command::RestoreMinimized => 0x00605030,   // muted amber
         Command::ZoomToggle => 0x00306030,         // muted olive
         Command::MinimizeFocused => 0x00304030,    // muted slate
+        Command::FocusBrowser => 0x00205550,        // native Browser teal
     }
 }
 
@@ -15765,6 +15768,7 @@ fn command_palette_selected_accent() -> u32 {
             Command::RestoreMinimized => 0x00C0A060,   // bright amber
             Command::ZoomToggle => 0x0080C060,         // bright olive
             Command::MinimizeFocused => 0x00708080,    // bright slate
+            Command::FocusBrowser => 0x005ED9C3,        // native Browser teal
         }
     }
 }
@@ -15784,6 +15788,7 @@ unsafe fn palette_render_list() {
         let visible_status=match item.command {
             Command::FocusSpindle=>spindle_reserve_label(spindle_history_label(status,available,reason),available,reason),
             Command::FocusQuil=>quil_reserve_label(status,available,reason),
+            Command::FocusBrowser=>browser_reserve_label(status,available,reason),
             Command::FocusLinen=>"FILES / BROWSE",
             Command::FocusAtlas=>"DESKTOP OVERVIEW",
             Command::FocusBell=>"NOTIFICATIONS",
@@ -15873,7 +15878,7 @@ unsafe fn toggle_command_palette() -> bool {
             | ((available_count as u64) << 9);
         unsafe { send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, packed, 0); }
         // ── Launcher markers: app subset (indices 0-6) ──
-        let app_count: u8 = 7; // FocusSpindle/Quil/Linen/Atlas/Bell/Collar/Mesh
+        let app_count: u8 = 8; // Existing seven app rows plus native Browser at index10.
         sex_pdx::serial_record!(
             "[launcher.open] count={} selected={} ok=1",
             app_count,
@@ -15901,7 +15906,7 @@ unsafe fn toggle_command_palette() -> bool {
                 reason
             );
             // ── Launcher row: app subset only ──
-            if idx < 7 {
+            if idx < 7 || matches!(item.command,Command::FocusBrowser) {
                 serial_println!(
                     "[launcher.row] idx={} app={} status={} available={}",
                     idx,
@@ -15981,18 +15986,22 @@ fn launcher_live_action(target:u32)->Option<launcher::LiveAction>{
     }
 }
 fn launcher_row_title(command:Command,fallback:&'static str)->&'static str{
-    let (info,quil)=match command{
-        Command::FocusQuil=>(quil_activation_info(false).ok(),true),
-        Command::FocusSpindle=>(spindle_activation_info(false).ok(),false),
+    if matches!(command,Command::FocusBrowser) && app_catalog::count(app_catalog::App::Browser)==1 {
+        return browser_active_frame().and_then(|(target,_)|launcher_live_action(target)).map_or(fallback,|a|a.browser_title());
+    }
+    let (info,quil,browser)=match command{
+        Command::FocusQuil=>(quil_activation_info(false).ok(),true,false),
+        Command::FocusSpindle=>(spindle_activation_info(false).ok(),false,false),
+        Command::FocusBrowser=>(browser_activation_info(false).ok(),false,true),
         _=>return fallback,
     };
     let Some(i)=info else{return fallback};
-    if i.state==1{return launcher::LiveAction::Open.title(quil)}
+    if i.state==1{return if browser{launcher::LiveAction::Open.browser_title()}else{launcher::LiveAction::Open.title(quil)}}
     let target=if i.state==2{i.successor}else{
         let Some(row)=app_catalog::by_target(i.successor)else{return fallback};
         let Some(previous)=app_catalog::predecessor(row)else{return fallback};previous.target
     };
-    launcher_live_action(target).map_or(fallback,|a|a.title(quil))
+    launcher_live_action(target).map_or(fallback,|a|if browser{a.browser_title()}else{a.title(quil)})
 }
 /// An already accepted focus intent survives bounded held-query contention.
 unsafe fn launcher_subject_live(target:u32,task:u32)->Option<bool>{
@@ -16102,7 +16111,9 @@ unsafe fn launcher_focus_poll(){
 /// means its asynchronous initial registration/frame creation is still needed.
 unsafe fn launcher_focus_existing(target:u32,frame:u64,chosen:Option<launcher::LiveAction>)->Option<bool>{
     let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==target).copied()else{return Some(false)};
-    if !app_catalog::by_target(target).is_some_and(|i|i.app!=app_catalog::App::Browser)||e.shell_surface().unwrap_or(e.surface)!=frame||!native_launcher_status(target).0{return Some(false)}
+    let Some(row)=app_catalog::by_surface(e.target,e.surface)else{return Some(false)};
+    if row.lifecycle_slot!=e.slot || row.frame()!=frame
+        || e.shell_surface().unwrap_or(e.surface)!=frame || !native_launcher_status(target).0{return Some(false)}
     launcher_focus_discard();
     let Some(fid)=frame_for_surface(frame)else{return None};
     let Some(from)=FRAMES.iter().flatten().find(|f|f.frame_id==fid).map(|f|f.scene_id)else{return Some(false)};
@@ -16180,6 +16191,50 @@ fn app_route_slot(app:app_catalog::App,fallback:u64)->u64{
         _=>fallback,
     }
 }
+// Native Browser uses the same finite held activation grants, never WebStub205.
+fn browser_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{app_activation_info(app_catalog::App::Browser,commit)}
+fn browser_launcher_status()->(bool,&'static str,&'static str){
+    if app_catalog::count(app_catalog::App::Browser)==1 {
+        native_launcher_status(app_catalog::boot_incarnation(app_catalog::App::Browser).target)
+    }else{app_launcher_status(app_catalog::App::Browser)}
+}
+fn browser_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
+    launcher::reserve_label(fallback,available,reason,app_reserve_remaining(app_catalog::App::Browser))
+}
+/// Presentation lookup only. Actual input retains its captured participant;
+/// this never retargets an old key, clipboard request, close, or viewport notice.
+fn browser_active_frame()->Option<(u32,u64)>{
+    let row=if app_catalog::count(app_catalog::App::Browser)==1 {
+        app_catalog::boot_incarnation(app_catalog::App::Browser)
+    }else{
+        let info=browser_activation_info(false).ok()?;
+        let successor=app_catalog::by_surface(info.successor,info.surface).filter(|r|r.app==app_catalog::App::Browser)?;
+        match info.state {2=>successor,0=>app_catalog::predecessor(successor)?,_=>return None}
+    };
+    if row.app!=app_catalog::App::Browser || !native_launcher_status(row.target).0{return None}
+    Some((row.target,row.frame()))
+}
+unsafe fn open_browser_in_active_scene()->bool{
+    if app_catalog::count(app_catalog::App::Browser)>1 {
+        let Ok(instance)=browser_activation_info(false)else{return false};
+        if instance.state==1 {
+            launcher_focus_discard();
+            let Ok(active)=browser_activation_info(true)else{return false};
+            if active.state!=2 || browser_activation_info(true)!=Ok(active){return false}
+            let Some(row)=app_catalog::by_surface(active.successor,active.surface).filter(|r|r.app==app_catalog::App::Browser)else{return false};
+            let Some(previous)=app_catalog::predecessor(row)else{return false};
+            sex_pdx::serial_record!("[shell.app.relaunch] predecessor={} successor={} task={} surface={} receipt_replayed=1",previous.target,active.successor,active.task,active.surface);
+            launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
+            return true; // Exact app registration completes focus asynchronously.
+        }
+        if instance.state==3{return false}
+    }
+    let Some((target,frame))=browser_active_frame()else{return false};
+    // None means this already-live incarnation's initial registration is still
+    // in flight. No Shell surface creation or successor activation is invented.
+    launcher_focus_existing(target,frame,None).unwrap_or(true)
+}
+
 fn quil_activation_info(commit:bool)->Result<sex_pdx::app_lifecycle::ActivationInfo,u64>{app_activation_info(app_catalog::App::Quil,commit)}
 fn quil_reserve_remaining()->Option<u8>{app_reserve_remaining(app_catalog::App::Quil)}
 fn quil_reserve_label(fallback:&'static str,available:bool,reason:&str)->&'static str{
@@ -16210,6 +16265,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
     match cmd {
         Command::FocusSpindle => spindle_launcher_status(),
         Command::FocusQuil => quil_launcher_status(),
+        Command::FocusBrowser => browser_launcher_status(),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -16283,6 +16339,12 @@ unsafe fn palette_execute_selected() -> bool {
             if open_ok {
                 serial_println!("[quil.launch.route.ok]");
             }
+            open_ok
+        }
+        Command::FocusBrowser => {
+            let open_ok=open_browser_in_active_scene();
+            let sid=if open_ok{browser_active_frame().map_or(0,|(_,frame)|frame)}else{0};
+            sex_pdx::serial_record!("[shell.palette.focus.result] target=BROWSER sid={} ok={}",sid,open_ok as u8);
             open_ok
         }
         Command::FocusLinen => {
@@ -16359,7 +16421,7 @@ unsafe fn palette_execute_selected() -> bool {
         if ok { "ok" } else { "action_reject" }
     );
     // ── Launcher exec marker: app subset only ──
-    if idx < 7 {
+    if idx < 7 || matches!(cmd,Command::FocusBrowser) {
         serial_println!(
             "[launcher.exec] idx={} app={} ok={} reason={}",
             idx,
@@ -19608,6 +19670,10 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
                     restore_ok as u8,
                     if restore_ok { "ok" } else { "restore_state_blocker" }
                 );
+            }
+            Command::FocusBrowser => {
+                let sid=browser_active_frame().map_or(0,|(_,frame)|frame);
+                palette_batch_emit_app_focus("Browser",sid,ok,if ok{"ok"}else{"open_or_focus_reject"});
             }
             Command::ZoomToggle | Command::MinimizeFocused => {}
         }

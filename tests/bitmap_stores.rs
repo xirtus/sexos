@@ -59,7 +59,7 @@ fn receipt(owner:u32,word:u64)->Applied{
  assert_eq!(stores.initialized_count(),0);
  for b in bindings().into_iter().rev(){assert!(stores.initialize_once(b));assert!(!stores.initialize_once(b));}
  assert_eq!(&*stores as*const Set,address);assert_eq!(stores.initialized_count(),COUNT);
- #[cfg(not(bitmap_stores_catalog))]assert_eq!(COUNT,1);
+ #[cfg(not(bitmap_stores_catalog))]assert_eq!(COUNT,3);
  #[cfg(bitmap_stores_catalog)]assert_eq!(COUNT,3);
  assert_eq!(core::mem::size_of::<Stores<1>>(),core::mem::size_of::<bitmap_transaction::Stage>());
  assert_eq!(core::mem::size_of::<Stores<3>>(),3*core::mem::size_of::<bitmap_transaction::Stage>());

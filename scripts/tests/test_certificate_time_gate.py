@@ -1,4 +1,5 @@
 """Public UTC/checker fixtures only, never native RTC or rollback evidence."""
+from source_boot_fixture import with_inventory
 import contextlib,io,json,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +10,7 @@ ROOT=Path(__file__).resolve().parents[2]
 SECONDS=1793367907
 def command(mode='normal'):
  return ['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-rtc',gate.RTC_INVALID if mode=='invalid-year'else gate.RTC_NORMAL]
+@with_inventory
 def metadata(mode='normal',pending=0):
  lines=['[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[boot.silkbar.clock.source] holder=6 task=6 slot=61 consumer=6 consumer_task=6 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1']
  for seq in range(1,2 if mode=='close'else 3):

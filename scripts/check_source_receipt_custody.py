@@ -187,13 +187,17 @@ def future_catalog(source):
   values=[r[index]for r in rows]
   if any(v==0 for v in values)or len(values)!=len(set(values)):raise ValueError('duplicate/zero catalog '+label)
  browser=[r for r in rows if r[0]=='Browser']
- if browser!=[('Browser',0,15,300,'None',40,43,'None',43,())]:raise ValueError('host expansion requires exact original-only Browser inventory')
- targets={r[2]for r in rows};surfaces=set();slots=set()
- for row in rows:
+ original=[('Browser',0,15,300,'None',40,43,'None',43,())]
+ reserved=original+[('Browser',1,30,343,'None',154,155,'Some(156)',157,()),('Browser',2,31,344,'None',158,159,'Some(160)',161,())]
+ if browser not in (original,reserved):raise ValueError('host copy requires exact reviewed Browser inventory')
+ others=[r for r in rows if r[0]!='Browser']
+ targets={r[2]for r in others};surfaces=set();slots=set()
+ for row in others:
   surfaces.add(row[3]);surfaces.update(row[9]);slots.update((row[5],row[6],row[8]))
   if row[4]!='None':surfaces.add(int(row[4][5:-1]))
   if row[7]!='None':slots.add(int(row[7][5:-1]))
- if targets&{30,31}or surfaces&{343,344}or slots&set(range(154,162)):raise ValueError('host successor tuple collides with current inventory')
+ if targets&{30,31}or surfaces&{343,344}or slots&set(range(154,162)):raise ValueError('host successor tuple collides with another family')
+ if browser==reserved:return source
  future_rows=(
   '    Incarnation { app: App::Browser, ordinal: 1, target: 30, surface: 343, shell_surface: None, lifecycle_slot: 154, close_slot: 155, activation_slot: Some(156), route_slot: 157, children: &[] },\n'
   '    Incarnation { app: App::Browser, ordinal: 2, target: 31, surface: 344, shell_surface: None, lifecycle_slot: 158, close_slot: 159, activation_slot: Some(160), route_slot: 161, children: &[] },\n')
@@ -228,7 +232,7 @@ def run(root,out,denial,main,plan,binding,catalog):
  if catalog:
   extra=out/'override-catalog';extra.mkdir(exist_ok=True)
   check(root,extra,denial,main,plan,binding,catalog)
- print('[source.receipt.catalog.host] PASS actual_and_future=1 compiled_mutants=9 wiring_controls=9 catalog_controls=3 future_rows=host_only')
+ print('[source.receipt.catalog.host] PASS actual_and_future=1 compiled_mutants=9 wiring_controls=9 catalog_controls=3 catalog_copy=reviewed_reserved_rows')
 
 def main():
  parser=argparse.ArgumentParser();parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]);parser.add_argument('--out',type=Path)

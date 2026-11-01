@@ -1,4 +1,5 @@
 """Independent public-clock model fixtures; native evidence is separate."""
+from source_boot_fixture import with_inventory,TAGS
 import datetime,sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -6,6 +7,11 @@ import silkbar_clock_gate as gate
 from check_desktop_pixels import glyph
 ROOT=Path(__file__).resolve().parents[2];T=1793367907
 
+def runtime_only(text):
+ tags=TAGS+('boot.app.catalog','boot.network.tls')
+ return ''.join(line for line in text.splitlines(keepends=True)if not any('['+tag+']'in line for tag in tags))
+
+@with_inventory
 def fixture(state='Snapshot',width=1280,late_enqueue=False):
  seq=1;value=T if state=='Snapshot'else 0;index={'Unknown':0,'Snapshot':1,'Unavailable':2,'Rollback':3,'Exhausted':4}[state];known=int(state in('Snapshot','Unavailable','Rollback'));observed=T if state=='Snapshot'else 0;attempts=int(observed>0);x=928 if width==1024 else 1090
  text='[boot.silkbar.clock.source] holder=6 task=6 slot=61 consumer=6 consumer_task=6 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0\n'
@@ -50,7 +56,7 @@ class CivilClockOracle(unittest.TestCase):
  def test_real_admissions_skip_repeated_seconds_but_not_changed_text(self):
   base=fixture().replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n');trace=base
   for seq,value,redraw in[(2,T,0),(3,T+1,1)]:
-   part=fixture().split('\n',1)[1].replace('sequence=1','sequence='+str(seq)).replace('ordinal=1','ordinal='+str(seq)).replace(str(T),str(value)).replace('pixels=unconfirmed\n','pixels=unconfirmed repaint='+str(redraw)+'\n')
+   part=runtime_only(fixture()).replace('sequence=1','sequence='+str(seq)).replace('ordinal=1','ordinal='+str(seq)).replace(str(T),str(value)).replace('pixels=unconfirmed\n','pixels=unconfirmed repaint='+str(redraw)+'\n')
    # A suppressed admission has no fabricated draw; a different dirty cause
    # may nevertheless really draw that same sequence later.
    if seq==2:part=part[:part.index('[display.civil.draw]')]
@@ -61,18 +67,18 @@ class CivilClockOracle(unittest.TestCase):
  def test_actual_local_expiry_requires_same_second_recovery_redraw(self):
   base=fixture().replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n')
   expiry=f'[sexdisplay.clock.civil.stale] sequence=1 high_water={T} state=Unknown seconds=0 stale=1 ticks=620 synthesized=0\n'
-  next_sample=fixture().split('\n',1)[1].replace('sequence=1','sequence=2').replace('ordinal=1','ordinal=2').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n')
+  next_sample=runtime_only(fixture()).replace('sequence=1','sequence=2').replace('ordinal=1','ordinal=2').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n')
   self.assertEqual(gate.repaint_metrics(base+expiry+next_sample)['clock_repaint_requests'],2)
   for bad in(expiry.replace('sequence=1','sequence=2'),expiry.replace('high_water='+str(T),'high_water=1')):
    with self.assertRaises(AssertionError):gate.repaint_metrics(base+bad+next_sample)
  def test_source_precision_row_changes_are_not_coalesced(self):
   base=fixture('Unknown').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=0\n')
-  next_sample=fixture('Unavailable').split('\n',1)[1].replace('sequence=1','sequence=2').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n')
+  next_sample=runtime_only(fixture('Unavailable')).replace('sequence=1','sequence=2').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n')
   self.assertEqual(gate.repaint_metrics(base+next_sample)['clock_repaint_requests'],1)
   with self.assertRaises(AssertionError):gate.repaint_metrics(base+next_sample.replace('repaint=1','repaint=0'))
  def test_unrelated_actual_draw_can_follow_suppressed_admission(self):
   base=fixture().replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=1\n')
-  next_sample=fixture().split('\n',1)[1].replace('sequence=1','sequence=2').replace('ordinal=1','ordinal=2').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=0\n')
+  next_sample=runtime_only(fixture()).replace('sequence=1','sequence=2').replace('ordinal=1','ordinal=2').replace('pixels=unconfirmed\n','pixels=unconfirmed repaint=0\n')
   self.assertEqual(gate.repaint_metrics(base+next_sample)['completed_civil_draws'],2)
   for bad in(next_sample.replace('[display.civil.draw] sequence=2','[display.civil.draw] sequence=1'),next_sample.replace('state=Snapshot seconds='+str(T)+' stale=0 pixels=written','state=Unknown seconds=0 stale=1 pixels=written')):
    with self.assertRaises(AssertionError):gate.repaint_metrics(base+bad)

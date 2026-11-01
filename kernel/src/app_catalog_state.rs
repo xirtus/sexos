@@ -16,6 +16,9 @@ pub struct Observed {
     pub logical_app: u32,
     pub incarnation: u32,
     pub predecessor: u32,
+    /// Actual registered predecessor main-task ID, checked by the BOOT capturer.
+    /// Zero only for an original; never derive it from a domain or grant.
+    pub predecessor_registered_task: u32,
     pub coordinator: u32,
     pub dormant: bool,
     /// Actual terminal/retired/dead state, not the catalog's intended state.
@@ -48,6 +51,7 @@ pub enum Error {
     LogicalApp,
     IncarnationNumber,
     Predecessor,
+    PredecessorRegisteredTask,
     Dormant,
     Dead,
     ShellLifecycleTarget,
@@ -122,14 +126,14 @@ pub fn validate_layout(rows: &[Incarnation]) -> Result<(), Error> {
 
 /// Validate one immutable catalog row against observations of actual BOOT
 /// objects. Exact rights are required, including absence of surplus rights.
-/// This current catalog explicitly binds every main task ID to its PD ID;
-/// generic lifecycle protocol identities remain separate namespaces.
+/// Task IDs come from registered execution objects. Catalog rows describe
+/// domains; equal IDs in the current BOOT do not merge these namespaces.
 pub fn validate(row: &Incarnation, actual: &Observed, coordinator: u32) -> Result<(), Error> {
     validate_layout(&INCARNATIONS)?;
     if !INCARNATIONS.iter().any(|canonical| canonical == row) { return Err(Error::CatalogRow); }
     if coordinator != 3 || actual.coordinator != coordinator { return Err(Error::Coordinator); }
     if actual.target != row.target { return Err(Error::Target); }
-    if actual.task != row.target { return Err(Error::Task); }
+    if actual.task == 0 { return Err(Error::Task); }
     if actual.task_domain != actual.target { return Err(Error::TaskDomain); }
     if !actual.task_domain_pointer_matches { return Err(Error::TaskDomainPointer); }
     if actual.content_surface != row.surface { return Err(Error::ContentSurface); }
@@ -143,17 +147,18 @@ pub fn validate(row: &Incarnation, actual: &Observed, coordinator: u32) -> Resul
     if actual.logical_app != original.target { return Err(Error::LogicalApp); }
     if actual.incarnation != number { return Err(Error::IncarnationNumber); }
     if actual.predecessor != predecessor { return Err(Error::Predecessor); }
+    if (predecessor == 0) != (actual.predecessor_registered_task == 0) { return Err(Error::PredecessorRegisteredTask); }
     if actual.dormant != (row.ordinal != 0) { return Err(Error::Dormant); }
     if actual.dead { return Err(Error::Dead); }
     let grant = actual.shell_lifecycle;
     if grant.target_pd != row.target { return Err(Error::ShellLifecycleTarget); }
-    if grant.task_id != row.target { return Err(Error::ShellLifecycleTask); }
+    if grant.task_id != actual.task { return Err(Error::ShellLifecycleTask); }
     if grant.holder_pd != coordinator { return Err(Error::ShellLifecycleHolder); }
     if grant.rights != (QUERY | ACK) { return Err(Error::ShellLifecycleRights); }
     if grant.ack_bit != 1 { return Err(Error::ShellLifecycleAck); }
     let own = actual.self_catalog;
     if own.target_pd != row.target { return Err(Error::SelfCatalogTarget); }
-    if own.task_id != row.target { return Err(Error::SelfCatalogTask); }
+    if own.task_id != actual.task { return Err(Error::SelfCatalogTask); }
     if own.holder_pd != row.target { return Err(Error::SelfCatalogHolder); }
     if own.rights != QUERY { return Err(Error::SelfCatalogRights); }
     if own.ack_bit != 0 { return Err(Error::SelfCatalogAck); }
@@ -167,9 +172,9 @@ pub fn validate(row: &Incarnation, actual: &Observed, coordinator: u32) -> Resul
         if activation.logical_app != original.target { return Err(Error::ActivationLogicalApp); }
         if activation.incarnation != number { return Err(Error::ActivationIncarnation); }
         if activation.predecessor != predecessor { return Err(Error::ActivationPredecessor); }
-        if activation.predecessor_task != predecessor { return Err(Error::ActivationPredecessorTask); }
+        if activation.predecessor_task != actual.predecessor_registered_task { return Err(Error::ActivationPredecessorTask); }
         if activation.successor != row.target { return Err(Error::ActivationSuccessor); }
-        if activation.successor_task != row.target { return Err(Error::ActivationSuccessorTask); }
+        if activation.successor_task != actual.task { return Err(Error::ActivationSuccessorTask); }
     }
     Ok(())
 }

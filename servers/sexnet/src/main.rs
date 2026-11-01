@@ -63,8 +63,8 @@ fn load_source_bindings()->[Option<source_binding::Binding>;sex_pdx::browser_sou
         sex_pdx::serial_record!("[sexnet.entropy.source] held={} available={} source=rdseed fallback=0 broker=private_seed32",binding.is_some()as u8,binding.is_some_and(|b|b.entropy_info().available)as u8);
         sex_pdx::serial_record!("[sexnet.clock.source] held={} source=q35_cmos_utc no_ticks_fallback=1 precision=1",binding.is_some()as u8);
         if let Some(b)=binding{
-            sex_pdx::serial_record!("[net.source.binding.held] target={} task={} surface={} lifecycle_slot={} entropy_slot={} clock_slot={} trust_slot={} before_dispatch=1",
-                b.target(),b.task(),b.plan().surface(),b.plan().lifecycle_slot(),b.entropy_slot(),b.clock_slot(),b.trust_slot());
+            sex_pdx::serial_record!("[net.source.binding.held] target={} task={} surface={} lifecycle_slot={} entropy_slot={} clock_slot={} trust_slot={} before_dispatch=1 trust_profile={} trust_root_bytes={} trust_version={}",
+                b.target(),b.task(),b.plan().surface(),b.plan().lifecycle_slot(),b.entropy_slot(),b.clock_slot(),b.trust_slot(),b.trust_info().profile,b.trust_info().root_bytes,b.trust_info().version);
         }else{sex_pdx::serial_record!("[net.source.binding.unavailable] target={} fallback=0",plan.target());}
         binding
     })

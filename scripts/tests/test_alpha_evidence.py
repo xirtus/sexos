@@ -1,4 +1,5 @@
 """Counterexamples for immutable alpha storage; these are not native evidence."""
+from source_boot_fixture import complete as complete_source_fixture
 import contextlib,gzip,hashlib,io,json,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -84,7 +85,7 @@ class AlphaEvidence(unittest.TestCase):
   # actual immutable closure and canonical option/result join without a guest.
   with tempfile.TemporaryDirectory()as name:
    root=Path(name).resolve();out=root/'evidence';out.mkdir();iso=root/'held.iso';iso.write_bytes(b'held image');binding=root/'binding.json';binding.write_text('{}')
-   source={'held':'source'};c=dict(source_sha256=source);held={'sealed':'binding'};text='complete immutable prefix\n';proof=dict(ok=True)
+   source={'held':'source'};c=dict(source_sha256=source);held={'sealed':'binding'};text=complete_source_fixture('complete immutable prefix\n');proof=dict(ok=True)
    (out/'serial.log').write_text(text);(out/'frame.ppm').write_bytes(b'pixel fixture')
    disk=b'unchanged terminal disk';disk_hash=hashlib.sha256(disk).hexdigest()
    for file in ['seed.img.gz','nvme.img.gz']:(out/file).write_bytes(gzip.compress(disk))

@@ -5,6 +5,7 @@ The host is the named endpoint itself. It neither forwards guest traffic nor
 provides a substitute verifier. No TLS key log or ephemeral secrets are saved.
 """
 from clock_source_evidence import browser_clock_sources
+import browser_source_evidence as source_evidence
 import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,struct,subprocess,tempfile,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -389,21 +390,30 @@ def verify_peer_pixels(trace,ppm,expected,contract,resolution=None):
   return dict(ok=True,errors=[],expected=expected,geometry=g,checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
-def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
+def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end,*,root=None,plans=None,require_version=False):
  from http_content_gate import resolution_joins
  errors=[];joins=[]
  try:
   assert mode in MODES and wire['ok']and dns['ok'],'missing independent actual TLS/DNS wire proof'
-  for marker in('[boot.entropy.source] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0','[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[boot.trust.policy] holder=13 task=13 slot=62 consumer=15 consumer_task=15 profile=1 root_bytes=376 runtime_mint=0','[boot.network.tls] holder=13 task=13 consumer=15 consumer_task=15 profile=1 peer_port=46080 origin=immutable_boot_profile runtime_mint=0','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1'):
-   assert trace.count(marker)==1 and trace.count(marker.split(']')[0]+']')==1,'missing/foreign/duplicate exact BOOT grant or raw-source denial'
+  root=Path(root)if root is not None else Path(__file__).resolve().parents[1]
+  plans=tuple(plans)if plans is not None else source_evidence.plans_from_catalog(root)
+  inventory=source_evidence.validate_inventory(trace,plans,require_version=require_version)
+  selected=inventory['roster'].get(15);assert selected is not None,'original Browser absent from source-bound inventory'
+  consumer_task=selected['task'];holder,holder_task=inventory['holder']
+  source_evidence.validate_entropy_stream(trace,inventory)
+  source_evidence.validate_clock_stream(trace,inventory)
+  for marker in ('[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1'):
+   assert trace.count(marker)==1 and trace.count(marker.split(']')[0]+']')==1,'missing/foreign/duplicate exact raw-source denial'
+  marker=f'[boot.network.tls] holder={holder} task={holder_task} consumer=15 consumer_task={consumer_task} profile=1 peer_port=46080 origin=immutable_boot_profile runtime_mint=0'
+  assert trace.count(marker)==1 and trace.count('[boot.network.tls]')==len(inventory['roster']),'missing/foreign/duplicate exact BOOT TLS route'
   private_lines=[line for line in trace.splitlines()if re.search(r'\[(?:browser\.tls|entropy\.)',line)]
   assert not any(re.search(r'\b(?:key|keylog|traffic_secret|master_secret|seed_bytes|seed_value|secret)=',line)for line in private_lines),'private TLS/seed material in metadata'
   intent=re.search(r'\[browser.tls.peer.intent\] accepted=1 explicit=1 public_internet=0',trace);assert intent and trace.count('[browser.tls.peer.intent]')==1,'missing exact actual Y intent'
-  policy=re.search(r'\[trust.policy.snapshot\] owner=15 task=15 seq=1 profile=1 root_bytes=376 origin=held_boot_grant',trace);assert policy and trace.count('[trust.policy.snapshot]')==1 and intent.start()<policy.start(),'missing fresh exact policy query'
-  sources=browser_clock_sources(trace);source=sources[0]if len(sources)==1 else None;service=re.search(r'\[certificate.time.snapshot\] owner=15 task=15 seq=1 seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace)
+  policy=re.search(rf'\[trust.policy.snapshot\] owner=15 task={consumer_task} seq=1 profile=1 root_bytes=376 origin=held_boot_grant',trace);assert policy and trace.count('[trust.policy.snapshot]')==1 and intent.start()<policy.start(),'missing fresh exact policy query'
+  sources=browser_clock_sources(trace,15,consumer_task,plans=plans,require_version=require_version);source=sources[0]if len(sources)==1 else None;service=re.search(rf'\[certificate.time.snapshot\] owner=15 task={consumer_task} seq=1 seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace)
   assert source and service and len(sources)==trace.count('[certificate.time.snapshot]')==1 and source[1]==service[1]and policy.start()<source.start()<service.start(),'missing fresh exact UTC receipt'
   assert math.floor(host_start)-1<=int(source[1])<=math.ceil(host_end)+1,'UTC outside actual trusted host bracket'
-  seed=re.search(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=1 bytes=32 source=held_boot_grant',trace);produced=re.search(r'\[entropy.seed.progress\] owner=Some\(Identity \{ pd: 15, task: 15 \}\) ticket=1 state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace);released=re.search(r'\[entropy.seed.released\] owner=15 task=15 ticket=1 service_payload=erased receipt=retained',trace)
+  seed=re.search(rf'\[entropy.seed.admitted\] owner=15 task={consumer_task} ticket=1 bytes=32 source=held_boot_grant',trace);produced=re.search(rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: 15, task: {consumer_task} \}}\) ticket=1 state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace);released=re.search(rf'\[entropy.seed.released\] owner=15 task={consumer_task} ticket=1 service_payload=erased receipt=retained',trace)
   assert seed and produced and released and trace.count('[entropy.seed.admitted]')==trace.count('[entropy.seed.released]')==1 and policy.start()<seed.start()<produced.start()<released.start(),'missing fresh produced32/positive seed cleanup'
   check=re.search(r'\[browser.trust.self_check\] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0',trace);prep=re.search(r'\[browser.tls.prepared\] task_bytes=(\d+) private_bytes=(\d+) read=4096 write=2048 tx_bytes=(\d+) utc_snapshot=(\d+) authenticated=0 network=0',trace)
   assert check and prep and trace.count('[browser.trust.self_check]')==trace.count('[browser.tls.prepared]')==1 and max(released.start(),service.start())<check.start()<prep.start(),'local prerequisite preparation proof missing'
@@ -412,8 +422,8 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
   peer_admit=re.search(r'\[browser.tls.peer.admitted\] ticket=(\d+) dns_generation=(\d+) seq=(\d+) task_bytes=(\d+) private_bytes=(\d+) profile=1 authority=held_route',trace);assert peer_admit and trace.count('[browser.tls.peer.admitted]')==1,'missing correlated nonzero duplex lease receipt'
   ticket,generation,seq,atask,aprivate=map(int,peer_admit.groups());assert ticket==wire['joins'][0]['ticket']and ticket==2 and generation==1 and 0<seq<=0xffffff and(atask,aprivate)==(task,private),'wrong peer/DNS/sequence/private join'
   resolution=resolution_joins(trace,raw,[(ticket,generation)],dns);assert resolution['ok'],resolution['errors']
-  assert re.search(rf'\[net.job.state\] owner=Some\(Identity \{{ pd: 15, task: 15 \}}\) ticket={ticket} ',trace),'duplex lease lacks actual authenticated owner/task state'
-  admission=re.search(rf'\[net.job.duplex.admitted\] owner=15 task=15 ticket={ticket} kind=10 ring=1024 tx_ring=4096 max_wire=32768 peer_port=46080 trust_profile=1 authority=held_boot_route',trace)
+  assert re.search(rf'\[net.job.state\] owner=Some\(Identity \{{ pd: 15, task: {consumer_task} \}}\) ticket={ticket} ',trace),'duplex lease lacks actual authenticated owner/task state'
+  admission=re.search(rf'\[net.job.duplex.admitted\] owner=15 task={consumer_task} ticket={ticket} kind=10 ring=1024 tx_ring=4096 max_wire=32768 peer_port=46080 trust_profile=1 authority=held_boot_route',trace)
   assert admission and trace.count('[net.job.duplex.admitted]')==1 and prep.start()<admission.start()<peer_admit.start(),'missing exact service-backed duplex admission'
   auth=list(re.finditer(rf'\[browser.tls.peer.authenticated\] ticket={ticket} profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1',trace));responses=list(re.finditer(rf'\[browser.tls.peer.response\] ticket={ticket} bytes={len(RESPONSE)} hash=(0x[0-9a-f]+) authenticated=1 source=guest_aead',trace));positive=list(re.finditer(rf'\[browser.tls.peer.released\] ticket={ticket} tx=(\d+) rx=(\d+) request_bytes={len(REQUEST)} response_bytes={len(RESPONSE)} positive_release=1 authenticated=1 public_test_root=1',trace))
   assert len(auth)==trace.count('[browser.tls.peer.authenticated]')and len(responses)==trace.count('[browser.tls.peer.response]')and len(positive)==trace.count('[browser.tls.peer.released]'),'malformed/foreign peer success receipts'
@@ -437,10 +447,10 @@ def inspect_exchange(trace,mode,wire,dns,raw,host_start,host_end):
     assert peer_admit.start()<rejected[0].start()<unavailable[0].start(),'rejection published before positive cleanup RELEASE'
     assert not any(v[1]in('Cancelled','Uncertain')for v in views),'negative qualification lacks certain terminal cleanup'
    else:
-    close=re.search(r'\[browser.tls.peer.closed\] pending=1 terminal=1 owned_storage=erased',trace);ack=re.search(r'\[net.app.cleanup.ack\] target=15 task=15 client_leases=0 shared_cache=retained ok=1',trace)
+    close=re.search(r'\[browser.tls.peer.closed\] pending=1 terminal=1 owned_storage=erased',trace);ack=re.search(rf'\[net.app.cleanup.ack\] target=15 task={consumer_task} client_leases=0 shared_cache=retained ok=1',trace)
     assert close and trace.count('[browser.tls.peer.closed]')==1 and ack and peer_admit.start()<close.start()<ack.start(),'Close missed actual pending TLS lease/cleanup'
     assert not re.search(rf'\[net.job.egress.submit\] ticket={ticket} |\[net.dns.egress.submit\] ticket={generation} ',trace[ack.end():]),'retired owner emitted new private egress after cleanupACK'
-    for marker in('[trust.policy.retired] target=15 task=15 before_cleanup_ack=1','[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1'):
+    for marker in(f'[trust.policy.retired] target=15 task={consumer_task} before_cleanup_ack=1',f'[entropy.seed.retired] target=15 task={consumer_task} before_cleanup_ack=1 private_payload=erased',f'[certificate.time.retired] target=15 task={consumer_task} before_cleanup_ack=1 high_water_retained=1'):
      assert marker in trace and close.start()<trace.index(marker)<ack.start(),'prerequisite retirement did not precede exact cleanupACK'
   joins.append(dict(ticket=ticket,dns_generation=generation,sequence=seq,task_bytes=task,private_bytes=private,initial_tls_bytes=initial,utc_snapshot=utc,policy_offset=policy.start(),prepared_offset=prep.start(),duplex_admitted_offset=admission.start(),client_admitted_offset=peer_admit.start(),authenticated=mode=='ready',dns_resolution=resolution))
  except(AssertionError,ValueError,KeyError,IndexError,TypeError,AttributeError)as exc:errors.append(str(exc))
@@ -520,7 +530,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['missing actual fixed-name DNS fixture']);exchange=inspect_exchange(trace,a.mode,wire,dns,raw,host_start,host_end);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['missing actual fixed-name DNS fixture']);exchange=inspect_exchange(trace,a.mode,wire,dns,raw,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
  (out/'peer-exchanges.json').write_text(json.dumps(dict(tls=peer.rows,dns=peer.dns,dns_send_attempts=peer.attempts,keylog_enabled=False,scope='Explicit actual endpoint public application observations only; no private/ephemeral TLS material captured.'),indent=2)+'\n')
  result=dict(ok=failure is None and not peer.errors and all(v['ok']for v in(wire,dns,exchange,authority,waiting)),error=failure,server_errors=peer.errors,mode=a.mode,binding=binding,wire=wire,dns=dns,exchange=exchange,authority=authority,self_wait=waiting,pixels=pixels,cleanup=cleanup,actions=actions,scope=scope(a.mode));(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))

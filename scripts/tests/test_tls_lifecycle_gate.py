@@ -1,4 +1,5 @@
 """Independent public lifecycle fixtures, never native guest acceptance proof."""
+from source_boot_fixture import with_inventory
 import copy,json,os,re,select,shutil,socket,ssl,struct,subprocess,sys,threading,time,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -52,6 +53,7 @@ class LifecycleWireOracle(unittest.TestCase):
 UTC=fixture.UTC
 CONTRACT={'pipe_bytes':8248,'stream_ring':1024,'stream_max_wire':13312,'stream_total_ticks':30000,'stream_idle_ticks':5000}
 def snapshot(reason,used=0,payload=0,tls=0,route=0,providers=0,queued='None',visible=0):return f'[browser.resources] reason={reason} heap_used={used} heap_free={65536-used} heap_total=65536 tls_payload={payload} tls_pending={tls} route_busy={route} providers_busy={providers} queued={queued} body_visible={visible}\n'
+@with_inventory
 def metadata():
  raw=capture();wire=gate.inspect_wire(raw,endpoint_rows(),public_rows(),PLAIN_REQUEST);assert wire['ok'];flows,_=gate.tls.reassemble(raw);by_ticket={f['guest_port']-48000:f for f in flows};text=fixture.metadata(fixture.capture()).split('[browser.tls.peer.intent]',1)[0];cycle=0
  def queue(kind,document,old=0):

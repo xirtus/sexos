@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Actual pure BOOT validator over explicit seventeen-subject kernel observations.
+//! Actual pure BOOT validator over explicit nineteen-subject kernel observations.
 //! These are host observations, not native grant extraction or task admission.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
@@ -33,12 +33,14 @@ fn observed(target: u32) -> Observed {
         27 => (328, 12, 6, 26, true),
         28 => (333, 12, 7, 27, true),
         29 => (338, 12, 8, 28, true),
+        30 => (343, 15, 2, 15, true),
+        31 => (344, 15, 3, 30, true),
         _ => panic!("not a current BOOT subject"),
     };
     Observed {
         target, task: target, task_domain: target, task_domain_pointer_matches: true,
         content_surface, logical_app, incarnation,
-        predecessor, coordinator: 3, dormant, dead: false,
+        predecessor, predecessor_registered_task: predecessor, coordinator: 3, dormant, dead: false,
         shell_lifecycle: LifecycleGrant {
             target_pd: target, task_id: target, holder_pd: 3, rights: QUERY | ACK, ack_bit: 1,
         },
@@ -58,8 +60,8 @@ fn row(target: u32) -> &'static Incarnation {
 }
 
 #[test]
-fn all_seventeen_current_boot_subjects_validate_without_changing_observations() {
-    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+fn all_nineteen_current_boot_subjects_validate_without_changing_observations() {
+    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
     assert_eq!(validate_layout(&INCARNATIONS), Ok(()));
     for row in &INCARNATIONS {
         let actual = observed(row.target);
@@ -73,7 +75,7 @@ fn all_seventeen_current_boot_subjects_validate_without_changing_observations() 
 fn actual_identity_surface_and_lineage_mismatches_are_distinct() {
     let changes: [(fn(&mut Observed), Error); 7] = [
         (|o| o.target = 12, Error::Target),
-        (|o| o.task = 12, Error::Task),
+        (|o| o.task = 12, Error::ShellLifecycleTask),
         (|o| o.task = 0, Error::Task),
         (|o| o.content_surface = 156, Error::ContentSurface),
         (|o| o.logical_app = 16, Error::LogicalApp),
@@ -159,7 +161,7 @@ fn domain_routes_cannot_target_another_incarnation() {
 
 #[test]
 fn activation_presence_is_exact_for_originals_and_successors() {
-    for target in [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29] {
+    for target in [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] {
         let mut actual = observed(target);actual.activation = None;
         assert_eq!(validate(row(target), &actual, 3), Err(Error::MissingActivation));
     }
@@ -196,7 +198,7 @@ fn fabricated_catalog_rows_are_not_new_authority() {
 
 #[test]
 fn malformed_catalog_identity_order_and_slot_layouts_reject() {
-    let mutations: [(fn(&mut [Incarnation; 17]), Error); 11] = [
+    let mutations: [(fn(&mut [Incarnation; 19]), Error); 11] = [
         (|r| r[1].target = 9, Error::CatalogTarget),
         (|r| r[0].target = 0, Error::CatalogTarget),
         (|r| r[0].target = 3, Error::CatalogTarget),
@@ -214,7 +216,7 @@ fn malformed_catalog_identity_order_and_slot_layouts_reject() {
         assert_eq!(validate_layout(&rows), Err(expected));
     }
     assert_eq!(validate_layout(&INCARNATIONS[..5]), Err(Error::CatalogLength));
-    let mut rows = INCARNATIONS;rows[2].app = App::Quil;
+    let mut rows = INCARNATIONS;for row in &mut rows{if row.app==App::Browser{row.app=App::Quil;}}
     assert_eq!(validate_layout(&rows), Err(Error::CatalogMissingApp));
     let mut rows = INCARNATIONS;rows[0].route_slot = u32::MAX as u64 + 1;
     assert_eq!(validate_layout(&rows), Err(Error::CatalogSlot));
@@ -244,7 +246,7 @@ fn final_reserve_requires_exact_eighth_lineage_task_and_routes() {
     assert_eq!(validate(row(23), &observed(23), 3), Ok(()));
     let changes: [(fn(&mut Observed), Error); 9] = [
         (|o| o.target = 23 | (1 << 31), Error::Target),
-        (|o| o.task = 23 | (1 << 31), Error::Task),
+        (|o| o.task = 23 | (1 << 31), Error::ShellLifecycleTask),
         (|o| o.content_surface = 312 | (1u64 << 32), Error::ContentSurface),
         (|o| o.incarnation = 7, Error::IncarnationNumber),
         (|o| o.predecessor = 18, Error::Predecessor),
@@ -277,7 +279,7 @@ fn third_spindle_actual_grants_require_exact_lineage_task_routes_and_no_high_bit
  assert_eq!(validate(row(24),&actual,3),Ok(()));
  let changes:[(fn(&mut Observed),Error);20]=[
   (|o|o.target=24|(1u32<<31),Error::Target),
-  (|o|o.task=24|(1u32<<31),Error::Task),
+  (|o|o.task=24|(1u32<<31),Error::ShellLifecycleTask),
   (|o|o.task_domain=17,Error::TaskDomain),
   (|o|o.task_domain_pointer_matches=false,Error::TaskDomainPointer),
   (|o|o.content_surface=313|(1u64<<32),Error::ContentSurface),
@@ -319,7 +321,7 @@ fn all_added_spindle_boot_observations_and_held_tuples_are_exact() {
         assert_eq!(validate(row(target),&actual,3),Ok(()));
         let changes:[(fn(&mut Observed),Error);12]=[
             (|o|o.target|=1<<31,Error::Target),
-            (|o|o.task|=1<<31,Error::Task),
+            (|o|o.task|=1<<31,Error::ShellLifecycleTask),
             (|o|o.content_surface|=1u64<<32,Error::ContentSurface),
             (|o|o.task_domain=12,Error::TaskDomain),
             (|o|o.task_domain_pointer_matches=false,Error::TaskDomainPointer),
@@ -346,4 +348,73 @@ fn all_added_spindle_boot_observations_and_held_tuples_are_exact() {
     assert_eq!(validate_layout(&rows),Err(Error::CatalogOrder));
     let mut rows=INCARNATIONS;rows[16].route_slot=153|(1u64<<32);
     assert_eq!(validate_layout(&rows),Err(Error::CatalogSlot));
+}
+
+
+// Explicit host observations of independently numbered registered task objects.
+// The production BOOT capturer must establish these IDs and pointer facts;
+// neither this pure validator nor descriptive catalog data queries a registry.
+fn unequal_browser(target:u32)->Observed{
+    let mut actual=observed(target);
+    let(task,predecessor_task)=match target{15=>(150,0),30=>(300,150),31=>(310,300),_=>panic!("explicit Browser observation")};
+    actual.task=task;
+    actual.predecessor_registered_task=predecessor_task;
+    actual.shell_lifecycle.task_id=task;
+    actual.self_catalog.task_id=task;
+    if let Some(activation)=actual.activation.as_mut(){activation.successor_task=task;activation.predecessor_task=predecessor_task;}
+    actual
+}
+#[test]
+fn unequal_registered_browser_tasks_validate_original_and_both_successors(){
+    for(pd,task,predecessor,pred_task)in [(15,150,0,0),(30,300,15,150),(31,310,30,300)]{
+        let actual=unequal_browser(pd);let retained=actual;
+        assert_eq!((actual.target,actual.task,actual.predecessor,actual.predecessor_registered_task),(pd,task,predecessor,pred_task));
+        assert_eq!(actual.task_domain,pd);assert!(actual.task_domain_pointer_matches);
+        assert_eq!(validate(row(pd),&actual,3),Ok(()));assert_eq!(actual,retained);
+    }
+}
+#[test]
+fn unequal_registered_task_still_requires_exact_pointer_domain_and_grant_tasks(){
+    for pd in [15,30,31]{let original=unequal_browser(pd);
+        let mut bad=original;bad.task=0;assert_eq!(validate(row(pd),&bad,3),Err(Error::Task));
+        let mut bad=original;bad.task_domain=original.task;assert_eq!(validate(row(pd),&bad,3),Err(Error::TaskDomain));
+        let mut bad=original;bad.task_domain_pointer_matches=false;assert_eq!(validate(row(pd),&bad,3),Err(Error::TaskDomainPointer));
+        for wrong in [0,pd,original.task+1,u32::MAX]{
+            let mut bad=original;bad.shell_lifecycle.task_id=wrong;assert_eq!(validate(row(pd),&bad,3),Err(Error::ShellLifecycleTask));
+            let mut bad=original;bad.self_catalog.task_id=wrong;assert_eq!(validate(row(pd),&bad,3),Err(Error::SelfCatalogTask));
+            if let Some(activation)=bad.activation.as_mut(){
+                bad.self_catalog=original.self_catalog;activation.successor_task=wrong;assert_eq!(validate(row(pd),&bad,3),Err(Error::ActivationSuccessorTask));
+            }
+        }
+    }
+}
+#[test]
+fn predecessor_grant_task_matches_separate_registered_task_observation(){
+    for pd in [30,31]{let original=unequal_browser(pd);
+        for wrong in [0,original.predecessor,original.predecessor_registered_task+1,u32::MAX]{
+            let mut bad=original;bad.activation.as_mut().unwrap().predecessor_task=wrong;
+            assert_eq!(validate(row(pd),&bad,3),Err(Error::ActivationPredecessorTask));
+        }
+        let mut bad=original;bad.predecessor_registered_task=0;assert_eq!(validate(row(pd),&bad,3),Err(Error::PredecessorRegisteredTask));
+        // Keeping the grant unchanged exposes a stale/replaced registry task;
+        // copying a grant task into this observation would defeat that join.
+        for wrong in [original.predecessor,original.predecessor_registered_task+1]{
+            let mut bad=original;bad.predecessor_registered_task=wrong;assert_eq!(validate(row(pd),&bad,3),Err(Error::ActivationPredecessorTask));
+        }
+    }
+    for wrong in [15,150,u32::MAX]{let mut bad=unequal_browser(15);bad.predecessor_registered_task=wrong;assert_eq!(validate(row(15),&bad,3),Err(Error::PredecessorRegisteredTask));}
+}
+#[test]
+fn last_browser_held_tasks_do_not_relax_canonical_row_rights_routes_or_terminal_state(){
+    let original=unequal_browser(31);
+    let controls:[(fn(&mut Observed),Error);8]=[
+        (|v|v.dead=true,Error::Dead),(|v|v.dormant=false,Error::Dormant),
+        (|v|v.shell_lifecycle.rights|=RETIRE,Error::ShellLifecycleRights),
+        (|v|v.self_catalog.holder_pd=310,Error::SelfCatalogHolder),
+        (|v|v.close_target=310,Error::CloseTarget),(|v|v.route_target=30,Error::RouteTarget),
+        (|v|v.predecessor=15,Error::Predecessor),
+        (|v|v.activation.as_mut().unwrap().predecessor=15,Error::ActivationPredecessor),
+    ];
+    for(change,error)in controls{let mut bad=original;change(&mut bad);assert_eq!(validate(row(31),&bad,3),Err(error));}
+    let mut fake=*row(31);fake.route_slot=157;assert_eq!(validate(&fake,&original,3),Err(Error::CatalogRow));
 }

@@ -1,6 +1,7 @@
 """Independent public import fixtures; never actual native acceptance evidence."""
 import copy,hashlib,re,struct,sys,unittest
 from pathlib import Path
+from source_boot_fixture import complete
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import https_import_gate as gate
 import test_tls_exchange_gate as fixture
@@ -87,9 +88,8 @@ class ImportDisk(unittest.TestCase):
 UTC=fixture.UTC
 CONTRACT={'pipe_bytes':8248}
 def metadata(recovery=False):
- before,after=disks();meta=gate.import_disk(before,after);identity=meta['identity'];raw=capture(recovery);wire=gate.inspect_wire(raw,[]if recovery else peer_rows(),recovery);flows={f['guest_port']-48000:f for f in gate.https.tls.reassemble(raw)[0]};text=''
+ before,after=disks();meta=gate.import_disk(before,after);identity=meta['identity'];raw=capture(recovery);wire=gate.inspect_wire(raw,[]if recovery else peer_rows(),recovery);flows={f['guest_port']-48000:f for f in gate.https.tls.reassemble(raw)[0]};text=''.join(line for line in fixture.metadata(fixture.capture()).splitlines(keepends=True)if any('['+tag+']'in line for tag in ('boot.network.tls','browser.trust.source.denied','browser.entropy.source.denied','browser.clock.source.denied')))
  if not recovery:
-  text='\n'.join(fixture.metadata(fixture.capture()).splitlines()[:7])+'\n'
   for index,flow in enumerate(wire['joins'],1):
    ticket=index+1;digest=hex(gate.fnv(gate.BODIES[index-1]));initial=flow['initial_tls_bytes'];utc=UTC+index
    text+=f'[browser.command.started] kind=TlsDns accepted=1\n[browser.https.intent] accepted=1 explicit=1 public_internet=0\n[trust.policy.snapshot] owner=15 task=15 seq={index} profile=1 root_bytes=376 origin=held_boot_grant\n[clock.source.snapshot] pd=13 task=13 slot=61 seconds={utc} attempts=1 precision=1 profile=q35_cmos_utc ordinal={index}\n[certificate.time.snapshot] owner=15 task=15 seq={index} seconds={utc} source=q35_cmos_utc precision=1 receipt=retained\n[entropy.seed.admitted] owner=15 task=15 ticket={index} bytes=32 source=held_boot_grant\n[entropy.seed.progress] owner=Some(Identity {{ pd: 15, task: 15 }}) ticket={index} state=Some(Ready) produced=32 consumed=0 failure=0 private=1\n[entropy.seed.released] owner=15 task=15 ticket={index} service_payload=erased receipt=retained\n[browser.trust.self_check] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0\n[browser.tls.prepared] task_bytes=25000 private_bytes=45536 read=4096 write=2048 tx_bytes={initial} utc_snapshot={utc} authenticated=0 network=0\n[browser.https.prepared] task_bytes=25000 private_bytes=45536 tx_bytes={initial} utc_snapshot={utc} request_bytes=94 document_limit=12288 network=0\n[browser.dns.released] ticket={index} view=Answer([10, 0, 2, 2]) private_job=0\n[net.job.resolved.admitted] owner=15 task=15 ticket={ticket} dns_generation={index} observed=100 expires=60000 now=101 fixed=1 at_begin=1\n[net.job.duplex.admitted] owner=15 task=15 ticket={ticket} kind=10 ring=1024 tx_ring=4096 max_wire=32768 peer_port=46080 trust_profile=1 authority=held_boot_route\n[browser.https.admitted] ticket={ticket} dns_generation={index} seq={index*100} task_bytes=25000 private_bytes=45536 profile=1 authority=held_route\n'
@@ -107,7 +107,7 @@ def metadata(recovery=False):
  else:text+=f'[browser.import.files] target=15 task=15 accepted=1\n[shell.document.open] target=15 linen=200\n[linen.quil.disk_doc.intent] object_id=1005 path_id=5 ok=1\n[quil.persist.load.ok] bytes=12288 hash={hex(gate.fnv(gate.BODY))} doc=5\n'
  text+='[browser.import.closed] target=15 task=15 pending=0 accepted=0 terminal=1 owned_storage=erased\n[files.document.retire] target=15 staged=0 pending=0 terminal=1\n'
  for role in(1,2,4,8,16):text+=f'[app.service.ack] target=15 task=15 holder=13 role={role} ok=1\n'
- text+='[net.dns.records.retired] target=15 task=15 remaining=0 before_cleanup_ack=1\n[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1\n[sext.app.pool.ready] target=15 task=15 bytes=516096 ok=1\n';dns=gate.dns_capture(raw,'echo',expected=[dict(ticket=n,response_hex=gate.https.tls.dns_response(n).hex())for n in(1,2)])if not recovery else{'ok':True};return text,raw,wire,dns,meta
+ text+='[net.dns.records.retired] target=15 task=15 remaining=0 before_cleanup_ack=1\n[net.app.cleanup.ack] target=15 task=15 client_leases=0 shared_cache=retained ok=1\n[sext.app.pool.ready] target=15 task=15 bytes=516096 ok=1\n';dns=gate.dns_capture(raw,'echo',expected=[dict(ticket=n,response_hex=gate.https.tls.dns_response(n).hex())for n in(1,2)])if not recovery else{'ok':True};return complete(text),raw,wire,dns,meta
 
 class FullImportJoins(unittest.TestCase):
  def check(self,text=None,recovery=False):

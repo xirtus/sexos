@@ -1,4 +1,5 @@
 """Public independent HTTPS checker fixtures, never native acceptance evidence."""
+from source_boot_fixture import with_inventory
 import copy,hashlib,json,os,re,select,shutil,socket,ssl,struct,subprocess,sys,threading,time,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -68,6 +69,7 @@ class HTTPSReaderPixels(unittest.TestCase):
    bad=copy.deepcopy(frame);bad['lines'][index]=replacement.ljust(frame['cols'],b' ')
    with self.assertRaises(ValueError):gate.frame_pixels(image,bad,contract)
 
+@with_inventory
 def metadata(mode='ready'):
  base=fixture.metadata(fixture.capture());base=base[:base.index('[browser.tls.peer.authenticated]')].replace('browser.tls.peer.','browser.https.');base=re.sub(r'task_bytes=\d+','task_bytes=25000',base);base=re.sub(r'private_bytes=\d+','private_bytes=45536',base);initial=tls.tls_records(fixture.hello())[0]['length']+5
  marker='[browser.tls.prepared]';at=base.index('\n',base.index(marker));base=base[:at+1]+f'[browser.https.prepared] task_bytes=25000 private_bytes=45536 tx_bytes={initial} utc_snapshot={fixture.UTC} request_bytes=94 document_limit=12288 network=0\n'+base[at+1:]

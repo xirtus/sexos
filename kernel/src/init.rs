@@ -24,7 +24,7 @@ fn browser_source_grants(holder:&crate::capability::ProtectionDomain,plan:sex_pd
      sex_pdx::clock_source::Grant{holder:sex_pdx::clock_source::Identity{pd:holder.id,task:ht},consumer:sex_pdx::clock_source::Identity{pd:plan.target(),task:ct},source:sex_pdx::clock_source::CMOS_UTC},
      sex_pdx::trust_source::Grant{holder:sex_pdx::trust_source::Identity{pd:holder.id,task:ht},consumer:sex_pdx::trust_source::Identity{pd:plan.target(),task:ct},profile:sex_pdx::trust_config::PROFILE})
 }
-fn verify_browser_source_grants(holder:&crate::capability::ProtectionDomain,plan:sex_pdx::browser_sources::Plan){
+fn verify_browser_source_grants(holder:&crate::capability::ProtectionDomain,plan:sex_pdx::browser_sources::Plan)->sex_pdx::trust_source::Info{
     use crate::capability::CapabilityData;
     let expected=browser_source_grants(holder,plan);
     let read=|raw|holder.find_capability(crate::capability_slot::decode_capability_slot(raw).expect("BOOT_SOURCE_SLOT_WIDTH")).expect("BOOT_SOURCE_READBACK").data;
@@ -41,6 +41,23 @@ fn verify_browser_source_grants(holder:&crate::capability::ProtectionDomain,plan
     assert_eq!(ci,sex_pdx::clock_source::Info{consumer:expected.1.consumer,source:sex_pdx::clock_source::CMOS_UTC},"BOOT_SOURCE_CLOCK_METADATA");
     let ti=sex_pdx::trust_source::Info::decode(sex_pdx::trust_source::invoke(Some(&trust),expected.2.holder,sex_pdx::trust_source::INFO,[0;3])).expect("BOOT_SOURCE_TRUST_INFO");
     assert_eq!(ti,sex_pdx::trust_source::Info{consumer:expected.2.consumer,profile:sex_pdx::trust_config::PROFILE,root_bytes:sex_pdx::trust_config::ROOT_DER.len(),version:sex_pdx::trust_config::VERSION},"BOOT_SOURCE_TRUST_METADATA");
+    ti
+}
+
+/// BOOT-only service edge for a fresh reserved Browser, with exact registered
+/// holder/service context checks and actual table readback before any admission.
+fn grant_browser_successor_route(pd:&crate::capability::ProtectionDomain,slot:u64,service:u32){
+    use crate::capability::CapabilityData;
+    assert_eq!(crate::ipc::BOOT_PHASE.load(core::sync::atomic::Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"BOOT_BROWSER_ROUTE_PHASE");
+    assert!(sex_pdx::app_catalog::by_target(pd.id).is_some_and(|row|row.app==sex_pdx::app_catalog::App::Browser&&row.ordinal!=0),"BOOT_BROWSER_ROUTE_SUBJECT");
+    let task=browser_source_task(pd);
+    let target=crate::ipc::DOMAIN_REGISTRY.get(service).expect("BOOT_BROWSER_ROUTE_SERVICE");
+    let _=browser_source_task(target);
+    let decoded=crate::capability_slot::decode_capability_slot(slot).expect("BOOT_BROWSER_ROUTE_SLOT");
+    assert!(pd.find_capability(decoded).is_none(),"BOOT_BROWSER_ROUTE_COLLISION");
+    pd.grant_capability(slot,CapabilityData::Domain(service));
+    assert!(matches!(pd.find_capability(decoded).map(|cap|cap.data),Some(CapabilityData::Domain(actual))if actual==service),"BOOT_BROWSER_ROUTE_READBACK");
+    serial_println!("[boot.browser.service.route] target={} task={} slot={} service={} checked=1 readback=1 runtime_mint=0",pd.id,task,slot,service);
 }
 
 pub fn init() {
@@ -840,6 +857,13 @@ pub fn init() {
             }
             pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
         }
+        if incarnation.app==sex_pdx::app_catalog::App::Browser {
+            // Normal Browser startup and typed source protocols use Net. Bell
+            // supports the existing configured cleanup exercise; successors do
+            // not inherit the original's demand-paging grant or private leaves.
+            grant_browser_successor_route(pd,sex_pdx::SLOT_NET,sexnet_id);
+            grant_browser_successor_route(pd,sex_pdx::SLOT_BELL,sexbell_id);
+        }
         for slot in [incarnation.close_slot,incarnation.route_slot]{
             assert!(shell.find_capability(slot as u32).is_none(),"BOOT_SUCCESSOR_SHELL_COLLISION");
             shell.grant_capability(slot,crate::capability::CapabilityData::Domain(incarnation.target));
@@ -946,8 +970,8 @@ pub fn init() {
     crate::app_resources::audit_boot_catalog(silkshell_id);
     crate::scheduler::seal_self_wait_inventory();
     for plan in sex_pdx::browser_sources::PLANS.iter().copied(){
-        verify_browser_source_grants(seed_holder,plan);
-        serial_println!("[boot.browser.sources.readback] holder={} target={} entropy={} clock={} trust={} late_before_seal=1 typed_info=1 runtime_context=0",sexnet_id,plan.target(),plan.entropy_slot(),plan.clock_slot(),plan.trust_slot());
+        let info=verify_browser_source_grants(seed_holder,plan);
+        serial_println!("[boot.browser.sources.readback] holder={} target={} entropy={} clock={} trust={} late_before_seal=1 typed_info=1 runtime_context=0 trust_profile={} trust_root_bytes={} trust_version={}",sexnet_id,plan.target(),plan.entropy_slot(),plan.clock_slot(),plan.trust_slot(),info.profile,info.root_bytes,info.version);
     }
     crate::boot_memory::seal_all();
 

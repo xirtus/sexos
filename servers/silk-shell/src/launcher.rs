@@ -9,6 +9,12 @@ pub enum Status { Running, Closing, Closed, Unavailable }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum LiveAction { Open, Restore, BringHere, Focus }
 impl LiveAction {
+    pub fn browser_title(self)->&'static str {
+        match self {
+            Self::Open=>"Open Browser",Self::Restore=>"Restore Browser",
+            Self::BringHere=>"Bring Here Browser",Self::Focus=>"Focus Browser",
+        }
+    }
     pub fn title(self,quil:bool)->&'static str {
         match(self,quil){
             (Self::Open,true)=>"Open Quil",(Self::Restore,true)=>"Restore Quil",(Self::BringHere,true)=>"Bring Here Quil",(Self::Focus,true)=>"Focus Quil",

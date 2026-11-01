@@ -5,6 +5,7 @@ No TLS records leave the guest. Metadata and status pixels prove only this
 bounded foundation; they do not prove an authenticated or encrypted connection.
 """
 from clock_source_evidence import browser_clock_sources
+import browser_source_evidence as source_evidence
 import argparse,hashlib,json,math,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -42,7 +43,7 @@ def tls_contract(root):
   match=re.search(r'pub const '+name+r': usize = ([0-9_]+);',backend)
   if not match or int(match[1].replace('_',''))!=expected:raise ValueError('source-bound TLS capacity changed: '+name)
  if 'pub const PIPE_METADATA_BYTES:usize=56;'not in backend or 'size_of::<Pipe>()==PIPE_BYTES'not in backend:raise ValueError('source-bound Pipe accounting changed')
- names=['apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/trust_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-pdx/src/trust_source.rs','crates/sex-pdx/src/trust_policy.rs','kernel/src/trust_source.rs','servers/sexnet/src/trust_policy.rs','crates/sex-trust-config/Cargo.toml','crates/sex-trust-config/src/lib.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
+ names=['scripts/browser_source_evidence.py','scripts/clock_source_evidence.py','crates/sex-pdx/src/browser_sources.rs','crates/sex-pdx/src/app_catalog.rs','apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/trust_probe.rs','apps/kaleidoscope/src/entropy_probe.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-pdx/src/entropy_seed.rs','crates/sex-pdx/src/certificate_time.rs','kernel/src/entropy_source.rs','kernel/src/clock_source.rs','servers/sexnet/src/entropy.rs','servers/sexnet/src/certificate_time.rs','crates/sex-pdx/src/trust_source.rs','crates/sex-pdx/src/trust_policy.rs','kernel/src/trust_source.rs','servers/sexnet/src/trust_policy.rs','crates/sex-trust-config/Cargo.toml','crates/sex-trust-config/src/lib.rs','crates/sex-tls/Cargo.toml','crates/sex-tls/src/lib.rs','crates/sex-tls/src/verifier.rs','crates/sex-tls/src/probe_fixture.rs','x86_64-sex.json','rust-toolchain.toml','Cargo.lock','apps/kaleidoscope/Cargo.lock']
  for name in names:
   path=root/name
   if path.is_file():contract['source_sha256'][name]=hashlib.sha256(path.read_bytes()).hexdigest()
@@ -110,22 +111,28 @@ def verify_tls_pixels(trace,ppm,expected,contract,resolution=None):
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
 
-def inspect_tls(trace,mode,command,host_start,host_end):
+def inspect_tls(trace,mode,command,host_start,host_end,*,root=None,plans=None,require_version=False):
  errors=list(command_profile(command,mode)['errors']);joins=[];trust_joins=[];closed_pending=None
  try:
-  for marker in ('[boot.entropy.source] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0','[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1','[boot.trust.policy] holder=13 task=13 slot=62 consumer=15 consumer_task=15 profile=1 root_bytes=376 runtime_mint=0','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1'):
-   assert trace.count(marker)==1,'missing/duplicate exact BOOT/source denial contract'
-  for marker in ('[boot.entropy.source]','[boot.clock.source]','[boot.trust.policy]','[browser.trust.source.denied]'):assert trace.count(marker)==1,'foreign BOOT source grant'
-  assert trace.count(f'[sexnet.entropy.source] held=1 available={0 if mode=="unsupported"else 1} source=rdseed fallback=0 broker=private_seed32')==1,'wrong actual source availability/fallback'
+  root=Path(root)if root is not None else Path(__file__).resolve().parents[1]
+  plans=tuple(plans)if plans is not None else source_evidence.plans_from_catalog(root)
+  inventory=source_evidence.validate_inventory(trace,plans,require_version=require_version)
+  selected=inventory['roster'].get(15);assert selected is not None,'original Browser absent from source-bound inventory'
+  consumer_task=selected['task'];holder,holder_task=inventory['holder']
+  source_evidence.validate_entropy_stream(trace,inventory)
+  source_evidence.validate_clock_stream(trace,inventory)
+  for marker in ('[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1'):
+   assert trace.count(marker)==1 and trace.count(marker.split(']')[0]+']')==1,'missing/foreign/duplicate exact raw-source denial'
+  assert trace.count('[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1')==len(plans) and trace.count('[sexnet.clock.source]')==len(plans),'wrong held clock source metadata'
+  assert trace.count(f'[sexnet.entropy.source] held=1 available={0 if mode=="unsupported"else 1} source=rdseed fallback=0 broker=private_seed32')==len(plans) and trace.count('[sexnet.entropy.source]')==len(plans),'wrong actual source availability/fallback'
   private_lines=[line for line in trace.splitlines()if re.search(r'\[(?:browser\.tls|browser\.entropy|entropy\.|sexnet\.entropy|boot\.entropy)',line)]
   assert not any(re.search(r'\b(?:hash|fingerprint|word|value|hex|seed_bytes|seed_value|sample_value|data|secret|random)=',line)for line in private_lines),'secret-bearing private metadata field'
-  samples=list(re.finditer(r'\[entropy.source.sample\] pd=13 task=13 slot=60 source=rdseed attempts=(\d+) count=(\d+) private=1',trace))
-  assert len(samples)==trace.count('[entropy.source.sample]'),'foreign/malformed entropy metadata'
+  samples=list(re.finditer(rf'\[entropy.source.sample\] pd={holder} task={holder_task} slot={selected["plan"].entropy} source=rdseed attempts=(\d+) count=(\d+) private=1',trace))
   assert all(1<=int(m[1])<=8 for m in samples),'unbounded source attempts'
   counts=[int(m[2])for m in samples];assert all(a<b for a,b in zip(counts,counts[1:])),'sample ordinal regressed'
-  admitted=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace));releases=list(re.finditer(r'\[entropy.seed.released\] owner=15 task=15 ticket=(\d+) service_payload=erased receipt=retained',trace))
+  admitted=list(re.finditer(rf'\[entropy.seed.admitted\] owner=15 task={consumer_task} ticket=(\d+) bytes=32 source=held_boot_grant',trace));releases=list(re.finditer(rf'\[entropy.seed.released\] owner=15 task={consumer_task} ticket=(\d+) service_payload=erased receipt=retained',trace))
   for marker,values in (('[entropy.seed.admitted]',admitted),('[entropy.seed.released]',releases)):assert len(values)==trace.count(marker),'foreign/malformed private seed receipt'
-  sources=browser_clock_sources(trace);services=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace))
+  sources=browser_clock_sources(trace,15,consumer_task,plans=plans,require_version=require_version);services=list(re.finditer(rf'\[certificate.time.snapshot\] owner=15 task={consumer_task} seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace))
   assert len(services)==trace.count('[certificate.time.snapshot]'),'foreign/malformed UTC receipt'
   assert len(sources)==len(services),'source/service UTC count differs'
   assert [int(m[1])for m in services]==list(range(1,len(services)+1)),'UTC ordinal/query sequence reused'
@@ -134,7 +141,7 @@ def inspect_tls(trace,mode,command,host_start,host_end):
    assert math.floor(host_start)-1<=int(source[1])<=math.ceil(host_end)+1,'UTC outside actual trusted host bracket'
   intents=list(re.finditer(r'\[browser.tls.intent\] accepted=1 explicit=1 network=0',trace));expected=1 if mode=='close'else 2
   assert len(intents)==trace.count('[browser.tls.intent]')==expected,'wrong explicit L count'
-  policies=list(re.finditer(r'\[trust.policy.snapshot\] owner=15 task=15 seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace))
+  policies=list(re.finditer(rf'\[trust.policy.snapshot\] owner=15 task={consumer_task} seq=(\d+) profile=1 root_bytes=376 origin=held_boot_grant',trace))
   assert len(policies)==trace.count('[trust.policy.snapshot]')==expected,'missing/foreign/duplicate held trust query'
   assert [int(policy[1])for policy in policies]==list(range(1,expected+1)),'trust query sequence reused or skipped'
   policy_ready=list(re.finditer(r'\[browser.trust.view\] state=Ready\(1\) immutable_boot_profile=1 transport=0',trace))
@@ -163,7 +170,7 @@ def inspect_tls(trace,mode,command,host_start,host_end):
    end=intents[index+1].start()if index+1<len(intents)else len(trace)
    assert check.start()<prep.start()<end,'self-check/preparation escaped this explicit L'
    release=releases[index];ticket=int(release[1]);admission=next((m for m in admitted if int(m[1])==ticket),None)
-   collected=re.search(rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: 15, task: 15 \}}\) ticket={ticket} state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace)
+   collected=re.search(rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: 15, task: {consumer_task} \}}\) ticket={ticket} state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace)
    assert admission and collected and intents[index].start()<admission.start()<collected.start()<release.start()<prep.start()<hello.start(),'HelloPending before exact produced32/positive seed RELEASE'
    assert release.start()<check.start()and services[index].start()<check.start(),'controlled verifier self-check preceded fresh seed/time prerequisites'
    assert services[index].start()<prep.start()and int(services[index][2])==utc,'prepared UTC differs from fresh held snapshot'
@@ -179,11 +186,11 @@ def inspect_tls(trace,mode,command,host_start,host_end):
    closed=re.search(r'\[browser.tls.closed\] pending=([01]) terminal=1 owned_storage=erased',trace);assert closed and trace.count('[browser.tls.closed]')==1,'missing exact terminal TLS Close'
    closed_pending=int(closed[1]);assert closed_pending==1,'Close did not observe allocated pending TLSfuture'
    assert len(prepared)==len(joins)==1 and len(admitted)==len(releases)==len(services)==1 and hellos[0].start()<closed.start(),'Close did not follow one fully prepared allocated TLSfuture'
-   ack=re.search(r'\[net.app.cleanup.ack\] target=15 task=15 client_leases=0 shared_cache=retained ok=1',trace)
+   ack=re.search(rf'\[net.app.cleanup.ack\] target=15 task={consumer_task} client_leases=0 shared_cache=retained ok=1',trace)
    assert ack and closed.start()<ack.start(),'Close did not precede exact cleanup ACK'
-   for marker in ('[entropy.seed.retired] target=15 task=15 before_cleanup_ack=1 private_payload=erased','[certificate.time.retired] target=15 task=15 before_cleanup_ack=1 high_water_retained=1','[trust.policy.retired] target=15 task=15 before_cleanup_ack=1'):
+   for marker in (f'[entropy.seed.retired] target=15 task={consumer_task} before_cleanup_ack=1 private_payload=erased',f'[certificate.time.retired] target=15 task={consumer_task} before_cleanup_ack=1 high_water_retained=1',f'[trust.policy.retired] target=15 task={consumer_task} before_cleanup_ack=1'):
     assert marker in trace and closed.start()<trace.index(marker)<ack.start(),'missing prerequisite retirement before cleanup ACK'
-   trust_closed=re.search(r'\[browser.trust.closed\] target=15 task=15 pending=0 terminal=1',trace);assert trust_closed and trace.count('[browser.trust.closed]')==1 and closed.start()<trust_closed.start()<ack.start(),'allocated Close did not terminally retire completed policy client'
+   trust_closed=re.search(rf'\[browser.trust.closed\] target=15 task={consumer_task} pending=0 terminal=1',trace);assert trust_closed and trace.count('[browser.trust.closed]')==1 and closed.start()<trust_closed.start()<ack.start(),'allocated Close did not terminally retire completed policy client'
    assert trace.count('[trust.policy.retired]')==1,'foreign/duplicate trust retirement'
    assert any(closed.start()>=e.start()for e in erased),'Close missing owned storage erasure'
    if joins:assert any(int(e[1])==joins[0]['task_bytes']+8192 and prepared[0].start()<e.start()<closed.start()for e in erased),'completed Close missing exact owned future+queue erasure'
@@ -281,7 +288,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing actual wire capture']);owners=owner_joins(trace,raw,[(15,15)]);tls=inspect_tls(trace,a.mode,command,host_start,host_end);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing actual wire capture']);owners=owner_joins(trace,raw,[(15,15)]);tls=inspect_tls(trace,a.mode,command,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
  try:
   for frame in frames(raw):
    if len(frame)>=42 and frame[12:14]==b'\x08\0'and frame[23]==17 and frame[26:30]==bytes([10,0,2,15]):

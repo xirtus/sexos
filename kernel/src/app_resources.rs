@@ -156,13 +156,27 @@ pub fn audit_boot_catalog(coordinator:u32){
             Some(CapabilityData::Domain(target))=>target,_=>panic!("BOOT_CATALOG_DOMAIN_ROUTE")};
         let activation=row.activation_slot.map(|at|match shell.find_capability(slot(at as u64)).map(|c|c.data){
             Some(CapabilityData::AppActivation(g))=>g,_=>panic!("BOOT_CATALOG_ACTIVATION")});
+        // Capture predecessor task independently from the activation grant and
+        // from its PD number. Task identity is a separate registered namespace.
+        let predecessor_registered_task=if app.predecessor==0 {0} else {
+            let predecessor=crate::ipc::DOMAIN_REGISTRY.get(app.predecessor).expect("BOOT_CATALOG_PREDECESSOR_DOMAIN");
+            let predecessor_main=predecessor.main_task.load(Ordering::Acquire);
+            let predecessor_app=apps.iter().find(|a|a.ready&&a.target==app.predecessor).expect("BOOT_CATALOG_PREDECESSOR_APP");
+            assert!(!predecessor_main.is_null()&&predecessor_main as usize==predecessor_app.main,"BOOT_CATALOG_PREDECESSOR_MAIN");
+            let predecessor_task=unsafe{&*predecessor_main};
+            assert_eq!(predecessor_task.context.pd_id,u64::from(app.predecessor),"BOOT_CATALOG_PREDECESSOR_TASK_DOMAIN");
+            assert!(core::ptr::eq(predecessor_task.context.pd_ptr,predecessor as *const _),"BOOT_CATALOG_PREDECESSOR_TASK_CONTEXT");
+            assert_eq!(predecessor_app.task,predecessor_task.id,"BOOT_CATALOG_PREDECESSOR_CAPTURED_TASK");
+            assert!(predecessor_task.id!=0,"BOOT_CATALOG_PREDECESSOR_TASK_ZERO");
+            predecessor_task.id
+        };
         let actual=crate::app_catalog_state::Observed{
             target:pd.id,task:task.id,
             task_domain:u32::try_from(task.context.pd_id).expect("BOOT_CATALOG_TASK_DOMAIN_RANGE"),
             task_domain_pointer_matches:core::ptr::eq(task.context.pd_ptr,pd as *const _),
             content_surface:app.surface,
             logical_app:app.identity.logical_app,incarnation:app.identity.number,
-            predecessor:app.predecessor,coordinator:app.coordinator,
+            predecessor:app.predecessor,predecessor_registered_task,coordinator:app.coordinator,
             dormant:DORMANT[index].load(Ordering::Acquire),
             dead:app.retired||TERMINAL[index].load(Ordering::Acquire)||task.state.snapshot().exited,
             shell_lifecycle:lifecycle,self_catalog,close_target:domain(row.close_slot),

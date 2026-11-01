@@ -30,8 +30,8 @@ impl Plan {
 const fn slots(ordinal:u8)->[u64;3]{
     match ordinal {
         0=>[60,61,62],
-        // Candidate slots audited against Net's current holder-local inventory.
-        // These do not add future Browser rows or actual source capabilities.
+        // Reserved successors use disjoint holder-local source slots.
+        // BOOT inserts and verifies the actual capabilities before sealing.
         1=>[70,71,72],
         2=>[73,74,75],
         _=>panic!("unsupported Browser source-plan ordinal"),

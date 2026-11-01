@@ -42,10 +42,12 @@ def descriptive_source(source,catalog):
     if 'app_catalog::count(App::Browser)'not in code or 'pub const PLANS:[Plan;BROWSER_COUNT]=build();'not in code:
         raise ValueError('plan budget must derive from the actual catalog')
     rows=re.findall(r'Incarnation\s*\{([^}]*app:\s*App::Browser[^}]*)\}',catalog,re.S)
-    if len(rows)!=1:raise ValueError('this cohort must keep exactly one actual Browser row')
-    for key,value in [('ordinal',0),('target',15),('surface',300),('lifecycle_slot',40)]:
-        found=re.findall(r'\b'+key+r':\s*(\d+)\b',rows[0])
-        if found!=[str(value)]:raise ValueError('actual Browser association changed: '+key)
+    expected_rows=((0,15,300,40),(1,30,343,154),(2,31,344,158))
+    if len(rows)!=3:raise ValueError('expected three reserved Browser rows')
+    for row,expected_values in zip(rows,expected_rows):
+        for key,value in zip(('ordinal','target','surface','lifecycle_slot'),expected_values):
+            if re.findall(r'\b'+key+r':\s*(\d+)\b',row)!=[str(value)]:raise ValueError('actual Browser association changed: '+key)
+
 
 
 def append_rows(catalog,rows,count):
@@ -54,6 +56,8 @@ def append_rows(catalog,rows,count):
     found=list(re.finditer(r'pub const INCARNATIONS:\s*\[Incarnation;\s*(\d+)\]\s*=\s*\[',source))
     if len(found)!=1:raise ValueError('expected actual unique incarnation array')
     match=found[0];end=source.index('\n];',match.end())
+    additions=[line for line in rows.splitlines()if line.strip()and line.strip()not in {v.strip()for v in source.splitlines()}]
+    count=len(additions);rows='\n'+'\n'.join(additions)if additions else ''
     source=source[:end]+rows+source[end:]
     return source[:match.start(1)]+str(int(match[1])+count)+source[match.end(1):]
 
@@ -138,7 +142,7 @@ fn main(){let _=browser_sources::Plan{target:15,surface:300,lifecycle_slot:40,en
     print('[browser.sources.private] rejected=external-field-construction diagnostic=E0451')
     result=dict(ok=True,actual_catalog_case_executions=13,future_catalog_case_executions=13,
                 const_plan_controls_rejected=10,private_constructor_rejected=True,
-                actual_browser_plans=1,future_host_browser_plans=3,plan_task_fields=0,
+                actual_browser_plans=3,future_host_browser_plans=3,plan_task_fields=0,
                 scope='host_descriptive_metadata_and_pure_mechanism_not_future_BOOT_grants_or_native_authority')
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 

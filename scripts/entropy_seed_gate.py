@@ -6,6 +6,7 @@ randomness-quality, opcode-exclusivity, replay-security or hardware certificate.
 """
 import argparse,ast,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
+import browser_source_evidence as source_evidence
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
 from network_contention_gate import frozen_binding,owner_joins,cleanup_receipts,MAX_PCAP
@@ -35,6 +36,8 @@ def seed_contract(root):
  for literal in ('b"\\n\\nPrivate seed: "','b"\\nE seed  Q clear"'):
   if literal not in view:raise ValueError('source-bound seed chrome changed')
  contract['seed_labels']=labels
+ for name in ('scripts/browser_source_evidence.py','scripts/clock_source_evidence.py','crates/sex-pdx/src/browser_sources.rs','crates/sex-pdx/src/app_catalog.rs'):
+  contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  for name in ('apps/kaleidoscope/src/entropy_probe.rs','servers/sexnet/src/entropy.rs','kernel/src/entropy_source.rs','crates/sex-pdx/src/entropy_source.rs','crates/sex-pdx/src/entropy_seed.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  return contract
@@ -100,42 +103,56 @@ def verify_seed_pixels(trace,ppm,expected,contract,resolution=None):
   return dict(ok=not errors,errors=errors,expected=expected,geometry=geometry,checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
-def inspect_seed(trace,mode,command):
+def inspect_seed(trace,mode,command,*,root=None,plans=None,consumer_pd=15,consumer_task=None,require_version=False):
  errors=list(command_profile(command,mode)['errors']);joins=[]
  try:
-  boot=list(re.finditer(r'\[boot.entropy.source\] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0',trace));assert len(boot)==1 and trace.count('[boot.entropy.source]')==1,'wrong/duplicate exact BOOT source grant'
+  root=Path(root)if root is not None else Path(__file__).resolve().parents[1]
+  plans=tuple(plans)if plans is not None else source_evidence.plans_from_catalog(root)
+  inventory=source_evidence.validate_inventory(trace,plans,require_version=require_version)
+  selected=inventory['roster'].get(consumer_pd);assert selected is not None,'selected consumer not in source-bound roster'
+  task=selected['task'];assert consumer_task in (None,task),'selected task differs from actual BOOT identity'
+  all_samples=source_evidence.validate_entropy_stream(trace,inventory)
+  source_evidence.validate_clock_stream(trace,inventory)
   assert trace.count('[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1')==1,'raw source denials absent'
   available=0 if mode=='unsupported'else 1
-  assert trace.count(f'[sexnet.entropy.source] held=1 available={available} source=rdseed fallback=0 broker=private_seed32')==1,'wrong actual held-source availability'
+  assert trace.count(f'[sexnet.entropy.source] held=1 available={available} source=rdseed fallback=0 broker=private_seed32')==len(plans) and trace.count('[sexnet.entropy.source]')==len(plans),'wrong actual held-source availability'
   lines=[line for line in trace.splitlines()if re.search(r'\[(?:browser\.entropy|entropy\.|sexnet\.entropy|boot\.entropy)',line)]
   assert not any(re.search(r'\b(?:hash|fingerprint|word|value|hex|seed_bytes|seed_value|sample_value|data)=',line)for line in lines),'secret-bearing entropy log field'
-  samples=list(re.finditer(r'\[entropy.source.sample\] pd=(\d+) task=(\d+) slot=(\d+) source=rdseed attempts=(\d+) count=(\d+) private=1',trace))
-  assert trace.count('[entropy.source.sample]')==len(samples),'malformed secret-source metadata log'
-  for m in samples:assert tuple(map(int,m.groups()[:3]))==(13,13,60)and 1<=int(m[4])<=8,'wrong exact source task/slot/attempt bound'
-  counts=[int(m[5])for m in samples];assert all(a<b for a,b in zip(counts,counts[1:])),'source metadata count regressed'
-  admitted=list(re.finditer(r'\[entropy.seed.admitted\] owner=15 task=15 ticket=(\d+) bytes=32 source=held_boot_grant',trace))
-  assert trace.count('[entropy.seed.admitted]')==len(admitted),'foreign/malformed seed admission'
-  releases=list(re.finditer(r'\[entropy.seed.released\] owner=15 task=15 ticket=(\d+) service_payload=erased receipt=retained',trace))
-  assert trace.count('[entropy.seed.released]')==len(releases),'foreign/malformed seed release'
+  holder,holder_task=inventory['holder'];slot=selected['plan'].entropy
+  samples=list(re.finditer(rf'\[entropy.source.sample\] pd=({holder}) task=({holder_task}) slot=({slot}) source=rdseed attempts=(\d+) count=(\d+) private=1\r?$',trace,re.M))
+  counts=[int(m[5])for m in samples]
+  for tag,tail in [('entropy.seed.admitted',r'ticket=(\d+) bytes=32 source=held_boot_grant'),('entropy.seed.released',r'ticket=(\d+) service_payload=erased receipt=retained')]:
+   rows=list(re.finditer(r'\['+re.escape(tag)+r'\] owner=(\d+) task=(\d+) '+tail+r'\r?$',trace,re.M))
+   assert len(rows)==trace.count('['+tag+']'),'malformed seed custody record'
+   for row in rows:
+    owner=inventory['roster'].get(int(row[1]));assert owner is not None and owner['task']==int(row[2]),'foreign seed custody identity'
+  admitted=list(re.finditer(rf'\[entropy.seed.admitted\] owner={consumer_pd} task={task} ticket=(\d+) bytes=32 source=held_boot_grant',trace))
+  releases=list(re.finditer(rf'\[entropy.seed.released\] owner={consumer_pd} task={task} ticket=(\d+) service_payload=erased receipt=retained',trace))
   ready=list(re.finditer(r'\[browser.entropy.view\] state=Ready private=1 bytes_visible=0',trace))
   if mode=='unsupported':
-   assert not samples and not admitted and not releases and not ready,'unsupported CPU sampled/admitted/published seed'
+   assert not all_samples and not admitted and not releases and not ready,'unsupported CPU sampled/admitted/published seed'
    assert len(re.findall(r'\[browser.entropy.view\] state=Unavailable private=1 bytes_visible=0',trace))==2,'unsupported E/Q/E did not reject both explicit requests'
   elif mode=='ready':
-   assert [int(m[1])for m in admitted]==[1,2]and[int(m[1])for m in releases]==[1,2]and len(ready)==2,'wrong explicit seed runs or cleanup count'
-   assert counts==[1,2,3,4,8],'sampled provider metadata differs from first4/powers2 source policy'
-   for ticket,admission,release,view in zip((1,2),admitted,releases,ready):
-    collected=re.search(rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: 15, task: 15 \}}\) ticket={ticket} state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace)
+   tickets=[int(m[1])for m in admitted]
+   assert len(tickets)==2 and 0<tickets[0]<tickets[1]<=17535 and [int(m[1])for m in releases]==tickets and len(ready)==2,'wrong explicit seed runs or cleanup count'
+   if len(plans)==1:assert tickets==[1,2],'original exclusive seed ticket sequence changed'
+   if all(row['consumer']==(consumer_pd,task)for row in all_samples):
+    assert counts==[1,2,3,4,8],'exclusive two-job source metadata differs from first4/powers2 policy'
+   # Other consumers share the global sparse counter; selected jobs are joined
+   # through produced32/RELEASE below, never by inventing one log per word.
+   for ticket,admission,release,view in zip(tickets,admitted,releases,ready):
+    collected=re.search(rf'\[entropy.seed.progress\] owner=Some\(Identity \{{ pd: {consumer_pd}, task: {task} \}}\) ticket={ticket} state=Some\(Ready\) produced=32 consumed=0 failure=0 private=1',trace)
     assert collected and admission.start()<collected.start()<release.start()<view.start(),'Ready did not follow exact produced32/positive service RELEASE'
     joins.append(dict(ticket=ticket,admitted=admission.start(),produced32=collected.start(),release=release.start(),browser_ready=view.start()))
   else:
-   assert [int(m[1])for m in admitted]==[1]and not releases and not ready,'Close did not overlap one still-owned seed job'
-   assert '[browser.entropy.closed] target=15 task=15 pending=1 terminal=1 private_payload=erased'in trace,'Close missed actual pending client'
-   retired=re.search(r'\[entropy.seed.retired\] target=15 task=15 before_cleanup_ack=1 private_payload=erased',trace);ack=re.search(r'\[net.app.cleanup.ack\] target=15 task=15 client_leases=0 shared_cache=retained ok=1',trace)
+   assert len(admitted)==1 and 0<int(admitted[0][1])<=17535 and not releases and not ready,'Close did not overlap one still-owned seed job'
+   if len(plans)==1:assert int(admitted[0][1])==1,'original Close seed ticket changed'
+   assert f'[browser.entropy.closed] target={consumer_pd} task={task} pending=1 terminal=1 private_payload=erased'in trace,'Close missed actual pending client'
+   retired=re.search(rf'\[entropy.seed.retired\] target={consumer_pd} task={task} before_cleanup_ack=1 private_payload=erased',trace);ack=re.search(rf'\[net.app.cleanup.ack\] target={consumer_pd} task={task} client_leases=0 shared_cache=retained ok=1',trace)
    assert retired and ack and retired.start()<ack.start(),'private seed retirement did not precede exact cleanup ACK'
   intents=trace.count('[browser.entropy.intent] accepted=1 explicit=1 fallback=0');assert intents==(1 if mode=='close'else 2),'wrong explicit E intent count'
   if mode!='close':assert '[browser.entropy.view] state=Cancelled private=1 bytes_visible=0'in trace,'actual Q did not clear private seed'
- except(AssertionError,AttributeError)as exc:errors.append(str(exc))
+ except(AssertionError,AttributeError,ValueError)as exc:errors.append(str(exc))
  return dict(ok=not errors,errors=errors,joins=joins,samples_observed=[dict(attempts=int(m[4]),ordinal=int(m[5]))for m in locals().get('samples',[])],scope='Exact BOOT/provider metadata, bounded source attempts, produced32 and positive service RELEASE before source-bound ClientReady. Actual32-byte READ completeness is established by frozen Client guards plus actual host client/broker tests; no invented consumed32 native receipt. No values or derivatives are logged; no randomness-quality, instruction exclusivity, SMP, physical or replay-security certification.')
 
 def main():
@@ -225,7 +242,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,peer_rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing baseline wire capture']);owners=owner_joins(trace,raw,[(15,15)]);metadata=inspect_seed(trace,a.mode,command);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,peer_rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing baseline wire capture']);owners=owner_joins(trace,raw,[(15,15)]);metadata=inspect_seed(trace,a.mode,command,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
  try:
   for frame in frames(raw):
    if len(frame)>=42 and frame[12:14]==b'\x08\0'and frame[23]==17 and frame[26:30]==bytes([10,0,2,15]):

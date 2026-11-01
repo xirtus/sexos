@@ -92,7 +92,7 @@ fn queries(p:Plan,task:u32,available:bool)->Queries{
  assert_eq!(a.task(),150);assert!(a.entropy_info().available);assert_eq!(a.entropy_slot(),60);
 }
 #[cfg(not(browser_source_catalog))]
-#[test]fn binding_current_plan_has_no_successor_authority(){assert_eq!(browser_sources::BROWSER_COUNT,1);assert!(browser_sources::by_target(30).is_none());assert!(browser_sources::by_target(31).is_none());}
+#[test]fn binding_current_plan_describes_all_reserved_successors(){assert_eq!(browser_sources::BROWSER_COUNT,3);assert!(browser_sources::by_target(30).is_some());assert!(browser_sources::by_target(31).is_some());}
 #[cfg(browser_source_catalog)]
 #[test]fn binding_future_host_catalog_keeps_three_distinct_retained_owners_and_slots(){
  assert_eq!(browser_sources::BROWSER_COUNT,3);

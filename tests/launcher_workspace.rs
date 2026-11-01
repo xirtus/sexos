@@ -17,10 +17,12 @@ pub fn get_ticks()->u64{unsafe{NOW}}
 static mut LAUNCHER_FOCUS:Option<LauncherFocus>=None;
 static mut DISPLAY_FOCUS:FocusDelivery=FocusDelivery::new();
 static mut ACTUAL_DESKTOP:Option<AdmissionStates>=None;
-#[derive(Clone,Copy)]enum Command{FocusQuil,FocusSpindle,Other}
+#[derive(Clone,Copy)]enum Command{FocusQuil,FocusSpindle,FocusBrowser,Other}
 struct Activation{state:u8,successor:u32}
 static mut ACTIVATION_STATE:u8=0;
 fn quil_activation_info(_:bool)->Result<Activation,u64>{unsafe{Ok(Activation{state:ACTIVATION_STATE,successor:16})}}
+fn browser_active_frame()->Option<(u32,u64)>{None}
+fn browser_activation_info(_:bool)->Result<Activation,u64>{unsafe{Ok(Activation{state:ACTIVATION_STATE,successor:30})}}
 fn spindle_activation_info(_:bool)->Result<Activation,u64>{unsafe{Ok(Activation{state:ACTIVATION_STATE,successor:17})}}
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 #[derive(Clone,Copy)]struct Tab{surface_id:u64}
@@ -89,7 +91,7 @@ unsafe fn sync_lifecycle_scene_visibility(){for f in FRAMES.iter().flatten(){let
 include!(env!("LAUNCHER_WORKSPACE_PRODUCTION"));
 unsafe fn reset(target:u32,sid:u64,scene:u8,minimized:bool,visible:bool){
  APP_CUSTODY=[None;6];FRAMES=[None;6];STATE=[LifecycleState::Hidden;6];READY=[true;6];ACTIVE_SCENE_IDX=0;FOCUSED_SURFACE_ID=0;LAST_DISPLAY_FOCUS_RESULT=None;CATALOG_BAD_TASK=false;CATALOG_ERROR=None;LAUNCHER_FOCUS=None;DISPLAY_FOCUS=FocusDelivery::new();ACTUAL_DESKTOP=None;NOW=0;ACTIVATION_STATE=0;EVIDENCE=Evidence::Live;STATUS=0;OPS.clear();LOG.clear();ATLAS_DRAG_INTENT.active=false;
- let content=match target{9=>156,12=>154,16=>301,17=>302,18=>307,_=>panic!()};APP_CUSTODY[0]=Some(app_custody::Entry::new(38,target,target*100+1,content));FRAMES[0]=Some(Frame{frame_id:sid as u32,scene_id:scene,flags:if minimized{1}else{0},tabs:[Some(Tab{surface_id:sid})]});STATE[index(sid)]=if minimized{LifecycleState::Minimized}else if visible{LifecycleState::Visible}else{LifecycleState::Hidden};
+ let (slot,content)=match target{9=>(38,156),12=>(39,154),16=>(45,301),17=>(50,302),18=>(54,307),_=>panic!()};let row=app_catalog::by_surface(target,content).unwrap();assert_eq!(row.lifecycle_slot,slot);assert_eq!(row.frame(),sid);APP_CUSTODY[0]=Some(app_custody::Entry::new(slot,target,target*100+1,content));FRAMES[0]=Some(Frame{frame_id:sid as u32,scene_id:scene,flags:if minimized{1}else{0},tabs:[Some(Tab{surface_id:sid})]});STATE[index(sid)]=if minimized{LifecycleState::Minimized}else if visible{LifecycleState::Visible}else{LifecycleState::Hidden};
 }
 #[test]fn original_and_reserved_live_instances_move_without_activation_and_focus_after_visibility(){let _l=LOCK.lock().unwrap();unsafe{
  for(target,sid)in[(9,201),(12,153),(16,301),(17,306),(18,307)]{reset(target,sid,2,false,false);assert_eq!(launcher_live_action(target),Some(LiveAction::BringHere));assert_eq!(launcher_focus_existing(target,sid,None),Some(true));assert_eq!(FRAMES[0].unwrap().scene_id,0);assert_eq!(FOCUSED_SURFACE_ID,sid);let create=OPS.iter().position(|s|s==&format!("send:ec:{sid}")).unwrap();let focus=OPS.iter().position(|s|s==&format!("send:ed:{sid}")).unwrap();assert!(create<focus);assert!(LOG.last().unwrap().contains("action=BringHere from=2 to=0 visible=1 focused=1 activated=0 queued=0 accepted=1 ok=1"));assert_eq!(APP_CUSTODY[0].unwrap().task,target*100+1);}
@@ -215,4 +217,14 @@ unsafe fn reset(target:u32,sid:u64,scene:u8,minimized:bool,visible:bool){
  for poll in 0..15_992u64{NOW=poll/8;launcher_focus_poll();assert!(LAUNCHER_FOCUS.is_some(),"poll {poll}");}
  // A clock that stops advancing is still bounded by polls.
  for _ in 0..4096{launcher_focus_poll();}assert!(LAUNCHER_FOCUS.is_none());
+}}
+
+#[test]fn noncanonical_held_slot_content_or_frame_never_moves_or_focuses(){let _l=LOCK.lock().unwrap();unsafe{
+ for bad in 0..3{
+  reset(12,153,2,true,false);
+  let frame=match bad{0=>{APP_CUSTODY[0].as_mut().unwrap().slot=50;153},1=>{APP_CUSTODY[0].as_mut().unwrap().surface=302;153},_=>306};
+  assert_eq!(launcher_focus_existing(12,frame,None),Some(false));
+  assert!(OPS.is_empty());assert!(LAUNCHER_FOCUS.is_none());assert_eq!(FOCUSED_SURFACE_ID,0);
+  assert_eq!(FRAMES[0].unwrap().scene_id,2);assert_eq!(FRAMES[0].unwrap().flags,FRAME_FLAG_MINIMIZED);
+ }
 }}

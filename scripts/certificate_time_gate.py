@@ -6,6 +6,7 @@ Trusted host/QEMU configuration supplies UTC. This establishes no NTP/clock
 """
 import argparse,datetime,gzip,hashlib,json,math,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
+import browser_source_evidence as source_evidence
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
 from network_contention_gate import frozen_binding,owner_joins,cleanup_receipts,MAX_PCAP
@@ -18,7 +19,7 @@ from check_desktop_pixels import glyph
 from check_disk_persistence import ppm_rgb
 from check_document_disk import fnv
 from http_content_gate import frame_prefix
-from clock_source_evidence import validate_clock_sources
+from clock_source_evidence import validate_clock_sources,browser_clock_sources
 from silkbar_clock_gate import source_contract as bar_contract,verify_pixels as bar_pixels
 
 LABELS={'Pending':b'checking','Unavailable':b'unavailable','Cancelled':b'cancelled','Uncertain':b'waiting receipt','Rollback':b'rollback; blocked'}
@@ -68,6 +69,8 @@ def clock_contract(root):
  for name in('apps/kaleidoscope/Cargo.toml','apps/kaleidoscope/src/clock_view.rs','apps/kaleidoscope/src/clock_probe.rs','crates/sex-time/src/lib.rs','crates/sex-time/Cargo.toml','crates/sex-pdx/src/clock_source.rs','crates/sex-pdx/src/certificate_time.rs','servers/sexnet/src/certificate_time.rs','kernel/src/clock_source.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  contract['civil_clock']=bar_contract(root);contract['source_sha256'].update(contract['civil_clock']['source_sha256'])
+ for name in ('scripts/browser_source_evidence.py','scripts/clock_source_evidence.py','crates/sex-pdx/src/browser_sources.rs','crates/sex-pdx/src/app_catalog.rs'):
+  contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
  return contract
 
 def utc_label(state,contract):
@@ -156,19 +159,22 @@ def verify_clock_pixels(trace,ppm,expected,contract,resolution=None):
   return dict(ok=not errors,errors=errors,expected=expected,geometry=geometry,checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError,OverflowError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
 
-def inspect_clock(trace,mode,command,host_start,host_end):
+def inspect_clock(trace,mode,command,host_start,host_end,*,root=None,plans=None,consumer_pd=15,consumer_task=None,require_version=False):
  errors=list(command_profile(command,mode)['errors']);joins=[];closed_pending=None
  try:
-  assert trace.count('[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0')==1 and trace.count('[boot.clock.source]')==1,'wrong exact BOOT clock grant'
-  assert trace.count('[boot.silkbar.clock.source] holder=6 task=6 slot=61 consumer=6 consumer_task=6 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0')==1 and trace.count('[boot.silkbar.clock.source]')==1,'wrong exact BOOT status-bar clock grant'
+  root=Path(root)if root is not None else Path(__file__).resolve().parents[1]
+  plans=tuple(plans)if plans is not None else source_evidence.plans_from_catalog(root)
+  inventory=source_evidence.validate_inventory(trace,plans,require_version=require_version)
+  selected=inventory['roster'].get(consumer_pd);assert selected is not None,'selected consumer not in source-bound roster'
+  task=selected['task'];assert consumer_task in (None,task),'selected task differs from actual BOOT identity'
   assert trace.count('[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1')==1,'raw source denial probes absent'
-  assert trace.count('[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1')==1,'held source metadata absent or fallback selected'
-  sources=list(re.finditer(r'\[clock.source.snapshot\] pd=13 task=13 slot=61 seconds=(\d+) attempts=(\d+) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace));services=list(re.finditer(r'\[certificate.time.snapshot\] owner=15 task=15 seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace));ready=list(re.finditer(r'\[browser.clock.view\] state=Ready\((\d+)\) source=q35_cmos_utc snapshot=1',trace))
-  validate_clock_sources(trace)
-  all_sources=list(re.finditer(r'\[clock.source.snapshot\] pd=(\d+) task=(\d+) slot=61 seconds=(\d+) attempts=(\d+) precision=1 profile=q35_cmos_utc ordinal=(\d+)',trace))
-  assert len(all_sources)==trace.count('[clock.source.snapshot]')and len(services)==trace.count('[certificate.time.snapshot]'),'foreign or malformed source/service identity'
-  assert all((int(s[1]),int(s[2]))in((6,6),(13,13))and 1<=int(s[4])<=4 and math.floor(host_start)-1<=int(s[3])<=math.ceil(host_end)+1 for s in all_sources),'ungranted source holder, attempt bound or UTC bracket differs'
-  assert [int(s[5])for s in all_sources]==list(range(1,len(all_sources)+1)),'global source ordinal gap, reuse or reorder'
+  assert trace.count('[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1')==len(plans) and trace.count('[sexnet.clock.source]')==len(plans),'held source metadata absent or fallback selected'
+  # Complete global stream/service semantics are checked before selection.
+  all_sources=validate_clock_sources(trace,plans=plans,require_version=require_version)
+  sources=browser_clock_sources(trace,consumer_pd,task,plans=plans,require_version=require_version)
+  services=list(re.finditer(rf'\[certificate.time.snapshot\] owner={consumer_pd} task={task} seq=(\d+) seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace))
+  ready=list(re.finditer(r'\[browser.clock.view\] state=Ready\((\d+)\) source=q35_cmos_utc snapshot=1',trace))
+  assert all(math.floor(host_start)-1<=int(row['seconds'])<=math.ceil(host_end)+1 for row in all_sources),'global source snapshot outside trusted UTC bracket'
   assert '[certificate.time.rollback]'not in trace,'unexpected rollback; native fixture does not inject rollback'
   assert '[entropy.source.sample]'not in trace and '[browser.entropy.intent]'not in trace,'clock query sampled unrelated entropy source'
   expected=1 if mode=='close'else 2;assert trace.count('[browser.clock.intent] accepted=1 explicit=1 no_ticks_fallback=1')==expected,'wrong explicit T count'
@@ -188,7 +194,7 @@ def inspect_clock(trace,mode,command,host_start,host_end):
     assert all(service.start()<view.start()for service,view in zip(services,ready)),'Ready before retained snapshot'
     assert joins[1]['seconds']>joins[0]['seconds'],'second fresh UTC snapshot did not progress'
    else:
-    closed=re.search(r'\[browser.clock.closed\] target=15 task=15 pending=([01]) terminal=1',trace);retired=re.search(r'\[certificate.time.retired\] target=15 task=15 before_cleanup_ack=1 high_water_retained=1',trace);ack=re.search(r'\[net.app.cleanup.ack\] target=15 task=15 client_leases=0 shared_cache=retained ok=1',trace)
+    closed=re.search(rf'\[browser.clock.closed\] target={consumer_pd} task={task} pending=([01]) terminal=1',trace);retired=re.search(rf'\[certificate.time.retired\] target={consumer_pd} task={task} before_cleanup_ack=1 high_water_retained=1',trace);ack=re.search(rf'\[net.app.cleanup.ack\] target={consumer_pd} task={task} client_leases=0 shared_cache=retained ok=1',trace)
     assert closed and retired and ack and closed.start()<retired.start()<ack.start(),'exact cache retirement did not precede ACK'
     closed_pending=int(closed[1]);assert len(ready)<=1,'Close received unrelated snapshots'
     if ready:assert int(ready[0][1])==joins[0]['seconds']and services[0].start()<ready[0].start()<closed.start(),'completed Close snapshot does not match retained UTC'
@@ -231,7 +237,7 @@ def replay_evidence(root,iso,binding_path,out):
   if hashlib.sha256(gzip.decompress((out/name).read_bytes())).hexdigest()!=expected:raise ValueError('clock disk hash differs')
  trace=clock_serial_text(out/'serial.log');raw=(out/'wire.pcap').read_bytes();endpoints=json.loads((out/'endpoint-exchanges.json').read_text())['public_baseline'];actions=json.loads((out/'actions.json').read_text())
  if len(endpoints)!=1 or re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow|\[fault.kill\]',trace):raise ValueError('clock guest/endpoint failure')
- clock=inspect_clock(trace,mode,command,manifest['host_utc_start'],manifest['host_utc_end']);wire=tcp_capture(raw,endpoints,guest_ports=range(48001,65536),initiator='guest');owners=owner_joins(trace,raw,[(15,15)]);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ clock=inspect_clock(trace,mode,command,manifest['host_utc_start'],manifest['host_utc_end'],root=root);wire=tcp_capture(raw,endpoints,guest_ports=range(48001,65536),initiator='guest');owners=owner_joins(trace,raw,[(15,15)]);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
  for check in(clock,wire,owners,authority,waiting):
   if not check['ok']:raise ValueError('clock replay join failed: '+str(check.get('errors')))
  for frame in frames(raw):
@@ -355,7 +361,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- manifest['host_utc_end']=host_end;raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing actual wire capture']);owners=owner_joins(trace,raw,[(15,15)]);clock=inspect_clock(trace,a.mode,command,host_start,host_end);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ manifest['host_utc_end']=host_end;raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing actual wire capture']);owners=owner_joins(trace,raw,[(15,15)]);clock=inspect_clock(trace,a.mode,command,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
  try:
   for frame in frames(raw):
    if len(frame)>=42 and frame[12:14]==b'\x08\0'and frame[23]==17 and frame[26:30]==bytes([10,0,2,15]):

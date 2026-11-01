@@ -165,9 +165,9 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  use linen_text_delivery::{Admission,DesktopStates,DESKTOP_SURFACES};
  // Independent current BOOT roster: Linen, seventeen frames, then distinct
  // content/panes. In particular 339 and all four eighth-Spindle panes exist.
- assert_eq!(DESKTOP_SURFACES,[200,201,153,300,301,306,307,308,309,310,311,312,314,319,324,329,334,339,
+ assert_eq!(DESKTOP_SURFACES,[200,201,153,300,301,306,307,308,309,310,311,312,314,319,324,329,334,339,343,344,
   156,154,160,161,162,302,303,304,305,313,315,316,317,318,320,321,322,323,325,326,327,328,330,331,332,333,335,336,337,338,340,341,342]);
- assert_eq!(DESKTOP_SURFACES.len(),51);assert_eq!(app_catalog::COUNT,17);
+ assert_eq!(DESKTOP_SURFACES.len(),53);assert_eq!(app_catalog::COUNT,19);
  let mut states=DesktopStates::new();
  for &sid in &DESKTOP_SURFACES {assert!(DesktopStates::tracks(sid));states.observe(op(0xEC,sid),Admission::Full);}
  for sid in [0,999,152,u64::MAX] {assert!(!DesktopStates::tracks(sid));states.observe(op(0xEC,sid),Admission::Full);assert!(!states.pending_surface(sid));assert!(!states.ready(sid));}

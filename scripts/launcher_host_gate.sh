@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sexos-launcher.XXXXXX")"
-trap 'rm -rf "$TEST_DIR"' EXIT
+if [[ -n "${LAUNCHER_GATE_OUT:-}" ]]; then
+    TEST_DIR="$LAUNCHER_GATE_OUT"
+    mkdir -p "$TEST_DIR"
+else
+    TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sexos-launcher.XXXXXX")"
+    trap 'rm -rf "$TEST_DIR"' EXIT
+fi
 rustc --edition=2021 --test "$ROOT_DIR/tests/launcher.rs" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests"
 python3 - "$ROOT_DIR" "$TEST_DIR/production.rs" <<'PY'
@@ -59,3 +64,4 @@ LAUNCHER_PRODUCTION="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT
 LAUNCHER_WORKSPACE_PRODUCTION="$TEST_DIR/production.rs.workspace" rustc --edition=2021 --test "$ROOT_DIR/tests/launcher_workspace.rs" -o "$TEST_DIR/workspace"
 "$TEST_DIR/workspace"
 echo '[launcher.workspace.host] PASS scope=actual_shell_action_reparent_scene_and_admission_callbacks_only_not_native_pixels'
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_launch.py" --root "$ROOT_DIR" --out "$TEST_DIR/browser-launch"

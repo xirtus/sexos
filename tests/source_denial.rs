@@ -25,7 +25,7 @@ fn stale(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::STALE,Kind::Cer
 fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind::CertificateTime=>certificate_time::MAX_SEQ,Kind::Trust=>trust_policy::MAX_SEQ}}
 
 #[test]fn denial_storage_budget_is_finite_and_contains_no_machine_backing(){
-    assert_eq!(OWNERS_PER_KIND,17);assert_eq!(TOTAL_SLOTS,51);
+    assert_eq!(OWNERS_PER_KIND,19);assert_eq!(TOTAL_SLOTS,57);
     println!("[source.denial.host.storage] bytes={} slots={} owners_per_kind={}",core::mem::size_of::<Outbox>(),TOTAL_SLOTS,OWNERS_PER_KIND);
     assert!(core::mem::size_of::<Outbox>()<4096);
 }

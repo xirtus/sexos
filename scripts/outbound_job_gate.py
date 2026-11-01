@@ -44,7 +44,8 @@ def browser_publication_binding(root,paths,sources):
  catalog=compact(sources['catalog'])
  rows=re.findall(r'Incarnation\{app:App::Browser,[^}]*\}',catalog)
  expected='Incarnation{app:App::Browser,ordinal:0,target:15,surface:300,shell_surface:None,lifecycle_slot:40,close_slot:43,activation_slot:None,route_slot:43,children:&[]}'
- if rows!=[expected]:raise ValueError('native Browser15/300 catalog changed')
+ reserved=[expected,'Incarnation{app:App::Browser,ordinal:1,target:30,surface:343,shell_surface:None,lifecycle_slot:154,close_slot:155,activation_slot:Some(156),route_slot:157,children:&[]}','Incarnation{app:App::Browser,ordinal:2,target:31,surface:344,shell_surface:None,lifecycle_slot:158,close_slot:159,activation_slot:Some(160),route_slot:161,children:&[]}']
+ if rows!=reserved:raise ValueError('native Browser reservation catalog changed')
  lifecycle=compact(sources['lifecycle'])
  subject=('pubfnis_subject(self,target:u32,surface:u64,coordinator:u32)->bool{'
           'target!=0&&surface!=0&&coordinator!=0&&target!=coordinator'

@@ -1,4 +1,5 @@
 """Adverse checker fixtures only; never native TLS, trust or entropy evidence."""
+from source_boot_fixture import with_inventory
 import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -9,6 +10,7 @@ SECONDS=1793367907
 
 def command(mode='ready'):
  return ['qemu-system-x86_64','-M','q35','-cpu','max,+pku,-rdseed,-rdrand'if mode=='unsupported'else'max,+pku,+rdseed','-rtc',gate.RTC_INVALID if mode=='invalid-year'else gate.RTC_NORMAL]
+@with_inventory
 def metadata(mode='ready',pending=1):
  lines=['[boot.entropy.source] holder=13 task=13 slot=60 consumer=15 consumer_task=15 source=rdseed attempts=8 runtime_mint=0','[boot.clock.source] holder=13 task=13 slot=61 consumer=15 consumer_task=15 source=q35_cmos_utc attempts=4 precision=1 runtime_mint=0','[browser.entropy.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1','[browser.clock.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1',f'[sexnet.entropy.source] held=1 available={0 if mode=="unsupported"else 1} source=rdseed fallback=0 broker=private_seed32','[sexnet.clock.source] held=1 source=q35_cmos_utc no_ticks_fallback=1 precision=1','[boot.trust.policy] holder=13 task=13 slot=62 consumer=15 consumer_task=15 profile=1 root_bytes=376 runtime_mint=0','[browser.trust.source.denied] wrong_kind=1 absent=1 alias=1 outputs_zero=1']
  for seq in range(1,2 if mode=='close'else 3):

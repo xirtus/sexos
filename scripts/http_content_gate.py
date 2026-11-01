@@ -149,7 +149,7 @@ def _wheel_shell_contract(source,root):
   expect(catalog,'by_surface','INCARNATIONS.iter().find(|i| i.target == target && i.surface == surface)')
   # The native geometry/receipt oracle remains this actual single Browser.
   rows=re.findall(r'Incarnation\s*\{\s*app:\s*App::Browser,([^}]+)\}',re.sub(r'//[^\n]*','',catalog))
-  if len(rows)!=1:raise ValueError('wheel held source native Browser roster differs')
+  if len(rows)!=3:raise ValueError('wheel held source native Browser roster differs')
   for field,value in (('ordinal',0),('target',15),('surface',300),('lifecycle_slot',40),('close_slot',43),('route_slot',43)):
    if re.findall(r'\b'+field+r':\s*(\d+)\b',rows[0])!=[str(value)]:raise ValueError('wheel held source native Browser '+field+' differs')
   expect(lifecycle,'is_sender','caller_pd!=0 && caller_task!=0 && self.target_pd==caller_pd && self.task_id==caller_task')
