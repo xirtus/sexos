@@ -89,6 +89,42 @@ fn erase(pixels: &mut [u32]) {
         }
     }
 }
+/// Owned immutable view of committed pixels, populated only by Display's
+/// installed Stage. It contains no pending transfer, coverage or reply state.
+/// Retained Binding is descriptive metadata, never live admission authority.
+pub struct Published {
+    binding: Option<Binding>,
+    geometry: Option<Geometry>,
+    pixels: [u32; CAPACITY],
+}
+impl Published {
+    pub const EMPTY: Self = Self { binding: None, geometry: None, pixels: [0; CAPACITY] };
+    pub const fn binding(&self) -> Option<Binding> { self.binding }
+    pub const fn geometry(&self) -> Option<Geometry> { self.geometry }
+    pub fn matches_surface(&self, owner: u32, sid: u64) -> bool {
+        self.binding.is_some_and(|binding| binding.target() == owner && binding.surface() == sid)
+    }
+    /// Same local-coordinate lookup as Stage; renderer still clips to the
+    /// winning owned surface/body/framebuffer of its captured scene.
+    pub fn sample(&self, owner: u32, sid: u64, x: i64, y: i64) -> Option<u32> {
+        if !self.matches_surface(owner, sid) { return None; }
+        let g = self.geometry?;
+        let (x, y) = (x.checked_sub(g.x as i64)?, y.checked_sub(g.y as i64)?);
+        if x < 0 || y < 0 { return None; }
+        let (x, y) = (x / g.scale as i64, y / g.scale as i64);
+        if x >= g.width as i64 || y >= g.height as i64 { return None; }
+        Some(self.pixels[y as usize * g.width as usize + x as usize])
+    }
+    /// Discard owned copied payload before reuse/releasing scene custody.
+    /// No claim about compiler temporaries, registers, caches or physical RAM.
+    pub fn scrub(&mut self) {
+        erase(&mut self.pixels);
+        self.binding = None;
+        self.geometry = None;
+    }
+    #[cfg(test)]
+    pub fn pixels_scrubbed(&self) -> bool { self.pixels.iter().all(|&pixel| pixel == 0) }
+}
 impl Stage {
     pub const UNBOUND: Self = Self {
         binding: None,
@@ -103,6 +139,17 @@ impl Stage {
         reply_pending: false,
         retired: false,
     };
+    /// Copy only already committed pixels into preallocated scene backing.
+    /// A pending/poisoned transfer does not replace the previous publication.
+    /// Unbound, retired or cleared sources erase any previous destination image.
+    pub fn snapshot_into(&self, dst: &mut Published) {
+        dst.scrub();
+        dst.binding = self.binding;
+        if self.retired || self.binding.is_none() { return; }
+        let Some(g) = self.published_geometry.filter(|g| g.valid()) else { return; };
+        dst.pixels[..g.len()].copy_from_slice(&self.published[..g.len()]);
+        dst.geometry = Some(g);
+    }
     /// Install metadata once into existing static backing. This never creates
     /// a large temporary, clears retirement, or infers identity from a packet.
     pub fn initialize_once(&mut self, binding: Binding) -> bool {

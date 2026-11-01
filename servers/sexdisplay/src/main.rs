@@ -123,6 +123,34 @@ mod surface_groups;
 static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGroups::new();
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
+mod scene;
+// One Display-owned scratch scene. Intake cannot run concurrently with a
+// logical render in this single-task service. No producer/framebuffer pointer
+// enters the snapshot, and each lease scrubs its owned payload on every exit.
+static mut RENDER_SCENE: scene::SceneSnapshot = scene::SceneSnapshot::EMPTY;
+struct SceneLease { _single_task: core::marker::PhantomData<*mut ()> }
+impl SceneLease {
+    fn capture(w: usize, h: usize, bar: &SilkBar) -> Option<Self> {
+        unsafe {
+            // Reject reentry using a shared read before constructing an
+            // exclusive reference: an existing lease may still borrow data.
+            if (*core::ptr::addr_of!(RENDER_SCENE)).is_valid() { return None; }
+            let destination = &mut *core::ptr::addr_of_mut!(RENDER_SCENE);
+            let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
+            if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, bar,
+                DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h) { return None; }
+        }
+        Some(Self { _single_task: core::marker::PhantomData })
+    }
+    fn view(&self) -> &scene::SceneSnapshot {
+        unsafe { &*core::ptr::addr_of!(RENDER_SCENE) }
+    }
+}
+impl Drop for SceneLease {
+    fn drop(&mut self) {
+        unsafe { (*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub(); }
+    }
+}
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 static mut APP_PRESENT_BITS: u64 = 0;
 static APP300_PRESENTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -315,24 +343,24 @@ fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usi
 
 /// Composite a single pixel: non-focused surfaces in slot order, then focused on top.
 /// Shared by render() and redraw_surface_area() to prevent drift.
-fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64) -> u32 {
-    let selected=unsafe{FRAME_GROUPS.winner(&SURFACES,focused_id,x,y,w,h).map(|s|s.surface_id)};
-    composite_pixel_selected(x,y,w,h,bg,focused_id,selected)
+fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64, scene: &scene::SceneSnapshot) -> u32 {
+    let selected=unsafe{scene.groups.winner(&scene.surfaces,focused_id,x,y,w,h).map(|s|s.surface_id)};
+    composite_pixel_selected(x,y,w,h,bg,focused_id,selected, scene)
 }
 
-fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64, selected:Option<u64>) -> u32 {
-    let source = unsafe { SURFACES.iter().find(|s| s.active && Some(s.surface_id) == selected)
+fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64, selected:Option<u64>, scene: &scene::SceneSnapshot) -> u32 {
+    let source = unsafe { scene.surfaces.iter().find(|s| s.active && Some(s.surface_id) == selected)
         .map(|surface| surface_groups::PixelSource {
             surface,
-            content: FRAME_GROUPS.content(surface, &SURFACES, x, y, w, h),
-            chrome: surface.surface_id == focused_id || FRAME_GROUPS.is_frame(surface),
+            content: scene.groups.content(surface, &scene.surfaces, x, y, w, h),
+            chrome: surface.surface_id == focused_id || scene.groups.is_frame(surface),
         }) };
-    composite_pixel_source(x,y,w,h,bg,source)
+    composite_pixel_source(x,y,w,h,bg,source, scene)
 }
 
 /// Choices are borrowed only during this immutable render row; no lookup or
 /// lifecycle authority is retained across a display drain.
-fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, source: Option<surface_groups::PixelSource<'_>>) -> u32 {
+fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, source: Option<surface_groups::PixelSource<'_>>, scene: &scene::SceneSnapshot) -> u32 {
     let Some(source) = source else { return bg; };
     let surf = source.surface;
     let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
@@ -341,7 +369,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
     let mut winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
     if !source.chrome {
         c = fill_rect_color(surf, x, y, surf.color);
-        c = bitmap_color(surf, x, y, c);
+        c = bitmap_color(surf, x, y, c, scene);
         if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
     } else { unsafe {
         // ── Phase 6 proof: real render-path markers ──────────────
@@ -352,8 +380,8 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             static mut PHASE6_RENDER_BEGIN_PROOF: u32 = 1;
             if PHASE6_RENDER_BEGIN_PROOF > 0 {
                 PHASE6_RENDER_BEGIN_PROOF -= 1;
-                let active_count = SURFACES.iter().filter(|s| s.active).count();
-                let frame_count = SURFACES.iter().filter(|s| s.active && s.tab_count > 0 && (s.chrome_flags & SURFACE_CHROME_TOP_BAR) != 0).count();
+                let active_count = scene.surfaces.iter().filter(|s| s.active).count();
+                let frame_count = scene.surfaces.iter().filter(|s| s.active && s.tab_count > 0 && (s.chrome_flags & SURFACE_CHROME_TOP_BAR) != 0).count();
                 serial_println!("[sexdisplay.frame_lights.render.begin] fb_w={} fb_h={} surfaces={} frames={}", w, h, active_count, frame_count);
             }
             static mut PHASE6_BOUNDS_OK_PROOF: u32 = 1;
@@ -409,7 +437,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             let base_alpha: u8 = if frame_hovered { 220 } else { 200 };
             let toolbar_alpha = scale_alpha(base_alpha, chrome_dim);
             if toolbar_alpha > 0 {
-                c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, toolbar_alpha);
+                c = glass_over_bg(scene.tokens.frame_top_bar_color, x, y, toolbar_alpha, scene);
             }
             // Divider: bright opaque line at bottom edge.
             if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
@@ -425,11 +453,11 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 if slot_w > 0 {
                     let tab_idx = (lx - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX) / slot_w;
                     let tab_color = if tab_idx == surf.active_tab as usize {
-                        DISPLAY_TOKENS.active_tab_color
+                        scene.tokens.active_tab_color
                     } else {
-                        DISPLAY_TOKENS.inactive_tab_color
+                        scene.tokens.inactive_tab_color
                     };
-                    let tab_glass = glass_over_bg(tab_color, x, y, 224);
+                    let tab_glass = glass_over_bg(tab_color, x, y, 224, scene);
                     let tab_alpha: u8 = if tab_idx == surf.active_tab as usize { 240 } else { 200 };
                     c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
                 }
@@ -469,21 +497,21 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 };
                 let light_alpha: u8 = scale_alpha(l1_close_base, chrome_dim);
                 if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                    if light_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha); }
+                    if light_alpha > 0 { c = glass_over_bg(scene.tokens.close_light_color, x, y, light_alpha, scene); }
                 } else {
                     let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                     let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                     let l2_hovered = light_hovered && hovered_light_kind == 1;
                     let l2_alpha = scale_alpha(if l2_hovered { 255 } else { 224 }, chrome_dim);
                     if lx >= l2_start && lx < l2_end {
-                        if l2_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, l2_alpha); }
+                        if l2_alpha > 0 { c = glass_over_bg(scene.tokens.minimize_light_color, x, y, l2_alpha, scene); }
                     } else {
                         let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                         let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                         let l3_hovered = light_hovered && hovered_light_kind == 2;
                         let l3_alpha = scale_alpha(if l3_hovered { 255 } else { 224 }, chrome_dim);
                         if lx >= l3_start && lx < l3_end {
-                            if l3_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, l3_alpha); }
+                            if l3_alpha > 0 { c = glass_over_bg(scene.tokens.zoom_light_color, x, y, l3_alpha, scene); }
                         }
                     }
                 }
@@ -503,17 +531,17 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 if lx >= FRAME_LIGHT_GAP_PX
                     && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                 {
-                    c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, l1_alpha);
+                    c = glass_over_bg(scene.tokens.close_light_color, x, y, l1_alpha, scene);
                 }
                 else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
                     && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                 {
-                    c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, 224);
+                    c = glass_over_bg(scene.tokens.minimize_light_color, x, y, 224, scene);
                 }
                 else if lx >= FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX)
                     && lx < FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX) + FRAME_LIGHT_SIZE_PX
                 {
-                    c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, 224);
+                    c = glass_over_bg(scene.tokens.zoom_light_color, x, y, 224, scene);
                 }
                 // Tab strip — glass version.
                 else if surf.tab_count > 0
@@ -525,33 +553,33 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                     if slot_w > 0 {
                         let tab_idx = (lx - TAB_STRIP_LIGHT_EXCLUSION_PX) / slot_w;
                         let tab_color = if tab_idx == surf.active_tab as usize {
-                            DISPLAY_TOKENS.active_tab_color
+                            scene.tokens.active_tab_color
                         } else {
-                            DISPLAY_TOKENS.inactive_tab_color
+                            scene.tokens.inactive_tab_color
                         };
                         let tab_alpha: u8 = if tab_idx == surf.active_tab as usize { 220 } else { 180 };
-                        c = glass_over_bg(tab_color, x, y, tab_alpha);
+                        c = glass_over_bg(tab_color, x, y, tab_alpha, scene);
                     } else {
-                        c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 196);
+                        c = glass_over_bg(scene.tokens.frame_rim_color, x, y, 196, scene);
                     }
                 } else {
-                    c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 196);
+                    c = glass_over_bg(scene.tokens.frame_rim_color, x, y, 196, scene);
                 }
             } else {
                 // Left, right, or bottom rim edge — pulsing neon glass.
-                let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
+                let frame = scene.frame;
                 const RIM_BASE_ALPHA: u8 = 196;
                 const RIM_AMP: u8 = 12;
                 const RIM_PERIOD: u64 = 128;
                 let rim_alpha = pulse_alpha(RIM_BASE_ALPHA, RIM_AMP, frame, RIM_PERIOD);
-                c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, rim_alpha);
+                c = glass_over_bg(scene.tokens.frame_rim_color, x, y, rim_alpha, scene);
             }
         } else {
             // ── SURFACE CONTENT AREA ──
             let content = source.content;
             winner_mask = surface_lifecycle::native_pixel_bit(content.owner_pd, content.surface_id);
             c = fill_rect_color(content, x, y, content.color);
-            c = bitmap_color(content, x, y, c);
+            c = bitmap_color(content, x, y, c, scene);
             // Child text uses its own origin; the parent alone draws chrome.
             if let Some(tc) = surface_text_fg_at(x, y, content) { c = tc; }
         }
@@ -584,10 +612,10 @@ fn bitmap_viewport(surf: &Surface) -> bitmap_transaction::Viewport {
     bitmap_transaction::Viewport { x: surf.x, y: surf.y, width: surf.w, height: surf.h,
         inset: if chrome { 8 } else { 0 }, top: if chrome { FRAME_TOP_BAR_HEIGHT_PX as u32 + 8 } else { 0 } }
 }
-fn bitmap_color(surf: &Surface, x: usize, y: usize, base: u32) -> u32 {
-    if !surf.active || !(unsafe { BITMAP_STORES.matches_surface(surf.owner_pd, surf.surface_id) }) { return base; }
+fn bitmap_color(surf: &Surface, x: usize, y: usize, base: u32, scene: &scene::SceneSnapshot) -> u32 {
+    if !surf.active || !(unsafe { scene.bitmaps.matches_surface(surf.owner_pd, surf.surface_id) }) { return base; }
     let Some((x, y)) = bitmap_viewport(surf).local(x, y) else { return base; };
-    unsafe { BITMAP_STORES.sample(surf.owner_pd, surf.surface_id, x, y) }
+    unsafe { scene.bitmaps.sample(surf.owner_pd, surf.surface_id, x, y) }
         .map_or(base, |pixel| bitmap_transaction::blend(pixel, base))
 }
 fn bitmap_surface_damage(surf: &Surface, geometry: Option<sex_pdx::bitmap_batch::Geometry>, w: usize, h: usize) -> (usize, usize, usize, usize) {
@@ -676,11 +704,31 @@ fn blur_bar_bg_buffer_radius1(fb_w: u32, fb_h: u32) -> bool {
     true
 }
 
-fn sample_bar_blur_bg_xrgb(x: u32, y: u32, fb_w: u32, fb_h: u32) -> u32 {
+/// The backdrop is horizontally constant. Its 3x3 integer blur therefore
+/// equals the average of its two/three distinct source rows. Capture these
+/// colors once; a pixel never reads the mutable legacy blur scratch buffers.
+fn scene_bar_blur_rows(fb_h: usize) -> [u32; BAR_BG_H] {
+    let height=BAR_BG_H.min(fb_h);
+    let mut rows=[0;BAR_BG_H];
+    for y in 0..height {
+        let first=y.saturating_sub(1);
+        let last=(y+1).min(height-1);
+        let (mut r,mut g,mut b)=(0u32,0u32,0u32);
+        for sy in first..=last {
+            let color=bg(sy,fb_h);
+            r+=color&255;g+=(color>>8)&255;b+=(color>>16)&255;
+        }
+        let count=(last-first+1)as u32;
+        rows[y]=0xFF000000|((b/count)<<16)|((g/count)<<8)|(r/count);
+    }
+    rows
+}
+
+fn sample_bar_blur_bg_xrgb(x: u32, y: u32, fb_w: u32, fb_h: u32, scene: &scene::SceneSnapshot) -> u32 {
     if fb_w as usize > BAR_BG_W_CAP || y as usize >= BAR_BG_H || x >= fb_w {
         return bg(y as usize, fb_h as usize);
     }
-    unsafe { BAR_BLUR_BUF[y as usize * BAR_BG_W_CAP + x as usize] }
+    scene.blur_rows[y as usize]
 }
 
 #[inline]
@@ -741,11 +789,11 @@ fn alpha_blend_xrgb_over_xrgb(fg: u32, bg: u32, alpha: u8) -> u32 {
 /// Alpha-blend a glass fg over the desktop background gradient.
 /// Uses FB_H for height; alpha controls translucency.
 #[inline]
-fn glass_over_bg(fg: u32, x: usize, y: usize, alpha: u8) -> u32 {
-    let fb_w = unsafe { FB_W };
-    let fb_h = unsafe { FB_H };
+fn glass_over_bg(fg: u32, x: usize, y: usize, alpha: u8, scene: &scene::SceneSnapshot) -> u32 {
+    let fb_w = unsafe { scene.width as u32 };
+    let fb_h = unsafe { scene.height as u32 };
     if fb_h == 0 { return fg; }
-    let bg = sample_bar_blur_bg_xrgb(x as u32, y as u32, fb_w, fb_h);
+    let bg = sample_bar_blur_bg_xrgb(x as u32, y as u32, fb_w, fb_h, scene);
     alpha_blend_xrgb_over_xrgb(fg, bg, alpha)
 }
 
@@ -768,7 +816,7 @@ fn module_rect(bar: &SilkBar, slot: ModuleSlot) -> (usize, usize, usize, usize) 
     (lb.x, lb.y, lb.w, lb.h)
 }
 
-fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+fn workspace_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
     const WS_SLOTS: [ModuleSlot; 5] = [
         ModuleSlot::Workspace0,
         ModuleSlot::Workspace1,
@@ -785,7 +833,7 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
                 const WORKSPACE_GLOW_BASE: u8 = 48;
                 const WORKSPACE_GLOW_AMP: u8 = 32;
                 const WORKSPACE_GLOW_PERIOD: u64 = 96;
-                let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
+                let frame = scene.frame;
                 let glow_alpha = pulse_alpha(
                     WORKSPACE_GLOW_BASE,
                     WORKSPACE_GLOW_AMP,
@@ -794,7 +842,7 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
                 );
                 let active_glow = alpha_blend_xrgb_over_xrgb(
                     0x00FFFFFF, DEFAULT_THEME.active, glow_alpha);
-                return Some(glass_over_bg(active_glow, x, y, 224));
+                return Some(glass_over_bg(active_glow, x, y, 224, scene));
             }
             if ws.urgent { return Some(DEFAULT_THEME.urgent); }
             return Some(DEFAULT_THEME.muted);
@@ -803,7 +851,7 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
-fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+fn chip_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
     const R6_CHIP_ALPHA: u8 = 212;
     const CHIP_SLOTS: [ModuleSlot; 4] = [
         ModuleSlot::Chip0,
@@ -817,7 +865,7 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
             let chip = &bar.chips[idx];
             if !chip.visible { return Some(0x00102038); }
             match chip.kind {
-                ChipKind::Net     => return Some(glass_over_bg(DEFAULT_THEME.chip_fill, x, y, R6_CHIP_ALPHA)),
+                ChipKind::Net     => return Some(glass_over_bg(DEFAULT_THEME.chip_fill, x, y, R6_CHIP_ALPHA, scene)),
                 ChipKind::Wifi    => return Some(0x0038D6C8),
                 ChipKind::Battery => return Some(0x00FFB84D),
                 ChipKind::Clock   => return Some(DEFAULT_THEME.chip_border),
@@ -861,10 +909,10 @@ const fn accent_swatch_color(idx: u8) -> u32 {
 
 /// Phase 5: active app indicator — 4x4 colored dot near launcher.
 /// Position: x=155..159, y=22..25 (right of options dots at x=135).
-fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar) -> Option<u32> {
+fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
     // The admitted compositor focus is live in normal builds; the separate
     // phase1 field is updated only by the optional protocol proof path.
-    let focused = unsafe { FOCUSED_SURFACE_ID };
+    let focused = unsafe { scene.focus };
     if focused == 0 { return None; }
     const DOT_X: usize = 155;
     const DOT_Y: usize = 22;
@@ -877,13 +925,13 @@ fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar) -> Option<u32> {
 }
 
 /// Same visible top-strip content for full and incremental redraws.
-fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2]) -> u32 {
+fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], scene: &scene::SceneSnapshot) -> u32 {
     if let Some(fg) = clock_fg_at(x, y, bar, lines) { fg }
     else if let Some(fg) = bell_badge_at(x, y, bar) { fg }
-    else if let Some(fg) = phase5_active_app_at(x, y, bar) { fg }
+    else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_palette_dot_at(x, y, bar) { fg }
-    else { bar_color(x, y, bar) }
+    else { bar_color(x, y, bar, scene) }
 }
 
 // Bounded observation only: no protocol, authority or scheduling decisions.
@@ -955,7 +1003,7 @@ fn phase5_palette_dot_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     }
 }
 
-fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
+fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> u32 {
     const R6_BAR_ALPHA: u8 = 196;
     const R6_EDGE_ALPHA: u8 = 72;
     const BAR_TOP_HIGHLIGHT: u32 = 0x00A8D8FF;
@@ -995,9 +1043,9 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
         }
     }
     // Workspace indicators
-    if let Some(c) = workspace_color(x, y, bar) { return c; }
+    if let Some(c) = workspace_color(x, y, bar, scene) { return c; }
     // Status chip backgrounds
-    if let Some(c) = chip_color(x, y, bar) { return c; }
+    if let Some(c) = chip_color(x, y, bar, scene) { return c; }
     // Bell indicator (privacy-safe presence dot between Battery and Clock)
     let (bx, by, bw, bh) = module_rect(bar, ModuleSlot::Bell);
     if in_rect(x, y, bx, by, bw, bh) {
@@ -1025,9 +1073,9 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
         let xw = lx + lw - 2;
         let yh = ly + lh - 2;
         if x < x2 || x >= xw || y < y2 || y >= yh {
-            return glass_over_bg(DEFAULT_THEME.panel_glow, x, y, R6_EDGE_ALPHA);
+            return glass_over_bg(DEFAULT_THEME.panel_glow, x, y, R6_EDGE_ALPHA, scene);
         }
-        let launcher_body = glass_over_bg(0x005CAEE8, x, y, 200);
+        let launcher_body = glass_over_bg(0x005CAEE8, x, y, 200, scene);
         return alpha_blend_xrgb_over_xrgb(0x0082D6FF, launcher_body, 64);
     }
     // Bar body: glass translucency over desktop background,
@@ -1035,11 +1083,11 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     const BAR_BOTTOM: usize = 50;
     const GLOW_SPREAD: usize = 4;
     if y == 0 {
-        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
         return alpha_blend_xrgb_over_xrgb(BAR_TOP_HIGHLIGHT, body, 64);
     }
     if y == BAR_BOTTOM - 1 {
-        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
         let darkened = alpha_blend_xrgb_over_xrgb(BAR_BOTTOM_DARK_EDGE, body, 88);
         return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, darkened, 48);
     }
@@ -1047,12 +1095,12 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
         let dist = (BAR_BOTTOM - 1 - y) as u32;
         let glow_a = glow_edge_alpha(dist, GLOW_SPREAD as u32, R6_EDGE_ALPHA);
         if glow_a > 0 {
-            let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+            let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
             let body = alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 36);
             return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, body, glow_a);
         }
     }
-    let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+    let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
     alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 32)
 }
 
@@ -1591,22 +1639,25 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
         serial_println!("[sexdisplay.render.glass.r6] bar_alpha=196 chip_alpha=212 blur=1 pulse=1");
     }
 
-    let focused_id = unsafe { FOCUSED_SURFACE_ID };
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
+    let scene=lease.view();
+    let bar=&scene.bar;
+    let focused_id=scene.focus;
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
     unsafe { APP_PRESENT_BITS = 0; }
     let clock_lines=civil_clock_lines(&bar.civil_clock);
     for y in 0..h {
-        let mut row=if y>50 {unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused_id,y,w,h)}}else{None};
+        let mut row=if y>50 {unsafe{scene.groups.row_winners(&scene.surfaces,focused_id,y,w,h)}}else{None};
         for x in 0..w {
             let c: u32 = if y < 50 {
-                top_strip_pixel(x, y, bar, &clock_lines)
+                top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
                 if let Some(row)=row.as_mut(){
-                    composite_pixel_source(x,y,w,h,bg(y,h),row.source(x))
-                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id)}
+                    composite_pixel_source(x,y,w,h,bg(y,h),row.source(x), scene)
+                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id, scene)}
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -1614,10 +1665,10 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
             }
         }
     }
-    draw_atlas_cards_pass(fb, w, h, total_pixels);
-    draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
-    draw_cursor_z_top(fb, w, h, total_pixels, true);
-    draw_launcher_panel(fb, w, h, total_pixels);
+    draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
+    draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
+    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
+    draw_launcher_panel(fb, w, h, total_pixels, scene);
     report_app_presented();
     repaint_end("full", repaint_started);
     civil_clock_drawn(bar,w,h,"full");
@@ -1643,6 +1694,9 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         Some(v) => v,
         None => return,
     };
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return;};
+    let scene=lease.view();
+    let bar=&scene.bar;
     // [silk.live_topstrip.v2.fb_clear] REMOVED: writing raw desktop gradient over
     // the bar area before rendering the bar causes a visible black/purple flash
     // on every clock tick (the host displays the partial gradient before the bar
@@ -1813,7 +1867,7 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                top_strip_pixel(x, y, bar, &clock_lines)
+                top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
                 DEFAULT_THEME.panel_glow
             };
@@ -1828,20 +1882,20 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     // pixels, launcher panel, atlas cards, and frame preview content that the
     // initial render() placed above the bar, causing glitch artifacts across
     // the top chrome.
-    draw_atlas_cards_pass(fb, w, h, total_pixels);
-    draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
+    draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
+    draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
     // save_under=false: this path repaints only y<50; pixels under the
     // cursor (y>=51) still contain the drawn cursor — capturing here would
     // poison the save-under patch with cursor pixels.
-    draw_cursor_z_top(fb, w, h, total_pixels, false);
-    draw_launcher_panel(fb, w, h, total_pixels);
+    draw_cursor_z_top(fb, w, h, total_pixels, false, scene);
+    draw_launcher_panel(fb, w, h, total_pixels, scene);
     repaint_end("strip", repaint_started);
     civil_clock_drawn(bar,w,h,"strip");
 }
 
 /// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
 /// Never touches y<50 (SilkBar/clock/chips). Not a full render() call.
-fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
+fn redraw_surface_area(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let repaint_started = repaint_begin();
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE { return; }
@@ -1860,17 +1914,20 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
             if hot_log() { serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h); }
         }
     }
-    let focused_id = unsafe { FOCUSED_SURFACE_ID };
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return;};
+    let scene=lease.view();
+    let bar=&scene.bar;
+    let focused_id=scene.focus;
     unsafe { APP_PRESENT_BITS = 0; }
     for y in 50..h {
-        let mut row=if y>50 {unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused_id,y,w,h)}}else{None};
+        let mut row=if y>50 {unsafe{scene.groups.row_winners(&scene.surfaces,focused_id,y,w,h)}}else{None};
         for x in 0..w {
             let c: u32 = if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
                 if let Some(row)=row.as_mut(){
-                    composite_pixel_source(x,y,w,h,bg(y,h),row.source(x))
-                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id)}
+                    composite_pixel_source(x,y,w,h,bg(y,h),row.source(x), scene)
+                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id, scene)}
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -1878,10 +1935,10 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
             }
         }
     }
-    draw_atlas_cards_pass(fb, w, h, total_pixels);
-    draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
-    draw_cursor_z_top(fb, w, h, total_pixels, true);
-    draw_launcher_panel(fb, w, h, total_pixels);
+    draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
+    draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
+    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
+    draw_launcher_panel(fb, w, h, total_pixels, scene);
     report_app_presented();
     repaint_end("area", repaint_started);
 }
@@ -1901,27 +1958,30 @@ fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize
 
 /// Text-only redraw after a complete transaction. Restore the old cursor patch
 /// before touching damage, then capture its new background exactly once.
-fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect) {
+fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect, bar: &SilkBar) {
     let repaint_started = repaint_begin();
     if (fb as u64) < HIGH_HALF_BASE || w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return; }
     if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return; }
     if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
-        redraw_surface_area(fb,w,h); return;
+        redraw_surface_area(fb,w,h,bar); return;
     }
     let Some(total) = w.checked_mul(h) else { return; };
-    let focused = unsafe { FOCUSED_SURFACE_ID };
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return;};
+    let scene=lease.view();
+    let bar=&scene.bar;
+    let focused=scene.focus;
     unsafe { restore_cursor_under(fb,w,h,total); APP_PRESENT_BITS = 0; }
     for y in rect.y..rect.bottom {
-        let mut row=unsafe{FRAME_GROUPS.row_winners(&SURFACES,focused,y,w,h)};
+        let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
         for x in rect.x..rect.right {
             let color=if let Some(row)=row.as_mut() {
-                composite_pixel_source(x,y,w,h,bg(y,h),row.source(x))
-            } else { composite_pixel(x,y,w,h,bg(y,h),focused) };
+                composite_pixel_source(x,y,w,h,bg(y,h),row.source(x), scene)
+            } else { composite_pixel(x,y,w,h,bg(y,h),focused, scene) };
             unsafe { core::ptr::write_volatile(fb.add(y*w+x),color); }
         }
     }
-    draw_cursor_z_top(fb,w,h,total,true);
-    draw_launcher_panel(fb,w,h,total);
+    draw_cursor_z_top(fb,w,h,total,true, scene);
+    draw_launcher_panel(fb,w,h,total, scene);
     report_app_presented();
     repaint_end("text", repaint_started);
 }
@@ -1964,6 +2024,25 @@ static mut CURSOR_UNDER_VALID: bool = false;
 /// Restore the framebuffer pixels saved beneath the last cursor draw.
 /// Mirrors draw_cursor_z_top bounds rules exactly: y<51 SilkBar zone never
 /// written, x/y clipped to fb dims, idx bounds-checked against total_pixels.
+fn redraw_cursor(fb: *mut u32,w:usize,h:usize,bar:&SilkBar){
+    if (fb as u64)<HIGH_HALF_BASE || w==0 || h<51 || w>MAX_FB_W || h>MAX_FB_H{return;}
+    let Some(total)=w.checked_mul(h)else{return;};
+    let Some(lease)=SceneLease::capture(w,h,bar)else{return;};
+    let scene=lease.view();
+    restore_cursor_under(fb,w,h,total);
+    draw_cursor_z_top(fb,w,h,total,true,scene);
+}
+
+/// Discard retained framebuffer-derived cursor pixels before cleanup custody
+/// can be acknowledged. A later draw saves only the removal scene's pixels.
+fn scrub_cursor_under(){
+    unsafe{
+        CURSOR_UNDER_VALID=false;
+        for pixel in &mut CURSOR_UNDER_SAVED{core::ptr::write_volatile(pixel,0);}
+        CURSOR_UNDER_X=0;CURSOR_UNDER_Y=0;
+    }
+}
+
 fn restore_cursor_under(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
     unsafe {
         if !CURSOR_UNDER_VALID { return; }
@@ -2026,6 +2105,9 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
     fill_bar_bg_buffer(PROOF_W as u32, PROOF_H as u32);
     blur_bar_bg_buffer_radius1(PROOF_W as u32, PROOF_H as u32);
 
+    let Some(lease)=SceneLease::capture(PROOF_W,PROOF_H,&proof_bar) else{return;};
+    let scene=lease.view();
+    let proof_bar=&scene.bar;
     let clock_lines=civil_clock_lines(&proof_bar.civil_clock);
     let mut any_nonzero = false;
     for y in 0..PROOF_H {
@@ -2036,7 +2118,7 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
                 } else if let Some(fg) = bell_badge_at(x, y, &proof_bar) {
                     fg
                 } else {
-                    bar_color(x, y, &proof_bar)
+                    bar_color(x, y, &proof_bar, scene)
                 }
             } else {
                 DEFAULT_THEME.panel_glow
@@ -2162,9 +2244,9 @@ unsafe fn input_trace_display_summary() {
 /// under the cursor is current (freshly composited or just restored); pass
 /// false from redraw_top_strip, which repaints only y<50 and would capture
 /// cursor-contaminated pixels.
-fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save_under: bool) {
+fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save_under: bool, scene: &scene::SceneSnapshot) {
     unsafe {
-        for surf in SURFACES.iter() {
+        for surf in scene.surfaces.iter() {
             if !surf.active || surf.surface_id != CURSOR_SURFACE_ID { continue; }
             let ox = surf.x.max(0) as usize; // origin x (not clamped — arrow clips naturally)
             let oy = surf.y.max(0) as usize; // origin y
@@ -2275,9 +2357,9 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
 /// app surfaces but under the cursor. Renders a solid rect with a thin border.
 /// Only active when the launcher surface is active (toggled by shell).
 /// Does not affect the top-strip render proof (y<50 area).
-fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
     unsafe {
-        for surf in SURFACES.iter() {
+        for surf in scene.surfaces.iter() {
             if !surf.active || surf.surface_id != LAUNCHER_PANEL_SURFACE_ID { continue; }
             let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
             if sw == 0 || sh == 0 { break; }
@@ -2325,7 +2407,7 @@ fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
 /// Safety: writes only within framebuffer bounds (checked per-card via
 /// clamp_surface + px/py bounds).  Only touches rows y>=51 (below SilkBar).
 /// Card border color is flat ARGB, zero alpha/blur.
-fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
     if !ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED {
         return;
     }
@@ -2350,7 +2432,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) 
             if card_count >= ATLAS_CARD_MAX_CARDS as u32 {
                 break;
             }
-            let surf = &SURFACES[si];
+            let surf = &scene.surfaces[si];
             if !surf.active {
                 continue;
             }
@@ -2402,7 +2484,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) 
                 continue;
             }
 
-            let active_flag: u8 = if surf.surface_id == (unsafe { FOCUSED_SURFACE_ID }) { 1 } else { 0 };
+            let active_flag: u8 = if surf.surface_id == (unsafe { scene.focus }) { 1 } else { 0 };
 
             // Budgeted layout marker.
             unsafe {
@@ -2525,7 +2607,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) 
 ///
 /// Runs after draw_atlas_cards_pass when SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF=1;
 /// markers are budgeted to prevent log spam.
-fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
     if !ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
         return;
     }
@@ -2545,7 +2627,7 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
             let mut eligible: u32 = 0;
             for si in 0..MAX_SURFACES {
                 if eligible >= ATLAS_PREVIEW_MAX_PREVIEWS as u32 { break; }
-                let surf = &SURFACES[si];
+                let surf = &scene.surfaces[si];
                 if !surf.active { continue; }
                 if surf.surface_id == CURSOR_SURFACE_ID || surf.surface_id == LAUNCHER_PANEL_SURFACE_ID { continue; }
                 let (_, sy, sw, sh) = clamp_surface(surf, w, h);
@@ -2567,7 +2649,7 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
             if preview_count >= ATLAS_PREVIEW_MAX_PREVIEWS as u32 {
                 break;
             }
-            let surf = &SURFACES[si];
+            let surf = &scene.surfaces[si];
             if !surf.active {
                 continue;
             }
@@ -2632,7 +2714,7 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
                 continue;
             }
 
-            let active_flag: u8 = if surf.surface_id == FOCUSED_SURFACE_ID { 1 } else { 0 };
+            let active_flag: u8 = if surf.surface_id == scene.focus { 1 } else { 0 };
             let is_active = active_flag == 1;
 
             // local_stub: active=focused, visible=non-focused active, minimized not detectable
@@ -2867,6 +2949,8 @@ fn browser_text_binding_live(lifecycle: &surface_lifecycle::Lifecycle, owner: u3
 }
 
 fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut SilkBar) -> bool {
+    // A retained scene cannot be retired or release cleanup custody.
+    if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return false;}
     let mut changed = false;
     for index in 0..surface_lifecycle::CATALOG_CAPACITY {
         let Some(catalog) = lifecycle.catalog(index) else { continue; };
@@ -2892,6 +2976,7 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
                 TOKEN_BUF_CALL1_RECEIVED = refs.token_pending;
                 if !refs.token_pending { TOKEN_BUF_ARG0 = 0; TOKEN_BUF_ARG1 = 0; TOKEN_BUF_ARG2 = 0; }
                 CURSOR_UNDER_VALID = refs.cursor_under_valid;
+                scrub_cursor_under();
                 changed = true;
                 sex_pdx::serial_record!("[display.app.cleanup.prepared] target={} task={} removed={} focus={} tombstone=1",
                     info.target_pd, info.task_id, removed, refs.focused_sid);
@@ -2902,6 +2987,8 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
 }
 
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &SilkBar, fb_live: bool) {
+    // A retained scene cannot be retired or release cleanup custody.
+    if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
     let prepared = (0..surface_lifecycle::CATALOG_CAPACITY)
         .any(|i| lifecycle.phase(i) == Some(surface_lifecycle::Phase::Prepared));
     if (prepared || lifecycle.needs_presentation()) && fb_live
@@ -4217,9 +4304,9 @@ pub extern "C" fn _start() -> ! {
         // updates draining in the same cycle. Without this, chrome updates are lost.
         if needs_surface_redraw && !transaction_full_render {
             clock_canon_apply_to_bar(&mut bar);
-            unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+            unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
         } else if let Some(rect) = text_damage.rect().filter(|_| fb_live && !transaction_full_render) {
-            unsafe { redraw_surface_damage(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, rect); }
+            unsafe { redraw_surface_damage(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, rect, &bar); }
         } else if cursor_only_moved && fb_live && !transaction_full_render {
             // Cursor-only fast path: restore the 8x16 patch saved beneath
             // the previous cursor draw, then draw at the new position (which
@@ -4229,8 +4316,7 @@ pub extern "C" fn _start() -> ! {
             unsafe {
                 let fb = FB_PTR as *mut u32;
                 let (w, h) = (FB_W as usize, FB_H as usize);
-                restore_cursor_under(fb, w, h, w * h);
-                draw_cursor_z_top(fb, w, h, w * h, true);
+                redraw_cursor(fb,w,h,&bar);
             }
         }
         // Top strip: redraw when needed (clock tick, silkbar update).

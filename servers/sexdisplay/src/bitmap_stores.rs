@@ -2,7 +2,7 @@
 //! Finite Display-owned bitmap backing, one independent Stage per catalogued
 //! Browser. Catalog data selects storage only; startup must supply each actual
 //! held Binding and Main must still check owned surfaces and live/terminal proof.
-use crate::{bitmap_binding::Binding,bitmap_transaction::{Change,Stage}};
+use crate::{bitmap_binding::Binding,bitmap_transaction::{Change,Stage,Published}};
 use sex_pdx::{app_catalog::{self,App},bitmap_batch::Request};
 const CATALOG_COUNT:usize=app_catalog::count(App::Browser);
 
@@ -27,6 +27,26 @@ impl<const N:usize> Stores<N>{
             if browser{ordinal+=1;}
         }
         if ordinal!=N{return None}found
+    }
+    /// Snapshot each installed canonical association into existing backing.
+    /// Preflight all metadata before copying; failure removes the entire old
+    /// destination so a caller cannot accidentally render a stale scene image.
+    pub fn snapshot_into(&self,dst:&mut PublishedStores<N>)->bool{
+        dst.scrub();
+        if N!=CATALOG_COUNT{return false}
+        for(index,stage)in self.stages.iter().enumerate(){
+            let Some(binding)=stage.binding()else{continue};
+            if Self::catalog_index(binding)!=Some(index){return false}
+            for previous in &self.stages[..index]{
+                let Some(other)=previous.binding()else{continue};
+                if binding.target()==other.target()||binding.surface()==other.surface()
+                    ||binding.task()==other.task(){return false}
+            }
+        }
+        for(source,target)in self.stages.iter().zip(dst.published.iter_mut()){
+            source.snapshot_into(target);
+        }
+        true
     }
     pub fn initialize_once(&mut self,binding:Binding)->bool{
         let Some(index)=Self::catalog_index(binding)else{return false};
@@ -88,4 +108,34 @@ impl<const N:usize> Stores<N>{
     pub fn pixels_scrubbed(&self,owner:u32,sid:u64)->Option<bool>{
         Some(self.stages[self.installed_index(owner,sid)?].pixels_scrubbed())
     }
+}
+
+/// Fixed backing for one immutable scene's committed Browser pixels. Only a
+/// validated Stores snapshot installs metadata; no packet-time binding exists.
+pub struct PublishedStores<const N:usize>{published:[Published;N]}
+impl<const N:usize> PublishedStores<N>{
+    pub const EMPTY:Self=Self{published:[const{Published::EMPTY};N]};
+    fn installed_index(&self,owner:u32,sid:u64)->Option<usize>{
+        if N!=CATALOG_COUNT{return None}
+        let mut found=None;
+        for(index,published)in self.published.iter().enumerate(){
+            if published.matches_surface(owner,sid){
+                if found.is_some(){return None}found=Some(index);
+            }
+        }
+        found
+    }
+    /// Captured association includes exact task; not current liveness proof.
+    pub fn binding_for(&self,owner:u32,sid:u64)->Option<Binding>{
+        self.published[self.installed_index(owner,sid)?].binding()
+    }
+    pub fn matches_surface(&self,owner:u32,sid:u64)->bool{
+        self.binding_for(owner,sid).is_some()
+    }
+    pub fn sample(&self,owner:u32,sid:u64,x:i64,y:i64)->Option<u32>{
+        self.published[self.installed_index(owner,sid)?].sample(owner,sid,x,y)
+    }
+    pub fn scrub(&mut self){for published in &mut self.published{published.scrub();}}
+    #[cfg(test)]
+    pub fn pixels_scrubbed(&self)->bool{self.published.iter().all(Published::pixels_scrubbed)}
 }

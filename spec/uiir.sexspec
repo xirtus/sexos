@@ -59,6 +59,10 @@
         {
           "path": "servers/silk-shell/src/launcher.rs",
           "anchor": "pub fn resolve"
+        },
+        {
+          "path": "servers/sexdisplay/src/scene.rs",
+          "anchor": "pub struct SceneSnapshot"
         }
       ],
       "checks": [
@@ -70,10 +74,11 @@
         "desktop_content",
         "display_surface_groups",
         "linen_text_delivery",
-        "launcher"
+        "launcher",
+        "display_scene"
       ],
       "gaps": [
-        "Boot readiness protocol does not prove atomic epoch frames, latch recovery or replay."
+        "Immutable scene inputs and bounded cleanup lifetime do not establish transactional intake/effect commit, atomic epoch frames, latch recovery or replay."
       ],
       "depends_on": [
         "EPOCH_COMMIT"

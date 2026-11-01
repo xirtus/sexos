@@ -53,17 +53,44 @@ def _caption_profile(display):
  assert re.search(r'fn civil_clock_date\(seconds:u32\)->\[u8;13\]',date),'unsupported finite date signature'
  assert 'sex_time::SexTimestamp::from_unix(seconds as i64,0)'in date and '.and_then(sex_time::Gregorian::from_timestamp)'in date,'date conversion not bound to actual sex-time API'
  assert tuple(re.findall(r'b"([A-Z]{3})"',date))==MONTHS,'unknown/ambiguous English month table'
- for name,result in(('civil_clock_fg_at','Option<u32>'),('clock_fg_at','Option<u32>'),('top_strip_pixel','u32')):
+ _date_render_shape(display)
+ return DATE_PROFILE
+
+def _date_render_shape(display):
+ # Recognize the archived cached-row API and the explicit owned-scene API.
+ # This checks the clock's source/caching route, not complete scene publication.
+ compact=lambda value:re.sub(r'\s+','',value)
+ top=compact(_function(display,'top_strip_pixel'))
+ old='fntop_strip_pixel(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2])->u32'
+ new='fntop_strip_pixel(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2],scene:&scene::SceneSnapshot)->u32'
+ header=top.split('{',1)[0]
+ assert header in(old,new),'unknown top-strip clock rendering shape'
+ scene_backed=header==new
+ for name in('civil_clock_fg_at','clock_fg_at'):
   helper=compact(_function(display,name))
-  assert 'bar:&SilkBar,lines:&[[u8;13];2])->'+result in helper,'uncached civil pixel signature: '+name
+  assert helper.split('{',1)[0]=='fn'+name+'(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2])->Option<u32>','uncached civil pixel signature: '+name
+ for name in('civil_clock_fg_at','clock_fg_at','top_strip_pixel'):
+  helper=compact(_function(display,name))
   assert all(call not in helper for call in('civil_clock_lines(','civil_clock_date(')),'formatter invoked per pixel: '+name
  assert 'ifbar.civil_enabled{returncivil_clock_fg_at(x,y,bar,lines);}'in compact(_function(display,'clock_fg_at')),'cached civil dispatch missing'
+ assert top.count('clock_fg_at(x,y,bar,lines)')==1,'top-strip cached glyph call missing'
+ if scene_backed:
+  assert 'bar_color(x,y,bar,scene)'in top,'top-strip background bypasses captured scene'
  for name,bar in(('render','bar'),('redraw_top_strip','bar'),('top_strip_render_proof','proof_bar')):
   helper=compact(_function(display,name));cache='letclock_lines=civil_clock_lines(&'+bar+'.civil_clock);'
-  assert helper.count(cache)==1 and helper.count('civil_clock_lines(')==1,'missing/duplicate per-pass clock snapshot: '+name
+  assert helper.count(cache)==1 and helper.count('civil_clock_lines(')==1 and helper.count('letclock_lines=')==1,'missing/duplicate per-pass clock snapshot: '+name
   assert helper.index(cache)<helper.index('foryin0..'),'calendar snapshot moved into pixel iteration: '+name
-  assert ',&clock_lines)'in helper,'cached rows not passed to actual renderer: '+name
- return DATE_PROFILE
+  if scene_backed:
+   capture='letSome(lease)=SceneLease::capture('+('PROOF_W,PROOF_H,&proof_bar'if name=='top_strip_render_proof'else'w,h,bar')+')else{return'+('false'if name=='render'else'')+';};'
+   chain=capture+'letscene=lease.view();let'+bar+'=&scene.bar;'
+   assert helper.count(chain)==1 and helper.count('SceneLease::capture(')==1,'missing/ambiguous scene-backed clock custody: '+name
+   assert helper.count('letscene=')==1 and helper.count('let'+bar+'=')==1 and helper.count('let'+bar+'=&scene.bar;')==1,'clock scene binding replaced: '+name
+   assert helper.index(chain)<helper.index(cache),'clock cached before owned scene capture: '+name
+  else:
+   assert 'SceneLease::capture('not in helper and '=&scene.bar;'not in helper,'ambiguous archived clock rendering shape: '+name
+  call=('clock_fg_at(x,y,&proof_bar,&clock_lines)'if name=='top_strip_render_proof'else'top_strip_pixel(x,y,bar,&clock_lines'+(',scene'if scene_backed else'')+')')
+  assert helper.count(call)==1,'cached rows not passed to actual renderer: '+name
+ return scene_backed
 
 def source_contract(root):
  root=Path(root);names=['crates/silkbar-model/src/lib.rs','crates/silkbar-model/src/civil_clock.rs','crates/sex-pdx/src/clock_source.rs','kernel/src/clock_source.rs','kernel/src/init.rs','servers/silkbar/src/main.rs','servers/silkbar/src/civil_clock.rs','servers/sexdisplay/src/main.rs','scripts/silkbar_clock_gate.py','scripts/clock_source_evidence.py','scripts/browser_source_evidence.py','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/browser_sources.rs'];texts={n:(root/n).read_text()for n in names};model=texts[names[0]];display=texts['servers/sexdisplay/src/main.rs'];abi=texts['crates/sex-pdx/src/clock_source.rs']
@@ -71,6 +98,9 @@ def source_contract(root):
  if profile==DATE_PROFILE:
   for name in('servers/sexdisplay/Cargo.toml','crates/sex-time/Cargo.toml','crates/sex-time/src/lib.rs'):texts[name]=(root/name).read_text()
   assert re.search(r'^sex-time\s*=\s*\{\s*path\s*=\s*"../../crates/sex-time",\s*default-features\s*=\s*false\s*\}',texts['servers/sexdisplay/Cargo.toml'],re.M),'Display calendar dependency not bound to local no_std sex-time'
+  if _date_render_shape(display):
+   for name in('servers/sexdisplay/src/scene.rs','servers/sexdisplay/src/bitmap_binding.rs','servers/sexdisplay/src/bitmap_transaction.rs','servers/sexdisplay/src/bitmap_stores.rs','servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/bitmap_batch.rs'):
+    texts[name]=(root/name).read_text()
  dimensions={}
  for name in('CHIP_X3','CHIP_Y','CLOCK_W','CHIP_H'):
   m=re.search(r'pub const '+name+r': usize = (\d+);',model);assert m,'missing source-bound civil geometry';dimensions[name]=int(m[1])

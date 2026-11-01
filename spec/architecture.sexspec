@@ -469,6 +469,15 @@
       "scope": "Actual compositor pixels and fixed catalog grouping with glass effects stubbed; guest framebuffer verification remains necessary."
     },
     {
+      "id": "display_scene",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_scene_host_gate.sh"
+      ],
+      "scope": "Actual Display-owned scene capture and SceneLease release with controlled globals and lifecycle/output boundary doubles; source wiring and compiled defect controls. Host isolation and cleanup-order evidence, not native pixels, atomic framebuffer publication or complete epochs/replay."
+    },
+    {
       "id": "linen_text_delivery",
       "kind": "host",
       "argv": [
@@ -716,11 +725,15 @@
         {
           "path": "servers/sexdisplay/src/main.rs",
           "anchor": "fn render("
+        },
+        {
+          "path": "servers/sexdisplay/src/scene.rs",
+          "anchor": "pub struct SceneSnapshot"
         }
       ],
       "checks": [],
       "gaps": [
-        "Current mutable display paths do not implement the complete epoch/UiIR contract."
+        "Display-owned immutable pixel inputs isolate one logical render; intake, transform/swap/commit, effect release, framebuffer atomicity and system-wide epoch transitions remain incomplete."
       ],
       "depends_on": []
     },

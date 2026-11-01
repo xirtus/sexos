@@ -179,3 +179,71 @@ fn receipt(owner:u32,word:u64)->Applied{
  }
  assert_eq!(stores.initialized_count(),0);
 }
+
+use bitmap_stores::PublishedStores;
+use bitmap_transaction::{Published,Stage};
+#[test]fn snapshot_excludes_pending_bytes_and_preserves_previous_commit(){
+ let mut stores=configured();let b=bindings()[0];let mut image=PublishedStores::<COUNT>::EMPTY;
+ packet(&mut stores,b,Request::Begin{sequence:1,geometry:g()});chunks(&mut stores,b,1,&[11,12]);
+ assert!(stores.snapshot_into(&mut image));assert_eq!(image.sample(b.target(),b.surface(),10,40),None);assert!(image.pixels_scrubbed());
+ assert_eq!(image.binding_for(b.target(),b.surface()),Some(b));stores.poll_reply(|_,_|panic!("snapshot manufactured pending reply"));
+ packet(&mut stores,b,Request::Commit{sequence:1,hash:hash(&[11,12])}).unwrap();
+ assert!(stores.snapshot_into(&mut image));assert_eq!(image.sample(b.target(),b.surface(),10,40),Some(11));
+ let mut replies=Vec::new();stores.poll_reply(|o,v|{replies.push((o,v));2});stores.poll_reply(|o,v|{assert_eq!(replies[0],(o,v));0});
+ packet(&mut stores,b,Request::Begin{sequence:2,geometry:g()});chunks(&mut stores,b,2,&[21,22]);
+ let mut pending=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut pending));assert_eq!(pending.sample(b.target(),b.surface(),10,40),Some(11));
+ // A poisoned staging transfer still leaves the previous committed scene valid.
+ assert_eq!(packet(&mut stores,b,Request::Commit{sequence:2,hash:0}),None);
+ assert!(stores.snapshot_into(&mut pending));assert_eq!(pending.sample(b.target(),b.surface(),10,40),Some(11));
+ assert_eq!(image.sample(b.target(),b.surface(),10,40),Some(11));
+}
+#[test]fn snapshot_is_owned_across_later_commit_clear_and_retirement(){
+ let mut stores=configured();let b=bindings()[0];publish(&mut stores,b,1,g(),&[11,12]);stores.poll_reply(|_,_|0);
+ let mut old=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut old));
+ publish(&mut stores,b,2,g(),&[21,22]);stores.poll_reply(|_,_|0);assert_eq!(old.sample(b.target(),b.surface(),10,40),Some(11));
+ let mut current=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut current));assert_eq!(current.sample(b.target(),b.surface(),10,40),Some(21));
+ packet(&mut stores,b,Request::Clear{sequence:3}).unwrap();assert!(stores.snapshot_into(&mut current));assert_eq!(current.sample(b.target(),b.surface(),10,40),None);assert!(current.pixels_scrubbed());assert_eq!(current.binding_for(b.target(),b.surface()),Some(b));
+ stores.retire(b.target(),b.task());assert!(stores.snapshot_into(&mut current));assert!(current.matches_surface(b.target(),b.surface()));assert_eq!(current.sample(b.target(),b.surface(),10,40),None);
+ assert_eq!(old.sample(b.target(),b.surface(),10,40),Some(11));old.scrub();assert!(old.pixels_scrubbed());assert!(!old.matches_surface(b.target(),b.surface()));
+}
+#[test]fn captured_clients_preserve_independent_binding_task_geometry_and_clipping(){
+ println!("[snapshot.size] published={} stores={}",core::mem::size_of::<Published>(),core::mem::size_of::<PublishedStores<COUNT>>());
+ let mut stores=configured();let all=bindings();assert_eq!(all.iter().map(|b|(b.target(),b.task(),b.surface())).collect::<Vec<_>>(),vec![(15,150,300),(30,300,343),(31,310,344)]);
+ for b in &all{publish(&mut stores,*b,1,g(),&[color(*b),color(*b)+1]);}
+ let mut image=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut image));
+ for b in &all{assert_eq!(image.binding_for(b.target(),b.surface()),Some(*b));assert!(!image.binding_for(b.target(),b.surface()).unwrap().admits(b.target(),b.target(),b.surface()));
+  for y in [i64::MIN,0,39,40,41,42,i64::MAX]{for x in [i64::MIN,0,9,10,11,12,13,14,i64::MAX]{assert_eq!(image.sample(b.target(),b.surface(),x,y),stores.sample(b.target(),b.surface(),x,y));}}
+  for other in &all{if other.target()!=b.target(){assert_eq!(image.sample(other.target(),b.surface(),10,40),None);}}
+ }
+ stores.retire(all[0].target(),all[0].task());let mut newer=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut newer));
+ assert_eq!(newer.sample(all[0].target(),all[0].surface(),10,40),None);for b in &all[1..]{assert_eq!(newer.sample(b.target(),b.surface(),10,40),Some(color(*b)));}
+}
+#[test]fn startup_partial_and_unbound_snapshots_clear_old_destination_slots(){
+ let all=bindings();let mut stores=configured();for b in &all{publish(&mut stores,*b,1,g(),&[1,2]);}
+ let mut image=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut image));
+ let mut partial=Set::UNBOUND;assert!(partial.initialize_once(all[1]));publish(&mut partial,all[1],1,g(),&[31,32]);
+ assert!(partial.snapshot_into(&mut image));assert_eq!(image.binding_for(all[0].target(),all[0].surface()),None);assert_eq!(image.sample(all[1].target(),all[1].surface(),10,40),Some(31));assert_eq!(image.binding_for(all[2].target(),all[2].surface()),None);
+ assert!(Set::UNBOUND.snapshot_into(&mut image));assert!(image.pixels_scrubbed());for b in all{assert!(!image.matches_surface(b.target(),b.surface()));}
+}
+#[test]fn malformed_installed_task_alias_fails_whole_snapshot_and_scrubs_prior_pixels(){
+ let all=bindings();let mut valid=configured();publish(&mut valid,all[0],1,g(),&[7,8]);let mut image=PublishedStores::<COUNT>::EMPTY;assert!(valid.snapshot_into(&mut image));
+ let mut malformed=Set::UNBOUND;for b in &all{let bad=Binding::from_catalog(b.slot(),app_lifecycle::CatalogInfo{target_pd:b.target(),task_id:150,surface_id:b.surface(),coordinator_pd:3}).unwrap();assert!(malformed.initialize_once(bad));}
+ assert!(!malformed.snapshot_into(&mut image));assert!(image.pixels_scrubbed());for b in all{assert_eq!(image.binding_for(b.target(),b.surface()),None);}
+ let mut wrong=PublishedStores::<2>::EMPTY;assert!(!Stores::<2>::UNBOUND.snapshot_into(&mut wrong));assert!(wrong.pixels_scrubbed());
+}
+#[test]fn direct_stage_unbound_retired_and_reset_snapshots_leave_no_copied_image(){
+ let b=bindings()[0];let mut stage=Stage::UNBOUND;assert!(stage.initialize_once(b));
+ for request in [Request::Begin{sequence:1,geometry:g()},Request::Chunk{sequence:1,offset:0,count:2,pixels:[99,100]},Request::Commit{sequence:1,hash:hash(&[99,100])}]{stage.receive(b.target(),b.task(),b.surface(),request);}
+ let mut image=Published::EMPTY;stage.snapshot_into(&mut image);assert_eq!(image.geometry(),Some(g()));assert_eq!(image.binding(),Some(b));assert_eq!(image.sample(b.target(),b.surface(),10,40),Some(99));
+ Stage::UNBOUND.snapshot_into(&mut image);assert!(image.pixels_scrubbed());assert_eq!(image.binding(),None);assert_eq!(image.geometry(),None);
+ stage.snapshot_into(&mut image);stage.retire(b.target(),b.task()+1);stage.snapshot_into(&mut image);assert_eq!(image.sample(b.target(),b.surface(),10,40),Some(99));
+ stage.reset_surface(b.target(),b.surface());stage.snapshot_into(&mut image);assert!(image.pixels_scrubbed());assert_eq!(image.geometry(),None);assert_eq!(image.binding(),Some(b));
+ stage.retire(b.target(),b.task());stage.snapshot_into(&mut image);assert!(image.pixels_scrubbed());assert_eq!(image.binding(),Some(b));assert!(!stage.initialize_once(b));
+ image.scrub();assert!(image.pixels_scrubbed());assert_eq!(image.binding(),None);assert_eq!(image.geometry(),None);
+}
+#[test]fn maximum_committed_snapshot_copies_all_pixels_without_staging_or_pointer_aliases(){
+ let mut stores=configured();let b=bindings()[2];let g=Geometry{x:65535,y:65535,width:48,height:48,scale:4};let pixels:Vec<_>=(0..2304).map(|i|0xff000000|i as u32).collect();publish(&mut stores,b,1,g,&pixels);
+ let mut image=PublishedStores::<COUNT>::EMPTY;assert!(stores.snapshot_into(&mut image));
+ for y in 0..48{for x in 0..48{assert_eq!(image.sample(b.target(),b.surface(),65535+x*4,65535+y*4),Some(pixels[(y*48+x)as usize]));}}
+ stores.reset_surface(b.target(),b.surface());assert_eq!(image.sample(b.target(),b.surface(),65535+47*4,65535+47*4),Some(pixels[2303]));image.scrub();assert!(image.pixels_scrubbed());
+}

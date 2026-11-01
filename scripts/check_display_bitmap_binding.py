@@ -83,8 +83,9 @@ def wiring(source):
     if clean.index(prepare)>=clean.index(retire):raise ValueError('bitmap retirement precedes exact prepared proof')
     require(cleanup,retire,'proof task retirement')
     sample=function(source,'bitmap_color')
-    require(sample,'!surf.active || !(unsafe { BITMAP_STORES.matches_surface(surf.owner_pd,surf.surface_id) })','internal bound sampling association')
-    require(sample,'BITMAP_STORES.sample(surf.owner_pd,surf.surface_id,x,y)','bound sample inputs')
+    require(sample,'!surf.active || !(unsafe { scene.bitmaps.matches_surface(surf.owner_pd,surf.surface_id) })','internal bound sampling association')
+    require(sample,'scene.bitmaps.sample(surf.owner_pd,surf.surface_id,x,y)','bound sample inputs')
+    if 'BITMAP_STORES' in sample:raise ValueError('pixel shader reads live bitmap stores')
     return function(source,'bitmap_binding_live')
 
 
@@ -238,7 +239,7 @@ def check(root,out,main,binding,tests):
     # Verify source-wiring controls independently of mutation construction.
     controls=(('binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)','binding.admits(msg.caller_pd,msg.caller_pd,msg.arg0)'),
               ('BITMAP_STORES.retire(info.target_pd,info.task_id);','BITMAP_STORES.retire(info.target_pd,info.target_pd);'),
-              ('BITMAP_STORES.matches_surface(surf.owner_pd, surf.surface_id)','BITMAP_STORES.matches_surface(15, 300)'),
+              ('scene.bitmaps.matches_surface(surf.owner_pd, surf.surface_id)','scene.bitmaps.matches_surface(15, 300)'),
               ('BITMAP_STORES.binding_for(msg.caller_pd,msg.arg0)','BITMAP_STORES.binding_for(15,300)'),
               ('assert_eq!(unsafe { BITMAP_STORES.initialized_count() },sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser),"missing display Browser bitmap binding");',''),
               ('BITMAP_STORES.initialize_once(binding)','BITMAP_STORES.initialize_once(binding) || BITMAP_STORES.initialize_once(binding)'),

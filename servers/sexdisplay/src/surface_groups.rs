@@ -8,6 +8,7 @@ impl Group {
         crate::app_catalog::by_surface(self.catalog.target_pd,self.catalog.surface_id).is_some_and(|i|!i.children.is_empty())
     }
 }
+#[derive(Clone, Copy)]
 pub struct FrameGroups { groups: [Option<Group>; CATALOG_CAPACITY] }
 impl FrameGroups {
     pub const fn new() -> Self { Self { groups: [None; CATALOG_CAPACITY] } }

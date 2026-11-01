@@ -16,6 +16,7 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 MODULE='servers/sexdisplay/src/bitmap_stores.rs'
+STAGE='servers/sexdisplay/src/bitmap_transaction.rs'
 FIXTURE='tests/bitmap_stores.rs'
 CATALOG='crates/sex-pdx/src/app_catalog.rs'
 AMBIGUOUS='ambiguous_catalog_associations_cannot_install_or_select_a_store'
@@ -49,20 +50,23 @@ def future_catalog(source):
     return source[:match.start(1)]+str(int(match[1])+len(additions))+source[match.end(1):]
 
 
-def fixture_source(root,module):
-    fixture=root/FIXTURE;substitutions=0
+def fixture_source(root,module,stage):
+    fixture=root/FIXTURE;substitutions=0;stage_substitutions=0
     def path(match):
-        nonlocal substitutions
+        nonlocal substitutions,stage_substitutions
         original=(fixture.parent/match[1]).resolve(strict=True)
         if original==(root/MODULE).resolve():original=module;substitutions+=1
+        elif original==(root/STAGE).resolve():original=stage;stage_substitutions+=1
         return '#[path='+json.dumps(str(original))+']'
     result=re.sub(r'#\[path\s*=\s*"([^"\n]+)"\s*\]',path,fixture.read_text())
-    if substitutions!=1:raise ValueError('fixture must include actual Stores exactly once')
+    if substitutions!=1 or stage_substitutions!=1:
+        raise ValueError('fixture must include actual Stores and Stage exactly once')
     return result
 
 
-def compile_fixture(root,out,name,module,catalog=None,ambiguous=False):
-    fixture=out/(name+'.rs');fixture.write_text(fixture_source(root,module));binary=out/name
+def compile_fixture(root,out,name,module,catalog=None,ambiguous=False,stage=None):
+    stage=(root/STAGE).resolve(strict=True) if stage is None else stage.resolve(strict=True)
+    fixture=out/(name+'.rs');fixture.write_text(fixture_source(root,module,stage));binary=out/name
     args=['rustc','--edition=2021','--test',str(fixture),'-o',str(binary)]
     env=os.environ.copy()
     if catalog:args+=['--cfg','bitmap_stores_catalog'];env['BITMAP_STORES_CATALOG']=str(catalog)
@@ -84,7 +88,7 @@ def run_fixture(out,name,binary,exact=None,reject=False):
         if 'running 1 test'not in output or not re.search(r'^test '+re.escape(exact)+r' \.\.\. '+status+r'$',output,re.M):
             raise ValueError(name+': exact named behavioral control did not execute')
     else:
-        if 'test result: ok. 10 passed; 0 failed;'not in output:raise ValueError(name+': expected10 actual store cases')
+        if 'test result: ok. 17 passed; 0 failed;'not in output:raise ValueError(name+': expected17 actual store/snapshot cases')
         print(output,end='')
     return output
 
@@ -97,13 +101,23 @@ def storage_measure(output,count):
     return values
 
 
+def snapshot_measure(output):
+    matches=re.findall(r'\[snapshot.size\] published=(\d+) stores=(\d+)',output)
+    if len(matches)!=1:raise ValueError('missing/ambiguous actual snapshot storage measurement')
+    values=tuple(map(int,matches[0]))
+    if values!=(9272,27816):raise ValueError('immutable bitmap snapshot backing budget changed: '+str(values))
+    return values
+
+
 def check(root,out):
     module=(root/MODULE).resolve(strict=True);source=module.read_text();static_backing(source)
     future=future_catalog((root/CATALOG).read_text());future_path=out/'future-catalog.rs';future_path.write_text(future)
     actual=compile_fixture(root,out,'actual',module)
-    measured=storage_measure(run_fixture(out,'actual',actual),3)
+    actual_output=run_fixture(out,'actual',actual)
+    measured=storage_measure(actual_output,3);published=snapshot_measure(actual_output)
     expanded=compile_fixture(root,out,'future',module,future_path)
-    storage_measure(run_fixture(out,'future',expanded),3)
+    future_output=run_fixture(out,'future',expanded)
+    storage_measure(future_output,3);snapshot_measure(future_output)
     target=once(future,'ordinal: 2, target: 31','ordinal: 2, target: 30')
     surface=once(future,'target: 31, surface: 344','target: 31, surface: 343')
     # The real SDK rejects duplicate SIDs at compile time. Bypass exactly that
@@ -131,8 +145,27 @@ def check(root,out):
         binary=compile_fixture(root,out,name,path,future_path)
         run_fixture(out,name,binary,test,True)
         print('[bitmap.stores.mutant] rejected='+name+' exact='+test)
-    result=dict(ok=True,actual_case_executions=10,future_case_executions=10,
-                ambiguity_runtime_controls=2,compiled_mutants_rejected=3,
+    # Mutate the actual Stage payload source and actual Stores failure path.
+    # Both controls must compile and execute their exact failing runtime case;
+    # no missing replacement or compile error counts as rejection evidence.
+    snapshot_controls=(
+        ('pending-pixels',STAGE,'&self.published[..g.len()]','&self.pixels[..g.len()]',
+         'snapshot_excludes_pending_bytes_and_preserves_previous_commit'),
+        ('failed-snapshot-stale-destination',MODULE,'        dst.scrub();',
+         '        // mutant: preserve stale destination',
+         'malformed_installed_task_alias_fails_whole_snapshot_and_scrubs_prior_pixels'),
+    )
+    for name,relative,old,new,test in snapshot_controls:
+        changed=once((root/relative).read_text(),old,new)
+        path=out/(name+'-module.rs');path.write_text(changed)
+        binary=compile_fixture(root,out,name,path if relative==MODULE else module,
+                               future_path,stage=path if relative==STAGE else None)
+        run_fixture(out,name,binary,test,True)
+        print('[bitmap.stores.snapshot.mutant] rejected='+name+' exact='+test)
+    result=dict(ok=True,actual_case_executions=17,future_case_executions=17,
+                ambiguity_runtime_controls=2,compiled_mutants_rejected=5,
+                snapshot_compiled_mutants_rejected=2,
+                published_bytes=published[0],published_stores3_bytes=published[1],
                 stores1_bytes=measured[0],stores3_bytes=measured[1],stage_bytes=measured[2],
                 current_catalog_browsers=3,future_host_catalog_browsers=3,
                 scope='actual_Stage_Binding_SDK_host_composition_not_future_BOOT_grants_or_native_pixels')

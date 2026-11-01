@@ -10,14 +10,25 @@ root,out=map(Path,sys.argv[1:]);s=(root/'servers/sexdisplay/src/main.rs').read_t
 a=s.index('const FONT_ASCII_5X7:');parts=[s[a:s.index('];',s.index('= [',a))+2]]
 for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
  a=s.index('const '+name+':');parts.append(s[a:s.index('];',a)+2])
-parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H)[^\n]+',s,re.M)
-for name in ['clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','legacy_text_clear','legacy_text_draw','surface_text_fg_at','redraw_surface_damage','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H|BAR_BG_W_CAP|FOCUS_SURFACE_COLOR|TAB_ACTIVE_COLOR|TAB_INACTIVE_COLOR)[^\n]+',s,re.M)
+a=s.index('#[derive(Clone, Copy)]\n#[repr(C)]\nstruct RenderTokensV1');b=s.index('\nstatic mut DISPLAY_TOKENS:',a)
+parts.append(s[a:b])
+for name in ['scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','legacy_text_clear','legacy_text_draw','surface_text_fg_at','redraw_surface_damage','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
- parts.append(s[a:i])
+ part=s[a:i]
+ if name in ['composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_color','phase5_active_app_at','top_strip_pixel']:
+  assert 'scene: &scene::SceneSnapshot' in part
+  assert not re.search(r'\b(?:SURFACES|FRAME_GROUPS|BITMAP_STORES|FOCUSED_SURFACE_ID|DISPLAY_TOKENS|RENDER_FRAME_COUNTER)\b',part),name
+ if name=='bg':part=part.replace('fn bg(', 'fn scene_bg(',1)
+ if name=='scene_bar_blur_rows':part=part.replace('bg(', 'scene_bg(')
+ if name=='redraw_surface_damage':part=part.replace('fn redraw_surface_damage(', 'fn scene_redraw_surface_damage(',1)
+ # Declared glass boundary: preserve the reference's old four-argument API.
+ part=part.replace('glass_over_bg(', 'scene_glass_over_bg(')
+ parts.append(part)
 for name in ['render','redraw_top_strip']:
  a=s.index('fn '+name+'(');b=s.index('\nfn ',a+1)
- assert 'top_strip_pixel(x, y, bar, &clock_lines)' in s[a:b]
+ assert 'top_strip_pixel(x, y, bar, &clock_lines, scene)' in s[a:b]
 focus=s[s.index('                0xED => {'):s.index('                0xEE => {')]
 assert 'needs_top_strip_redraw |= changed;' in focus
 assert 'stage.retire(info.target_pd);'  in s and 'if !SURFACES[index].active { stage.reset(); }' in s
@@ -44,8 +55,9 @@ assert admit.index('surface_lifecycle::upsert(')<admit.index('FRAME_GROUPS.obser
 assert 'fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color)' not in s
 out.write_text('\n'.join(parts))
 PY
-DISPLAY_COMPOSITION_SOURCE="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/display_surface_groups.rs" -o "$TEST_DIR/tests"
-"$TEST_DIR/tests" --test-threads=1
+rustc --edition=2021 --crate-type=rlib --crate-name silkbar_model "$ROOT_DIR/crates/silkbar-model/src/lib.rs" -o "$TEST_DIR/libsilkbar_model.rlib"
+DISPLAY_COMPOSITION_SOURCE="$TEST_DIR/production.rs" rustc --extern silkbar_model="$TEST_DIR/libsilkbar_model.rlib" --edition=2021 --test "$ROOT_DIR/tests/display_surface_groups.rs" -o "$TEST_DIR/tests"
+RUST_MIN_STACK=16777216 "$TEST_DIR/tests" --test-threads=1
 rustc --edition=2021 --test "$ROOT_DIR/tests/display_bitmap_transaction.rs" -o "$TEST_DIR/bitmap-tests"
 "$TEST_DIR/bitmap-tests" --test-threads=1
 python3 "$ROOT_DIR/scripts/check_display_bitmap_binding.py" --root "$ROOT_DIR"
