@@ -44,7 +44,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop { sex_pdx::sys_yield(); }
 }
 
-const KALEIDO_SURFACE_ID: u64 = 300;
+// Browser family title resource; it is not a surface or an authority identity.
+const BROWSER_TITLE_ID: u64 = 300;
 // One BOOT main task initializes this immutable tuple before service effects.
 // Metadata is selected only from a successful held SELF_CATALOG query.
 static mut BOOT_BROWSER_IDENTITY: Option<incarnation::Identity> = None;
@@ -429,6 +430,7 @@ impl SexApp for App {
     fn new(_pdx: u32) -> Self {
         let identity=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("BROWSER_SELF_AUTHORITY");
         let selected=incarnation::select(identity).expect("BROWSER_EXACT_BOOT_IDENTITY");
+        let surface=selected.surface();
         assert!((unsafe { BOOT_BROWSER_IDENTITY }).is_none(),"BROWSER_BOOT_IDENTITY_ONCE");
         unsafe { BOOT_BROWSER_IDENTITY=Some(selected); }
         sex_pdx::serial_record!("[browser.instance.held] target={} task={} surface={} ordinal={} coordinator=3 before_effects=1",selected.target(),selected.task(),selected.surface(),selected.ordinal());
@@ -533,15 +535,15 @@ impl SexApp for App {
             sex_pdx::serial_println!("[browser.body.text.set] live=1 len={}", body_len);
         }
         sex_pdx::serial_println!("[browser.render.live_text.begin] len={}", live_len);
-        sex_pdx::serial_println!("[browser.visible.polish.begin] sid={}", KALEIDO_SURFACE_ID);
+        sex_pdx::serial_println!("[browser.visible.polish.begin] sid={}", surface);
 
         service_call::enqueue(sex_pdx::SLOT_DISPLAY, 0xEC,
-            [KALEIDO_SURFACE_ID, (120u64 << 32) | 80u64, (120u64 << 32) | 520u64])
+            [surface, (120u64 << 32) | 80u64, (120u64 << 32) | 520u64])
             .expect("display surface create");
 
         sex_pdx::serial_println!(
             "[browser.render.buffer.ready] virt=surface pfn=surface sid={}",
-            KALEIDO_SURFACE_ID
+            surface
         );
 
         let preview = body_text::build(&body_text[..body_len], &live_text[..live_len]);
@@ -556,7 +558,7 @@ impl SexApp for App {
             // The bounded preview fits the existing low-byte offset encoding.
             let arg2 = offset as u64 | ((chunk.len() as u64) << 8) | (text_color << 32);
             service_call::enqueue(sex_pdx::SLOT_DISPLAY, 0xFB,
-                [KALEIDO_SURFACE_ID, packed, arg2]).expect("display text");
+                [surface, packed, arg2]).expect("display text");
         }
         sex_pdx::serial_record!("[browser.preview.layout] bytes={} newline=1 cached_or_sample=1", text.len());
         if body_len > 0 {
@@ -565,31 +567,31 @@ impl SexApp for App {
 
         sex_pdx::serial_println!("[browser.render.draw_text] live=1 len={}", live_len);
 
-        service_call::enqueue(sex_pdx::SLOT_DISPLAY, 0xEB, [KALEIDO_SURFACE_ID, 50, 100]).expect("display position");
+        service_call::enqueue(sex_pdx::SLOT_DISPLAY, 0xEB, [surface, 50, 100]).expect("display position");
 
-        sex_pdx::serial_println!("[browser.render.commit.request] window={}", KALEIDO_SURFACE_ID);
+        sex_pdx::serial_println!("[browser.render.commit.request] window={}", surface);
         sex_pdx::serial_println!("[browser.render.live_text.done]");
         sex_pdx::serial_println!("[browser.visible.polish.done]");
 
         // Complete registration before asking the display to attest an actual
         // rendered frame. Enqueue success alone proves neither transition.
         assert_eq!(service_call::request(sex_pdx::SLOT_SHELL, 3, 0xFA,
-            [KALEIDO_SURFACE_ID, 300, 15 << 8]).expect("shell app registration"),
-            KALEIDO_SURFACE_ID);
-        sex_pdx::serial_record!("[app.surface.registered] target=15 surface=300 owner=15");
+            [surface, BROWSER_TITLE_ID, (selected.target() as u64) << 8]).expect("shell app registration"),
+            surface);
+        sex_pdx::serial_record!("[app.surface.registered] target={} surface={} owner={}",selected.target(),surface,selected.target());
         assert_eq!(service_call::request(sex_pdx::SLOT_DISPLAY, 1,
-            sex_pdx::app_lifecycle::OP_APP_PRESENT, [KALEIDO_SURFACE_ID, 1, 0])
+            sex_pdx::app_lifecycle::OP_APP_PRESENT, [surface, 1, 0])
             .expect("display app presentation"), 1 << 8);
-        sex_pdx::serial_record!("[app.surface.presented] target=15 surface=300 sequence=1 ok=1");
+        sex_pdx::serial_record!("[app.surface.presented] target={} surface={} sequence=1 ok=1",selected.target(),surface);
         unsafe{assert!(CLIPBOARD.bind(sex_pdx::clipboard::Participant::from_catalog(identity).expect("BROWSER_CLIPBOARD_POLICY")));}
         #[cfg(app_resource_cleanup_proof)]
         full_resource_cleanup_proof();
         Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
-            asset_panel:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(),asset_presentation:asset_presentation::Presentation::new(),asset_fenced:false,
+            asset_panel:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(selected),asset_presentation:asset_presentation::Presentation::new(),asset_fenced:false,
             importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
             dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:tls_exchange::Client::new(),peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
-            intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(300),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
+            intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(surface),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
 
     }
 
@@ -601,7 +603,7 @@ impl SexApp for App {
         if let Some(req)=message{
             if req.caller_pd==3&&req.caller_task==3&&(sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],self.identity.target_pd,self.identity.task_id)
                 ||req.type_id==0xFF_FF){
-                sex_pdx::serial_record!("[browser.net.job.closed] target=15 pending={} terminal=1",self.probe.busy()as u8);
+                sex_pdx::serial_record!("[browser.net.job.closed] target={} pending={} terminal=1",self.identity.target_pd,self.probe.busy()as u8);
                 sex_pdx::serial_record!("[browser.dns.closed] pending={} terminal=1",self.dns.busy()as u8);
                 sex_pdx::serial_record!("[browser.http.closed] pending={} terminal=1",self.http.busy()as u8);
                 let asset_pending=self.image.pending()||self.bitmap.pending()||self.exchange.busy()||matches!(self.intent,Some(Intent::TlsAssetDns|Intent::TlsStart));
@@ -922,7 +924,8 @@ fn full_resource_cleanup_proof()->! {
     // visible interval before exit; this delay is not a presentation proof.
     let started=sex_pdx::get_ticks();
     while sex_pdx::get_ticks().wrapping_sub(started)<128 {sex_pdx::sys_yield();}
-    sex_pdx::serial_record!("[app.resources.acquired] target=15 surface=300 handle={} notification=1 private_heap=elf_owned resident=4 visible_ticks=128",handle);
+    let identity=browser_identity();
+    sex_pdx::serial_record!("[app.resources.acquired] target={} surface={} handle={} notification=1 private_heap=elf_owned resident=4 visible_ticks=128",identity.target(),identity.surface(),handle);
     sex_pdx::task_finish(0)
 }
 

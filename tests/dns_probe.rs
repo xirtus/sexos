@@ -31,17 +31,17 @@ fn response(id:u16)->Vec<u8>{
 }
 struct World {
  machine:dns_jobs::Machine,wire:Peer,request:Option<network_dns::Request>,accepted:Vec<network_dns::Request>,
- calls:usize,full_first:bool,last_full:u32,full_always:bool,display:Vec<(usize,[u8;8])>,display_full:bool,
+ calls:usize,full_first:bool,last_full:u32,full_always:bool,display:Vec<(usize,[u8;8])>,display_attempts:Vec<(u64,u64,u64)>,display_full:bool,
 }
 fn reset(full:bool){*WORLD.lock().unwrap()=Some(World {
  machine:dns_jobs::Machine::new(),wire:Peer {begins:Vec::new(),response:None,answer:true,error:None},
  request:None,accepted:Vec::new(),calls:0,full_first:full,last_full:0,full_always:false,
- display:Vec::new(),display_full:false,
+ display:Vec::new(),display_attempts:Vec::new(),display_full:false,
 });}
 pub fn pdx_call(slot:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){
  let mut guard=WORLD.lock().unwrap();let w=guard.as_mut().unwrap();
  if slot==SLOT_DISPLAY {
-  assert_eq!(op,0xFB);assert_eq!(a,300);assert_eq!((c>>8)&255,8);
+  assert_eq!(op,0xFB);w.display_attempts.push((a,b,c));assert_eq!((c>>8)&255,8);
   if w.display_full{return(ERR_SERVICE_NOT_READY,0);}
   w.display.push(((c&255)as usize,b.to_le_bytes()));return(0,0);
  }
@@ -119,14 +119,14 @@ fn finish(p:&mut probe::Client,from:u64){for now in from..from+10000{turn(p,now)
  assert_eq!(p.view(),probe::View::Answer([10,0,2,2]));
 }
 #[test]fn status_replacement_full_retains_chunk_coalesces_latest_and_formats_decimal(){
- let _serial=SERIAL.lock().unwrap();reset(false);let mut s=probe::Status::new(128);
+ let _serial=SERIAL.lock().unwrap();reset(false);let mut s=probe::Status::new(300,128);
  WORLD.lock().unwrap().as_mut().unwrap().display_full=true;s.advance();assert!(s.pending());
  assert!(WORLD.lock().unwrap().as_ref().unwrap().display.is_empty());
  WORLD.lock().unwrap().as_mut().unwrap().display_full=false;s.advance();s.set(probe::View::Uncertain);s.set(probe::View::Answer([0,9,100,255]));
- for _ in 0..30{s.advance();}assert!(!s.pending());let guard=WORLD.lock().unwrap();let chunks=&guard.as_ref().unwrap().display;
+ for _ in 0..30{s.advance();}assert!(!s.pending());let guard=WORLD.lock().unwrap();assert!(guard.as_ref().unwrap().display_attempts.iter().all(|r|r.0==300));let chunks=&guard.as_ref().unwrap().display;
  assert_eq!(chunks.len(),16);let mut bytes=[0;64];for(offset,data)in chunks{bytes[offset-128..offset-120].copy_from_slice(data);}
  assert!(bytes.starts_with(b"\n\nControlled DNS: 0.9.100.255\nD query  X cancel"));assert!(bytes.ends_with(b" "));
- drop(guard);let mut s=probe::Status::new(usize::MAX);s.advance();assert!(!s.pending());
+ drop(guard);let mut s=probe::Status::new(300,usize::MAX);s.advance();assert!(!s.pending());
 }
 #[test]fn accepted_release_timeout_never_starts_retry_until_positive_late_cleanup(){
  let _serial=SERIAL.lock().unwrap();reset(false);let mut p=probe::Client::new();p.start();
@@ -143,4 +143,30 @@ fn finish(p:&mut probe::Client,from:u64){for now in from..from+10000{turn(p,now)
  turn(&mut p,1);turn(&mut p,2);p.advance(3);p.cancel();finish(&mut p,4);
  assert!(!p.busy());assert_eq!(p.view(),probe::View::Cancelled);
  let g=WORLD.lock().unwrap();assert_eq!(g.as_ref().unwrap().machine.owner(),None);
+}
+
+// Surface343 is a descriptive host fixture; no Browser grant is installed.
+#[test]fn explicit_future_status_surface_survives_full_and_latest_replacement(){
+ let _serial=SERIAL.lock().unwrap();reset(false);let mut status=probe::Status::new(343,128);
+ WORLD.lock().unwrap().as_mut().unwrap().display_full=true;
+ status.advance();status.set(probe::View::Uncertain);status.set(probe::View::Answer([0,9,100,255]));
+ for _ in 0..3{status.advance();assert!(status.pending());}
+ {let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();assert!(w.display.is_empty());assert_eq!(w.display_attempts.len(),4);assert!(w.display_attempts.iter().all(|r|*r==w.display_attempts[0]));assert_eq!(w.display_attempts[0].0,343);}
+ WORLD.lock().unwrap().as_mut().unwrap().display_full=false;
+ for _ in 0..24{status.advance();}assert!(!status.pending());
+ let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();assert_eq!(w.display.len(),16);
+ assert!(w.display_attempts.iter().all(|r|r.0==343));assert_eq!(w.display_attempts[4],w.display_attempts[0]);
+ let mut text=[0u8;64];for(offset,bytes)in &w.display{text[offset-128..offset-120].copy_from_slice(bytes);}
+ assert!(text.starts_with(b"\n\nControlled DNS: 0.9.100.255\nD query  X cancel"));assert!(text.ends_with(b" "));assert_eq!(w.calls,0);
+}
+#[test]fn zero_surface_or_overflowing_status_offset_has_no_syscall_or_fallback(){
+ let _serial=SERIAL.lock().unwrap();
+ for(surface,offset)in[(0,128),(343,193),(343,256),(343,usize::MAX),(0,usize::MAX)]{
+  reset(false);let mut status=probe::Status::new(surface,offset);status.set(probe::View::Answer([0,9,100,255]));
+  for _ in 0..20{status.advance();}assert!(!status.pending());
+  let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();assert!(w.display_attempts.is_empty());assert!(w.display.is_empty());assert_eq!(w.calls,0);
+ }
+ // Last valid 64-byte interval ends exactly at the legacy 256-byte boundary.
+ reset(false);let mut status=probe::Status::new(343,192);for _ in 0..8{status.advance();}assert!(!status.pending());
+ let g=WORLD.lock().unwrap();let w=g.as_ref().unwrap();assert_eq!(w.display.len(),8);assert_eq!(w.display.last().unwrap().0,248);assert!(w.display_attempts.iter().all(|r|r.0==343));
 }

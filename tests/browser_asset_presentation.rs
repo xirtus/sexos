@@ -3,6 +3,12 @@
 //! Display Stage. Host transport callbacks establish no native pixel proof.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+// Explicit original held-tuple test double; no authority is constructed here.
+mod incarnation {
+ #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Identity;
+ impl Identity{pub const fn target(self)->u32{15}pub const fn task(self)->u32{15}pub const fn surface(self)->u64{300}}
+}
+
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
@@ -36,7 +42,7 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  let mut p=Presentation::new();assert_eq!((p.mode(),p.generation()),(Mode::Fit,1));assert!(!p.can_queue(4));
  for(gen,vp,current)in[(0,4,4),(2,4,4),(1,3,4),(1,0,0)]{assert!(!p.text_applied(gen,vp,current));}
  assert!(p.text_applied(1,4,4));assert!(!p.text_applied(1,4,4));assert!(p.can_queue(4));assert!(!p.can_queue(5));
- let pixels=[0xff123456,0x80010203];let mut out=Outbox::new();let mut stage=Stage::EMPTY;queue(&mut p,&mut out,&pixels,4,7);
+ let pixels=[0xff123456,0x80010203];let mut out=Outbox::new(incarnation::Identity);let mut stage=Stage::EMPTY;queue(&mut p,&mut out,&pixels,4,7);
  assert!(p.has_layout());assert!(!p.can_queue(4));assert!(!p.ready());let saved=p.layout().unwrap();
  let requests=submit(&mut stage,&mut out,&pixels);assert_eq!(requests.iter().filter(|r|matches!(r,Request::Commit{..})).count(),1);
  assert_eq!(stage.sample(15,300,8,80),Some(pixels[0]));let r=receipt(&mut stage,&mut out);
@@ -44,7 +50,7 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  assert_eq!(p.select(Mode::Fit),Ok(false));assert_eq!(p.generation(),1);assert!(p.ready());assert!(!p.can_queue(4));
 }
 #[test]fn stale_actual_fit_same_geometry_ack_cannot_be_rebound_to_new_generation(){
- let pixels=[1,2];let mut p=Presentation::new();let mut out=Outbox::new();let mut stage=Stage::EMPTY;p.text_applied(1,1,1);
+ let pixels=[1,2];let mut p=Presentation::new();let mut out=Outbox::new(incarnation::Identity);let mut stage=Stage::EMPTY;p.text_applied(1,1,1);
  let old=queue(&mut p,&mut out,&pixels,1,7);let initial=submit(&mut stage,&mut out,&pixels);
  assert_eq!(p.select(Mode::Actual),Ok(true));assert_eq!(p.select(Mode::Fit),Ok(true));assert_eq!(p.generation(),3);
  assert!(!p.text_applied(2,1,1));assert!(p.text_applied(3,1,1));
@@ -59,13 +65,13 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  assert!(!p.applied(&historical,1,7,hash(&pixels)));let current=receipt(&mut stage,&mut out);assert!(p.applied(&current,1,7,hash(&pixels)));
 }
 #[test]fn every_wrong_receipt_or_current_source_join_is_nonmutating_until_exact(){
- let pixels=[1,2];let mut p=Presentation::new();let mut out=Outbox::new();let mut stage=Stage::EMPTY;p.text_applied(1,2,2);queue(&mut p,&mut out,&pixels,2,8);submit(&mut stage,&mut out,&pixels);let r=receipt(&mut stage,&mut out);let layout=p.layout();
+ let pixels=[1,2];let mut p=Presentation::new();let mut out=Outbox::new(incarnation::Identity);let mut stage=Stage::EMPTY;p.text_applied(1,2,2);queue(&mut p,&mut out,&pixels,2,8);submit(&mut stage,&mut out,&pixels);let r=receipt(&mut stage,&mut out);let layout=p.layout();
  for cause in 0..8{let mut bad=r;match cause{0=>bad.sequence+=1,1=>bad.geometry=None,2=>bad.geometry.as_mut().unwrap().x+=1,3=>bad.hash^=1,4=>bad.metadata.viewport+=1,5=>bad.metadata.source+=1,6=>bad.metadata.source|=1u64<<32,_=>bad.geometry.as_mut().unwrap().scale+=1};assert!(!p.applied(&bad,2,8,r.hash));assert_eq!(p.layout(),layout);assert!(!p.ready());}
  for(vp,ticket,digest)in[(3,8,r.hash),(2,9,r.hash),(2,8,r.hash^1)]{assert!(!p.applied(&r,vp,ticket,digest));assert!(!p.ready());}
  assert!(p.applied(&r,2,8,r.hash));p.invalidate().unwrap();assert!(!p.has_layout());assert!(!p.ready());assert!(!p.applied(&r,2,8,r.hash));assert!(!p.text_applied(1,2,2));assert!(p.text_applied(2,3,3));assert!(p.can_queue(3));
 }
 #[test]fn full_before_each_effect_retains_exact_request_and_display_ack_full_never_replays_commit(){
- let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new();let mut stage=Stage::EMPTY;p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);
+ let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new(incarnation::Identity);let mut stage=Stage::EMPTY;p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);
  let mut blocked=None;let mut sent=Vec::new();
  for _ in 0..12{let result=out.poll(&pixels,4,|op|{
   if blocked.is_none(){blocked=Some(op);return Admission::Full}
@@ -76,7 +82,7 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  let r=receipt(&mut stage,&mut out);assert!(p.applied(&r,1,7,r.hash));
 }
 #[test]fn no_fit_clear_waits_behind_historical_commit_and_full_then_completes_once(){
- let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new();let mut stage=Stage::EMPTY;p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);submit(&mut stage,&mut out,&pixels);
+ let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new(incarnation::Identity);let mut stage=Stage::EMPTY;p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);submit(&mut stage,&mut out,&pixels);
  p.invalidate().unwrap();assert!(!p.has_layout());assert!(!p.expect_clear(2,2));assert!(p.text_applied(2,2,2));let clear=out.clear(metadata(2,0)).unwrap();assert!(p.expect_clear(2,clear));assert!(p.has_layout());assert!(p.layout().is_none());assert!(!p.can_queue(2));
  assert_eq!(out.poll(&[],4,|_|panic!("old accepted COMMIT must drain")),Poll::Pending);let old=receipt(&mut stage,&mut out);assert!(!p.applied(&old,2,7,old.hash));assert!(!p.cleared(&old,2));
  let mut blocked=None;assert_eq!(out.poll(&[],4,|op|{blocked=Some(op);Admission::Full}),Poll::Deferred);assert_eq!(stage.sample(15,300,8,80),Some(pixels[0]));
@@ -94,7 +100,7 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  assert!(!p.cleared(&r,5));assert!(p.cleared(&r,4));p.invalidate().unwrap();assert!(!p.cleared(&r,4));assert!(!p.has_layout());
 }
 #[test]fn viewport_change_during_accepted_clear_ignores_historical_ack_then_queues_fresh_image(){
- let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new();let mut stage=Stage::EMPTY;p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);submit(&mut stage,&mut out,&pixels);let image=receipt(&mut stage,&mut out);assert!(p.applied(&image,1,7,image.hash));
+ let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new(incarnation::Identity);let mut stage=Stage::EMPTY;p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);submit(&mut stage,&mut out,&pixels);let image=receipt(&mut stage,&mut out);assert!(p.applied(&image,1,7,image.hash));
  p.invalidate().unwrap();p.text_applied(2,2,2);let clear=out.clear(metadata(2,0)).unwrap();assert!(p.expect_clear(2,clear));
  assert_eq!(out.poll(&[],4,|op|{stage.receive(15,300,wire(op));Admission::Accepted}),Poll::Pending);
  p.invalidate().unwrap();assert!(p.text_applied(3,3,3));assert!(p.can_queue(3));assert_eq!(out.poll(&[],4,|_|panic!("accepted Clear replay")),Poll::Pending);

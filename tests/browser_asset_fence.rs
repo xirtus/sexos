@@ -3,6 +3,12 @@
 //! decoder are finite host custody callbacks; bitmap outbox is production code.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+// Explicit original held-tuple metadata for the existing fence regressions.
+mod incarnation {
+ #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Identity;
+ impl Identity{pub const fn target(self)->u32{15}pub const fn task(self)->u32{15}pub const fn surface(self)->u64{300}}
+}
+
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
@@ -41,7 +47,7 @@ struct App{
 }
 impl App{
  fn new()->Self{Self{asset_fenced:false,asset_status:asset_view::Status::Ready,asset_peer_view:tls_exchange::View::Idle,
- image:Image{body:vec![1,2,3],clears:0,begins:0,reject:false},bitmap:bitmap_delivery::Outbox::new(),asset_presentation:asset_presentation::Presentation::new(),
+ image:Image{body:vec![1,2,3],clears:0,begins:0,reject:false},bitmap:bitmap_delivery::Outbox::new(incarnation::Identity),asset_presentation:asset_presentation::Presentation::new(),
  exchange:Exchange{body:Some(Asset(vec![7,8])),cancels:0,takes:0,accepted:true,pending:true,abort:false,sends:0},intent:Some(Intent::TlsStart),dns:Dns::default(),tls:Tls{prepared:64,cancels:0},trust:Provider::default(),seed:Provider::default(),clock:Provider::default()}}
 }
 fn public_fingerprint(bytes:&[u8])->u64{bytes.iter().fold(0xcbf29ce484222325,|hash,b|(hash^*b as u64).wrapping_mul(0x100000001b3))}

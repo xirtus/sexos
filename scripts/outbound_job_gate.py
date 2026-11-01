@@ -8,6 +8,50 @@ from check_nic_command import inspect as nic
 from check_desktop_pixels import font_from_source,glyph,verify_kaleido_layout
 from check_disk_persistence import ppm_rgb
 
+def browser_publication_binding(root,paths,sources):
+ """Recognize only the frozen literal form or the current exact held form.
+ This is a narrow source oracle for native15/300, not a Rust evaluator or grant.
+ """
+ compact=lambda text:re.sub(r'\s+','',re.sub(r'//[^\n]*','',text))
+ app=compact(sources['app'])
+ constructors=re.findall(r'ui:text_delivery::Outbox::atomic\(([^()]*)\)',app)
+ # Round148 already selects held identity for Close while output is literal.
+ # A current local surface binding paired with literal output is a rewire.
+ if constructors==['300'] and not re.search(r'let(?:mut)?surface=',app):
+  return
+ if constructors!=['surface']:raise ValueError('rewired held Browser publication')
+ start=app.find('fnnew(_pdx:u32)->Self{')
+ if start<0:raise ValueError('missing Browser constructor')
+ begin=app.index('{',start);depth=1;end=begin+1
+ while depth and end<len(app):
+  depth+=(app[end]=='{')-(app[end]=='}');end+=1
+ body=app[begin+1:end-1]
+ binding=('letidentity=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("BROWSER_SELF_AUTHORITY");'
+          'letselected=incarnation::select(identity).expect("BROWSER_EXACT_BOOT_IDENTITY");'
+          'letsurface=selected.surface();')
+ code_body=re.sub(r'"(?:\\.|[^"\\])*"','""',body)
+ if not body.startswith(binding) or any(len(re.findall(r'(?:let(?:mut)?|(?<![\w.]))'+name+r'=(?!=)',code_body))!=1 for name in ('identity','selected','surface')):
+  raise ValueError('missing or ambiguous held Browser surface binding')
+ if 'ui:text_delivery::Outbox::atomic(surface)'not in body:raise ValueError('publication outside held constructor')
+ for key,path in [('identity','apps/kaleidoscope/src/incarnation.rs'),('catalog','crates/sex-pdx/src/app_catalog.rs'),('lifecycle','crates/sex-pdx/src/app_lifecycle.rs')]:
+  paths[key]=path;sources[key]=(root/path).read_text()
+ identity=compact(sources['identity'])
+ selector=('pubfnselect(c:CatalogInfo)->Option<Identity>{letrow=app_catalog::by_surface(c.target_pd,c.surface_id)?;'
+           'ifrow.app!=App::Browser||!c.is_subject(row.target,row.surface,3){returnNone;}'
+           'Some(Identity{target:row.target,task:c.task_id,surface:row.surface,ordinal:row.ordinal,})}')
+ if identity.count(selector)!=1 or identity.count('pubconstfnsurface(self)->u64{self.surface}')!=1:
+  raise ValueError('held Browser identity selector changed')
+ catalog=compact(sources['catalog'])
+ rows=re.findall(r'Incarnation\{app:App::Browser,[^}]*\}',catalog)
+ expected='Incarnation{app:App::Browser,ordinal:0,target:15,surface:300,shell_surface:None,lifecycle_slot:40,close_slot:43,activation_slot:None,route_slot:43,children:&[]}'
+ if rows!=[expected]:raise ValueError('native Browser15/300 catalog changed')
+ lifecycle=compact(sources['lifecycle'])
+ subject=('pubfnis_subject(self,target:u32,surface:u64,coordinator:u32)->bool{'
+          'target!=0&&surface!=0&&coordinator!=0&&target!=coordinator'
+          '&&self.target_pd==target&&self.task_id!=0'
+          '&&self.surface_id==surface&&self.coordinator_pd==coordinator}')
+ if subject not in lifecycle:raise ValueError('held Browser subject validation changed')
+
 def load_pixel_contract(root):
  """Freeze source-bound text/font metrics once, before starting the guest."""
  paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','probe':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs'}
@@ -19,7 +63,8 @@ def load_pixel_contract(root):
  prefix=re.search(r'preview\.append\((b"[^"\n]*")\)',sources['preview'])
  if not prefix:raise ValueError('missing production preview prefix')
  labels={view:ast.literal_eval(re.search(r'network_probe::View::'+view+r'=>\s*(b"[^"\n]*")',sources['probe']).group(1))for view in ('Verified','Unavailable')}
- if 'browser_view::compose(self.preview.as_bytes()'not in sources['app']or 'Outbox::atomic(300)'not in sources['app']:raise ValueError('missing actual atomic composed Browser publication')
+ if 'browser_view::compose(self.preview.as_bytes()'not in sources['app']:raise ValueError('missing actual atomic composed Browser publication')
+ browser_publication_binding(root,paths,sources)
  if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  return dict(font=font_from_source(sources['renderer']),prefix=ast.literal_eval(prefix[1]),labels=labels,
   status_bytes=number(sources['probe'],r'dns_start=preview\.len\(\)\+(\d+)'),capacity=number(sources['probe'],r'bytes:\[u8;(\d+)\]'),

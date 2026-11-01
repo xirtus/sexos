@@ -144,11 +144,11 @@ impl Client {
 
 /// Whole64-byte replacement, one retained eight-byte display enqueue per turn.
 /// Updates coalesce to the latest view after the current immutable paint drains.
-pub struct Status { offset:usize,desired:[u8;64],active:[u8;64],cursor:usize,failed:bool }
+pub struct Status { surface:u64,offset:usize,desired:[u8;64],active:[u8;64],cursor:usize,failed:bool }
 impl Status {
-    pub fn new(offset:usize)->Self {
-        let mut s=Self {offset,desired:[b' ';64],active:[0;64],cursor:64,
-            failed:offset.checked_add(64).is_none_or(|end|end>256)};
+    pub fn new(surface:u64,offset:usize)->Self {
+        let mut s=Self {surface,offset,desired:[b' ';64],active:[0;64],cursor:64,
+            failed:surface==0||offset.checked_add(64).is_none_or(|end|end>256)};
         s.set(View::Idle);s
     }
     pub fn set(&mut self,view:View) {
@@ -173,7 +173,7 @@ impl Status {
         if self.cursor==64 { self.active=self.desired;self.cursor=0; }
         let bytes:&[u8;8]=self.active[self.cursor..self.cursor+8].try_into().unwrap();
         let args=(self.offset+self.cursor)as u64 | (8u64<<8) | (0x00CDD6F4u64<<32);
-        let(status,_)=sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY,0xFB,300,u64::from_le_bytes(*bytes),args);
+        let(status,_)=sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY,0xFB,self.surface,u64::from_le_bytes(*bytes),args);
         match status {0=>self.cursor+=8,sex_pdx::ERR_SERVICE_NOT_READY=>{},_=>self.failed=true}
     }
 }

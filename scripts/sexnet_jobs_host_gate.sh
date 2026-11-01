@@ -55,6 +55,7 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset.rs" -o "$TEST_DIR/bro
 "$TEST_DIR/browser-asset-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_bitmap_delivery.rs" -o "$TEST_DIR/browser-bitmap-tests"
 "$TEST_DIR/browser-bitmap-tests"
+python3 "$ROOT_DIR/scripts/check_browser_output_identity.py" --root "$ROOT_DIR" --baseline-binary "$TEST_DIR/browser-bitmap-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset_presentation.rs" -o "$TEST_DIR/browser-asset-presentation-tests"
 "$TEST_DIR/browser-asset-presentation-tests"
 bash "$ROOT_DIR/scripts/browser_asset_fence_host_gate.sh"

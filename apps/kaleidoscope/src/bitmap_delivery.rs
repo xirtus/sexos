@@ -5,9 +5,9 @@
 //! Clear abandons unsent image operations, so the caller may immediately erase
 //! its pixels. Accepted COMMIT/CLEAR wait for their original exact Applied;
 //! that receipt describes historical state publication, never current pixels.
+use crate::incarnation::Identity;
 use sex_pdx::bitmap_batch::{hash, Applied, Geometry, Request};
 
-pub const SURFACE: u64 = 300;
 pub const SENDS_PER_TURN: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +91,7 @@ fn erase_cached(batch: &mut Option<Batch>) {
 }
 
 pub struct Outbox {
+    identity: Identity,
     active: Option<Batch>,
     desired: Option<Batch>,
     sequence: u32,
@@ -98,14 +99,15 @@ pub struct Outbox {
 }
 
 impl Outbox {
-    pub const fn new() -> Self {
-        Self::with_sequence_floor(0)
+    pub const fn new(identity: Identity) -> Self {
+        Self::with_sequence_floor(identity, 0)
     }
 
     /// Reconstruct only with the caller's retained monotonic sequence floor.
     /// Recreating an outbox at zero on the same live surface is not a reset.
-    pub const fn with_sequence_floor(sequence: u32) -> Self {
+    pub const fn with_sequence_floor(identity: Identity, sequence: u32) -> Self {
         Self {
+            identity,
             active: None,
             desired: None,
             sequence,
@@ -238,7 +240,7 @@ impl Outbox {
     }
 
     /// No success is inferred from send admission. Only the canonical display
-    /// caller1/surface300/active-sequence receipt completes an accepted batch.
+    /// caller1/bound-surface/active-sequence receipt completes an accepted batch.
     pub fn receive(&mut self, caller: u32, word: u64) -> Option<Receipt> {
         if self.closed {
             return None;
@@ -246,7 +248,7 @@ impl Outbox {
         let applied = Applied::decode(caller, word)?;
         let active = self.active.as_ref()?;
         if active.phase != Phase::Awaiting
-            || applied.surface as u64 != SURFACE
+            || applied.surface as u64 != self.identity.surface()
             || applied.sequence != active.receipt.sequence
         {
             return None;
@@ -326,7 +328,7 @@ impl Outbox {
             let (opcode, packed, control) = request.wire();
             match send(Operation {
                 opcode,
-                surface: SURFACE,
+                surface: self.identity.surface(),
                 packed,
                 control,
             }) {
