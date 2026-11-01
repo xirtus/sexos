@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–147
+# SexOS development: round 108 acceptance and rounds 109–148
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -711,3 +711,21 @@ cycle-accounting implementation, not the newer readable-tile image. Both termina
 all8 Quil/Spindle incarnations, cleanup and exact durable bytes. Scope/remaining
 obligations unchanged. Next implementation: held Browser identity and request
 metadata before any additional actual Browser reservation.
+
+
+## Round 148 — held Browser startup and authenticated typed request task
+
+[Report](BROWSER_HELD_IDENTITY_2026_11_01.md): successful heldSELF precedes
+Browser effects; immutable target/task drives nested Close, without task=domain.
+Original-only paging stays behind validated identity. All five fresh typedNet
+job/source paths authenticate kernel caller_task against held live main task;
+maintenance custody and legacy cached Domain-route reads remain scoped separately.
+ActualBrowser15 only. Future30/31 are host metadata, not BOOT reservations.
+Source d576eb17:43 host gates /2,760 logged Rust +8 extracted lifecycle cases /
+1,037 Python; Browser15 metadata/transport cases and7 network-owner cases reject
+five compiled mutants. Eight boots/112 captures pass full8 app chains, sourceTLS,
+connected warm/cold and auxiliary writer29 recovery. All1,180 source blobs and
+archive members verified; nine ELF scans inspect324,832 instructions without
+inspected vector/FP matches. Files deferred-task gap/native unequal allocator
+remain open. Next: Browser output identity, immutable bitmap binding and captured
+input routing before individual BOOT successor source grants. Inventory unchanged.

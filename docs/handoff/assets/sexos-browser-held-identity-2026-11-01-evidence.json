@@ -1,0 +1,868 @@
+{
+  "round": 148,
+  "browser_held_identity_and_typed_request_task_qualified": true,
+  "full_os_goal_complete": false,
+  "source_commit": "d576eb1776c66eab20fcd96e6113bf3648f24583",
+  "main_parent": "98beda3f52c8ab1a0ab206bab8610c944debb257",
+  "iso_sha256": "7e33a2fb6080bb33716b250e21a30a61d80baebb55aa5e50334a8f1b97cfc17f",
+  "kernel_sha256": "08bd29a9099ad90a8fa91698b973b18c1d9f6aa5e65dadbf6291f9e0f2064b82",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "d576eb1776c66eab20fcd96e6113bf3648f24583",
+    "production": 577,
+    "runner": 603,
+    "unique": 1180,
+    "iso_sha256": "7e33a2fb6080bb33716b250e21a30a61d80baebb55aa5e50334a8f1b97cfc17f",
+    "kernel_sha256": "08bd29a9099ad90a8fa91698b973b18c1d9f6aa5e65dadbf6291f9e0f2064b82"
+  },
+  "registered_host_checks": 43,
+  "rust_test_executions": 2768,
+  "rust_gate_log_passes": 2760,
+  "additional_extracted_lifecycle_cases": 8,
+  "python_tests": 1037,
+  "host_behavior": {
+    "browser_actual_metadata_cases": 5,
+    "browser_future_metadata_cases": 5,
+    "browser_transport_cases": 5,
+    "browser_compiled_mutants": 3,
+    "network_request_owner_cases": 7,
+    "network_compiled_mutants": 2,
+    "unequal_task_ids_host_only": true
+  },
+  "browser": {
+    "actual_targets": [
+      15
+    ],
+    "actual_surface": 300,
+    "held_query_before_effects": true,
+    "task_never_inferred_from_domain": true,
+    "immutable_private_startup_tuple": true,
+    "nested_close_target_task_from_held_tuple": true,
+    "paging_probe_original_only": true,
+    "future_browser_rows_installed": false
+  },
+  "network": {
+    "typed_dispatches_authenticated": 5,
+    "paths": [
+      "trust",
+      "certificate-time",
+      "entropy",
+      "TCP/TLS",
+      "DNS"
+    ],
+    "actual_kernel_stamped_task_required": true,
+    "held_live_main_task_required": true,
+    "maintenance_held_custody_unchanged": true,
+    "legacy_domain_route_cached_reads_unchanged": true,
+    "files_deferred_task_gap_fixed": false
+  },
+  "native": {
+    "sealed_probe_boots": 1,
+    "alpha_boots": 2,
+    "connected_boots": 4,
+    "auxiliary_cold_boots": 1,
+    "total_qualified_boots": 8,
+    "registry_verified_captures": 112,
+    "alpha": [
+      {
+        "profile": "compact",
+        "command": [
+          "python3",
+          "/tmp/sexos-browser-identity-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-browser-identity-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-browser-identity-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-browser-identity-a-alpha-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--third-spindle",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "148"
+        ],
+        "out": "/tmp/sexos-browser-identity-a-alpha-compact",
+        "driver": "/tmp/sexos-browser-identity-a-alpha-compact-driver.log",
+        "status": 0,
+        "seconds": 187.50098637503106,
+        "verified_captures": 39,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 8,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            },
+            {
+              "target": 24,
+              "task": 24
+            },
+            {
+              "target": 25,
+              "task": 25
+            },
+            {
+              "target": 26,
+              "task": 26
+            },
+            {
+              "target": 27,
+              "task": 27
+            },
+            {
+              "target": 28,
+              "task": 28
+            },
+            {
+              "target": 29,
+              "task": 29
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 0,
+          "generation": 55,
+          "source": 29,
+          "task": 29,
+          "logical": 12,
+          "size": 761,
+          "fingerprint": "0xf7f98e7ea46c839",
+          "count": 55,
+          "data_hash": "0x114c3d54f40ec4ad"
+        }
+      },
+      {
+        "profile": "wide",
+        "command": [
+          "python3",
+          "/tmp/sexos-browser-identity-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-browser-identity-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-browser-identity-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-browser-identity-a-alpha-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--third-spindle",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "148"
+        ],
+        "out": "/tmp/sexos-browser-identity-a-alpha-wide",
+        "driver": "/tmp/sexos-browser-identity-a-alpha-wide-driver.log",
+        "status": 0,
+        "seconds": 204.03315945796203,
+        "verified_captures": 39,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 8,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            },
+            {
+              "target": 24,
+              "task": 24
+            },
+            {
+              "target": 25,
+              "task": 25
+            },
+            {
+              "target": 26,
+              "task": 26
+            },
+            {
+              "target": 27,
+              "task": 27
+            },
+            {
+              "target": 28,
+              "task": 28
+            },
+            {
+              "target": 29,
+              "task": 29
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 0,
+          "generation": 55,
+          "source": 29,
+          "task": 29,
+          "logical": 12,
+          "size": 761,
+          "fingerprint": "0xf7f98e7ea46c839",
+          "count": 55,
+          "data_hash": "0x114c3d54f40ec4ad"
+        }
+      }
+    ],
+    "connected": [
+      {
+        "name": "connected-wide",
+        "status": 0,
+        "out": "/tmp/sexos-browser-identity-a-native-connected-wide",
+        "driver": "/tmp/sexos-browser-identity-a-native-connected-wide-driver.log",
+        "ports": "/tmp/sexos-browser-identity-a-ports/connected-wide",
+        "command": [
+          "python3",
+          "/private/tmp/sexos-browser-identity-a-frozen/source/scripts/connected_desktop_gate.py",
+          "--iso",
+          "/private/tmp/sexos-browser-identity-a-frozen/tested.iso",
+          "--binding",
+          "/private/tmp/sexos-browser-identity-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-browser-identity-a-native-connected-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800"
+        ],
+        "profile": {
+          "label": "wide",
+          "model": "e1000e",
+          "resolution": "1280x800"
+        },
+        "observations": [
+          {
+            "host_monotonic": 742319.064859708,
+            "guests": [
+              {
+                "pid": 12596,
+                "age_seconds": 1069
+              },
+              {
+                "pid": 13386,
+                "age_seconds": 769
+              }
+            ]
+          }
+        ],
+        "other_guests_before": [
+          {
+            "pid": 12596,
+            "age_seconds": 1069
+          },
+          {
+            "pid": 13386,
+            "age_seconds": 769
+          }
+        ],
+        "seconds": 48.37947658402845,
+        "other_guests_after": [
+          {
+            "pid": 12596,
+            "age_seconds": 1117
+          },
+          {
+            "pid": 13386,
+            "age_seconds": 817
+          }
+        ],
+        "boots": 2,
+        "verified_captures": 17
+      },
+      {
+        "name": "connected-compact",
+        "status": 0,
+        "out": "/tmp/sexos-browser-identity-a-native-connected-compact",
+        "driver": "/tmp/sexos-browser-identity-a-native-connected-compact-driver.log",
+        "ports": "/tmp/sexos-browser-identity-a-ports/connected-compact",
+        "command": [
+          "python3",
+          "/private/tmp/sexos-browser-identity-a-frozen/source/scripts/connected_desktop_gate.py",
+          "--iso",
+          "/private/tmp/sexos-browser-identity-a-frozen/tested.iso",
+          "--binding",
+          "/private/tmp/sexos-browser-identity-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-browser-identity-a-native-connected-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768"
+        ],
+        "profile": {
+          "label": "compact",
+          "model": "e1000",
+          "resolution": "1024x768"
+        },
+        "observations": [
+          {
+            "host_monotonic": 742367.480759208,
+            "guests": [
+              {
+                "pid": 12596,
+                "age_seconds": 1117
+              },
+              {
+                "pid": 13386,
+                "age_seconds": 817
+              }
+            ]
+          }
+        ],
+        "other_guests_before": [
+          {
+            "pid": 12596,
+            "age_seconds": 1117
+          },
+          {
+            "pid": 13386,
+            "age_seconds": 817
+          }
+        ],
+        "seconds": 53.77353983302601,
+        "other_guests_after": [
+          {
+            "pid": 12596,
+            "age_seconds": 1171
+          },
+          {
+            "pid": 13386,
+            "age_seconds": 871
+          }
+        ],
+        "boots": 2,
+        "verified_captures": 17
+      }
+    ],
+    "full_history_chain": {
+      "ok": true,
+      "profiles": [
+        {
+          "profile": "compact",
+          "errors": []
+        },
+        {
+          "profile": "wide",
+          "errors": []
+        }
+      ]
+    },
+    "cold": {
+      "observed": true,
+      "source": 29,
+      "task": 29,
+      "fresh_target": 12,
+      "generation": 55,
+      "bytes": 761,
+      "recall": "echo alpha29",
+      "standalone_artifact_replay": false,
+      "parent_source_bound_replayed": true
+    },
+    "boot_held_identity_audit": {
+      "ok": true,
+      "boots": 8,
+      "normal_workflow_boots": 6,
+      "sealed_probe_boots": 1,
+      "auxiliary_cold_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-browser-identity-a-build/serial.log",
+          "bytes": 505696,
+          "sha256": "0b1ae3ab8cb0012cf593c61ec4abfdfbb2af9f3f848a16c0a3bea946d0ccd106",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-last-writer-cold-aux/serial.log",
+          "bytes": 351342,
+          "sha256": "9937f5448b884ef7194571c926d86beccba94cb4285dd433e9158baede920ff7",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-alpha-compact/serial.log",
+          "bytes": 4035694,
+          "sha256": "4c76bded1e268615ecb5b3c4f937d31924ac8c6931ac04d5a4ca15ef58ae4a7f",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-alpha-wide/serial.log",
+          "bytes": 4064340,
+          "sha256": "abdb1e301a667c03a2ed43f5fc743ce7ea686d76d27a0502aeed40ed3695ac33",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-native-connected-wide/recovery/serial.log",
+          "bytes": 433760,
+          "sha256": "8583d89fcbf187001c388fbb16f5703185575f90ba927e623ef33a8d7239bd43",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-native-connected-wide/session/serial.log",
+          "bytes": 728095,
+          "sha256": "1e30950c4ead5a6bae9be96a4aeb4a568e323107a6cf7d1079c24b984380412b",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-native-connected-compact/recovery/serial.log",
+          "bytes": 428220,
+          "sha256": "77ef6ccd717bfd9f6a085835092d4aa0b8cdb90dc2d5f2e65957ee4b746273ab",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-browser-identity-a-native-connected-compact/session/serial.log",
+          "bytes": 725129,
+          "sha256": "c4bd45a9b9ef3141993ef0f90d4c7e79c7ae636b096e122285ed16b7af2b64ce",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        }
+      ],
+      "scope": "Actual inserted history capability queried beforeseal; exact registered tasks and both family catalogs/layout. Eight actual Spindles, no per-request task authentication."
+    },
+    "native_unequal_allocator": false,
+    "new_image_1800s_acceptance": false
+  },
+  "scalar": {
+    "elfs": 9,
+    "instructions": 324832,
+    "inspected_vector_fp_matches": 0,
+    "scope": "Nine exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "diagnostics": {
+    "initial_legacy_transport_fixture_missing_getter": true,
+    "fixed_before_source_commit": true
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "archive": {
+    "path": "assets/sexos-browser-held-identity-2026-11-01-raw.tar.gz",
+    "sha256": "4b04ddc93658ffae0f38f0db7c4aacbe447fafa818868defe0cea9c783770f7c",
+    "bytes": 19316813,
+    "members": 1621,
+    "payload_manifest_sha256": "6a803118f3c3bbd9a6081f6db05d1cfa84fbfd130072043986980befe81fe92d",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "One actual Browser15 selects exact held SELF CatalogInfo before service/paging effects; preserve main task in immutable local tuple and retained nested Close waits. Original-only paging remains BOOT-authorized. Five fresh typed Net job/source paths require actual incoming kernel task equals held live task before effects; maintenance custody and legacy cached/sample Domain-route reads stay separate. Compiled actual metadata/transport/request-owner controls and mutations cover independent task namespaces. Nativebothprofiles/full8appchains/TCP/sourceTLS/connectedcold pass; no new Browser reservation, generalizedFilesdeferredtaskauth, nativeunequalallocator, runtimecapmint/processVAS or daily-driver acceptance claim."
+}

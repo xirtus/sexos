@@ -67,3 +67,15 @@ must migrate to exact held tuples and slot-correlated receipts.
 This is an implementation plan, not qualified successor authority. Retain
 2 Open /28 Partial /System Proven false; finite reserves are not unrestricted
 reuse or global-epoch proof. Current native task/domain numbers still coincide.
+
+
+## Progress after Round148
+
+Held Browser identity now precedes startup effects; actual task metadata reaches
+nested Close waits. Five typed network job/source paths check incoming kernel task
+against held live main-task custody before effects. Original paging stays scoped;
+legacy cached Domain-route reads and Files deferred task propagation are separate.
+Both native desktop profiles/connected TLS/cold sessions pass; actual Browser15
+only. Next presentation slices: constructor-owned Browser output/outboxes, then
+immutable Display bitmap binding, then captured Shell input destinations. Keep
+30/31 inactive until every separate BOOT grant and provider policy is qualified.
