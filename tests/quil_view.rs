@@ -282,7 +282,7 @@ fn outbox_end_to_end_keeps_old_text_until_commit_at_every_full_boundary() {
                             return Err(ERR_SERVICE_NOT_READY);
                         }
                         let req = text_batch::Request::decode(op, a, b).unwrap();
-                        if let Some((n, _, bytes)) = stage.receive(9, sid, req) {
+                        if let Some((n, _, bytes)) = stage.receive(9, 90, sid, req) {
                             visible = bytes[..n].to_vec();
                         } else {
                             assert_eq!(visible, b"previous");
@@ -292,6 +292,7 @@ fn outbox_end_to_end_keeps_old_text_until_commit_at_every_full_boundary() {
                     },
                     |paint, n| admitted.push((paint, n)),
                 );
+                publish_output_turn(&mut stage);
                 stage.poll_reply(|target, value| {
                     assert_eq!(target, 9);
                     assert_eq!(out.receive(1, value), Some((1, len)));
@@ -412,13 +413,14 @@ fn ack_then_new_queue_supersedes_older_latest_and_never_replays_behind_display()
     out.poll(
         156,
         |op, sid, a, b| {
-            stage.receive(9, sid, text_batch::Request::decode(op, a, b).unwrap());
+            stage.receive(9, 90, sid, text_batch::Request::decode(op, a, b).unwrap());
             Ok(())
         },
         |_, _| {},
     );
     t.bytes[0] = b'b';
     out.queue(t, 2);
+    publish_output_turn(&mut stage);
     stage.poll_reply(|_, value| {
         assert_eq!(out.receive(1, value), Some((1, 1)));
         0
@@ -431,7 +433,7 @@ fn ack_then_new_queue_supersedes_older_latest_and_never_replays_behind_display()
         156,
         |op, sid, a, b| {
             if let Some((n, _, bytes)) =
-                stage.receive(9, sid, text_batch::Request::decode(op, a, b).unwrap())
+                stage.receive(9, 90, sid, text_batch::Request::decode(op, a, b).unwrap())
             {
                 assert_eq!(&bytes[..n], b"c");
             }
@@ -439,6 +441,7 @@ fn ack_then_new_queue_supersedes_older_latest_and_never_replays_behind_display()
         },
         |paint, _| completed.push(paint),
     );
+    publish_output_turn(&mut stage);
     stage.poll_reply(|_, value| {
         assert_eq!(out.receive(1, value), Some((3, 1)));
         0
@@ -474,7 +477,7 @@ fn third_geometry_binds_catalog_task_without_domain_task_alias() {
 
 #[test]
 fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequence() {
-    for (target, sid) in [(9, 156), (16, 301), (18, 307)] {
+    for (target, task, sid) in [(9, 90, 156), (16, 160, 301), (18, 180, 307)] {
         for cut in 1..=12 {
             let mut out = delivery::Outbox::new();
             let mut stage = text_transaction::Stage::EMPTY;
@@ -489,7 +492,7 @@ fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequen
                     sid,
                     |op, sid, a, b| {
                         operations += 1;
-                        stage.receive(target, sid, text_batch::Request::decode(op, a, b).unwrap());
+                        stage.receive(target, task, sid, text_batch::Request::decode(op, a, b).unwrap());
                         if operations == cut {
                             stage.reset();
                         }
@@ -527,6 +530,7 @@ fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequen
                         }
                         if let Some((n, _, bytes)) = stage.receive(
                             target,
+                            task,
                             sid,
                             text_batch::Request::decode(op, a, b).unwrap(),
                         ) {
@@ -539,6 +543,7 @@ fn recreated_binding_discards_obsolete_upload_and_old_ack_without_reusing_sequen
                 );
             }
             assert_eq!(out.receive(1, receipt), None);
+            publish_output_turn(&mut stage);
             stage.poll_reply(|pd, v| {
                 assert_eq!(pd, target);
                 assert_eq!(out.receive(1, v), Some((11, 3)));
@@ -755,7 +760,7 @@ fn selected_outbox_sends_exact_style_after_chunks_and_full_before_commit() {
                     return Err(ERR_SERVICE_NOT_READY);
                 }
                 sent.push(r);
-                if let Some((len, _, bytes)) = stage.receive(9, sid, r) {
+                if let Some((len, _, bytes)) = stage.receive(9, 90, sid, r) {
                     assert_eq!(&bytes[..len], b"a b c");
                     visible = true;
                 } else {
@@ -787,6 +792,7 @@ fn selected_outbox_sends_exact_style_after_chunks_and_full_before_commit() {
             hash: text_batch::selected_hash(b"a b c", 1, 4).unwrap()
         }
     );
+    publish_output_turn(&mut stage);
     stage.poll_reply(|_, value| {
         assert_eq!(out.receive(1, value), Some((7, 5)));
         0
@@ -1078,4 +1084,13 @@ fn last_quil_invalid_geometry_membership_and_terminal_delivery_never_replace_val
     delivery.poll(false,true,|_|panic!("retired incarnation must not send"));
     assert!(!delivery.pending());delivery.queue(39,3900,640,480);
     delivery.poll(true,true,|_|panic!("terminal delivery cannot reopen"));assert!(!delivery.pending());
+}
+
+// Explicit simulated successful Display output turn. Intake itself does not
+// release a completion; an eligible retry needs no further publication.
+fn publish_output_turn(stage: &mut text_transaction::Stage) {
+    if stage.needs_publication() {
+        stage.poll_reply(|_, _| panic!("completion escaped before simulated publication"));
+        assert!(stage.release_after_publication());
+    }
 }

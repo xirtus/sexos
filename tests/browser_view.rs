@@ -148,14 +148,17 @@ fn tls_rows(f:&browser_view::TlsFrame)->Vec<&str>{if f.len==0{Vec::new()}else{co
  use text_delivery::{Outbox,Admission,Poll};let mut out=Outbox::atomic(343);let mut stage=display_transaction::Stage::EMPTY;
  let first=browser_view::tls_panel(512,359,Some(b"preparing")).unwrap();let old=tls_frame_metadata(&first,7,tls_probe::View::Preparing);assert!(out.queue_selected(&first.bytes[..first.len],0xcdd6f4,old,(0,0)));
  let mut deferred=None;assert_eq!(out.poll(1,|op|{deferred=Some(op);Admission::Full}),Poll::Deferred);
- assert_eq!(out.poll(1,|op|{assert_eq!(Some(op),deferred);let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();stage.receive(30,343,req);Admission::Accepted}),Poll::Pending);
+ assert_eq!(out.poll(1,|op|{assert_eq!(Some(op),deferred);let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();stage.receive(30,300,343,req);Admission::Accepted}),Poll::Pending);
  let mut old_paint=0;
- while old_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();let committed=stage.receive(30,343,req);if let text_batch::Request::Commit{sequence,hash}=req{assert_eq!(hash,old.count as u64);assert_eq!(committed.unwrap().0,first.len);old_paint=sequence;}Admission::Accepted});}
+ while old_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();let committed=stage.receive(30,300,343,req);if let text_batch::Request::Commit{sequence,hash}=req{assert_eq!(hash,old.count as u64);assert_eq!(committed.unwrap().0,first.len);old_paint=sequence;}Admission::Accepted});}
  let next=browser_view::tls_panel(1024,718,Some(b"hello pending; no peer")).unwrap();let desired=tls_frame_metadata(&next,8,tls_probe::View::HelloPending);assert!(out.queue_selected(&next.bytes[..next.len],0xcdd6f4,desired,(0,0)));
  let wire=text_batch::Applied{surface:343,sequence:old_paint}.encode().unwrap();assert!(out.receive(2,wire).is_none());assert!(out.receive(1,text_batch::Applied{surface:344,sequence:old_paint}.encode().unwrap()).is_none());
- let receipt=out.receive(1,wire).unwrap();assert_eq!(receipt.metadata,old);assert_ne!(receipt.metadata,desired);assert_eq!(receipt.bytes,first.len);
- let mut new_paint=0;while new_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();stage.receive(30,343,req);if let text_batch::Request::Commit{sequence,..}=req{new_paint=sequence;}Admission::Accepted});}
- assert!(out.receive(1,wire).is_none());let reply=out.receive(1,text_batch::Applied{surface:343,sequence:new_paint}.encode().unwrap()).unwrap();assert_eq!(reply.metadata,desired);
+ assert!(stage.needs_publication());stage.poll_reply(|_,_|panic!("unreleased old panel"));assert!(stage.release_after_publication());
+ let mut receipt=None;stage.poll_reply(|owner,word|{assert_eq!((owner,word),(30,wire));receipt=out.receive(1,word);0});
+ let receipt=receipt.unwrap();assert_eq!(receipt.metadata,old);assert_ne!(receipt.metadata,desired);assert_eq!(receipt.bytes,first.len);
+ let mut new_paint=0;while new_paint==0{out.poll(4,|op|{let req=text_batch::Request::decode(op.opcode,op.packed,op.control).unwrap();let committed=stage.receive(30,300,343,req);if let text_batch::Request::Commit{sequence,..}=req{assert_eq!(committed.unwrap().0,next.len);new_paint=sequence;}Admission::Accepted});}
+ assert!(out.receive(1,wire).is_none());stage.poll_reply(|_,_|panic!("unreleased resized panel"));assert!(stage.release_after_publication());
+ let mut reply=None;stage.poll_reply(|owner,word|{assert_eq!((owner,word),(30,text_batch::Applied{surface:343,sequence:new_paint}.encode().unwrap()));reply=out.receive(1,word);0});assert_eq!(reply.unwrap().metadata,desired);
  // Cancellation on a later resize does not revive the previous sequence.
  assert!(out.queue_selected(&first.bytes[..first.len],0xcdd6f4,old,(0,0)));out.cancel();assert!(out.receive(1,wire).is_none());
 }

@@ -9,7 +9,7 @@ extern crate self as sex_pdx;
 // Explicit original held-tuple test double; no authority is constructed here.
 mod incarnation {
  #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Identity;
- impl Identity{pub const fn target(self)->u32{15}pub const fn task(self)->u32{15}pub const fn surface(self)->u64{300}}
+ impl Identity{pub const fn target(self)->u32{15}pub const fn task(self)->u32{150}pub const fn surface(self)->u64{300}}
 }
 
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
@@ -30,7 +30,7 @@ use transaction::Stage;
 fn bound_stage()->Stage {
     let mut stage=Stage::UNBOUND;
     let catalog=app_lifecycle::CatalogInfo {
-        target_pd:15,task_id:15,surface_id:300,coordinator_pd:3,
+        target_pd:15,task_id:150,surface_id:300,coordinator_pd:3,
     };
     assert!(stage.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
     stage
@@ -42,12 +42,23 @@ fn wire(op:Operation)->Request{assert_eq!(op.surface,300);Request::decode(op.opc
 fn submit(stage:&mut Stage,out:&mut Outbox,pixels:&[u32])->Vec<Request>{
  let mut sent=Vec::new();
  for _ in 0..16{
-  let before=sent.len();assert_eq!(out.poll(pixels,4,|op|{let request=wire(op);sent.push(request);stage.receive(15,15,300,request);Admission::Accepted}),Poll::Pending);
+  let before=sent.len();assert_eq!(out.poll(pixels,4,|op|{let request=wire(op);sent.push(request);stage.receive(15,150,300,request);Admission::Accepted}),Poll::Pending);
   assert!(sent.len()-before<=4);if before==sent.len(){return sent}
  }
  panic!("bounded bitmap did not await its real receipt")
 }
+// Explicit simulated Full boundary, separate from packet delivery. These
+// callbacks prove receipt custody only, not native rendering or pixel output.
+fn publication_boundary(stage: &mut Stage) {
+    if stage.needs_publication() {
+        stage.poll_reply(|_, _| panic!("Applied before simulated Full publication"));
+        assert!(stage.release_after_publication());
+    } else {
+        assert!(!stage.release_after_publication());
+    }
+}
 fn receipt(stage:&mut Stage,out:&mut Outbox)->Receipt{
+ publication_boundary(stage);
  let mut got=None;stage.poll_reply(|owner,word|{assert_eq!(owner,15);got=out.receive(1,word);0});got.expect("actual exact outbox Applied")
 }
 fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u32)->u32{
@@ -90,9 +101,10 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  let mut blocked=None;let mut sent=Vec::new();
  for _ in 0..12{let result=out.poll(&pixels,4,|op|{
   if blocked.is_none(){blocked=Some(op);return Admission::Full}
-  assert_eq!(Some(op),blocked);blocked=None;let r=wire(op);sent.push(r);stage.receive(15,15,300,r);Admission::Accepted
+  assert_eq!(Some(op),blocked);blocked=None;let r=wire(op);sent.push(r);stage.receive(15,150,300,r);Admission::Accepted
  });assert!(matches!(result,Poll::Deferred|Poll::Pending));if sent.iter().any(|r|matches!(r,Request::Commit{..})){break}}
  assert_eq!(sent.len(),3);assert_eq!(sent.iter().filter(|r|matches!(r,Request::Commit{..})).count(),1);
+ publication_boundary(&mut stage);
  let mut held=None;for _ in 0..3{stage.poll_reply(|_,word|{if let Some(previous)=held{assert_eq!(word,previous)}held=Some(word);9});assert_eq!(out.poll(&pixels,4,|_|panic!("accepted mutation replay")),Poll::Pending);assert!(!p.ready());}
  let r=receipt(&mut stage,&mut out);assert!(p.applied(&r,1,7,r.hash));
 }
@@ -101,7 +113,7 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
  p.invalidate().unwrap();assert!(!p.has_layout());assert!(!p.expect_clear(2,2));assert!(p.text_applied(2,2,2));let clear=out.clear(metadata(2,0)).unwrap();assert!(p.expect_clear(2,clear));assert!(p.has_layout());assert!(p.layout().is_none());assert!(!p.can_queue(2));
  assert_eq!(out.poll(&[],4,|_|panic!("old accepted COMMIT must drain")),Poll::Pending);let old=receipt(&mut stage,&mut out);assert!(!p.applied(&old,2,7,old.hash));assert!(!p.cleared(&old,2));
  let mut blocked=None;assert_eq!(out.poll(&[],4,|op|{blocked=Some(op);Admission::Full}),Poll::Deferred);assert_eq!(stage.sample(15,300,8,80),Some(pixels[0]));
- assert_eq!(out.poll(&[],4,|op|{assert_eq!(Some(op),blocked);assert_eq!(wire(op),Request::Clear{sequence:clear});stage.receive(15,15,300,wire(op));Admission::Accepted}),Poll::Pending);assert_eq!(stage.sample(15,300,8,80),None);
+ assert_eq!(out.poll(&[],4,|op|{assert_eq!(Some(op),blocked);assert_eq!(wire(op),Request::Clear{sequence:clear});stage.receive(15,150,300,wire(op));Admission::Accepted}),Poll::Pending);assert_eq!(stage.sample(15,300,8,80),None);
  let r=receipt(&mut stage,&mut out);assert!(p.cleared(&r,2));assert!(!p.cleared(&r,2));assert!(!p.applied(&r,2,0,0));assert!(!p.ready());assert!(!p.can_queue(2));
  assert_eq!(out.poll(&[],4,|_|panic!("completed nofit Clear replay")),Poll::Idle);
  assert_eq!(p.select(Mode::Actual),Ok(true));assert!(!p.can_queue(2));assert!(!p.text_applied(2,2,2));assert!(p.text_applied(3,2,2));assert!(p.can_queue(2));assert!(!p.cleared(&r,2));
@@ -117,7 +129,7 @@ fn queue(p:&mut Presentation,out:&mut Outbox,pixels:&[u32],viewport:u64,ticket:u
 #[test]fn viewport_change_during_accepted_clear_ignores_historical_ack_then_queues_fresh_image(){
  let pixels=[3,4];let mut p=Presentation::new();let mut out=Outbox::new(incarnation::Identity);let mut stage=bound_stage();p.text_applied(1,1,1);queue(&mut p,&mut out,&pixels,1,7);submit(&mut stage,&mut out,&pixels);let image=receipt(&mut stage,&mut out);assert!(p.applied(&image,1,7,image.hash));
  p.invalidate().unwrap();p.text_applied(2,2,2);let clear=out.clear(metadata(2,0)).unwrap();assert!(p.expect_clear(2,clear));
- assert_eq!(out.poll(&[],4,|op|{stage.receive(15,15,300,wire(op));Admission::Accepted}),Poll::Pending);
+ assert_eq!(out.poll(&[],4,|op|{stage.receive(15,150,300,wire(op));Admission::Accepted}),Poll::Pending);
  p.invalidate().unwrap();assert!(p.text_applied(3,3,3));assert!(p.can_queue(3));assert_eq!(out.poll(&[],4,|_|panic!("accepted Clear replay")),Poll::Pending);
  let historical=receipt(&mut stage,&mut out);assert!(!p.cleared(&historical,3));assert!(!p.applied(&historical,3,7,hash(&pixels)));assert!(!p.ready());
  let sequence=queue(&mut p,&mut out,&pixels,3,8);assert!(sequence>clear);submit(&mut stage,&mut out,&pixels);let current=receipt(&mut stage,&mut out);assert!(p.applied(&current,3,8,current.hash));assert!(p.ready());assert!(!p.cleared(&historical,3));

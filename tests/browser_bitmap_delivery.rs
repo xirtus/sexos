@@ -34,7 +34,7 @@ use transaction::Stage;
 fn bound_stage()->Stage {
     let mut stage=Stage::UNBOUND;
     let catalog=app_lifecycle::CatalogInfo {
-        target_pd:15,task_id:15,surface_id:300,coordinator_pd:3,
+        target_pd:15,task_id:150,surface_id:300,coordinator_pd:3,
     };
     assert!(stage.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
     stage
@@ -61,9 +61,20 @@ fn request(op: Operation) -> Request {
     Request::decode(op.opcode, op.packed, op.control).unwrap()
 }
 fn deliver(stage: &mut Stage, op: Operation) -> Option<transaction::Change> {
-    stage.receive(15, 15, op.surface, request(op))
+    stage.receive(15, 150, op.surface, request(op))
+}
+// Explicit simulated Full boundary, separate from packet delivery. These
+// callbacks prove receipt custody only, not native rendering or pixel output.
+fn publication_boundary(stage: &mut Stage) {
+    if stage.needs_publication() {
+        stage.poll_reply(|_, _| panic!("Applied before simulated Full publication"));
+        assert!(stage.release_after_publication());
+    } else {
+        assert!(!stage.release_after_publication());
+    }
 }
 fn receipt(stage: &mut Stage, out: &mut Outbox) -> Receipt {
+    publication_boundary(stage);
     let mut done = None;
     stage.poll_reply(|owner, value| {
         assert_eq!(owner, 15);
@@ -201,6 +212,7 @@ fn full_at_every_operation_boundary_preserves_exact_request_without_publication_
                 Poll::Pending
             );
         }
+        publication_boundary(&mut stage);
         let mut actual = Vec::new();
         for _ in 0..3 {
             stage.poll_reply(|owner, value| {
@@ -607,12 +619,13 @@ fn close_fences_partial_full_waiting_and_clear_without_false_completion() {
             Err(QueueError::Closed)
         );
         assert_eq!(out.clear(metadata(3)), Err(QueueError::Closed));
+        publication_boundary(&mut stage);
         stage.poll_reply(|_, value| {
             assert_eq!(out.receive(1, value), None);
             0
         });
         // Local close does not forge display erasure; lifecycle retirement does.
-        stage.retire(15,15);
+        stage.retire(15,150);
         assert!(stage.scrubbed());
     }
 }
@@ -836,6 +849,7 @@ fn viewport_reset_clear_barrier_restarts_partial_and_accepted_transactions() {
                 }
             }
         }
+        publication_boundary(&mut stage);
         let mut historical_word = None;
         stage.poll_reply(|owner, value| {
             assert_eq!(owner, 15);
