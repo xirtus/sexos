@@ -1102,3 +1102,39 @@ remain Open. No physical/SMP/hard realtime/erasure or general daily-driver claim
 Next166 implements substantive immutable Display scenes and commit ownership under
 the [published epoch plan](DISPLAY_EPOCH_IMPLEMENTATION_PLAN_2026_11_01.md).
 Active80–200 continues;166–200 remain35 rounds.
+
+## Round 166 — immutable Display composition inputs
+
+[Report](DISPLAY_SCENE_OWNERSHIP_2026_11_01.md): source c947cccd, one fixed
+59,584-byte owned scene and scoped non-copyable lease across full/strip/area/
+damage/cursor/proof rendering. Captures surfaces, committed Browser pixels,
+groups, bar, tokens, focus, dimensions, animation and backdrop rows. Nested
+capture fails before exclusive borrowing; Drop scrubs owned payload. Cleanup
+waits for release and scrubs cursor save-under before removal-frame custody ACK.
+No new runtime authority or producer/framebuffer pointer enters the snapshot.
+
+All44 frozen host checks and1,132 Python tests pass;3,174 logged successful Rust
+executions include repeated SDK fixtures. Actual scene11cases/6compiled mutants/
+2source controls; compositor46cases preserves its independent reference; bitmap
+17current+17future-metadata cases/5mutants do not establish future BOOT grants.
+Eleven boots qualify70captures:16clock,34connected/cold recovery,20Browser
+reserve/Close/panel/exhaustion. Fresh frozen CLI replay for every workflow and
+full clock API proofs pass. Original coordinator's result.frames/captures schema
+error occurred after successful compactBrowser; read-only recovery retained that
+raw run and started only unrun wide workflows. No compact guest restart/count.
+
+All1,214 frozen source blobs match Git;578/582 prior production files unchanged,
+four Display modules change and scene.rs adds one. Kernel byte-identical to165;
+66-input ABI unchanged. Nine ISO ELFs:324,383 decoded instructions,0FP/vector
+matches. Display ELF grows61,336bytes; measured prologues exclude transitive
+stack/interrupts. BOOT heap/private-app records stay unchanged; physical free
+frames unmeasured. Archive11,172,503bytes/1,569members independently reopened
+and SHA/size-verified; source/image/replays and failed preflight/coordinator
+diagnostics retained separately. No Alpha/1800s/performance/hardware/SMP/
+physical erasure/full-epoch claim.2 Open/28 Partial/System Proven false.
+
+Next167 BOOT-sanctioned frame backing and prepared-output publication ownership,
+then transactional intake/effect commit under the Display implementation plan.
+GLOBAL_VAS, BOOT-only genesis, sex-pdx authority, PKU enforcement and exact
+terminal incarnation ownership remain mandatory. Active80–200 continues;
+167–200 remain34 substantive rounds.

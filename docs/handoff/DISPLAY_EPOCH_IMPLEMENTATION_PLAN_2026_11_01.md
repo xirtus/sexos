@@ -39,3 +39,17 @@ Compile the actual reducer/renderer with finite input, authority and output-boun
 Before complete Display epoch qualification: real UiIR rendering operations, unified causal sender sequences, deterministic admission/drop policy, complete input capture and replay, bounded snapshot lifetime, BOOT buffer grants, vblank/triple-buffer/latch completion and interrupted-output recovery must exist. Logging only metadata/hashes cannot reconstruct pixels. A replay recorder containing private document/network bytes needs its own sanctioned custody/retention boundary; diagnostic serial is not that authority.
 
 Before system-wide closure: kernel scheduling/interrupt/device completion order, memory/fault/reclamation transitions, every service state and external I/O, authority-result observations and BOOT genesis must enter the same explicit replay model. Complete replay must reconstruct epoch zero and compare all observable state/effects; Display-only replay cannot close either full-system requirement. Keep GLOBAL_VAS, immutable BOOT genesis and sex-pdx authority unchanged throughout.
+
+## Round166 checkpoint and next implementation boundary
+
+[Round166](DISPLAY_SCENE_OWNERSHIP_2026_11_01.md) qualifies Display-owned
+composition inputs and bounded lease release. It does not implement the remaining
+transactional engine described above. The next boundary is BOOT-sanctioned frame
+backing sized from actual geometry, with checked extent/budget and typed held
+authority, followed by one prepared-output publication owner for every rendering
+path. Avoid reserving two maximum8192×4320 images without a measured memory plan.
+Keep CPU framebuffer publication's non-atomic behavior explicit until hardware
+latching exists. Candidate/effect intake and complete replay remain subsequent
+required work, preserving causal input order, Full uncertainty, exact owners and
+cleanup custody. Current source still computes legacy blur scratch; eliminating
+that measured redundant work can improve responsiveness alongside this boundary.
