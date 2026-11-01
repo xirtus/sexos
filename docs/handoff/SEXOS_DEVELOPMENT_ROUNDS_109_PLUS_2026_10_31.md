@@ -858,3 +858,30 @@ actualone-store/count/size observedeveryboot. All1,200 blobs and1,567 archive
 members verified; nine ELFs/327,612 decodedinstructions, zero vector/FPmatches.
 NoactualfutureRows/grants. Next157: BOOTBrowser30/31, checkedNet/Bell, native
 launcherfocus/activation/exhaustion and selected-consumer evidence. Inventoryunchanged.
+
+
+## Round 157 — BOOT-reserved Browser relaunch
+
+[Report](BROWSER_BOOT_RESERVE_2026_11_01.md): actual 15→30→31 chain with checked
+Net/Bell/source grants, 19 app reservations, 31/32 sealed mains and 34 retained
+Shell entries. Native Browser appends palette command10; old command indices and
+WebStub stay distinct. Exact held focus, ordered activation/commit replay and
+honest finite exhaustion. Separate registered predecessor tasks replace PD/task
+inference. Display binds three stores/55,992 bytes; document clients grow to11.
+
+Source eb774be9: 43 frozen host checks, 3,070 logged Rust +22 nested =3,092
+executions; 1,085 Python. Ten final boots pass both Browser chains, both full
+8-Quil/8-Spindle profiles, four connected warm/cold boots and parent-bound
+last-writer29 cold recovery. Fresh Browser and Alpha replays pass. There are114
+pixel-qualified captures +6 raw Browser frames; aux cold PPM is separate and has
+no standalone artifact replay. All1208 source blobs and1618 archive members
+match size/SHA; nine ISO ELFs/330084 decoded instructions, zero FP/vector matches.
+
+Memory-accounting and palette-navigation counterexamples remain unqualified;
+new source-bound controls reject them. ABI66 inputs/hash12d218c6. Inventory stays
+2Open/28Partial/System Proven false. No successor paging, runtime cap genesis,
+unlimited relaunch, public-web trust or new sustained alpha acceptance claimed.
+Next158: identity/frame-correlated, viewport-aware Browser TLS panels and exact
+per-incarnation glyph qualification; current small-tile panels clip, six raw
+images remain unqualified. Then pending-operation Close/reopen stress and a
+sustained unified desktop/cold recovery run, with31/32 task headroom reviewed.
