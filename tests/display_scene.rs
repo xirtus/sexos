@@ -3,6 +3,11 @@
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
+pub const ERR_CAP_INVALID:u64=u64::MAX-3;
+#[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
+pub use memory_region::MemoryRegionInfo;
+#[path="../crates/sex-pdx/src/display_frames.rs"]pub mod display_frames;
+#[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod app_lifecycle_sdk;
 pub mod app_lifecycle{
@@ -154,7 +159,7 @@ fn render(_fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{
  let fail=boundary::rendering();let Some(lease)=SceneLease::capture(w,h,bar)else{return false;};assert!(lease.view().is_valid());if fail{return false;}true
 }
 fn reset_host_inputs(){
- boundary::reset();unsafe{assert!(!(*core::ptr::addr_of!(RENDER_SCENE)).is_valid());(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub();SURFACES.fill(SURFACE_EMPTY);FRAME_GROUPS=FrameGroups::new();DISPLAY_TOKENS=DEFAULT_RENDER_TOKENS;FOCUSED_SURFACE_ID=0;TOKEN_BUF_CALL1_RECEIVED=false;TOKEN_BUF_OWNER=0;CURSOR_UNDER_VALID=false;FB_W=1024;FB_H=768;}
+ boundary::reset();unsafe{assert!(!(*core::ptr::addr_of!(RENDER_SCENE)).is_valid());(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub();SURFACES.fill(SURFACE_EMPTY);FRAME_GROUPS=FrameGroups::new();DISPLAY_TOKENS=DEFAULT_RENDER_TOKENS;FOCUSED_SURFACE_ID=0;TOKEN_BUF_CALL1_RECEIVED=false;TOKEN_BUF_OWNER=0;CURSOR_UNDER_VALID=false;FRAME_OUTPUT=None;PREPARED_CURSOR=None;FB_W=1024;FB_H=768;}
  RENDER_FRAME_COUNTER.store(0,core::sync::atomic::Ordering::Relaxed);
 }
 fn scene_scrubbed(){unsafe{assert_scrubbed(&*core::ptr::addr_of!(RENDER_SCENE));}}
@@ -189,12 +194,31 @@ fn scene_scrubbed(){unsafe{assert_scrubbed(&*core::ptr::addr_of!(RENDER_SCENE));
   assert!(SceneLease::capture(w,h,&bar).is_none());scene_scrubbed();
  }
 }
+// Small owned aligned host spans exercise the actual Store cleanup. They are
+// explicit simulated syscall replies, not native held-region authority proof.
+struct HostFrameRegion{pointer:*mut u8,allocation:std::alloc::Layout,layout:display_frames::Layout}
+impl HostFrameRegion{
+ fn new()->Self{
+  let layout=display_frames::Layout::new(19,7,76).unwrap();let allocation=std::alloc::Layout::from_size_align(layout.total_bytes()as usize,4096).unwrap();
+  let pointer=unsafe{std::alloc::alloc(allocation)};assert!(!pointer.is_null());unsafe{core::ptr::write_bytes(pointer,0xa5,allocation.size());}
+  Self{pointer,allocation,layout}
+ }
+ unsafe fn install(&self){
+  use memory_region::*;
+  let grant=RegionGrant{region_id:display_frames::REGION_ID,virtual_base:self.pointer as u64,length:self.layout.total_bytes(),rights:QUERY_VIEW|READ|WRITE,dma_base:None,peer_pd:None};
+  let info=resolve_info(Some(&grant)).unwrap();let view=resolve_view(Some(&grant),ViewRequest{offset:0,length:self.layout.total_bytes(),rights:QUERY_VIEW|READ|WRITE}).unwrap();
+  FRAME_OUTPUT=Some(frame_output::Store::new(display_frames::FrameBacking::from_resolved(self.layout,info,view).unwrap()));
+  for color in [0x11223344,0x55667788]{let output=FRAME_OUTPUT.as_mut().unwrap();let mut preparation=output.prepare(true).unwrap();{let target=preparation.target();for i in 0..target.len(){target.pointer().add(i).write(color);}}assert!(preparation.commit(|_|true));}
+ }
+ fn zeroed(&self)->bool{unsafe{(0..self.allocation.size()).all(|i|self.pointer.add(i).read_volatile()==0)}}
+}
+impl Drop for HostFrameRegion{fn drop(&mut self){unsafe{FRAME_OUTPUT=None;std::alloc::dealloc(self.pointer,self.allocation);}}}
 #[test]fn actual_cleanup_functions_withhold_effects_and_ack_until_render_lease_drops(){
- let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();boundary::terminal();let mut bar=silkbar_model::DEFAULT_SILK_BAR;
+ let _single=HOST_LEASE_LOCK.lock().unwrap();reset_host_inputs();let frames=HostFrameRegion::new();unsafe{frames.install();PREPARED_CURSOR=Some(PreparedCursor{x:1,y:2,seq:3,shell_tick:4});}assert!(!frames.zeroed());boundary::terminal();let mut bar=silkbar_model::DEFAULT_SILK_BAR;
  let mut lifecycle=surface_lifecycle::Lifecycle::new();assert!(lifecycle.register(Catalog{slot:40,target_pd:15,task_id:150,surface_id:300,coordinator_pd:3}));
  unsafe{SURFACES[0]=Surface{owner_pd:15,surface_id:300,active:true,text_len:1,..SURFACE_EMPTY};SURFACES[0].text_buf.fill(0x73);}
- let lease=SceneLease::capture(1024,768,&bar).unwrap();assert!(!prepare_app_cleanup(&mut lifecycle,&mut bar));assert_eq!(boundary::get().queries,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Live));assert_eq!(lease.view().surfaces[0].text_buf[511],0x73);drop(lease);scene_scrubbed();
- assert!(prepare_app_cleanup(&mut lifecycle,&mut bar));assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));assert_eq!(boundary::get().queries,1);
+ let lease=SceneLease::capture(1024,768,&bar).unwrap();assert!(!prepare_app_cleanup(&mut lifecycle,&mut bar));assert_eq!(boundary::get().queries,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Live));assert_eq!(lease.view().surfaces[0].text_buf[511],0x73);assert!(!frames.zeroed());unsafe{assert!(PREPARED_CURSOR.is_some());}drop(lease);scene_scrubbed();
+ assert!(prepare_app_cleanup(&mut lifecycle,&mut bar));assert!(frames.zeroed());unsafe{assert!(PREPARED_CURSOR.is_none());assert!(FRAME_OUTPUT.as_ref().unwrap().front_pixels().is_none());assert_eq!(FRAME_OUTPUT.as_ref().unwrap().generation(),2);}assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));assert_eq!(boundary::get().queries,1);
  let lease=SceneLease::capture(1024,768,&bar).unwrap();finish_display_transactions(&mut lifecycle,&bar,true);assert_eq!(boundary::get().renders,0);assert_eq!(boundary::get().acks,0);drop(lease);scene_scrubbed();
  finish_display_transactions(&mut lifecycle,&bar,false);assert_eq!(boundary::get().acks,0);boundary::fail_render(true);finish_display_transactions(&mut lifecycle,&bar,true);scene_scrubbed();assert_eq!(boundary::get().renders,1);assert_eq!(boundary::get().acks,0);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Prepared));
  boundary::fail_render(false);finish_display_transactions(&mut lifecycle,&bar,true);scene_scrubbed();assert_eq!(boundary::get().renders,2);assert_eq!(boundary::get().acks,1);assert_eq!(lifecycle.phase(0),Some(surface_lifecycle::Phase::Acknowledged));finish_display_transactions(&mut lifecycle,&bar,true);assert_eq!(boundary::get().acks,1);

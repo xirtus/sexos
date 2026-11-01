@@ -32,6 +32,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/entropy_seed.rs
   kernel/src/boot_display_state.rs
   crates/sex-pdx/src/display_boot.rs
+  crates/sex-pdx/src/display_frames.rs
   kernel/src/history_recovery.rs
   crates/sex-pdx/src/lib.rs
   crates/sex-pdx/src/uiir.rs

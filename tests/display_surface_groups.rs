@@ -127,7 +127,7 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
    else{BITMAP_STORES.receive(15,15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
   let mut d=damage::Damage::new();d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
   FOCUSED_SURFACE_ID=0;DAMAGE_ORDER.clear();redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,d.rect().unwrap());
-  assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);
+  assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
   let pixel_scene_2=capture_scene(w,h,0);
  for y in 0..h{for x in 0..w{assert_eq!(framebuffer[y*w+x],composite_pixel(x,y,w,h,bg(y,h),0, &pixel_scene_2),"sequence={sequence} x={x} y={y}");}}
  }
@@ -180,7 +180,7 @@ unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32
     let changed=match op{None=>legacy_text_clear(&mut SURFACES[1]),Some((packed,args))=>legacy_text_draw(&mut SURFACES[1],packed,args)};
     if changed{d.add(old,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);}
    }
-   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);}
+   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
    for y in 0..h{for px in 0..w{assert_eq!(actual[y*w+px],legacy_reference_pixel(px,y,w,h,focus),"focus={focus} hidden={hidden} x={x} drain={drain} px={px} y={y}");}}
   }
  }}}}
@@ -321,7 +321,7 @@ fn text_damage_matches_full_compositor_with_focus_clipping_overlay_and_hidden_pa
   SURFACES[1].text_buf=[0;TEXT_BUF_CAP];SURFACES[1].text_buf[..1].copy_from_slice(b"Z");SURFACES[1].text_len=1;recompute_text_lines(&mut SURFACES[1]);
   let mut d=damage::Damage::new();d.add(old_damage,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);
   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
-  if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);}
+  if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
   let pixel_scene_4=capture_scene(w,h,focus);
   for py in 0..h {for px in 0..w {assert_eq!(actual[py*w+px],composite_pixel(px,py,w,h,0x123,focus, &pixel_scene_4),"focus={focus} hidden={hidden} x={x} px={px} py={py}");}}
  }}}
@@ -341,7 +341,7 @@ fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER
 fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
-fn redraw_surface_area(_: *mut u32,_:usize,_:usize,_:&SilkBar){panic!("unexpected full redraw");}
+fn raster_area(_:&frame_output::Target<'_>,_:&SilkBar)->bool{panic!("unexpected full redraw");}
 #[test]
 fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacements(){
  for (x,y,w,h) in [(-30,-30,144,90),(0,0,220,150),(100,100,624,331),(950,750,624,331)] {
@@ -390,7 +390,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
    let(old,new)=fill_damage::update(&mut SURFACES[1],0,sx,sy,sw,sh,color).unwrap().unwrap();
    let mut d=damage::Damage::new();d.add(old.screen(&SURFACES[1],w,h),w,h);d.add(new.screen(&SURFACES[1],w,h),w,h);
    FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
-   if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);}
+   if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
   let pixel_scene_5=capture_scene(w,h,focus);
    for py in 0..h {for px in 0..w {assert_eq!(actual[py*w+px],composite_pixel(px,py,w,h,0x123,focus, &pixel_scene_5),"focus={focus} hidden={hidden} x={x} px={px} py={py}");}}
   }
@@ -561,7 +561,7 @@ unsafe fn span_text_fill(index:usize) {
   SURFACES[0].selection_start=start;SURFACES[0].selection_end=end;
   let mut d=damage::Damage::new();d.add(text_surface_damage(&SURFACES[0],w,h),w,h);
   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();redraw_surface_damage(actual.as_mut_ptr(),w,h,d.rect().unwrap());
-  assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);
+  assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
   let pixel_scene_10=capture_scene(w,h,focus);
  for y in 0..h{for x in 0..w{assert_eq!(actual[y*w+x],composite_pixel(x,y,w,h,bg(y,h),focus, &pixel_scene_10),"focus={focus} selection={start}..{end} x={x} y={y}");}}
  }
@@ -842,7 +842,40 @@ impl SceneLease {
  fn view(&self)->&scene::SceneSnapshot{&self.snapshot}
 }
 impl Drop for SceneLease {fn drop(&mut self){self.snapshot.scrub();}}
-fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,r:damage::Rect){scene_redraw_surface_damage(fb,w,h,r,&DEFAULT_SILK_BAR);}
+// OutputBoundary: actual Store/Target and raster_damage, with a host-only CPU
+// publication callback. This is not the Main wrapper/receipt/cleanup proof.
+#[path="../crates/sex-pdx/src/memory_region.rs"] pub mod memory_region;
+pub use memory_region::MemoryRegionInfo;
+pub const ERR_CAP_INVALID:u64=0xFFFF_FFFF_FFFF_FFFC;
+#[path="../crates/sex-pdx/src/display_frames.rs"] pub mod display_frames;
+#[path="../servers/sexdisplay/src/frame_output.rs"] mod frame_output;
+struct OutputBoundary{pointer:*mut u8,allocation:std::alloc::Layout}
+impl Drop for OutputBoundary{fn drop(&mut self){unsafe{std::alloc::dealloc(self.pointer,self.allocation);}}}
+fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,r:damage::Rect){unsafe{
+ let layout=display_frames::Layout::new(w as u64,h as u64,(w*4)as u64).unwrap();
+ let allocation=std::alloc::Layout::from_size_align(layout.total_bytes()as usize,4096).unwrap();
+ let pointer=std::alloc::alloc(allocation);assert!(!pointer.is_null());
+ let output=OutputBoundary{pointer,allocation};
+ // Explicit simulated held replies over a uniquely owned page-aligned host
+ // allocation. This does not establish a native capability or task isolation.
+ use memory_region::{RegionGrant,ViewRequest,QUERY_VIEW,READ,WRITE};
+ let grant=RegionGrant{region_id:display_frames::REGION_ID,virtual_base:output.pointer as u64,length:layout.total_bytes(),rights:QUERY_VIEW|READ|WRITE,dma_base:None,peer_pd:None};
+ let info=memory_region::resolve_info(Some(&grant)).unwrap();
+ let view=memory_region::resolve_view(Some(&grant),ViewRequest{offset:0,length:layout.total_bytes(),rights:QUERY_VIEW|READ|WRITE}).unwrap();
+ let backing=display_frames::FrameBacking::from_resolved(layout,info,view).unwrap();
+ let mut store=frame_output::Store::new(backing);
+ // The fixture's current framebuffer is the already-visible baseline. Seed it
+ // once, then use actual partial preparation; never recapture once per pixel.
+ let mut baseline=store.prepare(true).unwrap();
+ {let target=baseline.target();core::ptr::copy_nonoverlapping(fb,target.pointer(),target.len());}
+ assert!(baseline.commit(|_|true));
+ let mut preparation=store.prepare(false).unwrap();
+ {let target=preparation.target();assert!(raster_damage(&target,r,&DEFAULT_SILK_BAR));}
+ assert!(preparation.commit(|pixels|{core::ptr::copy_nonoverlapping(pixels.as_ptr(),fb,pixels.len());true}));
+ report_app_presented();
+ store.scrub();
+ // Store drops before OutputBoundary deallocates its mapped lifetime.
+}}
 fn scene_glass_over_bg(c:u32,x:usize,y:usize,a:u8,_:&scene::SceneSnapshot)->u32{glass_over_bg(c,x,y,a)}
 
 #[test]

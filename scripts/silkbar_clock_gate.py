@@ -66,6 +66,8 @@ def _date_render_shape(display):
  header=top.split('{',1)[0]
  assert header in(old,new),'unknown top-strip clock rendering shape'
  scene_backed=header==new
+ prepared='fn render_prepared('in display
+ assert not prepared or scene_backed,'prepared output requires an owned scene'
  for name in('civil_clock_fg_at','clock_fg_at'):
   helper=compact(_function(display,name))
   assert helper.split('{',1)[0]=='fn'+name+'(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2])->Option<u32>','uncached civil pixel signature: '+name
@@ -76,12 +78,12 @@ def _date_render_shape(display):
  assert top.count('clock_fg_at(x,y,bar,lines)')==1,'top-strip cached glyph call missing'
  if scene_backed:
   assert 'bar_color(x,y,bar,scene)'in top,'top-strip background bypasses captured scene'
- for name,bar in(('render','bar'),('redraw_top_strip','bar'),('top_strip_render_proof','proof_bar')):
+ for name,bar in((('raster_full'if prepared else'render'),'bar'),(('raster_strip'if prepared else'redraw_top_strip'),'bar'),('top_strip_render_proof','proof_bar')):
   helper=compact(_function(display,name));cache='letclock_lines=civil_clock_lines(&'+bar+'.civil_clock);'
   assert helper.count(cache)==1 and helper.count('civil_clock_lines(')==1 and helper.count('letclock_lines=')==1,'missing/duplicate per-pass clock snapshot: '+name
   assert helper.index(cache)<helper.index('foryin0..'),'calendar snapshot moved into pixel iteration: '+name
   if scene_backed:
-   capture='letSome(lease)=SceneLease::capture('+('PROOF_W,PROOF_H,&proof_bar'if name=='top_strip_render_proof'else'w,h,bar')+')else{return'+('false'if name=='render'else'')+';};'
+   capture='letSome(lease)=SceneLease::capture('+('PROOF_W,PROOF_H,&proof_bar'if name=='top_strip_render_proof'else'w,h,bar')+')else{return'+('false'if name in('render','raster_full','raster_strip')else'')+';};'
    chain=capture+'letscene=lease.view();let'+bar+'=&scene.bar;'
    assert helper.count(chain)==1 and helper.count('SceneLease::capture(')==1,'missing/ambiguous scene-backed clock custody: '+name
    assert helper.count('letscene=')==1 and helper.count('let'+bar+'=')==1 and helper.count('let'+bar+'=&scene.bar;')==1,'clock scene binding replaced: '+name
@@ -90,6 +92,16 @@ def _date_render_shape(display):
    assert 'SceneLease::capture('not in helper and '=&scene.bar;'not in helper,'ambiguous archived clock rendering shape: '+name
   call=('clock_fg_at(x,y,&proof_bar,&clock_lines)'if name=='top_strip_render_proof'else'top_strip_pixel(x,y,bar,&clock_lines'+(',scene'if scene_backed else'')+')')
   assert helper.count(call)==1,'cached rows not passed to actual renderer: '+name
+ if prepared:
+  writer=compact(_function(display,'render_prepared'))
+  commit='preparation.commit(|pixels|publish_frame(fb,w,h,pixels))'
+  drawn='civil_clock_drawn(&captured_bar,w,h,paint.label());'
+  assert writer.count(commit)==1 and writer.count(drawn)==1 and writer.index(commit)<writer.index(drawn),'clock receipt precedes completed CPU publication'
+  assert 'if!'+commit+'{backup.restore();returnfalse;}'in writer,'failed publication releases a clock receipt'
+  assert 'letcaptured_bar=*bar;'in writer,'publication clock metadata is not captured'
+  for name,kind in(('render','Full'),('redraw_top_strip','Strip')):
+   wrapper=compact(_function(display,name))
+   assert wrapper.count('render_prepared(fb,w,h,bar,Paint::'+kind+')')==1,'clock output bypasses preparation: '+name
  return scene_backed
 
 def source_contract(root):
@@ -101,6 +113,9 @@ def source_contract(root):
   if _date_render_shape(display):
    for name in('servers/sexdisplay/src/scene.rs','servers/sexdisplay/src/bitmap_binding.rs','servers/sexdisplay/src/bitmap_transaction.rs','servers/sexdisplay/src/bitmap_stores.rs','servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/bitmap_batch.rs'):
     texts[name]=(root/name).read_text()
+   if 'fn render_prepared('in display:
+    for name in('servers/sexdisplay/src/frame_output.rs','crates/sex-pdx/src/display_frames.rs','crates/sex-pdx/src/memory_region.rs'):
+     texts[name]=(root/name).read_text()
  dimensions={}
  for name in('CHIP_X3','CHIP_Y','CLOCK_W','CHIP_H'):
   m=re.search(r'pub const '+name+r': usize = (\d+);',model);assert m,'missing source-bound civil geometry';dimensions[name]=int(m[1])
@@ -109,7 +124,10 @@ def source_contract(root):
  for name in('MIN_SECONDS','MAX_SECONDS'):
   m=re.search(r'pub const '+name+r': u64 = ([\d_]+);',abi);assert m;bounds[name]=int(m[1].replace('_',''))
  assert 'pub const STATUS_BAR: Identity = Identity { pd: 6, task: 6 };'in abi
- assert 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display
+ if 'fn render_prepared('in display:
+  assert 'ifmatches!(paint,Paint::Full|Paint::Strip){civil_clock_drawn(&captured_bar,w,h,paint.label());}'in re.sub(r'\s+','',_function(display,'render_prepared'))
+ else:
+  assert 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display
  return dict(font=font_from_source(display),dimensions=dimensions,color=int(color[1],16)&0xffffff,bounds=bounds,caption_profile=profile,source_sha256={n:hashlib.sha256(t.encode()).hexdigest()for n,t in texts.items()})
 
 def expected_clock_lines(contract,state,seconds,stale=False):

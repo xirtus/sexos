@@ -478,6 +478,24 @@
       "scope": "Actual Display-owned scene capture and SceneLease release with controlled globals and lifecycle/output boundary doubles; source wiring and compiled defect controls. Host isolation and cleanup-order evidence, not native pixels, atomic framebuffer publication or complete epochs/replay."
     },
     {
+      "id": "display_frame_output",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_frame_output_host_gate.sh"
+      ],
+      "scope": "Actual checked frame-layout/held-view acquisition, two-buffer Store and Main preparation/publication/rollback with finite raster and scanout doubles; virtual-address bounds and compiled controls. Host ownership/output ordering only; native mapping and pixels remain separate."
+    },
+    {
+      "id": "display_cursor_output",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/display_cursor_output_host_gate.sh"
+      ],
+      "scope": "Actual cursor stencil, save-under and restore pixels over controlled background/launcher layers, with owned frame backing and source overlay-order checks. Hardware scanout and complete epochs remain unproven."
+    },
+    {
       "id": "linen_text_delivery",
       "kind": "host",
       "argv": [
@@ -733,7 +751,7 @@
       ],
       "checks": [],
       "gaps": [
-        "Display-owned immutable pixel inputs isolate one logical render; intake, transform/swap/commit, effect release, framebuffer atomicity and system-wide epoch transitions remain incomplete."
+        "Display isolates composition inputs and prepares owned output before a CPU publication boundary; transactional intake/effect commit, framebuffer atomicity, interrupted-output recovery and system-wide epochs remain incomplete."
       ],
       "depends_on": []
     },

@@ -773,8 +773,12 @@ pub fn init() {
 
         if let Some(fb_res) = crate::FB_REQUEST.response() {
             if let Some(fb) = fb_res.framebuffers().iter().next() {
+                let layout = sex_pdx::display_frames::Layout::new(fb.width, fb.height, fb.pitch)
+                    .expect("BOOT_DISPLAY_FRAME_GEOMETRY");
+                assert_eq!(fb.bpp, 32, "BOOT_DISPLAY_FRAME_FORMAT");
                 let fb_addr = fb.address() as u64;
-                let fb_size = fb.pitch * fb.height;
+                let fb_size = layout.frame_bytes();
+                crate::boot_memory::init_display_frames(sexdisp_id, layout);
                 crate::boot_display::init(crate::boot_display_state::Info{display:sexdisp_id,shell:silkshell_id,input:sexinput_id,address:fb_addr,width:fb.width as u32,height:fb.height as u32,pitch:fb.pitch as u32});
 
                 // Remap FB pages USER_ACCESSIBLE — Ring-3 sexdisplay can't write without this.
@@ -783,9 +787,10 @@ pub fn init() {
                     // The old mapper.update_flags(Page<Size4KiB>) silently returns
                     // Err(ParentEntryHugePage) when the framebuffer is mapped with huge pages,
                     // leaving USER_ACCESSIBLE unset and causing #GP from ring 3.
-                    let pkey = sexdisp_id as u8; // domain_id == pkey for sexdisplay
+                    let pkey = DOMAIN_REGISTRY.get(sexdisp_id).expect("BOOT_DISPLAY_DOMAIN").pku_key;
                     let start = fb_addr & !0xFFF;
-                    let end = ((fb_addr + fb_size + 4095) & !0xFFF);
+                    let end = fb_addr.checked_add(fb_size).and_then(|end| end.checked_add(4095))
+                        .map(|end| end & !0xFFF).expect("BOOT_DISPLAY_FRAMEBUFFER_EXTENT");
                     for va in (start..end).step_by(4096) {
                         unsafe { crate::pku::set_page_user_accessible(va, pkey); }
                     }

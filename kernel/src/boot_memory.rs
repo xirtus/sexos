@@ -78,6 +78,77 @@ fn paired_at(first_id: u32, second_id: u32, first_slot: u64, second_slot: u64,
         dma_base: None, peer_pd: Some(first.id) });
 }
 
+/// Immutable Display-only frame storage, reserved at geometry-known genesis.
+/// One buddy reservation contains two page-aligned, disjoint frame spans.
+/// This is PD-held memory authority; tasks within the PD share its access.
+pub fn init_display_frames(display: u32, layout: sex_pdx::display_frames::Layout) {
+    use sex_pdx::display_frames::{SLOT, REGION_ID};
+    require_boot();
+    let pd = DOMAIN_REGISTRY.get(display).expect("BOOT_DISPLAY_FRAME_DOMAIN");
+    let main = pd.main_task.load(core::sync::atomic::Ordering::Acquire);
+    assert!(!main.is_null(), "BOOT_DISPLAY_FRAME_MAIN");
+    assert_eq!(unsafe { (*main).context.pd_ptr }, pd as *const _, "BOOT_DISPLAY_FRAME_CONTEXT");
+    let task = unsafe { (*main).id };
+    assert!(task != 0, "BOOT_DISPLAY_FRAME_TASK");
+    assert!(pd.find_capability(SLOT as u32).is_none(), "BOOT_DISPLAY_FRAME_SLOT_OCCUPIED");
+    let physical = backing(layout.total_bytes());
+    let virtual_base = alias(pd, physical, layout.total_bytes(), true, false);
+    let region = RegionGrant { region_id: REGION_ID, virtual_base, length: layout.total_bytes(),
+        rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None };
+    grant(pd, SLOT, region);
+    let info = sex_pdx::memory_region::resolve_info(Some(&region)).expect("BOOT_DISPLAY_FRAME_INFO");
+    let view = sex_pdx::memory_region::resolve_view(Some(&region), sex_pdx::memory_region::ViewRequest {
+        offset: 0, length: layout.total_bytes(), rights: QUERY_VIEW | READ | WRITE,
+    }).expect("BOOT_DISPLAY_FRAME_VIEW");
+    let checked = unsafe { sex_pdx::display_frames::FrameBacking::from_resolved(layout, info, view) }
+        .expect("BOOT_DISPLAY_FRAME_DESCRIPTOR");
+    assert_eq!(checked.address(0), Some(virtual_base));
+    assert_eq!(checked.address(1), virtual_base.checked_add(layout.span_bytes()));
+    match pd.find_capability(SLOT as u32).map(|c| c.data) {
+        Some(CapabilityData::Region(g)) => assert_eq!(g, region, "BOOT_DISPLAY_FRAME_READBACK"),
+        _ => panic!("BOOT_DISPLAY_FRAME_READBACK"),
+    }
+    assert_eq!(crate::syscalls::region_query(pd, 55, SLOT, 0, 0, 0),
+        [0, layout.total_bytes(), (QUERY_VIEW | READ | WRITE) as u64, 0, REGION_ID as u64],
+        "BOOT_DISPLAY_FRAME_INFO_DISPATCH");
+    assert_eq!(crate::syscalls::region_query(pd, 54, SLOT, 0, layout.total_bytes(),
+        (QUERY_VIEW | READ | WRITE) as u64),
+        [0, virtual_base, layout.total_bytes(), 0, REGION_ID as u64], "BOOT_DISPLAY_FRAME_VIEW_DISPATCH");
+    let denied = [u64::MAX, 0, 0, 0, 0];
+    for (slot, offset, length, rights) in [
+        ((1u64 << 32) | SLOT, 0, layout.total_bytes(), QUERY_VIEW | READ | WRITE),
+        (SLOT, layout.total_bytes(), 1, QUERY_VIEW | READ),
+        (SLOT, 0, layout.total_bytes(), QUERY_VIEW | READ | WRITE | DMA_ADDRESS),
+    ] {
+        assert_eq!(crate::syscalls::region_query(pd, 54, slot, offset, length, rights as u64), denied,
+            "BOOT_DISPLAY_FRAME_NEGATIVE_DISPATCH");
+    }
+    for id in 1..crate::ipc::MAX_DOMAINS as u32 {
+        if id == display { continue; }
+        if let Some(other) = DOMAIN_REGISTRY.get(id) {
+            assert_eq!(crate::syscalls::region_query(other, 54, SLOT, 0, layout.total_bytes(),
+                (QUERY_VIEW | READ | WRITE) as u64), denied, "BOOT_DISPLAY_FRAME_FOREIGN_DISPATCH");
+        }
+    }
+    // Verify actual backing and GLOBAL_VAS leaf permissions before sealing.
+    let mut offset = 0;
+    while offset < layout.total_bytes() {
+        let address = virtual_base.checked_add(offset).expect("BOOT_DISPLAY_FRAME_ADDRESS");
+        let leaf = existing_leaf_address(address).expect("BOOT_DISPLAY_FRAME_LEAF");
+        let entry = unsafe { core::ptr::read_volatile(leaf as *const u64) };
+        assert!(entry & 7 == 7 && entry & (1 << 63) != 0
+            && ((entry >> 59) & 15) == pd.pku_key as u64, "BOOT_DISPLAY_FRAME_PERMISSIONS");
+        for word in 0..512 {
+            assert_eq!(unsafe { core::ptr::read_volatile((address + word * 8) as *const u64) }, 0,
+                "BOOT_DISPLAY_FRAME_NOT_ZERO");
+        }
+        offset += 4096;
+    }
+    crate::serial_println!("[boot.display.frames] pd={} task={} slot={} region={} width={} height={} pitch={} frame_bytes={} span_bytes={} total_bytes={} reserved_bytes={} buffers=2 pkey={} private=1 zero=1 readback=1 sealed_later=1 runtime_mint=0",
+        display, task, SLOT, REGION_ID, layout.width(), layout.height(), layout.pitch(),
+        layout.frame_bytes(), layout.span_bytes(), layout.total_bytes(), layout.buddy_bytes(), pd.pku_key);
+}
+
 /// The first UiIR stream: the producer may write its ring and only read the
 /// consumer's cursor; the consumer may only read the ring and write its
 /// cursor. Both are zeroed, exact-peer BOOT regions; nothing is minted later.

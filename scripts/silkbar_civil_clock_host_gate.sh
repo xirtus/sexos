@@ -24,39 +24,20 @@ assert 'if !bar.civil_enabled && !clock_from_silkbar {'in source
 assert 'bar.civil_enabled=option_env!("SEXOS_LEGACY_DEMO_CLOCK").is_none();'in source
 assert 'bar.civil_clock.health(raw_ticks)'in source
 composer=re.findall(r'^fn top_strip_pixel\b.*?^\}',source,re.M|re.S);assert len(composer)==1 and 'clock_fg_at(x, y, bar, lines)'in composer[0]
-compact=lambda text:re.sub(r'\s+','',re.sub(r'//[^\n]*','',text))
-header=compact(composer[0]).split('{',1)[0]
-old='fntop_strip_pixel(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2])->u32'
-new='fntop_strip_pixel(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2],scene:&scene::SceneSnapshot)->u32'
-assert header in(old,new),'unknown top-strip rendering shape'
-scene_backed=header==new
-assert source.count('top_strip_pixel(x, y, bar, &clock_lines'+(', scene'if scene_backed else'')+')')==2
-if scene_backed:assert 'bar_color(x,y,bar,scene)'in compact(composer[0])
-for name,bar in [('render','bar'),('redraw_top_strip','bar'),('top_strip_render_proof','proof_bar')]:
-    values=re.findall(r'^(?:unsafe )?fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(values)==1
-    actual=compact(values[0]);cache='letclock_lines=civil_clock_lines(&'+bar+'.civil_clock);'
-    assert actual.count(cache)==1 and actual.count('civil_clock_lines(')==1 and actual.count('letclock_lines=')==1
-    assert actual.index(cache)<actual.index('foryin0..')
-    if scene_backed:
-        capture='letSome(lease)=SceneLease::capture('+('PROOF_W,PROOF_H,&proof_bar'if name=='top_strip_render_proof'else'w,h,bar')+')else{return'+('false'if name=='render'else'')+';};'
-        chain=capture+'letscene=lease.view();let'+bar+'=&scene.bar;'
-        assert actual.count(chain)==1 and actual.count('SceneLease::capture(')==1
-        assert actual.count('letscene=')==1 and actual.count('let'+bar+'=')==1 and actual.count('let'+bar+'=&scene.bar;')==1
-        assert actual.index(chain)<actual.index(cache)
-    else:assert 'SceneLease::capture('not in actual and '=&scene.bar;'not in actual
-    call=('clock_fg_at(x,y,&proof_bar,&clock_lines)'if name=='top_strip_render_proof'else'top_strip_pixel(x,y,bar,&clock_lines'+(',scene'if scene_backed else'')+')')
-    assert actual.count(call)==1
-for name in ['top_strip_pixel','clock_fg_at','civil_clock_fg_at']:
-    actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
-    assert all(call not in actual[0]for call in('civil_clock_lines(','civil_clock_date(')),name+' must use the render snapshot'
-for name,path in [('render','full'),('redraw_top_strip','strip')]:
+# Share the strict source-shape validator with the frozen pixel oracle.
+sys.path.insert(0,str(root/'scripts'))
+from silkbar_clock_gate import _date_render_shape
+_date_render_shape(source)
+prepared='fn render_prepared('in source
+for name in [('raster_full'if prepared else'render'),('raster_strip'if prepared else'redraw_top_strip')]:
     actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
     assert actual[0].count('civil_clock_lines(&bar.civil_clock)')==1
     assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index('top_strip_pixel(')
-    pixel_loop='for y in 0..h {'if name=='render'else'for y in 0..51 {'
+    pixel_loop='for y in 0..h {'if name in('render','raster_full')else'for y in 0..51 {'
     assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index(pixel_loop)
-    assert actual[0].index('core::ptr::write_volatile(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+path+'")')
-    assert actual[0].index('draw_launcher_panel(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+path+'")')
+    if not prepared:
+        assert actual[0].index('core::ptr::write_volatile(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+('full'if name=='render'else'strip')+'")')
+        assert actual[0].index('draw_launcher_panel(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+('full'if name=='render'else'strip')+'")')
 display='\n'.join(parts)+'\n';(out/'display.rs').write_text(display)
 decision='let changed=!was_enabled || old_lines!=civil_clock_lines(&bar.civil_clock);'
 assert display.count(decision)==1

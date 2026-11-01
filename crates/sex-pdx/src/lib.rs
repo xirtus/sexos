@@ -696,6 +696,17 @@ pub fn memory_region_full_view(slot: u64, rights: u8) -> Result<memory_region::R
     memory_region_view(slot, 0, info.length, rights)
 }
 
+/// Resolve only this protection domain's immutable BOOT frame Region. The
+/// descriptor adds bounds and ownership discipline; it creates no authority.
+/// Memory-region authority belongs to the PD and is shared by its tasks.
+pub fn display_frame_backing(layout: display_frames::Layout) -> Result<display_frames::FrameBacking, u64> {
+    let info = memory_region_info(display_frames::SLOT)?;
+    let rights = memory_region::QUERY_VIEW | memory_region::READ | memory_region::WRITE;
+    let view = memory_region_view(display_frames::SLOT, 0, layout.total_bytes(), rights)?;
+    // Only the current subject's checked held-capability results reach here.
+    unsafe { display_frames::FrameBacking::from_resolved(layout, info, view) }
+}
+
 /// Resolve only the caller's existing BOOT document Region capability. Numeric
 /// subject/slot parameters cannot create a view or upgrade its rights.
 pub fn document_snapshot_view(subject: u32, writer: bool) -> Result<document_snapshot::Region, u32> {
@@ -1067,6 +1078,7 @@ pub mod desktop_style;
 pub mod document_view;
 
 pub mod display_boot;
+pub mod display_frames;
 
 pub mod text_batch;
 pub mod text_selection;

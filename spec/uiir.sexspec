@@ -63,6 +63,14 @@
         {
           "path": "servers/sexdisplay/src/scene.rs",
           "anchor": "pub struct SceneSnapshot"
+        },
+        {
+          "path": "servers/sexdisplay/src/frame_output.rs",
+          "anchor": "pub struct Store"
+        },
+        {
+          "path": "crates/sex-pdx/src/display_frames.rs",
+          "anchor": "pub struct FrameBacking"
         }
       ],
       "checks": [
@@ -75,10 +83,12 @@
         "display_surface_groups",
         "linen_text_delivery",
         "launcher",
-        "display_scene"
+        "display_scene",
+        "display_frame_output",
+        "display_cursor_output"
       ],
       "gaps": [
-        "Immutable scene inputs and bounded cleanup lifetime do not establish transactional intake/effect commit, atomic epoch frames, latch recovery or replay."
+        "Private prepared output and CPU publication do not establish transactional intake, atomic hardware frames, latch/interrupted-output recovery or complete replay."
       ],
       "depends_on": [
         "EPOCH_COMMIT"

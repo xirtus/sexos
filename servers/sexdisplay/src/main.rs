@@ -124,6 +124,8 @@ static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGrou
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
+mod frame_output;
+static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
 // One Display-owned scratch scene. Intake cannot run concurrently with a
 // logical render in this single-task service. No producer/framebuffer pointer
 // enters the snapshot, and each lease scrubs its owned payload on every exit.
@@ -1574,31 +1576,78 @@ fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
-fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
-    let repaint_started = repaint_begin();
-    let fb_addr = fb as u64;
-    if fb_addr < HIGH_HALF_BASE {
-        return false;
-    }
-    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
-        return false;
-    }
-    let pixels = match w.checked_mul(h) {
-        Some(v) => v,
-        None => return false,
-    };
-    let bytes = match pixels.checked_mul(4) {
-        Some(v) => v as u64,
-        None => return false,
-    };
-    let end_addr = match fb_addr.checked_add(bytes) {
-        Some(v) => v,
-        None => return false,
-    };
-    // Guard full framebuffer range before first write.
-    if end_addr < HIGH_HALF_BASE {
-        return false;
-    }
+
+#[derive(Clone,Copy)]
+enum Paint{Full,Strip,Area,Damage(damage::Rect),Cursor}
+impl Paint{
+    fn label(self)->&'static str{match self{Self::Full=>"full",Self::Strip=>"strip",Self::Area=>"area",Self::Damage(_)=>"text",Self::Cursor=>"cursor"}}
+}
+
+// Small output bookkeeping is tentative until the prepared frame is published.
+// Its retained pixel copy is erased before this invocation returns to cleanup.
+struct OutputBackup{saved:[u32;CURSOR_ARROW_W*CURSOR_ARROW_H],x:usize,y:usize,valid:bool,bits:u64,frame:u64,pending:Option<PreparedCursor>}
+impl OutputBackup{
+    fn capture()->Self{unsafe{Self{saved:CURSOR_UNDER_SAVED,x:CURSOR_UNDER_X,y:CURSOR_UNDER_Y,valid:CURSOR_UNDER_VALID,bits:APP_PRESENT_BITS,
+        frame:RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed),pending:PREPARED_CURSOR}}}
+    fn restore(&self){unsafe{CURSOR_UNDER_SAVED.copy_from_slice(&self.saved);CURSOR_UNDER_X=self.x;CURSOR_UNDER_Y=self.y;
+        CURSOR_UNDER_VALID=self.valid;APP_PRESENT_BITS=self.bits;PREPARED_CURSOR=self.pending;
+        RENDER_FRAME_COUNTER.store(self.frame,core::sync::atomic::Ordering::Relaxed);}}
+}
+impl Drop for OutputBackup{fn drop(&mut self){for pixel in &mut self.saved{unsafe{core::ptr::write_volatile(pixel,0);}}}}
+
+fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
+    let Some(bytes)=w.checked_mul(h).and_then(|n|n.checked_mul(4))else{return false;};
+    let address=fb as u64;
+    if address<HIGH_HALF_BASE || address.checked_add(bytes as u64).is_none(){return false;}
+    unsafe{address==FB_PTR&&w==FB_W as usize&&h==FB_H as usize&&w!=0&&h!=0&&w<=MAX_FB_W&&h<=MAX_FB_H}
+}
+
+// Sole Display scanout writer. Preparation writes only the held private target.
+// This complete CPU copy is not an atomic hardware flip or vblank completion.
+fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{
+    if !valid_scanout(fb,w,h)||w.checked_mul(h)!=Some(pixels.len()){return false;}
+    for(index,pixel)in pixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),*pixel);}}
+    // Order posted/write-combining CPU stores before releasing presentation
+    // effects. This does not signal GPU scanout/latch or atomic visibility.
+    #[cfg(target_arch="x86_64")]
+    unsafe{core::arch::asm!("sfence",options(nostack,preserves_flags));}
+    #[cfg(not(target_arch="x86_64"))]
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    true
+}
+
+fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,paint:Paint)->bool{
+    if !valid_scanout(fb,w,h){return false;}
+    if !matches!(paint,Paint::Full)&&h<51{return false;}
+    let started=if matches!(paint,Paint::Cursor){0}else{repaint_begin()};
+    let captured_bar=*bar;
+    let backup=OutputBackup::capture();
+    let Some(store)=(unsafe{FRAME_OUTPUT.as_mut()})else{return false;};
+    if store.layout().width()!=w||store.layout().height()!=h{return false;}
+    let Some(mut preparation)=store.prepare(matches!(paint,Paint::Full))else{return false;};
+    unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}
+    let prepared={let target=preparation.target();match paint{
+        Paint::Full=>raster_full(&target,&captured_bar),Paint::Strip=>raster_strip(&target,&captured_bar),
+        Paint::Area=>raster_area(&target,&captured_bar),Paint::Damage(rect)=>raster_damage(&target,rect,&captured_bar),
+        Paint::Cursor=>raster_cursor(&target,&captured_bar)}};
+    if !prepared{drop(preparation);backup.restore();return false;}
+    if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return false;}
+    record_cursor_presented();
+    report_app_presented();
+    if !matches!(paint,Paint::Cursor){repaint_end(paint.label(),started);}
+    if matches!(paint,Paint::Full|Paint::Strip){civil_clock_drawn(&captured_bar,w,h,paint.label());}
+    true
+}
+fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Full)}
+fn redraw_top_strip(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Strip)}
+fn redraw_surface_area(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Area)}
+fn redraw_surface_damage(fb:*mut u32,w:usize,h:usize,rect:damage::Rect,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Damage(rect))}
+fn redraw_cursor(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Paint::Cursor)}
+
+fn raster_full(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+    let fb=target.pointer();
+    let (w,h)=(target.width(),target.height());
+    let pixels=target.len();
     let frame = RENDER_FRAME_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     // Budgeted marker: full-FB render invoked (proof of render entry + boundedness).
     unsafe {
@@ -1667,36 +1716,32 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) -> bool {
     }
     draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
-    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
     draw_launcher_panel(fb, w, h, total_pixels, scene);
-    report_app_presented();
-    repaint_end("full", repaint_started);
-    civil_clock_drawn(bar,w,h,"full");
+    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
     true
 }
 
 /// Redraw the top strip (rows 0..50) — bar background, workspace indicators, chips, and clock digits.
 /// Called for all SilkBar updates (clock, workspace active/urgent, chip visibility/kind).
 /// This is the only function that touches y<50 pixels after initial render.
-fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
-    let repaint_started = repaint_begin();
-    let fb_addr = fb as u64;
-    if fb_addr < HIGH_HALF_BASE {
-        return;
-    }
+fn raster_strip(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+    let fb=target.pointer();
+    let (w,h)=(target.width(),target.height());
+
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
-        return;
+        return false;
     }
     if h < 51 {
-        return;
+        return false;
     }
     let total_pixels = match w.checked_mul(h) {
         Some(v) => v,
-        None => return,
+        None => return false,
     };
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return;};
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
     let scene=lease.view();
     let bar=&scene.bar;
+    restore_cursor_under(fb,w,h,total_pixels);
     // [silk.live_topstrip.v2.fb_clear] REMOVED: writing raw desktop gradient over
     // the bar area before rendering the bar causes a visible black/purple flash
     // on every clock tick (the host displays the partial gradient before the bar
@@ -1887,23 +1932,22 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     // save_under=false: this path repaints only y<50; pixels under the
     // cursor (y>=51) still contain the drawn cursor — capturing here would
     // poison the save-under patch with cursor pixels.
-    draw_cursor_z_top(fb, w, h, total_pixels, false, scene);
     draw_launcher_panel(fb, w, h, total_pixels, scene);
-    repaint_end("strip", repaint_started);
-    civil_clock_drawn(bar,w,h,"strip");
+    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
+    true
 }
 
 /// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
 /// Never touches y<50 (SilkBar/clock/chips). Not a full render() call.
-fn redraw_surface_area(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
-    let repaint_started = repaint_begin();
-    let fb_addr = fb as u64;
-    if fb_addr < HIGH_HALF_BASE { return; }
-    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return; }
-    if h < 51 { return; }
+fn raster_area(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+    let fb=target.pointer();
+    let (w,h)=(target.width(),target.height());
+
+    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return false; }
+    if h < 51 { return false; }
     let total_pixels = match w.checked_mul(h) {
         Some(v) => v,
-        None => return,
+        None => return false,
     };
     // Budgeted marker: surface-area redraw invoked (proof of compositor render + boundedness).
     unsafe {
@@ -1914,7 +1958,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             if hot_log() { serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h); }
         }
     }
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return;};
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
     let scene=lease.view();
     let bar=&scene.bar;
     let focused_id=scene.focus;
@@ -1937,10 +1981,9 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     }
     draw_atlas_cards_pass(fb, w, h, total_pixels, scene);
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels, scene);
-    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
     draw_launcher_panel(fb, w, h, total_pixels, scene);
-    report_app_presented();
-    repaint_end("area", repaint_started);
+    draw_cursor_z_top(fb, w, h, total_pixels, true, scene);
+    true
 }
 
 /// Conservative old/new glyph footprint, derived from the same layout fields
@@ -1958,15 +2001,17 @@ fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize
 
 /// Text-only redraw after a complete transaction. Restore the old cursor patch
 /// before touching damage, then capture its new background exactly once.
-fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect, bar: &SilkBar) {
-    let repaint_started = repaint_begin();
-    if (fb as u64) < HIGH_HALF_BASE || w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return; }
-    if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return; }
+fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, bar: &SilkBar) -> bool {
+    let fb=target.pointer();
+    let (w,h)=(target.width(),target.height());
+
+    if w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return false; }
+    if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return false; }
     if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
-        redraw_surface_area(fb,w,h,bar); return;
+        return raster_area(target,bar);
     }
-    let Some(total) = w.checked_mul(h) else { return; };
-    let Some(lease)=SceneLease::capture(w,h,bar) else{return;};
+    let Some(total) = w.checked_mul(h) else { return false; };
+    let Some(lease)=SceneLease::capture(w,h,bar) else{return false;};
     let scene=lease.view();
     let bar=&scene.bar;
     let focused=scene.focus;
@@ -1980,10 +2025,9 @@ fn redraw_surface_damage(fb: *mut u32, w: usize, h: usize, rect: damage::Rect, b
             unsafe { core::ptr::write_volatile(fb.add(y*w+x),color); }
         }
     }
-    draw_cursor_z_top(fb,w,h,total,true, scene);
     draw_launcher_panel(fb,w,h,total, scene);
-    report_app_presented();
-    repaint_end("text", repaint_started);
+    draw_cursor_z_top(fb,w,h,total,true, scene);
+    true
 }
 
 // Classic NW arrow, 8 wide × 16 tall.
@@ -2024,13 +2068,17 @@ static mut CURSOR_UNDER_VALID: bool = false;
 /// Restore the framebuffer pixels saved beneath the last cursor draw.
 /// Mirrors draw_cursor_z_top bounds rules exactly: y<51 SilkBar zone never
 /// written, x/y clipped to fb dims, idx bounds-checked against total_pixels.
-fn redraw_cursor(fb: *mut u32,w:usize,h:usize,bar:&SilkBar){
-    if (fb as u64)<HIGH_HALF_BASE || w==0 || h<51 || w>MAX_FB_W || h>MAX_FB_H{return;}
-    let Some(total)=w.checked_mul(h)else{return;};
-    let Some(lease)=SceneLease::capture(w,h,bar)else{return;};
+fn raster_cursor(target: &frame_output::Target<'_>, bar: &SilkBar) -> bool {
+    let fb=target.pointer();
+    let (w,h)=(target.width(),target.height());
+
+    if w==0 || h<51 || w>MAX_FB_W || h>MAX_FB_H{return false;}
+    let Some(total)=w.checked_mul(h)else{return false;};
+    let Some(lease)=SceneLease::capture(w,h,bar)else{return false;};
     let scene=lease.view();
     restore_cursor_under(fb,w,h,total);
     draw_cursor_z_top(fb,w,h,total,true,scene);
+    true
 }
 
 /// Discard retained framebuffer-derived cursor pixels before cleanup custody
@@ -2240,16 +2288,17 @@ unsafe fn input_trace_display_summary() {
 /// Renders an arrow bitmap instead of a solid rect; transparent pixels are not written.
 /// Called at the end of both render() and redraw_surface_area().
 /// `save_under`: capture the pixels beneath the cursor rect before drawing,
-/// enabling the cursor-only fast path. Pass true only when the framebuffer
-/// under the cursor is current (freshly composited or just restored); pass
-/// false from redraw_top_strip, which repaints only y<50 and would capture
-/// cursor-contaminated pixels.
-fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save_under: bool, scene: &scene::SceneSnapshot) {
-    unsafe {
-        for surf in scene.surfaces.iter() {
-            if !surf.active || surf.surface_id != CURSOR_SURFACE_ID { continue; }
-            let ox = surf.x.max(0) as usize; // origin x (not clamped — arrow clips naturally)
-            let oy = surf.y.max(0) as usize; // origin y
+/// enabling the cursor-only fast path. Raster roots first reconstruct or
+/// restore the old cursor, then paint overlays before capturing a fresh patch.
+/// The cursor remains the last visible layer in every prepared frame.
+
+#[derive(Clone,Copy)]
+struct PreparedCursor{x:usize,y:usize,seq:u32,shell_tick:u32}
+static mut PREPARED_CURSOR:Option<PreparedCursor>=None;
+fn record_cursor_presented(){
+    unsafe{
+        let Some(meta)=PREPARED_CURSOR.take()else{return;};
+        let (ox,oy)=(meta.x,meta.y);
             if !CURSOR_Z_TOP_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
                 serial_println!("[sexdisplay.cursor_surface.z_top.ok] id={:#x}", CURSOR_SURFACE_ID);
                 serial_println!("[sexdisplay.cursor_shape.arrow.ok] id={:#x}", CURSOR_SURFACE_ID);
@@ -2267,7 +2316,7 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             // Counters advance only on input-driven (seq-advancing) draws —
             // see LAST_COUNTED_DRAW_SEQ.
             let input_seq_advanced = unsafe {
-                INPUT_TRACE_LAST_SEQ != 0 && INPUT_TRACE_LAST_SEQ != LAST_COUNTED_DRAW_SEQ
+                meta.seq != 0 && meta.seq != LAST_COUNTED_DRAW_SEQ
             };
             unsafe {
                 if input_seq_advanced {
@@ -2276,10 +2325,10 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
                 static mut INPUT_TRACE_DRAW_BUDGET: u32 = 32;
                 if INPUT_TRACE_DRAW_BUDGET > 0 {
                     INPUT_TRACE_DRAW_BUDGET -= 1;
-                    if INPUT_TRACE_LAST_SEQ != 0 && INPUT_TRACE_LAST_SHELL_TICK != 0 {
-                        serial_println!("[input.trace.display.cursor.draw] seq={} shell_tick={} display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, INPUT_TRACE_LAST_SHELL_TICK, DISPLAY_DRAW_TICK, ox as i32, oy as i32);
-                    } else if INPUT_TRACE_LAST_SEQ != 0 {
-                        serial_println!("[input.trace.display.cursor.draw] seq={} shell_tick=unknown display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, DISPLAY_DRAW_TICK, ox as i32, oy as i32);
+                    if meta.seq != 0 && meta.shell_tick != 0 {
+                        serial_println!("[input.trace.display.cursor.draw] seq={} shell_tick={} display_tick={} x={} y={}", meta.seq, meta.shell_tick, DISPLAY_DRAW_TICK, ox as i32, oy as i32);
+                    } else if meta.seq != 0 {
+                        serial_println!("[input.trace.display.cursor.draw] seq={} shell_tick=unknown display_tick={} x={} y={}", meta.seq, DISPLAY_DRAW_TICK, ox as i32, oy as i32);
                     } else {
                         serial_println!("[input.trace.display.cursor.draw] seq=unknown shell_tick=unknown display_tick={} x={} y={}", DISPLAY_DRAW_TICK, ox as i32, oy as i32);
                     }
@@ -2287,6 +2336,37 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
                 }
                 }
             }
+            unsafe {
+                if input_seq_advanced {
+                INPUT_TRACE_PRESENTS = INPUT_TRACE_PRESENTS.wrapping_add(1);
+                DISPLAY_PRESENT_TICK = DISPLAY_PRESENT_TICK.wrapping_add(1);
+                static mut INPUT_TRACE_PRESENT_BUDGET: u32 = 32;
+                if INPUT_TRACE_PRESENT_BUDGET > 0 {
+                    INPUT_TRACE_PRESENT_BUDGET -= 1;
+                    if meta.seq != 0 && meta.shell_tick != 0 {
+                        serial_println!("[input.trace.display.cursor.present] seq={} shell_tick={} display_tick={} x={} y={}", meta.seq, meta.shell_tick, DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
+                    } else if meta.seq != 0 {
+                        serial_println!("[input.trace.display.cursor.present] seq={} shell_tick=unknown display_tick={} x={} y={}", meta.seq, DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
+                    } else {
+                        serial_println!("[input.trace.display.cursor.present] seq=unknown shell_tick=unknown display_tick={} x={} y={}", DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
+                    }
+                }
+                // Same tightened cadence as the recv summary above.
+                if INPUT_TRACE_PRESENTS == 4 || INPUT_TRACE_PRESENTS % 8 == 0 {
+                    input_trace_display_summary();
+                }
+                LAST_COUNTED_DRAW_SEQ = meta.seq;
+                }
+            }
+    }
+}
+
+fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save_under: bool, scene: &scene::SceneSnapshot) {
+    unsafe {
+        for surf in scene.surfaces.iter() {
+            if !surf.active || surf.surface_id != CURSOR_SURFACE_ID { continue; }
+            let ox = surf.x.max(0) as usize; // origin x (not clamped — arrow clips naturally)
+            let oy = surf.y.max(0) as usize; // origin y
             // Save-under capture: full 8x16 rect, same clip rules as the
             // arrow write loop below, read-only against the framebuffer.
             if save_under {
@@ -2323,31 +2403,8 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
                     }
                 }
             }
-            // INPUT_PRESENT_TRACE_V1: cursor pixels are now in the framebuffer
-            // (direct write, no flip) — this is the present point.
-            // Same seq-advance gating as the draw counter above.
-            unsafe {
-                if input_seq_advanced {
-                INPUT_TRACE_PRESENTS = INPUT_TRACE_PRESENTS.wrapping_add(1);
-                DISPLAY_PRESENT_TICK = DISPLAY_PRESENT_TICK.wrapping_add(1);
-                static mut INPUT_TRACE_PRESENT_BUDGET: u32 = 32;
-                if INPUT_TRACE_PRESENT_BUDGET > 0 {
-                    INPUT_TRACE_PRESENT_BUDGET -= 1;
-                    if INPUT_TRACE_LAST_SEQ != 0 && INPUT_TRACE_LAST_SHELL_TICK != 0 {
-                        serial_println!("[input.trace.display.cursor.present] seq={} shell_tick={} display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, INPUT_TRACE_LAST_SHELL_TICK, DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
-                    } else if INPUT_TRACE_LAST_SEQ != 0 {
-                        serial_println!("[input.trace.display.cursor.present] seq={} shell_tick=unknown display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
-                    } else {
-                        serial_println!("[input.trace.display.cursor.present] seq=unknown shell_tick=unknown display_tick={} x={} y={}", DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
-                    }
-                }
-                // Same tightened cadence as the recv summary above.
-                if INPUT_TRACE_PRESENTS == 4 || INPUT_TRACE_PRESENTS % 8 == 0 {
-                    input_trace_display_summary();
-                }
-                LAST_COUNTED_DRAW_SEQ = INPUT_TRACE_LAST_SEQ;
-                }
-            }
+            PREPARED_CURSOR=Some(PreparedCursor{x:ox,y:oy,seq:INPUT_TRACE_LAST_SEQ,shell_tick:INPUT_TRACE_LAST_SHELL_TICK});
+
             break;
         }
     }
@@ -2977,6 +3034,8 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
                 if !refs.token_pending { TOKEN_BUF_ARG0 = 0; TOKEN_BUF_ARG1 = 0; TOKEN_BUF_ARG2 = 0; }
                 CURSOR_UNDER_VALID = refs.cursor_under_valid;
                 scrub_cursor_under();
+                if let Some(output)=FRAME_OUTPUT.as_mut(){output.scrub();}
+                PREPARED_CURSOR=None;
                 changed = true;
                 sex_pdx::serial_record!("[display.app.cleanup.prepared] target={} task={} removed={} focus={} tombstone=1",
                     info.target_pd, info.task_id, removed, refs.focused_sid);
@@ -3028,6 +3087,14 @@ pub extern "C" fn _start() -> ! {
     assert!(geometry.pitch==geometry.width*4,"DISPLAY_PADDED_PITCH_UNSUPPORTED");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
     unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;}
+    let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.pitch as u64)
+        .expect("DISPLAY_FRAME_LAYOUT");
+    let frame_backing=sex_pdx::display_frame_backing(frame_layout).expect("DISPLAY_FRAME_HELD_BACKING");
+    unsafe{assert!(FRAME_OUTPUT.is_none(),"DISPLAY_FRAME_ALREADY_INITIALIZED");
+        FRAME_OUTPUT=Some(frame_output::Store::new(frame_backing));}
+    sex_pdx::serial_record!("[display.frames.held] slot={} region={} width={} height={} frame_bytes={} span_bytes={} total_bytes={} buffers=2 private=1 before_render=1",
+        sex_pdx::display_frames::SLOT,sex_pdx::display_frames::REGION_ID,frame_layout.width(),frame_layout.height(),
+        frame_layout.frame_bytes(),frame_layout.span_bytes(),frame_layout.total_bytes());
     sex_pdx::serial_record!("[display.boot.geometry] width={} height={} pitch={} boot=1",geometry.width,geometry.height,geometry.pitch);
     serial_println!("[sexdisplay.init.start]");
     serial_println!("[silk.contract.validate.start]");
@@ -3083,8 +3150,9 @@ pub extern "C" fn _start() -> ! {
     let mut handoff_reject_ss: u8 = 0;
     let mut handoff_reject_streak: u8 = 0;
 
-    // 1. Render immediately with fallback — visible before any IPC
-    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+    // Publish the BOOT-owned prepared frame before declaring first paint.
+    assert!(unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar) },
+        "DISPLAY_FIRST_FRAME_PUBLICATION");
     serial_println!("[boot.firstpaint.display_surface] ok=1");
     // ── Silk glass safe color pass markers ──────────────────────────────
     serial_println!("[silk.glass.color] name=focus_surface argb=0x0089B4FA ok=1");
@@ -3715,11 +3783,12 @@ pub extern "C" fn _start() -> ! {
                             clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                         }
                         // Coalesce startup repaints into one clean first frame.
-                        unsafe {
-                            render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar);
-                            serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", FB_W, FB_H);
+                        did_primary_fb_render = unsafe {
+                            render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar)
+                        };
+                        if did_primary_fb_render {
+                            serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", unsafe{FB_W}, unsafe{FB_H});
                         }
-                        did_primary_fb_render = true;
                         // Keep strip repaint batched in post-drain redraws.
                         unsafe { CLOCK_REDRAW_SOURCE = if clock_from_silkbar { 0 } else { 1 }; }
                         needs_top_strip_redraw = true;
@@ -4322,9 +4391,9 @@ pub extern "C" fn _start() -> ! {
         // Top strip: redraw when needed (clock tick, silkbar update).
         if needs_top_strip_redraw && !transaction_full_render {
             clock_canon_apply_to_bar(&mut bar);
-            unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
-            // Track last drawn canonical second for same-second redraw suppression.
-            unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
+            if unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar) } {
+                unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
+            }
         }
 
         if transaction_full_render { clock_canon_apply_to_bar(&mut bar); }
