@@ -1,0 +1,868 @@
+{
+  "round": 154,
+  "ok": true,
+  "source_commit": "d0b2a163cd2f5a4d77a5999223774311b3ed4382",
+  "parent_published_master": "0b76e50c0cdcc5335fdc0f773ab5102a33012179",
+  "iso_sha256": "bd9991bf8b7fea48a15683411472f5251825fda29ed25c04d0068b6c81b8a13d",
+  "kernel_sha256": "51615c566debd58ab5e96afeb6ec028618aa60db038b956b5821a52456962851",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "source_audit": {
+    "ok": true,
+    "commit": "d0b2a163cd2f5a4d77a5999223774311b3ed4382",
+    "production": 579,
+    "runner": 612,
+    "unique": 1191,
+    "iso_sha256": "bd9991bf8b7fea48a15683411472f5251825fda29ed25c04d0068b6c81b8a13d",
+    "kernel_sha256": "51615c566debd58ab5e96afeb6ec028618aa60db038b956b5821a52456962851"
+  },
+  "host": {
+    "registered": 43,
+    "rust_gate_log_passes": 2892,
+    "additional_lifecycle_cases": 8,
+    "additional_extracted_binding_cases": 8,
+    "additional_focused_input_cases": 2,
+    "additional_focused_entropy_lease_cases": 2,
+    "total_rust_test_executions": 2912,
+    "python_tests": 1051,
+    "output_controls": {
+      "baseline_reused": true,
+      "compiled_mutants_rejected": 2,
+      "exact_control": "immutable_constructor_binds_begin_chunks_commit_clear_and_exact_applied",
+      "main_wiring": true,
+      "ok": true,
+      "scope": "actual_bitmap_outbox_host_and_source_wiring_not_future_BOOT_Display_admission_or_pixels",
+      "wiring_controls_rejected": 5
+    },
+    "binding_controls": {
+      "actual_live_helper_tests": 3,
+      "compiled_binding_mutants_rejected": 2,
+      "metadata_tests": 5,
+      "ok": true,
+      "scope": "actual_binding_Lifecycle_helper_host_and_source_wiring_not_runtime_BOOT_grants_or_guest_pixels",
+      "wiring_controls_rejected": 3
+    },
+    "input_controls": {
+      "baseline_reused": true,
+      "compiled_mutants_rejected": 2,
+      "focused_baseline_tests": 2,
+      "ok": true,
+      "scope": "existing_fresh_operation_custody_host_and_source_wiring_not_callback_Close_coverage_or_future_BOOT_grants",
+      "wiring_controls_rejected": 5
+    },
+    "denial_controls": {
+      "compiled_mutants_rejected": 2,
+      "normal_case_executions": 43,
+      "ok": true,
+      "scope": "actual_denial_outbox_typed_SDK_and_Machine_host_composition_not_native_source_authority_or_BOOT_grants"
+    },
+    "dispatch_controls": {
+      "ok": true,
+      "case_executions": 50,
+      "actual_typed_branches": 3,
+      "compiled_mutants_rejected": 6,
+      "wiring_controls_rejected": 9,
+      "observations": [
+        {
+          "log": "/private/tmp/sexos-source-liveness-a-frozen-host/service_custody.log",
+          "sha256": "becf69ddee9ac2605614e654573f02ed88b02ab0d638f7b56cf9a40be4524f6f"
+        }
+      ],
+      "scope": "Actual compiled helper/source branches with finite host callbacks; no native unequal-task or forced lifecycle contention claim."
+    },
+    "lease_controls": {
+      "baseline_reused": true,
+      "compiled_mutants_rejected": 2,
+      "focused_normal_case_executions": 2,
+      "ok": true,
+      "scope": "actual_entropy_lease_host_not_native_liveness_source_authority_or_BOOT_grants"
+    },
+    "bitmap_transaction_cases": 17,
+    "wheel_input_cases": 29,
+    "app_cleanup_cases": 22
+  },
+  "browser": {
+    "actual_target": 15,
+    "actual_surface": 300,
+    "constructor_bound_bitmap_identity": true,
+    "held_surface_for_text_and_registration": true,
+    "descriptive_family_title_id": 300,
+    "status_helpers_constructor_surface_bound": true,
+    "status_helpers_instantiated_by_main": false,
+    "display_immutable_held_bitmap_binding": true,
+    "display_bitmap_per_task_authentication_added": true,
+    "bitmap_store_statically_reserved_initially_unbound": true,
+    "initialization_once_before_dispatch": true,
+    "historical_receipts_and_terminal_retirement_preserved": true,
+    "adjacent_text_fill_task_authentication_added": false,
+    "new_boot_incarnations": false
+  },
+  "native": {
+    "total_boots": 8,
+    "alpha": [
+      {
+        "profile": "compact",
+        "command": [
+          "python3",
+          "/tmp/sexos-source-liveness-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-source-liveness-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-source-liveness-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-source-liveness-a-alpha-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--third-spindle",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "154"
+        ],
+        "out": "/tmp/sexos-source-liveness-a-alpha-compact",
+        "driver": "/tmp/sexos-source-liveness-a-alpha-compact-driver.log",
+        "status": 0,
+        "seconds": 176.58887841692194,
+        "verified_captures": 39,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 8,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            },
+            {
+              "target": 24,
+              "task": 24
+            },
+            {
+              "target": 25,
+              "task": 25
+            },
+            {
+              "target": 26,
+              "task": 26
+            },
+            {
+              "target": 27,
+              "task": 27
+            },
+            {
+              "target": 28,
+              "task": 28
+            },
+            {
+              "target": 29,
+              "task": 29
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 0,
+          "generation": 55,
+          "source": 29,
+          "task": 29,
+          "logical": 12,
+          "size": 761,
+          "fingerprint": "0xf7f98e7ea46c839",
+          "count": 55,
+          "data_hash": "0x114c3d54f40ec4ad"
+        }
+      },
+      {
+        "profile": "wide",
+        "command": [
+          "python3",
+          "/tmp/sexos-source-liveness-a-frozen/source/scripts/quil_workflow_gate.py",
+          "--iso",
+          "/tmp/sexos-source-liveness-a-frozen/tested.iso",
+          "--binding",
+          "/tmp/sexos-source-liveness-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-source-liveness-a-alpha-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800",
+          "--soak-seconds",
+          "20",
+          "--rehearsal",
+          "--third-quil",
+          "--third-spindle",
+          "--capture-profile",
+          "--find",
+          "--round",
+          "154"
+        ],
+        "out": "/tmp/sexos-source-liveness-a-alpha-wide",
+        "driver": "/tmp/sexos-source-liveness-a-alpha-wide-driver.log",
+        "status": 0,
+        "seconds": 204.0386791670462,
+        "verified_captures": 39,
+        "fresh_replay": true,
+        "history_roster": {
+          "holder": 11,
+          "slot": 53,
+          "logical": 12,
+          "version": 1,
+          "base": 1808,
+          "sectors": 18,
+          "held_query_verified": 1,
+          "runtime_mint": 0,
+          "count": 8,
+          "participants": [
+            {
+              "target": 12,
+              "task": 12
+            },
+            {
+              "target": 17,
+              "task": 17
+            },
+            {
+              "target": 24,
+              "task": 24
+            },
+            {
+              "target": 25,
+              "task": 25
+            },
+            {
+              "target": 26,
+              "task": 26
+            },
+            {
+              "target": 27,
+              "task": 27
+            },
+            {
+              "target": 28,
+              "task": 28
+            },
+            {
+              "target": 29,
+              "task": 29
+            }
+          ]
+        },
+        "terminal_history": {
+          "bank": 0,
+          "generation": 55,
+          "source": 29,
+          "task": 29,
+          "logical": 12,
+          "size": 761,
+          "fingerprint": "0xf7f98e7ea46c839",
+          "count": 55,
+          "data_hash": "0x114c3d54f40ec4ad"
+        }
+      }
+    ],
+    "connected": [
+      {
+        "name": "connected-wide",
+        "status": 0,
+        "out": "/tmp/sexos-source-liveness-a-native-connected-wide",
+        "driver": "/tmp/sexos-source-liveness-a-native-connected-wide-driver.log",
+        "ports": "/tmp/sexos-source-liveness-a-ports/connected-wide",
+        "command": [
+          "python3",
+          "/private/tmp/sexos-source-liveness-a-frozen/source/scripts/connected_desktop_gate.py",
+          "--iso",
+          "/private/tmp/sexos-source-liveness-a-frozen/tested.iso",
+          "--binding",
+          "/private/tmp/sexos-source-liveness-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-source-liveness-a-native-connected-wide",
+          "--model",
+          "e1000e",
+          "--resolution",
+          "1280x800"
+        ],
+        "profile": {
+          "label": "wide",
+          "model": "e1000e",
+          "resolution": "1280x800"
+        },
+        "observations": [
+          {
+            "host_monotonic": 748576.716895958,
+            "guests": []
+          }
+        ],
+        "other_guests_before": [],
+        "seconds": 47.851494167000055,
+        "other_guests_after": [],
+        "boots": 2,
+        "verified_captures": 17
+      },
+      {
+        "name": "connected-compact",
+        "status": 0,
+        "out": "/tmp/sexos-source-liveness-a-native-connected-compact",
+        "driver": "/tmp/sexos-source-liveness-a-native-connected-compact-driver.log",
+        "ports": "/tmp/sexos-source-liveness-a-ports/connected-compact",
+        "command": [
+          "python3",
+          "/private/tmp/sexos-source-liveness-a-frozen/source/scripts/connected_desktop_gate.py",
+          "--iso",
+          "/private/tmp/sexos-source-liveness-a-frozen/tested.iso",
+          "--binding",
+          "/private/tmp/sexos-source-liveness-a-frozen/source-binding.json",
+          "--source-disk",
+          "/tmp/sexos-r100a-seed.img",
+          "--out",
+          "/tmp/sexos-source-liveness-a-native-connected-compact",
+          "--model",
+          "e1000",
+          "--resolution",
+          "1024x768"
+        ],
+        "profile": {
+          "label": "compact",
+          "model": "e1000",
+          "resolution": "1024x768"
+        },
+        "observations": [
+          {
+            "host_monotonic": 748624.604221125,
+            "guests": []
+          }
+        ],
+        "other_guests_before": [],
+        "seconds": 53.223865791922435,
+        "other_guests_after": [],
+        "boots": 2,
+        "verified_captures": 17
+      }
+    ],
+    "registry_verified_captures": 112,
+    "boot_audit": {
+      "ok": true,
+      "boots": 8,
+      "normal_workflow_boots": 6,
+      "sealed_probe_boots": 1,
+      "auxiliary_cold_boots": 1,
+      "observations": [
+        {
+          "path": "/tmp/sexos-source-liveness-a-build/serial.log",
+          "bytes": 507798,
+          "sha256": "9ca65a283dd7b90f3441e617dc20afd27e0d37f174d930ebf75974e30dd8b449",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-last-writer-cold-aux/serial.log",
+          "bytes": 352306,
+          "sha256": "a34dda40b4f149f0d07870facfec808ef1236ab08ebf98c99407be39ebee806e",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-alpha-compact/serial.log",
+          "bytes": 4012328,
+          "sha256": "c75c0b5d1e7912a79ec7e287e9fe3bf3301c31827d26011fca6adc02203b2a0b",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-alpha-wide/serial.log",
+          "bytes": 4082239,
+          "sha256": "3cdf3a362cfee76086c03ce30850cbbf8c15060e54eedf2203294ee53c1b72d5",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-native-connected-wide/recovery/serial.log",
+          "bytes": 433574,
+          "sha256": "876a36f73e7377a2cbf1fcf67fe208c9e7eaadc6d8c5b34098a4d44e7e0e2609",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-native-connected-wide/session/serial.log",
+          "bytes": 721800,
+          "sha256": "1a386bb7e65112efcc80225e0da80c465f39d8af7d094a1fa9c49145f82ba9e3",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-native-connected-compact/recovery/serial.log",
+          "bytes": 428085,
+          "sha256": "ef3c923a2abed740712f5c117307a6971b6be7ded32f3752838d758befdbec64",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        },
+        {
+          "path": "/tmp/sexos-source-liveness-a-native-connected-compact/session/serial.log",
+          "bytes": 716242,
+          "sha256": "14c839d2699030bbb7cc068371f1e31cde4ff423d7125b060dec3af828951336",
+          "roster": {
+            "holder": 11,
+            "slot": 53,
+            "logical": 12,
+            "version": 1,
+            "base": 1808,
+            "sectors": 18,
+            "held_query_verified": 1,
+            "runtime_mint": 0,
+            "count": 8,
+            "participants": [
+              {
+                "target": 12,
+                "task": 12
+              },
+              {
+                "target": 17,
+                "task": 17
+              },
+              {
+                "target": 24,
+                "task": 24
+              },
+              {
+                "target": 25,
+                "task": 25
+              },
+              {
+                "target": 26,
+                "task": 26
+              },
+              {
+                "target": 27,
+                "task": 27
+              },
+              {
+                "target": 28,
+                "task": 28
+              },
+              {
+                "target": 29,
+                "task": 29
+              }
+            ]
+          },
+          "grant_bytes": 88,
+          "capability_data_bytes": 128,
+          "capability_bytes": 192
+        }
+      ],
+      "scope": "Actual inserted history capability queried beforeseal; exact registered tasks and both family catalogs/layout. Eight actual Spindles plus exact held Display bitmap target/task/surface/slot observed at startup. This log audit does not independently prove every dispatch check."
+    },
+    "cold": {
+      "source": 29,
+      "task": 29,
+      "fresh_target": 12,
+      "generation": 55,
+      "bytes": 761,
+      "recall": "echo alpha29",
+      "standalone_replay": false,
+      "parent_source_bound_replayed": true
+    },
+    "new_image_1800s_acceptance": false
+  },
+  "scalar": {
+    "elfs": 9,
+    "instructions": 327008,
+    "vector_fp_matches": 0,
+    "scope": "Nine exact ISO-extracted ELF disassemblies; inspect decoded instructions for vector/MMX/x87/opmask registers, f/v-prefixed FP/vector operations, xsave/xrstor, MXCSR and EMMS. This is a static scan, not runtime register/cache erasure or a complete instruction-set audit."
+  },
+  "diagnostics": {
+    "query_time_lease_race_found_and_fixed_before_source_commit": true,
+    "fixed_before_source_commit": true
+  },
+  "release_gates": {
+    "open": 2,
+    "partial": 28,
+    "system_proven": false
+  },
+  "shell": {
+    "captured_input_destination_retained": true,
+    "legacy_singleton_input_removed": true,
+    "exact_held_browser_route_classification": true,
+    "fresh_operation_kernel_task_checked": true,
+    "viewport_ready_open_linen_kernel_task_checked": true,
+    "workspace_notice_task_independent": true,
+    "abi_version_hash": "575a6a0e76f58299a017e59b36bb33bcf2efd873adfe0839ab31375d598b661c",
+    "callback_close_task_coverage_added": false,
+    "new_browser_activations": false
+  },
+  "source_receipts": {
+    "normal_source_machines_changed": true,
+    "entropy_maintain_lease_added": true,
+    "entropy_pending_owner_metadata_peek_added": true,
+    "denial_partitions": 3,
+    "denial_owner_fences_per_partition": 17,
+    "total_denial_slots": 51,
+    "denial_backing_bytes": 3272,
+    "denial_backing_static": true,
+    "unsupported_requests_before_source_machine_effects": true,
+    "all_three_typed_request_decoders_precede_budget": true,
+    "denial_poll_tristate_retains_uncertainty": true,
+    "exact_net_terminal_proof_required_for_retirement": true,
+    "clock_high_water_and_poison_not_duplicated_or_reset": true,
+    "normal_provider_legacy_retry_poll_gap_fixed": true,
+    "source_sampling_only_positive_live": true,
+    "entropy_ticks_after_liveness": true,
+    "seed_word_copied_only_after_fresh_lease_check": true,
+    "original_entropy_deadline_never_extended": true,
+    "broader_tcp_dns_packet_liveness_gap_fixed": false,
+    "native_unsupported_caller_flood_executed": false,
+    "new_boot_grants": false
+  },
+  "archive": {
+    "path": "assets/sexos-source-liveness-retention-2026-11-01-raw.tar.gz",
+    "sha256": "9e5febc5cf69ee4b7531dc512eb6ecd4ec66c3fe4fab8da8a0ae7b8650e80b9c",
+    "bytes": 15283454,
+    "members": 1554,
+    "payload_manifest_sha256": "bc10b386ca5424a0c1a66f4d1ce884366f208d6ff54cfd58b6554079d598998b",
+    "all_members_verified": true
+  },
+  "scope": "Unsupported held callers retain typed source errors in separate bounded static backing before any authorized source-machine effects. Authorized source custody now retains on uncertain liveness; only exact terminal proof retires. Entropy leases still expire/redact on schedule, with fresh ticks after queries and metadata-only pending owner selection before secret word copy. Boot-global clock high-water and poison remain unchanged. TCP/DNS/packet liveness paths remain outside this qualification. Actual compiled three-branch saturation/Full/liveness tests use finite host callbacks; native rehearsals validate ordinary supported workflows, not an injected unsupported flood. Display bitmap backing retains its prior exact held ownership. Fresh bitmap requests authenticate actual kernel caller task and exact LIVE registry tuple before any staging effects; retirement uses exact lifecycle-proof task. Historical receipts, Full retention, sequence floors and terminal retirement survive. Current Browser15 only; future incarnations need separate store lifetimes and BOOT grants. Shell input retains each captured held destination and validates fresh-operation/viewport actual tasks; the data-only workspace publisher accepts independent nonzero tasks. Legacy singleton removed. Adjacent Display text/fill and Shell callback/Close task coverage remain scoped separately. No new process VAS, runtime capability minting, native unequal-task allocator or daily-driver certification."
+}

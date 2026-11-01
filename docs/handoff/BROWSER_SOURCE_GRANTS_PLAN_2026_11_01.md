@@ -72,3 +72,5 @@ No host fixture establishes runtime unequal-task BOOT execution. No source/pixel
 Round153 precedes this generalization with a denial-only retained outbox. Unsupported held consumers must receive canonical retained errors without consuming authorized source-machine owner fences or creating another clock/high-water machine. No pending owner receipt may be evicted.
 
 Round153 receipt isolation is qualified. Round154 first fixes the legacy authorized-source polling RETRY gap without losing lease expiry/redaction; generic TCP/DNS liveness and packet custody remain separate. Per-consumer source selection follows in155.
+
+Round154 is qualified: authorized entropy/time/trust polling uses tri-state held liveness, entropy retains the original lease during uncertainty, and fresh ticks after queries precede sampling/READ copying. Generic TCP/DNS/packet liveness remains separate. Round155 constructor/selection work keeps one actual Browser triple; future70–75 are descriptive and checked again at actual insertion.

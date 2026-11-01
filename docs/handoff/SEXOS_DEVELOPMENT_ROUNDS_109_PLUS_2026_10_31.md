@@ -806,3 +806,20 @@ No native unsupported-flood or unequal-task claim. All1,190 blobs and1,552 archi
 members verified; nine ELFs/326,655 decoded instructions, zero inspected vector/FP
 matches. Next154: source liveness/lease retention, then155 per-consumer BOOT plan.
 Inventory unchanged.
+
+
+## Round 154 — source liveness and lease retention
+
+[Report](SOURCE_LIVENESS_RETENTION_2026_11_01.md): authorized3source maintenance
+and replies preserve state on uncertain held liveness; exact terminal Net proof
+alone retires. Entropy waits without provider work but original deadline/backtick
+scrub/redaction remain; query-time fresh ticks precede sampling/secret copy.
+One clock high-water/poison remains. TCP/DNS/packet/fresh-lookup gaps stay scoped.
+Sourced0b2a163:43 frozen checks,2,892 logged Rust+20 nested cases=2,912 executions,
+1,051Python. Actual33-case lease/50-case dispatch fixtures,2 lease and6 dispatch
+compiled mutants +9 wiring controls pass. Eightboots/112 nativecaptures ordinary
+supported workflows pass bothsizes/full8chains/TLSimage/storage/cleanup/writer29 cold.
+Forced uncertainty/querytick races/unequalTask hostonly. All1,191 blobs and1,554
+archive members verified; nine ELFs/327,008 decoded instructions, zero inspected
+vector/FP matches. Next155: catalog-derived actual BOOT source construction and
+held per-consumer selection, stilloneBrowser triple. Inventory unchanged.
