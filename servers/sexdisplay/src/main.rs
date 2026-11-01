@@ -114,10 +114,11 @@ use sex_pdx::app_catalog;
 mod text_transaction;
 mod bitmap_binding;
 mod bitmap_transaction;
+mod bitmap_stores;
 mod fill_damage;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
-static mut BITMAP_STAGE: bitmap_transaction::Stage = bitmap_transaction::Stage::UNBOUND;
+static mut BITMAP_STORES: bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}> = bitmap_stores::Stores::UNBOUND;
 mod surface_groups;
 static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGroups::new();
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
@@ -584,9 +585,9 @@ fn bitmap_viewport(surf: &Surface) -> bitmap_transaction::Viewport {
         inset: if chrome { 8 } else { 0 }, top: if chrome { FRAME_TOP_BAR_HEIGHT_PX as u32 + 8 } else { 0 } }
 }
 fn bitmap_color(surf: &Surface, x: usize, y: usize, base: u32) -> u32 {
-    if !surf.active || !(unsafe { BITMAP_STAGE.matches_surface(surf.owner_pd, surf.surface_id) }) { return base; }
+    if !surf.active || !(unsafe { BITMAP_STORES.matches_surface(surf.owner_pd, surf.surface_id) }) { return base; }
     let Some((x, y)) = bitmap_viewport(surf).local(x, y) else { return base; };
-    unsafe { BITMAP_STAGE.sample(surf.owner_pd, surf.surface_id, x, y) }
+    unsafe { BITMAP_STORES.sample(surf.owner_pd, surf.surface_id, x, y) }
         .map_or(base, |pixel| bitmap_transaction::blend(pixel, base))
 }
 fn bitmap_surface_damage(surf: &Surface, geometry: Option<sex_pdx::bitmap_batch::Geometry>, w: usize, h: usize) -> (usize, usize, usize, usize) {
@@ -2802,7 +2803,6 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
 
 fn load_lifecycle_catalog() -> surface_lifecycle::Lifecycle {
     let mut lifecycle = surface_lifecycle::Lifecycle::new();
-    let mut mandatory = false;
     for slot in sex_pdx::app_lifecycle::SLOTS {
         if let Ok(c) = sex_pdx::app_lifecycle::catalog(slot) {
             assert!(lifecycle.register(surface_lifecycle::Catalog {
@@ -2816,14 +2816,16 @@ fn load_lifecycle_catalog() -> surface_lifecycle::Lifecycle {
             if sex_pdx::app_catalog::by_surface(c.target_pd,c.surface_id)
                 .is_some_and(|row|row.app==sex_pdx::app_catalog::App::Browser) {
                 let binding=bitmap_binding::Binding::from_catalog(slot,c).expect("display exact held bitmap identity");
-                assert!(unsafe { BITMAP_STAGE.initialize_once(binding) },"display bitmap startup installed once");
+                assert!(unsafe { BITMAP_STORES.initialize_once(binding) },"display bitmap startup installed once");
                 sex_pdx::serial_record!("[display.bitmap.binding.held] target={} task={} surface={} slot={} before_dispatch=1",
                     binding.target(),binding.task(),binding.surface(),binding.slot());
-                mandatory=true;
             }
         }
     }
-    assert!(mandatory, "missing display lifecycle catalog");
+    assert_eq!(unsafe { BITMAP_STORES.initialized_count() },sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser),"missing display Browser bitmap binding");
+    sex_pdx::serial_record!("[display.bitmap.stores.ready] stores={} bytes={} static_backing=1 before_dispatch=1",
+        sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser),
+        core::mem::size_of::<bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}>>());
     lifecycle
 }
 
@@ -2856,7 +2858,7 @@ fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut S
                 cursor_under_valid: CURSOR_UNDER_VALID,
             };
             if let Some(removed) = lifecycle.prepare(index, info.target_pd, info.task_id, &mut SURFACES, &mut refs) {
-                BITMAP_STAGE.retire(info.target_pd,info.task_id);
+                BITMAP_STORES.retire(info.target_pd,info.task_id);
                 for (index,stage) in TEXT_STAGES.iter_mut().enumerate() {
                     stage.retire(info.target_pd);
                     if !SURFACES[index].active { stage.reset(); }
@@ -3679,7 +3681,7 @@ pub extern "C" fn _start() -> ! {
                             REPAINT_UPSERTS += 1;
                             if let Some(index)=vacant {
                                 TEXT_STAGES[index].reset();
-                                BITMAP_STAGE.reset_surface(owner, surface_id);
+                                BITMAP_STORES.reset_surface(owner, surface_id);
                             }
                             FRAME_GROUPS.observe(&SURFACES);
                             FRAME_GROUPS.fit_children(&mut SURFACES);
@@ -3838,7 +3840,7 @@ pub extern "C" fn _start() -> ! {
                                     continue;
                                 }
                                 TEXT_STAGES[index].reset();
-                                BITMAP_STAGE.reset_surface(slot.owner_pd, target_id);
+                                BITMAP_STORES.reset_surface(slot.owner_pd, target_id);
                                 slot.erase_selection();
                                 *slot = SURFACE_EMPTY;
                                 found = true;
@@ -3914,17 +3916,18 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 sex_pdx::bitmap_batch::BEGIN | sex_pdx::bitmap_batch::CHUNK | sex_pdx::bitmap_batch::COMMIT | sex_pdx::bitmap_batch::CLEAR => {
-                    let Some(binding)=(unsafe { BITMAP_STAGE.binding() }) else { continue; };
+                    let Some(binding)=(unsafe { BITMAP_STORES.binding_for(msg.caller_pd,msg.arg0) }) else { continue; };
                     if !binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)
                         || !bitmap_binding_live(&lifecycle,binding) { continue; }
                     let Some(request) = sex_pdx::bitmap_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
                     unsafe {
                         if let Some(slot) = SURFACES.iter().find(|s| s.active && s.surface_id == msg.arg0 && s.owner_pd == msg.caller_pd) {
-                            if let Some(change) = BITMAP_STAGE.receive(msg.caller_pd, msg.caller_task, msg.arg0, request) {
+                            if let Some(change) = BITMAP_STORES.receive(msg.caller_pd, msg.caller_task, msg.arg0, request) {
+                                let sequence=BITMAP_STORES.sequence(binding.target(),binding.surface()).expect("committed bitmap remains bound");
                                 text_damage.add(bitmap_surface_damage(slot,change.old,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
                                 text_damage.add(bitmap_surface_damage(slot,change.new,FB_W as usize,FB_H as usize),FB_W as usize,FB_H as usize);
                                 sex_pdx::serial_record!("[display.bitmap.committed] target={} surface={} paint={} width={} height={} scale={} pixels=unconfirmed",
-                                    binding.target(),binding.surface(),BITMAP_STAGE.sequence(),change.new.map_or(0,|g|g.width),change.new.map_or(0,|g|g.height),change.new.map_or(0,|g|g.scale));
+                                    binding.target(),binding.surface(),sequence,change.new.map_or(0,|g|g.width),change.new.map_or(0,|g|g.height),change.new.map_or(0,|g|g.scale));
                             }
                         }
                     }
@@ -4212,7 +4215,7 @@ pub extern "C" fn _start() -> ! {
         if transaction_full_render { clock_canon_apply_to_bar(&mut bar); }
         finish_display_transactions(&mut lifecycle, &bar, fb_live);
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
-        unsafe { BITMAP_STAGE.poll_reply(sex_pdx::pdx_reply); }
+        unsafe { BITMAP_STORES.poll_reply(sex_pdx::pdx_reply); }
 
         // ── Yield once regardless of whether messages remain queued ──
         loop_iter = loop_iter.wrapping_add(1);

@@ -238,18 +238,29 @@ fn movement_resize_and_clear_damage_cover_every_changed_pixel() {
 fn production_uses_owned_live_route_both_paint_branches_and_terminal_cleanup() {
     let source=include_str!("../servers/sexdisplay/src/main.rs");
     for branch in ["c = fill_rect_color(surf, x, y, surf.color);\n        c = bitmap_color(surf, x, y, c);", "c = fill_rect_color(content, x, y, content.color);\n            c = bitmap_color(content, x, y, c);"] {assert!(source.contains(branch));}
+    assert!(source.contains("static mut BITMAP_STORES: bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}> = bitmap_stores::Stores::UNBOUND;"));
+    assert!(!source.contains("BITMAP_STAGE"));
+    assert_eq!(source.matches("BITMAP_STORES.initialize_once(").count(),1);
+    let load=&source[source.find("fn load_lifecycle_catalog()").unwrap()..source.find("fn bitmap_binding_live(").unwrap()];
+    assert!(load.find("sex_pdx::app_lifecycle::catalog(slot)").unwrap()<load.find("bitmap_binding::Binding::from_catalog(slot,c)").unwrap());
+    assert!(load.find("bitmap_binding::Binding::from_catalog(slot,c)").unwrap()<load.find("BITMAP_STORES.initialize_once(binding)").unwrap());
+    assert!(load.contains("assert!(unsafe { BITMAP_STORES.initialize_once(binding) },"));
+    assert!(load.contains("assert_eq!(unsafe { BITMAP_STORES.initialized_count() },sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser),"));
+    assert!(source.find("let mut lifecycle = load_lifecycle_catalog();").unwrap()<source.find("let Some(msg) = sex_pdx::pdx_try_listen_raw(0)").unwrap());
     let branch=&source[source.find("                sex_pdx::bitmap_batch::BEGIN |").unwrap()..];
     let branch=&branch[..branch.find("                sex_pdx::text_batch::BEGIN |").unwrap()];
-    assert!(branch.find("binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
-    assert!(branch.find("s.active && s.surface_id == msg.arg0 && s.owner_pd == msg.caller_pd").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
-    assert!(branch.contains("BITMAP_STAGE.receive(msg.caller_pd, msg.caller_task, msg.arg0, request)"));
-    assert!(branch.find("bitmap_binding_live(&lifecycle,binding)").unwrap()<branch.find("BITMAP_STAGE.receive(").unwrap());
+    assert!(branch.find("BITMAP_STORES.binding_for(msg.caller_pd,msg.arg0)").unwrap()<branch.find("binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)").unwrap());
+    assert!(branch.contains("BITMAP_STORES.sequence(binding.target(),binding.surface()).expect(\"committed bitmap remains bound\")"));
+    assert!(branch.find("binding.admits(msg.caller_pd,msg.caller_task,msg.arg0)").unwrap()<branch.find("BITMAP_STORES.receive(").unwrap());
+    assert!(branch.find("s.active && s.surface_id == msg.arg0 && s.owner_pd == msg.caller_pd").unwrap()<branch.find("BITMAP_STORES.receive(").unwrap());
+    assert!(branch.contains("BITMAP_STORES.receive(msg.caller_pd, msg.caller_task, msg.arg0, request)"));
+    assert!(branch.find("bitmap_binding_live(&lifecycle,binding)").unwrap()<branch.find("BITMAP_STORES.receive(").unwrap());
     assert!(source.contains("0x27A | 0x27B | 0x27C | 0x27D | 0x28B)\n                    && !lifecycle.sid_live(msg.arg0)"));
-    assert!(source.contains("BITMAP_STAGE.retire(info.target_pd,info.task_id);"));
-    assert!(source.contains("BITMAP_STAGE.reset_surface(owner, surface_id);"));
+    assert!(source.contains("BITMAP_STORES.retire(info.target_pd,info.task_id);"));
+    assert!(source.contains("BITMAP_STORES.reset_surface(owner, surface_id);"));
     let destroy=&source[source.find("                0xEE => {").unwrap()..source.find("                0xF5 => {").unwrap()];
-    assert!(destroy.find("BITMAP_STAGE.reset_surface(slot.owner_pd, target_id);").unwrap()<destroy.find("*slot = SURFACE_EMPTY;").unwrap());
-    assert!(source.find("finish_display_transactions(&mut lifecycle, &bar, fb_live);").unwrap()<source.find("BITMAP_STAGE.poll_reply(sex_pdx::pdx_reply);").unwrap());
+    assert!(destroy.find("BITMAP_STORES.reset_surface(slot.owner_pd, target_id);").unwrap()<destroy.find("*slot = SURFACE_EMPTY;").unwrap());
+    assert!(source.find("finish_display_transactions(&mut lifecycle, &bar, fb_live);").unwrap()<source.find("BITMAP_STORES.poll_reply(sex_pdx::pdx_reply);").unwrap());
 }
 
 #[test]

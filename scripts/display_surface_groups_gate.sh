@@ -21,7 +21,7 @@ for name in ['render','redraw_top_strip']:
 focus=s[s.index('                0xED => {'):s.index('                0xEE => {')]
 assert 'needs_top_strip_redraw |= changed;' in focus
 assert 'stage.retire(info.target_pd);'  in s and 'if !SURFACES[index].active { stage.reset(); }' in s
-assert 'if let Some(index)=vacant {' in s and 'TEXT_STAGES[index].reset();' in s and 'BITMAP_STAGE.reset_surface(' in s
+assert 'if let Some(index)=vacant {' in s and 'TEXT_STAGES[index].reset();' in s and 'BITMAP_STORES.reset_surface(' in s
 destroy=s[s.index('                0xEE => {'):s.index('                0xF5 => {')]
 assert destroy.index('TEXT_STAGES[index].reset();')<destroy.index('*slot = SURFACE_EMPTY;')
 assert 'text_damage.rect().filter(|_| fb_live && !transaction_full_render)' in s
@@ -49,4 +49,5 @@ DISPLAY_COMPOSITION_SOURCE="$TEST_DIR/production.rs" rustc --edition=2021 --test
 rustc --edition=2021 --test "$ROOT_DIR/tests/display_bitmap_transaction.rs" -o "$TEST_DIR/bitmap-tests"
 "$TEST_DIR/bitmap-tests" --test-threads=1
 python3 "$ROOT_DIR/scripts/check_display_bitmap_binding.py" --root "$ROOT_DIR"
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_bitmap_stores.py" --root "$ROOT_DIR"
 echo '[gate.display_surface_groups.result] PASS scope=actual_compositor_pixels_and_production_catalog_not_guest_screenshot'

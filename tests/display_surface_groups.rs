@@ -8,7 +8,8 @@ extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
 #[path="../servers/sexdisplay/src/bitmap_binding.rs"]mod bitmap_binding;
 #[path="../servers/sexdisplay/src/bitmap_transaction.rs"]mod bitmap_transaction;
-static mut BITMAP_STAGE:bitmap_transaction::Stage=bitmap_transaction::Stage::UNBOUND;
+#[path="../servers/sexdisplay/src/bitmap_stores.rs"]mod bitmap_stores;
+static mut BITMAP_STORES:bitmap_stores::Stores<{app_catalog::count(app_catalog::App::Browser)}>=bitmap_stores::Stores::UNBOUND;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
@@ -83,18 +84,18 @@ fn legacy_args(offset:usize,count:usize,color:u32)->u64{
 // HOST fixture reset only: production initializes static UNBOUND backing once
 // from its held query. No packet or compositor operation supplies a binding.
 unsafe fn reset_bitmap_stage(){
- BITMAP_STAGE=bitmap_transaction::Stage::UNBOUND;
+ BITMAP_STORES=bitmap_stores::Stores::UNBOUND;
  let catalog=app_lifecycle::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3};
- assert!(BITMAP_STAGE.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
+ assert!(BITMAP_STORES.initialize_once(bitmap_binding::Binding::from_catalog(40,catalog).unwrap()));
 }
 unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->bitmap_transaction::Change{
  use bitmap_batch::Request;
- assert!(BITMAP_STAGE.receive(15,15,300,Request::Begin{sequence,geometry:g}).is_none());
+ assert!(BITMAP_STORES.receive(15,15,300,Request::Begin{sequence,geometry:g}).is_none());
  for(offset,pair)in pixels.chunks(2).enumerate(){let mut data=[0;2];data[..pair.len()].copy_from_slice(pair);
-  assert!(BITMAP_STAGE.receive(15,15,300,Request::Chunk{sequence,offset:offset*2,count:pair.len(),pixels:data}).is_none());
+  assert!(BITMAP_STORES.receive(15,15,300,Request::Chunk{sequence,offset:offset*2,count:pair.len(),pixels:data}).is_none());
  }
- let change=BITMAP_STAGE.receive(15,15,300,Request::Commit{sequence,hash:bitmap_batch::hash(pixels)}).unwrap();
- BITMAP_STAGE.poll_reply(|owner,word|{assert_eq!(owner,15);assert_eq!(bitmap_batch::Applied::decode(1,word).unwrap().sequence,sequence);0});change
+ let change=BITMAP_STORES.receive(15,15,300,Request::Commit{sequence,hash:bitmap_batch::hash(pixels)}).unwrap();
+ BITMAP_STORES.poll_reply(|owner,word|{assert_eq!(owner,15);assert_eq!(bitmap_batch::Applied::decode(1,word).unwrap().sequence,sequence);0});change
 }
 #[test]fn actual_browser_bitmap_blends_over_fill_under_text_in_both_compositor_branches(){unsafe{
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
@@ -123,13 +124,13 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
  let mut framebuffer=vec![0;w*h];for y in 0..h{for x in 0..w{framebuffer[y*w+x]=composite_pixel(x,y,w,h,bg(y,h),0);}}
  for sequence in 2..=3{
   let change=if sequence==2{let b=bitmap_batch::Geometry{x:120,y:40,width:20,height:30,scale:2};publish_bitmap(sequence,b,&vec![0xffaa0011;b.len()])}
-   else{BITMAP_STAGE.receive(15,15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
+   else{BITMAP_STORES.receive(15,15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
   let mut d=damage::Damage::new();d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
   FOCUSED_SURFACE_ID=0;DAMAGE_ORDER.clear();redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,d.rect().unwrap());
   assert_eq!(DAMAGE_ORDER,["restore","cursor","launcher","presented"]);
   for y in 0..h{for x in 0..w{assert_eq!(framebuffer[y*w+x],composite_pixel(x,y,w,h,bg(y,h),0),"sequence={sequence} x={x} y={y}");}}
  }
- BITMAP_STAGE.poll_reply(|_,_|0);
+ BITMAP_STORES.poll_reply(|_,_|0);
  // Resize and movement use the existing structural redraw path. The retained
  // image samples its original pixel coordinates and clips to the current body.
  let g=bitmap_batch::Geometry{x:0,y:0,width:48,height:48,scale:4};publish_bitmap(4,g,&vec![0xffff00ff;g.len()]);
