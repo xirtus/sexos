@@ -228,7 +228,7 @@ def run(c):
   commands=palette_commands(root)
   for phase in ('expanded','restored'):
    begin=len(c['text']());palette_select(c['key'],'ZoomToggle',commands)
-   c['key']('ret',rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1'+END)
+   c['key']('ret',rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1 reason=ok'+END)
    viewport=c['wait'](rf'\[browser.viewport\] target={row["target"]} task={row["task"]} sequence=(\d+) w=\d+ h=\d+ origin=held_shell'+END,begin)
    paint_starts.append(begin);painted(f'browser-{row["target"]}-{phase}',begin,int(viewport[1]))
   c['key']('q',r'\[browser.tls.view\] state=Cancelled authenticated=0 network=0'+END)
@@ -311,7 +311,7 @@ def capture_fence(trace,frame,row):
 
 def resize_evidence(trace,row,start,end,geometry,actions):
  """Caller-return log may follow callee viewport; both must be in this phase."""
- zoom=one(trace,rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1',start,end)
+ zoom=one(trace,rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={row["surface"]} ok=1 reason=ok',start,end)
  view=one(trace,rf'\[browser.viewport\] target={row["target"]} task={row["task"]} sequence={geometry["viewport"]} w={geometry["tile"]["w"]} h={geometry["tile"]["h"]} origin=held_shell',start,end)
  if start+view.start()>=geometry['layout_offset']:raise ValueError('resize frame lacks prior accepted viewport')
  enters=[a for a in actions if a.get('kind')=='key'and a.get('key')=='ret'and start<=a.get('start',-1)<a.get('end',-1)<=end]

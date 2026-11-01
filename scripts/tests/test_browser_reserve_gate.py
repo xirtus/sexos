@@ -149,14 +149,14 @@ class CapturedPaintBoundaries(unittest.TestCase):
  def test_resize_requires_exact_zoom_and_enter_but_allows_late_caller_return(self):
   row=dict(target=30,task=300,surface=343)
   view='[browser.viewport] target=30 task=300 sequence=6 w=1024 h=718 origin=held_shell\n'
-  zoom='[shell.window.action] action=ZoomToggle frame=20 sid=343 ok=1\n'
+  zoom='[shell.window.action] action=ZoomToggle frame=20 sid=343 ok=1 reason=ok\n'
   text=view+zoom+'layout\n';geometry=dict(viewport=6,tile=dict(w=1024,h=718),layout_offset=len(view+zoom))
   actions=[dict(kind='key',key='ret',start=0,end=len(view+zoom))]
   self.assertEqual(p.resize_evidence(text,row,0,len(text),geometry,actions)['viewport_offset'],0)
   prefix='unrelated immutable history\n'*100;offset=len(prefix);shifted={**geometry,'layout_offset':geometry['layout_offset']+offset};shifted_actions=[{**a,'start':a['start']+offset,'end':a['end']+offset}for a in actions]
   proof=p.resize_evidence(prefix+text,row,offset,offset+len(text),shifted,shifted_actions)
   self.assertEqual(proof['viewport_offset'],offset);self.assertEqual(proof['zoom_offset'],offset+len(view))
-  for changed in (text.replace(zoom,''),text.replace('sid=343','sid=300'),text+zoom):
+  for changed in (text.replace(zoom,''),text.replace('sid=343','sid=300'),text.replace(' reason=ok',''),text+zoom):
    with self.subTest(changed=changed),self.assertRaises(ValueError):p.resize_evidence(changed,row,0,len(changed),geometry,actions)
   for invalid in ([],actions*2,[dict(kind='key',key='ret',start=len(view+zoom),end=len(text))]):
    with self.subTest(actions=invalid),self.assertRaises(ValueError):p.resize_evidence(text,row,0,len(text),geometry,invalid)
