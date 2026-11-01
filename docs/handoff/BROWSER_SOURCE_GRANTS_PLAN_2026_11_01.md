@@ -1,4 +1,4 @@
-# Round 154: Browser source-grant readiness
+# Round 155: Browser source-grant readiness
 
 Read-only source audit, 2026-11-01. Actual Browser remains PD15/task15. No successor rows, grants, activation, guest execution, or repository edits performed. Paths below are repository-relative; line anchors describe the current Round152 source.
 
@@ -70,3 +70,5 @@ Minimum controls before new activation:
 No host fixture establishes runtime unequal-task BOOT execution. No source/pixel/log evidence here qualifies hostile-code isolation, physical entropy quality, authenticated RTC, IOMMU/DMA drain, SMP, or post-reboot epoch security. The design remains immutable BOOT genesis, sex-pdx-mediated transitions, one GLOBAL_VAS, and userland policy; no Unix/process tables or runtime capability minting.
 
 Round153 precedes this generalization with a denial-only retained outbox. Unsupported held consumers must receive canonical retained errors without consuming authorized source-machine owner fences or creating another clock/high-water machine. No pending owner receipt may be evicted.
+
+Round153 receipt isolation is qualified. Round154 first fixes the legacy authorized-source polling RETRY gap without losing lease expiry/redaction; generic TCP/DNS liveness and packet custody remain separate. Per-consumer source selection follows in155.

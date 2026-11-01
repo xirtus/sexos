@@ -788,3 +788,21 @@ instructions, zero inspected vector/FP matches. ABI source hash575a6a0e over65
 ordered inputs; no new actual Browser reservations. Next153: isolate unsupported
 source denial receipts; then154 per-consumer BOOT source grants/selection.
 Inventory unchanged; no new-image1800s or native unequal-task claim.
+
+
+## Round 153 — unsupported source receipt isolation
+
+[Report](SOURCE_RECEIPT_ISOLATION_2026_11_01.md): three denial partitions reserve
+17 owner fences each in3,272 static bytes; unsupported held callers cannot consume
+authorized source-machine fences or query providers. Exact typed words/floors
+survive Full/uncertain liveness; only exact Net terminal proof retires. Original
+source machines/globalclock unchanged; legacy authorized poll gap deferred154.
+Source7e3a00c3:43 frozen checks,2,878 logged Rust+18 nested cases=2,896 executions,
+1,051Python. Actual43-case denial/41-case dispatch fixtures prove8-Spindle flood
+isolation and independent-task Browser seed32/release/time/trust;4 compiled mutants
+and4 wiring controls rejected. Eightboots/112 nativecaptures ordinary supported
+workflows pass bothsizes/full8chains/connected TLSimage/storage/cleanup/writer29 cold.
+No native unsupported-flood or unequal-task claim. All1,190 blobs and1,552 archive
+members verified; nine ELFs/326,655 decoded instructions, zero inspected vector/FP
+matches. Next154: source liveness/lease retention, then155 per-consumer BOOT plan.
+Inventory unchanged.
