@@ -17,7 +17,12 @@ impl Outbox{
  pub const fn new(target:u32)->Self{let grid=sex_pdx::app_catalog::spindle_grid(target);let ids=match grid{Some(ids)=>ids,None=>[0;4]};Self{ids,panes:[Pane::EMPTY;4],cursor:0,closed:grid.is_none()}}
  pub fn create(&mut self,index:usize,position:u64,size:u64){if self.closed||index>=4{return}let p=&mut self.panes[index];p.hidden=false;p.control=Some(Operation{opcode:0xEC,surface:self.ids[index],a:position,b:size});}
  pub fn destroy(&mut self,index:usize){if self.closed||index>=4{return}let p=&mut self.panes[index];p.discard();p.hidden=true;p.control=Some(Operation{opcode:0xEE,surface:self.ids[index],a:0,b:0});}
- pub fn text(&mut self,index:usize,text:Text,stamp:Stamp,color:u32){if self.closed||index>=4||text.len>text.bytes.len(){return}let p=&mut self.panes[index];if p.hidden{return}let batch=Batch::new(text,stamp,color);if p.active.is_none(){p.active=Some(batch)}else{p.latest=Some(batch)}}
+ pub fn text(&mut self,index:usize,text:Text,stamp:Stamp,color:u32){if self.closed||index>=4||text.len>text.bytes.len(){return}let p=&mut self.panes[index];if p.hidden{return}let batch=Batch::new(text,stamp,color);if p.active.is_none(){
+  // Completion can leave an unstarted latest batch until the next poll.
+  // New input supersedes that older desire; it must never follow this batch.
+  if let Some(stale)=&mut p.latest{stale.text.bytes.fill(0)}p.latest=None;
+  p.active=Some(batch)
+ }else{p.latest=Some(batch)}}
  pub fn pending(&self)->bool{!self.closed&&self.panes.iter().any(Pane::pending)}
  pub fn cancel(&mut self)->usize{let mut dropped=0;for p in &mut self.panes{dropped+=p.pending()as usize;p.discard();p.control=None;p.hidden=true;}self.closed=true;dropped}
  pub fn poll(&mut self,budget:usize,mut send:impl FnMut(Operation)->Result<(),u64>,mut complete:impl FnMut(Receipt))->Result<usize,u64>{

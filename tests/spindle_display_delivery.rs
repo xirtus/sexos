@@ -22,3 +22,37 @@ fn batches(ops:&[Operation])->Vec<Vec<u8>>{let mut out:Vec<Vec<u8>>=Vec::new();f
 #[test]fn rejection_is_terminal_without_a_fake_completion_or_retry(){let mut o=Outbox::new(17);o.text(0,text(b'x'),stamp(1),1);assert_eq!(o.poll(4,|_|Err(3),|_|panic!()),Err(3));assert!(!o.pending());o.text(0,text(b'y'),stamp(2),1);assert_eq!(o.poll(4,|_|panic!(),|_|panic!()),Ok(0));}
 #[test]fn unrecognized_subject_cannot_create_or_send_any_surface(){let mut o=Outbox::new(9);o.create(0,1,2);o.text(0,text(b'x'),stamp(1),1);assert!(!o.pending());o.poll(4,|_|panic!(),|_|panic!()).unwrap();}
 #[test]fn clear_only_batches_complete_only_after_admission(){let mut o=Outbox::new(12);let mut t=text(b'x');t.len=0;o.text(0,t,stamp(1),1);o.poll(4,|_|Err(ERR_SERVICE_NOT_READY),|_|panic!()).unwrap();let(ops,r)=drain(&mut o);assert_eq!(ops.len(),1);assert_eq!(ops[0].opcode,0xFA);assert_eq!(r[0].bytes,0);}
+
+fn sized_text(byte:u8,len:usize)->viewport::Text{let mut value=text(byte);value.len=len;value}
+fn gap_case(target:u32,pane:usize,len:usize,full_at:Option<usize>){
+ let sid=app_catalog::spindle_grid(target).unwrap()[pane];let mut out=Outbox::new(target);
+ let a=sized_text(b'a',len);let b=sized_text(b'b',len);let c=sized_text(b'c',len);
+ out.text(pane,a,stamp(7),1);out.text(pane,b,stamp(9),2);
+ let total=1+(len+7)/8;let mut accepted=Vec::new();let mut receipts=Vec::new();let mut blocked=None;
+ while receipts.is_empty(){
+  // Match production's four-call budget. The last poll has exactly the
+  // remaining A operations, so it ends after A without promoting queued B.
+  let budget=(total-accepted.len()).min(4);
+  let attempts=out.poll(budget,|op|{
+   assert_eq!(op.surface,sid);
+   if full_at==Some(accepted.len())&&blocked.is_none(){blocked=Some(op);return Err(ERR_SERVICE_NOT_READY)}
+   if full_at==Some(accepted.len()){assert_eq!(Some(op),blocked);}
+   if op.opcode==0xFB{assert_eq!(op.b>>32,1);}
+   accepted.push(op);Ok(())
+  },|receipt|receipts.push(receipt)).unwrap();assert!(attempts<=budget);
+ }
+ assert_eq!(accepted.len(),total);assert_eq!(receipts.iter().map(|r|r.stamp.paint).collect::<Vec<_>>(),vec![7]);assert!(out.pending());
+ out.text(pane,c,stamp(11),3);
+ let (rest,more)=drain(&mut out);assert!(rest.iter().all(|op|op.surface==sid));receipts.extend(more);
+ assert_eq!(receipts.iter().map(|r|r.stamp.paint).collect::<Vec<_>>(),vec![7,11],"obsolete B after newer C: target={target} pane={pane} len={len} full_at={full_at:?}");
+ assert!(rest.iter().filter(|op|op.opcode==0xFB).all(|op|op.b>>32==3));accepted.extend(rest);
+ assert_eq!(batches(&accepted),vec![a.bytes[..len].to_vec(),c.bytes[..len].to_vec()]);assert!(!out.pending());
+}
+#[test]fn between_poll_gap_supersedes_old_latest_for_every_catalog_pane_and_payload_length(){
+ let mut cases=0;for target in app_catalog::SPINDLE_TARGETS{for pane in 0..4{for len in[126,0,1,8,9]{gap_case(target,pane,len,None);cases+=1;}}}
+ assert_eq!(cases,app_catalog::SPINDLE_COUNT*4*5);println!("[spindle.display.gap] cases={cases} full=0");
+}
+#[test]fn full_clear_and_final_chunk_retry_preserve_active_then_newest_desire(){
+ let mut cases=0;for target in app_catalog::SPINDLE_TARGETS{for pane in 0..4{for len in[126,0,1,8,9]{for full_at in[0,(len+7)/8]{gap_case(target,pane,len,Some(full_at));cases+=1;}}}}
+ assert_eq!(cases,app_catalog::SPINDLE_COUNT*4*5*2);println!("[spindle.display.gap] cases={cases} full=clear_and_final");
+}
