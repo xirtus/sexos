@@ -23,7 +23,19 @@ NATIVE = {
     12: [300, 301, 306, 307, 308, 309, 310, 311, 312, 314],
     17: [300, 301, 306, 307, 308, 309, 310, 311, 312, 314,
          319, 324, 329, 334, 339],
+    19: [300, 301, 306, 307, 308, 309, 310, 311, 312, 314,
+         319, 324, 329, 334, 339, 343, 344],
 }
+# Independently reviewed (PD, Shell frame SID, lifecycle slot), not Task IDs.
+# Existing17 records retain their exact values; Browser30/31 add two frameless
+# content surfaces. No authority or runtime task namespace is inferred here.
+ROSTER = {19: [
+    (9,201,38), (12,153,39), (15,300,40), (16,301,45), (17,306,50),
+    (18,307,54), (19,308,110), (20,309,114), (21,310,118), (22,311,122),
+    (23,312,126), (24,314,130), (25,319,134), (26,324,138), (27,329,142),
+    (28,334,146), (29,339,150), (30,343,154), (31,344,158),
+]}
+
 
 
 def one(pattern, source, label):
@@ -60,8 +72,9 @@ def extract(source):
     return '\n'.join(parts)
 
 
-def fixture(actual, native):
+def fixture(actual, native, roster=None):
     initial = ','.join(f'({sid},LifecycleState::{state})' for sid, state in INITIAL)
+    roster_gold = 'None' if roster is None else 'Some(&' + repr(roster) + ')'
     return '''#![allow(dead_code,static_mut_refs)]
 #[path="catalog.rs"] mod app_catalog;
 static LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
@@ -69,6 +82,7 @@ macro_rules! serial_println {($($a:tt)*) => {LOG.lock().unwrap().push(format!($(
 ''' + actual + f'''
 const INITIAL_GOLD: [(u64,LifecycleState);17] = [{initial}];
 const NATIVE_GOLD: &[u64] = &{native!r};
+const ROSTER_GOLD: Option<&[(u32,u64,usize)]> = {roster_gold};
 ''' + r'''
 unsafe fn reset() {
     LIFECYCLE_TABLE = [None; LIFECYCLE_MAX_SURFACES];
@@ -95,6 +109,10 @@ unsafe fn fill() {
 #[test] fn complete_catalog_frames_fit_and_next_sid_is_refused() { unsafe {
     // Select by already-recorded frame IDs, independently of the production
     // ordinal/family counting predicate. These are metadata associations only.
+    if let Some(expected)=ROSTER_GOLD {
+        let catalog_metadata:Vec<_>=app_catalog::INCARNATIONS.iter().map(|r|(r.target,r.frame(),r.lifecycle_slot)).collect();
+        assert_eq!(catalog_metadata,expected);
+    }
     let actual:Vec<_>=app_catalog::INCARNATIONS.iter().map(|r|r.frame())
         .filter(|sid|!INITIAL_GOLD.iter().any(|&(initial,_)|initial==*sid)).collect();
     assert_eq!(actual,NATIVE_GOLD);
@@ -139,18 +157,21 @@ def expanded(catalog, count, extra):
     match = re.search(r'(pub const INCARNATIONS: \[Incarnation; )\d+(\] = \[)(.*?)(^\];)', catalog, re.M | re.S)
     if not match:
         raise ValueError('actual literal incarnation catalog missing')
+    ordinals = list(map(int,re.findall(r'app:\s*App::Browser,\s*ordinal:\s*(\d+)',catalog)))
+    expected = {12:[0],17:[0],19:[0,1,2]}.get(count)
+    if ordinals != expected:raise ValueError('actual Browser lineage needs independent review')
     rows = []
     for index in range(extra):
         rows.append('    Incarnation { app: App::Browser, ordinal: %d, target: %d, surface: %d, shell_surface: None, lifecycle_slot: %d, close_slot: %d, activation_slot: Some(%d), route_slot: %d, children: &[] },\n' %
-                    (index+1, 100+index, 500+index, 200+4*index, 201+4*index, 202+4*index, 203+4*index))
+                    (index+len(ordinals), 100+index, 500+index, 200+4*index, 201+4*index, 202+4*index, 203+4*index))
     replacement = match[1]+str(count+extra)+match[2]+match[3]+''.join(rows)+match[4]
     return catalog[:match.start()]+replacement+catalog[match.end():]
 
 
-def run_case(out, name, actual, catalog, native, failed_test=None):
+def run_case(out, name, actual, catalog, native, failed_test=None, roster=None):
     directory=out/name;directory.mkdir()
     (directory/'catalog.rs').write_text(catalog)
-    (directory/'tests.rs').write_text(fixture(actual,native))
+    (directory/'tests.rs').write_text(fixture(actual,native,roster))
     binary=directory/'tests'
     compile_result=subprocess.run(['rustc','--edition=2021','--test',str(directory/'tests.rs'),'-o',str(binary)],
                                   capture_output=True,text=True,timeout=30)
@@ -176,22 +197,24 @@ def check(root, out):
     count=int(one(r'^pub const INCARNATIONS: \[Incarnation; (\d+)\]',catalog,'roster count'))
     if count not in NATIVE:raise ValueError('current roster needs independent native-frame golden review')
     native=NATIVE[count];actual=extract(source)
-    passed=run_case(out,'current',actual,catalog,native)
+    roster=ROSTER.get(count)
+    passed=run_case(out,'current',actual,catalog,native,roster=roster)
     # Force at least two new Browser reservations and an actual retained budget
     # greater than32, even when run before the eight-Spindle roster lands.
     extra=max(2,17-len(native));future=expanded(catalog,count,extra)
     future_native=native+list(range(500,500+extra))
-    passed+=run_case(out,'future',actual,future,future_native)
+    future_roster=None if roster is None else roster+[(100+i,500+i,200+4*i)for i in range(extra)]
+    passed+=run_case(out,'future',actual,future,future_native,roster=future_roster)
     fixed=re.sub(r'^const LIFECYCLE_MAX_SURFACES:.*?;', 'const LIFECYCLE_MAX_SURFACES: usize = 32;',actual,flags=re.M)
-    run_case(out,'fixed32-mutant',fixed,future,future_native,'complete_catalog_frames_fit_and_next_sid_is_refused')
+    run_case(out,'fixed32-mutant',fixed,future,future_native,'complete_catalog_frames_fit_and_next_sid_is_refused',roster=future_roster)
     omitted=actual.replace('[(u64, LifecycleState); 17]','[(u64, LifecycleState); 16]',1)
     omitted=omitted.replace('    (SURFACE_ID_APP, LifecycleState::Allocated),\n','',1)
     if omitted==actual:raise ValueError('initial omission mutant not constructed')
-    run_case(out,'omitted-initial-mutant',omitted,catalog,native,'initial_inventory_states')
+    run_case(out,'omitted-initial-mutant',omitted,catalog,native,'initial_inventory_states',roster=roster)
     wrong=actual.replace('(SURFACE_ID_APP, LifecycleState::Allocated)', '(SURFACE_ID_APP, LifecycleState::Visible)',1)
     if wrong==actual:raise ValueError('initial state mutant not constructed')
-    run_case(out,'wrong-initial-state-mutant',wrong,catalog,native,'initial_inventory_states')
-    return dict(ok=True,tests=passed,compiled_mutants_rejected=3,boot_surfaces=17,
+    run_case(out,'wrong-initial-state-mutant',wrong,catalog,native,'initial_inventory_states',roster=roster)
+    return dict(ok=True,source_catalog_rows=count,tests=passed,compiled_mutants_rejected=3,boot_surfaces=17,
                 native_frames=len(native),capacity=17+len(native),future_capacity=17+len(future_native),
                 scope='actual_shell_retained_metadata_host_not_guest_authority',evidence=str(out))
 

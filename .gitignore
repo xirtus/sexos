@@ -109,3 +109,6 @@ tools/qemu/
 
 # Declarative proof inventory depends on this host model input.
 !/scripts/tests/fixtures/*.log
+
+# Generated Python bytecode
+__pycache__/
