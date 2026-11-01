@@ -6,7 +6,7 @@ from history_boot_fixture import boot
 
 def fixture():
     lines=[]
-    for pd in [12,17,24,25,26,27,28,29]:
+    for pd in [12,17,24,25,26,27,28,29,40]:
         if pd!=12:lines.append(f'[spindle.history.receipt] target={pd} task={pd} kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4')
         lines.extend([f'[files.history.open] target={pd} handle={pd} mode=save seq=2',f'[files.history.commit] target={pd} handle={pd} seq=10 bytes=40 hash=0xabc',f'[files.history.close] target={pd} handle={pd} seq=11 ok=1',f'[spindle.history.receipt] target={pd} task={pd} kind=saved handle={pd} bytes=40 count=1 hash=0xabc error=0'])
         if pd!=12:lines.extend([f'[files.history.open] target={pd} handle={pd+1} mode=load seq=12',f'[files.history.close] target={pd} handle={pd+1} seq=25 ok=1',f'[spindle.history.receipt] target={pd} task={pd} kind=loaded handle={pd+1} bytes=40 count=1 hash=0xabc error=0'])
@@ -14,14 +14,14 @@ def fixture():
     return '\n'.join(lines)
 def durable_fixture():
     text=fixture()
-    for generation,predecessor,target in [(1,12,17),(2,17,24),(3,24,25),(4,25,26),(5,26,27),(6,27,28),(7,28,29)]:
+    for generation,predecessor,target in [(1,12,17),(2,17,24),(3,24,25),(4,25,26),(5,26,27),(6,27,28),(7,28,29),(8,29,40)]:
         text=text.replace(f'[spindle.history.receipt] target={target} task={target} kind=missing handle=0 bytes=0 count=0 hash=0x1 error=4',f'[files.history.recovered] logical=12 source={predecessor} source_task={predecessor} target={target} generation={generation} bytes=40 source_hash=0xabc owned_hash=0xabc data_hash=0x123 boot_grant=53')
-    for generation,pd in enumerate([12,17,24,25,26,27,28,29],1):
+    for generation,pd in enumerate([12,17,24,25,26,27,28,29,40],1):
         text=text.replace(f'[files.history.commit] target={pd}',f'[files.history.durable] logical=12 target={pd} generation={generation} bytes=40 hash=0xabc barriers=3 readback=1\n[files.history.commit] target={pd}')
     return boot()+text
 def prefix_fixture(targets=(12,17)):
-    # Keep the complete eight-participant BOOT grant; declare the exercised prefix.
-    omitted=[pd for pd in [12,17,24,25,26,27,28,29]if pd not in targets]
+    # Keep the complete nine-participant BOOT grant; declare the exercised prefix.
+    omitted=[pd for pd in [12,17,24,25,26,27,28,29,40]if pd not in targets]
     return '\n'.join(line for line in durable_fixture().splitlines()
                      if line.startswith('[boot.')or not any(f'target={pd} 'in line or line.endswith(f'target={pd}')for pd in omitted))+'\n'
 class Check(unittest.TestCase):
@@ -70,8 +70,35 @@ class Check(unittest.TestCase):
         self.assertTrue(validate(text,durable=True,expected_targets=(12,17)))
     def test_prefix_accepts_distinct_held_task_namespace(self):
         text=prefix_fixture()
-        for pd in [12,17,24,25,26,27,28,29]:
+        for pd in [12,17,24,25,26,27,28,29,40]:
             text=text.replace(f'target={pd} task={pd} ',f'target={pd} task={pd*10} ')
         text=text.replace('source_task=12 ','source_task=120 ')
         self.assertEqual(validate(text,durable=True,expected_targets=(12,17)),[])
+    def test_ninth_successor_is_required_by_default_but_eight_is_explicit_prefix(self):
+        prefix=(12,17,24,25,26,27,28,29)
+        self.assertEqual(validate(prefix_fixture(prefix),durable=True,expected_targets=prefix),[])
+        self.assertTrue(validate(prefix_fixture(prefix),durable=True))
+        self.assertTrue(validate(durable_fixture(),durable=True,expected_targets=prefix))
+        for old,new in [
+            ('source=29 source_task=29 target=40 generation=8','source=28 source_task=28 target=40 generation=8'),
+            ('source=29 source_task=29 target=40 generation=8','source=29 source_task=29 target=40 generation=7'),
+            ('target=40 task=40 kind=saved','target=40 task=400 kind=saved'),
+            ('target=40 task=40 kind=loaded','target=40 task=400 kind=loaded'),
+            ('index=8 target=40 task=40','index=8 target=40 task=400'),
+        ]:
+            with self.subTest(old=old,new=new):
+                text=durable_fixture();self.assertIn(old,text)
+                self.assertTrue(validate(text.replace(old,new),durable=True))
+
+    def test_full_nine_chain_accepts_only_exact_unequal_boot_task_namespace(self):
+        text=durable_fixture()
+        for pd in [12,17,24,25,26,27,28,29,40]:
+            text=text.replace(f'target={pd} task={pd} ',f'target={pd} task={pd*10} ')
+            text=text.replace(f'source_task={pd} ',f'source_task={pd*10} ')
+        self.assertEqual(validate(text,durable=True),[])
+        for old,new in [('source_task=290 ','source_task=29 '),
+                        ('target=40 task=400 kind=saved','target=40 task=40 kind=saved'),
+                        ('index=8 target=40 task=400','index=8 target=40 task=40')]:
+            self.assertIn(old,text);self.assertTrue(validate(text.replace(old,new),durable=True))
+
 if __name__=='__main__':unittest.main()

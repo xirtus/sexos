@@ -975,6 +975,16 @@ pub fn init() {
     }
     crate::boot_memory::seal_all();
 
+    // Snapshot the actual kernel heap after all reserved images/grants exist.
+    // Drop its allocator guard before formatting/serial I/O. This is heap
+    // accounting at this BOOT point, not a physical free-frame watermark.
+    let (heap_bytes,heap_used,heap_free)={
+        let heap=crate::ALLOCATOR.lock();
+        (heap.size(),heap.used(),heap.free())
+    };
+    assert!(heap_bytes>0 && heap_used.checked_add(heap_free)==Some(heap_bytes),"BOOT_HEAP_BUDGET");
+    serial_println!("[boot.heap.budget] bytes={} used={} free={} apps={} point=after_grant_seal allocator_lock_released=1 physical_free_frames=unmeasured",heap_bytes,heap_used,heap_free,apps::COUNT);
+
     serial_println!("init: Revoking kernel write access...");
 
     // Enqueue all registered PD tasks onto scheduler runqueue

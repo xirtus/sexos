@@ -18,7 +18,7 @@ def fixture_layout(w,h,threshold=128):
     return [(8,36,left,upper),(16+left,36,right,upper),(8,bottom_y,left,lower),(16+left,bottom_y,right,lower)],cols,rows
 def fixture(w=1280,h=134,target=12,task=None,caption=None,threshold=128,glyph_threshold=None):
     task=target if task is None else task
-    width,height=1280,800;data=bytearray(width*height*3);x,y=0,50;panes,cols,rows=fixture_layout(w,h,threshold);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317],25:[318,320,321,322],26:[323,325,326,327],27:[328,330,331,332],28:[333,335,336,337],29:[338,340,341,342]}[target]
+    width,height=1280,800;data=bytearray(width*height*3);x,y=0,50;panes,cols,rows=fixture_layout(w,h,threshold);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317],25:[318,320,321,322],26:[323,325,326,327],27:[328,330,331,332],28:[333,335,336,337],29:[338,340,341,342],40:[353,355,356,357]}[target]
     text=boot({target:task})+f'[spindle.view.accepted] target={target} task={task} sequence=2 w={w} h={h} cols={cols} top_rows={rows[0]} bottom_rows={rows[1]} sender=3\n'
     prompt=b'> echo spindle17'.ljust(cols*2)
     for i,(sid,(px,py,pw,ph))in enumerate(zip(sids,panes)):
@@ -102,8 +102,8 @@ class Check(unittest.TestCase):
         for old,new in [('sid=161 sequence=2','sid=161 sequence=1'),('task=12 sequence=2','task=17 sequence=2'),('bottom_rows=1','bottom_rows=6'),('h=41','h=42')]:self.assertTrue(verify(text.replace(old,new),ppm,FONT,12,'> echo spindle17',True,False),(old,new))
     def test_empty_or_partial_hex_payload_is_not_a_paint(self):
         text,ppm=fixture();self.assertTrue(verify(text.replace('bytes=21','bytes=20'),ppm,FONT,12,None,False,False));self.assertTrue(verify(text.replace('hex=3e','hex=0'),ppm,FONT,12,None,False,False))
-    def test_all_eight_catalog_grids_and_unequal_held_task_have_exact_current_pixels(self):
-        for target,task in [(12,12),(17,17),(24,24),(24,240),(25,250),(26,260),(27,270),(28,280),(29,290)]:
+    def test_all_nine_catalog_grids_and_unequal_held_task_have_exact_current_pixels(self):
+        for target,task in [(12,12),(17,17),(24,24),(24,240),(25,250),(26,260),(27,270),(28,280),(29,290),(40,400)]:
             text,ppm=fixture(512,134,target,task,caption='NET / verified')
             self.assertEqual(verify(text,ppm,FONT,target,'> echo spindle17',False,False,require_text='NET / verified'),[])
         text,ppm=fixture(640,134,24,240,caption='NET / verified across panes')

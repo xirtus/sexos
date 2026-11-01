@@ -32,8 +32,8 @@ def fixture():
 
 
 class ReserveChainEvidence(unittest.TestCase):
- def test_all_eight_source_subjects_and_six_later_edits_join(self):
-  third,frames,text,rows=fixture();self.assertEqual([r['target']for r in rows],[9,16,18,19,20,21,22,23]);verify_boot_quil(text,rows);verify_third_captures(third,frames,text,rows)
+ def test_all_sixteen_source_subjects_and_fourteen_later_edits_join(self):
+  third,frames,text,rows=fixture();self.assertEqual([r['target']for r in rows],[9,16,18,19,20,21,22,23,32,33,34,35,36,37,38,39]);self.assertEqual(len(third['chain']),14);self.assertEqual(third['final_target'],39);verify_boot_quil(text,rows);verify_third_captures(third,frames,text,rows)
  def test_missing_middle_wrong_identity_recovery_frame_or_final_cleanup_fails(self):
   original=fixture()
   for mutation in range(7):
@@ -42,10 +42,18 @@ class ReserveChainEvidence(unittest.TestCase):
    elif mutation==1:third['chain'][-1]['target']=22
    elif mutation==2:third['chain'][1]['loaded'][1]['hash']='0x1'
    elif mutation==3:frames[2]['target']=18
-   elif mutation==4:text=text.replace('pd=23 task=23 reason=0','pd=22 task=23 reason=0')
+   elif mutation==4:text=text.replace('pd=39 task=39 reason=0','pd=38 task=39 reason=0')
    elif mutation==5:third['chain'][-1]['saved']['content']+='z'
    else:third['final_target']=18
    with self.subTest(mutation=mutation),self.assertRaises(ValueError):verify_third_captures(third,frames,text,rows)
+ def test_every_later_phase_requires_continuous_body_fresh_window_and_exact_member(self):
+  for index in range(14):
+   for fault in ('missing','window','body'):
+    third,frames,text,rows=fixture()
+    if fault=='missing':third['chain'].pop(index)
+    elif fault=='window':third['chain'][index]['frame']['serial_end']=third['chain'][index]['edit_start']
+    else:third['chain'][index]['saved']['content']='broken'
+    with self.subTest(index=index,fault=fault),self.assertRaises(ValueError):verify_third_captures(third,frames,text,rows)
  def test_duplicate_boot_audit_or_forged_slot_fails(self):
   third,frames,text,rows=fixture()
   for raw in [text+text.splitlines()[0]+'\n',text.replace('lifecycle=126','lifecycle=54')]:

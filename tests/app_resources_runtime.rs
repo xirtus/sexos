@@ -15,7 +15,7 @@ pub mod structures{pub mod paging{
 pub mod instructions{pub mod tlb{pub fn flush(va:crate::VirtAddr){crate::FLUSHES.lock().push(va.0);}}}
 static FLUSHES:Mutex<Vec<u64>>=Mutex::new(Vec::new());
 static LEAVES:Mutex<BTreeMap<u64,usize>>=Mutex::new(BTreeMap::new());
-static REGISTRY:[AtomicPtr<capability::ProtectionDomain>;32]=[const{AtomicPtr::new(core::ptr::null_mut())};32];
+static REGISTRY:[AtomicPtr<capability::ProtectionDomain>;ipc::MAX_DOMAINS]=[const{AtomicPtr::new(core::ptr::null_mut())};ipc::MAX_DOMAINS];
 static WAKES:AtomicUsize=AtomicUsize::new(0);
 #[macro_export]macro_rules! serial_println{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}
 #[path="../kernel/src/app_resource_state.rs"]mod app_resource_state;
@@ -230,15 +230,15 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
   return;
  };
  use capability::{ProtectionDomain,CapabilityData};use app_resource_state::{LifecycleGrant,QUERY};
- assert_eq!(app_catalog::TARGETS,[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]);
- for pd in 1..=31{
+ assert_eq!(app_catalog::TARGETS,[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40]);
+ for pd in 1..=40{
   let key=app_catalog::by_target(pd).map_or(pd as u8,|r|app_catalog::boot_incarnation(r.app).target as u8);
   let domain=ProtectionDomain::new_key(pd,key);
   // Deliberately distinct task namespace, with the actual context pointer
   // established by new_key. The production capturer reads these Task objects.
   unsafe{(*domain.main_task.load(Ordering::Acquire)).id=pd*10;}
  }
- assert_eq!(REGISTRY.iter().filter(|p|!p.load(Ordering::Acquire).is_null()).count(),31);
+ assert_eq!(REGISTRY.iter().filter(|p|!p.load(Ordering::Acquire).is_null()).count(),40);
  app_resources::plan_boot_apps(&app_catalog::TARGETS);
  let mut owned_leaves=Vec::new();
  for(index,row)in app_catalog::INCARNATIONS.iter().enumerate(){
@@ -283,5 +283,5 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
   };
   assert!(message.contains(expected),"case {case} failed for an unrelated reason: {message}");
  }
- assert_eq!(owned_leaves.len(),19);
+ assert_eq!(owned_leaves.len(),28);
 }

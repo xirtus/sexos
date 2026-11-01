@@ -8,12 +8,23 @@ def main():
  # Independent current roster expectation. Synthetic policy rows are descriptive
  # host metadata; they neither create grants nor assign/infer registered tasks.
  browsers=re.findall(r'Incarnation\s*\{\s*app:\s*App::Browser,\s*ordinal:\s*(\d+),\s*target:\s*(\d+),\s*surface:\s*(\d+),',catalog)
- assert int(m[1])==19 and browsers==[('0','15','300'),('1','30','343'),('2','31','344')], 'current source roster changed'
+ assert int(m[1])==28 and browsers==[('0','15','300'),('1','30','343'),('2','31','344')], 'current source roster changed'
+ quils=re.findall(r'^\s*quil\((\d+),\s*(\d+),',catalog,re.M)
+ spindles=re.findall(r'Incarnation\s*\{\s*app:\s*App::Spindle,\s*ordinal:\s*(\d+),\s*target:\s*(\d+),',catalog)
+ # Independent actual roster goldens; only subsequent synthetic ordinals are
+ # computed. Catalog metadata is not a registered-task identity or authority.
+ assert [int(t) for _,t in quils]==[9,16,18,19,20,21,22,23,32,33,34,35,36,37,38,39]
+ assert [int(t) for _,t in spindles]==[12,17,24,25,26,27,28,29,40]
+ families=(quils,spindles,[(o,t)for o,t,_ in browsers])
+ for rows in families:assert [int(o)for o,_ in rows]==list(range(len(rows))), 'noncanonical family ordinals'
+ actual_targets={int(t)for rows in families for _,t in rows}
+ assert len(actual_targets)==28 and not actual_targets.intersection({100,101,102}), 'synthetic identity alias'
+ next_ordinals=tuple(len(rows)for rows in families)
 
  extra='''
- quil(8,100,400,None,210,211,Some(212),213),
- Incarnation{app:App::Spindle,ordinal:8,target:101,surface:401,shell_surface:Some(402),lifecycle_slot:214,close_slot:215,activation_slot:Some(216),route_slot:217,children:&[403,404,405]},
- Incarnation{app:App::Browser,ordinal:3,target:102,surface:406,shell_surface:None,lifecycle_slot:218,close_slot:219,activation_slot:Some(220),route_slot:221,children:&[]},'''
+ quil(%d,100,400,None,210,211,Some(212),213),
+ Incarnation{app:App::Spindle,ordinal:%d,target:101,surface:401,shell_surface:Some(402),lifecycle_slot:214,close_slot:215,activation_slot:Some(216),route_slot:217,children:&[403,404,405]},
+ Incarnation{app:App::Browser,ordinal:%d,target:102,surface:406,shell_surface:None,lifecycle_slot:218,close_slot:219,activation_slot:Some(220),route_slot:221,children:&[]},''' % next_ordinals
  catalog=catalog[:end]+extra+catalog[end:];catalog=catalog[:m.start(1)]+str(int(m[1])+3)+catalog[m.end(1):]
  with tempfile.TemporaryDirectory(prefix='sexos-incarnation-policy-')as temp:
   out=Path(temp);cp=out/'catalog.rs';cp.write_text(catalog);source=(root/'servers/silk-shell/src/main.rs').read_text();parts=[]
@@ -25,12 +36,12 @@ def main():
   fixture=re.sub(r'#\[path="(\.\./[^"]+)"\]',lambda m:'#[path='+json.dumps(str(cp if m[1].endswith('/app_catalog.rs')else(root/m[1][3:]).resolve()))+']',fixture)
   fixture+=r'''
 #[test]fn explicit_expanded_lineage_preserves_actual_three_browser_rows(){
- assert_eq!(app_catalog::COUNT,22);
+ assert_eq!(app_catalog::COUNT,31);
  let browsers:Vec<_>=app_catalog::INCARNATIONS.iter().filter(|r|r.app==app_catalog::App::Browser)
   .map(|r|(r.ordinal,r.target,r.surface,r.lifecycle_slot,r.close_slot,r.activation_slot,r.route_slot)).collect();
  assert_eq!(browsers,[(0,15,300,40,43,None,43),(1,30,343,154,155,Some(156),157),
   (2,31,344,158,159,Some(160),161),(3,102,406,218,219,Some(220),221)]);
- for(target,predecessor)in[(100,23),(101,29),(102,31)]{
+ for(target,predecessor)in[(100,39),(101,40),(102,31)]{
   let row=app_catalog::by_target(target).expect("explicit synthetic row");
   assert_eq!(app_catalog::predecessor(row).map(|r|r.target),Some(predecessor));
  }

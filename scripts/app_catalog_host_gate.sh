@@ -81,4 +81,4 @@ for name,value in [('capture-infers-pd','app.predecessor'),('capture-trusts-gran
 PY_CONTROLS
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_startup_identity.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_sources.py" --root "$ROOT_DIR"
-echo '[app.catalog.result] PASS scope=actual_validator_and_capture_with_host_registry_mapper_tlb_not_native_observation compiled_mutants_rejected=9 apps=19 registered_mains=31'
+echo '[app.catalog.result] PASS scope=actual_validator_and_capture_with_host_registry_mapper_tlb_not_native_observation compiled_mutants_rejected=9 apps=28 registered_mains=40'

@@ -43,7 +43,7 @@ const fn quil(ordinal: u8, target: u32, surface: u64, shell_surface: Option<u64>
 }
 
 /// Every BOOT-reserved app incarnation, in activation order per app.
-pub const INCARNATIONS: [Incarnation; 19] = [
+pub const INCARNATIONS: [Incarnation; 28] = [
     quil(0, 9, 156, Some(201), 38, 41, None, 11),
     Incarnation { app: App::Spindle, ordinal: 0, target: 12, surface: 154, shell_surface: Some(153), lifecycle_slot: 39, close_slot: 42, activation_slot: None, route_slot: 14, children: &[160, 161, 162] },
     // Browser's document notices share its BOOT close route.
@@ -64,6 +64,15 @@ pub const INCARNATIONS: [Incarnation; 19] = [
     Incarnation { app: App::Spindle, ordinal: 7, target: 29, surface: 338, shell_surface: Some(339), lifecycle_slot: 150, close_slot: 151, activation_slot: Some(152), route_slot: 153, children: &[340, 341, 342] },
     Incarnation { app: App::Browser, ordinal: 1, target: 30, surface: 343, shell_surface: None, lifecycle_slot: 154, close_slot: 155, activation_slot: Some(156), route_slot: 157, children: &[] },
     Incarnation { app: App::Browser, ordinal: 2, target: 31, surface: 344, shell_surface: None, lifecycle_slot: 158, close_slot: 159, activation_slot: Some(160), route_slot: 161, children: &[] },
+    quil(8, 32, 345, None, 162, 163, Some(164), 165),
+    quil(9, 33, 346, None, 166, 167, Some(168), 169),
+    quil(10, 34, 347, None, 170, 171, Some(172), 173),
+    quil(11, 35, 348, None, 174, 175, Some(176), 177),
+    quil(12, 36, 349, None, 178, 179, Some(180), 181),
+    quil(13, 37, 350, None, 182, 183, Some(184), 185),
+    quil(14, 38, 351, None, 186, 187, Some(188), 189),
+    quil(15, 39, 352, None, 190, 191, Some(192), 193),
+    Incarnation { app: App::Spindle, ordinal: 8, target: 40, surface: 353, shell_surface: Some(354), lifecycle_slot: 194, close_slot: 195, activation_slot: Some(196), route_slot: 197, children: &[355, 356, 357] },
 ];
 
 /// Compile-time storage sizing; descriptive catalog data never grants authority.

@@ -18,7 +18,7 @@ use recovery::{Participant, RecoveryGrant};
 fn roster<const N: usize>(targets: [u32; N]) -> RecoveryGrant<N> {
     RecoveryGrant { holder: 11, logical: 12, participants: targets.map(|target| Participant { target, task: target * 10 }), base: 1808, sectors: 18 }
 }
-fn grant() -> recovery::Grant { roster([12, 17, 24, 25, 26, 27, 28, 29]) }
+fn grant() -> recovery::Grant { roster([12, 17, 24, 25, 26, 27, 28, 29, 40]) }
 fn body(raw: [u64; 5]) -> Result<[u64; 4], u64> {
     if raw[0] != 0 { assert_eq!(&raw[1..], &[0; 4]); Err(raw[0]) }
     else { Ok(raw[1..].try_into().unwrap()) }
@@ -27,10 +27,10 @@ fn decode<const N: usize>(g: RecoveryGrant<N>, targets: &[u32; N]) -> Result<Rec
     recovery::decode_for(11, 12, targets, |kind| body(g.query(11, kind)))
 }
 #[test]
-fn actual_catalog_eight_and_kernel_query_roundtrip() {
-    assert_eq!(app_catalog::SPINDLE_TARGETS, [12, 17, 24, 25, 26, 27, 28, 29]);
+fn actual_catalog_nine_and_kernel_query_roundtrip() {
+    assert_eq!(app_catalog::SPINDLE_TARGETS, [12, 17, 24, 25, 26, 27, 28, 29, 40]);
     let pd = capability::ProtectionDomain { id: 11, value: Some(capability::CapabilityData::HistoryRecovery(grant())) };
-    assert_eq!(production::query(&pd, 53, 0), [0, 12, 11, 8, 1]);
+    assert_eq!(production::query(&pd, 53, 0), [0, 12, 11, 9, 1]);
     assert_eq!(production::query(&pd, 53, 1), [0, 1808, 18, 0, 0]);
     assert_eq!(production::query(&pd, 53, 2), [0, 12, 120, 0, 0]);
     assert_eq!(production::query(&pd, 53, 3), [0, 17, 170, 1, 0]);
@@ -40,15 +40,16 @@ fn actual_catalog_eight_and_kernel_query_roundtrip() {
     assert_eq!(production::query(&pd, 53, 7), [0, 27, 270, 5, 0]);
     assert_eq!(production::query(&pd, 53, 8), [0, 28, 280, 6, 0]);
     assert_eq!(production::query(&pd, 53, 9), [0, 29, 290, 7, 0]);
-    for kind in [10, u64::MAX] { assert_eq!(production::query(&pd, 53, kind), [1, 0, 0, 0, 0]); }
+    assert_eq!(production::query(&pd, 53, 10), [0, 40, 400, 8, 0]);
+    for kind in [11, u64::MAX] { assert_eq!(production::query(&pd, 53, kind), [1, 0, 0, 0, 0]); }
     let decoded = recovery::decode_for(11, 12, &app_catalog::SPINDLE_TARGETS, |kind| body(production::query(&pd, 53, kind))).unwrap();
     assert_eq!(decoded, grant());
 }
 #[test]
 fn missing_wrong_kind_holder_and_full_width_slots_are_denied() {
-    for id in [0, 12, 17, 24, 25, 26, 27, 28, 29, 3] {
+    for id in [0, 12, 17, 24, 25, 26, 27, 28, 29, 40, 3] {
         let pd = capability::ProtectionDomain { id, value: Some(capability::CapabilityData::HistoryRecovery(grant())) };
-        for kind in 0..10 { assert_eq!(production::query(&pd, 53, kind), [3, 0, 0, 0, 0]); }
+        for kind in 0..11 { assert_eq!(production::query(&pd, 53, kind), [3, 0, 0, 0, 0]); }
     }
     for value in [None, Some(capability::CapabilityData::Domain(11))] {
         let pd = capability::ProtectionDomain { id: 11, value };
@@ -77,7 +78,7 @@ fn generic_two_three_and_eight_rosters_preserve_middle_last_and_unequal_task_ids
 #[test]
 fn owned_roster_sizes_remain_bounded() {
     assert_eq!(core::mem::size_of::<Participant>(), 8);
-    assert_eq!(core::mem::size_of::<recovery::Grant>(), 88);
+    assert_eq!(core::mem::size_of::<recovery::Grant>(), 96);
     assert_eq!(core::mem::size_of::<RecoveryGrant<2>>(), 40);
     assert_eq!(core::mem::size_of::<RecoveryGrant<3>>(), 48);
     assert_eq!(core::mem::size_of::<RecoveryGrant<8>>(), 88);
@@ -88,11 +89,11 @@ fn invalid_grants_never_expose_metadata_or_participants() {
     let mut bad = vec![RecoveryGrant { holder: 0, ..g }, RecoveryGrant { logical: 0, ..g },
         RecoveryGrant { base: u64::MAX, ..g }, RecoveryGrant { sectors: 17, ..g }];
     for p in [Participant::EMPTY, Participant { target: 12, task: 999 }, Participant { target: 99, task: 120 }] {
-        for index in [1, 4, 7] { let mut changed = g; changed.participants[index] = p; bad.push(changed); }
+        for index in [1, 4, 7, 8] { let mut changed = g; changed.participants[index] = p; bad.push(changed); }
     }
     for g in bad {
         assert!(!g.valid()); assert_eq!(g.participant(12), None); assert!(!g.permits(11, 12, 120));
-        for kind in 0..10 { assert_eq!(g.query(11, kind), [3, 0, 0, 0, 0]); }
+        for kind in 0..11 { assert_eq!(g.query(11, kind), [3, 0, 0, 0, 0]); }
     }
     assert!(!roster::<0>([]).valid());
     assert!(!roster(core::array::from_fn::<_, 65, _>(|i| i as u32 + 1)).valid());
@@ -101,9 +102,9 @@ fn invalid_grants_never_expose_metadata_or_participants() {
 #[test]
 fn decoder_rejects_header_count_version_extent_and_reserved_corruption() {
     let g = grant();
-    for (kind, field, value) in [(0,0,17), (0,1,12), (0,2,1), (0,2,2), (0,2,3), (0,2,4), (0,2,7), (0,2,9), (0,2,65), (0,3,0), (0,3,2),
+    for (kind, field, value) in [(0,0,17), (0,1,12), (0,2,1), (0,2,2), (0,2,3), (0,2,4), (0,2,7), (0,2,8), (0,2,10), (0,2,65), (0,3,0), (0,3,2),
         (0,0,(1u64<<32)|12), (0,1,(1u64<<32)|11), (1,0,u64::MAX), (1,1,19), (1,2,1), (1,3,1)] {
-        let result = recovery::decode_for(11, 12, &[12, 17, 24, 25, 26, 27, 28, 29], |k| {
+        let result = recovery::decode_for(11, 12, &[12, 17, 24, 25, 26, 27, 28, 29, 40], |k| {
             let mut b = body(g.query(11, k))?; if k == kind { b[field] = value; } Ok(b)
         });
         assert!(result.is_err(), "accepted kind={kind} field={field} value={value}");
@@ -120,15 +121,15 @@ fn decoder_rejects_middle_last_identity_order_duplicate_and_high_bits() {
             assert!(result.is_err(), "accepted kind={kind} field={field} value={value}");
         }
     }
-    assert!(decode(grant(), &[17, 12, 24, 25, 26, 27, 28, 29]).is_err());
-    assert!(decode(grant(), &[12, 12, 24, 25, 26, 27, 28, 29]).is_err());
+    assert!(decode(grant(), &[17, 12, 24, 25, 26, 27, 28, 29, 40]).is_err());
+    assert!(decode(grant(), &[12, 12, 24, 25, 26, 27, 28, 29, 40]).is_err());
 }
 #[test]
 fn truncation_at_any_query_returns_error_without_partial_grant() {
     let g = grant();
-    for missing in 0..10 {
+    for missing in 0..11 {
         let mut calls = Vec::new();
-        let result = recovery::decode_for(11, 12, &[12, 17, 24, 25, 26, 27, 28, 29], |k| {
+        let result = recovery::decode_for(11, 12, &[12, 17, 24, 25, 26, 27, 28, 29, 40], |k| {
             calls.push(k); if k == missing { Err(77) } else { body(g.query(11, k)) }
         });
         assert_eq!(result, Err(77));
@@ -142,4 +143,30 @@ fn malformed_expected_authority_is_not_queried_or_accepted() {
     }
     assert_eq!(recovery::decode_for(11, 12, &[], |_| panic!("zero count")), Err(1));
     assert_eq!(recovery::decode_for(11, 12, &[1; 65], |_| panic!("oversized count")), Err(1));
+}
+
+#[test]
+fn actual_ninth_held_participant_keeps_task_identity_and_strict_last_row_decode() {
+    let g=grant();
+    assert_eq!(g.participant(40),Some(Participant{target:40,task:400}));
+    assert!(g.permits(11,40,400));
+    for (holder,target,task) in [(11,40,40),(11,40,290),(11,29,400),(40,40,400),(11,41,410)] {
+        assert!(!g.permits(holder,target,task));
+    }
+    assert_eq!(g.participant(41),None);
+    let expected=[12,17,24,25,26,27,28,29,40];
+    assert_eq!(decode(g,&expected),Ok(g));
+    for (field,value) in [(0,0),(0,29),(0,(1u64<<32)|40),(1,0),(1,290),(1,(1u64<<32)|400),(2,7),(2,9),(3,1)] {
+        let r=recovery::decode_for(11,12,&expected,|kind|{
+            let mut row=body(g.query(11,kind))?;
+            if kind==10 {row[field]=value;}Ok(row)
+        });
+        assert!(r.is_err(),"accepted last participant field={field} value={value}");
+    }
+    let wrong=[12,17,24,25,26,27,28,29,41];
+    assert!(decode(g,&wrong).is_err());
+    let pd=capability::ProtectionDomain{id:11,value:Some(capability::CapabilityData::HistoryRecovery(g))};
+    for slot in [0,52,54,1025,53|(1u64<<32),u64::MAX] {
+        assert_eq!(production::query(&pd,slot,10),[1,0,0,0,0]);
+    }
 }

@@ -5320,6 +5320,9 @@ pub extern "C" fn _start() -> ! {
     if let Some(config)=network_config{let w=config.to_words();sex_pdx::serial_record!("[sexnet.network.config] words={:x},{:x},{:x},{:x} origin=held_boot_nic immutable=1 route=metadata",w[0],w[1],w[2],w[3]);}
     else{sex_pdx::serial_record!("[sexnet.network.config.unavailable] network=0 fallback=0");}
     let source_denials=unsafe { &mut SOURCE_DENIALS };
+    let denial_bytes=core::mem::size_of::<source_denial::Outbox>();
+    assert!(denial_bytes<4096,"SOURCE_DENIAL_STORAGE_BUDGET");
+    sex_pdx::serial_record!("[net.source.denial.storage] bytes={} owners={} slots={} bound=4096 public=1",denial_bytes,source_denial::OWNERS_PER_KIND,source_denial::TOTAL_SLOTS);
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     let mut outbound=jobs::Machine::new();
     let mut outbound_changes=0u64;

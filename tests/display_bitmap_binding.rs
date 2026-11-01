@@ -51,7 +51,7 @@ fn actual_non_browser_families_rejected_even_with_their_exact_held_tuple() {
         assert!(c.is_subject(row.target,row.surface,3));
         assert!(Binding::from_catalog(row.lifecycle_slot,c).is_none());count+=1;
     }
-    assert_eq!(count,16); // Independent current eight-Quil/eight-Spindle roster.
+    assert_eq!(count,25); // Independent current sixteen-Quil/nine-Spindle roster.
 }
 #[test]
 fn constructor_preserves_held_task_without_assuming_or_selecting_one() {

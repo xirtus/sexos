@@ -25,8 +25,13 @@ fn stale(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::STALE,Kind::Cer
 fn max_seq(kind:Kind)->u32{match kind{Kind::Entropy=>entropy_seed::MAX_SEQ,Kind::CertificateTime=>certificate_time::MAX_SEQ,Kind::Trust=>trust_policy::MAX_SEQ}}
 
 #[test]fn denial_storage_budget_is_finite_and_contains_no_machine_backing(){
-    assert_eq!(OWNERS_PER_KIND,19);assert_eq!(TOTAL_SLOTS,57);
+    assert_eq!(OWNERS_PER_KIND,app_catalog::COUNT);assert_eq!(TOTAL_SLOTS,3*app_catalog::COUNT);
     println!("[source.denial.host.storage] bytes={} slots={} owners_per_kind={}",core::mem::size_of::<Outbox>(),TOTAL_SLOTS,OWNERS_PER_KIND);
+    // Independent compact-layout budget for the 64-bit host/guest profile:
+    // each slot is 48 bytes; the round-robin cursor is 8 bytes. At planned 28
+    // descriptive participants this is 4040 bytes, still strictly below 4KiB.
+    assert_eq!(core::mem::size_of::<usize>(),8);
+    assert_eq!(core::mem::size_of::<Outbox>(),48*TOTAL_SLOTS+8);
     assert!(core::mem::size_of::<Outbox>()<4096);
 }
 #[test]fn every_kind_uses_actual_typed_error_word_and_finite_sequence(){

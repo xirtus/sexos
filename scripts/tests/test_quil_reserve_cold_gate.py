@@ -10,20 +10,20 @@ from test_pending_io_cold_gate import disk_image
 
 class ReserveCold(unittest.TestCase):
     def fixture(self):
-        payload = b'first noteqqtttttt'
+        payload = b'first noteqq' + b't' * 14
         seed = disk_image(payload)
         rows = gate.quil_catalog(Path(__file__).resolve().parents[2])
         saved = dict(object=5, content=payload.decode(), bytes=len(payload), hash=hex(gate.cold.fnv(payload)))
-        third = dict(catalog=copy.deepcopy(rows), final_target=23, append_count=6,
-                     chain=[dict(target=target, saved=saved) for target in [18, 19, 20, 21, 22, 23]])
+        third = dict(catalog=copy.deepcopy(rows), final_target=39, append_count=14,
+                     chain=[dict(target=target, saved=saved) for target in [18, 19, 20, 21, 22, 23, 32, 33, 34, 35, 36, 37, 38, 39]])
         return seed, dict(options=dict(third_quil=True), final_disk_sha256=gate.cold.digest(seed)), dict(ok=True, soak=dict(third_quil=third)), rows
 
     def test_exact_last_save_is_joined_to_real_terminal_journal(self):
         args = self.fixture()
         seed, payload, chain = gate.terminal_document(*args, '/tmp/sealed-parent')
         self.assertEqual(seed, args[0])
-        self.assertEqual(chain['targets'], [9, 16, 18, 19, 20, 21, 22, 23])
-        self.assertEqual(chain['final_target'], 23)
+        self.assertEqual(chain['targets'], [9, 16, 18, 19, 20, 21, 22, 23, 32, 33, 34, 35, 36, 37, 38, 39])
+        self.assertEqual(chain['final_target'], 39)
         self.assertEqual(chain['recovered']['identity'], 6 << 16 | 3)
         self.assertEqual(gate.POLICY.expected(payload), payload[-8:].decode())
 

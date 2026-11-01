@@ -51,11 +51,11 @@ struct Receipt { seq: u32, word: u64 }
 #[derive(Clone, Copy)]
 struct Slot {
     owner: Option<Identity>,
-    cached: Option<Receipt>,
+    cached_seq: Option<u32>,
     pending: Option<Receipt>,
 }
 impl Slot {
-    const EMPTY: Self = Self { owner: None, cached: None, pending: None };
+    const EMPTY: Self = Self { owner: None, cached_seq: None, pending: None };
 }
 pub struct Outbox { slots: [Slot; TOTAL_SLOTS], cursor: usize }
 impl Outbox {
@@ -70,16 +70,18 @@ impl Outbox {
             .or_else(|| partition.iter().position(|slot| slot.owner.is_none())) else { return false; };
         let slot = &mut self.slots[start + relative];
         if let Some(pending) = slot.pending { return pending.seq == seq; }
-        let receipt = match slot.cached {
-            Some(cached) if seq == cached.seq => cached,
-            Some(cached) if seq < cached.seq => Receipt { seq, word: kind.stale(seq) },
-            _ => Receipt { seq, word: kind.denied(seq) },
-        };
+        // The cache always denotes the latest DENIED, so its typed word is
+        // deterministic from this partition and sequence. Only the exact
+        // pending receipt needs a retained word (it may instead be STALE).
+        let receipt = Receipt { seq, word: match slot.cached_seq {
+            Some(cached) if seq < cached => kind.stale(seq),
+            _ => kind.denied(seq),
+        } };
         slot.owner = Some(owner);
         slot.pending = Some(receipt);
         // A stale error is retained for delivery but never replaces the latest
         // DENIED cache/floor, including at the protocol's last finite sequence.
-        if slot.cached.is_none_or(|cached| seq > cached.seq) { slot.cached = Some(receipt); }
+        if slot.cached_seq.is_none_or(|cached| seq > cached) { slot.cached_seq = Some(seq); }
         true
     }
     fn selected(&self) -> Option<usize> {

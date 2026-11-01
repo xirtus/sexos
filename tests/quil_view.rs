@@ -1009,8 +1009,8 @@ fn long_status_never_squeezes_the_document_name_below_eight_cells() {
 #[test]
 fn all_document_incarnations_receive_exact_fresh_viewports_and_retain_full_notice() {
     use document_view::{Delivery, Notice};
-    assert_eq!(app_catalog::DOCUMENT_TARGETS.len(),11);
-    assert!(app_catalog::DOCUMENT_TARGETS.contains(&23));
+    assert_eq!(app_catalog::DOCUMENT_TARGETS,[9,16,18,19,20,21,22,23,32,33,34,35,36,37,38,39,15,30,31]);
+    assert_eq!(app_catalog::DOCUMENT_COUNT,19);
     for &target in &app_catalog::DOCUMENT_TARGETS {
         let task=target+1000;let mut delivery=Delivery::new();
         delivery.queue(target,task,496,319);assert!(delivery.pending());
@@ -1058,5 +1058,24 @@ fn invalid_geometry_membership_and_terminal_delivery_never_replace_valid_pending
     }
     delivery.poll(false,true,|_|panic!("retired incarnation must not send"));
     assert!(!delivery.pending());delivery.queue(23,2300,640,480);
+    delivery.poll(true,true,|_|panic!("terminal delivery cannot reopen"));assert!(!delivery.pending());
+}
+
+#[test]
+fn last_quil_invalid_geometry_membership_and_terminal_delivery_never_replace_valid_pending_notice() {
+    use document_view::{Delivery,Notice};
+    let mut delivery=Delivery::new();delivery.queue(39,3900,512,384);
+    for (target,task,w,h) in [(0,3900,640,480),(12,1200,640,480),(17,1700,640,480),
+        (24,2400,640,480),(u32::MAX,3900,640,480),(39,0,640,480),
+        (39,3900,0,384),(39,3900,512,0),(39,3900,4097,384),(39,3900,512,u32::MAX)] {
+        delivery.queue(target,task,w,h);
+        delivery.poll(true,true,|n|{
+            assert_eq!((n.target,n.task,n.w,n.h,n.sequence),(39,3900,512,384,1));Err(ERR_SERVICE_NOT_READY)
+        });assert!(delivery.pending());
+        let malformed=Notice{target,task,w,h,sequence:1};
+        assert_eq!(Notice::decode(3,target,task,malformed.args(),0),None);
+    }
+    delivery.poll(false,true,|_|panic!("retired incarnation must not send"));
+    assert!(!delivery.pending());delivery.queue(39,3900,640,480);
     delivery.poll(true,true,|_|panic!("terminal delivery cannot reopen"));assert!(!delivery.pending());
 }

@@ -43,7 +43,7 @@ include!(env!("EXPANDED_SHELL_POLICY"));
  let mut view=document_view::Delivery::new();view.queue(100,1000,320,240);let mut notice=None;
  view.poll(true,true,|n|{notice=Some(n);Ok(())});let n=notice.expect("future Quil viewport queued");
  assert!(document_view::Notice::decode(3,100,1000,n.args(),0).is_some());assert!(document_view::Notice::decode(3,100,18,n.args(),0).is_none());
- assert_eq!(app_catalog::DOCUMENT_TARGETS,[9,16,18,19,20,21,22,23,100,15,30,31,102]);
+ assert_eq!(app_catalog::DOCUMENT_TARGETS,[9,16,18,19,20,21,22,23,32,33,34,35,36,37,38,39,100,15,30,31,102]);
  let mut out=display_delivery::Outbox::new(101);out.create(0,0,123);let mut seen=vec![];out.poll(4,|op|{seen.push(op.surface);Ok(())},|_|{}).unwrap();assert_eq!(seen,[401]);
  assert!(linen::admit(101,0x42,Some(5)));assert!(!linen::admit(101,0x42,Some(2)));assert!(!linen::admit(102,0x42,Some(5)));
  assert_eq!(desktop_content::parent_frame(405),Some(402));assert_eq!(desktop_content::parent_frame(406),None);

@@ -50,7 +50,7 @@ class HistoryRoster(unittest.TestCase):
     def check(self, text):
         return h.verify_boot_roster(self.root, text)
 
-    def test_actual_source_eight_literal_spindles(self):
+    def test_actual_source_nine_literal_spindles(self):
         self.assertEqual(h.source_spindles(ROOT), [
             dict(ordinal=0, target=12, surface=154, frame=153, lifecycle=39, close=42, activation=None, route=14),
             dict(ordinal=1, target=17, surface=302, frame=306, lifecycle=50, close=51, activation=49, route=52),
@@ -60,6 +60,7 @@ class HistoryRoster(unittest.TestCase):
             dict(ordinal=5, target=27, surface=328, frame=329, lifecycle=142, close=143, activation=144, route=145),
             dict(ordinal=6, target=28, surface=333, frame=334, lifecycle=146, close=147, activation=148, route=149),
             dict(ordinal=7, target=29, surface=338, frame=339, lifecycle=150, close=151, activation=152, route=153),
+            dict(ordinal=8, target=40, surface=353, frame=354, lifecycle=194, close=195, activation=196, route=197),
         ])
 
     def test_current_full_catalog_joins_only_exact_spindle_tasks(self):
@@ -69,26 +70,44 @@ class HistoryRoster(unittest.TestCase):
                   (19,308,9,4,18,110,111,113,1), (20,309,9,5,19,114,115,117,1),
                   (21,310,9,6,20,118,119,121,1), (22,311,9,7,21,122,123,125,1),
                   (23,312,9,8,22,126,127,129,1),
-                  (30,343,15,2,15,154,155,157,1), (31,344,15,3,30,158,159,161,1)]
+                  (30,343,15,2,15,154,155,157,1), (31,344,15,3,30,158,159,161,1),
+                  (32,345,9,9,23,162,163,165,1), (33,346,9,10,32,166,167,169,1),
+                  (34,347,9,11,33,170,171,173,1), (35,348,9,12,34,174,175,177,1),
+                  (36,349,9,13,35,178,179,181,1), (37,350,9,14,36,182,183,185,1),
+                  (38,351,9,15,37,186,187,189,1), (39,352,9,16,38,190,191,193,1)]
         extra = ""
         for target, surface, logical, inc, pred, lifecycle, close, route, dormant in others:
             extra += (f"[boot.app.catalog] target={target} task={target*10} surface={surface} logical={logical} "
                       f"incarnation={inc} predecessor={pred} lifecycle={lifecycle} close={close} route={route} "
                       f"dormant={dormant} grants_verified=1 data_only=1\n")
-        actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133),(3,25,318,319,134,135,136,137),(4,26,323,324,138,139,140,141),(5,27,328,329,142,143,144,145),(6,28,333,334,146,147,148,149),(7,29,338,339,150,151,152,153)]
-        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=8", extra + "[boot.app.catalog.complete] rows=19")
+        actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133),(3,25,318,319,134,135,136,137),(4,26,323,324,138,139,140,141),(5,27,328,329,142,143,144,145),(6,28,333,334,146,147,148,149),(7,29,338,339,150,151,152,153),(8,40,353,354,194,195,196,197)]
+        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=9", extra + "[boot.app.catalog.complete] rows=28")
         self.assertEqual(h.verify_boot_roster(ROOT, text)["participants"],
-                         [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240),dict(target=25,task=250),dict(target=26,task=260),dict(target=27,task=270),dict(target=28,task=280),dict(target=29,task=290)])
-        # New Browser rows do not turn any Browser task into a Spindle writer.
+                         [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240),dict(target=25,task=250),dict(target=26,task=260),dict(target=27,task=270),dict(target=28,task=280),dict(target=29,task=290),dict(target=40,task=400)])
+        # Descriptive Browser/Quil rows do not create Spindle writer authority.
         roster=h.verify_boot_roster(ROOT,text)
-        for writer in (dict(source=30,task=300,logical=12),dict(source=31,task=310,logical=12),dict(source=29,task=29,logical=12)):
+        self.assertEqual(h.verify_writer(dict(source=40,task=400,logical=12),roster),dict(target=40,task=400,logical=12))
+        for writer in (dict(source=30,task=300,logical=12),dict(source=31,task=310,logical=12),dict(source=29,task=29,logical=12),dict(source=40,task=40,logical=12),dict(source=40,task=401,logical=12)):
             with self.assertRaises(ValueError):h.verify_writer(writer,roster)
         with self.assertRaises(ValueError):
             h.verify_boot_roster(ROOT,text.replace('[boot.history.participant] index=7 target=29 task=290',
                                                   '[boot.history.participant] index=7 target=29 task=29'))
 
-    def test_two_and_three_unequal_tasks_join_writer(self):
-        for rows in (ROWS[:2], ROWS):
+        final_line=next(line for line in text.splitlines(keepends=True) if line.startswith('[boot.history.participant] index=8 '))
+        for bad in (text.replace(final_line,''),text.replace(final_line,final_line+final_line),
+                    text.replace('participants=9','participants=8'),
+                    text.replace('index=8 target=40 task=400','index=8 target=40 task=40'),
+                    text.replace('index=8 target=40 task=400',f'index=8 target=40 task={(1<<32)+400}'),
+                    text.replace('index=8 target=40','index=8 target=41'),
+                    text.replace('target=40 task=400 surface=353 logical=12 incarnation=9 predecessor=29',
+                                 'target=40 task=400 surface=353 logical=12 incarnation=9 predecessor=28')):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):h.verify_boot_roster(ROOT,bad)
+
+    def test_two_three_and_eight_explicit_rosters_with_unequal_tasks_join_writer(self):
+        eight=ROWS[:2]+[(2,24,313,314,130,131,132,133),(3,25,318,319,134,135,136,137),
+                       (4,26,323,324,138,139,140,141),(5,27,328,329,142,143,144,145),
+                       (6,28,333,334,146,147,148,149),(7,29,338,339,150,151,152,153)]
+        for rows in (ROWS[:2], ROWS, eight):
             self.path.write_text(source(rows))
             roster = self.check(trace(rows))
             self.assertEqual(roster["participants"], [{"target": row[1], "task": row[1]*10} for row in rows])

@@ -56,8 +56,8 @@ impl Services{
  fn dispatch(&mut self,pd:u32,task:u32,op:u64,args:[u64;3]){actual_dispatch(PdxMessage{caller_pd:pd,caller_task:task,type_id:op,arg0:args[0],arg1:args[1],arg2:args[2]},&mut self.denials,&mut self.seed,&mut self.clock,&mut self.trust,&self.bindings)}
  fn no_source_receipts(&self){assert_eq!(self.seed.pending_reply(),None);assert_eq!(self.seed.owner(),None);assert_eq!(self.clock.pending_reply(),None);assert_eq!(self.clock.snapshot().high_water,None);assert_eq!(self.trust.pending_reply(),None)}
 }
-const SPINDLES:[u32;8]=[12,17,24,25,26,27,28,29];
-fn install(){HOST.with(|h|{let mut state=Host::new();for(i,pd)in [15,12,17,24,25,26,27,28,29].into_iter().enumerate(){let row=app_catalog::by_target(pd).unwrap();state.held[i]=Some(Held{slot:row.lifecycle_slot,catalog:lifecycle_wire::CatalogInfo{target_pd:pd,task_id:pd*10,surface_id:row.surface,coordinator_pd:3},live:true,catalog_error:None,info_override:None});}
+const SPINDLES:[u32;9]=[12,17,24,25,26,27,28,29,40];
+fn install(){HOST.with(|h|{let mut state=Host::new();for(i,pd)in [15,12,17,24,25,26,27,28,29,40].into_iter().enumerate(){let row=app_catalog::by_target(pd).unwrap();state.held[i]=Some(Held{slot:row.lifecycle_slot,catalog:lifecycle_wire::CatalogInfo{target_pd:pd,task_id:pd*10,surface_id:row.surface,coordinator_pd:3},live:true,catalog_error:None,info_override:None});}
  for plan in browser_sources::PLANS{
   let pd=plan.target();let task=pd*10;
   if !state.held.iter().flatten().any(|e|e.catalog.target_pd==pd){let empty=state.held.iter_mut().find(|e|e.is_none()).unwrap();*empty=Some(Held{slot:plan.lifecycle_slot(),catalog:lifecycle_wire::CatalogInfo{target_pd:pd,task_id:task,surface_id:plan.surface(),coordinator_pd:3},live:true,catalog_error:None,info_override:None});}
@@ -71,12 +71,12 @@ fn entropy_request(seq:u32,kind:u8,ticket:u32,offset:u16,length:u16)->[u64;3]{en
 fn requests(seq:u32)->[(u64,[u64;3]);3]{[(entropy_seed::OP,entropy_request(seq,entropy_seed::BEGIN,0,0,32)),(certificate_time::OP,certificate_time::Request{seq}.encode()),(trust_policy::OP,trust_policy::Request{seq}.encode())]}
 fn browser_seed_reply(s:&mut Services,seq:u32)->Result<u32,u32>{let(owner,word)=s.seed.pending_reply().expect("Browser retained seed receipt");assert_eq!(owner,entropy_source::Identity{pd:15,task:150});s.seed.reply_accepted();entropy_seed::decode_reply(word,seq)}
 
-#[test]fn dispatch_eight_spindles_all_protocols_cannot_occupy_source_fences_or_prevent_seed32_time_trust(){
+#[test]fn dispatch_nine_spindles_all_protocols_cannot_occupy_source_fences_or_prevent_seed32_time_trust(){
  install();assert_eq!(app_catalog::SPINDLE_TARGETS,SPINDLES);let mut s=Services::new();
  for pd in SPINDLES{for(op,args)in requests(1){s.dispatch(pd,pd*10,op,args);}}
  s.no_source_receipts();assert_eq!(source_calls(),(0,0,0));
  let mut denied=Vec::new();while let Some((owner,word))=s.denials.pending_reply(){denied.push((owner,word));s.denials.reply_accepted();}
- assert_eq!(denied.len(),24);
+ assert_eq!(denied.len(),27);
  for pd in SPINDLES{for word in [entropy_seed::error(1,entropy_seed::DENIED),certificate_time::error(1,certificate_time::DENIED),trust_policy::error(1,trust_policy::DENIED)]{assert_eq!(denied.iter().filter(|(o,w)|o.pd==pd&&o.task==pd*10&&*w==word).count(),1);}}
  // All denial cache/floors remain retained while the authorized machine works.
  s.dispatch(15,150,entropy_seed::OP,entropy_request(1,entropy_seed::BEGIN,0,0,32));let ticket=browser_seed_reply(&mut s,1).unwrap();assert_eq!(ticket,1);
@@ -312,4 +312,17 @@ fn poll_sources(s:&mut Services){poll_source_receipts(&mut s.seed,&mut s.clock,&
  HOST.with(|h|h.borrow_mut().seconds=baseline+1000);
  for (pd,task,seq)in [(15,150,1),(31,310,2),(30,300,3)]{s.dispatch(pd,task,certificate_time::OP,[seq,0,0]);let(o,w)=s.clock.pending_reply().unwrap();assert_eq!(o,clock_source::Identity{pd,task});assert_eq!(certificate_time::decode_reply(w,seq as u32),Err(certificate_time::ROLLBACK));s.clock.reply_accepted();}
  assert_eq!(s.clock.snapshot(),poisoned);assert_eq!(source_calls(),(0,4,0));HOST.with(|h|assert_eq!(h.borrow().effects,[("clock",61),("clock",71),("clock",74),("clock",71)]));
+}
+
+#[test]fn last_spindle400_keeps_public_denials_on_full_then_exact_retirement_scrubs_all_kinds(){
+ install();let mut s=Services::new();
+ for(op,args)in requests(7){s.dispatch(40,40,op,args);}assert_eq!(s.denials.pending_reply(),None);
+ HOST.with(|h|h.borrow_mut().replies.clear());
+ for(op,args)in requests(7){s.dispatch(40,400,op,args);}
+ HOST.with(|h|h.borrow_mut().reply_status=1);
+ let mut retained=Vec::new();for _ in 0..3{let(owner,word)=s.denials.pending_reply().unwrap();assert_eq!((owner.pd,owner.task),(40,400));retained.push((owner,word));poll_source_denials(&mut s.denials);}
+ for expected in retained{assert_eq!(s.denials.pending_reply(),Some(expected));poll_source_denials(&mut s.denials);}
+ HOST.with(|h|{let mut h=h.borrow_mut();assert_eq!(h.replies.len(),6);h.replies.clear();h.held.iter_mut().flatten().find(|e|e.catalog.target_pd==40).unwrap().live=false;});
+ for _ in 0..3{poll_source_denials(&mut s.denials);}assert_eq!(s.denials.pending_reply(),None);
+ HOST.with(|h|assert!(h.borrow().replies.is_empty()));s.no_source_receipts();assert_eq!(source_calls(),(0,0,0));
 }
