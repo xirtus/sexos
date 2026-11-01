@@ -755,3 +755,19 @@ a guest CPU/idle benchmark or power-loss proof. Distinct from newer149 image.
 Archive1,635members verified. Remaining native obligation includes Quil pending-I/O
 terminal teardown. Next151: immutable held Display bitmap binding and actual
 incoming task authentication before pixel/sequence/receipt effects.
+
+
+## Round 151 — held-task Display bitmap binding
+
+[Report](DISPLAY_BITMAP_BINDING_2026_11_01.md): statically reserved bitmap backing
+starts UNBOUND and installs one exact held slot/PD/task/SID/coordinator tuple before
+dispatch. Actual stampedtask and exact LIVE registry tuple guard all bitmap effects;
+retirement requires provedtask. Historical Full receipts, sequence fences and terminal
+no-rebind survive. ActualBrowser15 only; adjacent text/fill task gaps remain scoped.
+Sourceb45c1bf6:43 frozen checks,2,773 logged Rust+8 lifecycle+8 binding/LIVE cases,
+1,042Python. Two compiled binding mutants+3 wiring controls rejected. Eightboots /
+112 verified captures pass both desktop sizes/full8 chains/connected TLSimage and
+storage/parent-bound writer29 cold recovery. All1,184 blobs and1,530 archive members
+verified; nine ELFs/325,243 decoded instructions, zero inspected vector/FP matches.
+Next152: preserve captured Shell input while removing fixed Browser classification,
+unused singleton queue and task==PD custody restriction. Inventory unchanged.
