@@ -22,6 +22,10 @@ mod dns_jobs;
 mod entropy;
 mod certificate_time;
 mod trust_policy;
+mod source_denial;
+// One BOOT Net main task owns this fixed error-only backing. No large stack
+// temporary or provider state is created while denying unsupported requests.
+static mut SOURCE_DENIALS:source_denial::Outbox=source_denial::Outbox::new();
 
 /// The held BOOT lifecycle grants establish exact current subject/task, never
 /// the app-supplied ticket. Err(LIVE) is the kernel's live-task attestation;
@@ -44,6 +48,46 @@ fn network_request_owner(caller:u32,caller_task:u32)->Option<jobs::Identity>{
     let owner=network_owner(caller)?;
     if caller_task!=owner.task{return None;}
     Some(owner)
+}
+// This partitions retained receipt budgets; it grants no source authority.
+// Typed source INFO still authenticates the exact consumer/profile inside the
+// existing machines. The caller was already authenticated against held custody.
+fn source_receipt_member(owner:jobs::Identity)->bool{
+    owner.pd!=0 && owner.task!=0 && sex_pdx::app_catalog::is_browser(owner.pd)
+}
+fn retain_source_denial(outbox:&mut source_denial::Outbox,kind:source_denial::Kind,owner:jobs::Identity,seq:u32)->bool{
+    if source_receipt_member(owner){return false;}
+    let retained=outbox.deny(kind,source_denial::Identity{pd:owner.pd,task:owner.task},seq);
+    sex_pdx::serial_record!("[net.source.denied] owner={} task={} kind={:?} seq={} retained={} source_effects=0 protected_fences=1",
+        owner.pd,owner.task,kind,seq,retained as u8);
+    true
+}
+// Contended or unavailable lifecycle queries are not terminal proof. Keep the
+// retained error/floor until a live send or exact held terminal observation.
+fn source_denial_live(owner:source_denial::Identity)->Option<bool>{
+    use sex_pdx::app_lifecycle as a;
+    let row=sex_pdx::app_catalog::by_target(owner.pd)?;
+    for slot in a::SLOTS{
+        if slot!=row.lifecycle_slot{continue;}
+        let Ok(c)=a::catalog(slot)else{continue;};
+        if !c.is_sender(owner.pd,owner.task)||!c.is_subject(row.target,row.surface,3){continue;}
+        return match a::info(slot){
+            Err(a::LIVE)=>Some(true),
+            Ok(info) if info.target_pd==owner.pd && info.task_id==owner.task
+                && info.required_mask&a::ROLE_NET!=0=>Some(false),
+            _=>None,
+        };
+    }
+    None
+}
+fn poll_source_denials(outbox:&mut source_denial::Outbox){
+    if let Some((owner,word))=outbox.pending_reply(){
+        match source_denial_live(owner){
+            Some(false)=>{outbox.retire(owner);},
+            Some(true) if pdx_reply(owner.pd,word)==0=>outbox.reply_accepted(),
+            _=>outbox.reply_deferred(),
+        }
+    }
 }
 struct ClientWire<'e,'a>(Option<&'e mut sex_net::Engine<'a>>,bool);
 impl jobs::Wire for ClientWire<'_,'_>{
@@ -5207,6 +5251,7 @@ pub extern "C" fn _start() -> ! {
     let network_config=network_config_result.ok();
     if let Some(config)=network_config{let w=config.to_words();sex_pdx::serial_record!("[sexnet.network.config] words={:x},{:x},{:x},{:x} origin=held_boot_nic immutable=1 route=metadata",w[0],w[1],w[2],w[3]);}
     else{sex_pdx::serial_record!("[sexnet.network.config.unavailable] network=0 fallback=0");}
+    let source_denials=unsafe { &mut SOURCE_DENIALS };
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
     let mut outbound=jobs::Machine::new();
     let mut outbound_changes=0u64;
@@ -5376,7 +5421,8 @@ pub extern "C" fn _start() -> ! {
             if network_owner(owner.pd)!=Some(jobs::Identity{pd:owner.pd,task:owner.task}){trust.retire(owner);}
             else if pdx_reply(owner.pd,word)==0{trust.reply_accepted();}else{trust.reply_deferred();}
         }
-        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some();
+        poll_source_denials(source_denials);
+        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
         let pending=preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
@@ -5402,6 +5448,7 @@ pub extern "C" fn _start() -> ! {
                     seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
                     clock.retire(sex_pdx::clock_source::Identity{pd:notice.target_pd,task:notice.task_id});
                     trust.retire(sex_pdx::trust_source::Identity{pd:notice.target_pd,task:notice.task_id});
+                    source_denials.retire(source_denial::Identity{pd:notice.target_pd,task:notice.task_id});
                     sex_pdx::serial_record!("[trust.policy.retired] target={} task={} before_cleanup_ack=1",notice.target_pd,notice.task_id);
                     sex_pdx::serial_record!("[certificate.time.retired] target={} task={} before_cleanup_ack=1 high_water_retained=1",notice.target_pd,notice.task_id);
                     sex_pdx::serial_record!("[entropy.seed.retired] target={} task={} before_cleanup_ack=1 private_payload=erased",notice.target_pd,notice.task_id);
@@ -5419,6 +5466,7 @@ pub extern "C" fn _start() -> ! {
         if req.type_id==sex_pdx::trust_policy::OP{
             let request=sex_pdx::trust_policy::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
+                if retain_source_denial(source_denials,source_denial::Kind::Trust,owner,request.seq){continue;}
                 let identity=sex_pdx::trust_source::Identity{pd:owner.pd,task:owner.task};
                 let mut observed=None;
                 if !trust.handle(identity,request,||{
@@ -5440,6 +5488,7 @@ pub extern "C" fn _start() -> ! {
         if req.type_id==sex_pdx::certificate_time::OP{
             let request=sex_pdx::certificate_time::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
+                if retain_source_denial(source_denials,source_denial::Kind::CertificateTime,owner,request.seq){continue;}
                 let identity=sex_pdx::clock_source::Identity{pd:owner.pd,task:owner.task};
                 let before=clock.snapshot();let mut sampled=false;
                 if !clock.handle(identity,request,clock_source,||{sampled=true;sex_pdx::clock_snapshot(sex_pdx::clock_source::SLOT)}){
@@ -5463,6 +5512,7 @@ pub extern "C" fn _start() -> ! {
         if req.type_id==sex_pdx::entropy_seed::OP{
             let request=sex_pdx::entropy_seed::Request::decode([req.arg0,req.arg1,req.arg2]);
             if let (Some(owner),Ok(request))=(network_request_owner(req.caller_pd,req.caller_task),request){
+                if retain_source_denial(source_denials,source_denial::Kind::Entropy,owner,request.seq){continue;}
                 let before=seed.snapshot();
                 let identity=sex_pdx::entropy_seed::Identity{pd:owner.pd,task:owner.task};
                 if !seed.handle(identity,request,sex_pdx::get_ticks(),seed_source){sex_pdx::serial_record!("[entropy.seed.backpressure] owner={} task={} seq={} effects=0",owner.pd,owner.task,request.seq);}
