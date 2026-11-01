@@ -1,4 +1,4 @@
-# Round150: Display bitmap constructor binding readiness
+# Round 151: Display bitmap binding readiness
 
 Read-only source review. Actual Browser remains PD15 with content surface300. No successor rows/grants, builds, guests or product edits are part of this preparation.
 

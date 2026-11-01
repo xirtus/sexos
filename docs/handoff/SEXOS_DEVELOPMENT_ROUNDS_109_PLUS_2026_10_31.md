@@ -729,3 +729,29 @@ archive members verified; nine ELF scans inspect324,832 instructions without
 inspected vector/FP matches. Files deferred-task gap/native unequal allocator
 remain open. Next: Browser output identity, immutable bitmap binding and captured
 input routing before individual BOOT successor source grants. Inventory unchanged.
+
+
+## Round 149 — Browser-owned output identity
+
+[Report](BROWSER_OUTPUT_IDENTITY_2026_11_01.md): held startup surface supplies
+create/text/position/register/present and constructor-bound bitmap operations.
+Full/retry and equal-sequence foreign-surface receipts cannot change the binding;
+legacy status helpers also retain their explicit surface. CurrentBrowser15 only;
+Display bitmap task authentication and successor routes remain separate.
+Source2b0758e4:43 frozen checks,2,768 logged Rust+8 lifecycle cases,1,042Python;
+2 compiled output mutants+5 wiring controls. Eight boots/112 verified captures,
+full app chains, connected TLS/image/storage, bound writer29 cold recovery pass.
+All1,181 source blobs and1,554 archive members verified; nine extracted ELFs,
+324,945 decoded instructions, zero inspected vector/FP matches. Inventory unchanged.
+
+## Round 150 — readable Spindle sustained acceptance
+
+[Acceptance report](READABLE_SPINDLE_ALPHA_ACCEPTANCE_2026_11_01.md) qualifies
+older typographyC source348cc9ab/ISO2ac80573, with2x Spindle text and corrected
+cycle-final serial-read timing. Two terminal raw>=1800s sessions and fresh strict
+read-only replays pass:171cycles/412captures, both resolutions, all8 Quil/Spindle
+incarnations and cleanup. Acceptance bounds unchanged; workflow evidence is not
+a guest CPU/idle benchmark or power-loss proof. Distinct from newer149 image.
+Archive1,635members verified. Remaining native obligation includes Quil pending-I/O
+terminal teardown. Next151: immutable held Display bitmap binding and actual
+incoming task authentication before pixel/sequence/receipt effects.

@@ -1,0 +1,99 @@
+{
+  "round": 150,
+  "readable_spindle_image_paired_sustained_accepted": true,
+  "full_os_goal_complete": false,
+  "source_commit": "348cc9ab4d2988eb58c1e4dcacf8f7b4149d6ad7",
+  "iso_sha256": "2ac80573a5240fc0d30dd2900fb59da19513b0f098d33013b8bc985f94e41b5e",
+  "kernel_sha256": "08bd29a9099ad90a8fa91698b973b18c1d9f6aa5e65dadbf6291f9e0f2064b82",
+  "architecture_sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7",
+  "committed_source_audit": {
+    "ok": true,
+    "commit": "348cc9ab4d2988eb58c1e4dcacf8f7b4149d6ad7",
+    "production": 576,
+    "runner": 598,
+    "unique": 1174,
+    "iso_sha256": "2ac80573a5240fc0d30dd2900fb59da19513b0f098d33013b8bc985f94e41b5e",
+    "kernel_sha256": "08bd29a9099ad90a8fa91698b973b18c1d9f6aa5e65dadbf6291f9e0f2064b82"
+  },
+  "native": {
+    "acceptance_boots": 2,
+    "cycles": 171,
+    "verified_captures": 412,
+    "profiles": [
+      {
+        "profile": "compact",
+        "model": "e1000",
+        "resolution": "1024x768",
+        "cycles": 87,
+        "verified_captures": 209,
+        "elapsed_seconds": 1800.0040542919887,
+        "active_elapsed_seconds": 495.7903777102474,
+        "idle_elapsed_seconds": 1304.2136765817413,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 1,
+            "generation": 97,
+            "identity": 327681,
+            "bytes": 105,
+            "hash": "0xcce91c68d54f9378"
+          }
+        ],
+        "fresh_replay": true,
+        "result_sha256": "5df6794a4716dc34178fd4466bc56ffcd0fbe4eeaa510521c1002d2e8ad32b39",
+        "independent_replay_sha256": "0597d6508279e26b1cdd173f5918524b809354549cd8c99153c14f0f63f41cee"
+      },
+      {
+        "profile": "wide",
+        "model": "e1000e",
+        "resolution": "1280x800",
+        "cycles": 84,
+        "verified_captures": 203,
+        "elapsed_seconds": 1800.0015799589455,
+        "active_elapsed_seconds": 540.1424309258582,
+        "idle_elapsed_seconds": 1259.8591490330873,
+        "remaining_obligations": [
+          "Quil pending-I/O terminal teardown"
+        ],
+        "disk_documents": [
+          {
+            "bank": 1,
+            "generation": 1,
+            "identity": 262145,
+            "bytes": 10,
+            "hash": "0xe41184b5fedbdf93"
+          },
+          {
+            "bank": 0,
+            "generation": 94,
+            "identity": 327681,
+            "bytes": 102,
+            "hash": "0xf966f9393dc41f7f"
+          }
+        ],
+        "fresh_replay": true,
+        "result_sha256": "6bb20b2c05dc955a11e92f848b1df5b9062a05b16f62971f06953eff41f5a0e6",
+        "independent_replay_sha256": "797307a2e8d4637dfaeb09c281872f3adb6349877f76180d71c24a0e0c086dd2"
+      }
+    ],
+    "all_fresh_replays": true
+  },
+  "archive": {
+    "path": "assets/sexos-readable-spindle-alpha-paired-2026-11-01-raw.tar.gz",
+    "sha256": "2c7fb61678ba938d32915ec8de8afb40895e3f9028d5d7c2e9b5afbd9b937bd8",
+    "bytes": 13541286,
+    "members": 1635,
+    "payload_manifest_sha256": "0a25433af0c95ae6c5da0018829c1eba1f635b3689cc5c3419794e92176f2ab2",
+    "all_members_size_and_sha256_verified": true
+  },
+  "scope": "Paired raw>=1800s workflow acceptance on frozen typography C: 2x Spindle font and corrected finish_cycle serial-read timing. Not Round149 Browser-output image, not guest CPU/idle benchmark, not power-loss or general daily-driver qualification. No new guest launched by packaging."
+}
