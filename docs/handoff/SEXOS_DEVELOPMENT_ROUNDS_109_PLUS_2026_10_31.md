@@ -823,3 +823,22 @@ Forced uncertainty/querytick races/unequalTask hostonly. All1,191 blobs and1,554
 archive members verified; nine ELFs/327,008 decoded instructions, zero inspected
 vector/FP matches. Next155: catalog-derived actual BOOT source construction and
 held per-consumer selection, stilloneBrowser triple. Inventory unchanged.
+
+
+## Round 155 — catalog-driven BOOT source grants and held selection
+
+[Report](BROWSER_SOURCE_CATALOG_2026_11_01.md): task-free metadata plan drives
+currentBrowser15 triple60/61/62; allslotpreflight/actualregisteredtaskcontext/typed
+insertedgrantINFOreadback/latepresealcheck. Net actualstartupslot-labelledqueries
+bind immutable consumer task; freshrequest andactiveentropyowner selecttheirown
+slots. One clockMachine/globalhighwater/rollback remains. Noactualfuturegrants.
+Source2501ebb8:43 frozen checks,3,030 logged Rust+20 nested=3,050 executions,
+1,051Python. Plan13+13/binding27+27/dispatch53+55 current+hostfuture cases; const10,
+privateforge, binding3 anddispatch9compiled forms pluswiring/catalog controls reject.
+Eightboots/112captures pass bothsizes/full8chains/TLSimage/storage/cleanup/writer29
+cold; all5 originalsourceauthorityrecords byte-identical before/after, actualtable
+readbackbeforeseal andruntimeNetbindingeveryboot. All1,197 blobs and1,648 archive
+members verified; nine ELFs/327,421 decoded instructions, zero vector/FPmatches.
+ABI66 inputs/hash73a2f412; existingwirelayouts unchanged. Next156: perBrowser static
+bitmap stores/tombstones beforeactualsuccessors andselected-consumer evidence.
+Inventory unchanged.
