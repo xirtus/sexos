@@ -114,3 +114,31 @@ actual input/Close responsiveness. Bitmap/bar/other raw intake transactionality,
 causal input capture, interrupted output, hardware latch and replay remain further
 work. Current Full settlement is not a performance or complete-epoch claim.
 2Open/28Partial/SystemProvenfalse. GLOBAL_VAS, BOOT genesis, sex-pdx and PKU remain.
+
+
+## Round170 checkpoint and next coverage boundary
+
+[Round170](TYPED_TEXT_CANONICAL_COMMIT_2026_11_01.md) qualifies typed text
+candidate projection into owned scene storage with canonical commit only after
+successful Full CPU publication, scene release and exact captured-context match.
+Old canonical bytes survive failed output; pending bytes remain for retry. Shared
+actual layout code serves projection and commit. Legacy mixed writes are fenced
+behind owner checks while a typed candidate is unreleased. The metadata is not a
+capability or a reset-unique token; closed single-Main intake remains essential.
+Bitmap/bar/geometry/focus/other raw intake and full epoch/replay remain open.
+
+Next171 reduces conservative Full raster work with explicit per-context coverage.
+Derive old AND projected-new glyph/selection damage after geometry fitting; never
+lose the old bounds for shortening/clear. Prefer conservative clipping over new
+occlusion assumptions. Capture the context and checked requirement together;
+commit/release only after successful output covers it. Empty coverage must mean
+verified no visible pixel delta, not missing metadata. Pure Settle republishes
+unchanged baseline without cursor/overlay/app/clock effects; Settle+strip still
+renders the strip. Keep Full fallback for no baseline/tiny modes, and preserve
+bitmap/lifecycle Full requirements. Do not use initial awaiting_parent as a
+complete visibility predicate. Structural Area/Full still owns window movement.
+
+Measure current-image input/Close responsiveness and work counts. FrameStore's
+full baseline clone and complete CPU scanout copy remain even for partial paint,
+so shader savings do not establish reduced copy bandwidth or hardware atomicity.
+SASOS authority rules remain unchanged;2Open/28Partial/SystemProvenfalse.

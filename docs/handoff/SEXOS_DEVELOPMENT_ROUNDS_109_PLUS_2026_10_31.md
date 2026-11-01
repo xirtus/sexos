@@ -1257,3 +1257,45 @@ cost settlement and remaining source/causal/interruption/hardware/replay work.
 Full settlement may cost more; no speedup/Alpha1800/daily-driver/hardware/SMP/
 physical-erasure/full-epoch claim.2Open/28Partial/SystemProvenfalse; SASOS rules
 unchanged. Accepted80–169=90/121;170–200 remain31 substantive rounds.
+
+
+## Round 170 — owned typed candidates and canonical text commit
+
+[Report](TYPED_TEXT_CANONICAL_COMMIT_2026_11_01.md): sourceda40f6f3.
+Typed intake seals only; canonical Surface bytes/selection/layout remain old.
+Owned Scene projects validated pending text through the actual shared layout
+helper, captures descriptive contexts and validates every active owner/SID slot.
+After successful Full CPU output and SceneLease drop, exact pending-context match
+precedes canonical text-only commit, Applied eligibility and committed diagnostics.
+Failure keeps old canonical state/pending candidate. Reset/retire suppress stale
+settlement; mixed legacy FA/FB is fenced after ownership. No new grant/authority,
+reset-resistant token or exact-task reply isolation. Other raw intake stays open.
+
+All46 frozen host checks/1,132 Python pass;3,210 logged successful Rust executions
+include repeated fixtures and separate JSON case counts. Stage24;MainScene21/
+12compiled defects/2source controls;compositor52(old49+3projection cases).
+Frame39 includes10Main pipeline cases with7pipeline+3plan runtime defects,
+4compiler and7source controls;cursor5/2compiled/4source. Binding checker13cases/
+5compiled/15source controls proves actual split flow and closed intake.
+Eleven qualified boots/70captures (16clock,34connected/recovery,20Browser) pass
+fresh frozen CLI/full-clock API replay;all11 BOOT inventories/typedreleasewitnesses.
+Current fixture/extraction/oldchecker and oldpackager49pin diagnostics remain
+UNQUALIFIED with exact helper/logs; no source/native acceptance transfer or extra
+restarted guest.1,224sourcefiles/12,293,089bytes matchGit.583/586production
+unchanged;Main/Scene/Stage change,noadds. Kernel26bace17/ABI67hash3b98b233
+byte-identical169;9ISO ELFs325,066instructions/0matchedFP-vector.
+
+DisplayELF291,760(+3,080),scene60,096(+512),textstages9,088/bitmapstores55,992/
+frameStore88 unchanged. Framebuddy8MiB/heapused11,851,408/appprivate2465pages
+remain; physicalfreeunmeasured, budgetsnotdisjointRAM. Local prologues_start4728
+(+32),raster_batch2344,render_prepared1304+48registerpush each exclude transitive/
+interrupt/dynamic stack. Raw11,554,814bytes/1,601members SHA
+4fe87bc0fd97cbb397ff0382ec756a709de0af57481bbf47258216bdf313062b,
+Root independently reopened every member and verified size/SHA.
+
+Next171 captured coverage and no-change settlement to lower conservative Full
+raster work, with measured input/Close responsiveness. Other source/causal/
+interruption/hardware/replay work remains. No speedup/Alpha1800/daily-driver/full
+reserve/hardware/SMP/physical-erasure/full-epoch claim.2Open/28Partial/SystemProven
+false;GLOBAL_VAS/BOOT-onlygenesis/sex-pdx/PKU unchanged. Accepted80–170=91/121;
+171–200 remain30 substantive rounds underactive80–200 plan.
