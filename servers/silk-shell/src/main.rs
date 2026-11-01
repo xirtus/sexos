@@ -15782,13 +15782,14 @@ fn command_palette_selected_accent() -> u32 {
 ///   3-7: per-row left accent bars for the first five rows only
 unsafe fn palette_render_list() {
     let (w,h)=(COMMAND_PALETTE_BOOT_W,COMMAND_PALETTE_BOOT_H);
-    let mut rows=[launcher::Row{name:"",status:""};16];
-    for (i,item) in COMMAND_LIST.iter().enumerate() {
+    // Each row borrows its own owned label until text() copies the bytes into
+    // the Display outbox. No mutable scratch buffer is shared between rows.
+    let mut reserve_labels=[None;COMMAND_LIST.len()];
+    let mut rows=[launcher::Row{name:"",status:""};COMMAND_LIST.len()];
+    for ((i,item),label) in COMMAND_LIST.iter().enumerate().zip(reserve_labels.iter_mut()) {
         let (available,status,reason)=palette_item_status(item.command);
-        let visible_status=match item.command {
-            Command::FocusSpindle=>spindle_reserve_label(spindle_history_label(status,available,reason),available,reason),
-            Command::FocusQuil=>quil_reserve_label(status,available,reason),
-            Command::FocusBrowser=>browser_reserve_label(status,available,reason),
+        let base=match item.command {
+            Command::FocusSpindle=>spindle_history_label(status,available,reason),
             Command::FocusLinen=>"FILES / BROWSE",
             Command::FocusAtlas=>"DESKTOP OVERVIEW",
             Command::FocusBell=>"NOTIFICATIONS",
@@ -15798,6 +15799,21 @@ unsafe fn palette_render_list() {
             Command::MinimizeFocused=>"HIDE CURRENT WINDOW",
             _=>status,
         };
+        let app=match item.command {
+            Command::FocusSpindle=>Some(app_catalog::App::Spindle),
+            Command::FocusQuil=>Some(app_catalog::App::Quil),
+            Command::FocusBrowser=>Some(app_catalog::App::Browser),
+            _=>None,
+        };
+        // Preserve Spindle's active I/O and recovery messages. A reserve hint
+        // uses one observation of the held edges and never authorizes activation.
+        let hint=available && matches!(reason,"original_incarnation_live"|"boot_successor_ready")
+            && (!matches!(item.command,Command::FocusSpindle)
+                || reason!="original_incarnation_live" || base=="RUNNING / FOCUS");
+        let count=if hint {app.and_then(app_reserve_remaining)}else{None};
+        let fallback=if hint {launcher::reserve_label(base,available,reason,count)}else{base};
+        *label=if hint {launcher::reserve_count_label(available,reason,count)}else{None};
+        let visible_status=label.as_ref().map_or(fallback,launcher::ReserveCountLabel::as_str);
         rows[i]=launcher::Row{name:launcher_row_title(item.command,item.name),status:visible_status};
         serial_println!("[shell.palette.item] idx={} action={} available={} status={} reason={}",i,item.name,available as u8,status,reason);
     }

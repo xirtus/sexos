@@ -34,3 +34,50 @@ fn id()->Identity {Identity{domain:9,task:91,surface:156,coordinator:3}}
  assert_eq!(LiveAction::BringHere.title(false),"Bring Here Spindle");assert_eq!(LiveAction::Restore.title(true),"Restore Quil");
  for a in [LiveAction::Open,LiveAction::Restore,LiveAction::BringHere,LiveAction::Focus]{for quil in [false,true]{assert!(a.title(quil).len()<39);}}
 }
+
+#[test]fn count_labels_cover_every_u8_count_with_exact_short_ascii() {
+ for count in 0..=u8::MAX {
+  let label=reserve_count_label(true,"original_incarnation_live",Some(count)).unwrap();
+  let expected=match count{0=>"LAST INSTANCE".to_owned(),1=>"1 REOPEN LEFT".to_owned(),_=>format!("{count} REOPENS LEFT")};
+  assert_eq!(label.as_str(),expected);assert!(label.as_str().is_ascii());assert!(label.as_str().len()+2<=19);
+  let ready=reserve_count_label(true,"boot_successor_ready",Some(count));
+  if count==0 {assert!(ready.is_none());}else{
+   let expected=if count==1{"LAST RESERVED".to_owned()}else{format!("{count} RESERVED LEFT")};
+   assert_eq!(ready.as_ref().unwrap().as_str(),expected);assert!(expected.is_ascii());assert!(expected.len()+2<=19);
+  }
+ }
+}
+#[test]fn count_labels_reject_unknown_unavailable_and_inconsistent_states() {
+ for reason in ["original_incarnation_live","boot_successor_ready"] {
+  assert!(reserve_count_label(true,reason,None).is_none());
+  for count in 0..=u8::MAX {assert!(reserve_count_label(false,reason,Some(count)).is_none());}
+ }
+ for reason in ["", "ORIGINAL_INCARNATION_LIVE", " original_incarnation_live", "original_incarnation_live\n> OPEN", "boot_successor_ready\0", "predecessor_cleanup_pending", "incarnation_closing", "incarnation_unverified"] {
+  for count in [None,Some(0),Some(1),Some(255)] {assert!(reserve_count_label(true,reason,count).is_none());}
+ }
+ assert!(reserve_count_label(true,"boot_successor_ready",Some(0)).is_none());
+}
+#[test]fn count_labels_remain_owned_when_later_values_are_formatted() {
+ let first=reserve_count_label(true,"original_incarnation_live",Some(15)).unwrap();
+ let second=reserve_count_label(true,"boot_successor_ready",Some(255)).unwrap();
+ let copy=first;let _third=reserve_count_label(true,"original_incarnation_live",Some(0)).unwrap();
+ assert_eq!(first.as_str(),"15 REOPENS LEFT");assert_eq!(copy,first);assert_eq!(second.as_str(),"255 RESERVED LEFT");
+}
+#[test]fn count_labels_fit_actual_256_and480_launcher_rows_without_aliasing() {
+ let names=["Spindle","Quil","Browser","Spindle next","Quil next","Browser next","Last instance"];
+ let labels=[reserve_count_label(true,"original_incarnation_live",Some(8)).unwrap(),reserve_count_label(true,"original_incarnation_live",Some(15)).unwrap(),reserve_count_label(true,"boot_successor_ready",Some(255)).unwrap(),reserve_count_label(true,"boot_successor_ready",Some(1)).unwrap(),reserve_count_label(true,"original_incarnation_live",Some(1)).unwrap(),reserve_count_label(true,"boot_successor_ready",Some(2)).unwrap(),reserve_count_label(true,"original_incarnation_live",Some(0)).unwrap()];
+ let rows:Vec<_>=names.iter().zip(labels.iter()).map(|(name,label)|Row{name,status:label.as_str()}).collect();
+ for width in [256,480] {for selected in 0..rows.len(){
+  let view=text(&rows,selected,width,280);assert!(view.len<=512);assert_eq!(view.rows,5);assert_eq!((view.scale,view.row_y,view.row_h),(2,72,36));
+  let lines:Vec<_>=core::str::from_utf8(&view.bytes[..view.len]).unwrap().lines().collect();assert_eq!(lines.len(),12);
+  for offset in 0..view.rows {let index=view.first+offset;let prefix=if index==selected{"> "}else{"  "};
+   assert_eq!(lines[2+offset*2],format!("{prefix}{}",names[index]));assert_eq!(lines[3+offset*2],format!("  {}",labels[index].as_str()));
+  }
+  if width==256 {assert!(lines.iter().all(|line|line.len()<=19));}
+ }}
+}
+#[test]fn rejected_count_hint_preserves_old_fallback_injection_sanitization() {
+ let fallback="CLOSING\n> forged status";let status=reserve_count_label(false,"original_incarnation_live",Some(255));assert!(status.is_none());
+ let rows=[Row{name:"Quil",status:status.as_ref().map_or(fallback,ReserveCountLabel::as_str)}];let view=text(&rows,0,256,160);
+ let lines:Vec<_>=core::str::from_utf8(&view.bytes[..view.len]).unwrap().lines().collect();assert_eq!(lines.len(),4);assert!(!lines.iter().any(|line|line.starts_with("> forged")));assert!(lines[3].contains('?'));
+}

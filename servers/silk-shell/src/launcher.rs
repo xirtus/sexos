@@ -98,3 +98,36 @@ pub fn reserve_label<'a>(fallback:&'a str,available:bool,reason:&str,count:Optio
         _=>fallback,
     }
 }
+
+/// Owned ASCII presentation data. Counts never attest a live incarnation or
+/// authorize activation; the caller must retain its existing held-grant checks.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct ReserveCountLabel { bytes:[u8;32], len:usize }
+impl ReserveCountLabel {
+    pub fn as_str(&self)->&str { core::str::from_utf8(&self.bytes[..self.len]).expect("RESERVE_COUNT_ASCII") }
+    fn append(&mut self,bytes:&[u8]) {
+        let end=self.len+bytes.len();self.bytes[self.len..end].copy_from_slice(bytes);self.len=end;
+    }
+    fn number(&mut self,mut count:u8) {
+        let mut digits=[0;3];let mut first=digits.len();
+        loop { first-=1;digits[first]=b'0'+count%10;count/=10;if count==0 {break;} }
+        self.append(&digits[first..]);
+    }
+}
+/// A compact reserve hint only when the caller already has a usable state and
+/// a known count. The longest label is 17 ASCII bytes, leaving the launcher's
+/// two-byte indentation inside its 19-column small-tile text measure. Unknown,
+/// unavailable and inconsistent states return None so existing labels survive.
+pub fn reserve_count_label(available:bool,reason:&str,count:Option<u8>)->Option<ReserveCountLabel> {
+    if !available {return None;}
+    let count=count?;let mut label=ReserveCountLabel{bytes:[0;32],len:0};
+    match(reason,count) {
+        ("original_incarnation_live",0)=>label.append(b"LAST INSTANCE"),
+        ("original_incarnation_live",1)=>label.append(b"1 REOPEN LEFT"),
+        ("original_incarnation_live",2..=u8::MAX)=>{label.number(count);label.append(b" REOPENS LEFT");},
+        ("boot_successor_ready",1)=>label.append(b"LAST RESERVED"),
+        ("boot_successor_ready",2..=u8::MAX)=>{label.number(count);label.append(b" RESERVED LEFT");},
+        _=>return None,
+    }
+    Some(label)
+}
