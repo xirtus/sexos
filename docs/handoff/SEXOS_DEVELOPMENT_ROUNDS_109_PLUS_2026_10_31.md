@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–164
+# SexOS development: round 108 acceptance and rounds 109–165
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -1064,3 +1064,41 @@ full daily-driver claim. Next165 useful UTC date with per-render formatting;
 then real Display scene isolation and commit work under the documented
 [epoch implementation plan](DISPLAY_EPOCH_IMPLEMENTATION_PLAN_2026_11_01.md).
 Active80–200 continues;165–200 remain36 rounds.
+
+
+## Round 165 — useful UTC date and one formatting snapshot per render
+
+[Report](UTC_DATE_CAPTION_2026_11_01.md): SilkBar now displays the UTC Gregorian
+date from the same held sample as its time, replacing the hardware debug caption.
+Full, strip and proof renderers compute13-column time/date rows once per pass;
+pixel helpers use those immutable rows. Stale/Unavailable/Rollback/Exhausted
+states erase the old date and show human captions. Existing pure sex-time math
+adds no source query, interpolation, clock trust or authority. Source bounds and
+wire remain unchanged.22 independent calendar vectors, date-only next-day
+repaint, health erasure, three rejected runtime controls and independent Python
+full-chip/date/legacy-profile controls pass.
+
+Source398810b4:43 frozen host checks,3147 logged successful Rust executions,
+1132 Python cases. Nine fresh C boots/50 qualified captures and fresh replays:
+normal/invalid-year at both sizes give16 clock/body/full-chip captures; connected
+session+cold recovery at both sizes give34. Normal samples show the date;
+invalid source shows UTC unknown/Source error. No native rare rollback/stale
+injection, Alpha,1800s or full-reserve-exhaustion acceptance is added.
+
+Review strengthened the per-pixel source guard; B then caught a stale compositor
+fixture signature, fixed without changing production. B failed-host report and
+old fixture/gate/binding remain UNQUALIFIED, native0; its sealed boot is not a C
+boot. The final packager preserves fresh CLI replay agreement and retrieves full
+clock pixels through the frozen replay API; its first output-shape failure and
+helper are retained. No acceptance predicate weakened.
+
+All1211 source blobs/12041843B and1512 archive members verified; nine ISO ELFs
+324207 decoded instructions/zeroFP-vector matches.579/582 production files
+unchanged versus164; onlyDisplayMain/Cargo andCargo.lock differ; kernel remains
+byte-identical. All nine BOOT inventories retain28apps/40mains/cap64 and bounded
+private/grant/source metadata. ABI66/hashff1d1346 and architecture unchanged.
+2Open/28Partial/SystemProvenfalse; complete EPOCH_COMMIT and DETERMINISTIC_REPLAY
+remain Open. No physical/SMP/hard realtime/erasure or general daily-driver claim.
+Next166 implements substantive immutable Display scenes and commit ownership under
+the [published epoch plan](DISPLAY_EPOCH_IMPLEMENTATION_PLAN_2026_11_01.md).
+Active80–200 continues;166–200 remain35 rounds.
