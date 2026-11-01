@@ -142,3 +142,34 @@ Measure current-image input/Close responsiveness and work counts. FrameStore's
 full baseline clone and complete CPU scanout copy remain even for partial paint,
 so shader savings do not establish reduced copy bandwidth or hardware atomicity.
 SASOS authority rules remain unchanged;2Open/28Partial/SystemProvenfalse.
+
+
+## Round171 checkpoint and next bitmap canonical boundary
+
+[Round171](TYPED_TEXT_DAMAGE_SETTLEMENT_2026_11_01.md) qualifies captured text
+coverage and explicit NoPixels settlement. Old/new damage is joined after fitting;
+only a successful covering plan with exact captured context can commit canonical
+text after lease release. Pure Settle suppresses raster/cursor/app/clock effects;
+strip joining and no-baseline/tiny/Atlas fallbacks remain conservative. Bitmap and
+lifecycle settlement remain Full-only. Two complete CPU copies remain. Paired
+four-burst host observations improve on170 in these samples; they are not a robust
+speedup or guest/hardware latency claim. Bounded repaint logs cannot establish total
+work counts. Current12boots/88captures, plus separate comparison1/18; no1800s.
+
+Next172: seal bitmap Commit/Clear without overwriting canonical published pixels.
+Project candidates through owned Scene bitmap backing; capture exact retained
+binding/task/SID/sequence/completion context. After successful Full CPU publication
+and Scene drop, match context, commit canonical bitmap, then release Applied.
+Reuse the current staging/published arrays. Failure keeps old canonical pixels and
+candidate; stale metadata cannot settle it. Protect sealed bytes from same-sequence
+Begin poisoning. Reset may erase pixels while retaining a historical receipt, so
+captured metadata must distinguish that state and never resurrect scrubbed payload.
+Terminal retirement cancels; independent owners and transport Full retries remain.
+Move committed logs to the actual boundary and prove prepared/publication/commit/
+Applied order with native bitmap assets. Canonical sample/snapshot must remain old
+until commit; do not silently turn the existing committed snapshot into pending.
+
+Bar handling follows separately: civil intake advances security anti-rollback and
+freshness state; renderer failure must not roll that back. Remaining source state,
+causal input capture, interrupted output, hardware latch and replay remain open.
+2Open/28Partial/SystemProvenfalse;GLOBAL_VAS/BOOT genesis/sex-pdx/PKU unchanged.

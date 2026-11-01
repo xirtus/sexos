@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "archive": "/tmp/sexos-text-coverage-a-2026-11-01-raw.tar.gz",
+  "sha256": "05271fa78b8cf3c462e3f21044d01f314e1cf225b2125b359a028b38f5d1891e",
+  "bytes": 17636725,
+  "members": 2907,
+  "all_members_independently_reopened_size_sha256_verified": true,
+  "round": 171,
+  "source_commit": "a187f0008f947d8f261334c239d4f81cbbe72285",
+  "repository_archive": "docs/handoff/assets/sexos-text-coverage-a-2026-11-01-raw.tar.gz",
+  "rgb_conversion": {
+    "source": "/tmp/sexos-text-coverage-a-native-connected-compact/session/image-fit.ppm",
+    "artifact": "docs/handoff/assets/sexos-text-coverage-a-connected-compact.png",
+    "width": 1024,
+    "height": 768,
+    "all_rgb_bytes_preserved": true
+  }
+}

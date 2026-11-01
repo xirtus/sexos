@@ -1299,3 +1299,45 @@ interruption/hardware/replay work remains. No speedup/Alpha1800/daily-driver/ful
 reserve/hardware/SMP/physical-erasure/full-epoch claim.2Open/28Partial/SystemProven
 false;GLOBAL_VAS/BOOT-onlygenesis/sex-pdx/PKU unchanged. Accepted80–170=91/121;
 171–200 remain30 substantive rounds underactive80–200 plan.
+
+
+## Round 171 — captured text coverage and no-change settlement
+
+[Report](TYPED_TEXT_DAMAGE_SETTLEMENT_2026_11_01.md): sourcea187f000.
+Actual old/new text/selection damage joins after fitting. Owned Scene couples
+Context with Body coverage or explicit NoPixels; successful covering publication
+and lease Drop precede exact canonical commit/Applied eligibility. Pure Settle
+republishes baseline without raster/cursor/app/clock effects; strip joining works.
+No-front/tiny/Atlas fallbacks remain conservative. Bitmap/lifecycle staysFull;
+other intake mutable, Context descriptive/notresetunique, no fullEpoch claim.
+
+All46 frozen host/1,132 Python pass;3,214 logged successful Rust executions include
+repeated fixtures. Stage24;Scene23/15compiled/2source;compositor54. Frame47
+(layout7/store8/VA6/plan13/pipeline13),10pipeline+3plan compiled defects,
+4compiler/7source/9wiring;plan1,728permutations. Cursor5/2/4;binding13/5/17.
+Core11boots70captures withfresh CLI/fullclock API replay,11 BOOT/typed witnesses.
+Current typing/pendingClose adds1boot18captures:current12/88. Separate170comparison
+1/18 supplies no current acceptance. Each workload fourbursts/12keys,18captures,
+exact semantic joins and durable24Bpayload;19synthetic validator controls pass.
+Host verified-pixel times170:521.19/751.32/409.88/752.48ms;
+171:115.46/167.56/107.28/177.73ms. Same runners/profile/seed, sequentialruns;
+QMP/polling/proof overhead included, four samples not robustspeedup/guestlatency.
+BothClose whileactualWRITEoutstanding and successor recover. Repaint records are
+sampled/bounded, nottotalwork; noClose latency or1800s/coldpendingclose claim.
+
+1,224sources/12,323,427B;583/586production unchanged,Main/Scene/planchange,noadds.
+Kernel26bace17/ABI67hash3b98b233 byteeq170;9ELFs326,346scalar/0matchedFPvector.
+Display298,280(+6,520);Scene60,608(+512),Text9,088/Bitmap55,992/Store88.
+Framebuddy8MiB/heapused11,851,408/appprivate2465pages;physicalfreeunmeasured,
+budgetsnotdisjointRAM. Localstack_start5032(+304),batch24,render1304,
+full2328/area2264/strip136/damage2248+48push each; compileroutlinedpasses,
+nottransitivestackreduction. CurrentScene/cursorpreflight and supersededbudget
+reader diagnostics retained; correctedfrozengatespass,no failednative cohort.
+Raw17,636,725B/2,907members SHA
+05271fa78b8cf3c462e3f21044d01f314e1cf225b2125b359a028b38f5d1891e,Rootallmembersindependentlysize/SHAverified.
+
+Next172 bitmap candidate/canonical publication with exact capturedcontexts, reset
+receipt preservation and no pixelresurrection. Other source/causal/interruption/
+hardware/replay remain.2Open/28Partial/SystemProvenfalse;SASOS rulesunchanged.
+NoAlpha/daily-driver/fullreserve/hardware/SMP/physicalerasure/fullEpochclaim.
+Accepted80–171=92/121;172–200 remain29 substantive rounds,goalactive.
