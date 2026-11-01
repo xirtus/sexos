@@ -842,3 +842,19 @@ members verified; nine ELFs/327,421 decoded instructions, zero vector/FPmatches.
 ABI66 inputs/hash73a2f412; existingwirelayouts unchanged. Next156: perBrowser static
 bitmap stores/tombstones beforeactualsuccessors andselected-consumer evidence.
 Inventory unchanged.
+
+
+## Round 156 — independent Browser bitmap-store lifetimes
+
+[Report](BROWSER_BITMAP_STORES_2026_11_01.md): staticStorepercanonicalBrowser holds
+independent pixels/seq/receipt/tombstone; exactheldcountbeforeintake, no packet
+binding/rebind. Current1=18,664B unchanged; host3=55,992B. FulloneOwnercannotstarve
+others; terminalcleanup erasesonlyexacttask andneverrevivesoldmetadata.
+Source6cb45e0d:43 frozen checks,3,050 logged Rust+22 nested=3,072 executions,
+1,051Python. Stores10+10 current/hostfuture,2 ambiguity and3 compiled controls;
+existing44compositor/17Stage +binding5/3,2compiled and7wiring pass. Eightboots /
+112captures pass bothsizes/full8chains/TLSimage/storage/cleanup/writer29 cold;
+actualone-store/count/size observedeveryboot. All1,200 blobs and1,567 archive
+members verified; nine ELFs/327,612 decodedinstructions, zero vector/FPmatches.
+NoactualfutureRows/grants. Next157: BOOTBrowser30/31, checkedNet/Bell, native
+launcherfocus/activation/exhaustion and selected-consumer evidence. Inventoryunchanged.
