@@ -106,6 +106,11 @@ class BrowserReserve(unittest.TestCase):
   text,result=fixture('allocated-close');live=next(line+'\n'for line in text.splitlines()if line.startswith('[browser.resources] reason=change'))
   bad,changed=rewrite(text,result,live,'');marker='[browser.tls.prepared]';bad,changed=rewrite(bad,changed,marker,live+marker)
   with self.assertRaisesRegex(ValueError,'stale/quiesced/not allocated'):self.verify(bad,changed,'allocated-close')
+ def test_atomic_resource_receipt_can_interrupt_legacy_serial_text(self):
+  text,result=fixture('allocated-close');bad,changed=rewrite(text,result,'[browser.resources] reason=close','[access.focus.describe] node_id=8195 role=7[browser.resources] reason=close')
+  self.assertTrue(self.verify(bad,changed,'allocated-close')['ok'])
+  for raw in ('[browser.resources] reason=close heap_used=0','[browser.resources] garbage\n'):
+   with self.subTest(raw=raw),self.assertRaises(ValueError):p.resource_rows(raw,0,len(raw))
  def test_allocated_close_rejects_early_pool_and_next_activation(self):
   text,result=fixture('allocated-close');pool=next(line+'\n'for line in text.splitlines()if line.startswith('[sext.app.pool.ready]'))
   bad,changed=rewrite(text,result,pool,'');marker='[task.finish] pd=15';bad,changed=rewrite(bad,changed,marker,pool+marker)

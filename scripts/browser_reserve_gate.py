@@ -161,7 +161,10 @@ def workload(trace,row,start,end,inventory,accounting):
 def resource_rows(trace,start,end):
  rows=[]
  pattern=r'\[browser.resources\] reason=(command|change|clear|close) heap_used=(\d+) heap_free=(\d+) heap_total=(\d+) tls_payload=(\d+) tls_pending=([01]) route_busy=([01]) providers_busy=([01]) queued=(None|Some\(\w+\)) body_visible=([01])\n'
- for match in re.finditer(r'^\[browser.resources\][^\n]*(?:\n|$)',window(trace,start,end),re.M):
+ span=window(trace,start,end)
+ matches=list(re.finditer(r'\[browser.resources\][^\n]*(?:\n|$)',span))
+ if len(matches)!=span.count('[browser.resources]'):raise ValueError('malformed Browser resource marker')
+ for match in matches:
   exact=re.fullmatch(pattern,match[0])
   if exact is None:raise ValueError('malformed/incomplete Browser resource receipt')
   reason,used,free,total,payload,pending,route,providers,queued,body=exact.groups()
