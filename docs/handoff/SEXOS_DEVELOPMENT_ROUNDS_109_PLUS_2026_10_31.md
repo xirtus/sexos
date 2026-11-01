@@ -1178,3 +1178,39 @@ Next168 one captured scene/prepared publication per desktop update batch, then
 transactional input/effect ownership and interrupted-output/hardware/replay work.
 GLOBAL_VAS, BOOT-only genesis, sex-pdx authority and PKU enforcement remain
 unchanged.2Open/28Partial/SystemProvenfalse.168–200 remain33 substantive rounds.
+
+## Round 168 — one captured scene/publication per desktop batch
+
+[Report](COALESCED_DISPLAY_BATCHES_2026_11_01.md): sourceca82b950, persistent
+bounded output plan joins Full/Area/Damage/Cursor plus strip; failed output
+retains work, new requests union, no-work skips capture/preparation/publication.
+One scene/target covers body+strip, one overlay tail and CPU publication. Primary
+framebuffer intake queues Full; lifecycle completion consumes captured published
+Full bits instead of rendering again. Partial/absent receipts cannot settle
+Prepared cleanup; committed ACK retries need no extra frame. One partial cursor
+restore/save-under and Full animation advance per attempt; rollback preserved.
+
+All46 frozen host checks and1,132 Python tests pass;3,183 logged successful Rust
+executions include repeated fixtures and separate JSON case counts. Frame38cases
+includes8plan tests/864request permutations and9actualMain cases;9compiled
+runtime defects/4ownership compiler controls/6source controls reject. Compositor
+49 preserves46old+3combined cases/reference; scene12/6compiled controls and
+cursor5/2controls pass. Old external bitmap signature assertion failed after
+49pixel cases,16/17bitmap; exact preflightdiagnostic retained UNQUALIFIED.
+
+Eleven boots/70captures:16clock,34connected/cold recovery,20Browser, allfresh
+frozen CLI/full-clock API replays pass. No guest restart/new prior-acceptance
+transfer. All1,224source blobs/12,217,001bytes matchGit.584/585priorproduction
+unchanged; Mainchanges+paint_batchnew. Kernel26bace17/ABI67hash3b98b233
+byte-identical to167. Nine ISO ELFs324,791instructions/0matchedFP-vector;
+actualSFENCE. Framebuddy8MiB/staticScene59,584/store88/heap11,851,408used
+andappprivate2465pages unchanged. DisplayELF286,720(+1,016). Prologues exclude
+transitive stack/interrupts; physicalfreeunmeasured andbudgetsnotdisjointRAM.
+Raw11,243,461bytes/1,576members independently reopened/size-SHAverified.
+
+Next169 typed completion-effect custody and retained text reply correctness.
+Dirty is output obligation data, not a causal input stream; raw intake remains
+mutable beforecommit. No fullEpoch/replay/latch/Alpha1800/performance/hardware/
+SMP/physical erasure claim.2Open/28Partial/SystemProvenfalse. GLOBAL_VAS,
+BOOT-onlygenesis,sex-pdxauthority andPKUenforcement unchanged.
+169–200 remain32 substantive rounds underactive80–200 plan.

@@ -67,3 +67,19 @@ an intermediate cursor/content frame before its strip update. Transactional
 intake/effect commit, unified causal/replay inputs, interrupted-output recovery
 and hardware latching remain required afterward; two private frames and SFENCE
 close none of these complete-system obligations.
+
+## Round168 checkpoint and next effect-custody boundary
+
+[Round168](COALESCED_DISPLAY_BATCHES_2026_11_01.md) qualifies one scene and
+publication per normal drain attempt, retained output requirements and captured
+Full-receipt lifecycle completion. Failed attempts may join newer requirements
+and take a fresh snapshot; this is not rollback of mutable producer admission.
+Next169 should retain exact typed text/bitmap completions until their logical
+scene/output settlement, then retry transport without replaying mutation. Hidden,
+empty and unchanged updates require an explicit settlement obligation; never
+claim intermediate or occluded bytes became visible. Preserve `pixels=unconfirmed`
+admission diagnostics and exact owner/task/SID/sequence binding. A newer text
+Begin must not erase an older completion under Full. Do not tie startup/control
+transport readiness indiscriminately to pixels. Full transactional source state,
+causal/replay inputs, hardware latching and interrupted-output recovery remain
+required later; completion-effect custody alone closes none of those obligations.
