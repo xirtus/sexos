@@ -930,3 +930,24 @@ key→pool403.34–1034.67ms includesQMP/serial/polling, notguestlatency/hardRT.
 Atomicmid-line resource counterexample staysunqualified. ABI66/hash12d218c6;
 2Open/28Partial/SystemProvenfalse. Next160:explicitBOOTmaincapacity64, unchanged
 catalog, boundedscan/sealing/exactpointer/overflow/wake checks beforemore reserves.
+
+
+## Round 160 — bounded BOOT main inventory at 64
+
+[Report](BOOT_MAIN_CAPACITY_2026_11_01.md): one explicit 64-entry constant for
+inventory and receipt; exact pointers, RegistryBuild-only construction, seal,
+self/main identity and cancellation/wake ownership retained. Actual catalog
+remains 19 apps / 31 mains. Adds 256 bytes of pointer storage; scans remain
+bounded at 64, with no performance or runtime-admission claim.
+
+Source e601e78a: 43 frozen host checks pass (3,081 logged Rust +27 nested =3,108),
+1,118 Python cases, two compiled capacity mutants and six source-wiring controls.
+Three boots independently audit the actual 31/64 inventory and timer returns;
+both allocated-Close profiles and fresh replays pass, 20 qualified captures and
+six allocated Closes. Explicit observed Browser task selection fixes stale
+original-only sampling assumptions without PD/task identity inference.
+All 1,209 source blobs and 1,359 archive members verified; nine ISO ELF scans
+contain 331,077 decoded instructions and zero FP/vector matches. No current
+sustained/physical/SMP acceptance. ABI66 unchanged; 2 Open /28 Partial /System
+Proven false. Next161: actual 16 Quil +9 Spindle +3 Browser, 40 mains, measured
+BOOT memory budget, compact public denial cache and full native exhaustion.
