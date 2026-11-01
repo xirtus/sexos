@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–148
+# SexOS development: round 108 acceptance and rounds 109–163
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -993,3 +993,42 @@ and size/SHA verified; source/image and prior evidence keep their exact bindings
 2Open/28Partial/SystemProvenfalse. Active80–200 plan follows documented dependency
 reordering; next163 exact-semantics dense public error cache before further budget
 expansion, then launcher/clock UX. Historical218 roadmap is not the active plan.
+
+
+## Round 163 — dense public errors and ordered Spindle repaint
+
+[Report](DENIAL_DENSITY_AND_REPAINT_ORDER_2026_11_01.md): public denial slots
+shrink48→16B; actual28-owner outbox4040→1352B, preserving exact owner/task,
+pending replies, floors, protocol partitions and retirement. A prospective64-owner
+host fixture uses3080B versus old9224B; it creates no additional BOOT authority.
+The pinned old48B implementation agrees over115248 depth-four histories/460992
+operations and602484 long-trace operations. Eight runtime mutants and one
+comparator-sensitivity control are rejected; finite comparisons are not formal
+all-history/concurrent proof.
+
+The first wide native attempt exposed a real Spindle stale-tail bug: paint11
+was admitted before older queued paint9, leaving the prompt stale for90s.
+New input now supersedes an unstarted older latest batch in the between-poll
+gap while active batches remain immutable across Full. The old module fails the
+actual ordering regression; the fix passes10 tests/540 matrix executions (not
+540 unique scenarios). FailedA raw evidence and source/image remain separately
+UNQUALIFIED; no A boots/captures count toward acceptedB.
+
+Source50278538:43 frozen host checks,3139 logged successful Rust executions,
+1124 Python tests. Nine fresh B boots/152 qualified captures: Browser20 with six
+allocated Closes, Alpha49/profile with all16Quil/nineSpindle and exhaustion,
+connected17/profile with same-image cold recovery. Fresh replays and all nine
+BOOT audits pass. Actual28apps/40mains/cap64/private2465pages; denial1352B.
+Heap used11851216B of256MiB after grant seal; physical-free frames unmeasured.
+Of582 production blobs580 unchanged; only Net denial and Spindle outbox differ;
+kernel byte-identical to161. All1211 source blobs and2900 archive members verified;
+nine ELF scans323819 decoded instructions, zeroFP/vector matches. Two packaging
+filename corrections retain their failed helpers/traces; no gate weakened.
+
+ABI66/hashff1d1346 and architecture unchanged. Current-image Alpha runs are20s
+rehearsals;162's1800s acceptance keeps its original image binding. No hardware,
+SMP, physical-erasure, hard realtime or general daily-driver claim. EPOCH_COMMIT
+and DETERMINISTIC_REPLAY remain Open;28 obligations Partial/SystemProvenfalse.
+Next164 exact held-grant launcher counts;165 useful UTC date and per-render
+formatting; then substantive Display snapshot/transform/swap/commit work toward
+the complete epoch model. Active80–200 plan continues;164–200 remain37 rounds.
