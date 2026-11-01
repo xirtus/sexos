@@ -56,7 +56,7 @@ def _caption_profile(display):
  for name,result in(('civil_clock_fg_at','Option<u32>'),('clock_fg_at','Option<u32>'),('top_strip_pixel','u32')):
   helper=compact(_function(display,name))
   assert 'bar:&SilkBar,lines:&[[u8;13];2])->'+result in helper,'uncached civil pixel signature: '+name
-  assert 'civil_clock_lines('not in helper,'formatter invoked per pixel: '+name
+  assert all(call not in helper for call in('civil_clock_lines(','civil_clock_date(')),'formatter invoked per pixel: '+name
  assert 'ifbar.civil_enabled{returncivil_clock_fg_at(x,y,bar,lines);}'in compact(_function(display,'clock_fg_at')),'cached civil dispatch missing'
  for name,bar in(('render','bar'),('redraw_top_strip','bar'),('top_strip_render_proof','proof_bar')):
   helper=compact(_function(display,name));cache='letclock_lines=civil_clock_lines(&'+bar+'.civil_clock);'

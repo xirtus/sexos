@@ -27,7 +27,7 @@ composer=re.findall(r'^fn top_strip_pixel\b.*?^\}',source,re.M|re.S);assert len(
 assert source.count('top_strip_pixel(x, y, bar, &clock_lines)')==2
 for name in ['top_strip_pixel','clock_fg_at','civil_clock_fg_at']:
     actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
-    assert 'civil_clock_lines('not in actual[0],name+' must use the render snapshot'
+    assert all(call not in actual[0]for call in('civil_clock_lines(','civil_clock_date(')),name+' must use the render snapshot'
 for name,path in [('render','full'),('redraw_top_strip','strip')]:
     actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
     assert actual[0].count('civil_clock_lines(&bar.civil_clock)')==1

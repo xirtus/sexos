@@ -1,6 +1,6 @@
 """Independent public-clock model fixtures; native evidence is separate."""
 from source_boot_fixture import with_inventory,TAGS
-import datetime,sys,unittest
+import datetime,re,sys,unittest
 from unittest import mock
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -140,6 +140,9 @@ class CivilClockOracle(unittest.TestCase):
  def test_unknown_hybrid_duplicate_and_uncached_source_forms_fail_closed(self):
   display=(ROOT/'servers/sexdisplay/src/main.rs').read_text()
   defects=[display.replace('b"Source error"','b"q35 1s fail"',1),display.replace('lines[1]=civil_clock_date(clock.seconds());','',1),display.replace('b"JAN"','b"JAX"',1),display.replace('lines:&[[u8;13];2]','lines:&[[u8;12];2]',1),display.replace('let clock_lines=civil_clock_lines(&bar.civil_clock);','let clock_lines=[[0;13];2];',1),display+gate._function(display,'civil_clock_lines')]
+  for name in('civil_clock_fg_at','clock_fg_at','top_strip_pixel'):
+   for call in('civil_clock_date(bar.civil_clock.seconds())','civil_clock_lines(&bar.civil_clock)'):
+    defects.append(re.sub(r'(fn '+name+r'\b[^{]*\{)',lambda m:m[0]+'let _='+call+';',display,count=1))
   for defect in defects:
    self.assertNotEqual(defect,display)
    with self.assertRaises(AssertionError):gate._caption_profile(defect)
