@@ -1,4 +1,4 @@
-# SexOS development: round 108 acceptance and rounds 109–163
+# SexOS development: round 108 acceptance and rounds 109–164
 
 31 October 2026. Continues [rounds 80–200](SEXOS_DEVELOPMENT_ROUNDS_80_200_2026_10_30.md) from the [round 108 checkpoint](ROUND108_CHECKPOINT_2026_10_31.md). SexOS remains a single-address-space microkernel: GLOBAL_VAS supplies addressing only, BOOT alone creates capabilities, typed sex-pdx supplies authority and PKU enforces held authority. Nothing here introduces a Unix/POSIX mechanism, a per-process address space or a runtime capability mint.
 
@@ -1032,3 +1032,35 @@ and DETERMINISTIC_REPLAY remain Open;28 obligations Partial/SystemProvenfalse.
 Next164 exact held-grant launcher counts;165 useful UTC date and per-render
 formatting; then substantive Display snapshot/transform/swap/commit work toward
 the complete epoch model. Active80–200 plan continues;164–200 remain37 rounds.
+
+
+## Round 164 — exact launcher reserve counts
+
+[Report](LAUNCHER_RESERVE_COUNTS_2026_11_01.md): the launcher now shows exact
+short count labels such as15 REOPENS LEFT, derived from one observation of each
+eligible app family's held BOOT activation edges. Each rendered row borrows its
+own owned ASCII label until the outbox copies it; labels fit a256px tile.
+Spindle I/O/recovery messages keep priority; unknown/unavailable states keep
+existing fallbacks. Presentation counts never authorize activation or routing.
+
+Sourcea84043d0:43 frozen host checks,3144 logged successful Rust executions,
+1124 Python cases.17 launcher tests cover everyu8 count and actual narrow/wide
+text rows. Three fresh boots/eight menu captures and independent replays pass
+at1024×768/e1000 and1280×800/e1000e: originalQuil15/Spindle8/Browser2; exact
+Spindle12 Close/five-role cleanup/zeroed pool→8 RESERVED LEFT; held successor17
+activation, local echo/save/Ready→7 REOPENS LEFT. Only this first successor is
+exercised; no new all-chain, connected, Alpha or1800s acceptance claim. A v1
+probe argument-type error happened before QEMU startup; its helper/partial
+output/trace remain UNQUALIFIED with zero boots/captures. v2 native command
+construction and12 helper tests pass, distinct from current native proof.
+
+All1211 frozen source blobs/12023092B and1381 archive members verified;
+nine exact ISO ELF scans324179 decoded instructions/zeroFP-vector matches.
+580/582 production files unchanged versus163; onlyShell launcher.rs/main.rs
+change, kernel byte-identical. All three BOOT audits retain28apps/40mains/cap64,
+private2465pages and denial1352B. ABI66/hashff1d1346 and architecture unchanged.
+2Open/28Partial/SystemProvenfalse; no physical/SMP/hard-realtime/erasure or
+full daily-driver claim. Next165 useful UTC date with per-render formatting;
+then real Display scene isolation and commit work under the documented
+[epoch implementation plan](DISPLAY_EPOCH_IMPLEMENTATION_PLAN_2026_11_01.md).
+Active80–200 continues;165–200 remain36 rounds.
