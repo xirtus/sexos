@@ -140,3 +140,9 @@ fn ordered_nested_and_definition_lists() {
     let (t, _) = text(page, 512);
     assert_eq!(t, "1. one\n2. two\n  - a\n  - b\n3. three\n\n7. seven\n\nterm\n    meaning");
 }
+
+#[test]
+fn inline_emphasis_and_code_keep_markers() {
+    let (t, _) = text("<p>Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to <strong>save</strong>, see <code>quil.rs</code> and <em>notes</em>.</p>", 256);
+    assert_eq!(t, "Press `Ctrl`+`S` to *save*, see `quil.rs` and _notes_.");
+}

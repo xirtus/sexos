@@ -353,6 +353,17 @@ tests (3 groups); sealed build and master gate GREEN; native
 `spindle_calc_gate.py` at both sizes: `calc ans` -> `NoAnswer`, then `2.8`,
 then `ans*10` -> `28`, plus the earlier cases.
 
+## F15. Inline emphasis and code markers (2026-11-02)
+
+**What changed.** In the HTML reader, `<code>`/`<kbd>` read as `` `x` ``,
+`<strong>`/`<b>` as `*x*` and `<em>`/`<i>` as `_x_`, so emphasis and key
+names survive plain-text reading.
+
+**Evidence** (`docs/handoff/assets/browser-html-inline-2026-11-02/`):
+html_text 17 host tests; sealed build and master gate GREEN; native
+`https_html_gate.py` at both sizes with `Press `W` for this *page*, see
+`html_text.rs`.` in the released text.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

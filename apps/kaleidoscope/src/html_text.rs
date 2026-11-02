@@ -144,6 +144,7 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
     Some((ch.encode_utf8(out).len(), end + 1))
 }
 
+const INLINE: [(&[u8], u8); 6] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_')];
 const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
 const BLOCK: [&[u8]; 15] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl"];
 
@@ -259,6 +260,9 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                     // A newline right after <pre> is not content.
                     if html.get(i) == Some(&b'\n') { i += 1; } else if html[i..].starts_with(b"\r\n") { i += 2; }
                 }
+            } else if let Some(mark) = INLINE.iter().find(|(n, _)| name_is(name, n)).map(|(_, m)| *m) {
+                // Inline emphasis and code keep a plain-text marker, Markdown style.
+                if end_tag { o.space = false; o.text(mark); } else { o.text(mark); o.space = false; }
             } else if name_is(name, b"img") && !end_tag {
                 // Images are not fetched; their alternative text is shown.
                 o.bytes(b"[image");
