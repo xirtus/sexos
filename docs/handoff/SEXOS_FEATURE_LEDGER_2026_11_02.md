@@ -131,6 +131,21 @@ link, follow `/guide` (with a `<pre>` table checked in glyph pixels), Back to
 `/page.html` as an exact third request with pixels, Back at depth 0 makes no
 request; `/welcome` regression passes.
 
+## F5. Build-time Browser stack budget (2026-11-02)
+
+**What changed.** `apps/kaleidoscope/src/main.rs` now fails to compile when
+the Browser `App` state grows past 19,000 bytes, with a message saying to box
+the new state. Measured size today: 18,872 bytes (probe with a zero-length
+array const against the sealed target and rustflags). The F4 crash happened at
+about 19,400 bytes. The assert was checked both ways: green at 19,000, and a
+compile error at a temporary 18,000 budget.
+
+**Evidence.** Browser host gates (asset fence, calendar, reader visibility,
+text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
+
+**Limit.** This bounds one big stack object, not total stack depth. A real
+fix is a stack high-water measurement or a stack quota separate from heap.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
@@ -139,5 +154,5 @@ request; `/welcome` regression passes.
   so it does not collide with the concurrent Display text work.
 - The Browser main task runs with a small pre-mapped stack and a 4-page pager
   quota shared with heap growth. Adding ~0.5 KiB of inline state was enough
-  to crash it (F4). A build-time stack-size check, or a quota that separates
-  stack from heap, is needed before more Browser features land.
+  to crash it (F4). F5 adds a build-time budget on the `App` state; a stack
+  high-water measurement or a stack quota separate from heap is still needed.

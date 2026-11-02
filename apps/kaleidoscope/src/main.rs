@@ -136,6 +136,12 @@ struct App {
     ui_retries:u8,
 }
 
+/// The Browser state lives on the BOOT main task's pre-mapped 64 KiB stack,
+/// and the pager quota is already spent on heap growth. At 18,872 bytes it
+/// fits; ~19,400 bytes overflowed into a rejected demand-paged stack page
+/// while preparing TLS (feature ledger F4). New state belongs on the heap.
+const APP_STATE_BUDGET:usize=19_000;
+const _:()=assert!(core::mem::size_of::<App>()<=APP_STATE_BUDGET,"Browser App state exceeds its stack budget; box the new state");
 impl App {
     fn clipboard_progress(&self)->bool { unsafe{CLIPBOARD.pending()&&CLIPBOARD.view()!=sex_pdx::clipboard_client::View::Uncertain} }
     fn clear_selection(&mut self){
