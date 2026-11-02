@@ -18,15 +18,27 @@ pub struct Output<'a> {
     /// The last emitted byte was whitespace or nothing has been emitted.
     space: bool,
     newlines: u8,
+    /// Inside `<pre>`: whitespace is kept as written (tabs become spaces).
+    pre: bool,
 }
 
 impl<'a> Output<'a> {
-    fn new(buf: &'a mut [u8]) -> Self { Self { buf, len: 0, truncated: false, space: true, newlines: 2 } }
+    fn new(buf: &'a mut [u8]) -> Self { Self { buf, len: 0, truncated: false, space: true, newlines: 2, pre: false } }
     fn room(&self) -> usize { self.buf.len().saturating_sub(TRUNCATED.len()) }
     fn byte(&mut self, b: u8) {
         if self.len < self.room() { self.buf[self.len] = b; self.len += 1; } else { self.truncated = true; }
     }
     fn text(&mut self, b: u8) {
+        if self.pre {
+            match b {
+                b'\r' => {}
+                b'\n' => { self.byte(b'\n'); self.newlines = self.newlines.saturating_add(1); }
+                b'\t' | 0x0c => { self.byte(b' '); self.newlines = 0; }
+                _ => { self.byte(b); self.newlines = 0; }
+            }
+            self.space = false;
+            return;
+        }
         if matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c) {
             self.space = true;
             return;
@@ -165,7 +177,13 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if (name_is(name, b"td") || name_is(name, b"th")) && !end_tag {
                 if o.newlines == 0 { o.bytes(b" |"); o.space = true; }
             } else if BLOCK.iter().any(|n| name_is(name, n)) {
+                o.pre = false;
                 o.line(true);
+                if name_is(name, b"pre") && !end_tag {
+                    o.pre = true;
+                    // A newline right after <pre> is not content.
+                    if html.get(i) == Some(&b'\n') { i += 1; } else if html[i..].starts_with(b"\r\n") { i += 2; }
+                }
             } else if name_is(name, b"a") {
                 if !end_tag {
                     if let Some(href) = attribute(&body[name_end..], b"href") {
@@ -200,6 +218,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
         i += 1;
     }
     let mut targets = [(0, 0); MAX_LINKS];
+    o.pre = false;
     if link_count > 0 {
         o.line(true);
         o.bytes(b"Links:");

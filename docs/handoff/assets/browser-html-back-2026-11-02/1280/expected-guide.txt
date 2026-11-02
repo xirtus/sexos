@@ -1,0 +1,12 @@
+# Guide
+
+Followed from the field notes on the same BOOT endpoint.
+
+key   action
+1-9   follow link
+Bksp  back
+
+Back to notes[1]
+
+Links:
+[1] /page.html

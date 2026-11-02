@@ -26,7 +26,7 @@ PAGE=(b'<!DOCTYPE html><html><head><title>ignored</title><style>body{color:red}<
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
  b'<!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
 GUIDE_REQUEST=b'GET /guide HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
-GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><p><a href="/page.html">Back to notes</a></p></body></html>'
+GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><pre>\nkey   action\n1-9   follow link\nBksp  back\n</pre><p><a href="/page.html">Back to notes</a></p></body></html>'
 SCOPE='Actual fixed BOOT-controlled HTTPS text/html page through held policy/seed/UTC/DNS/duplex authority, converted by the bounded no-script reader and checked against reader glyph pixels. Public laboratory root only; no script, CSS, layout, forms, arbitrary URL or public web trust claim.'
 
 def response(mode,page=PAGE):
@@ -34,7 +34,7 @@ def response(mode,page=PAGE):
 
 class HtmlPeer(doc.ControlledHTTPSPeer):
  """Serves the fixed page, then exactly one followed page; nothing else."""
- EXCHANGES=((REQUEST,PAGE),(GUIDE_REQUEST,GUIDE))
+ EXCHANGES=((REQUEST,PAGE),(GUIDE_REQUEST,GUIDE),(REQUEST,PAGE))
  def __init__(self,root):
   super().__init__(root,'ready');self.served=[threading.Event()for _ in self.EXCHANGES]
  def serve_dns(self,sock):
@@ -136,11 +136,17 @@ def main():
   if len(peer.dns)!=1 or len(peer.rows)!=1:raise RuntimeError('refused link caused network work')
   checks['refused_link']='index=3 https://elsewhere.example/x refused, no DNS/TLS'
   guide,glinks,gcut=expected_text(root,GUIDE)
-  b=len(trace());q.key('1');wait(r'\[browser.html.link\] index=1 path=/guide same_endpoint=1 script=0',b)
+  b=len(trace());q.key('1');wait(r'\[browser.html.link\] index=1 path=/guide same_endpoint=1 script=0 depth=1',b)
   if not peer.served[1].wait(60):raise TimeoutError('followed page not served')
   wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b)
   checks['followed']=wait(rf'\[browser.html.converted\] source_bytes={len(GUIDE)} text_bytes={len(guide)} links={glinks} truncated={gcut} script=0',b)[0]
   reader('html-followed',guide,GUIDE_REQUEST,b'/guide');(out/'expected-guide.txt').write_bytes(guide)
+  b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] path=/page.html depth=0',b)
+  if not peer.served[2].wait(60):raise TimeoutError('back page not served')
+  wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} script=0',b)
+  reader('html-back',text,REQUEST,b'/page.html')
+  b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] depth=0 network=0',b);time.sleep(1)
+  if len(peer.rows)!=3:raise RuntimeError('back at the first page caused network work')
   assert b'never runs' not in text and b'ignored' not in text,'skipped markup leaked into text'
  except Exception as exc:failure=repr(exc)
  finally:
@@ -150,7 +156,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- t=trace();request_ok=[r.get('request_hex')for r in peer.rows]==[REQUEST.hex(),GUIDE_REQUEST.hex()]
+ t=trace();request_ok=[r.get('request_hex')for r in peer.rows]==[REQUEST.hex(),GUIDE_REQUEST.hex(),REQUEST.hex()]
  res=dict(ok=failure is None and request_ok and not peer.errors,error=failure,request_exact=request_ok,peer=peer.rows,checks=checks,resolution=a.resolution,model=a.model,scope=SCOPE)
  (out/'result.json').write_text(json.dumps(res,indent=2,default=str)+'\n')
  if not res['ok']:raise RuntimeError(json.dumps(dict(error=failure,request_exact=request_ok,errors=peer.errors)))

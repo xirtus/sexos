@@ -103,3 +103,16 @@ fn cut_link_list_publishes_no_partial_target() {
     assert!(c.truncated);
     for &(a, b) in &c.targets { assert!(b <= c.len && (a, b) == (0, 0) || &out[a..b] == b"/a-long-target-path"); }
 }
+
+#[test]
+fn pre_keeps_its_layout_and_other_blocks_do_not() {
+    let page = "<p>a   b</p><pre>\nfn main() {\n    x\t= 1;\n}\n</pre><p>c   d</p>";
+    let (t, _) = text(page, 512);
+    assert_eq!(t, "a b\n\nfn main() {\n    x = 1;\n}\n\nc d");
+}
+
+#[test]
+fn unterminated_pre_ends_before_the_link_list() {
+    let (t, _) = text("<pre>  x  <a href=\"/y\">y</a>", 256);
+    assert_eq!(t, "  x  y[1]\n\nLinks:\n[1] /y");
+}

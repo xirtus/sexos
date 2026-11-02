@@ -110,9 +110,34 @@ Linen reopen, Display applied the new Quil view a few seconds late.
 route); drafts are not offered automatically on startup; one draft per
 document source per session.
 
+## F4. Browser Back key and preformatted text (2026-11-02)
+
+**What changed.** In an HTML page, **Backspace** returns to the page the
+current one was followed from (up to 8 levels, fetched again from the same
+endpoint); at the first page it does nothing and makes no network request.
+`<pre>` blocks keep their spacing and line breaks (tabs become spaces).
+
+**Found on the way.** The first build kept the 8-entry history inline in the
+Browser state. The Browser crashed while preparing TLS: its stack grew into a
+demand-paged page and the pager rejected it because its 4-page quota was
+already spent on heap pages (`sext.fault.reject ... reason=Policy used=4
+quota=4`). The history and link table now live on the Browser heap. The
+Browser's stack headroom is not measured anywhere; see the release gate below.
+
+**Evidence** (`docs/handoff/assets/browser-html-back-2026-11-02/`): host
+html_text 13 tests and sexnet host gate OK; sealed build and master gate
+GREEN; native `https_html_gate.py` at both sizes: page, refused off-endpoint
+link, follow `/guide` (with a `<pre>` table checked in glyph pixels), Back to
+`/page.html` as an exact third request with pixels, Back at depth 0 makes no
+request; `/welcome` regression passes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
   Display (47 columns, ~10 rows at 1280x800). A full-window reader needs a
   larger delivery region, which is a Display/Shell protocol change; deferred
   so it does not collide with the concurrent Display text work.
+- The Browser main task runs with a small pre-mapped stack and a 4-page pager
+  quota shared with heap growth. Adding ~0.5 KiB of inline state was enough
+  to crash it (F4). A build-time stack-size check, or a quota that separates
+  stack from heap, is needed before more Browser features land.
