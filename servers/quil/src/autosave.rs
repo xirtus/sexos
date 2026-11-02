@@ -65,6 +65,8 @@ impl Autosave {
         out
     }
     pub fn target(&self) -> Option<u8> { self.draft }
+    /// The buffer at `revision` is held in the draft object.
+    pub fn kept(&self, revision: u64) -> bool { self.draft.is_some() && self.drafted == Some(revision) }
 
     /// Settle the in-flight draft save. Failure waits for a fresh idle period.
     pub fn finish(&mut self, saved: bool, object: u8, revision: u64, error: u32) -> Done {
@@ -106,6 +108,7 @@ mod tests {
         assert_eq!(a.finish(true, 7, 2, 0), Done::Saved { draft: 7, revision: 2 });
         assert!(!a.due(20 * IDLE_MS, true, 2, true) && !a.due(30 * IDLE_MS, true, 2, true), "same revision is not drafted twice");
         assert_eq!(a.target(), Some(7));
+        assert!(a.kept(2) && !a.kept(3));
     }
 
     #[test]

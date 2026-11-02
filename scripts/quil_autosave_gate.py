@@ -51,6 +51,15 @@ def boot(iso,disk,out,tag,resolution):
   sock.unlink(missing_ok=True)
  return dict(q=q,text=text,wait=wait,key=key,chord=chord,stop=stop,focus=lambda sid:focus_surface(sid,text,key))
 
+def settle(g,timeout):
+ """Wait until Display applied Quil's latest admitted paint."""
+ d=time.monotonic()+timeout
+ while True:
+  txt=g['text']();adm=re.findall(r'\[quil.ui.admitted\] paint=(\d+)',txt)
+  if adm and re.search(rf'\[quil.ui.applied\] paint={adm[-1]} ',txt):return
+  if time.monotonic()>d:raise TimeoutError('Quil view never applied by Display')
+  time.sleep(.1)
+
 def type_keys(g,keys):
  for i in range(0,len(keys),5):
   s=len(g['text']());g['q'].key_sequence(keys[i:i+5]);g['wait'](r'\[quil.document.edit\]',s)
@@ -75,6 +84,7 @@ def main():
   b2=g['wait'](rf'\[quil.autosave.begin\] draft={draft} name={re.escape(name)} revision=(\d+) bytes=(\d+) hash=(0x[0-9a-f]+) document={b1[5]} document_unchanged=1',mid,90)
   g['wait'](rf'\[quil.autosave.result\] outcome=Saved result=Saved {{ draft: {draft}, revision: {b2[1]} }} revision=\d+ dirty=1',mid)
   if re.search(r'\[quil.persist.save.ok\]',t()[start:]):raise RuntimeError('autosave saved the user document')
+  g['wait'](r'\[quil.text.view\] target=9 surface=\d+ status=\S* ?[^\n]*DRAFT KEPT',mid,30);settle(g,60);g['q'].cmd('screendump',{'filename':str(out/'draft-kept.ppm')})
   idle=re.findall(r'\[quil.autosave.begin\]',t());result['boot1']=dict(idle_seconds=round(idle_s,1),name=name,draft=draft,first=dict(revision=int(b1[2]),bytes=int(b1[3]),hash=b1[4]),second=dict(revision=int(b2[1]),bytes=int(b2[2]),hash=b2[3]),document=int(b1[5]),document_saved=False,drafts_started=len(idle))
   g['stop']();g=None
   g=boot(iso,disk,out,'boot2',a.resolution);t=g['text']
@@ -90,12 +100,7 @@ def main():
   result['boot2']=dict(bytes=int(m[1]),hash=m[2],doc=int(m[3]))
   if(int(m[1]),m[2])!=(int(b2[2]),b2[3]):raise RuntimeError(f'recovered draft differs: {m[0]} vs {b2[0]}')
   g['focus'](201);g['key']('end',r'\[quil.cursor.move\] old=\d+ new=\d+ len=\d+ dir=end ok=1');time.sleep(.5)
-  def settled():
-   txt=t();adm=re.findall(r'\[quil.ui.admitted\] paint=(\d+)',txt);return adm and re.search(rf'\[quil.ui.applied\] paint={adm[-1]} ',txt)
-  d=time.monotonic()+60
-  while not settled():
-   if time.monotonic()>d:raise TimeoutError('recovered Quil view never applied by Display')
-   time.sleep(.1)
+  settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)
  finally:

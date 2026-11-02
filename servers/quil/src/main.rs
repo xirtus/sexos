@@ -441,6 +441,7 @@ unsafe fn autosave_event(event: document_exchange::Event) {
     sex_pdx::serial_record!("[quil.autosave.result] outcome={:?} result={:?} revision={} dirty={} document={}",
         event.outcome, done, QUIL_REVISION, QUIL_DIRTY as u8, QUIL_DOC_ID);
     if let Some(create) = QUIL_AUTOSAVE.queued_save.take() { document_save_start(create); }
+    else { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
 }
 fn document_event(event: document_exchange::Event, palette_active:&mut bool) {
     unsafe {
@@ -953,7 +954,9 @@ fn document_draw(buf: &[u8], palette: Option<u8>) {
         let input_status: &[u8]=if QUIL_UNICODE_INPUT.active(){&unicode_prompt[..unicode_len]}
             else if let Some(notice)=QUIL_INPUT_NOTICE {notice}
             else if QUIL_FIND.active(){&find_prompt[..find_len]}
-            else {quil_clipboard_status().unwrap_or(DOCUMENT_IO.status().as_bytes())};
+            else if let Some(s)=quil_clipboard_status(){s}
+            else if QUIL_DIRTY&&QUIL_AUTOSAVE.kept(QUIL_REVISION)&&DOCUMENT_IO.status()=="READY"{b"DRAFT KEPT"}
+            else {DOCUMENT_IO.status().as_bytes()};
         let text = view::render_selection(
             buf,
             QUIL_CURSOR_POS,

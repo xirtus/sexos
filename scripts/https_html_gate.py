@@ -24,7 +24,7 @@ PAGE=(b'<!DOCTYPE html><html><head><title>ignored</title><style>body{color:red}<
  b'<h2>Rules</h2><ul><li>BOOT grants routes &amp; identities.</li><li>Applications cannot mint them.</li><li>No script runs here.</li></ul>'
  b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
- b'<!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
+ b'<p><img src="/art.qoi" alt="SexOS mark"></p><!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
 GUIDE_REQUEST=b'GET /guide HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
 GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><pre>\nkey   action\n1-9   follow link\nBksp  back\n</pre><p><a href="/page.html">Back to notes</a></p></body></html>'
 SCOPE='Actual fixed BOOT-controlled HTTPS text/html page through held policy/seed/UTC/DNS/duplex authority, converted by the bounded no-script reader and checked against reader glyph pixels. Public laboratory root only; no script, CSS, layout, forms, arbitrary URL or public web trust claim.'

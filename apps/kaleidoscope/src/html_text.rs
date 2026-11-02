@@ -5,7 +5,8 @@
 //! script execution, network fetch or form. Markup becomes plain UTF-8 text:
 //! headings and block elements start new lines, list items get a bullet,
 //! links keep their text plus a numbered reference listed at the end, and
-//! `script`, `style`, `head`, `template` and comments contribute nothing. The
+//! images show their alt text, and `script`, `style`, `head`, `template` and
+//! comments contribute nothing. The
 //! output never exceeds the caller's buffer; a cut is marked, never silent.
 
 pub const MAX_LINKS: usize = 16;
@@ -184,6 +185,15 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                     // A newline right after <pre> is not content.
                     if html.get(i) == Some(&b'\n') { i += 1; } else if html[i..].starts_with(b"\r\n") { i += 2; }
                 }
+            } else if name_is(name, b"img") && !end_tag {
+                // Images are not fetched; their alternative text is shown.
+                o.bytes(b"[image");
+                if let Some(alt) = attribute(&body[name_end..], b"alt").filter(|a| a.iter().any(|b| !b.is_ascii_whitespace())) {
+                    o.text(b':');
+                    o.space = true;
+                    for &c in alt { o.text(c); }
+                }
+                o.text(b']');
             } else if name_is(name, b"a") {
                 if !end_tag {
                     if let Some(href) = attribute(&body[name_end..], b"href") {

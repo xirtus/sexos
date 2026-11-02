@@ -116,3 +116,10 @@ fn unterminated_pre_ends_before_the_link_list() {
     let (t, _) = text("<pre>  x  <a href=\"/y\">y</a>", 256);
     assert_eq!(t, "  x  y[1]\n\nLinks:\n[1] /y");
 }
+
+#[test]
+fn images_show_alt_text_and_are_never_fetched() {
+    let (t, c) = text("<p>Logo <img src=\"/art.qoi\" alt=\"SexOS mark\"> and <IMG src=x.png> and <img alt=' '/></p>", 256);
+    assert_eq!(t, "Logo [image: SexOS mark] and [image] and [image]");
+    assert_eq!(c.links, 0);
+}

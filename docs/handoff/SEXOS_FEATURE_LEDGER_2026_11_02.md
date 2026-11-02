@@ -146,6 +146,24 @@ text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
 **Limit.** This bounds one big stack object, not total stack depth. A real
 fix is a stack high-water measurement or a stack quota separate from heap.
 
+## F6. Quil shows "DRAFT KEPT"; HTML images show alt text (2026-11-02)
+
+**What changed.** When Quil has unsaved edits that are already held in the
+autosave draft, its status line reads `DRAFT KEPT` instead of `READY`, so the
+user can see the work is recoverable; the dirty `*` stays. In the Browser,
+`<img>` becomes `[image: alt text]` (or `[image]`); images are never fetched.
+
+**Evidence** (`docs/handoff/assets/quil-draft-status-html-images-2026-11-02/`):
+autosave host tests (now incl. `kept`), html_text 14 tests; sealed build and
+master gate GREEN; native autosave gate at both sizes now also waits for
+`status=UNTITLED * DRAFT KEPT` and captures it after Display applies the
+paint; HTML gate page includes an image and its text/pixels match;
+`quil_workflow_gate.py` regression passes.
+
+**Found on the way.** Display applies Quil paints a few seconds after Quil
+admits them in these runs, so screenshots must wait for
+`[quil.ui.applied]` of the latest paint (the gate now does).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
