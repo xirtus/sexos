@@ -195,6 +195,36 @@ html_text 15 host tests; sealed build and master gate GREEN; native
 `https_html_gate.py` at both sizes with a page containing title, quote, rule
 and image (reader text/pixels, link refusal, follow, Back all pass).
 
+## F9. Spindle Shift key and `calc` (2026-11-02)
+
+**What changed.** Spindle had no Shift: capitals and symbols such as
+`* ( ) + % : " ?` could not be typed (its help even said "no shift"). The
+Shell already tracks modifiers; it now sends Spindle the held Shift in bit 8
+of the key word (the same bit as `app_key::Key::wire`), and Spindle applies a
+US-QWERTY Shift layer in insert mode. New command `calc <expr>`: exact
+decimal arithmetic (`+ - * / %`, unary minus, parentheses, 9 decimal
+places, i128). `0.1+0.2` is `= 0.3`; an inexact division says `~`; overflow,
+division by zero, bad syntax and nesting deeper than 16 are named errors.
+This parser is meant to be reused as the numeric core of a later bounded
+script evaluator.
+
+**SexOS rules kept.** Shift is presentation state from the Shell's own
+modifier tracking, sent on the existing Spindle input route; no new route,
+grant or ABI input. `calc` uses no clock, storage or network.
+
+**Evidence** (`docs/handoff/assets/spindle-calc-shift-2026-11-02/`): host
+`spindle_calc_host_gate.sh` (2 test groups, 20 cases), Spindle editor host
+test for the Shift layer (via `service_custody_host_gate.sh`); sealed build
+and master gate GREEN; native `scripts/spindle_calc_gate.py` at both sizes
+types `calc 2*(3+4)/5`, `calc 0.1+0.2`, `calc 1/3`, `calc 7%0` through real
+keyboard events with Shift and checks each result record;
+`connected_desktop_gate.py` regression passes.
+
+**Open.** The end-of-run screenshot shows Spindle's pane without the new
+output: Spindle admitted its display batches early in the run but no later
+paint was applied before capture. Together with the Quil paint lag seen in
+F3/F6, this points at Display applying app paints late under these gates.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
@@ -205,3 +235,6 @@ and image (reader text/pixels, link refusal, follow, Back all pass).
   quota shared with heap growth. Adding ~0.5 KiB of inline state was enough
   to crash it (F4). F5 adds a build-time budget on the `App` state; a stack
   high-water measurement or a stack quota separate from heap is still needed.
+- Display applies app paints seconds late (Quil) or not before capture
+  (Spindle, F9) in short native runs. Needs a look at Display's paint
+  scheduling before relying on screenshots for app output.

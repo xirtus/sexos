@@ -10288,7 +10288,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         SURFACE_ID_SPINDLE, scancode, value
                     );
                 }
-                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), value, EV_KEY);
                 return;
             }
 
@@ -10668,7 +10668,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     let live = surface_is_alive(FOCUSED_SURFACE_ID) as u8;
                     surface_input_lifetime_mark_key_route(FOCUSED_SURFACE_ID, live, 1, live);
                 }
-                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
                     serial_println!(
                         "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
@@ -16274,6 +16274,10 @@ fn spindle_active_frame()->Option<(u32,u64)>{
     let row=app_catalog::by_surface(info.successor,info.surface).filter(|row|row.app==app_catalog::App::Spindle)?;
     Some((row.target,row.frame()))
 }
+/// Spindle key word: scancode in bits 0..8, held Shift in bit 8 (the same
+/// bit as sex_pdx::app_key::Key::wire). Shift is presentation state from the
+/// Shell's own modifier tracking; it carries no authority.
+fn spindle_key_word(scancode:u8)->u64{scancode as u64|(unsafe{APP_MODIFIERS.key(scancode).shift} as u64)<<8}
 fn spindle_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_SPINDLE||spindle_activation_info(false).is_ok_and(|info|info.state==2&&app_catalog::by_surface(info.successor,info.surface).is_some_and(|row|FOCUSED_SURFACE_ID==row.frame()))}}
 fn spindle_route_slot()->u64{app_route_slot(app_catalog::App::Spindle,SLOT_SPINDLE)}
 
@@ -25657,7 +25661,7 @@ pub extern "C" fn _start() -> ! {
                             // All other keys fall through to scancode_to_action unchanged.
                             } else if FOCUSED_SURFACE_ID!=SURFACE_ID_SPINDLE && spindle_has_focus() && is_spindle_text_key(scancode) {
                                 // Fresh subject gets only native dispatch, never predecessor YARN state.
-                                pdx_call(SLOT_SPINDLE,OP_HID_EVENT,scancode as u64,value,EV_KEY);
+                                pdx_call(SLOT_SPINDLE,OP_HID_EVENT,spindle_key_word(scancode),value,EV_KEY);
                                 mutated=true;
                             } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
                                 && is_spindle_text_key(scancode)
@@ -25668,7 +25672,7 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[silk-shell.main_dispatch.spindle.reach] scancode={:#x}", scancode);
                                 }
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
-                                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
+                                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), 1, EV_KEY);
                                 serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
                                 unsafe {
                                     static mut SPINDLE_ROUTE_BUDGET: u32 = 32;

@@ -45,7 +45,7 @@ from pathlib import Path
 import re,sys
 s=Path('apps/spindle/src/main.rs').read_text()
 parts=[s[s.index('#[derive(Clone, Copy, PartialEq)]\nenum ViMode'):s.index('// ── Prompt redraw')]]
-for name in ['handle_key','handle_key_insert','handle_key_normal','scancode_to_ascii']:
+for name in ['handle_key','handle_key_insert','handle_key_normal','scancode_to_ascii','shifted']:
     parts.append(re.findall(r'^fn '+name+r'\b.*?^}',s,re.M|re.S)[0])
 Path(sys.argv[1]).write_text('\n'.join(parts))
 PYEDITOR

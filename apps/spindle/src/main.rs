@@ -95,6 +95,7 @@ mod viewport;
 mod scroll_view;
 mod display_delivery;
 mod sextime_command;
+mod calc_command;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -700,12 +701,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         },
         b"help" => {
             // ── section: basics ──
-            serial_println!("[spindle.help.section] name=basics commands=6");
+            serial_println!("[spindle.help.section] name=basics commands=8");
             sb.push(b"--- Basics ---");
             sb.push(b"  help         show this help");
             sb.push(b"  clear        clear scrollback");
             sb.push(b"  echo <msg>   print message");
             sb.push(b"  sextime <n>  Unix seconds as SexTime/UTC/Long Count");
+            sb.push(b"  calc <expr>  exact decimal + - * / % ( )");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -824,6 +826,26 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"");
             sb.push(b"Type 'daily' for full daily-driver readiness summary.");
             sb.push(b"Type 'blockers' for known V1 limitations.");
+            true
+        }
+        b"calc" => {
+            match calc_command::eval(args) {
+                Ok(value) => {
+                    let mut line = [0u8; calc_command::LINE_MAX];
+                    let n = calc_command::render(value, &mut line);
+                    sb.push(&line[..n]);
+                    sex_pdx::serial_record!("[spindle.calc] expr_bytes={} result={} ok=1", args.len(), core::str::from_utf8(&line[..n]).unwrap_or("?"));
+                }
+                Err(error) => {
+                    sb.push(match error {
+                        calc_command::Error::DivideByZero => b"calc: division by zero".as_slice(),
+                        calc_command::Error::Overflow => b"calc: number too large",
+                        calc_command::Error::TooDeep => b"calc: nested too deeply",
+                        calc_command::Error::Syntax => b"usage: calc <expr>  e.g. calc 2*(3+4)/5",
+                    });
+                    sex_pdx::serial_record!("[spindle.calc] expr_bytes={} error={:?} ok=0", args.len(), error);
+                }
+            }
             true
         }
         b"sextime" => {
@@ -1649,7 +1671,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"    Esc              toggle palette");
             sb.push(b"  Selection: range markers [start, end] tracked.");
             sb.push(b"  Palette: up/down nav, Enter execute, Esc dismiss.");
-            sb.push(b"Limitations: no shift, no visual cursor indicator.");
+            sb.push(b"Limitations: no visual cursor indicator.");
             serial_println!("[spindle.editor.command] name=edit-help ok=1 reason=keybindings_v2");
             true
         }
@@ -2510,6 +2532,7 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
             sex_pdx::serial_record!("[spindle.probe.input] target={} pending={} key={} down={}",instance_pd(),unsafe{STORAGE_PROBE.busy()}as u8,msg.arg0,msg.arg1);
             let scancode = msg.arg0 as u8;
+            let shift = (msg.arg0 >> 8) & 1 == 1;
             let value = msg.arg1;
             unsafe {
                 static mut SPINDLE_KEY_RECV_BUDGET: u32 = 64;
@@ -2552,7 +2575,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 line.hist_nav = None;
             }
-            handle_key(scancode, &mut line, hist);
+            handle_key(scancode, shift, &mut line, hist);
             unsafe {
                 static mut SPINDLE_ECHO_BUDGET: u32 = 16;
                 if SPINDLE_ECHO_BUDGET > 0 {
@@ -2567,19 +2590,19 @@ pub extern "C" fn _start() -> ! {
 
 /// Process a single keyboard scancode into the line editor.
 /// Scancode table matches sexsh convention (US QWERTY set 1).
-fn handle_key(scancode: u8, line: &mut CmdLine, hist: &History) {
+fn handle_key(scancode: u8, shift: bool, line: &mut CmdLine, hist: &History) {
     let moved=match scancode {
         0x4B=>{line.cursor_left();true},0x47=>{line.cursor_home();true},0x4F=>{line.cursor_end();true},
         0x4D if line.mode==ViMode::Normal || line.cur<line.len=>{line.cursor_right();true},_=>false,
     };
     if moved{serial_println!("[spindle.line.cursor] pos={} len={}",line.cur,line.len);return;}
     match line.mode {
-        ViMode::Insert => handle_key_insert(scancode, line, hist),
+        ViMode::Insert => handle_key_insert(scancode, shift, line, hist),
         ViMode::Normal => handle_key_normal(scancode, line, hist),
     }
 }
 
-fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
+fn handle_key_insert(scancode: u8, shift: bool, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — caller handles dispatch; just clear
             serial_println!("[spindle.line.enter] len={} mode=insert text={:?}",
@@ -2620,7 +2643,7 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
             }
         }
         _ => {
-            if let Some(ch) = scancode_to_ascii(scancode) {
+            if let Some(ch) = scancode_to_ascii(scancode).map(|c| if shift { shifted(c) } else { c }) {
                 line.insert_at(line.cur, ch);
                 line.hist_nav = None;
                 serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
@@ -2697,6 +2720,18 @@ fn handle_key_normal(scancode: u8, line: &mut CmdLine, hist: &History) {
                 _ => {}
             }
         }
+    }
+}
+
+/// US QWERTY Shift layer for an unshifted ASCII key.
+fn shifted(c: u8) -> u8 {
+    match c {
+        b'a'..=b'z' => c - 32,
+        b'1' => b'!', b'2' => b'@', b'3' => b'#', b'4' => b'$', b'5' => b'%',
+        b'6' => b'^', b'7' => b'&', b'8' => b'*', b'9' => b'(', b'0' => b')',
+        b'-' => b'_', b'=' => b'+', b'[' => b'{', b']' => b'}', b';' => b':',
+        b'\'' => b'"', b'`' => b'~', b'\\' => b'|', b',' => b'<', b'.' => b'>', b'/' => b'?',
+        _ => c,
     }
 }
 
