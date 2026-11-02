@@ -38,6 +38,8 @@ pub mod view;
 pub mod unicode_input;
 #[path = "../servers/quil/src/find.rs"]
 pub mod find;
+#[path = "../servers/quil/src/autosave.rs"]
+pub mod autosave;
 pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX - 1;
 pub fn get_ticks() -> u64 {
     1
@@ -50,6 +52,7 @@ static mut QUIL_UNICODE_INPUT: unicode_input::Input = unicode_input::Input::new(
 static mut QUIL_UNICODE_SNAPSHOT: Option<text_selection::Snapshot> = None;
 static mut QUIL_INPUT_NOTICE: Option<&'static [u8]> = None;
 static mut QUIL_FIND: find::Find = find::Find::new();
+static mut QUIL_AUTOSAVE: autosave::Autosave = autosave::Autosave::new();
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_REVISION: u64 = 0;
 static mut QUIL_GENERATION: u64 = 1;

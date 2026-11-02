@@ -164,6 +164,26 @@ paint; HTML gate page includes an image and its text/pixels match;
 admits them in these runs, so screenshots must wait for
 `[quil.ui.applied]` of the latest paint (the gate now does).
 
+## Host-gate repair after F3 (2026-11-02)
+
+F3 broke two host gates I had not run: `quil_clipboard_host_gate.sh` (its
+extracted Quil functions now reference `QUIL_AUTOSAVE`) and
+`service_custody_host_gate.sh` (it required the first
+`DOCUMENT_WORKSPACE.changed()` to follow the Saved branch; autosave's own
+refresh comes earlier). The clipboard harness now includes the real
+`autosave.rs`; the custody check now requires the Saved branch itself to
+refresh the workspace. Both gates pass again.
+
+## F7 (pending approval). Quil Ctrl+D deletes a saved document
+
+Built on branch `feature/quil-delete`, not merged: it adds a `DELETE` kind to
+`sex_pdx::document`, which is an ABI input (`make full` stops on the
+`abi_version_hash` check). Design: Ctrl+D asks, a second Ctrl+D on the same
+unchanged saved document deletes it by its known generation through the held
+document route; sexfiles retires the generation so other holders go stale;
+the text stays in Quil as an unsaved UNTITLED buffer. Host gates pass on the
+branch; native gate `scripts/quil_delete_gate.py` is written but not yet run.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
