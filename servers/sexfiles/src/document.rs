@@ -25,6 +25,10 @@ pub trait Backend {
     fn save(&mut self, _caller: u32, _id: u8, _bytes: &[u8]) -> Result<(), u32> {
         Err(w::DENIED)
     }
+    /// Remove one object; its generation is retired so every holder goes stale.
+    fn delete(&mut self, _id: u8) -> Result<(), u32> {
+        Err(w::DENIED)
+    }
 }
 /// Four data requests may be admitted on the existing BOOT route.
 /// Each owns its receipt slot before any backend or staging effect.
@@ -271,6 +275,18 @@ impl Service {
                 return Err(w::BUSY);
             }
             return b.identity(r.object);
+        }
+        if r.kind == w::DELETE {
+            if s.bound || r.object < 3 || r.offset != 0 || r.b != 0 {
+                return Err(w::BUSY);
+            }
+            let generation = b.identity(r.object)?;
+            if r.a != generation as u64 {
+                return Err(w::STALE);
+            }
+            b.delete(r.object)?;
+            sex_pdx::serial_record!("[files.document.deleted] target={} object={} generation={}", caller, r.object, generation);
+            return Ok(0);
         }
         if r.kind == w::LOAD {
             if s.bound || r.offset != 0 || r.b > w::SNAPSHOT_MODE {

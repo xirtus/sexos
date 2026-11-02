@@ -174,15 +174,33 @@ refresh comes earlier). The clipboard harness now includes the real
 `autosave.rs`; the custody check now requires the Saved branch itself to
 refresh the workspace. Both gates pass again.
 
-## F7 (pending approval). Quil Ctrl+D deletes a saved document
+## F7. Quil Ctrl+D deletes a saved document (2026-11-02)
 
-Built on branch `feature/quil-delete`, not merged: it adds a `DELETE` kind to
-`sex_pdx::document`, which is an ABI input (`make full` stops on the
-`abi_version_hash` check). Design: Ctrl+D asks, a second Ctrl+D on the same
-unchanged saved document deletes it by its known generation through the held
-document route; sexfiles retires the generation so other holders go stale;
-the text stays in Quil as an unsaved UNTITLED buffer. Host gates pass on the
-branch; native gate `scripts/quil_delete_gate.py` is written but not yet run.
+**What changed.** In Quil, Ctrl+D on a saved document asks
+`DELETE FILE? CTRL D AGAIN`; a second Ctrl+D on the same unchanged document
+deletes its object. The text stays in Quil as an unsaved `UNTITLED` buffer
+(`DELETED / TEXT KEPT UNSAVED`), so nothing typed is lost by accident. Linen
+stops listing it, also after a power cut.
+
+**SexOS rules kept.** New request kind `sex_pdx::document::DELETE` (ABI
+input; Andreas approved the change in-thread, `abi_version_hash`
+recomputed). The object is named by its current generation on Quil's
+existing held document route; sexfiles refuses object 2, system slots, a
+bound session or a stale generation, and its delete retires the generation
+so every other holder goes stale. A refusal is a definite failure, not an
+uncertain one. No new grant, slot or route.
+
+**Evidence** (`docs/handoff/assets/quil-delete-2026-11-02/`): host
+`document_load_backend` delete mapping test and service custody / Quil
+clipboard host gates; sealed build and master gate GREEN; native
+`scripts/quil_delete_gate.py` at both sizes: save `gone`, Linen lists it,
+first Ctrl+D asks and deletes nothing, second Ctrl+D gives
+`[files.document.deleted] target=9 object=3`, Linen refresh drops `gone`,
+reboot after QEMU kill still without it; screenshots of both prompts.
+Regressions: autosave gate and `quil_workflow_gate.py` pass.
+
+**Limits.** Deletes only the document open in Quil; no Linen-side delete,
+no undo/trash.
 
 ## F8. HTML page title, quotes and rules (2026-11-02)
 

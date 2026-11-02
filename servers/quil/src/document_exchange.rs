@@ -12,11 +12,13 @@ enum Phase {
     BeginSave,
     Write,
     Commit,
+    Delete,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Loaded,
     Saved,
+    Deleted,
     Failed,
     Uncertain,
     Cancelled,
@@ -172,6 +174,30 @@ impl Client {
         self.total = 0;
         true
     }
+    /// Delete an object this client loaded or saved, by its known generation.
+    /// A refusal is definite (no effect); only a lost reply is uncertain.
+    pub fn delete(&mut self, id: u8) -> bool {
+        let Some(generation) = self.known.get(id as usize).copied().flatten() else { return false };
+        if self.busy || self.fenced || self.dead || !(3..15).contains(&id) {
+            return false;
+        }
+        self.bytes.fill(0);
+        self.name.fill(0);
+        self.len = 0;
+        self.object = id;
+        self.generation = generation;
+        self.saving = false;
+        self.creating = false;
+        self.phase = Phase::Delete;
+        self.offset = 0;
+        self.clear_window();
+        self.error = 0;
+        self.quiescent = false;
+        self.busy = true;
+        self.stall = 0;
+        self.total = 0;
+        true
+    }
     pub fn cancel(&mut self) -> bool {
         if self.dead {
             return false;
@@ -224,7 +250,7 @@ impl Client {
         }
     }
     fn fail(&mut self, error: u32) -> Option<Event> {
-        if !self.saving && matches!(self.phase, Phase::Info | Phase::Load) {
+        if !self.saving && matches!(self.phase, Phase::Info | Phase::Load | Phase::Delete) {
             Some(self.finish(Outcome::Failed, error))
         } else {
             Some(self.finish(Outcome::Uncertain, error))
@@ -385,6 +411,10 @@ impl Client {
                     a = w::hash(&self.bytes[..self.len]);
                     w::COMMIT
                 }
+                Phase::Delete => {
+                    a = self.generation as u64;
+                    w::DELETE
+                }
             };
             self.req = Some(w::Request {
                 seq: self.seq,
@@ -509,6 +539,13 @@ impl Client {
                     return self.fail(w::INVALID);
                 }
                 self.phase = Phase::End
+            }
+            Phase::Delete => {
+                if v != 0 {
+                    return self.fail(w::INVALID);
+                }
+                self.known[self.object as usize] = None;
+                return Some(self.finish(Outcome::Deleted, 0));
             }
             Phase::Abort => {
                 if v != 0 {
