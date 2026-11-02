@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Host tests of the Browser's bounded HTML reading view.
+extern crate alloc;
 #[path="../apps/kaleidoscope/src/html_text.rs"] mod html_text;
+#[path="../apps/kaleidoscope/src/script.rs"] mod script;
 use html_text::{convert, looks_like_html, MAX_LINKS};
 
 fn text(html: &str, cap: usize) -> (String, html_text::Converted) {
@@ -23,9 +25,10 @@ fn page_becomes_readable_blocks() {
 #[test]
 fn script_style_and_comments_contribute_nothing() {
     let page = "<p>a<script>document.write('<p>x</p>')</script>b<!-- hidden <p>c</p> -->d</p>\
-        <noscript>ns</noscript><template><p>tp</p></template><SCRIPT type=x>y</SCRIPT>e";
-    let (t, _) = text(page, 512);
-    assert_eq!(t, "abd\n\ne");
+        <noscript>ns</noscript><template><p>tp</p></template><SCRIPT type=x>y</SCRIPT><script src=/x.js></script><script>while(1){}</script>e";
+    let (t, c) = text(page, 512);
+    assert_eq!(t, "a<p>x</p>bd\n\ne");
+    assert_eq!((c.scripts_run, c.scripts_refused), (1, 3));
 }
 
 #[test]

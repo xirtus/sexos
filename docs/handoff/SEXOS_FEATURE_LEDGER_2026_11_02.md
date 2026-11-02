@@ -243,6 +243,50 @@ output: Spindle admitted its display batches early in the run but no later
 paint was applied before capture. Together with the Quil paint lag seen in
 F3/F6, this points at Display applying app paints late under these gates.
 
+## F10. Bounded inline script subset in the Browser (2026-11-02)
+
+**What changed.** First step toward scripting. Inline `<script>` blocks in an
+HTML page run through `apps/kaleidoscope/src/script.rs`, a deliberately
+small subset, not a JavaScript engine: `var/let/const` declarations,
+assignment to declared names, `document.write` / `document.writeln`, number
+and string literals (with escapes), `+ - * / %`, unary `+ -`, parentheses,
+`NaN`/`Infinity`, comments and newline-terminated statements. Numbers are
+IEEE doubles printed as JavaScript prints them (`0.1+0.2` gives
+`0.30000000000000004`, `1/0` gives `Infinity`, `1e21` gives `1e+21`);
+`+` with a string concatenates. Written output is inserted as text, never as
+markup. Anything else (loops, functions, objects, `fetch`, `eval`, page or
+window access, template strings, external `src`, other `type`s) means the
+script writes nothing; refusals are counted in `[browser.html.converted]
+... scripts_run=N scripts_refused=M`.
+
+**SexOS rules kept.** The subset has no names for anything outside its own
+16 variables: no DOM, timers, storage, network, clock or capability. It is
+straight-line, so it always terminates; nesting is capped at 8 levels (the
+Browser stack is tight, F4/F5), source at 4 KiB, string arena at 2 KiB and
+output at 1 KiB, both allocated fallibly on the heap. Conversion of the test
+page takes 4 ticks.
+
+**Evidence** (`docs/handoff/assets/browser-script-subset-2026-11-02/`):
+`tests/browser_script.rs` (4 test groups: writes and variables, 19 number
+formatting cases, 13 refused programs, bounds) and html_text 15 tests, both
+in `sexnet_jobs_host_gate.sh`; Browser host gates OK; sealed build and master
+gate GREEN; native `https_html_gate.py` at both sizes: the page's script
+writes `Script says 42 / -6`, a `while` script in `<head>`, a `fetch` script
+and a `src` script write nothing (`scripts_run=1 scripts_refused=2`), the
+released body hash equals the expected text, plus refusal/follow/Back;
+`/welcome` regression passes.
+
+**Found on the way: guest HTTPS close fails for some response sizes.** With
+the page at 992 bytes (response about 1.1 KB: one full 1024-byte TLS record
+and one short one) the guest received, parsed and converted the body, then
+its net job went `Receiving -> Failed` at close instead of `Complete`, and
+the Browser showed Unavailable. Reproduced three times at both sizes, with
+and without 1024-byte chunking on the server. An 841-byte page and a
+3.8 KB page complete normally. The gate page is now padded to 3.8 KB with a
+comment so this feature is tested; the failing case is kept as an excerpt in
+`close-failure-1.1kb/`. Not yet diagnosed (sexnet TCP close / TLS
+close_notify around a short final record).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
@@ -256,3 +300,5 @@ F3/F6, this points at Display applying app paints late under these gates.
 - Display applies app paints seconds late (Quil) or not before capture
   (Spindle, F9) in short native runs. Needs a look at Display's paint
   scheduling before relying on screenshots for app output.
+- Guest HTTPS fetch fails at connection close for a ~1.1 KB response (F10);
+  other sizes complete. Needs a sexnet/TLS close investigation.

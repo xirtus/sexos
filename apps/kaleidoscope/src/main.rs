@@ -29,6 +29,7 @@ mod asset_presentation;
 mod text_delivery;
 mod browser_command;
 mod html_text;
+mod script;
 use browser_command::Intent;
 
 use silkclient::{app_main, SexApp};
@@ -817,7 +818,7 @@ impl SexApp for App {
         let received=self.exchange.document_received();
         if self.asset_panel&&received>self.https_progress_logged{self.https_progress_logged=received;sex_pdx::serial_record!("[browser.asset.progress] ticket={} body_received={} authenticated=1 body_visible=0",peer_ticket,received);}
         if self.exchange.is_document()&&received>self.https_progress_logged{self.https_progress_logged=received;sex_pdx::serial_record!("[browser.https.progress] ticket={} body_received={} authenticated=1 body_visible=0",peer_ticket,received);}
-        if self.exchange.take_response_verified(){if let Some(p)=self.exchange.take_page_stats(){*self.page_links=p.targets;sex_pdx::serial_record!("[browser.html.converted] source_bytes={} text_bytes={} links={} truncated={} script=0",p.source,p.len,p.links,p.truncated as u8);}if self.exchange.resource_kind()==Some(sex_tls::Resource::ArtworkQoi){sex_pdx::serial_record!("[browser.asset.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_asset_len(),self.exchange.retained_asset_hash());}else if self.exchange.is_document(){sex_pdx::serial_record!("[browser.https.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_document_len(),self.exchange.retained_document_hash());}else{sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}}
+        if self.exchange.take_response_verified(){if let Some(p)=self.exchange.take_page_stats(){*self.page_links=p.targets;sex_pdx::serial_record!("[browser.html.converted] source_bytes={} text_bytes={} links={} truncated={} scripts_run={} scripts_refused={} ticks={}",p.source,p.len,p.links,p.truncated as u8,p.scripts_run,p.scripts_refused,p.ticks);}if self.exchange.resource_kind()==Some(sex_tls::Resource::ArtworkQoi){sex_pdx::serial_record!("[browser.asset.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_asset_len(),self.exchange.retained_asset_hash());}else if self.exchange.is_document(){sex_pdx::serial_record!("[browser.https.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_document_len(),self.exchange.retained_document_hash());}else{sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}}
         let peer_view=if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsAssetDns|Intent::TlsStart)){
             if self.waiting_receipt(){tls_exchange::View::Uncertain}else{tls_exchange::View::Pending}
         }else{self.exchange.view()};
@@ -1005,7 +1006,7 @@ app_main!(App);
 
 fn peer_label(view:tls_exchange::View)->&'static[u8]{match view{tls_exchange::View::Idle=>b"idle",tls_exchange::View::Pending=>b"checking",tls_exchange::View::Verified=>b"peer verified",tls_exchange::View::Unavailable=>b"unavailable",tls_exchange::View::Cancelled=>b"cancelled",tls_exchange::View::Uncertain=>b"waiting receipt"}}
 fn page_text(html:&[u8],out:&mut [u8])->tls_exchange::PageStats{
-    let c=html_text::convert(html,out);tls_exchange::PageStats{source:html.len(),len:c.len,links:c.links,truncated:c.truncated,targets:c.targets}
+    let t0=sex_pdx::get_ticks();let c=html_text::convert(html,out);let ticks=sex_pdx::get_ticks().saturating_sub(t0);tls_exchange::PageStats{ticks,source:html.len(),len:c.len,links:c.links,truncated:c.truncated,targets:c.targets,scripts_run:c.scripts_run,scripts_refused:c.scripts_refused}
 }
 /// Fixed request size: the WelcomeText request is 94 bytes and only the path
 /// and Accept value differ between fixed resources on the same BOOT endpoint.

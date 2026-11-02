@@ -128,6 +128,8 @@ echo '[sexnet.document.reader.host] PASS scope=actual_viewport_reader_and_shared
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset.rs" -o "$TEST_DIR/browser-asset-tests"
 "$TEST_DIR/browser-asset-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_html_text.rs" -o "$TEST_DIR/browser-html-text-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/browser_script.rs" -o "$TEST_DIR/browser-script-tests"
+"$TEST_DIR/browser-script-tests"
 "$TEST_DIR/browser-html-text-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_bitmap_delivery.rs" -o "$TEST_DIR/browser-bitmap-tests"
 "$TEST_DIR/browser-bitmap-tests"

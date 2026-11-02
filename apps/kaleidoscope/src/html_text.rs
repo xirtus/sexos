@@ -2,11 +2,12 @@
 //! Bounded HTML-to-readable-text conversion for the Browser reader.
 //!
 //! This is a reading view, not a web engine: there is no DOM, CSS, layout,
-//! script execution, network fetch or form. Markup becomes plain UTF-8 text:
+//! network fetch or form. Markup becomes plain UTF-8 text:
 //! headings and block elements start new lines, list items get a bullet,
 //! links keep their text plus a numbered reference listed at the end, and
-//! images show their alt text, and `script`, `style`, `head`, `template` and
-//! comments contribute nothing. The
+//! images show their alt text, inline scripts run only through the bounded
+//! subset in `script.rs` (their writes become text), and `style`, `head`,
+//! `template` and comments contribute nothing. The
 //! output never exceeds the caller's buffer; a cut is marked, never silent.
 
 pub const MAX_LINKS: usize = 16;
@@ -73,6 +74,10 @@ pub struct Converted {
     pub len: usize, pub links: usize, pub truncated: bool,
     /// Output ranges of each listed link target; empty when the list was cut.
     pub targets: [(usize, usize); MAX_LINKS],
+    /// Inline scripts run by the bounded subset, and scripts refused
+    /// (external `src`, other types, or outside the subset).
+    pub scripts_run: u8,
+    pub scripts_refused: u8,
 }
 
 fn lower(b: u8) -> u8 { b.to_ascii_lowercase() }
@@ -132,7 +137,7 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
     Some((ch.encode_utf8(out).len(), end + 1))
 }
 
-const SKIP: [&[u8]; 6] = [b"script", b"style", b"head", b"template", b"noscript", b"svg"];
+const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
 const BLOCK: [&[u8]; 14] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr"];
 
 /// Convert `html` into readable text in `out`. Link targets are appended as a
@@ -143,6 +148,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let mut link_count = 0usize;
     let mut open_link: Option<usize> = None;
     let mut skip_until: Option<&[u8]> = None;
+    let (mut scripts_run, mut scripts_refused) = (0u8, 0u8);
     if let Some(title) = title(html) {
         o.bytes(b"Title:");
         o.space = true;
@@ -170,6 +176,21 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             let name = &body[..name_end];
             if let Some(skip) = skip_until {
                 if end_tag && name_is(name, skip) { skip_until = None; }
+                continue;
+            }
+            if !end_tag && name_is(name, b"script") {
+                // Find the raw end tag; script text is never markup.
+                let rest = &html[i..];
+                let close = rest.windows(9).position(|w| name_is(w, b"</script>"));
+                let source = &rest[..close.unwrap_or(rest.len())];
+                i += close.map_or(rest.len(), |c| c + 9);
+                let attrs = &body[name_end..];
+                let plain = attribute(attrs, b"src").is_none()
+                    && attribute(attrs, b"type").is_none_or(|t| name_is(t, b"text/javascript"));
+                match plain.then(|| crate::script::run(source)) {
+                    Some(Ok(written)) => { scripts_run = scripts_run.saturating_add(1); for &c in &written { o.text(c); } }
+                    _ => scripts_refused = scripts_refused.saturating_add(1),
+                }
                 continue;
             }
             if !end_tag {
@@ -268,7 +289,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
         }
     }
     let (len, truncated) = o.finish();
-    Converted { len, links: link_count, truncated, targets }
+    Converted { len, links: link_count, truncated, targets, scripts_run, scripts_refused }
 }
 
 /// Text of the first `<title>` element, if any (it sits in the skipped head).

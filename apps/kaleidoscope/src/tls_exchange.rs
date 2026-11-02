@@ -10,7 +10,7 @@ pub enum View{Idle,Pending,Verified,Unavailable,Cancelled,Uncertain}
 /// application. The exchange owns no HTML policy of its own.
 pub type PageText=fn(&[u8],&mut [u8])->PageStats;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct PageStats{pub source:usize,pub len:usize,pub links:usize,pub truncated:bool,pub targets:[(usize,usize);16]}
+pub struct PageStats{pub source:usize,pub len:usize,pub links:usize,pub truncated:bool,pub targets:[(usize,usize);16],pub scripts_run:u8,pub scripts_refused:u8,pub ticks:u64}
 /// Diagnostic of one positively acknowledged RELEASE; not a new capability.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Released{pub ticket:u32,pub outcome:View,pub authenticated:bool,pub document:bool,pub resource:Option<Resource>,pub payload_bytes:usize}
@@ -134,7 +134,7 @@ impl Client{
                     self.document=session.take_document();if self.document.is_none(){self.failed(false);return;}
                     if self.resource==Some(Resource::PageHtml){
                         let (Some(convert),Some(document))=(self.page_text,self.document.as_mut())else{self.failed(false);return;};
-                        let source=document.as_bytes().len();let mut stats=PageStats{source,len:0,links:0,truncated:false,targets:[(0,0);16]};
+                        let source=document.as_bytes().len();let mut stats=PageStats{source,len:0,links:0,truncated:false,targets:[(0,0);16],scripts_run:0,scripts_refused:0,ticks:0};
                         if document.rewrite(|html,out|{stats=PageStats{source,..convert(html,out)};stats.len}).is_err(){self.failed(false);return;}
                         self.page_stats=Some(stats);
                     }
