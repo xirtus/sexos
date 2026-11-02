@@ -82,3 +82,24 @@ fn html_detection() {
     assert!(!looks_like_html(b"plain text <p>"));
     assert!(!looks_like_html(b""));
 }
+
+#[test]
+fn link_targets_are_exact_output_ranges() {
+    let page = "<a href='/a/b'>x</a> <a href=\"/guide\">y</a>";
+    let mut out = vec![0u8; 256];
+    let c = convert(page.as_bytes(), &mut out);
+    assert_eq!(c.links, 2);
+    let t = |n: usize| &out[c.targets[n].0..c.targets[n].1];
+    assert_eq!(t(0), b"/a/b");
+    assert_eq!(t(1), b"/guide");
+    assert_eq!(c.targets[2], (0, 0));
+}
+
+#[test]
+fn cut_link_list_publishes_no_partial_target() {
+    let page = "<p>".to_string() + &"w ".repeat(40) + "</p><a href=\"/a-long-target-path\">x</a>";
+    let mut out = vec![0u8; 120];
+    let c = convert(page.as_bytes(), &mut out);
+    assert!(c.truncated);
+    for &(a, b) in &c.targets { assert!(b <= c.len && (a, b) == (0, 0) || &out[a..b] == b"/a-long-target-path"); }
+}

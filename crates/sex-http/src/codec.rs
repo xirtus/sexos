@@ -122,6 +122,11 @@ pub fn request_https(out:&mut[u8;HTTPS_MAX_REQUEST],path:&Path)->usize{
 pub fn request_https_resource(out:&mut[u8;HTTPS_MAX_REQUEST],resource:Resource)->usize{
     emit_request_resource(out,&resource.path(),true,resource)
 }
+/// A validated page path on the same BOOT endpoint, always as text/html. The
+/// path is request data only; it never selects a host, port or route.
+pub fn request_https_page(out:&mut[u8;HTTPS_MAX_REQUEST],path:&Path)->usize{
+    emit_request_resource(out,path,true,Resource::PageHtml)
+}
 fn emit_request(out:&mut[u8],path:&Path,https:bool)->usize{
     emit_request_resource(out,path,https,Resource::WelcomeText)
 }
@@ -428,6 +433,12 @@ mod resource_tests {
             assert_eq!(&out[..len],expected.as_bytes());assert!(out[len..].iter().all(|b|*b==0xa5));
             if resource==Resource::WelcomeText{let mut legacy=[0;HTTPS_MAX_REQUEST];let n=request_https(&mut legacy,&Path::initial());assert_eq!(&legacy[..n],&out[..len]);}
         }
+    }
+    #[test] fn page_request_carries_validated_path_as_text_html(){
+        let mut out=[0xa5;HTTPS_MAX_REQUEST];let path=Path::from_location(b"/guide/intro.html").unwrap();let len=request_https_page(&mut out,&path);
+        assert_eq!(&out[..len],b"GET /guide/intro.html HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n".as_slice());
+        let long=[b'a';MAX_PATH-1];let mut p=vec![b'/'];p.extend_from_slice(&long);let len=request_https_page(&mut out,&Path::from_location(&p).unwrap());assert!(len<=HTTPS_MAX_REQUEST);
+        for bad in [&b"guide"[..],b"https://x/y",b"/a?b",b"/../x",b"//x",b"/a b"]{assert!(Path::from_location(bad).is_err());}
     }
     #[test] fn html_page_accepts_only_text_html_with_text_charsets(){
         let body=b"<p>hi &amp; bye</p>";

@@ -23,6 +23,7 @@ mod probe_fixture;
 pub use verifier::controlled_self_check;
 pub use sex_http::Error as HttpError;
 pub use sex_http::Resource;
+pub use sex_http::Path as HttpPath;
 
 pub const RECORD_READ: usize = 4096;
 pub const RECORD_WRITE: usize = 2048;
@@ -195,12 +196,12 @@ impl Session {
     /// Always erases the transferred caller seed, including rejected starts.
     /// Seconds are input data, not new time authority or an advancing clock.
     pub fn prepare(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
-        Self::prepare_mode(seed,seconds,profile,false,None)
+        Self::prepare_mode(seed,seconds,profile,false,None,None)
     }
     /// Real protocol mode still has no transport/endpoint authority. The
     /// caller must move bytes exclusively through an admitted held duplex job.
     pub fn exchange(seed:&mut[u8;32], seconds:u32, profile:u32) -> Result<Self,Error> {
-        Self::prepare_mode(seed,seconds,profile,true,None)
+        Self::prepare_mode(seed,seconds,profile,true,None,None)
     }
     /// Bounded HTTP/1.1 text document on the same immutable name/profile.
     /// This generates protocol bytes only; the parent supplies held duplex I/O.
@@ -210,9 +211,13 @@ impl Session {
     /// Fixed HTTP resource on the same BOOT-attested TLS endpoint/profile.
     /// Resource metadata is data, never a host, route or trust authority.
     pub fn resource(seed:&mut[u8;32],seconds:u32,profile:u32,resource:Resource)->Result<Self,Error>{
-        Self::prepare_mode(seed,seconds,profile,true,Some(resource))
+        Self::prepare_mode(seed,seconds,profile,true,Some(resource),None)
     }
-    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool, resource:Option<Resource>) -> Result<Self,Error> {
+    /// An HTML page at a validated path on the same BOOT endpoint/profile.
+    pub fn page(seed:&mut[u8;32],seconds:u32,profile:u32,path:sex_http::Path)->Result<Self,Error>{
+        Self::prepare_mode(seed,seconds,profile,true,Some(Resource::PageHtml),Some(path))
+    }
+    fn prepare_mode(seed:&mut[u8;32], seconds:u32, profile:u32, exchange:bool, resource:Option<Resource>, path:Option<sex_http::Path>) -> Result<Self,Error> {
         let private=Seed(*seed); erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(Error::Clock); }
         let verifier=verifier::Verifier::new(profile,seconds).map_err(|_|Error::Policy)?;
@@ -229,7 +234,7 @@ impl Session {
                 tls.open(TlsContext::new(&config,&mut provider)).await?;provider.verifier.finished()?;
                 shared.borrow_mut().authenticated=true;
                 let mut request=[0;sex_http::HTTPS_MAX_REQUEST];
-                let count=sex_http::request_https_resource(&mut request,resource);
+                let count=match path{Some(path)=>sex_http::request_https_page(&mut request,&path),None=>sex_http::request_https_resource(&mut request,resource)};
                 let mut at=0;while at<count{let n=tls.write(&request[at..count]).await?;
                     if n==0{return Err(TlsError::InvalidApplicationData);}at+=n;}
                 erase(&mut request);tls.flush().await?;

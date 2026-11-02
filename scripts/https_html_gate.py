@@ -7,7 +7,7 @@ reader text is produced on the host by compiling the same bounded converter
 (apps/kaleidoscope/src/html_text.rs); its behaviour is independently pinned by
 tests/browser_html_text.rs. No script, CSS, layout engine or public web claim.
 """
-import argparse,hashlib,json,os,re,shutil,subprocess,tempfile,time
+import argparse,hashlib,json,os,re,shutil,socket,subprocess,tempfile,threading,time
 from pathlib import Path
 import https_document_gate as doc
 import tls_exchange_gate as tls
@@ -22,25 +22,59 @@ PAGE=(b'<!DOCTYPE html><html><head><title>ignored</title><style>body{color:red}<
  b'<script>document.write("never runs")</script></head><body>'
  b'<h1>SexOS field notes</h1><p>One shared address space supplies addresses;\n held capabilities supply authority.</p>'
  b'<h2>Rules</h2><ul><li>BOOT grants routes &amp; identities.</li><li>Applications cannot mint them.</li><li>No script runs here.</li></ul>'
- b'<p>Read the <a href="/guide">guide</a> or the <a href=\'/ledger\'>ledger</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
+ b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
  b'<!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
+GUIDE_REQUEST=b'GET /guide HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
+GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><p><a href="/page.html">Back to notes</a></p></body></html>'
 SCOPE='Actual fixed BOOT-controlled HTTPS text/html page through held policy/seed/UTC/DNS/duplex authority, converted by the bounded no-script reader and checked against reader glyph pixels. Public laboratory root only; no script, CSS, layout, forms, arbitrary URL or public web trust claim.'
 
-def response(mode):
- return b'\r\n'.join([b'HTTP/1.1 200 OK',b'Content-Type: text/html; charset=utf-8',b'Content-Length: '+str(len(PAGE)).encode(),b'Connection: close'])+b'\r\n\r\n'+PAGE
+def response(mode,page=PAGE):
+ return b'\r\n'.join([b'HTTP/1.1 200 OK',b'Content-Type: text/html; charset=utf-8',b'Content-Length: '+str(len(page)).encode(),b'Connection: close'])+b'\r\n\r\n'+page
 
-def expected_text(root):
+class HtmlPeer(doc.ControlledHTTPSPeer):
+ """Serves the fixed page, then exactly one followed page; nothing else."""
+ EXCHANGES=((REQUEST,PAGE),(GUIDE_REQUEST,GUIDE))
+ def __init__(self,root):
+  super().__init__(root,'ready');self.served=[threading.Event()for _ in self.EXCHANGES]
+ def serve_dns(self,sock):
+  while not self.stop.is_set():
+   try:data,remote=sock.recvfrom(513)
+   except socket.timeout:continue
+   ticket=int.from_bytes(data[:2],'big')
+   if len(data)<2 or data!=tls.dns_query(ticket)or len(self.dns)>=len(self.EXCHANGES):raise ValueError('unexpected controlled DNS request')
+   r=tls.dns_response(ticket);sent=sock.sendto(r,remote);self.dns.append(dict(ticket=ticket,response_hex=r.hex()));self.attempts.append(dict(ticket=ticket,kind='answer',response_hex=r.hex(),sent_bytes=sent))
+ def serve_tls(self,listener,ctx):
+  for index,(request,page)in enumerate(self.EXCHANGES):
+   sock=self.accept(listener)
+   if sock is None:return
+   row=dict(index=index,request_hex=None,response_hex=None,unwrap_completed=False);self.rows.append(row)
+   w=ctx.wrap_socket(sock,server_side=True,do_handshake_on_connect=False);self.live.append(w);w.do_handshake()
+   if(w.version(),w.cipher()[0],getattr(w,'controlled_sni',None))!=('TLSv1.3',tls.CIPHER,tls.HOST):raise ValueError('foreign TLS profile')
+   got=bytearray()
+   while len(got)<len(request):
+    chunk=w.recv(4096)
+    if not chunk:raise ValueError('guest closed before exact request')
+    got.extend(chunk)
+   if bytes(got)!=request:raise ValueError(f'request {index} differs: {bytes(got)!r}')
+   row['request_hex']=bytes(got).hex();wire=response('ready',page);w.sendall(wire);row['response_hex']=wire.hex()
+   w.unwrap().close();row['unwrap_completed']=True;self.served[index].set()
+   if index==0:self.completed.set()
+  while not self.stop.is_set():
+   try:extra,_=listener.accept();extra.close();raise ValueError('extra HTTPS endpoint connection')
+   except socket.timeout:pass
+
+def expected_text(root,page=PAGE):
  with tempfile.TemporaryDirectory()as d:
   src=Path(d)/'oracle.rs';src.write_text('#[path='+json.dumps(str(root/'apps/kaleidoscope/src/html_text.rs'))+']mod html_text;\nuse std::io::{Read,Write};fn main(){let mut i=Vec::new();std::io::stdin().read_to_end(&mut i).unwrap();let mut o=vec![0u8;12288];let c=html_text::convert(&i,&mut o);eprintln!("{} {}",c.links,c.truncated as u8);std::io::stdout().write_all(&o[..c.len]).unwrap();}\n')
   subprocess.run(['rustc','--edition=2021','-O',str(src),'-o',str(Path(d)/'oracle')],check=True,capture_output=True)
-  r=subprocess.run([str(Path(d)/'oracle')],input=PAGE,capture_output=True,check=True);links,cut=map(int,r.stderr.split())
+  r=subprocess.run([str(Path(d)/'oracle')],input=page,capture_output=True,check=True);links,cut=map(int,r.stderr.split())
   return r.stdout,links,cut
 
-def geometry(trace,contract,text):
- rel=list(re.finditer(rf'\[browser.https.released\] ticket=(\d+) tx=\d+ rx=\d+ request_bytes={len(REQUEST)} body_bytes=(\d+) body_hash=(0x[0-9a-f]+) positive_release=1 authenticated=1 public_test_root=1',trace));assert rel,'missing positive authenticated HTML release'
+def geometry(trace,contract,text,request=REQUEST,path=b'/page.html'):
+ rel=list(re.finditer(rf'\[browser.https.released\] ticket=(\d+) tx=\d+ rx=\d+ request_bytes={len(request)} body_bytes=(\d+) body_hash=(0x[0-9a-f]+) positive_release=1 authenticated=1 public_test_root=1',trace));assert rel,'missing positive authenticated HTML release'
  r=rel[-1];assert int(r[2])==len(text)and r[3]==hex(tls.fingerprint(text)),'released body is not the converted page text'
- tile,seq=doc.viewport(trace);frame=http.reader_frame(text,tile['w'],tile['h'],contract,0,b'/page.html');frame.update(tile=tile,viewport=seq,document_ticket=int(r[1]))
+ tile,seq=doc.viewport(trace);frame=http.reader_frame(text,tile['w'],tile['h'],contract,0,path);frame.update(tile=tile,viewport=seq,document_ticket=int(r[1]))
  lay=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed',trace))
  want=tuple(frame[k]for k in('first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'));assert lay and lay[-1].start()>r.end()and tuple(map(int,lay[-1].groups()))==want,f'reader layout differs {lay[-1].groups() if lay else None} {want}'
  return frame
@@ -54,7 +88,7 @@ def main():
  if held['runner_sha256'].get('scripts/https_html_gate.py')!=hashlib.sha256(Path(__file__).read_bytes()).hexdigest():raise RuntimeError('HTML checker absent from exact frozen binding')
  text,links,cut=expected_text(root);contract=doc.load_contract(root);contract.update(request=REQUEST,reader_path=b' /page.html');resolution=tuple(map(int,a.resolution.split('x')))
  doc.REQUEST=REQUEST;doc.response=response
- peer=doc.ControlledHTTPSPeer(root,'ready');peer.start();disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);serial=out/'serial.log';pcap=out/'wire.pcap';sock=Path('/tmp')/f'sex-html-{os.getpid()}.sock'
+ peer=HtmlPeer(root);peer.start();disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);serial=out/'serial.log';pcap=out/'wire.pcap';sock=Path('/tmp')/f'sex-html-{os.getpid()}.sock'
  command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',doc.RTC_NORMAL,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(a.iso.resolve()),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
  manifest=dict(binding=binding,command=command,model=a.model,resolution=a.resolution,page_sha256=hashlib.sha256(PAGE).hexdigest(),page_bytes=len(PAGE),text_sha256=hashlib.sha256(text).hexdigest(),text_bytes=len(text),links=links,request_hex=REQUEST.hex());(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');(out/'expected-text.txt').write_bytes(text)
  proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic();failure=None;checks={}
@@ -87,15 +121,26 @@ def main():
   wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b);doc_event=peer.completed.wait(30)
   if not doc_event:raise TimeoutError('peer close_notify')
   conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} script=0',b);checks['converted']=conv[0]
-  path=out/'html-reader.ppm';result=dict(ok=False,errors=['no frame']);deadline=time.monotonic()+25
-  while time.monotonic()<deadline:
-   health();q.cmd('screendump',{'filename':str(path)})
-   try:result=doc.frame_pixels(path.read_bytes(),geometry(trace(),contract,text),contract,resolution)
-   except(AssertionError,ValueError,KeyError,IndexError,TypeError)as exc:result=dict(ok=False,errors=[str(exc)])
-   if result['ok']:break
-   time.sleep(.1)
-  checks['reader_pixels']=result
-  if not result['ok']:raise RuntimeError(str(result['errors']))
+  def reader(name,text,request,path):
+   shot=out/(name+'.ppm');result=dict(ok=False,errors=['no frame']);deadline=time.monotonic()+25
+   while time.monotonic()<deadline:
+    health();q.cmd('screendump',{'filename':str(shot)})
+    try:result=doc.frame_pixels(shot.read_bytes(),geometry(trace(),contract,text,request,path),contract,resolution)
+    except(AssertionError,ValueError,KeyError,IndexError,TypeError)as exc:result=dict(ok=False,errors=[str(exc)])
+    if result['ok']:break
+    time.sleep(.1)
+   checks[name]=result
+   if not result['ok']:raise RuntimeError(name+': '+str(result['errors']))
+  reader('html-reader',text,REQUEST,b'/page.html')
+  b=len(trace());q.key('3');wait(r'\[browser.html.link.refused\] index=3 listed=1 reason=not_endpoint_path network=0',b);time.sleep(1)
+  if len(peer.dns)!=1 or len(peer.rows)!=1:raise RuntimeError('refused link caused network work')
+  checks['refused_link']='index=3 https://elsewhere.example/x refused, no DNS/TLS'
+  guide,glinks,gcut=expected_text(root,GUIDE)
+  b=len(trace());q.key('1');wait(r'\[browser.html.link\] index=1 path=/guide same_endpoint=1 script=0',b)
+  if not peer.served[1].wait(60):raise TimeoutError('followed page not served')
+  wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b)
+  checks['followed']=wait(rf'\[browser.html.converted\] source_bytes={len(GUIDE)} text_bytes={len(guide)} links={glinks} truncated={gcut} script=0',b)[0]
+  reader('html-followed',guide,GUIDE_REQUEST,b'/guide');(out/'expected-guide.txt').write_bytes(guide)
   assert b'never runs' not in text and b'ignored' not in text,'skipped markup leaked into text'
  except Exception as exc:failure=repr(exc)
  finally:
@@ -105,7 +150,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- t=trace();request_ok=any(r.get('request_hex')==REQUEST.hex()for r in peer.rows)
+ t=trace();request_ok=[r.get('request_hex')for r in peer.rows]==[REQUEST.hex(),GUIDE_REQUEST.hex()]
  res=dict(ok=failure is None and request_ok and not peer.errors,error=failure,request_exact=request_ok,peer=peer.rows,checks=checks,resolution=a.resolution,model=a.model,scope=SCOPE)
  (out/'result.json').write_text(json.dumps(res,indent=2,default=str)+'\n')
  if not res['ok']:raise RuntimeError(json.dumps(dict(error=failure,request_exact=request_ok,errors=peer.errors)))

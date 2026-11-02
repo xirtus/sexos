@@ -53,7 +53,11 @@ impl<'a> Output<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Converted { pub len: usize, pub links: usize, pub truncated: bool }
+pub struct Converted {
+    pub len: usize, pub links: usize, pub truncated: bool,
+    /// Output ranges of each listed link target; empty when the list was cut.
+    pub targets: [(usize, usize); MAX_LINKS],
+}
 
 fn lower(b: u8) -> u8 { b.to_ascii_lowercase() }
 fn name_is(name: &[u8], want: &[u8]) -> bool { name.len() == want.len() && name.iter().zip(want).all(|(a, b)| lower(*a) == *b) }
@@ -195,6 +199,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
         o.text(b);
         i += 1;
     }
+    let mut targets = [(0, 0); MAX_LINKS];
     if link_count > 0 {
         o.line(true);
         o.bytes(b"Links:");
@@ -208,11 +213,13 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             o.byte(b' ');
             o.space = false;
             o.newlines = 0;
+            let from = o.len;
             for &c in &html[start..start + len] { o.text(c); }
+            if !o.truncated { targets[n] = (from, o.len); }
         }
     }
     let (len, truncated) = o.finish();
-    Converted { len, links: link_count, truncated }
+    Converted { len, links: link_count, truncated, targets }
 }
 
 fn number(mut n: usize, out: &mut [u8; 6]) -> usize {
