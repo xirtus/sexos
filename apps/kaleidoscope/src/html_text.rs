@@ -54,6 +54,13 @@ impl<'a> Output<'a> {
         self.byte(b);
     }
     fn bytes(&mut self, s: &[u8]) { for &b in s { self.text(b); } }
+    /// Literal bytes at the start of a line (indentation, list markers).
+    fn raw(&mut self, s: &[u8]) {
+        if self.newlines != 0 { for _ in 0..self.quote { self.byte(b'>'); self.byte(b' '); } }
+        for &b in s { self.byte(b); }
+        self.newlines = 0;
+        self.space = false;
+    }
     /// End the current line; `blank` asks for an empty line before the next block.
     fn line(&mut self, blank: bool) {
         let want = if blank { 2 } else { 1 };
@@ -138,7 +145,7 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
 }
 
 const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
-const BLOCK: [&[u8]; 14] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr"];
+const BLOCK: [&[u8]; 15] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl"];
 
 /// Convert `html` into readable text in `out`. Link targets are appended as a
 /// numbered list; at most MAX_LINKS are kept.
@@ -149,6 +156,9 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let mut open_link: Option<usize> = None;
     let mut skip_until: Option<&[u8]> = None;
     let (mut scripts_run, mut scripts_refused) = (0u8, 0u8);
+    // Open lists: 0 = bulleted, n = next number of an ordered list.
+    let mut lists = [0u16; 4];
+    let mut depth = 0usize;
     if let Some(title) = title(html) {
         o.bytes(b"Title:");
         o.space = true;
@@ -207,15 +217,38 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                 o.line(false);
             } else if name_is(name, b"li") && !end_tag {
                 o.line(false);
-                o.bytes(b"- ");
+                for _ in 1..depth.max(1) { o.raw(b"  "); }
+                match lists.get(depth.wrapping_sub(1)).copied().filter(|n| *n > 0) {
+                    Some(n) => {
+                        let mut digits = [0u8; 6];
+                        let len = number(n as usize, &mut digits);
+                        o.raw(&digits[..len]);
+                        o.raw(b". ");
+                        lists[depth - 1] = n.saturating_add(1);
+                    }
+                    None => o.raw(b"- "),
+                }
+            } else if (name_is(name, b"dt") || name_is(name, b"dd")) && !end_tag {
+                o.line(false);
+                if name_is(name, b"dd") { o.raw(b"    "); }
             } else if name_is(name, b"tr") && end_tag {
                 o.line(false);
             } else if (name_is(name, b"td") || name_is(name, b"th")) && !end_tag {
                 if o.newlines == 0 { o.bytes(b" |"); o.space = true; }
             } else if BLOCK.iter().any(|n| name_is(name, n)) {
                 o.pre = false;
-                o.line(true);
-                if name_is(name, b"blockquote") {
+                let list = name_is(name, b"ol") || name_is(name, b"ul");
+                // A list inside a list item continues that item's lines.
+                o.line(!(list && depth > usize::from(end_tag)));
+                if name_is(name, b"ol") || name_is(name, b"ul") {
+                    if end_tag { depth = depth.saturating_sub(1); }
+                    else if depth < lists.len() {
+                        let start = attribute(&body[name_end..], b"start")
+                            .and_then(|v| core::str::from_utf8(v).ok()?.trim().parse::<u16>().ok()).unwrap_or(1).max(1);
+                        lists[depth] = if name_is(name, b"ol") { start } else { 0 };
+                        depth += 1;
+                    } else { depth += 1; }
+                } else if name_is(name, b"blockquote") {
                     o.quote = if end_tag { o.quote.saturating_sub(1) } else { (o.quote + 1).min(4) };
                 } else if name_is(name, b"hr") {
                     o.bytes(b"----");

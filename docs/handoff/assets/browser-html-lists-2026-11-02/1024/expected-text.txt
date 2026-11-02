@@ -1,0 +1,33 @@
+Title: Lab notes
+
+# SexOS field notes
+
+One shared address space supplies addresses; held capabilities supply authority.
+
+Script says 42 / -6
+
+# Rules
+
+1. BOOT grants routes & identities.
+  - held, never ambient
+2. Applications cannot mint them.
+3. Only the bounded script subset runs.
+
+Read the guide[1], the ledger[2] or elsewhere[3].
+Entities: <tag> ABC
+
+key | value
+pages | 1
+
+> Quoted: authority is held, never ambient.
+
+----
+
+[image: SexOS mark]
+
+END OF CONTROLLED HTML PAGE
+
+Links:
+[1] /guide
+[2] /ledger
+[3] https://elsewhere.example/x

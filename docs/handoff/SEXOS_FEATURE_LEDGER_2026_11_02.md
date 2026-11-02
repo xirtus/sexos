@@ -309,6 +309,18 @@ native `https_html_gate.py` at both sizes now with the formerly failing
 992-byte page (padding removed): `ticket=2 ... to=Complete`; regressions
 `https_document_gate.py` (12 KB) and `https_asset_gate.py` pass.
 
+## F12. Numbered, nested and definition lists (2026-11-02)
+
+**What changed.** `<ol>` items are numbered (`start=` honoured), nested lists
+are indented two spaces per level and continue the parent item without a
+blank line, and `<dl>` shows terms with indented definitions.
+
+**Evidence** (`docs/handoff/assets/browser-html-lists-2026-11-02/`): html_text
+16 host tests; sealed build and master gate GREEN; native
+`https_html_gate.py` at both sizes with an ordered list containing a nested
+bulleted list (released text hash equals the expected text; the page is
+1029 bytes, again a two-record response that closes cleanly after F11).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

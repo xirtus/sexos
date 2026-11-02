@@ -23,7 +23,7 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b'<script>while(1){}</script></head><body>'
  b'<h1>SexOS field notes</h1><p>One shared address space supplies addresses;\n held capabilities supply authority.</p>'
  b'<p><script>var n = 6; document.write("Script says " + n*7, " / ", -(-(-((1+1)*3))))</script></p>'
- b'<h2>Rules</h2><ul><li>BOOT grants routes &amp; identities.</li><li>Applications cannot mint them.</li><li>Only the bounded script subset runs.</li></ul>'
+ b'<h2>Rules</h2><ol><li>BOOT grants routes &amp; identities.<ul><li>held, never ambient</li></ul></li><li>Applications cannot mint them.</li><li>Only the bounded script subset runs.</li></ol>'
  b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
  b'<script>fetch("/x")</script><script src="/x.js"></script>'

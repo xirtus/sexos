@@ -133,3 +133,10 @@ fn title_quotes_and_rules() {
     let (t, _) = text(page, 512);
     assert_eq!(t, "Title: Field & notes\n\na\n\n> q1\n\n> q2\n\n> > deep\n\n----\n\nb");
 }
+
+#[test]
+fn ordered_nested_and_definition_lists() {
+    let page = "<ol><li>one<li>two<ul><li>a</li><li>b</li></ul></li><li>three</li></ol><ol start=7><li>seven</li></ol><dl><dt>term</dt><dd>meaning</dd></dl>";
+    let (t, _) = text(page, 512);
+    assert_eq!(t, "1. one\n2. two\n  - a\n  - b\n3. three\n\n7. seven\n\nterm\n    meaning");
+}
