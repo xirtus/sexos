@@ -15,7 +15,7 @@ fn page_becomes_readable_blocks() {
         <body><h1>SexOS   News</h1><p>First\n  paragraph.</p><p>Second<br>line</p>\
         <ul><li>one</li><li>two</li></ul><h3>Small</h3><p>end</p></body></html>";
     let (t, c) = text(page, 4096);
-    assert_eq!(t, "# SexOS News\n\nFirst paragraph.\n\nSecond\nline\n\n- one\n- two\n\nSmall\n\nend");
+    assert_eq!(t, "Title: t\n\n# SexOS News\n\nFirst paragraph.\n\nSecond\nline\n\n- one\n- two\n\nSmall\n\nend");
     assert!(!c.truncated);
     assert_eq!(c.links, 0);
 }
@@ -122,4 +122,11 @@ fn images_show_alt_text_and_are_never_fetched() {
     let (t, c) = text("<p>Logo <img src=\"/art.qoi\" alt=\"SexOS mark\"> and <IMG src=x.png> and <img alt=' '/></p>", 256);
     assert_eq!(t, "Logo [image: SexOS mark] and [image] and [image]");
     assert_eq!(c.links, 0);
+}
+
+#[test]
+fn title_quotes_and_rules() {
+    let page = "<html><head><TITLE> Field &amp; notes </TITLE></head><body><p>a</p><blockquote><p>q1</p>q2<blockquote>deep</blockquote></blockquote><hr><p>b</p></body></html>";
+    let (t, _) = text(page, 512);
+    assert_eq!(t, "Title: Field & notes\n\na\n\n> q1\n\n> q2\n\n> > deep\n\n----\n\nb");
 }

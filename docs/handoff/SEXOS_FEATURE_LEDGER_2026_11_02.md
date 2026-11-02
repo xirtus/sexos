@@ -184,6 +184,17 @@ document route; sexfiles retires the generation so other holders go stale;
 the text stays in Quil as an unsaved UNTITLED buffer. Host gates pass on the
 branch; native gate `scripts/quil_delete_gate.py` is written but not yet run.
 
+## F8. HTML page title, quotes and rules (2026-11-02)
+
+**What changed.** The page `<title>` (entities decoded) opens the text as
+`Title: ...`; `<blockquote>` lines start with `> ` per nesting level (up to
+4); `<hr>` becomes `----`.
+
+**Evidence** (`docs/handoff/assets/browser-html-structure-2026-11-02/`):
+html_text 15 host tests; sealed build and master gate GREEN; native
+`https_html_gate.py` at both sizes with a page containing title, quote, rule
+and image (reader text/pixels, link refusal, follow, Back all pass).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

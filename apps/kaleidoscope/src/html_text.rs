@@ -21,10 +21,12 @@ pub struct Output<'a> {
     newlines: u8,
     /// Inside `<pre>`: whitespace is kept as written (tabs become spaces).
     pre: bool,
+    /// `<blockquote>` nesting; each line inside starts with `> ` per level.
+    quote: u8,
 }
 
 impl<'a> Output<'a> {
-    fn new(buf: &'a mut [u8]) -> Self { Self { buf, len: 0, truncated: false, space: true, newlines: 2, pre: false } }
+    fn new(buf: &'a mut [u8]) -> Self { Self { buf, len: 0, truncated: false, space: true, newlines: 2, pre: false, quote: 0 } }
     fn room(&self) -> usize { self.buf.len().saturating_sub(TRUNCATED.len()) }
     fn byte(&mut self, b: u8) {
         if self.len < self.room() { self.buf[self.len] = b; self.len += 1; } else { self.truncated = true; }
@@ -45,6 +47,7 @@ impl<'a> Output<'a> {
             return;
         }
         if self.space && self.newlines == 0 { self.byte(b' '); }
+        if self.newlines != 0 { for _ in 0..self.quote { self.byte(b'>'); self.byte(b' '); } }
         self.space = false;
         self.newlines = 0;
         self.byte(b);
@@ -140,6 +143,17 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let mut link_count = 0usize;
     let mut open_link: Option<usize> = None;
     let mut skip_until: Option<&[u8]> = None;
+    if let Some(title) = title(html) {
+        o.bytes(b"Title:");
+        o.space = true;
+        let mut buf = [0u8; 4];
+        let mut k = 0;
+        while k < title.len() {
+            if title[k] == b'&' { if let Some((n, used)) = entity(&title[k + 1..], &mut buf) { for &c in &buf[..n] { o.text(c); } k += 1 + used; continue; } }
+            o.text(title[k]); k += 1;
+        }
+        o.line(true);
+    }
     let mut i = 0;
     while i < html.len() {
         let b = html[i];
@@ -180,6 +194,12 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if BLOCK.iter().any(|n| name_is(name, n)) {
                 o.pre = false;
                 o.line(true);
+                if name_is(name, b"blockquote") {
+                    o.quote = if end_tag { o.quote.saturating_sub(1) } else { (o.quote + 1).min(4) };
+                } else if name_is(name, b"hr") {
+                    o.bytes(b"----");
+                    o.line(true);
+                }
                 if name_is(name, b"pre") && !end_tag {
                     o.pre = true;
                     // A newline right after <pre> is not content.
@@ -249,6 +269,15 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     }
     let (len, truncated) = o.finish();
     Converted { len, links: link_count, truncated, targets }
+}
+
+/// Text of the first `<title>` element, if any (it sits in the skipped head).
+fn title(html: &[u8]) -> Option<&[u8]> {
+    let open = html.windows(6).position(|w| name_is(&w[..6], b"<title"))?;
+    let start = open + html[open..].iter().position(|&b| b == b'>')? + 1;
+    let end = start + html[start..].windows(8).position(|w| name_is(w, b"</title>"))?;
+    let t = &html[start..end];
+    t.iter().any(|b| !b.is_ascii_whitespace()).then_some(t)
 }
 
 fn number(mut n: usize, out: &mut [u8; 6]) -> usize {

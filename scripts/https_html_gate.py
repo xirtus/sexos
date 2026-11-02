@@ -18,12 +18,13 @@ from network_contention_gate import frozen_binding,MAX_PCAP
 from check_nonunix_target import inspect as target_check
 
 REQUEST=b'GET /page.html HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
-PAGE=(b'<!DOCTYPE html><html><head><title>ignored</title><style>body{color:red}</style>'
+PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red}</style>'
  b'<script>document.write("never runs")</script></head><body>'
  b'<h1>SexOS field notes</h1><p>One shared address space supplies addresses;\n held capabilities supply authority.</p>'
  b'<h2>Rules</h2><ul><li>BOOT grants routes &amp; identities.</li><li>Applications cannot mint them.</li><li>No script runs here.</li></ul>'
  b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
+ b'<blockquote>Quoted: authority is held, never ambient.</blockquote><hr>'
  b'<p><img src="/art.qoi" alt="SexOS mark"></p><!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
 GUIDE_REQUEST=b'GET /guide HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
 GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><pre>\nkey   action\n1-9   follow link\nBksp  back\n</pre><p><a href="/page.html">Back to notes</a></p></body></html>'
@@ -147,7 +148,7 @@ def main():
   reader('html-back',text,REQUEST,b'/page.html')
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] depth=0 network=0',b);time.sleep(1)
   if len(peer.rows)!=3:raise RuntimeError('back at the first page caused network work')
-  assert b'never runs' not in text and b'ignored' not in text,'skipped markup leaked into text'
+  assert b'never runs' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
  except Exception as exc:failure=repr(exc)
  finally:
   peer.close()
