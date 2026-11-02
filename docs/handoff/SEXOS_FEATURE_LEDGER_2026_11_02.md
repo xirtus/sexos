@@ -321,6 +321,27 @@ blank line, and `<dl>` shows terms with indented definitions.
 bulleted list (released text hash equals the expected text; the page is
 1029 bytes, again a two-record response that closes cleanly after F11).
 
+## F13. Script subset: branches, comparisons, booleans, helpers (2026-11-02)
+
+**What changed.** The inline script subset (F10) now has `true`/`false`,
+comparisons `< > <= >= === !== == !=`, `! && ||`, `?:`, `if (...) ... else
+...` with `{ }` blocks, string `.length`, `.toUpperCase()`,
+`.toLowerCase()`, and `Math.floor/ceil/round/abs/min/max`. Still no loops,
+functions, calls into anything else or names for DOM/network/storage, so a
+script always terminates. Untaken branches are parsed and checked but write
+and assign nothing; an undeclared name even in an untaken branch refuses
+the script. Expressions now use precedence climbing, which keeps stack use
+per nesting level low; the nesting budget is 10 (was 8; statements now
+count too). `==` compares across types numerically; `===` does not.
+
+**Evidence** (`docs/handoff/assets/browser-script-branches-2026-11-02/`):
+`tests/browser_script.rs` 5 groups (incl. branches/comparisons/helpers and
+4 more refused programs), html_text 16; sealed build and master gate GREEN;
+native `https_html_gate.py` at both sizes: a second script writes
+`SEXOS ok` via `if`, `.length`, `.toUpperCase()`, `Math.max` and `?:`,
+alongside the depth-9 arithmetic script (`scripts_run=2
+scripts_refused=2`), with no pager fault rejections in the run.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

@@ -28,7 +28,7 @@ fn numbers_print_like_javascript() {
 #[test]
 fn anything_outside_the_subset_writes_nothing() {
     for src in ["while(true){}", "document.write(1); for(;;){}", "alert(1)", "fetch('/x')", "document.cookie = 'a'",
-        "document.write(window.location)", "function f(){}", "document.write(1) document.write(2)", "var x = 'unterminated",
+        "document.write(window.location)", "function f(){}", "if (1) { while(1){} }", "var a = 1; a.foo", "Math.sqrt(2)", "if (0) x = 1", "document.write(1) document.write(2)", "var x = 'unterminated",
         "document.write(1); eval('2')", "document.body.innerHTML = 'x'", "x => 1", "document.write(`t`)"] {
         assert!(run(src.as_bytes()).is_err(), "{src}");
     }
@@ -48,4 +48,18 @@ fn bounds_hold() {
     let long = format!("document.write('{}')", "x".repeat(1100));
     assert_eq!(out(&long).err(), Some(Error::Limit));
     assert_eq!(run(&vec![b' '; script::MAX_SOURCE + 1]).err(), Some(Error::Limit));
+}
+
+#[test]
+fn branches_comparisons_and_helpers() {
+    let src = "var n = 7\nif (n % 2 === 0) { document.write('even') } else if (n > 5 && n < 10) { document.write('odd, mid') } else document.write('odd')";
+    assert_eq!(out(src).unwrap(), "odd, mid");
+    assert_eq!(out("var s = 'Sex' + 'OS'; document.write(s.length, ' ', s.toUpperCase(), ' ', s.toLowerCase().length)").unwrap(), "5 SEXOS 5");
+    assert_eq!(out("document.write(1 < 2, ' ', 'b' > 'a', ' ', '2' == 2, ' ', '2' === 2, ' ', !0, ' ', null_safe = 1)").err(), Some(Error::Unsupported));
+    assert_eq!(out("document.write(1 < 2, ' ', 'b' > 'a', ' ', '2' == 2, ' ', '2' === 2, ' ', !0)").unwrap(), "true true true false true");
+    assert_eq!(out("document.write(0 || 'x', ' ', 1 && 'y', ' ', 3 > 2 ? 'big' : 'small', ' ', NaN < 1)").unwrap(), "x y big false");
+    assert_eq!(out("document.write(Math.floor(-2.5), Math.ceil(2.1), Math.round(2.5), Math.abs(-3), Math.max(1, 9, 4), Math.min(), Math.max(1, NaN))").unwrap(), "-33339InfinityNaN");
+    // Untaken branches still must be valid subset code, and write nothing.
+    assert_eq!(out("var a = 1; if (false) { a = 2; document.write('no') } document.write(a)").unwrap(), "1");
+    assert_eq!(out("if (true) document.write('a'); else document.write('b')").unwrap(), "a");
 }

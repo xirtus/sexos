@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! A bounded script subset for inline `<script>` in the Browser reader.
 //!
-//! This is not a JavaScript engine. It accepts straight-line statements only:
-//! `var|let|const name = expr;`, `name = expr;` and `document.write(...)` /
-//! `document.writeln(...)`, with number and string literals, variables,
-//! `+ - * / %`, unary `+ -` and parentheses. Numbers are IEEE doubles and
-//! print the way JavaScript prints them for ordinary values; `+` with a
-//! string concatenates. There are no loops, functions, objects, DOM, timers,
-//! storage or network, so a script cannot run long or reach anything. The
-//! whole script is checked first: any unsupported construct means it writes
-//! nothing at all. Written text is inserted as text, never parsed as markup.
+//! This is not a JavaScript engine. It accepts statements without loops or
+//! functions: `var|let|const name = expr`, `name = expr`, `if (...) ... else
+//! ...`, `{ ... }` blocks and `document.write(...)` / `document.writeln(...)`.
+//! Expressions: number, string and `true`/`false` literals, variables,
+//! `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
+//! parentheses, `.length`, `.toUpperCase()`, `.toLowerCase()` and
+//! `Math.floor/ceil/round/abs/min/max`. Numbers are IEEE doubles printed the
+//! way JavaScript prints ordinary values; `+` with a string concatenates.
+//! Without loops or calls a script always terminates, and it has no names for
+//! DOM, timers, storage or network. Any unsupported construct means the whole
+//! script writes nothing. Written text is inserted as text, never markup.
 use alloc::vec::Vec;
 use core::fmt::Write;
 
@@ -20,13 +22,13 @@ const ARENA: usize = 2048;
 const VARS: usize = 16;
 const NAME: usize = 16;
 // Each nesting level costs ~4 stack frames on the Browser main task.
-const MAX_DEPTH: u8 = 8;
+const MAX_DEPTH: u8 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Unsupported, Syntax, Limit }
 
 #[derive(Clone, Copy)]
-enum Value { Num(f64), Str(u16, u16) }
+enum Value { Num(f64), Str(u16, u16), Bool(bool) }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tok<'a> { Num(f64), Str(&'a [u8]), Ident(&'a [u8]), Punct(u8), End }
@@ -82,7 +84,11 @@ impl<'a> Machine<'a> {
             let start = self.at;
             while self.at < s.len() && (ident_start(s[self.at]) || s[self.at].is_ascii_digit()) { self.at += 1; }
             Tok::Ident(&s[start..self.at])
-        } else if b"+-*/%()=;,.".contains(&c) {
+        } else if let Some((op, len)) = [(&b"==="[..], b'E'), (b"!==", b'N'), (b"==", b'e'), (b"!=", b'n'), (b"<=", b'L'), (b">=", b'G'), (b"&&", b'&'), (b"||", b'|')]
+            .iter().find(|(t, _)| s[self.at..].starts_with(t)).map(|(t, op)| (*op, t.len())) {
+            self.at += len;
+            Tok::Punct(op)
+        } else if b"+-*/%()=;,.<>!?:{}".contains(&c) {
             self.at += 1;
             Tok::Punct(c)
         } else {
@@ -117,7 +123,7 @@ impl<'a> Machine<'a> {
         Ok(Value::Str(start as u16, (self.arena.len() - start) as u16))
     }
     fn text(&self, v: Value) -> &[u8] {
-        match v { Value::Str(s, n) => &self.arena[s as usize..s as usize + n as usize], Value::Num(_) => &[] }
+        match v { Value::Str(s, n) => &self.arena[s as usize..s as usize + n as usize], _ => &[] }
     }
     /// JavaScript's Number-to-String for ordinary values.
     fn number_text(&mut self, x: f64) -> Result<Value, Error> {
@@ -141,11 +147,15 @@ impl<'a> Machine<'a> {
         self.store(&buf.b[..n])
     }
     fn to_text(&mut self, v: Value) -> Result<Value, Error> {
-        match v { Value::Num(x) => self.number_text(x), s => Ok(s) }
+        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), s => Ok(s) }
+    }
+    fn truthy(&self, v: Value) -> bool {
+        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, s => !self.text(s).is_empty() }
     }
     fn to_number(&self, v: Value) -> f64 {
         match v {
             Value::Num(x) => x,
+            Value::Bool(b) => b as u8 as f64,
             s => {
                 let t = self.text(s);
                 let t = core::str::from_utf8(t).unwrap_or("x").trim();
@@ -154,14 +164,55 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// Full expression, including `?:`. Each nesting level (parentheses,
+    /// unary operators, branches) costs one unit of the depth budget.
     fn expr(&mut self) -> Result<Value, Error> {
         if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
         self.depth += 1;
-        let mut v = self.term()?;
-        while let Tok::Punct(op @ (b'+' | b'-')) = self.tok {
+        let v = self.binary(1);
+        self.depth -= 1;
+        v
+    }
+    /// Precedence climbing keeps stack use per nesting level small.
+    fn binary(&mut self, min: u8) -> Result<Value, Error> {
+        let mut v = self.unary()?;
+        loop {
+            let Tok::Punct(op) = self.tok else { return Ok(v) };
+            let prec = match op { b'?' => 1, b'|' => 2, b'&' => 3, b'E' | b'N' | b'e' | b'n' => 4, b'<' | b'>' | b'L' | b'G' => 5, b'+' | b'-' => 6, b'*' | b'/' | b'%' => 7, _ => 0 };
+            if prec == 0 || prec < min { return Ok(v); }
             self.next()?;
-            let r = self.term()?;
-            v = if op == b'+' && (matches!(v, Value::Str(..)) || matches!(r, Value::Str(..))) {
+            if op == b'?' {
+                let yes = self.expr()?;
+                self.expect(b':')?;
+                let no = self.binary(1)?;
+                v = if self.truthy(v) { yes } else { no };
+                continue;
+            }
+            let r = self.binary(prec + 1)?;
+            v = self.apply(op, v, r)?;
+        }
+    }
+    fn apply(&mut self, op: u8, v: Value, r: Value) -> Result<Value, Error> {
+        Ok(match op {
+            b'|' => if self.truthy(v) { v } else { r },
+            b'&' => if self.truthy(v) { r } else { v },
+            b'E' | b'N' | b'e' | b'n' => {
+                let strict = matches!(op, b'E' | b'N');
+                let same = match (v, r) {
+                    (Value::Str(..), Value::Str(..)) => self.text(v) == self.text(r),
+                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                    (Value::Num(a), Value::Num(b)) => a == b,
+                    _ if strict => false,
+                    _ => self.to_number(v) == self.to_number(r),
+                };
+                Value::Bool(same == matches!(op, b'E' | b'e'))
+            }
+            b'<' | b'>' | b'L' | b'G' => {
+                let order = if let (Value::Str(..), Value::Str(..)) = (v, r) { Some(self.text(v).cmp(self.text(r))) }
+                    else { self.to_number(v).partial_cmp(&self.to_number(r)) };
+                Value::Bool(order.is_some_and(|o| match op { b'<' => o.is_lt(), b'>' => o.is_gt(), b'L' => o.is_le(), _ => o.is_ge() }))
+            }
+            b'+' if matches!(v, Value::Str(..)) || matches!(r, Value::Str(..)) => {
                 let (l, r) = (self.to_text(v)?, self.to_text(r)?);
                 let start = self.arena.len();
                 let (ls, ln) = match l { Value::Str(s, n) => (s as usize, n as usize), _ => (0, 0) };
@@ -170,35 +221,78 @@ impl<'a> Machine<'a> {
                 self.arena.extend_from_within(ls..ls + ln);
                 self.arena.extend_from_within(rs..rs + rn);
                 Value::Str(start as u16, (ln + rn) as u16)
-            } else {
+            }
+            _ => {
                 let (a, b) = (self.to_number(v), self.to_number(r));
-                Value::Num(if op == b'+' { a + b } else { a - b })
-            };
-        }
-        self.depth -= 1;
-        Ok(v)
-    }
-    fn term(&mut self) -> Result<Value, Error> {
-        let mut v = self.unary()?;
-        while let Tok::Punct(op @ (b'*' | b'/' | b'%')) = self.tok {
-            self.next()?;
-            let r = self.unary()?;
-            let (a, b) = (self.to_number(v), self.to_number(r));
-            v = Value::Num(match op { b'*' => a * b, b'/' => a / b, _ => rem(a, b) });
-        }
-        Ok(v)
+                Value::Num(match op { b'+' => a + b, b'-' => a - b, b'*' => a * b, b'/' => a / b, _ => rem(a, b) })
+            }
+        })
     }
     fn unary(&mut self) -> Result<Value, Error> {
-        if let Tok::Punct(op @ (b'-' | b'+')) = self.tok {
+        if let Tok::Punct(op @ (b'-' | b'+' | b'!')) = self.tok {
             if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
             self.next()?;
             self.depth += 1;
             let v = self.unary()?;
             self.depth -= 1;
+            if op == b'!' { return Ok(Value::Bool(!self.truthy(v))); }
             let x = self.to_number(v);
             return Ok(Value::Num(if op == b'-' { -x } else { x }));
         }
-        self.atom()
+        let v = self.atom()?;
+        self.postfix(v)
+    }
+    /// `.length`, `.toUpperCase()`, `.toLowerCase()` on strings.
+    fn postfix(&mut self, mut v: Value) -> Result<Value, Error> {
+        while self.tok == Tok::Punct(b'.') {
+            self.next()?;
+            let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+            self.next()?;
+            let s = self.to_text(v)?;
+            v = match name {
+                b"length" => Value::Num(self.text(s).len() as f64),
+                b"toUpperCase" | b"toLowerCase" => {
+                    self.expect(b'(')?;
+                    self.expect(b')')?;
+                    let Value::Str(start, n) = s else { return Err(Error::Syntax) };
+                    let at = self.arena.len();
+                    if at + n as usize > ARENA { return Err(Error::Limit); }
+                    self.arena.extend_from_within(start as usize..start as usize + n as usize);
+                    for b in &mut self.arena[at..] { *b = if name == b"toUpperCase" { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }; }
+                    Value::Str(at as u16, n)
+                }
+                _ => return Err(Error::Unsupported),
+            };
+        }
+        Ok(v)
+    }
+    fn math(&mut self) -> Result<Value, Error> {
+        self.expect(b'.')?;
+        let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        self.expect(b'(')?;
+        let mut args = [0.0f64; 4];
+        let mut n = 0;
+        if self.tok != Tok::Punct(b')') {
+            loop {
+                if n == args.len() { return Err(Error::Limit); }
+                let v = self.expr()?;
+                args[n] = self.to_number(v);
+                n += 1;
+                if self.tok != Tok::Punct(b',') { break; }
+                self.next()?;
+            }
+        }
+        self.expect(b')')?;
+        let a = args[0];
+        let one = |f: fn(f64) -> f64| if n == 0 { f64::NAN } else { f(a) };
+        Ok(Value::Num(match name {
+            b"floor" => one(floor), b"ceil" => one(|x| -floor(-x)), b"round" => one(|x| floor(x + 0.5)),
+            b"abs" => one(|x| if x < 0.0 { -x } else { x }),
+            b"max" => args[..n].iter().fold(f64::NEG_INFINITY, |m, &x| if x.is_nan() || m.is_nan() { f64::NAN } else if x > m { x } else { m }),
+            b"min" => args[..n].iter().fold(f64::INFINITY, |m, &x| if x.is_nan() || m.is_nan() { f64::NAN } else if x < m { x } else { m }),
+            _ => return Err(Error::Unsupported),
+        }))
     }
     fn atom(&mut self) -> Result<Value, Error> {
         match self.tok {
@@ -210,6 +304,9 @@ impl<'a> Machine<'a> {
                 match name {
                     b"NaN" => Ok(Value::Num(f64::NAN)),
                     b"Infinity" => Ok(Value::Num(f64::INFINITY)),
+                    b"true" => Ok(Value::Bool(true)),
+                    b"false" => Ok(Value::Bool(false)),
+                    b"Math" => self.math(),
                     _ => self.lookup(name).ok_or(Error::Unsupported),
                 }
             }
@@ -239,17 +336,47 @@ impl<'a> Machine<'a> {
         self.out.extend_from_slice(&self.arena[s..s + n]);
         Ok(())
     }
-    fn statement(&mut self) -> Result<(), Error> {
+    /// One statement. With `run == false` (an untaken branch) it is parsed
+    /// and checked the same way but writes and assigns nothing.
+    fn statement(&mut self, run: bool) -> Result<(), Error> {
+        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        self.depth += 1;
+        let result = self.statement_inner(run);
+        self.depth -= 1;
+        result
+    }
+    fn statement_inner(&mut self, run: bool) -> Result<(), Error> {
         match self.tok {
             Tok::Punct(b';') => self.next(),
+            Tok::Punct(b'{') => {
+                self.next()?;
+                while self.tok != Tok::Punct(b'}') {
+                    if self.tok == Tok::End { return Err(Error::Syntax); }
+                    self.statement(run)?;
+                }
+                self.next()
+            }
+            Tok::Ident(b"if") => {
+                self.next()?;
+                self.expect(b'(')?;
+                let c = self.expr()?;
+                self.expect(b')')?;
+                let yes = self.truthy(c);
+                self.statement(run && yes)?;
+                if self.tok == Tok::Ident(b"else") {
+                    self.next()?;
+                    self.statement(run && !yes)?;
+                }
+                Ok(())
+            }
             Tok::Ident(b"var" | b"let" | b"const") => {
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                if matches!(name, b"var" | b"let" | b"const" | b"document") { return Err(Error::Syntax); }
+                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
                 self.next()?;
                 self.expect(b'=')?;
                 let v = self.expr()?;
-                self.assign(name, v, true)?;
+                if run { self.assign(name, v, true)?; }
                 self.end()
             }
             Tok::Ident(b"document") => {
@@ -261,20 +388,21 @@ impl<'a> Machine<'a> {
                 if self.tok != Tok::Punct(b')') {
                     loop {
                         let v = self.expr()?;
-                        self.emit(v)?;
+                        if run { self.emit(v)?; }
                         if self.tok != Tok::Punct(b',') { break; }
                         self.next()?;
                     }
                 }
                 self.expect(b')')?;
-                if line { let nl = self.store(b"\n")?; self.emit(nl)?; }
+                if line && run { let nl = self.store(b"\n")?; self.emit(nl)?; }
                 self.end()
             }
-            Tok::Ident(name) => {
+            Tok::Ident(name) if !matches!(name, b"else") => {
                 self.next()?;
                 self.expect(b'=')?;
                 let v = self.expr()?;
-                self.assign(name, v, false)?;
+                if run { self.assign(name, v, false)?; }
+                else if self.lookup(name).is_none() { return Err(Error::Unsupported); }
                 self.end()
             }
             _ => Err(Error::Unsupported),
@@ -284,7 +412,7 @@ impl<'a> Machine<'a> {
     fn end(&mut self) -> Result<(), Error> {
         match self.tok {
             Tok::Punct(b';') => self.next(),
-            Tok::End => Ok(()),
+            Tok::End | Tok::Punct(b'}') => Ok(()),
             _ if self.nl => Ok(()),
             _ => Err(Error::Syntax),
         }
@@ -298,6 +426,11 @@ fn rem(a: f64, b: f64) -> f64 {
     let q = a / b;
     let t = if q >= 0.0 { trunc(q) } else { -trunc(-q) };
     a - t * b
+}
+fn floor(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() || x >= 4503599627370496.0 || x <= -4503599627370496.0 { return x; }
+    let t = if x >= 0.0 { trunc(x) } else { -trunc(-x) };
+    if t > x { t - 1.0 } else { t }
 }
 fn trunc(x: f64) -> f64 {
     if x >= 4503599627370496.0 { return x; }
@@ -317,6 +450,6 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     out.try_reserve_exact(MAX_OUTPUT).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], nvars: 0, out, depth: 0 };
     m.next()?;
-    while m.tok != Tok::End { m.statement()?; }
+    while m.tok != Tok::End { m.statement(true)?; }
     Ok(m.out)
 }
