@@ -39,6 +39,9 @@ pub struct Machine {
     state: State, request: [u8; MAX_BYTES], response: [u8; MAX_BYTES],
     request_len: usize, staged: usize, sent: usize, response_len: usize,
     deadline: u64, last_now: u64, finished_send: bool,
+    /// The peer's FIN was observed; a later Closed after our own FIN is then a
+    /// graceful close, and already received bytes stay readable.
+    peer_fin: bool,
     streaming: bool, duplex: bool, finish_requested: bool, consumed: usize, idle_deadline: u64,
     pending: [Option<Receipt>; 6], reply_cursor: usize,
     // One replay fence for each identity in the finite six-app BOOT roster.
@@ -51,7 +54,7 @@ impl Machine {
         Self { owner: None, ticket: 0, next_ticket: 1, seq: 0, state: State::Idle,
             request: [0; MAX_BYTES], response: [0; MAX_BYTES], request_len: 0,
             staged: 0, sent: 0, response_len: 0, deadline: 0, last_now: 0,
-            finished_send: false, streaming: false, duplex: false, finish_requested: false, consumed: 0, idle_deadline: 0,
+            finished_send: false, peer_fin: false, streaming: false, duplex: false, finish_requested: false, consumed: 0, idle_deadline: 0,
             pending: [None; 6], reply_cursor: 0, cached: [None; 6], resolution: None }
     }
     pub fn is_duplex(&self) -> bool { self.duplex }
@@ -92,7 +95,7 @@ impl Machine {
     fn scrub(&mut self, wire: &mut impl Wire) {
         self.request.fill(0); self.response.fill(0);
         self.request_len = 0; self.staged = 0; self.sent = 0; self.response_len = 0;
-        self.finished_send = false; self.deadline = 0; self.last_now = 0;
+        self.finished_send = false; self.peer_fin = false; self.deadline = 0; self.last_now = 0;
         self.streaming = false; self.duplex = false; self.finish_requested = false; self.consumed = 0; self.idle_deadline = 0;
         self.resolution = None;
         wire.abort();
@@ -277,9 +280,16 @@ impl Machine {
     /// most half; available TX always gets the remaining budget even under a
     /// continuous RX stream. A full RX ring never masquerades as an EOF.
     fn advance_duplex(&mut self,now:u64,wire:&mut impl Wire){
-        let (received,drained)=match self.stream_receive_bounded(wire,TURN/2){Ok(v)=>v,Err(())=>{self.fail(wire);return;}};
+        // Both FINs exchanged: nothing more can arrive, and the ring keeps
+        // what did. Closed any other way (reset, abort) is still a failure.
+        let graceful=|m:&Self,link:Link|link==Link::Closed&&m.finished_send&&m.peer_fin;
+        if wire.link()==Link::PeerFin{self.peer_fin=true;}
+        let (received,drained)=if graceful(self,wire.link()){(0,true)}
+            else{match self.stream_receive_bounded(wire,TURN/2){Ok(v)=>v,Err(())=>{self.fail(wire);return;}}};
         if received!=0{self.stream_progress(now);}
-        let link=wire.link();if link==Link::Closed{self.fail(wire);return;}
+        let link=wire.link();if link==Link::PeerFin{self.peer_fin=true;}
+        let closed=graceful(self,link);
+        if link==Link::Closed&&!closed{self.fail(wire);return;}
         if matches!(link,Link::Open|Link::PeerFin)&&self.sent<self.staged {
             let at=self.sent%MAX_BYTES;let count=(self.staged-self.sent).min(MAX_BYTES-at).min(TURN-received);
             match wire.send(&self.request[at..at+count]){
@@ -290,7 +300,7 @@ impl Machine {
         if self.finish_requested&&self.sent==self.staged&&wire.queued()==0&&!self.finished_send{
             wire.finish_send();self.finished_send=true;
         }
-        if self.finished_send&&wire.link()==Link::PeerFin&&drained&&self.consumed==self.response_len&&wire.queued()==0{self.state=State::Complete;}
+        if self.finished_send&&(wire.link()==Link::PeerFin||closed)&&drained&&self.consumed==self.response_len&&wire.queued()==0{self.state=State::Complete;}
         else if wire.link()!=Link::Opening{self.state=if self.sent<self.staged||wire.queued()!=0{State::Sending}else{State::Receiving};}
     }
     /// Legacy modes retain receive priority and implicit one-request FIN. Only
@@ -299,8 +309,9 @@ impl Machine {
         if !matches!(self.state, State::Connecting | State::Sending | State::Receiving) { return; }
         if self.expired(now) { self.fail(wire); return; }
         self.last_now = now;
-        if wire.link() == Link::Closed { self.fail(wire); return; }
+        // Duplex decides for itself whether Closed is a graceful end.
         if self.duplex{self.advance_duplex(now,wire);return;}
+        if wire.link() == Link::Closed { self.fail(wire); return; }
         let (n, drained) = if self.streaming {
             match self.stream_receive(wire) { Ok(result) => result, Err(()) => { self.fail(wire); return; } }
         } else {
@@ -807,6 +818,19 @@ mod tests {
         assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),12),Ok(0));seq+=1;m.advance(13,&mut w);assert_eq!(w.finishes,1);assert_eq!(m.state,State::Receiving);
         assert_eq!(call_at(&mut m,&mut w,A,read(seq,t,0,3),13),Ok(0x00636261));seq+=1;m.advance(14,&mut w);assert_eq!(m.state,State::Complete);assert_eq!(m.consumed,m.response_len);
         assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),40_000),Ok(0));m.advance(40_001,&mut w);assert_eq!(w.finishes,1);
+    }
+    #[test]fn duplex_graceful_close_before_the_reader_finishes_keeps_received_bytes(){
+        let(mut m,mut w,t,mut seq)=duplex(1);m.advance(11,&mut w);
+        w.incoming=b"abc".to_vec();w.link=Link::PeerFin;m.advance(12,&mut w);assert_eq!(m.response_len,3);
+        assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),12),Ok(0));seq+=1;m.advance(13,&mut w);assert_eq!(w.finishes,1);
+        // Our FIN is acknowledged before the client read the last bytes.
+        w.link=Link::Closed;let calls=w.receive_calls;m.advance(14,&mut w);assert_eq!(m.state,State::Receiving);assert_eq!(w.receive_calls,calls);
+        assert_eq!(call_at(&mut m,&mut w,A,read(seq,t,0,3),14),Ok(0x00636261));m.advance(15,&mut w);assert_eq!(m.state,State::Complete);
+    }
+    #[test]fn duplex_closed_without_both_fins_still_fails(){
+        let(mut m,mut w,_,_)=duplex(1);m.advance(11,&mut w);w.incoming=b"abc".to_vec();w.link=Link::Closed;m.advance(12,&mut w);assert_eq!(m.state,State::Failed);
+        let(mut m,mut w,t,seq)=duplex(1);m.advance(11,&mut w);assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),11),Ok(0));m.advance(12,&mut w);assert_eq!(w.finishes,1);
+        w.link=Link::Closed;m.advance(13,&mut w);assert_eq!(m.state,State::Failed,"reset after our FIN without a peer FIN");
     }
     #[test]fn duplex_finish_seals_writes_and_waits_for_private_and_wire_queues(){
         let(mut m,mut w,t,mut seq)=duplex(600);w.send_limit=10;w.queued=1;assert_eq!(call_at(&mut m,&mut w,A,req(seq,abi::FINISH,t),11),Ok(0));seq+=1;

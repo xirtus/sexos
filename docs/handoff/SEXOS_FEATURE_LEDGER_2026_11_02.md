@@ -287,6 +287,28 @@ comment so this feature is tested; the failing case is kept as an excerpt in
 `close-failure-1.1kb/`. Not yet diagnosed (sexnet TCP close / TLS
 close_notify around a short final record).
 
+## F11. Fix: HTTPS fetch failed at close for some response sizes (2026-11-02)
+
+**Cause.** In sexnet's duplex job, `advance()` failed the job whenever the TCP
+link read `Closed`, before the duplex path ran. After the guest's FIN was
+acknowledged (CloseWait -> LastAck -> Closed), a TLS client that had not yet
+read the last received bytes (for example the close_notify behind a short
+final record) lost the whole exchange. Timing decided it, so it showed up
+for a ~1.1 KB response and not for 0.8 KB or 3.8 KB ones (F10).
+
+**Fix.** The duplex job records that the peer's FIN was seen. `Closed` after
+our own FIN and the peer's FIN is a graceful end: nothing more is received,
+bytes already in the ring stay readable, and the job completes once the
+client has consumed them. `Closed` any other way (reset, or our FIN without
+a peer FIN) still fails. Legacy single-request jobs are unchanged.
+
+**Evidence** (`docs/handoff/assets/https-graceful-close-2026-11-02/`): two new
+sexnet job host tests (graceful close keeps bytes; Closed without both FINs
+fails), full `sexnet_jobs_host_gate.sh`; sealed build and master gate GREEN;
+native `https_html_gate.py` at both sizes now with the formerly failing
+992-byte page (padding removed): `ticket=2 ... to=Complete`; regressions
+`https_document_gate.py` (12 KB) and `https_asset_gate.py` pass.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
@@ -300,5 +322,5 @@ close_notify around a short final record).
 - Display applies app paints seconds late (Quil) or not before capture
   (Spindle, F9) in short native runs. Needs a look at Display's paint
   scheduling before relying on screenshots for app output.
-- Guest HTTPS fetch fails at connection close for a ~1.1 KB response (F10);
-  other sizes complete. Needs a sexnet/TLS close investigation.
+- (Fixed in F11) Guest HTTPS fetch failed at connection close for a ~1.1 KB
+  response.

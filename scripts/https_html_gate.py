@@ -28,12 +28,11 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
  b'<script>fetch("/x")</script><script src="/x.js"></script>'
  b'<blockquote>Quoted: authority is held, never ambient.</blockquote><hr>'
- b'<p><img src="/art.qoi" alt="SexOS mark"></p><!-- '+b'pad '*700+b'--><!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
+ b'<p><img src="/art.qoi" alt="SexOS mark"></p><!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
 GUIDE_REQUEST=b'GET /guide HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
 GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><pre>\nkey   action\n1-9   follow link\nBksp  back\n</pre><p><a href="/page.html">Back to notes</a></p></body></html>'
-# The comment padding keeps the response at ~3.9 KB. A ~1.1 KB response (one
-# full 1024-byte record plus a short one) reproducibly ends in a failed guest
-# net job at close (feature ledger F10, open release gate).
+# The page response is ~1.1 KB: one full 1024-byte TLS record plus a short
+# one. Before F11 this size failed at guest connection close.
 SCOPE='Actual fixed BOOT-controlled HTTPS text/html page through held policy/seed/UTC/DNS/duplex authority, converted by the bounded reader (inline scripts only through the bounded subset) and checked against reader glyph pixels. Public laboratory root only; no general JavaScript, CSS, layout, forms, arbitrary URL or public web trust claim.'
 
 def response(mode,page=PAGE):
