@@ -6,6 +6,7 @@ mod view;
 mod unicode_input;
 mod display_delivery;
 mod find;
+mod autosave;
 use core::alloc::{GlobalAlloc, Layout};
 use sex_pdx::{pdx_call, pdx_listen_raw, pdx_try_listen_raw, sched_yield, serial_println, OP_QUIL_PING, OP_TEXT_DRAW, OP_TEXT_CLEAR, SLOT_DISPLAY, SLOT_STORAGE};
 
@@ -129,6 +130,8 @@ static mut QUIL_NAME_LEN: usize = 0;
 
 static mut DOCUMENT_IO:document_exchange::Client=document_exchange::Client::new();
 static mut QUIL_REVISION:u64=0;
+/// Idle recovery drafts; see autosave.rs. Never touches the document itself.
+static mut QUIL_AUTOSAVE:autosave::Autosave=autosave::Autosave::new();
 // One incarnation owns its scratch and selection; no stack-sized client temporary.
 static mut QUIL_CLIPBOARD:sex_pdx::clipboard_client::Client=sex_pdx::clipboard_client::Client::new();
 static mut QUIL_SELECTION:sex_pdx::text_selection::Selection=sex_pdx::text_selection::Selection::new();
@@ -156,7 +159,7 @@ unsafe fn quil_revision_changed()->bool {
 unsafe fn quil_fresh_source() {
     QUIL_UNICODE_INPUT.clear();QUIL_INPUT_NOTICE=None;QUIL_UNICODE_SNAPSHOT=None;
     let Some(next)=QUIL_GENERATION.checked_add(1).filter(|_|QUIL_GENERATION!=0)else{quil_selection_fence();return};
-    QUIL_GENERATION=next;QUIL_REVISION=0;QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;UNDO_HEAD=0;UNDO_COUNT=0;UNDO_REDO_COUNT=0;
+    QUIL_GENERATION=next;QUIL_REVISION=0;QUIL_AUTOSAVE.reset();QUIL_COPY_SNAPSHOT=None;QUIL_PASTE_SNAPSHOT=None;UNDO_HEAD=0;UNDO_COUNT=0;UNDO_REDO_COUNT=0;
     if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());}
     quil_selection_bind();
 }
@@ -408,14 +411,40 @@ fn document_save_start(create: bool) {
                 QUIL_REVISION,
                 QUIL_BUFFER_LEN
             );
+        } else if QUIL_AUTOSAVE.pending() {
+            QUIL_AUTOSAVE.queued_save = Some(create);
+            sex_pdx::serial_record!("[quil.document.queued] kind=save behind=autosave");
         } else {
             sex_pdx::serial_record!("[quil.document.busy] kind=save");
         }
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
 }
+/// Start an idle recovery draft of the current buffer (see autosave.rs).
+unsafe fn autosave_start() {
+    let name = QUIL_AUTOSAVE.name(&QUIL_DOC_TITLE);
+    let target = QUIL_AUTOSAVE.target();
+    let len = name.iter().position(|b| *b == 0).unwrap_or(16);
+    if DOCUMENT_IO.save(target, name, &QUIL_BUFFER[..QUIL_BUFFER_LEN], QUIL_REVISION) {
+        sex_pdx::serial_record!("[quil.autosave.begin] draft={} name={} revision={} bytes={} hash={:#x} document={} document_unchanged=1",
+            target.map_or(0, |v| v), core::str::from_utf8(&name[..len]).unwrap_or("?"), QUIL_REVISION, QUIL_BUFFER_LEN,
+            sex_pdx::document::hash(&QUIL_BUFFER[..QUIL_BUFFER_LEN]), QUIL_DOC_ID);
+    } else {
+        QUIL_AUTOSAVE.finish(false, 0, QUIL_REVISION, sex_pdx::document::BUSY);
+    }
+}
+/// Settle a draft save; an explicit Save queued behind it runs next.
+unsafe fn autosave_event(event: document_exchange::Event) {
+    let saved = event.outcome == document_exchange::Outcome::Saved;
+    let done = QUIL_AUTOSAVE.finish(saved, event.object, event.revision, event.error);
+    if saved { DOCUMENT_WORKSPACE.changed(); }
+    sex_pdx::serial_record!("[quil.autosave.result] outcome={:?} result={:?} revision={} dirty={} document={}",
+        event.outcome, done, QUIL_REVISION, QUIL_DIRTY as u8, QUIL_DOC_ID);
+    if let Some(create) = QUIL_AUTOSAVE.queued_save.take() { document_save_start(create); }
+}
 fn document_event(event: document_exchange::Event, palette_active:&mut bool) {
     unsafe {
+        if QUIL_AUTOSAVE.pending() { autosave_event(event); return; }
         QUIL_CLIPBOARD_NOTICE=false;
         if event.outcome == document_exchange::Outcome::Saved {
             DOCUMENT_WORKSPACE.changed();
@@ -4233,11 +4262,15 @@ pub extern "C" fn _start() -> ! {
         unsafe{if DOCUMENT_OPEN{match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::OPEN_LINEN,catalog.target_pd as u64,catalog.task_id as u64,0){Ok(_)=>DOCUMENT_OPEN=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>DOCUMENT_OPEN=false}}}
         unsafe{DOCUMENT_WORKSPACE.poll(|args|sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::WORKSPACE_CHANGED,args[0],args[1],args[2]).map(|_|()));}
         unsafe{DOCUMENT_DISPLAY.poll(quil_content_sid(),|op,sid,a,b|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op,sid,a,b).map(|_|()),|paint,bytes|sex_pdx::serial_record!("[quil.ui.admitted] paint={} bytes={} presentation=unconfirmed",paint,bytes));}
+        unsafe{let ready=!DOCUMENT_IO.busy()&&!QUIL_NAME_MODE&&!palette_active&&QUIL_BUFFER_LEN>0;if QUIL_AUTOSAVE.due(sex_pdx::get_ticks(),QUIL_DIRTY,QUIL_REVISION,ready){autosave_start();}}
         unsafe{if let Some(event)=DOCUMENT_IO.step(|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::document::OP,r.header(),r.a,r.b).map(|_|())){document_event(event,&mut palette_active);}}
         unsafe{QUIL_CLIPBOARD.poll(sex_pdx::get_ticks(),|packet|match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,packet.opcode,packet.args[0],packet.args[1],packet.args[2]){Ok(_)=>sex_pdx::clipboard_client::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sex_pdx::clipboard_client::Admission::Full,Err(_)=>sex_pdx::clipboard_client::Admission::Rejected});}
         quil_clipboard_events(palette_active);
         let msg = if presentation_pending || document_view_ready || unsafe{DOCUMENT_IO.busy()||DOCUMENT_DISPLAY.pending()||DOCUMENT_WORKSPACE.pending()||DOCUMENT_OPEN||(QUIL_CLIPBOARD.pending()&&QUIL_CLIPBOARD.view()!=sex_pdx::clipboard_client::View::Uncertain)} {
             match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sched_yield();continue}}
+        }else if unsafe{QUIL_AUTOSAVE.armed()}{
+            // Idle draft countdown: bounded timed wait, woken early by input.
+            match pdx_try_listen_raw(0){Some(msg)=>msg,None=>{let _=sex_pdx::sys_wait_self_ticks(64);continue}}
         }else{pdx_listen_raw(0)};
         if msg.type_id==1 && msg.caller_pd==3 && msg.arg0==catalog.surface_id && incarnation.ordinal!=0 {
             presentation_pending=true;continue;

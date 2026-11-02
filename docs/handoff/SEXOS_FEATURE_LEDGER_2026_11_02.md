@@ -72,6 +72,44 @@ followed with the exact second request `GET /guide`, guide text pixels match;
 
 **Limits.** Only links 1–9; no back/history key yet; fixed endpoint only.
 
+## F3. Quil autosave drafts (2026-11-02)
+
+**What changed.** When a Quil buffer has unsaved edits and nothing is typed
+for about 30 seconds, Quil saves a recovery copy into a separate object named
+`<title>.draft` (for a new document, `UNTITLED.draft`). Later idle periods
+overwrite the same draft object. The user's own document is never written and
+stays marked unsaved; the close guard still warns. After a crash or power cut,
+the draft is listed in Linen and opens in Quil like any document. An explicit
+Save pressed while a draft save is in flight is queued and runs right after.
+
+**SexOS rules kept.** The draft goes through Quil's existing held document
+route to sexfiles (`create_new`, then save to the returned object); no new
+grant, slot, opcode or ABI input. Names follow the storage rules
+(`[A-Za-z0-9._-]`, 16 bytes); a taken name moves to `<title>NN.draft`. While a
+draft is pending its idle period, Quil waits with the bounded
+`sys_wait_self_ticks(64)` instead of blocking forever, so the countdown can
+fire without input; otherwise the loop is unchanged.
+
+**Evidence** (`docs/handoff/assets/quil-autosave-2026-11-02/`): host
+`scripts/quil_autosave_host_gate.sh` (4 tests); sealed build and master gate
+GREEN; native `scripts/quil_autosave_gate.py` at 1280x800 and 1024x768: two
+drafts into the same object (revisions 9 and 17), document never saved and
+still dirty, QEMU killed (no shutdown), second boot opens `UNTITLED.draft`
+from Linen and loads 17 bytes with the drafted hash; the recovered text is on
+screen. Measured idle-to-draft was 37.7 s from the host side. Regressions:
+`quil_workflow_gate.py` and `connected_desktop_gate.py` pass on the same build.
+
+**Found on the way.** A first naming choice (`~title`) was rejected by
+sexfiles as INVALID, and a failed create during a save leaves Quil's document
+I/O fenced (Uncertain) until it is reopened. That is the existing
+uncertain-save rule, but it means a storage fault during an autosave blocks
+the next explicit save too; worth a recovery path later. Also, after a
+Linen reopen, Display applied the new Quil view a few seconds late.
+
+**Limits.** No draft cleanup (sexfiles has DELETE, but Quil holds no delete
+route); drafts are not offered automatically on startup; one draft per
+document source per session.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
