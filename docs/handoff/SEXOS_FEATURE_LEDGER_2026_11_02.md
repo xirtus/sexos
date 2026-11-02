@@ -31,7 +31,7 @@ changed.
 - Sealed build `make full` green; master runtime gate GREEN (the first attempt
   was YELLOW from a split SilkBar civil serial line, unrelated; rerun green).
 - Native `scripts/https_html_gate.py` at 1280x800/e1000e and 1024x768/e1000:
-  exact decrypted request, `[browser.html.converted] source_bytes=673
+  exact decrypted request, `[browser.html.converted] source_bytes=672
   text_bytes=342 links=2 truncated=0`, released body hash equals the converted
   text, and reader layout plus glyph pixels match the expected text.
 - Regression: `https_document_gate.py` (`/welcome`, ready) still passes.
