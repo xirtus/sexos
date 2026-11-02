@@ -116,6 +116,15 @@ impl Document {
     fn new(resource:Resource)->Result<Self,Error>{Ok(Self{bytes:Box::try_new([0;MAX_DOCUMENT]).map_err(|_|Error::Memory)?,len:0,ready:false,resource})}
     pub fn as_bytes(&self)->&[u8]{if self.ready{&self.bytes[..self.len]}else{&[]}}
     fn scrub(&mut self){erase(self.bytes.as_mut());self.len=0;self.ready=false;}
+    pub fn resource_kind(&self)->Resource{self.resource}
+    /// Replace ready text with a bounded presentation of itself (for example
+    /// HTML as readable text). The source bytes are erased; nothing escapes.
+    pub fn rewrite(&mut self,f:impl FnOnce(&[u8],&mut [u8])->usize)->Result<(),Error>{
+        if !self.ready{return Err(Error::Memory);}
+        let mut next=Box::try_new([0u8;MAX_DOCUMENT]).map_err(|_|Error::Memory)?;
+        let len=f(&self.bytes[..self.len],next.as_mut()).min(MAX_DOCUMENT);
+        self.scrub();core::mem::swap(&mut self.bytes,&mut next);erase(next.as_mut());self.len=len;self.ready=true;Ok(())
+    }
 }
 impl Drop for Document{fn drop(&mut self){self.scrub();}}
 
@@ -309,7 +318,7 @@ impl Session {
     pub fn state(&self) -> State { self.state }
     pub fn failure(&self) -> Option<Failure> { self.failure }
     pub fn http_failure(&self)->Option<sex_http::Error>{self.http_failure}
-    pub fn is_document(&self)->bool{self.resource==Some(Resource::WelcomeText)}
+    pub fn is_document(&self)->bool{matches!(self.resource,Some(Resource::WelcomeText|Resource::PageHtml))}
     pub fn resource_kind(&self)->Option<Resource>{self.resource}
     pub fn document_received(&self)->usize{self.pipe.borrow().document_received}
     pub fn owned_payload_bytes(&self)->usize{self.stats.task_bytes+2*QUEUE_BYTES+if self.resource.is_some(){MAX_DOCUMENT}else{0}}
@@ -325,7 +334,7 @@ impl Session {
     pub fn take_document(&mut self)->Option<Document>{
         if !self.is_document()||self.state!=State::ExchangeVerified{return None;}
         let mut pipe=self.pipe.borrow_mut();let body=pipe.document.as_ref()?;
-        if !body.ready||body.resource!=Resource::WelcomeText{return None;}
+        if !body.ready||Some(body.resource)!=self.resource{return None;}
         pipe.document.take()
     }
     /// Move the same finite allocation without copying or permitting binary
@@ -437,9 +446,9 @@ mod tests {
         }
     }
     #[test] fn resource_sessions_are_finite_and_cannot_transfer_before_tls_completion(){
-        for resource in [Resource::WelcomeText,Resource::ArtworkQoi]{
+        for resource in [Resource::WelcomeText,Resource::ArtworkQoi,Resource::PageHtml]{
             let mut seed=[29;32];let mut session=Session::resource(&mut seed,1_793_367_907,1,resource).unwrap();assert_eq!(seed,[0;32]);
-            assert_eq!(session.resource_kind(),Some(resource));assert_eq!(session.is_document(),resource==Resource::WelcomeText);
+            assert_eq!(session.resource_kind(),Some(resource));assert_eq!(session.is_document(),resource!=Resource::ArtworkQoi);
             assert!(session.take_document().is_none());assert!(session.take_asset().is_none());
             let stats=session.stats();assert!(stats.task_bytes<=MAX_TASK_BYTES);assert_eq!(stats.private_bytes,stats.task_bytes+PIPE_BYTES+MAX_DOCUMENT);
             assert_eq!(session.pipe.borrow().document.as_ref().unwrap().bytes.len(),MAX_DOCUMENT);
@@ -449,6 +458,13 @@ mod tests {
             for _ in 0..8{session.poll();}assert_eq!(session.state(),State::Rejected);assert!(session.task.is_none());assert!(session.take_asset().is_none());assert!(session.take_document().is_none());
             let pipe=session.pipe.borrow();let body=pipe.document.as_ref().unwrap();assert_eq!(body.len,0);assert!(!body.ready);assert!(body.bytes.iter().all(|b|*b==0));assert!(pipe.rx.iter().chain(pipe.tx.iter()).all(|b|*b==0));
         }
+    }
+    #[test] fn rewrite_replaces_ready_text_and_erases_the_source(){
+        let mut doc=Document::new(Resource::PageHtml).unwrap();assert!(doc.rewrite(|_,_|0).is_err());
+        doc.bytes[..9].copy_from_slice(b"<p>hi</p>");doc.len=9;doc.ready=true;let old=doc.bytes.as_ptr();
+        doc.rewrite(|html,out|{assert_eq!(html,b"<p>hi</p>");out[..2].copy_from_slice(b"hi");2}).unwrap();
+        assert_eq!(doc.as_bytes(),b"hi");assert_eq!(doc.resource_kind(),Resource::PageHtml);assert_ne!(doc.bytes.as_ptr(),old);
+        doc.rewrite(|_,_|usize::MAX).unwrap();assert_eq!(doc.as_bytes().len(),MAX_DOCUMENT);
     }
     #[test] fn asset_wrapper_moves_one_body_allocation_and_scrubs_the_entire_capacity(){
         // Local ownership/erasure test only: these deliberately seeded private

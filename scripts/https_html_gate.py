@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Actual controlled HTTPS text/html page read as text in the Browser reader.
+
+Same BOOT endpoint, trust profile and held authority as https_document_gate;
+only the fixed resource differs (/page.html, Accept: text/html). The expected
+reader text is produced on the host by compiling the same bounded converter
+(apps/kaleidoscope/src/html_text.rs); its behaviour is independently pinned by
+tests/browser_html_text.rs. No script, CSS, layout engine or public web claim.
+"""
+import argparse,hashlib,json,os,re,shutil,subprocess,tempfile,time
+from pathlib import Path
+import https_document_gate as doc
+import tls_exchange_gate as tls
+import http_content_gate as http
+from desktop_close_gate import QMP
+from desktop_focus import focus_surface
+from network_contention_gate import frozen_binding,MAX_PCAP
+from check_nonunix_target import inspect as target_check
+
+REQUEST=b'GET /page.html HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
+PAGE=(b'<!DOCTYPE html><html><head><title>ignored</title><style>body{color:red}</style>'
+ b'<script>document.write("never runs")</script></head><body>'
+ b'<h1>SexOS field notes</h1><p>One shared address space supplies addresses;\n held capabilities supply authority.</p>'
+ b'<h2>Rules</h2><ul><li>BOOT grants routes &amp; identities.</li><li>Applications cannot mint them.</li><li>No script runs here.</li></ul>'
+ b'<p>Read the <a href="/guide">guide</a> or the <a href=\'/ledger\'>ledger</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
+ b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
+ b'<!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
+SCOPE='Actual fixed BOOT-controlled HTTPS text/html page through held policy/seed/UTC/DNS/duplex authority, converted by the bounded no-script reader and checked against reader glyph pixels. Public laboratory root only; no script, CSS, layout, forms, arbitrary URL or public web trust claim.'
+
+def response(mode):
+ return b'\r\n'.join([b'HTTP/1.1 200 OK',b'Content-Type: text/html; charset=utf-8',b'Content-Length: '+str(len(PAGE)).encode(),b'Connection: close'])+b'\r\n\r\n'+PAGE
+
+def expected_text(root):
+ with tempfile.TemporaryDirectory()as d:
+  src=Path(d)/'oracle.rs';src.write_text('#[path='+json.dumps(str(root/'apps/kaleidoscope/src/html_text.rs'))+']mod html_text;\nuse std::io::{Read,Write};fn main(){let mut i=Vec::new();std::io::stdin().read_to_end(&mut i).unwrap();let mut o=vec![0u8;12288];let c=html_text::convert(&i,&mut o);eprintln!("{} {}",c.links,c.truncated as u8);std::io::stdout().write_all(&o[..c.len]).unwrap();}\n')
+  subprocess.run(['rustc','--edition=2021','-O',str(src),'-o',str(Path(d)/'oracle')],check=True,capture_output=True)
+  r=subprocess.run([str(Path(d)/'oracle')],input=PAGE,capture_output=True,check=True);links,cut=map(int,r.stderr.split())
+  return r.stdout,links,cut
+
+def geometry(trace,contract,text):
+ rel=list(re.finditer(rf'\[browser.https.released\] ticket=(\d+) tx=\d+ rx=\d+ request_bytes={len(REQUEST)} body_bytes=(\d+) body_hash=(0x[0-9a-f]+) positive_release=1 authenticated=1 public_test_root=1',trace));assert rel,'missing positive authenticated HTML release'
+ r=rel[-1];assert int(r[2])==len(text)and r[3]==hex(tls.fingerprint(text)),'released body is not the converted page text'
+ tile,seq=doc.viewport(trace);frame=http.reader_frame(text,tile['w'],tile['h'],contract,0,b'/page.html');frame.update(tile=tile,viewport=seq,document_ticket=int(r[1]))
+ lay=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed',trace))
+ want=tuple(frame[k]for k in('first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'));assert lay and lay[-1].start()>r.end()and tuple(map(int,lay[-1].groups()))==want,f'reader layout differs {lay[-1].groups() if lay else None} {want}'
+ return frame
+
+def main():
+ from quil_workflow_gate import palette_commands,palette_select
+ p=argparse.ArgumentParser();[p.add_argument(f'--{n}',required=True,type=Path)for n in('iso','source-disk','binding','out')];p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');a=p.parse_args()
+ root=Path(__file__).resolve().parents[1];out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
+ if any(out.iterdir()):raise RuntimeError('fresh HTML evidence directory required')
+ binding=frozen_binding(root,a.iso.resolve(strict=True),a.binding.resolve(strict=True));held=json.loads(a.binding.read_text())
+ if held['runner_sha256'].get('scripts/https_html_gate.py')!=hashlib.sha256(Path(__file__).read_bytes()).hexdigest():raise RuntimeError('HTML checker absent from exact frozen binding')
+ text,links,cut=expected_text(root);contract=doc.load_contract(root);contract.update(request=REQUEST,reader_path=b' /page.html');resolution=tuple(map(int,a.resolution.split('x')))
+ doc.REQUEST=REQUEST;doc.response=response
+ peer=doc.ControlledHTTPSPeer(root,'ready');peer.start();disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);serial=out/'serial.log';pcap=out/'wire.pcap';sock=Path('/tmp')/f'sex-html-{os.getpid()}.sock'
+ command=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',doc.RTC_NORMAL,'-m','512M','-vga','none','-device','VGA,xres='+a.resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(a.iso.resolve()),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none','-netdev','user,id=peer','-device',f'{a.model},netdev=peer,mac=52:54:00:12:34:56','-object',f'filter-dump,id=capture,netdev=peer,file={pcap}']
+ manifest=dict(binding=binding,command=command,model=a.model,resolution=a.resolution,page_sha256=hashlib.sha256(PAGE).hexdigest(),page_bytes=len(PAGE),text_sha256=hashlib.sha256(text).hexdigest(),text_bytes=len(text),links=links,request_hex=REQUEST.hex());(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');(out/'expected-text.txt').write_bytes(text)
+ proc=subprocess.Popen(command,stdout=(out/'qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic();failure=None;checks={}
+ def trace():return serial.read_text(errors='replace')if serial.exists()else''
+ def health():
+  if time.monotonic()-began>300:raise TimeoutError('bounded 300 second HTML gate')
+  if proc.poll()is not None:raise RuntimeError('guest exited')
+  if peer.errors:raise RuntimeError(str(peer.errors))
+  if any(f.exists()and f.stat().st_size>MAX_PCAP for f in(serial,pcap)):raise RuntimeError('raw evidence exceeded bound')
+  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',trace()):raise RuntimeError('guest failure')
+ def wait(pattern,start=0,timeout=90):
+  deadline=time.monotonic()+timeout
+  while time.monotonic()<deadline:
+   health();m=re.search(pattern,trace()[start:])
+   if m:return m
+   time.sleep(.01)
+  raise TimeoutError(pattern)
+ def key(code,pattern):b=len(trace());q.key(code);return wait(pattern,b)
+ try:
+  deadline=time.monotonic()+15
+  while not sock.exists():
+   health()
+   if time.monotonic()>deadline:raise TimeoutError('QMP unavailable')
+   time.sleep(.05)
+  q=QMP(sock)
+  if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,trace,key);palette_select(key,'ZoomToggle',palette_commands(root))
+  b=len(trace());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',b);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',b)
+  b=len(trace());q.key('w');wait(r'\[shell.browser.input\] code=17 down=1 slot=43 accepted=1',b);wait(r'\[browser.html.intent\] accepted=1 explicit=1 path=/page.html script=0 public_internet=0',b)
+  wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b);doc_event=peer.completed.wait(30)
+  if not doc_event:raise TimeoutError('peer close_notify')
+  conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} script=0',b);checks['converted']=conv[0]
+  path=out/'html-reader.ppm';result=dict(ok=False,errors=['no frame']);deadline=time.monotonic()+25
+  while time.monotonic()<deadline:
+   health();q.cmd('screendump',{'filename':str(path)})
+   try:result=doc.frame_pixels(path.read_bytes(),geometry(trace(),contract,text),contract,resolution)
+   except(AssertionError,ValueError,KeyError,IndexError,TypeError)as exc:result=dict(ok=False,errors=[str(exc)])
+   if result['ok']:break
+   time.sleep(.1)
+  checks['reader_pixels']=result
+  if not result['ok']:raise RuntimeError(str(result['errors']))
+  assert b'never runs' not in text and b'ignored' not in text,'skipped markup leaked into text'
+ except Exception as exc:failure=repr(exc)
+ finally:
+  peer.close()
+  if proc.poll()is None:
+   proc.terminate()
+   try:proc.wait(timeout=5)
+   except subprocess.TimeoutExpired:proc.kill();proc.wait()
+  sock.unlink(missing_ok=True)
+ t=trace();request_ok=any(r.get('request_hex')==REQUEST.hex()for r in peer.rows)
+ res=dict(ok=failure is None and request_ok and not peer.errors,error=failure,request_exact=request_ok,peer=peer.rows,checks=checks,resolution=a.resolution,model=a.model,scope=SCOPE)
+ (out/'result.json').write_text(json.dumps(res,indent=2,default=str)+'\n')
+ if not res['ok']:raise RuntimeError(json.dumps(dict(error=failure,request_exact=request_ok,errors=peer.errors)))
+ print(json.dumps(dict(ok=True,resolution=a.resolution,text_bytes=len(text),links=links)))
+
+if __name__=='__main__':main()

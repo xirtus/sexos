@@ -28,6 +28,7 @@ mod asset_presentation;
 #[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
 mod text_delivery;
 mod browser_command;
+mod html_text;
 use browser_command::Intent;
 
 use silkclient::{app_main, SexApp};
@@ -70,6 +71,8 @@ struct App {
     reading:bool,
     reading_https:bool,
     https_panel:bool,
+    /// The HTTPS document panel requested the fixed HTML page, read as text.
+    page_html:bool,
     https_view:tls_exchange::View,
     https_progress_logged:usize,
     asset_panel:bool,
@@ -313,7 +316,7 @@ impl App {
         if self.http.busy()||self.navigation.active()||matches!(next,Intent::HttpDns|Intent::TlsDns|Intent::TlsAssetDns){self.http.cancel();}
         self.navigation.cancel();if next==Intent::HttpDns{self.navigation.begin();}
         self.reading=false;self.reading_https=false;self.reader.clear();
-        self.https_panel=next==Intent::TlsDns&&document;self.peer_panel=next==Intent::TlsDns&&!document;
+        self.https_panel=next==Intent::TlsDns&&document;self.page_html=false;self.peer_panel=next==Intent::TlsDns&&!document;
         self.tls_panel=next==Intent::TlsPrepare;self.clock_panel=next==Intent::Clock;
         if self.https_panel{self.https_progress_logged=0;}
         sex_pdx::serial_record!("[browser.command.queued] kind={:?} document={} retained=1 accepted_replay=0",next,document as u8);
@@ -396,6 +399,7 @@ impl App {
             0x10=>{if self.asset_panel{let had=self.clear_asset();self.asset_status=if self.asset_fenced{asset_view::Status::Uncertain}else if had{asset_view::Status::Clearing}else{asset_view::Status::Cleared};sex_pdx::serial_record!("[browser.asset.clear.intent] pending={} owned_storage=erased",self.bitmap.pending()as u8);}self.exchange.cancel();if self.https_panel{self.reading=false;self.reading_https=false;self.reader.clear();sex_pdx::serial_record!("[browser.https.cleared] body_visible=0 owned_storage=erased network=0");}if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsAssetDns|Intent::TlsStart|Intent::TlsPrepare|Intent::Seed|Intent::Clock)){self.intent=None;self.dns.cancel();}let n=self.tls.cancel(&mut self.trust,&mut self.seed,&mut self.clock);sex_pdx::serial_record!("[browser.tls.erased] bytes={} owned_storage=1",n);self.resources("clear",true);},
             0x26=>{self.queue_intent(Intent::TlsPrepare,false);},
             0x22=>{if self.queue_intent(Intent::TlsAssetDns,false){sex_pdx::serial_record!("[browser.asset.intent] accepted=1 explicit=1 public_internet=0");}},
+            0x11=>{if self.queue_intent(Intent::TlsDns,true){self.page_html=true;sex_pdx::serial_record!("[browser.html.intent] accepted=1 explicit=1 path=/page.html script=0 public_internet=0");}},
             0x30=>{if self.queue_intent(Intent::TlsDns,true){sex_pdx::serial_record!("[browser.https.intent] accepted=1 explicit=1 public_internet=0");}},
             0x15=>{if self.queue_intent(Intent::TlsDns,false){sex_pdx::serial_record!("[browser.tls.peer.intent] accepted=1 explicit=1 public_internet=0");}},
             0x2E=>{if matches!(self.intent,Some(Intent::Echo)){self.intent=None;}self.probe.cancel();},
@@ -586,11 +590,11 @@ impl SexApp for App {
         unsafe{assert!(CLIPBOARD.bind(sex_pdx::clipboard::Participant::from_catalog(identity).expect("BROWSER_CLIPBOARD_POLICY")));}
         #[cfg(app_resource_cleanup_proof)]
         if selected.is_original(){full_resource_cleanup_proof();}
-        Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
+        Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,page_html:false,https_view:tls_exchange::View::Idle,https_progress_logged:0,
             asset_panel:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(selected),asset_presentation:asset_presentation::Presentation::new(),asset_fenced:false,
             importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
-            dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:tls_exchange::Client::new(),peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
+            dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:{let mut e=tls_exchange::Client::new();e.set_page_text(page_text);e},peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
             intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(surface),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
 
     }
@@ -727,7 +731,7 @@ impl SexApp for App {
                     Intent::Clock=>{let accepted=self.clock.start();sex_pdx::serial_record!("[browser.clock.intent] accepted={} explicit=1 no_ticks_fallback=1",accepted as u8);sex_pdx::serial_record!("[browser.command.started] kind=Clock accepted={}",accepted as u8);},
                     Intent::TlsPrepare=>{let accepted=self.tls.start(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks());sex_pdx::serial_record!("[browser.tls.intent] accepted={} explicit=1 network=0",accepted as u8);sex_pdx::serial_record!("[browser.command.started] kind=TlsPrepare accepted={}",accepted as u8);},
                     Intent::TlsDns|Intent::TlsAssetDns=>{
-                        let accepted=if intent==Intent::TlsAssetDns{self.tls.start_resource(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks(),sex_tls::Resource::ArtworkQoi)}else if self.https_panel{self.tls.start_document(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks())}else{self.tls.start_exchange(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks())};
+                        let accepted=if intent==Intent::TlsAssetDns{self.tls.start_resource(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks(),sex_tls::Resource::ArtworkQoi)}else if self.https_panel{self.tls.start_resource(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks(),if self.page_html{sex_tls::Resource::PageHtml}else{sex_tls::Resource::WelcomeText})}else{self.tls.start_exchange(&mut self.trust,&mut self.seed,&mut self.clock,sex_pdx::get_ticks())};
                         sex_pdx::serial_record!("[browser.command.started] kind=TlsDns accepted={}",accepted as u8);
                         if accepted{self.dns.start();self.intent=Some(Intent::TlsStart);}else{self.exchange.reject_prerequisites();}
                     },
@@ -771,7 +775,7 @@ impl SexApp for App {
         let received=self.exchange.document_received();
         if self.asset_panel&&received>self.https_progress_logged{self.https_progress_logged=received;sex_pdx::serial_record!("[browser.asset.progress] ticket={} body_received={} authenticated=1 body_visible=0",peer_ticket,received);}
         if self.exchange.is_document()&&received>self.https_progress_logged{self.https_progress_logged=received;sex_pdx::serial_record!("[browser.https.progress] ticket={} body_received={} authenticated=1 body_visible=0",peer_ticket,received);}
-        if self.exchange.take_response_verified(){if self.exchange.resource_kind()==Some(sex_tls::Resource::ArtworkQoi){sex_pdx::serial_record!("[browser.asset.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_asset_len(),self.exchange.retained_asset_hash());}else if self.exchange.is_document(){sex_pdx::serial_record!("[browser.https.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_document_len(),self.exchange.retained_document_hash());}else{sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}}
+        if self.exchange.take_response_verified(){if let Some(p)=self.exchange.take_page_stats(){sex_pdx::serial_record!("[browser.html.converted] source_bytes={} text_bytes={} links={} truncated={} script=0",p.source,p.len,p.links,p.truncated as u8);}if self.exchange.resource_kind()==Some(sex_tls::Resource::ArtworkQoi){sex_pdx::serial_record!("[browser.asset.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_asset_len(),self.exchange.retained_asset_hash());}else if self.exchange.is_document(){sex_pdx::serial_record!("[browser.https.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_document_len(),self.exchange.retained_document_hash());}else{sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}}
         let peer_view=if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsAssetDns|Intent::TlsStart)){
             if self.waiting_receipt(){tls_exchange::View::Uncertain}else{tls_exchange::View::Pending}
         }else{self.exchange.view()};
@@ -781,7 +785,7 @@ impl SexApp for App {
             if peer_view!=self.https_view{
                 self.https_view=peer_view;
                 if peer_view==tls_exchange::View::Verified&&self.exchange.has_document(){
-                    sex_pdx::serial_record!("[browser.https.released] ticket={} tx={} rx={} request_bytes=94 body_bytes={} body_hash={:#x} positive_release=1 authenticated=1 public_test_root=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),self.exchange.document().len(),public_fingerprint(self.exchange.document()));
+                    sex_pdx::serial_record!("[browser.https.released] ticket={} tx={} rx={} request_bytes={} body_bytes={} body_hash={:#x} positive_release=1 authenticated=1 public_test_root=1",peer_ticket,self.exchange.tx_bytes(),self.exchange.rx_bytes(),https_request_bytes(self.exchange.resource_kind()),self.exchange.document().len(),public_fingerprint(self.exchange.document()));
                     self.reading=true;self.reading_https=true;self.reader.clear();
                 }
                 if peer_view==tls_exchange::View::Cancelled&&peer_ticket!=0&&!self.exchange.busy(){sex_pdx::serial_record!("[browser.https.cancelled] ticket={} positive_release=1 authenticated={}",peer_ticket,self.exchange.peer_authenticated() as u8);}
@@ -846,7 +850,7 @@ impl SexApp for App {
             Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
         }else if self.visible_reader()&&self.reading_https{
             let body=if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().unwrap().as_bytes()};
-            let f=self.reader.render_https_selected(body,sex_tls::HTTPS_PATH,self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
+            let f=self.reader.render_https_selected(body,if self.page_html{&b"/page.html"[..]}else{sex_tls::HTTPS_PATH},self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
             Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:body.len(),first:f.first,rows:f.body_rows,selected:2|256|512}))
         }else if self.visible_reader()&&!self.reading_https{
             let f=self.reader.render_path_selected(self.http.document(),self.http.document_path(),self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
@@ -958,6 +962,14 @@ fn full_resource_cleanup_proof()->! {
 app_main!(App);
 
 fn peer_label(view:tls_exchange::View)->&'static[u8]{match view{tls_exchange::View::Idle=>b"idle",tls_exchange::View::Pending=>b"checking",tls_exchange::View::Verified=>b"peer verified",tls_exchange::View::Unavailable=>b"unavailable",tls_exchange::View::Cancelled=>b"cancelled",tls_exchange::View::Uncertain=>b"waiting receipt"}}
+fn page_text(html:&[u8],out:&mut [u8])->tls_exchange::PageStats{
+    let c=html_text::convert(html,out);tls_exchange::PageStats{source:html.len(),len:c.len,links:c.links,truncated:c.truncated}
+}
+/// Fixed request size: the WelcomeText request is 94 bytes and only the path
+/// and Accept value differ between fixed resources on the same BOOT endpoint.
+fn https_request_bytes(resource:Option<sex_tls::Resource>)->usize{
+    let r=resource.unwrap_or(sex_tls::Resource::WelcomeText);94-18+r.path().as_bytes().len()+r.mime().len()
+}
 fn public_fingerprint(bytes:&[u8])->u64{bytes.iter().fold(0xcbf29ce484222325,|hash,byte|(hash^*byte as u64).wrapping_mul(0x100000001b3))}
 
 fn https_label(view:tls_exchange::View,failure:Option<sex_tls::Failure>,http:Option<sex_tls::HttpError>)->&'static[u8]{

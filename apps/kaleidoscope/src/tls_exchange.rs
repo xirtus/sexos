@@ -6,6 +6,11 @@ use sex_pdx::network_job as w;
 use sex_tls::{Resource,Session,Stats};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum View{Idle,Pending,Verified,Unavailable,Cancelled,Uncertain}
+/// Presentation of a fixed text/html page as readable text, supplied by the
+/// application. The exchange owns no HTML policy of its own.
+pub type PageText=fn(&[u8],&mut [u8])->PageStats;
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct PageStats{pub source:usize,pub len:usize,pub links:usize,pub truncated:bool}
 /// Diagnostic of one positively acknowledged RELEASE; not a new capability.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Released{pub ticket:u32,pub outcome:View,pub authenticated:bool,pub document:bool,pub resource:Option<Resource>,pub payload_bytes:usize}
@@ -13,7 +18,7 @@ pub struct Released{pub ticket:u32,pub outcome:View,pub authenticated:bool,pub d
 enum Step{Done,Begin,InitialWrite,Start,Active,Write,Status,Read,Finish,Cancel,Release,Held}
 pub struct Client{
     released:Option<Released>,session:Option<Session>,stats:Option<Stats>,document:Option<sex_tls::Document>,is_document:bool,document_received:usize,http_failure:Option<sex_tls::HttpError>,failure:Option<sex_tls::Failure>,step:Step,seq:u32,ticket:u32,last_ticket:u32,
-    asset:Option<sex_tls::Asset>,resource:Option<Resource>,
+    asset:Option<sex_tls::Asset>,resource:Option<Resource>,page_text:Option<PageText>,page_stats:Option<PageStats>,
     generation:u32,initial:usize,tx:usize,rx:usize,produced:usize,chunk:[u8;8],chunk_len:usize,
     pending:Option<w::Request>,accepted:bool,deadline:u64,total:Option<u64>,last:u64,next_poll:u64,
     active:bool,finish:bool,complete:bool,prefer_read:bool,abort:bool,closed:bool,
@@ -21,7 +26,7 @@ pub struct Client{
 }
 fn erase(bytes:&mut[u8]){for byte in bytes{unsafe{core::ptr::write_volatile(byte,0)}}}
 impl Client{
-    pub const fn new()->Self{Self{released:None,session:None,stats:None,document:None,asset:None,resource:None,is_document:false,document_received:0,http_failure:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
+    pub const fn new()->Self{Self{released:None,session:None,stats:None,document:None,asset:None,resource:None,page_text:None,page_stats:None,is_document:false,document_received:0,http_failure:None,failure:None,step:Step::Done,seq:1,ticket:0,last_ticket:0,
         generation:0,initial:0,tx:0,rx:0,produced:0,chunk:[0;8],chunk_len:0,
         pending:None,accepted:false,deadline:0,total:None,last:0,next_poll:0,
         active:false,finish:false,complete:false,prefer_read:true,abort:false,closed:false,
@@ -41,6 +46,8 @@ impl Client{
     pub fn failure(&self)->Option<sex_tls::Failure>{self.failure}
     pub fn http_failure(&self)->Option<sex_tls::HttpError>{self.http_failure}
     pub fn is_document(&self)->bool{self.is_document}
+    pub fn set_page_text(&mut self,convert:PageText){self.page_text=Some(convert);}
+    pub fn take_page_stats(&mut self)->Option<PageStats>{self.page_stats.take()}
     pub fn resource_kind(&self)->Option<Resource>{self.resource}
     pub fn has_asset(&self)->bool{self.resource==Some(Resource::ArtworkQoi)&&self.view==View::Verified&&!self.busy()&&self.asset.is_some()}
     /// Asset custody stays private until the exact positive RELEASE receipt.
@@ -73,13 +80,13 @@ impl Client{
     /// grant. A new attempt needs a fresh held profile/seed/time and DNS receipt.
     pub fn start(&mut self,session:Session,next_seq:u32,generation:u32)->bool{
         if self.closed||self.busy(){return false;}
-        let fence=self.seq;*self=Self::new();self.seq=fence;
+        let fence=self.seq;let page_text=self.page_text;*self=Self::new();self.seq=fence;self.page_text=page_text;
         if next_seq==0||next_seq<self.seq||next_seq>w::MAX_SEQ-4||generation==0||generation>w::MAX_TICKET
             ||session.state()!=sex_tls::State::HelloPending||session.outgoing_len()==0||session.outgoing_len()>w::MAX_BYTES{
             self.view=View::Unavailable;return false;
         }
         let stats=session.stats();let initial=session.outgoing_len();
-        *self=Self::new();self.seq=next_seq;self.generation=generation;self.initial=initial;
+        *self=Self::new();self.seq=next_seq;self.generation=generation;self.initial=initial;self.page_text=page_text;
         self.stats=Some(stats);self.is_document=session.is_document();self.resource=session.resource_kind();self.session=Some(session);self.step=Step::Begin;self.view=View::Pending;true
     }
     fn scrub(&mut self){self.session=None;erase(&mut self.chunk);self.chunk_len=0;
@@ -125,6 +132,12 @@ impl Client{
             sex_tls::State::ExchangeVerified=>{
                 if self.is_document&&self.document.is_none(){
                     self.document=session.take_document();if self.document.is_none(){self.failed(false);return;}
+                    if self.resource==Some(Resource::PageHtml){
+                        let (Some(convert),Some(document))=(self.page_text,self.document.as_mut())else{self.failed(false);return;};
+                        let source=document.as_bytes().len();let mut stats=PageStats{source,len:0,links:0,truncated:false};
+                        if document.rewrite(|html,out|{stats=PageStats{source,..convert(html,out)};stats.len}).is_err(){self.failed(false);return;}
+                        self.page_stats=Some(stats);
+                    }
                 }
                 if self.resource==Some(Resource::ArtworkQoi)&&self.asset.is_none(){
                     self.asset=session.take_asset();if self.asset.is_none(){self.failed(false);return;}

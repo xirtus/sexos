@@ -1,0 +1,21 @@
+# SexOS field notes
+
+One shared address space supplies addresses; held capabilities supply authority.
+
+# Rules
+
+- BOOT grants routes & identities.
+- Applications cannot mint them.
+- No script runs here.
+
+Read the guide[1] or the ledger[2].
+Entities: <tag> ABC
+
+key | value
+pages | 1
+
+END OF CONTROLLED HTML PAGE
+
+Links:
+[1] /guide
+[2] /ledger

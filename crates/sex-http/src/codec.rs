@@ -24,16 +24,16 @@ const REQUEST: &[u8] = b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConn
 /// resource never selects a trust profile, host, port, route or capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Resource { WelcomeText, ArtworkQoi }
+pub enum Resource { WelcomeText, ArtworkQoi, PageHtml }
 impl Resource {
     pub const fn path(self) -> Path {
-        let source: &[u8] = match self { Self::WelcomeText=>b"/welcome",Self::ArtworkQoi=>b"/art.qoi" };
+        let source: &[u8] = match self { Self::WelcomeText=>b"/welcome",Self::ArtworkQoi=>b"/art.qoi",Self::PageHtml=>b"/page.html" };
         let mut bytes=[0;MAX_PATH];let mut at=0;
         while at<source.len(){bytes[at]=source[at];at+=1;}
         Path{bytes,len:source.len()}
     }
     pub const fn mime(self) -> &'static [u8] {
-        match self {Self::WelcomeText=>b"text/plain",Self::ArtworkQoi=>b"image/qoi"}
+        match self {Self::WelcomeText=>b"text/plain",Self::ArtworkQoi=>b"image/qoi",Self::PageHtml=>b"text/html"}
     }
 }
 
@@ -184,9 +184,10 @@ fn length(bytes: &[u8]) -> Result<usize, Error> {
     if value > MAX_BODY { return Err(Error::BodyLimit); }
     Ok(value)
 }
-fn content_type(bytes: &[u8]) -> Result<(), Error> {
+fn content_type(bytes: &[u8]) -> Result<(), Error> { text_type(bytes,b"text/plain") }
+fn text_type(bytes: &[u8], mime: &[u8]) -> Result<(), Error> {
     let mut parts = bytes.split(|&b| b == b';');
-    if !trim(parts.next().unwrap_or(&[])).eq_ignore_ascii_case(b"text/plain") {
+    if !trim(parts.next().unwrap_or(&[])).eq_ignore_ascii_case(mime) {
         return Err(Error::UnsupportedContentType);
     }
     if let Some(parameter) = parts.next() {
@@ -203,6 +204,7 @@ fn content_type(bytes: &[u8]) -> Result<(), Error> {
 fn resource_content_type(bytes:&[u8],resource:Resource)->Result<(),Error>{
     match resource {
         Resource::WelcomeText=>content_type(bytes),
+        Resource::PageHtml=>text_type(bytes,resource.mime()),
         Resource::ArtworkQoi=>if bytes.eq_ignore_ascii_case(resource.mime()){Ok(())}else{Err(Error::UnsupportedContentType)},
     }
 }
@@ -419,13 +421,23 @@ mod resource_tests {
     }
     fn wiped(r:&Receiver){assert!(r.header.iter().chain(r.body.iter()).all(|b|*b==0));assert!(r.body().is_none());}
     #[test] fn fixed_resource_request_selects_path_accept_and_same_boot_host(){
-        for(resource,path,mime)in[(Resource::WelcomeText,b"/welcome".as_slice(),b"text/plain".as_slice()),(Resource::ArtworkQoi,b"/art.qoi",b"image/qoi")]{
+        for(resource,path,mime)in[(Resource::WelcomeText,b"/welcome".as_slice(),b"text/plain".as_slice()),(Resource::ArtworkQoi,b"/art.qoi",b"image/qoi"),(Resource::PageHtml,b"/page.html",b"text/html")]{
             assert_eq!(resource.path().as_bytes(),path);assert_eq!(resource.mime(),mime);assert_eq!(Path::from_location(path).unwrap(),resource.path());
             let mut out=[0xa5;HTTPS_MAX_REQUEST];let len=request_https_resource(&mut out,resource);
             let expected=format!("GET {} HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: {}\r\n\r\n",core::str::from_utf8(path).unwrap(),core::str::from_utf8(mime).unwrap());
             assert_eq!(&out[..len],expected.as_bytes());assert!(out[len..].iter().all(|b|*b==0xa5));
             if resource==Resource::WelcomeText{let mut legacy=[0;HTTPS_MAX_REQUEST];let n=request_https(&mut legacy,&Path::initial());assert_eq!(&legacy[..n],&out[..len]);}
         }
+    }
+    #[test] fn html_page_accepts_only_text_html_with_text_charsets(){
+        let body=b"<p>hi &amp; bye</p>";
+        for mime in ["text/html","TEXT/HTML ; charset=utf-8","text/html; charset=US-ASCII"]{
+            let mut r=Receiver::for_resource(Resource::PageHtml);r.feed(&response(&format!("Content-Type: {mime}\r\n"),body)).unwrap();assert_eq!(r.finish(),Ok(body.len()));assert_eq!(r.body(),Some(body.as_slice()));
+        }
+        for mime in ["text/plain","application/xhtml+xml","text/html; charset=latin1","text/html; x=y","image/qoi",""]{
+            let mut r=Receiver::for_resource(Resource::PageHtml);assert_eq!(r.feed(&response(&format!("Content-Type: {mime}\r\n"),body)),Err(Error::UnsupportedContentType));wiped(&r);
+        }
+        let mut r=Receiver::for_resource(Resource::WelcomeText);assert_eq!(r.feed(&response("Content-Type: text/html\r\n",body)),Err(Error::UnsupportedContentType));
     }
     #[test] fn qoi_profile_preserves_every_raw_byte_up_to_the_same_body_limit(){
         let body:Vec<u8>=(0..MAX_BODY).map(|i|(i%256)as u8).collect();let bytes=response("Content-Type: image/qoi\r\n",&body);
