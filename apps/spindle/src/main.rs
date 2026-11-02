@@ -707,7 +707,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  clear        clear scrollback");
             sb.push(b"  echo <msg>   print message");
             sb.push(b"  sextime <n>  Unix seconds as SexTime/UTC/Long Count");
-            sb.push(b"  calc <expr>  exact decimal + - * / % ( )");
+            sb.push(b"  calc <expr>  exact decimal + - * / % ( ), ans");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -829,8 +829,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"calc" => {
-            match calc_command::eval(args) {
+            static mut CALC_ANS: Option<i128> = None;
+            match calc_command::eval_with(args, unsafe { CALC_ANS }) {
                 Ok(value) => {
+                    unsafe { CALC_ANS = Some(value.scaled); }
                     let mut line = [0u8; calc_command::LINE_MAX];
                     let n = calc_command::render(value, &mut line);
                     sb.push(&line[..n]);
@@ -841,6 +843,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         calc_command::Error::DivideByZero => b"calc: division by zero".as_slice(),
                         calc_command::Error::Overflow => b"calc: number too large",
                         calc_command::Error::TooDeep => b"calc: nested too deeply",
+                        calc_command::Error::NoAnswer => b"calc: no previous answer (ans)",
                         calc_command::Error::Syntax => b"usage: calc <expr>  e.g. calc 2*(3+4)/5",
                     });
                     sex_pdx::serial_record!("[spindle.calc] expr_bytes={} error={:?} ok=0", args.len(), error);

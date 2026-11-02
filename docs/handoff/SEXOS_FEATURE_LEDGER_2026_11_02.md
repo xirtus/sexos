@@ -342,6 +342,17 @@ native `https_html_gate.py` at both sizes: a second script writes
 alongside the depth-9 arithmetic script (`scripts_run=2
 scripts_refused=2`), with no pager fault rejections in the run.
 
+## F14. Spindle `calc` remembers `ans` (2026-11-02)
+
+**What changed.** `ans` in a `calc` expression is the previous successful
+result in that Spindle session (`calc 2*(3+4)/5` then `calc ans*10` gives
+`= 28`). Before any result, `ans` is a named error, not zero.
+
+**Evidence** (`docs/handoff/assets/spindle-calc-ans-2026-11-02/`): calc host
+tests (3 groups); sealed build and master gate GREEN; native
+`spindle_calc_gate.py` at both sizes: `calc ans` -> `NoAnswer`, then `2.8`,
+then `ans*10` -> `28`, plus the earlier cases.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

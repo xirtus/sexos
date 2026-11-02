@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "error": null,
+  "binding": {
+    "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/f14-fz/source-binding.json",
+    "sha256": "55ad7d16c6befcf6773dc33d916a4474eb507ae922b268a34e1f7e3ee062c01f",
+    "iso_sha256": "3422b6cef5a8d86adf4a91a71e456ef5489893d64b4817490c7b66fe75956a50",
+    "production_files": 590,
+    "runner_files": 646
+  },
+  "resolution": "1024x768",
+  "cases": [
+    {
+      "input": "calc ans",
+      "record": "[spindle.calc] expr_bytes=3 error=NoAnswer ok=0"
+    },
+    {
+      "input": "calc 2*(3+4)/5",
+      "record": "[spindle.calc] expr_bytes=9 result== 2.8 ok=1"
+    },
+    {
+      "input": "calc ans*10",
+      "record": "[spindle.calc] expr_bytes=6 result== 28 ok=1"
+    },
+    {
+      "input": "calc 0.1+0.2",
+      "record": "[spindle.calc] expr_bytes=7 result== 0.3 ok=1"
+    },
+    {
+      "input": "calc 1/3",
+      "record": "[spindle.calc] expr_bytes=3 result=~ 0.333333333 ok=1"
+    },
+    {
+      "input": "calc 7%0",
+      "record": "[spindle.calc] expr_bytes=3 error=DivideByZero ok=0"
+    }
+  ]
+}

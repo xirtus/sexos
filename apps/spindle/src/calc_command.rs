@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `calc <expression>`: exact decimal arithmetic on what the user typed.
 //!
+//! `ans` is the previous successful result in this Spindle session.
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
 //! Parsing is recursive descent with a depth bound; every operation is
@@ -13,12 +14,12 @@ const MAX_DEPTH: u8 = 16;
 pub const LINE_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Syntax, DivideByZero, Overflow, TooDeep }
+pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Value { pub scaled: i128, pub inexact: bool }
 
-struct Parser<'a> { s: &'a [u8], at: usize, depth: u8, inexact: bool }
+struct Parser<'a> { s: &'a [u8], at: usize, depth: u8, inexact: bool, ans: Option<i128> }
 
 impl Parser<'_> {
     fn skip(&mut self) { while self.at < self.s.len() && self.s[self.at] == b' ' { self.at += 1; } }
@@ -68,6 +69,10 @@ impl Parser<'_> {
                 self.at += 1; Ok(v)
             }
             Some(b'0'..=b'9' | b'.') => self.number(),
+            Some(b'a') if self.s[self.at..].starts_with(b"ans") && !self.s.get(self.at + 3).is_some_and(u8::is_ascii_alphanumeric) => {
+                self.at += 3;
+                self.ans.ok_or(Error::NoAnswer)
+            }
             _ => Err(Error::Syntax),
         }
     }
@@ -88,9 +93,11 @@ impl Parser<'_> {
     }
 }
 
-pub fn eval(input: &[u8]) -> Result<Value, Error> {
+pub fn eval(input: &[u8]) -> Result<Value, Error> { eval_with(input, None) }
+/// Evaluate with `ans` bound to a previous result (scaled), if any.
+pub fn eval_with(input: &[u8], ans: Option<i128>) -> Result<Value, Error> {
     if input.len() > 200 { return Err(Error::Syntax); }
-    let mut p = Parser { s: input, at: 0, depth: 0, inexact: false };
+    let mut p = Parser { s: input, at: 0, depth: 0, inexact: false, ans };
     let v = p.expr()?;
     if p.peek().is_some() { return Err(Error::Syntax); }
     Ok(Value { scaled: v, inexact: p.inexact })
@@ -143,5 +150,14 @@ mod tests {
         assert_eq!(show("1..2"), "Syntax");
         assert_eq!(show(&("(".repeat(40) + "1" + &")".repeat(40))), "TooDeep");
         assert_eq!(show(&"-".repeat(40)), "TooDeep");
+        assert_eq!(show("ans+1"), "NoAnswer");
+        assert_eq!(show("answer"), "Syntax");
+    }
+    #[test] fn ans_is_the_previous_result() {
+        let first = eval(b"2*(3+4)/5").unwrap();
+        let next = eval_with(b"ans*2 - ans", Some(first.scaled)).unwrap();
+        let mut o = [0; LINE_MAX]; let n = render(next, &mut o);
+        assert_eq!(&o[..n], b"= 2.8");
+        assert_eq!(eval_with(b"(ans)/3", Some(SCALE)).map(|v| v.inexact), Ok(true));
     }
 }
