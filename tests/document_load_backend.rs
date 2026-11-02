@@ -38,12 +38,14 @@ fn v4_get(id:u64)->Result<Entry,u32>{
 }
 static CREATE_RESULT:AtomicU64=AtomicU64::new(5);
 fn handle_diskfs_create(_:u64,_:u64,_:u64)->u64{CREATE_RESULT.load(Ordering::Relaxed)}
+static DELETE_RESULT:AtomicU64=AtomicU64::new(0);
+fn handle_diskfs_delete(_:u64,_:u64)->u64{DELETE_RESULT.load(Ordering::Relaxed)}
 struct DocumentGrowth;
 impl DocumentGrowth{
  fn new(_:usize,_:u64)->Result<Self,u32>{MODEL.lock().unwrap().as_mut().unwrap().growth+=1;Ok(Self)}
  fn step(&mut self,_:u64)->Result<bool,u32>{Ok(true)}fn cancel(&self){}
 }
-mod messages{pub const ERR_EXISTS:i64=-8;}
+mod messages{pub const ERR_EXISTS:i64=-8;pub const ERR_NOT_FOUND:i64=-3;pub const ERR_FULL:i64=-5;pub const ERR_PERM_DENIED:i64=-6;}
 pub struct DocumentBackend;
 struct DocumentIo{id:u8}
 impl document_journal::Io for DocumentIo{
@@ -100,4 +102,13 @@ fn setup(){
  CREATE_RESULT.store(messages::ERR_EXISTS as u64,Ordering::Relaxed);assert_eq!(b.create_new(name),Err(wire::EXISTS));
  for invalid in [0,1,2,15,u64::MAX]{CREATE_RESULT.store(invalid,Ordering::Relaxed);assert_eq!(b.create_new(name),Err(wire::IO));}
  assert_eq!(MODEL.lock().unwrap().as_ref().unwrap().writes,0);
+}
+
+#[test]
+fn delete_maps_storage_results_to_document_errors(){
+ let _g=TEST_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut b=DocumentBackend;
+ for(raw,want)in[(0u64,Ok(())),(messages::ERR_FULL as u64,Err(wire::BUSY)),(messages::ERR_PERM_DENIED as u64,Err(wire::DENIED)),(messages::ERR_NOT_FOUND as u64,Err(wire::STALE)),(-9i64 as u64,Err(wire::IO))]{
+  DELETE_RESULT.store(raw,Ordering::Relaxed);assert_eq!(b.delete(4),want);
+ }
+ DELETE_RESULT.store(0,Ordering::Relaxed);
 }

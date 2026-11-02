@@ -1926,6 +1926,17 @@ impl crate::document::Backend for DocumentBackend{
   Ok(())
  }
  fn identity(&mut self,id:u8)->Result<u32,u32>{use sex_pdx::document as w;if !(2..15).contains(&id){return Err(w::DENIED)}let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let e=v4_get(id as u64).map_err(|_|w::STALE)?;Ok(((id as u32+1)<<16)|e.gen as u32)}
+ fn delete(&mut self,id:u8)->Result<(),u32>{
+  use sex_pdx::document as w;
+  let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;
+  match handle_diskfs_delete(id as u64,va){
+   0=>Ok(()),
+   v if v==messages::ERR_FULL as u64=>Err(w::BUSY),
+   v if v==messages::ERR_PERM_DENIED as u64=>Err(w::DENIED),
+   v if v==messages::ERR_NOT_FOUND as u64=>Err(w::STALE),
+   _=>Err(w::IO),
+  }
+ }
  fn name(&mut self,id:u8)->Result<[u8;16],u32>{let e=v4_get(id as u64).map_err(|_|sex_pdx::document::STALE)?;let mut name=[0;16];name.copy_from_slice(&e.name[..16]);Ok(name)}
  fn create(&mut self,name:[u8;16])->Result<u8,u32>{use sex_pdx::document as w;let va=diskfs_bridge_get_buf_va();if va==0||va==u64::MAX{return Err(w::IO)}v4_ensure(va).map_err(|_|w::IO)?;let id=handle_diskfs_create(u64::from_le_bytes(name[..8].try_into().unwrap()),u64::from_le_bytes(name[8..].try_into().unwrap()),va);if !(3..15).contains(&id){return Err(w::IO)}Ok(id as u8)}
  fn create_new(&mut self,name:[u8;16])->Result<(u8,u32),u32>{

@@ -135,7 +135,7 @@ assert 'unsafe { workspace_refresh_poll(); shell_lifecycle_poll();' in s
 assert 'WORKSPACE_REFRESH_PENDING.iter().any(|p|*p)' in s
 assert 'if workspace_refresh_receive(&msg) { continue; }' in s
 q=Path('servers/quil/src/main.rs').read_text()
-assert q.index('DOCUMENT_WORKSPACE.changed();')>q.index('if event.outcome == document_exchange::Outcome::Saved {')
+saved=q.index('if event.outcome == document_exchange::Outcome::Saved {');assert q.index('DOCUMENT_WORKSPACE.changed();',saved)<q.index('} else if',saved)
 assert 'DOCUMENT_WORKSPACE.close();DOCUMENT_IO.close();' in q
 assert 'DOCUMENT_WORKSPACE.pending()' in q and 'DOCUMENT_WORKSPACE.poll(' in q
 PYWORKSPACE

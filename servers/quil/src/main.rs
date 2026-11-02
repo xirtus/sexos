@@ -132,6 +132,8 @@ static mut DOCUMENT_IO:document_exchange::Client=document_exchange::Client::new(
 static mut QUIL_REVISION:u64=0;
 /// Idle recovery drafts; see autosave.rs. Never touches the document itself.
 static mut QUIL_AUTOSAVE:autosave::Autosave=autosave::Autosave::new();
+/// Ctrl+D armed for (document, revision); a second Ctrl+D deletes it.
+static mut QUIL_DELETE_ARMED:Option<(u64,u64)>=None;
 // One incarnation owns its scratch and selection; no stack-sized client temporary.
 static mut QUIL_CLIPBOARD:sex_pdx::clipboard_client::Client=sex_pdx::clipboard_client::Client::new();
 static mut QUIL_SELECTION:sex_pdx::text_selection::Selection=sex_pdx::text_selection::Selection::new();
@@ -313,6 +315,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                     draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
                 },
                 0x1e if !QUIL_NAME_MODE=>{*palette_active=false;let _=QUIL_SELECTION.select_all(quil_source());QUIL_CURSOR_POS=QUIL_BUFFER_LEN;quil_selection_record();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
+                0x20 if !QUIL_NAME_MODE&&!*palette_active=>quil_delete_key(),
                 0x31=>document_action(sex_pdx::document_view::NEW,palette_active,selected_row),
                 0x18=>document_action(sex_pdx::document_view::OPEN,palette_active,selected_row),
                 0x1f=>document_action(if key.shift{sex_pdx::document_view::SAVE_AS}else{sex_pdx::document_view::SAVE},palette_active,selected_row),
@@ -420,6 +423,28 @@ fn document_save_start(create: bool) {
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
 }
+/// Ctrl+D: the first press asks, a second press on the same unchanged saved
+/// document deletes its object. The text stays in the buffer, unsaved.
+unsafe fn quil_delete_key() {
+    let id = QUIL_DOC_ID;
+    if !(3..15).contains(&id) {
+        QUIL_INPUT_NOTICE = Some(b"NOTHING SAVED TO DELETE");
+    } else if QUIL_DELETE_ARMED == Some((id, QUIL_REVISION)) {
+        QUIL_DELETE_ARMED = None;
+        if DOCUMENT_IO.delete(id as u8) {
+            QUIL_INPUT_NOTICE = Some(b"DELETING");
+            sex_pdx::serial_record!("[quil.document.begin] kind=delete object={}", id);
+        } else {
+            QUIL_INPUT_NOTICE = Some(b"CANNOT DELETE NOW");
+            sex_pdx::serial_record!("[quil.document.busy] kind=delete object={}", id);
+        }
+    } else {
+        QUIL_DELETE_ARMED = Some((id, QUIL_REVISION));
+        QUIL_INPUT_NOTICE = Some(b"DELETE FILE? CTRL D AGAIN");
+        sex_pdx::serial_record!("[quil.document.delete.ask] object={} revision={}", id, QUIL_REVISION);
+    }
+    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+}
 /// Start an idle recovery draft of the current buffer (see autosave.rs).
 unsafe fn autosave_start() {
     let name = QUIL_AUTOSAVE.name(&QUIL_DOC_TITLE);
@@ -489,6 +514,16 @@ fn document_event(event: document_exchange::Event, palette_active:&mut bool) {
                 sex_pdx::document::hash(&QUIL_BUFFER[..QUIL_BUFFER_LEN]),
                 QUIL_DOC_ID
             );
+        } else if event.outcome == document_exchange::Outcome::Deleted {
+            DOCUMENT_WORKSPACE.changed();
+            sex_pdx::serial_record!("[quil.document.deleted] object={} current={} text_kept={}",event.object,(QUIL_DOC_ID==event.object as u64) as u8,QUIL_BUFFER_LEN);
+            if QUIL_DOC_ID == event.object as u64 {
+                QUIL_DOC_ID = u64::MAX;
+                QUIL_DOC_TITLE = *b"UNTITLED\0\0\0\0\0\0\0\0";
+                quil_fresh_source();
+                QUIL_DIRTY = QUIL_BUFFER_LEN > 0;
+                QUIL_INPUT_NOTICE = Some(b"DELETED / TEXT KEPT UNSAVED");
+            }
         } else {
             sex_pdx::serial_record!("[quil.document.result] outcome={:?} error={} requested_revision={} revision={} buffer_retained=1",event.outcome,event.error,event.revision,QUIL_REVISION);
         }

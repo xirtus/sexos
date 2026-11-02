@@ -11,6 +11,9 @@ pub const WRITE: u8 = 7;
 pub const COMMIT: u8 = 8;
 pub const CREATE: u8 = 9;
 pub const ABORT: u8 = 10;
+/// Delete a workspace object the caller names by its current generation
+/// (a = generation). Object 2 and system slots are never deletable.
+pub const DELETE: u8 = 11;
 /// LOAD.b selects coherent transfer through an existing BOOT snapshot Region.
 pub const SNAPSHOT_MODE: u64 = 1;
 pub const MAX: usize = 12288;
@@ -50,7 +53,7 @@ impl Request {
             a,
             b,
         };
-        if r.seq == 0 || !(INFO..=ABORT).contains(&r.kind) {
+        if r.seq == 0 || !(INFO..=DELETE).contains(&r.kind) {
             return None;
         }
         Some(r)
