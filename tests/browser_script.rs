@@ -314,3 +314,9 @@ fn exponent_bitwise_logical_assignment_and_expression_statements() {
     assert_eq!(out("document.write(Number('0x10'), ' ', Number('0b101'), ' ', Number('inf'), ' ', Number('-Infinity'), ' ', Number(' 12 '), ' ', +'0o17', ' ', '3' * '4', ' ', Number('-0x10'))").unwrap(), "16 5 NaN -Infinity 12 15 12 NaN");
     assert_eq!(out("var r = (function (a) { return a * 2 })(4); var fs = [x => x + 1]; var mk = function () { return function (y) { return y * 3 } }; document.write(r, fs[0](1), (() => 'k')(), mk()(2))").unwrap(), "82k6");
 }
+
+#[test]
+fn calls_take_up_to_six_arguments() {
+    assert_eq!(out("function f(a, b, c, d, e, g) { return [a, b, c, d, e, g].join('') } var a = [1, 2, 3, 4, 5]; a.splice(1, 1, 'x', 'y', 'z'); document.write(f(1, 2, 3, 4, 5, 6), ' ', a, ' ', new Date(2024, 0, 2, 3, 4, 5).toISOString())").unwrap(), "123456 1,x,y,z,3,4,5 2024-01-02T03:04:05.000Z");
+    assert_eq!(out("function f() {} f(1, 2, 3, 4, 5, 6, 7)").err(), Some(Error::Limit));
+}

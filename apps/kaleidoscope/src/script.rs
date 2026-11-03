@@ -58,7 +58,7 @@ const ARRAYS: usize = 32;
 /// Objects and their properties (name in the arena, value), by reference.
 const OBJECTS: usize = 16;
 const PROPS: usize = 128;
-const PARAMS: usize = 4;
+const PARAMS: usize = 6;
 const NAME: usize = 16;
 // Nesting budget (expressions, statements, calls). Measured natively at 32
 // with fact(7): the Browser stack stays below its 46.7 KiB construction peak
@@ -1290,9 +1290,9 @@ impl<'a> Machine<'a> {
         Ok(n)
     }
     /// `( a, b, ... )`, at most four values.
-    fn arguments(&mut self) -> Result<([Value; 4], usize), Error> {
+    fn arguments(&mut self) -> Result<([Value; PARAMS], usize), Error> {
         self.expect(b'(')?;
-        let mut args = [Value::Undef; 4];
+        let mut args = [Value::Undef; PARAMS];
         let n = self.items(b')', &mut args)?;
         Ok((args, n))
     }

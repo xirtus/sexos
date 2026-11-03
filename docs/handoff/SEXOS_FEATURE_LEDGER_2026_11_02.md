@@ -29,7 +29,7 @@ objects with most standard methods, spread, destructuring, templates,
 `?.`, `??`, short-circuit `&& || ?:`, `Math`, `JSON.stringify/parse`,
 `Date` from given values only (no `new Date()`/`Date.now()`), URI
 encode/decode; output via `document.write`. Nesting is capped at 32,
-calls take at most 4 arguments.
+calls take at most 6 arguments.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
 image): `https_html_gate.py` (also bounds the Browser stack high water),
@@ -979,6 +979,18 @@ stack) and `chain` (952 B, every member method in one frame).
 script host tests 33 groups unchanged; sealed build and master gate GREEN;
 native HTML gate at both sizes with identical page output and Browser stack
 high water **46,752 bytes (was 51,472)**: scripts no longer set the peak.
+
+## M22. Script calls take up to 6 arguments (2026-11-03)
+
+- Functions, methods, constructors and built-ins now accept up to 6
+  arguments (was 4): e.g. `splice(i, n, a, b, c)`, `new Date(y, m, d, h,
+  mi, s)`. A 7th argument still refuses the script (`Limit`). Affordable
+  after M21's frame cut.
+
+**Evidence** (`docs/handoff/assets/script-six-arguments-2026-11-03/`):
+script host tests 34 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes with a 6-argument call (`... 00070074 ...`);
+Browser stack high water unchanged at 46,752 bytes.
 
 ## Release gates noted while doing F1–F2
 
