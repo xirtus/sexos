@@ -30,7 +30,7 @@ like JavaScript, strings and string methods, regular expressions
 `var` (function scoped) / `let`/`const`; functions with default, rest and
 destructured parameters, arrows, IIFEs, named function expressions,
 callbacks, closures (on `return`), `this`, `class ... extends` with
-`super`, `static`, `get`/`set`, `new`, `instanceof`, `try/catch/finally/
+`super`, `static`, fields and `#private` names, `get`/`set`, `new`, `instanceof`, `try/catch/finally/
 throw` and Error objects; arrays, objects, `Set`, `Map` with most standard
 methods; object-literal shorthand/methods/computed keys/spread;
 destructuring (nested, defaults, holes, rest); nested templates; `?.`,
@@ -1566,6 +1566,22 @@ Python gate unit suite has only its 7 pre-existing failures
 pass; sealed build and master gate GREEN; native HTML gate at both sizes
 follows a **15,630-byte** page (`source_bytes=15630 text_bytes=149`);
 native HTTPS document, asset, PNG and Browser reserve gates pass.
+
+## Q2. Script class fields, static fields, `#private` names (2026-11-03)
+
+- Instance fields (`count = 0;`, `y = this.x + 1`), set on each new
+  instance before its constructor runs, parent class first; static fields
+  (`static made = 0`, readable/writable as `C.made`, `C.made++`, inherited
+  by subclasses, initialized in order after the class exists).
+- `#name` is accepted as a member name; private fields and class methods
+  are no longer listed by `Object.keys/values/entries`, `for...in` or
+  `JSON.stringify` (methods were listed before: they live on each instance
+  here, on the prototype in JavaScript). Privacy itself is not enforced.
+
+**Evidence** (`docs/handoff/assets/script-class-fields-2026-11-03/`): script
+host tests 49 groups; sealed build and master gate GREEN; native HTML gate
+at both sizes (`... 1a2a36 ...`: `Base.count` incremented by three
+constructions).
 
 ## Release gates noted while doing F1–F2
 

@@ -166,7 +166,7 @@ struct Machine<'a> {
     /// Objects passed to `Object.freeze` (assignments to them are ignored).
     frozen: Vec<u8>,
     /// `class` declarations: name, constructor, methods, parent class, static methods.
-    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>, Vec<(&'a [u8], u8, bool)>)>,
+    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>, Vec<(&'a [u8], u8, bool)>, Vec<(&'a [u8], Option<Pos<'a>>)>, u8)>,
     /// `Set`/`Map` objects: (object, keys array, values array; a Set's
     /// values array is its keys array).
     collections: Vec<(u8, u8, u8)>,
@@ -271,8 +271,10 @@ impl<'a> Machine<'a> {
             if i >= s.len() { return Err(Error::Syntax); }
             self.at = i + 1;
             Tok::Str(&s[start..i])
-        } else if ident_start(c) {
+        } else if ident_start(c) || (c == b'#' && s.get(self.at + 1).is_some_and(|b| ident_start(*b))) {
+            // `#name` (a private class member) is an ordinary name here.
             let start = self.at;
+            if c == b'#' { self.at += 1; }
             while self.at < s.len() && (ident_start(s[self.at]) || s[self.at].is_ascii_digit()) { self.at += 1; }
             Tok::Ident(&s[start..self.at])
         } else if s[self.at..].starts_with(b"?.") && !s.get(self.at + 2).is_some_and(u8::is_ascii_digit) {
@@ -1287,7 +1289,49 @@ impl<'a> Machine<'a> {
         if let Some(p) = self.classes[k].3 { self.class_methods(p as usize, id)?; }
         for (name, f) in self.classes[k].2.clone() { self.set_prop(id, name, Value::Func(f))?; }
         for (name, f, setter) in self.classes[k].5.clone() { self.add_accessor(id, name, f, setter)?; }
+        // Instance fields, parent's first, initialized with `this` = the instance.
+        for (name, init) in self.classes[k].6.clone() {
+            let v = match init { Some(at) => self.eval_at(at, Value::Obj(id))?, None => Value::Undef };
+            self.set_prop(id, name, v)?;
+        }
         Ok(())
+    }
+    /// Evaluates the expression at `at` (a field initializer) with `this`.
+    fn eval_at(&mut self, at: Pos<'a>, this: Value) -> Result<Value, Error> {
+        let back = self.pos();
+        let saved = core::mem::replace(&mut self.this, this);
+        let live = core::mem::replace(&mut self.live, true);
+        self.restore(at);
+        let v = self.expr();
+        self.restore(back);
+        self.this = saved;
+        self.live = live;
+        v
+    }
+    /// A `#private` class field: not listed by keys/values/entries/JSON.
+    fn private_prop(&self, k: usize) -> bool { let (ns, nn, _) = self.props[k]; nn > 0 && self.arena[ns as usize] == b'#' }
+    /// Property `k` of object `id` is not listed: a `#private` field, or a
+    /// class method (in JavaScript those live on the prototype).
+    fn hidden_prop(&self, id: u8, k: usize) -> bool {
+        if self.private_prop(k) { return true; }
+        let (ns, nn, v) = self.props[k];
+        let Value::Func(f) = v else { return false };
+        let mut c = match self.made_by[id as usize] { m @ 1..=16 => Some(m as usize - 1), _ => None };
+        let name = &self.arena[ns as usize..ns as usize + nn as usize];
+        while let Some(i) = c {
+            if self.classes[i].2.iter().any(|m| m.0 == name && m.1 == f) { return true; }
+            c = self.classes[i].3.map(|p| p as usize);
+        }
+        false
+    }
+    /// The static-field object of class `name` holding `key` (or its own).
+    fn static_home(&self, name: &[u8], key: &[u8]) -> Option<u8> {
+        let mut k = self.classes.iter().position(|c| c.0 == name)?;
+        let own = self.classes[k].7;
+        loop {
+            if self.find_prop(self.classes[k].7, key).is_some() { return Some(self.classes[k].7); }
+            match self.classes[k].3 { Some(p) => k = p as usize, None => return Some(own) }
+        }
     }
     /// Runs the constructor of class `k` on `this`; a class without one
     /// passes its arguments to its parent's, as JavaScript does.
@@ -1768,7 +1812,7 @@ impl<'a> Machine<'a> {
                     let (ns, nn, value) = self.props[k];
                     // Like JavaScript: undefined and function members are left out,
                     // and a replacer list keeps only the keys it names.
-                    if matches!(value, Value::Undef | Value::Func(_)) { continue; }
+                    if matches!(value, Value::Undef | Value::Func(_)) || self.arena.get(ns as usize) == Some(&b'#') { continue; }
                     if let Some(keys) = &layout.keys { if !keys.iter().any(|k| k[..] == self.arena[ns as usize..ns as usize + nn as usize]) { continue; } }
                     if !first { into.push(b','); }
                     first = false;
@@ -2369,6 +2413,7 @@ impl<'a> Machine<'a> {
                 let (start, len, _) = self.objects[id as usize];
                 let mut items = Vec::new();
                 for k in 0..len as usize {
+                    if self.hidden_prop(id, start as usize + k) { continue; }
                     let (ns, nn, value) = self.props[start as usize + k];
                     items.push(if f == b"values" { value } else { self.new_array(&[Value::Str(ns, nn), value])? });
                 }
@@ -2390,7 +2435,7 @@ impl<'a> Machine<'a> {
             }
             (b"Object", b"keys", Value::Obj(id)) => {
                 let (start, len, _) = self.objects[id as usize];
-                let keys: Vec<Value> = (start as usize..start as usize + len as usize).map(|k| { let (ns, nn, _) = self.props[k]; Value::Str(ns, nn) }).collect();
+                let keys: Vec<Value> = (start as usize..start as usize + len as usize).filter(|&k| !self.hidden_prop(id, k)).map(|k| { let (ns, nn, _) = self.props[k]; Value::Str(ns, nn) }).collect();
                 self.new_array(&keys)
             }
             _ => Err(Error::Unsupported),
@@ -2433,6 +2478,12 @@ impl<'a> Machine<'a> {
         self.next()?;
         let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
+        if self.tok != Tok::Punct(b'(') {
+            // `C.x`: a static field (inherited ones too).
+            if !self.live { return Ok(Value::Undef); }
+            let home = self.static_home(name, m).ok_or(Error::Unsupported)?;
+            return Ok(self.get_prop(home, m));
+        }
         let mut args = [Value::Undef; PARAMS];
         let n = self.argument_list(&mut args)?;
         if !self.live { return Ok(Value::Undef); }
@@ -2943,8 +2994,11 @@ impl<'a> Machine<'a> {
         } else { None };
         self.expect(b'{')?;
         let (mut ctor, mut methods) = (None, Vec::new());
-        let (mut statics, mut accessors) = (Vec::new(), Vec::new());
+        let (mut statics, mut accessors, mut fields, mut static_fields) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        // Static fields live on an object of their own (`C.x`, `C.x = v`).
+        let static_obj = if run { self.new_object()? } else { 0 };
         while self.tok != Tok::Punct(b'}') {
+            if self.tok == Tok::Punct(b';') { self.next()?; continue; }
             let Tok::Ident(mut m) = self.tok else { return Err(Error::Syntax) };
             self.next()?;
             // `static name(...)`, `get name()`, `set name(v)` (methods may
@@ -2954,6 +3008,13 @@ impl<'a> Machine<'a> {
             let access = !fixed && matches!(m, b"get" | b"set") && matches!(self.tok, Tok::Ident(_));
             let setter = m == b"set";
             if access { let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) }; m = n; self.next()?; }
+            if !access && self.tok != Tok::Punct(b'(') {
+                // A field: `x = expr` / `x;` (per instance), `static x = expr`.
+                let init = if self.tok == Tok::Punct(b'=') { self.next()?; let at = self.pos(); self.only_if(false, |m| m.expr())?; Some(at) } else { None };
+                if run { if fixed { static_fields.push((m, init)); } else { fields.push((m, init)); } }
+                if self.tok == Tok::Punct(b';') { self.next()?; } else if !self.nl && self.tok != Tok::Punct(b'}') { return Err(Error::Syntax); }
+                continue;
+            }
             let at = self.pos();
             self.expect(b'(')?;
             self.skip_params()?;
@@ -2968,7 +3029,12 @@ impl<'a> Machine<'a> {
         self.next()?;
         if run {
             if self.classes.len() == 16 { return Err(Error::Limit); }
-            self.classes.push((name, ctor, methods, parent, statics, accessors));
+            self.classes.push((name, ctor, methods, parent, statics, accessors, fields, static_obj));
+            // Static fields in order, once the class exists (`static b = C.a + 1`).
+            for (m, init) in static_fields {
+                let v = match init { Some(at) => self.eval_at(at, Value::Obj(static_obj))?, None => Value::Undef };
+                self.set_prop(static_obj, m, v)?;
+            }
         }
         Ok(())
     }
@@ -3281,6 +3347,11 @@ impl<'a> Machine<'a> {
         let mut i = 0usize;
         loop {
             self.restore(body);
+            if let (Value::Obj(id), false, true) = (coll, of, run) {
+                // `for...in` skips private fields and class methods.
+                let (start, len, _) = self.objects[id as usize];
+                while i < len as usize && self.hidden_prop(id, start as usize + i) { i += 1; }
+            }
             let item = if !run || self.ret.is_some() { None } else {
                 match (coll, of) {
                     (Value::Arr(id), true) => { let (start, len, _) = self.arrays[id as usize]; (i < len as usize).then(|| self.elems[start as usize + i]) }
@@ -3315,7 +3386,13 @@ impl<'a> Machine<'a> {
     fn assignment(&mut self, run: bool) -> Result<Value, Error> {
         let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
-        let found = if name == b"this" { Some(self.this) } else { self.lookup(name) };
+        let mut found = if name == b"this" { Some(self.this) } else { self.lookup(name) };
+        // `C.x = v` / `C.count++`: a class's static fields.
+        if found.is_none() && self.tok == Tok::Punct(b'.') {
+            if let Some(Tok::Ident(key)) = { let at = self.pos(); self.next()?; let t = self.tok; self.restore(at); Some(t) } {
+                found = self.static_home(name, key).map(Value::Obj);
+            }
+        }
         let Some(old) = found.or((self.skim || !run).then_some(Value::Undef)) else { return Err(Error::Unsupported) };
         if !matches!(self.tok, Tok::Punct(b'.' | b'[')) {
             let v = self.update(old)?;

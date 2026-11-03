@@ -445,3 +445,10 @@ fn elementary_functions_stay_within_a_few_ulps_of_std() {
     assert_eq!(fmath::exp(1000.0), f64::INFINITY);
     assert_eq!(out("document.write(Math.round(Math.sin(Math.PI / 6) * 1e6) / 1e6, ' ', Math.log(Math.E), ' ', Math.log10(1000), ' ', Math.log2(8), ' ', Math.cbrt(27), ' ', Math.hypot(3, 4), ' ', Math.atan2(1, 1) * 4 === Math.PI, ' ', Math.exp(0), ' ', Math.cos(0))").unwrap(), "0.5 1 3 3 3 5 true 1 1");
 }
+
+#[test]
+fn class_fields_static_fields_and_private_names() {
+    assert_eq!(out("class Counter { count = 0; #step = 2; static made = 0; constructor() { Counter.made++ } inc() { this.count += this.#step; return this } } var a = new Counter(); a.inc().inc(); new Counter(); document.write(a.count, ' ', Counter.made, ' ', JSON.stringify(a), Object.keys(a))").unwrap(), "4 2 {\"count\":4}count");
+    assert_eq!(out("class P { x = 1; y = this.x + 1 } class Q extends P { z = this.y * 10; static label = 'q' } class S { static a = 1; static b = S.a + 1; static c } var q = new Q(); document.write(q.x, q.y, q.z, Q.label, S.b, S.c)").unwrap(), "1220q2undefined");
+    assert_eq!(out("class C { a = 1; #b = 2; m() {} } var c = new C(); c.extra = () => 0; var t = ''; for (var k in c) t += k; document.write(Object.keys(c), ' ', t)").unwrap(), "a,extra aextra", "methods and #private fields are not listed");
+}
