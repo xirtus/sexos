@@ -42,8 +42,10 @@ const OBJECTS: usize = 16;
 const PROPS: usize = 256;
 const PARAMS: usize = 4;
 const NAME: usize = 16;
-// Each nesting level costs ~4 stack frames on the Browser main task.
-const MAX_DEPTH: u8 = 12;
+// Nesting budget (expressions, statements, calls). Measured natively at 32
+// with fact(7): the Browser stack stays below its 46.7 KiB construction peak
+// (feature ledger F30).
+const MAX_DEPTH: u8 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Unsupported, Syntax, Limit }

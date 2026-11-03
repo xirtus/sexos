@@ -26,7 +26,7 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b"<p><script>var t = 'sexos'; if (t.length === 5) { document.write(t.toUpperCase(), ' ', Math.max(2, 7) > 5 ? 'ok' : 'no') } else document.write('bad')</script></p>"
  b'<p>Press <kbd>W</kbd> for this <strong>page</strong>, see <code>html_text.rs</code>.</p>'
  b"<p><script>function sq(x) { return x * x }\nvar s = 0; for (var i = 1; i <= 200; i++) s += i; var n = 3; while (n > 0) { document.write(n, ' '); n-- } document.write('sum ', s, ' sq ', sq(12))</script></p>"
- b"<p><script>function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) }\ndocument.write('deep ', ((((((((((7)))))))))), ' ', fact(2))</script></p>"
+ b"<p><script>function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) }\ndocument.write('deep ', ((((((((((7)))))))))), ' ', fact(7))</script></p>"
  b"<p><script>var sq = []; for (var i = 1; i <= 6; i++) sq.push(i * i); document.write('squares ', sq.join(' '), ' last ', sq[sq.length - 1])</script></p>"
  b"<p><script>var parts = 'held, never ambient'.split(', '); document.write(parts.length, ' ', parts[1].toUpperCase(), ' at ', 'SexOS'.indexOf('OS'), ' ', parseInt('42px') + 1)</script></p>"
  b"<p><script>var odd = []; for (var i = 0; i < 20; i++) { if (i % 2 === 0) continue; if (i > 9) break; odd.push(i) } document.write(`odd ${odd.join('+')} = ${1 + 3 + 5 + 7 + 9}`)</script></p>"
@@ -166,7 +166,7 @@ def main():
   reader('html-back',text,REQUEST,b'/page.html')
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] depth=0 network=0',b);time.sleep(1)
   if len(peer.rows)!=3:raise RuntimeError('back at the first page caused network work')
-  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 2' in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'odd 1+3+5+7+9 = 25' in text and b'{"name":"Quil","saves":3,"kind":"editor"} keys 3' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
+  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 5040' in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'odd 1+3+5+7+9 = 25' in text and b'{"name":"Quil","saves":3,"kind":"editor"} keys 3' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
  except Exception as exc:failure=repr(exc)
  finally:
   peer.close()

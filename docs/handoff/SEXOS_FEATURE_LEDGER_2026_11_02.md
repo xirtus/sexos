@@ -12,7 +12,7 @@ the saved file. Spindle: Shift works; `calc 2*(3+4)/5`, `calc ans*10`,
 engine): variables, numbers printed like JavaScript, strings and string
 methods, booleans, comparisons, `if/else`, `while`/`for` with
 `break`/`continue` under a 10,000-step budget, functions (declared before
-use, shallow recursion), arrays, objects, templates, `Math`, `JSON.stringify`,
+use, recursion to nesting 32), arrays, objects, templates, `Math`, `JSON.stringify`,
 `Object.keys`, `String/Number/parseInt`, output via `document.write`. No DOM,
 events, timers, network, storage, clock or entropy names exist in it.
 
@@ -26,7 +26,7 @@ and PNG tests run in `sexnet_jobs_host_gate.sh`.
 Display text delivery; Display applies app paints late (screenshots must wait
 for the app's `applied` receipt) and Spindle's display stayed pending in the
 calc gate; Browser stack headroom is now measured (F29: 46.7 KiB of 64 KiB);
-script recursion is shallow for the same stack reason; autosave failure
+script recursion is capped at nesting 32 (about `fact(7)`); autosave failure
 fences document I/O like any uncertain save; no draft cleanup; images are
 limited to 48x48.
 
@@ -531,6 +531,15 @@ host gates and Python suite (1132) OK after keeping the identity-first
 gate GREEN; native HTML gate at both sizes now records and bounds the stack
 high water (fails above 60 KiB); regressions PNG, QOI asset, `/welcome`
 document and connected desktop gates pass.
+
+## F30. Deeper script recursion (2026-11-03)
+
+With the stack measured (F29), the script nesting budget went from 12 to 32:
+`fact(7)` now works (was `fact(2)`), `fact(30)` is still refused. Native HTML
+gate at both sizes runs `fact(7)` and depth-10 parentheses; the stack high
+water stays at the 46,752-byte construction peak (the script used about
+3.7 KiB less of the painted region than before) and there are no pager
+rejections. Evidence: `docs/handoff/assets/script-recursion-depth-2026-11-03/`.
 
 ## Release gates noted while doing F1–F2
 

@@ -85,7 +85,7 @@ fn functions_with_parameters_and_return() {
     assert_eq!(out("function sign(n) { if (n < 0) return -1; if (n > 0) return 1; return 0 } document.write(sign(-5), sign(0), sign(9))").unwrap(), "-101");
     assert_eq!(out("function sum(a, b, c) { var t = a + b; return t + (c === undefined ? 0 : c) } document.write(sum(1, 2))").err(), Some(Error::Unsupported), "no undefined name");
     assert_eq!(out("function noop() {} document.write(noop())").unwrap(), "undefined");
-    assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(2))").unwrap(), "2");
+    assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(7))").unwrap(), "5040");
     assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(30))").err(), Some(Error::Limit), "recursion bounded by depth");
     assert_eq!(out("document.write(later(1)); function later(x) { return x }").err(), Some(Error::Unsupported), "declare before use");
     assert_eq!(out("function f() { while (true) {} } f()").err(), Some(Error::Limit));
