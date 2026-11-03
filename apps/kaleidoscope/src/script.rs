@@ -11,6 +11,8 @@
 //! literals, variables,
 //! `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push(v)`, `.join(s)`),
+//! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`),
+//! `JSON.stringify(v)`,
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
 //! `.indexOf(s)`, `.charAt(i)`, `.slice(a, b)`, `.substring(a, b)`,
 //! `.split(s)`), `String(x)`, `Number(x)`, `parseInt(s)` and
@@ -35,6 +37,9 @@ const FUNCS: usize = 8;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
 const ELEMS: usize = 512;
 const ARRAYS: usize = 32;
+/// Objects and their properties (name in the arena, value), by reference.
+const OBJECTS: usize = 16;
+const PROPS: usize = 256;
 const PARAMS: usize = 4;
 const NAME: usize = 16;
 // Each nesting level costs ~4 stack frames on the Browser main task.
@@ -44,7 +49,7 @@ const MAX_DEPTH: u8 = 12;
 pub enum Error { Unsupported, Syntax, Limit }
 
 #[derive(Clone, Copy)]
-enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Arr(u8) }
+enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Arr(u8), Obj(u8) }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tok<'a> { Num(f64), Str(&'a [u8]), Template(&'a [u8]), Ident(&'a [u8]), Punct(u8), End }
@@ -78,6 +83,10 @@ struct Machine<'a> {
     /// (start, len, cap) of each array inside `elems`.
     arrays: [(u16, u16, u16); ARRAYS],
     narrays: usize,
+    props: Vec<(u16, u16, Value)>,
+    /// (start, len, cap) of each object inside `props`.
+    objects: [(u16, u16, u16); OBJECTS],
+    nobjects: usize,
 }
 
 /// A saved lexer position, to re-run a loop condition or body.
@@ -217,16 +226,16 @@ impl<'a> Machine<'a> {
         self.store(&buf.b[..n])
     }
     fn to_text(&mut self, v: Value) -> Result<Value, Error> {
-        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), Value::Undef => self.store(b"undefined"), Value::Arr(id) => self.join(id, b","), s => Ok(s) }
+        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), Value::Undef => self.store(b"undefined"), Value::Arr(id) => self.join(id, b","), Value::Obj(_) => self.store(b"[object Object]"), s => Ok(s) }
     }
     fn truthy(&self, v: Value) -> bool {
-        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, Value::Undef => false, Value::Arr(_) => true, s => !self.text(s).is_empty() }
+        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, Value::Undef => false, Value::Arr(_) | Value::Obj(_) => true, s => !self.text(s).is_empty() }
     }
     fn to_number(&self, v: Value) -> f64 {
         match v {
             Value::Num(x) => x,
             Value::Bool(b) => b as u8 as f64,
-            Value::Undef | Value::Arr(_) => f64::NAN,
+            Value::Undef | Value::Arr(_) | Value::Obj(_) => f64::NAN,
             s => {
                 let t = self.text(s);
                 let t = core::str::from_utf8(t).unwrap_or("x").trim();
@@ -320,14 +329,15 @@ impl<'a> Machine<'a> {
                 self.next()?;
                 let i = self.expr()?;
                 self.expect(b']')?;
-                let i = self.to_number(i);
-                v = self.index(v, i)?;
+                v = if let Value::Obj(id) = v { let k = self.to_text(i)?; let key = self.text(k).to_vec(); self.get_prop(id, &key) }
+                    else { let i = self.to_number(i); self.index(v, i)? };
                 continue;
             }
             if self.tok != Tok::Punct(b'.') { return Ok(v); }
             self.next()?;
             let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
             self.next()?;
+            if let Value::Obj(id) = v { v = self.get_prop(id, name); continue; }
             if let Value::Arr(id) = v {
                 let (_, len, _) = self.arrays[id as usize];
                 v = match name {
@@ -476,6 +486,85 @@ impl<'a> Machine<'a> {
             _ => return Err(Error::Unsupported),
         })
     }
+    fn find_prop(&self, id: u8, key: &[u8]) -> Option<usize> {
+        let (start, len, _) = self.objects[id as usize];
+        (start as usize..start as usize + len as usize).find(|&k| { let (s0, n, _) = self.props[k]; &self.arena[s0 as usize..s0 as usize + n as usize] == key })
+    }
+    fn get_prop(&self, id: u8, key: &[u8]) -> Value {
+        self.find_prop(id, key).map_or(Value::Undef, |k| self.props[k].2)
+    }
+    fn set_prop(&mut self, id: u8, key: &[u8], v: Value) -> Result<(), Error> {
+        if let Some(k) = self.find_prop(id, key) { self.props[k].2 = v; return Ok(()); }
+        let name = self.store(key)?;
+        let Value::Str(ns, nn) = name else { return Err(Error::Syntax) };
+        let (start, len, cap) = self.objects[id as usize];
+        if len == cap {
+            let cap2 = (cap as usize * 2).max(4);
+            let at = self.props.len();
+            if at + cap2 > PROPS { return Err(Error::Limit); }
+            self.props.extend_from_within(start as usize..start as usize + len as usize);
+            self.props.resize(at + cap2, (0, 0, Value::Undef));
+            self.objects[id as usize] = (at as u16, len, cap2 as u16);
+        }
+        let (start, len, cap) = self.objects[id as usize];
+        self.props[start as usize + len as usize] = (ns, nn, v);
+        self.objects[id as usize] = (start, len + 1, cap);
+        Ok(())
+    }
+    fn new_object(&mut self) -> Result<u8, Error> {
+        if self.nobjects == OBJECTS || self.props.len() + 4 > PROPS { return Err(Error::Limit); }
+        let at = self.props.len();
+        self.props.resize(at + 4, (0, 0, Value::Undef));
+        self.objects[self.nobjects] = (at as u16, 0, 4);
+        self.nobjects += 1;
+        Ok((self.nobjects - 1) as u8)
+    }
+    /// JSON text of a value; undefined members are left out like JavaScript.
+    fn json(&mut self, v: Value, into: &mut Vec<u8>) -> Result<(), Error> {
+        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        if into.len() > ARENA { return Err(Error::Limit); }
+        self.depth += 1;
+        match v {
+            Value::Num(x) if x.is_nan() || x.is_infinite() => into.extend_from_slice(b"null"),
+            Value::Str(..) => self.quote(v, into),
+            Value::Arr(id) => {
+                into.push(b'[');
+                let (start, len, _) = self.arrays[id as usize];
+                for k in 0..len as usize {
+                    if k > 0 { into.push(b','); }
+                    let e = self.elems[start as usize + k];
+                    if matches!(e, Value::Undef) { into.extend_from_slice(b"null"); } else { self.json(e, into)?; }
+                }
+                into.push(b']');
+            }
+            Value::Obj(id) => {
+                into.push(b'{');
+                let (start, len, _) = self.objects[id as usize];
+                let mut first = true;
+                for k in start as usize..start as usize + len as usize {
+                    let (ns, nn, value) = self.props[k];
+                    if matches!(value, Value::Undef) { continue; }
+                    if !first { into.push(b','); }
+                    first = false;
+                    self.quote(Value::Str(ns, nn), into);
+                    into.push(b':');
+                    self.json(value, into)?;
+                }
+                into.push(b'}');
+            }
+            Value::Undef => into.extend_from_slice(b"null"),
+            other => { let t = self.to_text(other)?; into.extend_from_slice(self.text(t)); }
+        }
+        self.depth -= 1;
+        Ok(())
+    }
+    fn quote(&self, v: Value, into: &mut Vec<u8>) {
+        into.push(b'"');
+        for &b in self.text(v) {
+            match b { b'"' => into.extend_from_slice(b"\\\""), b'\\' => into.extend_from_slice(b"\\\\"), b'\n' => into.extend_from_slice(b"\\n"), b'\t' => into.extend_from_slice(b"\\t"), 0..=31 => into.extend_from_slice(b"?"), _ => into.push(b) }
+        }
+        into.push(b'"');
+    }
     fn new_array(&mut self, items: &[Value]) -> Result<Value, Error> {
         let cap = items.len().max(4);
         if self.narrays == ARRAYS || self.elems.len() + cap > ELEMS { return Err(Error::Limit); }
@@ -561,6 +650,21 @@ impl<'a> Machine<'a> {
             Tok::Str(raw) => { self.next()?; self.literal(raw) }
             Tok::Template(raw) => { self.next()?; self.template(raw) }
             Tok::Punct(b'(') => { self.next()?; let v = self.expr()?; self.expect(b')')?; Ok(v) }
+            Tok::Punct(b'{') => {
+                self.next()?;
+                let id = self.new_object()?;
+                while self.tok != Tok::Punct(b'}') {
+                    let key: &[u8] = match self.tok { Tok::Ident(k) | Tok::Str(k) => k, _ => return Err(Error::Syntax) };
+                    self.next()?;
+                    self.expect(b':')?;
+                    let v = self.expr()?;
+                    self.set_prop(id, key, v)?;
+                    if self.tok != Tok::Punct(b',') { break; }
+                    self.next()?;
+                }
+                self.expect(b'}')?;
+                Ok(Value::Obj(id))
+            }
             Tok::Punct(b'[') => {
                 self.next()?;
                 let mut items = [Value::Undef; 16];
@@ -585,6 +689,25 @@ impl<'a> Machine<'a> {
                     b"true" => Ok(Value::Bool(true)),
                     b"false" => Ok(Value::Bool(false)),
                     b"Math" => self.math(),
+                    b"JSON" | b"Object" => {
+                        self.expect(b'.')?;
+                        let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
+                        self.next()?;
+                        self.expect(b'(')?;
+                        let v = self.expr()?;
+                        self.expect(b')')?;
+                        match (name, f, v) {
+                            (b"JSON", b"stringify", v) => { let mut j = Vec::new(); self.json(v, &mut j)?; self.store(&j) }
+                            (b"Object", b"keys", Value::Obj(id)) => {
+                                let (start, len, _) = self.objects[id as usize];
+                                let mut keys = [Value::Undef; 16];
+                                if len as usize > keys.len() { return Err(Error::Limit); }
+                                for (k, slot) in (start as usize..start as usize + len as usize).zip(keys.iter_mut()) { let (ns, nn, _) = self.props[k]; *slot = Value::Str(ns, nn); }
+                                self.new_array(&keys[..len as usize])
+                            }
+                            _ => Err(Error::Unsupported),
+                        }
+                    }
                     b"String" | b"Number" | b"parseInt" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
                     _ => self.lookup(name).or(self.skim.then_some(Value::Undef)).ok_or(Error::Unsupported),
@@ -707,7 +830,7 @@ impl<'a> Machine<'a> {
             Tok::Ident(b"var" | b"let" | b"const") => {
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
+                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
                 self.next()?;
                 self.expect(b'=')?;
                 let v = self.expr()?;
@@ -807,7 +930,12 @@ impl<'a> Machine<'a> {
                 // `f(...)` as a statement calls for its effects.
                 let at = self.pos();
                 self.next()?;
-                let call = matches!(self.tok, Tok::Punct(b'(' | b'.'));
+                let mut call = matches!(self.tok, Tok::Punct(b'(' | b'.'));
+                if self.tok == Tok::Punct(b'.') {
+                    // `o.key = v` assigns; `o.key(...)` calls.
+                    self.next()?;
+                    if matches!(self.tok, Tok::Ident(_)) { self.next()?; call = !matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'I' | b'D')); }
+                }
                 self.restore(at);
                 if call { self.expr()?; } else { self.assignment(run)?; }
                 self.end()
@@ -820,12 +948,29 @@ impl<'a> Machine<'a> {
         let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
         let Some(old) = self.lookup(name).or(self.skim.then_some(Value::Undef)) else { return Err(Error::Unsupported) };
+        if self.tok == Tok::Punct(b'.') {
+            self.next()?;
+            let Tok::Ident(key) = self.tok else { return Err(Error::Syntax) };
+            self.next()?;
+            let id = match old { Value::Obj(id) => Some(id), _ if !run => None, _ => return Err(Error::Unsupported) };
+            let current = id.map_or(Value::Undef, |id| self.get_prop(id, key));
+            let v = self.update(current)?;
+            if let (true, Some(id)) = (run, id) { self.set_prop(id, key, v)?; }
+            return Ok(());
+        }
         if self.tok == Tok::Punct(b'[') {
             self.next()?;
             let i = self.expr()?;
             self.expect(b']')?;
             self.expect(b'=')?;
             let v = self.expr()?;
+            if run && matches!(old, Value::Obj(_)) {
+                let Value::Obj(id) = old else { unreachable!() };
+                let k = self.to_text(i)?;
+                let key = self.text(k).to_vec();
+                self.set_prop(id, &key, v)?;
+                return Ok(());
+            }
             if run {
                 let (Value::Arr(id), i) = (old, self.to_number(i)) else { return Err(Error::Unsupported) };
                 let (start, len, _) = self.arrays[id as usize];
@@ -836,14 +981,18 @@ impl<'a> Machine<'a> {
             }
             return Ok(());
         }
-        let v = match self.tok {
+        let v = self.update(old)?;
+        if run { self.assign(name, v, false)?; }
+        Ok(())
+    }
+    /// The new value for `= e`, `+= e`, `-= e`, `++` or `--` applied to `old`.
+    fn update(&mut self, old: Value) -> Result<Value, Error> {
+        Ok(match self.tok {
             Tok::Punct(b'=') => { self.next()?; self.expr()? }
             Tok::Punct(op @ (b'P' | b'M')) => { self.next()?; let r = self.expr()?; self.apply(if op == b'P' { b'+' } else { b'-' }, old, r)? }
             Tok::Punct(op @ (b'I' | b'D')) => { self.next()?; Value::Num(self.to_number(old) + if op == b'I' { 1.0 } else { -1.0 }) }
             _ => return Err(Error::Syntax),
-        };
-        if run { self.assign(name, v, false)?; }
-        Ok(())
+        })
     }
     fn pos(&self) -> Pos<'a> { Pos { at: self.at, tok: self.tok, nl: self.nl } }
     fn restore(&mut self, p: Pos<'a>) { self.at = p.at; self.tok = p.tok; self.nl = p.nl; }
@@ -919,9 +1068,11 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     out.try_reserve_exact(MAX_OUTPUT).map_err(|_| Error::Limit)?;
     let mut elems = Vec::new();
     elems.try_reserve_exact(ELEMS).map_err(|_| Error::Limit)?;
+    let mut props = Vec::new();
+    props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], nvars: 0, out, depth: 0, steps: 0,
         funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, loops: 0,
-        elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0 };
+        elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }
     Ok(m.out)

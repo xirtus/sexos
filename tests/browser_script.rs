@@ -131,3 +131,15 @@ fn break_continue_and_templates() {
     assert_eq!(out("document.write(`${'a' + `b`}`)").err().is_some(), true, "no nested templates");
     assert_eq!(out("document.write(`${1 + }`)").err(), Some(Error::Syntax));
 }
+
+#[test]
+fn objects_keys_and_json() {
+    assert_eq!(out("var o = {name: 'Quil', 'ver': 3}; o.ver = o.ver + 1; o['kind'] = 'editor'; document.write(o.name, ' ', o.ver, ' ', o.kind, ' ', o.none, ' ', o)").unwrap(), "Quil 4 editor undefined [object Object]");
+    assert_eq!(out("var o = {a: 1, b: [1, 'x', true], c: {d: \"q\\\"\"}, e: undefined_name}").err(), Some(Error::Unsupported));
+    assert_eq!(out("var o = {a: 1, b: [1, 'x', true], c: {d: 'q\"'}}; document.write(JSON.stringify(o), ' ', Object.keys(o).join('|'), ' ', JSON.stringify([1/0, 'a\\nb']))").unwrap(),
+        "{\"a\":1,\"b\":[1,\"x\",true],\"c\":{\"d\":\"q\\\"\"}} a|b|c [null,\"a\\nb\"]");
+    assert_eq!(out("var p = {}; var q = p; q.x = 5; document.write(p.x)").unwrap(), "5", "objects by reference");
+    assert_eq!(out("var o = {}; o.self = o; JSON.stringify(o)").err(), Some(Error::Limit));
+    assert_eq!(out("var n = 1; n.x = 2").err(), Some(Error::Unsupported));
+    assert_eq!(out("var c = {n: 1}; c.n++; c.n += 10; c.n--; c.m = 'a'; c.m += 'b'; document.write(c.n, c.m)").unwrap(), "11ab");
+}

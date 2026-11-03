@@ -456,6 +456,23 @@ GREEN; native HTML gate at both sizes with a seventh page script
 (`odd 1+3+5+7+9 = 25` via continue/break/template); native calc gate at
 both sizes incl. `calc sqrt(2)`.
 
+## F27-F28. Script objects and JSON (2026-11-03)
+
+- **F27 objects.** `{a: 1, 'b': x}` literals, `o.a`, `o[key]`, `o.a = v`
+  (also `+=`, `-=`, `++`, `--`), `o[key] = v`, `Object.keys(o)`; objects are
+  references (16 objects, 256 properties in a fallible heap pool); missing
+  properties read as `undefined`.
+- **F28 JSON.** `JSON.stringify(v)` for numbers, strings (escaped),
+  booleans, arrays and objects; `undefined` members are left out, `NaN` and
+  infinities print `null`, a self-containing object stops at the depth
+  budget with a refusal.
+
+**Evidence** (`docs/handoff/assets/script-objects-json-2026-11-03/`): script
+host tests 12 groups; sealed build and master gate GREEN; native HTML gate
+at both sizes with an eighth page script writing
+`{"name":"Quil","saves":3,"kind":"editor"} keys 3` (`scripts_run=8`), no
+pager rejections.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
