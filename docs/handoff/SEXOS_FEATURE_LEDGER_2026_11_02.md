@@ -39,8 +39,9 @@ expressions, logical/compound assignment to any member chain, `++`/`--`;
 `Math`, `JSON.stringify` (replacer keys, indent) / `parse`, `Date` from
 given values only, URI encode/decode, `toPrecision`/`toLocaleString`;
 output via `document.write`. Bounds: nesting 64 plus a stack floor 10 KiB
-above the Browser stack bottom, 6 arguments per call, 32 variables, 16
-functions, 32 closures, 32 arrays, 16 objects, 16 collections.
+above the Browser stack bottom, 50,000 steps, 16 KiB source, 6 arguments
+per call, 48 variables, 32 functions, 64 closures, 128 arrays (512
+elements), 64 objects (256 properties), 32 collections.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
 image): `https_html_gate.py` (also bounds the Browser stack high water,
