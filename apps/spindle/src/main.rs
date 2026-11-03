@@ -774,6 +774,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc <expr>  exact + - * / % ** sqrt abs min max round floor ceil ans");
             sb.push(b"  calc x = 2   name a value (up to 8)");
             sb.push(b"  calc 255 in hex   also in bin / in oct");
+            sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
@@ -910,7 +911,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         calc_command::Error::Overflow => b"calc: number too large",
                         calc_command::Error::TooDeep => b"calc: nested too deeply",
                         calc_command::Error::NoAnswer => b"calc: no previous answer (ans)",
-                        calc_command::Error::Exponent => b"calc: ** needs a whole exponent up to 64",
+                        calc_command::Error::Exponent => b"calc: ** whole exponents go up to 64",
                         calc_command::Error::Domain => b"calc: square root of a negative number",
                         calc_command::Error::Unknown => b"calc: unknown name (set one with  calc x = 2)",
                         calc_command::Error::NotWhole => b"calc: only whole results show in hex/bin/oct",

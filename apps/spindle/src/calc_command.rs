@@ -4,7 +4,9 @@
 //! `ans` is the previous successful result in this Spindle session.
 //! `**` raises to a whole power up to 64; `sqrt(x)` is the square root;
 //! `0x..`/`0b..` whole numbers (and `<expr> in hex|bin|oct` to show a whole result in that base); `abs min max round floor ceil` work on the exact values; `pi` and `e`
-//! are 9-place constants (results using them are marked `~`).
+//! are 9-place constants (results using them are marked `~`); `exp ln log sin
+//! cos tan` and fractional powers (`2**0.5`) are computed at 18 places with
+//! integer arithmetic and shown to 9 (`~`).
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
 //! Parsing is recursive descent with a depth bound; every operation is
@@ -67,7 +69,14 @@ impl Parser<'_> {
         if !(self.peek() == Some(b'*') && self.s[self.at..].starts_with(b"**")) { return Ok(base); }
         self.at += 2;
         let e = self.guard(|p| p.unary())?;
-        if e % SCALE != 0 || (e / SCALE).abs() > 64 { return Err(Error::Exponent); }
+        if e % SCALE != 0 {
+            // A fractional power of a positive base: exp(e * ln(base)).
+            if base <= 0 { return Err(Error::Domain); }
+            self.inexact = true;
+            let l = ln_w(base)?;
+            return exp_w(l.checked_mul(e).ok_or(Error::Overflow)? / SCALE);
+        }
+        if (e / SCALE).abs() > 64 { return Err(Error::Exponent); }
         let n = e / SCALE;
         let mut v = SCALE;
         for _ in 0..n.abs() { v = self.mul(v, base)?; }
@@ -132,6 +141,27 @@ impl Parser<'_> {
                 if r * r != n { self.inexact = true; }
                 Ok(r as i128)
             }
+            Some(b'e' | b'l' | b's' | b'c' | b't') if [&b"exp("[..], b"ln(", b"log(", b"sin(", b"cos(", b"tan("].iter().any(|f| self.s[self.at..].starts_with(f)) => {
+                let name_len = self.s[self.at..].iter().position(|&c| c == b'(').unwrap_or(0);
+                let name = &self.s[self.at..self.at + name_len];
+                self.at += name_len;
+                let v = self.atom()?;
+                // Exact only at the trivial points (exp 0, ln 1, sin/tan 0, cos 0).
+                let trivial = match name { b"ln" | b"log" => v == SCALE, _ => v == 0 };
+                if !trivial { self.inexact = true; }
+                match name {
+                    b"exp" => exp_w(v.checked_mul(SCALE).ok_or(Error::Overflow)?),
+                    b"ln" => Ok(to_scale(ln_w(v)?)),
+                    b"log" => Ok(to_scale(ln_w(v)? * W / LN10_W)),
+                    b"sin" => Ok(to_scale(sin_cos_w(v)?.0)),
+                    b"cos" => Ok(to_scale(sin_cos_w(v)?.1)),
+                    _ => {
+                        let (s, c) = sin_cos_w(v)?;
+                        if c.abs() < 1_000 { return Err(Error::Domain); }
+                        Ok(to_scale(s.checked_mul(W).ok_or(Error::Overflow)? / c))
+                    }
+                }
+            }
             Some(b'p' | b'e') if [&b"pi"[..], b"e"].iter().any(|k| self.s[self.at..].starts_with(k) && !self.s.get(self.at + k.len()).is_some_and(u8::is_ascii_alphanumeric)) => {
                 // Constants to 9 places; any use makes the answer approximate.
                 let pi = self.s[self.at..].starts_with(b"pi");
@@ -179,6 +209,57 @@ impl Parser<'_> {
         if digits == 0 { return Err(Error::Syntax); }
         whole.checked_mul(SCALE).and_then(|w| w.checked_add(frac * 10i128.pow(9 - places))).ok_or(Error::Overflow)
     }
+}
+
+// Transcendental functions work at 18 decimal places (W) and round to the
+// 9 shown; no floats are used.
+const W: i128 = 1_000_000_000_000_000_000;
+const LN2_W: i128 = 693_147_180_559_945_309;
+const LN10_W: i128 = 2_302_585_092_994_045_684;
+const PI_W: i128 = 3_141_592_653_589_793_238;
+/// A W-scaled value rounded (half away from zero) to the 9-place scale.
+fn to_scale(w: i128) -> i128 { let h = (W / SCALE) / 2; if w < 0 { -((-w + h) / (W / SCALE)) } else { (w + h) / (W / SCALE) } }
+/// e^x for a W-scaled x, as a 9-place value.
+fn exp_w(x: i128) -> Result<i128, Error> {
+    if x > 88 * W { return Err(Error::Overflow); }
+    if x < -30 * W { return Ok(0); }
+    // x = k ln2 + r with |r| <= ln2/2, then a Taylor series for e^r.
+    let k = (if x < 0 { x - LN2_W / 2 } else { x + LN2_W / 2 }) / LN2_W;
+    let r = x - k * LN2_W;
+    let (mut term, mut sum, mut i) = (W, W, 1);
+    while term != 0 && i < 60 { term = term * r / W / i; sum += term; i += 1; }
+    let v = to_scale(sum);
+    if k >= 0 { v.checked_mul(1i128 << k).ok_or(Error::Overflow) } else { Ok(if -k >= 127 { 0 } else { (v + (1 << (-k - 1))) >> -k }) }
+}
+/// ln(x) for a positive 9-place x, W-scaled.
+fn ln_w(x: i128) -> Result<i128, Error> {
+    if x <= 0 { return Err(Error::Domain); }
+    // x = m 2^k with m in [1, 2): ln m = 2 atanh((m - 1) / (m + 1)).
+    let mut k = 0i128;
+    let mut m = x;
+    while m >= 2 * SCALE { m >>= 1; k += 1; }
+    while m < SCALE { m <<= 1; k -= 1; }
+    let m = m * (W / SCALE);
+    let z = (m - W) * W / (m + W);
+    let z2 = z * z / W;
+    let (mut term, mut sum, mut i) = (z, 0i128, 1);
+    while term != 0 && i < 200 { sum += term / i; term = term * z2 / W; i += 2; }
+    Ok(k * LN2_W + 2 * sum)
+}
+/// sin and cos of a 9-place x (radians), W-scaled.
+fn sin_cos_w(x: i128) -> Result<(i128, i128), Error> {
+    if x.abs() > 1_000_000 * SCALE { return Err(Error::Overflow); }
+    let two_pi = 2 * PI_W;
+    let mut a = (x * (W / SCALE)) % two_pi;
+    if a > PI_W { a -= two_pi; } else if a < -PI_W { a += two_pi; }
+    let a2 = a * a / W;
+    let (mut s, mut st, mut c, mut ct, mut i) = (a, a, W, W, 1i128);
+    while (st != 0 || ct != 0) && i < 60 {
+        st = -st * a2 / W / ((2 * i) * (2 * i + 1));
+        ct = -ct * a2 / W / ((2 * i - 1) * (2 * i));
+        s += st; c += ct; i += 1;
+    }
+    Ok((s, c))
 }
 
 pub fn eval(input: &[u8]) -> Result<Value, Error> { eval_with(input, None) }
@@ -325,7 +406,7 @@ mod tests {
         assert_eq!(show(&("(".repeat(40) + "1" + &")".repeat(40))), "TooDeep");
         assert_eq!(show(&"-".repeat(40)), "TooDeep");
         assert_eq!(show("ans+1"), "NoAnswer");
-        assert_eq!(show("2**0.5"), "Exponent");
+        assert_eq!(show("2**65"), "Exponent");
         assert_eq!(show("2**65"), "Exponent");
         assert_eq!(show("10**40"), "Overflow");
         assert_eq!(show("0**-1"), "DivideByZero");
@@ -341,6 +422,24 @@ mod tests {
         assert_eq!(r(&mut env, "pi = 3"), "Syntax");
         assert_eq!(r(&mut env, "x == 1"), "Syntax");
         assert_eq!(r(&mut env, "missing"), "Unknown");
+    }
+    #[test] fn transcendental_functions_to_nine_places() {
+        assert_eq!(show("exp(1)"), "~ 2.718281828");
+        assert_eq!(show("exp(0)"), "= 1");
+        assert_eq!(show("exp(-1)"), "~ 0.367879441");
+        assert_eq!(show("ln(10)"), "~ 2.302585093");
+        assert_eq!(show("ln(1)"), "= 0");
+        assert_eq!(show("log(1000)"), "~ 3");
+        assert_eq!(show("ln(0.5)"), "~ -0.693147181");
+        assert_eq!(show("sin(0.523598776)"), "~ 0.5");
+        assert_eq!(show("cos(pi)"), "~ -1");
+        assert_eq!(show("tan(1)"), "~ 1.557407725");
+        assert_eq!(show("sin(0)"), "= 0");
+        assert_eq!(show("2**0.5"), "~ 1.414213562");
+        assert_eq!(show("10**0.5"), "~ 3.16227766");
+        assert_eq!(show("ln(0)"), "Domain");
+        assert_eq!(show("(-8)**0.5"), "Domain");
+        assert_eq!(show("exp(100)"), "Overflow");
     }
     #[test] fn results_show_in_other_bases() {
         let show = |s: &str| { let (e, r) = split_radix(s.as_bytes()); let mut o = [0; LINE_MAX]; render_radix(eval(e).unwrap(), r, &mut o).map(|n| String::from_utf8(o[..n].to_vec()).unwrap()) };

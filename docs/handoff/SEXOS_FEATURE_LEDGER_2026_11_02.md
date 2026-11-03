@@ -12,7 +12,7 @@ find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
 select line, `Ctrl+Up/Down` move line, `Ctrl+]`/`Ctrl+[` indent, `Ctrl+Shift+D`
 duplicate line.
 Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `calc` does exact decimals with `** sqrt abs min max
-round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
+round floor ceil pi e ans`, `exp ln log sin cos tan`, fractional powers, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
 
 **HTML reader.** Headings, paragraphs, lists (numbered/nested/definition),
@@ -1454,6 +1454,23 @@ at both sizes with a 17th script (`promise first then 3 async 1+2`).
 **Evidence** (`docs/handoff/assets/script-optional-call-tagged-templates-2026-11-03/`):
 script host tests 47 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`promise first 1\dx-yundefined ...`).
+
+## P5. Spindle `calc` scientific functions (2026-11-03)
+
+- `exp ln log sin cos tan` (radians) and fractional powers of positive
+  bases (`2**0.5`, via exp(e ln b)). Computed with i128 integer
+  arithmetic at 18 decimal places (range reduction plus Taylor/atanh
+  series), shown to 9 and marked `~` except at trivial points (`exp(0)`,
+  `ln(1)`, `sin(0)`, `cos(0)`). `ln` of a non-positive number, a
+  fractional power of a non-positive base and `tan` at a pole are
+  `Domain`; `exp` above 88 is `Overflow`. Results are exact to 9 places
+  for exact inputs; inputs built from 9-place values (like `pi/6`) carry
+  their own rounding (`sin(pi/6)` is `~ 0.499999999`).
+
+**Evidence** (`docs/handoff/assets/spindle-calc-scientific-2026-11-03/`):
+calc host tests (`transcendental_functions_to_nine_places`); sealed build
+and master gate GREEN; native Spindle gate at both sizes (`calc ln(2)` ->
+`~ 0.693147181`, `calc 2**0.5` -> `~ 1.414213562`).
 
 ## Release gates noted while doing F1–F2
 
