@@ -572,9 +572,14 @@ outbox stays pending for the rest of the run and Display records no
 `[display.child.parent_gate] ... parent=153 observed=0 ... retained=1` for
 each pane at startup. The calc results are correct in the serial records,
 but nothing is drawn. The connected-desktop gate, which brings Spindle up
-through the launcher, does draw it. Likely a Display/Shell child-pane
-parent binding issue when Spindle is used straight after boot; not changed
-here (Display and Shell are the concurrent session's area).
+through the launcher, does draw it. Closer look: Shell tiles
+Spindle's frame 153 at x=640 y=425 w=640 h=375, the same tile the Browser
+occupies, and after `[shell.interact.focus] sid=153` the screenshot still
+shows the Browser on top there. So keyboard focus moves to Spindle but its
+window is not raised above the covering Browser, and Display (which settles
+covered text damage) never commits Spindle's text, leaving Spindle's outbox
+pending. User impact: typing into a focused but hidden window. Not changed
+here (Shell stacking and Display are the concurrent session's area).
 
 ## Release gates noted while doing F1–F2
 
