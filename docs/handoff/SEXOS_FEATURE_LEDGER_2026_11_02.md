@@ -541,6 +541,18 @@ water stays at the 46,752-byte construction peak (the script used about
 3.7 KiB less of the painted region than before) and there are no pager
 rejections. Evidence: `docs/handoff/assets/script-recursion-depth-2026-11-03/`.
 
+## F31. Script `null`, `undefined`, `typeof`, `toFixed` (2026-11-03)
+
+`null` and `undefined` literals (loose `null == undefined`, strict not;
+arrays/objects compare by identity), `typeof` (an undeclared name is
+`"undefined"`, as in JavaScript), and `n.toFixed(d)` for `d` 0..20, rounding
+the exact binary value half away from zero (`(2.5).toFixed(0)` is `3`,
+`(-1.005).toFixed(2)` is `-1.00`). A function called with fewer arguments
+now sees `undefined` for the rest. Host tests 13 groups; native HTML gate at
+both sizes with `number 20.00 true undefined` (`scripts_run=9`); stack high
+water unchanged. Evidence:
+`docs/handoff/assets/script-null-typeof-tofixed-2026-11-03/`.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

@@ -83,7 +83,7 @@ fn functions_with_parameters_and_return() {
     assert_eq!(out("function sq(x) { return x * x }\ndocument.write(sq(7), ' ', sq('3'))").unwrap(), "49 9");
     assert_eq!(out("var x = 'global'; function f(x) { return x + '!' } document.write(f('local'), ' ', x)").unwrap(), "local! global");
     assert_eq!(out("function sign(n) { if (n < 0) return -1; if (n > 0) return 1; return 0 } document.write(sign(-5), sign(0), sign(9))").unwrap(), "-101");
-    assert_eq!(out("function sum(a, b, c) { var t = a + b; return t + (c === undefined ? 0 : c) } document.write(sum(1, 2))").err(), Some(Error::Unsupported), "no undefined name");
+    assert_eq!(out("function sum(a, b, c) { var t = a + b; return t + (c === undefined ? 0 : c) } document.write(sum(1, 2), sum(1, 2, 3))").unwrap(), "36", "missing argument is undefined");
     assert_eq!(out("function noop() {} document.write(noop())").unwrap(), "undefined");
     assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(7))").unwrap(), "5040");
     assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(30))").err(), Some(Error::Limit), "recursion bounded by depth");
@@ -142,4 +142,14 @@ fn objects_keys_and_json() {
     assert_eq!(out("var o = {}; o.self = o; JSON.stringify(o)").err(), Some(Error::Limit));
     assert_eq!(out("var n = 1; n.x = 2").err(), Some(Error::Unsupported));
     assert_eq!(out("var c = {n: 1}; c.n++; c.n += 10; c.n--; c.m = 'a'; c.m += 'b'; document.write(c.n, c.m)").unwrap(), "11ab");
+}
+
+#[test]
+fn null_undefined_typeof_and_to_fixed() {
+    assert_eq!(out("var a; document.write(1)").err(), Some(Error::Syntax), "declarations need a value");
+    assert_eq!(out("var n = null; document.write(n, ' ', n == undefined, ' ', n === undefined, ' ', n === null, ' ', n + 1, ' ', !n)").unwrap(), "null true false true 1 true");
+    assert_eq!(out("document.write(typeof 1, typeof 'x', typeof true, typeof undefined, typeof nothing, typeof null, typeof [1], typeof {a: 1})").unwrap(), "numberstringbooleanundefinedundefinedobjectobjectobject");
+    assert_eq!(out("document.write((3.14159).toFixed(2), ' ', (2.5).toFixed(0), ' ', (-1.005).toFixed(2), ' ', (1e-7).toFixed(3), ' ', (12).toFixed(1), ' ', (0.000001).toFixed(7))").unwrap(), "3.14 3 -1.00 0.000 12.0 0.0000010");
+    assert_eq!(out("var x = 1.23456; document.write(x.toFixed(4))").unwrap(), "1.2346");
+    assert_eq!(out("document.write(JSON.stringify({a: null, b: [null, 1]}))").unwrap(), "{\"a\":null,\"b\":[null,1]}");
 }

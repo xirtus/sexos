@@ -12,7 +12,7 @@
 //! `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push(v)`, `.join(s)`),
 //! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`),
-//! `JSON.stringify(v)`,
+//! `JSON.stringify(v)`, `null`/`undefined`, `typeof`, `n.toFixed(d)`,
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
 //! `.indexOf(s)`, `.charAt(i)`, `.slice(a, b)`, `.substring(a, b)`,
 //! `.split(s)`), `String(x)`, `Number(x)`, `parseInt(s)` and
@@ -51,7 +51,7 @@ const MAX_DEPTH: u8 = 32;
 pub enum Error { Unsupported, Syntax, Limit }
 
 #[derive(Clone, Copy)]
-enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Arr(u8), Obj(u8) }
+enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Null, Arr(u8), Obj(u8) }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tok<'a> { Num(f64), Str(&'a [u8]), Template(&'a [u8]), Ident(&'a [u8]), Punct(u8), End }
@@ -228,15 +228,16 @@ impl<'a> Machine<'a> {
         self.store(&buf.b[..n])
     }
     fn to_text(&mut self, v: Value) -> Result<Value, Error> {
-        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), Value::Undef => self.store(b"undefined"), Value::Arr(id) => self.join(id, b","), Value::Obj(_) => self.store(b"[object Object]"), s => Ok(s) }
+        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), Value::Undef => self.store(b"undefined"), Value::Null => self.store(b"null"), Value::Arr(id) => self.join(id, b","), Value::Obj(_) => self.store(b"[object Object]"), s => Ok(s) }
     }
     fn truthy(&self, v: Value) -> bool {
-        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, Value::Undef => false, Value::Arr(_) | Value::Obj(_) => true, s => !self.text(s).is_empty() }
+        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, Value::Undef | Value::Null => false, Value::Arr(_) | Value::Obj(_) => true, s => !self.text(s).is_empty() }
     }
     fn to_number(&self, v: Value) -> f64 {
         match v {
             Value::Num(x) => x,
             Value::Bool(b) => b as u8 as f64,
+            Value::Null => 0.0,
             Value::Undef | Value::Arr(_) | Value::Obj(_) => f64::NAN,
             s => {
                 let t = self.text(s);
@@ -284,6 +285,10 @@ impl<'a> Machine<'a> {
                     (Value::Str(..), Value::Str(..)) => self.text(v) == self.text(r),
                     (Value::Bool(a), Value::Bool(b)) => a == b,
                     (Value::Num(a), Value::Num(b)) => a == b,
+                    (Value::Null | Value::Undef, Value::Null | Value::Undef) => !strict || core::mem::discriminant(&v) == core::mem::discriminant(&r),
+                    (Value::Null | Value::Undef, _) | (_, Value::Null | Value::Undef) => false,
+                    (Value::Arr(a), Value::Arr(b)) => a == b,
+                    (Value::Obj(a), Value::Obj(b)) => a == b,
                     _ if strict => false,
                     _ => self.to_number(v) == self.to_number(r),
                 };
@@ -311,6 +316,16 @@ impl<'a> Machine<'a> {
         })
     }
     fn unary(&mut self) -> Result<Value, Error> {
+        if self.tok == Tok::Ident(b"typeof") {
+            if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+            self.next()?;
+            self.depth += 1;
+            // An undeclared name is "undefined" here, as in JavaScript.
+            let v = if let Tok::Ident(name) = self.tok { if self.lookup(name).is_none() && !matches!(name, b"NaN" | b"Infinity" | b"true" | b"false" | b"null" | b"undefined" | b"Math" | b"JSON" | b"Object" | b"String" | b"Number" | b"parseInt") && self.funcs[..self.nfuncs].iter().all(|(n, l, _)| &n[..*l as usize] != name) { self.next()?; Value::Undef } else { self.unary()? } } else { self.unary()? };
+            self.depth -= 1;
+            let kind: &[u8] = match v { Value::Num(_) => b"number", Value::Str(..) => b"string", Value::Bool(_) => b"boolean", Value::Undef => b"undefined", _ => b"object" };
+            return self.store(kind);
+        }
         if let Tok::Punct(op @ (b'-' | b'+' | b'!')) = self.tok {
             if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
             self.next()?;
@@ -340,6 +355,15 @@ impl<'a> Machine<'a> {
             let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
             self.next()?;
             if let Value::Obj(id) = v { v = self.get_prop(id, name); continue; }
+            if let (Value::Num(x), b"toFixed") = (v, name) {
+                self.expect(b'(')?;
+                let d = if self.tok == Tok::Punct(b')') { Value::Num(0.0) } else { self.expr()? };
+                self.expect(b')')?;
+                let d = self.to_number(d);
+                if !(0.0..=20.0).contains(&d) || d != floor(d) { return Err(Error::Unsupported); }
+                v = self.fixed(x, d as usize)?;
+                continue;
+            }
             if let Value::Arr(id) = v {
                 let (_, len, _) = self.arrays[id as usize];
                 v = match name {
@@ -567,6 +591,35 @@ impl<'a> Machine<'a> {
         }
         into.push(b'"');
     }
+    /// `x.toFixed(d)`: the exact binary value rounded half away from zero.
+    fn fixed(&mut self, x: f64, d: usize) -> Result<Value, Error> {
+        if x.is_nan() || x.is_infinite() || x.abs_ge(1e21) { return self.number_text(x); }
+        // Print with 40 digits (exact for these magnitudes in practice), then
+        // round the decimal string ourselves so ties go away from zero.
+        let mut wide = alloc::string::String::new();
+        let _ = write!(wide, "{:.40}", if x < 0.0 { -x } else { x });
+        let bytes = wide.as_bytes();
+        let dot = bytes.iter().position(|&c| c == b'.').unwrap_or(bytes.len());
+        let mut digits: Vec<u8> = bytes[..dot].iter().chain(bytes[dot + 1..].iter()).copied().collect();
+        let keep = dot + d;
+        let up = digits.get(keep).is_some_and(|&c| c >= b'5');
+        digits.truncate(keep);
+        if up {
+            let mut i = digits.len();
+            loop {
+                if i == 0 { digits.insert(0, b'1'); break; }
+                i -= 1;
+                if digits[i] == b'9' { digits[i] = b'0'; } else { digits[i] += 1; break; }
+            }
+        }
+        let int_len = digits.len() - d;
+        let negative = x < 0.0 && digits.iter().any(|&c| c != b'0');
+        let mut text: Vec<u8> = Vec::new();
+        if negative { text.push(b'-'); }
+        text.extend_from_slice(&digits[..int_len]);
+        if d > 0 { text.push(b'.'); text.extend_from_slice(&digits[int_len..]); }
+        self.store(&text)
+    }
     fn new_array(&mut self, items: &[Value]) -> Result<Value, Error> {
         let cap = items.len().max(4);
         if self.narrays == ARRAYS || self.elems.len() + cap > ELEMS { return Err(Error::Limit); }
@@ -687,6 +740,8 @@ impl<'a> Machine<'a> {
                 self.next()?;
                 match name {
                     b"NaN" => Ok(Value::Num(f64::NAN)),
+                    b"null" => Ok(Value::Null),
+                    b"undefined" => Ok(Value::Undef),
                     b"Infinity" => Ok(Value::Num(f64::INFINITY)),
                     b"true" => Ok(Value::Bool(true)),
                     b"false" => Ok(Value::Bool(false)),
@@ -832,7 +887,7 @@ impl<'a> Machine<'a> {
             Tok::Ident(b"var" | b"let" | b"const") => {
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
+                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
                 self.next()?;
                 self.expect(b'=')?;
                 let v = self.expr()?;
@@ -1047,6 +1102,8 @@ fn pow(a: f64, e: f64) -> f64 {
     while k > 0 { if k & 1 == 1 { r *= b; } b *= b; k >>= 1; }
     if e < 0.0 { 1.0 / r } else { r }
 }
+trait AbsGe { fn abs_ge(self, limit: f64) -> bool; }
+impl AbsGe for f64 { fn abs_ge(self, limit: f64) -> bool { self >= limit || self <= -limit } }
 fn floor(x: f64) -> f64 {
     if x.is_nan() || x.is_infinite() || x >= 4503599627370496.0 || x <= -4503599627370496.0 { return x; }
     let t = if x >= 0.0 { trunc(x) } else { -trunc(-x) };
