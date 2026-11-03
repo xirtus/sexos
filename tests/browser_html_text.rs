@@ -17,7 +17,7 @@ fn page_becomes_readable_blocks() {
         <body><h1>SexOS   News</h1><p>First\n  paragraph.</p><p>Second<br>line</p>\
         <ul><li>one</li><li>two</li></ul><h3>Small</h3><p>end</p></body></html>";
     let (t, c) = text(page, 4096);
-    assert_eq!(t, "Title: t\n\n# SexOS News\n\nFirst paragraph.\n\nSecond\nline\n\n- one\n- two\n\nSmall\n\nend");
+    assert_eq!(t, "Title: t\n\n# SexOS News\n\nFirst paragraph.\n\nSecond\nline\n\n- one\n- two\n\n## Small\n\nend");
     assert!(!c.truncated);
     assert_eq!(c.links, 0);
 }
@@ -145,4 +145,10 @@ fn ordered_nested_and_definition_lists() {
 fn inline_emphasis_and_code_keep_markers() {
     let (t, _) = text("<p>Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to <strong>save</strong>, see <code>quil.rs</code> and <em>notes</em>.</p>", 256);
     assert_eq!(t, "Press `Ctrl`+`S` to *save*, see `quil.rs` and _notes_.");
+}
+
+#[test]
+fn common_named_entities() {
+    let (t, _) = text("<p>&ldquo;Held&rdquo; &ndash; it&rsquo;s 5&deg; &times; 2 &rarr; &euro;10 &bull; soft&shy;hyphen &nosuch;</p>", 256);
+    assert_eq!(t, "\u{201c}Held\u{201d} \u{2013} it\u{2019}s 5\u{b0} \u{d7} 2 \u{2192} \u{20ac}10 \u{2022} softhyphen &nosuch;");
 }

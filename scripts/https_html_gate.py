@@ -32,6 +32,7 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b"<p><script>var odd = []; for (var i = 0; i < 20; i++) { if (i % 2 === 0) continue; if (i > 9) break; odd.push(i) } document.write(`odd ${odd.join('+')} = ${1 + 3 + 5 + 7 + 9}`)</script></p>"
  b"<p><script>var app = {name: 'Quil', saves: 2}; app.saves++; app['kind'] = 'editor'; document.write(JSON.stringify(app), ' keys ', Object.keys(app).length)</script></p>"
  b"<p><script>var price = 19.999; document.write(typeof price, ' ', price.toFixed(2), ' ', null == undefined, ' ', typeof missing)</script></p>"
+ b'<h3>Notes</h3>'
  b'<h2>Rules</h2><ol><li>BOOT grants routes &amp; identities.<ul><li>held, never ambient</li></ul></li><li>Applications cannot mint them.</li><li>Only the bounded script subset runs.</li></ol>'
  b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'

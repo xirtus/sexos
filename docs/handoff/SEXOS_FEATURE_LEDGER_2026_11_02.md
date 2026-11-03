@@ -553,6 +553,29 @@ both sizes with `number 20.00 true undefined` (`scripts_run=9`); stack high
 water unchanged. Evidence:
 `docs/handoff/assets/script-null-typeof-tofixed-2026-11-03/`.
 
+## F32. Common named entities and minor headings (2026-11-03)
+
+Typographic and symbol entities common on real pages (`&ldquo; &rdquo;
+&lsquo; &rsquo; &bull; &middot; &deg; &times; &euro; &pound; &larr; &rarr;
+&reg; &trade; &frac12; &laquo; &raquo;` and more; `&shy;` disappears) now
+decode; unknown names stay literal. `<h3>`-`<h6>` read as `## title`. Host
+test of the entities (not in the native page: its pixel oracle is ASCII);
+native HTML gate at both sizes with `## Notes`. Evidence:
+`docs/handoff/assets/html-entities-headings-2026-11-03/`.
+
+## Finding: Spindle text never reaches the screen in the calc gate
+
+In `spindle_calc_gate.py` runs, Spindle's four grid panes (surfaces 154,
+160, 161, 162) admit their first batches, after which Spindle's display
+outbox stays pending for the rest of the run and Display records no
+`display.text.committed` for target 12 at all; Display logged
+`[display.child.parent_gate] ... parent=153 observed=0 ... retained=1` for
+each pane at startup. The calc results are correct in the serial records,
+but nothing is drawn. The connected-desktop gate, which brings Spindle up
+through the launcher, does draw it. Likely a Display/Shell child-pane
+parent binding issue when Spindle is used straight after boot; not changed
+here (Display and Shell are the concurrent session's area).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

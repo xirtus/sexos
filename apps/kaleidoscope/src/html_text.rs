@@ -136,7 +136,13 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
         match name {
             b"amp" => b'&' as u32, b"lt" => b'<' as u32, b"gt" => b'>' as u32, b"quot" => b'"' as u32,
             b"apos" => b'\'' as u32, b"nbsp" => b' ' as u32, b"copy" => 0xA9, b"mdash" => 0x2014,
-            b"ndash" => 0x2013, b"hellip" => 0x2026, _ => return None,
+            b"ndash" => 0x2013, b"hellip" => 0x2026, b"lsquo" => 0x2018, b"rsquo" => 0x2019,
+            b"ldquo" => 0x201c, b"rdquo" => 0x201d, b"bull" => 0x2022, b"middot" => 0xb7, b"times" => 0xd7,
+            b"divide" => 0xf7, b"deg" => 0xb0, b"euro" => 0x20ac, b"pound" => 0xa3, b"yen" => 0xa5,
+            b"cent" => 0xa2, b"sect" => 0xa7, b"para" => 0xb6, b"reg" => 0xae, b"trade" => 0x2122,
+            b"larr" => 0x2190, b"rarr" => 0x2192, b"uarr" => 0x2191, b"darr" => 0x2193, b"plusmn" => 0xb1,
+            b"frac12" => 0xbd, b"laquo" => 0xab, b"raquo" => 0xbb, b"iexcl" => 0xa1, b"iquest" => 0xbf,
+            b"shy" => return Some((0, end + 1)), _ => return None,
         }
     };
     // Controls and surrogates are not readable text.
@@ -213,7 +219,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             let h = name.len() == 2 && lower(name[0]) == b'h' && (b'1'..=b'6').contains(&name[1]);
             if h {
                 o.line(true);
-                if !end_tag && name[1] <= b'2' { o.bytes(b"# "); }
+                if !end_tag { o.bytes(if name[1] <= b'2' { b"# " } else { b"## " }); }
             } else if name_is(name, b"br") {
                 o.line(false);
             } else if name_is(name, b"li") && !end_tag {
