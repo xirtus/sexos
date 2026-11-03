@@ -105,6 +105,8 @@ pub enum Error { Unsupported, Syntax, Limit, Thrown }
 #[derive(Clone, Copy)]
 enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Null, Arr(u8), Obj(u8), Func(u8), Re(u8) }
 
+/// `JSON.stringify` options: the indent unit and a replacer key list.
+struct Layout { indent: Vec<u8>, keys: Option<Vec<Vec<u8>>> }
 /// An assignment target's last key: `.name` or `[value]`.
 #[derive(Clone, Copy)]
 enum Key<'a> { Name(&'a [u8]), Value(Value) }
@@ -1543,7 +1545,14 @@ impl<'a> Machine<'a> {
         }
     }
     /// JSON text of a value; undefined members are left out like JavaScript.
-    fn json(&mut self, v: Value, into: &mut Vec<u8>) -> Result<(), Error> {
+    fn json(&mut self, v: Value, into: &mut Vec<u8>) -> Result<(), Error> { self.json_with(v, into, &Layout { indent: Vec::new(), keys: None }, 0) }
+    /// A new line and the indent for `level` (pretty printing only).
+    fn json_break(into: &mut Vec<u8>, layout: &Layout, level: usize) {
+        if layout.indent.is_empty() { return; }
+        into.push(b'\n');
+        for _ in 0..level { into.extend_from_slice(&layout.indent); }
+    }
+    fn json_with(&mut self, v: Value, into: &mut Vec<u8>, layout: &Layout, level: usize) -> Result<(), Error> {
         if self.too_deep() { return Err(Error::Limit); }
         if into.len() > ARENA { return Err(Error::Limit); }
         self.depth += 1;
@@ -1555,9 +1564,11 @@ impl<'a> Machine<'a> {
                 let (start, len, _) = self.arrays[id as usize];
                 for k in 0..len as usize {
                     if k > 0 { into.push(b','); }
+                    Self::json_break(into, layout, level + 1);
                     let e = self.elems[start as usize + k];
-                    if matches!(e, Value::Undef | Value::Func(_)) { into.extend_from_slice(b"null"); } else { self.json(e, into)?; }
+                    if matches!(e, Value::Undef | Value::Func(_)) { into.extend_from_slice(b"null"); } else { self.json_with(e, into, layout, level + 1)?; }
                 }
+                if len > 0 { Self::json_break(into, layout, level); }
                 into.push(b']');
             }
             Value::Obj(id) => {
@@ -1566,14 +1577,19 @@ impl<'a> Machine<'a> {
                 let mut first = true;
                 for k in start as usize..start as usize + len as usize {
                     let (ns, nn, value) = self.props[k];
-                    // Like JavaScript: undefined and function members are left out.
+                    // Like JavaScript: undefined and function members are left out,
+                    // and a replacer list keeps only the keys it names.
                     if matches!(value, Value::Undef | Value::Func(_)) { continue; }
+                    if let Some(keys) = &layout.keys { if !keys.iter().any(|k| k[..] == self.arena[ns as usize..ns as usize + nn as usize]) { continue; } }
                     if !first { into.push(b','); }
                     first = false;
+                    Self::json_break(into, layout, level + 1);
                     self.quote(Value::Str(ns, nn), into);
                     into.push(b':');
-                    self.json(value, into)?;
+                    if !layout.indent.is_empty() { into.push(b' '); }
+                    self.json_with(value, into, layout, level + 1)?;
                 }
+                if !first { Self::json_break(into, layout, level); }
                 into.push(b'}');
             }
             Value::Undef | Value::Func(_) => into.extend_from_slice(b"null"),
@@ -2017,6 +2033,25 @@ impl<'a> Machine<'a> {
         let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
         if (name, f) == (&b"Array"[..], &b"of"[..]) { let (args, n) = self.arguments()?; return self.new_array(&args[..n]); }
+        if (name, f) == (&b"JSON"[..], &b"stringify"[..]) {
+            // `JSON.stringify(v, replacer, space)`: a key list (a function
+            // replacer is refused) and an indent of up to 10 spaces or text.
+            let (args, n) = self.arguments()?;
+            let keys = match args[1] {
+                Value::Arr(id) if n > 1 => { let (st, len, _) = self.arrays[id as usize]; let mut keys = Vec::new(); for k in 0..len as usize { let t = self.to_text(self.elems[st as usize + k])?; keys.push(self.text(t).to_vec()); } Some(keys) }
+                Value::Undef | Value::Null => None,
+                _ if n < 2 => None,
+                _ => return Err(Error::Unsupported),
+            };
+            let indent = match args[2] {
+                Value::Num(x) => { let k = if x.is_nan() { 0.0 } else { x.clamp(0.0, 10.0) }; alloc::vec![b' '; k as usize] }
+                s @ Value::Str(..) => { let t = self.text(s); t[..t.len().min(10)].to_vec() }
+                _ => Vec::new(),
+            };
+            let mut j = Vec::new();
+            self.json_with(args[0], &mut j, &Layout { indent, keys }, 0)?;
+            return self.store(&j);
+        }
         if (name, f) == (&b"Array"[..], &b"from"[..]) && self.from_with_map()? {
             // `Array.from(x, fn)`: each item mapped through fn(item, index).
             let (args, _) = self.arguments()?;
@@ -2229,6 +2264,19 @@ impl<'a> Machine<'a> {
                     b"true" => Ok(Value::Bool(true)),
                     b"false" => Ok(Value::Bool(false)),
                     b"Math" => self.math(),
+                    // `document.write(...)` as an expression (arrow bodies); its value is undefined.
+                    b"document" if self.tok == Tok::Punct(b'.') => {
+                        self.next()?;
+                        let line = match self.tok { Tok::Ident(b"write") => false, Tok::Ident(b"writeln") => true, _ => return Err(Error::Unsupported) };
+                        self.next()?;
+                        let mut args = [Value::Undef; PARAMS];
+                        let n = self.argument_list(&mut args)?;
+                        if self.live {
+                            for &v in &args[..n] { self.emit(v)?; }
+                            if line { let nl = self.store(b"\n")?; self.emit(nl)?; }
+                        }
+                        Ok(Value::Undef)
+                    }
                     b"Date" if self.tok == Tok::Punct(b'.') => self.date_static(),
                     b"JSON" | b"Object" | b"Array" | b"Number" if self.tok == Tok::Punct(b'.') => self.statics(name),
                     b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
@@ -2339,6 +2387,16 @@ impl<'a> Machine<'a> {
             // an `undefined` argument (the default runs only then).
             let rest = parens && self.tok == Tok::Punct(b'S');
             if rest { self.next()?; }
+            if parens && !rest && matches!(self.tok, Tok::Punct(b'[' | b'{')) {
+                // `({x, y = 2})` / `([k, v])`: the argument is destructured.
+                if i == PARAMS { return Err(Error::Limit); }
+                let v = args.get(i).copied().unwrap_or(Value::Undef);
+                self.pattern(Some(v))?;
+                i += 1;
+                if self.tok != Tok::Punct(b',') { break; }
+                self.next()?;
+                continue;
+            }
             let Tok::Ident(param) = self.tok else { if rest { return Err(Error::Syntax); } break };
             if i == PARAMS { return Err(Error::Limit); }
             self.next()?;
@@ -2406,8 +2464,11 @@ impl<'a> Machine<'a> {
                 let Tok::Ident(_) = self.tok else { return Err(Error::Syntax) };
                 return self.next();
             }
-            let Tok::Ident(_) = self.tok else { return Ok(()) };
-            self.next()?;
+            if matches!(self.tok, Tok::Punct(b'[' | b'{')) { self.pattern(None)?; }
+            else {
+                let Tok::Ident(_) = self.tok else { return Ok(()) };
+                self.next()?;
+            }
             if self.tok == Tok::Punct(b'=') { self.next()?; self.only_if(false, |m| m.expr())?; }
             if self.tok != Tok::Punct(b',') { return Ok(()); }
             self.next()?;

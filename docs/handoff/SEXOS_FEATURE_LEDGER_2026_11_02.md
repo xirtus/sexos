@@ -1349,6 +1349,21 @@ text host tests 26 (new `list_paragraphs_marker_styles_media_and_preformatted_co
 sealed build and master gate GREEN; native HTML gate at both sizes with
 `i. roman one / ii. roman two` and `[video: Clip]` (fallback absent).
 
+## N18. Script destructured parameters, `JSON.stringify` layout, `document.write` expressions (2026-11-03)
+
+- Parameters can be patterns: `([k, v]) => ...`, `function f({x, y = 2},
+  [p, q])` (functions, arrows, methods).
+- `JSON.stringify(v, keys, space)`: a replacer key list (at every level)
+  and an indent (a number up to 10, or text up to 10 bytes), laid out like
+  JavaScript (empty `[]`/`{}` stay on one line, `": "` after keys). A
+  function replacer refuses the script.
+- `document.write(...)`/`writeln(...)` also work as expressions, e.g. an
+  arrow body `xs.forEach(x => document.write(x))`.
+
+**Evidence** (`docs/handoff/assets/script-param-patterns-pretty-json-2026-11-03/`):
+script host tests 44 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... p118`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

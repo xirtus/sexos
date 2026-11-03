@@ -391,3 +391,11 @@ fn nested_templates_named_function_expressions_and_more_builtins() {
     assert_eq!(out("var f = function fact(n) { return n < 2 ? 1 : n * fact(n - 1) }; var {a: {b}, c: [d, e = 4]} = {a: {b: 7}, c: [1]}; var t = ''; for (const {p: {q}} of [{p: {q: 1}}, {p: {q: 2}}]) t += q; document.write(f(5), b, d, e, t)").unwrap(), "12071412");
     assert_eq!(out("document.write([1, 2, 3].reduceRight((a, b) => a + '' + b), ' ', ['a', 'b'].reduceRight((a, b) => a + b, '>'), ' ', 'abcb'.replace('b', m => m.toUpperCase()), 'abcb'.replaceAll('b', (m, i) => i), ' ', Array.from({length: 3}, (_, i) => i * i), Array.from([1, 2], x => x * 10))").unwrap(), "321 >ba aBcba1c3 0,1,410,20");
 }
+
+#[test]
+fn destructured_parameters_pretty_json_and_write_expressions() {
+    assert_eq!(out("function f({x, y = 2}, [p, q]) { return x + y + p + q } document.write(Object.entries({a: 1, b: 2}).map(([k, v]) => k + v).join(), ' ', f({x: 1}, [10, 20]), ' '); [[1, 2]].forEach(([a, b]) => document.write(a + b))").unwrap(), "a1,b2 33 3");
+    assert_eq!(out("document.write(JSON.stringify({a: [1, {b: 2}], e: [], o: {}}, null, 2))").unwrap(), "{\n  \"a\": [\n    1,\n    {\n      \"b\": 2\n    }\n  ],\n  \"e\": [],\n  \"o\": {}\n}");
+    assert_eq!(out("document.write(JSON.stringify({a: 1, b: 'x', c: {a: 2, z: 3}}, ['a', 'c']), JSON.stringify([1, 'a'], null, '--'))").unwrap(), "{\"a\":1,\"c\":{\"a\":2}}[\n--1,\n--\"a\"\n]");
+    assert_eq!(out("JSON.stringify({}, (k, v) => v)").err(), Some(Error::Unsupported), "function replacer");
+}
