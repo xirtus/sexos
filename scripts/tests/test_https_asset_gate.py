@@ -74,12 +74,12 @@ def metadata(mode='ready'):
 [entropy.seed.progress] owner=Some(Identity {{ pd: 15, task: 15 }}) ticket={i} state=Some(Ready) produced=32 consumed=0 failure=0 private=1
 [entropy.seed.released] owner=15 task=15 ticket={i} service_payload=erased receipt=retained
 [browser.trust.self_check] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0
-[browser.tls.prepared] task_bytes=25000 private_bytes=45536 read=4096 write=2048 tx_bytes={flow['initial_tls_bytes']} utc_snapshot={UTC} authenticated=0 network=0
+[browser.tls.prepared] task_bytes=25000 private_bytes=45544 read=4096 write=2048 tx_bytes={flow['initial_tls_bytes']} utc_snapshot={UTC} authenticated=0 network=0
 [browser.dns.released] ticket={i} view=Answer([10, 0, 2, 2]) private_job=0
 [net.job.resolved.admitted] owner=15 task=15 ticket={ticket} dns_generation={i} observed=100 expires=60000 now=101 fixed=1 at_begin=1
 [net.job.egress.submit] ticket={ticket} sequence=1 length={len(syn)} hash={hex(gate.fingerprint(syn))} scope=dma_admission_not_delivery
 [net.job.duplex.admitted] owner=15 task=15 ticket={ticket} kind=10 ring=1024 tx_ring=4096 max_wire=32768 peer_port=46080 trust_profile=1 authority=held_boot_route
-[browser.asset.admitted] ticket={ticket} dns_generation={i} seq={i*1000} task_bytes=25000 private_bytes=45536 profile=1 authority=held_route
+[browser.asset.admitted] ticket={ticket} dns_generation={i} seq={i*1000} task_bytes=25000 private_bytes=45544 profile=1 authority=held_route
 [net.job.state] owner=Some(Identity {{ pd: 15, task: 15 }}) ticket={ticket} from=Connecting to=Sending staged={flow['initial_tls_bytes']} queued={flow['initial_tls_bytes']} received=0 scope=private_job
 [browser.asset.authenticated] ticket={ticket} profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1
 '''

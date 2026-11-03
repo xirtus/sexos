@@ -77,7 +77,7 @@ def tls_accounting(root):
  """
  root=Path(root);backend=(root/'crates/sex-tls/src/lib.rs').read_text()
  code=re.sub(r'\s+','',re.sub(r'//[^\n]*','',backend));values={}
- for name,expected in [('RECORD_READ',4096),('RECORD_WRITE',2048),('QUEUE_BYTES',4096),('MAX_TASK_BYTES',32768),('PIPE_METADATA_BYTES',56)]:
+ for name,expected in [('RECORD_READ',4096),('RECORD_WRITE',2048),('QUEUE_BYTES',4096),('MAX_TASK_BYTES',32768),('PIPE_METADATA_BYTES',64)]:
   found=re.findall(r'pub const '+name+r'\s*:\s*usize\s*=\s*([0-9_]+)\s*;',backend)
   if len(found)!=1 or int(found[0].replace('_',''))!=expected:raise ValueError('unreviewed source TLS accounting: '+name)
   values[name]=expected

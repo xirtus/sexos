@@ -134,7 +134,7 @@ impl Client{
                     self.document=session.take_document();if self.document.is_none(){self.failed(false);return;}
                     if self.resource==Some(Resource::PageHtml){
                         let (Some(convert),Some(document))=(self.page_text,self.document.as_mut())else{self.failed(false);return;};
-                        let source=document.as_bytes().len();let mut stats=PageStats{source,len:0,links:0,truncated:false,targets:[(0,0);16],scripts_run:0,scripts_refused:0,ticks:0};
+                        let source=document.source_len();let mut stats=PageStats{source,len:0,links:0,truncated:false,targets:[(0,0);16],scripts_run:0,scripts_refused:0,ticks:0};
                         if document.rewrite(|html,out|{stats=PageStats{source,..convert(html,out)};stats.len}).is_err(){self.failed(false);return;}
                         self.page_stats=Some(stats);
                     }

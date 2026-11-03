@@ -324,7 +324,7 @@ def inspect_trace(trace,mode,wire,raw,host_start,host_end,contract,dns):
  previous=0
  for i,(intent,admit,authenticated,flow)in enumerate(zip(intents,admitted,auth,wire['joins']),1):
   ticket,generation,seq,task,private=map(int,admit.groups())
-  if(ticket,generation)!=(i+1,i)or int(authenticated[1])!=ticket or not previous<seq<=0xffffff or not 0<task<=32768 or private!=task+8248+12288 or not intent.start()<admit.start()<authenticated.start():raise ValueError('resource lease/private/intent correlation differs')
+  if(ticket,generation)!=(i+1,i)or int(authenticated[1])!=ticket or not previous<seq<=0xffffff or not 0<task<=32768 or private!=task+8256+12288 or not intent.start()<admit.start()<authenticated.start():raise ValueError('resource lease/private/intent correlation differs')
   previous=seq
   policy=re.search(rf'\[trust.policy.snapshot\] owner=15 task=15 seq={i} profile=1 root_bytes=376 origin=held_boot_grant',trace);clock=re.search(rf'\[certificate.time.snapshot\] owner=15 task=15 seq={i} seconds=(\d+) source=q35_cmos_utc precision=1 receipt=retained',trace);seed=re.search(rf'\[entropy.seed.released\] owner=15 task=15 ticket={i} service_payload=erased receipt=retained',trace)
   if not policy or not clock or not seed or not host_start-1<=int(clock[1])<=host_end+2 or not intent.start()<policy.start()<clock.start()<admit.start()or not policy.start()<seed.start()<admit.start():raise ValueError('missing fresh policy/UTC/positive seed cleanup')

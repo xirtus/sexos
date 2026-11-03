@@ -43,7 +43,7 @@ def fixture(mode='quiesced'):
   text+=f'[entropy.seed.admitted] owner={t} task={k} ticket={i+1} bytes=32 source=held_boot_grant\n'
   text+=f'[entropy.seed.progress] owner=Some(Identity {{ pd: {t}, task: {k} }}) ticket={i+1} state=Some(Ready) produced=32 consumed=0 failure=0 private=1\n'
   text+=f'[entropy.seed.released] owner={t} task={k} ticket={i+1} service_payload=erased receipt=retained\n'
-  text+=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18248 read=4096 write=2048 tx_bytes=100 utc_snapshot={utc} authenticated=0 network=0\n'
+  text+=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18256 read=4096 write=2048 tx_bytes=100 utc_snapshot={utc} authenticated=0 network=0\n'
   if mode=='allocated-close':
    text+='[browser.tls.view] state=HelloPending authenticated=0 network=0\n[browser.resources] reason=change heap_used=18300 heap_free=47236 heap_total=65536 tls_payload=18192 tls_pending=1 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
   close_start=len(text);terminal=cleanup_lines(row)
@@ -91,9 +91,9 @@ class BrowserReserve(unittest.TestCase):
   text,result=fixture('allocated-close');proof=self.verify(text,result,'allocated-close')
   self.assertEqual(proof['mode'],'allocated-close')
   for join in proof['joins']:
-   evidence=join['close_evidence'];self.assertEqual((evidence['task_bytes'],evidence['private_bytes'],evidence['erased_payload_bytes']),(10000,18248,18192));self.assertEqual(evidence['live_resources']['pending'],1);self.assertEqual(evidence['zero_resources']['used'],0)
+   evidence=join['close_evidence'];self.assertEqual((evidence['task_bytes'],evidence['private_bytes'],evidence['erased_payload_bytes']),(10000,18256,18192));self.assertEqual(evidence['live_resources']['pending'],1);self.assertEqual(evidence['zero_resources']['used'],0)
  def test_allocated_close_rejects_prior_q_expiry_reprepare_zero_and_wrong_erasure(self):
-  for old,new in[('state=HelloPending authenticated=0 network=0','state=TimedOut authenticated=0 network=0'),('state=HelloPending authenticated=0 network=0','state=Cancelled authenticated=0 network=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=18248'),('[browser.tls.closed] pending=1','[browser.tls.closed] pending=0'),('tls_payload=18192 tls_pending=1','tls_payload=0 tls_pending=0'),('reason=change heap_used=18300','reason=clear heap_used=18300')]:
+  for old,new in[('state=HelloPending authenticated=0 network=0','state=TimedOut authenticated=0 network=0'),('state=HelloPending authenticated=0 network=0','state=Cancelled authenticated=0 network=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=18256'),('[browser.tls.closed] pending=1','[browser.tls.closed] pending=0'),('tls_payload=18192 tls_pending=1','tls_payload=0 tls_pending=0'),('reason=change heap_used=18300','reason=clear heap_used=18300')]:
    text,result=fixture('allocated-close');bad,changed=rewrite(text,result,old,new)
    with self.subTest(old=old,new=new),self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
   for event in['[sexinput.ps2.scancode] raw=0x10\n','[browser.tls.erased] bytes=18192 owned_storage=1\n','[browser.command.queued] kind=TlsPrepare document=0 retained=1 accepted_replay=0\n']:
@@ -158,17 +158,17 @@ class BrowserReserve(unittest.TestCase):
  def test_preparation_counts_source_pipe_metadata_not_only_queue_arrays(self):
   accounting=p.tls_accounting(self.root)
   self.assertEqual(accounting['pipe_bytes'],2*accounting['queue_bytes']+accounting['pipe_metadata_bytes'])
-  self.assertEqual((accounting['pipe_bytes'],accounting['pipe_metadata_bytes']),(8248,56))
+  self.assertEqual((accounting['pipe_bytes'],accounting['pipe_metadata_bytes']),(8256,64))
   text,result=fixture();self.assertTrue(self.verify(text,result)['ok'])
   # The previous fixture/oracle both omitted Pipe's56 metadata bytes.
   with self.assertRaisesRegex(ValueError,'local TLS bounds/source UTC differ'):
-   self.verify(text.replace('task_bytes=10000 private_bytes=18248','task_bytes=10000 private_bytes=18192',1),result)
+   self.verify(text.replace('task_bytes=10000 private_bytes=18256','task_bytes=10000 private_bytes=18192',1),result)
   contract=p.source_contract(ROOT)
   self.assertEqual(contract['tls_accounting'],accounting)
   self.assertEqual(contract['source_sha256']['crates/sex-tls/src/lib.rs'],p.sha((ROOT/'crates/sex-tls/src/lib.rs').read_bytes()))
  def test_unqualified_pipe_or_session_accounting_fails_before_trace_acceptance(self):
   path=self.root/'crates/sex-tls/src/lib.rs';source=path.read_text()
-  for old,new in[('PIPE_METADATA_BYTES:usize=56','PIPE_METADATA_BYTES:usize=55'),
+  for old,new in[('PIPE_METADATA_BYTES:usize=64','PIPE_METADATA_BYTES:usize=63'),
                   ('2*QUEUE_BYTES+PIPE_METADATA_BYTES','2*QUEUE_BYTES'),
                   ('private_bytes:task.layout.size()+core::mem::size_of::<Pipe>()','private_bytes:task.layout.size()+2*QUEUE_BYTES')]:
    self.assertIn(old,source);path.write_text(source.replace(old,new,1))

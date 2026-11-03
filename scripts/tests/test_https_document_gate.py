@@ -20,7 +20,7 @@ def peer(mode='ready'):
 
 class HTTPSDocumentOracle(unittest.TestCase):
  def test_source_contract_binds_shared_codec_pipe_and_authenticated_reader(self):
-  contract=gate.load_contract(ROOT);self.assertEqual(contract['pipe_bytes'],8248);self.assertEqual(contract['reader_max_body'],12288);self.assertEqual(contract['expected_body_sha256'],hashlib.sha256(gate.BODY).hexdigest())
+  contract=gate.load_contract(ROOT);self.assertEqual(contract['pipe_bytes'],8256);self.assertEqual(contract['reader_max_body'],12288);self.assertEqual(contract['expected_body_sha256'],hashlib.sha256(gate.BODY).hexdigest())
   for name in('crates/sex-http/src/codec.rs','crates/sex-tls/src/lib.rs','apps/kaleidoscope/src/document_reader.rs','apps/kaleidoscope/src/tls_exchange.rs'):self.assertIn(name,contract['source_sha256'])
  def test_public_guide_is_exact_bounded_ascii_and_last_byte_is_unique(self):
   self.assertEqual(len(gate.BODY),12288);self.assertTrue(gate.BODY.endswith(gate.TAIL));self.assertEqual(gate.BODY.count(gate.TAIL),1);self.assertTrue(all(b==10 or 32<=b<=126 for b in gate.BODY));self.assertIn(b'It is not Unix.',gate.BODY);self.assertEqual(len(gate.REQUEST),94)
@@ -71,8 +71,8 @@ class HTTPSReaderPixels(unittest.TestCase):
 
 @with_inventory
 def metadata(mode='ready'):
- base=fixture.metadata(fixture.capture());base=base[:base.index('[browser.tls.peer.authenticated]')].replace('browser.tls.peer.','browser.https.');base=re.sub(r'task_bytes=\d+','task_bytes=25000',base);base=re.sub(r'private_bytes=\d+','private_bytes=45536',base);initial=tls.tls_records(fixture.hello())[0]['length']+5
- marker='[browser.tls.prepared]';at=base.index('\n',base.index(marker));base=base[:at+1]+f'[browser.https.prepared] task_bytes=25000 private_bytes=45536 tx_bytes={initial} utc_snapshot={fixture.UTC} request_bytes=94 document_limit=12288 network=0\n'+base[at+1:]
+ base=fixture.metadata(fixture.capture());base=base[:base.index('[browser.tls.peer.authenticated]')].replace('browser.tls.peer.','browser.https.');base=re.sub(r'task_bytes=\d+','task_bytes=25000',base);base=re.sub(r'private_bytes=\d+','private_bytes=45544',base);initial=tls.tls_records(fixture.hello())[0]['length']+5
+ marker='[browser.tls.prepared]';at=base.index('\n',base.index(marker));base=base[:at+1]+f'[browser.https.prepared] task_bytes=25000 private_bytes=45544 tx_bytes={initial} utc_snapshot={fixture.UTC} request_bytes=94 document_limit=12288 network=0\n'+base[at+1:]
  if mode!='wrong-name':base+='[browser.https.authenticated] ticket=2 profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1\n'
  if mode=='ready':
   wire=gate.inspect_wire(capture(mode),peer(mode),mode);assert wire['ok'],wire;flow=wire['joins'][0];digest=hex(tls.fingerprint(gate.BODY));base+=f'[browser.https.progress] ticket=2 body_received=12288 authenticated=1 body_visible=0\n[browser.https.body] ticket=2 bytes=12288 hash={digest} parsed=1 authenticated=1 visible=0\n[browser.https.released] ticket=2 tx={flow["outgoing_bytes"]} rx={flow["incoming_bytes"]} request_bytes=94 body_bytes=12288 body_hash={digest} positive_release=1 authenticated=1 public_test_root=1\n[browser.https.view] state=Verified controlled_profile=1 public_internet=0\n'
@@ -89,7 +89,7 @@ def metadata(mode='ready'):
 
 class HTTPSAuthorityReceipts(unittest.TestCase):
  def check(self,text,mode='ready'):
-  raw=capture(mode);wire=gate.inspect_wire(raw,peer(mode),mode);dns=gate.dns_capture(raw,'echo',expected=[dict(ticket=1,response_hex=tls.dns_response(1).hex())]);return gate.inspect_document(text,mode,wire,dns,raw,fixture.UTC-5,fixture.UTC+5,{'pipe_bytes':8248})
+  raw=capture(mode);wire=gate.inspect_wire(raw,peer(mode),mode);dns=gate.dns_capture(raw,'echo',expected=[dict(ticket=1,response_hex=tls.dns_response(1).hex())]);return gate.inspect_document(text,mode,wire,dns,raw,fixture.UTC-5,fixture.UTC+5,{'pipe_bytes':8256})
  def test_exact_document_negative_and_partial_authority_modes(self):
   for mode in gate.MODES:self.assertTrue(self.check(metadata(mode),mode)['ok'],(mode,self.check(metadata(mode),mode)))
  def test_missing_foreign_boot_policy_and_prerequisites_fail(self):
@@ -97,8 +97,8 @@ class HTTPSAuthorityReceipts(unittest.TestCase):
   for old,new in [('consumer_task=15 profile=1','consumer_task=99 profile=1'),('origin=held_boot_grant','origin=ambient'),('[browser.clock.source.denied]','[absent.clock.denial]'),('produced=32','produced=24'),('service_payload=erased','service_payload=retained'),('slot=62','slot=18')]:self.assertFalse(self.check(text.replace(old,new))['ok'],old)
  def test_source_bound_document_allocation_and_shared_metadata_must_agree(self):
   text=metadata()
-  for old,new in [('private_bytes=45536','private_bytes=45535'),('document_limit=12288','document_limit=16384'),('request_bytes=94','request_bytes=38'),('utc_snapshot='+str(fixture.UTC),'utc_snapshot='+str(fixture.UTC+1)),('task_bytes=25000','task_bytes=40000')]:self.assertFalse(self.check(text.replace(old,new))['ok'],old)
-  self.assertFalse(self.check(text.replace('private_bytes=45536','private_bytes=45535',1))['ok'])
+  for old,new in [('private_bytes=45544','private_bytes=45543'),('document_limit=12288','document_limit=16384'),('request_bytes=94','request_bytes=38'),('utc_snapshot='+str(fixture.UTC),'utc_snapshot='+str(fixture.UTC+1)),('task_bytes=25000','task_bytes=40000')]:self.assertFalse(self.check(text.replace(old,new))['ok'],old)
+  self.assertFalse(self.check(text.replace('private_bytes=45544','private_bytes=45543',1))['ok'])
  def test_dns_positive_release_and_exact_admitted_lease_precede_http(self):
   text=metadata()
   for old,new in [('ticket=1 view=Answer([10, 0, 2, 2])','ticket=1 view=Cancelled'),('dns_generation=1','dns_generation=2'),('expires=60000 now=101','expires=101 now=101'),('authority=held_boot_route','authority=ambient'),('owner=15 task=15 ticket=2 kind=10','owner=15 task=99 ticket=2 kind=10')]:self.assertFalse(self.check(text.replace(old,new))['ok'],old)

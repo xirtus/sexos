@@ -14,6 +14,10 @@ pub const HTTPS_MAX_REQUEST: usize = MAX_REQUEST + 6;
 pub const MAX_RESPONSE: usize = MAX_HEADERS + MAX_BODY;
 pub const MAX_HEADERS: usize = 1024;
 pub const MAX_BODY: usize = 12288;
+/// An HTML page's source may be larger than a text document: it is received
+/// into a caller-provided buffer of up to this size and converted to text
+/// (at most `MAX_BODY`) by its reader. Other resources keep `MAX_BODY`.
+pub const MAX_PAGE_SOURCE: usize = 32768;
 pub const MAX_PATH: usize = 48;
 pub const MAX_REDIRECT_BODY: usize = 1024;
 // Exact supported-profile fixture for host/native wire oracles. Runtime Host
@@ -182,7 +186,7 @@ fn token(bytes: &[u8]) -> bool {
         || matches!(b, b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+'
             | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'))
 }
-fn length(bytes: &[u8]) -> Result<usize, Error> {
+fn length(bytes: &[u8], limit: usize) -> Result<usize, Error> {
     if bytes.is_empty() { return Err(Error::InvalidContentLength); }
     let mut value = 0usize;
     for &byte in bytes {
@@ -190,7 +194,7 @@ fn length(bytes: &[u8]) -> Result<usize, Error> {
         value = value.checked_mul(10).and_then(|v| v.checked_add((byte-b'0') as usize))
             .ok_or(Error::InvalidContentLength)?;
     }
-    if value > MAX_BODY { return Err(Error::BodyLimit); }
+    if value > limit { return Err(Error::BodyLimit); }
     Ok(value)
 }
 fn content_type(bytes: &[u8]) -> Result<(), Error> { text_type(bytes,b"text/plain") }
@@ -294,7 +298,7 @@ fn navigation_prefix(input: &[u8], navigation: bool, resource:Resource) -> Resul
         if name.eq_ignore_ascii_case(b"content-encoding") { return Err(Error::UnsupportedEncoding); }
         if name.eq_ignore_ascii_case(b"content-length") {
             if body_length.is_some() { return Err(Error::DuplicateContentLength); }
-            body_length = Some(length(value)?);
+            body_length = Some(length(value, if resource == Resource::PageHtml && !navigation { MAX_PAGE_SOURCE } else { MAX_BODY })?);
         } else if name.eq_ignore_ascii_case(b"content-type") {
             if has_type { return Err(Error::UnsupportedContentType); }
             if !redirect_status {resource_content_type(value,resource)?;}else{ignored_media_type(value)?;}
@@ -352,20 +356,31 @@ fn erase(bytes:&mut[u8]){for byte in bytes{unsafe{core::ptr::write_volatile(byte
 /// Content-Length has arrived. It proves no TLS, peer EOF, job release or UI
 /// publication. The caller must finish once before borrowing/copying the body.
 /// Bytes after that extent within any feed are rejected, never silently dropped.
-pub struct Receiver{
-    header:[u8;MAX_HEADERS],body:[u8;MAX_BODY],header_len:usize,body_len:usize,
-    expected:Option<usize>,total:usize,error:Option<Error>,finished:bool,taken:bool,resource:Resource,
+pub struct ReceiverIn<B:AsRef<[u8]>+AsMut<[u8]>>{
+    header:[u8;MAX_HEADERS],body:B,header_len:usize,body_len:usize,
+    expected:Option<usize>,total:usize,error:Option<Error>,finished:bool,taken:bool,kept:bool,resource:Resource,
 }
+/// The inline receiver: a `MAX_BODY` body held in the value itself.
+pub type Receiver=ReceiverIn<[u8;MAX_BODY]>;
 impl Receiver{
     pub const fn new()->Self{Self::for_resource(Resource::WelcomeText)}
     pub const fn for_resource(resource:Resource)->Self{Self{header:[0;MAX_HEADERS],body:[0;MAX_BODY],header_len:0,body_len:0,
-        expected:None,total:0,error:None,finished:false,taken:false,resource}}
+        expected:None,total:0,error:None,finished:false,taken:false,kept:false,resource}}
+}
+impl<'b> ReceiverIn<&'b mut [u8]>{
+    /// A page receiver writing its body into `buffer` (at most
+    /// `MAX_PAGE_SOURCE` bytes are used); allocation stays with the caller.
+    pub fn page(buffer:&'b mut [u8])->Self{let n=buffer.len().min(MAX_PAGE_SOURCE);Self{header:[0;MAX_HEADERS],body:&mut buffer[..n],header_len:0,body_len:0,
+        expected:None,total:0,error:None,finished:false,taken:false,kept:false,resource:Resource::PageHtml}}
+}
+impl<B:AsRef<[u8]>+AsMut<[u8]>> ReceiverIn<B>{
+    fn capacity(&self)->usize{self.body.as_ref().len()}
     pub fn failure(&self)->Option<Error>{self.error}
     pub fn expected_length(&self)->Option<usize>{self.expected}
     pub fn length(&self)->usize{self.body_len}
     pub fn total_received(&self)->usize{self.total}
     pub fn complete(&self)->bool{self.error.is_none()&&self.expected==Some(self.body_len)}
-    fn wipe(&mut self){erase(&mut self.header);erase(&mut self.body);self.header_len=0;self.body_len=0;
+    fn wipe(&mut self){erase(&mut self.header);if !self.kept{erase(self.body.as_mut());}self.header_len=0;self.body_len=0;
         self.expected=None;self.total=0;self.finished=false;self.taken=false;}
     fn reject<T>(&mut self,error:Error)->Result<T,Error>{
         let first=*self.error.get_or_insert(error);self.wipe();Err(first)
@@ -378,16 +393,17 @@ impl Receiver{
     pub fn feed(&mut self,input:&[u8])->Result<(),Error>{
         if let Some(error)=self.error{return Err(error);}
         if self.finished||self.taken{return self.reject(if input.is_empty(){Error::State}else{Error::TrailingData});}
-        let Some(total)=self.total.checked_add(input.len()).filter(|n|*n<=MAX_RESPONSE)else{return self.reject(Error::ResponseLimit);};
+        let Some(total)=self.total.checked_add(input.len()).filter(|n|*n<=MAX_HEADERS+self.capacity())else{return self.reject(Error::ResponseLimit);};
         for &byte in input{
             if let Some(expected)=self.expected{
                 if self.body_len==expected{return self.reject(Error::TrailingData);}
-                self.body[self.body_len]=byte;self.body_len+=1;
+                self.body.as_mut()[self.body_len]=byte;self.body_len+=1;
             }else{
                 if self.header_len==MAX_HEADERS{return self.reject(Error::HeaderLimit);}
                 self.header[self.header_len]=byte;self.header_len+=1;
                 if self.header[..self.header_len].ends_with(b"\r\n\r\n"){
                     match parse_headers_resource(&self.header[..self.header_len],self.resource){
+                        Ok(headers) if headers.content_length>self.capacity()=>return self.reject(Error::BodyLimit),
                         Ok(headers)=>self.expected=Some(headers.content_length),
                         Err(error)=>return self.reject(error),
                     }
@@ -406,7 +422,7 @@ impl Receiver{
     /// Raw bytes remain caller-private data. Sanitization and publication after
     /// authenticated TLS and positive lease RELEASE belong to the parent.
     pub fn body(&self)->Option<&[u8]>{
-        if self.finished&&!self.taken&&self.error.is_none(){Some(&self.body[..self.body_len])}else{None}
+        if self.finished&&!self.taken&&self.error.is_none(){Some(&self.body.as_ref()[..self.body_len])}else{None}
     }
     /// Copy exactly once. A short output fails before changing caller bytes and
     /// permanently wipes this receiver; success erases both retained arrays.
@@ -414,11 +430,18 @@ impl Receiver{
         if let Some(error)=self.error{return Err(error);}
         if !self.finished||self.taken{return self.reject(Error::State);}
         if out.len()<self.body_len{return self.reject(Error::OutputLimit);}
-        let length=self.body_len;out[..length].copy_from_slice(&self.body[..length]);
-        erase(&mut self.body);erase(&mut self.header);self.taken=true;Ok(length)
+        let length=self.body_len;out[..length].copy_from_slice(&self.body.as_ref()[..length]);
+        erase(self.body.as_mut());erase(&mut self.header);self.taken=true;Ok(length)
+    }
+    /// Leave the finished body in the caller's own buffer (not erased on
+    /// drop) and return its length; the receiver gives up all access.
+    pub fn keep(&mut self)->Result<usize,Error>{
+        if let Some(error)=self.error{return Err(error);}
+        if !self.finished||self.taken{return self.reject(Error::State);}
+        erase(&mut self.header);self.taken=true;self.kept=true;Ok(self.body_len)
     }
 }
-impl Drop for Receiver{fn drop(&mut self){self.wipe();}}
+impl<B:AsRef<[u8]>+AsMut<[u8]>> Drop for ReceiverIn<B>{fn drop(&mut self){self.wipe();}}
 const _:()=assert!(core::mem::size_of::<Receiver>()<=MAX_RESPONSE+128);
 
 #[cfg(test)]
@@ -761,5 +784,51 @@ mod receiver_tests{
     #[test]fn exact_header_bound_and_max_body_can_share_a_feed(){
         let mut header=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nX-Pad: ",MAX_BODY).into_bytes();header.resize(MAX_HEADERS-4,b'a');header.extend_from_slice(b"\r\n\r\n");assert_eq!(header.len(),MAX_HEADERS);assert!(parse_headers(&header).is_ok());
         let mut wire=header;wire.extend_from_slice(&vec![0x97;MAX_BODY]);assert_eq!(wire.len(),MAX_RESPONSE);let mut r=Receiver::new();r.feed(&wire).unwrap();assert!(r.complete());r.finish().unwrap();assert_eq!(r.body(),Some(vec![0x97;MAX_BODY].as_slice()));r.scrub();wiped(&r);assert!(!r.complete());assert_eq!(r.failure(),Some(Error::State));
+    }
+}
+
+#[cfg(test)]
+mod page_receiver_tests {
+    use super::*;
+    extern crate std;
+    use std::{format, vec, vec::Vec};
+    fn page(body: &[u8]) -> Vec<u8> {
+        let mut wire = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n", body.len()).into_bytes();
+        wire.extend_from_slice(body);
+        wire
+    }
+    #[test] fn pages_up_to_the_page_source_limit_arrive_in_the_callers_buffer() {
+        let body: Vec<u8> = (0..20000).map(|n| b'a' + (n % 26) as u8).collect();
+        let mut buffer = vec![0u8; MAX_PAGE_SOURCE];
+        {
+            let mut r = ReceiverIn::page(&mut buffer);
+            for part in page(&body).chunks(512) { r.feed(part).unwrap(); }
+            assert!(r.complete());
+            assert_eq!(r.finish(), Ok(20000));
+            assert_eq!(r.keep(), Ok(20000));
+            assert!(r.body().is_none(), "kept bodies are no longer the receiver's");
+        }
+        assert_eq!(&buffer[..20000], body.as_slice(), "kept in place, not erased on drop");
+        // The inline receiver keeps the document limit, even for a page.
+        let mut small = Receiver::for_resource(Resource::PageHtml);
+        let wire = page(&body);
+        assert_eq!(small.feed(&wire[..wire.len() - body.len()]), Err(Error::BodyLimit), "refused at the header");
+        // A page larger than the buffer, or than the page limit, is refused.
+        let mut short = vec![0u8; 16384];
+        assert_eq!(ReceiverIn::page(&mut short).feed(&wire[..wire.len() - body.len()]), Err(Error::BodyLimit));
+        let mut big = vec![0u8; MAX_PAGE_SOURCE + 10];
+        assert_eq!(ReceiverIn::page(&mut big).feed(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n", MAX_PAGE_SOURCE + 1).as_bytes()), Err(Error::BodyLimit));
+        // Other resources keep MAX_BODY in their headers.
+        assert_eq!(parse_headers_resource(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n", MAX_BODY + 1).as_bytes(), Resource::WelcomeText), Err(Error::BodyLimit));
+    }
+    #[test] fn a_failed_page_receive_erases_the_callers_buffer() {
+        let mut buffer = vec![0u8; MAX_PAGE_SOURCE];
+        {
+            let mut r = ReceiverIn::page(&mut buffer);
+            let wire = page(&[b'x'; 100]);
+            r.feed(&wire[..wire.len() - 10]).unwrap();
+            assert_eq!(r.finish(), Err(Error::Truncated));
+        }
+        assert!(buffer.iter().all(|b| *b == 0));
     }
 }

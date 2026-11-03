@@ -134,7 +134,7 @@ class ExistingCheckerJoins(unittest.TestCase):
         trace, _ = responsive.source_trace()
         # source_trace is a fragment; its real caller supplies the BOOT grant.
         rows = responsive.gate.source_cycles(interleave(BROWSER_GRANT+'\n'+trace),
-            {'pipe_bytes': 8248}, responsive.UTC-5, responsive.UTC+5)
+            {'pipe_bytes': 8256}, responsive.UTC-5, responsive.UTC+5)
         self.assertEqual(len(rows), 3)
 
 

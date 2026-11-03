@@ -59,11 +59,9 @@ key handlers call new functions.
 **Open release gates** (details below): full-window reader needs a larger
 Display text delivery; Display applies app paints late; Display redraws are slow (raster 100-670 ticks per frame, H2; H1 removed the inbox backlog); autosave
 failure fences document I/O like any uncertain save; no draft cleanup;
-images limited to 48x48; the Browser body limit is 12 KiB (heap now 128 KiB).
+images limited to 48x48; HTML sources up to 32 KiB, converted text 12 KiB.
 
-**Next suggested steps.** A page-only receive path that converts HTML
-straight into the 12 KiB text document (sources larger than 12 KiB; see
-P2); `async`/`await` would need a suspendable interpreter. Fix focus raising in Shell/Display (with the
+**Next suggested steps.** `async`/`await` would need a suspendable interpreter. Fix focus raising in Shell/Display (with the
 concurrent session); grow the document/body limit with streaming
 conversion (12 KiB is fixed in `sex-http`'s codec); an event model for scripts only if it
 fits held authority.
@@ -1538,6 +1536,36 @@ Ctrl editing, Tab completion, scientific functions, history search)
 native gates pass; the HTML gate passed at both sizes in P9.
 
 Evidence: `docs/handoff/assets/batch-regression-2026-11-03/`.
+
+## Q1. HTML pages up to 32 KiB of source (2026-11-03)
+
+- `sex-http`: the receiver is generic over its body storage
+  (`ReceiverIn<B>`); `Receiver` stays the inline 12 KiB form, and
+  `ReceiverIn::page(&mut buffer)` writes into a caller-owned buffer. Only a
+  `PageHtml` response may declare up to `MAX_PAGE_SOURCE` (32 KiB); every
+  other resource keeps `MAX_BODY`. `keep()` leaves a finished body in the
+  caller's buffer (not erased on drop); a failed receive erases it.
+  Still allocation-free.
+- `sex-tls`: a page fetch receives into a fallible 32 KiB heap buffer
+  (the TLS task does not grow). A page that fits 12 KiB is copied as
+  before; a larger source becomes the document's buffer
+  (`Document.bytes` is now a boxed slice) until the Browser's `rewrite`
+  converts it into at most 12 KiB of text. `Pipe` grew by 8 bytes
+  (`PIPE_METADATA_BYTES` 56 -> 64); the gates that bind it from source,
+  and their synthetic fixtures (`8248` -> `8256`, totals +8), are updated.
+- The converted text is still bounded by 12 KiB (Quil import and the
+  document view are unchanged); the source can now carry up to 32 KiB of
+  markup, styles and scripts.
+
+**Evidence** (`docs/handoff/assets/browser-page-receive-32k-2026-11-03/`):
+`sex-http` tests 43 (new `pages_up_to_the_page_source_limit_arrive_in_the_callers_buffer`,
+`a_failed_page_receive_erases_the_callers_buffer`); `sex-tls` suites all
+pass (new `an_oversized_page_source_is_rewritten_into_a_document`); the
+Python gate unit suite has only its 7 pre-existing failures
+(`python-unit-preexisting-failures.txt`, unchanged from HEAD); host gates
+pass; sealed build and master gate GREEN; native HTML gate at both sizes
+follows a **15,630-byte** page (`source_bytes=15630 text_bytes=149`);
+native HTTPS document, asset, PNG and Browser reserve gates pass.
 
 ## Release gates noted while doing F1–F2
 

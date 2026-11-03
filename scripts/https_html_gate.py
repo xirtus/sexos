@@ -54,7 +54,8 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b'<blockquote>Quoted: authority is held, never ambient.</blockquote><hr>'
  b'<p><img src="/art.qoi" alt="SexOS mark"></p><!-- a comment that never renders --><p>END OF CONTROLLED HTML PAGE</p></body></html>')
 GUIDE_REQUEST=b'GET /guide HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: text/html\r\n\r\n'
-GUIDE=b'<html><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><pre>\nkey   action\n1-9   follow link\nBksp  back\n</pre><p><a href="/page.html">Back to notes</a></p></body></html>'
+# Larger than a 12 KiB document: the page receive path (style is skipped).
+GUIDE=b'<html><head><style>'+b'.pad{margin:0}'*1100+b'</style></head><body><h1>Guide</h1><p>Followed from the field notes on the same BOOT endpoint.</p><pre>\nkey   action\n1-9   follow link\nBksp  back\n</pre><p><a href="/page.html">Back to notes</a></p></body></html>'
 # The page response is ~1.1 KB: one full 1024-byte TLS record plus a short
 # one. Before F11 this size failed at guest connection close.
 SCOPE='Actual fixed BOOT-controlled HTTPS text/html page through held policy/seed/UTC/DNS/duplex authority, converted by the bounded reader (inline scripts only through the bounded subset) and checked against reader glyph pixels. Public laboratory root only; no general JavaScript, CSS, layout, forms, arbitrary URL or public web trust claim.'

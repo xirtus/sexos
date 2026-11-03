@@ -134,7 +134,7 @@ def load_contract(root):
  if not any(call in reader for call in reader_calls)or not any(call in app for call in app_calls)or 'selected:2|256|512'not in app:raise ValueError('source-bound authenticated HTTPS reader selection changed')
  if 'b"\\n\\nHTTPS / lab root: "'not in view or 'b"\\nB fetch V read Q clear"'not in view:raise ValueError('source-bound HTTPS status chrome changed')
  source=(root/'crates/sex-tls/src/lib.rs').read_text();meta=re.search(r'pub const PIPE_METADATA_BYTES\s*:\s*usize\s*=\s*(\d+)',source)
- if not meta or int(meta[1])!=56 or 'core::mem::size_of::<Pipe>()==PIPE_BYTES'not in source or 'PIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES'not in source:raise ValueError('source-bound x86_64 Pipe metadata/compile assertion differs')
+ if not meta or int(meta[1])!=64 or 'core::mem::size_of::<Pipe>()==PIPE_BYTES'not in source or 'PIPE_BYTES:usize=2*QUEUE_BYTES+PIPE_METADATA_BYTES'not in source:raise ValueError('source-bound x86_64 Pipe metadata/compile assertion differs')
  path=re.search(r'pub const HTTPS_PATH[^=]*=\s*(b"[^"\n]*");',source)
  if not path or ast.literal_eval(path[1])!=b'/welcome':raise ValueError('source-bound HTTPS document path differs')
  contract['source_sha256'].update(palette_source_hashes(root))

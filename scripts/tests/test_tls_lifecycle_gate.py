@@ -51,7 +51,7 @@ class LifecycleWireOracle(unittest.TestCase):
   rows=public_rows();rows[1]['response_hex']=gate.tls.ECHO.hex();self.assertFalse(gate.inspect_wire(capture(),endpoint_rows(),rows,PLAIN_REQUEST)['ok'])
 
 UTC=fixture.UTC
-CONTRACT={'pipe_bytes':8248,'stream_ring':1024,'stream_max_wire':13312,'stream_total_ticks':30000,'stream_idle_ticks':5000}
+CONTRACT={'pipe_bytes':8256,'stream_ring':1024,'stream_max_wire':13312,'stream_total_ticks':30000,'stream_idle_ticks':5000}
 def snapshot(reason,used=0,payload=0,tls=0,route=0,providers=0,queued='None',visible=0):return f'[browser.resources] reason={reason} heap_used={used} heap_free={65536-used} heap_total=65536 tls_payload={payload} tls_pending={tls} route_busy={route} providers_busy={providers} queued={queued} body_visible={visible}\n'
 @with_inventory
 def metadata():
@@ -62,7 +62,7 @@ def metadata():
   if old:text+=f'[browser.tls.cleanup] ticket={old} outcome=Cancelled authenticated=1 document=1 tls_payload=0 positive_release=1\n'+snapshot('change',queued='Some('+kind+')')
  def prepare(kind,document):
   nonlocal text,cycle
-  cycle+=1;task=25000 if document else 12000;private=task+8248+(12288 if document else 0);initial=gate.tls.tls_records(fixture.hello())[0]['length']+5;utc=UTC+cycle
+  cycle+=1;task=25000 if document else 12000;private=task+8256+(12288 if document else 0);initial=gate.tls.tls_records(fixture.hello())[0]['length']+5;utc=UTC+cycle
   text+=f'[browser.command.started] kind={kind} accepted=1\n[trust.policy.snapshot] owner=15 task=15 seq={cycle} profile=1 root_bytes=376 origin=held_boot_grant\n[clock.source.snapshot] pd=13 task=13 slot=61 seconds={utc} attempts=1 precision=1 profile=q35_cmos_utc ordinal={cycle}\n[certificate.time.snapshot] owner=15 task=15 seq={cycle} seconds={utc} source=q35_cmos_utc precision=1 receipt=retained\n[entropy.seed.admitted] owner=15 task=15 ticket={cycle} bytes=32 source=held_boot_grant\n[entropy.seed.progress] owner=Some(Identity {{ pd: 15, task: 15 }}) ticket={cycle} state=Some(Ready) produced=32 consumed=0 failure=0 private=1\n[entropy.seed.released] owner=15 task=15 ticket={cycle} service_payload=erased receipt=retained\n[browser.trust.self_check] profile=1 passed=1 fixture=public_controlled_profile authenticated_peer=0\n'
   if document:text+=f'[browser.https.prepared] task_bytes={task} private_bytes={private} tx_bytes={initial} utc_snapshot={utc} request_bytes=94 document_limit=12288 network=0\n'
   text+=f'[browser.tls.prepared] task_bytes={task} private_bytes={private} read=4096 write=2048 tx_bytes={initial} utc_snapshot={utc} authenticated=0 network=0\n'
@@ -99,7 +99,7 @@ class LifecycleOwnershipOracle(unittest.TestCase):
   lines=metadata().splitlines();cleanup=next(i for i,l in enumerate(lines)if l.startswith('[browser.tls.cleanup] ticket=5'));started=next(i for i in range(cleanup+1,len(lines))if lines[i]=='[browser.command.started] kind=TlsDns accepted=1');lines[cleanup],lines[started]=lines[started],lines[cleanup];self.assertFalse(self.inspect('\n'.join(lines))['ok'])
  def test_fresh_source_sequence_grant_and_shared_preparation_cannot_repeat(self):
   text=metadata()
-  for old,new in [('seq=7 profile=1','seq=6 profile=1'),('ordinal=8','ordinal=7'),('produced=32','produced=24'),('private_bytes=45536','private_bytes=45535'),('source=q35_cmos_utc precision=1','source=host precision=1'),('slot=62','slot=18')]:self.assertFalse(self.inspect(text.replace(old,new))['ok'],old)
+  for old,new in [('seq=7 profile=1','seq=6 profile=1'),('ordinal=8','ordinal=7'),('produced=32','produced=24'),('private_bytes=45544','private_bytes=45543'),('source=q35_cmos_utc precision=1','source=host precision=1'),('slot=62','slot=18')]:self.assertFalse(self.inspect(text.replace(old,new))['ok'],old)
  def test_command_replay_and_route_fence_regression_fail(self):
   text=metadata()
   for old,new in [('accepted_replay=0','accepted_replay=1'),('seq=1100 task_bytes=','seq=1000 task_bytes='),('kind=TlsPrepare accepted=1','kind=TlsPrepare accepted=0'),('kind=HttpDns document=0','kind=Echo document=0')]:self.assertFalse(self.inspect(text.replace(old,new))['ok'],old)

@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[2];UTC=fixture.fixture.UTC
 def source_trace(include_inventory=True):
  text=complete('')if include_inventory else'';prepared=[]
  for index in range(1,4):
-  kind='TlsDns'if index==3 else'TlsPrepare';doc=int(index==3);task=25000 if doc else 12000;private=task+8248+12288*doc;utc=UTC+index
+  kind='TlsDns'if index==3 else'TlsPrepare';doc=int(index==3);task=25000 if doc else 12000;private=task+8256+12288*doc;utc=UTC+index
   text+=f'[browser.command.queued] kind={kind} document={doc} retained=1 accepted_replay=0\n'+snapshot('command',queued='Some('+kind+')')+f'[browser.command.started] kind={kind} accepted=1\n'
   text+='[browser.https.intent] accepted=1 explicit=1 public_internet=0\n'if doc else'[browser.tls.intent] accepted=1 explicit=1 network=0\n'
   text+=f'[trust.policy.snapshot] owner=15 task=15 seq={index} profile=1 root_bytes=376 origin=held_boot_grant\n[clock.source.snapshot] pd=13 task=13 slot=61 seconds={utc} attempts=1 precision=1 profile=q35_cmos_utc ordinal={index}\n[certificate.time.snapshot] owner=15 task=15 seq={index} seconds={utc} source=q35_cmos_utc precision=1 receipt=retained\n[entropy.seed.admitted] owner=15 task=15 ticket={index} bytes=32 source=held_boot_grant\n[entropy.seed.progress] owner=Some(Identity {{ pd: 15, task: 15 }}) ticket={index} state=Some(Ready) produced=32 consumed=0 failure=0 private=1\n[entropy.seed.released] owner=15 task=15 ticket={index} service_payload=erased receipt=retained\n'
@@ -71,16 +71,16 @@ class HeavyWorkReceipts(unittest.TestCase):
   for a,b in(('payload=0 seed_ready=1','payload=1 seed_ready=1'),('payload=0 seed_ready=1','payload=0 seed_ready=0'),('payload=20192 seed_ready=0','payload=20191 seed_ready=0'),('payload=20192 seed_ready=0','payload=20192 seed_ready=1')):
    with self.assertRaises(AssertionError):gate.work_receipts(text.replace(a,b,1),prepared)
  def test_fresh_sources_positive_seed_cleanup_and_host_clock(self):
-  text,_=source_trace();rows=gate.source_cycles(text,{'pipe_bytes':8248},UTC,UTC+5);self.assertEqual([r['document']for r in rows],[False,False,True])
-  for a,b in(('seq=2 profile=1','seq=1 profile=1'),('service_payload=erased','service_payload=retained'),('ordinal=2','ordinal=1'),('private_bytes=33248','private_bytes=33247')):
+  text,_=source_trace();rows=gate.source_cycles(text,{'pipe_bytes':8256},UTC,UTC+5);self.assertEqual([r['document']for r in rows],[False,False,True])
+  for a,b in(('seq=2 profile=1','seq=1 profile=1'),('service_payload=erased','service_payload=retained'),('ordinal=2','ordinal=1'),('private_bytes=33256','private_bytes=33255')):
    changed=text.replace(a,b,1)
    if changed==text:continue
-   with self.assertRaises((AssertionError,ValueError)):gate.source_cycles(changed,{'pipe_bytes':8248},UTC,UTC+5)
-  with self.assertRaises((AssertionError,ValueError)):gate.source_cycles(text,{'pipe_bytes':8248},UTC+100,UTC+110)
+   with self.assertRaises((AssertionError,ValueError)):gate.source_cycles(changed,{'pipe_bytes':8256},UTC,UTC+5)
+  with self.assertRaises((AssertionError,ValueError)):gate.source_cycles(text,{'pipe_bytes':8256},UTC+100,UTC+110)
 
 class ProgressAndCustody(unittest.TestCase):
  def check(self,text):
-  raw=fixture.capture('partial-close');wire=gate.https.inspect_wire(raw,fixture.peer('partial-close'),'partial-close');dns=gate.dns_capture(raw,'echo',expected=[dict(ticket=1,response_hex=gate.https.tls.dns_response(1).hex())]);return gate.inspect_progress(text,wire,dns,raw,UTC-5,UTC+5,{'pipe_bytes':8248,'quil_initial':b'init'})
+  raw=fixture.capture('partial-close');wire=gate.https.inspect_wire(raw,fixture.peer('partial-close'),'partial-close');dns=gate.dns_capture(raw,'echo',expected=[dict(ticket=1,response_hex=gate.https.tls.dns_response(1).hex())]);return gate.inspect_progress(text,wire,dns,raw,UTC-5,UTC+5,{'pipe_bytes':8256,'quil_initial':b'init'})
  def test_full_synthetic_join_is_control_only(self):self.assertTrue(self.check(metadata())['ok'],self.check(metadata()))
  def test_no_peer_proof_no_quil_save_or_partial_publication_pass(self):
   text=metadata()

@@ -287,7 +287,7 @@ def inspect_session(trace,peer,wire,raw,c,manifest,evidence,seed,disk,before_sav
   auth=one(trace,r'\[browser.asset.authenticated\] ticket=2 profile=1 expected_name=probe.sexos.test server_finished=1 certificate=1 certificate_verify=1')
   admit=one(trace,r'\[browser.asset.admitted\] ticket=(2) dns_generation=(1) seq=(\d+) task_bytes=(\d+) private_bytes=(\d+) profile=1 authority=held_route');intent=one(trace,r'\[browser.asset.intent\] accepted=1 explicit=1 public_internet=0')
   asset.prerequisites(trace,[intent],[admit],wire['image'],manifest['host_utc_start'],manifest['host_utc_end'])
-  if int(admit[5])!=int(admit[4])+8248+12288:raise ValueError('image private byte accounting differs')
+  if int(admit[5])!=int(admit[4])+8256+12288:raise ValueError('image private byte accounting differs')
   parsed=one(trace,rf'\[browser.asset.body\] ticket=2 bytes={len(asset.BODY)} hash={hex(asset.fingerprint(asset.BODY))} parsed=1 authenticated=1 visible=0');flow=wire['image']['joins'][0]
   released=one(trace,rf'\[browser.asset.released\] ticket=2 tx={flow["outgoing_bytes"]} rx={flow["incoming_bytes"]} body_bytes={len(asset.BODY)} body_hash={hex(asset.fingerprint(asset.BODY))} positive_release=1 authenticated=1')
   decoded=one(trace,rf'\[browser.asset.decoded\] ticket=2 width=48 height=48 pixels=2304 hash={hex(asset.PIXEL_HASH)} bounded_turn=128')

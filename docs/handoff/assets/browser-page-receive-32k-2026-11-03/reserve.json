@@ -1,0 +1,1056 @@
+{
+  "evidence_version": 2,
+  "mode": "quiesced",
+  "chain": [
+    {
+      "identity": {
+        "target": 15,
+        "surface": 300,
+        "lifecycle": 40,
+        "entropy": 60,
+        "clock": 61,
+        "trust": 62,
+        "ordinal": 0,
+        "predecessor": 0,
+        "activation": null,
+        "task": 15
+      },
+      "start": 0,
+      "work_start": 379362,
+      "close_start": 444619,
+      "end": 467472,
+      "paint_starts": [
+        379362,
+        392081,
+        417283
+      ]
+    },
+    {
+      "identity": {
+        "target": 30,
+        "surface": 343,
+        "lifecycle": 154,
+        "entropy": 70,
+        "clock": 71,
+        "trust": 72,
+        "ordinal": 1,
+        "predecessor": 15,
+        "activation": 156,
+        "task": 30
+      },
+      "start": 467472,
+      "work_start": 521307,
+      "close_start": 577518,
+      "end": 595040,
+      "paint_starts": [
+        521307,
+        530602,
+        552596
+      ]
+    },
+    {
+      "identity": {
+        "target": 31,
+        "surface": 344,
+        "lifecycle": 158,
+        "entropy": 73,
+        "clock": 74,
+        "trust": 75,
+        "ordinal": 2,
+        "predecessor": 30,
+        "activation": 160,
+        "task": 31
+      },
+      "start": 595040,
+      "work_start": 645722,
+      "close_start": 701682,
+      "end": 716598,
+      "paint_starts": [
+        645722,
+        655580,
+        677623
+      ]
+    }
+  ],
+  "exhaustion_start": 716598,
+  "exhaustion_end": 754005,
+  "ok": true,
+  "frames": [
+    {
+      "name": "browser-15-prepared",
+      "kind": "browser_tls",
+      "target": 15,
+      "expected": "HelloPending",
+      "screenshot": "browser-15-prepared.ppm",
+      "screenshot_sha256": "828d09f33747b0b5623024fa52313e39d61da271df703683ef1d245ab0c1ccae",
+      "serial_end": 391130,
+      "serial_sha256": "de9c4dad8015dfa3c9ea55ec714a1102e97d5eb53414adbf097c9961337352bd",
+      "post_serial_end": 391130,
+      "post_serial_sha256": "de9c4dad8015dfa3c9ea55ec714a1102e97d5eb53414adbf097c9961337352bd",
+      "pixels_qualified": true,
+      "window_start": 379362,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 15,
+            "task": 15,
+            "surface": 300
+          },
+          "tile": {
+            "x": 640,
+            "y": 425,
+            "w": 640,
+            "h": 375
+          },
+          "viewport": 2,
+          "scale": 2,
+          "columns": 51,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                 ",
+              "x": 648,
+              "y": 461
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                   ",
+              "x": 648,
+              "y": 479
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                             ",
+              "x": 648,
+              "y": 497
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                               ",
+              "x": 648,
+              "y": 515
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                              ",
+              "x": 648,
+              "y": 533
+            },
+            {
+              "row": 5,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 551
+            },
+            {
+              "row": 6,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 569
+            },
+            {
+              "row": 7,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 587
+            },
+            {
+              "row": 8,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 605
+            }
+          ],
+          "bytes": 467,
+          "hash": "0x7fe2723532b3b11a",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 5,
+          "layout_offset": 385632,
+          "display_commit_offset": 386119,
+          "applied_offset": 386352,
+          "capture_window": [
+            379362,
+            391130
+          ]
+        },
+        "checked_pixels": 206544,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 459,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-15-expanded",
+      "kind": "browser_tls",
+      "target": 15,
+      "expected": "HelloPending",
+      "screenshot": "browser-15-expanded.ppm",
+      "screenshot_sha256": "21be17ba2f45ae889c2ff0a686caffc30632d9616dd4e1fa7ed46d7b73ecabeb",
+      "serial_end": 415643,
+      "serial_sha256": "e1e8fd481bd4766f7122f7993cc0aee7cdd21998ccfb97381cad9d34490eb82a",
+      "post_serial_end": 415643,
+      "post_serial_sha256": "e1e8fd481bd4766f7122f7993cc0aee7cdd21998ccfb97381cad9d34490eb82a",
+      "pixels_qualified": true,
+      "window_start": 392081,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 15,
+            "task": 15,
+            "surface": 300
+          },
+          "tile": {
+            "x": 0,
+            "y": 50,
+            "w": 1280,
+            "h": 750
+          },
+          "viewport": 3,
+          "scale": 2,
+          "columns": 63,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                             ",
+              "x": 8,
+              "y": 86
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                               ",
+              "x": 8,
+              "y": 104
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                                         ",
+              "x": 8,
+              "y": 122
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                                           ",
+              "x": 8,
+              "y": 140
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                                          ",
+              "x": 8,
+              "y": 158
+            },
+            {
+              "row": 5,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 176
+            },
+            {
+              "row": 6,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 194
+            },
+            {
+              "row": 7,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 212
+            }
+          ],
+          "bytes": 511,
+          "hash": "0x4387423223882440",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 6,
+          "layout_offset": 406940,
+          "display_commit_offset": 411602,
+          "applied_offset": 411835,
+          "capture_window": [
+            392081,
+            415643
+          ]
+        },
+        "checked_pixels": 892384,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 504,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-15-restored",
+      "kind": "browser_tls",
+      "target": 15,
+      "expected": "HelloPending",
+      "screenshot": "browser-15-restored.ppm",
+      "screenshot_sha256": "b2d092408d471486ff45910219437397aa0ad5b0354034efee8d000e6b0f3d23",
+      "serial_end": 442209,
+      "serial_sha256": "f20635845746d2a08e6aef63edc071a532e3622c74b7fe81b7d822e3cb88456b",
+      "post_serial_end": 442209,
+      "post_serial_sha256": "f20635845746d2a08e6aef63edc071a532e3622c74b7fe81b7d822e3cb88456b",
+      "pixels_qualified": true,
+      "window_start": 417283,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 15,
+            "task": 15,
+            "surface": 300
+          },
+          "tile": {
+            "x": 640,
+            "y": 425,
+            "w": 640,
+            "h": 375
+          },
+          "viewport": 4,
+          "scale": 2,
+          "columns": 51,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                 ",
+              "x": 648,
+              "y": 461
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                   ",
+              "x": 648,
+              "y": 479
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                             ",
+              "x": 648,
+              "y": 497
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                               ",
+              "x": 648,
+              "y": 515
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                              ",
+              "x": 648,
+              "y": 533
+            },
+            {
+              "row": 5,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 551
+            },
+            {
+              "row": 6,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 569
+            },
+            {
+              "row": 7,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 587
+            },
+            {
+              "row": 8,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 605
+            }
+          ],
+          "bytes": 467,
+          "hash": "0x7fe2723532b3b11a",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 7,
+          "layout_offset": 433171,
+          "display_commit_offset": 437995,
+          "applied_offset": 438320,
+          "capture_window": [
+            417283,
+            442209
+          ]
+        },
+        "checked_pixels": 206544,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 459,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-30-prepared",
+      "kind": "browser_tls",
+      "target": 30,
+      "expected": "HelloPending",
+      "screenshot": "browser-30-prepared.ppm",
+      "screenshot_sha256": "0b57d1b61de971e3b3799f9c3f50137fa00322d225fee2defe0844ccfb7e4836",
+      "serial_end": 530386,
+      "serial_sha256": "b5f57dbbdfcaffba18a0fd9560f052ff63ebb8283436bcbfd899b0ed8bbbf68c",
+      "post_serial_end": 530386,
+      "post_serial_sha256": "b5f57dbbdfcaffba18a0fd9560f052ff63ebb8283436bcbfd899b0ed8bbbf68c",
+      "pixels_qualified": true,
+      "window_start": 521307,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 30,
+            "task": 30,
+            "surface": 343
+          },
+          "tile": {
+            "x": 640,
+            "y": 425,
+            "w": 640,
+            "h": 375
+          },
+          "viewport": 2,
+          "scale": 2,
+          "columns": 51,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                 ",
+              "x": 648,
+              "y": 461
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                   ",
+              "x": 648,
+              "y": 479
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                             ",
+              "x": 648,
+              "y": 497
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                               ",
+              "x": 648,
+              "y": 515
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                              ",
+              "x": 648,
+              "y": 533
+            },
+            {
+              "row": 5,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 551
+            },
+            {
+              "row": 6,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 569
+            },
+            {
+              "row": 7,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 587
+            },
+            {
+              "row": 8,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 605
+            }
+          ],
+          "bytes": 467,
+          "hash": "0x7fe2723532b3b11a",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 5,
+          "layout_offset": 525901,
+          "display_commit_offset": 527072,
+          "applied_offset": 527305,
+          "capture_window": [
+            521307,
+            530386
+          ]
+        },
+        "checked_pixels": 206544,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 459,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-30-expanded",
+      "kind": "browser_tls",
+      "target": 30,
+      "expected": "HelloPending",
+      "screenshot": "browser-30-expanded.ppm",
+      "screenshot_sha256": "987cbee5202297b75253c6b6e4cdb0b1d521c5ef576f4a75b1e05ceb72aa08b9",
+      "serial_end": 551728,
+      "serial_sha256": "a180603d4b70133c4c05dc9a8e88757c882a3b2da46a4820e099fb933dc38924",
+      "post_serial_end": 551728,
+      "post_serial_sha256": "a180603d4b70133c4c05dc9a8e88757c882a3b2da46a4820e099fb933dc38924",
+      "pixels_qualified": true,
+      "window_start": 530602,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 30,
+            "task": 30,
+            "surface": 343
+          },
+          "tile": {
+            "x": 0,
+            "y": 50,
+            "w": 1280,
+            "h": 750
+          },
+          "viewport": 3,
+          "scale": 2,
+          "columns": 63,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                             ",
+              "x": 8,
+              "y": 86
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                               ",
+              "x": 8,
+              "y": 104
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                                         ",
+              "x": 8,
+              "y": 122
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                                           ",
+              "x": 8,
+              "y": 140
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                                          ",
+              "x": 8,
+              "y": 158
+            },
+            {
+              "row": 5,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 176
+            },
+            {
+              "row": 6,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 194
+            },
+            {
+              "row": 7,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 212
+            }
+          ],
+          "bytes": 511,
+          "hash": "0x4387423223882440",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 6,
+          "layout_offset": 544312,
+          "display_commit_offset": 547988,
+          "applied_offset": 548221,
+          "capture_window": [
+            530602,
+            551728
+          ]
+        },
+        "checked_pixels": 892384,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 504,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-30-restored",
+      "kind": "browser_tls",
+      "target": 30,
+      "expected": "HelloPending",
+      "screenshot": "browser-30-restored.ppm",
+      "screenshot_sha256": "4d5b58b586f8230dfc95b6cb9056f96b3d7768f2e9eb7668f4bdedbb51cc4621",
+      "serial_end": 575684,
+      "serial_sha256": "88fde04e8dc5b7a67e2b5ee71fe82cd73fae17fb3136eb598ac38af5b2a1f5ab",
+      "post_serial_end": 575684,
+      "post_serial_sha256": "88fde04e8dc5b7a67e2b5ee71fe82cd73fae17fb3136eb598ac38af5b2a1f5ab",
+      "pixels_qualified": true,
+      "window_start": 552596,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 30,
+            "task": 30,
+            "surface": 343
+          },
+          "tile": {
+            "x": 640,
+            "y": 425,
+            "w": 640,
+            "h": 375
+          },
+          "viewport": 4,
+          "scale": 2,
+          "columns": 51,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                 ",
+              "x": 648,
+              "y": 461
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                   ",
+              "x": 648,
+              "y": 479
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                             ",
+              "x": 648,
+              "y": 497
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                               ",
+              "x": 648,
+              "y": 515
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                              ",
+              "x": 648,
+              "y": 533
+            },
+            {
+              "row": 5,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 551
+            },
+            {
+              "row": 6,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 569
+            },
+            {
+              "row": 7,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 587
+            },
+            {
+              "row": 8,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 605
+            }
+          ],
+          "bytes": 467,
+          "hash": "0x7fe2723532b3b11a",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 7,
+          "layout_offset": 567304,
+          "display_commit_offset": 571607,
+          "applied_offset": 571840,
+          "capture_window": [
+            552596,
+            575684
+          ]
+        },
+        "checked_pixels": 206544,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 459,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-31-prepared",
+      "kind": "browser_tls",
+      "target": 31,
+      "expected": "HelloPending",
+      "screenshot": "browser-31-prepared.ppm",
+      "screenshot_sha256": "b6abd68de9a02048fb7bb7eebf4f42e4e6ea171d8b04322c4e41cf6402bb38a7",
+      "serial_end": 654663,
+      "serial_sha256": "dc11be5d9129e094361a5d2fe61f78f2fb1762d0633b23cee3c9a6a07a973981",
+      "post_serial_end": 654663,
+      "post_serial_sha256": "dc11be5d9129e094361a5d2fe61f78f2fb1762d0633b23cee3c9a6a07a973981",
+      "pixels_qualified": true,
+      "window_start": 645722,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 31,
+            "task": 31,
+            "surface": 344
+          },
+          "tile": {
+            "x": 640,
+            "y": 425,
+            "w": 640,
+            "h": 375
+          },
+          "viewport": 2,
+          "scale": 2,
+          "columns": 51,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                 ",
+              "x": 648,
+              "y": 461
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                   ",
+              "x": 648,
+              "y": 479
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                             ",
+              "x": 648,
+              "y": 497
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                               ",
+              "x": 648,
+              "y": 515
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                              ",
+              "x": 648,
+              "y": 533
+            },
+            {
+              "row": 5,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 551
+            },
+            {
+              "row": 6,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 569
+            },
+            {
+              "row": 7,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 587
+            },
+            {
+              "row": 8,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 605
+            }
+          ],
+          "bytes": 467,
+          "hash": "0x7fe2723532b3b11a",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 5,
+          "layout_offset": 650227,
+          "display_commit_offset": 651398,
+          "applied_offset": 651631,
+          "capture_window": [
+            645722,
+            654663
+          ]
+        },
+        "checked_pixels": 206544,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 459,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-31-expanded",
+      "kind": "browser_tls",
+      "target": 31,
+      "expected": "HelloPending",
+      "screenshot": "browser-31-expanded.ppm",
+      "screenshot_sha256": "39f6e8370ab5cc818f1f4e93e6d126890b0a61fa2938113b930f46fdda7db85d",
+      "serial_end": 676054,
+      "serial_sha256": "79942091627ae1d344744455b03512eedc681f6f3a6d7c7a959981d558cd411d",
+      "post_serial_end": 676054,
+      "post_serial_sha256": "79942091627ae1d344744455b03512eedc681f6f3a6d7c7a959981d558cd411d",
+      "pixels_qualified": true,
+      "window_start": 655580,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 31,
+            "task": 31,
+            "surface": 344
+          },
+          "tile": {
+            "x": 0,
+            "y": 50,
+            "w": 1280,
+            "h": 750
+          },
+          "viewport": 3,
+          "scale": 2,
+          "columns": 63,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                             ",
+              "x": 8,
+              "y": 86
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                               ",
+              "x": 8,
+              "y": 104
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                                         ",
+              "x": 8,
+              "y": 122
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                                           ",
+              "x": 8,
+              "y": 140
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                                          ",
+              "x": 8,
+              "y": 158
+            },
+            {
+              "row": 5,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 176
+            },
+            {
+              "row": 6,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 194
+            },
+            {
+              "row": 7,
+              "text": "                                                               ",
+              "x": 8,
+              "y": 212
+            }
+          ],
+          "bytes": 511,
+          "hash": "0x4387423223882440",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 6,
+          "layout_offset": 668823,
+          "display_commit_offset": 672363,
+          "applied_offset": 672596,
+          "capture_window": [
+            655580,
+            676054
+          ]
+        },
+        "checked_pixels": 892384,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 504,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-31-restored",
+      "kind": "browser_tls",
+      "target": 31,
+      "expected": "HelloPending",
+      "screenshot": "browser-31-restored.ppm",
+      "screenshot_sha256": "f576b9bae6be551c106f180180a8896e7e5ce428083b0c5106330940ce2f5424",
+      "serial_end": 699848,
+      "serial_sha256": "64d0f29b31c58f35c021e79291c73ceda20291d83b3c213ac4759cceb0aa3f0f",
+      "post_serial_end": 699848,
+      "post_serial_sha256": "64d0f29b31c58f35c021e79291c73ceda20291d83b3c213ac4759cceb0aa3f0f",
+      "pixels_qualified": true,
+      "window_start": 677623,
+      "proof": {
+        "ok": true,
+        "errors": [],
+        "expected": "HelloPending",
+        "geometry": {
+          "consumer": {
+            "target": 31,
+            "task": 31,
+            "surface": 344
+          },
+          "tile": {
+            "x": 640,
+            "y": 425,
+            "w": 640,
+            "h": 375
+          },
+          "viewport": 4,
+          "scale": 2,
+          "columns": 51,
+          "rows": [
+            {
+              "row": 0,
+              "text": "Kaleidoscope / TLS                                 ",
+              "x": 648,
+              "y": 461
+            },
+            {
+              "row": 1,
+              "text": "TLS preparation:                                   ",
+              "x": 648,
+              "y": 479
+            },
+            {
+              "row": 2,
+              "text": "hello pending; no peer                             ",
+              "x": 648,
+              "y": 497
+            },
+            {
+              "row": 3,
+              "text": "Local only / no peer                               ",
+              "x": 648,
+              "y": 515
+            },
+            {
+              "row": 4,
+              "text": "L prep Q clear Y peer                              ",
+              "x": 648,
+              "y": 533
+            },
+            {
+              "row": 5,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 551
+            },
+            {
+              "row": 6,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 569
+            },
+            {
+              "row": 7,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 587
+            },
+            {
+              "row": 8,
+              "text": "                                                   ",
+              "x": 648,
+              "y": 605
+            }
+          ],
+          "bytes": 467,
+          "hash": "0x7fe2723532b3b11a",
+          "complete": true,
+          "state_code": 2,
+          "status_text": "hello pending; no peer",
+          "paint": 7,
+          "layout_offset": 691557,
+          "display_commit_offset": 696210,
+          "applied_offset": 696443,
+          "capture_window": [
+            677623,
+            699848
+          ]
+        },
+        "checked_pixels": 206544,
+        "expected_ink_pixels": 3872,
+        "glyph_cells": 459,
+        "nonspace_glyphs": 82,
+        "status_qualified": true
+      }
+    },
+    {
+      "name": "browser-reserve-exhausted",
+      "kind": "launcher",
+      "target": 15,
+      "expected": "Open Browser",
+      "screenshot": "browser-reserve-exhausted.ppm",
+      "screenshot_sha256": "3189e32d2065b7ac01760e12a71e4ff4f6c1c0a57499bdef7d1fe0592bf171b3",
+      "serial_end": 751740,
+      "serial_sha256": "a765f634b735dd1deea54145caee8800f43dffa03cbbcbb463d5093844ae8e4f",
+      "post_serial_end": 751740,
+      "post_serial_sha256": "a765f634b735dd1deea54145caee8800f43dffa03cbbcbb463d5093844ae8e4f",
+      "pixels_qualified": true
+    }
+  ]
+}
