@@ -1,6 +1,6 @@
 # SexOS feature ledger (from 2026-11-02)
 
-## Handoff summary (as of 2026-11-03, after M36)
+## Handoff summary (as of 2026-11-03, after N19)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow
 links 1-16, `Backspace` back, `/` find in page, `G` QOI image, `P` PNG image (any standard depth,
@@ -23,21 +23,23 @@ with a numbered list, images as alt text, forms as read-only text,
 **Inline script subset** (`apps/kaleidoscope/src/script.rs`, not a JS
 engine, no DOM/events/timers/network/storage/clock/entropy): numbers printed
 like JavaScript, strings and string methods, regular expressions
-(`regex.rs`, bounded backtracking), `null`/`undefined`, `typeof`,
-`if/else`, `switch`, `while`/`do`/`for`/`for...of`/`for...in`, labelled
-`break`/`continue`, under a 10,000-step budget; `var` (function scoped) /
-`let`/`const` (block scoped); functions with default and rest parameters,
-arrows, IIFEs, callbacks, closures (on `return`), `this`, `class ...
-extends` with `super`, `static`, `get`/`set`, `new`, `instanceof`,
-`try/catch/finally/throw` and Error objects; arrays and objects with most
-standard methods, object-literal shorthand/methods/computed keys/spread,
-destructuring with defaults, holes and rest; templates; `?.`, `??`,
-short-circuit `&& || ?:`, `**`, bitwise operators, logical and compound
-assignment to any member chain, `++`/`--` in expressions; `Math`,
-`JSON.stringify/parse`, `Date` from given values only (no
-`new Date()`/`Date.now()`), URI encode/decode; output via `document.write`.
-Bounds: nesting 64 and a stack floor, 6 arguments per call, 32 variables, 16 functions, 32
-closures, 32 arrays, 16 objects.
+(`regex.rs`, bounded backtracking; `exec`/`lastIndex`, `matchAll`),
+`null`/`undefined`, `typeof`, `if/else`, `switch`, all loop forms incl.
+`for...of/in`, labelled `break`/`continue`, under a 10,000-step budget;
+`var` (function scoped) / `let`/`const`; functions with default, rest and
+destructured parameters, arrows, IIFEs, named function expressions,
+callbacks, closures (on `return`), `this`, `class ... extends` with
+`super`, `static`, `get`/`set`, `new`, `instanceof`, `try/catch/finally/
+throw` and Error objects; arrays, objects, `Set`, `Map` with most standard
+methods; object-literal shorthand/methods/computed keys/spread;
+destructuring (nested, defaults, holes, rest); nested templates; `?.`,
+`??`, short-circuit `&& || ?:`, `**`, bitwise operators, assignment
+expressions, logical/compound assignment to any member chain, `++`/`--`;
+`Math`, `JSON.stringify` (replacer keys, indent) / `parse`, `Date` from
+given values only, URI encode/decode, `toPrecision`/`toLocaleString`;
+output via `document.write`. Bounds: nesting 64 plus a stack floor 10 KiB
+above the Browser stack bottom, 6 arguments per call, 32 variables, 16
+functions, 32 closures, 32 arrays, 16 objects, 16 collections.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
 image): `https_html_gate.py` (also bounds the Browser stack high water,
