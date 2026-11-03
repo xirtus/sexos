@@ -1499,6 +1499,18 @@ sealed build and master gate GREEN; native HTML gate at both sizes
 (`big 79800 40 521`: `Math.hypot(3, 4)`, `Math.log10(100)`,
 `Math.sin(Math.PI / 2)`).
 
+## P8. HTML tables: captions and implicit row ends (2026-11-03)
+
+- **Fix:** `<caption>` text became an extra first column of the first
+  row; it is now its own line above the aligned rows.
+- **Fix:** rows without `</tr>` (the end tag is optional in HTML) ran
+  together on one line; a new `<tr>` now ends the previous row.
+
+**Evidence** (`docs/handoff/assets/html-table-caption-rows-2026-11-03/`):
+html text host tests 27 (`table_captions_and_implicit_row_ends`); sealed
+build and master gate GREEN; native HTML gate at both sizes with a
+captioned table of implicit rows (`Ports / dns   | 53 / https | 443`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

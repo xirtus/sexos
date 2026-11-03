@@ -199,3 +199,9 @@ fn list_paragraphs_marker_styles_media_and_preformatted_code() {
     let (t, _) = text("<video src=v.mp4 title='Demo clip'>Your browser cannot play this.</video><p>next</p><iframe src=x>fallback</iframe><p>tab&#9;stop</p><pre><code>fn main() {\n  x\n}</code></pre>", 512);
     assert_eq!(t.trim(), "[video: Demo clip]\n\nnext\n\n[frame]\n\ntab stop\n\nfn main() {\n  x\n}");
 }
+
+#[test]
+fn table_captions_and_implicit_row_ends() {
+    let (t, _) = text("<table><caption>Prices</caption><thead><tr><th>Item</th><th>Cost</th></tr></thead><tbody><tr><td>Tea</td><td>2</td></tr><tr><td>Coffee</td><td>3</td></tr></tbody></table><table><tr><td>a<td>b<tr><td>longer cell<td>x</table>", 512);
+    assert_eq!(t.trim(), "Prices\nItem   | Cost\nTea    | 2\nCoffee | 3\n\na           | b\nlonger cell | x");
+}

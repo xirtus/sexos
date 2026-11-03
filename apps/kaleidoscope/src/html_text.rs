@@ -311,8 +311,13 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if (name_is(name, b"dt") || name_is(name, b"dd")) && !end_tag {
                 o.line(false);
                 if name_is(name, b"dd") { o.raw(b"    "); }
-            } else if name_is(name, b"tr") && end_tag {
+            } else if name_is(name, b"tr") {
+                // A row ends at `</tr>` or at the next `<tr>` (the end tag is optional).
+                if end_tag || o.newlines == 0 { o.line(false); }
+            } else if name_is(name, b"caption") {
+                // The caption is its own line above the rows (not a column).
                 o.line(false);
+                if end_tag && table.is_some() { table = Some(o.len); }
             } else if (name_is(name, b"td") || name_is(name, b"th")) && !end_tag {
                 if o.newlines == 0 { o.bytes(b" |"); o.space = true; }
             } else if BLOCK.iter().any(|n| name_is(name, n)) {
