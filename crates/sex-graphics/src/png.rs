@@ -41,6 +41,7 @@ pub enum Error {
 pub fn is_png(input: &[u8]) -> bool { input.starts_with(&SIGNATURE) }
 
 fn be32(b: &[u8]) -> u32 { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) }
+fn be16(b: &[u8]) -> u32 { u16::from_be_bytes([b[0], b[1]]) as u32 }
 
 fn crc32(parts: [&[u8]; 2]) -> u32 {
     let mut c = !0u32;
@@ -71,6 +72,7 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
     let mut header: Option<(usize, usize, u8, u8, bool)> = None;
     let mut palette = [0u32; 256];
     let mut palette_len = 0usize;
+    let mut key: Option<[u32; 3]> = None;
     // IDAT data may be split across chunks; they are read as one stream.
     let mut idat = Chunks { input, at: 0, left: 0, started: false };
     let mut ended = false;
@@ -106,7 +108,9 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
                     if len > palette_len { return Err(Error::Palette); }
                     for i in 0..len { palette[i] = (palette[i] & 0x00ff_ffff) | (data[i] as u32) << 24; }
                 }
-                // Color-key transparency for gray/RGB is ignored (opaque).
+                // Gray/RGB colour key: that exact sample value is transparent.
+                if color == 0 && len == 2 { key = Some([be16(data), 0, 0]); }
+                if color == 2 && len == 6 { key = Some([be16(data), be16(&data[2..]), be16(&data[4..])]); }
             }
             b"IDAT" => {
                 if header.is_none() { return Err(Error::Header); }
@@ -171,10 +175,13 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
                     }
                 };
                 let gray = |v: u32| if depth < 8 { v * 255 / max } else { v };
+                // Full-precision sample, for the colour key.
+                let raw = |c: usize| -> u32 { let i = px * channels + c; if depth == 16 { (row[i * 2] as u32) << 8 | row[i * 2 + 1] as u32 } else { sample(c) } };
+                let keyed = match (color, key) { (0, Some(k)) => raw(0) == k[0], (2, Some(k)) => raw(0) == k[0] && raw(1) == k[1] && raw(2) == k[2], _ => false };
                 let (x, y) = (p.0 + px * p.2, p.1 + py * p.3);
                 out[y * w + x] = match color {
-                    0 => 0xff00_0000 | gray(sample(0)) * 0x0001_0101,
-                    2 => 0xff00_0000 | sample(0) << 16 | sample(1) << 8 | sample(2),
+                    0 => (if keyed { 0 } else { 0xff00_0000 }) | gray(sample(0)) * 0x0001_0101,
+                    2 => (if keyed { 0 } else { 0xff00_0000 }) | sample(0) << 16 | sample(1) << 8 | sample(2),
                     3 => { let i = sample(0) as usize; if i >= palette_len { return Err(Error::Palette); } palette[i] }
                     4 => sample(1) << 24 | sample(0) * 0x0001_0101,
                     _ => sample(3) << 24 | sample(0) << 16 | sample(1) << 8 | sample(2),

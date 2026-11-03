@@ -18,6 +18,7 @@ CASES=[('calc ans',r'\[spindle.calc\] expr_bytes=3 error=NoAnswer ok=0'),
        ('calc 2*pi',r'\[spindle.calc\] expr_bytes=4 result=~ 6\.283185308 ok=1'),
        ('calc r = 3',r'\[spindle.calc\] expr_bytes=5 result== 3 ok=1'),
        ('calc r*r+1',r'\[spindle.calc\] expr_bytes=5 result== 10 ok=1'),
+       ('calc 0xff+1',r'\[spindle.calc\] expr_bytes=6 result== 256 ok=1'),
        ('calc 7%0',r'\[spindle.calc\] expr_bytes=3 error=DivideByZero ok=0')]
 
 def type_line(g,value):

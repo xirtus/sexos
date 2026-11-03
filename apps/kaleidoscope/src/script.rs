@@ -101,6 +101,8 @@ struct Machine<'a> {
     thrown: Option<Value>,
     /// Compiled regular expression literals, by source offset.
     regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
+    /// `class` declarations: name, constructor, methods.
+    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>)>,
     /// Loops open in the current function (0 = `break` is a syntax error).
     loops: u8,
     elems: Vec<Value>,
@@ -435,6 +437,14 @@ impl<'a> Machine<'a> {
                 if self.tok == Tok::Punct(b'(') { let mut args = [Value::Undef; PARAMS]; self.argument_list(&mut args)?; }
                 v = Value::Undef;
                 continue;
+            }
+            if let (Value::Obj(id), Value::Num(ms)) = (v, if let Value::Obj(id) = v { self.get_prop(id, b"__date") } else { Value::Undef }) {
+                if self.find_prop(id, name).is_none() {
+                    let _ = id;
+                    self.arguments()?;
+                    v = self.date_method(ms, name)?;
+                    continue;
+                }
             }
             if let Value::Obj(id) = v {
                 let prop = self.get_prop(id, name);
@@ -830,6 +840,173 @@ impl<'a> Machine<'a> {
         self.nobjects += 1;
         Ok((self.nobjects - 1) as u8)
     }
+    /// `new C(args)`: built-ins, a `class`, or a function used as a constructor.
+    fn construct(&mut self, class: &[u8], args: &[Value]) -> Result<Value, Error> {
+        match class {
+            b"Array" => {
+                if let [Value::Num(n)] = args { if !(0.0..=ELEMS as f64).contains(n) || *n != floor(*n) { return Err(Error::Limit); } let items: Vec<Value> = (0..*n as usize).map(|_| Value::Undef).collect(); return self.new_array(&items); }
+                return self.new_array(args);
+            }
+            b"Object" => return Ok(Value::Obj(self.new_object()?)),
+            b"Error" | b"TypeError" | b"RangeError" | b"SyntaxError" => {
+                let id = self.new_object()?;
+                let name = self.store(class)?;
+                self.set_prop(id, b"name", name)?;
+                let message = match args.first() { Some(&m) => self.to_text(m)?, None => self.store(b"")? };
+                self.set_prop(id, b"message", message)?;
+                return Ok(Value::Obj(id));
+            }
+            b"Date" => return self.date_new(args),
+            _ => {}
+        }
+        let id = self.new_object()?;
+        if let Some(k) = self.classes.iter().position(|c| c.0 == class) {
+            let (ctor, methods) = (self.classes[k].1, self.classes[k].2.clone());
+            for (name, f) in methods { self.set_prop(id, name, Value::Func(f))?; }
+            if let Some(f) = ctor {
+                self.this_next = Some(Value::Obj(id));
+                let r = self.invoke(f, args)?;
+                if matches!(r, Value::Obj(_)) { return Ok(r); }
+            }
+            return Ok(Value::Obj(id));
+        }
+        let f = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == class)
+            .or_else(|| match self.lookup(class) { Some(Value::Func(i)) => Some(i as usize), _ => None }).ok_or(Error::Unsupported)?;
+        self.this_next = Some(Value::Obj(id));
+        let r = self.invoke(f as u8, args)?;
+        Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
+    }
+    /// `new Date(...)` from given components, a time value or an ISO string.
+    /// There is no `new Date()` / `Date.now()`: a script holds no clock.
+    fn date_new(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let ms = match args {
+            [] => return Err(Error::Unsupported),
+            [Value::Num(t)] => *t,
+            [s @ Value::Str(..)] => { let t = self.text(*s).to_vec(); parse_iso(&t).unwrap_or(f64::NAN) }
+            parts => {
+                let mut v = [0.0f64, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+                for (k, &p) in parts.iter().take(7).enumerate() { v[k] = self.to_number(p); }
+                date_ms(v)
+            }
+        };
+        let id = self.new_object()?;
+        self.set_prop(id, b"__date", Value::Num(ms))?;
+        Ok(Value::Obj(id))
+    }
+    fn date_method(&mut self, ms: f64, name: &[u8]) -> Result<Value, Error> {
+        if ms.is_nan() { return if name == b"toISOString" { Err(Error::Unsupported) } else { Ok(Value::Num(f64::NAN)) }; }
+        let days = floor(ms / 86_400_000.0);
+        let rem = ms - days * 86_400_000.0;
+        let (y, m, d) = civil(days as i64);
+        let (h, mi, sec, milli) = ((rem / 3_600_000.0) as i64, (rem / 60_000.0) as i64 % 60, (rem / 1000.0) as i64 % 60, rem as i64 % 1000);
+        let weekday = ((days as i64 % 7) + 11) % 7; // 1970-01-01 was a Thursday
+        Ok(match name {
+            b"getTime" | b"valueOf" => Value::Num(ms),
+            b"getFullYear" | b"getUTCFullYear" => Value::Num(y as f64),
+            b"getMonth" | b"getUTCMonth" => Value::Num((m - 1) as f64),
+            b"getDate" | b"getUTCDate" => Value::Num(d as f64),
+            b"getDay" | b"getUTCDay" => Value::Num(weekday as f64),
+            b"getHours" | b"getUTCHours" => Value::Num(h as f64),
+            b"getMinutes" | b"getUTCMinutes" => Value::Num(mi as f64),
+            b"getSeconds" | b"getUTCSeconds" => Value::Num(sec as f64),
+            b"getMilliseconds" | b"getUTCMilliseconds" => Value::Num(milli as f64),
+            b"toISOString" | b"toJSON" => {
+                let mut t = Vec::new();
+                let _ = write!(Text(&mut t), "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, h, mi, sec, milli);
+                self.store(&t)?
+            }
+            b"toDateString" => {
+                const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                let mut t = Vec::new();
+                let _ = write!(Text(&mut t), "{} {} {:02} {:04}", DAYS[weekday as usize], MONTHS[(m - 1) as usize], d, y);
+                self.store(&t)?
+            }
+            _ => return Err(Error::Unsupported),
+        })
+    }
+    /// One JSON value from `t` at `at` (objects, arrays, strings, numbers,
+    /// true/false/null), depth-bounded.
+    fn json_value(&mut self, t: &[u8], at: &mut usize, depth: u8) -> Result<Value, Error> {
+        if depth > 16 { return Err(Error::Limit); }
+        json_ws(t, at);
+        let c = *t.get(*at).ok_or(Error::Syntax)?;
+        match c {
+            b'{' => {
+                *at += 1;
+                let id = self.new_object()?;
+                json_ws(t, at);
+                if t.get(*at) == Some(&b'}') { *at += 1; return Ok(Value::Obj(id)); }
+                loop {
+                    json_ws(t, at);
+                    let key = self.json_value(t, at, depth + 1)?;
+                    let Value::Str(..) = key else { return Err(Error::Syntax) };
+                    let k = self.text(key).to_vec();
+                    json_ws(t, at);
+                    if t.get(*at) != Some(&b':') { return Err(Error::Syntax); }
+                    *at += 1;
+                    let v = self.json_value(t, at, depth + 1)?;
+                    self.set_prop(id, &k, v)?;
+                    json_ws(t, at);
+                    match t.get(*at) { Some(b',') => *at += 1, Some(b'}') => { *at += 1; return Ok(Value::Obj(id)); } _ => return Err(Error::Syntax) }
+                }
+            }
+            b'[' => {
+                *at += 1;
+                let mut items: Vec<Value> = Vec::new();
+                json_ws(t, at);
+                if t.get(*at) == Some(&b']') { *at += 1; return self.new_array(&items); }
+                loop {
+                    items.push(self.json_value(t, at, depth + 1)?);
+                    if items.len() > ELEMS { return Err(Error::Limit); }
+                    json_ws(t, at);
+                    match t.get(*at) { Some(b',') => *at += 1, Some(b']') => { *at += 1; return self.new_array(&items); } _ => return Err(Error::Syntax) }
+                }
+            }
+            b'"' => {
+                *at += 1;
+                let mut out: Vec<u8> = Vec::new();
+                loop {
+                    let b = *t.get(*at).ok_or(Error::Syntax)?;
+                    *at += 1;
+                    match b {
+                        b'"' => break,
+                        b'\\' => {
+                            let e = *t.get(*at).ok_or(Error::Syntax)?;
+                            *at += 1;
+                            match e {
+                                b'"' | b'\\' | b'/' => out.push(e), b'b' => out.push(8), b'f' => out.push(12), b'n' => out.push(b'\n'), b'r' => out.push(b'\r'), b't' => out.push(b'\t'),
+                                b'u' => {
+                                    let h = t.get(*at..*at + 4).ok_or(Error::Syntax)?;
+                                    let mut code = 0u32;
+                                    for &d in h { code = code * 16 + (d as char).to_digit(16).ok_or(Error::Syntax)?; }
+                                    *at += 4;
+                                    let mut buf = [0u8; 4];
+                                    out.extend_from_slice(char::from_u32(code).unwrap_or('\u{fffd}').encode_utf8(&mut buf).as_bytes());
+                                }
+                                _ => return Err(Error::Syntax),
+                            }
+                        }
+                        0..=31 => return Err(Error::Syntax),
+                        _ => out.push(b),
+                    }
+                    if out.len() > ARENA { return Err(Error::Limit); }
+                }
+                self.store(&out)
+            }
+            b't' if t[*at..].starts_with(b"true") => { *at += 4; Ok(Value::Bool(true)) }
+            b'f' if t[*at..].starts_with(b"false") => { *at += 5; Ok(Value::Bool(false)) }
+            b'n' if t[*at..].starts_with(b"null") => { *at += 4; Ok(Value::Null) }
+            b'-' | b'0'..=b'9' => {
+                let start = *at;
+                while t.get(*at).is_some_and(|c| c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.' | b'e' | b'E')) { *at += 1; }
+                let s = core::str::from_utf8(&t[start..*at]).map_err(|_| Error::Syntax)?;
+                if !s_is_plain(s.as_bytes()) { return Err(Error::Syntax); }
+                Ok(Value::Num(s.parse::<f64>().map_err(|_| Error::Syntax)?))
+            }
+            _ => Err(Error::Syntax),
+        }
+    }
     /// JSON text of a value; undefined members are left out like JavaScript.
     fn json(&mut self, v: Value, into: &mut Vec<u8>) -> Result<(), Error> {
         if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
@@ -1173,6 +1350,15 @@ impl<'a> Machine<'a> {
                 let n = self.items(b']', &mut items)?;
                 self.new_array(&items[..n])
             }
+            Tok::Ident(b"new") => {
+                self.next()?;
+                let Tok::Ident(class) = self.tok else { return Err(Error::Syntax) };
+                self.next()?;
+                let mut args = [Value::Undef; PARAMS];
+                let n = if self.tok == Tok::Punct(b'(') { self.argument_list(&mut args)? } else { 0 };
+                if !self.live { return Ok(Value::Undef); }
+                self.construct(class, &args[..n])
+            }
             Tok::Ident(b"function") => {
                 self.next()?;
                 if let Tok::Ident(_) = self.tok { self.next()?; }
@@ -1202,6 +1388,17 @@ impl<'a> Machine<'a> {
                     b"true" => Ok(Value::Bool(true)),
                     b"false" => Ok(Value::Bool(false)),
                     b"Math" => self.math(),
+                    b"Date" if self.tok == Tok::Punct(b'.') => {
+                        self.next()?;
+                        let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
+                        self.next()?;
+                        let (args, n) = self.arguments()?;
+                        match f {
+                            b"UTC" => { let mut v = [0.0f64, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; for k in 0..n { v[k] = self.to_number(args[k]); } Ok(Value::Num(date_ms(v))) }
+                            // Date.now() would need a clock: refused.
+                            _ => Err(Error::Unsupported),
+                        }
+                    }
                     b"JSON" | b"Object" | b"Array" | b"Number" if self.tok == Tok::Punct(b'.') => {
                         self.expect(b'.')?;
                         let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
@@ -1237,6 +1434,19 @@ impl<'a> Machine<'a> {
                                 self.new_array(&items[..len as usize])
                             }
                             (b"JSON", b"stringify", v) => { let mut j = Vec::new(); self.json(v, &mut j)?; self.store(&j) }
+                            (b"JSON", b"parse", v) => {
+                                if !self.live { return Ok(Value::Undef); }
+                                let t = self.to_text(v)?;
+                                let text = self.text(t).to_vec();
+                                let mut at = 0;
+                                let parsed = self.json_value(&text, &mut at, 0).and_then(|v| { json_ws(&text, &mut at); if at == text.len() { Ok(v) } else { Err(Error::Syntax) } });
+                                match parsed {
+                                    Ok(v) => Ok(v),
+                                    // Malformed JSON throws, as in JavaScript (catchable).
+                                    Err(Error::Syntax) => { let m = self.store(b"SyntaxError: bad JSON")?; self.thrown = Some(m); Err(Error::Thrown) }
+                                    Err(e) => Err(e),
+                                }
+                            }
                             (b"Object", b"keys", Value::Obj(id)) => {
                                 let (start, len, _) = self.objects[id as usize];
                                 let mut keys = [Value::Undef; 16];
@@ -1483,7 +1693,7 @@ impl<'a> Machine<'a> {
                 let kind = match keyword { b"var" => 0, b"let" => 1, _ => 2 };
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"do" | b"switch" | b"case" | b"default" | b"in" | b"delete" | b"Array" | b"this" | b"throw" | b"try" | b"catch" | b"finally" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
+                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"do" | b"switch" | b"case" | b"default" | b"in" | b"delete" | b"Array" | b"this" | b"throw" | b"try" | b"catch" | b"finally" | b"new" | b"class" | b"Date" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
                 self.next()?;
                 self.expect(b'=')?;
                 let v = self.expr()?;
@@ -1513,6 +1723,34 @@ impl<'a> Machine<'a> {
                 self.expect(b')')?;
                 if line && run { let nl = self.store(b"\n")?; self.emit(nl)?; }
                 self.end()
+            }
+            Tok::Ident(b"class") => {
+                self.next()?;
+                let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+                self.next()?;
+                if self.tok == Tok::Ident(b"extends") { return Err(Error::Unsupported); }
+                self.expect(b'{')?;
+                let (mut ctor, mut methods) = (None, Vec::new());
+                while self.tok != Tok::Punct(b'}') {
+                    let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
+                    self.next()?;
+                    let at = self.pos();
+                    self.expect(b'(')?;
+                    while let Tok::Ident(_) = self.tok { self.next()?; if self.tok != Tok::Punct(b',') { break; } self.next()?; }
+                    self.expect(b')')?;
+                    if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
+                    self.skim_body()?;
+                    if run {
+                        let f = self.define(b"", at)?;
+                        if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
+                    }
+                }
+                self.next()?;
+                if run {
+                    if self.classes.len() == 8 { return Err(Error::Limit); }
+                    self.classes.push((name, ctor, methods));
+                }
+                Ok(())
             }
             Tok::Ident(b"function") => {
                 self.next()?;
@@ -1831,6 +2069,58 @@ fn pow(a: f64, e: f64) -> f64 {
 }
 trait AbsGe { fn abs_ge(self, limit: f64) -> bool; }
 impl AbsGe for f64 { fn abs_ge(self, limit: f64) -> bool { self >= limit || self <= -limit } }
+struct Text<'v>(&'v mut Vec<u8>);
+impl Write for Text<'_> { fn write_str(&mut self, s: &str) -> core::fmt::Result { self.0.extend_from_slice(s.as_bytes()); Ok(()) } }
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (month 1-12).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+/// (year, month 1-12, day) for days since 1970-01-01.
+fn civil(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + (m <= 2) as i64, m, d)
+}
+/// Milliseconds for (year, month 0-11, day, h, m, s, ms), UTC; months and
+/// days roll over like JavaScript's Date.
+fn date_ms(v: [f64; 7]) -> f64 {
+    if v.iter().any(|x| !x.is_finite()) { return f64::NAN; }
+    let (mut y, mut mo) = (floor(v[0]) as i64, floor(v[1]) as i64);
+    y += mo.div_euclid(12);
+    mo = mo.rem_euclid(12);
+    let days = days_from_civil(y, mo + 1, 1) as f64 + floor(v[2]) - 1.0;
+    days * 86_400_000.0 + floor(v[3]) * 3_600_000.0 + floor(v[4]) * 60_000.0 + floor(v[5]) * 1000.0 + floor(v[6])
+}
+/// `YYYY-MM-DD` with optional `THH:MM[:SS[.mmm]]` and `Z` (UTC).
+fn parse_iso(t: &[u8]) -> Option<f64> {
+    let num = |a: usize, n: usize| -> Option<f64> { let s = t.get(a..a + n)?; if !s.iter().all(u8::is_ascii_digit) { return None; } core::str::from_utf8(s).ok()?.parse().ok() };
+    if t.len() < 10 || t[4] != b'-' || t[7] != b'-' { return None; }
+    let mut v = [num(0, 4)?, num(5, 2)? - 1.0, num(8, 2)?, 0.0, 0.0, 0.0, 0.0];
+    let mut at = 10;
+    if t.get(at) == Some(&b'T') {
+        v[3] = num(at + 1, 2)?; v[4] = num(at + 4, 2)?; at += 6;
+        if t.get(at) == Some(&b':') { v[5] = num(at + 1, 2)?; at += 3; }
+        if t.get(at) == Some(&b'.') { v[6] = num(at + 1, 3)?; at += 4; }
+        if t.get(at) == Some(&b'Z') { at += 1; }
+    }
+    if at != t.len() || v[1] > 11.0 || v[2] < 1.0 || v[2] > 31.0 { return None; }
+    Some(date_ms(v))
+}
+
+fn json_ws(t: &[u8], at: &mut usize) { while t.get(*at).is_some_and(|c| matches!(c, b' ' | b'\t' | b'\n' | b'\r')) { *at += 1; } }
+
 /// Digits, one dot, optional sign and exponent: what parseFloat accepts
 /// (Rust's parser also takes "inf"/"nan", which JavaScript does not).
 fn s_is_plain(t: &[u8]) -> bool {
@@ -1867,7 +2157,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

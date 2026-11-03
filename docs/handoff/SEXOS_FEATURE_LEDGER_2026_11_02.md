@@ -816,6 +816,34 @@ autosave gate at both sizes now presses Ctrl+G, 5, Enter
 (`line=5 reached=1 old=9 new=0`) and End before continuing; Quil workflow
 regression passes.
 
+## M1-M6. Script JSON.parse, `new`, classes, dates; PNG colour key; calc 0x/0b (2026-11-03)
+
+- **M1 `JSON.parse`** (objects, arrays, escaped strings incl. `\uXXXX`,
+  numbers, true/false/null; depth 16). Malformed JSON throws a catchable
+  `SyntaxError: bad JSON`.
+- **M2 `new`** with functions as constructors (`this` is the new object),
+  `new Array(n)`, `new Object()`, `new Error(msg)` (and Type/Range/Syntax
+  errors with `name`/`message`).
+- **M3 `class`** with a `constructor` and methods (no `extends`, which is
+  refused); methods are set on each instance.
+- **M4 Dates from given values only:** `new Date(y, m, d, h, mi, s, ms)`,
+  `new Date(ms)`, `new Date('YYYY-MM-DDTHH:MM:SS.sssZ')`, `Date.UTC(...)`,
+  getters (`getFullYear ... getDay ... getTime`), `toISOString`,
+  `toDateString`; all UTC. `new Date()` and `Date.now()` are refused: a
+  script holds no clock authority.
+- **M5 PNG colour key:** gray/RGB `tRNS` makes the exact keyed sample
+  transparent (16-bit compared at full precision).
+- **M6 Spindle `calc`** accepts `0x..` and `0b..` whole numbers.
+
+**Evidence** (`docs/handoff/assets/script-json-new-class-date-2026-11-03/`):
+script host tests 27 groups, PNG tests incl. two keyed fixtures, calc host
+tests; sealed build and master gate GREEN; native HTML gate at both sizes
+with `EPOCH Fri Dec 21 2012 5` (class + JSON.parse + Date); native calc gate
+at both sizes (`calc 0xff+1` -> `= 256`); PNG gate (8-bit and Adam7 16-bit)
+regression. Browser stack high water rose to 48,064 bytes (of 65,536;
+script frames now exceed the construction peak), still under the gate's
+60 KiB bound.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

@@ -3,7 +3,7 @@
 //!
 //! `ans` is the previous successful result in this Spindle session.
 //! `**` raises to a whole power up to 64; `sqrt(x)` is the square root;
-//! `abs min max round floor ceil` work on the exact values; `pi` and `e`
+//! `0x..`/`0b..` whole numbers; `abs min max round floor ceil` work on the exact values; `pi` and `e`
 //! are 9-place constants (results using them are marked `~`).
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
@@ -154,6 +154,17 @@ impl Parser<'_> {
         }
     }
     fn number(&mut self) -> Result<i128, Error> {
+        // 0x... hexadecimal and 0b... binary whole numbers.
+        if let Some(radix) = match self.s.get(self.at..self.at + 2) { Some(b"0x") | Some(b"0X") => Some(16), Some(b"0b") | Some(b"0B") => Some(2), _ => None } {
+            self.at += 2;
+            let (mut v, mut n) = (0i128, 0);
+            while let Some(d) = self.s.get(self.at).and_then(|&c| (c as char).to_digit(radix)) {
+                v = v.checked_mul(radix as i128).and_then(|v| v.checked_add(d as i128)).ok_or(Error::Overflow)?;
+                self.at += 1; n += 1;
+            }
+            if n == 0 { return Err(Error::Syntax); }
+            return v.checked_mul(SCALE).ok_or(Error::Overflow);
+        }
         let (mut whole, mut frac, mut places, mut digits, mut dot) = (0i128, 0i128, 0u32, 0, false);
         while let Some(&c) = self.s.get(self.at) {
             match c {
@@ -269,6 +280,8 @@ mod tests {
         assert_eq!(show("2*pi"), "~ 6.283185308");
         assert_eq!(show("e"), "~ 2.718281828");
         assert_eq!(show("pie"), "Unknown");
+        assert_eq!(show("0xff + 0b101"), "= 260");
+        assert_eq!(show("0x"), "Syntax");
         assert_eq!(show("x + 1"), "Unknown");
     }
     #[test] fn errors_are_named_not_wrapped() {

@@ -239,3 +239,22 @@ fn regular_expressions() {
     assert_eq!(out(r"document.write(/(/.test('x'))").err(), Some(Error::Syntax));
     assert_eq!(out(r"document.write(/(a*)*b/.test('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))").err(), Some(Error::Limit));
 }
+
+#[test]
+fn json_parse() {
+    assert_eq!(out(r#"var o = JSON.parse('{"name": "Quil", "tags": ["editor", "draft"], "n": -1.5e2, "ok": true, "none": null, "u": "\\u00e9\\n"}'); document.write(o.name, ' ', o.tags[1], ' ', o.n, ' ', o.ok, ' ', o.none, ' ', o.u.length, ' ', JSON.stringify(JSON.parse('[1, {"a": [2]}]')))"#).unwrap(), "Quil draft -150 true null 3 [1,{\"a\":[2]}]");
+    assert_eq!(out(r#"try { JSON.parse('{bad}') } catch (e) { document.write(e) }"#).unwrap(), "SyntaxError: bad JSON");
+    assert_eq!(out(r#"JSON.parse('[1]x')"#).err(), Some(Error::Thrown));
+}
+
+#[test]
+fn new_classes_and_dates() {
+    assert_eq!(out("function Point(x, y) { this.x = x; this.y = y } var p = new Point(2, 3); document.write(p.x + p.y, ' ', new Array(3).length, ' ', new Array(1, 2), ' ', new Object() !== null)").unwrap(), "5 3 1,2 true");
+    assert_eq!(out("class Counter { constructor(start) { this.n = start } inc() { this.n++; return this } get() { return this.n } } var c = new Counter(5); c.inc().inc(); document.write(c.get(), ' ', typeof c.inc)").unwrap(), "7 function");
+    assert_eq!(out("try { throw new Error('nope') } catch (e) { document.write(e.name, ': ', e.message) }").unwrap(), "Error: nope");
+    assert_eq!(out("var d = new Date(2012, 11, 21); document.write(d.getFullYear(), '-', d.getMonth() + 1, '-', d.getDate(), ' ', d.getDay(), ' ', d.toISOString(), ' ', d.toDateString())").unwrap(), "2012-12-21 5 2012-12-21T00:00:00.000Z Fri Dec 21 2012");
+    assert_eq!(out("var d = new Date('2024-02-29T13:45:07.250Z'); document.write(d.getHours(), ':', d.getMinutes(), ':', d.getSeconds(), '.', d.getMilliseconds(), ' ', new Date(2024, 1, 30).getDate(), ' ', Date.UTC(1970, 0, 2), ' ', new Date(0).toISOString())").unwrap(), "13:45:7.250 1 86400000 1970-01-01T00:00:00.000Z");
+    assert_eq!(out("new Date()").err().is_some(), true, "no clock");
+    assert_eq!(out("document.write(Date.now())").err(), Some(Error::Unsupported));
+    assert_eq!(out("class B extends A {}").err(), Some(Error::Unsupported));
+}

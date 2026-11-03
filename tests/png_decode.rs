@@ -4,6 +4,7 @@
 #[path="../crates/sex-graphics/src/png.rs"] mod png;
 #[path="fixtures/png/cases.rs"] mod cases;
 #[path="fixtures/png/variants.rs"] mod variants;
+#[path="fixtures/png/keyed.rs"] mod keyed;
 use png::{decode, Error, SCRATCH_BYTES};
 
 fn run(bytes: &[u8]) -> Result<(usize, usize, Vec<u32>), Error> {
@@ -55,5 +56,13 @@ fn decodes_low_bit_depths_sixteen_bit_and_adam7() {
         assert_eq!((gw, gh), (*w, *h), "{name}");
         assert_eq!(&got[..], *pixels, "{name}");
         for i in [8usize, bytes.len() / 2, bytes.len() - 5] { let mut b = bytes.to_vec(); b[i] ^= 0x10; assert!(run(&b).is_err(), "{name} byte {i}"); }
+    }
+}
+
+#[test]
+fn colour_key_transparency() {
+    for (name, bytes, w, h, pixels) in keyed::KEYED {
+        let (gw, gh, got) = run(bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!((gw, gh, &got[..]), (*w, *h, *pixels), "{name}");
     }
 }
