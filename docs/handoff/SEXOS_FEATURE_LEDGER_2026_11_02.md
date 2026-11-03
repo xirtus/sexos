@@ -1023,12 +1023,36 @@ HTML gate at both sizes (`... 1025iife 51`). Browser stack high water
   text `function`; like JavaScript it now leaves them out of objects and
   writes `null` in arrays.
 
-Closures are still not in the subset: a function returned from another
-cannot read the outer function's locals after it returns.
+(Closures followed in M28.)
 
 **Evidence** (`docs/handoff/assets/script-object-literals-destructuring-2026-11-03/`):
 script host tests 36 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... Zdaymode`). Browser stack high water 46,752.
+
+## M28-M29. Script closures; function-scoped `var` fix (2026-11-03)
+
+- **M28 Closures.** A function value that escapes its creating call by
+  `return` (directly, or as a member of a returned object or array) becomes
+  a closure over one copy of that call's variables (parameters, `var`,
+  `let`, `const`). Functions returned together share the copy, and writes
+  persist across calls: counters (`() => ++c`), the module pattern
+  (`(function () { var n; return {inc() {...}, get() {...}} })()`),
+  `adder(5)`. Capture happens only on escape, so callbacks created in loops
+  cost nothing. Bounds: 32 closures and 8 environments per script (heap,
+  fallible). Not modelled: two separately returned closures sharing one
+  variable, or a closure escaping by assignment rather than `return`.
+- **M29 Fix: `var` and parameters were not function scoped.** A parameter
+  or `var` reused any outer binding of the same name (restored afterwards
+  for parameters only), so `var x = 2` inside a function overwrote a global
+  `x`. Each call now has a frame base: parameters are new bindings, and
+  `var` reuses only a binding of the same call. Variable slots grew 16 ->
+  32 since calls no longer reuse outer slots.
+
+**Evidence** (`docs/handoff/assets/script-closures-var-scope-2026-11-03/`):
+script host tests 37 groups (incl. `closures_and_function_scoped_var`); all
+earlier expectations unchanged; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... Zdaymode2`, an IIFE counter). Browser stack
+high water 46,752.
 
 ## Release gates noted while doing F1–F2
 

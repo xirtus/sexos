@@ -44,7 +44,7 @@ fn bounds_hold() {
     let big = format!("var s = '{}'; s = s + s; s = s + s; s = s + s; s = s + s;", "a".repeat(600));
     assert_eq!(out(&big).err(), Some(Error::Limit));
     let mut many = String::new();
-    for i in 0..17 { many += &format!("var v{i} = {i};"); }
+    for i in 0..33 { many += &format!("var v{i} = {i};"); }
     assert_eq!(out(&many).err(), Some(Error::Limit));
     let long = format!("document.write('{}')", "x".repeat(1100));
     assert_eq!(out(&long).err(), Some(Error::Limit));
@@ -338,4 +338,13 @@ fn object_literal_shorthand_spread_and_richer_destructuring() {
     assert_eq!(out("const {name, price = 1} = {name: 'x'}; const [first, ...others] = [1, 2, 3]; var [a, , c = 9, d = 4] = [1, 2, undefined, 0]; document.write(name, price, first, '|', others, '|', a, c, d)").unwrap(), "x11|2,3|190");
     assert_eq!(out("var n = 0; function f() { n++; return 5 } var {x = f(), y: why = f(), ...more} = {x: 1, z: 3, w: 4}; document.write(x, why, n, JSON.stringify(more))").unwrap(), "151{\"z\":3,\"w\":4}");
     assert_eq!(out("var t = ''; for (const [k, v] of Object.entries({a: 1, b: 2})) t += k + '=' + v + ';'; for (let {n, m = 0} of [{n: 1}, {n: 2, m: 3}]) t += n + m; function g() { for (const [a] of [[7]]) return a } document.write(t, g())").unwrap(), "a=1;b=2;157");
+}
+
+#[test]
+fn closures_and_function_scoped_var() {
+    assert_eq!(out("var x = 1; function f(x) { x = 5; var y = 2 } function g() { var x = 2 } f(9); g(); document.write(x, typeof y)").unwrap(), "1undefined");
+    assert_eq!(out("function counter() { let c = 0; return () => ++c } var a = counter(); var b = counter(); a(); a(); document.write(a(), b())").unwrap(), "31", "each call's closure has its own variables");
+    assert_eq!(out("var api = (function () { var n = 10; return { inc() { n++; return this }, get() { return n } } })(); api.inc().inc(); document.write(api.get())").unwrap(), "12", "methods returned together share variables");
+    assert_eq!(out("function adder(k) { return function (x) { return x + k } } var add5 = adder(5); function mk(x) { return {x, get() { return x }} } document.write([1, 2].map(add5), ' ', mk(4).get(), mk(7).get())").unwrap(), "6,7 47");
+    assert_eq!(out("function f() { return f } document.write(typeof f()())").unwrap(), "function", "a function returning itself is not a closure");
 }

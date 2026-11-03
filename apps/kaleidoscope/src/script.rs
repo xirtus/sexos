@@ -9,6 +9,8 @@
 //! `for (k in o)` with
 //! `break`/`continue`, `{ ... }`
 //! blocks, `function name(a, b = 2, ...rest) { ... return x }` declared before use,
+//! closures (a function returned, alone or in an object/array, keeps one shared
+//! copy of its creating call's variables), function-scoped `var`,
 //! function values (`function (x) {...}`, `x => x * 2`, `(a, b) => {...}`) and
 //! array callbacks (`forEach map filter find findIndex some every reduce`,
 //! `sort(cmp)`), and
@@ -52,8 +54,12 @@ const HEADROOM: usize = 20 * 1024;
 /// Statements executed per script, loop bodies included.
 const STEPS: u32 = 10_000;
 // Arena and output live on the heap (fallibly): the Browser stack is tight.
-const VARS: usize = 16;
+const VARS: usize = 32;
 const FUNCS: usize = 16;
+/// Function values that escaped their creating call, and the variable
+/// sets (environments) they carry; `Value::Func(FUNCS + k)` is closure k.
+const CLOSURES: usize = 32;
+const ENVS: usize = 8;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
 const ELEMS: usize = 256;
 const ARRAYS: usize = 32;
@@ -120,6 +126,11 @@ struct Machine<'a> {
     made_by: [u8; OBJECTS],
     /// The function running now (for `super`).
     func_now: Option<u8>,
+    /// First variable slot of the running call (its parameters and locals).
+    frame_base: usize,
+    /// Closures: (function, environment); environments: captured variables.
+    closures: Vec<(u8, u8)>,
+    envs: Vec<Vec<([u8; NAME], u8, Value)>>,
     /// Loops open in the current function (0 = `break` is a syntax error).
     loops: u8,
     elems: Vec<Value>,
@@ -1012,7 +1023,7 @@ impl<'a> Machine<'a> {
         }
         let f = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == class)
             .or_else(|| match self.lookup(class) { Some(Value::Func(i)) => Some(i as usize), _ => None }).ok_or(Error::Unsupported)?;
-        self.made_by[id as usize] = 16 + f as u8;
+        self.made_by[id as usize] = 16 + self.real_func(f as u8);
         self.this_next = Some(Value::Obj(id));
         let r = self.invoke(f as u8, args)?;
         Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
@@ -1042,7 +1053,7 @@ impl<'a> Machine<'a> {
                 while let Some(m) = at { if m == k { return Ok(true); } at = self.classes[m].3.map(|p| p as usize); }
                 false
             } else if let Some(f) = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == c).or_else(|| match self.lookup(c) { Some(Value::Func(i)) => Some(i as usize), _ => None }) {
-                made == 16 + f as u8
+                made == 16 + self.real_func(f as u8)
             } else { return Err(Error::Unsupported) },
         })
     }
@@ -1868,6 +1879,48 @@ impl<'a> Machine<'a> {
         self.expect(b'(')?;
         self.items(b')', args)
     }
+    /// A value leaving a call by `return`: function values defined inside the
+    /// call (directly, or as members of a returned object or array) become
+    /// closures over one copy of the call's variables, shared between them
+    /// and kept across their calls. Without a running call, or with no
+    /// function inside, the value is unchanged.
+    fn escape(&mut self, v: Value) -> Result<Value, Error> {
+        let Some(now) = self.func_now else { return Ok(v) };
+        let start = self.funcs[now as usize].2.at;
+        let inner = |m: &Self, x: Value| matches!(x, Value::Func(f) if (f as usize) < FUNCS && f != now && m.funcs[f as usize].2.at > start && m.funcs[f as usize].2.at < m.at);
+        let mut env = None;
+        let mut close = |m: &mut Self, x: Value| -> Result<Value, Error> {
+            let Value::Func(f) = x else { return Ok(x) };
+            if !inner(m, x) { return Ok(x); }
+            let e = match env { Some(e) => e, None => {
+                if m.envs.len() == ENVS { return Err(Error::Limit); }
+                let mut vars = Vec::new();
+                vars.try_reserve_exact(m.nvars - m.frame_base).map_err(|_| Error::Limit)?;
+                vars.extend_from_slice(&m.vars[m.frame_base..m.nvars]);
+                m.envs.push(vars);
+                let e = (m.envs.len() - 1) as u8; env = Some(e); e
+            } };
+            if m.closures.len() == CLOSURES { return Err(Error::Limit); }
+            m.closures.push((f, e));
+            Ok(Value::Func((FUNCS + m.closures.len() - 1) as u8))
+        };
+        match v {
+            Value::Func(_) => close(self, v),
+            Value::Obj(id) => {
+                let (start, len, _) = self.objects[id as usize];
+                for k in start as usize..start as usize + len as usize { let x = self.props[k].2; self.props[k].2 = close(self, x)?; }
+                Ok(v)
+            }
+            Value::Arr(id) => {
+                let (start, len, _) = self.arrays[id as usize];
+                for k in start as usize..start as usize + len as usize { let x = self.elems[k]; self.elems[k] = close(self, x)?; }
+                Ok(v)
+            }
+            _ => Ok(v),
+        }
+    }
+    /// The declared function behind a function value (closure or not).
+    fn real_func(&self, f: u8) -> u8 { if f as usize >= FUNCS { self.closures[f as usize - FUNCS].0 } else { f } }
     /// Run function `f` with `args`. Parameters bind for the call (shadowing,
     /// then restored); names it declares end with it. Arrow functions with
     /// an expression body return that expression.
@@ -1877,7 +1930,12 @@ impl<'a> Machine<'a> {
         self.depth += 1;
         let back = self.pos();
         let base = self.nvars;
-        let mut shadowed = [None; PARAMS];
+        // A closure starts with its captured variables (written back after).
+        let (f, env) = if f as usize >= FUNCS { let (g, e) = self.closures[f as usize - FUNCS]; (g, Some(e as usize)) } else { (f, None) };
+        if let Some(e) = env {
+            for j in 0..self.envs[e].len() { let (n, l, v) = self.envs[e][j]; self.declare(&n[..l as usize], v, 0)?; }
+        }
+        let frame = core::mem::replace(&mut self.frame_base, base);
         self.restore(self.funcs[f as usize].2);
         let parens = self.tok == Tok::Punct(b'(');
         if parens { self.next()?; }
@@ -1889,7 +1947,6 @@ impl<'a> Machine<'a> {
             if rest { self.next()?; }
             let Tok::Ident(param) = self.tok else { if rest { return Err(Error::Syntax); } break };
             if i == PARAMS { return Err(Error::Limit); }
-            if let Some(slot) = self.vars[..base].iter().position(|(n, l, _)| &n[..*l as usize] == param) { shadowed[i] = Some((slot, self.vars[slot].2)); }
             self.next()?;
             let mut v = args.get(i).copied().unwrap_or(Value::Undef);
             if rest { v = self.new_array(args.get(i..).unwrap_or(&[]))?; }
@@ -1899,7 +1956,8 @@ impl<'a> Machine<'a> {
                 let d = self.only_if(missing, |m| m.expr())?;
                 if missing { v = d; }
             }
-            self.assign(param, v, true)?;
+            // Parameters are new bindings of this call.
+            self.declare(param, v, 0)?;
             i += 1;
             if rest || !parens || self.tok != Tok::Punct(b',') { break; }
             self.next()?;
@@ -1911,13 +1969,14 @@ impl<'a> Machine<'a> {
         let loops = core::mem::replace(&mut self.loops, 0);
         let live = core::mem::replace(&mut self.live, true);
         let now = self.func_now.replace(f);
-        let body = if self.tok == Tok::Punct(b'{') { self.statement(true).map(|_| self.ret.take().unwrap_or(Value::Undef)) } else { self.expr() };
+        let body = if self.tok == Tok::Punct(b'{') { self.statement(true).map(|_| self.ret.take().unwrap_or(Value::Undef)) } else { self.expr().and_then(|v| self.escape(v)) };
+        if let Some(e) = env { for j in 0..self.envs[e].len() { self.envs[e][j].2 = self.vars[base + j].2; } }
+        self.frame_base = frame;
         self.func_now = now;
         self.live = live;
         self.loops = loops;
         self.this = this;
         self.ret = outer;
-        for (slot, value) in shadowed.iter().flatten() { self.vars[*slot].2 = *value; }
         self.nvars = base;
         self.restore(back);
         self.depth -= 1;
@@ -1988,6 +2047,16 @@ impl<'a> Machine<'a> {
         }
         if !declare { return Err(Error::Unsupported); }
         self.declare(name, v, 0)
+    }
+    /// `var name [= v]`: function scoped. A binding of this call (or, at the
+    /// top level, a global) is reused and keeps its value when none is given;
+    /// otherwise the name is new here, shadowing any outer one.
+    fn bind_var(&mut self, name: &[u8], v: Option<Value>) -> Result<(), Error> {
+        match self.slot(name).filter(|&k| k >= self.frame_base) {
+            Some(k) if self.kinds[k] == 2 => Err(Error::Syntax),
+            Some(k) => { if let Some(v) = v { self.vars[k].2 = v; } Ok(()) }
+            None => self.declare(name, v.unwrap_or(Value::Undef), 0),
+        }
     }
     /// A new binding; `let`/`const` (kind 1/2) shadow outer names.
     fn declare(&mut self, name: &[u8], v: Value, kind: u8) -> Result<(), Error> {
@@ -2092,7 +2161,7 @@ impl<'a> Machine<'a> {
                 let d = self.only_if(missing, |m| m.expr())?;
                 if missing { item = d; }
             }
-            if v.is_some() { self.assign(name, item, true)?; }
+            if v.is_some() { self.bind_var(name, Some(item))?; }
             seen.push(key);
             index += 1;
             if rest || self.tok != Tok::Punct(b',') { break; }
@@ -2115,7 +2184,7 @@ impl<'a> Machine<'a> {
                 // `var` reuses an existing binding (and keeps its value when
                 // none is given); `let`/`const` make a new one unless the
                 // name is already bound in this same block scope.
-                if kind == 0 { if v.is_some() || self.lookup(name).is_none() { self.assign(name, v.unwrap_or(Value::Undef), true)?; } }
+                if kind == 0 { self.bind_var(name, v)?; }
                 else if self.slot(name).is_some_and(|k| k >= self.block_base && self.kinds[k] != 0) { return Err(Error::Syntax); }
                 else { self.declare(name, v.unwrap_or(Value::Undef), kind)?; }
             }
@@ -2372,7 +2441,7 @@ impl<'a> Machine<'a> {
             Tok::Ident(b"return") => {
                 self.next()?;
                 let v = if matches!(self.tok, Tok::Punct(b';' | b'}') | Tok::End) || self.nl { Value::Undef } else { self.expr()? };
-                if run { self.ret = Some(v); }
+                if run { let v = self.escape(v)?; self.ret = Some(v); }
                 self.end()
             }
             Tok::Ident(kind @ (b"break" | b"continue")) => {
@@ -2758,7 +2827,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), made_by: [0; OBJECTS], func_now: None, loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }
