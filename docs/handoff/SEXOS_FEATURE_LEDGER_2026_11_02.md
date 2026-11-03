@@ -364,6 +364,81 @@ html_text 17 host tests; sealed build and master gate GREEN; native
 `https_html_gate.py` at both sizes with `Press `W` for this *page*, see
 `html_text.rs`.` in the released text.
 
+## S1. Sustained 30-minute alpha session on the F15 image (2026-11-03)
+
+`quil_workflow_gate.py --soak-seconds 1800` on the image built after F15:
+1280x800 passed (80 cycles, 171 verified captures, accepted). 1024x768 ran
+84 cycles and its session result is `ok=true acceptance=true`, but its
+after-run source-seal re-check then failed (`alpha checker/source not
+sealed: apps/kaleidoscope/src/main.rs`) because I edited Browser sources while
+it ran. The run is sound; the 1024 evidence is not seal-clean. (An earlier
+1024 attempt was cut at 1707 s when my session ended.) Autosave did not fire
+during either soak: the workflow saves within the idle window each cycle.
+Evidence: `docs/handoff/assets/alpha-sustained-2026-11-03/`.
+
+## F16-F20. Script subset: loops, functions, arrays, strings, more Math (2026-11-03)
+
+- **F16 loops.** `while`, `for (init; cond; update)`, `+=`, `-=`, `++`,
+  `--`. Every executed statement spends one unit of a 10,000-step budget, so
+  an endless loop refuses the script instead of hanging the Browser. Arena
+  raised to 8 KiB (heap, fallible).
+- **F17 functions.** `function name(a, b) { ... return x }`, declared before
+  use, up to 8 functions and 4 parameters; parameters shadow globals for the
+  call and names declared inside end with it; call statements `f(x);`.
+  Recursion is bounded by the nesting budget (12), which allows only a couple
+  of levels (`fact(2)`) because the Browser stack is tight (F4/F5).
+  Function bodies are checked at declaration.
+- **F18 arrays.** `[a, b]`, `x[i]`, `x[i] = v` (no holes), `.length`,
+  `.push(v)`, `.join(s)`; arrays are references (32 arrays, 512 elements,
+  doubling growth). Self-containing arrays fail on depth, never loop.
+- **F19 strings.** `.trim()`, `.indexOf()`, `.charAt()`, `.slice()` (negative
+  from the end), `.substring()`, `.split()` (to an array), `String()`,
+  `Number()`, `parseInt()`. Strings are bytes in this subset.
+- **F20 Math.** `sqrt` (correctly rounded via an exact integer root; 100,000
+  host cases equal Rust's `f64::sqrt`), `pow` (whole exponents), `trunc`,
+  `sign`, `PI`. No `Math.random`: a script holds no entropy source.
+
+**Evidence** (`docs/handoff/assets/browser-script-loops-functions-2026-11-03/`):
+`tests/browser_script.rs` 10 groups; html_text 17; sealed build and master
+gate GREEN; native `https_html_gate.py` at both sizes with six scripts on the
+page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
+and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
+conversion took 9 ticks; no pager rejections.
+
+## F21. Spindle `calc` powers (2026-11-03)
+
+`a ** n` for whole `n` up to 64 (right-associative, tighter than unary
+minus: `-2**2` is `-4`; negative powers divide, flagged `~` when inexact).
+Host tests; native `spindle_calc_gate.py` types `calc 2**10` -> `= 1024`.
+
+## F22-F23. PNG images in the Browser (2026-11-03)
+
+**What changed.** `crates/sex-graphics/src/png.rs`: an allocation-free PNG
+decoder written from the PNG spec and RFC 1950/1951 (stored, fixed and
+dynamic Huffman blocks; filters 0-4; 8-bit gray, RGB, palette with tRNS,
+gray+alpha, RGBA; non-interlaced; up to 48x48 like the QOI path). Every
+chunk CRC and the Adler-32 are checked; consecutive IDAT chunks are read as
+one stream; the caller supplies the inflate buffer (heap, fallible), which
+doubles as the DEFLATE window. In the Browser, key **P** fetches the fixed
+`/art.png` (`image/png`) on the same BOOT endpoint and route; the asset
+panel title says PNG. Codec `Resource::ArtworkPng` with
+`Resource::is_image()` replacing the QOI-only checks. No ABI input changed.
+
+**Evidence** (`docs/handoff/assets/browser-png-2026-11-03/`):
+`tests/png_decode.rs` (six zlib-made fixtures across all colour types,
+filters, block kinds and split IDATs; every single-byte corruption and every
+truncation refused; no panics), `tests/browser_asset.rs` one-step decode;
+sex-http and sex-tls suites; sealed build and master gate GREEN; native
+`scripts/https_png_gate.py` at both sizes: exact `GET /art.png`, released
+body hash, `[browser.asset.decoded] ... hash=<QOI oracle PIXEL_HASH>` (same
+pixels as the QOI fixture), presentation Ready, and 256 sampled screen pixels
+equal the straight-alpha blend. Regressions: QOI `https_asset_gate.py`,
+`/welcome` document gate, calc gate.
+
+**Found on the way.** Two Browser host fixtures stub `sex_tls::Resource`
+and needed `is_image`; three host gates had been failing until fixed in this
+commit (they were not part of the native runs).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

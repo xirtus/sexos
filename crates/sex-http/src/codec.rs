@@ -24,16 +24,20 @@ const REQUEST: &[u8] = b"GET /welcome HTTP/1.1\r\nHost: probe.sexos.test\r\nConn
 /// resource never selects a trust profile, host, port, route or capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Resource { WelcomeText, ArtworkQoi, PageHtml }
+pub enum Resource { WelcomeText, ArtworkQoi, PageHtml, ArtworkPng }
 impl Resource {
     pub const fn path(self) -> Path {
-        let source: &[u8] = match self { Self::WelcomeText=>b"/welcome",Self::ArtworkQoi=>b"/art.qoi",Self::PageHtml=>b"/page.html" };
+        let source: &[u8] = match self { Self::WelcomeText=>b"/welcome",Self::ArtworkQoi=>b"/art.qoi",Self::PageHtml=>b"/page.html",Self::ArtworkPng=>b"/art.png" };
         let mut bytes=[0;MAX_PATH];let mut at=0;
         while at<source.len(){bytes[at]=source[at];at+=1;}
         Path{bytes,len:source.len()}
     }
     pub const fn mime(self) -> &'static [u8] {
-        match self {Self::WelcomeText=>b"text/plain",Self::ArtworkQoi=>b"image/qoi",Self::PageHtml=>b"text/html"}
+        match self {Self::WelcomeText=>b"text/plain",Self::ArtworkQoi=>b"image/qoi",Self::PageHtml=>b"text/html",Self::ArtworkPng=>b"image/png"}
+    }
+    /// Binary image bodies: never text, decoded only after positive RELEASE.
+    pub const fn is_image(self) -> bool {
+        matches!(self, Self::ArtworkQoi | Self::ArtworkPng)
     }
 }
 
@@ -210,7 +214,7 @@ fn resource_content_type(bytes:&[u8],resource:Resource)->Result<(),Error>{
     match resource {
         Resource::WelcomeText=>content_type(bytes),
         Resource::PageHtml=>text_type(bytes,resource.mime()),
-        Resource::ArtworkQoi=>if bytes.eq_ignore_ascii_case(resource.mime()){Ok(())}else{Err(Error::UnsupportedContentType)},
+        Resource::ArtworkQoi|Resource::ArtworkPng=>if bytes.eq_ignore_ascii_case(resource.mime()){Ok(())}else{Err(Error::UnsupportedContentType)},
     }
 }
 
@@ -426,7 +430,7 @@ mod resource_tests {
     }
     fn wiped(r:&Receiver){assert!(r.header.iter().chain(r.body.iter()).all(|b|*b==0));assert!(r.body().is_none());}
     #[test] fn fixed_resource_request_selects_path_accept_and_same_boot_host(){
-        for(resource,path,mime)in[(Resource::WelcomeText,b"/welcome".as_slice(),b"text/plain".as_slice()),(Resource::ArtworkQoi,b"/art.qoi",b"image/qoi"),(Resource::PageHtml,b"/page.html",b"text/html")]{
+        for(resource,path,mime)in[(Resource::WelcomeText,b"/welcome".as_slice(),b"text/plain".as_slice()),(Resource::ArtworkQoi,b"/art.qoi",b"image/qoi"),(Resource::PageHtml,b"/page.html",b"text/html"),(Resource::ArtworkPng,b"/art.png",b"image/png")]{
             assert_eq!(resource.path().as_bytes(),path);assert_eq!(resource.mime(),mime);assert_eq!(Path::from_location(path).unwrap(),resource.path());
             let mut out=[0xa5;HTTPS_MAX_REQUEST];let len=request_https_resource(&mut out,resource);
             let expected=format!("GET {} HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: {}\r\n\r\n",core::str::from_utf8(path).unwrap(),core::str::from_utf8(mime).unwrap());

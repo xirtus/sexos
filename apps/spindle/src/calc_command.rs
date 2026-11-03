@@ -2,6 +2,7 @@
 //! `calc <expression>`: exact decimal arithmetic on what the user typed.
 //!
 //! `ans` is the previous successful result in this Spindle session.
+//! `**` raises to a whole power up to 64.
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
 //! Parsing is recursive descent with a depth bound; every operation is
@@ -14,7 +15,7 @@ const MAX_DEPTH: u8 = 16;
 pub const LINE_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer }
+pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer, Exponent }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Value { pub scaled: i128, pub inexact: bool }
@@ -36,10 +37,11 @@ impl Parser<'_> {
     fn term(&mut self) -> Result<i128, Error> {
         let mut v = self.unary()?;
         while let Some(op @ (b'*' | b'/' | b'%')) = self.peek() {
+            if self.s[self.at..].starts_with(b"**") { break; }
             self.at += 1;
             let r = self.unary()?;
             v = match op {
-                b'*' => { let p = v.checked_mul(r).ok_or(Error::Overflow)?; if p % SCALE != 0 { self.inexact = true; } p / SCALE }
+                b'*' => self.mul(v, r)?,
                 b'/' => {
                     if r == 0 { return Err(Error::DivideByZero); }
                     let n = v.checked_mul(SCALE).ok_or(Error::Overflow)?;
@@ -54,7 +56,31 @@ impl Parser<'_> {
     fn unary(&mut self) -> Result<i128, Error> {
         if self.peek() == Some(b'-') { self.at += 1; return self.guard(|p| p.unary())?.checked_neg().ok_or(Error::Overflow); }
         if self.peek() == Some(b'+') { self.at += 1; return self.guard(|p| p.unary()); }
-        self.atom()
+        self.power()
+    }
+    /// `a ** n` for a whole exponent |n| <= 64 (right-associative, binds
+    /// tighter than unary minus: `-2**2` is -4).
+    fn power(&mut self) -> Result<i128, Error> {
+        let base = self.atom()?;
+        if !(self.peek() == Some(b'*') && self.s[self.at..].starts_with(b"**")) { return Ok(base); }
+        self.at += 2;
+        let e = self.guard(|p| p.unary())?;
+        if e % SCALE != 0 || (e / SCALE).abs() > 64 { return Err(Error::Exponent); }
+        let n = e / SCALE;
+        let mut v = SCALE;
+        for _ in 0..n.abs() { v = self.mul(v, base)?; }
+        if n < 0 {
+            if v == 0 { return Err(Error::DivideByZero); }
+            let num = SCALE.checked_mul(SCALE).ok_or(Error::Overflow)?;
+            if num % v != 0 { self.inexact = true; }
+            v = num / v;
+        }
+        Ok(v)
+    }
+    fn mul(&mut self, v: i128, r: i128) -> Result<i128, Error> {
+        let p = v.checked_mul(r).ok_or(Error::Overflow)?;
+        if p % SCALE != 0 { self.inexact = true; }
+        Ok(p / SCALE)
     }
     fn guard(&mut self, f: impl FnOnce(&mut Self) -> Result<i128, Error>) -> Result<i128, Error> {
         if self.depth >= MAX_DEPTH { return Err(Error::TooDeep); }
@@ -137,6 +163,13 @@ mod tests {
         assert_eq!(show("1/3*3"), "~ 0.999999999");
         assert_eq!(show("12345678901234567890"), "= 12345678901234567890");
         assert_eq!(show(".5*4"), "= 2");
+        assert_eq!(show("2**10"), "= 1024");
+        assert_eq!(show("-2**2"), "= -4");
+        assert_eq!(show("2**3**2"), "= 512");
+        assert_eq!(show("1.5**2"), "= 2.25");
+        assert_eq!(show("2**-2"), "= 0.25");
+        assert_eq!(show("3**-1"), "~ 0.333333333");
+        assert_eq!(show("2*3**2"), "= 18");
     }
     #[test] fn errors_are_named_not_wrapped() {
         assert_eq!(show("1/0"), "DivideByZero");
@@ -151,6 +184,10 @@ mod tests {
         assert_eq!(show(&("(".repeat(40) + "1" + &")".repeat(40))), "TooDeep");
         assert_eq!(show(&"-".repeat(40)), "TooDeep");
         assert_eq!(show("ans+1"), "NoAnswer");
+        assert_eq!(show("2**0.5"), "Exponent");
+        assert_eq!(show("2**65"), "Exponent");
+        assert_eq!(show("10**40"), "Overflow");
+        assert_eq!(show("0**-1"), "DivideByZero");
         assert_eq!(show("answer"), "Syntax");
     }
     #[test] fn ans_is_the_previous_result() {

@@ -25,6 +25,10 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b'<p><script>var n = 6; document.write("Script says " + n*7, " / ", -(-(-((1+1)*3))))</script></p>'
  b"<p><script>var t = 'sexos'; if (t.length === 5) { document.write(t.toUpperCase(), ' ', Math.max(2, 7) > 5 ? 'ok' : 'no') } else document.write('bad')</script></p>"
  b'<p>Press <kbd>W</kbd> for this <strong>page</strong>, see <code>html_text.rs</code>.</p>'
+ b"<p><script>function sq(x) { return x * x }\nvar s = 0; for (var i = 1; i <= 200; i++) s += i; var n = 3; while (n > 0) { document.write(n, ' '); n-- } document.write('sum ', s, ' sq ', sq(12))</script></p>"
+ b"<p><script>function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) }\ndocument.write('deep ', ((((((((((7)))))))))), ' ', fact(2))</script></p>"
+ b"<p><script>var sq = []; for (var i = 1; i <= 6; i++) sq.push(i * i); document.write('squares ', sq.join(' '), ' last ', sq[sq.length - 1])</script></p>"
+ b"<p><script>var parts = 'held, never ambient'.split(', '); document.write(parts.length, ' ', parts[1].toUpperCase(), ' at ', 'SexOS'.indexOf('OS'), ' ', parseInt('42px') + 1)</script></p>"
  b'<h2>Rules</h2><ol><li>BOOT grants routes &amp; identities.<ul><li>held, never ambient</li></ul></li><li>Applications cannot mint them.</li><li>Only the bounded script subset runs.</li></ol>'
  b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
  b'<table><tr><th>key</th><th>value</th></tr><tr><td>pages</td><td>1</td></tr></table>'
@@ -131,7 +135,7 @@ def main():
   b=len(trace());q.key('w');wait(r'\[shell.browser.input\] code=17 down=1 slot=43 accepted=1',b);wait(r'\[browser.html.intent\] accepted=1 explicit=1 path=/page.html script=0 public_internet=0',b)
   wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b);doc_event=peer.completed.wait(30)
   if not doc_event:raise TimeoutError('peer close_notify')
-  conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=2 scripts_refused=2 ticks=\d+',b);checks['converted']=conv[0]
+  conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=6 scripts_refused=2 ticks=\d+',b);checks['converted']=conv[0]
   def reader(name,text,request,path):
    shot=out/(name+'.ppm');result=dict(ok=False,errors=['no frame']);deadline=time.monotonic()+25
    while time.monotonic()<deadline:
@@ -154,11 +158,11 @@ def main():
   reader('html-followed',guide,GUIDE_REQUEST,b'/guide');(out/'expected-guide.txt').write_bytes(guide)
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] path=/page.html depth=0',b)
   if not peer.served[2].wait(60):raise TimeoutError('back page not served')
-  wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=2 scripts_refused=2 ticks=\d+',b)
+  wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=6 scripts_refused=2 ticks=\d+',b)
   reader('html-back',text,REQUEST,b'/page.html')
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] depth=0 network=0',b);time.sleep(1)
   if len(peer.rows)!=3:raise RuntimeError('back at the first page caused network work')
-  assert b'Script says 42' in text and b'SEXOS ok' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
+  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 2' in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
  except Exception as exc:failure=repr(exc)
  finally:
   peer.close()

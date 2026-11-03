@@ -42,6 +42,10 @@ fn append(out:&mut[u8;32],len:&mut usize,text:&[u8]) {
 /// so a prior reader cannot leave text over the image. Tiny views show only
 /// the rows/cells physically available; their image geometry may be unavailable.
 pub fn render(w:u32,h:u32,status:Status,mode:Mode,width:usize,height:usize)->Frame {
+    render_titled(w,h,status,mode,width,height,b"QOI / controlled HTTPS lab root")
+}
+/// Same frame with the format named in the first row.
+pub fn render_titled(w:u32,h:u32,status:Status,mode:Mode,width:usize,height:usize,title:&[u8])->Frame {
     let factor=scale(w);let cols=columns(w);let top=28+INSET;
     let rows=if cols==0||h<top+7*factor {0} else {1+(h-top-7*factor)/(LINE*factor)} as usize;
     // Display has 24 indexed rows and the atomic text frame has 512 bytes.
@@ -53,7 +57,7 @@ pub fn render(w:u32,h:u32,status:Status,mode:Mode,width:usize,height:usize)->Fra
         let at=row*(cols+1);frame.bytes[at..at+cols].fill(b' ');
         if row+1<rows {frame.bytes[at+cols]=b'\n';}
     }
-    put(&mut frame,0,b"QOI / controlled HTTPS lab root");
+    put(&mut frame,0,title);
     put(&mut frame,1,status.label());
     if width==0||height==0 {
         put(&mut frame,2,if matches!(status,Status::Loading|Status::Decoding) {b"Dimensions pending"}else{b"No retained image"});

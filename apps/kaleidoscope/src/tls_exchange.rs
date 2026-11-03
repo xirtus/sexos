@@ -49,7 +49,7 @@ impl Client{
     pub fn set_page_text(&mut self,convert:PageText){self.page_text=Some(convert);}
     pub fn take_page_stats(&mut self)->Option<PageStats>{self.page_stats.take()}
     pub fn resource_kind(&self)->Option<Resource>{self.resource}
-    pub fn has_asset(&self)->bool{self.resource==Some(Resource::ArtworkQoi)&&self.view==View::Verified&&!self.busy()&&self.asset.is_some()}
+    pub fn has_asset(&self)->bool{self.resource.is_some_and(Resource::is_image)&&self.view==View::Verified&&!self.busy()&&self.asset.is_some()}
     /// Asset custody stays private until the exact positive RELEASE receipt.
     pub fn asset(&self)->Option<&sex_tls::Asset>{if self.has_asset(){self.asset.as_ref()}else{None}}
     pub fn take_asset(&mut self)->Option<sex_tls::Asset>{if self.has_asset(){self.asset.take()}else{None}}
@@ -139,7 +139,7 @@ impl Client{
                         self.page_stats=Some(stats);
                     }
                 }
-                if self.resource==Some(Resource::ArtworkQoi)&&self.asset.is_none(){
+                if self.resource.is_some_and(Resource::is_image)&&self.asset.is_none(){
                     self.asset=session.take_asset();if self.asset.is_none(){self.failed(false);return;}
                 }
                 if !self.authenticated{self.authenticated=true;self.auth_event=true;}self.verified=true;self.verify_event=true;},

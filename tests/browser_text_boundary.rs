@@ -9,6 +9,7 @@ extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../apps/kaleidoscope/src/import_view.rs"]mod import_view;
 #[derive(Clone,Copy,PartialEq,Eq)]pub enum Resource{WelcomeText,ArtworkQoi}
+impl Resource{pub const fn is_image(self)->bool{matches!(self,Self::ArtworkQoi)}}
 mod sex_tls{pub use crate::Resource;}
 pub fn get_ticks()->u64{1}
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format!($($arg)*);}}}

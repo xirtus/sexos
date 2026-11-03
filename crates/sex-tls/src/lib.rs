@@ -345,9 +345,9 @@ impl Session {
     /// Move the same finite allocation without copying or permitting binary
     /// bytes to enter the text/import API. Positive RELEASE belongs to parent.
     pub fn take_asset(&mut self)->Option<Asset>{
-        if self.resource!=Some(Resource::ArtworkQoi)||self.state!=State::ExchangeVerified{return None;}
+        if !self.resource.is_some_and(Resource::is_image)||self.state!=State::ExchangeVerified{return None;}
         let mut pipe=self.pipe.borrow_mut();let body=pipe.document.as_ref()?;
-        if !body.ready||body.resource!=Resource::ArtworkQoi{return None;}
+        if !body.ready||Some(body.resource)!=self.resource{return None;}
         pipe.document.take().map(Asset)
     }
     pub fn stats(&self) -> Stats { self.stats }
@@ -451,9 +451,9 @@ mod tests {
         }
     }
     #[test] fn resource_sessions_are_finite_and_cannot_transfer_before_tls_completion(){
-        for resource in [Resource::WelcomeText,Resource::ArtworkQoi,Resource::PageHtml]{
+        for resource in [Resource::WelcomeText,Resource::ArtworkQoi,Resource::PageHtml,Resource::ArtworkPng]{
             let mut seed=[29;32];let mut session=Session::resource(&mut seed,1_793_367_907,1,resource).unwrap();assert_eq!(seed,[0;32]);
-            assert_eq!(session.resource_kind(),Some(resource));assert_eq!(session.is_document(),resource!=Resource::ArtworkQoi);
+            assert_eq!(session.resource_kind(),Some(resource));assert_eq!(session.is_document(),!resource.is_image());
             assert!(session.take_document().is_none());assert!(session.take_asset().is_none());
             let stats=session.stats();assert!(stats.task_bytes<=MAX_TASK_BYTES);assert_eq!(stats.private_bytes,stats.task_bytes+PIPE_BYTES+MAX_DOCUMENT);
             assert_eq!(session.pipe.borrow().document.as_ref().unwrap().bytes.len(),MAX_DOCUMENT);

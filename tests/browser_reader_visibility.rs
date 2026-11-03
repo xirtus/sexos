@@ -17,6 +17,7 @@ extern crate self as sex_tls;
 #[path="../apps/kaleidoscope/src/document_reader.rs"]mod document_reader;
 #[path="../apps/kaleidoscope/src/import_view.rs"]mod import_view;
 #[derive(Clone,Copy,PartialEq)]pub enum Resource{WelcomeText,ArtworkQoi}
+impl Resource{pub const fn is_image(self)->bool{matches!(self,Self::ArtworkQoi)}}
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 thread_local! {static SENT:std::cell::RefCell<Vec<clipboard::Request>>=const{std::cell::RefCell::new(Vec::new())};static FULL:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 pub const SLOT_SHELL:u64=6;pub const ERR_SERVICE_NOT_READY:u64=9;

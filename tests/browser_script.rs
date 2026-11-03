@@ -28,7 +28,7 @@ fn numbers_print_like_javascript() {
 #[test]
 fn anything_outside_the_subset_writes_nothing() {
     for src in ["while(true){}", "document.write(1); for(;;){}", "alert(1)", "fetch('/x')", "document.cookie = 'a'",
-        "document.write(window.location)", "function f(){}", "if (1) { while(1){} }", "var a = 1; a.foo", "Math.sqrt(2)", "if (0) x = 1", "document.write(1) document.write(2)", "var x = 'unterminated",
+        "document.write(window.location)", "if (1) { while(1){} }", "var a = 1; a.foo", "if (0) x = 1", "document.write(1) document.write(2)", "var x = 'unterminated",
         "document.write(1); eval('2')", "document.body.innerHTML = 'x'", "x => 1", "document.write(`t`)"] {
         assert!(run(src.as_bytes()).is_err(), "{src}");
     }
@@ -38,9 +38,9 @@ fn anything_outside_the_subset_writes_nothing() {
 fn bounds_hold() {
     let deep = format!("document.write({}1{})", "(".repeat(40), ")".repeat(40));
     assert_eq!(out(&deep).err(), Some(Error::Limit));
-    let negs = format!("document.write({}1)", "-".repeat(40));
+    let negs = format!("document.write({}1)", "- ".repeat(40));
     assert_eq!(out(&negs).err(), Some(Error::Limit));
-    let big = format!("var s = '{}'; s = s + s; s = s + s;", "a".repeat(600));
+    let big = format!("var s = '{}'; s = s + s; s = s + s; s = s + s; s = s + s;", "a".repeat(600));
     assert_eq!(out(&big).err(), Some(Error::Limit));
     let mut many = String::new();
     for i in 0..17 { many += &format!("var v{i} = {i};"); }
@@ -62,4 +62,59 @@ fn branches_comparisons_and_helpers() {
     // Untaken branches still must be valid subset code, and write nothing.
     assert_eq!(out("var a = 1; if (false) { a = 2; document.write('no') } document.write(a)").unwrap(), "1");
     assert_eq!(out("if (true) document.write('a'); else document.write('b')").unwrap(), "a");
+}
+
+#[test]
+fn loops_run_within_the_step_budget() {
+    assert_eq!(out("for (var i = 1; i <= 5; i++) document.write(i, i < 5 ? ',' : '')").unwrap(), "1,2,3,4,5");
+    assert_eq!(out("var n = 10, s = 0").err(), Some(Error::Syntax));
+    assert_eq!(out("var n = 10; var s = 0; while (n > 0) { s += n; n-- } document.write(s)").unwrap(), "55");
+    assert_eq!(out("var t = ''; for (let i = 0; i < 3; i += 1) { for (let j = 0; j < 2; j++) t = t + i + j + ' ' } document.write(t)").unwrap(), "00 01 10 11 20 21 ");
+    assert_eq!(out("var k = 0; for (;;) { k++ } document.write(k)").err(), Some(Error::Limit), "endless loop spends the budget");
+    assert_eq!(out("while (true) {}").err(), Some(Error::Limit));
+    assert_eq!(out("var x = 0; while (false) { y = 1 } document.write(x)").err(), Some(Error::Unsupported), "body checked even when never run");
+    assert_eq!(out("var x = 3; while (false) x = 9; document.write(x)").unwrap(), "3");
+    assert!(out("var i = 0; while (i < 9000) i++; document.write(i)").is_ok());
+    assert_eq!(out("var i = 0; while (i < 20000) i++").err(), Some(Error::Limit));
+}
+
+#[test]
+fn functions_with_parameters_and_return() {
+    assert_eq!(out("function sq(x) { return x * x }\ndocument.write(sq(7), ' ', sq('3'))").unwrap(), "49 9");
+    assert_eq!(out("var x = 'global'; function f(x) { return x + '!' } document.write(f('local'), ' ', x)").unwrap(), "local! global");
+    assert_eq!(out("function sign(n) { if (n < 0) return -1; if (n > 0) return 1; return 0 } document.write(sign(-5), sign(0), sign(9))").unwrap(), "-101");
+    assert_eq!(out("function sum(a, b, c) { var t = a + b; return t + (c === undefined ? 0 : c) } document.write(sum(1, 2))").err(), Some(Error::Unsupported), "no undefined name");
+    assert_eq!(out("function noop() {} document.write(noop())").unwrap(), "undefined");
+    assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(2))").unwrap(), "2");
+    assert_eq!(out("function fact(n) { if (n <= 1) return 1; return n * fact(n - 1) } document.write(fact(30))").err(), Some(Error::Limit), "recursion bounded by depth");
+    assert_eq!(out("document.write(later(1)); function later(x) { return x }").err(), Some(Error::Unsupported), "declare before use");
+    assert_eq!(out("function f() { while (true) {} } f()").err(), Some(Error::Limit));
+    assert_eq!(out("function f(a) { document.write(a) } f(1); f(2)").unwrap(), "12");
+    assert_eq!(out("function f(a) { return a; document.write('never') } document.write(f(5))").unwrap(), "5");
+}
+
+#[test]
+fn arrays_by_reference() {
+    assert_eq!(out("var a = [3, 1, 2]; document.write(a, ' ', a.length, ' ', a[0] + a[2], ' ', a[9])").unwrap(), "3,1,2 3 5 undefined");
+    assert_eq!(out("var a = []; for (var i = 0; i < 10; i++) a.push(i * i); document.write(a.join(' '))").unwrap(), "0 1 4 9 16 25 36 49 64 81");
+    assert_eq!(out("var a = [1]; var b = a; b.push(2); a[0] = 'x'; document.write(a, '|', b)").unwrap(), "x,2|x,2");
+    assert_eq!(out("var w = ['Sex', 'OS']; document.write(w.join(''), ' ', 'abc'[1], [[1, 2], 3])").unwrap(), "SexOS b1,2,3");
+    assert_eq!(out("var a = [1]; a[5] = 2").err(), Some(Error::Unsupported), "no holes");
+    assert_eq!(out("var a = []; while (true) a.push(1)").err(), Some(Error::Limit));
+    assert_eq!(out("var s = 0; var a = [5, 6, 7]; for (var i = 0; i < a.length; i++) s += a[i]; document.write(s)").unwrap(), "18");
+}
+
+#[test]
+fn string_methods_and_conversions() {
+    assert_eq!(out("var s = '  SexOS rocks  '.trim(); document.write(s.indexOf('OS'), ' ', s.indexOf('zz'), ' ', s.charAt(1), ' ', s.slice(-5), ' ', s.substring(5, 0))").unwrap(), "3 -1 e rocks SexOS");
+    assert_eq!(out("var p = 'a,b,,c'.split(','); document.write(p.length, ' ', p.join('|'), ' ', 'abc'.split('').join('-'), ' ', 'x'.split().length)").unwrap(), "4 a|b||c a-b-c 1");
+    assert_eq!(out("document.write(String(12) + 3, ' ', Number('4') + 3, ' ', parseInt(' 42px'), ' ', parseInt('-7'), ' ', parseInt('px'), ' ', Number('x'))").unwrap(), "123 7 42 -7 NaN NaN");
+    assert_eq!(out("document.write('abc'.slice(1, -1), 'abc'.slice(5), 'abc'.substring(2, 1))").unwrap(), "bb");
+}
+
+#[test]
+fn more_math() {
+    assert_eq!(out("document.write(Math.sqrt(144), ' ', Math.sqrt(2), ' ', Math.sqrt(-1), ' ', Math.pow(2, 10), ' ', Math.pow(2, -2), ' ', Math.pow(2, 0.5))").unwrap(), "12 1.4142135623730951 NaN 1024 0.25 NaN");
+    assert_eq!(out("document.write(Math.trunc(-2.7), Math.sign(-3), Math.sign(0), ' ', Math.PI)").unwrap(), "-2-10 3.141592653589793");
+    assert_eq!(out("Math.random()").err(), Some(Error::Unsupported));
 }

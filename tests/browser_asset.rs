@@ -8,6 +8,8 @@ extern crate self as sex_tls;
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-graphics/src/qoi.rs"] pub mod qoi;
+#[path="../crates/sex-graphics/src/png.rs"] pub mod png;
+#[path="fixtures/png/cases.rs"] mod png_cases;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"] pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"] pub mod desktop_style;
 #[path="../apps/kaleidoscope/src/asset_decode.rs"] mod asset_decode;
@@ -144,4 +146,15 @@ fn frame_row(frame:&asset_view::Frame,row:usize)->&[u8]{
     assert_eq!(asset_view::Status::NoFit.label(),b"Image does not fit");
     assert_eq!(asset_view::Status::Uncertain as u8,8);
     assert_eq!(asset_view::Status::NoFit as u8,9);
+}
+#[test] fn png_assets_decode_in_one_step_and_bad_png_leaves_nothing(){
+    for (name,bytes,w,h,pixels) in png_cases::CASES {
+        let mut image=asset_decode::Image::new();
+        image.begin(Asset(bytes.to_vec()),7).unwrap_or_else(|_|panic!("{name}"));
+        assert!(image.pending());assert!(image.pixels().is_empty(),"nothing visible before advance");
+        assert_eq!(image.advance(),Ok(true));assert!(!image.pending());
+        assert_eq!((image.width,image.height),(*w,*h));assert_eq!(image.pixels(),*pixels,"{name}");
+    }
+    let (_,bytes,..)=png_cases::CASES[0];let mut bad=bytes.to_vec();let n=bad.len();bad[n-20]^=1;
+    let mut image=asset_decode::Image::new();assert!(image.begin(Asset(bad),8).is_err());assert!(!image.pending());assert!(image.pixels().is_empty());
 }

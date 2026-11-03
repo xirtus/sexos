@@ -129,6 +129,8 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/browser_asset.rs" -o "$TEST_DIR/bro
 "$TEST_DIR/browser-asset-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_html_text.rs" -o "$TEST_DIR/browser-html-text-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_script.rs" -o "$TEST_DIR/browser-script-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/png_decode.rs" -o "$TEST_DIR/png-decode-tests"
+"$TEST_DIR/png-decode-tests"
 "$TEST_DIR/browser-script-tests"
 "$TEST_DIR/browser-html-text-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/browser_bitmap_delivery.rs" -o "$TEST_DIR/browser-bitmap-tests"
