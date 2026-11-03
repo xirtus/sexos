@@ -1,6 +1,6 @@
 # SexOS feature ledger (from 2026-11-02)
 
-## Handoff summary (as of 2026-11-03, after M16)
+## Handoff summary (as of 2026-11-03, after M36)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9` follow
 links, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
@@ -23,22 +23,32 @@ with a numbered list, images as alt text, forms as read-only text,
 engine, no DOM/events/timers/network/storage/clock/entropy): numbers printed
 like JavaScript, strings and string methods, regular expressions
 (`regex.rs`, bounded backtracking), `null`/`undefined`, `typeof`,
-`if/else`, `switch`, `while`/`do`/`for`/`for...of`/`for...in` under a
-10,000-step budget, `var`/`let`/`const` block scope, functions with default
-and rest parameters, arrows, callbacks, `this`, `class ... extends` with
-`super`, `new`, `try/catch/finally/throw` and Error objects, arrays and
-objects with most standard methods, spread, destructuring, templates,
-`?.`, `??`, short-circuit `&& || ?:`, `Math`, `JSON.stringify/parse`,
-`Date` from given values only (no `new Date()`/`Date.now()`), URI
-encode/decode; output via `document.write`. Nesting is capped at 32,
-calls take at most 6 arguments.
+`if/else`, `switch`, `while`/`do`/`for`/`for...of`/`for...in`, labelled
+`break`/`continue`, under a 10,000-step budget; `var` (function scoped) /
+`let`/`const` (block scoped); functions with default and rest parameters,
+arrows, IIFEs, callbacks, closures (on `return`), `this`, `class ...
+extends` with `super`, `static`, `get`/`set`, `new`, `instanceof`,
+`try/catch/finally/throw` and Error objects; arrays and objects with most
+standard methods, object-literal shorthand/methods/computed keys/spread,
+destructuring with defaults, holes and rest; templates; `?.`, `??`,
+short-circuit `&& || ?:`, `**`, bitwise operators, logical and compound
+assignment to any member chain, `++`/`--` in expressions; `Math`,
+`JSON.stringify/parse`, `Date` from given values only (no
+`new Date()`/`Date.now()`), URI encode/decode; output via `document.write`.
+Bounds: nesting 32, 6 arguments per call, 32 variables, 16 functions, 32
+closures, 32 arrays, 16 objects.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
-image): `https_html_gate.py` (also bounds the Browser stack high water),
-`https_png_gate.py` (`--variant adam7-16` too), `quil_autosave_gate.py`
-(also Ctrl+I), `quil_delete_gate.py`, `spindle_calc_gate.py`. Host gates:
-`quil_autosave_host_gate.sh`, `spindle_calc_host_gate.sh`; script, html_text
-and PNG tests run in `sexnet_jobs_host_gate.sh`.
+image): `https_html_gate.py` (also bounds the Browser stack high water,
+now 46,752 of 65,536 bytes), `https_png_gate.py` (`--variant adam7-16`
+too), `quil_autosave_gate.py` (also Ctrl+I, Ctrl+G, word movement, find
+next/previous, replace all, Ctrl+L), `quil_delete_gate.py`,
+`spindle_calc_gate.py` (also Tab completion). Host gates:
+`quil_autosave_host_gate.sh`, `spindle_calc_host_gate.sh` (calc and
+completion); script, html_text and PNG tests run in
+`sexnet_jobs_host_gate.sh`. Fixtures that copy production code
+(`tests/quil_clipboard_ui.rs`, `tests/spindle_editor.rs`) need stubs when
+key handlers call new functions.
 
 **Open release gates** (details below): full-window reader needs a larger
 Display text delivery; Display applies app paints late; Display redraws are slow (raster 100-670 ticks per frame, H2; H1 removed the inbox backlog); autosave
@@ -47,7 +57,10 @@ images limited to 48x48; the Browser body limit is 12 KiB.
 
 **Next suggested steps.** Fix focus raising in Shell/Display (with the
 concurrent session); grow the document/body limit with streaming
-conversion; an event model for scripts only if it fits held authority.
+conversion (12 KiB is fixed in `sex-http`'s codec); a runtime stack guard in
+the script interpreter before raising its nesting limit (callback-heavy
+recursion costs ~3 KiB per level); an event model for scripts only if it
+fits held authority.
 
 ## F1. Browser reads HTML pages as text (2026-11-02)
 
