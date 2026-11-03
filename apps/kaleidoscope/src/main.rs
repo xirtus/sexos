@@ -30,6 +30,7 @@ mod text_delivery;
 mod browser_command;
 mod html_text;
 mod regex;
+mod fmath;
 mod script;
 mod stack_probe;
 use browser_command::Intent;

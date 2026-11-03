@@ -49,6 +49,7 @@
 //! script writes nothing. Written text is inserted as text, never markup.
 use alloc::vec::Vec;
 use crate::regex::{Regex, CAPTURES};
+use crate::fmath;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2088,7 +2089,8 @@ impl<'a> Machine<'a> {
         self.expect(b'.')?;
         let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
-        if name == b"PI" { return Ok(Value::Num(core::f64::consts::PI)); }
+        use core::f64::consts as k;
+        if let Some(c) = match name { b"PI" => Some(k::PI), b"E" => Some(k::E), b"LN2" => Some(k::LN_2), b"LN10" => Some(k::LN_10), b"LOG2E" => Some(k::LOG2_E), b"LOG10E" => Some(k::LOG10_E), b"SQRT2" => Some(k::SQRT_2), b"SQRT1_2" => Some(k::FRAC_1_SQRT_2), _ => None } { return Ok(Value::Num(c)); }
         self.expect(b'(')?;
         let mut values = [Value::Undef; 32];
         let n = self.items(b')', &mut values)?;
@@ -2102,6 +2104,24 @@ impl<'a> Machine<'a> {
             b"trunc" => one(|x| if x < 0.0 { -floor(-x) } else { floor(x) }),
             b"sign" => one(|x| if x.is_nan() { x } else if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { x }),
             b"sqrt" => one(sqrt),
+            b"exp" => one(fmath::exp),
+            b"expm1" => one(|x| if x.abs() < 1e-5 { x + x * x / 2.0 } else { fmath::exp(x) - 1.0 }),
+            b"log" => one(fmath::ln),
+            b"log1p" => one(|x| if x.abs() < 1e-5 { x - x * x / 2.0 } else { fmath::ln(1.0 + x) }),
+            b"log2" => one(|x| fmath::log_base(x, 2.0, core::f64::consts::LN_2)),
+            b"log10" => one(|x| fmath::log_base(x, 10.0, core::f64::consts::LN_10)),
+            b"sin" => one(|x| fmath::sin_cos(x).0),
+            b"cos" => one(|x| fmath::sin_cos(x).1),
+            b"tan" => one(|x| { let (s, c) = fmath::sin_cos(x); s / c }),
+            b"atan" => one(fmath::atan),
+            b"asin" => one(|x| if x.abs() > 1.0 { f64::NAN } else { fmath::atan2(x, sqrt(1.0 - x * x)) }),
+            b"acos" => one(|x| if x.abs() > 1.0 { f64::NAN } else { fmath::atan2(sqrt(1.0 - x * x), x) }),
+            b"atan2" => if n < 2 { f64::NAN } else { fmath::atan2(a, args[1]) },
+            b"cbrt" => one(|x| if x == 0.0 || !x.is_finite() { x } else { let r = fmath::exp(fmath::ln(x.abs()) / 3.0).copysign(x); r - (r * r * r - x) / (3.0 * r * r) }),
+            b"hypot" => { let m = args[..n].iter().fold(0.0f64, |m, &x| if x.is_infinite() { f64::INFINITY } else if m.is_infinite() { m } else if x.is_nan() || m.is_nan() { f64::NAN } else { m.max(x.abs()) }); if m == 0.0 || !m.is_finite() { m } else { m * sqrt(args[..n].iter().map(|x| (x / m) * (x / m)).sum()) } },
+            b"sinh" => one(|x| (fmath::exp(x) - fmath::exp(-x)) / 2.0),
+            b"cosh" => one(|x| (fmath::exp(x) + fmath::exp(-x)) / 2.0),
+            b"tanh" => one(|x| if x.abs() > 20.0 { 1.0f64.copysign(x) } else { let e = fmath::exp(2.0 * x); (e - 1.0) / (e + 1.0) }),
             b"pow" => if n < 2 { f64::NAN } else { pow(a, args[1]) },
             b"max" => args[..n].iter().fold(f64::NEG_INFINITY, |m, &x| if x.is_nan() || m.is_nan() { f64::NAN } else if x > m { x } else { m }),
             b"min" => args[..n].iter().fold(f64::INFINITY, |m, &x| if x.is_nan() || m.is_nan() { f64::NAN } else if x < m { x } else { m }),
@@ -3443,6 +3463,7 @@ fn rem(a: f64, b: f64) -> f64 {
 }
 /// Correctly rounded square root without libm: an exact integer square
 /// root of the scaled significand, rounded once with a sticky bit.
+pub fn sqrt_f64(x: f64) -> f64 { sqrt(x) }
 fn sqrt(x: f64) -> f64 {
     if x.is_nan() || x < 0.0 { return f64::NAN; }
     if x == 0.0 || x.is_infinite() { return x; }

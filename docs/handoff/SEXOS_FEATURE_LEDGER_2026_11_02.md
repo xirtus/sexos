@@ -37,7 +37,7 @@ destructuring (nested, defaults, holes, rest); nested templates; `?.`,
 `??`, short-circuit `&& || ?:`, `**`, bitwise operators, assignment
 expressions, logical/compound assignment to any member chain, `++`/`--`;
 `Promise` (then/catch/finally/all, microtask order; no async/await),
-`Math`, `JSON.stringify` (replacer keys, indent) / `parse`, `Date` from
+`Math` (incl. exp/log/trig, no random), `JSON.stringify` (replacer keys, indent) / `parse`, `Date` from
 given values only, URI encode/decode, `toPrecision`/`toLocaleString`;
 output via `document.write`. Bounds: nesting 64 plus a stack floor 10 KiB
 above the Browser stack bottom, 50,000 steps, 16 KiB source, 6 arguments
@@ -1481,6 +1481,23 @@ and master gate GREEN; native Spindle gate at both sizes (`calc ln(2)` ->
 **Evidence** (`docs/handoff/assets/spindle-history-search-2026-11-03/`):
 host gates pass; sealed build and master gate GREEN; native Spindle gate at
 both sizes (`history ln` -> `[spindle.history.search] bytes=2 found=1`).
+
+## P7. Script `Math` elementary functions (2026-11-03)
+
+- `Math.exp expm1 log log1p log2 log10 sin cos tan asin acos atan atan2
+  sinh cosh tanh cbrt hypot` and the constants `E LN2 LN10 LOG2E LOG10E
+  SQRT2 SQRT1_2`, in `apps/kaleidoscope/src/fmath.rs` without libm:
+  range reduction (split ln2 / pi/2 constants) and series. A host test
+  sweeps -40..40 against Rust's std and keeps every result within 4 ulps;
+  `log10`/`log2` are exact at exact powers (`Math.log10(1000)` is 3, as in
+  JavaScript engines), `exp(0)`/`log(1)` exact. `Math.random` stays absent
+  (no entropy authority).
+
+**Evidence** (`docs/handoff/assets/script-math-elementary-2026-11-03/`):
+script host tests 48 groups (incl. `elementary_functions_stay_within_a_few_ulps_of_std`);
+sealed build and master gate GREEN; native HTML gate at both sizes
+(`big 79800 40 521`: `Math.hypot(3, 4)`, `Math.log10(100)`,
+`Math.sin(Math.PI / 2)`).
 
 ## Release gates noted while doing F1–F2
 

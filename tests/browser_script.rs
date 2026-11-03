@@ -2,6 +2,7 @@
 //! Host tests of the Browser's bounded inline script subset.
 extern crate alloc;
 #[path="../apps/kaleidoscope/src/regex.rs"] mod regex;
+#[path="../apps/kaleidoscope/src/fmath.rs"] mod fmath;
 #[path="../apps/kaleidoscope/src/script.rs"] mod script;
 use script::{run, Error};
 
@@ -420,4 +421,27 @@ fn promises_run_as_ordered_microtasks_after_the_script() {
 fn optional_calls_tagged_templates_and_string_raw() {
     assert_eq!(out("var f = null; var g = x => x * 2; document.write(f?.(1), g?.(4), ({m: null}).m?.(), ({k: () => 3}).k?.())").unwrap(), "undefined8undefined3");
     assert_eq!(out(r#"function tag(s, a, b) { return s.join("|") + ":" + a + "," + b } var x = 1; document.write(tag`A${x}B${x + 1}C`, ' ', String.raw`a\nb${1 + 1}\t`)"#).unwrap(), "A|B|C:1,2 a\\nb2\\t");
+}
+
+#[test]
+fn elementary_functions_stay_within_a_few_ulps_of_std() {
+    let ulps = |a: f64, b: f64| if a == b { 0 } else { (a.to_bits() as i64 - b.to_bits() as i64).unsigned_abs() };
+    let mut x = -40.0f64;
+    while x < 40.0 {
+        let (s, c) = fmath::sin_cos(x);
+        assert!(ulps(s, x.sin()) <= 4 || (s - x.sin()).abs() < 1e-16, "sin {x}: {s} vs {}", x.sin());
+        assert!(ulps(c, x.cos()) <= 4 || (c - x.cos()).abs() < 1e-16, "cos {x}");
+        assert!(ulps(fmath::exp(x), x.exp()) <= 4, "exp {x}: {} vs {}", fmath::exp(x), x.exp());
+        assert!(ulps(fmath::atan(x), x.atan()) <= 4, "atan {x}");
+        if x > 0.0 { assert!(ulps(fmath::ln(x), x.ln()) <= 4, "ln {x}: {} vs {}", fmath::ln(x), x.ln()); }
+        x += 0.0937;
+    }
+    for &(y, x) in &[(1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (0.0, -1.0), (-0.0, -1.0), (3.0, 0.0), (-2.0, 5.0)] {
+        assert!(ulps(fmath::atan2(y, x), f64::atan2(y, x)) <= 4, "atan2 {y} {x}");
+    }
+    assert_eq!(fmath::exp(0.0), 1.0);
+    assert_eq!(fmath::ln(1.0), 0.0);
+    assert!(fmath::ln(-1.0).is_nan());
+    assert_eq!(fmath::exp(1000.0), f64::INFINITY);
+    assert_eq!(out("document.write(Math.round(Math.sin(Math.PI / 6) * 1e6) / 1e6, ' ', Math.log(Math.E), ' ', Math.log10(1000), ' ', Math.log2(8), ' ', Math.cbrt(27), ' ', Math.hypot(3, 4), ' ', Math.atan2(1, 1) * 4 === Math.PI, ' ', Math.exp(0), ' ', Math.cos(0))").unwrap(), "0.5 1 3 3 3 5 true 1 1");
 }
