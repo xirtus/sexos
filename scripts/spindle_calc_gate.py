@@ -57,6 +57,8 @@ def main():
   g['chord']('ctrl','u',r'\[spindle.line.ctrl\] key=u len=0 cur=0')
   type_line(g,'0xff');g['chord']('ctrl','r',r'\[spindle.line.ctrl\] key=r len=11 cur=11')
   s=len(g['text']());g['q'].key('ret');rows.append(dict(input='0xff<Ctrl+R>',record=g['wait'](r'\[spindle.calc\] expr_bytes=6 result== 256 ok=1',s)[0]))
+  # `history ln` lists the one calc line containing "ln".
+  type_line(g,'history ln');s=len(g['text']());g['q'].key('ret');rows.append(dict(input='history ln',record=g['wait'](r'\[spindle.history.search\] bytes=2 found=1',s)[0]))
   # Spindle's display outbox must drain: its last batch is admitted after the last command.
   last=len(g['text']());import time as _t;d=_t.monotonic()+30
   while _t.monotonic()<d and not re.search(r'\[spindle.display.batch.admitted\]',g['text']()[last-20000 if last>20000 else 0:]):_t.sleep(.2)

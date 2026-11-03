@@ -1,0 +1,98 @@
+{
+  "ok": true,
+  "error": null,
+  "binding": {
+    "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/p6-fz/source-binding.json",
+    "sha256": "f0d74f208f255d2782d381029ccee6f1c9f5b6131b38cf00c6c7984d62bec793",
+    "iso_sha256": "b2c779e4de2b145e95e8cbffcd4b369819574d2ec2cc22a6d06be36ecc4a8598",
+    "production_files": 594,
+    "runner_files": 651
+  },
+  "resolution": "1024x768",
+  "cases": [
+    {
+      "input": "calc ans",
+      "record": "[spindle.calc] expr_bytes=3 error=NoAnswer ok=0"
+    },
+    {
+      "input": "calc 2*(3+4)/5",
+      "record": "[spindle.calc] expr_bytes=9 result== 2.8 ok=1"
+    },
+    {
+      "input": "calc ans*10",
+      "record": "[spindle.calc] expr_bytes=6 result== 28 ok=1"
+    },
+    {
+      "input": "calc 0.1+0.2",
+      "record": "[spindle.calc] expr_bytes=7 result== 0.3 ok=1"
+    },
+    {
+      "input": "calc 1/3",
+      "record": "[spindle.calc] expr_bytes=3 result=~ 0.333333333 ok=1"
+    },
+    {
+      "input": "calc 2**10",
+      "record": "[spindle.calc] expr_bytes=5 result== 1024 ok=1"
+    },
+    {
+      "input": "calc sqrt(2)",
+      "record": "[spindle.calc] expr_bytes=7 result=~ 1.414213562 ok=1"
+    },
+    {
+      "input": "calc max(2,9)",
+      "record": "[spindle.calc] expr_bytes=8 result== 9 ok=1"
+    },
+    {
+      "input": "calc 2*pi",
+      "record": "[spindle.calc] expr_bytes=4 result=~ 6.283185308 ok=1"
+    },
+    {
+      "input": "calc r = 3",
+      "record": "[spindle.calc] expr_bytes=5 result== 3 ok=1"
+    },
+    {
+      "input": "calc r*r+1",
+      "record": "[spindle.calc] expr_bytes=5 result== 10 ok=1"
+    },
+    {
+      "input": "calc 0xff+1",
+      "record": "[spindle.calc] expr_bytes=6 result== 256 ok=1"
+    },
+    {
+      "input": "calc ans in hex",
+      "record": "[spindle.calc] expr_bytes=10 result== 0x100 ok=1"
+    },
+    {
+      "input": "calc 1/2 in bin",
+      "record": "[spindle.calc] expr_bytes=10 error=NotWhole ok=0"
+    },
+    {
+      "input": "calc ln(2)",
+      "record": "[spindle.calc] expr_bytes=5 result=~ 0.693147181 ok=1"
+    },
+    {
+      "input": "calc 2**0.5",
+      "record": "[spindle.calc] expr_bytes=6 result=~ 1.414213562 ok=1"
+    },
+    {
+      "input": "calc 7%0",
+      "record": "[spindle.calc] expr_bytes=3 error=DivideByZero ok=0"
+    },
+    {
+      "input": "sext<Tab>0",
+      "record": "[spindle.sextime] SexTime -1356048000 s | UTC 1970-01-01T00:00:00Z | Long Count 12.17.16.7.5 (GMT 584283) ok=1"
+    },
+    {
+      "input": "proj<Tab>",
+      "record": "[spindle.complete] matches=2 added=10 len=14"
+    },
+    {
+      "input": "0xff<Ctrl+R>",
+      "record": "[spindle.calc] expr_bytes=6 result== 256 ok=1"
+    },
+    {
+      "input": "history ln",
+      "record": "[spindle.history.search] bytes=2 found=1"
+    }
+  ]
+}

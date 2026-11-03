@@ -11,7 +11,7 @@ saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
 select line, `Ctrl+Up/Down` move line, `Ctrl+]`/`Ctrl+[` indent, `Ctrl+Shift+D`
 duplicate line.
-Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `calc` does exact decimals with `** sqrt abs min max
+Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `history <text>` filters; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, `exp ln log sin cos tan`, fractional powers, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
 
@@ -1471,6 +1471,16 @@ HTML gate at both sizes (`promise first 1\dx-yundefined ...`).
 calc host tests (`transcendental_functions_to_nine_places`); sealed build
 and master gate GREEN; native Spindle gate at both sizes (`calc ln(2)` ->
 `~ 0.693147181`, `calc 2**0.5` -> `~ 1.414213562`).
+
+## P6. Spindle `history <text>` (2026-11-03)
+
+- `history <text>` lists the history entries containing the text, newest
+  first, leaving out earlier `history ...` searches; `No history entries
+  match.` otherwise. `history` and `history clear` are unchanged.
+
+**Evidence** (`docs/handoff/assets/spindle-history-search-2026-11-03/`):
+host gates pass; sealed build and master gate GREEN; native Spindle gate at
+both sizes (`history ln` -> `[spindle.history.search] bytes=2 found=1`).
 
 ## Release gates noted while doing F1–F2
 

@@ -816,6 +816,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"--- History & Events ---");
             sb.push(b"  history      show command history");
             sb.push(b"  history clear  clear and save history");
+            sb.push(b"  history <text>  entries containing text");
             sb.push(b"  events       show event log");
             sb.push(b"  events clr   clear event log");
             serial_println!("[spindle.help.command] name=history ok=1");
@@ -1257,6 +1258,20 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             if args == b"clear" {
                 hist.clear();
                 sb.push(b"History cleared.");
+            } else if !args.is_empty() {
+                // `history <text>`: entries containing the text, newest first
+                // (history searches themselves are left out).
+                let count = (hist.total as usize).min(MAX_HISTORY);
+                let mut found = 0;
+                for i in 0..count {
+                    if let Some(entry) = hist.get(i) {
+                        if entry.starts_with(b"history ") || !entry.windows(args.len()).any(|w| w == args) { continue; }
+                        sb.push(entry);
+                        found += 1;
+                    }
+                }
+                if found == 0 { sb.push(b"No history entries match."); }
+                sex_pdx::serial_record!("[spindle.history.search] bytes={} found={}", args.len(), found);
             } else {
                 if hist.total == 0 {
                     sb.push(b"History: empty.");
