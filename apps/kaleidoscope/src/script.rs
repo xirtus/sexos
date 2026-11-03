@@ -125,8 +125,16 @@ impl<'a> Machine<'a> {
             let start = self.at;
             while self.at < s.len() && (s[self.at].is_ascii_alphanumeric() || s[self.at] == b'.'
                 || (matches!(s[self.at], b'+' | b'-') && matches!(s[self.at - 1], b'e' | b'E'))) { self.at += 1; }
-            let text = core::str::from_utf8(&s[start..self.at]).map_err(|_| Error::Syntax)?;
-            Tok::Num(text.parse::<f64>().map_err(|_| Error::Syntax)?)
+            let raw = &s[start..self.at];
+            if raw.len() > 2 && (raw.starts_with(b"0x") || raw.starts_with(b"0X")) {
+                // Hexadecimal integer literal.
+                let mut v = 0f64;
+                for &d in &raw[2..] { v = v * 16.0 + (d as char).to_digit(16).ok_or(Error::Syntax)? as f64; }
+                Tok::Num(v)
+            } else {
+                let text = core::str::from_utf8(raw).map_err(|_| Error::Syntax)?;
+                Tok::Num(text.parse::<f64>().map_err(|_| Error::Syntax)?)
+            }
         } else if c == b'`' {
             let start = self.at + 1;
             let end = s[start..].iter().position(|&b| b == b'`').ok_or(Error::Syntax)? + start;
@@ -430,7 +438,7 @@ impl<'a> Machine<'a> {
             v = match name {
                 b"length" => Value::Num(self.text(s).len() as f64),
                 b"trim" | b"indexOf" | b"charAt" | b"slice" | b"substring" | b"split" | b"replace" | b"replaceAll"
-                | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" => {
+                | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" => {
                     self.expect(b'(')?;
                     let mut args = [Value::Undef; 2];
                     let mut n = 0;
@@ -529,6 +537,7 @@ impl<'a> Machine<'a> {
                 let (h, k) = (self.text(s), self.text(needle));
                 Value::Num(if k.is_empty() { 0.0 } else { h.windows(k.len()).position(|w| w == k).map_or(-1.0, |p| p as f64) })
             }
+            b"charCodeAt" => { let i = pos(self, args[0], 0, false); if i < n { Value::Num(self.arena[start + i] as f64) } else { Value::Num(f64::NAN) } }
             b"charAt" => { let i = pos(self, args[0], 0, false); if i < n { Value::Str((start + i) as u16, 1) } else { self.store(b"")? } }
             b"slice" | b"substring" => {
                 let slice = name == b"slice";
@@ -1028,6 +1037,20 @@ impl<'a> Machine<'a> {
                             }
                             _ => Err(Error::Unsupported),
                         }
+                    }
+                    b"String" if self.tok == Tok::Punct(b'.') => {
+                        self.next()?;
+                        if self.tok != Tok::Ident(b"fromCharCode") { return Err(Error::Unsupported); }
+                        self.next()?;
+                        let (args, n) = self.arguments()?;
+                        let mut text: Vec<u8> = Vec::new();
+                        for &a in &args[..n] {
+                            let c = self.to_number(a);
+                            let ch = if c.is_finite() && c >= 0.0 { char::from_u32(c as u32 & 0xffff) } else { None }.ok_or(Error::Unsupported)?;
+                            let mut b = [0u8; 4];
+                            text.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
+                        }
+                        self.store(&text)
                     }
                     b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),

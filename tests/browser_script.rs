@@ -206,3 +206,8 @@ fn spread_and_destructuring() {
     assert_eq!(out("var [x] = 5").err(), Some(Error::Unsupported));
     assert_eq!(out("[...5]").err(), Some(Error::Unsupported));
 }
+
+#[test]
+fn char_codes() {
+    assert_eq!(out("document.write('A'.charCodeAt(0), ' ', 'abc'.charCodeAt(9), ' ', String.fromCharCode(72, 105, 33), ' ', 'abc'.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 32)).join(''), ' ', String.fromCharCode(0xe9))").unwrap(), "65 NaN Hi! ABC \u{e9}");
+}

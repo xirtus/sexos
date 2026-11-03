@@ -3,7 +3,8 @@
 //!
 //! `ans` is the previous successful result in this Spindle session.
 //! `**` raises to a whole power up to 64; `sqrt(x)` is the square root;
-//! `abs min max round floor ceil` work on the exact values.
+//! `abs min max round floor ceil` work on the exact values; `pi` and `e`
+//! are 9-place constants (results using them are marked `~`).
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
 //! Parsing is recursive descent with a depth bound; every operation is
@@ -131,6 +132,13 @@ impl Parser<'_> {
                 if r * r != n { self.inexact = true; }
                 Ok(r as i128)
             }
+            Some(b'p' | b'e') if [&b"pi"[..], b"e"].iter().any(|k| self.s[self.at..].starts_with(k) && !self.s.get(self.at + k.len()).is_some_and(u8::is_ascii_alphanumeric)) => {
+                // Constants to 9 places; any use makes the answer approximate.
+                let pi = self.s[self.at..].starts_with(b"pi");
+                self.at += if pi { 2 } else { 1 };
+                self.inexact = true;
+                Ok(if pi { 3_141_592_654 } else { 2_718_281_828 })
+            }
             Some(b'a') if self.s[self.at..].starts_with(b"ans") && !self.s.get(self.at + 3).is_some_and(u8::is_ascii_alphanumeric) => {
                 self.at += 3;
                 self.ans.ok_or(Error::NoAnswer)
@@ -215,6 +223,9 @@ mod tests {
         assert_eq!(show("round(2.5) + round(-2.5) + floor(-1.2) + ceil(1.2)"), "= 0");
         assert_eq!(show("round(1, 2)"), "Syntax");
         assert_eq!(show("maxx(1)"), "Syntax");
+        assert_eq!(show("2*pi"), "~ 6.283185308");
+        assert_eq!(show("e"), "~ 2.718281828");
+        assert_eq!(show("pie"), "Syntax");
     }
     #[test] fn errors_are_named_not_wrapped() {
         assert_eq!(show("1/0"), "DivideByZero");

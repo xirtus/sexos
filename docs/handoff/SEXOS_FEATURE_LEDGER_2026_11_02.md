@@ -1,43 +1,46 @@
 # SexOS feature ledger (from 2026-11-02)
 
-## Handoff summary (as of 2026-11-03, after F28)
+## Handoff summary (as of 2026-11-03, after G19)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9` follow
-links, `Backspace` back, `G` QOI image, `P` PNG image, `B` plain document.
-Quil: autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes
-the saved file. Spindle: Shift works; `calc 2*(3+4)/5`, `calc ans*10`,
-`calc 2**10`, `calc sqrt(2)`.
+links, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
+interlaced or not), `B` plain document. Quil: autosave draft after ~30 s
+idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the saved file, `Ctrl+I` shows
+line/word/char counts. Spindle: Shift works; `calc` does exact decimals with
+`** sqrt abs min max round floor ceil pi e ans`.
+
+**HTML reader.** Headings, paragraphs, lists (numbered/nested/definition),
+aligned tables, quotes, rules, `<pre>`, inline code/emphasis markers, links
+with a numbered list, images as alt text, forms as read-only text,
+`sup/sub/abbr/q/details`, common named and numeric entities, page title.
 
 **Inline script subset** (`apps/kaleidoscope/src/script.rs`, not a JS
-engine): variables, numbers printed like JavaScript, strings and string
-methods, booleans, comparisons, `if/else`, `while`/`for` with
-`break`/`continue` under a 10,000-step budget, functions (declared before
-use, recursion to nesting 32), arrays, objects, templates, `Math`, `JSON.stringify`,
-`Object.keys`, `String/Number/parseInt`, output via `document.write`. No DOM,
-events, timers, network, storage, clock or entropy names exist in it.
+engine, no DOM/events/timers/network/storage/clock/entropy): numbers printed
+like JavaScript, strings and string methods, booleans, `null`/`undefined`,
+`typeof`, comparisons, `if/else`, `switch`, `while`/`do`/`for` with
+`break`/`continue` under a 10,000-step budget, functions, function values,
+arrow functions, callbacks (`map filter reduce forEach find some every
+sort(cmp)`), arrays and array methods, objects, spread, destructuring,
+templates, `Math`, `JSON.stringify`, `Object.keys/values/entries`, `in`,
+`delete`, `parseInt/parseFloat/Number/String`, char codes, `toFixed`,
+`toString(radix)`; output via `document.write`. Nesting is capped at 32.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
-image): `https_html_gate.py`, `https_png_gate.py`, `quil_autosave_gate.py`,
-`quil_delete_gate.py`, `spindle_calc_gate.py`. Host gates added:
+image): `https_html_gate.py` (also bounds the Browser stack high water),
+`https_png_gate.py` (`--variant adam7-16` too), `quil_autosave_gate.py`
+(also Ctrl+I), `quil_delete_gate.py`, `spindle_calc_gate.py`. Host gates:
 `quil_autosave_host_gate.sh`, `spindle_calc_host_gate.sh`; script, html_text
 and PNG tests run in `sexnet_jobs_host_gate.sh`.
 
 **Open release gates** (details below): full-window reader needs a larger
-Display text delivery; Display applies app paints late (screenshots must wait
-for the app's `applied` receipt) and Spindle's display stayed pending in the
-calc gate; Browser stack headroom is now measured (F29: 46.7 KiB of 64 KiB);
-script recursion is capped at nesting 32 (about `fact(7)`); autosave failure
-fences document I/O like any uncertain save; no draft cleanup; images are
-limited to 48x48 (any standard PNG depth/interlace).
+Display text delivery; Display applies app paints late; a focused Spindle
+window can stay under the Browser after boot (window stacking); autosave
+failure fences document I/O like any uncertain save; no draft cleanup;
+images limited to 48x48; the Browser body limit is 12 KiB.
 
-**Next suggested steps.** A DOM-free event model is the next JavaScript step
-only if it fits held authority (e.g. a key handler the Browser calls, no
-ambient names); measuring the Browser stack high-water mark first; then
-larger images once Display delivery grows.
-
-
-User-noticeable daily-driver features, logged here so they don't collide with
-the round numbering in `SEXOS_DEVELOPMENT_ROUNDS_109_PLUS_2026_10_31.md`.
+**Next suggested steps.** Fix focus raising in Shell/Display (with the
+concurrent session); grow the document/body limit with streaming
+conversion; an event model for scripts only if it fits held authority.
 
 ## F1. Browser reads HTML pages as text (2026-11-02)
 
@@ -677,6 +680,19 @@ service custody host gates; sealed build and master gate GREEN; native HTML
 gate at both sizes (aligned `key   | value` rows); native autosave gate at
 both sizes now also presses Ctrl+I and checks `1 LINES / 2 WORDS / 9 CHARS`;
 `quil_workflow_gate.py` regression passes.
+
+## G18-G19. Script character codes and hex literals; calc constants (2026-11-03)
+
+- **G18.** `s.charCodeAt(i)` (byte value in this byte-string subset),
+  `String.fromCharCode(...)` (UTF-8 encoded), and hexadecimal literals
+  (`0xff`).
+- **G19.** Spindle `calc` constants `pi` and `e` to 9 places; results that
+  use them are marked `~` (`calc 2*pi` -> `~ 6.283185308`).
+
+**Evidence** (`docs/handoff/assets/script-charcodes-calc-constants-2026-11-03/`):
+script host tests 20 groups, calc host tests; sealed build and master gate
+GREEN; native HTML gate at both sizes (`code 83 Sex 8`); native calc gate at
+both sizes (`calc 2*pi`).
 
 ## Release gates noted while doing F1–F2
 
