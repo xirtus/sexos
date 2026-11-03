@@ -52,28 +52,28 @@ use crate::regex::{Regex, CAPTURES};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-pub const MAX_SOURCE: usize = 4096;
-pub const MAX_OUTPUT: usize = 1024;
-const ARENA: usize = 4096;
+pub const MAX_SOURCE: usize = 16384;
+pub const MAX_OUTPUT: usize = 4096;
+const ARENA: usize = 12288;
 /// Contiguous heap a script needs before it starts (buffers plus slack).
-const HEADROOM: usize = 20 * 1024;
+const HEADROOM: usize = 40 * 1024;
 /// Statements executed per script, loop bodies included.
-const STEPS: u32 = 10_000;
+const STEPS: u32 = 50_000;
 // Arena and output live on the heap (fallibly): the Browser stack is tight.
-const VARS: usize = 32;
-const FUNCS: usize = 16;
+const VARS: usize = 48;
+const FUNCS: usize = 32;
 /// Function values that escaped their creating call, and the variable
 /// sets (environments) they carry; `Value::Func(FUNCS + k)` is closure k.
-const CLOSURES: usize = 32;
-const ENVS: usize = 8;
+const CLOSURES: usize = 64;
+const ENVS: usize = 16;
 /// `String`, `Number` and `Boolean` used as function values (`xs.map(Number)`).
 const BUILTIN_FUNCS: u8 = 250;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
-const ELEMS: usize = 256;
-const ARRAYS: usize = 32;
+const ELEMS: usize = 512;
+const ARRAYS: usize = 128;
 /// Objects and their properties (name in the arena, value), by reference.
-const OBJECTS: usize = 16;
-const PROPS: usize = 128;
+const OBJECTS: usize = 64;
+const PROPS: usize = 256;
 const PARAMS: usize = 6;
 const NAME: usize = 16;
 // Nesting budget (expressions, statements, calls). Measured natively at 32
@@ -121,16 +121,16 @@ struct Machine<'a> {
     /// A newline was skipped before the current token (statement end).
     nl: bool,
     arena: Vec<u8>,
-    vars: [([u8; NAME], u8, Value); VARS],
+    vars: Vec<([u8; NAME], u8, Value)>,
     /// Per variable: 0 `var`/parameter, 1 `let`, 2 `const` (block scoped).
-    kinds: [u8; VARS],
+    kinds: Vec<u8>,
     /// First variable slot of the innermost open block.
     block_base: usize,
     nvars: usize,
     out: Vec<u8>,
     depth: u8,
     steps: u32,
-    funcs: [([u8; NAME], u8, Pos<'a>); FUNCS],
+    funcs: Vec<([u8; NAME], u8, Pos<'a>)>,
     nfuncs: usize,
     /// Checking a function body at its declaration: names may be parameters.
     skim: bool,
@@ -164,8 +164,8 @@ struct Machine<'a> {
     /// Accessor properties: (object, name, getter, setter).
     accessors: Vec<(u8, Vec<u8>, Option<u8>, Option<u8>)>,
     /// What made each object, for `instanceof`: 0 a literal, 1+k class k,
-    /// 16+f function `f` as a constructor, 64 an Error, 65 a Set, 66 a Map.
-    made_by: [u8; OBJECTS],
+    /// 256+f function `f` as a constructor, 64 an Error, 65 a Set, 66 a Map.
+    made_by: Vec<u16>,
     /// The function running now (for `super`).
     func_now: Option<u8>,
     /// First variable slot of the running call (its parameters and locals).
@@ -177,11 +177,11 @@ struct Machine<'a> {
     loops: u8,
     elems: Vec<Value>,
     /// (start, len, cap) of each array inside `elems`.
-    arrays: [(u16, u16, u16); ARRAYS],
+    arrays: Vec<(u16, u16, u16)>,
     narrays: usize,
     props: Vec<(u16, u16, Value)>,
     /// (start, len, cap) of each object inside `props`.
-    objects: [(u16, u16, u16); OBJECTS],
+    objects: Vec<(u16, u16, u16)>,
     nobjects: usize,
 }
 
@@ -989,9 +989,9 @@ impl<'a> Machine<'a> {
             _ => {
                 // split(sep): a new array of pieces (no separator: one piece).
                 let sep = match args[0] { Value::Undef => None, v => { let t = self.to_text(v)?; Some(t) } };
-                let mut items = [Value::Undef; 16];
+                let mut items: Vec<Value> = Vec::new();
                 let mut count = 0;
-                let mut put = |v: Value, c: &mut usize| -> Result<(), Error> { if *c == 16 { return Err(Error::Limit); } items[*c] = v; *c += 1; Ok(()) };
+                let mut put = |v: Value, c: &mut usize| -> Result<(), Error> { if *c == ELEMS { return Err(Error::Limit); } items.push(v); *c += 1; Ok(()) };
                 match sep {
                     None => put(s, &mut count)?,
                     Some(Value::Str(_, 0)) => for i in 0..n { put(Value::Str((start + i) as u16, 1), &mut count)?; },
@@ -1096,7 +1096,7 @@ impl<'a> Machine<'a> {
     fn add_accessor(&mut self, id: u8, key: &[u8], f: u8, setter: bool) -> Result<(), Error> {
         let k = match self.accessors.iter().position(|a| a.0 == id && a.1 == key) {
             Some(k) => k,
-            None => { if self.accessors.len() == 32 { return Err(Error::Limit); } self.accessors.push((id, key.to_vec(), None, None)); self.accessors.len() - 1 }
+            None => { if self.accessors.len() == 64 { return Err(Error::Limit); } self.accessors.push((id, key.to_vec(), None, None)); self.accessors.len() - 1 }
         };
         if setter { self.accessors[k].3 = Some(f); } else { self.accessors[k].2 = Some(f); }
         Ok(())
@@ -1162,14 +1162,14 @@ impl<'a> Machine<'a> {
         }
         let id = self.new_object()?;
         if let Some(k) = self.classes.iter().position(|c| c.0 == class) {
-            self.made_by[id as usize] = 1 + k as u8;
+            self.made_by[id as usize] = 1 + k as u16;
             self.class_methods(k, id)?;
             let r = self.class_init(k, Value::Obj(id), args)?;
             return Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) });
         }
         let f = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == class)
             .or_else(|| match self.lookup(class) { Some(Value::Func(i)) => Some(i as usize), _ => None }).ok_or(Error::Unsupported)?;
-        self.made_by[id as usize] = 16 + self.real_func(f as u8);
+        self.made_by[id as usize] = 256 + self.real_func(f as u8) as u16;
         self.this_next = Some(Value::Obj(id));
         let r = self.invoke(f as u8, args)?;
         Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
@@ -1197,11 +1197,11 @@ impl<'a> Machine<'a> {
             b"Map" => made == 66,
             b"TypeError" | b"RangeError" | b"SyntaxError" => made == 64 && { let Value::Obj(id) = v else { return Ok(false) }; let n = self.get_prop(id, b"name"); matches!(n, Value::Str(..)) && self.text(n) == c },
             _ => if let Some(k) = self.classes.iter().position(|x| x.0 == c) {
-                let mut at = (1..=8).contains(&made).then(|| made as usize - 1);
+                let mut at = (1..=16).contains(&made).then(|| made as usize - 1);
                 while let Some(m) = at { if m == k { return Ok(true); } at = self.classes[m].3.map(|p| p as usize); }
                 false
             } else if let Some(f) = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == c).or_else(|| match self.lookup(c) { Some(Value::Func(i)) => Some(i as usize), _ => None }) {
-                made == 16 + self.real_func(f as u8)
+                made == 256 + self.real_func(f as u8) as u16
             } else { return Err(Error::Unsupported) },
         })
     }
@@ -1267,7 +1267,7 @@ impl<'a> Machine<'a> {
         self.made_by[id as usize] = if map { 66 } else { 65 };
         let Value::Arr(keys) = self.new_array(&[])? else { return Err(Error::Limit) };
         let vals = if map { let Value::Arr(v) = self.new_array(&[])? else { return Err(Error::Limit) }; v } else { keys };
-        if self.collections.len() == 16 { return Err(Error::Limit); }
+        if self.collections.len() == 32 { return Err(Error::Limit); }
         self.collections.push((id, keys, vals));
         if let Some(src) = from.filter(|v| !matches!(v, Value::Undef | Value::Null)) {
             for item in self.iterate(src)? {
@@ -2135,13 +2135,12 @@ impl<'a> Machine<'a> {
             }
             (b"Object", b"values" | b"entries", Value::Obj(id)) => {
                 let (start, len, _) = self.objects[id as usize];
-                let mut items = [Value::Undef; 16];
-                if len as usize > items.len() { return Err(Error::Limit); }
+                let mut items = Vec::new();
                 for k in 0..len as usize {
                     let (ns, nn, value) = self.props[start as usize + k];
-                    items[k] = if f == b"values" { value } else { self.new_array(&[Value::Str(ns, nn), value])? };
+                    items.push(if f == b"values" { value } else { self.new_array(&[Value::Str(ns, nn), value])? });
                 }
-                self.new_array(&items[..len as usize])
+                self.new_array(&items)
             }
             (b"JSON", b"stringify", v) => { let mut j = Vec::new(); self.json(v, &mut j)?; self.store(&j) }
             (b"JSON", b"parse", v) => {
@@ -2159,10 +2158,8 @@ impl<'a> Machine<'a> {
             }
             (b"Object", b"keys", Value::Obj(id)) => {
                 let (start, len, _) = self.objects[id as usize];
-                let mut keys = [Value::Undef; 16];
-                if len as usize > keys.len() { return Err(Error::Limit); }
-                for (k, slot) in (start as usize..start as usize + len as usize).zip(keys.iter_mut()) { let (ns, nn, _) = self.props[k]; *slot = Value::Str(ns, nn); }
-                self.new_array(&keys[..len as usize])
+                let keys: Vec<Value> = (start as usize..start as usize + len as usize).map(|k| { let (ns, nn, _) = self.props[k]; Value::Str(ns, nn) }).collect();
+                self.new_array(&keys)
             }
             _ => Err(Error::Unsupported),
         }
@@ -2215,7 +2212,7 @@ impl<'a> Machine<'a> {
                 let at = pattern.as_ptr() as usize - self.src.as_ptr() as usize;
                 self.next()?;
                 if let Some(k) = self.regexes.iter().position(|r| r.0 == at) { return Ok(Value::Re(k as u8)); }
-                if self.regexes.len() == 8 { return Err(Error::Limit); }
+                if self.regexes.len() == 16 { return Err(Error::Limit); }
                 let re = Regex::new(pattern, flags).map_err(|e| if e == crate::regex::Error::Limit { Error::Limit } else { Error::Syntax })?;
                 self.regexes.push((at, pattern, flags, re));
                 self.re_last.push(0);
@@ -2719,7 +2716,7 @@ impl<'a> Machine<'a> {
         }
         self.next()?;
         if run {
-            if self.classes.len() == 8 { return Err(Error::Limit); }
+            if self.classes.len() == 16 { return Err(Error::Limit); }
             self.classes.push((name, ctor, methods, parent, statics, accessors));
         }
         Ok(())
@@ -3371,9 +3368,11 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     elems.try_reserve_exact(ELEMS).map_err(|_| Error::Limit)?;
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
-    let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), collections: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
-        elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
+    // Fixed tables live on the heap too: the Browser stack is for nesting.
+    fn table<T: Clone>(n: usize, v: T) -> Result<Vec<T>, Error> { let mut t = Vec::new(); t.try_reserve_exact(n).map_err(|_| Error::Limit)?; t.resize(n, v); Ok(t) }
+    let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: table(VARS, ([0; NAME], 0, Value::Num(0.0)))?, kinds: table(VARS, 0)?, block_base: 0, nvars: 0, out, depth: 0, steps: 0,
+        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        elems, arrays: table(ARRAYS, (0, 0, 0))?, narrays: 0, props, objects: table(OBJECTS, (0, 0, 0))?, nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }
     Ok(m.out)

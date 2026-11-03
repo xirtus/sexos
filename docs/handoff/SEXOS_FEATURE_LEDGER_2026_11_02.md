@@ -1397,6 +1397,33 @@ build and master gate GREEN; native HTML and PNG gates (1280x800) with
 `heap_total=131072` (peak 48,400 used); Browser reserve gate at 1280x800
 and 1024x768.
 
+## P2. Script budgets raised with the 128 KiB heap (2026-11-03)
+
+- Script budgets, previously shrunk for the 64 KiB heap: source 4 -> 16
+  KiB, output 1 -> 4 KiB, string arena 4 -> 12 KiB, steps 10,000 ->
+  50,000, variables 32 -> 48, functions 16 -> 32, closures 32 -> 64,
+  array elements 256 -> 512, arrays 32 -> 128, objects 16 -> 64,
+  properties 128 -> 256, classes/regexes/collections/accessors doubled.
+  A script starts only with 40 KiB of free heap (was 20).
+- The interpreter's fixed tables (variables, functions, arrays, objects,
+  constructor tags) moved from the Browser stack to fallible heap
+  allocations: with the larger tables on the stack, the first native run
+  refused `fact(15)` at the stack floor.
+- Fixes: `Object.keys/values/entries` and string `split` were capped at
+  16 results by fixed buffers; constructor tags became 16-bit so 32
+  functions cannot collide with the Error/Set/Map tags.
+- The 12 KiB page-body limit stays: `sex-http` is allocation-free, a
+  larger receiver would push the shared TLS task past its 32 KiB budget,
+  and ~8 gates encode the figure (also Quil's import bound). Follow-up:
+  a page-only receive path that converts HTML straight into the 12 KiB
+  text document.
+
+**Evidence** (`docs/handoff/assets/script-budgets-heap-tables-2026-11-03/`):
+script host tests 45 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes with a 16th script (`big 79800 40`: a 400-element
+array, a 40-property object), `scripts_run=16 scripts_refused=3`, stack
+floor hits 1 (the intended deep recursion), high water 56,952.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

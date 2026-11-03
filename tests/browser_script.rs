@@ -41,12 +41,12 @@ fn bounds_hold() {
     assert_eq!(out(&deep).err(), Some(Error::Limit));
     let negs = format!("document.write({}1)", "- ".repeat(80));
     assert_eq!(out(&negs).err(), Some(Error::Limit));
-    let big = format!("var s = '{}'; s = s + s; s = s + s; s = s + s; s = s + s;", "a".repeat(600));
+    let big = format!("var s = '{}'; s = s + s; s = s + s; s = s + s; s = s + s;", "a".repeat(2400));
     assert_eq!(out(&big).err(), Some(Error::Limit));
     let mut many = String::new();
-    for i in 0..33 { many += &format!("var v{i} = {i};"); }
+    for i in 0..49 { many += &format!("var v{i} = {i};"); }
     assert_eq!(out(&many).err(), Some(Error::Limit));
-    let long = format!("document.write('{}')", "x".repeat(1100));
+    let long = format!("document.write('{}')", "x".repeat(4100));
     assert_eq!(out(&long).err(), Some(Error::Limit));
     assert_eq!(run(&vec![b' '; script::MAX_SOURCE + 1]).err(), Some(Error::Limit));
 }
@@ -77,7 +77,7 @@ fn loops_run_within_the_step_budget() {
     assert_eq!(out("var x = 0; while (false) { y = = 1 }").err(), Some(Error::Syntax), "but it must parse");
     assert_eq!(out("var x = 3; while (false) x = 9; document.write(x)").unwrap(), "3");
     assert!(out("var i = 0; while (i < 9000) i++; document.write(i)").is_ok());
-    assert_eq!(out("var i = 0; while (i < 20000) i++").err(), Some(Error::Limit));
+    assert_eq!(out("var i = 0; while (i < 60000) i++").err(), Some(Error::Limit));
 }
 
 #[test]
@@ -398,4 +398,10 @@ fn destructured_parameters_pretty_json_and_write_expressions() {
     assert_eq!(out("document.write(JSON.stringify({a: [1, {b: 2}], e: [], o: {}}, null, 2))").unwrap(), "{\n  \"a\": [\n    1,\n    {\n      \"b\": 2\n    }\n  ],\n  \"e\": [],\n  \"o\": {}\n}");
     assert_eq!(out("document.write(JSON.stringify({a: 1, b: 'x', c: {a: 2, z: 3}}, ['a', 'c']), JSON.stringify([1, 'a'], null, '--'))").unwrap(), "{\"a\":1,\"c\":{\"a\":2}}[\n--1,\n--\"a\"\n]");
     assert_eq!(out("JSON.stringify({}, (k, v) => v)").err(), Some(Error::Unsupported), "function replacer");
+}
+
+#[test]
+fn larger_budgets_for_bigger_pages() {
+    assert_eq!(out("var big = Array.from({length: 400}, (_, i) => i); var ob = {}; for (var i = 0; i < 40; i++) ob['k' + i] = i; document.write('big ', big.reduce((a, b) => a + b), ' ', Object.keys(ob).length, ' ', 'a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s'.split(',').length)").unwrap(), "big 79800 40 19");
+    assert!(out("var i = 0; while (i < 45000) i++; document.write(i)").is_ok(), "50,000 steps");
 }
