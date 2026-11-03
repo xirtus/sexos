@@ -51,3 +51,10 @@ pub fn high_water() -> Option<usize> {
     while a < top && unsafe { core::ptr::read_volatile(a as *const u64) } == PATTERN { a += 8; }
     Some(top - a)
 }
+
+/// The lowest address scripts may use: 8 KiB above the mapped stack's
+/// bottom (room for the leaf frames below a check), if painted.
+pub fn script_floor() -> usize {
+    let top = unsafe { TOP };
+    if top == 0 { 0 } else { top - STACK + 8192 }
+}

@@ -35,7 +35,7 @@ short-circuit `&& || ?:`, `**`, bitwise operators, logical and compound
 assignment to any member chain, `++`/`--` in expressions; `Math`,
 `JSON.stringify/parse`, `Date` from given values only (no
 `new Date()`/`Date.now()`), URI encode/decode; output via `document.write`.
-Bounds: nesting 32, 6 arguments per call, 32 variables, 16 functions, 32
+Bounds: nesting 64 and a stack floor, 6 arguments per call, 32 variables, 16 functions, 32
 closures, 32 arrays, 16 objects.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
@@ -57,9 +57,7 @@ images limited to 48x48; the Browser body limit is 12 KiB.
 
 **Next suggested steps.** Fix focus raising in Shell/Display (with the
 concurrent session); grow the document/body limit with streaming
-conversion (12 KiB is fixed in `sex-http`'s codec); a runtime stack guard in
-the script interpreter before raising its nesting limit (callback-heavy
-recursion costs ~3 KiB per level); an event model for scripts only if it
+conversion (12 KiB is fixed in `sex-http`'s codec); an event model for scripts only if it
 fits held authority.
 
 ## F1. Browser reads HTML pages as text (2026-11-02)
@@ -1150,6 +1148,25 @@ HTML gate at both sizes (`... Zdaymode231a2a`: a class getter and a
 script host tests 40 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... Zdaymode231a2a6`). Browser stack high water
 46,752.
+
+## N1. Script stack floor; nesting limit 32 -> 64 (2026-11-03)
+
+- The Browser gives the script interpreter a **stack floor**: 8 KiB above
+  the bottom of its mapped 64 KiB stack (`stack_probe::script_floor`).
+  Every statement, expression and call checks the stack pointer against
+  it, and nesting that reaches it refuses the script (`Limit`, writes
+  nothing) instead of overrunning the stack, whatever the frame sizes.
+  Refusals are counted (`[browser.script.stack_floor] hits=N`). Host
+  tests and the gate oracle run without a floor.
+- With that guard the nesting budget doubles (`MAX_DEPTH` 64): plain
+  recursion now reaches `fact(15)` (was `fact(7)`).
+
+**Evidence** (`docs/handoff/assets/script-stack-floor-2026-11-03/`): script
+host tests 40 groups; sealed build and master gate GREEN; native HTML gate
+at both sizes with `fact(15)` = `1307674368000` and a callback recursion
+`r(400)` refused at the floor (`hits=1`, `scripts_refused=3`, no output).
+Browser stack high water 57,936 bytes: the refused recursion ran down to
+the floor (57,344) plus a leaf frame, under the gate's 60 KiB bound.
 
 ## Release gates noted while doing F1–F2
 

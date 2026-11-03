@@ -46,6 +46,7 @@
 use alloc::vec::Vec;
 use crate::regex::{Regex, CAPTURES};
 use core::fmt::Write;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const MAX_SOURCE: usize = 4096;
 pub const MAX_OUTPUT: usize = 1024;
@@ -74,7 +75,25 @@ const NAME: usize = 16;
 // Nesting budget (expressions, statements, calls). Measured natively at 32
 // with fact(7): the Browser stack stays below its 46.7 KiB construction peak
 // (feature ledger F30).
-const MAX_DEPTH: u8 = 32;
+const MAX_DEPTH: u8 = 64;
+/// Lowest stack address a script may reach (0: no floor). The Browser sets
+/// it from its mapped stack, so deep nesting is refused (`Limit`) before the
+/// stack runs out, whatever the frame sizes; host tests run without one.
+static STACK_FLOOR: AtomicUsize = AtomicUsize::new(0);
+static FLOOR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub fn set_stack_floor(addr: usize) { STACK_FLOOR.store(addr, Ordering::Relaxed); }
+/// Scripts refused at the stack floor so far.
+pub fn floor_hits() -> usize { FLOOR_HITS.load(Ordering::Relaxed) }
+#[inline(always)]
+fn stack_low() -> bool {
+    let floor = STACK_FLOOR.load(Ordering::Relaxed);
+    if floor == 0 { return false; }
+    let marker = 0u8;
+    let sp = core::hint::black_box(&marker) as *const u8 as usize;
+    if sp >= floor { return false; }
+    FLOOR_HITS.fetch_add(1, Ordering::Relaxed);
+    true
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Unsupported, Syntax, Limit, Thrown }
@@ -369,7 +388,7 @@ impl<'a> Machine<'a> {
     /// Full expression, including `?:`. Each nesting level (parentheses,
     /// unary operators, branches) costs one unit of the depth budget.
     fn expr(&mut self) -> Result<Value, Error> {
-        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        if self.too_deep() { return Err(Error::Limit); }
         self.depth += 1;
         let v = self.binary(1);
         self.depth -= 1;
@@ -474,7 +493,7 @@ impl<'a> Machine<'a> {
     }
     fn unary(&mut self) -> Result<Value, Error> {
         if self.tok == Tok::Ident(b"typeof") {
-            if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+            if self.too_deep() { return Err(Error::Limit); }
             self.next()?;
             self.depth += 1;
             // An undeclared name is "undefined" here, as in JavaScript.
@@ -492,14 +511,14 @@ impl<'a> Machine<'a> {
         }
         if self.tok == Tok::Ident(b"void") {
             self.next()?;
-            if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+            if self.too_deep() { return Err(Error::Limit); }
             self.depth += 1;
             let v = self.unary();
             self.depth -= 1;
             return v.map(|_| Value::Undef);
         }
         if let Tok::Punct(op @ (b'-' | b'+' | b'!' | b'~')) = self.tok {
-            if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+            if self.too_deep() { return Err(Error::Limit); }
             self.next()?;
             self.depth += 1;
             let v = self.unary()?;
@@ -1258,7 +1277,7 @@ impl<'a> Machine<'a> {
     }
     /// JSON text of a value; undefined members are left out like JavaScript.
     fn json(&mut self, v: Value, into: &mut Vec<u8>) -> Result<(), Error> {
-        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        if self.too_deep() { return Err(Error::Limit); }
         if into.len() > ARENA { return Err(Error::Limit); }
         self.depth += 1;
         match v {
@@ -1557,7 +1576,7 @@ impl<'a> Machine<'a> {
         Ok(())
     }
     fn join(&mut self, id: u8, sep: &[u8]) -> Result<Value, Error> {
-        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        if self.too_deep() { return Err(Error::Limit); }
         self.depth += 1;
         let (start, len, _) = self.arrays[id as usize];
         let at = self.arena.len();
@@ -1983,7 +2002,7 @@ impl<'a> Machine<'a> {
                 _ => Value::Bool(self.truthy(v)),
             });
         }
-        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        if self.too_deep() { return Err(Error::Limit); }
         self.depth += 1;
         let back = self.pos();
         let base = self.nvars;
@@ -2142,8 +2161,9 @@ impl<'a> Machine<'a> {
     }
     /// One statement. With `run == false` (an untaken branch) it is parsed
     /// and checked the same way but writes and assigns nothing.
+    fn too_deep(&self) -> bool { self.depth >= MAX_DEPTH || stack_low() }
     fn statement(&mut self, run: bool) -> Result<(), Error> {
-        if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+        if self.too_deep() { return Err(Error::Limit); }
         // After `return`, the rest of the function body is checked, not run.
         let run = run && self.ret.is_none() && self.jump.is_none() && !self.skim;
         if run { self.steps += 1; if self.steps > STEPS { return Err(Error::Limit); } }
