@@ -33,8 +33,8 @@ image): `https_html_gate.py` (also bounds the Browser stack high water),
 and PNG tests run in `sexnet_jobs_host_gate.sh`.
 
 **Open release gates** (details below): full-window reader needs a larger
-Display text delivery; Display applies app paints late; a focused Spindle
-window can stay under the Browser after boot (window stacking); autosave
+Display text delivery; Display applies app paints late; Display's inbox backlog delays
+focus changes and app paints by seconds (a focused Spindle can stay hidden); autosave
 failure fences document I/O like any uncertain save; no draft cleanup;
 images limited to 48x48; the Browser body limit is 12 KiB.
 
@@ -581,8 +581,17 @@ occupies, and after `[shell.interact.focus] sid=153` the screenshot still
 shows the Browser on top there. So keyboard focus moves to Spindle but its
 window is not raised above the covering Browser, and Display (which settles
 covered text damage) never commits Spindle's text, leaving Spindle's outbox
-pending. User impact: typing into a focused but hidden window. Not changed
-here (Shell stacking and Display are the concurrent session's area).
+pending. User impact: typing into a focused but hidden window.
+
+**Re-diagnosed (2026-11-03, H0).** It is not a stacking rule: Display's
+`winner()` does raise the focused frame. Display is simply far behind its
+inbox. In the calc gate the Shell sends `0xED` focus 300 (log line 4554)
+then 153 (line 5411); Display reports `[display.focus.drawn] focus=201` at
+line 5968 and `focus=300` at line 7969, i.e. it is still applying the
+older focus thousands of records later, and the run ends before it reaches
+153. Spindle's pending text and the late Quil paints (F3/F6) are the same
+backlog. The fix is Display throughput (repaint cost under TCG), which is
+the concurrent session's area; not changed here.
 
 ## G1-G5. Script: assignment operators, do/switch, array and string methods, callbacks, arrows (2026-11-03)
 
