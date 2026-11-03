@@ -205,3 +205,9 @@ fn table_captions_and_implicit_row_ends() {
     let (t, _) = text("<table><caption>Prices</caption><thead><tr><th>Item</th><th>Cost</th></tr></thead><tbody><tr><td>Tea</td><td>2</td></tr><tr><td>Coffee</td><td>3</td></tr></tbody></table><table><tr><td>a<td>b<tr><td>longer cell<td>x</table>", 512);
     assert_eq!(t.trim(), "Prices\nItem   | Cost\nTea    | 2\nCoffee | 3\n\na           | b\nlonger cell | x");
 }
+
+#[test]
+fn repeated_breaks_and_no_break_spaces() {
+    let (t, _) = text("<p>Line<br><br>gap<br>x</p><p>A&nbsp;&nbsp;B &nbsp;C</p>", 512);
+    assert_eq!(t.trim(), "Line\n\ngap\nx\n\nA  B  C");
+}

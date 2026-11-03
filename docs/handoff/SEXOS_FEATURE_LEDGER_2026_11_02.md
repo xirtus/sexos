@@ -1511,6 +1511,19 @@ html text host tests 27 (`table_captions_and_implicit_row_ends`); sealed
 build and master gate GREEN; native HTML gate at both sizes with a
 captioned table of implicit rows (`Ports / dns   | 53 / https | 443`).
 
+## P9. HTML repeated breaks and no-break spaces (2026-11-03)
+
+- **Fix:** `<br><br>` collapsed into one line break; repeated breaks now
+  leave blank lines (up to two).
+- **Fix:** `&nbsp;` was an ordinary collapsible space, so `a&nbsp;&nbsp;b`
+  showed one space; no-break spaces are now always written (as plain
+  ASCII spaces, keeping the reader output ASCII).
+
+**Evidence** (`docs/handoff/assets/html-breaks-nbsp-2026-11-03/`): html
+text host tests 28 (`repeated_breaks_and_no_break_spaces`); sealed build
+and master gate GREEN; native HTML gate at both sizes (`wide  gap` /
+blank line / `after break`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

@@ -57,6 +57,16 @@ impl<'a> Output<'a> {
         self.byte(b);
     }
     fn bytes(&mut self, s: &[u8]) { for &b in s { self.text(b); } }
+    /// A space that is always written (`&nbsp;`): pending collapsible space
+    /// first, then this one.
+    fn hard_space(&mut self) {
+        if self.space && self.newlines == 0 { self.byte(b' '); }
+        if self.newlines != 0 { for _ in 0..self.quote { self.byte(b'>'); self.byte(b' '); } }
+        self.byte(b' ');
+        self.space = false;
+        self.newlines = 0;
+        self.marker = false;
+    }
     /// Literal bytes at the start of a line (indentation, list markers).
     fn raw(&mut self, s: &[u8]) {
         if self.newlines != 0 { for _ in 0..self.quote { self.byte(b'>'); self.byte(b' '); } }
@@ -293,7 +303,8 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                 o.line(true);
                 if !end_tag { o.bytes(if name[1] <= b'2' { b"# " } else { b"## " }); }
             } else if name_is(name, b"br") {
-                o.line(false);
+                // Each <br> ends a line; repeated ones leave blank lines (up to two).
+                if o.newlines == 0 { o.line(false); } else if o.newlines < 3 { o.byte(b'\n'); o.newlines += 1; }
             } else if name_is(name, b"li") && !end_tag {
                 o.line(false);
                 for _ in 1..depth.max(1) { o.raw(b"  "); }
@@ -458,6 +469,12 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
         if skip_until.is_some() { i += 1; continue; }
         if b == b'&' {
             let mut buf = [0u8; 4];
+            if html[i + 1..].starts_with(b"nbsp;") && !o.pre {
+                // A no-break space is kept, not collapsed (written as a plain space).
+                o.hard_space();
+                i += 6;
+                continue;
+            }
             if let Some((n, used)) = entity(&html[i + 1..], &mut buf) {
                 for &c in &buf[..n] { o.text(c); }
                 i += 1 + used;
