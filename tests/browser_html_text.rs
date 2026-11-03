@@ -152,3 +152,15 @@ fn common_named_entities() {
     let (t, _) = text("<p>&ldquo;Held&rdquo; &ndash; it&rsquo;s 5&deg; &times; 2 &rarr; &euro;10 &bull; soft&shy;hyphen &nosuch;</p>", 256);
     assert_eq!(t, "\u{201c}Held\u{201d} \u{2013} it\u{2019}s 5\u{b0} \u{d7} 2 \u{2192} \u{20ac}10 \u{2022} softhyphen &nosuch;");
 }
+
+#[test]
+fn forms_and_inline_extras_read_as_text() {
+    let page = "<form><label>Name <input name=n placeholder='Your name'></label><input type=hidden value=secret>\
+        <label><input type=checkbox checked> Remember</label> <input type=radio> A <input type=radio checked> B\
+        <select><option>One<option selected>Two</select><textarea>hi there</textarea>\
+        <button>Go now</button><input type=submit value=Send></form>\
+        <p>E = mc<sup>2</sup>, H<sub>2</sub>O, <abbr title=\"capability\">cap</abbr>, <q>held</q>.</p>\
+        <details><summary>More</summary><p>Hidden by default.</p></details>";
+    let (t, _) = text(page, 1024);
+    assert_eq!(t, "Name [input: Your name][x] Remember ( ) A (*) B[select: One | Two][text: hi there][button: Go now][button: Send]\n\nE = mc^2, H_2O, cap(capability), \"held\".\n\n> More\n\nHidden by default.");
+}

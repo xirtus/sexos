@@ -626,6 +626,25 @@ original 8-bit PNG and with `--variant adam7-16` (the same oracle pixels as a
 16-bit interlaced RGBA PNG, 10,353 bytes) at both sizes: decoded pixel hash
 equals the oracle and 256 sampled screen pixels match.
 
+## G9-G11. HTML forms and inline extras as text; calc functions (2026-11-03)
+
+- **G9 forms (read-only).** `<input>` shows `[input: placeholder/value]`,
+  checkboxes `[ ]`/`[x]`, radios `( )`/`(*)`, submit/reset/button
+  `[button: label]`, hidden inputs nothing; `<button>`, `<select>` (options
+  separated by `|`) and `<textarea>` show their text in brackets; `form`,
+  `fieldset`, `details` are blocks. Nothing is submitted: the Browser holds
+  no route for it.
+- **G10 inline extras.** `<sup>` `^x`, `<sub>` `_x`, `<abbr title>` adds
+  `(title)`, `<q>` quotes, `<summary>` starts a `> ` line.
+- **G11 Spindle calc functions.** `abs min max round floor ceil` on the
+  exact decimal values (round half away from zero).
+
+**Evidence** (`docs/handoff/assets/html-forms-calc-functions-2026-11-03/`):
+html_text 19 host tests, calc host tests; sealed build and master gate
+GREEN; native HTML gate at both sizes with
+`[input: Search notes] [x] exact [button: Find]` and `x^2 LC(Long Count)`;
+native calc gate at both sizes with `calc max(2,9)` -> `= 9`.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

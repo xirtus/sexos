@@ -6,7 +6,7 @@ from network_contention_gate import frozen_binding
 from quil_autosave_gate import boot,settle
 
 SHIFTED={'*':'8','(':'9',')':'0','+':'equal','%':'5'}
-PLAIN={' ':'spc','-':'minus','/':'slash','.':'dot'}
+PLAIN={' ':'spc','-':'minus','/':'slash','.':'dot',',':'comma'}
 CASES=[('calc ans',r'\[spindle.calc\] expr_bytes=3 error=NoAnswer ok=0'),
        ('calc 2*(3+4)/5',r'\[spindle.calc\] expr_bytes=9 result== 2\.8 ok=1'),
        ('calc ans*10',r'\[spindle.calc\] expr_bytes=6 result== 28 ok=1'),
@@ -14,6 +14,7 @@ CASES=[('calc ans',r'\[spindle.calc\] expr_bytes=3 error=NoAnswer ok=0'),
        ('calc 1/3',r'\[spindle.calc\] expr_bytes=3 result=~ 0\.333333333 ok=1'),
        ('calc 2**10',r'\[spindle.calc\] expr_bytes=5 result== 1024 ok=1'),
        ('calc sqrt(2)',r'\[spindle.calc\] expr_bytes=7 result=~ 1\.414213562 ok=1'),
+       ('calc max(2,9)',r'\[spindle.calc\] expr_bytes=8 result== 9 ok=1'),
        ('calc 7%0',r'\[spindle.calc\] expr_bytes=3 error=DivideByZero ok=0')]
 
 def type_line(g,value):

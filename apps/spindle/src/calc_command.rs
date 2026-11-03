@@ -2,7 +2,8 @@
 //! `calc <expression>`: exact decimal arithmetic on what the user typed.
 //!
 //! `ans` is the previous successful result in this Spindle session.
-//! `**` raises to a whole power up to 64; `sqrt(x)` is the square root.
+//! `**` raises to a whole power up to 64; `sqrt(x)` is the square root;
+//! `abs min max round floor ceil` work on the exact values.
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
 //! Parsing is recursive descent with a depth bound; every operation is
@@ -95,6 +96,29 @@ impl Parser<'_> {
                 self.at += 1; Ok(v)
             }
             Some(b'0'..=b'9' | b'.') => self.number(),
+            Some(b'a' | b'm' | b'r' | b'f' | b'c') if [&b"abs("[..], b"min(", b"max(", b"round(", b"floor(", b"ceil("].iter().any(|f| self.s[self.at..].starts_with(f)) => {
+                let name_len = self.s[self.at..].iter().position(|&c| c == b'(').unwrap_or(0);
+                let name = &self.s[self.at..self.at + name_len];
+                self.at += name_len + 1;
+                let mut vals = [0i128; 8];
+                let mut n = 0;
+                loop {
+                    if n == vals.len() { return Err(Error::Syntax); }
+                    vals[n] = self.guard(|p| p.expr())?;
+                    n += 1;
+                    match self.peek() { Some(b',') => self.at += 1, Some(b')') => { self.at += 1; break } _ => return Err(Error::Syntax) }
+                }
+                let one = || if n == 1 { Ok(vals[0]) } else { Err(Error::Syntax) };
+                Ok(match name {
+                    b"abs" => one()?.checked_abs().ok_or(Error::Overflow)?,
+                    b"min" => *vals[..n].iter().min().unwrap(),
+                    b"max" => *vals[..n].iter().max().unwrap(),
+                    // Whole numbers: round half away from zero, floor, ceil.
+                    b"round" => { let v = one()?; let r = (v.abs() + SCALE / 2) / SCALE * SCALE; if v < 0 { -r } else { r } }
+                    b"floor" => { let v = one()?; v.div_euclid(SCALE) * SCALE }
+                    _ => { let v = one()?; -((-v).div_euclid(SCALE) * SCALE) }
+                })
+            }
             Some(b's') if self.s[self.at..].starts_with(b"sqrt(") => {
                 self.at += 4;
                 let v = self.atom()?;
@@ -187,6 +211,10 @@ mod tests {
         assert_eq!(show("sqrt(2.25)+1"), "= 2.5");
         assert_eq!(show("sqrt(-1)"), "Domain");
         assert_eq!(show("sqrt 4"), "Syntax");
+        assert_eq!(show("abs(-2.5)+max(1, 7, 3)-min(4, -1)"), "= 10.5");
+        assert_eq!(show("round(2.5) + round(-2.5) + floor(-1.2) + ceil(1.2)"), "= 0");
+        assert_eq!(show("round(1, 2)"), "Syntax");
+        assert_eq!(show("maxx(1)"), "Syntax");
     }
     #[test] fn errors_are_named_not_wrapped() {
         assert_eq!(show("1/0"), "DivideByZero");

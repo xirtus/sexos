@@ -707,7 +707,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  clear        clear scrollback");
             sb.push(b"  echo <msg>   print message");
             sb.push(b"  sextime <n>  Unix seconds as SexTime/UTC/Long Count");
-            sb.push(b"  calc <expr>  exact decimal + - * / % ** sqrt() ans");
+            sb.push(b"  calc <expr>  exact + - * / % ** sqrt abs min max round floor ceil ans");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");

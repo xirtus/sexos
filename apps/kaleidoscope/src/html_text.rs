@@ -152,7 +152,7 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
 
 const INLINE: [(&[u8], u8); 6] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_')];
 const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
-const BLOCK: [&[u8]; 15] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl"];
+const BLOCK: [&[u8]; 18] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl", b"form", b"details", b"fieldset"];
 
 /// Convert `html` into readable text in `out`. Link targets are appended as a
 /// numbered list; at most MAX_LINKS are kept.
@@ -165,6 +165,8 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let (mut scripts_run, mut scripts_refused) = (0u8, 0u8);
     // Open lists: 0 = bulleted, n = next number of an ordered list.
     let mut lists = [0u16; 4];
+    // Title of the open <abbr>, shown after its text.
+    let mut abbr: Option<(usize, usize)> = None;
     let mut depth = 0usize;
     if let Some(title) = title(html) {
         o.bytes(b"Title:");
@@ -269,6 +271,62 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if let Some(mark) = INLINE.iter().find(|(n, _)| name_is(name, n)).map(|(_, m)| *m) {
                 // Inline emphasis and code keep a plain-text marker, Markdown style.
                 if end_tag { o.space = false; o.text(mark); } else { o.text(mark); o.space = false; }
+            } else if name_is(name, b"input") && !end_tag {
+                // Forms are shown, never submitted: there is no form route.
+                let attrs = &body[name_end..];
+                let kind = attribute(attrs, b"type").unwrap_or(b"text");
+                let checked = attribute(attrs, b"checked").is_some() || attrs.windows(7).any(|w| name_is(w, b"checked"));
+                if name_is(kind, b"hidden") {
+                } else if name_is(kind, b"checkbox") {
+                    o.bytes(if checked { b"[x]" } else { b"[ ]" });
+                } else if name_is(kind, b"radio") {
+                    o.bytes(if checked { b"(*)" } else { b"( )" });
+                } else if name_is(kind, b"submit") || name_is(kind, b"button") || name_is(kind, b"reset") {
+                    o.bytes(b"[button:");
+                    o.space = true;
+                    let label: &[u8] = attribute(attrs, b"value").unwrap_or(if name_is(kind, b"reset") { b"Reset" } else { b"Submit" });
+                    for &c in label { o.text(c); }
+                    o.text(b']');
+                } else {
+                    o.bytes(b"[input");
+                    if let Some(hint) = attribute(attrs, b"value").or(attribute(attrs, b"placeholder")).filter(|v| !v.is_empty()) {
+                        o.text(b':');
+                        o.space = true;
+                        for &c in hint { o.text(c); }
+                    }
+                    o.text(b']');
+                }
+            } else if (name_is(name, b"button") || name_is(name, b"textarea") || name_is(name, b"select")) && !end_tag {
+                o.bytes(if name_is(name, b"button") { b"[button:" } else if name_is(name, b"select") { b"[select:" } else { b"[text:" });
+                o.space = true;
+            } else if (name_is(name, b"button") || name_is(name, b"textarea") || name_is(name, b"select")) && end_tag {
+                o.space = false;
+                o.text(b']');
+            } else if name_is(name, b"option") && !end_tag {
+                // Options after the first are separated inside [select: ...].
+                if o.len > 0 && o.buf[o.len - 1] != b':' && !(o.len > 1 && &o.buf[o.len - 2..o.len] == b": ") { o.space = false; o.text(b' '); o.text(b'|'); }
+                o.space = true;
+            } else if name_is(name, b"sup") || name_is(name, b"sub") {
+                if !end_tag { o.space = false; o.text(if name_is(name, b"sup") { b'^' } else { b'_' }); o.space = false; }
+            } else if name_is(name, b"q") {
+                if end_tag { o.space = false; }
+                o.text(b'"');
+                if !end_tag { o.space = false; }
+            } else if name_is(name, b"summary") && !end_tag {
+                o.line(false);
+                o.bytes(b"> ");
+            } else if name_is(name, b"summary") && end_tag {
+                o.line(false);
+            } else if name_is(name, b"abbr") && !end_tag {
+                abbr = attribute(&body[name_end..], b"title").map(|t| (t.as_ptr() as usize - html.as_ptr() as usize, t.len()));
+            } else if name_is(name, b"abbr") && end_tag {
+                if let Some((start, len)) = abbr.take() {
+                    o.text(b'(');
+                    o.space = false;
+                    for &c in &html[start..start + len] { o.text(c); }
+                    o.space = false;
+                    o.text(b')');
+                }
             } else if name_is(name, b"img") && !end_tag {
                 // Images are not fetched; their alternative text is shown.
                 o.bytes(b"[image");
