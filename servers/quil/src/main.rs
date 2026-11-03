@@ -368,6 +368,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                     draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
                 },
                 0x1e if !QUIL_NAME_MODE=>{*palette_active=false;let _=QUIL_SELECTION.select_all(quil_source());QUIL_CURSOR_POS=QUIL_BUFFER_LEN;quil_selection_record();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
+                0x20 if key.shift&&!QUIL_NAME_MODE&&!*palette_active=>quil_duplicate_line(),
                 0x20 if !QUIL_NAME_MODE&&!*palette_active=>quil_delete_key(),
                 0x17 if !QUIL_NAME_MODE&&!*palette_active=>quil_stats_key(),
                 0x22 if !QUIL_NAME_MODE&&!*palette_active=>{QUIL_FIND.clear();QUIL_GOTO=Some(0);sex_pdx::serial_record!("[quil.goto.mode] on=1");draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
@@ -553,6 +554,24 @@ unsafe fn quil_indent(range: (usize, usize), out: bool) -> bool {
     }
     sex_pdx::serial_record!("[quil.indent] lines={} out={} start={} end={} applied={} len={}", lines, out as u8, start, start + n, applied as u8, QUIL_BUFFER_LEN);
     applied
+}
+/// Ctrl+Shift+D copies the caret's line below itself (one undoable edit);
+/// the caret moves to the same column in the copy.
+unsafe fn quil_duplicate_line() {
+    let Some(snapshot) = QUIL_SELECTION.snapshot() else { return };
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let caret = snapshot.caret();
+    let start = text[..caret].iter().rposition(|c| *c == b'\n').map_or(0, |k| k + 1);
+    let end = text[caret..].iter().position(|c| *c == b'\n').map_or(text.len(), |k| caret + k);
+    let scratch = &mut *core::ptr::addr_of_mut!(QUIL_REPLACE_SCRATCH);
+    let n = end - start;
+    scratch[0] = b'\n';
+    scratch[1..1 + n].copy_from_slice(&text[start..end]);
+    let applied = quil_replace((end, end), &scratch[..1 + n]);
+    let new_caret = end + 1 + (caret - start);
+    if applied && QUIL_SELECTION.move_to(quil_source(), new_caret, false).is_ok() { QUIL_CURSOR_POS = new_caret; quil_selection_record(); }
+    sex_pdx::serial_record!("[quil.line.duplicate] start={} bytes={} caret={} applied={} len={}", end, n, QUIL_CURSOR_POS, applied as u8, QUIL_BUFFER_LEN);
+    if applied { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
 }
 /// Ctrl+Up / Ctrl+Down swap the caret's line with the one above / below as
 /// one undoable edit; the caret keeps its column in the moved line.

@@ -127,6 +127,9 @@ def main():
   g['chord']('ctrl','a',r'\[quil.selection\] generation=\d+ revision=\d+ bytes=16 anchor=0 caret=16')
   g['chord']('ctrl','bracket_right',r'\[quil.indent\] lines=2 out=0 start=0 end=18 applied=1 len=18')
   g['chord']('ctrl','bracket_left',r'\[quil.indent\] lines=2 out=1 start=0 end=16 applied=1 len=16')
+  # Ctrl+Shift+D copies the caret's (second) line below it.
+  s0=len(t());g['q'].cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'d'}],'hold-time':80})
+  g['wait'](r'\[quil.line.duplicate\] start=16 bytes=14 caret=31 applied=1 len=31',s0,30)
   settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)

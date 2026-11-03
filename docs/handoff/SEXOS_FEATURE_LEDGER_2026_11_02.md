@@ -9,7 +9,8 @@ autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
 find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
-select line, `Ctrl+Up/Down` move line, `Ctrl+]`/`Ctrl+[` indent.
+select line, `Ctrl+Up/Down` move line, `Ctrl+]`/`Ctrl+[` indent, `Ctrl+Shift+D`
+duplicate line.
 Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
@@ -1363,6 +1364,18 @@ sealed build and master gate GREEN; native HTML gate at both sizes with
 **Evidence** (`docs/handoff/assets/script-param-patterns-pretty-json-2026-11-03/`):
 script host tests 44 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... p118`).
+
+## N19. Quil duplicate line (2026-11-03)
+
+- `Ctrl+Shift+D` copies the caret's line below itself as one undoable
+  edit; the caret moves to the same column in the copy. Plain `Ctrl+D`
+  keeps its meaning (press twice to delete the saved document).
+
+**Evidence** (`docs/handoff/assets/quil-duplicate-line-2026-11-03/`): Quil
+clipboard, service-custody and sexnet host gates pass; sealed build and
+master gate GREEN; native Quil autosave gate at both sizes
+(`[quil.line.duplicate] start=16 bytes=14 caret=31 applied=1 len=31`);
+Quil delete gate (plain Ctrl+D) regression OK.
 
 ## Release gates noted while doing F1–F2
 
