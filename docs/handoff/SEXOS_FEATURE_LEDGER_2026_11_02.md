@@ -957,6 +957,29 @@ script host tests 33 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... true 1025iife`). Browser stack high water
 51,472 of 65,536 bytes (gate bound 60 KiB).
 
+## M21. Script interpreter stack frames cut (2026-11-03)
+
+The Browser stack high water had grown with each script round (48.0 KiB at
+M1, 51.5 KiB at M20, gate bound 60 KiB of 64 KiB). Measured from the
+release binary (`sub $N, %rsp` per function), one script call level cost
+about 3.2 KiB, mostly `atom` (936 B, a 32-value array-literal buffer on the
+stack) and `chain` (952 B, every member method in one frame).
+
+- Array-literal items are built in a fallible 512-byte heap buffer.
+- Rarely recursive arms moved out of the recursive frames into
+  `#[inline(never)]` helpers: object/array literals, `new`, `Date.*`,
+  `JSON/Object/Array/Number.*`, `String.*`, class statics (from `atom`);
+  number/regex/array/string members (`member`, from `chain`); and
+  declarations, destructuring, `document.write`, `class`, `delete`,
+  `throw`, `try`, `do`, `switch`, `while` (from `statement_inner`).
+- Now: `chain` 328 B, `unary`+`atom` 200 B, `statement_inner` is below the
+  reporting floor; one call level is about 1.75 KiB.
+
+**Evidence** (`docs/handoff/assets/script-stack-frames-2026-11-03/`):
+script host tests 33 groups unchanged; sealed build and master gate GREEN;
+native HTML gate at both sizes with identical page output and Browser stack
+high water **46,752 bytes (was 51,472)**: scripts no longer set the peak.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

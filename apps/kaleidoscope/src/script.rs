@@ -543,115 +543,122 @@ impl<'a> Machine<'a> {
                 } else { v = prop; }
                 continue;
             }
-            if let (Value::Num(x), b"toString") = (v, name) {
-                let (args, n) = self.arguments()?;
-                let radix = if n == 0 { 10.0 } else { self.to_number(args[0]) };
-                v = if radix == 10.0 { self.number_text(x)? }
-                else if !(2.0..=36.0).contains(&radix) || radix != floor(radix) || !x.is_finite() || x != floor(x) || x.abs_ge(9.007e15) {
-                    // Fractions in other bases are not in the subset.
-                    return Err(Error::Unsupported);
-                } else {
-                    let (mut n, r) = (if x < 0.0 { -x } else { x } as u64, radix as u64);
-                    let mut digits = Vec::new();
-                    loop { digits.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(n % r) as usize]); n /= r; if n == 0 { break; } }
-                    if x < 0.0 { digits.push(b'-'); }
-                    digits.reverse();
-                    self.store(&digits)?
-                };
-                continue;
-            }
-            if let (Value::Num(x), b"toFixed") = (v, name) {
-                self.expect(b'(')?;
-                let d = if self.tok == Tok::Punct(b')') { Value::Num(0.0) } else { self.expr()? };
-                self.expect(b')')?;
-                let d = self.to_number(d);
-                if !(0.0..=20.0).contains(&d) || d != floor(d) { return Err(Error::Unsupported); }
-                v = self.fixed(x, d as usize)?;
-                continue;
-            }
-            if let Value::Re(k) = v {
-                v = match name {
-                    b"test" => { let (args, _) = self.arguments()?; let t = self.to_text(args[0])?; let text = self.text(t).to_vec(); Value::Bool(self.re_find(k, &text, 0)?.is_some()) }
-                    b"source" => { let p = self.regexes[k as usize].1; self.store(p)? }
-                    b"flags" => { let f = self.regexes[k as usize].2; self.store(f)? }
-                    _ => return Err(Error::Unsupported),
-                };
-                continue;
-            }
-            if let (Value::Str(..), b"match" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
-                // String methods with a regular expression argument.
-                let at = self.pos();
-                let (args, n) = self.arguments()?;
-                if let Some(Value::Re(k)) = args.first().copied().filter(|_| n >= 1) {
-                    v = self.string_regex(name, v, k, args.get(1).copied().unwrap_or(Value::Undef))?;
-                    continue;
-                }
-                self.restore(at);
-            }
-            if let Value::Arr(id) = v {
-                let (_, len, _) = self.arrays[id as usize];
-                v = match name {
-                    b"length" => Value::Num(len as f64),
-                    b"push" => {
-                        self.expect(b'(')?;
-                        let x = self.expr()?;
-                        self.expect(b')')?;
-                        if self.live { self.push(id, x)?; }
-                        Value::Num(self.arrays[id as usize].1 as f64)
-                    }
-                    b"join" => {
-                        self.expect(b'(')?;
-                        let sep = if self.tok == Tok::Punct(b')') { None } else { Some(self.expr()?) };
-                        self.expect(b')')?;
-                        let sep = match sep { Some(x) => { let t = self.to_text(x)?; self.text(t).to_vec() } None => b",".to_vec() };
-                        self.join(id, &sep)?
-                    }
-                    b"forEach" | b"map" | b"filter" | b"find" | b"findIndex" | b"findLast" | b"findLastIndex" | b"flatMap" | b"some" | b"every" | b"reduce" => {
-                        let (args, n) = self.arguments()?;
-                        self.array_callback(id, name, &args[..n])?
-                    }
-                    b"indexOf" | b"lastIndexOf" | b"includes" | b"slice" | b"concat" | b"reverse" | b"sort" | b"pop" | b"shift" | b"fill" | b"at" | b"flat"
-                    | b"toString" | b"splice" | b"unshift" => {
-                        let (args, n) = self.arguments()?;
-                        self.array_method(id, name, &args[..n])?
-                    }
-                    _ => return Err(Error::Unsupported),
-                };
-                continue;
-            }
-            let s = self.to_text(v)?;
+            v = self.member(v, name)?;
+        }
+    }
+    /// `.name` / `.name(...)` on numbers, regular expressions, arrays and
+    /// strings. Kept out of `chain` (whose frame is on every call path).
+    #[inline(never)]
+    fn member(&mut self, mut v: Value, name: &'a [u8]) -> Result<Value, Error> {
+        if let (Value::Num(x), b"toString") = (v, name) {
+            let (args, n) = self.arguments()?;
+            let radix = if n == 0 { 10.0 } else { self.to_number(args[0]) };
+            v = if radix == 10.0 { self.number_text(x)? }
+            else if !(2.0..=36.0).contains(&radix) || radix != floor(radix) || !x.is_finite() || x != floor(x) || x.abs_ge(9.007e15) {
+                // Fractions in other bases are not in the subset.
+                return Err(Error::Unsupported);
+            } else {
+                let (mut n, r) = (if x < 0.0 { -x } else { x } as u64, radix as u64);
+                let mut digits = Vec::new();
+                loop { digits.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(n % r) as usize]); n /= r; if n == 0 { break; } }
+                if x < 0.0 { digits.push(b'-'); }
+                digits.reverse();
+                self.store(&digits)?
+            };
+            return Ok(v);
+        }
+        if let (Value::Num(x), b"toFixed") = (v, name) {
+            self.expect(b'(')?;
+            let d = if self.tok == Tok::Punct(b')') { Value::Num(0.0) } else { self.expr()? };
+            self.expect(b')')?;
+            let d = self.to_number(d);
+            if !(0.0..=20.0).contains(&d) || d != floor(d) { return Err(Error::Unsupported); }
+            v = self.fixed(x, d as usize)?;
+            return Ok(v);
+        }
+        if let Value::Re(k) = v {
             v = match name {
-                b"length" => Value::Num(self.text(s).len() as f64),
-                b"trim" | b"indexOf" | b"charAt" | b"slice" | b"substring" | b"split" | b"replace" | b"replaceAll"
-                | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" => {
+                b"test" => { let (args, _) = self.arguments()?; let t = self.to_text(args[0])?; let text = self.text(t).to_vec(); Value::Bool(self.re_find(k, &text, 0)?.is_some()) }
+                b"source" => { let p = self.regexes[k as usize].1; self.store(p)? }
+                b"flags" => { let f = self.regexes[k as usize].2; self.store(f)? }
+                _ => return Err(Error::Unsupported),
+            };
+            return Ok(v);
+        }
+        if let (Value::Str(..), b"match" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
+            // String methods with a regular expression argument.
+            let at = self.pos();
+            let (args, n) = self.arguments()?;
+            if let Some(Value::Re(k)) = args.first().copied().filter(|_| n >= 1) {
+                v = self.string_regex(name, v, k, args.get(1).copied().unwrap_or(Value::Undef))?;
+                return Ok(v);
+            }
+            self.restore(at);
+        }
+        if let Value::Arr(id) = v {
+            let (_, len, _) = self.arrays[id as usize];
+            v = match name {
+                b"length" => Value::Num(len as f64),
+                b"push" => {
                     self.expect(b'(')?;
-                    let mut args = [Value::Undef; 2];
-                    let mut n = 0;
-                    if self.tok != Tok::Punct(b')') {
-                        loop {
-                            if n == 2 { return Err(Error::Unsupported); }
-                            args[n] = self.expr()?;
-                            n += 1;
-                            if self.tok != Tok::Punct(b',') { break; }
-                            self.next()?;
-                        }
-                    }
+                    let x = self.expr()?;
                     self.expect(b')')?;
-                    self.string_method(name, s, args)?
+                    if self.live { self.push(id, x)?; }
+                    Value::Num(self.arrays[id as usize].1 as f64)
                 }
-                b"toUpperCase" | b"toLowerCase" => {
+                b"join" => {
                     self.expect(b'(')?;
+                    let sep = if self.tok == Tok::Punct(b')') { None } else { Some(self.expr()?) };
                     self.expect(b')')?;
-                    let Value::Str(start, n) = s else { return Err(Error::Syntax) };
-                    let at = self.arena.len();
-                    if at + n as usize > ARENA { return Err(Error::Limit); }
-                    self.arena.extend_from_within(start as usize..start as usize + n as usize);
-                    for b in &mut self.arena[at..] { *b = if name == b"toUpperCase" { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }; }
-                    Value::Str(at as u16, n)
+                    let sep = match sep { Some(x) => { let t = self.to_text(x)?; self.text(t).to_vec() } None => b",".to_vec() };
+                    self.join(id, &sep)?
+                }
+                b"forEach" | b"map" | b"filter" | b"find" | b"findIndex" | b"findLast" | b"findLastIndex" | b"flatMap" | b"some" | b"every" | b"reduce" => {
+                    let (args, n) = self.arguments()?;
+                    self.array_callback(id, name, &args[..n])?
+                }
+                b"indexOf" | b"lastIndexOf" | b"includes" | b"slice" | b"concat" | b"reverse" | b"sort" | b"pop" | b"shift" | b"fill" | b"at" | b"flat"
+                | b"toString" | b"splice" | b"unshift" => {
+                    let (args, n) = self.arguments()?;
+                    self.array_method(id, name, &args[..n])?
                 }
                 _ => return Err(Error::Unsupported),
             };
+            return Ok(v);
         }
+        let s = self.to_text(v)?;
+        v = match name {
+            b"length" => Value::Num(self.text(s).len() as f64),
+            b"trim" | b"indexOf" | b"charAt" | b"slice" | b"substring" | b"split" | b"replace" | b"replaceAll"
+            | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" => {
+                self.expect(b'(')?;
+                let mut args = [Value::Undef; 2];
+                let mut n = 0;
+                if self.tok != Tok::Punct(b')') {
+                    loop {
+                        if n == 2 { return Err(Error::Unsupported); }
+                        args[n] = self.expr()?;
+                        n += 1;
+                        if self.tok != Tok::Punct(b',') { break; }
+                        self.next()?;
+                    }
+                }
+                self.expect(b')')?;
+                self.string_method(name, s, args)?
+            }
+            b"toUpperCase" | b"toLowerCase" => {
+                self.expect(b'(')?;
+                self.expect(b')')?;
+                let Value::Str(start, n) = s else { return Err(Error::Syntax) };
+                let at = self.arena.len();
+                if at + n as usize > ARENA { return Err(Error::Limit); }
+                self.arena.extend_from_within(start as usize..start as usize + n as usize);
+                for b in &mut self.arena[at..] { *b = if name == b"toUpperCase" { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }; }
+                Value::Str(at as u16, n)
+            }
+            _ => return Err(Error::Unsupported),
+        };
+        Ok(v)
     }
     fn re_find(&self, k: u8, text: &[u8], from: usize) -> Result<Option<[Option<(usize, usize)>; CAPTURES]>, Error> {
         self.regexes[k as usize].3.find(text, from).map_err(|_| Error::Limit)
@@ -1527,6 +1534,183 @@ impl<'a> Machine<'a> {
             _ => return Err(Error::Unsupported),
         }))
     }
+    /// `{a: 1, 'b': x}` (kept out of `atom`, whose frame recurses).
+    #[inline(never)]
+    fn object_literal(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        let id = self.new_object()?;
+        while self.tok != Tok::Punct(b'}') {
+            let key: &[u8] = match self.tok { Tok::Ident(k) | Tok::Str(k) => k, _ => return Err(Error::Syntax) };
+            self.next()?;
+            self.expect(b':')?;
+            let v = self.expr()?;
+            self.set_prop(id, key, v)?;
+            if self.tok != Tok::Punct(b',') { break; }
+            self.next()?;
+        }
+        self.expect(b'}')?;
+        Ok(Value::Obj(id))
+    }
+    /// `[a, b, ...xs]`.
+    #[inline(never)]
+    fn array_literal(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        // On the heap: 32 values would be 512 bytes of the Browser stack.
+        let mut items = Vec::new();
+        items.try_reserve_exact(32).map_err(|_| Error::Limit)?;
+        items.resize(32, Value::Undef);
+        let n = self.items(b']', &mut items)?;
+        self.new_array(&items[..n])
+    }
+    /// `new C(...)`.
+    #[inline(never)]
+    fn new_expression(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        let Tok::Ident(class) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        let mut args = [Value::Undef; PARAMS];
+        let n = if self.tok == Tok::Punct(b'(') { self.argument_list(&mut args)? } else { 0 };
+        if !self.live { return Ok(Value::Undef); }
+        self.construct(class, &args[..n])
+    }
+    /// `Date.UTC(...)`.
+    #[inline(never)]
+    fn date_static(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        let (args, n) = self.arguments()?;
+        match f {
+            b"UTC" => { let mut v = [0.0f64, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; for k in 0..n { v[k] = self.to_number(args[k]); } Ok(Value::Num(date_ms(v))) }
+            // Date.now() would need a clock: refused.
+            _ => Err(Error::Unsupported),
+        }
+    }
+    /// `JSON.*`, `Object.*`, `Array.*`, `Number.*`.
+    #[inline(never)]
+    fn statics(&mut self, name: &[u8]) -> Result<Value, Error> {
+        self.expect(b'.')?;
+        let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        if (name, f) == (&b"Array"[..], &b"of"[..]) { let (args, n) = self.arguments()?; return self.new_array(&args[..n]); }
+        if (name, f) == (&b"Object"[..], &b"assign"[..]) {
+            // Copies own properties of each source onto the target.
+            let (args, n) = self.arguments()?;
+            if !self.live { return Ok(Value::Undef); }
+            let Some(&Value::Obj(to)) = args[..n].first() else { return Err(Error::Unsupported) };
+            for &src in &args[1..n] {
+                let Value::Obj(from) = src else { if matches!(src, Value::Null | Value::Undef) { continue; } return Err(Error::Unsupported) };
+                let (start, len, _) = self.objects[from as usize];
+                for k in start as usize..start as usize + len as usize {
+                    let (ns, nn, value) = self.props[k];
+                    let key = self.arena[ns as usize..ns as usize + nn as usize].to_vec();
+                    self.set_prop(to, &key, value)?;
+                }
+            }
+            return Ok(Value::Obj(to));
+        }
+        self.expect(b'(')?;
+        let v = self.expr()?;
+        self.expect(b')')?;
+        let num = |m: &Self| if let Value::Num(x) = v { Some(x) } else { let _ = m; None };
+        match (name, f, v) {
+            (b"Array", b"isArray", v) => Ok(Value::Bool(matches!(v, Value::Arr(_)))),
+            (b"Array", b"from", v) => {
+                // From an array (copy), a string (characters) or {length: n}.
+                let items: Vec<Value> = match v {
+                    Value::Arr(id) => { let (s0, l0, _) = self.arrays[id as usize]; self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec() }
+                    Value::Str(s0, n0) => (0..n0).map(|k| Value::Str(s0 + k, 1)).collect(),
+                    Value::Obj(id) => { let n = self.to_number(self.get_prop(id, b"length")); if !(0.0..=ELEMS as f64).contains(&n) { return Err(Error::Limit); } (0..n as usize).map(|_| Value::Undef).collect() }
+                    _ => return Err(Error::Unsupported),
+                };
+                if items.len() > ELEMS { return Err(Error::Limit); }
+                self.new_array(&items)
+            }
+            (b"Number", b"isInteger", _) => Ok(Value::Bool(num(self).is_some_and(|x| x.is_finite() && x == floor(x)))),
+            (b"Number", b"isFinite", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_finite))),
+            (b"Number", b"isNaN", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_nan))),
+            (b"Object", b"fromEntries", Value::Arr(list)) => {
+                let id = self.new_object()?;
+                let (start, len, _) = self.arrays[list as usize];
+                for k in 0..len as usize {
+                    let Value::Arr(pair) = self.elems[start as usize + k] else { return Err(Error::Unsupported) };
+                    let (ps, pl, _) = self.arrays[pair as usize];
+                    let key = if pl > 0 { self.elems[ps as usize] } else { Value::Undef };
+                    let value = if pl > 1 { self.elems[ps as usize + 1] } else { Value::Undef };
+                    let key = self.to_text(key)?;
+                    let key = self.text(key).to_vec();
+                    self.set_prop(id, &key, value)?;
+                }
+                Ok(Value::Obj(id))
+            }
+            (b"Object", b"values" | b"entries", Value::Obj(id)) => {
+                let (start, len, _) = self.objects[id as usize];
+                let mut items = [Value::Undef; 16];
+                if len as usize > items.len() { return Err(Error::Limit); }
+                for k in 0..len as usize {
+                    let (ns, nn, value) = self.props[start as usize + k];
+                    items[k] = if f == b"values" { value } else { self.new_array(&[Value::Str(ns, nn), value])? };
+                }
+                self.new_array(&items[..len as usize])
+            }
+            (b"JSON", b"stringify", v) => { let mut j = Vec::new(); self.json(v, &mut j)?; self.store(&j) }
+            (b"JSON", b"parse", v) => {
+                if !self.live { return Ok(Value::Undef); }
+                let t = self.to_text(v)?;
+                let text = self.text(t).to_vec();
+                let mut at = 0;
+                let parsed = self.json_value(&text, &mut at, 0).and_then(|v| { json_ws(&text, &mut at); if at == text.len() { Ok(v) } else { Err(Error::Syntax) } });
+                match parsed {
+                    Ok(v) => Ok(v),
+                    // Malformed JSON throws, as in JavaScript (catchable).
+                    Err(Error::Syntax) => { let m = self.store(b"SyntaxError: bad JSON")?; self.thrown = Some(m); Err(Error::Thrown) }
+                    Err(e) => Err(e),
+                }
+            }
+            (b"Object", b"keys", Value::Obj(id)) => {
+                let (start, len, _) = self.objects[id as usize];
+                let mut keys = [Value::Undef; 16];
+                if len as usize > keys.len() { return Err(Error::Limit); }
+                for (k, slot) in (start as usize..start as usize + len as usize).zip(keys.iter_mut()) { let (ns, nn, _) = self.props[k]; *slot = Value::Str(ns, nn); }
+                self.new_array(&keys[..len as usize])
+            }
+            _ => Err(Error::Unsupported),
+        }
+    }
+    /// `String.fromCharCode(...)`.
+    #[inline(never)]
+    fn string_static(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        if self.tok != Tok::Ident(b"fromCharCode") { return Err(Error::Unsupported); }
+        self.next()?;
+        let (args, n) = self.arguments()?;
+        if !self.live { return Ok(Value::Undef); }
+        let mut text: Vec<u8> = Vec::new();
+        for &a in &args[..n] {
+            let c = self.to_number(a);
+            let ch = if c.is_finite() && c >= 0.0 { char::from_u32(c as u32 & 0xffff) } else { None }.ok_or(Error::Unsupported)?;
+            let mut b = [0u8; 4];
+            text.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
+        }
+        self.store(&text)
+    }
+    /// `C.m(...)`: a static method of class C (or a parent).
+    #[inline(never)]
+    fn class_static(&mut self, name: &[u8]) -> Result<Value, Error> {
+        // `C.m(...)`: a static method of class C (or a parent).
+        self.next()?;
+        let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        let mut args = [Value::Undef; PARAMS];
+        let n = self.argument_list(&mut args)?;
+        if !self.live { return Ok(Value::Undef); }
+        let mut k = self.classes.iter().position(|c| c.0 == name);
+        while let Some(c) = k {
+            if let Some(&(_, f)) = self.classes[c].4.iter().find(|s| s.0 == m) { return self.invoke(f, &args[..n]); }
+            k = self.classes[c].3.map(|p| p as usize);
+        }
+        Err(Error::Unsupported)
+    }
     fn atom(&mut self) -> Result<Value, Error> {
         // Arrow functions need one token of lookahead (or a scan to `)`).
         let arrow = match self.tok {
@@ -1555,36 +1739,9 @@ impl<'a> Machine<'a> {
                 Ok(Value::Func(self.define(b"", at)?))
             }
             Tok::Punct(b'(') => { self.next()?; let v = self.expr()?; self.expect(b')')?; Ok(v) }
-            Tok::Punct(b'{') => {
-                self.next()?;
-                let id = self.new_object()?;
-                while self.tok != Tok::Punct(b'}') {
-                    let key: &[u8] = match self.tok { Tok::Ident(k) | Tok::Str(k) => k, _ => return Err(Error::Syntax) };
-                    self.next()?;
-                    self.expect(b':')?;
-                    let v = self.expr()?;
-                    self.set_prop(id, key, v)?;
-                    if self.tok != Tok::Punct(b',') { break; }
-                    self.next()?;
-                }
-                self.expect(b'}')?;
-                Ok(Value::Obj(id))
-            }
-            Tok::Punct(b'[') => {
-                self.next()?;
-                let mut items = [Value::Undef; 32];
-                let n = self.items(b']', &mut items)?;
-                self.new_array(&items[..n])
-            }
-            Tok::Ident(b"new") => {
-                self.next()?;
-                let Tok::Ident(class) = self.tok else { return Err(Error::Syntax) };
-                self.next()?;
-                let mut args = [Value::Undef; PARAMS];
-                let n = if self.tok == Tok::Punct(b'(') { self.argument_list(&mut args)? } else { 0 };
-                if !self.live { return Ok(Value::Undef); }
-                self.construct(class, &args[..n])
-            }
+            Tok::Punct(b'{') => self.object_literal(),
+            Tok::Punct(b'[') => self.array_literal(),
+            Tok::Ident(b"new") => self.new_expression(),
             Tok::Ident(b"function") => {
                 self.next()?;
                 if let Tok::Ident(_) = self.tok { self.next()?; }
@@ -1615,138 +1772,12 @@ impl<'a> Machine<'a> {
                     b"true" => Ok(Value::Bool(true)),
                     b"false" => Ok(Value::Bool(false)),
                     b"Math" => self.math(),
-                    b"Date" if self.tok == Tok::Punct(b'.') => {
-                        self.next()?;
-                        let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
-                        self.next()?;
-                        let (args, n) = self.arguments()?;
-                        match f {
-                            b"UTC" => { let mut v = [0.0f64, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; for k in 0..n { v[k] = self.to_number(args[k]); } Ok(Value::Num(date_ms(v))) }
-                            // Date.now() would need a clock: refused.
-                            _ => Err(Error::Unsupported),
-                        }
-                    }
-                    b"JSON" | b"Object" | b"Array" | b"Number" if self.tok == Tok::Punct(b'.') => {
-                        self.expect(b'.')?;
-                        let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
-                        self.next()?;
-                        if (name, f) == (&b"Array"[..], &b"of"[..]) { let (args, n) = self.arguments()?; return self.new_array(&args[..n]); }
-                        if (name, f) == (&b"Object"[..], &b"assign"[..]) {
-                            // Copies own properties of each source onto the target.
-                            let (args, n) = self.arguments()?;
-                            if !self.live { return Ok(Value::Undef); }
-                            let Some(&Value::Obj(to)) = args[..n].first() else { return Err(Error::Unsupported) };
-                            for &src in &args[1..n] {
-                                let Value::Obj(from) = src else { if matches!(src, Value::Null | Value::Undef) { continue; } return Err(Error::Unsupported) };
-                                let (start, len, _) = self.objects[from as usize];
-                                for k in start as usize..start as usize + len as usize {
-                                    let (ns, nn, value) = self.props[k];
-                                    let key = self.arena[ns as usize..ns as usize + nn as usize].to_vec();
-                                    self.set_prop(to, &key, value)?;
-                                }
-                            }
-                            return Ok(Value::Obj(to));
-                        }
-                        self.expect(b'(')?;
-                        let v = self.expr()?;
-                        self.expect(b')')?;
-                        let num = |m: &Self| if let Value::Num(x) = v { Some(x) } else { let _ = m; None };
-                        match (name, f, v) {
-                            (b"Array", b"isArray", v) => Ok(Value::Bool(matches!(v, Value::Arr(_)))),
-                            (b"Array", b"from", v) => {
-                                // From an array (copy), a string (characters) or {length: n}.
-                                let items: Vec<Value> = match v {
-                                    Value::Arr(id) => { let (s0, l0, _) = self.arrays[id as usize]; self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec() }
-                                    Value::Str(s0, n0) => (0..n0).map(|k| Value::Str(s0 + k, 1)).collect(),
-                                    Value::Obj(id) => { let n = self.to_number(self.get_prop(id, b"length")); if !(0.0..=ELEMS as f64).contains(&n) { return Err(Error::Limit); } (0..n as usize).map(|_| Value::Undef).collect() }
-                                    _ => return Err(Error::Unsupported),
-                                };
-                                if items.len() > ELEMS { return Err(Error::Limit); }
-                                self.new_array(&items)
-                            }
-                            (b"Number", b"isInteger", _) => Ok(Value::Bool(num(self).is_some_and(|x| x.is_finite() && x == floor(x)))),
-                            (b"Number", b"isFinite", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_finite))),
-                            (b"Number", b"isNaN", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_nan))),
-                            (b"Object", b"fromEntries", Value::Arr(list)) => {
-                                let id = self.new_object()?;
-                                let (start, len, _) = self.arrays[list as usize];
-                                for k in 0..len as usize {
-                                    let Value::Arr(pair) = self.elems[start as usize + k] else { return Err(Error::Unsupported) };
-                                    let (ps, pl, _) = self.arrays[pair as usize];
-                                    let key = if pl > 0 { self.elems[ps as usize] } else { Value::Undef };
-                                    let value = if pl > 1 { self.elems[ps as usize + 1] } else { Value::Undef };
-                                    let key = self.to_text(key)?;
-                                    let key = self.text(key).to_vec();
-                                    self.set_prop(id, &key, value)?;
-                                }
-                                Ok(Value::Obj(id))
-                            }
-                            (b"Object", b"values" | b"entries", Value::Obj(id)) => {
-                                let (start, len, _) = self.objects[id as usize];
-                                let mut items = [Value::Undef; 16];
-                                if len as usize > items.len() { return Err(Error::Limit); }
-                                for k in 0..len as usize {
-                                    let (ns, nn, value) = self.props[start as usize + k];
-                                    items[k] = if f == b"values" { value } else { self.new_array(&[Value::Str(ns, nn), value])? };
-                                }
-                                self.new_array(&items[..len as usize])
-                            }
-                            (b"JSON", b"stringify", v) => { let mut j = Vec::new(); self.json(v, &mut j)?; self.store(&j) }
-                            (b"JSON", b"parse", v) => {
-                                if !self.live { return Ok(Value::Undef); }
-                                let t = self.to_text(v)?;
-                                let text = self.text(t).to_vec();
-                                let mut at = 0;
-                                let parsed = self.json_value(&text, &mut at, 0).and_then(|v| { json_ws(&text, &mut at); if at == text.len() { Ok(v) } else { Err(Error::Syntax) } });
-                                match parsed {
-                                    Ok(v) => Ok(v),
-                                    // Malformed JSON throws, as in JavaScript (catchable).
-                                    Err(Error::Syntax) => { let m = self.store(b"SyntaxError: bad JSON")?; self.thrown = Some(m); Err(Error::Thrown) }
-                                    Err(e) => Err(e),
-                                }
-                            }
-                            (b"Object", b"keys", Value::Obj(id)) => {
-                                let (start, len, _) = self.objects[id as usize];
-                                let mut keys = [Value::Undef; 16];
-                                if len as usize > keys.len() { return Err(Error::Limit); }
-                                for (k, slot) in (start as usize..start as usize + len as usize).zip(keys.iter_mut()) { let (ns, nn, _) = self.props[k]; *slot = Value::Str(ns, nn); }
-                                self.new_array(&keys[..len as usize])
-                            }
-                            _ => Err(Error::Unsupported),
-                        }
-                    }
-                    b"String" if self.tok == Tok::Punct(b'.') => {
-                        self.next()?;
-                        if self.tok != Tok::Ident(b"fromCharCode") { return Err(Error::Unsupported); }
-                        self.next()?;
-                        let (args, n) = self.arguments()?;
-                        if !self.live { return Ok(Value::Undef); }
-                        let mut text: Vec<u8> = Vec::new();
-                        for &a in &args[..n] {
-                            let c = self.to_number(a);
-                            let ch = if c.is_finite() && c >= 0.0 { char::from_u32(c as u32 & 0xffff) } else { None }.ok_or(Error::Unsupported)?;
-                            let mut b = [0u8; 4];
-                            text.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
-                        }
-                        self.store(&text)
-                    }
+                    b"Date" if self.tok == Tok::Punct(b'.') => self.date_static(),
+                    b"JSON" | b"Object" | b"Array" | b"Number" if self.tok == Tok::Punct(b'.') => self.statics(name),
+                    b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
                     b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
-                    _ if self.tok == Tok::Punct(b'.') && self.lookup(name).is_none() && self.classes.iter().any(|c| c.0 == name) => {
-                        // `C.m(...)`: a static method of class C (or a parent).
-                        self.next()?;
-                        let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
-                        self.next()?;
-                        let mut args = [Value::Undef; PARAMS];
-                        let n = self.argument_list(&mut args)?;
-                        if !self.live { return Ok(Value::Undef); }
-                        let mut k = self.classes.iter().position(|c| c.0 == name);
-                        while let Some(c) = k {
-                            if let Some(&(_, f)) = self.classes[c].4.iter().find(|s| s.0 == m) { return self.invoke(f, &args[..n]); }
-                            k = self.classes[c].3.map(|p| p as usize);
-                        }
-                        Err(Error::Unsupported)
-                    }
+                    _ if self.tok == Tok::Punct(b'.') && self.lookup(name).is_none() && self.classes.iter().any(|c| c.0 == name) => self.class_static(name),
                     _ => self.lookup(name)
                         .or_else(|| self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == name).map(|i| Value::Func(i as u8)))
                         // Code that is only checked (not run) may name bindings that
@@ -1934,6 +1965,261 @@ impl<'a> Machine<'a> {
         self.depth -= 1;
         result
     }
+    /// `var [a, b] = x` / `var {a, b} = o`. (Statement kinds kept out of the recursive `statement_inner` frame.)
+    #[inline(never)]
+    fn destructure_statement(&mut self, run: bool) -> Result<(), Error> {
+        // Destructuring: `var [a, b] = array` or `var {x, y} = object`.
+        self.next()?;
+        let close = if self.tok == Tok::Punct(b'[') { b']' } else { b'}' };
+        self.next()?;
+        let mut names: [&[u8]; 8] = [b""; 8];
+        let mut n = 0;
+        while let Tok::Ident(name) = self.tok {
+            if n == names.len() || name.len() > NAME { return Err(Error::Limit); }
+            names[n] = name;
+            n += 1;
+            self.next()?;
+            if self.tok != Tok::Punct(b',') { break; }
+            self.next()?;
+        }
+        self.expect(close)?;
+        self.expect(b'=')?;
+        let v = self.expr()?;
+        if run {
+            for (k, name) in names[..n].iter().enumerate() {
+                let item = match (close, v) {
+                    (b']', Value::Arr(_)) => self.index(v, k as f64)?,
+                    (b'}', Value::Obj(id)) => self.get_prop(id, name),
+                    _ => return Err(Error::Unsupported),
+                };
+                self.assign(name, item, true)?;
+            }
+        }
+        self.end()
+    }
+    /// `var|let|const a = 1, b;`
+    #[inline(never)]
+    fn declaration(&mut self, run: bool, keyword: &[u8]) -> Result<(), Error> {
+        let kind = match keyword { b"var" => 0, b"let" => 1, _ => 2 };
+        // `var a = 1, b;`: several names; only `const` needs a value.
+        loop {
+            self.next()?;
+            let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+            if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"do" | b"switch" | b"case" | b"default" | b"in" | b"delete" | b"Array" | b"this" | b"throw" | b"try" | b"catch" | b"finally" | b"new" | b"class" | b"Date" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
+            self.next()?;
+            let v = if self.tok == Tok::Punct(b'=') { self.next()?; Some(self.expr()?) } else if kind == 2 { return Err(Error::Syntax) } else { None };
+            if run {
+                // `var` reuses an existing binding (and keeps its value when
+                // none is given); `let`/`const` make a new one unless the
+                // name is already bound in this same block scope.
+                if kind == 0 { if v.is_some() || self.lookup(name).is_none() { self.assign(name, v.unwrap_or(Value::Undef), true)?; } }
+                else if self.slot(name).is_some_and(|k| k >= self.block_base && self.kinds[k] != 0) { return Err(Error::Syntax); }
+                else { self.declare(name, v.unwrap_or(Value::Undef), kind)?; }
+            }
+            if self.tok != Tok::Punct(b',') { break; }
+        }
+        self.end()
+    }
+    /// `document.write(...)` / `document.writeln(...)`.
+    #[inline(never)]
+    fn write_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        self.expect(b'.')?;
+        let line = match self.tok { Tok::Ident(b"write") => false, Tok::Ident(b"writeln") => true, _ => return Err(Error::Unsupported) };
+        self.next()?;
+        self.expect(b'(')?;
+        if self.tok != Tok::Punct(b')') {
+            loop {
+                let v = self.expr()?;
+                if run { self.emit(v)?; }
+                if self.tok != Tok::Punct(b',') { break; }
+                self.next()?;
+            }
+        }
+        self.expect(b')')?;
+        if line && run { let nl = self.store(b"\n")?; self.emit(nl)?; }
+        self.end()
+    }
+    /// `class Name [extends Parent] { ... }`.
+    #[inline(never)]
+    fn class_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        let parent = if self.tok == Tok::Ident(b"extends") {
+            self.next()?;
+            let Tok::Ident(p) = self.tok else { return Err(Error::Syntax) };
+            self.next()?;
+            // Only a class declared earlier can be extended.
+            if run { Some(self.classes.iter().position(|c| c.0 == p).ok_or(Error::Unsupported)? as u8) } else { None }
+        } else { None };
+        self.expect(b'{')?;
+        let (mut ctor, mut methods) = (None, Vec::new());
+        let mut statics = Vec::new();
+        while self.tok != Tok::Punct(b'}') {
+            let Tok::Ident(mut m) = self.tok else { return Err(Error::Syntax) };
+            self.next()?;
+            // `static name(...)` (a method named `static` is also allowed).
+            let fixed = m == b"static" && matches!(self.tok, Tok::Ident(_));
+            if fixed { let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) }; m = n; self.next()?; }
+            let at = self.pos();
+            self.expect(b'(')?;
+            self.skip_params()?;
+            self.expect(b')')?;
+            if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
+            self.skim_body()?;
+            if run {
+                let f = self.define(b"", at)?;
+                if fixed { statics.push((m, f)); } else if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
+            }
+        }
+        self.next()?;
+        if run {
+            if self.classes.len() == 8 { return Err(Error::Limit); }
+            self.classes.push((name, ctor, methods, parent, statics));
+        }
+        Ok(())
+    }
+    /// `delete o.key` / `delete o[k]`.
+    #[inline(never)]
+    fn delete_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        self.expect(b'.')?;
+        let Tok::Ident(key) = self.tok else { return Err(Error::Syntax) };
+        self.next()?;
+        if run {
+            let Some(Value::Obj(id)) = self.lookup(name) else { return Err(Error::Unsupported) };
+            if let Some(k) = self.find_prop(id, key) {
+                let (start, len, cap) = self.objects[id as usize];
+                self.props.copy_within(k + 1..start as usize + len as usize, k);
+                self.objects[id as usize] = (start, len - 1, cap);
+            }
+        }
+        self.end()
+    }
+    /// `throw value`.
+    #[inline(never)]
+    fn throw_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        let v = self.expr()?;
+        if run { self.thrown = Some(v); return Err(Error::Thrown); }
+        self.end()
+    }
+    /// `try { } catch (e) { } finally { }`.
+    #[inline(never)]
+    fn try_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
+        let at = self.pos();
+        let saved = (self.depth, self.loops, self.live, self.nvars, self.block_base);
+        let caught = match self.statement(run) {
+            Ok(()) => None,
+            Err(Error::Thrown) => {
+                // Unwind to the try block and pass over it without running it.
+                (self.depth, self.loops, self.live, self.nvars, self.block_base) = saved;
+                self.jump = None;
+                self.restore(at);
+                self.statement(false)?;
+                self.thrown.take()
+            }
+            Err(e) => return Err(e),
+        };
+        if self.tok == Tok::Ident(b"catch") {
+            self.next()?;
+            let since = self.nvars;
+            let mut name: Option<&'a [u8]> = None;
+            if self.tok == Tok::Punct(b'(') {
+                self.next()?;
+                let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) };
+                name = Some(n);
+                self.next()?;
+                self.expect(b')')?;
+            }
+            if let (Some(n), Some(v)) = (name, caught) { self.declare(n, v, 1)?; }
+            self.statement(run && caught.is_some())?;
+            self.end_block(since);
+        } else if caught.is_some() && self.tok != Tok::Ident(b"finally") {
+            return Err(Error::Syntax);
+        }
+        if self.tok == Tok::Ident(b"finally") {
+            self.next()?;
+            self.statement(run)?;
+        }
+        Ok(())
+    }
+    /// `do body while (cond)`.
+    #[inline(never)]
+    fn do_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        let top = self.pos();
+        self.loops += 1;
+        let mut go = run && self.ret.is_none();
+        loop {
+            self.restore(top);
+            self.statement(go)?;
+            let jump = if go { self.jump.take() } else { None };
+            if self.tok != Tok::Ident(b"while") { return Err(Error::Syntax); }
+            self.next()?;
+            self.expect(b'(')?;
+            let c = self.expr()?;
+            self.expect(b')')?;
+            let again = go && jump != Some(true) && self.ret.is_none() && self.truthy(c);
+            // JavaScript inserts the `;` after `do ... while (...)` itself.
+            if !again { self.loops -= 1; if self.tok == Tok::Punct(b';') { self.next()?; } return Ok(()); }
+            go = again;
+        }
+    }
+    /// `switch (x) { case a: ... default: ... }`.
+    #[inline(never)]
+    fn switch_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        self.expect(b'(')?;
+        let d = self.expr()?;
+        self.expect(b')')?;
+        self.expect(b'{')?;
+        self.loops += 1;
+        let mut matched = false;
+        while self.tok != Tok::Punct(b'}') {
+            match self.tok {
+                Tok::Ident(b"case") => {
+                    self.next()?;
+                    let v = self.expr()?;
+                    self.expect(b':')?;
+                    if !matched { matched = matches!(self.apply(b'E', d, v)?, Value::Bool(true)); }
+                }
+                Tok::Ident(b"default") => { self.next()?; self.expect(b':')?; matched = true; }
+                Tok::End => return Err(Error::Syntax),
+                _ => {
+                    // Fall through from the first match until `break`.
+                    let live = run && matched && self.jump.is_none();
+                    self.statement(live)?;
+                }
+            }
+        }
+        self.next()?;
+        self.loops -= 1;
+        // `break` ends the switch; `continue` belongs to an outer loop.
+        if self.jump == Some(true) { self.jump = None; }
+        Ok(())
+    }
+    /// `while (cond) body`.
+    #[inline(never)]
+    fn while_statement(&mut self, run: bool) -> Result<(), Error> {
+        self.next()?;
+        let top = self.pos();
+        self.loops += 1;
+        loop {
+            self.restore(top);
+            self.expect(b'(')?;
+            let c = self.expr()?;
+            self.expect(b')')?;
+            let go = run && self.ret.is_none() && self.truthy(c);
+            self.statement(go)?;
+            if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
+        }
+    }
     fn statement_inner(&mut self, run: bool) -> Result<(), Error> {
         let destructure = matches!(self.tok, Tok::Ident(b"var" | b"let" | b"const")) && matches!(self.peek_after()?, Tok::Punct(b'[' | b'{'));
         match self.tok {
@@ -1963,113 +2249,10 @@ impl<'a> Machine<'a> {
                 }
                 Ok(())
             }
-            Tok::Ident(b"var" | b"let" | b"const") if destructure => {
-                // Destructuring: `var [a, b] = array` or `var {x, y} = object`.
-                self.next()?;
-                let close = if self.tok == Tok::Punct(b'[') { b']' } else { b'}' };
-                self.next()?;
-                let mut names: [&[u8]; 8] = [b""; 8];
-                let mut n = 0;
-                while let Tok::Ident(name) = self.tok {
-                    if n == names.len() || name.len() > NAME { return Err(Error::Limit); }
-                    names[n] = name;
-                    n += 1;
-                    self.next()?;
-                    if self.tok != Tok::Punct(b',') { break; }
-                    self.next()?;
-                }
-                self.expect(close)?;
-                self.expect(b'=')?;
-                let v = self.expr()?;
-                if run {
-                    for (k, name) in names[..n].iter().enumerate() {
-                        let item = match (close, v) {
-                            (b']', Value::Arr(_)) => self.index(v, k as f64)?,
-                            (b'}', Value::Obj(id)) => self.get_prop(id, name),
-                            _ => return Err(Error::Unsupported),
-                        };
-                        self.assign(name, item, true)?;
-                    }
-                }
-                self.end()
-            }
-            Tok::Ident(keyword @ (b"var" | b"let" | b"const")) => {
-                let kind = match keyword { b"var" => 0, b"let" => 1, _ => 2 };
-                // `var a = 1, b;`: several names; only `const` needs a value.
-                loop {
-                    self.next()?;
-                    let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                    if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"do" | b"switch" | b"case" | b"default" | b"in" | b"delete" | b"Array" | b"this" | b"throw" | b"try" | b"catch" | b"finally" | b"new" | b"class" | b"Date" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
-                    self.next()?;
-                    let v = if self.tok == Tok::Punct(b'=') { self.next()?; Some(self.expr()?) } else if kind == 2 { return Err(Error::Syntax) } else { None };
-                    if run {
-                        // `var` reuses an existing binding (and keeps its value when
-                        // none is given); `let`/`const` make a new one unless the
-                        // name is already bound in this same block scope.
-                        if kind == 0 { if v.is_some() || self.lookup(name).is_none() { self.assign(name, v.unwrap_or(Value::Undef), true)?; } }
-                        else if self.slot(name).is_some_and(|k| k >= self.block_base && self.kinds[k] != 0) { return Err(Error::Syntax); }
-                        else { self.declare(name, v.unwrap_or(Value::Undef), kind)?; }
-                    }
-                    if self.tok != Tok::Punct(b',') { break; }
-                }
-                self.end()
-            }
-            Tok::Ident(b"document") => {
-                self.next()?;
-                self.expect(b'.')?;
-                let line = match self.tok { Tok::Ident(b"write") => false, Tok::Ident(b"writeln") => true, _ => return Err(Error::Unsupported) };
-                self.next()?;
-                self.expect(b'(')?;
-                if self.tok != Tok::Punct(b')') {
-                    loop {
-                        let v = self.expr()?;
-                        if run { self.emit(v)?; }
-                        if self.tok != Tok::Punct(b',') { break; }
-                        self.next()?;
-                    }
-                }
-                self.expect(b')')?;
-                if line && run { let nl = self.store(b"\n")?; self.emit(nl)?; }
-                self.end()
-            }
-            Tok::Ident(b"class") => {
-                self.next()?;
-                let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                self.next()?;
-                let parent = if self.tok == Tok::Ident(b"extends") {
-                    self.next()?;
-                    let Tok::Ident(p) = self.tok else { return Err(Error::Syntax) };
-                    self.next()?;
-                    // Only a class declared earlier can be extended.
-                    if run { Some(self.classes.iter().position(|c| c.0 == p).ok_or(Error::Unsupported)? as u8) } else { None }
-                } else { None };
-                self.expect(b'{')?;
-                let (mut ctor, mut methods) = (None, Vec::new());
-                let mut statics = Vec::new();
-                while self.tok != Tok::Punct(b'}') {
-                    let Tok::Ident(mut m) = self.tok else { return Err(Error::Syntax) };
-                    self.next()?;
-                    // `static name(...)` (a method named `static` is also allowed).
-                    let fixed = m == b"static" && matches!(self.tok, Tok::Ident(_));
-                    if fixed { let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) }; m = n; self.next()?; }
-                    let at = self.pos();
-                    self.expect(b'(')?;
-                    self.skip_params()?;
-                    self.expect(b')')?;
-                    if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
-                    self.skim_body()?;
-                    if run {
-                        let f = self.define(b"", at)?;
-                        if fixed { statics.push((m, f)); } else if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
-                    }
-                }
-                self.next()?;
-                if run {
-                    if self.classes.len() == 8 { return Err(Error::Limit); }
-                    self.classes.push((name, ctor, methods, parent, statics));
-                }
-                Ok(())
-            }
+            Tok::Ident(b"var" | b"let" | b"const") if destructure => self.destructure_statement(run),
+            Tok::Ident(keyword @ (b"var" | b"let" | b"const")) => self.declaration(run, keyword),
+            Tok::Ident(b"document") => self.write_statement(run),
+            Tok::Ident(b"class") => self.class_statement(run),
             Tok::Ident(b"function") => {
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
@@ -2095,134 +2278,12 @@ impl<'a> Machine<'a> {
                 if run { self.jump = Some(kind == b"break"); }
                 self.end()
             }
-            Tok::Ident(b"delete") => {
-                self.next()?;
-                let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                self.next()?;
-                self.expect(b'.')?;
-                let Tok::Ident(key) = self.tok else { return Err(Error::Syntax) };
-                self.next()?;
-                if run {
-                    let Some(Value::Obj(id)) = self.lookup(name) else { return Err(Error::Unsupported) };
-                    if let Some(k) = self.find_prop(id, key) {
-                        let (start, len, cap) = self.objects[id as usize];
-                        self.props.copy_within(k + 1..start as usize + len as usize, k);
-                        self.objects[id as usize] = (start, len - 1, cap);
-                    }
-                }
-                self.end()
-            }
-            Tok::Ident(b"throw") => {
-                self.next()?;
-                let v = self.expr()?;
-                if run { self.thrown = Some(v); return Err(Error::Thrown); }
-                self.end()
-            }
-            Tok::Ident(b"try") => {
-                self.next()?;
-                if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
-                let at = self.pos();
-                let saved = (self.depth, self.loops, self.live, self.nvars, self.block_base);
-                let caught = match self.statement(run) {
-                    Ok(()) => None,
-                    Err(Error::Thrown) => {
-                        // Unwind to the try block and pass over it without running it.
-                        (self.depth, self.loops, self.live, self.nvars, self.block_base) = saved;
-                        self.jump = None;
-                        self.restore(at);
-                        self.statement(false)?;
-                        self.thrown.take()
-                    }
-                    Err(e) => return Err(e),
-                };
-                if self.tok == Tok::Ident(b"catch") {
-                    self.next()?;
-                    let since = self.nvars;
-                    let mut name: Option<&'a [u8]> = None;
-                    if self.tok == Tok::Punct(b'(') {
-                        self.next()?;
-                        let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) };
-                        name = Some(n);
-                        self.next()?;
-                        self.expect(b')')?;
-                    }
-                    if let (Some(n), Some(v)) = (name, caught) { self.declare(n, v, 1)?; }
-                    self.statement(run && caught.is_some())?;
-                    self.end_block(since);
-                } else if caught.is_some() && self.tok != Tok::Ident(b"finally") {
-                    return Err(Error::Syntax);
-                }
-                if self.tok == Tok::Ident(b"finally") {
-                    self.next()?;
-                    self.statement(run)?;
-                }
-                Ok(())
-            }
-            Tok::Ident(b"do") => {
-                self.next()?;
-                let top = self.pos();
-                self.loops += 1;
-                let mut go = run && self.ret.is_none();
-                loop {
-                    self.restore(top);
-                    self.statement(go)?;
-                    let jump = if go { self.jump.take() } else { None };
-                    if self.tok != Tok::Ident(b"while") { return Err(Error::Syntax); }
-                    self.next()?;
-                    self.expect(b'(')?;
-                    let c = self.expr()?;
-                    self.expect(b')')?;
-                    let again = go && jump != Some(true) && self.ret.is_none() && self.truthy(c);
-                    // JavaScript inserts the `;` after `do ... while (...)` itself.
-                    if !again { self.loops -= 1; if self.tok == Tok::Punct(b';') { self.next()?; } return Ok(()); }
-                    go = again;
-                }
-            }
-            Tok::Ident(b"switch") => {
-                self.next()?;
-                self.expect(b'(')?;
-                let d = self.expr()?;
-                self.expect(b')')?;
-                self.expect(b'{')?;
-                self.loops += 1;
-                let mut matched = false;
-                while self.tok != Tok::Punct(b'}') {
-                    match self.tok {
-                        Tok::Ident(b"case") => {
-                            self.next()?;
-                            let v = self.expr()?;
-                            self.expect(b':')?;
-                            if !matched { matched = matches!(self.apply(b'E', d, v)?, Value::Bool(true)); }
-                        }
-                        Tok::Ident(b"default") => { self.next()?; self.expect(b':')?; matched = true; }
-                        Tok::End => return Err(Error::Syntax),
-                        _ => {
-                            // Fall through from the first match until `break`.
-                            let live = run && matched && self.jump.is_none();
-                            self.statement(live)?;
-                        }
-                    }
-                }
-                self.next()?;
-                self.loops -= 1;
-                // `break` ends the switch; `continue` belongs to an outer loop.
-                if self.jump == Some(true) { self.jump = None; }
-                Ok(())
-            }
-            Tok::Ident(b"while") => {
-                self.next()?;
-                let top = self.pos();
-                self.loops += 1;
-                loop {
-                    self.restore(top);
-                    self.expect(b'(')?;
-                    let c = self.expr()?;
-                    self.expect(b')')?;
-                    let go = run && self.ret.is_none() && self.truthy(c);
-                    self.statement(go)?;
-                    if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
-                }
-            }
+            Tok::Ident(b"delete") => self.delete_statement(run),
+            Tok::Ident(b"throw") => self.throw_statement(run),
+            Tok::Ident(b"try") => self.try_statement(run),
+            Tok::Ident(b"do") => self.do_statement(run),
+            Tok::Ident(b"switch") => self.switch_statement(run),
+            Tok::Ident(b"while") => self.while_statement(run),
             Tok::Ident(b"for") => {
                 self.next()?;
                 self.expect(b'(')?;
