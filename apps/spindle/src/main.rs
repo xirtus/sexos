@@ -96,6 +96,7 @@ mod scroll_view;
 mod display_delivery;
 mod sextime_command;
 mod calc_command;
+mod complete;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -434,6 +435,31 @@ fn ghost_suffix(line: &CmdLine, hist: &History) -> Option<([u8; CMD_MAX], usize)
     None
 }
 
+/// Tab without a ghost: complete the command name being typed (the line is
+/// one word, caret at its end). A unique match gets a trailing space; an
+/// ambiguous one extends to the shared prefix, and when nothing more is
+/// shared lists the candidates above the prompt.
+fn complete_command(line: &mut CmdLine) -> bool {
+    if line.len == 0 || line.cur != line.len || line.buf[..line.len].contains(&b' ') { return false; }
+    let word = &line.buf[..line.len];
+    let (extra, matches) = complete::complete(word);
+    if matches == 0 { return false; }
+    if extra.is_empty() && matches > 1 {
+        let mut row = [0u8; 96];
+        let mut n = 0;
+        for c in complete::candidates(word) {
+            if n + c.len() + 2 > row.len() { break; }
+            row[n..n + 2].copy_from_slice(b"  "); n += 2;
+            row[n..n + c.len()].copy_from_slice(c); n += c.len();
+        }
+        unsafe { (*core::ptr::addr_of_mut!(SPINDLE_SCROLLBACK)).push(&row[..n]); }
+    }
+    for &b in extra { line.insert_at(line.len, b); }
+    if matches == 1 { line.insert_at(line.len, b' '); }
+    serial_println!("[spindle.complete] matches={} added={} len={}", matches, extra.len() + (matches == 1) as usize, line.len);
+    true
+}
+
 /// Accept the current ghost suggestion (if any) into the live command line.
 fn ghost_accept(line: &mut CmdLine, hist: &History) -> bool {
     if let Some((suffix, slen)) = ghost_suffix(line, hist) {
@@ -710,6 +736,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc <expr>  exact + - * / % ** sqrt abs min max round floor ceil ans");
             sb.push(b"  calc x = 2   name a value (up to 8)");
             sb.push(b"  calc 255 in hex   also in bin / in oct");
+            sb.push(b"  Tab          complete a command name");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -2645,8 +2672,8 @@ fn handle_key_insert(scancode: u8, shift: bool, line: &mut CmdLine, hist: &Histo
                 serial_println!("[spindle.key.right] no_ghost");
             }
         }
-        0x0F => { // Tab — accept ghost autosuggest if present (no raw-tab insert)
-            if !ghost_accept(line, hist) {
+        0x0F => { // Tab — accept ghost autosuggest, else complete a command name
+            if !ghost_accept(line, hist) && !complete_command(line) {
                 serial_println!("[spindle.key.tab] no_ghost");
             }
         }

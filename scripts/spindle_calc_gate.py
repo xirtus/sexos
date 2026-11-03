@@ -41,6 +41,15 @@ def main():
   g=boot(iso,disk,out,'boot',a.resolution);g['focus'](153)
   for line,pattern in CASES:
    type_line(g,line);s=len(g['text']());g['q'].key('ret');m=g['wait'](pattern,s);rows.append(dict(input=line,record=m[0]))
+  # Tab completes a command name: unique (`sext` -> `sextime `), then shared
+  # prefix (`proj` -> `project-scene-`), then a second Tab lists both.
+  type_line(g,'sext');s=len(g['text']());g['q'].key('tab');g['wait'](r'\[spindle.complete\] matches=1 added=4 len=8',s)
+  s=len(g['text']());g['q'].key('0');g['wait'](r'\[spindle.cursor.view\] target=12 sequence=\d+ pos=9 len=9(?:\s|$)',s)
+  s=len(g['text']());g['q'].key('ret');rows.append(dict(input='sext<Tab>0',record=g['wait'](r'\[spindle.sextime\] [^\n]* ok=1',s)[0]))
+  type_line(g,'proj');s=len(g['text']());g['q'].key('tab');rows.append(dict(input='proj<Tab>',record=g['wait'](r'\[spindle.complete\] matches=2 added=10 len=14',s)[0]))
+  s=len(g['text']());g['q'].key('tab');g['wait'](r'\[spindle.complete\] matches=2 added=0 len=14',s)
+  for _ in range(14):
+   s=len(g['text']());g['q'].key('backspace');g['wait'](r'\[spindle.line.backspace\]',s)
   # Spindle's display outbox must drain: its last batch is admitted after the last command.
   last=len(g['text']());import time as _t;d=_t.monotonic()+30
   while _t.monotonic()<d and not re.search(r'\[spindle.display.batch.admitted\]',g['text']()[last-20000 if last>20000 else 0:]):_t.sleep(.2)

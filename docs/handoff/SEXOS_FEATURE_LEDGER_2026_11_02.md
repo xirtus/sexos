@@ -8,7 +8,7 @@ interlaced or not, colour-key transparency), `B` plain document. Quil:
 autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word.
-Spindle: Shift works; `calc` does exact decimals with `** sqrt abs min max
+Spindle: Shift works; Tab completes command names; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
 
@@ -1053,6 +1053,21 @@ script host tests 37 groups (incl. `closures_and_function_scoped_var`); all
 earlier expectations unchanged; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... Zdaymode2`, an IIFE counter). Browser stack
 high water 46,752.
+
+## M30. Spindle Tab completes command names (2026-11-03)
+
+- When no history ghost suggestion applies, Tab completes the command
+  name being typed (one word, caret at the end) from a fixed sorted table
+  of Spindle's 100 commands (`apps/spindle/src/complete.rs`): a unique
+  match gets a trailing space (`sext` -> `sextime `); several matches
+  extend to their shared prefix (`proj` -> `project-scene-`); a further
+  Tab lists them above the prompt. It reads only the fixed table.
+
+**Evidence** (`docs/handoff/assets/spindle-tab-completion-2026-11-03/`):
+completion host test (in `spindle_calc_host_gate.sh`); sealed build and
+master gate GREEN; native Spindle gate at 1280x800 and 1024x768 now also
+types `sext`, Tab, `0`, Enter (sextime runs) and `proj`, Tab, Tab
+(`matches=2 added=10`, then the listing).
 
 ## Release gates noted while doing F1–F2
 
