@@ -61,6 +61,7 @@ unsafe fn quil_word_delete(_code: u8) {}
 unsafe fn quil_replace_all() {}
 unsafe fn quil_find_prev() {}
 unsafe fn quil_select_line() {}
+unsafe fn quil_move_line(_up: bool) {}
 static mut QUIL_GOTO: Option<u32> = None;
 unsafe fn quil_goto_line(_line: u32) {}
 static mut QUIL_CURSOR_POS: usize = 0;

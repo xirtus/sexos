@@ -1,0 +1,36 @@
+{
+  "binding": {
+    "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/n10-fz/source-binding.json",
+    "sha256": "5221cb71f5bcbf613edc5bd2faf4971ef9aea6ab181fdae145379c1e73079448",
+    "iso_sha256": "b85753b5880eee179df638106c393eac38a3654e3e7492f1ac96537c18b5caaa",
+    "production_files": 594,
+    "runner_files": 651
+  },
+  "resolution": "1280x800",
+  "scope": "Native QEMU power-cut recovery of a Quil idle draft through the held document route and Linen; no claim about physical media flush ordering.",
+  "boot1": {
+    "idle_seconds": 37.7,
+    "name": "UNTITLED.draft",
+    "draft": 3,
+    "first": {
+      "revision": 9,
+      "bytes": 9,
+      "hash": "0xdb6b81873379ba58"
+    },
+    "second": {
+      "revision": 17,
+      "bytes": 17,
+      "hash": "0xeb6031a138966a7b"
+    },
+    "document": 18446744073709551615,
+    "document_saved": false,
+    "drafts_started": 2
+  },
+  "boot2": {
+    "bytes": 17,
+    "hash": "0xeb6031a138966a7b",
+    "doc": 3
+  },
+  "ok": true,
+  "error": null
+}

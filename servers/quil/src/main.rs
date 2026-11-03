@@ -377,6 +377,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 0x13=>{if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());QUIL_CLIPBOARD_NOTICE=true;QUIL_CLIPBOARD_ERROR=None;}document_action(sex_pdx::document_view::QUIESCE,palette_active,selected_row);},
                 0x4b|0x4d|0x47|0x4f if !QUIL_NAME_MODE&&!*palette_active=>quil_word_move(key.code,key.shift),
                 0x26 if !QUIL_NAME_MODE&&!*palette_active=>quil_select_line(),
+                0x48|0x50 if !QUIL_NAME_MODE&&!*palette_active=>quil_move_line(key.code==0x48),
                 0x0e|0x53 if !QUIL_NAME_MODE&&!*palette_active=>quil_word_delete(key.code),
                 0x2c if !QUIL_NAME_MODE=>{*palette_active=false;if key.shift{text_buffer_redo();}else{text_buffer_undo();}draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x15 if !QUIL_NAME_MODE=>{*palette_active=false;text_buffer_redo();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
@@ -521,6 +522,34 @@ unsafe fn quil_select_line() {
     let ok = QUIL_SELECTION.move_to(source, start, false).is_ok() && QUIL_SELECTION.move_to(source, end, true).is_ok();
     if ok { QUIL_CURSOR_POS = end; QUIL_GOAL_COL = usize::MAX; quil_selection_record(); draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
     sex_pdx::serial_record!("[quil.select.line] start={} end={} extended={} ok={}", start, end, whole as u8, ok as u8);
+}
+/// Ctrl+Up / Ctrl+Down swap the caret's line with the one above / below as
+/// one undoable edit; the caret keeps its column in the moved line.
+unsafe fn quil_move_line(up: bool) {
+    let Some(snapshot) = QUIL_SELECTION.snapshot() else { return };
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let caret = snapshot.caret();
+    let start = text[..caret].iter().rposition(|c| *c == b'\n').map_or(0, |k| k + 1);
+    let end = text[caret..].iter().position(|c| *c == b'\n').map_or(text.len(), |k| caret + k);
+    // The neighbour line: (its start, its end), excluding newlines.
+    let other = if up {
+        if start == 0 { None } else { Some((text[..start - 1].iter().rposition(|c| *c == b'\n').map_or(0, |k| k + 1), start - 1)) }
+    } else if end == text.len() { None } else {
+        Some((end + 1, text[end + 1..].iter().position(|c| *c == b'\n').map_or(text.len(), |k| end + 1 + k)))
+    };
+    let Some((o_start, o_end)) = other else { sex_pdx::serial_record!("[quil.line.move] up={} applied=0 reason=edge", up as u8); return };
+    let (first, second, range) = if up { ((start, end), (o_start, o_end), (o_start, end)) } else { ((o_start, o_end), (start, end), (start, o_end)) };
+    let scratch = &mut *core::ptr::addr_of_mut!(QUIL_REPLACE_SCRATCH);
+    let (a, b) = (first.1 - first.0, second.1 - second.0);
+    scratch[..a].copy_from_slice(&text[first.0..first.1]);
+    scratch[a] = b'\n';
+    scratch[a + 1..a + 1 + b].copy_from_slice(&text[second.0..second.1]);
+    let col = caret - start;
+    let new_caret = if up { range.0 + col } else { range.0 + a + 1 + col };
+    let applied = quil_replace(range, &scratch[..a + 1 + b]);
+    if applied && QUIL_SELECTION.move_to(quil_source(), new_caret, false).is_ok() { QUIL_CURSOR_POS = new_caret; quil_selection_record(); }
+    sex_pdx::serial_record!("[quil.line.move] up={} start={} end={} caret={} applied={} len={}", up as u8, range.0, range.1, QUIL_CURSOR_POS, applied as u8, QUIL_BUFFER_LEN);
+    if applied { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
 }
 /// Ctrl+Backspace / Ctrl+Delete remove the word before / after the caret
 /// (or the selection) as one undoable edit.

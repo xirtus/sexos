@@ -119,6 +119,10 @@ def main():
   g['chord']('ctrl','ret',r'\[quil.replace.all\] count=2 start=7 end=12 new_bytes=5 applied=1 len=14')
   g['key']('esc',r'\[quil.find.mode\] on=0 reason=escape')
   g['chord']('ctrl','l',r'\[quil.select.line\] start=0 end=14 extended=0 ok=1')
+  # A second line "x", then Ctrl+Up moves it above the first.
+  g['key']('end',r'\[quil.cursor.move\] old=\d+ new=14 len=14 dir=end ok=1');s0=len(t());g['q'].key('ret');g['q'].key('x')
+  g['wait'](r'\[quil.document.edit\] revision=\d+ pending=\d+ bytes=16',s0,30)
+  g['chord']('ctrl','up',r'\[quil.line.move\] up=1 start=0 end=16 caret=1 applied=1 len=16')
   settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)

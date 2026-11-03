@@ -9,7 +9,7 @@ autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
 find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
-select line.
+select line, `Ctrl+Up/Down` move line.
 Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
@@ -1302,6 +1302,19 @@ host gates pass (sexnet, service-custody, clipboard, Quil clipboard,
 Spindle calc, app activation); sealed build and master gate GREEN; native
 Spindle gate at both sizes: `echo ab cd` + Ctrl+W (`len=8`), Ctrl+U
 (`len=0`), `0xff` + Ctrl+R recalls `calc 0xff+1` (`len=11`), Enter -> `256`.
+
+## N15. Quil move line up/down (2026-11-03)
+
+- `Ctrl+Up` / `Ctrl+Down` swap the caret's line with the line above /
+  below as one undoable edit (the span of both lines is rewritten once);
+  the caret keeps its column in the moved line. At the first / last line
+  nothing changes (`applied=0 reason=edge`).
+
+**Evidence** (`docs/handoff/assets/quil-move-line-2026-11-03/`): Quil
+clipboard, service-custody and sexnet host gates pass; sealed build and
+master gate GREEN; native Quil autosave gate at both sizes adds a second
+line `x` after recovery and moves it up
+(`[quil.line.move] up=1 start=0 end=16 caret=1 applied=1 len=16`).
 
 ## Release gates noted while doing F1–F2
 
