@@ -6,7 +6,7 @@ use core::ptr::{self, NonNull};
 use linked_list_allocator::Heap;
 use spin::Mutex;
 
-pub const HEAP_BYTES: usize = 64 * 1024;
+pub const HEAP_BYTES: usize = 128 * 1024;
 
 /// One coherent allocator snapshot. Byte usage includes allocator alignment and
 /// bookkeeping; these counts confer no frame, mapping or endpoint authority.

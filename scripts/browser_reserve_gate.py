@@ -12,6 +12,9 @@ The exhausted launcher is independently checked against every visible glyph.
 No public TLS handshake, arbitrary restart, runtime grants, process VAS or POSIX.
 """
 import argparse
+# Browser private heap (sex-rt/src/heap.rs HEAP_BYTES) and the bytes it keeps
+# for its whole life: the page-link table (16 x 16 B) and history (8 x 64 B).
+HEAP,BASELINE=131072,768
 from contextlib import contextmanager
 import gzip
 import hashlib
@@ -169,7 +172,7 @@ def resource_rows(trace,start,end):
   if exact is None:raise ValueError('malformed/incomplete Browser resource receipt')
   reason,used,free,total,payload,pending,route,providers,queued,body=exact.groups()
   values=dict(used=int(used),free=int(free),total=int(total),payload=int(payload),pending=int(pending),route=int(route),providers=int(providers),body=int(body))
-  if values['total']!=65536 or values['used']+values['free']!=values['total']:raise ValueError('Browser private heap accounting differs')
+  if values['total']!=HEAP or values['used']+values['free']!=values['total']:raise ValueError('Browser private heap accounting differs')
   rows.append(dict(values,reason=reason,queued=queued,offset=start+match.start(),end=start+match.end()))
  return rows
 
@@ -189,7 +192,7 @@ def allocated_close_evidence(trace,row,step,prepared):
  resources=resource_rows(trace,start,end);before=[r for r in resources if r['offset']<cut]
  if not before:raise ValueError('missing live allocated TLS resource receipt')
  live=before[-1];payload=prepared['owned_payload_bytes']
- if live['offset']<=prepared['prepared_offset']or live['reason']!='change'or not 0<payload<=live['used']<=65536 or (live['payload'],live['pending'],live['route'],live['providers'],live['queued'],live['body'])!=(payload,1,0,0,'None',0):raise ValueError('latest TLS resource snapshot is stale/quiesced/not allocated')
+ if live['offset']<=prepared['prepared_offset']or live['reason']!='change'or not 0<payload<=live['used']<=HEAP or (live['payload'],live['pending'],live['route'],live['providers'],live['queued'],live['body'])!=(payload,1,0,0,'None',0):raise ValueError('latest TLS resource snapshot is stale/quiesced/not allocated')
  request=one(trace,rf'\[shell.app.close.request\] target={t} task={k} surface={s}',cut,end)
  erased=one(trace,r'\[browser.tls.erased\] bytes=(\d+) owned_storage=1',cut,end)
  closed=one(trace,r'\[browser.tls.closed\] pending=1 terminal=1 owned_storage=erased',cut,end)
@@ -203,7 +206,7 @@ def allocated_close_evidence(trace,row,step,prepared):
  after=[r for r in resources if r['offset']>=cut]
  if len(after)!=1:raise ValueError('missing/duplicate/stale terminal close resource receipt')
  zero=after[0]
- if (zero['reason'],zero['used'],zero['free'],zero['payload'],zero['pending'],zero['route'],zero['providers'],zero['queued'],zero['body'])!=('close',0,65536,0,0,0,0,'None',0):raise ValueError('terminal allocated Close did not free isolated private heap/payload')
+ if (zero['reason'],zero['used'],zero['free'],zero['payload'],zero['pending'],zero['route'],zero['providers'],zero['queued'],zero['body'])!=('close',BASELINE,HEAP-BASELINE,0,0,0,0,'None',0):raise ValueError('terminal allocated Close did not free isolated private heap/payload')
  offsets=dict(request=cut+request.start(),erased=cut+erased.start(),closed=cut+closed.start(),clipboard=cut+clipboard.start(),resources=zero['offset'],finish=cut+finish.start())
  if not offsets['request']<offsets['erased']<offsets['closed']<min(bindings)<=max(bindings)<offsets['clipboard']<offsets['resources']<offsets['finish']:raise ValueError('allocated Close/drop/client-close/resources/finish order differs')
  if re.search(r'\[sexinput.ps2.scancode\] raw=0x10'+END,window(trace,start,end)):raise ValueError('allocated Close contains actual Q make')
@@ -317,7 +320,7 @@ def run(c,mode='quiesced'):
    paint_starts.append(begin);painted(f'browser-{row["target"]}-{phase}',begin,int(viewport[1]))
   if mode=='quiesced':
    c['key']('q',r'\[browser.tls.view\] state=Cancelled authenticated=0 network=0'+END)
-   c['wait'](r'\[browser.resources\] reason=clear heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 [^\n]*'+END,work_start)
+   c['wait'](rf'\[browser.resources\] reason=clear heap_used={BASELINE} heap_free={HEAP-BASELINE} heap_total={HEAP} tls_payload=0 [^\n]*'+END,work_start)
   else:
    # Check the current snapshot immediately before the hardware request, not
    # merely peak preparation statistics or a preceding screenshot.

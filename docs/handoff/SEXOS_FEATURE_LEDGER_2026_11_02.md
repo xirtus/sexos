@@ -57,7 +57,7 @@ key handlers call new functions.
 **Open release gates** (details below): full-window reader needs a larger
 Display text delivery; Display applies app paints late; Display redraws are slow (raster 100-670 ticks per frame, H2; H1 removed the inbox backlog); autosave
 failure fences document I/O like any uncertain save; no draft cleanup;
-images limited to 48x48; the Browser body limit is 12 KiB.
+images limited to 48x48; the Browser body limit is 12 KiB (heap now 128 KiB).
 
 **Next suggested steps.** Fix focus raising in Shell/Display (with the
 concurrent session); grow the document/body limit with streaming
@@ -1379,6 +1379,23 @@ clipboard, service-custody and sexnet host gates pass; sealed build and
 master gate GREEN; native Quil autosave gate at both sizes
 (`[quil.line.duplicate] start=16 bytes=14 caret=31 applied=1 len=31`);
 Quil delete gate (plain Ctrl+D) regression OK.
+
+## P1. Browser private heap 64 -> 128 KiB (2026-11-03)
+
+- The Browser's ELF-owned heap arena (`sex-rt/src/heap.rs`, used only by
+  the Browser) grew to 128 KiB, the first step toward a larger page limit:
+  with a 12 KiB body the peak was 48,400 bytes (74% of 64 KiB); a 24 KiB
+  body needs about 36 KiB more. Not an ABI input; the Browser ELF is
+  ~991 KB on the image.
+- `browser_reserve_gate.py` now names the heap size and the Browser's
+  permanent 768-byte state (page-link table and history boxes, added with
+  the HTML link rounds). The gate had been expecting `heap_used=0` after
+  a clear and so was failing since those rounds; it is green again.
+
+**Evidence** (`docs/handoff/assets/browser-heap-128k-2026-11-03/`): sealed
+build and master gate GREEN; native HTML and PNG gates (1280x800) with
+`heap_total=131072` (peak 48,400 used); Browser reserve gate at 1280x800
+and 1024x768.
 
 ## Release gates noted while doing F1–F2
 
