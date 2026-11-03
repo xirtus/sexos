@@ -241,7 +241,7 @@ impl<'a> Machine<'a> {
             }
         } else if c == b'`' {
             let start = self.at + 1;
-            let end = s[start..].iter().position(|&b| b == b'`').ok_or(Error::Syntax)? + start;
+            let end = template_end(s, start).ok_or(Error::Syntax)?;
             self.at = end + 1;
             Tok::Template(&s[start..end])
         } else if c == b'"' || c == b'\'' {
@@ -730,7 +730,7 @@ impl<'a> Machine<'a> {
                     let sep = match sep { Some(x) => { let t = self.to_text(x)?; self.text(t).to_vec() } None => b",".to_vec() };
                     self.join(id, &sep)?
                 }
-                b"forEach" | b"map" | b"filter" | b"find" | b"findIndex" | b"findLast" | b"findLastIndex" | b"flatMap" | b"some" | b"every" | b"reduce" => {
+                b"forEach" | b"map" | b"filter" | b"find" | b"findIndex" | b"findLast" | b"findLastIndex" | b"flatMap" | b"some" | b"every" | b"reduce" | b"reduceRight" => {
                     let (args, n) = self.arguments()?;
                     self.array_callback(id, name, &args[..n])?
                 }
@@ -918,14 +918,22 @@ impl<'a> Machine<'a> {
                 }
             }
             b"replace" | b"replaceAll" => {
-                let (from, to) = (self.to_text(args[0])?, self.to_text(args[1])?);
+                // The replacement is text, or a function called with
+                // (match, offset, whole string) for each match.
+                let call = if let Value::Func(g) = args[1] { Some(g) } else { None };
+                let from = self.to_text(args[0])?;
+                let to = if call.is_some() { self.store(b"")? } else { self.to_text(args[1])? };
                 let (h, f, t) = (self.text(s).to_vec(), self.text(from).to_vec(), self.text(to).to_vec());
                 let mut out: Vec<u8> = Vec::new();
                 let mut i = 0;
                 let mut done = false;
                 while i < h.len() {
                     if !f.is_empty() && !done && h[i..].starts_with(&f) {
-                        out.extend_from_slice(&t);
+                        match call {
+                            Some(g) if self.live => { let r = self.invoke(g, &[from, Value::Num(i as f64), s])?; let r = self.to_text(r)?; out.extend_from_slice(self.text(r)); }
+                            Some(_) => {}
+                            None => out.extend_from_slice(&t),
+                        }
                         i += f.len();
                         done = name == b"replace";
                     } else { out.push(h[i]); i += 1; }
@@ -1230,6 +1238,26 @@ impl<'a> Machine<'a> {
             if let Some(&(_, f)) = self.classes[k].2.iter().find(|c| c.0 == m) { self.this_next = Some(this); return self.invoke(f, &args[..n]); }
             k = self.classes[k].3.ok_or(Error::Unsupported)? as usize;
         }
+    }
+    /// At `(` of `Array.from(...)`: is there a second (map function) argument?
+    fn from_with_map(&mut self) -> Result<bool, Error> {
+        let at = self.pos();
+        self.expect(b'(')?;
+        let mut depth = 0;
+        let mut second = false;
+        loop {
+            match self.tok {
+                Tok::Punct(b'(' | b'[' | b'{') => depth += 1,
+                Tok::Punct(b')' | b']' | b'}') if depth == 0 => break,
+                Tok::Punct(b')' | b']' | b'}') => depth -= 1,
+                Tok::Punct(b',') if depth == 0 => { second = true; break; }
+                Tok::End => break,
+                _ => {}
+            }
+            self.next()?;
+        }
+        self.restore(at);
+        Ok(second)
     }
     /// `new Set(iterable)` / `new Map([[k, v], ...])`.
     fn collection_new(&mut self, map: bool, from: Option<Value>) -> Result<Value, Error> {
@@ -1733,6 +1761,18 @@ impl<'a> Machine<'a> {
         let (_, len, _) = self.arrays[id as usize];
         let mut acc = args.get(1).copied();
         let mut kept: Vec<Value> = Vec::new();
+        if name == b"reduceRight" {
+            let mut acc = args.get(1).copied();
+            for k in (0..len as usize).rev() {
+                let (start, now, _) = self.arrays[id as usize];
+                if k >= now as usize { continue; }
+                let e = self.elems[start as usize + k];
+                self.steps += 1;
+                if self.steps > STEPS { return Err(Error::Limit); }
+                acc = Some(match acc { None => e, Some(a) => self.invoke(f, &[a, e, Value::Num(k as f64), Value::Arr(id)])? });
+            }
+            return acc.ok_or(Error::Unsupported);
+        }
         if matches!(name, b"findLast" | b"findLastIndex") {
             for k in (0..len as usize).rev() {
                 let (start, now, _) = self.arrays[id as usize];
@@ -1977,6 +2017,19 @@ impl<'a> Machine<'a> {
         let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
         if (name, f) == (&b"Array"[..], &b"of"[..]) { let (args, n) = self.arguments()?; return self.new_array(&args[..n]); }
+        if (name, f) == (&b"Array"[..], &b"from"[..]) && self.from_with_map()? {
+            // `Array.from(x, fn)`: each item mapped through fn(item, index).
+            let (args, _) = self.arguments()?;
+            if !self.live { return Ok(Value::Undef); }
+            let Value::Func(g) = args[1] else { return Err(Error::Unsupported) };
+            let items = match args[0] {
+                Value::Obj(id) if !matches!(self.made_by[id as usize], 65 | 66) => { let n = self.to_number(self.get_prop(id, b"length")); if !(0.0..=ELEMS as f64).contains(&n) { return Err(Error::Limit); } (0..n as usize).map(|_| Value::Undef).collect() }
+                v => self.iterate(v)?,
+            };
+            let mut out = Vec::new();
+            for (k, item) in items.into_iter().enumerate() { self.steps += 1; if self.steps > STEPS { return Err(Error::Limit); } out.push(self.invoke(g, &[item, Value::Num(k as f64)])?); }
+            return self.new_array(&out);
+        }
         if name == b"Number" && self.tok != Tok::Punct(b'(') {
             return Ok(Value::Num(match f {
                 b"MAX_SAFE_INTEGER" => 9007199254740991.0, b"MIN_SAFE_INTEGER" => -9007199254740991.0,
@@ -2147,14 +2200,15 @@ impl<'a> Machine<'a> {
             Tok::Ident(b"new") => self.new_expression(),
             Tok::Ident(b"function") => {
                 self.next()?;
-                if let Tok::Ident(_) = self.tok { self.next()?; }
+                // A named function expression can call itself by its name.
+                let name = if let Tok::Ident(n) = self.tok { self.next()?; n } else { b"" };
                 let at = self.pos();
                 self.expect(b'(')?;
                 self.skip_params()?;
                 self.expect(b')')?;
                 if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
                 self.skim_body()?;
-                Ok(Value::Func(self.define(b"", at)?))
+                Ok(Value::Func(self.define(name, at)?))
             }
             Tok::Ident(_) if arrow => {
                 let at = self.pos();
@@ -2471,11 +2525,18 @@ impl<'a> Machine<'a> {
             let Tok::Ident(key) = self.tok else { return Err(Error::Syntax) };
             self.next()?;
             let mut name = key;
+            let mut nested = None;
             if close == b'}' && !rest && self.tok == Tok::Punct(b':') {
                 self.next()?;
-                let Tok::Ident(alias) = self.tok else { return Err(Error::Syntax) };
-                self.next()?;
-                name = alias;
+                if matches!(self.tok, Tok::Punct(b'[' | b'{')) {
+                    // `{a: {b}}` / `{a: [x, y]}`: a pattern for the member.
+                    nested = Some(self.pos());
+                    self.pattern(None)?;
+                } else {
+                    let Tok::Ident(alias) = self.tok else { return Err(Error::Syntax) };
+                    self.next()?;
+                    name = alias;
+                }
             }
             if seen.len() == 8 || name.len() > NAME { return Err(Error::Limit); }
             let mut item = match (close, v, rest) {
@@ -2502,7 +2563,12 @@ impl<'a> Machine<'a> {
                 let d = self.only_if(missing, |m| m.expr())?;
                 if missing { item = d; }
             }
-            if v.is_some() { self.bind_var(name, Some(item))?; }
+            if let (Some(p), Some(_)) = (nested, v) {
+                let back = self.pos();
+                self.restore(p);
+                self.pattern(Some(item))?;
+                self.restore(back);
+            } else if v.is_some() { self.bind_var(name, Some(item))?; }
             seen.push(key);
             index += 1;
             if rest || self.tok != Tok::Punct(b',') { break; }
@@ -3174,6 +3240,38 @@ fn json_ws(t: &[u8], at: &mut usize) { while t.get(*at).is_some_and(|c| matches!
 /// (Rust's parser also takes "inf"/"nan", which JavaScript does not).
 fn s_is_plain(t: &[u8]) -> bool {
     t.iter().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-')) && t.iter().any(u8::is_ascii_digit)
+}
+/// The closing backtick of a template starting at `i`: skips `\x` escapes
+/// and `${...}` substitutions (with their own strings, braces and nested
+/// templates).
+fn template_end(s: &[u8], mut i: usize) -> Option<usize> {
+    while i < s.len() {
+        match s[i] {
+            b'\\' => i += 2,
+            b'`' => return Some(i),
+            b'$' if s.get(i + 1) == Some(&b'{') => i = substitution_end(s, i + 2)?,
+            _ => i += 1,
+        }
+    }
+    None
+}
+/// Just past the `}` closing a `${` whose body starts at `i`.
+fn substitution_end(s: &[u8], mut i: usize) -> Option<usize> {
+    let mut depth = 1;
+    while i < s.len() {
+        match s[i] {
+            b'{' => depth += 1,
+            b'}' => { depth -= 1; if depth == 0 { return Some(i + 1); } }
+            q @ (b'\'' | b'"') => {
+                i += 1;
+                while *s.get(i)? != q { if s[i] == b'\\' { i += 1; } i += 1; }
+            }
+            b'`' => i = template_end(s, i + 1)?,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 /// JavaScript ToInt32 (for the bitwise operators).
 fn int32(x: f64) -> i32 {

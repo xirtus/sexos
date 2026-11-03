@@ -130,7 +130,7 @@ fn break_continue_and_templates() {
     assert_eq!(out("function f() { break } for (;;) { f() }").err(), Some(Error::Syntax), "break does not cross a call");
     let name = "var who = 'SexOS'; var n = 3; document.write(`Hello ${who}, ${n} x ${n} = ${n * n}!\\n`)";
     assert_eq!(out(name).unwrap(), "Hello SexOS, 3 x 3 = 9!\n");
-    assert_eq!(out("document.write(`${'a' + `b`}`)").err().is_some(), true, "no nested templates");
+    assert_eq!(out("document.write(`${'a' + `b`}`)").unwrap(), "ab", "nested templates");
     assert_eq!(out("document.write(`${1 + }`)").err(), Some(Error::Syntax));
 }
 
@@ -383,4 +383,11 @@ fn number_formatting_regex_exec_and_object_helpers() {
     assert_eq!(out(r"var re = /(\w)(\d)/g; var m; var t = ''; while ((m = re.exec('a1 b2')) !== null) t += m[1] + re.lastIndex; document.write(t, re.lastIndex, ' ', /x(y)/.exec('axy'), ' ', 'a1b2'.matchAll(/(\w)(\d)/g).map(m => m[2]).join('+'))").unwrap(), "a2b50 xy,y 1+2");
     assert_eq!(out("document.write('b'.localeCompare('a'), ['b', 'a', 'C', 'A'].sort((x, y) => x.localeCompare(y)))").unwrap(), "1a,A,b,C");
     assert_eq!(out("var o = Object.freeze({a: 1}); o.a = 2; o.b = 3; var a = [7, 8]; var t = ''; for (const [i, v] of a.entries()) t += i + '' + v; document.write(o.a, o.b, Object.isFrozen(o), ' ', Number.MAX_SAFE_INTEGER, ' ', t, a.keys(), ' ', ({a: 1}).hasOwnProperty('a'), Object.hasOwn({k: 0}, 'z'))").unwrap(), "1undefinedtrue 9007199254740991 07180,1 truefalse");
+}
+
+#[test]
+fn nested_templates_named_function_expressions_and_more_builtins() {
+    assert_eq!(out(r#"var a = [1, 2]; var o = {n: 2}; document.write(`list: ${a.map(x => `<${x}>`).join("")}`, ' ', `${o.n > 1 ? `${o.n} items` : "one"}`, ' ', `x\`y`, `${`${`deep`}`}`, `a${"`"}b`)"#).unwrap(), "list: <1><2> 2 items x`ydeepa`b");
+    assert_eq!(out("var f = function fact(n) { return n < 2 ? 1 : n * fact(n - 1) }; var {a: {b}, c: [d, e = 4]} = {a: {b: 7}, c: [1]}; var t = ''; for (const {p: {q}} of [{p: {q: 1}}, {p: {q: 2}}]) t += q; document.write(f(5), b, d, e, t)").unwrap(), "12071412");
+    assert_eq!(out("document.write([1, 2, 3].reduceRight((a, b) => a + '' + b), ' ', ['a', 'b'].reduceRight((a, b) => a + b, '>'), ' ', 'abcb'.replace('b', m => m.toUpperCase()), 'abcb'.replaceAll('b', (m, i) => i), ' ', Array.from({length: 3}, (_, i) => i * i), Array.from([1, 2], x => x * 10))").unwrap(), "321 >ba aBcba1c3 0,1,410,20");
 }

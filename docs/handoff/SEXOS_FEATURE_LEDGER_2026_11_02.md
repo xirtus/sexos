@@ -1252,6 +1252,23 @@ build and master gate GREEN; native HTML gate at both sizes presses `0`
 (`index=10 listed=0 ... network=0`) and `Shift+4` (`index=14`) on the
 3-link page before following link 1 as before.
 
+## N11-N12. Script nested templates, named function expressions, replace fix (2026-11-03)
+
+- **N11 Templates:** a template literal now ends at its real closing
+  backtick: `\`` escapes and `${...}` substitutions with their own strings,
+  braces and **nested templates** (`` `${xs.map(x => `<${x}>`)}` ``) are
+  skipped. Before, the first backtick ended the template.
+- **N12** Named function expressions can call themselves
+  (`var f = function fact(n) {... fact(n - 1)}`); nested destructuring
+  patterns (`{a: {b}, c: [d, e = 4]}`, also in `for...of`); `reduceRight`;
+  `Array.from(x, mapFn)`. **Fix:** `'s'.replace('b', fn)` with a string
+  pattern inserted the text `function`; the function is now called with
+  `(match, offset, string)`.
+
+**Evidence** (`docs/handoff/assets/script-templates-named-fn-builtins-2026-11-03/`):
+script host tests 43 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... [1][2]a+b`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
