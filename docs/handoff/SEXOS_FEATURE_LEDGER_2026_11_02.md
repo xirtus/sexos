@@ -1,5 +1,41 @@
 # SexOS feature ledger (from 2026-11-02)
 
+## Handoff summary (as of 2026-11-03, after F28)
+
+**Try it (native image).** Browser: `W` HTML page as text, `1`-`9` follow
+links, `Backspace` back, `G` QOI image, `P` PNG image, `B` plain document.
+Quil: autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes
+the saved file. Spindle: Shift works; `calc 2*(3+4)/5`, `calc ans*10`,
+`calc 2**10`, `calc sqrt(2)`.
+
+**Inline script subset** (`apps/kaleidoscope/src/script.rs`, not a JS
+engine): variables, numbers printed like JavaScript, strings and string
+methods, booleans, comparisons, `if/else`, `while`/`for` with
+`break`/`continue` under a 10,000-step budget, functions (declared before
+use, shallow recursion), arrays, objects, templates, `Math`, `JSON.stringify`,
+`Object.keys`, `String/Number/parseInt`, output via `document.write`. No DOM,
+events, timers, network, storage, clock or entropy names exist in it.
+
+**Native gates added** (all pass at 1280x800 and 1024x768 on the latest
+image): `https_html_gate.py`, `https_png_gate.py`, `quil_autosave_gate.py`,
+`quil_delete_gate.py`, `spindle_calc_gate.py`. Host gates added:
+`quil_autosave_host_gate.sh`, `spindle_calc_host_gate.sh`; script, html_text
+and PNG tests run in `sexnet_jobs_host_gate.sh`.
+
+**Open release gates** (details below): full-window reader needs a larger
+Display text delivery; Display applies app paints late (screenshots must wait
+for the app's `applied` receipt) and Spindle's display stayed pending in the
+calc gate; Browser stack headroom is guarded only by an `App` size budget;
+script recursion is shallow for the same stack reason; autosave failure
+fences document I/O like any uncertain save; no draft cleanup; images are
+limited to 48x48.
+
+**Next suggested steps.** A DOM-free event model is the next JavaScript step
+only if it fits held authority (e.g. a key handler the Browser calls, no
+ambient names); measuring the Browser stack high-water mark first; then
+larger images once Display delivery grows.
+
+
 User-noticeable daily-driver features, logged here so they don't collide with
 the round numbering in `SEXOS_DEVELOPMENT_ROUNDS_109_PLUS_2026_10_31.md`.
 
