@@ -1,13 +1,16 @@
 # SexOS feature ledger (from 2026-11-02)
 
-## Handoff summary (as of 2026-11-03, after G19)
+## Handoff summary (as of 2026-11-03, after M16)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9` follow
 links, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
-interlaced or not), `B` plain document. Quil: autosave draft after ~30 s
-idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the saved file, `Ctrl+I` shows
-line/word/char counts, `Ctrl+G` goes to a line. Spindle: Shift works; `calc` does exact decimals with
-`** sqrt abs min max round floor ceil pi e ans`.
+interlaced or not, colour-key transparency), `B` plain document. Quil:
+autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
+saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
+`Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word.
+Spindle: Shift works; `calc` does exact decimals with `** sqrt abs min max
+round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
+and `... in hex|bin|oct` output.
 
 **HTML reader.** Headings, paragraphs, lists (numbered/nested/definition),
 aligned tables, quotes, rules, `<pre>`, inline code/emphasis markers, links
@@ -16,14 +19,17 @@ with a numbered list, images as alt text, forms as read-only text,
 
 **Inline script subset** (`apps/kaleidoscope/src/script.rs`, not a JS
 engine, no DOM/events/timers/network/storage/clock/entropy): numbers printed
-like JavaScript, strings and string methods, booleans, `null`/`undefined`,
-`typeof`, comparisons, `if/else`, `switch`, `while`/`do`/`for` with
-`break`/`continue` under a 10,000-step budget, functions, function values,
-arrow functions, callbacks (`map filter reduce forEach find some every
-sort(cmp)`), arrays and array methods, objects, spread, destructuring,
-templates, `Math`, `JSON.stringify`, `Object.keys/values/entries`, `in`,
-`delete`, `parseInt/parseFloat/Number/String`, char codes, `toFixed`,
-`toString(radix)`; output via `document.write`. Nesting is capped at 32.
+like JavaScript, strings and string methods, regular expressions
+(`regex.rs`, bounded backtracking), `null`/`undefined`, `typeof`,
+`if/else`, `switch`, `while`/`do`/`for`/`for...of`/`for...in` under a
+10,000-step budget, `var`/`let`/`const` block scope, functions with default
+and rest parameters, arrows, callbacks, `this`, `class ... extends` with
+`super`, `new`, `try/catch/finally/throw` and Error objects, arrays and
+objects with most standard methods, spread, destructuring, templates,
+`?.`, `??`, short-circuit `&& || ?:`, `Math`, `JSON.stringify/parse`,
+`Date` from given values only (no `new Date()`/`Date.now()`), URI
+encode/decode; output via `document.write`. Nesting is capped at 32,
+calls take at most 4 arguments.
 
 **Native gates added** (all pass at 1280x800 and 1024x768 on the latest
 image): `https_html_gate.py` (also bounds the Browser stack high water),
