@@ -3,7 +3,7 @@
 //!
 //! `ans` is the previous successful result in this Spindle session.
 //! `**` raises to a whole power up to 64; `sqrt(x)` is the square root;
-//! `0x..`/`0b..` whole numbers; `abs min max round floor ceil` work on the exact values; `pi` and `e`
+//! `0x..`/`0b..` whole numbers (and `<expr> in hex|bin|oct` to show a whole result in that base); `abs min max round floor ceil` work on the exact values; `pi` and `e`
 //! are 9-place constants (results using them are marked `~`).
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
@@ -17,7 +17,7 @@ const MAX_DEPTH: u8 = 16;
 pub const LINE_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer, Exponent, Domain, Unknown }
+pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer, Exponent, Domain, Unknown, NotWhole }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Value { pub scaled: i128, pub inexact: bool }
@@ -227,6 +227,34 @@ fn eval_raw(input: &[u8], ans: Option<i128>, vars: &[([u8; 8], u8, i128)]) -> Re
     Ok(Value { scaled: v, inexact: p.inexact })
 }
 
+/// `<expr> in hex|bin|oct`: the expression and the base to show it in.
+pub fn split_radix(input: &[u8]) -> (&[u8], u32) {
+    let end = input.iter().rposition(|c| *c != b' ').map_or(0, |k| k + 1);
+    let t = &input[..end];
+    for (suffix, radix) in [(&b" in hex"[..], 16), (b" in bin", 2), (b" in oct", 8)] {
+        if t.ends_with(suffix) { return (&t[..t.len() - suffix.len()], radix); }
+    }
+    (input, 10)
+}
+
+/// Like `render`, in base 16, 2 or 8 (`= 0xff`); only exact whole values.
+pub fn render_radix(v: Value, radix: u32, out: &mut [u8; LINE_MAX]) -> Result<usize, Error> {
+    if radix == 10 { return Ok(render(v, out)); }
+    if v.inexact || v.scaled % SCALE != 0 { return Err(Error::NotWhole); }
+    let mut digits = [0u8; 128];
+    let (mut k, mut w) = (0, (v.scaled / SCALE).unsigned_abs());
+    loop { digits[k] = b"0123456789abcdef"[(w % radix as u128) as usize]; k += 1; w /= radix as u128; if w == 0 { break; } }
+    let prefix: &[u8] = match radix { 16 => b"0x", 2 => b"0b", _ => b"0o" };
+    let sign = (v.scaled < 0) as usize;
+    if 2 + sign + prefix.len() + k > LINE_MAX { return Err(Error::Overflow); }
+    out[..2].copy_from_slice(b"= ");
+    let mut n = 2;
+    if sign == 1 { out[n] = b'-'; n += 1; }
+    out[n..n + prefix.len()].copy_from_slice(prefix); n += prefix.len();
+    while k > 0 { k -= 1; out[n] = digits[k]; n += 1; }
+    Ok(n)
+}
+
 /// `= 1.5` or `~ 0.333333333`; trailing zeros trimmed.
 pub fn render(v: Value, out: &mut [u8; LINE_MAX]) -> usize {
     let mut n = 0;
@@ -313,6 +341,18 @@ mod tests {
         assert_eq!(r(&mut env, "pi = 3"), "Syntax");
         assert_eq!(r(&mut env, "x == 1"), "Syntax");
         assert_eq!(r(&mut env, "missing"), "Unknown");
+    }
+    #[test] fn results_show_in_other_bases() {
+        let show = |s: &str| { let (e, r) = split_radix(s.as_bytes()); let mut o = [0; LINE_MAX]; render_radix(eval(e).unwrap(), r, &mut o).map(|n| String::from_utf8(o[..n].to_vec()).unwrap()) };
+        assert_eq!(show("255 in hex").unwrap(), "= 0xff");
+        assert_eq!(show("0xff+1 in bin ").unwrap(), "= 0b100000000");
+        assert_eq!(show("-8 in oct").unwrap(), "= -0o10");
+        assert_eq!(show("0 in hex").unwrap(), "= 0x0");
+        assert_eq!(show("6/4").unwrap(), "= 1.5");
+        assert_eq!(show("6/4 in hex"), Err(Error::NotWhole));
+        assert_eq!(show("1/3*3 in hex"), Err(Error::NotWhole), "inexact");
+        assert_eq!(show("2**64 in bin"), Err(Error::Overflow), "longer than a line");
+        assert_eq!(split_radix(b"x in hexagon"), (&b"x in hexagon"[..], 10));
     }
     #[test] fn ans_is_the_previous_result() {
         let first = eval(b"2*(3+4)/5").unwrap();

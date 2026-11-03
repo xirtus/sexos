@@ -899,6 +899,18 @@ autosave gate at 1280x800 and 1024x768 now drives `ctrl-right` (0->5
 recovery, `ctrl-backspace` (`dir=back bytes=3 changed=1 len=14`); Quil
 delete gate regression OK.
 
+## M14. Spindle `calc ... in hex|bin|oct` (2026-11-03)
+
+- A trailing `in hex`, `in bin` or `in oct` shows an exact whole result
+  as `= 0xff`, `= 0b1010`, `= -0o10`. A fractional or inexact result
+  says `calc: only whole results show in hex/bin/oct` (`NotWhole`), and a
+  result too long for the line is refused, not cut.
+
+**Evidence** (`docs/handoff/assets/spindle-calc-radix-2026-11-03/`): calc
+host tests (`results_show_in_other_bases`); sealed build and master gate
+GREEN; native calc gate at 1280x800 and 1024x768 with `calc ans in hex`
+-> `= 0x100` and `calc 1/2 in bin` -> `error=NotWhole`.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

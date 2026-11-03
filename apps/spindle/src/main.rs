@@ -709,6 +709,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  sextime <n>  Unix seconds as SexTime/UTC/Long Count");
             sb.push(b"  calc <expr>  exact + - * / % ** sqrt abs min max round floor ceil ans");
             sb.push(b"  calc x = 2   name a value (up to 8)");
+            sb.push(b"  calc 255 in hex   also in bin / in oct");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -831,10 +832,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"calc" => {
             static mut CALC_ENV: calc_command::Env = calc_command::Env::new();
-            match calc_command::eval_env(args, unsafe { &mut *core::ptr::addr_of_mut!(CALC_ENV) }).map(|(v, _)| v) {
-                Ok(value) => {
-                    let mut line = [0u8; calc_command::LINE_MAX];
-                    let n = calc_command::render(value, &mut line);
+            let (expr, radix) = calc_command::split_radix(args);
+            let mut line = [0u8; calc_command::LINE_MAX];
+            match calc_command::eval_env(expr, unsafe { &mut *core::ptr::addr_of_mut!(CALC_ENV) }).and_then(|(v, _)| calc_command::render_radix(v, radix, &mut line)) {
+                Ok(n) => {
                     sb.push(&line[..n]);
                     sex_pdx::serial_record!("[spindle.calc] expr_bytes={} result={} ok=1", args.len(), core::str::from_utf8(&line[..n]).unwrap_or("?"));
                 }
@@ -847,6 +848,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         calc_command::Error::Exponent => b"calc: ** needs a whole exponent up to 64",
                         calc_command::Error::Domain => b"calc: square root of a negative number",
                         calc_command::Error::Unknown => b"calc: unknown name (set one with  calc x = 2)",
+                        calc_command::Error::NotWhole => b"calc: only whole results show in hex/bin/oct",
                         calc_command::Error::Syntax => b"usage: calc <expr>  e.g. calc 2*(3+4)/5",
                     });
                     sex_pdx::serial_record!("[spindle.calc] expr_bytes={} error={:?} ok=0", args.len(), error);
