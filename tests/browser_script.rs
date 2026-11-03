@@ -275,3 +275,13 @@ fn short_circuit_nullish_and_optional_chaining() {
     assert_eq!(out("const q;").err(), Some(Error::Syntax));
     assert_eq!(out("var n = 0; function f() { n++; return 0 } var x = null; var y = x?.[f()]; document.write(y, n, ' ', true ? 1 : .5, ' ', false?.5:2)").unwrap(), "undefined0 1 2");
 }
+
+#[test]
+fn for_of_in_defaults_rest_and_assign() {
+    assert_eq!(out("var t = ''; for (const x of [1, 2, 3]) { if (x === 2) continue; t += x } for (let c of 'ab') t += c.toUpperCase(); for (var k in {p: 1, q: 2}) t += k; for (var i in [7, 8]) t += typeof i + i; document.write(t)").unwrap(), "13ABpqstring0string1");
+    assert_eq!(out("function first(xs) { for (var x of xs) { if (x > 1) return x } return 0 } var s = 0; for (var y of [1, 2, 3, 4]) { if (y > 2) break; s += y } document.write(first([1, 5, 9]), ' ', s, y)").unwrap(), "5 33");
+    assert_eq!(out("for (var x of {a: 1}) document.write(x)").err(), Some(Error::Unsupported), "plain objects are not iterable");
+    assert_eq!(out("var n = 0; function h() { n++; return 9 } function f(a = h(), b = a * 2, ...more) { return a + b + more.length } var g = (x, y = 1) => x * y; document.write(f(1), ' ', n, ' ', f(), ' ', n, ' ', f(1, 1, 5, 5), ' ', g(3), g(3, 2))").unwrap(), "3 0 27 1 4 36");
+    assert_eq!(out("function f(...a, b) {}").err(), Some(Error::Syntax));
+    assert_eq!(out("var o = Object.assign({}, {a: 1}, null, {b: 2, a: 3}); var d = {x: 1}; document.write(JSON.stringify(o), Object.assign(d, {y: 2}) === d, d.y)").unwrap(), "{\"a\":3,\"b\":2}true2");
+}

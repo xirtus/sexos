@@ -864,6 +864,24 @@ HTML gate at 1280x800 and 1024x768 with `EPOCH Fri Dec 21 2012 5 UTC!`
 (inherited `super.loud()`, `cfg.tz?.name ?? 'UTC'`, `cfg.day?.[3] || '!'`).
 Browser stack high water 49,632 of 65,536 bytes.
 
+## M10-M12. Script `for...of`/`for...in`, default and rest parameters, `Object.assign` (2026-11-03)
+
+- **M10 `for (x of xs)`** over arrays (elements) and strings (characters);
+  **`for (k in o)`** over object keys and array indices (as strings), with
+  `var`/`let`/`const` or a bare name, `break`/`continue`/`return`. Items are
+  read by position as each iteration starts. `for...of` on a plain object
+  is refused (not iterable in JavaScript).
+- **M11 Parameters:** defaults `function f(a = 1, b = a * 2)` (a default
+  runs only when its argument is `undefined`) and rest `...xs` (last
+  parameter; an array) for functions, function values, arrows, class
+  constructors and methods.
+- **M12 `Object.assign(target, ...sources)`** (null/undefined sources skipped).
+
+**Evidence** (`docs/handoff/assets/script-for-of-defaults-rest-assign-2026-11-03/`):
+script host tests 30 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes with `... UTC! dayvOK 00070072`. Browser stack high
+water 49,952 of 65,536 bytes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

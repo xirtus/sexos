@@ -4,9 +4,10 @@
 //! This is not a JavaScript engine. It accepts:
 //! `var|let|const name = expr, other` (no value: `undefined`), `name = expr` (also `+= -= *= /= %= ++ --`),
 //! `if (...) ... else ...`, `while (...)`, `do ... while (...)`,
-//! `switch` with `case`/`default`, `for (...; ...; ...)` with
+//! `switch` with `case`/`default`, `for (...; ...; ...)`, `for (x of xs)`,
+//! `for (k in o)` with
 //! `break`/`continue`, `{ ... }`
-//! blocks, `function name(a, b) { ... return x }` declared before use,
+//! blocks, `function name(a, b = 2, ...rest) { ... return x }` declared before use,
 //! function values (`function (x) {...}`, `x => x * 2`, `(a, b) => {...}`) and
 //! array callbacks (`forEach map filter find findIndex some every reduce`,
 //! `sort(cmp)`), and
@@ -17,7 +18,7 @@
 //! `??`, optional chaining `a?.b` / `a?.[k]` (`&& || ?? ?:` evaluate only the side JavaScript does),
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push .pop .shift .join
 //! .indexOf .includes .slice .concat .reverse .sort`),
-//! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`),
+//! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`, `Object.assign(t, ...s)`),
 //! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
 //! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
 //! `class A extends B { constructor() { super(...) } m() { super.m() } }` and `new`,
@@ -1433,7 +1434,7 @@ impl<'a> Machine<'a> {
                 if let Tok::Ident(_) = self.tok { self.next()?; }
                 let at = self.pos();
                 self.expect(b'(')?;
-                while let Tok::Ident(_) = self.tok { self.next()?; if self.tok != Tok::Punct(b',') { break; } self.next()?; }
+                self.skip_params()?;
                 self.expect(b')')?;
                 if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
                 self.skim_body()?;
@@ -1473,6 +1474,22 @@ impl<'a> Machine<'a> {
                         self.expect(b'.')?;
                         let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
                         self.next()?;
+                        if (name, f) == (&b"Object"[..], &b"assign"[..]) {
+                            // Copies own properties of each source onto the target.
+                            let (args, n) = self.arguments()?;
+                            if !self.live { return Ok(Value::Undef); }
+                            let Some(&Value::Obj(to)) = args[..n].first() else { return Err(Error::Unsupported) };
+                            for &src in &args[1..n] {
+                                let Value::Obj(from) = src else { if matches!(src, Value::Null | Value::Undef) { continue; } return Err(Error::Unsupported) };
+                                let (start, len, _) = self.objects[from as usize];
+                                for k in start as usize..start as usize + len as usize {
+                                    let (ns, nn, value) = self.props[k];
+                                    let key = self.arena[ns as usize..ns as usize + nn as usize].to_vec();
+                                    self.set_prop(to, &key, value)?;
+                                }
+                            }
+                            return Ok(Value::Obj(to));
+                        }
                         self.expect(b'(')?;
                         let v = self.expr()?;
                         self.expect(b')')?;
@@ -1584,13 +1601,26 @@ impl<'a> Machine<'a> {
         let parens = self.tok == Tok::Punct(b'(');
         if parens { self.next()?; }
         let mut i = 0;
-        while let Tok::Ident(param) = self.tok {
+        loop {
+            // `...rest` collects the remaining arguments; `p = d` defaults
+            // an `undefined` argument (the default runs only then).
+            let rest = parens && self.tok == Tok::Punct(b'S');
+            if rest { self.next()?; }
+            let Tok::Ident(param) = self.tok else { if rest { return Err(Error::Syntax); } break };
             if i == PARAMS { return Err(Error::Limit); }
             if let Some(slot) = self.vars[..base].iter().position(|(n, l, _)| &n[..*l as usize] == param) { shadowed[i] = Some((slot, self.vars[slot].2)); }
-            self.assign(param, args.get(i).copied().unwrap_or(Value::Undef), true)?;
-            i += 1;
             self.next()?;
-            if !parens || self.tok != Tok::Punct(b',') { break; }
+            let mut v = args.get(i).copied().unwrap_or(Value::Undef);
+            if rest { v = self.new_array(args.get(i..).unwrap_or(&[]))?; }
+            else if parens && self.tok == Tok::Punct(b'=') {
+                self.next()?;
+                let missing = matches!(v, Value::Undef);
+                let d = self.only_if(missing, |m| m.expr())?;
+                if missing { v = d; }
+            }
+            self.assign(param, v, true)?;
+            i += 1;
+            if rest || !parens || self.tok != Tok::Punct(b',') { break; }
             self.next()?;
         }
         if parens { self.expect(b')')?; }
@@ -1632,6 +1662,22 @@ impl<'a> Machine<'a> {
         self.skim = skim;
         self.live = live;
         body
+    }
+    /// Skips a declared parameter list (`a, b = expr, ...rest`) up to `)`;
+    /// defaults are only checked here.
+    fn skip_params(&mut self) -> Result<(), Error> {
+        loop {
+            if self.tok == Tok::Punct(b'S') {
+                self.next()?;
+                let Tok::Ident(_) = self.tok else { return Err(Error::Syntax) };
+                return self.next();
+            }
+            let Tok::Ident(_) = self.tok else { return Ok(()) };
+            self.next()?;
+            if self.tok == Tok::Punct(b'=') { self.next()?; self.only_if(false, |m| m.expr())?; }
+            if self.tok != Tok::Punct(b',') { return Ok(()); }
+            self.next()?;
+        }
     }
     /// After `(`: is this a parenthesised arrow parameter list?
     fn arrow_ahead(&mut self) -> Result<bool, Error> {
@@ -1818,7 +1864,7 @@ impl<'a> Machine<'a> {
                     self.next()?;
                     let at = self.pos();
                     self.expect(b'(')?;
-                    while let Tok::Ident(_) = self.tok { self.next()?; if self.tok != Tok::Punct(b',') { break; } self.next()?; }
+                    self.skip_params()?;
                     self.expect(b')')?;
                     if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
                     self.skim_body()?;
@@ -1840,7 +1886,7 @@ impl<'a> Machine<'a> {
                 self.next()?;
                 let at = self.pos();
                 self.expect(b'(')?;
-                while let Tok::Ident(_) = self.tok { self.next()?; if self.tok != Tok::Punct(b',') { break; } self.next()?; }
+                self.skip_params()?;
                 self.expect(b')')?;
                 if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
                 self.skim_body()?;
@@ -2016,6 +2062,15 @@ impl<'a> Machine<'a> {
     }
     /// `for (init; cond; update) body` after the opening parenthesis.
     fn for_loop(&mut self, run: bool) -> Result<(), Error> {
+        // `for ([var|let|const] name of|in expr)`?
+        let at = self.pos();
+        let kind = match self.tok { Tok::Ident(b"var") => Some(0), Tok::Ident(b"let") => Some(1), Tok::Ident(b"const") => Some(2), _ => None };
+        if kind.is_some() { self.next()?; }
+        if let Tok::Ident(name) = self.tok {
+            self.next()?;
+            if let Tok::Ident(each @ (b"of" | b"in")) = self.tok { return self.for_each(run, kind.unwrap_or(0), name, each == b"of"); }
+        }
+        self.restore(at);
         if self.tok == Tok::Punct(b';') { self.next()?; } else { self.statement(run)?; }
         let top = self.pos();
         self.loops += 1;
@@ -2032,6 +2087,42 @@ impl<'a> Machine<'a> {
             if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
             self.restore(update);
             if self.tok != Tok::Punct(b')') { self.assignment(true)?; }
+        }
+    }
+    /// `for (name of xs)` (array elements, string characters) and
+    /// `for (name in o)` (object keys, array indices as strings), after the
+    /// keyword. Items are read live, by position, as each iteration starts.
+    fn for_each(&mut self, run: bool, kind: u8, name: &'a [u8], of: bool) -> Result<(), Error> {
+        self.next()?;
+        let coll = self.expr()?;
+        self.expect(b')')?;
+        let body = self.pos();
+        self.loops += 1;
+        let mut i = 0usize;
+        loop {
+            self.restore(body);
+            let item = if !run || self.ret.is_some() { None } else {
+                match (coll, of) {
+                    (Value::Arr(id), true) => { let (start, len, _) = self.arrays[id as usize]; (i < len as usize).then(|| self.elems[start as usize + i]) }
+                    (Value::Str(_, n), true) => if i < n as usize { Some(self.index(coll, i as f64)?) } else { None },
+                    (Value::Obj(id), false) => { let (start, len, _) = self.objects[id as usize]; if i < len as usize { let (ns, nn, _) = self.props[start as usize + i]; Some(Value::Str(ns, nn)) } else { None } }
+                    (Value::Arr(id), false) => if i < self.arrays[id as usize].1 as usize { Some(self.number_text(i as f64)?) } else { None },
+                    (Value::Null | Value::Undef, false) => None,
+                    _ => return Err(Error::Unsupported),
+                }
+            };
+            let go = item.is_some();
+            if let Some(v) = item {
+                // `let`/`const`: one binding in the loop's block, set per item.
+                match self.slot(name).filter(|&k| kind == 0 || k >= self.block_base) {
+                    Some(k) => self.vars[k].2 = v,
+                    None if kind == 0 => self.assign(name, v, true)?,
+                    None => self.declare(name, v, kind)?,
+                }
+            }
+            self.statement(go)?;
+            if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
+            i += 1;
         }
     }
     /// `name = expr`, `name += expr`, `name -= expr`, `name++`, `name--`.
