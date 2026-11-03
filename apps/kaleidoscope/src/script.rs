@@ -366,6 +366,18 @@ impl<'a> Machine<'a> {
         self.restore(resume);
         self.store(&text)
     }
+    /// `tag\`...\``: tag(strings, ...values) (kept out of `chain`).
+    #[inline(never)]
+    fn tagged_template(&mut self, f: u8, raw: &'a [u8]) -> Result<Value, Error> {
+        let (pieces, values) = self.template_parts(raw, true)?;
+        if !self.live { return Ok(Value::Undef); }
+        let mut strings = Vec::new();
+        for piece in &pieces { strings.push(self.store(piece)?); }
+        let mut args = alloc::vec![self.new_array(&strings)?];
+        args.extend_from_slice(&values);
+        if args.len() > PARAMS { return Err(Error::Limit); }
+        self.invoke(f, &args)
+    }
     /// A template's text pieces (escapes processed when `cooked`) and its
     /// substitution values, in order.
     fn template_parts(&mut self, raw: &'a [u8], cooked: bool) -> Result<(Vec<Vec<u8>>, Vec<Value>), Error> {
@@ -634,14 +646,7 @@ impl<'a> Machine<'a> {
             // A tagged template: `tag\`a${x}b\`` calls tag(strings, ...values).
             if let (Value::Func(f), Tok::Template(raw)) = (v, self.tok) {
                 self.next()?;
-                let (pieces, values) = self.template_parts(raw, true)?;
-                if !self.live { v = Value::Undef; continue; }
-                let mut strings = Vec::new();
-                for piece in &pieces { strings.push(self.store(piece)?); }
-                let mut args = alloc::vec![self.new_array(&strings)?];
-                args.extend_from_slice(&values);
-                if args.len() > PARAMS { return Err(Error::Limit); }
-                v = self.invoke(f, &args)?;
+                v = self.tagged_template(f, raw)?;
                 continue;
             }
             if self.tok == Tok::Punct(b'[') {
@@ -707,8 +712,9 @@ impl<'a> Machine<'a> {
     }
     /// `.name` / `.name(...)` on numbers, regular expressions, arrays and
     /// strings. Kept out of `chain` (whose frame is on every call path).
+    /// `toString(radix)`, `toPrecision`, `toLocaleString`, `toFixed` on numbers.
     #[inline(never)]
-    fn member(&mut self, mut v: Value, name: &'a [u8]) -> Result<Value, Error> {
+    fn member_number(&mut self, mut v: Value, name: &'a [u8]) -> Result<Option<Value>, Error> {
         if let (Value::Num(x), b"toString") = (v, name) {
             let (args, n) = self.arguments()?;
             let radix = if n == 0 { 10.0 } else { self.to_number(args[0]) };
@@ -724,7 +730,7 @@ impl<'a> Machine<'a> {
                 digits.reverse();
                 self.store(&digits)?
             };
-            return Ok(v);
+            return Ok(Some(v));
         }
         if let (Value::Num(x), b"toPrecision" | b"toLocaleString") = (v, name) {
             let (args, n) = self.arguments()?;
@@ -732,7 +738,7 @@ impl<'a> Machine<'a> {
                 let p = self.to_number(args[0]);
                 if !(1.0..=21.0).contains(&p) || p != floor(p) { return Err(Error::Unsupported); }
                 self.precision(x, p as usize)
-            };
+            }.map(Some);
         }
         if let (Value::Num(x), b"toFixed") = (v, name) {
             self.expect(b'(')?;
@@ -741,8 +747,14 @@ impl<'a> Machine<'a> {
             let d = self.to_number(d);
             if !(0.0..=20.0).contains(&d) || d != floor(d) { return Err(Error::Unsupported); }
             v = self.fixed(x, d as usize)?;
-            return Ok(v);
+            return Ok(Some(v));
         }
+        let _ = &mut v;
+        Ok(None)
+    }
+    /// `test`, `exec`, `source`, `flags`, `lastIndex` on regular expressions.
+    #[inline(never)]
+    fn member_regex(&mut self, mut v: Value, name: &'a [u8]) -> Result<Option<Value>, Error> {
         if let Value::Re(k) = v {
             v = match name {
                 b"test" => { let (args, _) = self.arguments()?; let t = self.to_text(args[0])?; let text = self.text(t).to_vec(); Value::Bool(self.re_find(k, &text, 0)?.is_some()) }
@@ -753,7 +765,7 @@ impl<'a> Machine<'a> {
                     // With `g`, starts at `lastIndex` and moves it past the match
                     // (back to 0 when nothing more matches).
                     let (args, _) = self.arguments()?;
-                    if !self.live { return Ok(Value::Undef); }
+                    if !self.live { return Ok(Some(Value::Undef)); }
                     let t = self.to_text(args[0])?;
                     let text = self.text(t).to_vec();
                     let global = self.regexes[k as usize].2.contains(&b'g');
@@ -772,18 +784,14 @@ impl<'a> Machine<'a> {
                 }
                 _ => return Err(Error::Unsupported),
             };
-            return Ok(v);
+            return Ok(Some(v));
         }
-        if let (Value::Str(..), b"match" | b"matchAll" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
-            // String methods with a regular expression argument.
-            let at = self.pos();
-            let (args, n) = self.arguments()?;
-            if let Some(Value::Re(k)) = args.first().copied().filter(|_| n >= 1) {
-                v = self.string_regex(name, v, k, args.get(1).copied().unwrap_or(Value::Undef))?;
-                return Ok(v);
-            }
-            self.restore(at);
-        }
+        let _ = &mut v;
+        Ok(None)
+    }
+    /// Array members.
+    #[inline(never)]
+    fn member_array(&mut self, mut v: Value, name: &'a [u8]) -> Result<Option<Value>, Error> {
         if let Value::Arr(id) = v {
             let (_, len, _) = self.arrays[id as usize];
             v = match name {
@@ -807,13 +815,34 @@ impl<'a> Machine<'a> {
                     self.array_callback(id, name, &args[..n])?
                 }
                 b"indexOf" | b"lastIndexOf" | b"includes" | b"slice" | b"concat" | b"reverse" | b"sort" | b"pop" | b"shift" | b"fill" | b"at" | b"flat"
-                | b"toString" | b"splice" | b"unshift" | b"keys" | b"values" | b"entries" => {
+                | b"toString" | b"splice" | b"unshift" | b"keys" | b"values" | b"entries"
+                | b"toSorted" | b"toReversed" | b"with" | b"toSpliced" => {
                     let (args, n) = self.arguments()?;
                     self.array_method(id, name, &args[..n])?
                 }
                 _ => return Err(Error::Unsupported),
             };
-            return Ok(v);
+            return Ok(Some(v));
+        }
+        let _ = &mut v;
+        Ok(None)
+    }
+    /// `.name` / `.name(...)` on numbers, regular expressions, arrays and
+    /// strings. Kept out of `chain` (whose frame is on every call path).
+    #[inline(never)]
+    fn member(&mut self, mut v: Value, name: &'a [u8]) -> Result<Value, Error> {
+        // Per-type members live in their own frames (callbacks recurse through here).
+        let done = match v { Value::Num(_) => self.member_number(v, name)?, Value::Re(_) => self.member_regex(v, name)?, Value::Arr(_) => self.member_array(v, name)?, _ => None };
+        if let Some(r) = done { return Ok(r); }
+        if let (Value::Str(..), b"match" | b"matchAll" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
+            // String methods with a regular expression argument.
+            let at = self.pos();
+            let (args, n) = self.arguments()?;
+            if let Some(Value::Re(k)) = args.first().copied().filter(|_| n >= 1) {
+                v = self.string_regex(name, v, k, args.get(1).copied().unwrap_or(Value::Undef))?;
+                return Ok(v);
+            }
+            self.restore(at);
         }
         let s = self.to_text(v)?;
         v = match name {
@@ -1494,6 +1523,56 @@ impl<'a> Machine<'a> {
         }
         Ok(())
     }
+    /// `document.write(...)` as an expression (kept out of `atom`).
+    #[inline(never)]
+    fn write_expression(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        let line = match self.tok { Tok::Ident(b"write") => false, Tok::Ident(b"writeln") => true, _ => return Err(Error::Unsupported) };
+        self.next()?;
+        let mut args = [Value::Undef; PARAMS];
+        let n = self.argument_list(&mut args)?;
+        if self.live {
+            for &v in &args[..n] { self.emit(v)?; }
+            if line { let nl = self.store(b"\n")?; self.emit(nl)?; }
+        }
+        Ok(Value::Undef)
+    }
+    #[inline(never)]
+    fn structured_clone(&mut self) -> Result<Value, Error> {
+        let (args, _) = self.arguments()?;
+        if !self.live { return Ok(Value::Undef); }
+        self.deep_copy(args[0], 0)
+    }
+    /// `structuredClone(v)`: plain arrays and objects copied deeply (functions,
+    /// class instances and collections are refused, as JavaScript does for
+    /// functions); other values are themselves.
+    fn deep_copy(&mut self, v: Value, depth: u8) -> Result<Value, Error> {
+        if depth > 32 { return Err(Error::Limit); }
+        Ok(match v {
+            Value::Func(_) => return Err(Error::Unsupported),
+            Value::Arr(id) => {
+                let (start, len, _) = self.arrays[id as usize];
+                let items = self.elems[start as usize..start as usize + len as usize].to_vec();
+                let mut out = Vec::new();
+                for item in items { out.push(self.deep_copy(item, depth + 1)?); }
+                self.new_array(&out)?
+            }
+            Value::Obj(id) => {
+                if self.made_by[id as usize] != 0 && self.made_by[id as usize] != 64 { return Err(Error::Unsupported); }
+                let copy = self.new_object()?;
+                self.made_by[copy as usize] = self.made_by[id as usize];
+                let (start, len, _) = self.objects[id as usize];
+                for k in start as usize..start as usize + len as usize {
+                    let (ns, nn, value) = self.props[k];
+                    let key = self.arena[ns as usize..ns as usize + nn as usize].to_vec();
+                    let value = self.deep_copy(value, depth + 1)?;
+                    self.set_prop(copy, &key, value)?;
+                }
+                Value::Obj(copy)
+            }
+            other => other,
+        })
+    }
     /// `new Set(iterable)` / `new Map([[k, v], ...])`.
     fn collection_new(&mut self, map: bool, from: Option<Value>) -> Result<Value, Error> {
         let id = self.new_object()?;
@@ -1913,6 +1992,24 @@ impl<'a> Machine<'a> {
                 Value::Num(found)
             }
             b"toString" => self.join(id, b",")?,
+            // Copying forms: the array itself is left unchanged.
+            b"toSorted" | b"toReversed" | b"toSpliced" | b"with" => {
+                let items = self.elems[start..start + len].to_vec();
+                let Value::Arr(copy) = self.new_array(&items)? else { return Err(Error::Limit) };
+                match name {
+                    b"toSorted" => { self.array_method(copy, b"sort", args)?; }
+                    b"toReversed" => { self.array_method(copy, b"reverse", &[])?; }
+                    b"toSpliced" => { self.array_method(copy, b"splice", args)?; }
+                    _ => {
+                        let i = self.to_number(arg(0));
+                        let i = if i < 0.0 { len as f64 + floor(i) } else { floor(i) };
+                        if !(i >= 0.0 && (i as usize) < len) { return Err(Error::Unsupported); }
+                        let s0 = self.arrays[copy as usize].0 as usize;
+                        self.elems[s0 + i as usize] = arg(1);
+                    }
+                }
+                Value::Arr(copy)
+            }
             b"keys" => { let items: Vec<Value> = (0..len).map(|k| Value::Num(k as f64)).collect(); self.new_array(&items)? }
             b"values" => { let items = self.elems[start..start + len].to_vec(); self.new_array(&items)? }
             b"entries" => {
@@ -2349,6 +2446,26 @@ impl<'a> Machine<'a> {
                 _ => Err(Error::Unsupported),
             };
         }
+        if (name, f) == (&b"Object"[..], &b"groupBy"[..]) {
+            // `Object.groupBy(items, fn)`: arrays of items under fn(item, i).
+            let (args, _) = self.arguments()?;
+            if !self.live { return Ok(Value::Undef); }
+            let Value::Func(g) = args[1] else { return Err(Error::Unsupported) };
+            let items = self.iterate(args[0])?;
+            let out = self.new_object()?;
+            for (k, item) in items.into_iter().enumerate() {
+                self.steps += 1;
+                if self.steps > STEPS { return Err(Error::Limit); }
+                let key = self.invoke(g, &[item, Value::Num(k as f64)])?;
+                let key = self.to_text(key)?;
+                let key = self.text(key).to_vec();
+                match self.get_prop(out, &key) {
+                    Value::Arr(group) => self.push(group, item)?,
+                    _ => { let group = self.new_array(&[item])?; self.set_prop(out, &key, group)?; }
+                }
+            }
+            return Ok(Value::Obj(out));
+        }
         if (name, f) == (&b"Object"[..], &b"hasOwn"[..]) {
             let (args, _) = self.arguments()?;
             let Value::Obj(id) = args[0] else { return Ok(Value::Bool(false)) };
@@ -2558,22 +2675,12 @@ impl<'a> Machine<'a> {
                     b"false" => Ok(Value::Bool(false)),
                     b"Math" => self.math(),
                     // `document.write(...)` as an expression (arrow bodies); its value is undefined.
-                    b"document" if self.tok == Tok::Punct(b'.') => {
-                        self.next()?;
-                        let line = match self.tok { Tok::Ident(b"write") => false, Tok::Ident(b"writeln") => true, _ => return Err(Error::Unsupported) };
-                        self.next()?;
-                        let mut args = [Value::Undef; PARAMS];
-                        let n = self.argument_list(&mut args)?;
-                        if self.live {
-                            for &v in &args[..n] { self.emit(v)?; }
-                            if line { let nl = self.store(b"\n")?; self.emit(nl)?; }
-                        }
-                        Ok(Value::Undef)
-                    }
+                    b"document" if self.tok == Tok::Punct(b'.') => self.write_expression(),
                     b"Date" if self.tok == Tok::Punct(b'.') => self.date_static(),
                     b"JSON" | b"Object" | b"Array" | b"Number" | b"Promise" if self.tok == Tok::Punct(b'.') => self.statics(name),
                     b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
                     b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" | b"Boolean" if self.tok == Tok::Punct(b'(') => self.convert(name),
+                    b"structuredClone" if self.tok == Tok::Punct(b'(') && self.lookup(name).is_none() => self.structured_clone(),
                     b"String" | b"Number" | b"Boolean" if self.lookup(name).is_none() => Ok(Value::Func(BUILTIN_FUNCS + match name { b"String" => 0, b"Number" => 1, _ => 2 })),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
                     // `n++` / `n--` in an expression: the old value (a `++` on

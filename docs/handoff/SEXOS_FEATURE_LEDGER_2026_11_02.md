@@ -1583,6 +1583,24 @@ host tests 49 groups; sealed build and master gate GREEN; native HTML gate
 at both sizes (`... 1a2a36 ...`: `Base.count` incremented by three
 constructions).
 
+## Q3. Script copying array methods, `Object.groupBy`, `structuredClone`; frames re-cut (2026-11-03)
+
+- `toSorted`, `toReversed`, `with(i, v)`, `toSpliced(...)` return changed
+  copies; `Object.groupBy(items, fn)`; `structuredClone(v)` deep-copies
+  plain arrays and objects (functions, class instances and collections are
+  refused).
+- The first native run showed `fact(15)` refused at the stack floor: the
+  P/Q rounds had regrown the recursive frames (`unary`+`atom` 200 -> 408,
+  `chain` 328 -> 520, `member` 616 -> 1,144). `document.write` as an
+  expression, `structuredClone` and tagged templates moved to
+  `#[inline(never)]` helpers, and `member` dispatches to per-type helpers
+  (`member_number/regex/array`): now `unary` 200, `chain` 456, `member` 360.
+
+**Evidence** (`docs/handoff/assets/script-copying-array-methods-2026-11-03/`):
+script host tests 50 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`big 79800 40 521 1232`, `scripts_run=17
+scripts_refused=3`, floor hits 1, high water 56,016).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
