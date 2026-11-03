@@ -320,3 +320,13 @@ fn calls_take_up_to_six_arguments() {
     assert_eq!(out("function f(a, b, c, d, e, g) { return [a, b, c, d, e, g].join('') } var a = [1, 2, 3, 4, 5]; a.splice(1, 1, 'x', 'y', 'z'); document.write(f(1, 2, 3, 4, 5, 6), ' ', a, ' ', new Date(2024, 0, 2, 3, 4, 5).toISOString())").unwrap(), "123456 1,x,y,z,3,4,5 2024-01-02T03:04:05.000Z");
     assert_eq!(out("function f() {} f(1, 2, 3, 4, 5, 6, 7)").err(), Some(Error::Limit));
 }
+
+#[test]
+fn increments_in_expressions_and_member_chain_assignment() {
+    assert_eq!(out("var i = 0; var a = [5, 6]; function f() { var n = 1; return n++ } var k = 3; var j = ++k + k--; var c = 0; while (c++ < 3) {} for (var t = 0, s = ''; t < 3; ) s += t++; document.write(a[i++], i, f(), k, j, c, s)").unwrap(), "511384012");
+    assert_eq!(out("var a = 1\n++a\ndocument.write(a)").unwrap(), "2", "ASI before a prefix ++");
+    assert_eq!(out("var o = {a: {b: [1, 2]}}; o.a.b[1] = 9; o.a.c = 'k'; o['a'].b[0] -= 1; var m = [[0, 0], [0, 0]]; m[1][0] = 7; var x = [1]; x[0]++; x[0] += 5; var xs = [1, 2, 3]; xs.length = 1; document.write(JSON.stringify(o), m, ' ', x, xs, xs.length)").unwrap(), "{\"a\":{\"b\":[0,9],\"c\":\"k\"}}0,0,7,0 711");
+    assert_eq!(out("class S { constructor() { this.items = [] } add(x) { this.items[this.items.length] = x; return this } } var s = new S(); s.add(4).add(5); document.write(s.items)").unwrap(), "4,5");
+    assert_eq!(out("var xs = [1]; xs.length = 5").err(), Some(Error::Unsupported), "growing length");
+    assert_eq!(out("var n = 1; n.x = 2").err(), Some(Error::Unsupported));
+}

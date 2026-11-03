@@ -992,6 +992,22 @@ script host tests 34 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes with a 6-argument call (`... 00070074 ...`);
 Browser stack high water unchanged at 46,752 bytes.
 
+## M23-M24. Script `++`/`--` in expressions; member-chain assignment (2026-11-03)
+
+- **M23** `n++`, `n--` (old value) and `++n`, `--n` (new value) inside
+  expressions (`a[i++]`, `return n++`, `while (c++ < 3)`); a `++` on a new
+  line starts a new statement (ASI), as in JavaScript.
+- **M24** Assignment targets can be any member chain: `o.a.b = v`,
+  `this.items[i] = v`, `m[1][0] = 7`, `o['a'].b[0] -= 1`, with every
+  compound and logical assignment operator; `arr.length = n` shrinks an
+  array (growing it is refused). Previously only `name`, `name.key` and
+  `name[i] = v` worked, and `a[i]++` was a syntax error.
+
+**Evidence** (`docs/handoff/assets/script-increments-member-assign-2026-11-03/`):
+script host tests 35 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... 1025iife 51`). Browser stack high water
+46,752 bytes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

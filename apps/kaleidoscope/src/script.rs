@@ -2,7 +2,8 @@
 //! A bounded script subset for inline `<script>` in the Browser reader.
 //!
 //! This is not a JavaScript engine. It accepts:
-//! `var|let|const name = expr, other` (no value: `undefined`), `name = expr` (also `+= -= *= /= %= ++ --`),
+//! `var|let|const name = expr, other` (no value: `undefined`), `target = expr` where the
+//! target is a name or a member chain `a.b[c].d` (also `+= -= *= /= %= ++ --`), `n++`/`++n` in expressions,
 //! `if (...) ... else ...`, `while (...)`, `do ... while (...)`,
 //! `switch` with `case`/`default`, `for (...; ...; ...)`, `for (x of xs)`,
 //! `for (k in o)` with
@@ -71,6 +72,9 @@ pub enum Error { Unsupported, Syntax, Limit, Thrown }
 #[derive(Clone, Copy)]
 enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Null, Arr(u8), Obj(u8), Func(u8), Re(u8) }
 
+/// An assignment target's last key: `.name` or `[value]`.
+#[derive(Clone, Copy)]
+enum Key<'a> { Name(&'a [u8]), Value(Value) }
 #[derive(Clone, Copy, PartialEq)]
 enum Tok<'a> { Num(f64), Str(&'a [u8]), Template(&'a [u8]), Regex(&'a [u8], &'a [u8]), Ident(&'a [u8]), Punct(u8), End }
 
@@ -456,6 +460,13 @@ impl<'a> Machine<'a> {
             self.depth -= 1;
             let kind: &[u8] = match v { Value::Num(_) => b"number", Value::Str(..) => b"string", Value::Bool(_) => b"boolean", Value::Undef => b"undefined", Value::Func(_) => b"function", _ => b"object" };
             return self.store(kind);
+        }
+        if let (Tok::Punct(b'I' | b'D'), Tok::Ident(name)) = (self.tok, self.peek_after()?) {
+            // `++n` / `--n`: the new value.
+            let up = self.tok == Tok::Punct(b'I');
+            self.next()?;
+            self.next()?;
+            return self.step_name(name, up, true);
         }
         if self.tok == Tok::Ident(b"void") {
             self.next()?;
@@ -1004,6 +1015,15 @@ impl<'a> Machine<'a> {
         self.this_next = Some(Value::Obj(id));
         let r = self.invoke(f as u8, args)?;
         Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
+    }
+    /// `++`/`--` on a variable in an expression: the new value (prefix) or
+    /// the old one (postfix), as a number.
+    fn step_name(&mut self, name: &[u8], up: bool, prefix: bool) -> Result<Value, Error> {
+        let old = self.lookup(name).or((self.skim || !self.live).then_some(Value::Undef)).ok_or(Error::Unsupported)?;
+        let x = self.to_number(old);
+        let new = if up { x + 1.0 } else { x - 1.0 };
+        if self.live { self.assign(name, Value::Num(new), false)?; }
+        Ok(Value::Num(if prefix { new } else { x }))
     }
     /// `v instanceof C` for a class (or a parent), a constructor function,
     /// `Array`, `Object` and the Error types.
@@ -1777,6 +1797,9 @@ impl<'a> Machine<'a> {
                     b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
                     b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
+                    // `n++` / `n--` in an expression: the old value (a `++` on
+                    // the next line starts a new statement instead).
+                    _ if matches!(self.tok, Tok::Punct(b'I' | b'D')) && !self.nl => { let up = self.tok == Tok::Punct(b'I'); self.next()?; self.step_name(name, up, false) }
                     _ if self.tok == Tok::Punct(b'.') && self.lookup(name).is_none() && self.classes.iter().any(|c| c.0 == name) => self.class_static(name),
                     _ => self.lookup(name)
                         .or_else(|| self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == name).map(|i| Value::Func(i as u8)))
@@ -2298,12 +2321,8 @@ impl<'a> Machine<'a> {
                 // `f(...)` as a statement calls for its effects.
                 let at = self.pos();
                 self.next()?;
-                let mut call = matches!(self.tok, Tok::Punct(b'(' | b'.'));
-                if self.tok == Tok::Punct(b'.') {
-                    // `o.key = v` assigns; `o.key(...)` calls.
-                    self.next()?;
-                    if matches!(self.tok, Tok::Ident(_)) { self.next()?; call = !matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'T' | b'Q' | b'R' | b'I' | b'D' | b'W' | b'v' | b'w' | b'x' | b'y' | b'z' | b'q')); }
-                }
+                // `o.a[b] = v` assigns; `o.f(...)`, `f(...)`, `xs[0](...)` call.
+                let call = !self.assigns_ahead()? && matches!(self.tok, Tok::Punct(b'(' | b'.' | b'['));
                 self.restore(at);
                 if call { self.expr()?; } else { self.assignment(run)?; }
                 self.end()
@@ -2391,42 +2410,87 @@ impl<'a> Machine<'a> {
         self.next()?;
         let found = if name == b"this" { Some(self.this) } else { self.lookup(name) };
         let Some(old) = found.or((self.skim || !run).then_some(Value::Undef)) else { return Err(Error::Unsupported) };
-        if self.tok == Tok::Punct(b'.') {
-            self.next()?;
-            let Tok::Ident(key) = self.tok else { return Err(Error::Syntax) };
-            self.next()?;
-            let id = match old { Value::Obj(id) => Some(id), _ if !run => None, _ => return Err(Error::Unsupported) };
-            let current = id.map_or(Value::Undef, |id| self.get_prop(id, key));
+        if !matches!(self.tok, Tok::Punct(b'.' | b'[')) {
+            let v = self.update(old)?;
+            if run { self.assign(name, v, false)?; }
+            return Ok(());
+        }
+        // A member chain `a.b[c].d op= v`: every key but the last is read.
+        let mut base = old;
+        loop {
+            let key = if self.tok == Tok::Punct(b'.') {
+                self.next()?;
+                let Tok::Ident(k) = self.tok else { return Err(Error::Syntax) };
+                self.next()?;
+                Key::Name(k)
+            } else {
+                self.next()?;
+                let i = self.expr()?;
+                self.expect(b']')?;
+                Key::Value(i)
+            };
+            let current = if run { self.get_member(base, key)? } else { Value::Undef };
+            if matches!(self.tok, Tok::Punct(b'.' | b'[')) { base = current; continue; }
             let v = self.update(current)?;
-            if let (true, Some(id)) = (run, id) { self.set_prop(id, key, v)?; }
+            if run { self.set_member(base, key, v)?; }
             return Ok(());
         }
-        if self.tok == Tok::Punct(b'[') {
-            self.next()?;
-            let i = self.expr()?;
-            self.expect(b']')?;
-            self.expect(b'=')?;
-            let v = self.expr()?;
-            if run && matches!(old, Value::Obj(_)) {
-                let Value::Obj(id) = old else { unreachable!() };
-                let k = self.to_text(i)?;
-                let key = self.text(k).to_vec();
-                self.set_prop(id, &key, v)?;
-                return Ok(());
+    }
+    fn key_text(&mut self, key: Key<'a>) -> Result<Vec<u8>, Error> {
+        Ok(match key { Key::Name(k) => k.to_vec(), Key::Value(v) => { let t = self.to_text(v)?; self.text(t).to_vec() } })
+    }
+    /// `base.key` / `base[key]` as an assignment target reads it.
+    fn get_member(&mut self, base: Value, key: Key<'a>) -> Result<Value, Error> {
+        match (base, key) {
+            (Value::Obj(id), k) => { let k = self.key_text(k)?; Ok(self.get_prop(id, &k)) }
+            (Value::Arr(id), Key::Name(b"length")) => Ok(Value::Num(self.arrays[id as usize].1 as f64)),
+            (Value::Arr(_) | Value::Str(..), Key::Value(i)) => { let i = self.to_number(i); self.index(base, i) }
+            _ => Err(Error::Unsupported),
+        }
+    }
+    /// Stores into an object property, an array element (one past the end
+    /// appends) or an array's `length` (shrinking only).
+    fn set_member(&mut self, base: Value, key: Key<'a>, v: Value) -> Result<(), Error> {
+        match (base, key) {
+            (Value::Obj(id), k) => { let k = self.key_text(k)?; self.set_prop(id, &k, v) }
+            (Value::Arr(id), Key::Name(b"length")) => {
+                let (start, len, cap) = self.arrays[id as usize];
+                let n = self.to_number(v);
+                if !(n >= 0.0 && n == floor(n) && n <= len as f64) { return Err(Error::Unsupported); }
+                self.arrays[id as usize] = (start, n as u16, cap);
+                Ok(())
             }
-            if run {
-                let (Value::Arr(id), i) = (old, self.to_number(i)) else { return Err(Error::Unsupported) };
+            (Value::Arr(id), Key::Value(i)) => {
+                let i = self.to_number(i);
                 let (start, len, _) = self.arrays[id as usize];
-                if !(i >= 0.0 && i == floor(i)) { return Err(Error::Unsupported); }
-                if (i as u16) < len && i < 65536.0 { self.elems[start as usize + i as usize] = v; }
-                else if i as u16 == len { self.push(id, v)?; }
-                else { return Err(Error::Unsupported); }
+                if !(i >= 0.0 && i == floor(i) && i < 65536.0) { return Err(Error::Unsupported); }
+                if (i as u16) < len { self.elems[start as usize + i as usize] = v; Ok(()) }
+                else if i as u16 == len { self.push(id, v) }
+                else { Err(Error::Unsupported) }
             }
-            return Ok(());
+            _ => Err(Error::Unsupported),
         }
-        let v = self.update(old)?;
-        if run { self.assign(name, v, false)?; }
-        Ok(())
+    }
+    /// After a name: does a member chain (`.a[b].c`) lead to an assignment?
+    fn assigns_ahead(&mut self) -> Result<bool, Error> {
+        let at = self.pos();
+        loop {
+            match self.tok {
+                Tok::Punct(b'.') => { self.next()?; if !matches!(self.tok, Tok::Ident(_)) { break; } self.next()?; }
+                Tok::Punct(b'[') => {
+                    let mut depth = 0;
+                    loop {
+                        match self.tok { Tok::Punct(b'[') => depth += 1, Tok::Punct(b']') => depth -= 1, Tok::End => break, _ => {} }
+                        self.next()?;
+                        if depth == 0 { break; }
+                    }
+                }
+                _ => break,
+            }
+        }
+        let assigns = matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'T' | b'Q' | b'R' | b'I' | b'D' | b'W' | b'v' | b'w' | b'x' | b'y' | b'z' | b'q'));
+        self.restore(at);
+        Ok(assigns)
     }
     /// The new value for `= e`, `+= e`, `-= e`, `++` or `--` applied to `old`.
     fn update(&mut self, old: Value) -> Result<Value, Error> {
