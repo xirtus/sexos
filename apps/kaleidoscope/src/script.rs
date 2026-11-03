@@ -2,7 +2,7 @@
 //! A bounded script subset for inline `<script>` in the Browser reader.
 //!
 //! This is not a JavaScript engine. It accepts:
-//! `var|let|const name = expr`, `name = expr` (also `+= -= *= /= %= ++ --`),
+//! `var|let|const name = expr, other` (no value: `undefined`), `name = expr` (also `+= -= *= /= %= ++ --`),
 //! `if (...) ... else ...`, `while (...)`, `do ... while (...)`,
 //! `switch` with `case`/`default`, `for (...; ...; ...)` with
 //! `break`/`continue`, `{ ... }`
@@ -14,11 +14,13 @@
 //! Expressions: number, string, template (`` `a ${x}` ``) and `true`/`false`
 //! literals, variables,
 //! `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
+//! `??`, optional chaining `a?.b` / `a?.[k]` (`&& || ?? ?:` evaluate only the side JavaScript does),
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push .pop .shift .join
 //! .indexOf .includes .slice .concat .reverse .sort`),
 //! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`),
 //! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
 //! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
+//! `class A extends B { constructor() { super(...) } m() { super.m() } }` and `new`,
 //! `JSON.stringify(v)`, spread `...array` in array literals and calls,
 //! destructuring `var [a, b] = x` / `var {a, b} = o`, `null`/`undefined`, `typeof`, `n.toFixed(d)`,
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
@@ -101,8 +103,10 @@ struct Machine<'a> {
     thrown: Option<Value>,
     /// Compiled regular expression literals, by source offset.
     regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
-    /// `class` declarations: name, constructor, methods.
-    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>)>,
+    /// `class` declarations: name, constructor, methods, parent class.
+    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>)>,
+    /// The function running now (for `super`).
+    func_now: Option<u8>,
     /// Loops open in the current function (0 = `break` is a syntax error).
     loops: u8,
     elems: Vec<Value>,
@@ -187,7 +191,10 @@ impl<'a> Machine<'a> {
             let start = self.at;
             while self.at < s.len() && (ident_start(s[self.at]) || s[self.at].is_ascii_digit()) { self.at += 1; }
             Tok::Ident(&s[start..self.at])
-        } else if let Some((op, len)) = [(&b"==="[..], b'E'), (b"!==", b'N'), (b"==", b'e'), (b"!=", b'n'), (b"<=", b'L'), (b">=", b'G'), (b"&&", b'&'), (b"||", b'|'),
+        } else if s[self.at..].starts_with(b"?.") && !s.get(self.at + 2).is_some_and(u8::is_ascii_digit) {
+            self.at += 2;
+            Tok::Punct(b'O')
+        } else if let Some((op, len)) = [(&b"==="[..], b'E'), (b"!==", b'N'), (b"==", b'e'), (b"!=", b'n'), (b"<=", b'L'), (b">=", b'G'), (b"&&", b'&'), (b"||", b'|'), (b"??", b'C'),
                 (b"++", b'I'), (b"--", b'D'), (b"+=", b'P'), (b"-=", b'M'), (b"*=", b'T'), (b"/=", b'Q'), (b"%=", b'R'), (b"=>", b'F'), (b"...", b'S')]
             .iter().find(|(t, _)| s[self.at..].starts_with(t)).map(|(t, op)| (*op, t.len())) {
             self.at += len;
@@ -338,24 +345,38 @@ impl<'a> Machine<'a> {
                 continue;
             }
             let Tok::Punct(op) = self.tok else { return Ok(v) };
-            let prec = match op { b'?' => 1, b'|' => 2, b'&' => 3, b'E' | b'N' | b'e' | b'n' => 4, b'<' | b'>' | b'L' | b'G' => 5, b'+' | b'-' => 6, b'*' | b'/' | b'%' => 7, _ => 0 };
+            let prec = match op { b'?' => 1, b'|' | b'C' => 2, b'&' => 3, b'E' | b'N' | b'e' | b'n' => 4, b'<' | b'>' | b'L' | b'G' => 5, b'+' | b'-' => 6, b'*' | b'/' | b'%' => 7, _ => 0 };
             if prec == 0 || prec < min { return Ok(v); }
             self.next()?;
+            // Only the branch JavaScript evaluates runs; the other is checked.
             if op == b'?' {
-                let yes = self.expr()?;
+                let t = self.truthy(v);
+                let yes = self.only_if(t, |m| m.expr())?;
                 self.expect(b':')?;
-                let no = self.binary(1)?;
-                v = if self.truthy(v) { yes } else { no };
+                let no = self.only_if(!t, |m| m.binary(1))?;
+                v = if t { yes } else { no };
+                continue;
+            }
+            if matches!(op, b'|' | b'&' | b'C') {
+                let decided = match op { b'|' => self.truthy(v), b'&' => !self.truthy(v), _ => !matches!(v, Value::Undef | Value::Null) };
+                let r = self.only_if(!decided, |m| m.binary(prec + 1))?;
+                if !decided { v = r; }
                 continue;
             }
             let r = self.binary(prec + 1)?;
             v = self.apply(op, v, r)?;
         }
     }
+    /// Evaluates `f` for real only when `run` (otherwise it is only checked).
+    fn only_if(&mut self, run: bool, f: impl FnOnce(&mut Self) -> Result<Value, Error>) -> Result<Value, Error> {
+        let live = self.live;
+        self.live = live && run;
+        let v = f(self);
+        self.live = live;
+        v
+    }
     fn apply(&mut self, op: u8, v: Value, r: Value) -> Result<Value, Error> {
         Ok(match op {
-            b'|' => if self.truthy(v) { v } else { r },
-            b'&' => if self.truthy(v) { r } else { v },
             b'E' | b'N' | b'e' | b'n' => {
                 let strict = matches!(op, b'E' | b'N');
                 let same = match (v, r) {
@@ -418,18 +439,36 @@ impl<'a> Machine<'a> {
         self.postfix(v)
     }
     /// `.length`, `.toUpperCase()`, `.toLowerCase()` on strings.
-    fn postfix(&mut self, mut v: Value) -> Result<Value, Error> {
+    /// A member chain; `?.` on `null`/`undefined` makes the rest of the
+    /// chain `undefined` (it is still checked, not run).
+    fn postfix(&mut self, v: Value) -> Result<Value, Error> {
+        let live = self.live;
+        let r = self.chain(v);
+        let short = live && !self.live;
+        self.live = live;
+        r.map(|v| if short { Value::Undef } else { v })
+    }
+    fn chain(&mut self, mut v: Value) -> Result<Value, Error> {
         loop {
+            let opt = self.tok == Tok::Punct(b'O');
+            if opt {
+                self.next()?;
+                if matches!(v, Value::Undef | Value::Null) { self.live = false; }
+                if self.tok == Tok::Punct(b'(') { return Err(Error::Unsupported); }
+            }
             if self.tok == Tok::Punct(b'[') {
                 self.next()?;
                 let i = self.expr()?;
                 self.expect(b']')?;
+                if !self.live && !matches!(v, Value::Obj(_) | Value::Arr(_) | Value::Str(..)) { v = Value::Undef; continue; }
                 v = if let Value::Obj(id) = v { let k = self.to_text(i)?; let key = self.text(k).to_vec(); self.get_prop(id, &key) }
                     else { let i = self.to_number(i); self.index(v, i)? };
                 continue;
             }
-            if self.tok != Tok::Punct(b'.') { return Ok(v); }
-            self.next()?;
+            if !opt {
+                if self.tok != Tok::Punct(b'.') { return Ok(v); }
+                self.next()?;
+            }
             let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
             self.next()?;
             if !self.live && !matches!(v, Value::Obj(_) | Value::Arr(_) | Value::Str(..)) {
@@ -861,20 +900,50 @@ impl<'a> Machine<'a> {
         }
         let id = self.new_object()?;
         if let Some(k) = self.classes.iter().position(|c| c.0 == class) {
-            let (ctor, methods) = (self.classes[k].1, self.classes[k].2.clone());
-            for (name, f) in methods { self.set_prop(id, name, Value::Func(f))?; }
-            if let Some(f) = ctor {
-                self.this_next = Some(Value::Obj(id));
-                let r = self.invoke(f, args)?;
-                if matches!(r, Value::Obj(_)) { return Ok(r); }
-            }
-            return Ok(Value::Obj(id));
+            self.class_methods(k, id)?;
+            let r = self.class_init(k, Value::Obj(id), args)?;
+            return Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) });
         }
         let f = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == class)
             .or_else(|| match self.lookup(class) { Some(Value::Func(i)) => Some(i as usize), _ => None }).ok_or(Error::Unsupported)?;
         self.this_next = Some(Value::Obj(id));
         let r = self.invoke(f as u8, args)?;
         Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
+    }
+    /// Methods of class `k` and its ancestors (nearest wins) onto `id`.
+    fn class_methods(&mut self, k: usize, id: u8) -> Result<(), Error> {
+        if let Some(p) = self.classes[k].3 { self.class_methods(p as usize, id)?; }
+        for (name, f) in self.classes[k].2.clone() { self.set_prop(id, name, Value::Func(f))?; }
+        Ok(())
+    }
+    /// Runs the constructor of class `k` on `this`; a class without one
+    /// passes its arguments to its parent's, as JavaScript does.
+    fn class_init(&mut self, k: usize, this: Value, args: &[Value]) -> Result<Value, Error> {
+        match (self.classes[k].1, self.classes[k].3) {
+            (Some(f), _) => { self.this_next = Some(this); self.invoke(f, args) }
+            (None, Some(p)) => self.class_init(p as usize, this, args),
+            (None, None) => Ok(Value::Undef),
+        }
+    }
+    /// `super(...)` and `super.m(...)` inside a class's constructor or method.
+    fn super_call(&mut self) -> Result<Value, Error> {
+        let parent = self.func_now.and_then(|f| self.classes.iter().position(|c| c.1 == Some(f) || c.2.iter().any(|m| m.1 == f))).and_then(|k| self.classes[k].3);
+        let method = if self.tok == Tok::Punct(b'.') {
+            self.next()?;
+            let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
+            self.next()?;
+            Some(m)
+        } else { None };
+        let mut args = [Value::Undef; PARAMS];
+        let n = self.argument_list(&mut args)?;
+        if !self.live { return Ok(Value::Undef); }
+        let mut k = parent.ok_or(Error::Syntax)? as usize;
+        let this = self.this;
+        let Some(m) = method else { self.class_init(k, this, &args[..n])?; return Ok(Value::Undef) };
+        loop {
+            if let Some(&(_, f)) = self.classes[k].2.iter().find(|c| c.0 == m) { self.this_next = Some(this); return self.invoke(f, &args[..n]); }
+            k = self.classes[k].3.ok_or(Error::Unsupported)? as usize;
+        }
     }
     /// `new Date(...)` from given components, a time value or an ISO string.
     /// There is no `new Date()` / `Date.now()`: a script holds no clock.
@@ -1383,6 +1452,7 @@ impl<'a> Machine<'a> {
                     b"NaN" => Ok(Value::Num(f64::NAN)),
                     b"null" => Ok(Value::Null),
                     b"this" => Ok(self.this),
+                    b"super" => self.super_call(),
                     b"undefined" => Ok(Value::Undef),
                     b"Infinity" => Ok(Value::Num(f64::INFINITY)),
                     b"true" => Ok(Value::Bool(true)),
@@ -1529,7 +1599,9 @@ impl<'a> Machine<'a> {
         let this = core::mem::replace(&mut self.this, receiver);
         let loops = core::mem::replace(&mut self.loops, 0);
         let live = core::mem::replace(&mut self.live, true);
+        let now = self.func_now.replace(f);
         let body = if self.tok == Tok::Punct(b'{') { self.statement(true).map(|_| self.ret.take().unwrap_or(Value::Undef)) } else { self.expr() };
+        self.func_now = now;
         self.live = live;
         self.loops = loops;
         self.this = this;
@@ -1691,18 +1763,22 @@ impl<'a> Machine<'a> {
             }
             Tok::Ident(keyword @ (b"var" | b"let" | b"const")) => {
                 let kind = match keyword { b"var" => 0, b"let" => 1, _ => 2 };
-                self.next()?;
-                let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"do" | b"switch" | b"case" | b"default" | b"in" | b"delete" | b"Array" | b"this" | b"throw" | b"try" | b"catch" | b"finally" | b"new" | b"class" | b"Date" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
-                self.next()?;
-                self.expect(b'=')?;
-                let v = self.expr()?;
-                if run {
-                    // `var` reuses an existing binding; `let`/`const` make a new one
-                    // unless the name is already bound in this same block scope.
-                    if kind == 0 { self.assign(name, v, true)?; }
-                    else if self.slot(name).is_some_and(|k| k >= self.block_base && self.kinds[k] != 0) { return Err(Error::Syntax); }
-                    else { self.declare(name, v, kind)?; }
+                // `var a = 1, b;`: several names; only `const` needs a value.
+                loop {
+                    self.next()?;
+                    let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
+                    if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"JSON" | b"Object" | b"null" | b"undefined" | b"typeof" | b"do" | b"switch" | b"case" | b"default" | b"in" | b"delete" | b"Array" | b"this" | b"throw" | b"try" | b"catch" | b"finally" | b"new" | b"class" | b"Date" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
+                    self.next()?;
+                    let v = if self.tok == Tok::Punct(b'=') { self.next()?; Some(self.expr()?) } else if kind == 2 { return Err(Error::Syntax) } else { None };
+                    if run {
+                        // `var` reuses an existing binding (and keeps its value when
+                        // none is given); `let`/`const` make a new one unless the
+                        // name is already bound in this same block scope.
+                        if kind == 0 { if v.is_some() || self.lookup(name).is_none() { self.assign(name, v.unwrap_or(Value::Undef), true)?; } }
+                        else if self.slot(name).is_some_and(|k| k >= self.block_base && self.kinds[k] != 0) { return Err(Error::Syntax); }
+                        else { self.declare(name, v.unwrap_or(Value::Undef), kind)?; }
+                    }
+                    if self.tok != Tok::Punct(b',') { break; }
                 }
                 self.end()
             }
@@ -1728,7 +1804,13 @@ impl<'a> Machine<'a> {
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
                 self.next()?;
-                if self.tok == Tok::Ident(b"extends") { return Err(Error::Unsupported); }
+                let parent = if self.tok == Tok::Ident(b"extends") {
+                    self.next()?;
+                    let Tok::Ident(p) = self.tok else { return Err(Error::Syntax) };
+                    self.next()?;
+                    // Only a class declared earlier can be extended.
+                    if run { Some(self.classes.iter().position(|c| c.0 == p).ok_or(Error::Unsupported)? as u8) } else { None }
+                } else { None };
                 self.expect(b'{')?;
                 let (mut ctor, mut methods) = (None, Vec::new());
                 while self.tok != Tok::Punct(b'}') {
@@ -1748,7 +1830,7 @@ impl<'a> Machine<'a> {
                 self.next()?;
                 if run {
                     if self.classes.len() == 8 { return Err(Error::Limit); }
-                    self.classes.push((name, ctor, methods));
+                    self.classes.push((name, ctor, methods, parent));
                 }
                 Ok(())
             }
@@ -2157,7 +2239,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), func_now: None, loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

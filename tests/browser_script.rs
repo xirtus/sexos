@@ -68,7 +68,7 @@ fn branches_comparisons_and_helpers() {
 #[test]
 fn loops_run_within_the_step_budget() {
     assert_eq!(out("for (var i = 1; i <= 5; i++) document.write(i, i < 5 ? ',' : '')").unwrap(), "1,2,3,4,5");
-    assert_eq!(out("var n = 10, s = 0").err(), Some(Error::Syntax));
+    assert_eq!(out("var n = 10, s = 0; document.write(n + s)").unwrap(), "10");
     assert_eq!(out("var n = 10; var s = 0; while (n > 0) { s += n; n-- } document.write(s)").unwrap(), "55");
     assert_eq!(out("var t = ''; for (let i = 0; i < 3; i += 1) { for (let j = 0; j < 2; j++) t = t + i + j + ' ' } document.write(t)").unwrap(), "00 01 10 11 20 21 ");
     assert_eq!(out("var k = 0; for (;;) { k++ } document.write(k)").err(), Some(Error::Limit), "endless loop spends the budget");
@@ -148,7 +148,7 @@ fn objects_keys_and_json() {
 
 #[test]
 fn null_undefined_typeof_and_to_fixed() {
-    assert_eq!(out("var a; document.write(1)").err(), Some(Error::Syntax), "declarations need a value");
+    assert_eq!(out("var a; document.write(a)").unwrap(), "undefined");
     assert_eq!(out("var n = null; document.write(n, ' ', n == undefined, ' ', n === undefined, ' ', n === null, ' ', n + 1, ' ', !n)").unwrap(), "null true false true 1 true");
     assert_eq!(out("document.write(typeof 1, typeof 'x', typeof true, typeof undefined, typeof nothing, typeof null, typeof [1], typeof {a: 1})").unwrap(), "numberstringbooleanundefinedundefinedobjectobjectobject");
     assert_eq!(out("document.write((3.14159).toFixed(2), ' ', (2.5).toFixed(0), ' ', (-1.005).toFixed(2), ' ', (1e-7).toFixed(3), ' ', (12).toFixed(1), ' ', (0.000001).toFixed(7))").unwrap(), "3.14 3 -1.00 0.000 12.0 0.0000010");
@@ -256,5 +256,22 @@ fn new_classes_and_dates() {
     assert_eq!(out("var d = new Date('2024-02-29T13:45:07.250Z'); document.write(d.getHours(), ':', d.getMinutes(), ':', d.getSeconds(), '.', d.getMilliseconds(), ' ', new Date(2024, 1, 30).getDate(), ' ', Date.UTC(1970, 0, 2), ' ', new Date(0).toISOString())").unwrap(), "13:45:7.250 1 86400000 1970-01-01T00:00:00.000Z");
     assert_eq!(out("new Date()").err().is_some(), true, "no clock");
     assert_eq!(out("document.write(Date.now())").err(), Some(Error::Unsupported));
-    assert_eq!(out("class B extends A {}").err(), Some(Error::Unsupported));
+    assert_eq!(out("class B extends A {}").err(), Some(Error::Unsupported), "unknown parent");
+}
+
+#[test]
+fn class_inheritance_and_super() {
+    assert_eq!(out("class Shape { constructor(name) { this.name = name } area() { return 0 } describe() { return this.name + ' ' + this.area() } }\nclass Sq extends Shape { constructor(s) { super('square'); this.s = s } area() { return this.s * this.s } describe() { return '[' + super.describe() + ']' } }\nclass Unit extends Sq {}\nvar a = new Sq(3); var u = new Unit(1); document.write(a.describe(), ' ', u.describe(), ' ', new Shape('dot').describe(), ' ', u.name)").unwrap(), "[square 9] [square 1] dot 0 square");
+    assert_eq!(out("class A { f() { return super.f() } } var a = new A(); a.f()").err(), Some(Error::Syntax), "no parent");
+    assert_eq!(out("class A {} class B extends A { g() { return super.nope() } } var b = new B(); b.g()").err(), Some(Error::Unsupported));
+}
+
+#[test]
+fn short_circuit_nullish_and_optional_chaining() {
+    assert_eq!(out("var n = 0; function hit() { n++; return 'x' } var a = true || hit(); var b = false && hit(); var c = 1 ? 'y' : hit(); var d = 'z' ?? hit(); document.write(a, b, c, d, n)").unwrap(), "truefalseyz0");
+    assert_eq!(out("var o = null; document.write(o && o.x, ' ', o ?? 'dflt', ' ', 0 ?? 1, ' ', '' || 'e', ' ', undefined ?? null ?? 3)").unwrap(), "null dflt 0 e 3");
+    assert_eq!(out("var cfg = {user: {name: 'Ann', tags: ['a', 'b']}}; var none; document.write(cfg.user?.name, ' ', cfg.admin?.name, ' ', none?.a.b.c, ' ', cfg?.user?.tags?.[1], ' ', none?.[0], ' ', cfg.admin?.name ?? 'guest')").unwrap(), "Ann undefined undefined b undefined guest");
+    assert_eq!(out("var a = 1, b, c = a + 1; var a; document.write(a, b, c)").unwrap(), "1undefined2");
+    assert_eq!(out("const q;").err(), Some(Error::Syntax));
+    assert_eq!(out("var n = 0; function f() { n++; return 0 } var x = null; var y = x?.[f()]; document.write(y, n, ' ', true ? 1 : .5, ' ', false?.5:2)").unwrap(), "undefined0 1 2");
 }

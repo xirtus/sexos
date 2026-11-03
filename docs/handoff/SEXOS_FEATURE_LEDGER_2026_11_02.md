@@ -844,6 +844,26 @@ regression. Browser stack high water rose to 48,064 bytes (of 65,536;
 script frames now exceed the construction peak), still under the gate's
 60 KiB bound.
 
+## M7-M9. Script short-circuit, `??`, `?.`, bare `var`, `extends`/`super` (2026-11-03)
+
+- **M7 Short-circuit fix:** `&& || ?:` used to evaluate both sides (a
+  function on the untaken side still ran). Now only the side JavaScript
+  evaluates runs; the other is only checked. Added `??` and optional
+  chaining `a?.b` / `a?.[k]` (the rest of the chain is skipped on
+  `null`/`undefined`; `f?.()` is refused).
+- **M8 Declarations:** `var a = 1, b;`, `let x;` (value `undefined`);
+  a repeated `var x;` keeps the value; `const x;` is a syntax error.
+- **M9 Class inheritance:** `class B extends A` (A declared earlier),
+  `super(...)` in a constructor, `super.m(...)` in methods, inherited
+  methods with overriding, and an implicit constructor that passes its
+  arguments up.
+
+**Evidence** (`docs/handoff/assets/script-nullish-optional-extends-2026-11-03/`):
+script host tests 29 groups; sealed build and master gate GREEN; native
+HTML gate at 1280x800 and 1024x768 with `EPOCH Fri Dec 21 2012 5 UTC!`
+(inherited `super.loud()`, `cfg.tz?.name ?? 'UTC'`, `cfg.day?.[3] || '!'`).
+Browser stack high water 49,632 of 65,536 bytes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
