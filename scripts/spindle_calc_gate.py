@@ -13,6 +13,7 @@ CASES=[('calc ans',r'\[spindle.calc\] expr_bytes=3 error=NoAnswer ok=0'),
        ('calc 0.1+0.2',r'\[spindle.calc\] expr_bytes=7 result== 0\.3 ok=1'),
        ('calc 1/3',r'\[spindle.calc\] expr_bytes=3 result=~ 0\.333333333 ok=1'),
        ('calc 2**10',r'\[spindle.calc\] expr_bytes=5 result== 1024 ok=1'),
+       ('calc sqrt(2)',r'\[spindle.calc\] expr_bytes=7 result=~ 1\.414213562 ok=1'),
        ('calc 7%0',r'\[spindle.calc\] expr_bytes=3 error=DivideByZero ok=0')]
 
 def type_line(g,value):

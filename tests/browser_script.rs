@@ -29,7 +29,7 @@ fn numbers_print_like_javascript() {
 fn anything_outside_the_subset_writes_nothing() {
     for src in ["while(true){}", "document.write(1); for(;;){}", "alert(1)", "fetch('/x')", "document.cookie = 'a'",
         "document.write(window.location)", "if (1) { while(1){} }", "var a = 1; a.foo", "if (0) x = 1", "document.write(1) document.write(2)", "var x = 'unterminated",
-        "document.write(1); eval('2')", "document.body.innerHTML = 'x'", "x => 1", "document.write(`t`)"] {
+        "document.write(1); eval('2')", "document.body.innerHTML = 'x'", "x => 1"] {
         assert!(run(src.as_bytes()).is_err(), "{src}");
     }
 }
@@ -117,4 +117,17 @@ fn more_math() {
     assert_eq!(out("document.write(Math.sqrt(144), ' ', Math.sqrt(2), ' ', Math.sqrt(-1), ' ', Math.pow(2, 10), ' ', Math.pow(2, -2), ' ', Math.pow(2, 0.5))").unwrap(), "12 1.4142135623730951 NaN 1024 0.25 NaN");
     assert_eq!(out("document.write(Math.trunc(-2.7), Math.sign(-3), Math.sign(0), ' ', Math.PI)").unwrap(), "-2-10 3.141592653589793");
     assert_eq!(out("Math.random()").err(), Some(Error::Unsupported));
+}
+
+#[test]
+fn break_continue_and_templates() {
+    assert_eq!(out("for (var i = 0; i < 10; i++) { if (i % 2 === 1) continue; if (i > 6) break; document.write(i) }").unwrap(), "0246");
+    assert_eq!(out("var n = 0; while (true) { n++; if (n === 5) break } document.write(n)").unwrap(), "5");
+    assert_eq!(out("for (var i = 0; i < 3; i++) { for (var j = 0; j < 3; j++) { if (j === 1) break; document.write(i, j, ' ') } }").unwrap(), "00 10 20 ");
+    assert_eq!(out("break").err(), Some(Error::Syntax));
+    assert_eq!(out("function f() { break } for (;;) { f() }").err(), Some(Error::Syntax), "break does not cross a call");
+    let name = "var who = 'SexOS'; var n = 3; document.write(`Hello ${who}, ${n} x ${n} = ${n * n}!\\n`)";
+    assert_eq!(out(name).unwrap(), "Hello SexOS, 3 x 3 = 9!\n");
+    assert_eq!(out("document.write(`${'a' + `b`}`)").err().is_some(), true, "no nested templates");
+    assert_eq!(out("document.write(`${1 + }`)").err(), Some(Error::Syntax));
 }

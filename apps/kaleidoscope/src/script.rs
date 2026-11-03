@@ -3,10 +3,12 @@
 //!
 //! This is not a JavaScript engine. It accepts:
 //! `var|let|const name = expr`, `name = expr` (also `+=`, `-=`, `++`, `--`),
-//! `if (...) ... else ...`, `while (...)`, `for (...; ...; ...)`, `{ ... }`
+//! `if (...) ... else ...`, `while (...)`, `for (...; ...; ...)` with
+//! `break`/`continue`, `{ ... }`
 //! blocks, `function name(a, b) { ... return x }` declared before use, and
 //! `document.write(...)` / `document.writeln(...)`.
-//! Expressions: number, string and `true`/`false` literals, variables,
+//! Expressions: number, string, template (`` `a ${x}` ``) and `true`/`false`
+//! literals, variables,
 //! `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push(v)`, `.join(s)`),
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
@@ -45,7 +47,7 @@ pub enum Error { Unsupported, Syntax, Limit }
 enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Arr(u8) }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tok<'a> { Num(f64), Str(&'a [u8]), Ident(&'a [u8]), Punct(u8), End }
+enum Tok<'a> { Num(f64), Str(&'a [u8]), Template(&'a [u8]), Ident(&'a [u8]), Punct(u8), End }
 
 
 struct Machine<'a> {
@@ -68,6 +70,10 @@ struct Machine<'a> {
     live: bool,
     /// Set by `return` until the enclosing call takes it.
     ret: Option<Value>,
+    /// `break` (true) or `continue` (false) pending for the innermost loop.
+    jump: Option<bool>,
+    /// Loops open in the current function (0 = `break` is a syntax error).
+    loops: u8,
     elems: Vec<Value>,
     /// (start, len, cap) of each array inside `elems`.
     arrays: [(u16, u16, u16); ARRAYS],
@@ -104,6 +110,11 @@ impl<'a> Machine<'a> {
                 || (matches!(s[self.at], b'+' | b'-') && matches!(s[self.at - 1], b'e' | b'E'))) { self.at += 1; }
             let text = core::str::from_utf8(&s[start..self.at]).map_err(|_| Error::Syntax)?;
             Tok::Num(text.parse::<f64>().map_err(|_| Error::Syntax)?)
+        } else if c == b'`' {
+            let start = self.at + 1;
+            let end = s[start..].iter().position(|&b| b == b'`').ok_or(Error::Syntax)? + start;
+            self.at = end + 1;
+            Tok::Template(&s[start..end])
         } else if c == b'"' || c == b'\'' {
             let start = self.at + 1;
             let mut i = start;
@@ -153,6 +164,33 @@ impl<'a> Machine<'a> {
             i += 1;
         }
         Ok(Value::Str(start as u16, (self.arena.len() - start) as u16))
+    }
+    /// `` `text ${expr} text` ``: each expression is parsed in place from the
+    /// script source, then the lexer resumes after the template.
+    fn template(&mut self, raw: &'a [u8]) -> Result<Value, Error> {
+        let base = raw.as_ptr() as usize - self.src.as_ptr() as usize;
+        let resume = self.pos();
+        let mut text: Vec<u8> = Vec::new();
+        let mut i = 0;
+        while i < raw.len() {
+            if raw[i..].starts_with(b"${") {
+                self.at = base + i + 2;
+                self.next()?;
+                let v = self.expr()?;
+                if self.tok != Tok::Punct(b'}') { return Err(Error::Syntax); }
+                let t = self.to_text(v)?;
+                text.extend_from_slice(self.text(t));
+                i = self.at - base;
+            } else {
+                let mut b = raw[i];
+                if b == b'\\' && i + 1 < raw.len() { i += 1; b = match raw[i] { b'n' => b'\n', b't' => b'\t', other => other }; }
+                text.push(b);
+                i += 1;
+            }
+            if text.len() > ARENA { return Err(Error::Limit); }
+        }
+        self.restore(resume);
+        self.store(&text)
     }
     fn text(&self, v: Value) -> &[u8] {
         match v { Value::Str(s, n) => &self.arena[s as usize..s as usize + n as usize], _ => &[] }
@@ -521,6 +559,7 @@ impl<'a> Machine<'a> {
         match self.tok {
             Tok::Num(x) => { self.next()?; Ok(Value::Num(x)) }
             Tok::Str(raw) => { self.next()?; self.literal(raw) }
+            Tok::Template(raw) => { self.next()?; self.template(raw) }
             Tok::Punct(b'(') => { self.next()?; let v = self.expr()?; self.expect(b')')?; Ok(v) }
             Tok::Punct(b'[') => {
                 self.next()?;
@@ -592,7 +631,9 @@ impl<'a> Machine<'a> {
         }
         self.expect(b')')?;
         let outer = self.ret.take();
+        let loops = core::mem::replace(&mut self.loops, 0);
         let body = self.statement(true);
+        self.loops = loops;
         let result = self.ret.take().unwrap_or(Value::Undef);
         self.ret = outer;
         for (slot, value) in shadowed.iter().flatten() { self.vars[*slot].2 = *value; }
@@ -629,7 +670,7 @@ impl<'a> Machine<'a> {
     fn statement(&mut self, run: bool) -> Result<(), Error> {
         if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
         // After `return`, the rest of the function body is checked, not run.
-        let run = run && self.ret.is_none() && !self.skim;
+        let run = run && self.ret.is_none() && self.jump.is_none() && !self.skim;
         if run { self.steps += 1; if self.steps > STEPS { return Err(Error::Limit); } }
         self.depth += 1;
         let live = self.live;
@@ -666,7 +707,7 @@ impl<'a> Machine<'a> {
             Tok::Ident(b"var" | b"let" | b"const") => {
                 self.next()?;
                 let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
-                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
+                if matches!(name, b"var" | b"let" | b"const" | b"document" | b"if" | b"else" | b"while" | b"for" | b"function" | b"return" | b"break" | b"continue" | b"Math" | b"true" | b"false") { return Err(Error::Syntax); }
                 self.next()?;
                 self.expect(b'=')?;
                 let v = self.expr()?;
@@ -721,9 +762,16 @@ impl<'a> Machine<'a> {
                 if run { self.ret = Some(v); }
                 self.end()
             }
+            Tok::Ident(kind @ (b"break" | b"continue")) => {
+                if self.loops == 0 { return Err(Error::Syntax); }
+                self.next()?;
+                if run { self.jump = Some(kind == b"break"); }
+                self.end()
+            }
             Tok::Ident(b"while") => {
                 self.next()?;
                 let top = self.pos();
+                self.loops += 1;
                 loop {
                     self.restore(top);
                     self.expect(b'(')?;
@@ -731,7 +779,7 @@ impl<'a> Machine<'a> {
                     self.expect(b')')?;
                     let go = run && self.ret.is_none() && self.truthy(c);
                     self.statement(go)?;
-                    if !go { return Ok(()); }
+                    if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
                 }
             }
             Tok::Ident(b"for") => {
@@ -739,6 +787,7 @@ impl<'a> Machine<'a> {
                 self.expect(b'(')?;
                 if self.tok == Tok::Punct(b';') { self.next()?; } else { self.statement(run)?; }
                 let top = self.pos();
+                self.loops += 1;
                 loop {
                     self.restore(top);
                     let go = if self.tok == Tok::Punct(b';') { true } else { let c = self.expr()?; self.truthy(c) };
@@ -748,7 +797,8 @@ impl<'a> Machine<'a> {
                     self.expect(b')')?;
                     let go = run && self.ret.is_none() && go;
                     self.statement(go)?;
-                    if !go { return Ok(()); }
+                    // The body statement was parsed to its end either way.
+                    if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
                     self.restore(update);
                     if self.tok != Tok::Punct(b')') { self.assignment(true)?; }
                 }
@@ -870,7 +920,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut elems = Vec::new();
     elems.try_reserve_exact(ELEMS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

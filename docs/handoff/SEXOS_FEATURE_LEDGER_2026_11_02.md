@@ -439,6 +439,23 @@ equal the straight-alpha blend. Regressions: QOI `https_asset_gate.py`,
 and needed `is_image`; three host gates had been failing until fixed in this
 commit (they were not part of the native runs).
 
+## F24-F26. `break`/`continue`, template strings, `calc sqrt` (2026-11-03)
+
+- **F24.** `break` and `continue` in `while`/`for` (innermost loop; a
+  `break` outside a loop, or crossing a function call, is a syntax error).
+- **F25.** Template strings `` `Hello ${who}, ${n * n}` `` with `\n`/`\t`
+  escapes; each `${...}` is parsed in place from the script source. Nested
+  templates are refused.
+- **F26.** Spindle `calc sqrt(x)`: exact integer square root of the scaled
+  value (`sqrt(16)` -> `= 4`, `sqrt(2)` -> `~ 1.414213562`, negative -> named
+  error); integers only, no floats in Spindle.
+
+**Evidence** (`docs/handoff/assets/script-jumps-templates-calc-sqrt-2026-11-03/`):
+script host tests 11 groups, calc host tests; sealed build and master gate
+GREEN; native HTML gate at both sizes with a seventh page script
+(`odd 1+3+5+7+9 = 25` via continue/break/template); native calc gate at
+both sizes incl. `calc sqrt(2)`.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

@@ -1,0 +1,46 @@
+{
+  "ok": true,
+  "error": null,
+  "binding": {
+    "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/f24-fz/source-binding.json",
+    "sha256": "14e7b4b4161259f4721d7a955bb300f7a2e1d43e20b0f9b7a73a3d4b6a4fccb4",
+    "iso_sha256": "e98ab281ec9d2c07e836e81d953a9fae4d968dd1fe1dd37de5731efff0262990",
+    "production_files": 591,
+    "runner_files": 649
+  },
+  "resolution": "1280x800",
+  "cases": [
+    {
+      "input": "calc ans",
+      "record": "[spindle.calc] expr_bytes=3 error=NoAnswer ok=0"
+    },
+    {
+      "input": "calc 2*(3+4)/5",
+      "record": "[spindle.calc] expr_bytes=9 result== 2.8 ok=1"
+    },
+    {
+      "input": "calc ans*10",
+      "record": "[spindle.calc] expr_bytes=6 result== 28 ok=1"
+    },
+    {
+      "input": "calc 0.1+0.2",
+      "record": "[spindle.calc] expr_bytes=7 result== 0.3 ok=1"
+    },
+    {
+      "input": "calc 1/3",
+      "record": "[spindle.calc] expr_bytes=3 result=~ 0.333333333 ok=1"
+    },
+    {
+      "input": "calc 2**10",
+      "record": "[spindle.calc] expr_bytes=5 result== 1024 ok=1"
+    },
+    {
+      "input": "calc sqrt(2)",
+      "record": "[spindle.calc] expr_bytes=7 result=~ 1.414213562 ok=1"
+    },
+    {
+      "input": "calc 7%0",
+      "record": "[spindle.calc] expr_bytes=3 error=DivideByZero ok=0"
+    }
+  ]
+}

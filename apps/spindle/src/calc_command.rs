@@ -2,7 +2,7 @@
 //! `calc <expression>`: exact decimal arithmetic on what the user typed.
 //!
 //! `ans` is the previous successful result in this Spindle session.
-//! `**` raises to a whole power up to 64.
+//! `**` raises to a whole power up to 64; `sqrt(x)` is the square root.
 //! Numbers are fixed point with 9 decimal places in an i128, so `0.1+0.2`
 //! is exactly `0.3`. Operators: `+ - * / %`, unary minus and parentheses.
 //! Parsing is recursive descent with a depth bound; every operation is
@@ -15,7 +15,7 @@ const MAX_DEPTH: u8 = 16;
 pub const LINE_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer, Exponent }
+pub enum Error { Syntax, DivideByZero, Overflow, TooDeep, NoAnswer, Exponent, Domain }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Value { pub scaled: i128, pub inexact: bool }
@@ -95,6 +95,18 @@ impl Parser<'_> {
                 self.at += 1; Ok(v)
             }
             Some(b'0'..=b'9' | b'.') => self.number(),
+            Some(b's') if self.s[self.at..].starts_with(b"sqrt(") => {
+                self.at += 4;
+                let v = self.atom()?;
+                if v < 0 { return Err(Error::Domain); }
+                // sqrt(v / S) * S == sqrt(v * S), rounded down at the 9th place.
+                let n = (v as u128).checked_mul(SCALE as u128).ok_or(Error::Overflow)?;
+                // Integer Newton from above (no floats in Spindle).
+                let mut r: u128 = if n == 0 { 0 } else { 1u128 << ((128 - n.leading_zeros() + 1) / 2) };
+                while r > 0 { let next = (r + n / r) / 2; if next >= r { break; } r = next; }
+                if r * r != n { self.inexact = true; }
+                Ok(r as i128)
+            }
             Some(b'a') if self.s[self.at..].starts_with(b"ans") && !self.s.get(self.at + 3).is_some_and(u8::is_ascii_alphanumeric) => {
                 self.at += 3;
                 self.ans.ok_or(Error::NoAnswer)
@@ -170,6 +182,11 @@ mod tests {
         assert_eq!(show("2**-2"), "= 0.25");
         assert_eq!(show("3**-1"), "~ 0.333333333");
         assert_eq!(show("2*3**2"), "= 18");
+        assert_eq!(show("sqrt(16)"), "= 4");
+        assert_eq!(show("sqrt(2)"), "~ 1.414213562");
+        assert_eq!(show("sqrt(2.25)+1"), "= 2.5");
+        assert_eq!(show("sqrt(-1)"), "Domain");
+        assert_eq!(show("sqrt 4"), "Syntax");
     }
     #[test] fn errors_are_named_not_wrapped() {
         assert_eq!(show("1/0"), "DivideByZero");
