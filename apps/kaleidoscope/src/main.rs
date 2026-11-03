@@ -30,6 +30,7 @@ mod text_delivery;
 mod browser_command;
 mod html_text;
 mod script;
+mod stack_probe;
 use browser_command::Intent;
 
 use silkclient::{app_main, SexApp};
@@ -59,7 +60,7 @@ const SEXNET_DNS_RESOLVE: u64 = 0x20B;
 // Inline payload is private BOOT ELF storage, never an App::new stack copy.
 static mut CLIPBOARD:sex_pdx::clipboard_client::Client=sex_pdx::clipboard_client::Client::new();
 
-struct App {
+struct Browser {
     identity:sex_pdx::app_lifecycle::CatalogInfo,
     viewport_sequence:u64,
     viewport_ready:bool,
@@ -139,13 +140,13 @@ struct App {
     ui_retries:u8,
 }
 
-/// The Browser state lives on the BOOT main task's pre-mapped 64 KiB stack,
-/// and the pager quota is already spent on heap growth. At 18,872 bytes it
-/// fits; ~19,400 bytes overflowed into a rejected demand-paged stack page
-/// while preparing TLS (feature ledger F4). New state belongs on the heap.
+/// The Browser state is built once on the BOOT main task's 64 KiB stack and
+/// then lives in a static (F29). A ~19,400-byte state once overflowed into a
+/// rejected demand-paged stack page while preparing TLS (feature ledger F4);
+/// the budget still bounds that one construction.
 const APP_STATE_BUDGET:usize=19_000;
-const _:()=assert!(core::mem::size_of::<App>()<=APP_STATE_BUDGET,"Browser App state exceeds its stack budget; box the new state");
-impl App {
+const _:()=assert!(core::mem::size_of::<Browser>()<=APP_STATE_BUDGET,"Browser App state exceeds its stack budget; box the new state");
+impl Browser {
     fn clipboard_progress(&self)->bool { unsafe{CLIPBOARD.pending()&&CLIPBOARD.view()!=sex_pdx::clipboard_client::View::Uncertain} }
     fn clear_selection(&mut self){
         self.selection.clear();self.selection_body=None;
@@ -476,7 +477,7 @@ impl App {
     }
 }
 
-impl SexApp for App {
+impl Browser {
     fn new(_pdx: u32) -> Self {
         let identity=sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).expect("BROWSER_SELF_AUTHORITY");
         let selected=incarnation::select(identity).expect("BROWSER_EXACT_BOOT_IDENTITY");
@@ -821,7 +822,7 @@ impl SexApp for App {
         let received=self.exchange.document_received();
         if self.asset_panel&&received>self.https_progress_logged{self.https_progress_logged=received;sex_pdx::serial_record!("[browser.asset.progress] ticket={} body_received={} authenticated=1 body_visible=0",peer_ticket,received);}
         if self.exchange.is_document()&&received>self.https_progress_logged{self.https_progress_logged=received;sex_pdx::serial_record!("[browser.https.progress] ticket={} body_received={} authenticated=1 body_visible=0",peer_ticket,received);}
-        if self.exchange.take_response_verified(){if let Some(p)=self.exchange.take_page_stats(){*self.page_links=p.targets;sex_pdx::serial_record!("[browser.html.converted] source_bytes={} text_bytes={} links={} truncated={} scripts_run={} scripts_refused={} ticks={}",p.source,p.len,p.links,p.truncated as u8,p.scripts_run,p.scripts_refused,p.ticks);}if self.exchange.resource_kind().is_some_and(sex_tls::Resource::is_image){sex_pdx::serial_record!("[browser.asset.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_asset_len(),self.exchange.retained_asset_hash());}else if self.exchange.is_document(){sex_pdx::serial_record!("[browser.https.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_document_len(),self.exchange.retained_document_hash());}else{sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}}
+        if self.exchange.take_response_verified(){if let Some(p)=self.exchange.take_page_stats(){*self.page_links=p.targets;sex_pdx::serial_record!("[browser.html.converted] source_bytes={} text_bytes={} links={} truncated={} scripts_run={} scripts_refused={} ticks={}",p.source,p.len,p.links,p.truncated as u8,p.scripts_run,p.scripts_refused,p.ticks);if let Some(depth)=stack_probe::high_water(){let (painted,untouched)=stack_probe::detail();sex_pdx::serial_record!("[browser.stack.high_water] bytes={} mapped=65536 painted_at={} untouched={}",depth,painted,untouched);}}if self.exchange.resource_kind().is_some_and(sex_tls::Resource::is_image){sex_pdx::serial_record!("[browser.asset.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_asset_len(),self.exchange.retained_asset_hash());}else if self.exchange.is_document(){sex_pdx::serial_record!("[browser.https.body] ticket={} bytes={} hash={:#x} parsed=1 authenticated=1 visible=0",peer_ticket,self.exchange.retained_document_len(),self.exchange.retained_document_hash());}else{sex_pdx::serial_record!("[browser.tls.peer.response] ticket={} bytes={} hash={:#x} authenticated=1 source=guest_aead",peer_ticket,sex_tls::EXCHANGE_RESPONSE.len(),public_fingerprint(sex_tls::EXCHANGE_RESPONSE));}}
         let peer_view=if matches!(self.intent,Some(Intent::TlsDns|Intent::TlsAssetDns|Intent::TlsStart)){
             if self.waiting_receipt(){tls_exchange::View::Uncertain}else{tls_exchange::View::Pending}
         }else{self.exchange.view()};
@@ -1005,6 +1006,21 @@ fn full_resource_cleanup_proof()->! {
     sex_pdx::task_finish(0)
 }
 
+/// The Browser state lives here, not in `_start`'s frame: held on the stack
+/// it kept ~19 KiB (and a construction copy) live for the whole session, and
+/// the measured stack high water was within 256 bytes of the mapped 64 KiB.
+static mut BROWSER: core::mem::MaybeUninit<Browser> = core::mem::MaybeUninit::uninit();
+struct App;
+impl SexApp for App {
+    fn new(pdx: u32) -> Self {
+        stack_probe::paint();
+        unsafe { (*core::ptr::addr_of_mut!(BROWSER)).write(Browser::new(pdx)); }
+        App
+    }
+    fn run(&mut self, pdx: u32) -> bool {
+        unsafe { (*core::ptr::addr_of_mut!(BROWSER)).assume_init_mut().run(pdx) }
+    }
+}
 app_main!(App);
 
 fn peer_label(view:tls_exchange::View)->&'static[u8]{match view{tls_exchange::View::Idle=>b"idle",tls_exchange::View::Pending=>b"checking",tls_exchange::View::Verified=>b"peer verified",tls_exchange::View::Unavailable=>b"unavailable",tls_exchange::View::Cancelled=>b"cancelled",tls_exchange::View::Uncertain=>b"waiting receipt"}}

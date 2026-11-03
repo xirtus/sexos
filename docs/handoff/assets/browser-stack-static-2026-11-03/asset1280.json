@@ -1,0 +1,553 @@
+{
+  "ok": true,
+  "binding": {
+    "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/f29-fz/source-binding.json",
+    "sha256": "4d7aa126e0f201fad2b9e6ac094fc2055e2737fe62f61dee84f6c36a745c6cf4",
+    "iso_sha256": "e33013af30e2e0241c5c77a2d16cc45d56ea6e6e62322313110e08c3cf60b556",
+    "production_files": 592,
+    "runner_files": 649
+  },
+  "mode": "ready",
+  "wire": {
+    "ok": true,
+    "joins": [
+      {
+        "ticket": 2,
+        "initial_tls_bytes": 190,
+        "outgoing_bytes": 387,
+        "incoming_bytes": 12683,
+        "client_hello": {
+          "tls_version": "TLSv1.3",
+          "cipher": "TLS_AES_128_GCM_SHA256",
+          "group": "P-256",
+          "sni": "probe.sexos.test"
+        },
+        "incoming_tail": null
+      },
+      {
+        "ticket": 3,
+        "initial_tls_bytes": 190,
+        "outgoing_bytes": 387,
+        "incoming_bytes": 12683,
+        "client_hello": {
+          "tls_version": "TLSv1.3",
+          "cipher": "TLS_AES_128_GCM_SHA256",
+          "group": "P-256",
+          "sni": "probe.sexos.test"
+        },
+        "incoming_tail": null
+      }
+    ]
+  },
+  "trace": {
+    "ok": true,
+    "resources": 2,
+    "released": 2,
+    "decoded": 2
+  },
+  "pixels": [
+    {
+      "ok": true,
+      "checked_pixels": 37636,
+      "colored_pixels": 24576,
+      "erased_pixels": 772,
+      "text_pixels": 44928,
+      "geometry": {
+        "x": 224,
+        "y": 145,
+        "width": 48,
+        "height": 48,
+        "scale": 4,
+        "mode": "Fit",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 2,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        },
+        "generation": 3,
+        "ticket": 2,
+        "sequence": 1
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 36864,
+      "colored_pixels": 1536,
+      "erased_pixels": 34560,
+      "text_pixels": 44928,
+      "geometry": {
+        "x": 296,
+        "y": 217,
+        "width": 48,
+        "height": 48,
+        "scale": 1,
+        "mode": "Actual",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 2,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        },
+        "generation": 4,
+        "ticket": 2,
+        "sequence": 2
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 37636,
+      "colored_pixels": 24576,
+      "erased_pixels": 772,
+      "text_pixels": 44928,
+      "geometry": {
+        "x": 224,
+        "y": 145,
+        "width": 48,
+        "height": 48,
+        "scale": 4,
+        "mode": "Fit",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 2,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        },
+        "generation": 5,
+        "ticket": 2,
+        "sequence": 3
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 37636,
+      "colored_pixels": 0,
+      "erased_pixels": 37636,
+      "text_pixels": 0,
+      "geometry": {
+        "x": 224,
+        "y": 145,
+        "width": 48,
+        "height": 48,
+        "scale": 4,
+        "mode": "Fit",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 2,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        }
+      },
+      "visible": false
+    },
+    {
+      "ok": true,
+      "checked_pixels": 37636,
+      "colored_pixels": 24576,
+      "erased_pixels": 772,
+      "text_pixels": 44928,
+      "geometry": {
+        "x": 224,
+        "y": 145,
+        "width": 48,
+        "height": 48,
+        "scale": 4,
+        "mode": "Fit",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 2,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        },
+        "generation": 7,
+        "ticket": 3,
+        "sequence": 5
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 74500,
+      "colored_pixels": 24576,
+      "erased_pixels": 37636,
+      "text_pixels": 69120,
+      "geometry": {
+        "x": 544,
+        "y": 333,
+        "width": 48,
+        "height": 48,
+        "scale": 4,
+        "mode": "Fit",
+        "cols": 79,
+        "chrome_rows": 4,
+        "viewport": 3,
+        "tile": {
+          "x": 0,
+          "y": 50,
+          "w": 1280,
+          "h": 750
+        },
+        "generation": 8,
+        "ticket": 3,
+        "sequence": 7
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 73728,
+      "colored_pixels": 1536,
+      "erased_pixels": 71424,
+      "text_pixels": 69120,
+      "geometry": {
+        "x": 616,
+        "y": 405,
+        "width": 48,
+        "height": 48,
+        "scale": 1,
+        "mode": "Actual",
+        "cols": 79,
+        "chrome_rows": 4,
+        "viewport": 3,
+        "tile": {
+          "x": 0,
+          "y": 50,
+          "w": 1280,
+          "h": 750
+        },
+        "generation": 9,
+        "ticket": 3,
+        "sequence": 8
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 39856,
+      "colored_pixels": 1536,
+      "erased_pixels": 37552,
+      "text_pixels": 44928,
+      "geometry": {
+        "x": 296,
+        "y": 217,
+        "width": 48,
+        "height": 48,
+        "scale": 1,
+        "mode": "Actual",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 4,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        },
+        "generation": 10,
+        "ticket": 3,
+        "sequence": 10
+      },
+      "visible": true
+    },
+    {
+      "ok": true,
+      "checked_pixels": 40628,
+      "colored_pixels": 24576,
+      "erased_pixels": 3764,
+      "text_pixels": 44928,
+      "geometry": {
+        "x": 224,
+        "y": 145,
+        "width": 48,
+        "height": 48,
+        "scale": 4,
+        "mode": "Fit",
+        "cols": 51,
+        "chrome_rows": 4,
+        "viewport": 4,
+        "tile": {
+          "x": 640,
+          "y": 425,
+          "w": 640,
+          "h": 375
+        },
+        "generation": 11,
+        "ticket": 3,
+        "sequence": 11
+      },
+      "visible": true
+    }
+  ],
+  "pointer_parking": {
+    "ok": true,
+    "captures": 9,
+    "checks": [
+      {
+        "capture": "initial-image",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 429705
+      },
+      {
+        "capture": "actual-image",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 446488
+      },
+      {
+        "capture": "refitted-image",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 463142
+      },
+      {
+        "capture": "cleared-image",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 473647
+      },
+      {
+        "capture": "fresh-image",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 528868
+      },
+      {
+        "capture": "zoomed-image",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 571864
+      },
+      {
+        "capture": "zoomed-actual",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 588190
+      },
+      {
+        "capture": "restored-actual",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 629820
+      },
+      {
+        "capture": "restored-fit",
+        "x": 1259,
+        "y": 9,
+        "receipt_offset": 645669
+      }
+    ]
+  },
+  "key_actions": {
+    "ok": true,
+    "physical_keys": 18,
+    "browser_keys": 8,
+    "checks": [
+      {
+        "key": "g",
+        "physical": 354429,
+        "handler": 355326,
+        "held_return": 354978,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "a",
+        "physical": 432525,
+        "handler": 433196,
+        "held_return": 432955,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "f",
+        "physical": 449051,
+        "handler": 449476,
+        "held_return": 449380,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "i",
+        "physical": 465769,
+        "handler": 466245,
+        "held_return": 466051,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "q",
+        "physical": 467549,
+        "handler": 468260,
+        "held_return": 467818,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "g",
+        "physical": 474107,
+        "handler": 474734,
+        "held_return": 474376,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "a",
+        "physical": 574684,
+        "handler": 575047,
+        "held_return": 574953,
+        "callee_before_caller_receipt": false
+      },
+      {
+        "key": "f",
+        "physical": 631926,
+        "handler": 632487,
+        "held_return": 632195,
+        "callee_before_caller_receipt": false
+      }
+    ],
+    "scope": "QMP windows and atomic pre-forward PS2 makes establish causality; post-call held-route receipts may occur before or after App events."
+  },
+  "authority": {
+    "ok": true,
+    "errors": [],
+    "configuration": {
+      "ok": true,
+      "errors": [],
+      "queries": 1,
+      "copies": 1,
+      "scope": "Immutable BOOT metadata and scalar checked copy; held device authority is checked separately. Route holder obtains no NIC metadata; gateway data alone is separate from the transport route receipt."
+    },
+    "routing": {
+      "ok": true,
+      "errors": [],
+      "routes": 1,
+      "scope": "Normal-profile private default-route receipt after held BOOT metadata and device readiness. Actual next-hop bytes and neighbor recovery require independent wire evidence."
+    },
+    "grants": [
+      [
+        13,
+        19,
+        0,
+        4,
+        0,
+        32902,
+        4307,
+        6,
+        2
+      ]
+    ],
+    "runtime_queries": 4,
+    "command_invocations": 6,
+    "preparation": true,
+    "ethernet": true,
+    "transitions": [
+      "[sexnet.nic.prepare] from=Cold to=Drain failure=None status=524931 mac=000000000000 dma=0 packets=0",
+      "[sexnet.nic.prepare] from=Drain to=Reset failure=None status=524931 mac=000000000000 dma=0 packets=0",
+      "[sexnet.nic.prepare] from=Reset to=Verify failure=None status=524931 mac=000000000000 dma=0 packets=0",
+      "[sexnet.nic.prepare] from=Verify to=Quiescent failure=None status=524931 mac=525400123456 dma=0 packets=0"
+    ],
+    "scope": "Exact BOOT identity/command custody, reset, fixed DMA queue initialization and actual bus-master transition. Wire bytes require independent peer capture. No online protocol, firmware DMA drain, physical hardware or hostile/SMP containment proof."
+  },
+  "self_wait": {
+    "ok": true,
+    "errors": [],
+    "browser_tasks": [
+      15
+    ],
+    "boot_tasks": 40,
+    "parks_observed": 16,
+    "expiries_observed": 15,
+    "returns_observed": 18,
+    "timer_user_joins": [
+      {
+        "task": 13,
+        "deadline": 422,
+        "expired_at": 422,
+        "returned_at": 426
+      },
+      {
+        "task": 13,
+        "deadline": 432,
+        "expired_at": 432,
+        "returned_at": 434
+      },
+      {
+        "task": 13,
+        "deadline": 439,
+        "expired_at": 439,
+        "returned_at": 441
+      },
+      {
+        "task": 13,
+        "deadline": 450,
+        "expired_at": 450,
+        "returned_at": 452
+      },
+      {
+        "task": 13,
+        "deadline": 484,
+        "expired_at": 484,
+        "returned_at": 486
+      },
+      {
+        "task": 13,
+        "deadline": 529,
+        "expired_at": 529,
+        "returned_at": 530
+      }
+    ],
+    "scope": "Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof."
+  },
+  "target": {
+    "ok": true,
+    "scope": "Active x86_64-sex.json and pinned compiler default cfg only; legacy sex-src/targets is historical. No capability, containment, SMP, runtime or whole-workspace proof; downstream codegen overrides require separate checks.",
+    "target": "/Users/xmacbookm5/Projects/Sex/x86_64-sex.json",
+    "target_sha256": "58c36dbfb388082ffd1ea37ac37dec9f4786ad4e99630fbb13d38565a0edb86b",
+    "toolchain": "nightly-2026-07-22",
+    "command": [
+      "rustc",
+      "-Z",
+      "unstable-options",
+      "--print",
+      "cfg",
+      "--target",
+      "/Users/xmacbookm5/Projects/Sex/x86_64-sex.json"
+    ],
+    "compiler": "rustc 1.99.0-nightly (0e29c21d9 2026-07-21)\nbinary: rustc\ncommit-hash: 0e29c21d93abc9bdc330182be1fbd33cfd5fee68\ncommit-date: 2026-07-21\nhost: aarch64-apple-darwin\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8",
+    "cfg": {
+      "os": [
+        "none"
+      ],
+      "env": [
+        ""
+      ],
+      "arch": [
+        "x86_64"
+      ],
+      "pointer_width": [
+        "64"
+      ],
+      "families": [],
+      "features": [
+        "x87"
+      ],
+      "unix": false,
+      "sha256": "bcff688386336e5e078380ba66f39eafc1052ca4e2ff9025e94e523b70002e64"
+    },
+    "errors": []
+  },
+  "scope": "Actual explicit G on immutable BOOT HTTPS endpoint, authenticated bounded image/qoi, exact positive RELEASE before bounded decode/publication, complete centered Fit/1:1 straight-alpha image and source-font controls in raw PPM, current-generation text/bitmap acknowledgments, prior image-box erasure inside the live owned body, and positive Q/CLEAR erasure. Public controlled root and endpoint only; no TLS key logs, proxy, public Internet, runtime capability mint, arbitrary URL, execution or hostile-content containment claim."
+}

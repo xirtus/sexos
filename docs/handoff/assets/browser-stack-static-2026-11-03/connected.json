@@ -1,0 +1,404 @@
+{
+  "ok": true,
+  "acceptance": "representative_connected_only",
+  "full_alpha_acceptance": false,
+  "boots": 2,
+  "frames": 17,
+  "same_image": true,
+  "same_disk_state": true,
+  "session": {
+    "ok": true,
+    "acceptance": "representative_connected_only",
+    "full_alpha_acceptance": false,
+    "binding": {
+      "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/f29-fz/source-binding.json",
+      "sha256": "4d7aa126e0f201fad2b9e6ac094fc2055e2737fe62f61dee84f6c36a745c6cf4",
+      "iso_sha256": "e33013af30e2e0241c5c77a2d16cc45d56ea6e6e62322313110e08c3cf60b556",
+      "production_files": 592,
+      "runner_files": 649
+    },
+    "boots": 1,
+    "frames": 15,
+    "recovery": false,
+    "wire": {
+      "ok": true,
+      "flows": 3,
+      "packets": 170,
+      "image": {
+        "joins": [
+          {
+            "ticket": 2,
+            "initial_tls_bytes": 190,
+            "outgoing_bytes": 387,
+            "incoming_bytes": 12684,
+            "client_hello": {
+              "tls_version": "TLSv1.3",
+              "cipher": "TLS_AES_128_GCM_SHA256",
+              "group": "P-256",
+              "sni": "probe.sexos.test"
+            }
+          }
+        ]
+      },
+      "dns": {
+        "ok": true,
+        "errors": [],
+        "mode": "echo",
+        "queries": [
+          {
+            "packet": 21,
+            "direction": "outgoing",
+            "ticket": 1,
+            "guest_port": 48001,
+            "peer_port": 46079,
+            "payload_hex": "0001010000010000000000000570726f6265057365786f7304746573740000010001",
+            "payload_sha256": "32254955302ed92fc7e90d31b7829cc90aba7a6df9c5d7341c8222d534341642",
+            "udp_checksum": "verified"
+          },
+          {
+            "packet": 163,
+            "direction": "outgoing",
+            "ticket": 2,
+            "guest_port": 48002,
+            "peer_port": 46079,
+            "payload_hex": "0002010000010000000000000570726f6265057365786f7304746573740000010001",
+            "payload_sha256": "891a11bdcb1a9f92ac21b8bf7bf5ca859192f526018cac6002b752e39351ba77",
+            "udp_checksum": "verified"
+          }
+        ],
+        "responses": [
+          {
+            "packet": 22,
+            "direction": "incoming",
+            "ticket": 1,
+            "guest_port": 48001,
+            "peer_port": 46079,
+            "payload_hex": "0001818000010001000000000570726f6265057365786f7304746573740000010001c00c000100010000003c00040a000202",
+            "payload_sha256": "9d4cfcfd97d0f8e14efad3b592c8885a58545552112eb21353578636052a8c6a",
+            "udp_checksum": "verified",
+            "kind": "explicit"
+          },
+          {
+            "packet": 164,
+            "direction": "incoming",
+            "ticket": 2,
+            "guest_port": 48002,
+            "peer_port": 46079,
+            "payload_hex": "0002818000010001000000000570726f6265057365786f7304746573740000010001c00c000100010000003c00040a000202",
+            "payload_sha256": "e3af1a199cac612bbe83e773798c1a647ff19d474adbff8ba7ea39bb51844422",
+            "udp_checksum": "verified",
+            "kind": "explicit"
+          }
+        ],
+        "packets": [
+          {
+            "packet": 21,
+            "direction": "outgoing",
+            "ticket": 1,
+            "guest_port": 48001,
+            "peer_port": 46079,
+            "payload_hex": "0001010000010000000000000570726f6265057365786f7304746573740000010001",
+            "payload_sha256": "32254955302ed92fc7e90d31b7829cc90aba7a6df9c5d7341c8222d534341642",
+            "udp_checksum": "verified"
+          },
+          {
+            "packet": 22,
+            "direction": "incoming",
+            "ticket": 1,
+            "guest_port": 48001,
+            "peer_port": 46079,
+            "payload_hex": "0001818000010001000000000570726f6265057365786f7304746573740000010001c00c000100010000003c00040a000202",
+            "payload_sha256": "9d4cfcfd97d0f8e14efad3b592c8885a58545552112eb21353578636052a8c6a",
+            "udp_checksum": "verified",
+            "kind": "explicit"
+          },
+          {
+            "packet": 163,
+            "direction": "outgoing",
+            "ticket": 2,
+            "guest_port": 48002,
+            "peer_port": 46079,
+            "payload_hex": "0002010000010000000000000570726f6265057365786f7304746573740000010001",
+            "payload_sha256": "891a11bdcb1a9f92ac21b8bf7bf5ca859192f526018cac6002b752e39351ba77",
+            "udp_checksum": "verified"
+          },
+          {
+            "packet": 164,
+            "direction": "incoming",
+            "ticket": 2,
+            "guest_port": 48002,
+            "peer_port": 46079,
+            "payload_hex": "0002818000010001000000000570726f6265057365786f7304746573740000010001c00c000100010000003c00040a000202",
+            "payload_sha256": "e3af1a199cac612bbe83e773798c1a647ff19d474adbff8ba7ea39bb51844422",
+            "udp_checksum": "verified",
+            "kind": "explicit"
+          }
+        ],
+        "host_attempt_capture_join": [
+          {
+            "ticket": 1,
+            "kind": "answer",
+            "captured_packets": [
+              22
+            ],
+            "host_send_succeeded": true
+          },
+          {
+            "ticket": 2,
+            "kind": "answer",
+            "captured_packets": [
+              164
+            ],
+            "host_send_succeeded": true
+          }
+        ],
+        "ipv4_udp_zero_checksums": 0,
+        "scope": "Independent full captured Ethernet/IPv4/UDP lengths and checksums, exact query/response bytes, fixed endpoint and finite ticket/transaction binding. IPv4 UDP zero checksums are explicit. Host send attempts are distinct from packets; no DNS cache, public resolver, web, TLS, physical containment or pixel claim."
+      }
+    },
+    "keys": {
+      "ok": true,
+      "physical_makes": 89
+    },
+    "wheel": [
+      {
+        "ok": true,
+        "name": "down",
+        "target": "body",
+        "wheel": -1,
+        "reports": 1,
+        "before": 0,
+        "anchor": 96,
+        "events": [
+          {
+            "wheel": -1,
+            "before": 0,
+            "anchor": 96,
+            "changed": true,
+            "callee_before_shell_return": false,
+            "callee_before_input_return": false
+          }
+        ]
+      },
+      {
+        "ok": true,
+        "name": "up",
+        "target": "body",
+        "wheel": 1,
+        "reports": 1,
+        "before": 96,
+        "anchor": 0,
+        "events": [
+          {
+            "wheel": 1,
+            "before": 96,
+            "anchor": 0,
+            "changed": true,
+            "callee_before_shell_return": false,
+            "callee_before_input_return": false
+          }
+        ]
+      }
+    ],
+    "joins": {
+      "ok": true,
+      "document": {
+        "object": 3,
+        "name": "connote",
+        "identity": 262145,
+        "bytes": 2049,
+        "hash": "0x995e94b8c0d62060",
+        "generation": 1,
+        "bank": 1,
+        "raw_object_sha256": "579954c6a6a60f34006f1470c1bfcebd63b1d0a40a992c759e6b67ca250f62e0",
+        "workspace_count": 4,
+        "workspace_manifest_sha256": "47ebcbf864a655705862b0476c194e00af58e9027a329d2d1f59d7b3a547287c"
+      },
+      "history": {
+        "bank": 0,
+        "generation": 1,
+        "source": 12,
+        "task": 12,
+        "logical": 12,
+        "size": 43,
+        "fingerprint": "0xef716c232344c786",
+        "count": 1,
+        "data_hash": "0x95e8cf167b9bda9",
+        "commands": [
+          "echo connected108"
+        ],
+        "payload_sha256": "523be2e1689a35683d8ae94b540a3f28c85c92aca5b3e8a96ef1bf7bf81ee0c2",
+        "payload_hex": "534849310c00000001002b00000000008466e59d8a22f0c611006563686f20636f6e6e6563746564313038"
+      },
+      "history_receipt": {
+        "handle": 3,
+        "receipt": 720256,
+        "effect": 720001,
+        "generation": 1
+      },
+      "cleanup": [
+        {
+          "target": 12,
+          "task": 12,
+          "roles": [
+            1,
+            2,
+            4,
+            8,
+            16
+          ],
+          "retire_offset": 769259,
+          "ack_offset": 769410,
+          "pool_offset": 776969
+        },
+        {
+          "target": 15,
+          "task": 15,
+          "roles": [
+            1,
+            2,
+            4,
+            8,
+            16
+          ],
+          "retire_offset": 799909,
+          "ack_offset": 800060,
+          "pool_offset": 810575
+        },
+        {
+          "target": 9,
+          "task": 9,
+          "roles": [
+            1,
+            2,
+            4,
+            8,
+            16
+          ],
+          "retire_offset": 813480,
+          "ack_offset": 813627,
+          "pool_offset": 819524
+        }
+      ]
+    },
+    "scope": "Representative connected session, not full alpha acceptance: one live boot and exact same-image/terminal-disk cold boot per profile. Actual fixed public-lab-root TLS QOI response is withheld while real Quil typing completes; this proves network-wait overlap, not simultaneous CPU execution. Positive image Clear precedes separate plainHTTP2048 reader/USB wheel; explicit clipboard replacement, append z, typed SaveAs2049, Linen reopen; exact Spindle12 history barrier/readback and same-instance workspace BringHere, then ordered exact-incarnation app Close and cold document/history reopen. All authority remains existing BOOT routes in GLOBAL_VAS. No publicweb/publicCA, arbitrary endpoint, Unix/POSIX, sustained1800s alpha, power-loss/crash, physical/SMP or hostile-isolation claim."
+  },
+  "recovery": {
+    "ok": true,
+    "acceptance": "representative_connected_only",
+    "full_alpha_acceptance": false,
+    "binding": {
+      "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/f29-fz/source-binding.json",
+      "sha256": "4d7aa126e0f201fad2b9e6ac094fc2055e2737fe62f61dee84f6c36a745c6cf4",
+      "iso_sha256": "e33013af30e2e0241c5c77a2d16cc45d56ea6e6e62322313110e08c3cf60b556",
+      "production_files": 592,
+      "runner_files": 649
+    },
+    "boots": 1,
+    "frames": 2,
+    "recovery": true,
+    "wire": {
+      "ok": true,
+      "flows": 1,
+      "packets": 19,
+      "image": {
+        "joins": []
+      },
+      "dns": {
+        "ok": true,
+        "queries": [],
+        "responses": [],
+        "packets": [],
+        "scope": "No captured guest IPv4 UDP datagram in the exact cold PCAP; not merely an empty endpoint list."
+      }
+    },
+    "keys": {
+      "ok": true,
+      "physical_makes": 19
+    },
+    "wheel": [],
+    "joins": {
+      "ok": true,
+      "document": {
+        "object": 3,
+        "name": "connote",
+        "identity": 262145,
+        "bytes": 2049,
+        "hash": "0x995e94b8c0d62060",
+        "generation": 1,
+        "bank": 1,
+        "raw_object_sha256": "579954c6a6a60f34006f1470c1bfcebd63b1d0a40a992c759e6b67ca250f62e0",
+        "workspace_count": 4,
+        "workspace_manifest_sha256": "47ebcbf864a655705862b0476c194e00af58e9027a329d2d1f59d7b3a547287c"
+      },
+      "history": {
+        "bank": 0,
+        "generation": 1,
+        "source": 12,
+        "task": 12,
+        "logical": 12,
+        "size": 43,
+        "fingerprint": "0xef716c232344c786",
+        "count": 1,
+        "data_hash": "0x95e8cf167b9bda9",
+        "commands": [
+          "echo connected108"
+        ],
+        "payload_sha256": "523be2e1689a35683d8ae94b540a3f28c85c92aca5b3e8a96ef1bf7bf81ee0c2",
+        "payload_hex": "534849310c00000001002b00000000008466e59d8a22f0c611006563686f20636f6e6e6563746564313038"
+      },
+      "history_receipt": {
+        "handle": 1,
+        "receipt": 326842,
+        "effect": 308166,
+        "generation": 1
+      },
+      "cleanup": [
+        {
+          "target": 12,
+          "task": 12,
+          "roles": [
+            1,
+            2,
+            4,
+            8,
+            16
+          ],
+          "retire_offset": 461759,
+          "ack_offset": 461910,
+          "pool_offset": 474468
+        },
+        {
+          "target": 15,
+          "task": 15,
+          "roles": [
+            1,
+            2,
+            4,
+            8,
+            16
+          ],
+          "retire_offset": 481241,
+          "ack_offset": 481392,
+          "pool_offset": 493610
+        },
+        {
+          "target": 9,
+          "task": 9,
+          "roles": [
+            1,
+            2,
+            4,
+            8,
+            16
+          ],
+          "retire_offset": 496956,
+          "ack_offset": 497103,
+          "pool_offset": 503793
+        }
+      ]
+    },
+    "scope": "Representative connected session, not full alpha acceptance: one live boot and exact same-image/terminal-disk cold boot per profile. Actual fixed public-lab-root TLS QOI response is withheld while real Quil typing completes; this proves network-wait overlap, not simultaneous CPU execution. Positive image Clear precedes separate plainHTTP2048 reader/USB wheel; explicit clipboard replacement, append z, typed SaveAs2049, Linen reopen; exact Spindle12 history barrier/readback and same-instance workspace BringHere, then ordered exact-incarnation app Close and cold document/history reopen. All authority remains existing BOOT routes in GLOBAL_VAS. No publicweb/publicCA, arbitrary endpoint, Unix/POSIX, sustained1800s alpha, power-loss/crash, physical/SMP or hostile-isolation claim."
+  },
+  "scope": "Representative connected session, not full alpha acceptance: one live boot and exact same-image/terminal-disk cold boot per profile. Actual fixed public-lab-root TLS QOI response is withheld while real Quil typing completes; this proves network-wait overlap, not simultaneous CPU execution. Positive image Clear precedes separate plainHTTP2048 reader/USB wheel; explicit clipboard replacement, append z, typed SaveAs2049, Linen reopen; exact Spindle12 history barrier/readback and same-instance workspace BringHere, then ordered exact-incarnation app Close and cold document/history reopen. All authority remains existing BOOT routes in GLOBAL_VAS. No publicweb/publicCA, arbitrary endpoint, Unix/POSIX, sustained1800s alpha, power-loss/crash, physical/SMP or hostile-isolation claim."
+}

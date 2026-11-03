@@ -138,6 +138,8 @@ def main():
   wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b);doc_event=peer.completed.wait(30)
   if not doc_event:raise TimeoutError('peer close_notify')
   conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=8 scripts_refused=2 ticks=\d+',b);checks['converted']=conv[0]
+  hw=wait(r'\[browser.stack.high_water\] bytes=(\d+) mapped=65536 painted_at=\d+ untouched=\d+',b);checks['stack_high_water']=int(hw[1])
+  if int(hw[1])>60*1024:raise RuntimeError(f'Browser stack high water {hw[1]} leaves under 4 KiB')
   def reader(name,text,request,path):
    shot=out/(name+'.ppm');result=dict(ok=False,errors=['no frame']);deadline=time.monotonic()+25
    while time.monotonic()<deadline:

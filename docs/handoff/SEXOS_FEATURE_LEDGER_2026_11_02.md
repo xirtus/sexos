@@ -25,7 +25,7 @@ and PNG tests run in `sexnet_jobs_host_gate.sh`.
 **Open release gates** (details below): full-window reader needs a larger
 Display text delivery; Display applies app paints late (screenshots must wait
 for the app's `applied` receipt) and Spindle's display stayed pending in the
-calc gate; Browser stack headroom is guarded only by an `App` size budget;
+calc gate; Browser stack headroom is now measured (F29: 46.7 KiB of 64 KiB);
 script recursion is shallow for the same stack reason; autosave failure
 fences document I/O like any uncertain save; no draft cleanup; images are
 limited to 48x48.
@@ -508,6 +508,29 @@ host tests 12 groups; sealed build and master gate GREEN; native HTML gate
 at both sizes with an eighth page script writing
 `{"name":"Quil","saves":3,"kind":"editor"} keys 3` (`scripts_run=8`), no
 pager rejections.
+
+## F29. Browser stack measured, then halved by a static state (2026-11-03)
+
+**Measured.** `apps/kaleidoscope/src/stack_probe.rs` paints the unused part
+of the Browser main task's 64 KiB stack once at startup and reports the
+deepest use (`[browser.stack.high_water] bytes=... mapped=65536`). On the F28
+image the high water was **65,280 bytes**: the Browser was running within
+256 bytes of the mapped stack, which explains the F4 crash and why every new
+field was dangerous.
+
+**Fixed.** The 18.9 KiB `Browser` state no longer lives in `_start`'s frame
+for the whole session: `App` is now a zero-sized handle and the state is
+written once into a static (`BROWSER: MaybeUninit<Browser>`). High water is
+now **46,752 bytes** at both sizes (about 18 KiB headroom); the remaining
+peak is the one-time construction. The `App` size budget (F5) still bounds
+that construction. No behaviour, route or authority changed.
+
+**Evidence** (`docs/handoff/assets/browser-stack-static-2026-11-03/`): Browser
+host gates and Python suite (1132) OK after keeping the identity-first
+`Browser::new` the output-identity checker requires; sealed build and master
+gate GREEN; native HTML gate at both sizes now records and bounds the stack
+high water (fails above 60 KiB); regressions PNG, QOI asset, `/welcome`
+document and connected desktop gates pass.
 
 ## Release gates noted while doing F1–F2
 
