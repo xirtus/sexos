@@ -3,6 +3,7 @@ macro_rules! serial_println{($($a:tt)*)=>{{let _=format_args!($($a)*);}};}
 const CMD_MAX:usize=256;struct History;
 fn history_nav(_: &mut CmdLine,_:&History,_:bool)->bool{false}
 fn ghost_accept(_: &mut CmdLine,_:&History)->bool{false}
+fn complete_command(_: &mut CmdLine)->bool{false}
 fn scrollback_page(_:bool){}
 include!(env!("SPINDLE_EDITOR_SOURCE"));
 #[test]fn real_insert_navigation_and_middle_backspace_preserve_expected_text(){

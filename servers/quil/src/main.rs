@@ -249,6 +249,25 @@ unsafe fn quil_replace_next() {
     sex_pdx::serial_record!("[quil.replace] start={} old_bytes={} new_bytes={} applied={} revision={}",start,end-start,len,applied as u8,QUIL_REVISION);
     if applied {quil_find_next();} else {QUIL_INPUT_NOTICE=Some(b"REPLACE NOT APPLIED");}
 }
+/// Rewritten span for replace-all (the document limit).
+static mut QUIL_REPLACE_SCRATCH: [u8; 12288] = [0; 12288];
+/// Replace every occurrence of the query as one undoable edit covering the
+/// first match to the last.
+unsafe fn quil_replace_all() {
+    let (mut query, mut with) = ([0u8; find::QUERY_MAX], [0u8; find::QUERY_MAX]);
+    let (ql, wl) = (QUIL_FIND.query().len(), QUIL_FIND.replacement().len());
+    query[..ql].copy_from_slice(QUIL_FIND.query());
+    with[..wl].copy_from_slice(QUIL_FIND.replacement());
+    let scratch = &mut *core::ptr::addr_of_mut!(QUIL_REPLACE_SCRATCH);
+    match find::replace_all(&QUIL_BUFFER[..QUIL_BUFFER_LEN], &query[..ql], &with[..wl], scratch) {
+        Some((start, end, len, count)) => {
+            let applied = quil_replace((start, end), &scratch[..len]);
+            if !applied { QUIL_INPUT_NOTICE = Some(b"REPLACE NOT APPLIED"); }
+            sex_pdx::serial_record!("[quil.replace.all] count={} start={} end={} new_bytes={} applied={} len={} revision={}", count, start, end, len, applied as u8, QUIL_BUFFER_LEN, QUIL_REVISION);
+        }
+        None => { QUIL_INPUT_NOTICE = Some(b"NOT FOUND"); sex_pdx::serial_record!("[quil.replace.all] count=0 applied=0"); }
+    }
+}
 /// Select the next exact occurrence after the current selection, wrapping
 /// once to the start. The bound selection source fences stale documents.
 unsafe fn quil_find_next() {
@@ -303,6 +322,8 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
         }
         if QUIL_FIND.active() {
             // A control chord (New/Open/Save...) leaves find mode and proceeds.
+            // Ctrl+Enter in the replacement field replaces every match.
+            if key.control&&key.code==0x1c&&QUIL_FIND.field()==find::Field::Replacement {quil_replace_all();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);return}
             if key.control {QUIL_FIND.clear();sex_pdx::serial_record!("[quil.find.mode] on=0 reason=chord");}
             else {
                 match key.code {

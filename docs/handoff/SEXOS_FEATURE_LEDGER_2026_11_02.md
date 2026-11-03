@@ -7,7 +7,8 @@ links, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
 interlaced or not, colour-key transparency), `B` plain document. Quil:
 autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
-`Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word.
+`Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
+find/replace with `Ctrl+Enter` to replace all.
 Spindle: Shift works; Tab completes command names; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
@@ -1068,6 +1069,25 @@ completion host test (in `spindle_calc_host_gate.sh`); sealed build and
 master gate GREEN; native Spindle gate at 1280x800 and 1024x768 now also
 types `sext`, Tab, `0`, Enter (sextime runs) and `proj`, Tab, Tab
 (`matches=2 added=10`, then the listing).
+
+## M31. Quil replace all (2026-11-03)
+
+- In find mode with the replacement field active (`Ctrl+F`, query, `Down`,
+  replacement), `Ctrl+Enter` replaces every non-overlapping occurrence,
+  left to right, as **one undoable edit** that covers only the first match
+  to the last (`find::replace_all`, rewritten into a static 12 KiB scratch;
+  a span that would not fit is refused, not cut). `NOT FOUND` when nothing
+  matches.
+- Also fixes the `spindle_editor` host fixture (in
+  `service_custody_host_gate.sh`), which M30 left without a
+  `complete_command` stub.
+
+**Evidence** (`docs/handoff/assets/quil-replace-all-2026-11-03/`): host test
+`replace_all_rewrites_only_the_matched_span` (tests/quil_find.rs);
+service-custody, clipboard and sexnet host gates pass; sealed build and
+master gate GREEN; native Quil autosave gate at both sizes now, after draft
+recovery, finds `n`, replaces with `N` via Ctrl+Enter:
+`[quil.replace.all] count=2 start=7 end=12 new_bytes=5 applied=1 len=14`.
 
 ## Release gates noted while doing F1–F2
 

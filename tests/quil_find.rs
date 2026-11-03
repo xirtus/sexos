@@ -92,3 +92,18 @@ fn replacement_field_is_separate_bounded_and_shown_in_the_prompt() {
     f.clear();
     assert!(f.replacement().is_empty() && f.field() == find::Field::Query && !f.active());
 }
+
+#[test]
+fn replace_all_rewrites_only_the_matched_span() {
+    let mut out = [0u8; 64];
+    let r = find::replace_all(b"draft one and two", b"n", b"N", &mut out).unwrap();
+    assert_eq!(r, (7, 12, 5, 2));
+    assert_eq!(&out[..r.2], b"Ne aN");
+    let r = find::replace_all(b"aaaa", b"aa", b"b", &mut out).unwrap();
+    assert_eq!((r, &out[..r.2]), ((0, 4, 2, 2), &b"bb"[..]), "non-overlapping, left to right");
+    let r = find::replace_all(b"x.y.z", b".", b"", &mut out).unwrap();
+    assert_eq!((r, &out[..r.2]), ((1, 4, 1, 2), &b"y"[..]));
+    assert_eq!(find::replace_all(b"abc", b"z", b"y", &mut out), None);
+    assert_eq!(find::replace_all(b"abc", b"", b"y", &mut out), None);
+    assert_eq!(find::replace_all(b"aaaa", b"a", b"bbbbbbbbbbbbbbbbbbbb", &mut out), None, "overflow refuses");
+}
