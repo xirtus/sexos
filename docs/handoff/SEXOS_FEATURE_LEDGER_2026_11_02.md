@@ -1185,6 +1185,25 @@ script host tests 41 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... mispx`); stack floor refusal unchanged
 (`hits=1`), high water 58,048 bytes.
 
+## N4-N6. Script number formatting, `exec`/`matchAll`, object helpers (2026-11-03)
+
+- **N4 Numbers:** `toPrecision(p)` (exponential when the exponent is below
+  -6 or at least p, as JavaScript), `toLocaleString()` in the en-US form
+  (grouped thousands, at most 3 fraction digits), and the `Number`
+  constants (`MAX_SAFE_INTEGER`, `EPSILON`, `MAX_VALUE`, ...).
+- **N5 Regular expressions:** `re.exec(s)` with `lastIndex` for `g`
+  (the `while ((m = re.exec(s)) !== null)` loop), `re.lastIndex`, and
+  `s.matchAll(re)` (an array of match arrays, not an iterator).
+- **N6 Objects and strings:** `hasOwnProperty`, `Object.hasOwn`,
+  `Object.freeze`/`isFrozen` (assignments to a frozen object are ignored),
+  arrays' `keys/values/entries`, and `localeCompare` (letters compared
+  case-insensitively first, lower case before upper).
+
+**Evidence** (`docs/handoff/assets/script-format-exec-helpers-2026-11-03/`):
+script host tests 42 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... 98,765.432 0.012`). High water 58,472 bytes
+(the floor-refused recursion; bound 60 KiB).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

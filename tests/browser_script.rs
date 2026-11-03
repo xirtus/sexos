@@ -376,3 +376,11 @@ fn sets_maps_and_assignment_expressions() {
     assert_eq!(out("var m = new Map([['a', 1]]); m.set('b', 2).set('a', 3); var t = ''; for (const [k, v] of m) t += k + v; m.forEach((v, k) => t += '|' + k + '=' + v); document.write(m.size, m.get('a'), m.get('z'), ' ', t, ' ', m.delete('a'), m.size, ' ', [...m.keys()], ' ', Array.from(m.values()), m instanceof Map)").unwrap(), "23undefined a3b2|a=3|b=2 true1 b 2true");
     assert_eq!(out("var a, b; a = b = 5; var o = {}; var r = (o.k = 2) * 3; var n = 0; [1, 2, 3].forEach(x => n += x); var x = 1; if (x = 2) document.write(a, b, r, o.k, n, x)").unwrap(), "556262");
 }
+
+#[test]
+fn number_formatting_regex_exec_and_object_helpers() {
+    assert_eq!(out("document.write((1234.5).toLocaleString(), ' ', (-1234567.891).toLocaleString(), ' ', (0.0004).toLocaleString(), ' ', (12.345).toPrecision(3), ' ', (123456).toPrecision(2), ' ', (0.000001234).toPrecision(2), ' ', (9.99).toPrecision(2), ' ', (0).toPrecision(3))").unwrap(), "1,234.5 -1,234,567.891 0 12.3 1.2e+5 0.0000012 10 0.00");
+    assert_eq!(out(r"var re = /(\w)(\d)/g; var m; var t = ''; while ((m = re.exec('a1 b2')) !== null) t += m[1] + re.lastIndex; document.write(t, re.lastIndex, ' ', /x(y)/.exec('axy'), ' ', 'a1b2'.matchAll(/(\w)(\d)/g).map(m => m[2]).join('+'))").unwrap(), "a2b50 xy,y 1+2");
+    assert_eq!(out("document.write('b'.localeCompare('a'), ['b', 'a', 'C', 'A'].sort((x, y) => x.localeCompare(y)))").unwrap(), "1a,A,b,C");
+    assert_eq!(out("var o = Object.freeze({a: 1}); o.a = 2; o.b = 3; var a = [7, 8]; var t = ''; for (const [i, v] of a.entries()) t += i + '' + v; document.write(o.a, o.b, Object.isFrozen(o), ' ', Number.MAX_SAFE_INTEGER, ' ', t, a.keys(), ' ', ({a: 1}).hasOwnProperty('a'), Object.hasOwn({k: 0}, 'z'))").unwrap(), "1undefinedtrue 9007199254740991 07180,1 truefalse");
+}

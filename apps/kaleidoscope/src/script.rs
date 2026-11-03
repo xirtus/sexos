@@ -28,6 +28,8 @@
 //! `class A extends B { constructor() { super(...) } m() { super.m() } static s() {} }`,
 //! `Set`/`Map` (add/set/get/has/delete/clear/size/forEach/keys/values/entries, spread,
 //! `for...of`), assignment as an expression (`a = b = 0`, `x => t += x`),
+//! `re.exec` with `lastIndex`, `matchAll`, `toPrecision`, `toLocaleString`, `localeCompare`,
+//! `Number.MAX_SAFE_INTEGER` etc., `hasOwnProperty`/`Object.hasOwn`, `Object.freeze`,
 //! `get`/`set` accessors in classes and object literals (not listed by `Object.keys`),
 //! `new`, `instanceof`,
 //! `findLast findLastIndex flatMap lastIndexOf splice unshift toString`, `Array.of`,
@@ -148,6 +150,10 @@ struct Machine<'a> {
     thrown: Option<Value>,
     /// Compiled regular expression literals, by source offset.
     regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
+    /// `lastIndex` of each regular expression (for `exec` with `g`).
+    re_last: Vec<usize>,
+    /// Objects passed to `Object.freeze` (assignments to them are ignored).
+    frozen: Vec<u8>,
     /// `class` declarations: name, constructor, methods, parent class, static methods.
     classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>, Vec<(&'a [u8], u8, bool)>)>,
     /// `Set`/`Map` objects: (object, keys array, values array; a Set's
@@ -605,6 +611,15 @@ impl<'a> Machine<'a> {
                     continue;
                 }
             }
+            if let (Value::Obj(id), b"hasOwnProperty") = (v, name) {
+                if self.find_prop(id, name).is_none() {
+                    let (args, _) = self.arguments()?;
+                    let k = self.to_text(args[0])?;
+                    let key = self.text(k).to_vec();
+                    v = Value::Bool(self.find_prop(id, &key).is_some() || self.accessor(id, &key).is_some());
+                    continue;
+                }
+            }
             if let Value::Obj(id) = v {
                 let prop = self.read_prop(id, name)?;
                 // `o.f(...)` calls with `this` bound to `o`.
@@ -639,6 +654,14 @@ impl<'a> Machine<'a> {
             };
             return Ok(v);
         }
+        if let (Value::Num(x), b"toPrecision" | b"toLocaleString") = (v, name) {
+            let (args, n) = self.arguments()?;
+            return if name == b"toLocaleString" { self.locale_number(x) } else if n == 0 || matches!(args[0], Value::Undef) { self.number_text(x) } else {
+                let p = self.to_number(args[0]);
+                if !(1.0..=21.0).contains(&p) || p != floor(p) { return Err(Error::Unsupported); }
+                self.precision(x, p as usize)
+            };
+        }
         if let (Value::Num(x), b"toFixed") = (v, name) {
             self.expect(b'(')?;
             let d = if self.tok == Tok::Punct(b')') { Value::Num(0.0) } else { self.expr()? };
@@ -653,11 +676,33 @@ impl<'a> Machine<'a> {
                 b"test" => { let (args, _) = self.arguments()?; let t = self.to_text(args[0])?; let text = self.text(t).to_vec(); Value::Bool(self.re_find(k, &text, 0)?.is_some()) }
                 b"source" => { let p = self.regexes[k as usize].1; self.store(p)? }
                 b"flags" => { let f = self.regexes[k as usize].2; self.store(f)? }
+                b"lastIndex" => Value::Num(self.re_last[k as usize] as f64),
+                b"exec" => {
+                    // With `g`, starts at `lastIndex` and moves it past the match
+                    // (back to 0 when nothing more matches).
+                    let (args, _) = self.arguments()?;
+                    if !self.live { return Ok(Value::Undef); }
+                    let t = self.to_text(args[0])?;
+                    let text = self.text(t).to_vec();
+                    let global = self.regexes[k as usize].2.contains(&b'g');
+                    let from = if global { self.re_last[k as usize] } else { 0 };
+                    let found = if from > text.len() { None } else { self.re_find(k, &text, from)? };
+                    match found {
+                        None => { self.re_last[k as usize] = 0; Value::Null }
+                        Some(c) => {
+                            if global { self.re_last[k as usize] = c[0].map_or(0, |(_, b)| b); }
+                            let groups = self.regexes[k as usize].3.groups;
+                            let mut items = Vec::new();
+                            for g in 0..=groups { items.push(match c[g] { Some((a, b)) => self.store(&text[a..b])?, None => Value::Undef }); }
+                            self.new_array(&items)?
+                        }
+                    }
+                }
                 _ => return Err(Error::Unsupported),
             };
             return Ok(v);
         }
-        if let (Value::Str(..), b"match" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
+        if let (Value::Str(..), b"match" | b"matchAll" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
             // String methods with a regular expression argument.
             let at = self.pos();
             let (args, n) = self.arguments()?;
@@ -690,7 +735,7 @@ impl<'a> Machine<'a> {
                     self.array_callback(id, name, &args[..n])?
                 }
                 b"indexOf" | b"lastIndexOf" | b"includes" | b"slice" | b"concat" | b"reverse" | b"sort" | b"pop" | b"shift" | b"fill" | b"at" | b"flat"
-                | b"toString" | b"splice" | b"unshift" => {
+                | b"toString" | b"splice" | b"unshift" | b"keys" | b"values" | b"entries" => {
                     let (args, n) = self.arguments()?;
                     self.array_method(id, name, &args[..n])?
                 }
@@ -702,7 +747,7 @@ impl<'a> Machine<'a> {
         v = match name {
             b"length" => Value::Num(self.text(s).len() as f64),
             b"trim" | b"indexOf" | b"charAt" | b"slice" | b"substring" | b"split" | b"replace" | b"replaceAll"
-            | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" => {
+            | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" | b"localeCompare" => {
                 self.expect(b'(')?;
                 let mut args = [Value::Undef; 2];
                 let mut n = 0;
@@ -753,6 +798,17 @@ impl<'a> Machine<'a> {
         let piece = |m: &mut Self, span: Option<(usize, usize)>| -> Result<Value, Error> { match span { Some((a, b)) => m.store(&text[a..b]), None => Ok(Value::Undef) } };
         Ok(match name {
             b"search" => Value::Num(found.first().and_then(|c| c[0]).map_or(-1.0, |(a, _)| a as f64)),
+            b"matchAll" => {
+                // Every match with its groups (an array, not an iterator).
+                if !global { return Err(Error::Unsupported); }
+                let mut all: Vec<Value> = Vec::new();
+                for c in &found {
+                    let mut items: Vec<Value> = Vec::new();
+                    for g in 0..=groups { items.push(piece(self, c[g])?); }
+                    all.push(self.new_array(&items)?);
+                }
+                self.new_array(&all)?
+            }
             b"match" => {
                 if found.is_empty() { return Ok(Value::Null); }
                 let mut items: Vec<Value> = Vec::new();
@@ -842,6 +898,14 @@ impl<'a> Machine<'a> {
                 let a = t.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(n);
                 let b = t.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(a, |p| p + 1);
                 Value::Str((start + a) as u16, (b - a) as u16)
+            }
+            b"localeCompare" => {
+                // ASCII letters case-insensitively first, then lower before
+                // upper (close to the default collation for plain text).
+                let other = self.to_text(args[0])?;
+                let key = |t: &[u8]| t.iter().map(|b| (b.to_ascii_lowercase(), b.is_ascii_uppercase())).collect::<Vec<_>>();
+                let (a, b) = (key(&self.arena[start..start + n]), key(self.text(other)));
+                Value::Num(match a.cmp(&b) { core::cmp::Ordering::Less => -1.0, core::cmp::Ordering::Equal => 0.0, _ => 1.0 })
             }
             b"startsWith" | b"endsWith" | b"includes" | b"lastIndexOf" => {
                 let needle = self.to_text(args[0])?;
@@ -1277,6 +1341,48 @@ impl<'a> Machine<'a> {
             _ => return Err(Error::Unsupported),
         })
     }
+    /// `x.toPrecision(p)`: `p` significant digits, exponential when the
+    /// exponent is below -6 or at least `p` (as JavaScript).
+    fn precision(&mut self, x: f64, p: usize) -> Result<Value, Error> {
+        if !x.is_finite() { return self.number_text(x); }
+        if x == 0.0 { return self.fixed(0.0, p - 1); }
+        let a = if x < 0.0 { -x } else { x };
+        let mut e: i32 = 0;
+        let mut m = a;
+        while m >= 10.0 { m /= 10.0; e += 1; }
+        while m < 1.0 { m *= 10.0; e -= 1; }
+        // Rounding to p digits can carry into a new digit (9.99 -> 10.0).
+        let scale = pow(10.0, (p as i32 - 1) as f64);
+        if floor(m * scale + 0.5) >= 10.0 * scale { e += 1; m /= 10.0; }
+        if e < -6 || e >= p as i32 {
+            let digits = self.fixed(m, p - 1)?;
+            let mut t = if x < 0.0 { b"-".to_vec() } else { Vec::new() };
+            t.extend_from_slice(self.text(digits));
+            let _ = write!(Text(&mut t), "e{}{}", if e < 0 { '-' } else { '+' }, e.abs());
+            return self.store(&t);
+        }
+        self.fixed(x, (p as i32 - 1 - e) as usize)
+    }
+    /// `x.toLocaleString()` in the en-US form: grouped thousands, at most
+    /// three fraction digits.
+    fn locale_number(&mut self, x: f64) -> Result<Value, Error> {
+        if x.is_nan() { return self.store(b"NaN"); }
+        if x.is_infinite() { return self.store(if x < 0.0 { "-∞".as_bytes() } else { "∞".as_bytes() }); }
+        let f = self.fixed(x, 3)?;
+        let mut t = self.text(f).to_vec();
+        while t.last() == Some(&b'0') { t.pop(); }
+        if t.last() == Some(&b'.') { t.pop(); }
+        let neg = t.first() == Some(&b'-');
+        let body = if neg { &t[1..] } else { &t[..] };
+        let int_len = body.iter().position(|c| *c == b'.').unwrap_or(body.len());
+        let mut out = if neg { b"-".to_vec() } else { Vec::new() };
+        for (i, &c) in body.iter().enumerate() {
+            if i > 0 && i < int_len && (int_len - i) % 3 == 0 { out.push(b','); }
+            out.push(c);
+        }
+        if out == b"-0" { out.remove(0); }
+        self.store(&out)
+    }
     /// `new Date(...)` from given components, a time value or an ISO string.
     /// There is no `new Date()` / `Date.now()`: a script holds no clock.
     fn date_new(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -1530,6 +1636,13 @@ impl<'a> Machine<'a> {
                 Value::Num(found)
             }
             b"toString" => self.join(id, b",")?,
+            b"keys" => { let items: Vec<Value> = (0..len).map(|k| Value::Num(k as f64)).collect(); self.new_array(&items)? }
+            b"values" => { let items = self.elems[start..start + len].to_vec(); self.new_array(&items)? }
+            b"entries" => {
+                let mut items = Vec::new();
+                for k in 0..len { let e = self.elems[start + k]; items.push(self.new_array(&[Value::Num(k as f64), e])?); }
+                self.new_array(&items)?
+            }
             b"splice" | b"unshift" => {
                 // Rebuild the contents; the array keeps its identity.
                 let (a, removed) = if name == b"unshift" { (0, 0) } else {
@@ -1864,6 +1977,21 @@ impl<'a> Machine<'a> {
         let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
         if (name, f) == (&b"Array"[..], &b"of"[..]) { let (args, n) = self.arguments()?; return self.new_array(&args[..n]); }
+        if name == b"Number" && self.tok != Tok::Punct(b'(') {
+            return Ok(Value::Num(match f {
+                b"MAX_SAFE_INTEGER" => 9007199254740991.0, b"MIN_SAFE_INTEGER" => -9007199254740991.0,
+                b"EPSILON" => f64::EPSILON, b"MAX_VALUE" => f64::MAX, b"MIN_VALUE" => 5e-324,
+                b"POSITIVE_INFINITY" => f64::INFINITY, b"NEGATIVE_INFINITY" => f64::NEG_INFINITY, b"NaN" => f64::NAN,
+                _ => return Err(Error::Unsupported),
+            }));
+        }
+        if (name, f) == (&b"Object"[..], &b"hasOwn"[..]) {
+            let (args, _) = self.arguments()?;
+            let Value::Obj(id) = args[0] else { return Ok(Value::Bool(false)) };
+            let k = self.to_text(args[1])?;
+            let key = self.text(k).to_vec();
+            return Ok(Value::Bool(self.find_prop(id, &key).is_some() || self.accessor(id, &key).is_some()));
+        }
         if (name, f) == (&b"Object"[..], &b"assign"[..]) {
             // Copies own properties of each source onto the target.
             let (args, n) = self.arguments()?;
@@ -1901,6 +2029,8 @@ impl<'a> Machine<'a> {
             (b"Number", b"isInteger", _) => Ok(Value::Bool(num(self).is_some_and(|x| x.is_finite() && x == floor(x)))),
             (b"Number", b"isFinite", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_finite))),
             (b"Number", b"isNaN", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_nan))),
+            (b"Object", b"freeze", v) => { if let (Value::Obj(id), true) = (v, self.live) { if !self.frozen.contains(&id) { self.frozen.push(id); } } Ok(v) }
+            (b"Object", b"isFrozen", v) => Ok(Value::Bool(match v { Value::Obj(id) => self.frozen.contains(&id), _ => true })),
             (b"Object", b"fromEntries", Value::Arr(list)) => {
                 let id = self.new_object()?;
                 let (start, len, _) = self.arrays[list as usize];
@@ -2000,6 +2130,7 @@ impl<'a> Machine<'a> {
                 if self.regexes.len() == 8 { return Err(Error::Limit); }
                 let re = Regex::new(pattern, flags).map_err(|e| if e == crate::regex::Error::Limit { Error::Limit } else { Error::Syntax })?;
                 self.regexes.push((at, pattern, flags, re));
+                self.re_last.push(0);
                 Ok(Value::Re((self.regexes.len() - 1) as u8))
             }
             Tok::Template(raw) => { self.next()?; self.template(raw) }
@@ -2853,6 +2984,8 @@ impl<'a> Machine<'a> {
     /// appends) or an array's `length` (shrinking only).
     fn set_member(&mut self, base: Value, key: Key<'a>, v: Value) -> Result<(), Error> {
         match (base, key) {
+            // Assignments to a frozen object are ignored (sloppy mode).
+            (Value::Obj(id), _) if self.frozen.contains(&id) => Ok(()),
             (Value::Obj(id), k) => {
                 let k = self.key_text(k)?;
                 match self.accessor(id, &k) {
@@ -3080,7 +3213,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), accessors: Vec::new(), collections: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), collections: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }
