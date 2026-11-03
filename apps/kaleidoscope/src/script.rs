@@ -26,6 +26,8 @@
 //! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
 //! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
 //! `class A extends B { constructor() { super(...) } m() { super.m() } static s() {} }`,
+//! `Set`/`Map` (add/set/get/has/delete/clear/size/forEach/keys/values/entries, spread,
+//! `for...of`), assignment as an expression (`a = b = 0`, `x => t += x`),
 //! `get`/`set` accessors in classes and object literals (not listed by `Object.keys`),
 //! `new`, `instanceof`,
 //! `findLast findLastIndex flatMap lastIndexOf splice unshift toString`, `Array.of`,
@@ -148,10 +150,13 @@ struct Machine<'a> {
     regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
     /// `class` declarations: name, constructor, methods, parent class, static methods.
     classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>, Vec<(&'a [u8], u8, bool)>)>,
+    /// `Set`/`Map` objects: (object, keys array, values array; a Set's
+    /// values array is its keys array).
+    collections: Vec<(u8, u8, u8)>,
     /// Accessor properties: (object, name, getter, setter).
     accessors: Vec<(u8, Vec<u8>, Option<u8>, Option<u8>)>,
     /// What made each object, for `instanceof`: 0 a literal, 1+k class k,
-    /// 16+f function `f` as a constructor, 64 an Error.
+    /// 16+f function `f` as a constructor, 64 an Error, 65 a Set, 66 a Map.
     made_by: [u8; OBJECTS],
     /// The function running now (for `super`).
     func_now: Option<u8>,
@@ -390,6 +395,15 @@ impl<'a> Machine<'a> {
     fn expr(&mut self) -> Result<Value, Error> {
         if self.too_deep() { return Err(Error::Limit); }
         self.depth += 1;
+        // An assignment is an expression too (`a = b = 0`, `x => t += x`);
+        // its value is the value assigned. (`n++` is handled in `atom`.)
+        if let Tok::Ident(_) = self.tok {
+            let at = self.pos();
+            self.next()?;
+            let assigns = self.assigns_ahead_with(false)?;
+            self.restore(at);
+            if assigns { let v = self.assignment(self.live); self.depth -= 1; return v; }
+        }
         let v = self.binary(1);
         self.depth -= 1;
         v
@@ -582,6 +596,12 @@ impl<'a> Machine<'a> {
                     let _ = id;
                     self.arguments()?;
                     v = self.date_method(ms, name)?;
+                    continue;
+                }
+            }
+            if let (Value::Obj(id), true) = (v, self.live) {
+                if matches!(self.made_by[id as usize], 65 | 66) && self.find_prop(id, name).is_none() {
+                    v = self.collection_member(id, name)?;
                     continue;
                 }
             }
@@ -1063,6 +1083,7 @@ impl<'a> Machine<'a> {
                 return Ok(Value::Obj(id));
             }
             b"Date" => return self.date_new(args),
+            b"Set" | b"Map" => return self.collection_new(class == b"Map", args.first().copied()),
             _ => {}
         }
         let id = self.new_object()?;
@@ -1098,6 +1119,8 @@ impl<'a> Machine<'a> {
             b"Object" => matches!(v, Value::Obj(_) | Value::Arr(_) | Value::Func(_)),
             b"Function" => matches!(v, Value::Func(_)),
             b"Error" => made == 64,
+            b"Set" => made == 65,
+            b"Map" => made == 66,
             b"TypeError" | b"RangeError" | b"SyntaxError" => made == 64 && { let Value::Obj(id) = v else { return Ok(false) }; let n = self.get_prop(id, b"name"); matches!(n, Value::Str(..)) && self.text(n) == c },
             _ => if let Some(k) = self.classes.iter().position(|x| x.0 == c) {
                 let mut at = (1..=8).contains(&made).then(|| made as usize - 1);
@@ -1143,6 +1166,116 @@ impl<'a> Machine<'a> {
             if let Some(&(_, f)) = self.classes[k].2.iter().find(|c| c.0 == m) { self.this_next = Some(this); return self.invoke(f, &args[..n]); }
             k = self.classes[k].3.ok_or(Error::Unsupported)? as usize;
         }
+    }
+    /// `new Set(iterable)` / `new Map([[k, v], ...])`.
+    fn collection_new(&mut self, map: bool, from: Option<Value>) -> Result<Value, Error> {
+        let id = self.new_object()?;
+        self.made_by[id as usize] = if map { 66 } else { 65 };
+        let Value::Arr(keys) = self.new_array(&[])? else { return Err(Error::Limit) };
+        let vals = if map { let Value::Arr(v) = self.new_array(&[])? else { return Err(Error::Limit) }; v } else { keys };
+        if self.collections.len() == 16 { return Err(Error::Limit); }
+        self.collections.push((id, keys, vals));
+        if let Some(src) = from.filter(|v| !matches!(v, Value::Undef | Value::Null)) {
+            for item in self.iterate(src)? {
+                if map {
+                    let Value::Arr(pair) = item else { return Err(Error::Unsupported) };
+                    let (ps, pl, _) = self.arrays[pair as usize];
+                    let k = if pl > 0 { self.elems[ps as usize] } else { Value::Undef };
+                    let v = if pl > 1 { self.elems[ps as usize + 1] } else { Value::Undef };
+                    self.collection_put(id, k, v)?;
+                } else { self.collection_put(id, item, item)?; }
+            }
+        }
+        Ok(Value::Obj(id))
+    }
+    fn collection(&self, id: u8) -> Result<(u8, u8), Error> {
+        self.collections.iter().find(|c| c.0 == id).map(|c| (c.1, c.2)).ok_or(Error::Unsupported)
+    }
+    /// Position of `key` (SameValueZero: NaN equals NaN).
+    fn collection_find(&mut self, keys: u8, key: Value) -> Result<Option<usize>, Error> {
+        let (start, len, _) = self.arrays[keys as usize];
+        for k in 0..len as usize {
+            let e = self.elems[start as usize + k];
+            if let (Value::Num(a), Value::Num(b)) = (e, key) { if a.is_nan() && b.is_nan() { return Ok(Some(k)); } }
+            if matches!(self.apply(b'E', e, key)?, Value::Bool(true)) { return Ok(Some(k)); }
+        }
+        Ok(None)
+    }
+    fn collection_put(&mut self, id: u8, key: Value, value: Value) -> Result<(), Error> {
+        let (keys, vals) = self.collection(id)?;
+        match self.collection_find(keys, key)? {
+            Some(k) => { if keys != vals { let s = self.arrays[vals as usize].0 as usize; self.elems[s + k] = value; } }
+            None => { self.push(keys, key)?; if keys != vals { self.push(vals, value)?; } }
+        }
+        Ok(())
+    }
+    /// The `i`th item when iterating: a Set's value, a Map's `[key, value]`.
+    fn collection_item(&mut self, id: u8, i: usize) -> Result<Option<Value>, Error> {
+        let (keys, vals) = self.collection(id)?;
+        let (ks, len, _) = self.arrays[keys as usize];
+        if i >= len as usize { return Ok(None); }
+        let k = self.elems[ks as usize + i];
+        if keys == vals { return Ok(Some(k)); }
+        let v = self.elems[self.arrays[vals as usize].0 as usize + i];
+        Ok(Some(self.new_array(&[k, v])?))
+    }
+    /// The values `...v` / `Array.from(v)` / `for...of` see.
+    fn iterate(&mut self, v: Value) -> Result<Vec<Value>, Error> {
+        Ok(match v {
+            Value::Arr(id) => { let (s0, l0, _) = self.arrays[id as usize]; self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec() }
+            Value::Str(s0, n0) => (0..n0).map(|k| Value::Str(s0 + k, 1)).collect(),
+            Value::Obj(id) if matches!(self.made_by[id as usize], 65 | 66) => {
+                let mut out = Vec::new();
+                while let Some(item) = self.collection_item(id, out.len())? { out.push(item); }
+                out
+            }
+            _ if !self.live => Vec::new(),
+            _ => return Err(Error::Unsupported),
+        })
+    }
+    /// `size` and the methods of a Set or Map.
+    #[inline(never)]
+    fn collection_member(&mut self, id: u8, name: &[u8]) -> Result<Value, Error> {
+        let (keys, vals) = self.collection(id)?;
+        let map = keys != vals;
+        if name == b"size" { return Ok(Value::Num(self.arrays[keys as usize].1 as f64)); }
+        let (args, n) = self.arguments()?;
+        let a0 = if n > 0 { args[0] } else { Value::Undef };
+        Ok(match name {
+            b"add" if !map => { self.collection_put(id, a0, a0)?; Value::Obj(id) }
+            b"set" if map => { self.collection_put(id, a0, if n > 1 { args[1] } else { Value::Undef })?; Value::Obj(id) }
+            b"get" if map => match self.collection_find(keys, a0)? { Some(k) => self.elems[self.arrays[vals as usize].0 as usize + k], None => Value::Undef },
+            b"has" => Value::Bool(self.collection_find(keys, a0)?.is_some()),
+            b"delete" => match self.collection_find(keys, a0)? {
+                Some(k) => {
+                    for arr in if map { [keys, vals].to_vec() } else { [keys].to_vec() } {
+                        let (s0, l0, _) = self.arrays[arr as usize];
+                        let mut items = self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec();
+                        items.remove(k);
+                        self.set_items(arr, &items)?;
+                    }
+                    Value::Bool(true)
+                }
+                None => Value::Bool(false),
+            },
+            b"clear" => { self.set_items(keys, &[])?; if map { self.set_items(vals, &[])?; } Value::Undef }
+            b"keys" => { let (s0, l0, _) = self.arrays[keys as usize]; let items = self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec(); self.new_array(&items)? }
+            b"values" => { let (s0, l0, _) = self.arrays[vals as usize]; let items = self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec(); self.new_array(&items)? }
+            b"entries" => { let items = self.iterate(Value::Obj(id))?; let items = if map { items } else { let mut pairs = Vec::new(); for v in items { pairs.push(self.new_array(&[v, v])?); } pairs }; self.new_array(&items)? }
+            b"forEach" => {
+                let Value::Func(f) = a0 else { return Err(Error::Unsupported) };
+                let mut i = 0;
+                while let Some(item) = { let (ks, len, _) = self.arrays[keys as usize]; (i < len as usize).then(|| self.elems[ks as usize + i]) } {
+                    self.steps += 1;
+                    if self.steps > STEPS { return Err(Error::Limit); }
+                    let value = if map { self.elems[self.arrays[vals as usize].0 as usize + i] } else { item };
+                    self.invoke(f, &[value, item, Value::Obj(id)])?;
+                    i += 1;
+                }
+                Value::Undef
+            }
+            _ => return Err(Error::Unsupported),
+        })
     }
     /// `new Date(...)` from given components, a time value or an ISO string.
     /// There is no `new Date()` / `Date.now()`: a script holds no clock.
@@ -1358,11 +1491,10 @@ impl<'a> Machine<'a> {
             if self.tok == Tok::Punct(b'S') {
                 self.next()?;
                 let v = self.expr()?;
-                let Value::Arr(id) = v else { return Err(Error::Unsupported) };
-                let (start, len, _) = self.arrays[id as usize];
-                if n + len as usize > out.len() { return Err(Error::Limit); }
-                out[n..n + len as usize].copy_from_slice(&self.elems[start as usize..start as usize + len as usize]);
-                n += len as usize;
+                let items = self.iterate(v)?;
+                if n + items.len() > out.len() { return Err(Error::Limit); }
+                out[n..n + items.len()].copy_from_slice(&items);
+                n += items.len();
             } else {
                 if n == out.len() { return Err(Error::Limit); }
                 out[n] = self.expr()?;
@@ -1759,6 +1891,7 @@ impl<'a> Machine<'a> {
                 let items: Vec<Value> = match v {
                     Value::Arr(id) => { let (s0, l0, _) = self.arrays[id as usize]; self.elems[s0 as usize..s0 as usize + l0 as usize].to_vec() }
                     Value::Str(s0, n0) => (0..n0).map(|k| Value::Str(s0 + k, 1)).collect(),
+                    Value::Obj(id) if matches!(self.made_by[id as usize], 65 | 66) => self.iterate(v)?,
                     Value::Obj(id) => { let n = self.to_number(self.get_prop(id, b"length")); if !(0.0..=ELEMS as f64).contains(&n) { return Err(Error::Limit); } (0..n as usize).map(|_| Value::Undef).collect() }
                     _ => return Err(Error::Unsupported),
                 };
@@ -2645,6 +2778,7 @@ impl<'a> Machine<'a> {
             let item = if !run || self.ret.is_some() { None } else {
                 match (coll, of) {
                     (Value::Arr(id), true) => { let (start, len, _) = self.arrays[id as usize]; (i < len as usize).then(|| self.elems[start as usize + i]) }
+                    (Value::Obj(id), true) if matches!(self.made_by[id as usize], 65 | 66) => self.collection_item(id, i)?,
                     (Value::Str(_, n), true) => if i < n as usize { Some(self.index(coll, i as f64)?) } else { None },
                     (Value::Obj(id), false) => { let (start, len, _) = self.objects[id as usize]; if i < len as usize { let (ns, nn, _) = self.props[start as usize + i]; Some(Value::Str(ns, nn)) } else { None } }
                     (Value::Arr(id), false) => if i < self.arrays[id as usize].1 as usize { Some(self.number_text(i as f64)?) } else { None },
@@ -2672,7 +2806,7 @@ impl<'a> Machine<'a> {
         }
     }
     /// `name = expr`, `name += expr`, `name -= expr`, `name++`, `name--`.
-    fn assignment(&mut self, run: bool) -> Result<(), Error> {
+    fn assignment(&mut self, run: bool) -> Result<Value, Error> {
         let Tok::Ident(name) = self.tok else { return Err(Error::Syntax) };
         self.next()?;
         let found = if name == b"this" { Some(self.this) } else { self.lookup(name) };
@@ -2680,7 +2814,7 @@ impl<'a> Machine<'a> {
         if !matches!(self.tok, Tok::Punct(b'.' | b'[')) {
             let v = self.update(old)?;
             if run { self.assign(name, v, false)?; }
-            return Ok(());
+            return Ok(v);
         }
         // A member chain `a.b[c].d op= v`: every key but the last is read.
         let mut base = old;
@@ -2700,7 +2834,7 @@ impl<'a> Machine<'a> {
             if matches!(self.tok, Tok::Punct(b'.' | b'[')) { base = current; continue; }
             let v = self.update(current)?;
             if run { self.set_member(base, key, v)?; }
-            return Ok(());
+            return Ok(v);
         }
     }
     fn key_text(&mut self, key: Key<'a>) -> Result<Vec<u8>, Error> {
@@ -2748,7 +2882,8 @@ impl<'a> Machine<'a> {
         }
     }
     /// After a name: does a member chain (`.a[b].c`) lead to an assignment?
-    fn assigns_ahead(&mut self) -> Result<bool, Error> {
+    fn assigns_ahead(&mut self) -> Result<bool, Error> { self.assigns_ahead_with(true) }
+    fn assigns_ahead_with(&mut self, steps: bool) -> Result<bool, Error> {
         let at = self.pos();
         loop {
             match self.tok {
@@ -2764,7 +2899,8 @@ impl<'a> Machine<'a> {
                 _ => break,
             }
         }
-        let assigns = matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'T' | b'Q' | b'R' | b'I' | b'D' | b'W' | b'v' | b'w' | b'x' | b'y' | b'z' | b'q'));
+        let assigns = matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'T' | b'Q' | b'R' | b'W' | b'v' | b'w' | b'x' | b'y' | b'z' | b'q'))
+            || (steps && matches!(self.tok, Tok::Punct(b'I' | b'D')));
         self.restore(at);
         Ok(assigns)
     }
@@ -2944,7 +3080,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), accessors: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), accessors: Vec::new(), collections: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

@@ -369,3 +369,10 @@ fn builtin_conversions_as_function_values() {
     assert_eq!(out("var f = Number; document.write([1, 2, 3].map(String).join('-'), ' ', ['1', '2.5'].map(Number), ' ', [0, 'a', '', null, 3].filter(Boolean), ' ', Boolean(''), Boolean('x'), typeof String, typeof Boolean, ' ', f('7') + 1)").unwrap(), "1-2-3 1,2.5 a,3 falsetruefunctionfunction 8");
     assert_eq!(out("var String = 5; document.write(String)").unwrap(), "5", "a script's own binding wins");
 }
+
+#[test]
+fn sets_maps_and_assignment_expressions() {
+    assert_eq!(out("var s = new Set([1, 2, 2, 3]); s.add(4).add(1); var z = new Set(); z.add(NaN).add(NaN); var o = {}; z.add(o).add(o).add({}); document.write(s.size, s.has(2), s.has(9), ' ', [...s], ' ', [...new Set('hello')].join(''), ' ', z.size, z instanceof Set, JSON.stringify(z))").unwrap(), "4truefalse 1,2,3,4 helo 3true{}");
+    assert_eq!(out("var m = new Map([['a', 1]]); m.set('b', 2).set('a', 3); var t = ''; for (const [k, v] of m) t += k + v; m.forEach((v, k) => t += '|' + k + '=' + v); document.write(m.size, m.get('a'), m.get('z'), ' ', t, ' ', m.delete('a'), m.size, ' ', [...m.keys()], ' ', Array.from(m.values()), m instanceof Map)").unwrap(), "23undefined a3b2|a=3|b=2 true1 b 2true");
+    assert_eq!(out("var a, b; a = b = 5; var o = {}; var r = (o.k = 2) * 3; var n = 0; [1, 2, 3].forEach(x => n += x); var x = 1; if (x = 2) document.write(a, b, r, o.k, n, x)").unwrap(), "556262");
+}

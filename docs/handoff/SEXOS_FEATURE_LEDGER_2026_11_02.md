@@ -1168,6 +1168,23 @@ at both sizes with `fact(15)` = `1307674368000` and a callback recursion
 Browser stack high water 57,936 bytes: the refused recursion ran down to
 the floor (57,344) plus a leaf frame, under the gate's 60 KiB bound.
 
+## N2-N3. Script `Set`/`Map`; assignment expressions (2026-11-03)
+
+- **N2 `Set` and `Map`:** `new Set(iterable)`, `new Map([[k, v], ...])`,
+  `add/set/get/has/delete/clear/size/forEach/keys/values/entries`, chaining,
+  SameValueZero keys (NaN equals NaN, objects by identity), insertion
+  order, spread (`[...new Set(xs)]`), `Array.from`, `for...of` (a Map gives
+  `[key, value]`), `instanceof`. Up to 16 collections per script.
+  `keys/values/entries` return arrays rather than iterators.
+- **N3 Assignment expressions:** an assignment can appear wherever an
+  expression can, with the assigned value as its value: `a = b = 0`,
+  `(o.k = 2) * 3`, `if (x = f())`, arrow bodies such as `x => t += x`.
+
+**Evidence** (`docs/handoff/assets/script-set-map-assign-expr-2026-11-03/`):
+script host tests 41 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... mispx`); stack floor refusal unchanged
+(`hits=1`), high water 58,048 bytes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
