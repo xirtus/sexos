@@ -56,6 +56,8 @@ static mut QUIL_AUTOSAVE: autosave::Autosave = autosave::Autosave::new();
 /// Ctrl+D deletion is a storage effect, covered by scripts/quil_delete_gate.py.
 unsafe fn quil_delete_key() {}
 unsafe fn quil_stats_key() {}
+unsafe fn quil_word_move(_code: u8, _shift: bool) {}
+unsafe fn quil_word_delete(_code: u8) {}
 static mut QUIL_GOTO: Option<u32> = None;
 unsafe fn quil_goto_line(_line: u32) {}
 static mut QUIL_CURSOR_POS: usize = 0;

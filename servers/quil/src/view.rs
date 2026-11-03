@@ -284,6 +284,26 @@ pub fn vertical_steps(
     Some(start + utf8::offset(&buf[start..],*goal))
 }
 
+/// Word movement (Ctrl+Left/Right, Ctrl+Backspace/Delete). A word is a run
+/// of ASCII letters, digits, `_` or non-ASCII bytes; anything else separates
+/// words. Every UTF-8 byte of a scalar classifies alike, so the result is
+/// always a scalar boundary.
+fn word_byte(b: u8) -> bool { b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80 }
+/// The start of the word before `at` (separators before it are skipped).
+pub fn word_left(buf: &[u8], at: usize) -> usize {
+    let mut i = at.min(buf.len());
+    while i > 0 && !word_byte(buf[i - 1]) { i -= 1; }
+    while i > 0 && word_byte(buf[i - 1]) { i -= 1; }
+    i
+}
+/// The end of the word after `at` (separators before it are skipped).
+pub fn word_right(buf: &[u8], at: usize) -> usize {
+    let mut i = at.min(buf.len());
+    while i < buf.len() && !word_byte(buf[i]) { i += 1; }
+    while i < buf.len() && word_byte(buf[i]) { i += 1; }
+    i
+}
+
 /// Preflight a whole replacement before an undo entry or byte is changed.
 pub fn replacement_len(len: usize, range: (usize, usize), incoming: usize) -> Option<usize> {
     let (start, end) = range;

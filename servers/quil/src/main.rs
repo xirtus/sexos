@@ -336,6 +336,8 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 0x18=>document_action(sex_pdx::document_view::OPEN,palette_active,selected_row),
                 0x1f=>document_action(if key.shift{sex_pdx::document_view::SAVE_AS}else{sex_pdx::document_view::SAVE},palette_active,selected_row),
                 0x13=>{if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());QUIL_CLIPBOARD_NOTICE=true;QUIL_CLIPBOARD_ERROR=None;}document_action(sex_pdx::document_view::QUIESCE,palette_active,selected_row);},
+                0x4b|0x4d|0x47|0x4f if !QUIL_NAME_MODE&&!*palette_active=>quil_word_move(key.code,key.shift),
+                0x0e|0x53 if !QUIL_NAME_MODE&&!*palette_active=>quil_word_delete(key.code),
                 0x2c if !QUIL_NAME_MODE=>{*palette_active=false;if key.shift{text_buffer_redo();}else{text_buffer_undo();}draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x15 if !QUIL_NAME_MODE=>{*palette_active=false;text_buffer_redo();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 // C/X/V arrive only as a separately authorized Shell INTENT.
@@ -452,6 +454,30 @@ unsafe fn quil_goto_line(line: u32) {
     let old = QUIL_CURSOR_POS;
     if QUIL_SELECTION.move_to(quil_source(), pos, false).is_ok() { QUIL_CURSOR_POS = pos; QUIL_GOAL_COL = usize::MAX; quil_selection_record(); }
     sex_pdx::serial_record!("[quil.goto] line={} reached={} old={} new={} len={}", line, current, old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+}
+/// Ctrl+Left/Right move by word, Ctrl+Home/End to the ends of the document;
+/// Shift extends the selection.
+unsafe fn quil_word_move(code: u8, shift: bool) {
+    let Some(snapshot) = QUIL_SELECTION.snapshot() else { return };
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let to = match code { 0x4b => view::word_left(text, snapshot.caret()), 0x4d => view::word_right(text, snapshot.caret()), 0x47 => 0, _ => QUIL_BUFFER_LEN };
+    let old = QUIL_CURSOR_POS;
+    if QUIL_SELECTION.move_to(quil_source(), to, shift).is_ok() {
+        QUIL_CURSOR_POS = QUIL_SELECTION.snapshot().map_or(to, |s| s.caret()); QUIL_GOAL_COL = usize::MAX; quil_selection_record();
+        sex_pdx::serial_record!("[quil.cursor.move] old={} new={} len={} dir={} ok=1", old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN, match code { 0x4b => "word_left", 0x4d => "word_right", 0x47 => "doc_start", _ => "doc_end" });
+        draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+    }
+}
+/// Ctrl+Backspace / Ctrl+Delete remove the word before / after the caret
+/// (or the selection) as one undoable edit.
+unsafe fn quil_word_delete(code: u8) {
+    let Some(snapshot) = QUIL_SELECTION.snapshot() else { return };
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let range = snapshot.range();
+    let range = if range.0 != range.1 { range } else if code == 0x0e { (view::word_left(text, snapshot.caret()), snapshot.caret()) } else { (snapshot.caret(), view::word_right(text, snapshot.caret())) };
+    let changed = range.0 != range.1 && quil_replace(range, &[]);
+    sex_pdx::serial_record!("[quil.word.delete] dir={} bytes={} changed={} len={}", if code == 0x0e { "back" } else { "forward" }, range.1 - range.0, changed as u8, QUIL_BUFFER_LEN);
+    if changed { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
 }
 /// Ctrl+I: lines, words and characters of the buffer in the status line.
 static mut QUIL_STATS_TEXT: [u8; 48] = [0; 48];

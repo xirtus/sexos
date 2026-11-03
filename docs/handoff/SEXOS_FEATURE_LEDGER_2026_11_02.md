@@ -882,6 +882,23 @@ script host tests 30 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes with `... UTC! dayvOK 00070072`. Browser stack high
 water 49,952 of 65,536 bytes.
 
+## M13. Quil word movement and word delete (2026-11-03)
+
+- Ctrl+Left / Ctrl+Right move to the previous word start / next word end;
+  Ctrl+Home / Ctrl+End go to the start / end of the document; Shift extends
+  the selection with all four. Ctrl+Backspace / Ctrl+Delete remove the word
+  before / after the caret (or the selection) as one undoable edit. A word
+  is a run of ASCII letters, digits, `_` or non-ASCII bytes, so a stop is
+  always a UTF-8 scalar boundary (`view::word_left/word_right`).
+
+**Evidence** (`docs/handoff/assets/quil-word-movement-2026-11-03/`): host
+test `word_movement_stops_at_word_edges_and_scalar_boundaries`
+(tests/quil_view.rs); sealed build and master gate GREEN; native Quil
+autosave gate at 1280x800 and 1024x768 now drives `ctrl-right` (0->5
+`word_right`), `ctrl-end` (5->9), `ctrl-home` (9->0) and, after draft
+recovery, `ctrl-backspace` (`dir=back bytes=3 changed=1 len=14`); Quil
+delete gate regression OK.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

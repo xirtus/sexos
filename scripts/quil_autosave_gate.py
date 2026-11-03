@@ -83,6 +83,9 @@ def main():
   g['chord']('ctrl','i',r'\[quil.stats\] lines=1 words=2 chars=9 bytes=9');g['wait'](r'\[quil.text.view\][^\n]*1 LINES / 2 WORDS / 9 CHARS',0,30)
   g['chord']('ctrl','g',r'\[quil.goto.mode\] on=1');s0=len(t());g['q'].key('5');g['wait'](r'\[quil.text.view\][^\n]*Go to line: 5',s0,30)
   g['key']('ret',r'\[quil.goto\] line=5 reached=1 old=9 new=0 len=9');checks_goto=True
+  g['chord']('ctrl','right',r'\[quil.cursor.move\] old=0 new=5 len=9 dir=word_right ok=1')
+  g['chord']('ctrl','end',r'\[quil.cursor.move\] old=5 new=9 len=9 dir=doc_end ok=1')
+  g['chord']('ctrl','home',r'\[quil.cursor.move\] old=9 new=0 len=9 dir=doc_start ok=1')
   g['key']('end',r'\[quil.cursor.move\] old=0 new=9 len=9 dir=end ok=1')
   mid=len(t())
   type_keys(g,SECOND)
@@ -105,6 +108,7 @@ def main():
   result['boot2']=dict(bytes=int(m[1]),hash=m[2],doc=int(m[3]))
   if(int(m[1]),m[2])!=(int(b2[2]),b2[3]):raise RuntimeError(f'recovered draft differs: {m[0]} vs {b2[0]}')
   g['focus'](201);g['key']('end',r'\[quil.cursor.move\] old=\d+ new=\d+ len=\d+ dir=end ok=1');time.sleep(.5)
+  g['chord']('ctrl','backspace',r'\[quil.word.delete\] dir=back bytes=3 changed=1 len=14')
   settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)
