@@ -415,3 +415,9 @@ fn promises_run_as_ordered_microtasks_after_the_script() {
     assert_eq!(out("var p = Promise.resolve(Promise.resolve(9)); p.then(v => document.write(v)); document.write(p instanceof Promise)").unwrap(), "true9");
     assert_eq!(out("async function f() {}").err(), Some(Error::Unsupported), "no async functions");
 }
+
+#[test]
+fn optional_calls_tagged_templates_and_string_raw() {
+    assert_eq!(out("var f = null; var g = x => x * 2; document.write(f?.(1), g?.(4), ({m: null}).m?.(), ({k: () => 3}).k?.())").unwrap(), "undefined8undefined3");
+    assert_eq!(out(r#"function tag(s, a, b) { return s.join("|") + ":" + a + "," + b } var x = 1; document.write(tag`A${x}B${x + 1}C`, ' ', String.raw`a\nb${1 + 1}\t`)"#).unwrap(), "A|B|C:1,2 a\\nb2\\t");
+}

@@ -1444,6 +1444,17 @@ floor hits 1 (the intended deep recursion), high water 56,952.
 host tests 46 groups; sealed build and master gate GREEN; native HTML gate
 at both sizes with a 17th script (`promise first then 3 async 1+2`).
 
+## P4. Script optional calls, tagged templates, `String.raw` (2026-11-03)
+
+- `f?.(args)` calls unless `f` is null/undefined (`o.m?.()` too; the
+  arguments are then only checked).
+- Tagged templates: ``tag`a${x}b` `` calls `tag(['a', 'b'], x)` with the
+  cooked text pieces; ``String.raw`a\n${x}` `` keeps escapes as written.
+
+**Evidence** (`docs/handoff/assets/script-optional-call-tagged-templates-2026-11-03/`):
+script host tests 47 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`promise first 1\dx-yundefined ...`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

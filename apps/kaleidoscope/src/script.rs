@@ -363,6 +363,33 @@ impl<'a> Machine<'a> {
         self.restore(resume);
         self.store(&text)
     }
+    /// A template's text pieces (escapes processed when `cooked`) and its
+    /// substitution values, in order.
+    fn template_parts(&mut self, raw: &'a [u8], cooked: bool) -> Result<(Vec<Vec<u8>>, Vec<Value>), Error> {
+        let base = raw.as_ptr() as usize - self.src.as_ptr() as usize;
+        let resume = self.pos();
+        let (mut pieces, mut values) = (alloc::vec![Vec::new()], Vec::new());
+        let mut i = 0;
+        while i < raw.len() {
+            if raw[i..].starts_with(b"${") {
+                self.at = base + i + 2;
+                self.next()?;
+                values.push(self.expr()?);
+                if self.tok != Tok::Punct(b'}') { return Err(Error::Syntax); }
+                i = self.at - base;
+                pieces.push(Vec::new());
+            } else {
+                let piece = pieces.last_mut().ok_or(Error::Syntax)?;
+                if raw[i] == b'\\' && i + 1 < raw.len() {
+                    if cooked { piece.push(match raw[i + 1] { b'n' => b'\n', b't' => b'\t', other => other }); } else { piece.extend_from_slice(&raw[i..i + 2]); }
+                    i += 2;
+                } else { piece.push(raw[i]); i += 1; }
+            }
+            if pieces.iter().map(Vec::len).sum::<usize>() > ARENA { return Err(Error::Limit); }
+        }
+        self.restore(resume);
+        Ok((pieces, values))
+    }
     fn text(&self, v: Value) -> &[u8] {
         match v { Value::Str(s, n) => &self.arena[s as usize..s as usize + n as usize], _ => &[] }
     }
@@ -593,7 +620,26 @@ impl<'a> Machine<'a> {
             if opt {
                 self.next()?;
                 if matches!(v, Value::Undef | Value::Null) { self.live = false; }
-                if self.tok == Tok::Punct(b'(') { return Err(Error::Unsupported); }
+                if self.tok == Tok::Punct(b'(') {
+                    // `f?.(args)`: called unless f is null/undefined.
+                    let mut args = [Value::Undef; PARAMS];
+                    let n = self.argument_list(&mut args)?;
+                    v = match v { Value::Func(f) if self.live => self.invoke(f, &args[..n])?, _ if !self.live => Value::Undef, _ => return Err(Error::Unsupported) };
+                    continue;
+                }
+            }
+            // A tagged template: `tag\`a${x}b\`` calls tag(strings, ...values).
+            if let (Value::Func(f), Tok::Template(raw)) = (v, self.tok) {
+                self.next()?;
+                let (pieces, values) = self.template_parts(raw, true)?;
+                if !self.live { v = Value::Undef; continue; }
+                let mut strings = Vec::new();
+                for piece in &pieces { strings.push(self.store(piece)?); }
+                let mut args = alloc::vec![self.new_array(&strings)?];
+                args.extend_from_slice(&values);
+                if args.len() > PARAMS { return Err(Error::Limit); }
+                v = self.invoke(f, &args)?;
+                continue;
             }
             if self.tok == Tok::Punct(b'[') {
                 self.next()?;
@@ -2334,6 +2380,19 @@ impl<'a> Machine<'a> {
     #[inline(never)]
     fn string_static(&mut self) -> Result<Value, Error> {
         self.next()?;
+        if self.tok == Tok::Ident(b"raw") {
+            // String.raw`...`: escapes kept as written, substitutions filled in.
+            self.next()?;
+            let Tok::Template(raw) = self.tok else { return Err(Error::Unsupported) };
+            self.next()?;
+            let (pieces, values) = self.template_parts(raw, false)?;
+            let mut out = Vec::new();
+            for (k, piece) in pieces.iter().enumerate() {
+                out.extend_from_slice(piece);
+                if let Some(&v) = values.get(k) { let t = self.to_text(v)?; out.extend_from_slice(self.text(t)); }
+            }
+            return self.store(&out);
+        }
         if self.tok != Tok::Ident(b"fromCharCode") { return Err(Error::Unsupported); }
         self.next()?;
         let (args, n) = self.arguments()?;
