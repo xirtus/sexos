@@ -1331,6 +1331,24 @@ master gate GREEN; native Quil autosave gate at both sizes: Ctrl+A, Ctrl+]
 (`[quil.indent] lines=2 out=0 start=0 end=18 applied=1 len=18`), Ctrl+[
 (`lines=2 out=1 ... len=16`).
 
+## N17. HTML reader: list paragraphs, marker styles, media, `<pre><code>` (2026-11-03)
+
+- A paragraph (or other block) opening right after a list marker stays on
+  the marker's line (`<li><p>x</p>` was an empty bullet and blank lines),
+  and blocks inside lists are not spaced apart.
+- `<ol type=a|A|i|I>` numbers with letters or roman numerals (with
+  `start`).
+- `<video>`, `<audio>` and `<iframe>` show `[video: title]`, `[audio]`,
+  `[frame]` and their fallback content is skipped (nothing is played or
+  loaded).
+- `<code>`/`<kbd>` inside `<pre>` get no backtick markers; `&#9;` is a
+  space instead of staying literal.
+
+**Evidence** (`docs/handoff/assets/html-lists-media-pre-2026-11-03/`): html
+text host tests 26 (new `list_paragraphs_marker_styles_media_and_preformatted_code`);
+sealed build and master gate GREEN; native HTML gate at both sizes with
+`i. roman one / ii. roman two` and `[video: Clip]` (fallback absent).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

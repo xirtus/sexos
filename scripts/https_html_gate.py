@@ -22,6 +22,7 @@ REQUEST=b'GET /page.html HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection:
 PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red}</style>'
  b'<script>while(1){}</script></head><body>'
  b'<h1>SexOS field notes</h1><p>One shared address space supplies addresses;\n held capabilities supply authority.</p>'
+ b'<ol type=i><li><p>roman one</p><li>roman two</ol><video title=Clip>no player</video>'
  b'<p><script>var n = 6; document.write("Script says " + n*7, " / ", -(-(-((1+1)*3))))</script></p>'
  b"<p><script>var t = 'sexos'; if (t.length === 5) { document.write(t.toUpperCase(), ' ', Math.max(2, 7) > 5 ? 'ok' : 'no') } else document.write('bad')</script></p>"
  b'<p>Press <kbd>W</kbd> for this <strong>page</strong>, see <code>html_text.rs</code>.</p>'
@@ -187,7 +188,7 @@ def main():
   reader('html-back',text,REQUEST,b'/page.html')
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] depth=0 network=0',b);time.sleep(1)
   if len(peer.rows)!=3:raise RuntimeError('back at the first page caused network work')
-  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 1307674368000' in text and b'zzdeep' not in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'odd 1+3+5+7+9 = 25' in text and b'{"name":"Quil","saves":3,"kind":"editor"} keys 3' in text and b'number 20.00 true undefined' in text and b'LINEN... QUIL.... SPINDLE. 23 6 four 1 a+b' in text and b'[input: Search notes] [x] exact [button: Find]' in text and b'9 9 hex ff true truefalse 5' in text and b'code 83 Sex 8' in text and b'Sex 2 0/skip/2 3 undefined' in text and b'3 49 true 7:linenms' in text and b'==held== not ~~ambient~~' in text and b'EPOCH Fri Dec 21 2012 5 UTC! dayvOK 00070074 a%20b3,1k,v true 1025iife 51 Zdaymode231a2a6 mispx 98,765.432 0.012 [1][2]a+b' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
+  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 1307674368000' in text and b'zzdeep' not in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'odd 1+3+5+7+9 = 25' in text and b'{"name":"Quil","saves":3,"kind":"editor"} keys 3' in text and b'number 20.00 true undefined' in text and b'LINEN... QUIL.... SPINDLE. 23 6 four 1 a+b' in text and b'[input: Search notes] [x] exact [button: Find]' in text and b'9 9 hex ff true truefalse 5' in text and b'code 83 Sex 8' in text and b'Sex 2 0/skip/2 3 undefined' in text and b'3 49 true 7:linenms' in text and b'==held== not ~~ambient~~' in text and b'EPOCH Fri Dec 21 2012 5 UTC! dayvOK 00070074 a%20b3,1k,v true 1025iife 51 Zdaymode231a2a6 mispx 98,765.432 0.012 [1][2]a+b' in text and b'i. roman one\nii. roman two' in text and b'[video: Clip]' in text and b'no player' not in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
  except Exception as exc:failure=repr(exc)
  finally:
   peer.close()

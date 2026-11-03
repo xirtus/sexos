@@ -24,10 +24,12 @@ pub struct Output<'a> {
     pre: bool,
     /// `<blockquote>` nesting; each line inside starts with `> ` per level.
     quote: u8,
+    /// Only a list marker is on the current line (a block opening here stays on it).
+    marker: bool,
 }
 
 impl<'a> Output<'a> {
-    fn new(buf: &'a mut [u8]) -> Self { Self { buf, len: 0, truncated: false, space: true, newlines: 2, pre: false, quote: 0 } }
+    fn new(buf: &'a mut [u8]) -> Self { Self { buf, len: 0, truncated: false, space: true, newlines: 2, pre: false, quote: 0, marker: false } }
     fn room(&self) -> usize { self.buf.len().saturating_sub(TRUNCATED.len()) }
     fn byte(&mut self, b: u8) {
         if self.len < self.room() { self.buf[self.len] = b; self.len += 1; } else { self.truncated = true; }
@@ -51,6 +53,7 @@ impl<'a> Output<'a> {
         if self.newlines != 0 { for _ in 0..self.quote { self.byte(b'>'); self.byte(b' '); } }
         self.space = false;
         self.newlines = 0;
+        self.marker = false;
         self.byte(b);
     }
     fn bytes(&mut self, s: &[u8]) { for &b in s { self.text(b); } }
@@ -173,7 +176,7 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
         }
     };
     // Controls and surrogates are not readable text.
-    let ch = char::from_u32(code).filter(|c| !c.is_control() || *c == '\n')?;
+    let ch = char::from_u32(code).filter(|c| !c.is_control() || matches!(*c, '\n' | '\t'))?;
     Some((ch.encode_utf8(out).len(), end + 1))
 }
 
@@ -194,6 +197,7 @@ fn named(name: &[u8]) -> Option<u32> {
 const INLINE: [(&[u8], u8); 7] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_'), (b"cite", b'_')];
 /// Two-character markers: highlighted, deleted and inserted text.
 const INLINE2: [(&[u8], &[u8]); 6] = [(b"mark", b"=="), (b"del", b"~~"), (b"s", b"~~"), (b"strike", b"~~"), (b"ins", b"++"), (b"u", b"__")];
+const MEDIA: [&[u8]; 3] = [b"video", b"audio", b"iframe"];
 const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
 const BLOCK: [&[u8]; 19] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl", b"form", b"details", b"fieldset", b"figure"];
 
@@ -227,6 +231,8 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let (mut scripts_run, mut scripts_refused) = (0u8, 0u8);
     // Open lists: 0 = bulleted, n = next number of an ordered list.
     let mut lists = [0u16; 4];
+    // Marker style per open ordered list: b'1', b'a', b'A', b'i' or b'I'.
+    let mut styles = [b'1'; 4];
     // Title of the open <abbr>, shown after its text.
     let mut abbr: Option<(usize, usize)> = None;
     // Output offset where the open (outermost) table's rows begin.
@@ -293,14 +299,15 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                 for _ in 1..depth.max(1) { o.raw(b"  "); }
                 match lists.get(depth.wrapping_sub(1)).copied().filter(|n| *n > 0) {
                     Some(n) => {
-                        let mut digits = [0u8; 6];
-                        let len = number(n as usize, &mut digits);
+                        let mut digits = [0u8; 16];
+                        let len = list_marker(n as usize, styles[depth - 1], &mut digits);
                         o.raw(&digits[..len]);
                         o.raw(b". ");
                         lists[depth - 1] = n.saturating_add(1);
                     }
                     None => o.raw(b"- "),
                 }
+                o.marker = true;
             } else if (name_is(name, b"dt") || name_is(name, b"dd")) && !end_tag {
                 o.line(false);
                 if name_is(name, b"dd") { o.raw(b"    "); }
@@ -311,8 +318,10 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if BLOCK.iter().any(|n| name_is(name, n)) {
                 o.pre = false;
                 let list = name_is(name, b"ol") || name_is(name, b"ul");
-                // A list inside a list item continues that item's lines.
-                o.line(!(list && depth > usize::from(end_tag)));
+                // A list inside a list item continues that item's lines; a
+                // paragraph opening right after a list marker stays on its
+                // line, and blocks inside lists are not spaced apart.
+                if !(o.marker && !end_tag && !list) { o.line(!(depth > usize::from(end_tag && list))); }
                 if name_is(name, b"table") {
                     if !end_tag { table = Some(o.len); } else if let Some(start) = table.take() { o.align_columns(start); }
                 } else if name_is(name, b"ol") || name_is(name, b"ul") {
@@ -321,6 +330,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                         let start = attribute(&body[name_end..], b"start")
                             .and_then(|v| core::str::from_utf8(v).ok()?.trim().parse::<u16>().ok()).unwrap_or(1).max(1);
                         lists[depth] = if name_is(name, b"ol") { start } else { 0 };
+                        styles[depth] = match attribute(&body[name_end..], b"type") { Some([c @ (b'a' | b'A' | b'i' | b'I')]) => *c, _ => b'1' };
                         depth += 1;
                     } else { depth += 1; }
                 } else if name_is(name, b"blockquote") {
@@ -339,6 +349,18 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if name_is(name, b"figcaption") {
                 o.line(false);
                 if !end_tag { o.bytes(b"Figure:"); o.space = true; }
+            } else if o.pre && (name_is(name, b"code") || name_is(name, b"kbd")) {
+                // Preformatted code is already set apart: no inline markers.
+            } else if MEDIA.iter().any(|n| name_is(name, n)) && !end_tag {
+                // Media and frames are not played or loaded; a placeholder
+                // stands for them and their fallback content is skipped.
+                let label = MEDIA.iter().find(|n| name_is(name, n)).copied().unwrap_or(b"media");
+                o.text(b'[');
+                o.space = false;
+                for &c in if name_is(name, b"iframe") { &b"frame"[..] } else { label } { o.text(c); }
+                if let Some(t) = attribute(&body[name_end..], b"title").filter(|t| !t.is_empty()) { o.text(b':'); o.space = true; for &c in t { o.text(c); } }
+                o.text(b']');
+                if !body.ends_with(b"/") { skip_until = MEDIA.iter().find(|n| name_is(name, n)).copied(); }
             } else if let Some(mark) = INLINE.iter().find(|(n, _)| name_is(name, n)).map(|(_, m)| *m) {
                 // Inline emphasis and code keep a plain-text marker, Markdown style.
                 if end_tag { o.space = false; o.text(mark); } else { o.text(mark); o.space = false; }
@@ -488,6 +510,27 @@ fn title(html: &[u8]) -> Option<&[u8]> {
     let end = start + html[start..].windows(8).position(|w| name_is(w, b"</title>"))?;
     let t = &html[start..end];
     t.iter().any(|b| !b.is_ascii_whitespace()).then_some(t)
+}
+
+/// An ordered-list marker: decimal, letters (`a`..`z`, `aa`..) or roman.
+fn list_marker(n: usize, style: u8, out: &mut [u8; 16]) -> usize {
+    match style {
+        b'a' | b'A' => {
+            let (mut n, mut tmp, mut len) = (n, [0u8; 16], 0);
+            while n > 0 && len < 16 { n -= 1; tmp[len] = style + (n % 26) as u8; len += 1; n /= 26; }
+            for i in 0..len { out[i] = tmp[len - 1 - i]; }
+            len
+        }
+        b'i' | b'I' if (1..4000).contains(&n) => {
+            let mut len = 0;
+            let mut n = n;
+            for (v, r) in [(1000, &b"m"[..]), (900, b"cm"), (500, b"d"), (400, b"cd"), (100, b"c"), (90, b"xc"), (50, b"l"), (40, b"xl"), (10, b"x"), (9, b"ix"), (5, b"v"), (4, b"iv"), (1, b"i")] {
+                while n >= v { for &c in r { if len < 16 { out[len] = if style == b'I' { c.to_ascii_uppercase() } else { c }; len += 1; } } n -= v; }
+            }
+            len
+        }
+        _ => { let mut d = [0u8; 6]; let len = number(n, &mut d); out[..len].copy_from_slice(&d[..len]); len }
+    }
 }
 
 fn number(mut n: usize, out: &mut [u8; 6]) -> usize {

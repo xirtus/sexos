@@ -190,3 +190,11 @@ fn latin1_greek_and_symbol_entities() {
     let (t, _) = text("<p>&eacute;&Eacute;&ntilde;&szlig;&AElig;&yuml;&ETH; &le;&ge;&ne; &micro; &alpha;&pi;&Omega;&sigmaf; &check;&infin;&frac14;&sup2;&dagger;&hearts; a&shy;b &bogus; &Sigmaf;</p>", 512);
     assert_eq!(t.trim(), "éÉñßÆÿÐ ≤≥≠ µ απΩς ✓∞¼²†♥ ab &bogus; &Sigmaf;");
 }
+
+#[test]
+fn list_paragraphs_marker_styles_media_and_preformatted_code() {
+    let (t, _) = text("<ul><li><p>para in li</p></li><li>two</li></ul><p>after</p><ol type=a><li>x<li>y</ol><ol type=I start=4><li>x<li>y</ol>", 512);
+    assert_eq!(t.trim(), "- para in li\n- two\n\nafter\n\na. x\nb. y\n\nIV. x\nV. y");
+    let (t, _) = text("<video src=v.mp4 title='Demo clip'>Your browser cannot play this.</video><p>next</p><iframe src=x>fallback</iframe><p>tab&#9;stop</p><pre><code>fn main() {\n  x\n}</code></pre>", 512);
+    assert_eq!(t.trim(), "[video: Demo clip]\n\nnext\n\n[frame]\n\ntab stop\n\nfn main() {\n  x\n}");
+}
