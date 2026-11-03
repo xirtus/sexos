@@ -98,6 +98,9 @@ impl Find {
     pub fn next(&self, text: &[u8], from: usize) -> Option<Match> {
         next_match(text, self.query(), from)
     }
+    pub fn prev(&self, text: &[u8], before: usize) -> Option<Match> {
+        prev_match(text, self.query(), before)
+    }
 }
 
 /// Replace every non-overlapping occurrence (left to right). Writes only the
@@ -121,6 +124,19 @@ pub fn replace_all(text: &[u8], needle: &[u8], with: &[u8], out: &mut [u8]) -> O
         last = at;
     }
     Some((start?, last, n, count))
+}
+
+/// The last occurrence ending at or before `before`, else the last one in
+/// the document (wrapping once from the end). Empty queries never match.
+pub fn prev_match(text: &[u8], needle: &[u8], before: usize) -> Option<Match> {
+    if needle.is_empty() || needle.len() > text.len() { return None; }
+    let last = text.len() - needle.len();
+    let at = |start: usize| text[start..start + needle.len()] == *needle;
+    let limit = before.min(text.len());
+    if let Some(start) = (0..=last).rev().filter(|s| s + needle.len() <= limit).find(|&s| at(s)) {
+        return Some(Match { start, end: start + needle.len(), wrapped: false });
+    }
+    (0..=last).rev().find(|&s| at(s)).map(|start| Match { start, end: start + needle.len(), wrapped: true })
 }
 
 pub fn next_match(text: &[u8], needle: &[u8], from: usize) -> Option<Match> {

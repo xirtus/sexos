@@ -8,7 +8,8 @@ interlaced or not, colour-key transparency), `B` plain document. Quil:
 autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
-find/replace with `Ctrl+Enter` to replace all.
+find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
+select line.
 Spindle: Shift works; Tab completes command names; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
@@ -1088,6 +1089,22 @@ service-custody, clipboard and sexnet host gates pass; sealed build and
 master gate GREEN; native Quil autosave gate at both sizes now, after draft
 recovery, finds `n`, replaces with `N` via Ctrl+Enter:
 `[quil.replace.all] count=2 start=7 end=12 new_bytes=5 applied=1 len=14`.
+
+## M32-M33. Quil find previous; select line (2026-11-03)
+
+- **M32** In find mode, `Shift+Enter` (query field) selects the previous
+  occurrence ending before the selection, wrapping once to the last one
+  (`find::prev_match`).
+- **M33** `Ctrl+L` selects the caret's whole line including its newline;
+  pressed again on a selected whole line, it extends by the next line.
+
+**Evidence** (`docs/handoff/assets/quil-find-prev-select-line-2026-11-03/`):
+host test `finds_backwards_then_wraps_once` (tests/quil_find.rs); clipboard
+and service-custody host gates pass; sealed build and master gate GREEN;
+native Quil autosave gate at both sizes: `Enter` finds `n` at 7 (wrapped),
+`Shift+Enter` at 11 (wrapped), replace all, `Esc`, `Ctrl+L`
+(`[quil.select.line] start=0 end=14 extended=0 ok=1`); Quil delete gate
+regression OK.
 
 ## Release gates noted while doing F1–F2
 

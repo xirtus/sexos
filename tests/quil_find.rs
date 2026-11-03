@@ -107,3 +107,14 @@ fn replace_all_rewrites_only_the_matched_span() {
     assert_eq!(find::replace_all(b"abc", b"", b"y", &mut out), None);
     assert_eq!(find::replace_all(b"aaaa", b"a", b"bbbbbbbbbbbbbbbbbbbb", &mut out), None, "overflow refuses");
 }
+
+#[test]
+fn finds_backwards_then_wraps_once() {
+    let t = b"one two one two";
+    assert_eq!(find::prev_match(t, b"one", 15), m(8, 11, false));
+    assert_eq!(find::prev_match(t, b"one", 8), m(0, 3, false));
+    assert_eq!(find::prev_match(t, b"one", 0), m(8, 11, true));
+    assert_eq!(find::prev_match(t, b"one", 2), m(8, 11, true), "a match must end before the limit");
+    assert_eq!(find::prev_match(t, b"zz", 9), None);
+    assert_eq!(find::prev_match(t, b"", 9), None);
+}

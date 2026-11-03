@@ -249,6 +249,23 @@ unsafe fn quil_replace_next() {
     sex_pdx::serial_record!("[quil.replace] start={} old_bytes={} new_bytes={} applied={} revision={}",start,end-start,len,applied as u8,QUIL_REVISION);
     if applied {quil_find_next();} else {QUIL_INPUT_NOTICE=Some(b"REPLACE NOT APPLIED");}
 }
+/// Shift+Enter: select the previous occurrence before the selection (or
+/// caret), wrapping once to the end.
+unsafe fn quil_find_prev() {
+    let Some(snapshot)=QUIL_SELECTION.snapshot() else{QUIL_INPUT_NOTICE=Some(b"FIND UNAVAILABLE");return};
+    let before=snapshot.range().0;
+    let query_bytes=QUIL_FIND.query().len();
+    match QUIL_FIND.prev(&QUIL_BUFFER[..QUIL_BUFFER_LEN],before) {
+        Some(found)=>{
+            let source=quil_source();
+            let selected=QUIL_SELECTION.move_to(source,found.start,false).is_ok()&&QUIL_SELECTION.move_to(source,found.end,true).is_ok();
+            if selected {QUIL_CURSOR_POS=found.end;QUIL_GOAL_COL=usize::MAX;}
+            sex_pdx::serial_record!("[quil.find.prev] query_bytes={} start={} end={} wrapped={} found=1 selected={}",query_bytes,found.start,found.end,found.wrapped as u8,selected as u8);
+            quil_selection_record();
+        },
+        None=>{QUIL_INPUT_NOTICE=Some(b"NOT FOUND");sex_pdx::serial_record!("[quil.find.prev] query_bytes={} found=0",query_bytes);},
+    }
+}
 /// Rewritten span for replace-all (the document limit).
 static mut QUIL_REPLACE_SCRATCH: [u8; 12288] = [0; 12288];
 /// Replace every occurrence of the query as one undoable edit covering the
@@ -331,6 +348,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                     0x0e=>{QUIL_FIND.pop();},
                     0x50=>QUIL_FIND.set_field(find::Field::Replacement),
                     0x48=>QUIL_FIND.set_field(find::Field::Query),
+                    0x1c if key.shift&&QUIL_FIND.field()==find::Field::Query=>quil_find_prev(),
                     0x1c if QUIL_FIND.field()==find::Field::Replacement=>quil_replace_next(),
                     0x1c=>quil_find_next(),
                     code=>{if let Some(ch)=scancode_to_char(code as u64,key.shift){if !QUIL_FIND.push(ch){QUIL_INPUT_NOTICE=Some(b"FIND QUERY FULL");}}},
@@ -358,6 +376,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 0x1f=>document_action(if key.shift{sex_pdx::document_view::SAVE_AS}else{sex_pdx::document_view::SAVE},palette_active,selected_row),
                 0x13=>{if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());QUIL_CLIPBOARD_NOTICE=true;QUIL_CLIPBOARD_ERROR=None;}document_action(sex_pdx::document_view::QUIESCE,palette_active,selected_row);},
                 0x4b|0x4d|0x47|0x4f if !QUIL_NAME_MODE&&!*palette_active=>quil_word_move(key.code,key.shift),
+                0x26 if !QUIL_NAME_MODE&&!*palette_active=>quil_select_line(),
                 0x0e|0x53 if !QUIL_NAME_MODE&&!*palette_active=>quil_word_delete(key.code),
                 0x2c if !QUIL_NAME_MODE=>{*palette_active=false;if key.shift{text_buffer_redo();}else{text_buffer_undo();}draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x15 if !QUIL_NAME_MODE=>{*palette_active=false;text_buffer_redo();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
@@ -488,6 +507,20 @@ unsafe fn quil_word_move(code: u8, shift: bool) {
         sex_pdx::serial_record!("[quil.cursor.move] old={} new={} len={} dir={} ok=1", old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN, match code { 0x4b => "word_left", 0x4d => "word_right", 0x47 => "doc_start", _ => "doc_end" });
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
+}
+/// Ctrl+L selects the caret's whole line (with its newline); pressed again
+/// with a line selected, it extends the selection by the next line.
+unsafe fn quil_select_line() {
+    let Some(snapshot) = QUIL_SELECTION.snapshot() else { return };
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let (a, b) = snapshot.range();
+    let line_end = |from: usize| text[from..].iter().position(|c| *c == b'\n').map_or(text.len(), |k| from + k + 1);
+    let whole = a != b && (a == 0 || text[a - 1] == b'\n') && (b == text.len() || text[b - 1] == b'\n');
+    let (start, end) = if whole { (a, line_end(b)) } else { let s = text[..a].iter().rposition(|c| *c == b'\n').map_or(0, |k| k + 1); (s, line_end(a.max(s))) };
+    let source = quil_source();
+    let ok = QUIL_SELECTION.move_to(source, start, false).is_ok() && QUIL_SELECTION.move_to(source, end, true).is_ok();
+    if ok { QUIL_CURSOR_POS = end; QUIL_GOAL_COL = usize::MAX; quil_selection_record(); draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
+    sex_pdx::serial_record!("[quil.select.line] start={} end={} extended={} ok={}", start, end, whole as u8, ok as u8);
 }
 /// Ctrl+Backspace / Ctrl+Delete remove the word before / after the caret
 /// (or the selection) as one undoable edit.

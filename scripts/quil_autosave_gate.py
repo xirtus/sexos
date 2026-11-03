@@ -110,9 +110,15 @@ def main():
   g['focus'](201);g['key']('end',r'\[quil.cursor.move\] old=\d+ new=\d+ len=\d+ dir=end ok=1');time.sleep(.5)
   g['chord']('ctrl','backspace',r'\[quil.word.delete\] dir=back bytes=3 changed=1 len=14')
   # Find "n", replacement "N", Ctrl+Enter replaces both as one edit.
-  g['chord']('ctrl','f',r'\[quil.find.mode\] on=1');g['q'].key('n');g['q'].key('down');g['q'].cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'n'}],'hold-time':80})
+  # First Enter finds forward (wrapping to 7), Shift+Enter backward (wrapping to 11).
+  g['chord']('ctrl','f',r'\[quil.find.mode\] on=1');g['q'].key('n')
+  g['key']('ret',r'\[quil.find\] query_bytes=1 start=7 end=8 wrapped=1 found=1 selected=1')
+  g['chord']('shift','ret',r'\[quil.find.prev\] query_bytes=1 start=11 end=12 wrapped=1 found=1 selected=1')
+  g['q'].key('down');g['q'].cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'n'}],'hold-time':80})
   g['wait'](r'\[quil.text.view\][^\n]*Find: n > N#',0,30)
   g['chord']('ctrl','ret',r'\[quil.replace.all\] count=2 start=7 end=12 new_bytes=5 applied=1 len=14')
+  g['key']('esc',r'\[quil.find.mode\] on=0 reason=escape')
+  g['chord']('ctrl','l',r'\[quil.select.line\] start=0 end=14 extended=0 ok=1')
   settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)
