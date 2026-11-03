@@ -55,6 +55,7 @@ static mut QUIL_FIND: find::Find = find::Find::new();
 static mut QUIL_AUTOSAVE: autosave::Autosave = autosave::Autosave::new();
 /// Ctrl+D deletion is a storage effect, covered by scripts/quil_delete_gate.py.
 unsafe fn quil_delete_key() {}
+unsafe fn quil_stats_key() {}
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_REVISION: u64 = 0;
 static mut QUIL_GENERATION: u64 = 1;

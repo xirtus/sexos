@@ -87,6 +87,15 @@ impl Autosave {
     }
 }
 
+/// Lines (0 for an empty buffer), whitespace-separated words, and UTF-8
+/// characters of `text` (for Quil's Ctrl+I status).
+pub fn counts(text: &[u8]) -> (usize, usize, usize) {
+    let lines = if text.is_empty() { 0 } else { text.iter().filter(|b| **b == b'\n').count() + 1 };
+    let words = text.split(|b| b.is_ascii_whitespace()).filter(|w| !w.is_empty()).count();
+    let chars = text.iter().filter(|b| **b & 0xc0 != 0x80).count();
+    (lines, words, chars)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +144,13 @@ mod tests {
         a.reset();
         assert!(a.pending() && a.queued_save == Some(false) && a.target().is_none());
         assert_eq!(a.finish(true, 3, 1, 0), Done::Saved { draft: 3, revision: 1 });
+    }
+
+    #[test]
+    fn counts_lines_words_and_characters() {
+        assert_eq!(counts(b""), (0, 0, 0));
+        assert_eq!(counts(b"one two\nthree"), (2, 3, 13));
+        assert_eq!(counts("caf\u{e9}  \n\n".as_bytes()), (3, 1, 8));
     }
 
     #[test]

@@ -67,6 +67,32 @@ impl<'a> Output<'a> {
         while self.newlines < want { self.byte(b'\n'); self.newlines += 1; }
         self.space = true;
     }
+    /// Pad the ` | `-separated cells written since `start` into columns.
+    /// Skipped if the padding would not fit; widths count characters.
+    fn align_columns(&mut self, start: usize) {
+        if self.truncated || start >= self.len { return; }
+        let text = &self.buf[start..self.len];
+        let width = |cell: &[u8]| cell.iter().filter(|b| **b & 0xc0 != 0x80).count();
+        let mut widths = [0usize; 16];
+        for line in text.split(|b| *b == b'\n') {
+            let cells = split_cells(line);
+            for (k, cell) in cells.iter().enumerate().take(16) { widths[k] = widths[k].max(width(cell)); }
+        }
+        let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        for (n, line) in text.split(|b| *b == b'\n').enumerate() {
+            if n > 0 { out.push(b'\n'); }
+            let cells = split_cells(line);
+            let last = cells.len().saturating_sub(1);
+            for (k, cell) in cells.iter().enumerate() {
+                if k > 0 { out.extend_from_slice(b" | "); }
+                out.extend_from_slice(cell);
+                if k < last && k < 16 { for _ in width(cell)..widths[k] { out.push(b' '); } }
+            }
+        }
+        if start + out.len() > self.room() { return; }
+        self.buf[start..start + out.len()].copy_from_slice(&out);
+        self.len = start + out.len();
+    }
     fn finish(mut self) -> (usize, bool) {
         while self.len > 0 && self.buf[self.len - 1] == b'\n' { self.len -= 1; }
         if self.truncated {
@@ -167,6 +193,8 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let mut lists = [0u16; 4];
     // Title of the open <abbr>, shown after its text.
     let mut abbr: Option<(usize, usize)> = None;
+    // Output offset where the open (outermost) table's rows begin.
+    let mut table: Option<usize> = None;
     let mut depth = 0usize;
     if let Some(title) = title(html) {
         o.bytes(b"Title:");
@@ -249,7 +277,9 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                 let list = name_is(name, b"ol") || name_is(name, b"ul");
                 // A list inside a list item continues that item's lines.
                 o.line(!(list && depth > usize::from(end_tag)));
-                if name_is(name, b"ol") || name_is(name, b"ul") {
+                if name_is(name, b"table") {
+                    if !end_tag { table = Some(o.len); } else if let Some(start) = table.take() { o.align_columns(start); }
+                } else if name_is(name, b"ol") || name_is(name, b"ul") {
                     if end_tag { depth = depth.saturating_sub(1); }
                     else if depth < lists.len() {
                         let start = attribute(&body[name_end..], b"start")
@@ -391,6 +421,17 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     }
     let (len, truncated) = o.finish();
     Converted { len, links: link_count, truncated, targets, scripts_run, scripts_refused }
+}
+
+fn split_cells(line: &[u8]) -> alloc::vec::Vec<&[u8]> {
+    let mut cells = alloc::vec::Vec::new();
+    let mut from = 0;
+    let mut i = 0;
+    while i + 3 <= line.len() {
+        if &line[i..i + 3] == b" | " { cells.push(&line[from..i]); i += 3; from = i; } else { i += 1; }
+    }
+    cells.push(&line[from..]);
+    cells
 }
 
 /// Text of the first `<title>` element, if any (it sits in the skipped head).

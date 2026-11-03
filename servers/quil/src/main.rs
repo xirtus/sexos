@@ -316,6 +316,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 },
                 0x1e if !QUIL_NAME_MODE=>{*palette_active=false;let _=QUIL_SELECTION.select_all(quil_source());QUIL_CURSOR_POS=QUIL_BUFFER_LEN;quil_selection_record();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x20 if !QUIL_NAME_MODE&&!*palette_active=>quil_delete_key(),
+                0x17 if !QUIL_NAME_MODE&&!*palette_active=>quil_stats_key(),
                 0x31=>document_action(sex_pdx::document_view::NEW,palette_active,selected_row),
                 0x18=>document_action(sex_pdx::document_view::OPEN,palette_active,selected_row),
                 0x1f=>document_action(if key.shift{sex_pdx::document_view::SAVE_AS}else{sex_pdx::document_view::SAVE},palette_active,selected_row),
@@ -422,6 +423,27 @@ fn document_save_start(create: bool) {
         }
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
+}
+/// Ctrl+I: lines, words and characters of the buffer in the status line.
+static mut QUIL_STATS_TEXT: [u8; 48] = [0; 48];
+unsafe fn quil_stats_key() {
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let (lines, words, chars) = autosave::counts(text);
+    let mut out = [0u8; 48];
+    let mut n = 0;
+    for (value, label) in [(lines, &b" LINES / "[..]), (words, b" WORDS / "), (chars, b" CHARS")] {
+        let mut digits = [0u8; 20];
+        let mut k = 0;
+        let mut v = value;
+        loop { digits[k] = b'0' + (v % 10) as u8; k += 1; v /= 10; if v == 0 { break; } }
+        while k > 0 { k -= 1; out[n] = digits[k]; n += 1; }
+        out[n..n + label.len()].copy_from_slice(label);
+        n += label.len();
+    }
+    QUIL_STATS_TEXT = out;
+    QUIL_INPUT_NOTICE = Some(&*core::ptr::slice_from_raw_parts(core::ptr::addr_of!(QUIL_STATS_TEXT) as *const u8, n));
+    sex_pdx::serial_record!("[quil.stats] lines={} words={} chars={} bytes={}", lines, words, chars, QUIL_BUFFER_LEN);
+    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
 }
 /// Ctrl+D: the first press asks, a second press on the same unchanged saved
 /// document deletes its object. The text stays in the buffer, unsaved.

@@ -662,6 +662,22 @@ script host tests 19 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes with an eleventh page script writing
 `9 9 hex ff true truefalse 5`; stack high water unchanged.
 
+## G16-G17. Aligned HTML tables; Quil Ctrl+I counts (2026-11-03)
+
+- **G16.** When a `<table>` closes, its rows are re-laid as padded columns
+  (`name          | size   | kind`), counted in characters; skipped when the
+  padding would not fit the 12 KiB text.
+- **G17.** In Quil, **Ctrl+I** shows `N LINES / N WORDS / N CHARS` for the
+  buffer in the status line (characters are UTF-8 scalars) and records
+  `[quil.stats]`. Read-only.
+
+**Evidence** (`docs/handoff/assets/html-tables-quil-stats-2026-11-03/`):
+html_text and autosave host tests (incl. `counts`), Quil clipboard and
+service custody host gates; sealed build and master gate GREEN; native HTML
+gate at both sizes (aligned `key   | value` rows); native autosave gate at
+both sizes now also presses Ctrl+I and checks `1 LINES / 2 WORDS / 9 CHARS`;
+`quil_workflow_gate.py` regression passes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

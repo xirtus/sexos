@@ -76,6 +76,8 @@ fn malformed_markup_terminates() {
 fn table_cells_are_separated() {
     let (t, _) = text("<table><tr><th>k</th><th>v</th></tr><tr><td>a</td><td>1</td></tr></table>", 256);
     assert_eq!(t, "k | v\na | 1");
+    let (t, _) = text("<table><tr><th>name</th><th>size</th><th>kind</th></tr><tr><td>Quil</td><td>12 KiB</td><td>editor</td></tr><tr><td>Spindle shell</td><td>8</td></tr></table><p>after</p>", 512);
+    assert_eq!(t, "name          | size   | kind\nQuil          | 12 KiB | editor\nSpindle shell | 8\n\nafter");
 }
 
 #[test]
