@@ -33,7 +33,7 @@ image): `https_html_gate.py` (also bounds the Browser stack high water),
 and PNG tests run in `sexnet_jobs_host_gate.sh`.
 
 **Open release gates** (details below): full-window reader needs a larger
-Display text delivery; Display applies app paints late; Display redraws are slow (200-680 ticks each; H1 removed the inbox backlog); autosave
+Display text delivery; Display applies app paints late; Display redraws are slow (raster 100-670 ticks per frame, H2; H1 removed the inbox backlog); autosave
 failure fences document I/O like any uncertain save; no draft cleanup;
 images limited to 48x48; the Browser body limit is 12 KiB.
 
@@ -726,6 +726,18 @@ surface groups, surface lifecycle, text readability) OK; sealed build and
 master gate GREEN; native calc gate at both sizes, connected desktop, Quil
 workflow, autosave, delete, HTML, PNG, QOI asset and `/welcome` document
 gates all pass.
+
+## H2. Display redraw profiled; scanout diffing tried and dropped (2026-11-03)
+
+A temporary `[display.profile]` probe split each redraw (calc gate, 1280x800):
+frame preparation 1-12 ticks, scene capture 0-4, **raster 18-667**, scanout
+publication 3-10. Publishing only changed scanout words (diffing against the
+previous front frame) was implemented and passed every pixel gate, but did
+not change redraw time, so it was reverted. The cost is the per-pixel
+composition in `raster_full`/`raster_area` (`composite_pixel_source` with
+per-pixel fill, bitmap and text lookups). Speeding that up means rendering
+per span instead of per pixel, a larger change across a pixel-exact
+pipeline; left as a release gate.
 
 ## Release gates noted while doing F1–F2
 
