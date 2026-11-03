@@ -330,3 +330,12 @@ fn increments_in_expressions_and_member_chain_assignment() {
     assert_eq!(out("var xs = [1]; xs.length = 5").err(), Some(Error::Unsupported), "growing length");
     assert_eq!(out("var n = 1; n.x = 2").err(), Some(Error::Unsupported));
 }
+
+#[test]
+fn object_literal_shorthand_spread_and_richer_destructuring() {
+    assert_eq!(out("var a = 1; var o = {a, b() { return this.a + 1 }, 2: 'two', ['c' + 1]: 3, f() {}, }; var p = {...{a: 1, b: 1}, b: 2, ...null}; document.write(JSON.stringify(o), o.b(), typeof o.f, JSON.stringify(p), JSON.stringify([o.f]))").unwrap(), "{\"a\":1,\"2\":\"two\",\"c1\":3}2function{\"a\":1,\"b\":2}[null]");
+    assert_eq!(out("var o = {...[1]}").err(), Some(Error::Unsupported));
+    assert_eq!(out("const {name, price = 1} = {name: 'x'}; const [first, ...others] = [1, 2, 3]; var [a, , c = 9, d = 4] = [1, 2, undefined, 0]; document.write(name, price, first, '|', others, '|', a, c, d)").unwrap(), "x11|2,3|190");
+    assert_eq!(out("var n = 0; function f() { n++; return 5 } var {x = f(), y: why = f(), ...more} = {x: 1, z: 3, w: 4}; document.write(x, why, n, JSON.stringify(more))").unwrap(), "151{\"z\":3,\"w\":4}");
+    assert_eq!(out("var t = ''; for (const [k, v] of Object.entries({a: 1, b: 2})) t += k + '=' + v + ';'; for (let {n, m = 0} of [{n: 1}, {n: 2, m: 3}]) t += n + m; function g() { for (const [a] of [[7]]) return a } document.write(t, g())").unwrap(), "a=1;b=2;157");
+}

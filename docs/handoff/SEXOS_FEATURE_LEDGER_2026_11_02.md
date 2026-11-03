@@ -1008,6 +1008,28 @@ script host tests 35 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... 1025iife 51`). Browser stack high water
 46,752 bytes.
 
+## M25-M27. Script object literals, richer destructuring, JSON fix (2026-11-03)
+
+- **M25 Object literals:** shorthand `{a}`, methods `{m() {...}}` (called
+  with `this` = the object), computed keys `{[k]: v}`, number keys, a
+  trailing comma, and `...spread` of objects (null/undefined add nothing;
+  spreading an array into an object is refused).
+- **M26 Destructuring:** defaults (`{x = f()}`, run only for an undefined
+  item), aliases (`{y: why}`), array holes (`[a, , c]`), rest elements
+  (`[first, ...others]`, `{a, ...more}`), and patterns in `for...of` /
+  `for...in` (`for (const [k, v] of Object.entries(o))`). One pattern
+  parser checks and binds both forms.
+- **M27 Fix:** `JSON.stringify` printed function-valued members as the
+  text `function`; like JavaScript it now leaves them out of objects and
+  writes `null` in arrays.
+
+Closures are still not in the subset: a function returned from another
+cannot read the outer function's locals after it returns.
+
+**Evidence** (`docs/handoff/assets/script-object-literals-destructuring-2026-11-03/`):
+script host tests 36 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... Zdaymode`). Browser stack high water 46,752.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
