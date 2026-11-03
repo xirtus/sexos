@@ -9,7 +9,7 @@ autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
 find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
-select line, `Ctrl+Up/Down` move line.
+select line, `Ctrl+Up/Down` move line, `Ctrl+]`/`Ctrl+[` indent.
 Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
@@ -1315,6 +1315,21 @@ clipboard, service-custody and sexnet host gates pass; sealed build and
 master gate GREEN; native Quil autosave gate at both sizes adds a second
 line `x` after recovery and moves it up
 (`[quil.line.move] up=1 start=0 end=16 caret=1 applied=1 len=16`).
+
+## N16. Quil indent / outdent lines (2026-11-03)
+
+- `Ctrl+]` indents (a leading tab) and `Ctrl+[` outdents (one leading tab,
+  else up to four spaces) every line the selection touches, as one
+  undoable edit; the lines stay selected so the chord can repeat. Tab
+  itself is the desktop's focus key (Shell consumes it as
+  `AccessFocusNext`), which the first native attempt showed, so the
+  chords use brackets.
+
+**Evidence** (`docs/handoff/assets/quil-indent-lines-2026-11-03/`): Quil
+clipboard, service-custody and sexnet host gates pass; sealed build and
+master gate GREEN; native Quil autosave gate at both sizes: Ctrl+A, Ctrl+]
+(`[quil.indent] lines=2 out=0 start=0 end=18 applied=1 len=18`), Ctrl+[
+(`lines=2 out=1 ... len=16`).
 
 ## Release gates noted while doing F1–F2
 

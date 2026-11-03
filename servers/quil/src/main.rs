@@ -378,6 +378,8 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 0x4b|0x4d|0x47|0x4f if !QUIL_NAME_MODE&&!*palette_active=>quil_word_move(key.code,key.shift),
                 0x26 if !QUIL_NAME_MODE&&!*palette_active=>quil_select_line(),
                 0x48|0x50 if !QUIL_NAME_MODE&&!*palette_active=>quil_move_line(key.code==0x48),
+                // Ctrl+] indents and Ctrl+[ outdents the selected lines (Tab is the desktop's).
+                0x1b|0x1a if !QUIL_NAME_MODE&&!*palette_active=>{if let Some(s)=QUIL_SELECTION.snapshot(){if quil_indent(s.range(),key.code==0x1a){draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}},
                 0x0e|0x53 if !QUIL_NAME_MODE&&!*palette_active=>quil_word_delete(key.code),
                 0x2c if !QUIL_NAME_MODE=>{*palette_active=false;if key.shift{text_buffer_redo();}else{text_buffer_undo();}draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x15 if !QUIL_NAME_MODE=>{*palette_active=false;text_buffer_redo();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
@@ -522,6 +524,35 @@ unsafe fn quil_select_line() {
     let ok = QUIL_SELECTION.move_to(source, start, false).is_ok() && QUIL_SELECTION.move_to(source, end, true).is_ok();
     if ok { QUIL_CURSOR_POS = end; QUIL_GOAL_COL = usize::MAX; quil_selection_record(); draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
     sex_pdx::serial_record!("[quil.select.line] start={} end={} extended={} ok={}", start, end, whole as u8, ok as u8);
+}
+/// Indent (a leading tab) or outdent (one leading tab, else up to four
+/// spaces) every line the selection touches, as one undoable edit; the
+/// changed lines stay selected so the key can repeat.
+unsafe fn quil_indent(range: (usize, usize), out: bool) -> bool {
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let start = text[..range.0].iter().rposition(|c| *c == b'\n').map_or(0, |k| k + 1);
+    // A selection ending at a line start does not include that line.
+    let last = if range.1 > range.0 && text[range.1 - 1] == b'\n' { range.1 - 1 } else { range.1 };
+    let end = text[last..].iter().position(|c| *c == b'\n').map_or(text.len(), |k| last + k);
+    let scratch = &mut *core::ptr::addr_of_mut!(QUIL_REPLACE_SCRATCH);
+    let (mut n, mut lines) = (0, 0);
+    for line in text[start..end].split(|c| *c == b'\n') {
+        if lines > 0 { if n == scratch.len() { return false; } scratch[n] = b'\n'; n += 1; }
+        lines += 1;
+        let body = if out {
+            if line.first() == Some(&b'\t') { &line[1..] } else { &line[line.iter().take(4).take_while(|c| **c == b' ').count()..] }
+        } else { if n == scratch.len() { return false; } scratch[n] = b'\t'; n += 1; line };
+        if n + body.len() > scratch.len() { return false; }
+        scratch[n..n + body.len()].copy_from_slice(body);
+        n += body.len();
+    }
+    let applied = quil_replace((start, end), &scratch[..n]);
+    if applied {
+        let source = quil_source();
+        if QUIL_SELECTION.move_to(source, start, false).is_ok() && QUIL_SELECTION.move_to(source, start + n, true).is_ok() { QUIL_CURSOR_POS = start + n; quil_selection_record(); }
+    }
+    sex_pdx::serial_record!("[quil.indent] lines={} out={} start={} end={} applied={} len={}", lines, out as u8, start, start + n, applied as u8, QUIL_BUFFER_LEN);
+    applied
 }
 /// Ctrl+Up / Ctrl+Down swap the caret's line with the one above / below as
 /// one undoable edit; the caret keeps its column in the moved line.

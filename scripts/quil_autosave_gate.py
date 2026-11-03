@@ -123,6 +123,10 @@ def main():
   g['key']('end',r'\[quil.cursor.move\] old=\d+ new=14 len=14 dir=end ok=1');s0=len(t());g['q'].key('ret');g['q'].key('x')
   g['wait'](r'\[quil.document.edit\] revision=\d+ pending=\d+ bytes=16',s0,30)
   g['chord']('ctrl','up',r'\[quil.line.move\] up=1 start=0 end=16 caret=1 applied=1 len=16')
+  # Select all, Ctrl+] indents both lines, Ctrl+[ outdents them again.
+  g['chord']('ctrl','a',r'\[quil.selection\] generation=\d+ revision=\d+ bytes=16 anchor=0 caret=16')
+  g['chord']('ctrl','bracket_right',r'\[quil.indent\] lines=2 out=0 start=0 end=18 applied=1 len=18')
+  g['chord']('ctrl','bracket_left',r'\[quil.indent\] lines=2 out=1 start=0 end=16 applied=1 len=16')
   settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)
