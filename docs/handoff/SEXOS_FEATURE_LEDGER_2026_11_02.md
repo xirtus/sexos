@@ -1,6 +1,6 @@
 # SexOS feature ledger (from 2026-11-02)
 
-## Handoff summary (as of 2026-11-03, after N19)
+## Handoff summary (as of 2026-11-03, after P9)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow
 links 1-16, `Backspace` back, `/` find in page, `G` QOI image, `P` PNG image (any standard depth,
@@ -61,7 +61,9 @@ Display text delivery; Display applies app paints late; Display redraws are slow
 failure fences document I/O like any uncertain save; no draft cleanup;
 images limited to 48x48; the Browser body limit is 12 KiB (heap now 128 KiB).
 
-**Next suggested steps.** Fix focus raising in Shell/Display (with the
+**Next suggested steps.** A page-only receive path that converts HTML
+straight into the 12 KiB text document (sources larger than 12 KiB; see
+P2); `async`/`await` would need a suspendable interpreter. Fix focus raising in Shell/Display (with the
 concurrent session); grow the document/body limit with streaming
 conversion (12 KiB is fixed in `sex-http`'s codec); an event model for scripts only if it
 fits held authority.
@@ -1523,6 +1525,19 @@ captioned table of implicit rows (`Ports / dns   | 53 / https | 443`).
 text host tests 28 (`repeated_breaks_and_no_break_spaces`); sealed build
 and master gate GREEN; native HTML gate at both sizes (`wide  gap` /
 blank line / `after break`).
+
+## P10. Regression on the final image of the P batch (2026-11-03)
+
+All 11 host gates pass (sexnet jobs, service custody, Quil clipboard,
+clipboard, Spindle calc, Quil autosave, Spindle sextime, browser text,
+Display text readability, Display surface groups, app activation). On the
+sealed image at the batch's head: PNG (8-bit 1280x800, Adam7 16-bit
+1024x768), Browser reserve (1280x800, 128 KiB heap), Quil autosave
+(1280x800, all Quil editing chords) and Spindle calc (1024x768, incl.
+Ctrl editing, Tab completion, scientific functions, history search)
+native gates pass; the HTML gate passed at both sizes in P9.
+
+Evidence: `docs/handoff/assets/batch-regression-2026-11-03/`.
 
 ## Release gates noted while doing F1–F2
 
