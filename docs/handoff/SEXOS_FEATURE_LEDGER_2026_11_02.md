@@ -33,8 +33,7 @@ image): `https_html_gate.py` (also bounds the Browser stack high water),
 and PNG tests run in `sexnet_jobs_host_gate.sh`.
 
 **Open release gates** (details below): full-window reader needs a larger
-Display text delivery; Display applies app paints late; Display's inbox backlog delays
-focus changes and app paints by seconds (a focused Spindle can stay hidden); autosave
+Display text delivery; Display applies app paints late; Display redraws are slow (200-680 ticks each; H1 removed the inbox backlog); autosave
 failure fences document I/O like any uncertain save; no draft cleanup;
 images limited to 48x48; the Browser body limit is 12 KiB.
 
@@ -702,6 +701,31 @@ both sizes now also presses Ctrl+I and checks `1 LINES / 2 WORDS / 9 CHARS`;
 script host tests 20 groups, calc host tests; sealed build and master gate
 GREEN; native HTML gate at both sizes (`code 83 Sex 8`); native calc gate at
 both sizes (`calc 2*pi`).
+
+## H1. Display catches up with its inbox (2026-11-03)
+
+**Cause.** Display applied at most `DRAIN_MAX = 16` messages per loop and
+then redrew; a redraw costs 200-680 ticks under QEMU, and app text arrives
+8 bytes per message (Spindle sends ~17 messages per pane update). Display
+therefore fell seconds behind, which is why focus changes, Quil paints and
+Spindle text appeared late or not at all (see the finding above).
+
+**Fix.** `DRAIN_MAX` is now 256: up to 256 messages are applied before each
+redraw, so a burst of updates costs one frame instead of sixteen.
+Rendering, message handling and authority checks are unchanged.
+
+**Result.** In the calc gate Display now reaches `focus=153` (it never did
+before), Spindle admits 132 display batches instead of 10, and the end
+screenshot shows Spindle in front with `= 1024`, `~ 1.414213562`, `= 9`,
+`~ 6.283185308` and the division-by-zero message. The gate now waits for
+Spindle's outbox before its screenshot.
+
+**Evidence** (`docs/handoff/assets/display-drain-2026-11-03/`): all Display
+host gates (clock, cursor output, frame output, scene, ready protocol,
+surface groups, surface lifecycle, text readability) OK; sealed build and
+master gate GREEN; native calc gate at both sizes, connected desktop, Quil
+workflow, autosave, delete, HTML, PNG, QOI asset and `/welcome` document
+gates all pass.
 
 ## Release gates noted while doing F1–F2
 

@@ -19,7 +19,9 @@ const FALLBACK_H: u32 = 800;
 const HIGH_HALF_BASE: u64 = 0xffff_8000_0000_0000;
 const MAX_FB_W: usize = 8192;
 const MAX_FB_H: usize = 4320;
-const DRAIN_MAX: usize = 16;
+// Messages applied per frame. Text arrives 8 bytes per message, so a small
+// drain left Display seconds behind its inbox (feature ledger H1).
+const DRAIN_MAX: usize = 256;
 
 /// Phase 3: receive+render proof for new SilkBar ABI v4 variants (8/9/10).
 /// When enabled, emits [sexdisplay.silkbar.phase3.recv/state] markers.

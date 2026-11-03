@@ -36,6 +36,10 @@ def main():
   g=boot(iso,disk,out,'boot',a.resolution);g['focus'](153)
   for line,pattern in CASES:
    type_line(g,line);s=len(g['text']());g['q'].key('ret');m=g['wait'](pattern,s);rows.append(dict(input=line,record=m[0]))
+  # Spindle's display outbox must drain: its last batch is admitted after the last command.
+  last=len(g['text']());import time as _t;d=_t.monotonic()+30
+  while _t.monotonic()<d and not re.search(r'\[spindle.display.batch.admitted\]',g['text']()[last-20000 if last>20000 else 0:]):_t.sleep(.2)
+  _t.sleep(2)
   g['q'].cmd('screendump',{'filename':str(out/'calc.ppm')})
  except Exception as exc:failure=repr(exc)
  finally:
