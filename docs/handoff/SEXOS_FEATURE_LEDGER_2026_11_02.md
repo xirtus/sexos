@@ -6,7 +6,7 @@
 links, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
 interlaced or not), `B` plain document. Quil: autosave draft after ~30 s
 idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the saved file, `Ctrl+I` shows
-line/word/char counts. Spindle: Shift works; `calc` does exact decimals with
+line/word/char counts, `Ctrl+G` goes to a line. Spindle: Shift works; `calc` does exact decimals with
 `** sqrt abs min max round floor ceil pi e ans`.
 
 **HTML reader.** Headings, paragraphs, lists (numbered/nested/definition),
@@ -802,6 +802,19 @@ script (regex replace with a callback summing timings, `match/g`, `test`,
 html_text 24 host tests, calc host tests 4 groups; sealed build and master
 gate GREEN; native HTML gate at both sizes (`==held== not ~~ambient~~`);
 native calc gate at both sizes with `calc r = 3`, `calc r*r+1`.
+
+## L1. Quil Ctrl+G go to line (2026-11-03)
+
+**Ctrl+G** opens a `Go to line: N` prompt in Quil's status line; digits
+type the number, Backspace deletes, Enter moves the caret to the start of
+that line (clamped to the last line), Esc or any chord leaves. Recorded as
+`[quil.goto] line= reached= old= new=`.
+
+**Evidence** (`docs/handoff/assets/quil-goto-2026-11-03/`): Quil clipboard and
+service custody host gates; sealed build and master gate GREEN; native
+autosave gate at both sizes now presses Ctrl+G, 5, Enter
+(`line=5 reached=1 old=9 new=0`) and End before continuing; Quil workflow
+regression passes.
 
 ## Release gates noted while doing F1–F2
 

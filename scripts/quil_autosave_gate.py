@@ -81,6 +81,9 @@ def main():
   r1=g['wait'](rf'\[quil.autosave.result\] outcome=Saved result=Saved {{ draft: (\d+), revision: {b1[2]} }} revision=\d+ dirty=1 document={b1[5]}',b1.end()+start)
   draft,name=int(r1[1]),b1[1]
   g['chord']('ctrl','i',r'\[quil.stats\] lines=1 words=2 chars=9 bytes=9');g['wait'](r'\[quil.text.view\][^\n]*1 LINES / 2 WORDS / 9 CHARS',0,30)
+  g['chord']('ctrl','g',r'\[quil.goto.mode\] on=1');s0=len(t());g['q'].key('5');g['wait'](r'\[quil.text.view\][^\n]*Go to line: 5',s0,30)
+  g['key']('ret',r'\[quil.goto\] line=5 reached=1 old=9 new=0 len=9');checks_goto=True
+  g['key']('end',r'\[quil.cursor.move\] old=0 new=9 len=9 dir=end ok=1')
   mid=len(t())
   type_keys(g,SECOND)
   b2=g['wait'](rf'\[quil.autosave.begin\] draft={draft} name={re.escape(name)} revision=(\d+) bytes=(\d+) hash=(0x[0-9a-f]+) document={b1[5]} document_unchanged=1',mid,90)

@@ -287,6 +287,20 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
             }
             draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);return
         }
+        if let Some(line)=QUIL_GOTO {
+            // Ctrl+G: digits, Backspace, Enter jumps, Esc or any chord leaves.
+            QUIL_GOTO=None;
+            if !key.control {
+                match key.code {
+                    0x01=>{},
+                    0x0e=>QUIL_GOTO=Some(line/10),
+                    0x1c=>quil_goto_line(line),
+                    0x02..=0x0b=>{let d=if key.code==0x0b{0}else{key.code as u32-1};QUIL_GOTO=Some(if line>=1_000_000{line}else{line*10+d});},
+                    _=>QUIL_GOTO=Some(line),
+                }
+                draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);return
+            }
+        }
         if QUIL_FIND.active() {
             // A control chord (New/Open/Save...) leaves find mode and proceeds.
             if key.control {QUIL_FIND.clear();sex_pdx::serial_record!("[quil.find.mode] on=0 reason=chord");}
@@ -317,6 +331,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 0x1e if !QUIL_NAME_MODE=>{*palette_active=false;let _=QUIL_SELECTION.select_all(quil_source());QUIL_CURSOR_POS=QUIL_BUFFER_LEN;quil_selection_record();draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x20 if !QUIL_NAME_MODE&&!*palette_active=>quil_delete_key(),
                 0x17 if !QUIL_NAME_MODE&&!*palette_active=>quil_stats_key(),
+                0x22 if !QUIL_NAME_MODE&&!*palette_active=>{QUIL_FIND.clear();QUIL_GOTO=Some(0);sex_pdx::serial_record!("[quil.goto.mode] on=1");draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);},
                 0x31=>document_action(sex_pdx::document_view::NEW,palette_active,selected_row),
                 0x18=>document_action(sex_pdx::document_view::OPEN,palette_active,selected_row),
                 0x1f=>document_action(if key.shift{sex_pdx::document_view::SAVE_AS}else{sex_pdx::document_view::SAVE},palette_active,selected_row),
@@ -423,6 +438,20 @@ fn document_save_start(create: bool) {
         }
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
+}
+/// Ctrl+G line prompt: the number typed so far.
+static mut QUIL_GOTO: Option<u32> = None;
+static mut QUIL_GOTO_TEXT: [u8; 24] = [0; 24];
+/// Move the caret to the start of line `line` (1-based, clamped).
+unsafe fn quil_goto_line(line: u32) {
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let want = line.max(1) as usize;
+    let mut pos = 0;
+    let mut current = 1;
+    while current < want { match text[pos..].iter().position(|b| *b == b'\n') { Some(k) => { pos += k + 1; current += 1; } None => break } }
+    let old = QUIL_CURSOR_POS;
+    if QUIL_SELECTION.move_to(quil_source(), pos, false).is_ok() { QUIL_CURSOR_POS = pos; QUIL_GOAL_COL = usize::MAX; quil_selection_record(); }
+    sex_pdx::serial_record!("[quil.goto] line={} reached={} old={} new={} len={}", line, current, old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
 }
 /// Ctrl+I: lines, words and characters of the buffer in the status line.
 static mut QUIL_STATS_TEXT: [u8; 48] = [0; 48];
@@ -1010,6 +1039,11 @@ fn document_draw(buf: &[u8], palette: Option<u8>) {
         let (find_prompt,find_len)=QUIL_FIND.prompt();
         let input_status: &[u8]=if QUIL_UNICODE_INPUT.active(){&unicode_prompt[..unicode_len]}
             else if let Some(notice)=QUIL_INPUT_NOTICE {notice}
+            else if let Some(line)=QUIL_GOTO{
+                let mut n=0;for &b in b"Go to line: "{QUIL_GOTO_TEXT[n]=b;n+=1;}
+                if line>0{let mut d=[0u8;10];let mut k=0;let mut v=line;while v>0{d[k]=b'0'+(v%10) as u8;k+=1;v/=10;}while k>0{k-=1;QUIL_GOTO_TEXT[n]=d[k];n+=1;}}
+                &*core::ptr::slice_from_raw_parts(core::ptr::addr_of!(QUIL_GOTO_TEXT) as *const u8,n)
+            }
             else if QUIL_FIND.active(){&find_prompt[..find_len]}
             else if let Some(s)=quil_clipboard_status(){s}
             else if QUIL_DIRTY&&QUIL_AUTOSAVE.kept(QUIL_REVISION)&&DOCUMENT_IO.status()=="READY"{b"DRAFT KEPT"}
