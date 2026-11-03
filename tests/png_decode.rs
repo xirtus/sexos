@@ -3,6 +3,7 @@
 #[path="../crates/sex-graphics/src/qoi.rs"] #[allow(dead_code)] mod qoi;
 #[path="../crates/sex-graphics/src/png.rs"] mod png;
 #[path="fixtures/png/cases.rs"] mod cases;
+#[path="fixtures/png/variants.rs"] mod variants;
 use png::{decode, Error, SCRATCH_BYTES};
 
 fn run(bytes: &[u8]) -> Result<(usize, usize, Vec<u32>), Error> {
@@ -45,4 +46,14 @@ fn refuses_what_it_does_not_support() {
     let mut big = vec![0u8; qoi::MAX_INPUT_BYTES + 1];
     big[..8].copy_from_slice(&good[..8]);
     assert_eq!(run(&big).err(), Some(Error::InputTooLarge));
+}
+
+#[test]
+fn decodes_low_bit_depths_sixteen_bit_and_adam7() {
+    for (name, bytes, w, h, pixels) in variants::CASES {
+        let (gw, gh, got) = run(bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!((gw, gh), (*w, *h), "{name}");
+        assert_eq!(&got[..], *pixels, "{name}");
+        for i in [8usize, bytes.len() / 2, bytes.len() - 5] { let mut b = bytes.to_vec(); b[i] ^= 0x10; assert!(run(&b).is_err(), "{name} byte {i}"); }
+    }
 }

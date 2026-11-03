@@ -1,9 +1,11 @@
 //! Allocation-free PNG decoder for small owned assets.
 //!
 //! Independently implemented from the PNG specification (ISO/IEC 15948,
-//! W3C PNG 2nd edition) and RFC 1950/1951 (zlib/DEFLATE). Supported: 8-bit
-//! grayscale, RGB, palette (with tRNS alpha), grayscale+alpha and RGBA,
-//! non-interlaced, up to the same `MAX_DIMENSION` as the QOI decoder. Every
+//! W3C PNG 2nd edition) and RFC 1950/1951 (zlib/DEFLATE). Supported: every
+//! standard colour type and bit depth (grayscale 1/2/4/8/16, palette 1/2/4/8
+//! with tRNS alpha, RGB/gray+alpha/RGBA 8/16), non-interlaced or Adam7, up
+//! to the same `MAX_DIMENSION` as the QOI decoder. 16-bit samples keep their
+//! high byte. Every
 //! chunk CRC and the zlib Adler-32 are checked; anything else is refused.
 //! Pixels are unpremultiplied `0xAARRGGBB`, like `qoi`.
 //!
@@ -15,7 +17,9 @@
 use crate::qoi::{MAX_DIMENSION, MAX_INPUT_BYTES, MAX_PIXELS};
 
 /// Inflated bytes for the largest accepted image: one filter byte per row.
-pub const SCRATCH_BYTES: usize = MAX_DIMENSION * (MAX_DIMENSION * 4 + 1);
+/// 16-bit RGBA rows plus one filter byte per row for each of the seven
+/// Adam7 passes.
+pub const SCRATCH_BYTES: usize = MAX_DIMENSION * (MAX_DIMENSION * 8 + 1) + 7 * MAX_DIMENSION;
 const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,7 +68,7 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
     if input.len() > MAX_INPUT_BYTES { return Err(Error::InputTooLarge); }
     if !is_png(input) { return Err(Error::Signature); }
     let mut at = 8;
-    let mut header: Option<(usize, usize, u8)> = None;
+    let mut header: Option<(usize, usize, u8, u8, bool)> = None;
     let mut palette = [0u32; 256];
     let mut palette_len = 0usize;
     // IDAT data may be split across chunks; they are read as one stream.
@@ -85,8 +89,9 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
                 let (w, h) = (be32(data) as usize, be32(&data[4..]) as usize);
                 let (depth, color, method, filter, interlace) = (data[8], data[9], data[10], data[11], data[12]);
                 if w == 0 || h == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION { return Err(Error::Size); }
-                if depth != 8 || method != 0 || filter != 0 || interlace != 0 || !matches!(color, 0 | 2 | 3 | 4 | 6) { return Err(Error::Unsupported); }
-                header = Some((w, h, color));
+                let depth_ok = match color { 0 => matches!(depth, 1 | 2 | 4 | 8 | 16), 3 => matches!(depth, 1 | 2 | 4 | 8), 2 | 4 | 6 => matches!(depth, 8 | 16), _ => false };
+                if !depth_ok || method != 0 || filter != 0 || interlace > 1 { return Err(Error::Unsupported); }
+                header = Some((w, h, color, depth, interlace == 1));
             }
             b"PLTE" => {
                 if header.is_none() || len % 3 != 0 || len == 0 || len > 768 || idat.started { return Err(Error::Palette); }
@@ -96,7 +101,7 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
                 }
             }
             b"tRNS" => {
-                let Some((_, _, color)) = header else { return Err(Error::Header) };
+                let Some((_, _, color, _, _)) = header else { return Err(Error::Header) };
                 if color == 3 {
                     if len > palette_len { return Err(Error::Palette); }
                     for i in 0..len { palette[i] = (palette[i] & 0x00ff_ffff) | (data[i] as u32) << 24; }
@@ -120,11 +125,20 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
         at = end;
     }
     if !ended || at != input.len() { return Err(Error::Truncated); }
-    let (w, h, color) = header.ok_or(Error::Header)?;
+    let (w, h, color, depth, interlaced) = header.ok_or(Error::Header)?;
     if color == 3 && palette_len == 0 { return Err(Error::Palette); }
     let channels = match color { 0 => 1, 2 => 3, 3 => 1, 4 => 2, _ => 4 };
-    let stride = w * channels;
-    let need = h * (stride + 1);
+    let bits = channels * depth as usize;
+    // Bytes back to the corresponding byte of the previous pixel (filters).
+    let bpp = (bits + 7) / 8;
+    let row_bytes = |pw: usize| (pw * bits + 7) / 8;
+    // (x0, y0, dx, dy) per pass: Adam7 or one full pass.
+    const ADAM7: [(usize, usize, usize, usize); 7] = [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
+    let passes: &[(usize, usize, usize, usize)] = if interlaced { &ADAM7 } else { &[(0, 0, 1, 1)] };
+    let size = |&(x0, y0, dx, dy): &(usize, usize, usize, usize)| ((w + dx - 1 - x0.min(w)) / dx, (h + dy - 1 - y0.min(h)) / dy);
+    let mut need = 0;
+    for p in passes { let (pw, ph) = size(p); if pw > 0 && ph > 0 { need += ph * (row_bytes(pw) + 1); } }
+    if need > SCRATCH_BYTES { return Err(Error::Size); }
     let mut z = Bits { src: idat, bit: 0, nbits: 0 };
     // zlib header: CM=8, window <= 32K, no preset dictionary, check bits.
     let (cmf, flg) = (z.byte()?, z.byte()?);
@@ -135,19 +149,39 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
     let adler = (z.byte()? as u32) << 24 | (z.byte()? as u32) << 16 | (z.byte()? as u32) << 8 | z.byte()? as u32;
     if adler != adler32(&scratch[..need]) { return Err(Error::Adler); }
     if z.src.next().is_some() { return Err(Error::Zlib); }
-    unfilter(&mut scratch[..need], stride, channels, h)?;
-    for y in 0..h {
-        let row = &scratch[y * (stride + 1) + 1..(y + 1) * (stride + 1)];
-        for x in 0..w {
-            let p = &row[x * channels..x * channels + channels];
-            out[y * w + x] = match color {
-                0 => 0xff00_0000 | (p[0] as u32) * 0x0001_0101,
-                2 => 0xff00_0000 | (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32,
-                3 => { if p[0] as usize >= palette_len { return Err(Error::Palette); } palette[p[0] as usize] }
-                4 => (p[1] as u32) << 24 | (p[0] as u32) * 0x0001_0101,
-                _ => (p[3] as u32) << 24 | (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32,
-            };
+    let max = (1u32 << depth.min(8)) - 1;
+    let mut base = 0;
+    for p in passes {
+        let (pw, ph) = size(p);
+        if pw == 0 || ph == 0 { continue; }
+        let stride = row_bytes(pw);
+        let region = &mut scratch[base..base + ph * (stride + 1)];
+        unfilter(region, stride, bpp, ph)?;
+        for py in 0..ph {
+            let row = &region[py * (stride + 1) + 1..(py + 1) * (stride + 1)];
+            for px in 0..pw {
+                // Sample `c` of pixel `px`: sub-byte depths pack MSB first;
+                // 16-bit samples use their high byte; low depths scale to 8 bits.
+                let sample = |c: usize| -> u32 {
+                    let i = px * channels + c;
+                    match depth {
+                        16 => row[i * 2] as u32,
+                        8 => row[i] as u32,
+                        d => { let bit = i * d as usize; ((row[bit / 8] >> (8 - d as usize - bit % 8)) as u32) & max }
+                    }
+                };
+                let gray = |v: u32| if depth < 8 { v * 255 / max } else { v };
+                let (x, y) = (p.0 + px * p.2, p.1 + py * p.3);
+                out[y * w + x] = match color {
+                    0 => 0xff00_0000 | gray(sample(0)) * 0x0001_0101,
+                    2 => 0xff00_0000 | sample(0) << 16 | sample(1) << 8 | sample(2),
+                    3 => { let i = sample(0) as usize; if i >= palette_len { return Err(Error::Palette); } palette[i] }
+                    4 => sample(1) << 24 | sample(0) * 0x0001_0101,
+                    _ => sample(3) << 24 | sample(0) << 16 | sample(1) << 8 | sample(2),
+                };
+            }
         }
+        base += ph * (stride + 1);
     }
     Ok((w, h))
 }

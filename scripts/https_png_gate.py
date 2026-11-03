@@ -18,10 +18,17 @@ from network_contention_gate import frozen_binding,MAX_PCAP
 from check_disk_persistence import ppm_rgb
 
 REQUEST=b'GET /art.png HTTP/1.1\r\nHost: probe.sexos.test:46080\r\nConnection: close\r\nAccept: image/png\r\n\r\n'
-def make_png():
+ADAM7=((0,0,8,8),(4,0,8,8),(0,4,4,8),(2,0,4,4),(0,2,2,4),(1,0,2,2),(0,1,1,2))
+def make_png(variant='rgba8'):
+ """The QOI oracle's RGBA pixels as PNG: plain 8-bit, or 16-bit Adam7."""
  def chunk(t,d):return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d))
- px=asset.rgba();w=h=48;raw=b''.join(b'\0'+px[y*w*4:(y+1)*w*4]for y in range(h))
- return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
+ px=asset.rgba();w=h=48
+ if variant=='rgba8':depth,inter,raw=8,0,b''.join(b'\0'+px[y*w*4:(y+1)*w*4]for y in range(h))
+ else:
+  depth,inter,raw=16,1,b''
+  for x0,y0,dx,dy in ADAM7:
+   for y in range(y0,h,dy):raw+=b'\0'+b''.join(bytes((v,0))for x in range(x0,w,dx)for v in px[(y*w+x)*4:(y*w+x)*4+4])
+ return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,depth,6,0,0,inter))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
 BODY=make_png()
 def response(mode,page=BODY):
  return b'\r\n'.join([b'HTTP/1.1 200 OK',b'Content-Type: image/png',b'Content-Length: '+str(len(page)).encode(),b'Connection: close'])+b'\r\n\r\n'+page
@@ -31,7 +38,8 @@ SCOPE='Actual fixed BOOT-controlled HTTPS image/png fetched by key P, decoded by
 
 def main():
  from quil_workflow_gate import palette_commands,palette_select
- p=argparse.ArgumentParser();[p.add_argument(f'--{n}',required=True,type=Path)for n in('iso','source-disk','binding','out')];p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');a=p.parse_args()
+ p=argparse.ArgumentParser();[p.add_argument(f'--{n}',required=True,type=Path)for n in('iso','source-disk','binding','out')];p.add_argument('--model',choices=('e1000','e1000e'),default='e1000e');p.add_argument('--resolution',choices=('1280x800','1024x768'),default='1280x800');p.add_argument('--variant',choices=('rgba8','adam7-16'),default='rgba8');a=p.parse_args()
+ global BODY;BODY=make_png(a.variant);PngPeer.EXCHANGES=((REQUEST,BODY),)
  root=Path(__file__).resolve().parents[1];out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh evidence directory required')
  binding=frozen_binding(root,a.iso.resolve(strict=True),a.binding.resolve(strict=True));held=json.loads(a.binding.read_text())
@@ -94,7 +102,7 @@ def main():
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
  request_ok=[r.get('request_hex')for r in peer.rows]==[REQUEST.hex()]
- res=dict(ok=failure is None and request_ok and not peer.errors,error=failure,request_exact=request_ok,png_bytes=len(BODY),png_sha256=hashlib.sha256(BODY).hexdigest(),pixel_hash=hex(asset.PIXEL_HASH),checks=checks,resolution=a.resolution,model=a.model,scope=SCOPE)
+ res=dict(ok=failure is None and request_ok and not peer.errors,error=failure,request_exact=request_ok,png_bytes=len(BODY),variant=a.variant,png_sha256=hashlib.sha256(BODY).hexdigest(),pixel_hash=hex(asset.PIXEL_HASH),checks=checks,resolution=a.resolution,model=a.model,scope=SCOPE)
  (out/'result.json').write_text(json.dumps(res,indent=2,default=str)+'\n')
  if not res['ok']:raise RuntimeError(json.dumps(dict(error=failure,request_exact=request_ok)))
  print(json.dumps(dict(ok=True,resolution=a.resolution,png_bytes=len(BODY))))

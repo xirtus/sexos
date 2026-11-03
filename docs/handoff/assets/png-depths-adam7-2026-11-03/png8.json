@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "error": null,
+  "request_exact": true,
+  "png_bytes": 8354,
+  "variant": "rgba8",
+  "png_sha256": "f951cf03bab34d48806e3f864573a5f796b0a5708b5655057d9393a4d2a69089",
+  "pixel_hash": "0x3681b665b27e8585",
+  "checks": {
+    "decoded": "[browser.asset.decoded] ticket=2 width=48 height=48 pixels=2304 hash=0x3681b665b27e8585 bounded_turn=128",
+    "ready": "[browser.asset.presentation.ready] generation=4 mode=Fit viewport=3 ticket=2 sequence=1 hash=0x3681b665b27e8585 positive_ack=1",
+    "pixels": {
+      "ok": true,
+      "checked": 256,
+      "mismatched": 0,
+      "x": 544,
+      "y": 333,
+      "scale": 4
+    }
+  },
+  "resolution": "1280x800",
+  "model": "e1000e",
+  "scope": "Actual fixed BOOT-controlled HTTPS image/png fetched by key P, decoded by the allocation-free PNG decoder after positive RELEASE, pixel hash equal to the QOI oracle and screen pixels checked. No other formats, sizes or public web claim."
+}

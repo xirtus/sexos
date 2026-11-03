@@ -28,7 +28,7 @@ for the app's `applied` receipt) and Spindle's display stayed pending in the
 calc gate; Browser stack headroom is now measured (F29: 46.7 KiB of 64 KiB);
 script recursion is capped at nesting 32 (about `fact(7)`); autosave failure
 fences document I/O like any uncertain save; no draft cleanup; images are
-limited to 48x48.
+limited to 48x48 (any standard PNG depth/interlace).
 
 **Next suggested steps.** A DOM-free event model is the next JavaScript step
 only if it fits held authority (e.g. a key handler the Browser calls, no
@@ -608,6 +608,23 @@ gate at both sizes with a tenth page script
 (`LINEN... QUIL.... SPINDLE. 23 6 four 1 a+b` from filter/map/arrow/
 toUpperCase/padEnd/sort/reduce/do/switch/indexOf/replaceAll); conversion 20
 ticks; stack high water unchanged at 46,752.
+
+## G6-G8. PNG: low bit depths, 16-bit samples, Adam7 interlace (2026-11-03)
+
+The PNG decoder (F22) now accepts every standard colour type and bit depth:
+grayscale 1/2/4 (scaled to 8 bits), palette 1/2/4 (MSB-first packing), 16-bit
+grayscale/RGB/gray+alpha/RGBA (high byte kept), and Adam7 interlacing (each
+of the seven passes unfiltered separately, then scattered). The inflate
+scratch grew to 18,864 bytes (still a fallible heap allocation, freed after
+decode).
+
+**Evidence** (`docs/handoff/assets/png-depths-adam7-2026-11-03/`): 13 new
+zlib-made fixtures (all depths, interlaced and not, 1x1 and 3x2 Adam7 edge
+cases) plus corruption probes in `tests/png_decode.rs`; asset host tests;
+sealed build and master gate GREEN; native `https_png_gate.py` with the
+original 8-bit PNG and with `--variant adam7-16` (the same oracle pixels as a
+16-bit interlaced RGBA PNG, 10,353 bytes) at both sizes: decoded pixel hash
+equals the oracle and 256 sampled screen pixels match.
 
 ## Release gates noted while doing F1–F2
 
