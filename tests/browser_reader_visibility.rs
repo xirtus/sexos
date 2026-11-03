@@ -50,7 +50,7 @@ struct App{
  reading:bool,reading_https:bool,asset_panel:bool,import_panel:bool,https_panel:bool,peer_panel:bool,tls_panel:bool,clock_panel:bool,
  reader:document_reader::Reader,selection:text_selection::Selection,selection_generation:u64,selection_body:Option<(bool,usize,u64)>,
  clipboard_view:clipboard_client::View,viewport_sequence:u64,http:Http,exchange:Exchange,importer:Importer,import_source:Option<Body>,import_editor:import_view::Editor,
- import_status:import_view::Status,import_ticket:u32,resources_called:usize,
+ import_status:import_view::Status,import_ticket:u32,resources_called:usize,page_html:bool,
 }
 impl App{
  fn new()->Self{
@@ -60,9 +60,10 @@ impl App{
   Self{reading:true,reading_https:false,asset_panel:false,import_panel:false,https_panel:false,peer_panel:false,tls_panel:false,clock_panel:false,
    reader,selection:text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:clipboard_client::View::Idle,viewport_sequence:1,
    http:Http{body:Body((0..100).map(|n|format!("{n} café 中\n")).collect::<String>().into_bytes()),view:http_probe::View::Ready},
-   exchange:Exchange{body:None,resource:None},importer:Importer{body:None,view:document_import::View::Idle,busy:false},import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_ticket:0,resources_called:0}
+   exchange:Exchange{body:None,resource:None},importer:Importer{body:None,view:document_import::View::Idle,busy:false},import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_ticket:0,resources_called:0,page_html:false}
  }
  fn resources(&mut self,_:&str,_:bool){self.resources_called+=1;}
+ fn follow_link(&mut self,_:usize){}
  // Only the command dispatcher is a host adapter; its selected transition
  // helpers and all selection/navigation/copy logic are actual source methods.
  fn key(&mut self,raw:u64){let code=raw as u8;if code==0x17{self.begin_import();}else if !self.dismiss_import_key(code){self.navigate_reader(code);}}

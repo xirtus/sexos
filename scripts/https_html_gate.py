@@ -167,6 +167,12 @@ def main():
   if len(peer.dns)!=1 or len(peer.rows)!=1:raise RuntimeError('refused link caused network work')
   checks['refused_link']='index=3 https://elsewhere.example/x refused, no DNS/TLS'
   guide,glinks,gcut=expected_text(root,GUIDE)
+  # Find in page: `/`, query `sum`, Enter selects the match, Esc closes.
+  b=len(trace());q.key('slash');wait(r'\[browser.find.mode\] on=1',b)
+  for k in ('s','u','m'):q.key(k)
+  b=len(trace());q.key('ret');m=wait(r'\[browser.find\] query_bytes=3 start=(\d+) end=(\d+) wrapped=0 found=1 selected=1',b);checks['find']=m[0]
+  if text[int(m[1]):int(m[2])].lower()!=b'sum':raise RuntimeError(f'find selected {text[int(m[1]):int(m[2])]!r}')
+  b=len(trace());q.key('esc');wait(r'\[browser.find.mode\] on=0',b)
   # `0` is link 10 and Shift+4 link 14; this page lists 3, so both are refused locally.
   b=len(trace());q.key('0');wait(r'\[browser.html.link.refused\] index=10 listed=0 reason=not_endpoint_path network=0',b)
   b=len(trace());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'4'}],'hold-time':80});wait(r'\[browser.html.link.refused\] index=14 listed=0 reason=not_endpoint_path network=0',b)

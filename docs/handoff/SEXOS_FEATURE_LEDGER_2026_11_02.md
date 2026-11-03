@@ -3,7 +3,7 @@
 ## Handoff summary (as of 2026-11-03, after M36)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow
-links 1-16, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
+links 1-16, `Backspace` back, `/` find in page, `G` QOI image, `P` PNG image (any standard depth,
 interlaced or not, colour-key transparency), `B` plain document. Quil:
 autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
@@ -1268,6 +1268,26 @@ build and master gate GREEN; native HTML gate at both sizes presses `0`
 **Evidence** (`docs/handoff/assets/script-templates-named-fn-builtins-2026-11-03/`):
 script host tests 43 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... [1][2]a+b`).
+
+## N13. Browser find in page (2026-11-03)
+
+- In the visible reader, `/` opens find: the footer shows
+  `FIND: query_ ENTER NEXT/ESC`; letters, digits, space and `-.,` edit the
+  query (24 bytes), Backspace erases, Enter selects the next match after
+  the selection (ASCII case-insensitive, wrapping once) and scrolls it
+  into view, Esc closes. Purely local: no service or authority.
+- Shell's Browser key filter (`browser_input::command`) now also passes
+  `/` and space; its host test lists them.
+- Also fixes the `browser_reader_visibility` host fixture (in
+  `service_custody_host_gate.sh`), which N10 left without `page_html` /
+  `follow_link`. That gate showed one flaky run (tests sharing the global
+  clipboard client across threads), then passed three times in a row.
+
+**Evidence** (`docs/handoff/assets/browser-find-in-page-2026-11-03/`):
+clipboard, service-custody, sexnet and Quil clipboard host gates pass;
+sealed build and master gate GREEN; native HTML gate at both sizes types
+`/`, `sum`, Enter (`[browser.find] query_bytes=3 start=206 end=209
+wrapped=0 found=1 selected=1`, checked against the expected text), Esc.
 
 ## Release gates noted while doing F1–F2
 
