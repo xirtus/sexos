@@ -823,7 +823,7 @@ fn reference_contrast(a:u32,b:u32)->f64{
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
 }}
 #[test]fn finite_scalar_font_is_explicit_bounded_and_never_aliases_unknown_to_question_mark(){
- assert_eq!(FONT_UNICODE_5X7.len(),16);
+ assert_eq!(FONT_UNICODE_5X7.len(),94);
  for(code,rows)in FONT_UNICODE_5X7{
   assert!(char::from_u32(*code).is_some());assert!(rows.iter().all(|&row|row<32));
   assert_eq!(scalar_glyph(*code),*rows);

@@ -1223,6 +1223,23 @@ host test `latin1_greek_and_symbol_entities` (tests/browser_html_text.rs,
 25 tests); sealed build and master gate GREEN; native HTML gate at both
 sizes (`floor_offset=10240 hits=1`, high water 56,784).
 
+## N9. Display glyphs for Latin-1, quotes, dashes and common symbols (2026-11-03)
+
+- Display's 5x7 scalar font grew from 16 to 94 glyphs: the accented
+  Latin-1 letters (grave, acute, circumflex, tilde, diaeresis, ring;
+  capitals with the letter compressed under the accent, as the existing
+  `É`/`Ä`), `ç Ç ñ Ñ`, `° ± × ÷ « » © £ ¢ ¥ § µ ¿ ¡ · ¬ ² ½`, curly
+  quotes, en/em dash, bullet, minus, `≤ ≥ ≠ ∞ π α β ✓`. Other scalars still
+  draw the explicit box. The table is generated from the ASCII glyphs plus
+  accent rows and kept sorted and distinct; it is a constant ROM change
+  only (no layout or protocol change).
+
+**Evidence** (`docs/handoff/assets/display-latin1-glyphs-2026-11-03/`,
+including `glyph-sheet.png` rendered from the table): display text
+readability and surface-group host gates pass (table size assertion now
+94), desktop pixel checker tests pass (29); sealed build and master gate
+GREEN; native HTML (1280x800) and Quil autosave (1024x768) regressions OK.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
