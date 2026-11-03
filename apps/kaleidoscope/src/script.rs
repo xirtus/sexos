@@ -68,6 +68,8 @@ const CLOSURES: usize = 64;
 const ENVS: usize = 16;
 /// `String`, `Number` and `Boolean` used as function values (`xs.map(Number)`).
 const BUILTIN_FUNCS: u8 = 250;
+/// A Promise executor's `resolve`/`reject` functions: `Value::Func(RESOLVERS + k)`.
+const RESOLVERS: u8 = 200;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
 const ELEMS: usize = 512;
 const ARRAYS: usize = 128;
@@ -105,6 +107,12 @@ pub enum Error { Unsupported, Syntax, Limit, Thrown }
 #[derive(Clone, Copy)]
 enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Null, Arr(u8), Obj(u8), Func(u8), Re(u8) }
 
+/// What a settled promise does next: call `fulfilled`/`rejected` (absent:
+/// pass the state on) and settle `child` with the outcome. `finally`
+/// handlers see no value and pass the original outcome on; `slot` feeds a
+/// `Promise.all` (gather, index).
+#[derive(Clone, Copy)]
+struct Reaction { fulfilled: Option<u8>, rejected: Option<u8>, child: Option<u8>, finally: bool, slot: Option<(u8, u16)> }
 /// `JSON.stringify` options: the indent unit and a replacer key list.
 struct Layout { indent: Vec<u8>, keys: Option<Vec<Vec<u8>>> }
 /// An assignment target's last key: `.name` or `[value]`.
@@ -161,6 +169,15 @@ struct Machine<'a> {
     /// `Set`/`Map` objects: (object, keys array, values array; a Set's
     /// values array is its keys array).
     collections: Vec<(u8, u8, u8)>,
+    /// Promises: (object, state 0 pending / 1 fulfilled / 2 rejected, value,
+    /// reactions waiting for it).
+    promises: Vec<(u8, u8, Value, Vec<Reaction>)>,
+    /// Settled reactions to run, in order, after the script (microtasks).
+    jobs: Vec<(Reaction, u8, Value)>,
+    /// `resolve`/`reject` handed to executors: (promise, rejects).
+    resolvers: Vec<(u8, bool)>,
+    /// `Promise.all`: (result promise, results array, items still pending).
+    gathers: Vec<(u8, u8, usize)>,
     /// Accessor properties: (object, name, getter, setter).
     accessors: Vec<(u8, Vec<u8>, Option<u8>, Option<u8>)>,
     /// What made each object, for `instanceof`: 0 a literal, 1+k class k,
@@ -610,6 +627,10 @@ impl<'a> Machine<'a> {
             if let (Value::Obj(id), true) = (v, self.live) {
                 if matches!(self.made_by[id as usize], 65 | 66) && self.find_prop(id, name).is_none() {
                     v = self.collection_member(id, name)?;
+                    continue;
+                }
+                if self.made_by[id as usize] == 67 && matches!(name, b"then" | b"catch" | b"finally") {
+                    v = self.promise_then(id, name)?;
                     continue;
                 }
             }
@@ -1157,6 +1178,14 @@ impl<'a> Machine<'a> {
                 return Ok(Value::Obj(id));
             }
             b"Date" => return self.date_new(args),
+            b"Promise" => {
+                // The executor runs now with resolve/reject; a throw rejects.
+                let p = self.promise_new()?;
+                let Some(&Value::Func(exec)) = args.first() else { return Err(Error::Unsupported) };
+                let (res, rej) = (self.resolver(p, false)?, self.resolver(p, true)?);
+                self.call_settling(exec, &[res, rej], |m, outcome| match outcome { Ok(_) => Ok(()), Err(e) => m.settle(p, 2, e) })?;
+                return Ok(Value::Obj(p));
+            }
             b"Set" | b"Map" => return self.collection_new(class == b"Map", args.first().copied()),
             _ => {}
         }
@@ -1194,6 +1223,7 @@ impl<'a> Machine<'a> {
             b"Function" => matches!(v, Value::Func(_)),
             b"Error" => made == 64,
             b"Set" => made == 65,
+            b"Promise" => made == 67,
             b"Map" => made == 66,
             b"TypeError" | b"RangeError" | b"SyntaxError" => made == 64 && { let Value::Obj(id) = v else { return Ok(false) }; let n = self.get_prop(id, b"name"); matches!(n, Value::Str(..)) && self.text(n) == c },
             _ => if let Some(k) = self.classes.iter().position(|x| x.0 == c) {
@@ -1260,6 +1290,118 @@ impl<'a> Machine<'a> {
         }
         self.restore(at);
         Ok(second)
+    }
+    fn promise_new(&mut self) -> Result<u8, Error> {
+        if self.promises.len() == 64 { return Err(Error::Limit); }
+        let id = self.new_object()?;
+        self.made_by[id as usize] = 67;
+        self.promises.push((id, 0, Value::Undef, Vec::new()));
+        Ok(id)
+    }
+    fn resolver(&mut self, p: u8, reject: bool) -> Result<Value, Error> {
+        if self.resolvers.len() == (BUILTIN_FUNCS - RESOLVERS) as usize { return Err(Error::Limit); }
+        self.resolvers.push((p, reject));
+        Ok(Value::Func(RESOLVERS + (self.resolvers.len() - 1) as u8))
+    }
+    fn promise_index(&self, p: u8) -> Result<usize, Error> { self.promises.iter().position(|e| e.0 == p).ok_or(Error::Unsupported) }
+    /// Resolving with another promise follows it; anything else fulfils.
+    fn resolve(&mut self, p: u8, v: Value) -> Result<(), Error> {
+        if let Value::Obj(q) = v {
+            if self.made_by[q as usize] == 67 {
+                if q == p { return self.settle(p, 2, Value::Undef); }
+                return self.react(q, Reaction { fulfilled: None, rejected: None, child: Some(p), finally: false, slot: None });
+            }
+        }
+        self.settle(p, 1, v)
+    }
+    /// The first settlement wins; reactions waiting on it become jobs.
+    fn settle(&mut self, p: u8, state: u8, v: Value) -> Result<(), Error> {
+        let k = self.promise_index(p)?;
+        if self.promises[k].1 != 0 { return Ok(()); }
+        self.promises[k].1 = state;
+        self.promises[k].2 = v;
+        let waiting = core::mem::take(&mut self.promises[k].3);
+        for r in waiting { self.queue(r, state, v)?; }
+        Ok(())
+    }
+    fn queue(&mut self, r: Reaction, state: u8, v: Value) -> Result<(), Error> {
+        if self.jobs.len() >= 256 { return Err(Error::Limit); }
+        self.jobs.push((r, state, v));
+        Ok(())
+    }
+    /// Runs `r` when `p` settles (now, as a job, if it already has).
+    fn react(&mut self, p: u8, r: Reaction) -> Result<(), Error> {
+        let k = self.promise_index(p)?;
+        match self.promises[k].1 { 0 => { self.promises[k].3.push(r); Ok(()) } state => { let v = self.promises[k].2; self.queue(r, state, v) } }
+    }
+    /// `p.then(f, g)`, `p.catch(g)`, `p.finally(h)`: a new promise.
+    #[inline(never)]
+    fn promise_then(&mut self, p: u8, name: &[u8]) -> Result<Value, Error> {
+        let (args, n) = self.arguments()?;
+        if !self.live { return Ok(Value::Undef); }
+        let func = |i: usize| match args.get(i).copied().filter(|_| i < n) { Some(Value::Func(f)) => Some(f), _ => None };
+        let child = self.promise_new()?;
+        let r = match name {
+            b"then" => Reaction { fulfilled: func(0), rejected: func(1), child: Some(child), finally: false, slot: None },
+            b"catch" => Reaction { fulfilled: None, rejected: func(0), child: Some(child), finally: false, slot: None },
+            _ => Reaction { fulfilled: func(0), rejected: func(0), child: Some(child), finally: true, slot: None },
+        };
+        self.react(p, r)?;
+        Ok(Value::Obj(child))
+    }
+    /// Calls `f`, turning a throw into `Err(value)` for `done` (other errors
+    /// still refuse the script).
+    fn call_settling(&mut self, f: u8, args: &[Value], done: impl FnOnce(&mut Self, Result<Value, Value>) -> Result<(), Error>) -> Result<(), Error> {
+        let saved = (self.depth, self.loops, self.live, self.nvars, self.block_base);
+        match self.invoke(f, args) {
+            Ok(v) => done(self, Ok(v)),
+            Err(Error::Thrown) => {
+                (self.depth, self.loops, self.live, self.nvars, self.block_base) = saved;
+                (self.jump, self.jump_label, self.ret) = (None, None, None);
+                let e = self.thrown.take().unwrap_or(Value::Undef);
+                done(self, Err(e))
+            }
+            Err(e) => Err(e),
+        }
+    }
+    /// One microtask: a reaction to a settled promise.
+    fn run_job(&mut self, r: Reaction, state: u8, v: Value) -> Result<(), Error> {
+        self.steps += 1;
+        if self.steps > STEPS { return Err(Error::Limit); }
+        if let Some((g, i)) = r.slot {
+            let (p, results, _) = self.gathers[g as usize];
+            if state == 2 { return self.settle(p, 2, v); }
+            let start = self.arrays[results as usize].0 as usize;
+            self.elems[start + i as usize] = v;
+            self.gathers[g as usize].2 -= 1;
+            if self.gathers[g as usize].2 == 0 { self.settle(p, 1, Value::Arr(results))?; }
+            return Ok(());
+        }
+        let handler = if state == 1 { r.fulfilled } else { r.rejected };
+        let child = r.child;
+        match handler {
+            None => match child { Some(c) => if state == 1 { self.resolve(c, v) } else { self.settle(c, 2, v) }, None => Ok(()) },
+            Some(f) => {
+                let args: &[Value] = if r.finally { &[] } else { core::slice::from_ref(&v) };
+                let args = args.to_vec();
+                self.call_settling(f, &args, |m, outcome| match (child, outcome) {
+                    (None, _) => Ok(()),
+                    (Some(c), Err(e)) => m.settle(c, 2, e),
+                    (Some(c), Ok(_)) if r.finally => if state == 1 { m.resolve(c, v) } else { m.settle(c, 2, v) },
+                    (Some(c), Ok(out)) => m.resolve(c, out),
+                })
+            }
+        }
+    }
+    /// After the script: run promise reactions in order until none remain.
+    fn drain_jobs(&mut self) -> Result<(), Error> {
+        let mut i = 0;
+        while i < self.jobs.len() {
+            let (r, state, v) = self.jobs[i];
+            self.run_job(r, state, v)?;
+            i += 1;
+        }
+        Ok(())
     }
     /// `new Set(iterable)` / `new Map([[k, v], ...])`.
     fn collection_new(&mut self, map: bool, from: Option<Value>) -> Result<Value, Error> {
@@ -2073,6 +2215,30 @@ impl<'a> Machine<'a> {
                 _ => return Err(Error::Unsupported),
             }));
         }
+        if name == b"Promise" {
+            let (args, _) = self.arguments()?;
+            if !self.live { return Ok(Value::Undef); }
+            return match f {
+                b"resolve" => { if let Value::Obj(id) = args[0] { if self.made_by[id as usize] == 67 { return Ok(args[0]); } } let p = self.promise_new()?; self.resolve(p, args[0])?; Ok(Value::Obj(p)) }
+                b"reject" => { let p = self.promise_new()?; self.settle(p, 2, args[0])?; Ok(Value::Obj(p)) }
+                b"all" => {
+                    let items = self.iterate(args[0])?;
+                    let p = self.promise_new()?;
+                    let results = self.new_array(&alloc::vec![Value::Undef; items.len()])?;
+                    let Value::Arr(results) = results else { return Err(Error::Limit) };
+                    if items.is_empty() { self.settle(p, 1, Value::Arr(results))?; return Ok(Value::Obj(p)); }
+                    if self.gathers.len() == 32 { return Err(Error::Limit); }
+                    self.gathers.push((p, results, items.len()));
+                    let g = (self.gathers.len() - 1) as u8;
+                    for (k, item) in items.into_iter().enumerate() {
+                        let q = match item { Value::Obj(id) if self.made_by[id as usize] == 67 => id, v => { let q = self.promise_new()?; self.settle(q, 1, v)?; q } };
+                        self.react(q, Reaction { fulfilled: None, rejected: None, child: None, finally: false, slot: Some((g, k as u16)) })?;
+                    }
+                    Ok(Value::Obj(p))
+                }
+                _ => Err(Error::Unsupported),
+            };
+        }
         if (name, f) == (&b"Object"[..], &b"hasOwn"[..]) {
             let (args, _) = self.arguments()?;
             let Value::Obj(id) = args[0] else { return Ok(Value::Bool(false)) };
@@ -2275,7 +2441,7 @@ impl<'a> Machine<'a> {
                         Ok(Value::Undef)
                     }
                     b"Date" if self.tok == Tok::Punct(b'.') => self.date_static(),
-                    b"JSON" | b"Object" | b"Array" | b"Number" if self.tok == Tok::Punct(b'.') => self.statics(name),
+                    b"JSON" | b"Object" | b"Array" | b"Number" | b"Promise" if self.tok == Tok::Punct(b'.') => self.statics(name),
                     b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
                     b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" | b"Boolean" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     b"String" | b"Number" | b"Boolean" if self.lookup(name).is_none() => Ok(Value::Func(BUILTIN_FUNCS + match name { b"String" => 0, b"Number" => 1, _ => 2 })),
@@ -2357,6 +2523,12 @@ impl<'a> Machine<'a> {
     /// an expression body return that expression.
     fn invoke(&mut self, f: u8, args: &[Value]) -> Result<Value, Error> {
         let receiver = self.this_next.take().unwrap_or(Value::Undef);
+        if (RESOLVERS..BUILTIN_FUNCS).contains(&f) {
+            let (p, reject) = self.resolvers[(f - RESOLVERS) as usize];
+            let v = args.first().copied().unwrap_or(Value::Undef);
+            if reject { self.settle(p, 2, v)?; } else { self.resolve(p, v)?; }
+            return Ok(Value::Undef);
+        }
         if f >= BUILTIN_FUNCS {
             let v = args.first().copied().unwrap_or(Value::Undef);
             return Ok(match f - BUILTIN_FUNCS {
@@ -2952,7 +3124,7 @@ impl<'a> Machine<'a> {
                 if self.jump_label == Some(name) { (self.jump, self.jump_label) = (None, None); }
                 r
             }
-            Tok::Ident(name) if !matches!(name, b"else") => {
+            Tok::Ident(name) if !matches!(name, b"else" | b"new" | b"void" | b"typeof") => {
                 // `f(...)` as a statement calls for its effects.
                 let at = self.pos();
                 self.next()?;
@@ -2970,7 +3142,7 @@ impl<'a> Machine<'a> {
                 if run { let old = self.lookup(name).ok_or(Error::Unsupported)?; self.assign(name, Value::Num(self.to_number(old) + if op == b'I' { 1.0 } else { -1.0 }), false)?; }
                 self.end()
             }
-            Tok::Punct(b'[' | b'(') | Tok::Num(_) | Tok::Str(_) | Tok::Template(_) => { self.expr()?; self.end() }
+            Tok::Punct(b'[' | b'(') | Tok::Num(_) | Tok::Str(_) | Tok::Template(_) | Tok::Ident(b"new" | b"void" | b"typeof") => { self.expr()?; self.end() }
             _ => Err(Error::Unsupported),
         }
     }
@@ -3371,9 +3543,10 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     // Fixed tables live on the heap too: the Browser stack is for nesting.
     fn table<T: Clone>(n: usize, v: T) -> Result<Vec<T>, Error> { let mut t = Vec::new(); t.try_reserve_exact(n).map_err(|_| Error::Limit)?; t.resize(n, v); Ok(t) }
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: table(VARS, ([0; NAME], 0, Value::Num(0.0)))?, kinds: table(VARS, 0)?, block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), promises: Vec::new(), jobs: Vec::new(), resolvers: Vec::new(), gathers: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: table(ARRAYS, (0, 0, 0))?, narrays: 0, props, objects: table(OBJECTS, (0, 0, 0))?, nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }
+    m.drain_jobs()?;
     Ok(m.out)
 }

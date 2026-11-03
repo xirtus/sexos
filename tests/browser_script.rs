@@ -405,3 +405,13 @@ fn larger_budgets_for_bigger_pages() {
     assert_eq!(out("var big = Array.from({length: 400}, (_, i) => i); var ob = {}; for (var i = 0; i < 40; i++) ob['k' + i] = i; document.write('big ', big.reduce((a, b) => a + b), ' ', Object.keys(ob).length, ' ', 'a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s'.split(',').length)").unwrap(), "big 79800 40 19");
     assert!(out("var i = 0; while (i < 45000) i++; document.write(i)").is_ok(), "50,000 steps");
 }
+
+#[test]
+fn promises_run_as_ordered_microtasks_after_the_script() {
+    assert_eq!(out("Promise.resolve(1).then(v => document.write('a')); Promise.resolve(2).then(v => document.write('b')); document.write('c')").unwrap(), "cab");
+    assert_eq!(out("new Promise((res, rej) => { document.write('exec '); res(5) }).then(v => v * 2).then(v => document.write(v))").unwrap(), "exec 10");
+    assert_eq!(out("Promise.reject(new Error('bad')).then(() => document.write('no')).catch(e => document.write('caught ', e.message)).finally(() => document.write(' fin'))").unwrap(), "caught bad fin");
+    assert_eq!(out("Promise.all([1, Promise.resolve(2), new Promise(r => r(3))]).then(xs => document.write(xs.join('+'))); new Promise(() => { throw new Error('x') }).catch(e => document.write(' ', e.message)); Promise.resolve(1).then(() => { throw 7 }).then(() => 0, e => document.write(' r', e))").unwrap(), " x1+2+3 r7", "JavaScript job order: Promise.all settles after its items' reactions");
+    assert_eq!(out("var p = Promise.resolve(Promise.resolve(9)); p.then(v => document.write(v)); document.write(p instanceof Promise)").unwrap(), "true9");
+    assert_eq!(out("async function f() {}").err(), Some(Error::Unsupported), "no async functions");
+}

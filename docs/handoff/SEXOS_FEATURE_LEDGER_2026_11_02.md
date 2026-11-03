@@ -36,6 +36,7 @@ methods; object-literal shorthand/methods/computed keys/spread;
 destructuring (nested, defaults, holes, rest); nested templates; `?.`,
 `??`, short-circuit `&& || ?:`, `**`, bitwise operators, assignment
 expressions, logical/compound assignment to any member chain, `++`/`--`;
+`Promise` (then/catch/finally/all, microtask order; no async/await),
 `Math`, `JSON.stringify` (replacer keys, indent) / `parse`, `Date` from
 given values only, URI encode/decode, `toPrecision`/`toLocaleString`;
 output via `document.write`. Bounds: nesting 64 plus a stack floor 10 KiB
@@ -1424,6 +1425,24 @@ script host tests 45 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes with a 16th script (`big 79800 40`: a 400-element
 array, a 40-property object), `scripts_run=16 scripts_refused=3`, stack
 floor hits 1 (the intended deep recursion), high water 56,952.
+
+## P3. Script Promises (2026-11-03)
+
+- `new Promise((resolve, reject) => ...)` (a throw in the executor
+  rejects), `then(f, g)`, `catch(g)`, `finally(h)`, `Promise.resolve`,
+  `Promise.reject`, `Promise.all`, adoption of a promise by another, and
+  `instanceof Promise`. Reactions are microtasks run in JavaScript's
+  order after the script's own code (e.g. `Promise.all` settles after its
+  items' reactions), all under the step budget. Nothing asynchronous
+  exists to wait for (no timers or network), so every promise settles
+  within the script. `async`/`await` remain refused: the interpreter
+  cannot suspend a call, so their ordering could not be honest.
+- Statements may start with `new`, `void` or `typeof`
+  (`new Promise(...).then(...)`, `new A()`).
+
+**Evidence** (`docs/handoff/assets/script-promises-2026-11-03/`): script
+host tests 46 groups; sealed build and master gate GREEN; native HTML gate
+at both sizes with a 17th script (`promise first then 3 async 1+2`).
 
 ## Release gates noted while doing F1–F2
 
