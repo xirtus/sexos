@@ -14,14 +14,16 @@
 //! `document.write(...)` / `document.writeln(...)`.
 //! Expressions: number, string, template (`` `a ${x}` ``) and `true`/`false`
 //! literals, variables,
-//! `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
+//! `**`, bitwise `& | ^ ~ << >> >>>`, `void`, `**= |= &= ^= ||= &&= ??=`,
+//! calling function values (`(function () {...})()`), `+ - * / %`, comparisons (`< > <= >= === !== == !=`), `! && ||`, `?:`,
 //! `??`, optional chaining `a?.b` / `a?.[k]` (`&& || ?? ?:` evaluate only the side JavaScript does),
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push .pop .shift .join
 //! .indexOf .includes .slice .concat .reverse .sort`),
 //! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`, `Object.assign(t, ...s)`),
 //! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
 //! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
-//! `class A extends B { constructor() { super(...) } m() { super.m() } }` and `new`,
+//! `class A extends B { constructor() { super(...) } m() { super.m() } static s() {} }`,
+//! `new`, `instanceof`,
 //! `findLast findLastIndex flatMap lastIndexOf splice unshift toString`, `Array.of`,
 //! `Object.fromEntries`, `codePointAt`, `encodeURIComponent`/`decodeURIComponent`,
 //! `JSON.stringify(v)`, spread `...array` in array literals and calls,
@@ -106,8 +108,11 @@ struct Machine<'a> {
     thrown: Option<Value>,
     /// Compiled regular expression literals, by source offset.
     regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
-    /// `class` declarations: name, constructor, methods, parent class.
-    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>)>,
+    /// `class` declarations: name, constructor, methods, parent class, static methods.
+    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>)>,
+    /// What made each object, for `instanceof`: 0 a literal, 1+k class k,
+    /// 16+f function `f` as a constructor, 64 an Error.
+    made_by: [u8; OBJECTS],
     /// The function running now (for `super`).
     func_now: Option<u8>,
     /// Loops open in the current function (0 = `break` is a syntax error).
@@ -197,14 +202,16 @@ impl<'a> Machine<'a> {
         } else if s[self.at..].starts_with(b"?.") && !s.get(self.at + 2).is_some_and(u8::is_ascii_digit) {
             self.at += 2;
             Tok::Punct(b'O')
-        } else if let Some((op, len)) = [(&b"==="[..], b'E'), (b"!==", b'N'), (b"==", b'e'), (b"!=", b'n'), (b"<=", b'L'), (b">=", b'G'), (b"&&", b'&'), (b"||", b'|'), (b"??", b'C'),
+        } else if let Some((op, len)) = [(&b"==="[..], b'E'), (b"!==", b'N'), (b"==", b'e'), (b"!=", b'n'), (b"<=", b'L'), (b">=", b'G'), (b"&&=", b'z'), (b"||=", b'y'), (b"??=", b'q'), (b"&&", b'&'), (b"||", b'|'), (b"??", b'C'),
+                (b"**=", b'W'), (b"**", b'X'), (b"|=", b'v'), (b"&=", b'w'), (b"^=", b'x'), (b"<<", b'l'), (b">>>", b'u'), (b">>", b'r'),
                 (b"++", b'I'), (b"--", b'D'), (b"+=", b'P'), (b"-=", b'M'), (b"*=", b'T'), (b"/=", b'Q'), (b"%=", b'R'), (b"=>", b'F'), (b"...", b'S')]
             .iter().find(|(t, _)| s[self.at..].starts_with(t)).map(|(t, op)| (*op, t.len())) {
             self.at += len;
             Tok::Punct(op)
-        } else if b"+-*/%()=;,.<>!?:{}[]".contains(&c) {
+        } else if b"+-*/%()=;,.<>!?:{}[]&|^~".contains(&c) {
             self.at += 1;
-            Tok::Punct(c)
+            // Single `&` `|` are bitwise: codes `a` `o` (`&&` `||` are `&` `|`).
+            Tok::Punct(match c { b'&' => b'a', b'|' => b'o', c => c })
         } else {
             return Err(Error::Unsupported);
         };
@@ -321,7 +328,14 @@ impl<'a> Machine<'a> {
             s => {
                 let t = self.text(s);
                 let t = core::str::from_utf8(t).unwrap_or("x").trim();
-                if t.is_empty() { 0.0 } else { t.parse::<f64>().unwrap_or(f64::NAN) }
+                // JavaScript StringToNumber: 0x/0o/0b integers, `Infinity`, and
+                // decimals (Rust's own `inf`/`nan` spellings are not numbers here).
+                let radix = match t.get(..2) { Some("0x" | "0X") => 16, Some("0o" | "0O") => 8, Some("0b" | "0B") => 2, _ => 0 };
+                if t.is_empty() { 0.0 }
+                else if radix != 0 { let d = &t[2..]; if d.is_empty() { f64::NAN } else { d.chars().try_fold(0.0f64, |v, c| c.to_digit(radix).map(|k| v * radix as f64 + k as f64)).unwrap_or(f64::NAN) } }
+                else if let Some(inf) = t.strip_prefix(['+', '-']).or(Some(t)).filter(|u| *u == "Infinity") { let _ = inf; if t.starts_with('-') { f64::NEG_INFINITY } else { f64::INFINITY } }
+                else if t.bytes().any(|b| b.is_ascii_alphabetic() && !matches!(b, b'e' | b'E')) { f64::NAN }
+                else { t.parse::<f64>().unwrap_or(f64::NAN) }
             }
         }
     }
@@ -339,16 +353,24 @@ impl<'a> Machine<'a> {
     fn binary(&mut self, min: u8) -> Result<Value, Error> {
         let mut v = self.unary()?;
         loop {
-            if self.tok == Tok::Ident(b"in") && min <= 5 {
+            if self.tok == Tok::Ident(b"in") && min <= 8 {
                 self.next()?;
-                let r = self.binary(6)?;
+                let r = self.binary(9)?;
                 let k = self.to_text(v)?;
                 let key = self.text(k).to_vec();
                 v = Value::Bool(match r { Value::Obj(id) => self.find_prop(id, &key).is_some(), Value::Arr(id) => core::str::from_utf8(&key).ok().and_then(|t| t.parse::<usize>().ok()).is_some_and(|i| i < self.arrays[id as usize].1 as usize), _ => return Err(Error::Unsupported) });
                 continue;
             }
+            if self.tok == Tok::Ident(b"instanceof") && min <= 8 {
+                self.next()?;
+                let Tok::Ident(c) = self.tok else { return Err(Error::Unsupported) };
+                self.next()?;
+                v = Value::Bool(self.instance_of(v, c)?);
+                continue;
+            }
             let Tok::Punct(op) = self.tok else { return Ok(v) };
-            let prec = match op { b'?' => 1, b'|' | b'C' => 2, b'&' => 3, b'E' | b'N' | b'e' | b'n' => 4, b'<' | b'>' | b'L' | b'G' => 5, b'+' | b'-' => 6, b'*' | b'/' | b'%' => 7, _ => 0 };
+            let prec = match op { b'?' => 1, b'|' | b'C' => 2, b'&' => 3, b'o' => 4, b'^' => 5, b'a' => 6, b'E' | b'N' | b'e' | b'n' => 7,
+                b'<' | b'>' | b'L' | b'G' => 8, b'l' | b'r' | b'u' => 9, b'+' | b'-' => 10, b'*' | b'/' | b'%' => 11, b'X' => 12, _ => 0 };
             if prec == 0 || prec < min { return Ok(v); }
             self.next()?;
             // Only the branch JavaScript evaluates runs; the other is checked.
@@ -366,7 +388,8 @@ impl<'a> Machine<'a> {
                 if !decided { v = r; }
                 continue;
             }
-            let r = self.binary(prec + 1)?;
+            // `**` is right-associative.
+            let r = self.binary(if op == b'X' { prec } else { prec + 1 })?;
             v = self.apply(op, v, r)?;
         }
     }
@@ -411,6 +434,12 @@ impl<'a> Machine<'a> {
                 self.arena.extend_from_within(rs..rs + rn);
                 Value::Str(start as u16, (ln + rn) as u16)
             }
+            b'a' | b'o' | b'^' | b'l' | b'r' => {
+                let (a, b) = (int32(self.to_number(v)), int32(self.to_number(r)));
+                Value::Num(match op { b'a' => a & b, b'o' => a | b, b'^' => a ^ b, b'l' => a.wrapping_shl(b as u32 & 31), _ => a >> (b as u32 & 31) } as f64)
+            }
+            b'u' => Value::Num((int32(self.to_number(v)) as u32 >> (int32(self.to_number(r)) as u32 & 31)) as f64),
+            b'X' => Value::Num(pow(self.to_number(v), self.to_number(r))),
             _ => {
                 let (a, b) = (self.to_number(v), self.to_number(r));
                 Value::Num(match op { b'+' => a + b, b'-' => a - b, b'*' => a * b, b'/' => a / b, _ => rem(a, b) })
@@ -428,13 +457,22 @@ impl<'a> Machine<'a> {
             let kind: &[u8] = match v { Value::Num(_) => b"number", Value::Str(..) => b"string", Value::Bool(_) => b"boolean", Value::Undef => b"undefined", Value::Func(_) => b"function", _ => b"object" };
             return self.store(kind);
         }
-        if let Tok::Punct(op @ (b'-' | b'+' | b'!')) = self.tok {
+        if self.tok == Tok::Ident(b"void") {
+            self.next()?;
+            if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
+            self.depth += 1;
+            let v = self.unary();
+            self.depth -= 1;
+            return v.map(|_| Value::Undef);
+        }
+        if let Tok::Punct(op @ (b'-' | b'+' | b'!' | b'~')) = self.tok {
             if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
             self.next()?;
             self.depth += 1;
             let v = self.unary()?;
             self.depth -= 1;
             if op == b'!' { return Ok(Value::Bool(!self.truthy(v))); }
+            if op == b'~' { return Ok(Value::Num(!int32(self.to_number(v)) as f64)); }
             let x = self.to_number(v);
             return Ok(Value::Num(if op == b'-' { -x } else { x }));
         }
@@ -453,6 +491,13 @@ impl<'a> Machine<'a> {
     }
     fn chain(&mut self, mut v: Value) -> Result<Value, Error> {
         loop {
+            // Calling a function value: `(function () {...})()`, `fs[0](x)`.
+            if let (Value::Func(f), Tok::Punct(b'(')) = (v, self.tok) {
+                let mut args = [Value::Undef; PARAMS];
+                let n = self.argument_list(&mut args)?;
+                v = if self.live { self.invoke(f, &args[..n])? } else { Value::Undef };
+                continue;
+            }
             let opt = self.tok == Tok::Punct(b'O');
             if opt {
                 self.next()?;
@@ -915,6 +960,7 @@ impl<'a> Machine<'a> {
         let at = self.props.len();
         self.props.resize(at + 4, (0, 0, Value::Undef));
         self.objects[self.nobjects] = (at as u16, 0, 4);
+        self.made_by[self.nobjects] = 0;
         self.nobjects += 1;
         Ok((self.nobjects - 1) as u8)
     }
@@ -928,6 +974,7 @@ impl<'a> Machine<'a> {
             b"Object" => return Ok(Value::Obj(self.new_object()?)),
             b"Error" | b"TypeError" | b"RangeError" | b"SyntaxError" => {
                 let id = self.new_object()?;
+                self.made_by[id as usize] = 64;
                 let name = self.store(class)?;
                 self.set_prop(id, b"name", name)?;
                 let message = match args.first() { Some(&m) => self.to_text(m)?, None => self.store(b"")? };
@@ -939,15 +986,37 @@ impl<'a> Machine<'a> {
         }
         let id = self.new_object()?;
         if let Some(k) = self.classes.iter().position(|c| c.0 == class) {
+            self.made_by[id as usize] = 1 + k as u8;
             self.class_methods(k, id)?;
             let r = self.class_init(k, Value::Obj(id), args)?;
             return Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) });
         }
         let f = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == class)
             .or_else(|| match self.lookup(class) { Some(Value::Func(i)) => Some(i as usize), _ => None }).ok_or(Error::Unsupported)?;
+        self.made_by[id as usize] = 16 + f as u8;
         self.this_next = Some(Value::Obj(id));
         let r = self.invoke(f as u8, args)?;
         Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
+    }
+    /// `v instanceof C` for a class (or a parent), a constructor function,
+    /// `Array`, `Object` and the Error types.
+    fn instance_of(&mut self, v: Value, c: &[u8]) -> Result<bool, Error> {
+        if !self.live { return Ok(false); }
+        let made = if let Value::Obj(id) = v { self.made_by[id as usize] } else { 0 };
+        Ok(match c {
+            b"Array" => matches!(v, Value::Arr(_)),
+            b"Object" => matches!(v, Value::Obj(_) | Value::Arr(_) | Value::Func(_)),
+            b"Function" => matches!(v, Value::Func(_)),
+            b"Error" => made == 64,
+            b"TypeError" | b"RangeError" | b"SyntaxError" => made == 64 && { let Value::Obj(id) = v else { return Ok(false) }; let n = self.get_prop(id, b"name"); matches!(n, Value::Str(..)) && self.text(n) == c },
+            _ => if let Some(k) = self.classes.iter().position(|x| x.0 == c) {
+                let mut at = (1..=8).contains(&made).then(|| made as usize - 1);
+                while let Some(m) = at { if m == k { return Ok(true); } at = self.classes[m].3.map(|p| p as usize); }
+                false
+            } else if let Some(f) = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == c).or_else(|| match self.lookup(c) { Some(Value::Func(i)) => Some(i as usize), _ => None }) {
+                made == 16 + f as u8
+            } else { return Err(Error::Unsupported) },
+        })
     }
     /// Methods of class `k` and its ancestors (nearest wins) onto `id`.
     fn class_methods(&mut self, k: usize, id: u8) -> Result<(), Error> {
@@ -1663,6 +1732,21 @@ impl<'a> Machine<'a> {
                     }
                     b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
+                    _ if self.tok == Tok::Punct(b'.') && self.lookup(name).is_none() && self.classes.iter().any(|c| c.0 == name) => {
+                        // `C.m(...)`: a static method of class C (or a parent).
+                        self.next()?;
+                        let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
+                        self.next()?;
+                        let mut args = [Value::Undef; PARAMS];
+                        let n = self.argument_list(&mut args)?;
+                        if !self.live { return Ok(Value::Undef); }
+                        let mut k = self.classes.iter().position(|c| c.0 == name);
+                        while let Some(c) = k {
+                            if let Some(&(_, f)) = self.classes[c].4.iter().find(|s| s.0 == m) { return self.invoke(f, &args[..n]); }
+                            k = self.classes[c].3.map(|p| p as usize);
+                        }
+                        Err(Error::Unsupported)
+                    }
                     _ => self.lookup(name)
                         .or_else(|| self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == name).map(|i| Value::Func(i as u8)))
                         // Code that is only checked (not run) may name bindings that
@@ -1961,9 +2045,13 @@ impl<'a> Machine<'a> {
                 } else { None };
                 self.expect(b'{')?;
                 let (mut ctor, mut methods) = (None, Vec::new());
+                let mut statics = Vec::new();
                 while self.tok != Tok::Punct(b'}') {
-                    let Tok::Ident(m) = self.tok else { return Err(Error::Syntax) };
+                    let Tok::Ident(mut m) = self.tok else { return Err(Error::Syntax) };
                     self.next()?;
+                    // `static name(...)` (a method named `static` is also allowed).
+                    let fixed = m == b"static" && matches!(self.tok, Tok::Ident(_));
+                    if fixed { let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) }; m = n; self.next()?; }
                     let at = self.pos();
                     self.expect(b'(')?;
                     self.skip_params()?;
@@ -1972,13 +2060,13 @@ impl<'a> Machine<'a> {
                     self.skim_body()?;
                     if run {
                         let f = self.define(b"", at)?;
-                        if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
+                        if fixed { statics.push((m, f)); } else if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
                     }
                 }
                 self.next()?;
                 if run {
                     if self.classes.len() == 8 { return Err(Error::Limit); }
-                    self.classes.push((name, ctor, methods, parent));
+                    self.classes.push((name, ctor, methods, parent, statics));
                 }
                 Ok(())
             }
@@ -2153,12 +2241,21 @@ impl<'a> Machine<'a> {
                 if self.tok == Tok::Punct(b'.') {
                     // `o.key = v` assigns; `o.key(...)` calls.
                     self.next()?;
-                    if matches!(self.tok, Tok::Ident(_)) { self.next()?; call = !matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'T' | b'Q' | b'R' | b'I' | b'D')); }
+                    if matches!(self.tok, Tok::Ident(_)) { self.next()?; call = !matches!(self.tok, Tok::Punct(b'=' | b'P' | b'M' | b'T' | b'Q' | b'R' | b'I' | b'D' | b'W' | b'v' | b'w' | b'x' | b'y' | b'z' | b'q')); }
                 }
                 self.restore(at);
                 if call { self.expr()?; } else { self.assignment(run)?; }
                 self.end()
             }
+            Tok::Punct(op @ (b'I' | b'D')) => {
+                // `++x` / `--x` as a statement.
+                self.next()?;
+                let Tok::Ident(name) = self.tok else { return Err(Error::Unsupported) };
+                self.next()?;
+                if run { let old = self.lookup(name).ok_or(Error::Unsupported)?; self.assign(name, Value::Num(self.to_number(old) + if op == b'I' { 1.0 } else { -1.0 }), false)?; }
+                self.end()
+            }
+            Tok::Punct(b'[' | b'(') | Tok::Num(_) | Tok::Str(_) | Tok::Template(_) => { self.expr()?; self.end() }
             _ => Err(Error::Unsupported),
         }
     }
@@ -2274,10 +2371,17 @@ impl<'a> Machine<'a> {
     fn update(&mut self, old: Value) -> Result<Value, Error> {
         Ok(match self.tok {
             Tok::Punct(b'=') => { self.next()?; self.expr()? }
-            Tok::Punct(op @ (b'P' | b'M' | b'T' | b'Q' | b'R')) => {
+            Tok::Punct(op @ (b'P' | b'M' | b'T' | b'Q' | b'R' | b'W' | b'v' | b'w' | b'x')) => {
                 self.next()?;
                 let r = self.expr()?;
-                self.apply(match op { b'P' => b'+', b'M' => b'-', b'T' => b'*', b'Q' => b'/', _ => b'%' }, old, r)?
+                self.apply(match op { b'P' => b'+', b'M' => b'-', b'T' => b'*', b'Q' => b'/', b'W' => b'X', b'v' => b'o', b'w' => b'a', b'x' => b'^', _ => b'%' }, old, r)?
+            }
+            Tok::Punct(op @ (b'y' | b'z' | b'q')) => {
+                // `||= &&= ??=` evaluate the right side only when it is used.
+                self.next()?;
+                let keep = match op { b'y' => self.truthy(old), b'z' => !self.truthy(old), _ => !matches!(old, Value::Undef | Value::Null) };
+                let r = self.only_if(!keep, |m| m.expr())?;
+                if keep { old } else { r }
             }
             Tok::Punct(op @ (b'I' | b'D')) => { self.next()?; Value::Num(self.to_number(old) + if op == b'I' { 1.0 } else { -1.0 }) }
             _ => return Err(Error::Syntax),
@@ -2401,6 +2505,13 @@ fn json_ws(t: &[u8], at: &mut usize) { while t.get(*at).is_some_and(|c| matches!
 fn s_is_plain(t: &[u8]) -> bool {
     t.iter().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-')) && t.iter().any(u8::is_ascii_digit)
 }
+/// JavaScript ToInt32 (for the bitwise operators).
+fn int32(x: f64) -> i32 {
+    if !x.is_finite() { return 0; }
+    let t = if x < 0.0 { -floor(-x) } else { floor(x) };
+    let m = t - floor(t / 4294967296.0) * 4294967296.0;
+    m as u32 as i32
+}
 fn floor(x: f64) -> f64 {
     if x.is_nan() || x.is_infinite() || x >= 4503599627370496.0 || x <= -4503599627370496.0 { return x; }
     let t = if x >= 0.0 { trunc(x) } else { -trunc(-x) };
@@ -2432,7 +2543,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), func_now: None, loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), made_by: [0; OBJECTS], func_now: None, loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

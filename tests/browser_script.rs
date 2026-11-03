@@ -295,3 +295,22 @@ fn more_builtins_and_split_limit() {
     assert_eq!(out("decodeURIComponent('%E0%A4%A')").err(), Some(Error::Unsupported), "URIError");
     assert_eq!(out(r"document.write('a-b-c'.split('-', 2), ' ', 'a1b2c'.split(/\d/, 1), ' ', 'abc'.split('', 0).length)").unwrap(), "a,b a 0");
 }
+
+#[test]
+fn static_methods_and_instanceof() {
+    assert_eq!(out("class A { static make(x) { return new A(x) } constructor(x) { this.x = x } } class B extends A {} var a = A.make(3); var b = new B(1); document.write(a.x, ' ', a instanceof A, b instanceof A, a instanceof B, ' ', B.make(5).x, ' ', [] instanceof Array, {} instanceof Object, 5 instanceof Object)").unwrap(), "3 truetruefalse 5 truetruefalse");
+    assert_eq!(out("function P() { this.k = 1 } var p = new P(); class S { static() { return 1 } } var s = new S(); document.write(p instanceof P, {} instanceof P, s.static())").unwrap(), "truefalse1");
+    assert_eq!(out("try { throw new TypeError('t') } catch (e) { document.write(e instanceof Error, e instanceof TypeError, e instanceof RangeError, ' ', {} instanceof Error) }").unwrap(), "truetruefalse false");
+    assert_eq!(out("document.write(1 instanceof Nope)").err(), Some(Error::Unsupported));
+    assert_eq!(out("class C { static v() { return 2 } } document.write(C.w())").err(), Some(Error::Unsupported));
+}
+
+#[test]
+fn exponent_bitwise_logical_assignment_and_expression_statements() {
+    assert_eq!(out("var x = 5; x **= 2; document.write(x, ' ', 2 ** 3 ** 2, ' ', -(2 ** 2))").unwrap(), "25 512 -4");
+    assert_eq!(out("document.write(1 < 2 < 3, ' ', 7 & 3, 5 | 2, 5 ^ 1, ' ', ~5, ' ', 1 << 4, ' ', -16 >> 2, ' ', -1 >>> 28, ' ', 1 << 31, ' ', 2 ** 32 | 0, ' ', 5.7 | 0, ' ', 3 & 1 === 1, ' ', true && 'y', 1 && 2 || 3)").unwrap(), "true 374 -6 16 -4 15 -2147483648 0 5 1 y2");
+    assert_eq!(out("var n = 0; function bump() { n++; return 7 } var a = 1; a ||= bump(); var b = null; b ??= 3; var c = 1; c &&= 9; var f = 6; f |= 1; f &= 5; f ^= 4; var o = {k: null}; o.k ??= 'set'; document.write(a, b, c, n, f, o.k)").unwrap(), "13901set");
+    assert_eq!(out("var s = 0; [1, 2].forEach(function (x) { s += x }); var i = 0; ++i; ++i; --i; (function () { s += 10 })(); document.write(s, i, typeof null, void 0)").unwrap(), "131objectundefined");
+    assert_eq!(out("document.write(Number('0x10'), ' ', Number('0b101'), ' ', Number('inf'), ' ', Number('-Infinity'), ' ', Number(' 12 '), ' ', +'0o17', ' ', '3' * '4', ' ', Number('-0x10'))").unwrap(), "16 5 NaN -Infinity 12 15 12 NaN");
+    assert_eq!(out("var r = (function (a) { return a * 2 })(4); var fs = [x => x + 1]; var mk = function () { return function (y) { return y * 3 } }; document.write(r, fs[0](1), (() => 'k')(), mk()(2))").unwrap(), "82k6");
+}

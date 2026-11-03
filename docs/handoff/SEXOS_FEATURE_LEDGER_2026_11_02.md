@@ -934,6 +934,29 @@ script host tests 31 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... a%20b3,1k,v`). Browser stack high water
 50,240 of 65,536 bytes.
 
+## M17-M20. Script `static`/`instanceof`, operators, expression statements, `Number` parsing (2026-11-03)
+
+- **M17 Classes:** `static` methods (`C.m()`, inherited by subclasses; a
+  method may still be named `static`) and `instanceof` for classes (with
+  parents), constructor functions, `Array`, `Object`, `Function` and the
+  Error types. Each object records what made it (literal, class,
+  constructor or Error).
+- **M18 Operators:** `**` (right-associative), bitwise `& | ^ ~ << >> >>>`
+  (JavaScript ToInt32/ToUint32), `void`, compound `**= |= &= ^=` and
+  logical assignment `||= &&= ??=` (the right side runs only when used).
+  Precedence now follows JavaScript's table.
+- **M19 Statements:** a statement may start with an expression
+  (`[1, 2].forEach(...)`, `(function () {...})()`), and `++x`/`--x`;
+  function values can be called directly (IIFE, `fs[0](x)`, `mk()(2)`).
+- **M20 Fix:** string-to-number now follows JavaScript: `0x`/`0o`/`0b`
+  integers, `Infinity`; Rust's own `inf`/`nan` spellings are `NaN`
+  (previously `Number('inf')` was `Infinity` and `Number('0x10')` `NaN`).
+
+**Evidence** (`docs/handoff/assets/script-static-instanceof-operators-2026-11-03/`):
+script host tests 33 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... true 1025iife`). Browser stack high water
+51,472 of 65,536 bytes (gate bound 60 KiB).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
