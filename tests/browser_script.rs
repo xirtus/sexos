@@ -153,3 +153,41 @@ fn null_undefined_typeof_and_to_fixed() {
     assert_eq!(out("var x = 1.23456; document.write(x.toFixed(4))").unwrap(), "1.2346");
     assert_eq!(out("document.write(JSON.stringify({a: null, b: [null, 1]}))").unwrap(), "{\"a\":null,\"b\":[null,1]}");
 }
+
+#[test]
+fn compound_assignment_do_while_and_switch() {
+    assert_eq!(out("var x = 10; x *= 3; x /= 4; x %= 5; x -= 0.5; document.write(x)").unwrap(), "2");
+    assert_eq!(out("var i = 0; do { i++ } while (i < 3); document.write(i); do { i = 100 } while (false) document.write(' ', i)").unwrap(), "3 100");
+    assert_eq!(out("var n = 0; do { n++; if (n === 2) continue; if (n > 4) break } while (true); document.write(n)").unwrap(), "5");
+    let sw = |v: &str| out(&format!("var r = ''; switch ({v}) {{ case 1: r += 'one'; case 2: r += 'two'; break; case 'x': r = 'ex'; break; default: r = 'other' }} document.write(r)")).unwrap();
+    assert_eq!(sw("1"), "onetwo");
+    assert_eq!(sw("2"), "two");
+    assert_eq!(sw("'x'"), "ex");
+    assert_eq!(sw("'1'"), "other", "strict comparison");
+    assert_eq!(out("for (var i = 0; i < 4; i++) { switch (i) { case 1: continue; case 3: break } document.write(i) }").unwrap(), "023");
+}
+
+#[test]
+fn array_methods() {
+    assert_eq!(out("var a = [3, 'b', 10, 1]; document.write(a.indexOf(10), a.indexOf('10'), a.includes('b'), ' ', a.slice(1, -1), ' ', a.concat([7], 8).length, ' ', a.sort(), ' ', a.reverse())").unwrap(), "2-1true b,10 6 1,10,3,b b,3,10,1");
+    assert_eq!(out("var q = [1, 2, 3]; var f = q.shift(); var l = q.pop(); document.write(f, l, ' ', q, ' ', q.length, ' ', [].pop())").unwrap(), "13 2 1 undefined");
+    assert_eq!(out("[1].sort(cmp)").is_err(), true);
+}
+
+#[test]
+fn more_string_methods() {
+    assert_eq!(out("var s = 'a-b-c'; document.write(s.replace('-', '+'), ' ', s.replaceAll('-', ''), ' ', s.startsWith('a-'), s.endsWith('c'), s.includes('b-'), ' ', s.lastIndexOf('-'))").unwrap(), "a+b-c abc truetruetrue 3");
+    assert_eq!(out("document.write('ab'.repeat(3), ' ', '7'.padStart(3, '0'), ' ', 'x'.padEnd(4, '.'), '|', 'long'.padStart(2))").unwrap(), "ababab 007 x...|long");
+    assert_eq!(out("'a'.repeat(-1)").err(), Some(Error::Unsupported));
+}
+
+#[test]
+fn function_values_arrows_and_callbacks() {
+    assert_eq!(out("var nums = [5, 1, 4, 2, 3]; document.write(nums.map(x => x * 10).join(' '), ' | ', nums.filter(function (n) { return n % 2 === 1 }), ' | ', nums.reduce((a, b) => a + b, 0), ' ', nums.reduce((a, b) => a > b ? a : b))").unwrap(), "50 10 40 20 30 | 5,1,3 | 15 5");
+    assert_eq!(out("var nums = [5, 1, 4]; nums.sort((a, b) => a - b); var seen = ''; nums.forEach((n, i) => { seen += i + ':' + n + ' ' }); document.write(seen, nums.find(n => n > 1), nums.findIndex(n => n > 9), nums.some(n => n === 4), nums.every(n => n > 0))").unwrap(), "0:1 1:4 2:5 4-1truetrue");
+    assert_eq!(out("function twice(f, x) { return f(f(x)) } var inc = x => x + 1; document.write(twice(inc, 5), ' ', typeof inc, ' ', twice(function (s) { return s + '!' }, 'hi'))").unwrap(), "7 function hi!!");
+    assert_eq!(out("var add = (a, b) => { var s = a + b; return s * 2 }; document.write(add(2, 3), ' ', [1, 2, 3].map(n => [n, n * n]).join(';'))").unwrap(), "10 1,1;2,4;3,9");
+    assert_eq!(out("[1, 2].map(n => undefined_thing)").err(), Some(Error::Unsupported));
+    assert_eq!(out("var a = [1]; a.forEach(n => a.push(n)); document.write(a.length)").unwrap(), "2", "visits the elements present at the start, like JavaScript");
+    assert_eq!(out("[3].sort(5)").err(), Some(Error::Unsupported));
+}

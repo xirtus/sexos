@@ -581,6 +581,34 @@ covered text damage) never commits Spindle's text, leaving Spindle's outbox
 pending. User impact: typing into a focused but hidden window. Not changed
 here (Shell stacking and Display are the concurrent session's area).
 
+## G1-G5. Script: assignment operators, do/switch, array and string methods, callbacks, arrows (2026-11-03)
+
+- **G1.** `*=`, `/=`, `%=`; `do ... while (...)` (with the JavaScript
+  semicolon insertion after it); `switch` with `case`/`default`,
+  fall-through, `break` ending the switch and `continue` reaching the loop.
+- **G2.** Arrays: `.indexOf .includes .slice (negative ends) .concat
+  .reverse .sort (string order, undefined last) .pop .shift`.
+- **G3.** Strings: `.replace .replaceAll .startsWith .endsWith .includes
+  .lastIndexOf .repeat (to 1024) .padStart .padEnd` (string patterns only;
+  no regular expressions).
+- **G4.** Function values: `function (x) {...}` expressions, named functions
+  as values, variables holding functions, and array callbacks `forEach map
+  filter find findIndex some every reduce` and `sort(cmp)`. Callbacks spend
+  the same step budget; `forEach` visits the length present at the start,
+  like JavaScript. Up to 16 functions; the same source position is one
+  function, so a function expression in a loop does not fill the table.
+- **G5.** Arrow functions `x => expr`, `(a, b) => expr`, `(a) => { ... }`.
+
+Still no closures over enclosing calls' locals beyond the shared globals,
+no `this`, no prototypes, no regular expressions, no DOM.
+
+**Evidence** (`docs/handoff/assets/script-callbacks-arrows-2026-11-03/`):
+script host tests 17 groups; sealed build and master gate GREEN; native HTML
+gate at both sizes with a tenth page script
+(`LINEN... QUIL.... SPINDLE. 23 6 four 1 a+b` from filter/map/arrow/
+toUpperCase/padEnd/sort/reduce/do/switch/indexOf/replaceAll); conversion 20
+ticks; stack high water unchanged at 46,752.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
