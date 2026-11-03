@@ -167,6 +167,9 @@ def main():
   if len(peer.dns)!=1 or len(peer.rows)!=1:raise RuntimeError('refused link caused network work')
   checks['refused_link']='index=3 https://elsewhere.example/x refused, no DNS/TLS'
   guide,glinks,gcut=expected_text(root,GUIDE)
+  # `0` is link 10 and Shift+4 link 14; this page lists 3, so both are refused locally.
+  b=len(trace());q.key('0');wait(r'\[browser.html.link.refused\] index=10 listed=0 reason=not_endpoint_path network=0',b)
+  b=len(trace());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'4'}],'hold-time':80});wait(r'\[browser.html.link.refused\] index=14 listed=0 reason=not_endpoint_path network=0',b)
   b=len(trace());q.key('1');wait(r'\[browser.html.link\] index=1 path=/guide same_endpoint=1 script=0 depth=1',b)
   if not peer.served[1].wait(60):raise TimeoutError('followed page not served')
   wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b)

@@ -2,8 +2,8 @@
 
 ## Handoff summary (as of 2026-11-03, after M36)
 
-**Try it (native image).** Browser: `W` HTML page as text, `1`-`9` follow
-links, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
+**Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow
+links 1-16, `Backspace` back, `G` QOI image, `P` PNG image (any standard depth,
 interlaced or not, colour-key transparency), `B` plain document. Quil:
 autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
@@ -1239,6 +1239,18 @@ including `glyph-sheet.png` rendered from the table): display text
 readability and surface-group host gates pass (table size assertion now
 94), desktop pixel checker tests pass (29); sealed build and master gate
 GREEN; native HTML (1280x800) and Quil autosave (1024x768) regressions OK.
+
+## N10. Browser follows links 10-16 (2026-11-03)
+
+- The reader lists up to 16 links but only `1`-`9` followed them. Now `0`
+  follows link 10 and `Shift+1`..`Shift+6` links 11-16. A number beyond the
+  page's links is refused locally (`[browser.html.link.refused] ...
+  network=0`) like any non-endpoint target.
+
+**Evidence** (`docs/handoff/assets/browser-links-10-16-2026-11-03/`): sealed
+build and master gate GREEN; native HTML gate at both sizes presses `0`
+(`index=10 listed=0 ... network=0`) and `Shift+4` (`index=14`) on the
+3-link page before following link 1 as before.
 
 ## Release gates noted while doing F1–F2
 

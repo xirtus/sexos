@@ -234,6 +234,8 @@ impl Browser {
                 }
             }
         }
+        // Shift+1..6 follow links 11..16 (`0` is link 10, see `key`).
+        if key.shift&&(0x02..=0x07).contains(&key.code)&&self.page_html&&self.visible_reader()&&self.reading_https&&self.exchange.has_document(){self.follow_link(10+(key.code-1) as usize);return;}
         self.key(key.code as u64);
     }
     fn selection_horizontal(&mut self,right:bool,extend:bool){
@@ -431,7 +433,7 @@ impl Browser {
             if !self.importer.busy()||self.importer.view()==document_import::View::Uncertain{self.workspace.changed();self.files_pending=true;}else{sex_pdx::serial_record!("[browser.import.files.blocked] pending=1 effects=0");}return;
         }
         if self.dismiss_import_key(code){return;}
-        if (0x02..=0x0A).contains(&code)&&self.page_html&&self.visible_reader()&&self.reading_https&&self.exchange.has_document(){self.follow_link((code-1) as usize);return;}
+        if (0x02..=0x0B).contains(&code)&&self.page_html&&self.visible_reader()&&self.reading_https&&self.exchange.has_document(){self.follow_link(if code==0x0B{10}else{(code-1) as usize});return;}
         if code==0x0E&&self.page_html&&self.visible_reader()&&self.reading_https&&self.exchange.has_document(){self.page_back();return;}
         if matches!(code,0x10|0x24){self.clear_selection();}
         if code==0x10&&(self.import_panel||self.importer.has_document()||self.import_source.is_some()||self.importer.busy()){
