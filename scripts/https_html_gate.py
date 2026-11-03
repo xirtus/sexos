@@ -37,6 +37,7 @@ PAGE=(b'<!DOCTYPE html><html><head><title>Lab notes</title><style>body{color:red
  b"<p><script>var scores = [7, 3, 9]; var [best] = [...scores].sort((a, b) => b - a); var {kind, n} = {kind: 'hex', n: 255}; var cfg = {debug: 1, log: 2}; delete cfg.debug;\ndocument.write(best, ' ', Math.max(...scores, 4), ' ', kind, ' ', n.toString(16), ' ', Number.isInteger(2.0), ' ', 'log' in cfg, 'debug' in cfg, ' ', parseFloat('2.5em') * 2)</script></p>"
  b"<p><script>document.write('code ', 'S'.charCodeAt(0), ' ', String.fromCharCode(0x53, 101, 120), ' ', (0xff).toString(2).length)</script></p>"
  b"<p><script>const app = {name: '\\u0053ex', opens: 0, open: function () { this.opens++; return this }}; app.open().open(); let out = []; for (let i = 0; i < 3; i++) { try { if (i === 1) throw 'skip'; out.push(i) } catch (e) { out.push(e) } }\ndocument.write(app.name, ' ', app.opens, ' ', out.join('/'), ' ', [[1], [2, 3]].flat().at(-1), ' ', typeof i)</script></p>"
+ b"<p><script>var log = 'boot 12ms, linen 7ms, quil 30ms'; var total = 0; log.replace(/(\\w+) (\\d+)ms/g, function (all, name, ms) { total += parseInt(ms); return '' });\ndocument.write(log.match(/\\d+ms/g).length, ' ', total, ' ', /^boot/.test(log), ' ', log.split(/,\\s*/)[1].replace(/(\\w+) (\\d+)/, '$2:$1'))</script></p>"
  b'<h3>Notes</h3>'
  b'<h2>Rules</h2><ol><li>BOOT grants routes &amp; identities.<ul><li>held, never ambient</li></ul></li><li>Applications cannot mint them.</li><li>Only the bounded script subset runs.</li></ol>'
  b'<p>Read the <a href="/guide">guide</a>, the <a href=\'/ledger\'>ledger</a> or <a href="https://elsewhere.example/x">elsewhere</a>.<br>Entities: &lt;tag&gt; &#65;&#x42;C</p>'
@@ -90,7 +91,7 @@ class HtmlPeer(doc.ControlledHTTPSPeer):
 
 def expected_text(root,page=PAGE):
  with tempfile.TemporaryDirectory()as d:
-  src=Path(d)/'oracle.rs';src.write_text('extern crate alloc;\n#[path='+json.dumps(str(root/'apps/kaleidoscope/src/script.rs'))+']mod script;\n#[path='+json.dumps(str(root/'apps/kaleidoscope/src/html_text.rs'))+']mod html_text;\nuse std::io::{Read,Write};fn main(){let mut i=Vec::new();std::io::stdin().read_to_end(&mut i).unwrap();let mut o=vec![0u8;12288];let c=html_text::convert(&i,&mut o);eprintln!("{} {}",c.links,c.truncated as u8);std::io::stdout().write_all(&o[..c.len]).unwrap();}\n')
+  src=Path(d)/'oracle.rs';src.write_text('extern crate alloc;\n#[path='+json.dumps(str(root/'apps/kaleidoscope/src/regex.rs'))+']mod regex;\n#[path='+json.dumps(str(root/'apps/kaleidoscope/src/script.rs'))+']mod script;\n#[path='+json.dumps(str(root/'apps/kaleidoscope/src/html_text.rs'))+']mod html_text;\nuse std::io::{Read,Write};fn main(){let mut i=Vec::new();std::io::stdin().read_to_end(&mut i).unwrap();let mut o=vec![0u8;12288];let c=html_text::convert(&i,&mut o);eprintln!("{} {}",c.links,c.truncated as u8);std::io::stdout().write_all(&o[..c.len]).unwrap();}\n')
   subprocess.run(['rustc','--edition=2021','-O',str(src),'-o',str(Path(d)/'oracle')],check=True,capture_output=True)
   r=subprocess.run([str(Path(d)/'oracle')],input=page,capture_output=True,check=True);links,cut=map(int,r.stderr.split())
   return r.stdout,links,cut
@@ -144,7 +145,7 @@ def main():
   b=len(trace());q.key('w');wait(r'\[shell.browser.input\] code=17 down=1 slot=43 accepted=1',b);wait(r'\[browser.html.intent\] accepted=1 explicit=1 path=/page.html script=0 public_internet=0',b)
   wait(r'\[browser.https.view\] state=Verified controlled_profile=1 public_internet=0',b);doc_event=peer.completed.wait(30)
   if not doc_event:raise TimeoutError('peer close_notify')
-  conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=13 scripts_refused=2 ticks=\d+',b);checks['converted']=conv[0]
+  conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=14 scripts_refused=2 ticks=\d+',b);checks['converted']=conv[0]
   hw=wait(r'\[browser.stack.high_water\] bytes=(\d+) mapped=65536 painted_at=\d+ untouched=\d+',b);checks['stack_high_water']=int(hw[1])
   if int(hw[1])>60*1024:raise RuntimeError(f'Browser stack high water {hw[1]} leaves under 4 KiB')
   def reader(name,text,request,path):
@@ -169,11 +170,11 @@ def main():
   reader('html-followed',guide,GUIDE_REQUEST,b'/guide');(out/'expected-guide.txt').write_bytes(guide)
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] path=/page.html depth=0',b)
   if not peer.served[2].wait(60):raise TimeoutError('back page not served')
-  wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=13 scripts_refused=2 ticks=\d+',b)
+  wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=14 scripts_refused=2 ticks=\d+',b)
   reader('html-back',text,REQUEST,b'/page.html')
   b=len(trace());q.key('backspace');wait(r'\[browser.html.back\] depth=0 network=0',b);time.sleep(1)
   if len(peer.rows)!=3:raise RuntimeError('back at the first page caused network work')
-  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 5040' in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'odd 1+3+5+7+9 = 25' in text and b'{"name":"Quil","saves":3,"kind":"editor"} keys 3' in text and b'number 20.00 true undefined' in text and b'LINEN... QUIL.... SPINDLE. 23 6 four 1 a+b' in text and b'[input: Search notes] [x] exact [button: Find]' in text and b'9 9 hex ff true truefalse 5' in text and b'code 83 Sex 8' in text and b'Sex 2 0/skip/2 3 undefined' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
+  assert b'Script says 42' in text and b'SEXOS ok' in text and b'3 2 1 sum 20100 sq 144' in text and b'deep 7 5040' in text and b'squares 1 4 9 16 25 36 last 36' in text and b'2 NEVER AMBIENT at 3 43' in text and b'odd 1+3+5+7+9 = 25' in text and b'{"name":"Quil","saves":3,"kind":"editor"} keys 3' in text and b'number 20.00 true undefined' in text and b'LINEN... QUIL.... SPINDLE. 23 6 four 1 a+b' in text and b'[input: Search notes] [x] exact [button: Find]' in text and b'9 9 hex ff true truefalse 5' in text and b'code 83 Sex 8' in text and b'Sex 2 0/skip/2 3 undefined' in text and b'3 49 true 7:linenms' in text and b'while' not in text and b'color:red' not in text and text.startswith(b'Title: Lab notes'),'head/script/style handling differs'
  except Exception as exc:failure=repr(exc)
  finally:
   peer.close()

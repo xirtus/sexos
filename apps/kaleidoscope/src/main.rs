@@ -29,6 +29,7 @@ mod asset_presentation;
 mod text_delivery;
 mod browser_command;
 mod html_text;
+mod regex;
 mod script;
 mod stack_probe;
 use browser_command::Intent;

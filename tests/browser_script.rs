@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Host tests of the Browser's bounded inline script subset.
 extern crate alloc;
+#[path="../apps/kaleidoscope/src/regex.rs"] mod regex;
 #[path="../apps/kaleidoscope/src/script.rs"] mod script;
 use script::{run, Error};
 
@@ -226,4 +227,15 @@ fn block_scope_const_escapes_methods_helpers_and_exceptions() {
     assert_eq!(out("function risky(n) { if (n > 1) throw {code: n}; return n } var r = []; for (var i = 0; i < 3; i++) { try { r.push(risky(i)) } catch (err) { r.push('E' + err.code) } } document.write(r)").unwrap(), "0,1,E2");
     assert_eq!(out("throw 'uncaught'").err(), Some(Error::Thrown));
     assert_eq!(out("try { while (true) {} } catch (e) {}").err(), Some(Error::Limit), "limits are not catchable");
+}
+
+#[test]
+fn regular_expressions() {
+    assert_eq!(out(r"var re = /(\d+)-(\d+)/; document.write(re.test('a 12-34 b'), re.test('none'), ' ', 'a 12-34 b'.match(re).join('|'), ' ', 'x1y22z333'.match(/\d+/g), ' ', 'abc'.search(/c/), ' ', re)").unwrap(), "truefalse 12-34|12|34 1,22,333 2 /(\\d+)-(\\d+)/");
+    assert_eq!(out(r"document.write('2024-11-03'.replace(/(\d+)-(\d+)-(\d+)/, '$3.$2.$1'), ' ', 'a.b.c'.replace(/\./g, '/'), ' ', 'Hello'.replace(/l/gi, '[$&]'), ' ', 'one two'.replace(/\w+/g, w => w.toUpperCase()))").unwrap(), "03.11.2024 a/b/c He[l][l]o ONE TWO");
+    assert_eq!(out(r"document.write('a, b,c ,  d'.split(/\s*,\s*/).join('|'), ' ', 'k=v'.split(/(=)/).length, ' ', 'no'.match(/x/))").unwrap(), "a|b|c|d 3 null");
+    assert_eq!(out(r"var n = 10 / 2 / 5; document.write(n)").unwrap(), "1", "division still divides");
+    assert_eq!(out(r"'a'.replaceAll(/a/, 'b')").err(), Some(Error::Unsupported));
+    assert_eq!(out(r"document.write(/(/.test('x'))").err(), Some(Error::Syntax));
+    assert_eq!(out(r"document.write(/(a*)*b/.test('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))").err(), Some(Error::Limit));
 }

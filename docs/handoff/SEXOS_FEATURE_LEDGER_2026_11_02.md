@@ -761,6 +761,32 @@ host tests 21 groups; sealed build and master gate GREEN; native HTML gate at
 both sizes with a thirteenth page script writing
 `Sex 2 0/skip/2 3 undefined`; stack high water unchanged.
 
+## J1-J2. Script regular expressions; heap-safe script budgets (2026-11-03)
+
+- **J1 regular expressions** (`apps/kaleidoscope/src/regex.rs`, written
+  here): literals `/.../gi`, `.` `[...]` `[^...]` `\d \w \s \D \W \S \b \B`,
+  `^ $`, capturing and `(?:)` groups (9), `|`, `* + ? {n,m}` and lazy forms,
+  `i` and `g` flags; `re.test`, `s.match` (groups, or all matches with
+  `g`), `s.search`, `s.replace`/`replaceAll` with `$1`-`$9`, `$&`, `$$` or a
+  callback, `s.split(re)` (with captured separators), `re.source/flags`.
+  Backtracking with an explicit stack, a step budget, and a rule that an
+  empty loop iteration fails, so `(a*)*b` refuses instead of hanging. `/`
+  after a value still divides. Byte semantics; no lookaround or
+  backreferences.
+- **J2 heap safety.** The first native run of J1 crashed the Browser:
+  `memory allocation of 960 bytes failed`. Page conversion runs inside the
+  64 KiB Browser heap next to the TLS pipe and the 12 KiB body; script
+  buffers had grown to ~23 KiB. Now: string arena 4 KiB, 256 array elements,
+  128 object properties; a script starts only if 20 KiB of contiguous heap
+  is free (else it is refused and the page still renders); the regex
+  backtracking stack is capped at 512 frames and grown fallibly.
+
+**Evidence** (`docs/handoff/assets/script-regex-2026-11-03/`): regex unit tests
+(basics, captures, refusals) and script host tests 25 groups; sealed build
+and master gate GREEN; native HTML gate at both sizes with a fourteenth page
+script (regex replace with a callback summing timings, `match/g`, `test`,
+`split`, `$2:$1`) writing `3 49 true 7:linenms`; no Browser fault.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

@@ -2,6 +2,7 @@
 //! Host tests of the Browser's bounded HTML reading view.
 extern crate alloc;
 #[path="../apps/kaleidoscope/src/html_text.rs"] mod html_text;
+#[path="../apps/kaleidoscope/src/regex.rs"] mod regex;
 #[path="../apps/kaleidoscope/src/script.rs"] mod script;
 use html_text::{convert, looks_like_html, MAX_LINKS};
 

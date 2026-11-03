@@ -17,6 +17,8 @@
 //! parentheses, arrays (`[a, b]`, `x[i]`, `x[i] = v`, `.push .pop .shift .join
 //! .indexOf .includes .slice .concat .reverse .sort`),
 //! objects (`{a: 1, 'b': x}`, `o.a`, `o[k]`, `o.a = v`, `Object.keys(o)`),
+//! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
+//! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
 //! `JSON.stringify(v)`, spread `...array` in array literals and calls,
 //! destructuring `var [a, b] = x` / `var {a, b} = o`, `null`/`undefined`, `typeof`, `n.toFixed(d)`,
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
@@ -30,22 +32,25 @@
 //! for DOM, timers, storage or network. Any unsupported construct means the whole
 //! script writes nothing. Written text is inserted as text, never markup.
 use alloc::vec::Vec;
+use crate::regex::{Regex, CAPTURES};
 use core::fmt::Write;
 
 pub const MAX_SOURCE: usize = 4096;
 pub const MAX_OUTPUT: usize = 1024;
-const ARENA: usize = 8192;
+const ARENA: usize = 4096;
+/// Contiguous heap a script needs before it starts (buffers plus slack).
+const HEADROOM: usize = 20 * 1024;
 /// Statements executed per script, loop bodies included.
 const STEPS: u32 = 10_000;
 // Arena and output live on the heap (fallibly): the Browser stack is tight.
 const VARS: usize = 16;
 const FUNCS: usize = 16;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
-const ELEMS: usize = 512;
+const ELEMS: usize = 256;
 const ARRAYS: usize = 32;
 /// Objects and their properties (name in the arena, value), by reference.
 const OBJECTS: usize = 16;
-const PROPS: usize = 256;
+const PROPS: usize = 128;
 const PARAMS: usize = 4;
 const NAME: usize = 16;
 // Nesting budget (expressions, statements, calls). Measured natively at 32
@@ -57,10 +62,10 @@ const MAX_DEPTH: u8 = 32;
 pub enum Error { Unsupported, Syntax, Limit, Thrown }
 
 #[derive(Clone, Copy)]
-enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Null, Arr(u8), Obj(u8), Func(u8) }
+enum Value { Num(f64), Str(u16, u16), Bool(bool), Undef, Null, Arr(u8), Obj(u8), Func(u8), Re(u8) }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tok<'a> { Num(f64), Str(&'a [u8]), Template(&'a [u8]), Ident(&'a [u8]), Punct(u8), End }
+enum Tok<'a> { Num(f64), Str(&'a [u8]), Template(&'a [u8]), Regex(&'a [u8], &'a [u8]), Ident(&'a [u8]), Punct(u8), End }
 
 
 struct Machine<'a> {
@@ -94,6 +99,8 @@ struct Machine<'a> {
     this_next: Option<Value>,
     /// The value of a `throw` travelling to the nearest `catch`.
     thrown: Option<Value>,
+    /// Compiled regular expression literals, by source offset.
+    regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
     /// Loops open in the current function (0 = `break` is a syntax error).
     loops: u8,
     elems: Vec<Value>,
@@ -130,6 +137,24 @@ impl<'a> Machine<'a> {
             break;
         }
         let Some(&c) = s.get(self.at) else { self.tok = Tok::End; return Ok(()) };
+        // `/` starts a regular expression where a value cannot end.
+        let after_value = match self.tok { Tok::Num(_) | Tok::Str(_) | Tok::Template(_) | Tok::Regex(..) => true,
+            Tok::Ident(k) => !matches!(k, b"return" | b"typeof" | b"case" | b"in" | b"delete" | b"throw" | b"do" | b"else"),
+            Tok::Punct(p) => matches!(p, b')' | b']'), Tok::End => false };
+        if c == b'/' && !after_value {
+            let start = self.at + 1;
+            let (mut i, mut class) = (start, false);
+            while i < s.len() && (s[i] != b'/' || class) {
+                match s[i] { b'\\' => i += 1, b'[' => class = true, b']' => class = false, b'\n' => return Err(Error::Syntax), _ => {} }
+                i += 1;
+            }
+            if i >= s.len() { return Err(Error::Syntax); }
+            let mut f = i + 1;
+            while f < s.len() && s[f].is_ascii_alphabetic() { f += 1; }
+            self.tok = Tok::Regex(&s[start..i], &s[i + 1..f]);
+            self.at = f;
+            return Ok(());
+        }
         self.tok = if c.is_ascii_digit() || (c == b'.' && s.get(self.at + 1).is_some_and(u8::is_ascii_digit)) {
             let start = self.at;
             while self.at < s.len() && (s[self.at].is_ascii_alphanumeric() || s[self.at] == b'.'
@@ -269,17 +294,18 @@ impl<'a> Machine<'a> {
         self.store(&buf.b[..n])
     }
     fn to_text(&mut self, v: Value) -> Result<Value, Error> {
-        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), Value::Undef => self.store(b"undefined"), Value::Null => self.store(b"null"), Value::Arr(id) => self.join(id, b","), Value::Obj(_) => self.store(b"[object Object]"), Value::Func(_) => self.store(b"function"), s => Ok(s) }
+        match v { Value::Num(x) => self.number_text(x), Value::Bool(b) => self.store(if b { b"true" } else { b"false" }), Value::Undef => self.store(b"undefined"), Value::Null => self.store(b"null"), Value::Arr(id) => self.join(id, b","), Value::Obj(_) => self.store(b"[object Object]"), Value::Func(_) => self.store(b"function"),
+            Value::Re(k) => { let (_, p, f, _) = &self.regexes[k as usize]; let t: Vec<u8> = [&b"/"[..], p, b"/", f].concat(); self.store(&t) }, s => Ok(s) }
     }
     fn truthy(&self, v: Value) -> bool {
-        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, Value::Undef | Value::Null => false, Value::Arr(_) | Value::Obj(_) | Value::Func(_) => true, s => !self.text(s).is_empty() }
+        match v { Value::Num(x) => x != 0.0 && !x.is_nan(), Value::Bool(b) => b, Value::Undef | Value::Null => false, Value::Arr(_) | Value::Obj(_) | Value::Func(_) | Value::Re(_) => true, s => !self.text(s).is_empty() }
     }
     fn to_number(&self, v: Value) -> f64 {
         match v {
             Value::Num(x) => x,
             Value::Bool(b) => b as u8 as f64,
             Value::Null => 0.0,
-            Value::Undef | Value::Arr(_) | Value::Obj(_) | Value::Func(_) => f64::NAN,
+            Value::Undef | Value::Arr(_) | Value::Obj(_) | Value::Func(_) | Value::Re(_) => f64::NAN,
             s => {
                 let t = self.text(s);
                 let t = core::str::from_utf8(t).unwrap_or("x").trim();
@@ -446,6 +472,25 @@ impl<'a> Machine<'a> {
                 v = self.fixed(x, d as usize)?;
                 continue;
             }
+            if let Value::Re(k) = v {
+                v = match name {
+                    b"test" => { let (args, _) = self.arguments()?; let t = self.to_text(args[0])?; let text = self.text(t).to_vec(); Value::Bool(self.re_find(k, &text, 0)?.is_some()) }
+                    b"source" => { let p = self.regexes[k as usize].1; self.store(p)? }
+                    b"flags" => { let f = self.regexes[k as usize].2; self.store(f)? }
+                    _ => return Err(Error::Unsupported),
+                };
+                continue;
+            }
+            if let (Value::Str(..), b"match" | b"search" | b"replace" | b"replaceAll" | b"split") = (v, name) {
+                // String methods with a regular expression argument.
+                let at = self.pos();
+                let (args, n) = self.arguments()?;
+                if let Some(Value::Re(k)) = args.first().copied().filter(|_| n >= 1) {
+                    v = self.string_regex(name, v, k, args.get(1).copied().unwrap_or(Value::Undef))?;
+                    continue;
+                }
+                self.restore(at);
+            }
             if let Value::Arr(id) = v {
                 let (_, len, _) = self.arrays[id as usize];
                 v = match name {
@@ -509,6 +554,91 @@ impl<'a> Machine<'a> {
                 _ => return Err(Error::Unsupported),
             };
         }
+    }
+    fn re_find(&self, k: u8, text: &[u8], from: usize) -> Result<Option<[Option<(usize, usize)>; CAPTURES]>, Error> {
+        self.regexes[k as usize].3.find(text, from).map_err(|_| Error::Limit)
+    }
+    /// `match`, `search`, `replace`, `replaceAll`, `split` with a regex.
+    fn string_regex(&mut self, name: &[u8], s: Value, k: u8, arg: Value) -> Result<Value, Error> {
+        let text = self.text(s).to_vec();
+        let global = self.regexes[k as usize].2.contains(&b'g');
+        let groups = self.regexes[k as usize].3.groups;
+        // All matches (global) or the first, advancing past empty matches.
+        let mut found: Vec<[Option<(usize, usize)>; CAPTURES]> = Vec::new();
+        let mut from = 0;
+        while from <= text.len() {
+            let Some(c) = self.re_find(k, &text, from)? else { break };
+            let (a, b) = c[0].ok_or(Error::Limit)?;
+            found.push(c);
+            if !(global || name == b"split") || found.len() > ELEMS { break; }
+            from = if b == a { b + 1 } else { b };
+        }
+        let piece = |m: &mut Self, span: Option<(usize, usize)>| -> Result<Value, Error> { match span { Some((a, b)) => m.store(&text[a..b]), None => Ok(Value::Undef) } };
+        Ok(match name {
+            b"search" => Value::Num(found.first().and_then(|c| c[0]).map_or(-1.0, |(a, _)| a as f64)),
+            b"match" => {
+                if found.is_empty() { return Ok(Value::Null); }
+                let mut items: Vec<Value> = Vec::new();
+                if global { for c in &found { items.push(piece(self, c[0])?); } }
+                else { for g in 0..=groups { items.push(piece(self, found[0][g])?); } }
+                self.new_array(&items)?
+            }
+            b"split" => {
+                let mut items: Vec<Value> = Vec::new();
+                let mut last = 0;
+                for c in &found {
+                    let (a, b) = c[0].unwrap();
+                    if b == a && (a == 0 || a == text.len()) { continue; }
+                    items.push(self.store(&text[last..a])?);
+                    for g in 1..=groups { items.push(piece(self, c[g])?); }
+                    last = b;
+                    if items.len() > ELEMS { return Err(Error::Limit); }
+                }
+                items.push(self.store(&text[last..])?);
+                self.new_array(&items)?
+            }
+            _ => {
+                if name == b"replaceAll" && !global { return Err(Error::Unsupported); }
+                let mut out: Vec<u8> = Vec::new();
+                let mut last = 0;
+                for c in &found {
+                    let (a, b) = c[0].unwrap();
+                    out.extend_from_slice(&text[last..a]);
+                    match arg {
+                        Value::Func(f) => {
+                            let mut call = [Value::Undef; 4];
+                            for g in 0..=groups.min(3) { call[g] = piece(self, c[g])?; }
+                            let r = self.invoke(f, &call[..=groups.min(3)])?;
+                            let t = self.to_text(r)?;
+                            out.extend_from_slice(self.text(t));
+                        }
+                        _ => {
+                            // `$&`, `$1`..`$9` and `$$` in the replacement text.
+                            let t = self.to_text(arg)?;
+                            let rep = self.text(t).to_vec();
+                            let mut i = 0;
+                            while i < rep.len() {
+                                if rep[i] == b'$' && i + 1 < rep.len() {
+                                    let d = rep[i + 1];
+                                    if d == b'$' { out.push(b'$'); i += 2; continue; }
+                                    if d == b'&' { out.extend_from_slice(&text[a..b]); i += 2; continue; }
+                                    if d.is_ascii_digit() && d != b'0' && ((d - b'0') as usize) <= groups {
+                                        if let Some((x, y)) = c[(d - b'0') as usize] { out.extend_from_slice(&text[x..y]); }
+                                        i += 2; continue;
+                                    }
+                                }
+                                out.push(rep[i]);
+                                i += 1;
+                            }
+                        }
+                    }
+                    last = b;
+                    if out.len() > ARENA { return Err(Error::Limit); }
+                }
+                out.extend_from_slice(&text[last..]);
+                self.store(&out)?
+            }
+        })
     }
     /// String methods on byte offsets (the subset treats text as bytes).
     fn string_method(&mut self, name: &[u8], s: Value, args: [Value; 2]) -> Result<Value, Error> {
@@ -1004,6 +1134,15 @@ impl<'a> Machine<'a> {
         match self.tok {
             Tok::Num(x) => { self.next()?; Ok(Value::Num(x)) }
             Tok::Str(raw) => { self.next()?; self.literal(raw) }
+            Tok::Regex(pattern, flags) => {
+                let at = pattern.as_ptr() as usize - self.src.as_ptr() as usize;
+                self.next()?;
+                if let Some(k) = self.regexes.iter().position(|r| r.0 == at) { return Ok(Value::Re(k as u8)); }
+                if self.regexes.len() == 8 { return Err(Error::Limit); }
+                let re = Regex::new(pattern, flags).map_err(|e| if e == crate::regex::Error::Limit { Error::Limit } else { Error::Syntax })?;
+                self.regexes.push((at, pattern, flags, re));
+                Ok(Value::Re((self.regexes.len() - 1) as u8))
+            }
             Tok::Template(raw) => { self.next()?; self.template(raw) }
             Tok::Punct(b'(') if arrow => {
                 let at = self.pos();
@@ -1715,6 +1854,11 @@ impl Write for Buf { fn write_str(&mut self, s: &str) -> core::fmt::Result { sel
 /// including a failed allocation, nothing is returned.
 pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     if source.len() > MAX_SOURCE { return Err(Error::Limit); }
+    // The Browser heap is 64 KiB and shared with TLS and the page: refuse a
+    // script unless room for its working set (and some slack) exists now.
+    let mut probe: Vec<u8> = Vec::new();
+    probe.try_reserve_exact(HEADROOM).map_err(|_| Error::Limit)?;
+    drop(probe);
     let (mut arena, mut out) = (Vec::new(), Vec::new());
     arena.try_reserve_exact(ARENA).map_err(|_| Error::Limit)?;
     out.try_reserve_exact(MAX_OUTPUT).map_err(|_| Error::Limit)?;
@@ -1723,7 +1867,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }
