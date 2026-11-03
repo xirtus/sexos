@@ -18,7 +18,8 @@ and `... in hex|bin|oct` output.
 **HTML reader.** Headings, paragraphs, lists (numbered/nested/definition),
 aligned tables, quotes, rules, `<pre>`, inline code/emphasis markers, links
 with a numbered list, images as alt text, forms as read-only text,
-`sup/sub/abbr/q/details`, common named and numeric entities, page title.
+`sup/sub/abbr/q/details`, `ol type=a/i`, media/frame placeholders, Latin-1,
+Greek and symbol entities (Display draws 94 non-ASCII glyphs), page title.
 
 **Inline script subset** (`apps/kaleidoscope/src/script.rs`, not a JS
 engine, no DOM/events/timers/network/storage/clock/entropy): numbers printed
