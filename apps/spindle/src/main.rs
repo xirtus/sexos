@@ -701,13 +701,14 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         },
         b"help" => {
             // ── section: basics ──
-            serial_println!("[spindle.help.section] name=basics commands=8");
+            serial_println!("[spindle.help.section] name=basics commands=9");
             sb.push(b"--- Basics ---");
             sb.push(b"  help         show this help");
             sb.push(b"  clear        clear scrollback");
             sb.push(b"  echo <msg>   print message");
             sb.push(b"  sextime <n>  Unix seconds as SexTime/UTC/Long Count");
             sb.push(b"  calc <expr>  exact + - * / % ** sqrt abs min max round floor ceil ans");
+            sb.push(b"  calc x = 2   name a value (up to 8)");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -829,10 +830,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"calc" => {
-            static mut CALC_ANS: Option<i128> = None;
-            match calc_command::eval_with(args, unsafe { CALC_ANS }) {
+            static mut CALC_ENV: calc_command::Env = calc_command::Env::new();
+            match calc_command::eval_env(args, unsafe { &mut *core::ptr::addr_of_mut!(CALC_ENV) }).map(|(v, _)| v) {
                 Ok(value) => {
-                    unsafe { CALC_ANS = Some(value.scaled); }
                     let mut line = [0u8; calc_command::LINE_MAX];
                     let n = calc_command::render(value, &mut line);
                     sb.push(&line[..n]);
@@ -846,6 +846,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         calc_command::Error::NoAnswer => b"calc: no previous answer (ans)",
                         calc_command::Error::Exponent => b"calc: ** needs a whole exponent up to 64",
                         calc_command::Error::Domain => b"calc: square root of a negative number",
+                        calc_command::Error::Unknown => b"calc: unknown name (set one with  calc x = 2)",
                         calc_command::Error::Syntax => b"usage: calc <expr>  e.g. calc 2*(3+4)/5",
                     });
                     sex_pdx::serial_record!("[spindle.calc] expr_bytes={} error={:?} ok=0", args.len(), error);

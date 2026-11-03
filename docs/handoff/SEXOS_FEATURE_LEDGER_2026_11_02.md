@@ -787,6 +787,22 @@ and master gate GREEN; native HTML gate at both sizes with a fourteenth page
 script (regex replace with a callback summing timings, `match/g`, `test`,
 `split`, `$2:$1`) writing `3 49 true 7:linenms`; no Browser fault.
 
+## K1-K3. Highlight/edit markers, Latin charsets, calc variables (2026-11-03)
+
+- **K1.** `<mark>` `==x==`, `<del>/<s>/<strike>` `~~x~~`, `<ins>` `++x++`,
+  `<u>` `__x__`, `<cite>` `_x_`, `<figure>` with a `Figure: caption` line.
+- **K2.** Pages declaring `charset=windows-1252` / `iso-8859-1` / `latin1`
+  in a `<meta>` are transcoded to UTF-8 (Windows-1252 table for 0x80-0x9F);
+  undeclared pages stay UTF-8.
+- **K3.** Spindle `calc x = expr` names a value (up to 8, 1-8 letters,
+  built-in names refused) for the session; unknown names are a named
+  error. `calc r = 3` then `calc r*r+1` gives `= 10`.
+
+**Evidence** (`docs/handoff/assets/html-marks-charset-calc-vars-2026-11-03/`):
+html_text 24 host tests, calc host tests 4 groups; sealed build and master
+gate GREEN; native HTML gate at both sizes (`==held== not ~~ambient~~`);
+native calc gate at both sizes with `calc r = 3`, `calc r*r+1`.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

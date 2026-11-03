@@ -176,13 +176,34 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
     Some((ch.encode_utf8(out).len(), end + 1))
 }
 
-const INLINE: [(&[u8], u8); 6] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_')];
+const INLINE: [(&[u8], u8); 7] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_'), (b"cite", b'_')];
+/// Two-character markers: highlighted, deleted and inserted text.
+const INLINE2: [(&[u8], &[u8]); 6] = [(b"mark", b"=="), (b"del", b"~~"), (b"s", b"~~"), (b"strike", b"~~"), (b"ins", b"++"), (b"u", b"__")];
 const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
-const BLOCK: [&[u8]; 18] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl", b"form", b"details", b"fieldset"];
+const BLOCK: [&[u8]; 19] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl", b"form", b"details", b"fieldset", b"figure"];
 
 /// Convert `html` into readable text in `out`. Link targets are appended as a
 /// numbered list; at most MAX_LINKS are kept.
+/// Windows-1252 (a superset of ISO-8859-1's printable range) to Unicode.
+fn cp1252(b: u8) -> char {
+    const HIGH: [u16; 32] = [0x20ac, 0xfffd, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0xfffd, 0x017d, 0xfffd,
+        0xfffd, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0xfffd, 0x017e, 0x0178];
+    let code = if (0x80..0xa0).contains(&b) { HIGH[(b - 0x80) as usize] as u32 } else { b as u32 };
+    char::from_u32(code).unwrap_or('\u{fffd}')
+}
+
+/// Whether the document declares a single-byte Latin charset in a `<meta>`
+/// near its start (pages without one are read as UTF-8).
+fn declares_latin(html: &[u8]) -> bool {
+    let head = &html[..html.len().min(1024)];
+    let Some(at) = head.windows(8).position(|w| w.eq_ignore_ascii_case(b"charset=")) else { return false };
+    let rest = &head[at + 8..];
+    let rest = rest.strip_prefix(b"\"").or(rest.strip_prefix(b"'")).unwrap_or(rest);
+    [&b"windows-1252"[..], b"iso-8859-1", b"latin1", b"iso8859-1", b"cp1252"].iter().any(|c| rest.len() >= c.len() && rest[..c.len()].eq_ignore_ascii_case(c))
+}
+
 pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
+    let latin = declares_latin(html);
     let mut o = Output::new(out);
     let mut links: [(usize, usize); MAX_LINKS] = [(0, 0); MAX_LINKS];
     let mut link_count = 0usize;
@@ -298,6 +319,11 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                     // A newline right after <pre> is not content.
                     if html.get(i) == Some(&b'\n') { i += 1; } else if html[i..].starts_with(b"\r\n") { i += 2; }
                 }
+            } else if let Some(mark) = INLINE2.iter().find(|(n, _)| name_is(name, n)).map(|(_, m)| *m) {
+                if end_tag { o.space = false; o.bytes(mark); } else { o.bytes(mark); o.space = false; }
+            } else if name_is(name, b"figcaption") {
+                o.line(false);
+                if !end_tag { o.bytes(b"Figure:"); o.space = true; }
             } else if let Some(mark) = INLINE.iter().find(|(n, _)| name_is(name, n)).map(|(_, m)| *m) {
                 // Inline emphasis and code keep a plain-text marker, Markdown style.
                 if end_tag { o.space = false; o.text(mark); } else { o.text(mark); o.space = false; }
@@ -396,7 +422,13 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                 continue;
             }
         }
-        o.text(b);
+        if latin && b >= 0x80 {
+            // Declared Windows-1252 / ISO-8859-1 text becomes UTF-8.
+            let mut buf = [0u8; 4];
+            for &c in cp1252(b).encode_utf8(&mut buf).as_bytes() { o.text(c); }
+        } else {
+            o.text(b);
+        }
         i += 1;
     }
     let mut targets = [(0, 0); MAX_LINKS];

@@ -6,7 +6,7 @@ from network_contention_gate import frozen_binding
 from quil_autosave_gate import boot,settle
 
 SHIFTED={'*':'8','(':'9',')':'0','+':'equal','%':'5'}
-PLAIN={' ':'spc','-':'minus','/':'slash','.':'dot',',':'comma'}
+PLAIN={' ':'spc','-':'minus','/':'slash','.':'dot',',':'comma','=':'equal'}
 CASES=[('calc ans',r'\[spindle.calc\] expr_bytes=3 error=NoAnswer ok=0'),
        ('calc 2*(3+4)/5',r'\[spindle.calc\] expr_bytes=9 result== 2\.8 ok=1'),
        ('calc ans*10',r'\[spindle.calc\] expr_bytes=6 result== 28 ok=1'),
@@ -16,6 +16,8 @@ CASES=[('calc ans',r'\[spindle.calc\] expr_bytes=3 error=NoAnswer ok=0'),
        ('calc sqrt(2)',r'\[spindle.calc\] expr_bytes=7 result=~ 1\.414213562 ok=1'),
        ('calc max(2,9)',r'\[spindle.calc\] expr_bytes=8 result== 9 ok=1'),
        ('calc 2*pi',r'\[spindle.calc\] expr_bytes=4 result=~ 6\.283185308 ok=1'),
+       ('calc r = 3',r'\[spindle.calc\] expr_bytes=5 result== 3 ok=1'),
+       ('calc r*r+1',r'\[spindle.calc\] expr_bytes=5 result== 10 ok=1'),
        ('calc 7%0',r'\[spindle.calc\] expr_bytes=3 error=DivideByZero ok=0')]
 
 def type_line(g,value):

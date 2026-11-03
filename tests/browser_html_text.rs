@@ -167,3 +167,20 @@ fn forms_and_inline_extras_read_as_text() {
     let (t, _) = text(page, 1024);
     assert_eq!(t, "Name [input: Your name][x] Remember ( ) A (*) B[select: One | Two][text: hi there][button: Go now][button: Send]\n\nE = mc^2, H_2O, cap(capability), \"held\".\n\n> More\n\nHidden by default.");
 }
+
+#[test]
+fn highlight_edit_and_figure_markers() {
+    let (t, _) = text("<p>Use <mark>held</mark> routes, not <del>ambient</del><ins>granted</ins> ones; see <cite>ARCHITECTURE</cite> <s>old</s> <u>u</u>.</p><figure><img alt=Map><figcaption>The SASOS map</figcaption></figure>", 512);
+    assert_eq!(t, "Use ==held== routes, not ~~ambient~~++granted++ ones; see _ARCHITECTURE_ ~~old~~ __u__.\n\n[image: Map]\nFigure: The SASOS map");
+}
+
+#[test]
+fn declared_latin_charset_becomes_utf8() {
+    let page = b"<html><head><meta charset=\"windows-1252\"></head><body><p>caf\xe9 \x93q\x94 \x80</p></body></html>";
+    let mut out = vec![0u8; 256];
+    let c = convert(page, &mut out);
+    assert_eq!(std::str::from_utf8(&out[..c.len]).unwrap(), "caf\u{e9} \u{201c}q\u{201d} \u{20ac}");
+    let utf8 = "<p>caf\u{e9}</p>";
+    let c = convert(utf8.as_bytes(), &mut out);
+    assert_eq!(std::str::from_utf8(&out[..c.len]).unwrap(), "caf\u{e9}", "undeclared pages are UTF-8");
+}
