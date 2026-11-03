@@ -6,7 +6,7 @@
 //! target is a name or a member chain `a.b[c].d` (also `+= -= *= /= %= ++ --`), `n++`/`++n` in expressions,
 //! `if (...) ... else ...`, `while (...)`, `do ... while (...)`,
 //! `switch` with `case`/`default`, `for (...; ...; ...)`, `for (x of xs)`,
-//! `for (k in o)` with
+//! labelled statements with `break label` / `continue label`, `for (k in o)` with
 //! `break`/`continue`, `{ ... }`
 //! blocks, `function name(a, b = 2, ...rest) { ... return x }` declared before use,
 //! closures (a function returned, alone or in an object/array, keeps one shared
@@ -26,6 +26,7 @@
 //! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
 //! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
 //! `class A extends B { constructor() { super(...) } m() { super.m() } static s() {} }`,
+//! `get`/`set` accessors in classes and object literals (not listed by `Object.keys`),
 //! `new`, `instanceof`,
 //! `findLast findLastIndex flatMap lastIndexOf splice unshift toString`, `Array.of`,
 //! `Object.fromEntries`, `codePointAt`, `encodeURIComponent`/`decodeURIComponent`,
@@ -110,8 +111,13 @@ struct Machine<'a> {
     live: bool,
     /// Set by `return` until the enclosing call takes it.
     ret: Option<Value>,
-    /// `break` (true) or `continue` (false) pending for the innermost loop.
+    /// `break` (true) or `continue` (false) pending for the innermost loop,
+    /// or for the loop/statement with label `jump_label`.
     jump: Option<bool>,
+    jump_label: Option<&'a [u8]>,
+    /// The label of the loop about to run, and labels open now.
+    label_next: Option<&'a [u8]>,
+    labels: u8,
     /// `this` inside the current call, and the receiver for the next call.
     this: Value,
     this_next: Option<Value>,
@@ -120,7 +126,9 @@ struct Machine<'a> {
     /// Compiled regular expression literals, by source offset.
     regexes: Vec<(usize, &'a [u8], &'a [u8], Regex)>,
     /// `class` declarations: name, constructor, methods, parent class, static methods.
-    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>)>,
+    classes: Vec<(&'a [u8], Option<u8>, Vec<(&'a [u8], u8)>, Option<u8>, Vec<(&'a [u8], u8)>, Vec<(&'a [u8], u8, bool)>)>,
+    /// Accessor properties: (object, name, getter, setter).
+    accessors: Vec<(u8, Vec<u8>, Option<u8>, Option<u8>)>,
     /// What made each object, for `instanceof`: 0 a literal, 1+k class k,
     /// 16+f function `f` as a constructor, 64 an Error.
     made_by: [u8; OBJECTS],
@@ -557,7 +565,7 @@ impl<'a> Machine<'a> {
                 }
             }
             if let Value::Obj(id) = v {
-                let prop = self.get_prop(id, name);
+                let prop = self.read_prop(id, name)?;
                 // `o.f(...)` calls with `this` bound to `o`.
                 if let (Value::Func(f), Tok::Punct(b'(')) = (prop, self.tok) {
                     let mut args = [Value::Undef; PARAMS];
@@ -964,6 +972,27 @@ impl<'a> Machine<'a> {
         let (start, len, _) = self.objects[id as usize];
         (start as usize..start as usize + len as usize).find(|&k| { let (s0, n, _) = self.props[k]; &self.arena[s0 as usize..s0 as usize + n as usize] == key })
     }
+    /// The getter and setter of an accessor property `key` of object `id`.
+    fn accessor(&self, id: u8, key: &[u8]) -> Option<(Option<u8>, Option<u8>)> {
+        if self.accessors.is_empty() || self.find_prop(id, key).is_some() { return None; }
+        self.accessors.iter().find(|a| a.0 == id && a.1 == key).map(|a| (a.2, a.3))
+    }
+    fn add_accessor(&mut self, id: u8, key: &[u8], f: u8, setter: bool) -> Result<(), Error> {
+        let k = match self.accessors.iter().position(|a| a.0 == id && a.1 == key) {
+            Some(k) => k,
+            None => { if self.accessors.len() == 32 { return Err(Error::Limit); } self.accessors.push((id, key.to_vec(), None, None)); self.accessors.len() - 1 }
+        };
+        if setter { self.accessors[k].3 = Some(f); } else { self.accessors[k].2 = Some(f); }
+        Ok(())
+    }
+    /// Reads `o.key` running a getter with `this` = `o`, if one is defined.
+    fn read_prop(&mut self, id: u8, key: &[u8]) -> Result<Value, Error> {
+        match self.accessor(id, key) {
+            Some((Some(g), _)) if self.live => { self.this_next = Some(Value::Obj(id)); self.invoke(g, &[]) }
+            Some(_) => Ok(Value::Undef),
+            None => Ok(self.get_prop(id, key)),
+        }
+    }
     fn get_prop(&self, id: u8, key: &[u8]) -> Value {
         self.find_prop(id, key).map_or(Value::Undef, |k| self.props[k].2)
     }
@@ -1061,6 +1090,7 @@ impl<'a> Machine<'a> {
     fn class_methods(&mut self, k: usize, id: u8) -> Result<(), Error> {
         if let Some(p) = self.classes[k].3 { self.class_methods(p as usize, id)?; }
         for (name, f) in self.classes[k].2.clone() { self.set_prop(id, name, Value::Func(f))?; }
+        for (name, f, setter) in self.classes[k].5.clone() { self.add_accessor(id, name, f, setter)?; }
         Ok(())
     }
     /// Runs the constructor of class `k` on `this`; a class without one
@@ -1600,6 +1630,21 @@ impl<'a> Machine<'a> {
                     Tok::Punct(b'[') => { self.next()?; let k = self.expr()?; self.expect(b']')?; let t = self.to_text(k)?; (self.text(t).to_vec(), None) }
                     _ => return Err(Error::Syntax),
                 };
+                if let (Some(kw @ (b"get" | b"set")), Tok::Ident(n) | Tok::Str(n)) = (name, self.tok) {
+                    // `get name() {...}` / `set name(v) {...}`.
+                    self.next()?;
+                    let at = self.pos();
+                    self.expect(b'(')?;
+                    self.skip_params()?;
+                    self.expect(b')')?;
+                    if self.tok != Tok::Punct(b'{') { return Err(Error::Syntax); }
+                    self.skim_body()?;
+                    let f = self.define(b"", at)?;
+                    self.add_accessor(id, n, f, kw == b"set")?;
+                    if self.tok != Tok::Punct(b',') { break; }
+                    self.next()?;
+                    continue;
+                }
                 let v = match (self.tok, name) {
                     (Tok::Punct(b'('), _) => {
                         let at = self.pos();
@@ -2227,13 +2272,17 @@ impl<'a> Machine<'a> {
         } else { None };
         self.expect(b'{')?;
         let (mut ctor, mut methods) = (None, Vec::new());
-        let mut statics = Vec::new();
+        let (mut statics, mut accessors) = (Vec::new(), Vec::new());
         while self.tok != Tok::Punct(b'}') {
             let Tok::Ident(mut m) = self.tok else { return Err(Error::Syntax) };
             self.next()?;
-            // `static name(...)` (a method named `static` is also allowed).
+            // `static name(...)`, `get name()`, `set name(v)` (methods may
+            // also be named `static`, `get` or `set`).
             let fixed = m == b"static" && matches!(self.tok, Tok::Ident(_));
             if fixed { let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) }; m = n; self.next()?; }
+            let access = !fixed && matches!(m, b"get" | b"set") && matches!(self.tok, Tok::Ident(_));
+            let setter = m == b"set";
+            if access { let Tok::Ident(n) = self.tok else { return Err(Error::Syntax) }; m = n; self.next()?; }
             let at = self.pos();
             self.expect(b'(')?;
             self.skip_params()?;
@@ -2242,13 +2291,13 @@ impl<'a> Machine<'a> {
             self.skim_body()?;
             if run {
                 let f = self.define(b"", at)?;
-                if fixed { statics.push((m, f)); } else if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
+                if access { accessors.push((m, f, setter)); } else if fixed { statics.push((m, f)); } else if m == b"constructor" { ctor = Some(f); } else { methods.push((m, f)); }
             }
         }
         self.next()?;
         if run {
             if self.classes.len() == 8 { return Err(Error::Limit); }
-            self.classes.push((name, ctor, methods, parent, statics));
+            self.classes.push((name, ctor, methods, parent, statics, accessors));
         }
         Ok(())
     }
@@ -2291,7 +2340,7 @@ impl<'a> Machine<'a> {
             Err(Error::Thrown) => {
                 // Unwind to the try block and pass over it without running it.
                 (self.depth, self.loops, self.live, self.nvars, self.block_base) = saved;
-                self.jump = None;
+                (self.jump, self.jump_label) = (None, None);
                 self.restore(at);
                 self.statement(false)?;
                 self.thrown.take()
@@ -2324,6 +2373,7 @@ impl<'a> Machine<'a> {
     /// `do body while (cond)`.
     #[inline(never)]
     fn do_statement(&mut self, run: bool) -> Result<(), Error> {
+        let label = self.label_next.take();
         self.next()?;
         let top = self.pos();
         self.loops += 1;
@@ -2331,7 +2381,7 @@ impl<'a> Machine<'a> {
         loop {
             self.restore(top);
             self.statement(go)?;
-            let jump = if go { self.jump.take() } else { None };
+            let jump = if go { self.loop_jump(label) } else { None };
             if self.tok != Tok::Ident(b"while") { return Err(Error::Syntax); }
             self.next()?;
             self.expect(b'(')?;
@@ -2373,12 +2423,13 @@ impl<'a> Machine<'a> {
         self.next()?;
         self.loops -= 1;
         // `break` ends the switch; `continue` belongs to an outer loop.
-        if self.jump == Some(true) { self.jump = None; }
+        if self.jump == Some(true) && self.jump_label.is_none() { self.jump = None; }
         Ok(())
     }
     /// `while (cond) body`.
     #[inline(never)]
     fn while_statement(&mut self, run: bool) -> Result<(), Error> {
+        let label = self.label_next.take();
         self.next()?;
         let top = self.pos();
         self.loops += 1;
@@ -2389,11 +2440,12 @@ impl<'a> Machine<'a> {
             self.expect(b')')?;
             let go = run && self.ret.is_none() && self.truthy(c);
             self.statement(go)?;
-            if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
+            if !go || self.loop_jump(label) == Some(true) { self.loops -= 1; return Ok(()); }
         }
     }
     fn statement_inner(&mut self, run: bool) -> Result<(), Error> {
         let destructure = matches!(self.tok, Tok::Ident(b"var" | b"let" | b"const")) && matches!(self.peek_after()?, Tok::Punct(b'[' | b'{'));
+        let labeled = matches!(self.tok, Tok::Ident(n) if !matches!(n, b"default" | b"case" | b"else")) && self.peek_after()? == Tok::Punct(b':');
         match self.tok {
             Tok::Punct(b';') => self.next(),
             Tok::Punct(b'{') => {
@@ -2445,9 +2497,11 @@ impl<'a> Machine<'a> {
                 self.end()
             }
             Tok::Ident(kind @ (b"break" | b"continue")) => {
-                if self.loops == 0 { return Err(Error::Syntax); }
                 self.next()?;
-                if run { self.jump = Some(kind == b"break"); }
+                // `break label` / `continue label` (on the same line).
+                let label = match self.tok { Tok::Ident(l) if !self.nl => { self.next()?; Some(l) } _ => None };
+                if (label.is_none() && self.loops == 0) || (label.is_some() && self.labels == 0) { return Err(Error::Syntax); }
+                if run { self.jump = Some(kind == b"break"); self.jump_label = label; }
                 self.end()
             }
             Tok::Ident(b"delete") => self.delete_statement(run),
@@ -2464,6 +2518,18 @@ impl<'a> Machine<'a> {
                 let r = self.for_loop(run);
                 self.end_block(since);
                 self.block_base = base;
+                r
+            }
+            Tok::Ident(name) if labeled => {
+                // `label: statement`; a labelled loop also takes `continue label`.
+                self.next()?;
+                self.next()?;
+                if matches!(self.tok, Tok::Ident(b"for" | b"while" | b"do")) { self.label_next = Some(name); }
+                self.labels += 1;
+                let r = self.statement(run);
+                self.labels -= 1;
+                self.label_next = None;
+                if self.jump_label == Some(name) { (self.jump, self.jump_label) = (None, None); }
                 r
             }
             Tok::Ident(name) if !matches!(name, b"else") => {
@@ -2488,20 +2554,30 @@ impl<'a> Machine<'a> {
             _ => Err(Error::Unsupported),
         }
     }
+    /// After a loop body: the pending jump for this loop (`Some(true)` also
+    /// for a labelled jump meant for an outer statement, which stays pending
+    /// so the outer one sees it).
+    fn loop_jump(&mut self, label: Option<&'a [u8]>) -> Option<bool> {
+        match self.jump_label {
+            Some(l) if Some(l) != label => self.jump.map(|_| true),
+            _ => { self.jump_label = None; self.jump.take() }
+        }
+    }
     /// `for (init; cond; update) body` after the opening parenthesis.
     fn for_loop(&mut self, run: bool) -> Result<(), Error> {
+        let label = self.label_next.take();
         // `for ([var|let|const] name of|in expr)`?
         let at = self.pos();
         let kind = match self.tok { Tok::Ident(b"var") => Some(0), Tok::Ident(b"let") => Some(1), Tok::Ident(b"const") => Some(2), _ => None };
         if kind.is_some() { self.next()?; }
         if let Tok::Ident(name) = self.tok {
             self.next()?;
-            if let Tok::Ident(each @ (b"of" | b"in")) = self.tok { return self.for_each(run, kind.unwrap_or(0), name, None, each == b"of"); }
+            if let Tok::Ident(each @ (b"of" | b"in")) = self.tok { return self.for_each(run, kind.unwrap_or(0), name, None, each == b"of", label); }
         } else if kind.is_some() && matches!(self.tok, Tok::Punct(b'[' | b'{')) {
             // `for (const [k, v] of entries)`: a pattern bound per item.
             let pat = self.pos();
             self.pattern(None)?;
-            if let Tok::Ident(each @ (b"of" | b"in")) = self.tok { return self.for_each(run, 0, b"", Some(pat), each == b"of"); }
+            if let Tok::Ident(each @ (b"of" | b"in")) = self.tok { return self.for_each(run, 0, b"", Some(pat), each == b"of", label); }
         }
         self.restore(at);
         if self.tok == Tok::Punct(b';') { self.next()?; } else { self.statement(run)?; }
@@ -2517,7 +2593,7 @@ impl<'a> Machine<'a> {
             let go = run && self.ret.is_none() && go;
             self.statement(go)?;
             // The body statement was parsed to its end either way.
-            if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
+            if !go || self.loop_jump(label) == Some(true) { self.loops -= 1; return Ok(()); }
             self.restore(update);
             if self.tok != Tok::Punct(b')') { self.assignment(true)?; }
         }
@@ -2525,7 +2601,7 @@ impl<'a> Machine<'a> {
     /// `for (name of xs)` (array elements, string characters) and
     /// `for (name in o)` (object keys, array indices as strings), after the
     /// keyword. Items are read live, by position, as each iteration starts.
-    fn for_each(&mut self, run: bool, kind: u8, name: &'a [u8], pat: Option<Pos<'a>>, of: bool) -> Result<(), Error> {
+    fn for_each(&mut self, run: bool, kind: u8, name: &'a [u8], pat: Option<Pos<'a>>, of: bool, label: Option<&'a [u8]>) -> Result<(), Error> {
         self.next()?;
         let coll = self.expr()?;
         self.expect(b')')?;
@@ -2559,7 +2635,7 @@ impl<'a> Machine<'a> {
                 }
             }
             self.statement(go)?;
-            if !go || self.jump.take() == Some(true) { self.loops -= 1; return Ok(()); }
+            if !go || self.loop_jump(label) == Some(true) { self.loops -= 1; return Ok(()); }
             i += 1;
         }
     }
@@ -2601,7 +2677,7 @@ impl<'a> Machine<'a> {
     /// `base.key` / `base[key]` as an assignment target reads it.
     fn get_member(&mut self, base: Value, key: Key<'a>) -> Result<Value, Error> {
         match (base, key) {
-            (Value::Obj(id), k) => { let k = self.key_text(k)?; Ok(self.get_prop(id, &k)) }
+            (Value::Obj(id), k) => { let k = self.key_text(k)?; self.read_prop(id, &k) }
             (Value::Arr(id), Key::Name(b"length")) => Ok(Value::Num(self.arrays[id as usize].1 as f64)),
             (Value::Arr(_) | Value::Str(..), Key::Value(i)) => { let i = self.to_number(i); self.index(base, i) }
             _ => Err(Error::Unsupported),
@@ -2611,7 +2687,16 @@ impl<'a> Machine<'a> {
     /// appends) or an array's `length` (shrinking only).
     fn set_member(&mut self, base: Value, key: Key<'a>, v: Value) -> Result<(), Error> {
         match (base, key) {
-            (Value::Obj(id), k) => { let k = self.key_text(k)?; self.set_prop(id, &k, v) }
+            (Value::Obj(id), k) => {
+                let k = self.key_text(k)?;
+                match self.accessor(id, &k) {
+                    // A setter runs with `this` = the object; without one the
+                    // assignment is ignored, as in sloppy-mode JavaScript.
+                    Some((_, Some(f))) => { self.this_next = Some(Value::Obj(id)); self.invoke(f, &[v]).map(|_| ()) }
+                    Some((_, None)) => Ok(()),
+                    None => self.set_prop(id, &k, v),
+                }
+            }
             (Value::Arr(id), Key::Name(b"length")) => {
                 let (start, len, cap) = self.arrays[id as usize];
                 let n = self.to_number(v);
@@ -2827,7 +2912,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     let mut props = Vec::new();
     props.try_reserve_exact(PROPS).map_err(|_| Error::Limit)?;
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: [([0; NAME], 0, Value::Num(0.0)); VARS], kinds: [0; VARS], block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        funcs: [([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }); FUNCS], nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), classes: Vec::new(), accessors: Vec::new(), made_by: [0; OBJECTS], func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: [(0, 0, 0); ARRAYS], narrays: 0, props, objects: [(0, 0, 0); OBJECTS], nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

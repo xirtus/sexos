@@ -348,3 +348,18 @@ fn closures_and_function_scoped_var() {
     assert_eq!(out("function adder(k) { return function (x) { return x + k } } var add5 = adder(5); function mk(x) { return {x, get() { return x }} } document.write([1, 2].map(add5), ' ', mk(4).get(), mk(7).get())").unwrap(), "6,7 47");
     assert_eq!(out("function f() { return f } document.write(typeof f()())").unwrap(), "function", "a function returning itself is not a closure");
 }
+
+#[test]
+fn getters_and_setters() {
+    assert_eq!(out("var o = { first: 'Ada', last: 'L', get full() { return this.first + ' ' + this.last }, set full(v) { var p = v.split(' '); this.first = p[0]; this.last = p[1] } }; document.write(o.full); o.full = 'Alan T'; document.write('|', o.first, o.full)").unwrap(), "Ada L|AlanAlan T");
+    assert_eq!(out("class T { constructor() { this._c = 0 } get c() { return this._c } set c(v) { this._c = v * 2 } get() { return 'm' } } class U extends T {} var t = new U(); t.c = 5; document.write(t.c, t.get())").unwrap(), "10m");
+    assert_eq!(out("var o = { get x() { return 3 } }; o.x = 9; var get = 1; var p = {get, set: 2}; document.write(o.x, p.get, p.set)").unwrap(), "312", "no setter: the assignment is ignored");
+}
+
+#[test]
+fn labelled_break_and_continue() {
+    assert_eq!(out("outer: for (var i = 0; i < 3; i++) { for (var j = 0; j < 3; j++) { if (j == 1) continue outer; if (i == 2) break outer; document.write(i, j, ' ') } }").unwrap(), "00 10 ");
+    assert_eq!(out("var t = ''; blk: { t += 'a'; break blk; t += 'b' } var n = 0; loop1: while (true) { do { n++; if (n > 4) break loop1 } while (true) } document.write(t, n)").unwrap(), "a5");
+    assert_eq!(out("a: for (var x of [1, 2, 3]) { switch (x) { case 2: continue a; case 3: break a } document.write(x) } switch (1) { case 1: document.write('c') }").unwrap(), "1c");
+    assert_eq!(out("break nowhere").err(), Some(Error::Syntax));
+}

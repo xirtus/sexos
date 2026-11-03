@@ -1106,6 +1106,24 @@ native Quil autosave gate at both sizes: `Enter` finds `n` at 7 (wrapped),
 (`[quil.select.line] start=0 end=14 extended=0 ok=1`); Quil delete gate
 regression OK.
 
+## M34-M35. Script getters/setters; labelled break/continue (2026-11-03)
+
+- **M34 Accessors:** `get name()` / `set name(v)` in object literals and
+  classes (inherited by subclasses), run with `this` = the object. Kept in
+  a separate accessor table (32 per script) so property listing is
+  unchanged; unlike JavaScript, `Object.keys`/`JSON.stringify` do not list
+  accessor properties. Assigning to a getter-only property is ignored
+  (sloppy-mode behaviour). `get`/`set` remain usable as ordinary names.
+- **M35 Labels:** `label: statement`, `break label` (loops and plain
+  blocks), `continue label` (loops), through nested `for`, `for...of/in`,
+  `while`, `do` and `switch`. A labelled jump meant for an outer statement
+  stays pending through inner loops.
+
+**Evidence** (`docs/handoff/assets/script-accessors-labels-2026-11-03/`):
+script host tests 39 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... Zdaymode231a2a`: a class getter and a
+`continue outer`). Browser stack high water 46,752.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
