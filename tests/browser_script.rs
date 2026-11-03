@@ -285,3 +285,13 @@ fn for_of_in_defaults_rest_and_assign() {
     assert_eq!(out("function f(...a, b) {}").err(), Some(Error::Syntax));
     assert_eq!(out("var o = Object.assign({}, {a: 1}, null, {b: 2, a: 3}); var d = {x: 1}; document.write(JSON.stringify(o), Object.assign(d, {y: 2}) === d, d.y)").unwrap(), "{\"a\":3,\"b\":2}true2");
 }
+
+#[test]
+fn more_builtins_and_split_limit() {
+    assert_eq!(out("document.write([3, 1, 2].toString(), ' ', [1, 2, 3].findLast(x => x < 3), [1, 2, 3].findLastIndex(x => x > 5), ' ', [1, 2, 1].lastIndexOf(1), ' ', [1, 2].flatMap(x => [x, x * 10]))").unwrap(), "3,1,2 2-1 2 1,10,2,20");
+    assert_eq!(out("var a = [1, 2, 3, 4, 5]; var r = a.splice(1, 2, 'x', 'y'); var b = [1, 2, 3]; b.splice(1); var c = []; for (var i = 0; i < 6; i++) c.unshift(i); document.write(a, ' ', r, ' ', b, ' ', c, ' ', c.unshift(9))").unwrap(), "1,x,y,4,5 2,3 1 5,4,3,2,1,0 7");
+    assert_eq!(out("document.write(Array.of(7, 8), ' ', Object.fromEntries([['a', 1], ['b', [2]]]).b[0], ' ', 'é'.codePointAt(0), 'A'.codePointAt(0))").unwrap(), "7,8 2 23365");
+    assert_eq!(out("document.write(encodeURIComponent('a b&c/é'), ' ', decodeURIComponent('a%20b%C3%A9'))").unwrap(), "a%20b%26c%2F%C3%A9 a bé");
+    assert_eq!(out("decodeURIComponent('%E0%A4%A')").err(), Some(Error::Unsupported), "URIError");
+    assert_eq!(out(r"document.write('a-b-c'.split('-', 2), ' ', 'a1b2c'.split(/\d/, 1), ' ', 'abc'.split('', 0).length)").unwrap(), "a,b a 0");
+}

@@ -22,6 +22,8 @@
 //! regular expressions (`/a(b+)/gi`, `.test`, and `match search replace
 //! replaceAll split` with `$1`/`$&` or a callback; see `regex.rs`),
 //! `class A extends B { constructor() { super(...) } m() { super.m() } }` and `new`,
+//! `findLast findLastIndex flatMap lastIndexOf splice unshift toString`, `Array.of`,
+//! `Object.fromEntries`, `codePointAt`, `encodeURIComponent`/`decodeURIComponent`,
 //! `JSON.stringify(v)`, spread `...array` in array literals and calls,
 //! destructuring `var [a, b] = x` / `var {a, b} = o`, `null`/`undefined`, `typeof`, `n.toFixed(d)`,
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
@@ -421,7 +423,7 @@ impl<'a> Machine<'a> {
             self.next()?;
             self.depth += 1;
             // An undeclared name is "undefined" here, as in JavaScript.
-            let v = if let Tok::Ident(name) = self.tok { if self.lookup(name).is_none() && !matches!(name, b"NaN" | b"Infinity" | b"true" | b"false" | b"null" | b"undefined" | b"Math" | b"JSON" | b"Object" | b"String" | b"Number" | b"parseInt") && self.funcs[..self.nfuncs].iter().all(|(n, l, _)| &n[..*l as usize] != name) { self.next()?; Value::Undef } else { self.unary()? } } else { self.unary()? };
+            let v = if let Tok::Ident(name) = self.tok { if self.lookup(name).is_none() && !matches!(name, b"NaN" | b"Infinity" | b"true" | b"false" | b"null" | b"undefined" | b"Math" | b"JSON" | b"Object" | b"String" | b"Number" | b"parseInt" | b"encodeURIComponent" | b"decodeURIComponent") && self.funcs[..self.nfuncs].iter().all(|(n, l, _)| &n[..*l as usize] != name) { self.next()?; Value::Undef } else { self.unary()? } } else { self.unary()? };
             self.depth -= 1;
             let kind: &[u8] = match v { Value::Num(_) => b"number", Value::Str(..) => b"string", Value::Bool(_) => b"boolean", Value::Undef => b"undefined", Value::Func(_) => b"function", _ => b"object" };
             return self.store(kind);
@@ -559,11 +561,12 @@ impl<'a> Machine<'a> {
                         let sep = match sep { Some(x) => { let t = self.to_text(x)?; self.text(t).to_vec() } None => b",".to_vec() };
                         self.join(id, &sep)?
                     }
-                    b"forEach" | b"map" | b"filter" | b"find" | b"findIndex" | b"some" | b"every" | b"reduce" => {
+                    b"forEach" | b"map" | b"filter" | b"find" | b"findIndex" | b"findLast" | b"findLastIndex" | b"flatMap" | b"some" | b"every" | b"reduce" => {
                         let (args, n) = self.arguments()?;
                         self.array_callback(id, name, &args[..n])?
                     }
-                    b"indexOf" | b"includes" | b"slice" | b"concat" | b"reverse" | b"sort" | b"pop" | b"shift" | b"fill" | b"at" | b"flat" => {
+                    b"indexOf" | b"lastIndexOf" | b"includes" | b"slice" | b"concat" | b"reverse" | b"sort" | b"pop" | b"shift" | b"fill" | b"at" | b"flat"
+                    | b"toString" | b"splice" | b"unshift" => {
                         let (args, n) = self.arguments()?;
                         self.array_method(id, name, &args[..n])?
                     }
@@ -575,7 +578,7 @@ impl<'a> Machine<'a> {
             v = match name {
                 b"length" => Value::Num(self.text(s).len() as f64),
                 b"trim" | b"indexOf" | b"charAt" | b"slice" | b"substring" | b"split" | b"replace" | b"replaceAll"
-                | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"at" | b"trimStart" | b"trimEnd" => {
+                | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" => {
                     self.expect(b'(')?;
                     let mut args = [Value::Undef; 2];
                     let mut n = 0;
@@ -645,6 +648,7 @@ impl<'a> Machine<'a> {
                     if items.len() > ELEMS { return Err(Error::Limit); }
                 }
                 items.push(self.store(&text[last..])?);
+                if !matches!(arg, Value::Undef) { items.truncate(self.to_number(arg) as u32 as usize); }
                 self.new_array(&items)?
             }
             _ => {
@@ -766,6 +770,16 @@ impl<'a> Machine<'a> {
                 Value::Num(if k.is_empty() { 0.0 } else { h.windows(k.len()).position(|w| w == k).map_or(-1.0, |p| p as f64) })
             }
             b"charCodeAt" => { let i = pos(self, args[0], 0, false); if i < n { Value::Num(self.arena[start + i] as f64) } else { Value::Num(f64::NAN) } }
+            b"codePointAt" => {
+                // The UTF-8 scalar starting at byte `i` (a continuation byte or
+                // a bad sequence gives its byte value, like charCodeAt).
+                let i = pos(self, args[0], 0, false);
+                if i >= n { Value::Undef } else {
+                    let t = &self.arena[start + i..start + n];
+                    let w = match t[0] { 0xc0..=0xdf => 2, 0xe0..=0xef => 3, 0xf0..=0xf7 => 4, _ => 1 };
+                    Value::Num(t.get(..w).and_then(|c| core::str::from_utf8(c).ok()).and_then(|c| c.chars().next()).map_or(t[0] as u32, |c| c as u32) as f64)
+                }
+            }
             b"charAt" => { let i = pos(self, args[0], 0, false); if i < n { Value::Str((start + i) as u16, 1) } else { self.store(b"")? } }
             b"slice" | b"substring" => {
                 let slice = name == b"slice";
@@ -796,11 +810,12 @@ impl<'a> Machine<'a> {
                     }
                     _ => return Err(Error::Unsupported),
                 }
-                self.new_array(&items[..count])?
+                let limit = if matches!(args[1], Value::Undef) { count } else { self.to_number(args[1]) as u32 as usize };
+                self.new_array(&items[..count.min(limit)])?
             }
         })
     }
-    /// `String(x)`, `Number(x)`, `parseInt(s)`.
+    /// `String(x)`, `Number(x)`, `parseInt(s)`, `encodeURIComponent(s)`...
     fn convert(&mut self, name: &[u8]) -> Result<Value, Error> {
         self.expect(b'(')?;
         let v = if self.tok == Tok::Punct(b')') { Value::Undef } else { self.expr()? };
@@ -808,6 +823,29 @@ impl<'a> Machine<'a> {
         Ok(match name {
             b"String" => self.to_text(v)?,
             b"isNaN" => Value::Bool(self.to_number(v).is_nan()),
+            b"encodeURIComponent" => {
+                // UTF-8 bytes as %XX except JavaScript's unreserved marks.
+                let t = self.to_text(v)?;
+                let mut out = Vec::new();
+                for &b in self.text(t) {
+                    if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) { out.push(b); } else { out.extend_from_slice(&[b'%', b"0123456789ABCDEF"[(b >> 4) as usize], b"0123456789ABCDEF"[(b & 15) as usize]]); }
+                }
+                self.store(&out)?
+            }
+            b"decodeURIComponent" => {
+                // A malformed escape or non-UTF-8 result is a URIError: refused.
+                let t = self.to_text(v)?;
+                let (t, mut out, mut i) = (self.text(t).to_vec(), Vec::new(), 0);
+                while i < t.len() {
+                    if t[i] == b'%' {
+                        let hex = |c: Option<&u8>| c.and_then(|c| (*c as char).to_digit(16));
+                        let (Some(h), Some(l)) = (hex(t.get(i + 1)), hex(t.get(i + 2))) else { return Err(Error::Unsupported) };
+                        out.push((h * 16 + l) as u8); i += 3;
+                    } else { out.push(t[i]); i += 1; }
+                }
+                if core::str::from_utf8(&out).is_err() { return Err(Error::Unsupported); }
+                self.store(&out)?
+            }
             b"parseFloat" => {
                 // The longest leading decimal number, like JavaScript.
                 let t = self.to_text(v)?;
@@ -1193,6 +1231,29 @@ impl<'a> Machine<'a> {
             if x < 0.0 { 0 } else if x > len as f64 { len } else { x as usize }
         };
         Ok(match name {
+            b"lastIndexOf" => {
+                let mut found = -1.0;
+                for k in (0..len).rev() { if matches!(self.apply(b'E', self.elems[start + k], arg(0))?, Value::Bool(true)) { found = k as f64; break; } }
+                Value::Num(found)
+            }
+            b"toString" => self.join(id, b",")?,
+            b"splice" | b"unshift" => {
+                // Rebuild the contents; the array keeps its identity.
+                let (a, removed) = if name == b"unshift" { (0, 0) } else {
+                    let a = index(self, arg(0), len);
+                    let k = if args.len() < 2 { len - a } else { let d = self.to_number(arg(1)); if d.is_nan() || d < 0.0 { 0 } else { (floor(d) as usize).min(len - a) } };
+                    (a, k)
+                };
+                let insert = if name == b"unshift" { args } else { args.get(2..).unwrap_or(&[]) };
+                let old: Vec<Value> = self.elems[start..start + len].to_vec();
+                if !self.live { return Ok(if name == b"unshift" { Value::Num(len as f64) } else { Value::Undef }); }
+                let mut items: Vec<Value> = old[..a].to_vec();
+                items.extend_from_slice(insert);
+                items.extend_from_slice(&old[a + removed..]);
+                if items.len() > ELEMS { return Err(Error::Limit); }
+                self.set_items(id, &items)?;
+                if name == b"unshift" { Value::Num(items.len() as f64) } else { self.new_array(&old[a..a + removed])? }
+            }
             b"indexOf" | b"includes" => {
                 let mut found = None;
                 for k in 0..len { if matches!(self.apply(b'E', self.elems[start + k], arg(0))?, Value::Bool(true)) { found = Some(k); break; } }
@@ -1266,6 +1327,17 @@ impl<'a> Machine<'a> {
         let (_, len, _) = self.arrays[id as usize];
         let mut acc = args.get(1).copied();
         let mut kept: Vec<Value> = Vec::new();
+        if matches!(name, b"findLast" | b"findLastIndex") {
+            for k in (0..len as usize).rev() {
+                let (start, now, _) = self.arrays[id as usize];
+                let e = if k < now as usize { self.elems[start as usize + k] } else { Value::Undef };
+                self.steps += 1;
+                if self.steps > STEPS { return Err(Error::Limit); }
+                let r = self.invoke(f, &[e, Value::Num(k as f64), Value::Arr(id)])?;
+                if self.truthy(r) { return Ok(if name == b"findLast" { e } else { Value::Num(k as f64) }); }
+            }
+            return Ok(if name == b"findLast" { Value::Undef } else { Value::Num(-1.0) });
+        }
         for k in 0..len as usize {
             // JavaScript visits the length present at the start; the array may
             // have moved or shrunk, so re-read where it lives now.
@@ -1282,6 +1354,7 @@ impl<'a> Machine<'a> {
             let yes = self.truthy(r);
             match name {
                 b"map" => kept.push(r),
+                b"flatMap" => if let Value::Arr(inner) = r { let (s2, l2, _) = self.arrays[inner as usize]; kept.extend_from_slice(&self.elems[s2 as usize..s2 as usize + l2 as usize]); } else { kept.push(r) },
                 b"filter" => if yes { kept.push(e) },
                 b"find" => if yes { return Ok(e) },
                 b"findIndex" => if yes { return Ok(Value::Num(k as f64)) },
@@ -1292,7 +1365,7 @@ impl<'a> Machine<'a> {
             if kept.len() > ELEMS { return Err(Error::Limit); }
         }
         Ok(match name {
-            b"map" | b"filter" => self.new_array(&kept)?,
+            b"map" | b"filter" | b"flatMap" => self.new_array(&kept)?,
             b"find" => Value::Undef,
             b"findIndex" => Value::Num(-1.0),
             b"some" => Value::Bool(false),
@@ -1325,6 +1398,20 @@ impl<'a> Machine<'a> {
         let (start, len, cap) = self.arrays[id as usize];
         self.elems[start as usize + len as usize] = x;
         self.arrays[id as usize] = (start, len + 1, cap);
+        Ok(())
+    }
+    /// Replaces an array's contents in place, moving it when it outgrows its room.
+    fn set_items(&mut self, id: u8, items: &[Value]) -> Result<(), Error> {
+        let (mut start, _, mut cap) = self.arrays[id as usize];
+        if items.len() > cap as usize {
+            let cap2 = items.len().max(cap as usize * 2);
+            let at = self.elems.len();
+            if at + cap2 > ELEMS { return Err(Error::Limit); }
+            self.elems.resize(at + cap2, Value::Undef);
+            (start, cap) = (at as u16, cap2 as u16);
+        }
+        self.elems[start as usize..start as usize + items.len()].copy_from_slice(items);
+        self.arrays[id as usize] = (start, items.len() as u16, cap);
         Ok(())
     }
     fn join(&mut self, id: u8, sep: &[u8]) -> Result<Value, Error> {
@@ -1474,6 +1561,7 @@ impl<'a> Machine<'a> {
                         self.expect(b'.')?;
                         let Tok::Ident(f) = self.tok else { return Err(Error::Syntax) };
                         self.next()?;
+                        if (name, f) == (&b"Array"[..], &b"of"[..]) { let (args, n) = self.arguments()?; return self.new_array(&args[..n]); }
                         if (name, f) == (&b"Object"[..], &b"assign"[..]) {
                             // Copies own properties of each source onto the target.
                             let (args, n) = self.arguments()?;
@@ -1510,6 +1598,20 @@ impl<'a> Machine<'a> {
                             (b"Number", b"isInteger", _) => Ok(Value::Bool(num(self).is_some_and(|x| x.is_finite() && x == floor(x)))),
                             (b"Number", b"isFinite", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_finite))),
                             (b"Number", b"isNaN", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_nan))),
+                            (b"Object", b"fromEntries", Value::Arr(list)) => {
+                                let id = self.new_object()?;
+                                let (start, len, _) = self.arrays[list as usize];
+                                for k in 0..len as usize {
+                                    let Value::Arr(pair) = self.elems[start as usize + k] else { return Err(Error::Unsupported) };
+                                    let (ps, pl, _) = self.arrays[pair as usize];
+                                    let key = if pl > 0 { self.elems[ps as usize] } else { Value::Undef };
+                                    let value = if pl > 1 { self.elems[ps as usize + 1] } else { Value::Undef };
+                                    let key = self.to_text(key)?;
+                                    let key = self.text(key).to_vec();
+                                    self.set_prop(id, &key, value)?;
+                                }
+                                Ok(Value::Obj(id))
+                            }
                             (b"Object", b"values" | b"entries", Value::Obj(id)) => {
                                 let (start, len, _) = self.objects[id as usize];
                                 let mut items = [Value::Undef; 16];
@@ -1559,7 +1661,7 @@ impl<'a> Machine<'a> {
                         }
                         self.store(&text)
                     }
-                    b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" if self.tok == Tok::Punct(b'(') => self.convert(name),
+                    b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
                     _ => self.lookup(name)
                         .or_else(|| self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == name).map(|i| Value::Func(i as u8)))

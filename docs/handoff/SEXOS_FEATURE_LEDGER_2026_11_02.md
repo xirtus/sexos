@@ -911,6 +911,23 @@ host tests (`results_show_in_other_bases`); sealed build and master gate
 GREEN; native calc gate at 1280x800 and 1024x768 with `calc ans in hex`
 -> `= 0x100` and `calc 1/2 in bin` -> `error=NotWhole`.
 
+## M15-M16. Script array/URI builtins; `split` limit fix (2026-11-03)
+
+- **M15 Builtins:** arrays `findLast findLastIndex flatMap lastIndexOf
+  toString splice unshift` (splice/unshift keep the array's identity and
+  move it when it outgrows its room), `Array.of`, `Object.fromEntries`,
+  string `codePointAt` (UTF-8 scalar at a byte index),
+  `encodeURIComponent` / `decodeURIComponent` (a malformed escape or
+  non-UTF-8 result, a URIError in JavaScript, refuses the script). Calls
+  still take at most 4 arguments.
+- **M16 Fix:** `split(sep, limit)` ignored `limit` (string and regex
+  separators); now the result is cut to `limit` pieces.
+
+**Evidence** (`docs/handoff/assets/script-array-uri-builtins-2026-11-03/`):
+script host tests 31 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... a%20b3,1k,v`). Browser stack high water
+50,240 of 65,536 bytes.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
