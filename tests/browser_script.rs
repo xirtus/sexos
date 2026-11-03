@@ -28,7 +28,7 @@ fn numbers_print_like_javascript() {
 #[test]
 fn anything_outside_the_subset_writes_nothing() {
     for src in ["while(true){}", "document.write(1); for(;;){}", "alert(1)", "fetch('/x')", "document.cookie = 'a'",
-        "document.write(window.location)", "if (1) { while(1){} }", "var a = 1; a.foo", "if (0) x = 1", "document.write(1) document.write(2)", "var x = 'unterminated",
+        "document.write(window.location)", "if (1) { while(1){} }", "var a = 1; a.foo", "document.write(1) document.write(2)", "var x = 'unterminated",
         "document.write(1); eval('2')", "document.body.innerHTML = 'x'", "x => 1"] {
         assert!(run(src.as_bytes()).is_err(), "{src}");
     }
@@ -72,7 +72,8 @@ fn loops_run_within_the_step_budget() {
     assert_eq!(out("var t = ''; for (let i = 0; i < 3; i += 1) { for (let j = 0; j < 2; j++) t = t + i + j + ' ' } document.write(t)").unwrap(), "00 01 10 11 20 21 ");
     assert_eq!(out("var k = 0; for (;;) { k++ } document.write(k)").err(), Some(Error::Limit), "endless loop spends the budget");
     assert_eq!(out("while (true) {}").err(), Some(Error::Limit));
-    assert_eq!(out("var x = 0; while (false) { y = 1 } document.write(x)").err(), Some(Error::Unsupported), "body checked even when never run");
+    assert_eq!(out("var x = 0; while (false) { y = 1 } document.write(x)").unwrap(), "0", "a body that never runs is only parsed, as in JavaScript");
+    assert_eq!(out("var x = 0; while (false) { y = = 1 }").err(), Some(Error::Syntax), "but it must parse");
     assert_eq!(out("var x = 3; while (false) x = 9; document.write(x)").unwrap(), "3");
     assert!(out("var i = 0; while (i < 9000) i++; document.write(i)").is_ok());
     assert_eq!(out("var i = 0; while (i < 20000) i++").err(), Some(Error::Limit));
@@ -210,4 +211,19 @@ fn spread_and_destructuring() {
 #[test]
 fn char_codes() {
     assert_eq!(out("document.write('A'.charCodeAt(0), ' ', 'abc'.charCodeAt(9), ' ', String.fromCharCode(72, 105, 33), ' ', 'abc'.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 32)).join(''), ' ', String.fromCharCode(0xe9))").unwrap(), "65 NaN Hi! ABC \u{e9}");
+}
+
+#[test]
+fn block_scope_const_escapes_methods_helpers_and_exceptions() {
+    assert_eq!(out("let x = 1; { let x = 2; document.write(x) } document.write(x); for (let i = 0; i < 2; i++) {} document.write(typeof i)").unwrap(), "21undefined");
+    assert_eq!(out("const k = 1; k = 2").err(), Some(Error::Unsupported));
+    assert_eq!(out("let a = 1; let a = 2").err(), Some(Error::Syntax));
+    assert_eq!(out("document.write('\\u0041\\x42\\u{1F600}'.length, ' ', '\\u00e9')").unwrap(), "6 \u{e9}");
+    assert_eq!(out("var counter = {n: 0, inc: function () { this.n = this.n + 1; return this }, get: function () { return this.n }}; counter.inc().inc(); document.write(counter.get())").unwrap(), "2");
+    assert_eq!(out("document.write(Array.from('abc').join('-'), ' ', Array.from({length: 3}).length, ' ', [1, [2, 3], [4]].flat(), ' ', [1, 2, 3].at(-1), ' ', new_fill = 0)").err(), Some(Error::Unsupported));
+    assert_eq!(out("document.write(Array.from('abc').join('-'), ' ', [0, 0, 0].fill(7, 1), ' ', [1, [2, 3], [4]].flat(), ' ', [1, 2, 3].at(-1), ' ', 'xyz'.at(-1), '|', '  t  '.trimStart(), '|', '  t  '.trimEnd(), '|')").unwrap(), "a-b-c 0,7,7 1,2,3,4 3 z|t  |  t|");
+    assert_eq!(out("var log = ''; try { log += 'a'; throw 'boom'; log += 'never' } catch (e) { log += ' caught ' + e } finally { log += ' done' } document.write(log)").unwrap(), "a caught boom done");
+    assert_eq!(out("function risky(n) { if (n > 1) throw {code: n}; return n } var r = []; for (var i = 0; i < 3; i++) { try { r.push(risky(i)) } catch (err) { r.push('E' + err.code) } } document.write(r)").unwrap(), "0,1,E2");
+    assert_eq!(out("throw 'uncaught'").err(), Some(Error::Thrown));
+    assert_eq!(out("try { while (true) {} } catch (e) {}").err(), Some(Error::Limit), "limits are not catchable");
 }

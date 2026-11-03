@@ -739,6 +739,28 @@ per-pixel fill, bitmap and text lookups). Speeding that up means rendering
 per span instead of per pixel, a larger change across a pixel-exact
 pipeline; left as a release gate.
 
+## I1-I5. Script: block scope, escapes, methods with `this`, array helpers, exceptions (2026-11-03)
+
+- **I1.** `let`/`const` are block scoped (blocks and `for (let ...)`), shadow
+  outer names and end with their block; assigning a `const` and redeclaring
+  a `let` in the same block are refused. Code that is only checked, not run
+  (untaken branches, a loop's final test), no longer refuses names that were
+  never bound, as in JavaScript.
+- **I2.** `\xHH`, `\uHHHH` and `\u{...}` string escapes (UTF-8; `.length`
+  counts bytes in this subset).
+- **I3.** Method calls `o.f(...)` with `this` bound to `o` (also chained,
+  `return this`), `this.x = ...` assignments.
+- **I4.** `Array.from` (array, string or `{length: n}`), `.fill`, `.at`,
+  `.flat` (one level); strings `.at`, `.trimStart`, `.trimEnd`.
+- **I5.** `throw`, `try { } catch (e) { } finally { }`: thrown values reach
+  the nearest `catch` (across calls); an uncaught throw refuses the script;
+  step/size limits are not catchable.
+
+**Evidence** (`docs/handoff/assets/script-scope-this-try-2026-11-03/`): script
+host tests 21 groups; sealed build and master gate GREEN; native HTML gate at
+both sizes with a thirteenth page script writing
+`Sex 2 0/skip/2 3 undefined`; stack high water unchanged.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
