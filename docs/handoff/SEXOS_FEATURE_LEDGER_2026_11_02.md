@@ -10,7 +10,7 @@ saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
 `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
 find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
 select line.
-Spindle: Shift works; Tab completes command names; `calc` does exact decimals with `** sqrt abs min max
+Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
 
@@ -1288,6 +1288,20 @@ clipboard, service-custody, sexnet and Quil clipboard host gates pass;
 sealed build and master gate GREEN; native HTML gate at both sizes types
 `/`, `sum`, Enter (`[browser.find] query_bytes=3 start=206 end=209
 wrapped=0 found=1 selected=1`, checked against the expected text), Esc.
+
+## N14. Spindle Ctrl line editing (2026-11-03)
+
+- Shell now passes Ctrl to Spindle (bit 9 of the key word, beside Shift in
+  bit 8). Ctrl chords never insert text: `Ctrl+U` clears the line,
+  `Ctrl+W` deletes the word before the cursor, `Ctrl+L` clears the
+  scrollback, `Ctrl+R` recalls the newest history entry containing the
+  typed text and, pressed again, the next older one.
+
+**Evidence** (`docs/handoff/assets/spindle-ctrl-editing-2026-11-03/`): all
+host gates pass (sexnet, service-custody, clipboard, Quil clipboard,
+Spindle calc, app activation); sealed build and master gate GREEN; native
+Spindle gate at both sizes: `echo ab cd` + Ctrl+W (`len=8`), Ctrl+U
+(`len=0`), `0xff` + Ctrl+R recalls `calc 0xff+1` (`len=11`), Enter -> `256`.
 
 ## Release gates noted while doing F1–F2
 

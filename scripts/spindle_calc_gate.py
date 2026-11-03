@@ -50,6 +50,11 @@ def main():
   s=len(g['text']());g['q'].key('tab');g['wait'](r'\[spindle.complete\] matches=2 added=0 len=14',s)
   for _ in range(14):
    s=len(g['text']());g['q'].key('backspace');g['wait'](r'\[spindle.line.backspace\]',s)
+  # Ctrl editing: Ctrl+W drops a word, Ctrl+U the line, Ctrl+R recalls history.
+  type_line(g,'echo ab cd');g['chord']('ctrl','w',r'\[spindle.line.ctrl\] key=w len=8 cur=8')
+  g['chord']('ctrl','u',r'\[spindle.line.ctrl\] key=u len=0 cur=0')
+  type_line(g,'0xff');g['chord']('ctrl','r',r'\[spindle.line.ctrl\] key=r len=11 cur=11')
+  s=len(g['text']());g['q'].key('ret');rows.append(dict(input='0xff<Ctrl+R>',record=g['wait'](r'\[spindle.calc\] expr_bytes=6 result== 256 ok=1',s)[0]))
   # Spindle's display outbox must drain: its last batch is admitted after the last command.
   last=len(g['text']());import time as _t;d=_t.monotonic()+30
   while _t.monotonic()<d and not re.search(r'\[spindle.display.batch.admitted\]',g['text']()[last-20000 if last>20000 else 0:]):_t.sleep(.2)

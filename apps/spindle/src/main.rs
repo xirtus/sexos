@@ -460,6 +460,44 @@ fn complete_command(line: &mut CmdLine) -> bool {
     true
 }
 
+/// Ctrl+U clears the line, Ctrl+W deletes the word before the cursor,
+/// Ctrl+L clears the scrollback, Ctrl+R recalls the newest history entry
+/// containing the typed text (again: the next older one).
+fn line_control(code: u8, line: &mut CmdLine, hist: &History, sb: &mut Scrollback) {
+    // Ctrl+R: the text searched for, and the last entry recalled.
+    static mut SEARCH: ([u8; CMD_MAX], usize, [u8; CMD_MAX], usize, usize) = ([0; CMD_MAX], 0, [0; CMD_MAX], 0, 0);
+    let s = unsafe { &mut *core::ptr::addr_of_mut!(SEARCH) };
+    let key = match code {
+        0x16 => { line.clear(); "u" }
+        0x11 => {
+            let mut a = line.cur;
+            while a > 0 && line.buf[a - 1] == b' ' { a -= 1; }
+            while a > 0 && line.buf[a - 1] != b' ' { a -= 1; }
+            for _ in a..line.cur { line.delete_at(a); }
+            line.cur = a;
+            "w"
+        }
+        0x26 => { *sb = Scrollback::new(); "l" }
+        0x13 => {
+            // Continue only while the line still shows the last recalled entry.
+            if line.buf[..line.len] != s.2[..s.3] { s.0[..line.len].copy_from_slice(&line.buf[..line.len]); s.1 = line.len; s.4 = 0; }
+            let needle = &s.0[..s.1];
+            let count = (hist.total as usize).min(MAX_HISTORY);
+            let found = (s.4..count).find(|&i| hist.get(i).is_some_and(|e| needle.is_empty() || e.windows(needle.len()).any(|w| w == needle)));
+            if let Some(i) = found {
+                let entry = hist.get(i).unwrap_or(b"");
+                line.clear();
+                for &b in entry { line.insert_at(line.len, b); }
+                s.2[..line.len].copy_from_slice(&line.buf[..line.len]); s.3 = line.len; s.4 = i + 1;
+            }
+            "r"
+        }
+        _ => "other",
+    };
+    line.hist_nav = None;
+    sex_pdx::serial_record!("[spindle.line.ctrl] key={} len={} cur={}", key, line.len, line.cur);
+}
+
 /// Accept the current ghost suggestion (if any) into the live command line.
 fn ghost_accept(line: &mut CmdLine, hist: &History) -> bool {
     if let Some((suffix, slen)) = ghost_suffix(line, hist) {
@@ -2577,6 +2615,12 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             if value != 1 { continue; }
+            // Ctrl chords edit the line; they never insert text.
+            if (msg.arg0 >> 9) & 1 == 1 {
+                line_control(scancode, &mut line, hist, sb);
+                unsafe { content_render(&line, sb); }
+                continue;
+            }
 
             // On Enter, record command, persist, dispatch, and optionally Bell-notify.
             if scancode == 0x1C && line.len > 0 {

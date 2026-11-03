@@ -16277,7 +16277,8 @@ fn spindle_active_frame()->Option<(u32,u64)>{
 /// Spindle key word: scancode in bits 0..8, held Shift in bit 8 (the same
 /// bit as sex_pdx::app_key::Key::wire). Shift is presentation state from the
 /// Shell's own modifier tracking; it carries no authority.
-fn spindle_key_word(scancode:u8)->u64{scancode as u64|(unsafe{APP_MODIFIERS.key(scancode).shift} as u64)<<8}
+/// Scancode with Shift (bit 8) and Ctrl (bit 9) for Spindle's line editor.
+fn spindle_key_word(scancode:u8)->u64{let key=unsafe{APP_MODIFIERS.key(scancode)};scancode as u64|(key.shift as u64)<<8|(key.control as u64)<<9}
 fn spindle_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_SPINDLE||spindle_activation_info(false).is_ok_and(|info|info.state==2&&app_catalog::by_surface(info.successor,info.surface).is_some_and(|row|FOCUSED_SURFACE_ID==row.frame()))}}
 fn spindle_route_slot()->u64{app_route_slot(app_catalog::App::Spindle,SLOT_SPINDLE)}
 
