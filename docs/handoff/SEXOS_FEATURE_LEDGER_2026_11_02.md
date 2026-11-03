@@ -645,6 +645,23 @@ GREEN; native HTML gate at both sizes with
 `[input: Search notes] [x] exact [button: Find]` and `x^2 LC(Long Count)`;
 native calc gate at both sizes with `calc max(2,9)` -> `= 9`.
 
+## G12-G15. Script: number/object helpers, `in`/`delete`, spread, destructuring (2026-11-03)
+
+- **G12.** `Number.isInteger/isFinite/isNaN`, `isNaN()`, `parseFloat()` (the
+  longest leading decimal number), `n.toString(radix)` for whole numbers
+  (fractions in other bases are refused).
+- **G13.** `Object.values/entries`, `Array.isArray`, the `in` operator on
+  objects and array indexes, and `delete o.key`.
+- **G14.** Spread `...array` in array literals, function calls and `Math`
+  calls (array literals up to 32 items).
+- **G15.** Destructuring declarations `var [a, b] = array` and
+  `var {x, y} = object` (missing items are `undefined`).
+
+**Evidence** (`docs/handoff/assets/script-spread-destructure-2026-11-03/`):
+script host tests 19 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes with an eleventh page script writing
+`9 9 hex ff true truefalse 5`; stack high water unchanged.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

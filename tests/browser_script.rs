@@ -191,3 +191,18 @@ fn function_values_arrows_and_callbacks() {
     assert_eq!(out("var a = [1]; a.forEach(n => a.push(n)); document.write(a.length)").unwrap(), "2", "visits the elements present at the start, like JavaScript");
     assert_eq!(out("[3].sort(5)").err(), Some(Error::Unsupported));
 }
+
+#[test]
+fn number_helpers_object_helpers_in_and_delete() {
+    assert_eq!(out("document.write(Number.isInteger(5), Number.isInteger(5.5), Number.isFinite(1 / 0), Number.isNaN('x'), isNaN('x'), ' ', parseFloat('3.25kg'), ' ', parseFloat('.5'), ' ', parseFloat('x'), ' ', (255).toString(16), ' ', (-10).toString(2), ' ', (1.5).toString())").unwrap(), "truefalsefalsefalsetrue 3.25 0.5 NaN ff -1010 1.5");
+    assert_eq!(out("var o = {a: 1, b: 2}; delete o.a; document.write('a' in o, 'b' in o, ' ', Object.values(o), ' ', JSON.stringify(Object.entries({x: 1, y: 'z'})), ' ', Array.isArray([]), Array.isArray(o), ' ', 1 in [5, 6], 2 in [5, 6])").unwrap(), "falsetrue 2 [[\"x\",1],[\"y\",\"z\"]] truefalse truefalse");
+    assert_eq!(out("document.write((1.5).toString(2))").err(), Some(Error::Unsupported));
+}
+
+#[test]
+fn spread_and_destructuring() {
+    assert_eq!(out("var a = [3, 9, 1]; var b = [0, ...a, 10]; function sum3(x, y, z) { return x + y + z } document.write(b, ' ', Math.max(...a), ' ', sum3(...a), ' ', [...'ab'.split('')].length)").unwrap(), "0,3,9,1,10 9 13 2");
+    assert_eq!(out("var [first, second, third] = [1, 2]; var {name, age} = {name: 'Ann', x: 1}; document.write(first, second, third, ' ', name, ' ', age)").unwrap(), "12undefined Ann undefined");
+    assert_eq!(out("var [x] = 5").err(), Some(Error::Unsupported));
+    assert_eq!(out("[...5]").err(), Some(Error::Unsupported));
+}
