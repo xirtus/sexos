@@ -1204,6 +1204,25 @@ script host tests 42 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... 98,765.432 0.012`). High water 58,472 bytes
 (the floor-refused recursion; bound 60 KiB).
 
+## N7-N8. HTML entities; script stack floor reserve 10 KiB (2026-11-03)
+
+- **N7** The HTML reader decodes the full Latin-1 letter set (`&eacute;`,
+  `&szlig;`, `&AElig;`, ...), Greek letters (`&alpha;`..`&omega;`, capitals,
+  `&sigmaf;`), and about 90 other common named references (math
+  `&le; &ge; &ne; &infin; &sum;`, arrows, `&check;`, `&dagger;`, card suits,
+  typographic spaces and quotes); `&zwj; &zwnj; &lrm; &rlm;` vanish like
+  `&shy;`. Unknown names stay literal. (Whether a glyph draws depends on
+  the reader font; the native reader pixel oracle only checks ASCII, so the
+  gate page stays ASCII and the entities are covered by the host test.)
+- **N8** The script stack floor moved from 8 to 10 KiB above the stack
+  bottom: a recursion refused at the floor now peaks at 56,784 bytes
+  (was 58,472), leaving more room under the gate's 60 KiB bound.
+
+**Evidence** (`docs/handoff/assets/html-entities-stack-floor-10k-2026-11-03/`):
+host test `latin1_greek_and_symbol_entities` (tests/browser_html_text.rs,
+25 tests); sealed build and master gate GREEN; native HTML gate at both
+sizes (`floor_offset=10240 hits=1`, high water 56,784).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

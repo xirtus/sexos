@@ -151,7 +151,7 @@ def main():
   conv=wait(rf'\[browser.html.converted\] source_bytes={len(PAGE)} text_bytes={len(text)} links={links} truncated={cut} scripts_run=15 scripts_refused=3 ticks=\d+',b);checks['converted']=conv[0]
   hw=wait(r'\[browser.stack.high_water\] bytes=(\d+) mapped=65536 painted_at=\d+ untouched=\d+',b);checks['stack_high_water']=int(hw[1])
   if int(hw[1])>60*1024:raise RuntimeError(f'Browser stack high water {hw[1]} leaves under 4 KiB')
-  fl=wait(r'\[browser.script.stack_floor\] floor_offset=8192 hits=(\d+)',b);checks['script_stack_floor_hits']=int(fl[1])
+  fl=wait(r'\[browser.script.stack_floor\] floor_offset=10240 hits=(\d+)',b);checks['script_stack_floor_hits']=int(fl[1])
   def reader(name,text,request,path):
    shot=out/(name+'.ppm');result=dict(ok=False,errors=['no frame']);deadline=time.monotonic()+25
    while time.monotonic()<deadline:

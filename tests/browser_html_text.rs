@@ -184,3 +184,9 @@ fn declared_latin_charset_becomes_utf8() {
     let c = convert(utf8.as_bytes(), &mut out);
     assert_eq!(std::str::from_utf8(&out[..c.len]).unwrap(), "caf\u{e9}", "undeclared pages are UTF-8");
 }
+
+#[test]
+fn latin1_greek_and_symbol_entities() {
+    let (t, _) = text("<p>&eacute;&Eacute;&ntilde;&szlig;&AElig;&yuml;&ETH; &le;&ge;&ne; &micro; &alpha;&pi;&Omega;&sigmaf; &check;&infin;&frac14;&sup2;&dagger;&hearts; a&shy;b &bogus; &Sigmaf;</p>", 512);
+    assert_eq!(t.trim(), "éÉñßÆÿÐ ≤≥≠ µ απΩς ✓∞¼²†♥ ab &bogus; &Sigmaf;");
+}

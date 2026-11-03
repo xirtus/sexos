@@ -168,12 +168,27 @@ fn entity(input: &[u8], out: &mut [u8; 4]) -> Option<(usize, usize)> {
             b"cent" => 0xa2, b"sect" => 0xa7, b"para" => 0xb6, b"reg" => 0xae, b"trade" => 0x2122,
             b"larr" => 0x2190, b"rarr" => 0x2192, b"uarr" => 0x2191, b"darr" => 0x2193, b"plusmn" => 0xb1,
             b"frac12" => 0xbd, b"laquo" => 0xab, b"raquo" => 0xbb, b"iexcl" => 0xa1, b"iquest" => 0xbf,
-            b"shy" => return Some((0, end + 1)), _ => return None,
+            b"shy" | b"zwnj" | b"zwj" | b"lrm" | b"rlm" => return Some((0, end + 1)),
+            _ => named(name)?,
         }
     };
     // Controls and surrogates are not readable text.
     let ch = char::from_u32(code).filter(|c| !c.is_control() || *c == '\n')?;
     Some((ch.encode_utf8(out).len(), end + 1))
+}
+
+/// Latin-1 letters U+00C0..U+00FF by entity name (the two operators too).
+const LATIN1: [&[u8]; 64] = [b"Agrave", b"Aacute", b"Acirc", b"Atilde", b"Auml", b"Aring", b"AElig", b"Ccedil", b"Egrave", b"Eacute", b"Ecirc", b"Euml", b"Igrave", b"Iacute", b"Icirc", b"Iuml", b"ETH", b"Ntilde", b"Ograve", b"Oacute", b"Ocirc", b"Otilde", b"Ouml", b"times", b"Oslash", b"Ugrave", b"Uacute", b"Ucirc", b"Uuml", b"Yacute", b"THORN", b"szlig", b"agrave", b"aacute", b"acirc", b"atilde", b"auml", b"aring", b"aelig", b"ccedil", b"egrave", b"eacute", b"ecirc", b"euml", b"igrave", b"iacute", b"icirc", b"iuml", b"eth", b"ntilde", b"ograve", b"oacute", b"ocirc", b"otilde", b"ouml", b"divide", b"oslash", b"ugrave", b"uacute", b"ucirc", b"uuml", b"yacute", b"thorn", b"yuml"];
+/// Greek lower case U+03B1..U+03C9 (`sigmaf` is U+03C2); capitalised names are
+/// U+0391.. (there is no capital final sigma).
+const GREEK: [&[u8]; 25] = [b"alpha", b"beta", b"gamma", b"delta", b"epsilon", b"zeta", b"eta", b"theta", b"iota", b"kappa", b"lambda", b"mu", b"nu", b"xi", b"omicron", b"pi", b"rho", b"sigmaf", b"sigma", b"tau", b"upsilon", b"phi", b"chi", b"psi", b"omega"];
+/// Other common named references.
+const NAMED: [(&[u8], u32); 89] = [(b"le", 0x2264), (b"ge", 0x2265), (b"ne", 0x2260), (b"micro", 0xb5), (b"check", 0x2713), (b"infin", 0x221e), (b"minus", 0x2212), (b"asymp", 0x2248), (b"equiv", 0x2261), (b"sum", 0x2211), (b"prod", 0x220f), (b"radic", 0x221a), (b"part", 0x2202), (b"nabla", 0x2207), (b"isin", 0x2208), (b"notin", 0x2209), (b"cap", 0x2229), (b"cup", 0x222a), (b"forall", 0x2200), (b"exist", 0x2203), (b"empty", 0x2205), (b"harr", 0x2194), (b"rArr", 0x21d2), (b"lArr", 0x21d0), (b"hArr", 0x21d4), (b"uArr", 0x21d1), (b"dArr", 0x21d3), (b"crarr", 0x21b5), (b"sup1", 0xb9), (b"sup2", 0xb2), (b"sup3", 0xb3), (b"frac14", 0xbc), (b"frac34", 0xbe), (b"ensp", 0x2002), (b"emsp", 0x2003), (b"thinsp", 0x2009), (b"dagger", 0x2020), (b"Dagger", 0x2021), (b"permil", 0x2030), (b"prime", 0x2032), (b"Prime", 0x2033), (b"lsaquo", 0x2039), (b"rsaquo", 0x203a), (b"sbquo", 0x201a), (b"bdquo", 0x201e), (b"loz", 0x25ca), (b"spades", 0x2660), (b"clubs", 0x2663), (b"hearts", 0x2665), (b"diams", 0x2666), (b"curren", 0xa4), (b"brvbar", 0xa6), (b"uml", 0xa8), (b"ordf", 0xaa), (b"ordm", 0xba), (b"macr", 0xaf), (b"acute", 0xb4), (b"cedil", 0xb8), (b"oline", 0x203e), (b"frasl", 0x2044), (b"lowast", 0x2217), (b"sim", 0x223c), (b"cong", 0x2245), (b"sub", 0x2282), (b"sup", 0x2283), (b"perp", 0x22a5), (b"sdot", 0x22c5), (b"lceil", 0x2308), (b"rceil", 0x2309), (b"lfloor", 0x230a), (b"rfloor", 0x230b), (b"lang", 0x27e8), (b"rang", 0x27e9), (b"OElig", 0x152), (b"oelig", 0x153), (b"Scaron", 0x160), (b"scaron", 0x161), (b"Yuml", 0x178), (b"fnof", 0x192), (b"circ", 0x2c6), (b"tilde", 0x2dc), (b"star", 0x2606), (b"starf", 0x2605), (b"cross", 0x2717), (b"hyphen", 0x2010), (b"ang", 0x2220), (b"there4", 0x2234), (b"prop", 0x221d), (b"int", 0x222b)];
+fn named(name: &[u8]) -> Option<u32> {
+    if let Some(i) = LATIN1.iter().position(|n| *n == name) { return Some(0xC0 + i as u32); }
+    if let Some(i) = GREEK.iter().position(|n| *n == name) { return Some(0x3B1 + i as u32); }
+    if let Some(i) = GREEK.iter().position(|n| n.len() == name.len() && n[0].to_ascii_uppercase() == name[0] && n[1..] == name[1..]) { return (i != 17).then_some(0x391 + i as u32); }
+    NAMED.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
 }
 
 const INLINE: [(&[u8], u8); 7] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_'), (b"cite", b'_')];
