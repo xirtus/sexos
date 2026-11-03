@@ -35,7 +35,7 @@
 //! object literals with shorthand, methods, `[computed]` keys and `...spread`, `null`/`undefined`, `typeof`, `n.toFixed(d)`,
 //! strings (`.length`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`,
 //! `.indexOf(s)`, `.charAt(i)`, `.slice(a, b)`, `.substring(a, b)`,
-//! `.split(s)`), `String(x)`, `Number(x)`, `parseInt(s)` and
+//! `.split(s)`), `String(x)`, `Number(x)`, `Boolean(x)` (also as callbacks: `xs.map(Number)`), `parseInt(s)` and
 //! `Math.floor/ceil/round/trunc/sign/abs/min/max/sqrt/pow` and `Math.PI`
 //! (no `Math.random`: a script holds no entropy source). Numbers are IEEE doubles printed the
 //! way JavaScript prints ordinary values; `+` with a string concatenates.
@@ -61,6 +61,8 @@ const FUNCS: usize = 16;
 /// sets (environments) they carry; `Value::Func(FUNCS + k)` is closure k.
 const CLOSURES: usize = 32;
 const ENVS: usize = 8;
+/// `String`, `Number` and `Boolean` used as function values (`xs.map(Number)`).
+const BUILTIN_FUNCS: u8 = 250;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
 const ELEMS: usize = 256;
 const ARRAYS: usize = 32;
@@ -476,7 +478,7 @@ impl<'a> Machine<'a> {
             self.next()?;
             self.depth += 1;
             // An undeclared name is "undefined" here, as in JavaScript.
-            let v = if let Tok::Ident(name) = self.tok { if self.lookup(name).is_none() && !matches!(name, b"NaN" | b"Infinity" | b"true" | b"false" | b"null" | b"undefined" | b"Math" | b"JSON" | b"Object" | b"String" | b"Number" | b"parseInt" | b"encodeURIComponent" | b"decodeURIComponent") && self.funcs[..self.nfuncs].iter().all(|(n, l, _)| &n[..*l as usize] != name) { self.next()?; Value::Undef } else { self.unary()? } } else { self.unary()? };
+            let v = if let Tok::Ident(name) = self.tok { if self.lookup(name).is_none() && !matches!(name, b"NaN" | b"Infinity" | b"true" | b"false" | b"null" | b"undefined" | b"Math" | b"JSON" | b"Object" | b"String" | b"Number" | b"Boolean" | b"parseInt" | b"encodeURIComponent" | b"decodeURIComponent") && self.funcs[..self.nfuncs].iter().all(|(n, l, _)| &n[..*l as usize] != name) { self.next()?; Value::Undef } else { self.unary()? } } else { self.unary()? };
             self.depth -= 1;
             let kind: &[u8] = match v { Value::Num(_) => b"number", Value::Str(..) => b"string", Value::Bool(_) => b"boolean", Value::Undef => b"undefined", Value::Func(_) => b"function", _ => b"object" };
             return self.store(kind);
@@ -906,6 +908,7 @@ impl<'a> Machine<'a> {
         Ok(match name {
             b"String" => self.to_text(v)?,
             b"isNaN" => Value::Bool(self.to_number(v).is_nan()),
+            b"Boolean" => Value::Bool(self.truthy(v)),
             b"encodeURIComponent" => {
                 // UTF-8 bytes as %XX except JavaScript's unreserved marks.
                 let t = self.to_text(v)?;
@@ -1892,7 +1895,8 @@ impl<'a> Machine<'a> {
                     b"Date" if self.tok == Tok::Punct(b'.') => self.date_static(),
                     b"JSON" | b"Object" | b"Array" | b"Number" if self.tok == Tok::Punct(b'.') => self.statics(name),
                     b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
-                    b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" if self.tok == Tok::Punct(b'(') => self.convert(name),
+                    b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" | b"Boolean" if self.tok == Tok::Punct(b'(') => self.convert(name),
+                    b"String" | b"Number" | b"Boolean" if self.lookup(name).is_none() => Ok(Value::Func(BUILTIN_FUNCS + match name { b"String" => 0, b"Number" => 1, _ => 2 })),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
                     // `n++` / `n--` in an expression: the old value (a `++` on
                     // the next line starts a new statement instead).
@@ -1971,6 +1975,14 @@ impl<'a> Machine<'a> {
     /// an expression body return that expression.
     fn invoke(&mut self, f: u8, args: &[Value]) -> Result<Value, Error> {
         let receiver = self.this_next.take().unwrap_or(Value::Undef);
+        if f >= BUILTIN_FUNCS {
+            let v = args.first().copied().unwrap_or(Value::Undef);
+            return Ok(match f - BUILTIN_FUNCS {
+                0 => if args.is_empty() { self.store(b"")? } else { self.to_text(v)? },
+                1 => Value::Num(if args.is_empty() { 0.0 } else { self.to_number(v) }),
+                _ => Value::Bool(self.truthy(v)),
+            });
+        }
         if self.depth >= MAX_DEPTH { return Err(Error::Limit); }
         self.depth += 1;
         let back = self.pos();

@@ -363,3 +363,9 @@ fn labelled_break_and_continue() {
     assert_eq!(out("a: for (var x of [1, 2, 3]) { switch (x) { case 2: continue a; case 3: break a } document.write(x) } switch (1) { case 1: document.write('c') }").unwrap(), "1c");
     assert_eq!(out("break nowhere").err(), Some(Error::Syntax));
 }
+
+#[test]
+fn builtin_conversions_as_function_values() {
+    assert_eq!(out("var f = Number; document.write([1, 2, 3].map(String).join('-'), ' ', ['1', '2.5'].map(Number), ' ', [0, 'a', '', null, 3].filter(Boolean), ' ', Boolean(''), Boolean('x'), typeof String, typeof Boolean, ' ', f('7') + 1)").unwrap(), "1-2-3 1,2.5 a,3 falsetruefunctionfunction 8");
+    assert_eq!(out("var String = 5; document.write(String)").unwrap(), "5", "a script's own binding wins");
+}

@@ -1124,6 +1124,20 @@ script host tests 39 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... Zdaymode231a2a`: a class getter and a
 `continue outer`). Browser stack high water 46,752.
 
+## M36. Script `String`/`Number`/`Boolean` as function values (2026-11-03)
+
+- `String`, `Number` and `Boolean` can be passed and stored as functions
+  (`xs.map(Number)`, `xs.filter(Boolean)`, `var f = Number`), and
+  `Boolean(x)` converts. A script's own binding of the same name wins.
+  `parseInt` is deliberately not a function value: `map(parseInt)` relies
+  on JavaScript passing the index as a radix, which the subset does not
+  model.
+
+**Evidence** (`docs/handoff/assets/script-builtin-function-values-2026-11-03/`):
+script host tests 40 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... Zdaymode231a2a6`). Browser stack high water
+46,752.
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with
