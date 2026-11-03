@@ -1601,6 +1601,17 @@ script host tests 50 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`big 79800 40 521 1232`, `scripts_run=17
 scripts_refused=3`, floor hits 1, high water 56,016).
 
+## Q4. HTML table header rule (2026-11-03)
+
+- A table row made only of `<th>` cells is followed by a rule under the
+  aligned columns (`------+-----`, `-+-` between columns). If a table cannot
+  be aligned (no room), the rule stays a short `-` line.
+
+**Evidence** (`docs/handoff/assets/html-table-header-rule-2026-11-03/`):
+html text host tests 28 (three table expectations updated for the rule);
+sealed build and master gate GREEN; native HTML gate at both sizes
+(`name  | port` / `------+-----` / `dns   | 53` / `https | 443`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

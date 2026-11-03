@@ -77,9 +77,9 @@ fn malformed_markup_terminates() {
 #[test]
 fn table_cells_are_separated() {
     let (t, _) = text("<table><tr><th>k</th><th>v</th></tr><tr><td>a</td><td>1</td></tr></table>", 256);
-    assert_eq!(t, "k | v\na | 1");
+    assert_eq!(t, "k | v\n--+--\na | 1");
     let (t, _) = text("<table><tr><th>name</th><th>size</th><th>kind</th></tr><tr><td>Quil</td><td>12 KiB</td><td>editor</td></tr><tr><td>Spindle shell</td><td>8</td></tr></table><p>after</p>", 512);
-    assert_eq!(t, "name          | size   | kind\nQuil          | 12 KiB | editor\nSpindle shell | 8\n\nafter");
+    assert_eq!(t, "name          | size   | kind\n--------------+--------+-------\nQuil          | 12 KiB | editor\nSpindle shell | 8\n\nafter");
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn list_paragraphs_marker_styles_media_and_preformatted_code() {
 #[test]
 fn table_captions_and_implicit_row_ends() {
     let (t, _) = text("<table><caption>Prices</caption><thead><tr><th>Item</th><th>Cost</th></tr></thead><tbody><tr><td>Tea</td><td>2</td></tr><tr><td>Coffee</td><td>3</td></tr></tbody></table><table><tr><td>a<td>b<tr><td>longer cell<td>x</table>", 512);
-    assert_eq!(t.trim(), "Prices\nItem   | Cost\nTea    | 2\nCoffee | 3\n\na           | b\nlonger cell | x");
+    assert_eq!(t.trim(), "Prices\nItem   | Cost\n-------+-----\nTea    | 2\nCoffee | 3\n\na           | b\nlonger cell | x");
 }
 
 #[test]

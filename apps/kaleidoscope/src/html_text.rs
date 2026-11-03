@@ -83,7 +83,7 @@ impl<'a> Output<'a> {
     /// Pad the ` | `-separated cells written since `start` into columns.
     /// Skipped if the padding would not fit; widths count characters.
     fn align_columns(&mut self, start: usize) {
-        if self.truncated || start >= self.len { return; }
+        if self.truncated || start >= self.len { self.plain_rules(start); return; }
         let text = &self.buf[start..self.len];
         let width = |cell: &[u8]| cell.iter().filter(|b| **b & 0xc0 != 0x80).count();
         let mut widths = [0usize; 16];
@@ -92,8 +92,14 @@ impl<'a> Output<'a> {
             for (k, cell) in cells.iter().enumerate().take(16) { widths[k] = widths[k].max(width(cell)); }
         }
         let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let columns = text.split(|b| *b == b'\n').map(|l| split_cells(l).len()).max().unwrap_or(0).min(16);
         for (n, line) in text.split(|b| *b == b'\n').enumerate() {
             if n > 0 { out.push(b'\n'); }
+            if line == [HEADER_RULE] {
+                // Under a header row: dashes per column, `-+-` between.
+                for k in 0..columns { if k > 0 { out.extend_from_slice(b"-+-"); } for _ in 0..widths[k].max(1) { out.push(b'-'); } }
+                continue;
+            }
             let cells = split_cells(line);
             let last = cells.len().saturating_sub(1);
             for (k, cell) in cells.iter().enumerate() {
@@ -102,9 +108,13 @@ impl<'a> Output<'a> {
                 if k < last && k < 16 { for _ in width(cell)..widths[k] { out.push(b' '); } }
             }
         }
-        if start + out.len() > self.room() { return; }
+        if start + out.len() > self.room() { self.plain_rules(start); return; }
         self.buf[start..start + out.len()].copy_from_slice(&out);
         self.len = start + out.len();
+    }
+    /// Unaligned tables keep a short plain rule under header rows.
+    fn plain_rules(&mut self, start: usize) {
+        for b in &mut self.buf[start.min(self.len)..self.len] { if *b == HEADER_RULE { *b = b'-'; } }
     }
     fn finish(mut self) -> (usize, bool) {
         while self.len > 0 && self.buf[self.len - 1] == b'\n' { self.len -= 1; }
@@ -207,6 +217,8 @@ fn named(name: &[u8]) -> Option<u32> {
 const INLINE: [(&[u8], u8); 7] = [(b"code", b'`'), (b"kbd", b'`'), (b"strong", b'*'), (b"b", b'*'), (b"em", b'_'), (b"i", b'_'), (b"cite", b'_')];
 /// Two-character markers: highlighted, deleted and inserted text.
 const INLINE2: [(&[u8], &[u8]); 6] = [(b"mark", b"=="), (b"del", b"~~"), (b"s", b"~~"), (b"strike", b"~~"), (b"ins", b"++"), (b"u", b"__")];
+/// Marks a rule line under a table header row until columns are aligned.
+const HEADER_RULE: u8 = 0x01;
 const MEDIA: [&[u8]; 3] = [b"video", b"audio", b"iframe"];
 const SKIP: [&[u8]; 5] = [b"style", b"head", b"template", b"noscript", b"svg"];
 const BLOCK: [&[u8]; 19] = [b"p", b"div", b"section", b"article", b"header", b"footer", b"main", b"nav", b"ul", b"ol", b"table", b"blockquote", b"pre", b"hr", b"dl", b"form", b"details", b"fieldset", b"figure"];
@@ -247,6 +259,8 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
     let mut abbr: Option<(usize, usize)> = None;
     // Output offset where the open (outermost) table's rows begin.
     let mut table: Option<usize> = None;
+    // The open table row: cells so far, and whether all were header cells.
+    let (mut row_cells, mut row_all_th) = (0u8, true);
     let mut depth = 0usize;
     if let Some(title) = title(html) {
         o.bytes(b"Title:");
@@ -325,11 +339,15 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
             } else if name_is(name, b"tr") {
                 // A row ends at `</tr>` or at the next `<tr>` (the end tag is optional).
                 if end_tag || o.newlines == 0 { o.line(false); }
+                if row_cells > 0 && row_all_th && table.is_some() { o.raw(&[HEADER_RULE]); o.line(false); }
+                (row_cells, row_all_th) = (0, true);
             } else if name_is(name, b"caption") {
                 // The caption is its own line above the rows (not a column).
                 o.line(false);
                 if end_tag && table.is_some() { table = Some(o.len); }
             } else if (name_is(name, b"td") || name_is(name, b"th")) && !end_tag {
+                row_cells = row_cells.saturating_add(1);
+                if name_is(name, b"td") { row_all_th = false; }
                 if o.newlines == 0 { o.bytes(b" |"); o.space = true; }
             } else if BLOCK.iter().any(|n| name_is(name, n)) {
                 o.pre = false;
@@ -339,6 +357,7 @@ pub fn convert(html: &[u8], out: &mut [u8]) -> Converted {
                 // line, and blocks inside lists are not spaced apart.
                 if !(o.marker && !end_tag && !list) { o.line(!(depth > usize::from(end_tag && list))); }
                 if name_is(name, b"table") {
+                    (row_cells, row_all_th) = (0, true);
                     if !end_tag { table = Some(o.len); } else if let Some(start) = table.take() { o.align_columns(start); }
                 } else if name_is(name, b"ol") || name_is(name, b"ul") {
                     if end_tag { depth = depth.saturating_sub(1); }
