@@ -63,6 +63,7 @@ unsafe fn quil_find_prev() {}
 unsafe fn quil_select_line() {}
 unsafe fn quil_move_line(_up: bool) {}
 unsafe fn quil_duplicate_line() {}
+unsafe fn quil_kill_or_join(_join: bool) {}
 unsafe fn quil_indent(_range: (usize, usize), _out: bool) -> bool { false }
 static mut QUIL_GOTO: Option<u32> = None;
 unsafe fn quil_goto_line(_line: u32) {}

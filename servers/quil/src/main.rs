@@ -378,6 +378,7 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
                 0x13=>{if QUIL_CLIPBOARD.pending(){QUIL_CLIPBOARD.cancel(sex_pdx::get_ticks());QUIL_CLIPBOARD_NOTICE=true;QUIL_CLIPBOARD_ERROR=None;}document_action(sex_pdx::document_view::QUIESCE,palette_active,selected_row);},
                 0x4b|0x4d|0x47|0x4f if !QUIL_NAME_MODE&&!*palette_active=>quil_word_move(key.code,key.shift),
                 0x26 if !QUIL_NAME_MODE&&!*palette_active=>quil_select_line(),
+                0x25|0x24 if !QUIL_NAME_MODE&&!*palette_active=>quil_kill_or_join(key.code==0x24),
                 0x48|0x50 if !QUIL_NAME_MODE&&!*palette_active=>quil_move_line(key.code==0x48),
                 // Ctrl+] indents and Ctrl+[ outdents the selected lines (Tab is the desktop's).
                 0x1b|0x1a if !QUIL_NAME_MODE&&!*palette_active=>{if let Some(s)=QUIL_SELECTION.snapshot(){if quil_indent(s.range(),key.code==0x1a){draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}},
@@ -399,8 +400,9 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
         let movement=match key.code {
             0x4b=>Some(QUIL_SELECTION.move_to(source,if !key.shift&&snapshot.range().0!=snapshot.range().1{snapshot.range().0}else{sex_pdx::text_encoding::previous(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret())},key.shift)),
             0x4d=>Some(QUIL_SELECTION.move_to(source,if !key.shift&&snapshot.range().0!=snapshot.range().1{snapshot.range().1}else{sex_pdx::text_encoding::next(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret())},key.shift)),
-            0x47=>Some(QUIL_SELECTION.home(source,key.shift)),
-            0x4f=>Some(QUIL_SELECTION.end(source,key.shift)),
+            // The caret's line; Ctrl+Home/End go to the ends of the document.
+            0x47=>Some(QUIL_SELECTION.move_to(source,view::line_start(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret()),key.shift)),
+            0x4f=>Some(QUIL_SELECTION.move_to(source,view::line_end(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret()),key.shift)),
             0x48|0x50|0x49|0x51=>{
                 let steps=if key.code==0x49||key.code==0x51{DOCUMENT_VIEW.body_rows().max(1)}else{1};
                 let next=view::vertical_steps(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret(),DOCUMENT_VIEW.cols,&mut QUIL_GOAL_COL,key.code==0x48||key.code==0x49,steps).unwrap_or(snapshot.caret());
@@ -554,6 +556,24 @@ unsafe fn quil_indent(range: (usize, usize), out: bool) -> bool {
     }
     sex_pdx::serial_record!("[quil.indent] lines={} out={} start={} end={} applied={} len={}", lines, out as u8, start, start + n, applied as u8, QUIL_BUFFER_LEN);
     applied
+}
+/// Ctrl+K deletes from the caret to the end of its line (at the end, the
+/// line break); Ctrl+J joins the next line onto this one with one space
+/// (its leading spaces and tabs dropped). Each is one undoable edit.
+unsafe fn quil_kill_or_join(join: bool) {
+    let Some(snapshot) = QUIL_SELECTION.snapshot() else { return };
+    let text = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+    let caret = snapshot.caret();
+    let end = text[caret..].iter().position(|c| *c == b'\n').map_or(text.len(), |k| caret + k);
+    let (range, insert): ((usize, usize), &[u8]) = if join {
+        if end == text.len() { sex_pdx::serial_record!("[quil.line.join] applied=0 reason=last_line"); return; }
+        let next = end + 1 + text[end + 1..].iter().take_while(|c| matches!(**c, b' ' | b'\t')).count();
+        ((end, next), if end > 0 && text[end - 1] != b' ' && next < text.len() && text[next] != b'\n' { b" " } else { b"" })
+    } else if end > caret { ((caret, end), b"") } else if end < text.len() { ((end, end + 1), b"") } else { return };
+    let applied = quil_replace(range, insert);
+    if applied && QUIL_SELECTION.move_to(quil_source(), if join { range.0 } else { caret }, false).is_ok() { QUIL_CURSOR_POS = if join { range.0 } else { caret }; quil_selection_record(); }
+    sex_pdx::serial_record!("[quil.line.{}] start={} removed={} applied={} len={}", if join { "join" } else { "kill" }, range.0, range.1 - range.0, applied as u8, QUIL_BUFFER_LEN);
+    if applied { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
 }
 /// Ctrl+Shift+D copies the caret's line below itself (one undoable edit);
 /// the caret moves to the same column in the copy.

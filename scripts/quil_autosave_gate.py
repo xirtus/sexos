@@ -130,6 +130,11 @@ def main():
   # Ctrl+Shift+D copies the caret's (second) line below it.
   s0=len(t());g['q'].cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'d'}],'hold-time':80})
   g['wait'](r'\[quil.line.duplicate\] start=16 bytes=14 caret=31 applied=1 len=31',s0,30)
+  # Home, Ctrl+K kills the copied line's text; Ctrl+Home, Ctrl+J joins lines 1 and 2.
+  g['key']('home',r'\[quil.cursor.move\] old=31 new=17 len=31 dir=home ok=1')
+  g['chord']('ctrl','k',r'\[quil.line.kill\] start=17 removed=14 applied=1 len=17')
+  g['chord']('ctrl','home',r'\[quil.cursor.move\] old=17 new=0 len=17 dir=doc_start ok=1')
+  g['chord']('ctrl','j',r'\[quil.line.join\] start=1 removed=1 applied=1 len=17')
   settle(g,60)
   g['q'].cmd('screendump',{'filename':str(out/'recovered.ppm')})
  except Exception as exc:failure=repr(exc)

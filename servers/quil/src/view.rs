@@ -284,6 +284,16 @@ pub fn vertical_steps(
     Some(start + utf8::offset(&buf[start..],*goal))
 }
 
+/// Home / End: the start and end of the caret's line (between line breaks).
+pub fn line_start(buf: &[u8], at: usize) -> usize {
+    let at = at.min(buf.len());
+    buf[..at].iter().rposition(|c| *c == b'\n').map_or(0, |k| k + 1)
+}
+pub fn line_end(buf: &[u8], at: usize) -> usize {
+    let at = at.min(buf.len());
+    buf[at..].iter().position(|c| *c == b'\n').map_or(buf.len(), |k| at + k)
+}
+
 /// Word movement (Ctrl+Left/Right, Ctrl+Backspace/Delete). A word is a run
 /// of ASCII letters, digits, `_` or non-ASCII bytes; anything else separates
 /// words. Every UTF-8 byte of a scalar classifies alike, so the result is

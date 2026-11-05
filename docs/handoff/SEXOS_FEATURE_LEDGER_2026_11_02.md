@@ -7,10 +7,10 @@ links 1-16, `Backspace` back, `/` find in page, `G` QOI image, `P` PNG image (an
 interlaced or not, colour-key transparency), `B` plain document. Quil:
 autosave draft after ~30 s idle (`DRAFT KEPT`), `Ctrl+D` twice deletes the
 saved file, `Ctrl+I` line/word/char counts, `Ctrl+G` go to line,
-`Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
+Home/End on the line, `Ctrl+Left/Right` by word, `Ctrl+Home/End`, `Ctrl+Backspace/Delete` a word,
 find/replace (`Shift+Enter` previous, `Ctrl+Enter` replace all), `Ctrl+L`
 select line, `Ctrl+Up/Down` move line, `Ctrl+]`/`Ctrl+[` indent, `Ctrl+Shift+D`
-duplicate line.
+duplicate line, `Ctrl+K` kill to line end, `Ctrl+J` join lines.
 Spindle: Shift works; Tab completes command names; Ctrl+U/W/L/R edit and search; `history <text>` filters; `calc` does exact decimals with `** sqrt abs min max
 round floor ceil pi e ans`, `exp ln log sin cos tan`, fractional powers, named values (`calc x = 2`), `0x`/`0b` input
 and `... in hex|bin|oct` output.
@@ -1611,6 +1611,24 @@ scripts_refused=3`, floor hits 1, high water 56,016).
 html text host tests 28 (three table expectations updated for the rule);
 sealed build and master gate GREEN; native HTML gate at both sizes
 (`name  | port` / `------+-----` / `dns   | 53` / `https | 443`).
+
+## Q5-Q6. Quil Home/End on the line; kill and join lines (2026-11-05)
+
+- **Q5 Fix:** Home and End went to the start and end of the whole document
+  (found by the native gate on a three-line document). They now stay on the
+  caret's line (`view::line_start/line_end`); `Ctrl+Home/End` remain the
+  document ends. `connected_desktop_gate.py` uses Ctrl+End accordingly.
+- **Q6** `Ctrl+K` deletes from the caret to the end of the line (at the end,
+  the line break); `Ctrl+J` joins the next line with one space, dropping
+  its leading whitespace. Each is one undoable edit.
+
+**Evidence** (`docs/handoff/assets/quil-line-home-end-kill-join-2026-11-05/`):
+host test `home_and_end_stay_on_the_carets_line`; Quil clipboard,
+service-custody and sexnet host gates pass; the Python gate suite has only
+its 7 pre-existing failures; sealed build and master gate GREEN; native
+Quil autosave gate at both sizes (Home `old=31 new=17`, `[quil.line.kill]
+start=17 removed=14`, `[quil.line.join] start=1 removed=1`); native
+connected desktop gate at 1280x800.
 
 ## Release gates noted while doing F1–F2
 
