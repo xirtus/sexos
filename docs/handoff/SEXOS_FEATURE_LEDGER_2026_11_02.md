@@ -1563,8 +1563,8 @@ Evidence: `docs/handoff/assets/batch-regression-2026-11-03/`.
 `sex-http` tests 43 (new `pages_up_to_the_page_source_limit_arrive_in_the_callers_buffer`,
 `a_failed_page_receive_erases_the_callers_buffer`); `sex-tls` suites all
 pass (new `an_oversized_page_source_is_rewritten_into_a_document`); the
-Python gate unit suite has only its 7 pre-existing failures
-(`python-unit-preexisting-failures.txt`, unchanged from HEAD); host gates
+Python gate unit suite gains no new failures (the 7 it had were left by P1,
+fixed in Q10); host gates
 pass; sealed build and master gate GREEN; native HTML gate at both sizes
 follows a **15,630-byte** page (`source_bytes=15630 text_bytes=149`);
 native HTTPS document, asset, PNG and Browser reserve gates pass.
@@ -1626,8 +1626,8 @@ sealed build and master gate GREEN; native HTML gate at both sizes
 
 **Evidence** (`docs/handoff/assets/quil-line-home-end-kill-join-2026-11-05/`):
 host test `home_and_end_stay_on_the_carets_line`; Quil clipboard,
-service-custody and sexnet host gates pass; the Python gate suite has only
-its 7 pre-existing failures; sealed build and master gate GREEN; native
+service-custody and sexnet host gates pass; the Python gate suite gains no
+new failures; sealed build and master gate GREEN; native
 Quil autosave gate at both sizes (Home `old=31 new=17`, `[quil.line.kill]
 start=17 removed=14`, `[quil.line.join] start=1 removed=1`); native
 connected desktop gate at 1280x800.
@@ -1665,6 +1665,21 @@ HTML gate at both sizes (`big 79800 40 521 1232 27`).
 **Evidence** (`docs/handoff/assets/script-prototypes-comma-console-2026-11-05/`):
 script host tests 53 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`... 1232 27 82`), floor hits 1, high water 56,592.
+
+## Q10. Regression on the head of the Q batch; P1 test debt paid (2026-11-05)
+
+- **Correction:** P1 grew the Browser heap and updated
+  `browser_reserve_gate.py`, but not its unit fixtures: 7 tests in
+  `test_browser_reserve_gate.py` had failed since then, and P1/P10 did not
+  run the Python suite. Q1 and Q5 described them as pre-existing without
+  saying they came from P1. The fixtures now use the 128 KiB heap and the
+  768-byte baseline. The full Python gate suite passes: 1,132 tests.
+- All 11 host gates pass. Native gates on the sealed image at the batch's
+  head: HTML, connected desktop and Spindle calc at 1024x768; HTTPS
+  document, asset, PNG, Browser reserve, Quil autosave and Quil delete at
+  1280x800. All pass.
+
+Evidence: `docs/handoff/assets/batch-regression-2026-11-05/`.
 
 ## Release gates noted while doing F1–F2
 

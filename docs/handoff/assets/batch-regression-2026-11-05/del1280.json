@@ -1,0 +1,35 @@
+{
+  "binding": {
+    "path": "/private/tmp/claude-501/-Users-xmacbookm5-Projects/9b64a2c6-0499-411e-8a1a-e209afbe743a/scratchpad/q10-fz/source-binding.json",
+    "sha256": "456b43f63693fe45debe3615b8022ab2f3396410dccd0c02277d7844fc951766",
+    "iso_sha256": "f92b3d5277677b757820f8af05d3384a3b7256858bb076006189f8b35ca912d0",
+    "production_files": 595,
+    "runner_files": 651
+  },
+  "resolution": "1280x800",
+  "scope": "Native QEMU delete of a Quil-saved object through the held document route; Linen listing checked live and after a power cut.",
+  "boot1": {
+    "object": 3,
+    "saved_hash": "0xf4deda60fe883de4",
+    "listed_before": [
+      "sexfiles-proof-v1",
+      "linen-object-v1",
+      "quil-object-v1",
+      "gone"
+    ],
+    "listed_after": [
+      "sexfiles-proof-v1",
+      "linen-object-v1",
+      "quil-object-v1"
+    ]
+  },
+  "boot2": {
+    "listed": [
+      "sexfiles-proof-v1",
+      "linen-object-v1",
+      "quil-object-v1"
+    ]
+  },
+  "ok": true,
+  "error": null
+}

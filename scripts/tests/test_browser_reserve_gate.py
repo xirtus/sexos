@@ -37,7 +37,7 @@ def fixture(mode='quiesced'):
   from check_tcp_capture import fingerprint
   text+=f'[net.job.state] owner=Some(Identity {{ pd: {t}, task: {k} }}) ticket={i+1} from=Connecting to=Sending staged=1025 queued=1025 received=0 scope=private_job\n[browser.net.job.bytes] ticket={i+1} length=1025 hash={hex(fingerprint(p.ECHO))} exact=1 endpoint=controlled_peer tls=0 web=0\n[browser.net.job.released] ticket={i+1} view=Verified private_job=0\n'
   begin=len(text);utc=e.MIN_SECONDS+100+i
-  text+='[browser.resources] reason=command heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 tls_pending=0 route_busy=0 providers_busy=0 queued=Some(TlsPrepare) body_visible=0\n'
+  text+='[browser.resources] reason=command heap_used=768 heap_free=130304 heap_total=131072 tls_payload=0 tls_pending=0 route_busy=0 providers_busy=0 queued=Some(TlsPrepare) body_visible=0\n'
   text+=f'[browser.command.started] kind=TlsPrepare accepted=1\n[trust.policy.snapshot] owner={t} task={k} seq=1 profile=1 root_bytes=376 origin=held_boot_grant\n'
   text+=clock(13,130,row['clock'],utc,i+1)+success(t,k,1,utc)
   text+=f'[entropy.seed.admitted] owner={t} task={k} ticket={i+1} bytes=32 source=held_boot_grant\n'
@@ -45,13 +45,13 @@ def fixture(mode='quiesced'):
   text+=f'[entropy.seed.released] owner={t} task={k} ticket={i+1} service_payload=erased receipt=retained\n'
   text+=f'[browser.tls.prepared] task_bytes=10000 private_bytes=18256 read=4096 write=2048 tx_bytes=100 utc_snapshot={utc} authenticated=0 network=0\n'
   if mode=='allocated-close':
-   text+='[browser.tls.view] state=HelloPending authenticated=0 network=0\n[browser.resources] reason=change heap_used=18300 heap_free=47236 heap_total=65536 tls_payload=18192 tls_pending=1 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
+   text+='[browser.tls.view] state=HelloPending authenticated=0 network=0\n[browser.resources] reason=change heap_used=18300 heap_free=112772 heap_total=131072 tls_payload=18192 tls_pending=1 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
   close_start=len(text);terminal=cleanup_lines(row)
   if mode=='allocated-close':
    tag=f'[task.finish] pd={t} task={k} reason=0 terminal=1\n'
    effects='[browser.tls.erased] bytes=18192 owned_storage=1\n[browser.tls.closed] pending=1 terminal=1 owned_storage=erased\n'
    for name,suffix in[('trust',''),('clock',''),('entropy',' private_payload=erased')]:effects+=f'[browser.{name}.closed] target={t} task={k} pending=0 terminal=1{suffix}\n'
-   effects+=f'[browser.clipboard.closed] target={t} task={k} owned_scratch=erased terminal=1\n[browser.resources] reason=close heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 tls_pending=0 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
+   effects+=f'[browser.clipboard.closed] target={t} task={k} owned_scratch=erased terminal=1\n[browser.resources] reason=close heap_used=768 heap_free=130304 heap_total=131072 tls_payload=0 tls_pending=0 route_busy=0 providers_busy=0 queued=None body_visible=0\n'
    terminal='[sexinput.ps2.scancode] raw=0x57\n'+terminal.replace(tag,effects+tag,1)+'[sexinput.ps2.scancode] raw=0xd7\n'
   text+=terminal;result['chain'].append(dict(identity=row,start=start,work_start=begin,close_start=close_start,end=len(text)))
  result['exhaustion_start']=len(text);text+='[launcher.text.row] index=10 row=4 name=Open Browser status=CLOSED / RESERVE EXHAUSTED\n[launcher.execute.denied] idx=10 status=CLOSED / RESERVE EXHAUSTED reason=boot_reserve_exhausted\n';result['exhaustion_end']=len(text)
@@ -91,7 +91,7 @@ class BrowserReserve(unittest.TestCase):
   text,result=fixture('allocated-close');proof=self.verify(text,result,'allocated-close')
   self.assertEqual(proof['mode'],'allocated-close')
   for join in proof['joins']:
-   evidence=join['close_evidence'];self.assertEqual((evidence['task_bytes'],evidence['private_bytes'],evidence['erased_payload_bytes']),(10000,18256,18192));self.assertEqual(evidence['live_resources']['pending'],1);self.assertEqual(evidence['zero_resources']['used'],0)
+   evidence=join['close_evidence'];self.assertEqual((evidence['task_bytes'],evidence['private_bytes'],evidence['erased_payload_bytes']),(10000,18256,18192));self.assertEqual(evidence['live_resources']['pending'],1);self.assertEqual(evidence['zero_resources']['used'],768)
  def test_allocated_close_rejects_prior_q_expiry_reprepare_zero_and_wrong_erasure(self):
   for old,new in[('state=HelloPending authenticated=0 network=0','state=TimedOut authenticated=0 network=0'),('state=HelloPending authenticated=0 network=0','state=Cancelled authenticated=0 network=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=0'),('[browser.tls.erased] bytes=18192','[browser.tls.erased] bytes=18256'),('[browser.tls.closed] pending=1','[browser.tls.closed] pending=0'),('tls_payload=18192 tls_pending=1','tls_payload=0 tls_pending=0'),('reason=change heap_used=18300','reason=clear heap_used=18300')]:
    text,result=fixture('allocated-close');bad,changed=rewrite(text,result,old,new)
@@ -100,7 +100,7 @@ class BrowserReserve(unittest.TestCase):
    text,result=fixture('allocated-close');marker='[browser.resources] reason=change';bad,changed=rewrite(text,result,marker,event+marker)
    with self.subTest(event=event),self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
  def test_allocated_close_rejects_stale_crossed_and_nonzero_terminal_resources(self):
-  for old,new in[('reason=change heap_used=18300 heap_free=47236','reason=change heap_used=1 heap_free=65535'),('reason=close heap_used=0 heap_free=65536','reason=close heap_used=1 heap_free=65535'),('reason=close heap_used=0','reason=change heap_used=0'),('target=30 task=300 pending=0 terminal=1','target=30 task=30 pending=0 terminal=1'),('heap_total=65536 tls_payload=18192','heap_total=65536 target=31 task=310 tls_payload=18192')]:
+  for old,new in[('reason=change heap_used=18300 heap_free=112772','reason=change heap_used=1 heap_free=131071'),('reason=close heap_used=768 heap_free=130304','reason=close heap_used=1 heap_free=131071'),('reason=close heap_used=768','reason=change heap_used=0'),('target=30 task=300 pending=0 terminal=1','target=30 task=30 pending=0 terminal=1'),('heap_total=131072 tls_payload=18192','heap_total=131072 target=31 task=310 tls_payload=18192')]:
    text,result=fixture('allocated-close');bad,changed=rewrite(text,result,old,new)
    with self.subTest(old=old),self.assertRaises(ValueError):self.verify(bad,changed,'allocated-close')
   text,result=fixture('allocated-close');live=next(line+'\n'for line in text.splitlines()if line.startswith('[browser.resources] reason=change'))
@@ -109,7 +109,7 @@ class BrowserReserve(unittest.TestCase):
  def test_atomic_resource_receipt_can_interrupt_legacy_serial_text(self):
   text,result=fixture('allocated-close');bad,changed=rewrite(text,result,'[browser.resources] reason=close','[access.focus.describe] node_id=8195 role=7[browser.resources] reason=close')
   self.assertTrue(self.verify(bad,changed,'allocated-close')['ok'])
-  for raw in ('[browser.resources] reason=close heap_used=0','[browser.resources] garbage\n'):
+  for raw in ('[browser.resources] reason=close heap_used=768','[browser.resources] garbage\n'):
    with self.subTest(raw=raw),self.assertRaises(ValueError):p.resource_rows(raw,0,len(raw))
  def test_allocated_close_rejects_early_pool_and_next_activation(self):
   text,result=fixture('allocated-close');pool=next(line+'\n'for line in text.splitlines()if line.startswith('[sext.app.pool.ready]'))
