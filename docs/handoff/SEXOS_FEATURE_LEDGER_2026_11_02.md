@@ -1,6 +1,6 @@
 # SexOS feature ledger (from 2026-11-02)
 
-## Handoff summary (as of 2026-11-03, after P9)
+## Handoff summary (as of 2026-11-05, after Q9)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow
 links 1-16, `Backspace` back, `/` find in page, `G` QOI image, `P` PNG image (any standard depth,
@@ -36,7 +36,9 @@ methods; object-literal shorthand/methods/computed keys/spread;
 destructuring (nested, defaults, holes, rest); nested templates; `?.`,
 `??`, short-circuit `&& || ?:`, `**`, bitwise operators, assignment
 expressions, logical/compound assignment to any member chain, `++`/`--`;
-`Promise` (then/catch/finally/all, microtask order; no async/await),
+`arguments`, `call/apply/bind`, prototypes (copied at construction), comma
+operator, `console.*` (no output), `Promise` (then/catch/finally/all,
+microtask order; no async/await),
 `Math` (incl. exp/log/trig, no random), `JSON.stringify` (replacer keys, indent) / `parse`, `Date` from
 given values only, URI encode/decode, `toPrecision`/`toLocaleString`;
 output via `document.write`. Bounds: nesting 64 plus a stack floor 10 KiB
@@ -1643,6 +1645,26 @@ connected desktop gate at 1280x800.
 **Evidence** (`docs/handoff/assets/script-arguments-call-apply-bind-2026-11-05/`):
 script host tests 51 groups; sealed build and master gate GREEN; native
 HTML gate at both sizes (`big 79800 40 521 1232 27`).
+
+## Q8-Q9. Script prototypes, comma operator, `console`, small builtins (2026-11-05)
+
+- **Q8 Prototypes:** `F.prototype.m = ...`, `F.prototype = {...}`,
+  `F.prototype` reads, `Object.create(proto)`, and the
+  `P.call(this, x)` + `C.prototype = Object.create(P.prototype)` pattern.
+  This is a snapshot, not a chain: an instance copies its prototype when
+  constructed, so later additions do not reach existing instances, and
+  `instanceof` does not walk from C to P. Copied properties are not listed
+  by `Object.keys`/`JSON.stringify`.
+- **Q9:** the comma operator (`(a, b)`, `a = 1, b = 2;`, `for (...; i++, j--)`;
+  `for` updates are now any expression, so `++i` works); `console.log/info/
+  warn/error/debug` evaluate their arguments and write nothing (they used
+  to refuse the whole script); `substr`, `isFinite`, `Number.parseFloat/
+  parseInt`, `Object.defineProperty` (`value`/`get`/`set` only),
+  `Object.getOwnPropertyNames`, `Array(n)` and `Error(m)` without `new`.
+
+**Evidence** (`docs/handoff/assets/script-prototypes-comma-console-2026-11-05/`):
+script host tests 53 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`... 1232 27 82`), floor hits 1, high water 56,592.
 
 ## Release gates noted while doing F1–F2
 

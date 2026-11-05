@@ -189,6 +189,8 @@ struct Machine<'a> {
     made_by: Vec<u16>,
     /// The function running now (for `super`).
     func_now: Option<u8>,
+    /// `F.prototype` objects: (function, object).
+    protos: Vec<(u8, u8)>,
     /// `bind` results: (function, this, leading arguments).
     bounds: Vec<(u8, Value, Vec<Value>)>,
     /// The running call's arguments (for `arguments`); valid while it runs.
@@ -856,7 +858,7 @@ impl<'a> Machine<'a> {
         v = match name {
             b"length" => Value::Num(self.text(s).len() as f64),
             b"trim" | b"indexOf" | b"charAt" | b"slice" | b"substring" | b"split" | b"replace" | b"replaceAll"
-            | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" | b"localeCompare" => {
+            | b"startsWith" | b"endsWith" | b"includes" | b"repeat" | b"padStart" | b"padEnd" | b"lastIndexOf" | b"charCodeAt" | b"codePointAt" | b"at" | b"trimStart" | b"trimEnd" | b"localeCompare" | b"substr" => {
                 self.expect(b'(')?;
                 let mut args = [Value::Undef; 2];
                 let mut n = 0;
@@ -1008,6 +1010,12 @@ impl<'a> Machine<'a> {
                 let b = t.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(a, |p| p + 1);
                 Value::Str((start + a) as u16, (b - a) as u16)
             }
+            b"substr" => {
+                // Start (negative: from the end) and length, in bytes.
+                let a = pos(self, args[0], 0, true);
+                let l = pos(self, args[1], n - a, false).min(n - a);
+                Value::Str((start + a) as u16, l as u16)
+            }
             b"localeCompare" => {
                 // ASCII letters case-insensitively first, then lower before
                 // upper (close to the default collation for plain text).
@@ -1129,6 +1137,7 @@ impl<'a> Machine<'a> {
             b"String" => self.to_text(v)?,
             b"isNaN" => Value::Bool(self.to_number(v).is_nan()),
             b"Boolean" => Value::Bool(self.truthy(v)),
+            b"isFinite" => Value::Bool(self.to_number(v).is_finite()),
             b"encodeURIComponent" => {
                 // UTF-8 bytes as %XX except JavaScript's unreserved marks.
                 let t = self.to_text(v)?;
@@ -1284,7 +1293,11 @@ impl<'a> Machine<'a> {
         }
         let f = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == class)
             .or_else(|| match self.lookup(class) { Some(Value::Func(i)) => Some(i as usize), _ => None }).ok_or(Error::Unsupported)?;
-        self.made_by[id as usize] = 256 + self.real_func(f as u8) as u16;
+        let real = self.real_func(f as u8);
+        self.made_by[id as usize] = 256 + real as u16;
+        // A snapshot of F.prototype at construction (later additions do not
+        // reach existing instances).
+        if let Some(proto) = self.protos.iter().find(|p| p.0 == real).map(|p| p.1) { self.copy_props(proto, id)?; }
         self.this_next = Some(Value::Obj(id));
         let r = self.invoke(f as u8, args)?;
         Ok(if matches!(r, Value::Obj(_)) { r } else { Value::Obj(id) })
@@ -1352,6 +1365,17 @@ impl<'a> Machine<'a> {
     fn hidden_prop(&self, id: u8, k: usize) -> bool {
         if self.private_prop(k) { return true; }
         let (ns, nn, v) = self.props[k];
+        // Copied from F.prototype and unchanged: inherited, in JavaScript's terms.
+        if self.made_by[id as usize] >= 256 {
+            let f = (self.made_by[id as usize] - 256) as u8;
+            if let Some(proto) = self.protos.iter().find(|p| p.0 == f).map(|p| p.1) {
+                let name = &self.arena[ns as usize..ns as usize + nn as usize];
+                if let Some(q) = self.find_prop(proto, name) {
+                    let same = match (self.props[q].2, v) { (Value::Func(a), Value::Func(b)) => a == b, (Value::Num(a), Value::Num(b)) => a == b, (Value::Bool(a), Value::Bool(b)) => a == b, (Value::Str(a, n), Value::Str(b, m)) => a == b && n == m, (Value::Arr(a), Value::Arr(b)) | (Value::Obj(a), Value::Obj(b)) => a == b, (Value::Null, Value::Null) | (Value::Undef, Value::Undef) => true, _ => false };
+                    if same { return true; }
+                }
+            }
+        }
         let Value::Func(f) = v else { return false };
         let mut c = match self.made_by[id as usize] { m @ 1..=16 => Some(m as usize - 1), _ => None };
         let name = &self.arena[ns as usize..ns as usize + nn as usize];
@@ -1550,6 +1574,31 @@ impl<'a> Machine<'a> {
         let (args, _) = self.arguments()?;
         if !self.live { return Ok(Value::Undef); }
         self.deep_copy(args[0], 0)
+    }
+    /// `console.log(...)` and friends: arguments are evaluated, nothing is
+    /// written (the page has no console to show them).
+    #[inline(never)]
+    fn console_call(&mut self) -> Result<Value, Error> {
+        self.next()?;
+        let Tok::Ident(b"log" | b"info" | b"warn" | b"error" | b"debug") = self.tok else { return Err(Error::Unsupported) };
+        self.next()?;
+        self.expect(b'(')?;
+        while self.tok != Tok::Punct(b')') {
+            if self.tok == Tok::Punct(b'S') { self.next()?; }
+            self.expr()?;
+            if self.tok != Tok::Punct(b',') { break; }
+            self.next()?;
+        }
+        self.expect(b')')?;
+        Ok(Value::Undef)
+    }
+    /// `Array(3)`, `Error('x')`: the same as with `new`.
+    #[inline(never)]
+    fn construct_call(&mut self, name: &[u8]) -> Result<Value, Error> {
+        let mut args = [Value::Undef; PARAMS];
+        let n = self.argument_list(&mut args)?;
+        if !self.live { return Ok(Value::Undef); }
+        self.construct(name, &args[..n])
     }
     /// `structuredClone(v)`: plain arrays and objects copied deeply (functions,
     /// class instances and collections are refused, as JavaScript does for
@@ -1899,7 +1948,7 @@ impl<'a> Machine<'a> {
                     let (ns, nn, value) = self.props[k];
                     // Like JavaScript: undefined and function members are left out,
                     // and a replacer list keeps only the keys it names.
-                    if matches!(value, Value::Undef | Value::Func(_)) || self.arena.get(ns as usize) == Some(&b'#') { continue; }
+                    if matches!(value, Value::Undef | Value::Func(_)) || self.hidden_prop(id, k) { continue; }
                     if let Some(keys) = &layout.keys { if !keys.iter().any(|k| k[..] == self.arena[ns as usize..ns as usize + nn as usize]) { continue; } }
                     if !first { into.push(b','); }
                     first = false;
@@ -2474,6 +2523,20 @@ impl<'a> Machine<'a> {
             }
             return Ok(Value::Obj(out));
         }
+        if name == b"Number" && matches!(f, b"parseFloat" | b"parseInt") { return self.convert(f); }
+        if (name, f) == (&b"Object"[..], &b"defineProperty"[..]) {
+            // `value`, `get` and `set` of a descriptor; the other flags are not
+            // modelled (properties stay writable and enumerable).
+            let (args, _) = self.arguments()?;
+            if !self.live { return Ok(Value::Undef); }
+            let (Value::Obj(id), Value::Obj(d)) = (args[0], args[2]) else { return Err(Error::Unsupported) };
+            let k = self.to_text(args[1])?;
+            let key = self.text(k).to_vec();
+            if let Value::Func(g) = self.get_prop(d, b"get") { self.add_accessor(id, &key, g, false)?; }
+            if let Value::Func(g) = self.get_prop(d, b"set") { self.add_accessor(id, &key, g, true)?; }
+            if self.find_prop(d, b"value").is_some() { let v = self.get_prop(d, b"value"); self.set_prop(id, &key, v)?; }
+            return Ok(args[0]);
+        }
         if (name, f) == (&b"Object"[..], &b"hasOwn"[..]) {
             let (args, _) = self.arguments()?;
             let Value::Obj(id) = args[0] else { return Ok(Value::Bool(false)) };
@@ -2518,6 +2581,13 @@ impl<'a> Machine<'a> {
             (b"Number", b"isInteger", _) => Ok(Value::Bool(num(self).is_some_and(|x| x.is_finite() && x == floor(x)))),
             (b"Number", b"isFinite", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_finite))),
             (b"Number", b"isNaN", _) => Ok(Value::Bool(num(self).is_some_and(f64::is_nan))),
+            (b"Object", b"create", v) => {
+                // A new object with a snapshot of `proto`'s properties.
+                if !self.live { return Ok(Value::Undef); }
+                let id = self.new_object()?;
+                match v { Value::Obj(p) => self.copy_props(p, id)?, Value::Null => {} _ => return Err(Error::Unsupported) }
+                Ok(Value::Obj(id))
+            }
             (b"Object", b"freeze", v) => { if let (Value::Obj(id), true) = (v, self.live) { if !self.frozen.contains(&id) { self.frozen.push(id); } } Ok(v) }
             (b"Object", b"isFrozen", v) => Ok(Value::Bool(match v { Value::Obj(id) => self.frozen.contains(&id), _ => true })),
             (b"Object", b"fromEntries", Value::Arr(list)) => {
@@ -2558,7 +2628,7 @@ impl<'a> Machine<'a> {
                     Err(e) => Err(e),
                 }
             }
-            (b"Object", b"keys", Value::Obj(id)) => {
+            (b"Object", b"keys" | b"getOwnPropertyNames", Value::Obj(id)) => {
                 let (start, len, _) = self.objects[id as usize];
                 let keys: Vec<Value> = (start as usize..start as usize + len as usize).filter(|&k| !self.hidden_prop(id, k)).map(|k| { let (ns, nn, _) = self.props[k]; Value::Str(ns, nn) }).collect();
                 self.new_array(&keys)
@@ -2647,7 +2717,14 @@ impl<'a> Machine<'a> {
                 self.skim_body()?;
                 Ok(Value::Func(self.define(b"", at)?))
             }
-            Tok::Punct(b'(') => { self.next()?; let v = self.expr()?; self.expect(b')')?; Ok(v) }
+            Tok::Punct(b'(') => {
+                self.next()?;
+                let mut v = self.expr()?;
+                // The comma operator: each runs, the last is the value.
+                while self.tok == Tok::Punct(b',') { self.next()?; v = self.expr()?; }
+                self.expect(b')')?;
+                Ok(v)
+            }
             Tok::Punct(b'{') => self.object_literal(),
             Tok::Punct(b'[') => self.array_literal(),
             Tok::Ident(b"new") => self.new_expression(),
@@ -2676,6 +2753,8 @@ impl<'a> Machine<'a> {
                     b"NaN" => Ok(Value::Num(f64::NAN)),
                     b"null" => Ok(Value::Null),
                     b"this" => Ok(self.this),
+                    b"console" if self.tok == Tok::Punct(b'.') && self.lookup(name).is_none() => self.console_call(),
+                    b"Array" | b"Error" | b"TypeError" | b"RangeError" | b"SyntaxError" if self.tok == Tok::Punct(b'(') && self.lookup(name).is_none() => self.construct_call(name),
                     b"arguments" if self.func_now.is_some() && self.lookup(name).is_none() => self.arguments_array(),
                     b"super" => self.super_call(),
                     b"undefined" => Ok(Value::Undef),
@@ -2688,7 +2767,7 @@ impl<'a> Machine<'a> {
                     b"Date" if self.tok == Tok::Punct(b'.') => self.date_static(),
                     b"JSON" | b"Object" | b"Array" | b"Number" | b"Promise" if self.tok == Tok::Punct(b'.') => self.statics(name),
                     b"String" if self.tok == Tok::Punct(b'.') => self.string_static(),
-                    b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" | b"Boolean" if self.tok == Tok::Punct(b'(') => self.convert(name),
+                    b"String" | b"Number" | b"parseInt" | b"parseFloat" | b"isNaN" | b"encodeURIComponent" | b"decodeURIComponent" | b"Boolean" | b"isFinite" if self.tok == Tok::Punct(b'(') => self.convert(name),
                     b"structuredClone" if self.tok == Tok::Punct(b'(') && self.lookup(name).is_none() => self.structured_clone(),
                     b"String" | b"Number" | b"Boolean" if self.lookup(name).is_none() => Ok(Value::Func(BUILTIN_FUNCS + match name { b"String" => 0, b"Number" => 1, _ => 2 })),
                     _ if self.tok == Tok::Punct(b'(') => self.call(name),
@@ -2776,9 +2855,29 @@ impl<'a> Machine<'a> {
         let args: Vec<Value> = unsafe { (*self.args_now).to_vec() };
         self.new_array(&args)
     }
-    /// `f.call(this, ...)`, `f.apply(this, [...])`, `f.bind(this, ...)`.
+    /// Copies every property of object `from` onto object `to`.
+    fn copy_props(&mut self, from: u8, to: u8) -> Result<(), Error> {
+        let (start, len, _) = self.objects[from as usize];
+        for k in start as usize..start as usize + len as usize {
+            let (ns, nn, value) = self.props[k];
+            let key = self.arena[ns as usize..ns as usize + nn as usize].to_vec();
+            self.set_prop(to, &key, value)?;
+        }
+        Ok(())
+    }
+    /// The object behind `F.prototype`, made on first use.
+    fn prototype(&mut self, f: u8) -> Result<u8, Error> {
+        let real = self.real_func(f);
+        if let Some(p) = self.protos.iter().find(|p| p.0 == real) { return Ok(p.1); }
+        if self.protos.len() == 32 { return Err(Error::Limit); }
+        let id = self.new_object()?;
+        self.protos.push((real, id));
+        Ok(id)
+    }
+    /// `F.prototype`, `f.call(this, ...)`, `f.apply(this, [...])`, `f.bind(this, ...)`.
     #[inline(never)]
     fn function_member(&mut self, f: u8, name: &[u8]) -> Result<Value, Error> {
+        if name == b"prototype" { return Ok(Value::Obj(self.prototype(f)?)); }
         if !matches!(name, b"call" | b"apply" | b"bind") { return Err(Error::Unsupported); }
         let (args, n) = self.arguments()?;
         if !self.live { return Ok(Value::Undef); }
@@ -3436,6 +3535,7 @@ impl<'a> Machine<'a> {
                 let call = !self.assigns_ahead()? && matches!(self.tok, Tok::Punct(b'(' | b'.' | b'['));
                 self.restore(at);
                 if call { self.expr()?; } else { self.assignment(run)?; }
+                while self.tok == Tok::Punct(b',') { self.next()?; self.expr()?; }
                 self.end()
             }
             Tok::Punct(op @ (b'I' | b'D')) => {
@@ -3484,14 +3584,22 @@ impl<'a> Machine<'a> {
             let go = if self.tok == Tok::Punct(b';') { true } else { let c = self.expr()?; self.truthy(c) };
             self.expect(b';')?;
             let update = self.pos();
-            if self.tok != Tok::Punct(b')') { self.assignment(false)?; }
+            if self.tok != Tok::Punct(b')') { self.update_list(false)?; }
             self.expect(b')')?;
             let go = run && self.ret.is_none() && go;
             self.statement(go)?;
             // The body statement was parsed to its end either way.
             if !go || self.loop_jump(label) == Some(true) { self.loops -= 1; return Ok(()); }
             self.restore(update);
-            if self.tok != Tok::Punct(b')') { self.assignment(true)?; }
+            if self.tok != Tok::Punct(b')') { self.update_list(true)?; }
+        }
+    }
+    /// A `for` update: expressions separated by commas (`i++, j--`).
+    fn update_list(&mut self, run: bool) -> Result<(), Error> {
+        loop {
+            self.only_if(run, |m| m.expr())?;
+            if self.tok != Tok::Punct(b',') { return Ok(()); }
+            self.next()?;
         }
     }
     /// `for (name of xs)` (array elements, string characters) and
@@ -3551,6 +3659,8 @@ impl<'a> Machine<'a> {
             if let Some(Tok::Ident(key)) = { let at = self.pos(); self.next()?; let t = self.tok; self.restore(at); Some(t) } {
                 found = self.static_home(name, key).map(Value::Obj);
             }
+            // `F.prototype...` for a declared function.
+            if found.is_none() { found = self.funcs[..self.nfuncs].iter().position(|(n, l, _)| *l != 0 && &n[..*l as usize] == name).map(|i| Value::Func(i as u8)); }
         }
         let Some(old) = found.or((self.skim || !run).then_some(Value::Undef)) else { return Err(Error::Unsupported) };
         if !matches!(self.tok, Tok::Punct(b'.' | b'[')) {
@@ -3587,6 +3697,7 @@ impl<'a> Machine<'a> {
         match (base, key) {
             (Value::Obj(id), k) => { let k = self.key_text(k)?; self.read_prop(id, &k) }
             (Value::Arr(id), Key::Name(b"length")) => Ok(Value::Num(self.arrays[id as usize].1 as f64)),
+            (Value::Func(f), Key::Name(b"prototype")) => Ok(Value::Obj(self.prototype(f)?)),
             (Value::Arr(_) | Value::Str(..), Key::Value(i)) => { let i = self.to_number(i); self.index(base, i) }
             _ => Err(Error::Unsupported),
         }
@@ -3595,6 +3706,13 @@ impl<'a> Machine<'a> {
     /// appends) or an array's `length` (shrinking only).
     fn set_member(&mut self, base: Value, key: Key<'a>, v: Value) -> Result<(), Error> {
         match (base, key) {
+            // `F.prototype = {...}` replaces what new instances copy.
+            (Value::Func(f), Key::Name(b"prototype")) => {
+                let Value::Obj(obj) = v else { return Err(Error::Unsupported) };
+                let real = self.real_func(f);
+                match self.protos.iter().position(|p| p.0 == real) { Some(k) => self.protos[k].1 = obj, None => { if self.protos.len() == 32 { return Err(Error::Limit); } self.protos.push((real, obj)); } }
+                Ok(())
+            }
             // Assignments to a frozen object are ignored (sloppy mode).
             (Value::Obj(id), _) if self.frozen.contains(&id) => Ok(()),
             (Value::Obj(id), k) => {
@@ -3859,7 +3977,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     // Fixed tables live on the heap too: the Browser stack is for nesting.
     fn table<T: Clone>(n: usize, v: T) -> Result<Vec<T>, Error> { let mut t = Vec::new(); t.try_reserve_exact(n).map_err(|_| Error::Limit)?; t.resize(n, v); Ok(t) }
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: table(VARS, ([0; NAME], 0, Value::Num(0.0)))?, kinds: table(VARS, 0)?, block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), promises: Vec::new(), jobs: Vec::new(), resolvers: Vec::new(), gathers: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, bounds: Vec::new(), args_now: core::ptr::slice_from_raw_parts(core::ptr::null(), 0), frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), promises: Vec::new(), jobs: Vec::new(), resolvers: Vec::new(), gathers: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, protos: Vec::new(), bounds: Vec::new(), args_now: core::ptr::slice_from_raw_parts(core::ptr::null(), 0), frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: table(ARRAYS, (0, 0, 0))?, narrays: 0, props, objects: table(OBJECTS, (0, 0, 0))?, nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

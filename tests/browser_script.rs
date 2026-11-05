@@ -466,3 +466,18 @@ fn arguments_call_apply_and_bind() {
     assert_eq!(out("function h(a, b) { return this.k + a + (b || 0) } document.write(h.call({k: 1}, 2), ' ', h.apply({k: 2}, [3, 4]), ' ', h.bind({k: 3}, 1)(1), ' ', h.bind({k: 3}).call({k: 9}, 1))").unwrap(), "3 9 5 4", "a bound this cannot be replaced");
     assert_eq!(out("var o = {n: 1, m() { return [1].map(function () { return this.n }.bind(this))[0] }}; var g = function () { return this.x }.bind({x: 5}); document.write(o.m(), g())").unwrap(), "15");
 }
+
+#[test]
+fn prototypes_and_object_create() {
+    assert_eq!(out("function F(x) { this.x = x } F.prototype.get = function () { return this.x * 2 }; F.prototype.k = 7; var a = new F(4); document.write(a.get(), a.k, ' ', JSON.stringify(a), Object.keys(a), a instanceof F)").unwrap(), "87 {\"x\":4}xtrue");
+    assert_eq!(out("function A(n) { this.n = n } A.prototype = {hi: function () { return 'hi ' + this.n }}; var V = function () {}; V.prototype.v = 1; document.write(new A('z').hi(), new V().v)").unwrap(), "hi z1");
+    assert_eq!(out("function P(x) { this.x = x } P.prototype.who = function () { return 'P' + this.x }; function C(x) { P.call(this, x) } C.prototype = Object.create(P.prototype); C.prototype.extra = function () { return 'E' }; var c = new C(3); var b = Object.create({q: 1}); document.write(c.who(), c.extra(), b.q, Object.create(null).z)").unwrap(), "P3E1undefined");
+}
+
+#[test]
+fn comma_operator_console_and_small_builtins() {
+    assert_eq!(out("var x = 1, y = (x++, x * 2); for (var i = 0, j = 9; i < j; i++, j--) {} var a; a = 1, x = 5; var t = ''; for (var k = 0; k < 2; ++k) t += k; document.write(y, i, j, a, x, t)").unwrap(), "4541501");
+    assert_eq!(out("console.log('hi', 1 + 1); console.error(); document.write('ok')").unwrap(), "ok");
+    assert_eq!(out("document.write('abcdef'.substr(1, 2), 'abcdef'.substr(-2), 'abc'.substr(1), isFinite('3'), isFinite(1 / 0), Number.parseFloat('1.5'), Number.parseInt('7x'))").unwrap(), "bcefbctruefalse1.57");
+    assert_eq!(out("var o = {}; Object.defineProperty(o, 'x', {value: 1}); Object.defineProperty(o, 'y', {get() { return 2 }}); document.write(o.x, o.y, Object.getOwnPropertyNames({a: 1}), Array(2).length, Error('m').message)").unwrap(), "12a2m");
+}
