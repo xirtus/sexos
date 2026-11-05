@@ -69,6 +69,9 @@ const CLOSURES: usize = 64;
 const ENVS: usize = 16;
 /// `String`, `Number` and `Boolean` used as function values (`xs.map(Number)`).
 const BUILTIN_FUNCS: u8 = 250;
+/// `f.bind(...)` results: `Value::Func(BOUND + k)` (after functions and closures).
+const BOUND: u8 = 100;
+const BOUNDS: usize = 64;
 /// A Promise executor's `resolve`/`reject` functions: `Value::Func(RESOLVERS + k)`.
 const RESOLVERS: u8 = 200;
 /// Array elements (all arrays) and array count; arrays are shared by reference.
@@ -186,6 +189,10 @@ struct Machine<'a> {
     made_by: Vec<u16>,
     /// The function running now (for `super`).
     func_now: Option<u8>,
+    /// `bind` results: (function, this, leading arguments).
+    bounds: Vec<(u8, Value, Vec<Value>)>,
+    /// The running call's arguments (for `arguments`); valid while it runs.
+    args_now: *const [Value],
     /// First variable slot of the running call (its parameters and locals).
     frame_base: usize,
     /// Closures: (function, environment); environments: captured variables.
@@ -670,6 +677,7 @@ impl<'a> Machine<'a> {
                 v = Value::Undef;
                 continue;
             }
+            if let Value::Func(f) = v { v = self.function_member(f, name)?; continue; }
             if let (Value::Obj(id), Value::Num(ms)) = (v, if let Value::Obj(id) = v { self.get_prop(id, b"__date") } else { Value::Undef }) {
                 if self.find_prop(id, name).is_none() {
                     let _ = id;
@@ -2064,7 +2072,7 @@ impl<'a> Machine<'a> {
                 self.new_array(&items)?
             }
             b"sort" => {
-                let cmp = match args.first() { None => None, Some(Value::Func(f)) => Some(*f), _ => return Err(Error::Unsupported) };
+                let cmp = match args.first() { None => None, Some(Value::Func(f)) => Some(*f), _ if !self.live => None, _ => return Err(Error::Unsupported) };
                 if let (Some(f), true) = (cmp, self.live) {
                     // Insertion sort with the script's comparator (bounded by steps).
                     for i in 1..len {
@@ -2102,8 +2110,8 @@ impl<'a> Machine<'a> {
         })
     }
     fn array_callback(&mut self, id: u8, name: &[u8], args: &[Value]) -> Result<Value, Error> {
-        let Some(Value::Func(f)) = args.first().copied() else { return Err(Error::Unsupported) };
         if !self.live { return Ok(Value::Undef); }
+        let Some(Value::Func(f)) = args.first().copied() else { return Err(Error::Unsupported) };
         let (_, len, _) = self.arrays[id as usize];
         let mut acc = args.get(1).copied();
         let mut kept: Vec<Value> = Vec::new();
@@ -2668,6 +2676,7 @@ impl<'a> Machine<'a> {
                     b"NaN" => Ok(Value::Num(f64::NAN)),
                     b"null" => Ok(Value::Null),
                     b"this" => Ok(self.this),
+                    b"arguments" if self.func_now.is_some() && self.lookup(name).is_none() => self.arguments_array(),
                     b"super" => self.super_call(),
                     b"undefined" => Ok(Value::Undef),
                     b"Infinity" => Ok(Value::Num(f64::INFINITY)),
@@ -2754,7 +2763,41 @@ impl<'a> Machine<'a> {
         }
     }
     /// The declared function behind a function value (closure or not).
-    fn real_func(&self, f: u8) -> u8 { if f as usize >= FUNCS { self.closures[f as usize - FUNCS].0 } else { f } }
+    fn real_func(&self, f: u8) -> u8 {
+        if (BOUND..BOUND + BOUNDS as u8).contains(&f) { self.real_func(self.bounds[(f - BOUND) as usize].0) }
+        else if f as usize >= FUNCS && (f as usize) < FUNCS + CLOSURES { self.closures[f as usize - FUNCS].0 } else { f }
+    }
+    /// `arguments`: the running call's arguments as a new array.
+    #[inline(never)]
+    fn arguments_array(&mut self) -> Result<Value, Error> {
+        // SAFETY: `args_now` is set by `invoke` to its `args` slice, which
+        // outlives the body, and restored before `invoke` returns; it is only
+        // read here, while a function body runs (`func_now` is set).
+        let args: Vec<Value> = unsafe { (*self.args_now).to_vec() };
+        self.new_array(&args)
+    }
+    /// `f.call(this, ...)`, `f.apply(this, [...])`, `f.bind(this, ...)`.
+    #[inline(never)]
+    fn function_member(&mut self, f: u8, name: &[u8]) -> Result<Value, Error> {
+        if !matches!(name, b"call" | b"apply" | b"bind") { return Err(Error::Unsupported); }
+        let (args, n) = self.arguments()?;
+        if !self.live { return Ok(Value::Undef); }
+        let this = if n > 0 { args[0] } else { Value::Undef };
+        let rest = if n > 1 { &args[1..n] } else { &[][..] };
+        match name {
+            b"call" => { self.this_next = Some(this); self.invoke(f, rest) }
+            b"apply" => {
+                let items = match args[1] { Value::Undef | Value::Null => Vec::new(), v @ Value::Arr(_) => self.iterate(v)?, _ => return Err(Error::Unsupported) };
+                self.this_next = Some(this);
+                self.invoke(f, &items)
+            }
+            _ => {
+                if self.bounds.len() == BOUNDS { return Err(Error::Limit); }
+                self.bounds.push((f, this, rest.to_vec()));
+                Ok(Value::Func(BOUND + (self.bounds.len() - 1) as u8))
+            }
+        }
+    }
     /// Run function `f` with `args`. Parameters bind for the call (shadowing,
     /// then restored); names it declares end with it. Arrow functions with
     /// an expression body return that expression.
@@ -2779,6 +2822,13 @@ impl<'a> Machine<'a> {
         let back = self.pos();
         let base = self.nvars;
         // A closure starts with its captured variables (written back after).
+        if (BOUND..BOUND + BOUNDS as u8).contains(&f) {
+            let (g, this, pre) = self.bounds[(f - BOUND) as usize].clone();
+            let mut all = pre;
+            all.extend_from_slice(args);
+            self.this_next = Some(this);
+            return self.invoke(g, &all);
+        }
         let (f, env) = if f as usize >= FUNCS { let (g, e) = self.closures[f as usize - FUNCS]; (g, Some(e as usize)) } else { (f, None) };
         if let Some(e) = env {
             for j in 0..self.envs[e].len() { let (n, l, v) = self.envs[e][j]; self.declare(&n[..l as usize], v, 0)?; }
@@ -2827,9 +2877,11 @@ impl<'a> Machine<'a> {
         let loops = core::mem::replace(&mut self.loops, 0);
         let live = core::mem::replace(&mut self.live, true);
         let now = self.func_now.replace(f);
+        let args_before = core::mem::replace(&mut self.args_now, args as *const [Value]);
         let body = if self.tok == Tok::Punct(b'{') { self.statement(true).map(|_| self.ret.take().unwrap_or(Value::Undef)) } else { self.expr().and_then(|v| self.escape(v)) };
         if let Some(e) = env { for j in 0..self.envs[e].len() { self.envs[e][j].2 = self.vars[base + j].2; } }
         self.frame_base = frame;
+        self.args_now = args_before;
         self.func_now = now;
         self.live = live;
         self.loops = loops;
@@ -3807,7 +3859,7 @@ pub fn run(source: &[u8]) -> Result<Vec<u8>, Error> {
     // Fixed tables live on the heap too: the Browser stack is for nesting.
     fn table<T: Clone>(n: usize, v: T) -> Result<Vec<T>, Error> { let mut t = Vec::new(); t.try_reserve_exact(n).map_err(|_| Error::Limit)?; t.resize(n, v); Ok(t) }
     let mut m = Machine { src: source, at: 0, tok: Tok::End, nl: false, arena, vars: table(VARS, ([0; NAME], 0, Value::Num(0.0)))?, kinds: table(VARS, 0)?, block_base: 0, nvars: 0, out, depth: 0, steps: 0,
-        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), promises: Vec::new(), jobs: Vec::new(), resolvers: Vec::new(), gathers: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
+        funcs: table(FUNCS, ([0; NAME], 0, Pos { at: 0, tok: Tok::End, nl: false }))?, nfuncs: 0, skim: false, live: true, ret: None, jump: None, jump_label: None, label_next: None, labels: 0, this: Value::Undef, this_next: None, thrown: None, regexes: Vec::new(), re_last: Vec::new(), frozen: Vec::new(), classes: Vec::new(), accessors: Vec::new(), promises: Vec::new(), jobs: Vec::new(), resolvers: Vec::new(), gathers: Vec::new(), collections: Vec::new(), made_by: table(OBJECTS, 0)?, func_now: None, bounds: Vec::new(), args_now: core::ptr::slice_from_raw_parts(core::ptr::null(), 0), frame_base: 0, closures: Vec::new(), envs: Vec::new(), loops: 0,
         elems, arrays: table(ARRAYS, (0, 0, 0))?, narrays: 0, props, objects: table(OBJECTS, (0, 0, 0))?, nobjects: 0 };
     m.next()?;
     while m.tok != Tok::End { m.statement(true)?; }

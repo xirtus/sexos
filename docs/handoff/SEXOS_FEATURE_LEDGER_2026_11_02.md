@@ -1630,6 +1630,20 @@ Quil autosave gate at both sizes (Home `old=31 new=17`, `[quil.line.kill]
 start=17 removed=14`, `[quil.line.join] start=1 removed=1`); native
 connected desktop gate at 1280x800.
 
+## Q7. Script `arguments`, `call`, `apply`, `bind` (2026-11-05)
+
+- `arguments` gives the running call's arguments as a new array (so it is
+  a copy: writing to it does not change parameters). `f.call(this, ...)`,
+  `f.apply(this, [...])`, and `f.bind(this, ...)` (64 per script; a bound
+  `this` cannot be replaced, as in JavaScript).
+- **Fix:** a callback that was not a plain function value during the
+  parse-only pass of a function body (`xs.map(fn.bind(this))`) refused the
+  whole script; `map`-style methods and `sort` now check only when live.
+
+**Evidence** (`docs/handoff/assets/script-arguments-call-apply-bind-2026-11-05/`):
+script host tests 51 groups; sealed build and master gate GREEN; native
+HTML gate at both sizes (`big 79800 40 521 1232 27`).
+
 ## Release gates noted while doing F1–F2
 
 - The reader frame is bounded by the 512-byte Linen text delivery shared with

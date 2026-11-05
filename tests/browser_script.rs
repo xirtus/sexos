@@ -459,3 +459,10 @@ fn copying_array_methods_group_by_and_structured_clone() {
     assert_eq!(out("var g = Object.groupBy([1, 2, 3, 4, 5], x => x % 2 ? 'odd' : 'even'); var o = {a: [1, {b: 2}]}; var c = structuredClone(o); c.a[1].b = 9; document.write(JSON.stringify(g), o.a[1].b, c.a[1].b)").unwrap(), "{\"odd\":[1,3,5],\"even\":[2,4]}29");
     assert_eq!(out("structuredClone(() => 1)").err(), Some(Error::Unsupported));
 }
+
+#[test]
+fn arguments_call_apply_and_bind() {
+    assert_eq!(out("function f() { return arguments.length + ':' + arguments[1] } function sum() { var t = 0; for (var i = 0; i < arguments.length; i++) t += arguments[i]; return t } document.write(f(1, 2), ' ', sum(1, 2, 3, 4), ' ', typeof arguments)").unwrap(), "2:2 10 undefined");
+    assert_eq!(out("function h(a, b) { return this.k + a + (b || 0) } document.write(h.call({k: 1}, 2), ' ', h.apply({k: 2}, [3, 4]), ' ', h.bind({k: 3}, 1)(1), ' ', h.bind({k: 3}).call({k: 9}, 1))").unwrap(), "3 9 5 4", "a bound this cannot be replaced");
+    assert_eq!(out("var o = {n: 1, m() { return [1].map(function () { return this.n }.bind(this))[0] }}; var g = function () { return this.x }.bind({x: 5}); document.write(o.m(), g())").unwrap(), "15");
+}
