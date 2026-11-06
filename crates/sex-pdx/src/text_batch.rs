@@ -5,10 +5,18 @@ pub const CHUNK: u64 = 0x277;
 pub const COMMIT: u64 = 0x278;
 /// Optional final metadata, after all chunks and before Commit.
 pub const SELECT: u64 = 0x28b;
+/// Begin seeded from the surface's committed text; only changed chunks follow.
+/// Commit still verifies the hash of the whole text.
+pub const BEGIN_DELTA: u64 = 0x28c;
 pub const CAPACITY: usize = 6144;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Begin {
+        sequence: u32,
+        len: usize,
+        color: u32,
+    },
+    BeginDelta {
         sequence: u32,
         len: usize,
         color: u32,
@@ -36,6 +44,15 @@ impl Request {
                 let sequence = a as u32;
                 let len = (a >> 32) as usize;
                 (sequence != 0 && len <= CAPACITY).then_some(Self::Begin {
+                    sequence,
+                    len,
+                    color: b as u32 | 0xff000000,
+                })
+            }
+            BEGIN_DELTA if a >> 48 == 0 && b >> 32 == 0 => {
+                let sequence = a as u32;
+                let len = (a >> 32) as usize;
+                (sequence != 0 && len <= CAPACITY).then_some(Self::BeginDelta {
                     sequence,
                     len,
                     color: b as u32 | 0xff000000,
@@ -78,6 +95,11 @@ impl Request {
                 len,
                 color,
             } => (BEGIN, sequence as u64 | (len as u64) << 32, color as u64),
+            Self::BeginDelta {
+                sequence,
+                len,
+                color,
+            } => (BEGIN_DELTA, sequence as u64 | (len as u64) << 32, color as u64),
             Self::Chunk {
                 sequence,
                 offset,

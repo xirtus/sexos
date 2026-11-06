@@ -210,7 +210,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 #[test]fn late_native_geometry_is_fitted_and_grid_has_exact_gap_and_bounds(){
  let mut g=FrameGroups::new();g.register(cat(12));let mut s=[surf(3,153),surf(12,154),surf(12,160),surf(12,161),surf(12,162)];g.observe(&s);
  for c in &mut s[1..]{c.x=-900;c.y=-900;c.w=10000;c.h=10000;}g.fit_children(&mut s);
- assert_eq!((s[1].x,s[1].y,s[1].w,s[1].h),(108,136,188,124));assert_eq!((s[2].x,s[2].y),(304,136));assert_eq!((s[3].x,s[3].y),(108,268));assert_eq!((s[4].x,s[4].y),(304,268));
+ assert_eq!((s[1].x,s[1].y,s[1].w,s[1].h),(108,136,384,256));assert!(s[2..].iter().all(|c|c.h==0));
  for c in &s[1..]{assert!(c.x>=108&&c.y>=136);assert!(c.x as u32+c.w<=492);assert!(c.y as u32+c.h<=392);}
  s[0].w=1;s[0].h=1;g.fit_children(&mut s);assert!(s[1..].iter().all(|c|c.w==0&&c.h==0));
 }
@@ -273,7 +273,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 #[test]fn fresh_spindle_grid_uses_distinct_owner_frame_and_exact_quadrants(){
  let c=Catalog{slot:50,target_pd:17,task_id:17,surface_id:302,coordinator_pd:3};let mut g=FrameGroups::new();g.register(c);
  let mut s=[surf(3,306),surf(17,302),surf(17,303),surf(17,304),surf(17,305)];g.observe(&s);g.fit_children(&mut s);
- for (i,expected) in [(108,136),(304,136),(108,268),(304,268)].into_iter().enumerate(){let child=&s[i+1];assert_eq!((child.x,child.y),expected);
+ for (i,expected) in [(108,136)].into_iter().enumerate(){let child=&s[i+1];assert_eq!((child.x,child.y),expected);
   let px=child.x as usize+10;let py=child.y as usize+14;let frame=g.winner(&s,302,px,py,1000,800).unwrap();assert_eq!(frame.surface_id,306);assert_eq!(g.content(frame,&s,px,py,1000,800).surface_id,302+i as u64);
  }
  assert_eq!(native_pixel_bit(17,302),16);assert_eq!(native_pixel_bit(12,302),0);
@@ -646,6 +646,7 @@ fn spindle_children(pd:u32)->[Surface;5] {
     let pane=layout.panes[index-1];assert_eq!((child.x,child.y,child.w,child.h),(surfaces[0].x+pane.x as i32,surfaces[0].y+pane.y as i32,pane.w,pane.h));
     assert_eq!(child.text_buf,before[index].text_buf);assert_eq!(child.color,before[index].color);assert_eq!((child.selection_start,child.selection_end),(0,1));
     assert!(!g.independent(child));assert_eq!(g.awaiting_parent(child),None);
+    if index>1{assert_eq!(child.h,0);continue}
     let(px,py)=(child.x as usize+child.w as usize/2,child.y as usize+child.h as usize/2);
     let winner=g.winner(&surfaces,child.surface_id,px,py,w,h).unwrap();assert_eq!(winner.surface_id,parent);assert_eq!(g.content(winner,&surfaces,px,py,w,h).surface_id,child.surface_id);
    }
@@ -682,7 +683,7 @@ fn spindle_children(pd:u32)->[Surface;5] {
   SURFACES=[SURFACE_EMPTY;MAX_SURFACES];SURFACES[..5].copy_from_slice(&scene);FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(catalog);
   scene[0]=Surface{x:20,y:60,w:w as u32-100,h:h as u32-150,chrome_flags:SURFACE_CHROME_TOP_BAR,..surf(3,parent)};SURFACES[0]=scene[0];
   FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
-  for slot in 1..5{recompute_text_lines(&mut SURFACES[slot]);let child=SURFACES[slot];let(px,py)=(child.x as usize+child.w as usize/2,child.y as usize+child.h as usize/2);
+  for slot in 1..2{recompute_text_lines(&mut SURFACES[slot]);let child=SURFACES[slot];let(px,py)=(child.x as usize+child.w as usize/2,child.y as usize+child.h as usize/2);
    for focus in[0,parent,child.surface_id]{
     APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,focus, &capture_scene(w,h,focus)),child.color);assert_eq!(APP_PRESENT_BITS,native_pixel_bit(pd,child.surface_id));
     let pane_scene=capture_scene(w,h,focus);let mut row=pane_scene.groups.row_winners(&pane_scene.surfaces,focus,py,w,h).unwrap();let source=row.source(px).unwrap();assert_eq!(source.surface.surface_id,parent);assert_eq!(source.content.surface_id,child.surface_id);

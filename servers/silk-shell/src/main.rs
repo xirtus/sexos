@@ -14225,7 +14225,6 @@ unsafe fn open_spindle_in_active_scene() -> bool {
     }
 
     // Render Spindle output bands.
-    spindle_render();
 
     sex_pdx::serial_record!("[spindle.placeholder.open] frame={}", fid);
     launcher_focus_existing(12,SURFACE_ID_SPINDLE,Some(launcher::LiveAction::Open)).unwrap_or(false)
@@ -14699,14 +14698,12 @@ unsafe fn spiderweb_accept() {
         serial_println!("[spindle.spiderweb.accept] len={}", len);
     }
     SPIDERWEB_OPEN = false;
-    spindle_render();
 }
 
 /// Cancel Spiderweb: close without modifying cmd_buf.
 unsafe fn spiderweb_cancel() {
     SPIDERWEB_OPEN = false;
     serial_println!("[spindle.spiderweb.cancel]");
-    spindle_render();
 }
 
 /// Route a key event while Spiderweb is open.
@@ -14845,7 +14842,6 @@ unsafe fn spindle_history_up() {
     }
     spindle_history_load(YARN.history_pos as usize);
     serial_println!("[silk-shell.spindle.history.nav] dir=up pos={} len={}", YARN.history_pos, YARN.cmd_len);
-    spindle_render();
 }
 
 /// Down — recall next (newer) history entry; past the newest, restore draft.
@@ -14861,7 +14857,6 @@ unsafe fn spindle_history_down() {
         spindle_history_load(YARN.history_pos as usize);
     }
     serial_println!("[silk-shell.spindle.history.nav] dir=down pos={} len={}", YARN.history_pos, YARN.cmd_len);
-    spindle_render();
 }
 
 /// Fish-style ghost autosuggest: newest history entry whose prefix matches
@@ -14894,7 +14889,6 @@ unsafe fn spindle_ghost_accept() -> bool {
             spindle_vi_insert_at(YARN.cmd_len, suffix[i]);
         }
         serial_println!("[spindle.ghost.accept] len={}", slen);
-        spindle_render();
         true
     } else {
         false
@@ -14911,7 +14905,6 @@ unsafe fn spindle_vi_normal_key(scancode: u8) {
             SPINDLE_VI_CUR = 0;
             serial_println!("[spindle.line.edit.ok] op=dd");
             serial_println!("[spindle.line.cursor] pos=0 len=0");
-            spindle_render();
         }
         return;
     }
@@ -14919,19 +14912,18 @@ unsafe fn spindle_vi_normal_key(scancode: u8) {
         0x0E => { // Backspace in normal = cursor left (h)
             if SPINDLE_VI_CUR > 0 { SPINDLE_VI_CUR -= 1; }
             serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
-            spindle_render();
         }
         _ => match spindle_scan_to_char(scancode) {
-            Some(b'h') => { if SPINDLE_VI_CUR > 0 { SPINDLE_VI_CUR -= 1; }                   serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); spindle_render(); }
-            Some(b'l') => { if SPINDLE_VI_CUR < YARN.cmd_len { SPINDLE_VI_CUR += 1; }        serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); spindle_render(); }
-            Some(b'0') => { SPINDLE_VI_CUR = 0;                                               serial_println!("[spindle.line.cursor] pos=0 len={}", YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=home"); spindle_render(); }
-            Some(b'w') => { spindle_vi_word_fwd();  serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_fwd");  spindle_render(); }
-            Some(b'b') => { spindle_vi_word_back(); serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_back"); spindle_render(); }
-            Some(b'e') => { spindle_vi_word_end();  serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_end");  spindle_render(); }
-            Some(b'i') => { SPINDLE_VI_NORMAL = false; serial_println!("[spindle.vi.mode] mode=insert"); spindle_render(); }
-            Some(b'a') => { if SPINDLE_VI_CUR < YARN.cmd_len { SPINDLE_VI_CUR += 1; } SPINDLE_VI_NORMAL = false; serial_println!("[spindle.vi.mode] mode=insert cursor={}", SPINDLE_VI_CUR); spindle_render(); }
+            Some(b'h') => { if SPINDLE_VI_CUR > 0 { SPINDLE_VI_CUR -= 1; }                   serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);  }
+            Some(b'l') => { if SPINDLE_VI_CUR < YARN.cmd_len { SPINDLE_VI_CUR += 1; }        serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);  }
+            Some(b'0') => { SPINDLE_VI_CUR = 0;                                               serial_println!("[spindle.line.cursor] pos=0 len={}", YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=home");  }
+            Some(b'w') => { spindle_vi_word_fwd();  serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_fwd");   }
+            Some(b'b') => { spindle_vi_word_back(); serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_back");  }
+            Some(b'e') => { spindle_vi_word_end();  serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_end");   }
+            Some(b'i') => { SPINDLE_VI_NORMAL = false; serial_println!("[spindle.vi.mode] mode=insert");  }
+            Some(b'a') => { if SPINDLE_VI_CUR < YARN.cmd_len { SPINDLE_VI_CUR += 1; } SPINDLE_VI_NORMAL = false; serial_println!("[spindle.vi.mode] mode=insert cursor={}", SPINDLE_VI_CUR);  }
             Some(b'd') => { SPINDLE_VI_PENDING_D = true; }
-            Some(b'u') => { spindle_vi_undo(); serial_println!("[spindle.line.edit.ok] op=undo len={}", YARN.cmd_len); serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); spindle_render(); }
+            Some(b'u') => { spindle_vi_undo(); serial_println!("[spindle.line.edit.ok] op=undo len={}", YARN.cmd_len); serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);  }
             _ => {}
         }
     }
@@ -15002,161 +14994,8 @@ unsafe fn spindle_dispatch() {
     SPINDLE_VI_NORMAL = false; // return to insert mode for next command
     SPINDLE_VI_PENDING_D = false;
 
-    // Render output bands.
-    spindle_render();
 }
 
-/// Render Spindle output using existing 0xEF fill rects (colored bands).
-/// No text rendering, no sexdisplay protocol changes.
-unsafe fn spindle_render() {
-    let w = SURFACE_0x99_W;
-    let h = SURFACE_0x99_H;
-    if w == 0 || h == 0 { return; }
-
-    serial_println!("[spindle.render.band] w={} h={}", w, h);
-
-    // Draw header bar at top of surface (rect_index=0).
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
-        (0u64 << 32) | 0u64,
-        ((SPINDLE_PLACEHOLDER_COLOR as u64) << 32)
-            | ((SPINDLE_HEADER_H as u64) << 16)
-            | w as u64);
-
-    // Draw output lines as colored fill-rect bands.
-    let yarn = &YARN;
-    let output_start = if yarn.output_count > SPINDLE_ROW_RECTS as usize {
-        yarn.output_count - SPINDLE_ROW_RECTS as usize
-    } else {
-        0
-    };
-    let visible_count = yarn.output_count - output_start;
-    for i in 0..visible_count.min(SPINDLE_ROW_RECTS as usize) {
-        let line_idx = output_start + i;
-        if line_idx >= YARN_OUTPUT_LINES { break; }
-        let rect_index = (i as u64 + 1) & 0xF;
-        let row_y = SPINDLE_HEADER_H + i as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP);
-        // Simple semantic coloring: command lines get accent, others get dim.
-        let color = if yarn.output_lines[line_idx][0] == b'>' {
-            0x007AAFA4u32  // teal accent for echo/prompt lines
-        } else if i == visible_count - 1 {
-            0x00386050u32  // green tint for latest output
-        } else {
-            0x00202830u32  // dim default
-        };
-        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
-            (row_y as u64) << 32 | 0u64,
-            (rect_index << 56)
-                | ((color as u64) << 32)
-                | ((SPINDLE_ROW_H as u64) << 16)
-                | w as u64);
-        serial_println!("[spindle.render.band] index={} color={:#010x}", rect_index, color);
-    }
-
-    // ── Render command line text + cursor via display-safe path ──
-    spindle_render_cmdline();
-
-    serial_println!("[spindle.render.submit] lines={}", visible_count);
-}
-
-/// Stargate prompt renderer: [OK/!!] [I/N] sex> <cmd> + block cursor.
-/// Segments: status (green/red) → vi-mode (green/yellow) → prompt → cmd text.
-/// Font: 5×7 ASCII bitmap (safe, no TTF). JetBrains Mono planned via offline converter.
-unsafe fn spindle_render_cmdline() {
-    let w = SURFACE_0x99_W;
-    let h = SURFACE_0x99_H;
-    if w == 0 || h == 0 { return; }
-
-    let yarn = &YARN;
-
-    // ── Segment 0: session [S0] / [S1] ──────────────────────────────────────
-    let sess_idx = SPINDLE_ACTIVE_SESSION.min(SPINDLE_SESSION_COUNT - 1);
-    let session_tag: &[u8] = if sess_idx == 0 { b"[S0]" } else { b"[S1]" };
-    let session_color: u64 = if sess_idx == 0 { CAT_BLUE } else { CAT_MAUVE };
-    serial_println!("[spindle.stargate.segment] kind=session idx={}", sess_idx);
-
-    // ── Segment 1: status [OK] / [!!] ───────────────────────────────────────
-    let status_tag:   &[u8] = if SPINDLE_LAST_CMD_OK { b"[OK]" } else { b"[!!]" };
-    let status_color: u64   = if SPINDLE_LAST_CMD_OK { CAT_GREEN  } else { CAT_RED };
-    serial_println!("[spindle.stargate.segment] kind=status tag={:?}", status_tag);
-
-    // ── Segment 2: vi mode [I] / [N] ────────────────────────────────────────
-    let mode_tag:   &[u8] = if SPINDLE_VI_NORMAL { b"[N]" } else { b"[I]" };
-    let mode_color: u64   = if SPINDLE_VI_NORMAL { CAT_YELLOW } else { CAT_GREEN };
-    serial_println!("[spindle.stargate.segment] kind=mode tag={:?}", mode_tag);
-
-    // ── Segment 3: prompt ───────────────────────────────────────────────────
-    const PROMPT_BYTES: &[u8] = b"sex> ";
-    // header: [S0/S1](4) + [OK/!!](4) + [I/N](3) + sex>(5) = 16 chars
-    let header_len = session_tag.len() + status_tag.len() + mode_tag.len() + PROMPT_BYTES.len();
-
-    // Clear text buffer then pack all segments + cmd into one 0xFB stream.
-    pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_SPINDLE, 0, 0);
-
-    let max_chars = 40usize;
-    let mut packed_buf = [0u8; 40];
-    let mut seg_ends = [0usize; 4]; // end byte offsets of each colored segment
-    let mut ti = 0usize;
-    for &b in session_tag  { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[0] = ti; // end of session segment
-    for &b in status_tag   { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[1] = ti; // end of status segment
-    for &b in mode_tag     { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[2] = ti; // end of mode segment
-    for &b in PROMPT_BYTES { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[3] = ti; // end of prompt segment
-    for i in 0..yarn.cmd_len {
-        if ti < max_chars { packed_buf[ti] = yarn.cmd_buf[i]; ti += 1; }
-    }
-    let cmd_end = ti; // end of real command text, before any ghost suggestion
-
-    // Fish-style ghost autosuggest: dim completion from history, cursor stays
-    // at cmd_end (never included in the real command line until accepted).
-    if let Some((suffix, slen)) = spindle_ghost_suffix() {
-        static mut SPINDLE_GHOST_MARK_BUDGET: u32 = 32;
-        if SPINDLE_GHOST_MARK_BUDGET > 0 {
-            SPINDLE_GHOST_MARK_BUDGET -= 1;
-            serial_println!("[spindle.ghost.suggest] suffix_len={}", slen);
-        }
-        for i in 0..slen {
-            if ti < max_chars { packed_buf[ti] = suffix[i]; ti += 1; } else { break; }
-        }
-    }
-
-    let mut offset = 0usize;
-    while offset < ti {
-        let chunk = 8.min(ti - offset);
-        let mut word: u64 = 0;
-        for i in 0..chunk { word |= (packed_buf[offset + i] as u64) << (i * 8); }
-        // Color by segment: session → status → mode → prompt (subtext) → cmd text → ghost (dim).
-        let color: u64 = if offset < seg_ends[0]      { session_color }
-                         else if offset < seg_ends[1] { status_color }
-                         else if offset < seg_ends[2] { mode_color }
-                         else if offset < seg_ends[3] { CAT_SUBTEXT1 }
-                         else if offset < cmd_end      { CAT_TEXT }
-                         else                          { CAT_OVERLAY2 };
-        pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
-            (offset as u64) | ((chunk as u64) << 8) | (color << 32));
-        offset += chunk;
-    }
-
-    // ── Cursor: amber in normal mode, rosewater in insert ───────────────────
-    let cursor_y = SPINDLE_HEADER_H
-        + SPINDLE_ROW_RECTS as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP)
-        + SPINDLE_ROW_GAP;
-    let cursor_w = 8u32;
-    let cursor_h = SPINDLE_ROW_H;
-    let vi_cur = SPINDLE_VI_CUR.min(yarn.cmd_len);
-    let cursor_x = (4u32 + (header_len as u32 + vi_cur as u32) * 8u32)
-        .min(w.saturating_sub(cursor_w));
-    let cursor_color = if SPINDLE_VI_NORMAL { CAT_YELLOW } else { CAT_ROSEWATER };
-
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
-        ((cursor_y as u64) << 32) | (cursor_x as u64),
-        (7u64 << 56) | (cursor_color << 32) | ((cursor_h as u64) << 16) | (cursor_w as u64));
-
-    serial_println!("[spindle.stargate.render] cmd_len={} vi_cur={} cursor_x={} ok={} sess={}",
-        yarn.cmd_len, vi_cur, cursor_x, SPINDLE_LAST_CMD_OK as u8, sess_idx);
-}
 
 // ── Spindle session save/load/switch ─────────────────────────────────────────
 
@@ -15233,7 +15072,6 @@ unsafe fn spindle_session_switch() {
     serial_println!("[spindle.session.pane.switch] from={} to={}", prev, next);
     serial_println!("[spindle.session.active] idx={}", next);
     serial_println!("[spindle.session.pane.independent] prev={} next={}", prev, next);
-    spindle_render();
     serial_println!("[spindle.session.render] idx={}", SPINDLE_ACTIVE_SESSION);
 }
 
@@ -24561,7 +24399,6 @@ pub extern "C" fn _start() -> ! {
                     yarn_append_output(b"> sent: a b c Backspace d Enter");
                     yarn_append_output(b"> Spindle PD received and processed all keys");
                     yarn_append_output(b"");
-                    spindle_render();
                     serial_println!("[silk-shell.spindle.render.input_line] proof_output=written");
                 }
             }
@@ -25711,7 +25548,6 @@ pub extern "C" fn _start() -> ! {
                                             serial_println!("[spindle.key.backspace] len={}", YARN.cmd_len);
                                             serial_println!("[spindle.line.edit] op=backspace len={}", YARN.cmd_len);
                                             serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
-                                            spindle_render();
                                         }
                                     }
                                     0x01 => { // Escape — enter normal vi mode
@@ -25723,7 +25559,6 @@ pub extern "C" fn _start() -> ! {
                                             }
                                             serial_println!("[spindle.vi.mode] mode=normal");
                                             serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
-                                            spindle_render();
                                         }
                                     }
                                     0x0F => { // Tab — accept ghost autosuggest if present
@@ -25750,7 +25585,6 @@ pub extern "C" fn _start() -> ! {
                                                 serial_println!("[spindle.key.char] ch={}", ch as char);
                                                 serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
                                                 serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
-                                                spindle_render();
                                             }
                                         }
                                     }

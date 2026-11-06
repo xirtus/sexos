@@ -9,7 +9,7 @@ pub struct Outbox{ids:[u64;4],control:[Option<Operation>;4],hidden:bool,closed:b
 impl Outbox{
  pub const fn new()->Self{Self{ids:[0;4],control:[None;4],hidden:false,closed:true,text:text_delivery::Outbox::new(0)}}
  /// In place, for the static outbox. An unrecognized subject stays closed.
- pub fn bind(&mut self,target:u32){let Some(ids)=sex_pdx::app_catalog::spindle_grid(target)else{return};self.ids=ids;self.closed=false;self.text.bind_atomic(ids[0]);}
+ pub fn bind(&mut self,target:u32){let Some(ids)=sex_pdx::app_catalog::spindle_grid(target)else{return};self.ids=ids;self.closed=false;self.text.bind_atomic(ids[0]);self.text.enable_delta();}
  pub fn create(&mut self,index:usize,position:u64,size:u64){if self.closed||index>=4{return}if index==0{self.hidden=false;}self.control[index]=Some(Operation{opcode:0xEC,surface:self.ids[index],a:position,b:size});}
  pub fn destroy(&mut self,index:usize){if self.closed||index>=4{return}if index==0{self.hidden=true;self.text.cancel();}self.control[index]=Some(Operation{opcode:0xEE,surface:self.ids[index],a:0,b:0});}
  pub fn text(&mut self,text:&Text,stamp:Stamp,color:u32){if self.closed||self.hidden||text.len>text.bytes.len(){return}

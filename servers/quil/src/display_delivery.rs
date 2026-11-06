@@ -8,6 +8,10 @@ struct Batch {
     offset: usize,
     selected: bool,
     awaiting: Option<u16>,
+    /// Sent as changes against the last applied text.
+    delta: bool,
+    /// A re-send is always complete.
+    full: bool,
     /// Polls spent waiting for the reply; a lost reply re-sends the batch.
     waits: u32,
 }
@@ -18,6 +22,9 @@ pub struct Outbox {
     latest: Option<Batch>,
     dead: bool,
     last_paint: u64,
+    deltas: bool,
+    applied: [u8; super::view::CAPACITY],
+    applied_len: Option<usize>,
 }
 impl Outbox {
     pub const fn new() -> Self {
@@ -26,7 +33,14 @@ impl Outbox {
             latest: None,
             dead: false,
             last_paint: 0,
+            deltas: false,
+            applied: [0; super::view::CAPACITY],
+            applied_len: None,
         }
+    }
+    /// Send only changed chunks once Display holds an applied text.
+    pub fn enable_delta(&mut self) {
+        self.deltas = true;
     }
     pub fn queue(&mut self, text: Text, paint: u64) {
         if self.dead {
@@ -53,6 +67,8 @@ impl Outbox {
             offset: 0,
             selected: false,
             awaiting: None,
+            delta: false,
+            full: false,
             waits: 0,
         };
         if self.active.is_none() {
@@ -75,6 +91,10 @@ impl Outbox {
             return None;
         }
         let done = (b.paint, b.text.len);
+        if self.deltas {
+            self.applied[..b.text.len].copy_from_slice(&b.text.bytes[..b.text.len]);
+            self.applied_len = Some(b.text.len);
+        }
         b.text.bytes.fill(0);
         self.active = None;
         Some(done)
@@ -89,6 +109,7 @@ impl Outbox {
         if self.dead {
             return;
         }
+        self.applied_len = None;
         if let Some(b) = self.active.as_mut() {
             b.text.bytes.fill(0);
         }
@@ -144,11 +165,33 @@ impl Outbox {
                     b.text.bytes.fill(0);
                     *b = next;
                 } else {
-                    (b.begun, b.offset, b.selected, b.awaiting, b.waits) = (false, 0, false, None, 0);
+                    // Display holds a failed delta poisoned under its old number.
+                    if b.delta {
+                        self.last_paint += 1;
+                        b.paint = self.last_paint;
+                    }
+                    (b.begun, b.offset, b.selected, b.awaiting, b.waits, b.delta, b.full) = (false, 0, false, None, 0, false, true);
                 }
             }
-            let b = self.active.as_ref().unwrap();
-            let request = if !b.begun {
+            let applied_len = self.applied_len.unwrap_or(0);
+            let b = self.active.as_mut().unwrap();
+            if b.begun && b.delta {
+                while b.offset < b.text.len {
+                    let end = b.offset + (b.text.len - b.offset).min(8);
+                    if end > applied_len || b.text.bytes[b.offset..end] != self.applied[b.offset..end] {
+                        break;
+                    }
+                    b.offset = end;
+                }
+            }
+            let start_delta = !b.begun && !b.full && self.deltas && self.applied_len.is_some();
+            let request = if start_delta {
+                sex_pdx::text_batch::Request::BeginDelta {
+                    sequence: b.paint as u32,
+                    len: b.text.len,
+                    color: sex_pdx::desktop_style::TEXT,
+                }
+            } else if !b.begun {
                 sex_pdx::text_batch::Request::Begin {
                     sequence: b.paint as u32,
                     len: b.text.len,
@@ -200,6 +243,7 @@ impl Outbox {
             let b = self.active.as_mut().unwrap();
             if !b.begun {
                 b.begun = true;
+                b.delta = start_delta;
             } else if b.offset < b.text.len {
                 b.offset += (b.text.len - b.offset).min(8);
             } else if !b.selected && b.text.selection.is_some() {

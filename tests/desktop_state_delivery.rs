@@ -127,11 +127,11 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
 }}
 #[test]fn viewport_waits_for_each_spindle_child_and_hard_failure_cannot_be_readiness(){let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(50,17,170,302));
- for sid in [302,303,304,305]{DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
+ for sid in [302]{DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
  assert!(!desktop_content_ready(306));desktop_state_poll();assert!(!desktop_content_ready(306));desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(306));
- DESKTOP_STATES.observe(op(0xEC,303),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(306));
- DESKTOP_STATES.observe(op(0xFD,303),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(306));
- DESKTOP_STATES.observe(op(0xEC,303),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(306));
+ DESKTOP_STATES.observe(op(0xEC,302),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(306));
+ DESKTOP_STATES.observe(op(0xFD,302),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(306));
+ DESKTOP_STATES.observe(op(0xEC,302),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(306));
 }}
 
 
@@ -201,19 +201,20 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
 #[test]fn third_spindle_all_panes_use_exact_parent_geometry_and_gate_viewport_until_admitted(){
  let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(130,24,240,313));
- for (sid,x,y) in [(313,18,86),(315,334,86),(316,18,268),(317,334,268)] {
+ for sid in [315,316,317]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());} // zero-height panes carry no text
+ for (sid,x,y) in [(313,18,86)] {
   let create=desktop_state_validate(op(0xEC,sid)).unwrap();
-  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(174<<32)|308});
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(356<<32)|624});
   assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
  }
  assert!(!desktop_content_ready(314));
- RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);4]);desktop_state_poll();
- assert_eq!(CALLS.lock().unwrap().len(),4);assert!(!desktop_content_ready(314));
- for sid in [313,315,316,317]{assert!(DESKTOP_STATES.pending_surface(sid));}
+ RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);1]);desktop_state_poll();
+ assert_eq!(CALLS.lock().unwrap().len(),1);assert!(!desktop_content_ready(314));
+ for sid in [313]{assert!(DESKTOP_STATES.pending_surface(sid));}
  desktop_state_poll();desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(314));
- let calls=CALLS.lock().unwrap();assert_eq!(&calls[..4],&calls[4..8]);drop(calls);
- for sid in [313,315,316,317]{
+ let calls=CALLS.lock().unwrap();assert_eq!(&calls[..1],&calls[1..2]);drop(calls);
+ for sid in [313]{
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(314));
   DESKTOP_STATES.observe(op(0xFD,sid),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(314));
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(314));
@@ -223,7 +224,8 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  let _l=LOCK.lock().unwrap();unsafe{
  for stale in 0..8{
   reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(130,24,240,313));
-  for sid in [313,315,316,317]{assert!(desktop_state_validate(op(0xEC,sid)).is_some());DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
+  assert!(desktop_state_validate(op(0xEC,313)).is_some());for sid in [315,316,317]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());}
+  for sid in [313,315,316,317]{DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
   match stale{0=>APP_CUSTODY[0].as_mut().unwrap().close_pending=true,1=>APP_CUSTODY[0].as_mut().unwrap().dead=true,
    2=>APP_CUSTODY=[None;28],3=>APP_CUSTODY[0].as_mut().unwrap().surface=302,
    4=>ALIVE=false,5=>STATE=LifecycleState::Hidden,6=>MINIMIZED=true,_=>BOUNDS=Some((10,50,0,0))}
@@ -235,19 +237,20 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
 #[test]fn eighth_spindle_all_panes_use_exact_parent_geometry_and_gate_viewport_until_admitted(){
  let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(150,29,290,338));
- for (sid,x,y) in [(338,18,86),(340,334,86),(341,18,268),(342,334,268)] {
+ for sid in [340,341,342]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());} // zero-height panes carry no text
+ for (sid,x,y) in [(338,18,86)] {
   let create=desktop_state_validate(op(0xEC,sid)).unwrap();
-  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(174<<32)|308});
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(356<<32)|624});
   assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
  }
  assert!(!desktop_content_ready(339));
- RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);4]);desktop_state_poll();
- assert_eq!(CALLS.lock().unwrap().len(),4);assert!(!desktop_content_ready(339));
- for sid in [338,340,341,342]{assert!(DESKTOP_STATES.pending_surface(sid));}
+ RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);1]);desktop_state_poll();
+ assert_eq!(CALLS.lock().unwrap().len(),1);assert!(!desktop_content_ready(339));
+ for sid in [338]{assert!(DESKTOP_STATES.pending_surface(sid));}
  desktop_state_poll();desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(339));
- let calls=CALLS.lock().unwrap();assert_eq!(&calls[..4],&calls[4..8]);drop(calls);
- for sid in [338,340,341,342]{
+ let calls=CALLS.lock().unwrap();assert_eq!(&calls[..1],&calls[1..2]);drop(calls);
+ for sid in [338]{
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(339));
   DESKTOP_STATES.observe(op(0xFD,sid),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(339));
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(339));
@@ -257,7 +260,8 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  let _l=LOCK.lock().unwrap();unsafe{
  for stale in 0..8{
   reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(150,29,290,338));
-  for sid in [338,340,341,342]{assert!(desktop_state_validate(op(0xEC,sid)).is_some());DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
+  assert!(desktop_state_validate(op(0xEC,338)).is_some());for sid in [340,341,342]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());}
+  for sid in [338,340,341,342]{DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
   match stale{0=>APP_CUSTODY[0].as_mut().unwrap().close_pending=true,1=>APP_CUSTODY[0].as_mut().unwrap().dead=true,
    2=>APP_CUSTODY=[None;28],3=>APP_CUSTODY[0].as_mut().unwrap().surface=302,
    4=>ALIVE=false,5=>STATE=LifecycleState::Hidden,6=>MINIMIZED=true,_=>BOUNDS=Some((10,50,0,0))}
@@ -269,19 +273,20 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
 #[test]fn ninth_spindle_all_panes_use_exact_parent_geometry_and_gate_viewport_until_admitted(){
  let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(194,40,400,353));
- for (sid,x,y) in [(353,18,86),(355,334,86),(356,18,268),(357,334,268)] {
+ for sid in [355,356,357]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());} // zero-height panes carry no text
+ for (sid,x,y) in [(353,18,86)] {
   let create=desktop_state_validate(op(0xEC,sid)).unwrap();
-  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(174<<32)|308});
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(356<<32)|624});
   assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
  }
  assert!(!desktop_content_ready(354));
- RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);4]);desktop_state_poll();
- assert_eq!(CALLS.lock().unwrap().len(),4);assert!(!desktop_content_ready(354));
- for sid in [353,355,356,357]{assert!(DESKTOP_STATES.pending_surface(sid));}
+ RESULTS.lock().unwrap().extend([(ERR_SERVICE_NOT_READY,0);1]);desktop_state_poll();
+ assert_eq!(CALLS.lock().unwrap().len(),1);assert!(!desktop_content_ready(354));
+ for sid in [353]{assert!(DESKTOP_STATES.pending_surface(sid));}
  desktop_state_poll();desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(354));
- let calls=CALLS.lock().unwrap();assert_eq!(&calls[..4],&calls[4..8]);drop(calls);
- for sid in [353,355,356,357]{
+ let calls=CALLS.lock().unwrap();assert_eq!(&calls[..1],&calls[1..2]);drop(calls);
+ for sid in [353]{
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Rejected(3));assert!(!desktop_content_ready(354));
   DESKTOP_STATES.observe(op(0xFD,sid),linen_text_delivery::Admission::Accepted);assert!(!desktop_content_ready(354));
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Accepted);desktop_state_poll();assert!(desktop_content_ready(354));
@@ -291,7 +296,8 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  let _l=LOCK.lock().unwrap();unsafe{
  for stale in 0..8{
   reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(194,40,400,353));
-  for sid in [353,355,356,357]{assert!(desktop_state_validate(op(0xEC,sid)).is_some());DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
+  assert!(desktop_state_validate(op(0xEC,353)).is_some());for sid in [355,356,357]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());}
+  for sid in [353,355,356,357]{DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);}
   match stale{0=>APP_CUSTODY[0].as_mut().unwrap().close_pending=true,1=>APP_CUSTODY[0].as_mut().unwrap().dead=true,
    2=>APP_CUSTODY=[None;28],3=>APP_CUSTODY[0].as_mut().unwrap().surface=302,
    4=>ALIVE=false,5=>STATE=LifecycleState::Hidden,6=>MINIMIZED=true,_=>BOUNDS=Some((10,50,0,0))}

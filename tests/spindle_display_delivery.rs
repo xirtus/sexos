@@ -18,7 +18,7 @@ fn stamp(paint:u64)->Stamp{Stamp{sequence:1,paint}}
 fn outbox(target:u32)->Box<Outbox>{let mut o=Box::new(Outbox::new());o.bind(target);o}
 fn drain(o:&mut Outbox)->Vec<Operation>{let mut ops=Vec::new();for _ in 0..64{o.poll(128,|op|{ops.push(op);Ok(())}).unwrap();}ops}
 fn decode(op:&Operation)->Request{Request::decode(op.opcode,op.a,op.b).unwrap()}
-fn begun(op:&Operation)->u32{match decode(op){Request::Begin{sequence,..}=>sequence,other=>panic!("{other:?}")}}
+fn begun(op:&Operation)->u32{match decode(op){Request::Begin{sequence,..}|Request::BeginDelta{sequence,..}=>sequence,other=>panic!("{other:?}")}}
 fn applied(sid:u64,sequence:u32)->u64{Applied{surface:sid as u16,sequence}.encode().unwrap()}
 #[test]fn create_precedes_one_atomic_terminal_batch_on_the_first_catalog_surface(){
  for(target,sid)in[(12,154),(17,302)]{
@@ -71,4 +71,16 @@ fn applied(sid:u64,sequence:u32)->u64{Applied{surface:sid as u16,sequence}.encod
 }
 #[test]fn unrecognized_subject_cannot_create_or_send_any_surface(){
  let mut o=outbox(9);o.create(0,1,2);o.text(&text(b'x'),stamp(1),1);assert!(!o.pending());o.poll(4,|_|panic!()).unwrap();
+}
+#[test]fn second_paint_sends_only_changed_chunks_and_a_lost_reply_resends_it_whole(){
+ let mut o=outbox(12);let first=text(b'a');o.text(&first,stamp(1),1);let ops=drain(&mut o);
+ assert!(matches!(decode(&ops[0]),Request::Begin{..}));assert!(o.receive(1,applied(154,begun(&ops[0]))).is_some());
+ let mut second=first;second.bytes[first.len-5]=b'!';o.text(&second,stamp(2),1);let ops=drain(&mut o);
+ assert!(matches!(decode(&ops[0]),Request::BeginDelta{..}));
+ assert_eq!(ops.iter().filter(|op|matches!(decode(op),Request::Chunk{..})).count(),1);
+ assert!(matches!(decode(ops.last().unwrap()),Request::Commit{hash,..}if hash==text_batch::hash(&second.bytes[..second.len])));
+ let mut again=Vec::new();for _ in 0..5000{o.poll(128,|op|{again.push(op);Ok(())}).unwrap();if !again.is_empty(){break}}
+ for _ in 0..64{o.poll(128,|op|{again.push(op);Ok(())}).unwrap();}
+ assert!(matches!(decode(&again[0]),Request::Begin{..}));assert!(begun(&again[0])>begun(&ops[0]));
+ assert_eq!(again.iter().filter(|op|matches!(decode(op),Request::Chunk{..})).count(),(second.len+7)/8);
 }

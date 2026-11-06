@@ -780,3 +780,37 @@ fn incomplete_poisoned_or_malformed_text_never_produces_a_pending_view() {
         stage.poll_reply(|_,_|panic!("invalid pending text receipt"));
     }
 }
+
+#[test]
+fn delta_seeds_committed_text_and_commit_still_verifies_the_whole_hash() {
+    let committed=b"hello world, this is text";
+    let mut new=*committed;new[8]=b'X';
+    let request=Request::BeginDelta{sequence:7,len:new.len(),color:1};
+    let(op,a,b)=request.wire();
+    assert_eq!(op,text_batch::BEGIN_DELTA);
+    assert!(matches!(Request::decode(op,a,b),Some(Request::BeginDelta{sequence:7,..})));
+    assert!(Request::decode(text_batch::BEGIN_DELTA,(CAPACITY as u64+1)<<32|1,0).is_none());
+    let chunk=|text:&[u8],offset:usize|{let count=(text.len()-offset).min(8);let mut bytes=[0;8];bytes[..count].copy_from_slice(&text[offset..offset+count]);Request::Chunk{sequence:7,offset,count,bytes}};
+    let commit=|text:&[u8]|Request::Commit{sequence:7,hash:text_batch::hash(text)};
+    // Only the changed chunk, replacing bytes the seed already covered.
+    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,new.len(),1,committed);
+    s.receive(9,90,156,chunk(&new,8));
+    let(len,_,bytes)=s.receive(9,90,156,commit(&new)).unwrap();assert_eq!(&bytes[..len],&new);
+    // A sender whose idea of the committed text is wrong never publishes.
+    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,new.len(),1,b"other text entirely here!");
+    s.receive(9,90,156,chunk(&new,8));
+    assert!(s.receive(9,90,156,commit(&new)).is_none());assert!(s.pending().is_none());
+    // Longer than the committed text: the uncovered tail starts empty.
+    let longer=b"hello world, this is text and more";
+    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,longer.len(),1,committed);
+    s.receive(9,90,156,chunk(longer,24));s.receive(9,90,156,chunk(longer,32));
+    assert!(s.receive(9,90,156,commit(longer)).is_some());
+    // A plain Begin never reads the seed path, and a delta Request alone stages nothing.
+    let mut s=Stage::EMPTY;assert!(s.receive(9,90,156,Request::BeginDelta{sequence:7,len:4,color:1}).is_none());
+    assert!(s.receive(9,90,156,commit(b"text")).is_none());
+    // An owed reply refuses the seed as it refuses Begin.
+    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,committed.len(),1,committed);
+    assert!(s.receive(9,90,156,commit(committed)).is_some());
+    s.begin_delta(9,90,156,8,new.len(),1,committed);
+    assert!(s.pending().is_some_and(|p|p.context().sequence()==7));
+}

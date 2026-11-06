@@ -1122,3 +1122,23 @@ fn home_and_end_stay_on_the_carets_line() {
     assert_eq!((view::line_start(t, 8), view::line_end(t, 8)), (8, 8), "an empty line");
     assert_eq!((view::line_start(t, 99), view::line_end(t, 99)), (9, t.len()));
 }
+
+#[test]
+fn enabled_delta_sends_only_changed_chunks_after_an_applied_paint() {
+    let mut out=delivery::Outbox::new();out.enable_delta();
+    let mut text=view::Text::new();text.len=80;text.bytes[..80].fill(b'a');
+    out.queue(text,10);
+    let mut first=Vec::new();out.poll(156,|op,_,a,b|{first.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
+    assert!(matches!(first[0],text_batch::Request::Begin{..}));
+    let receipt=text_batch::Applied{surface:156,sequence:10}.encode().unwrap();
+    assert_eq!(out.receive(1,receipt),Some((10,80)));
+    text.bytes[17]=b'z';out.queue(text,11);
+    let mut second=Vec::new();out.poll(156,|op,_,a,b|{second.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
+    assert!(matches!(second[0],text_batch::Request::BeginDelta{..}));
+    assert_eq!(second.iter().filter(|r|matches!(r,text_batch::Request::Chunk{..})).count(),1);
+    assert!(matches!(second.last(),Some(text_batch::Request::Commit{..})));
+    // A new binding has no applied text to change.
+    let receipt=text_batch::Applied{surface:156,sequence:11}.encode().unwrap();out.receive(1,receipt);out.rebind();
+    out.queue(text,12);let mut third=Vec::new();out.poll(156,|op,_,a,b|{third.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
+    assert!(matches!(third[0],text_batch::Request::Begin{..}));
+}

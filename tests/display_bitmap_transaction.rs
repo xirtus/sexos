@@ -261,7 +261,7 @@ fn production_uses_owned_live_route_both_paint_branches_and_terminal_cleanup() {
     assert!(branch.find("s.active && s.surface_id == msg.arg0 && s.owner_pd == msg.caller_pd").unwrap()<branch.find("BITMAP_STORES.receive(").unwrap());
     assert!(branch.contains("BITMAP_STORES.receive(msg.caller_pd, msg.caller_task, msg.arg0, request)"));
     assert!(branch.find("bitmap_binding_live(&lifecycle,binding)").unwrap()<branch.find("BITMAP_STORES.receive(").unwrap());
-    assert!(source.contains("0x27A | 0x27B | 0x27C | 0x27D | 0x28B)\n                    && !lifecycle.sid_live(msg.arg0)"));
+    assert!(source.contains("0x27A | 0x27B | 0x27C | 0x27D | 0x28B | 0x28C)\n                    && !lifecycle.sid_live(msg.arg0)"));
     assert!(source.contains("BITMAP_STORES.retire(info.target_pd,info.task_id);"));
     assert!(source.contains("BITMAP_STORES.reset_surface(owner, surface_id);"));
     let destroy=&source[source.find("                0xEE => {").unwrap()..source.find("                0xF5 => {").unwrap()];

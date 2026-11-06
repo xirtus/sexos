@@ -1511,6 +1511,11 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
     }
 }
 
+/// Seed for a delta batch. Reading it changes nothing canonical.
+fn committed_text(slot:&Surface)->&[u8]{
+    &slot.text_buf[..(slot.text_len as usize).min(TEXT_BUF_CAP)]
+}
+
 fn legacy_text_clear(slot:&mut Surface)->bool{
     let changed=slot.text_len!=0 || slot.selection_start!=0 || slot.selection_end!=0;
     slot.erase_selection();
@@ -3740,7 +3745,7 @@ pub extern "C" fn _start() -> ! {
                 REPAINT_DRAINED=drained;
                 REPAINT_SEEN |= match msg.type_id {
                     0xEC=>1,0xEB=>2,0xED=>4,0xEE=>8,0xEF=>16,
-                    0x276|0x277|0x278|0x27A|0x27B|0x27C|0x27D=>32,0xFA|0xFB=>64,0xFD=>128,
+                    0x276|0x277|0x278|0x27A|0x27B|0x27C|0x27D|0x28C=>32,0xFA|0xFB=>64,0xFD=>128,
                     silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
                 };
             }
@@ -3755,7 +3760,7 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             if !lifecycle.caller_live(msg.caller_pd)
-                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B)
+                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B | 0x28C)
                     && !lifecycle.sid_live(msg.arg0)) {
                 unsafe {
                     static mut DEAD_CALL_LOG_BUDGET: u8 = 8;
@@ -4321,13 +4326,15 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::SELECT | sex_pdx::text_batch::COMMIT => {
+                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::SELECT | sex_pdx::text_batch::COMMIT | sex_pdx::text_batch::BEGIN_DELTA => {
                     if !browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0) { continue; }
                     let Some(request) = sex_pdx::text_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
                     unsafe {
                         for (index, slot) in SURFACES.iter().enumerate() {
                             if !slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd { continue; }
-                            if TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request).is_some() {
+                            if let sex_pdx::text_batch::Request::BeginDelta{sequence,len,color}=request{
+                                TEXT_STAGES[index].begin_delta(msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,color,committed_text(slot));
+                            } else if TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request).is_some() {
                                 // Commit seals a candidate; canonical Surface text is
                                 // unchanged until its captured Full publication succeeds.
                                 let pending=TEXT_STAGES[index].pending().expect("sealed text candidate");
