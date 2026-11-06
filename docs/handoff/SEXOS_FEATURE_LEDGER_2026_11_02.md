@@ -1746,11 +1746,31 @@ surfaces; the three children stay at zero height and hold no text.
   `network_contention`, `spindle_reserve_probe`, `https_document`. Maximized
   Spindle at both sizes passes the `check_spindle_viewport_pixels` oracle using
   a local script, not a committed gate.
-- Typing cost is high: about 0.22 s per key maximized on QEMU, since a full
-  batch is about 490 chunks. Delta batches are next.
+- Typing cost: 0.22 s per key maximized on QEMU at first, 0.057 s after the two
+  changes in the next entry.
 - Not green: `launcher_workflow_gate.py` stops at launcher-exhausted because it
   expects Spindle to be out of reopens while 7 remain; the gate predates the
   larger reserve but was not re-run on an older image. `spindle_viewport_gate.py`
   needs a journal disk from an earlier boot and has not run here.
   `desktop_close_gate.py` times out waiting for `[quil.palette.action] kind=esc`, the same on the Q10 image.
 - Screenshot: `assets/sexos-alpha-spindle-full-window-2026-11-06.png`.
+
+## Delta text batches and the hidden terminal (2026-11-06)
+
+- **New ABI op** `text_batch::BEGIN_DELTA` (0x28c). Display seeds the Stage from
+  the surface's committed text, only changed chunks follow, and Commit still
+  verifies the hash of the whole text. A mismatch poisons that sequence, so the
+  sender re-sends complete under a new number after 4096 polls with no reply.
+  Quil, Browser and Spindle use it.
+- **Removed** the shell's `spindle_render`/`spindle_render_cmdline`: a dead copy
+  of the terminal behind Spindle that repainted the whole window on every key.
+  Measured: maximized Spindle typing 0.207 s with deltas alone, 0.057 s after
+  this removal, at both 1280x800 and 1024x768.
+- **Gates.** 15 host gates, 1,132 Python tests, master gate GREEN. Native,
+  source-bound, all pass: `http_content`, `quil_autosave`, `clipboard_workflow`
+  at both sizes; `quil_readability`, `connected_desktop`, `quil_workflow`,
+  `https_document`, `https_import`, `spindle_calc`, `network_contention`,
+  `spindle_reserve_probe`.
+- **Correction.** The Spindle commit was merged with `display_surface_groups_gate`
+  and `linen_text_delivery_gate` failing, because I had run only part of the host
+  set. Their tests still assumed four panes. This merge fixes them.
