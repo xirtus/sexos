@@ -1788,3 +1788,26 @@ All host gates and Python tests pass. Native at 1280x800: `http_content`,
 `quil_workflow`, `https_document`, `spindle_calc`, `spindle_reserve_probe`,
 `https_png`; `http_content` and `clipboard_workflow` also at 1024x768.
 Also fills the band above Spindle's terminal pane.
+
+## Shared text regions (2026-11-07)
+
+ABI: `text_batch::FILL` (0x28c) replaces `BEGIN_DELTA`; new `text_region` module;
+new BOOT grants; `BootFrameReservations` holds 96 ranges, up from 32.
+
+Each catalog row has an 8 KiB region granted at BOOT, writable by that app and
+read-only to Display. A batch is Begin, Fill, optional Select, Commit: 3 or 4
+calls instead of about 490 for a full screen. Display copies the region once and
+hashes its copy, so the app cannot change a text after Fill. Quil, Browser and
+Spindle use it; the shell's small surfaces keep chunks. This is the UiIR idea from
+ARCHITECTURE.md 1.4 applied to app text, and it removes the delta code.
+
+Measured on QEMU: Quil 0.037 s per key, maximized Spindle 0.063 s, both about the
+same as with deltas. Region delivery mainly removes the worst case, a text whose
+every chunk changes. Display logs `[display.text.incomplete]` a few times at boot
+when a paint is refused while a reply is owed; each recovers by re-sending.
+
+All host gates, 1,132 Python tests, `memory_region_authority_gate`, master gate
+GREEN. Native: `http_content` and `clipboard_workflow` at both sizes;
+`quil_autosave`, `quil_readability`, `connected_desktop`, `quil_workflow`,
+`https_document`, `spindle_calc`, `spindle_reserve_probe`, `https_png`,
+`network_contention` at 1280x800.
