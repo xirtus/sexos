@@ -1774,3 +1774,17 @@ surfaces; the three children stay at zero height and hold no text.
 - **Correction.** The Spindle commit was merged with `display_surface_groups_gate`
   and `linen_text_delivery_gate` failing, because I had run only part of the host
   set. Their tests still assumed four panes. This merge fixes them.
+
+## Run-based compositor (2026-11-07)
+
+Display paints each row in runs: `raster_row` fills a run of plain content and
+draws its glyphs directly, and falls back to `composite_pixel_source` for chrome,
+bitmaps and fill rects that cover part of a run. Maximized repaint on QEMU: about
+320 ticks before, 20-50 after (strip repaints are unchanged at about 130).
+`fast_rows_match_the_pixel_compositor_exactly` holds both paths equal, including
+present bits, across selection, Unicode, wrap, fill rects, clipping and damage.
+All host gates and Python tests pass. Native at 1280x800: `http_content`,
+`quil_autosave`, `clipboard_workflow`, `quil_readability`, `connected_desktop`,
+`quil_workflow`, `https_document`, `spindle_calc`, `spindle_reserve_probe`,
+`https_png`; `http_content` and `clipboard_workflow` also at 1024x768.
+Also fills the band above Spindle's terminal pane.
