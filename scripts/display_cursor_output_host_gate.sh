@@ -19,7 +19,7 @@ def guards(s):
  batch=body('raster_batch');assert batch.count('restore_cursor_under(')==1 and batch.count('draw_cursor_z_top(')==1 and batch.count('draw_launcher_panel(')==1
  assert batch.index('restore_cursor_under(')<batch.index('letbody=matchplan.content')<batch.index('raster_strip(target,scene)')<batch.index('draw_launcher_panel(')<batch.index('draw_cursor_z_top(')
  assert 'draw_cursor_z_top(fb,w,h,total,true,scene);'in batch
- for name in ['raster_full','raster_strip','raster_area','raster_damage']:
+ for name in ['raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage']:
   primitive=body(name)
   assert not any(call in primitive for call in('restore_cursor_under(','draw_cursor_z_top(','draw_launcher_panel(','SceneLease::capture(')),name+' must be a scene-borrowing primitive'
  draw=body('draw_cursor_z_top');assert 'scene.surfaces.iter()' in draw

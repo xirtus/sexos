@@ -118,6 +118,14 @@ impl<'a> RowWinners<'a> {
         while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
         if self.cursor < self.count && x < self.runs[self.cursor].end { self.runs[self.cursor].source } else { None }
     }
+    /// End and source of the run holding `x`: every pixel to `end` has this source.
+    #[inline(always)]
+    pub fn run(&mut self, x: usize) -> (usize, Option<PixelSource<'a>>) {
+        while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
+        if self.cursor < self.count && x < self.runs[self.cursor].end {
+            (self.runs[self.cursor].end, self.runs[self.cursor].source)
+        } else { (usize::MAX, None) }
+    }
     pub fn selected(&mut self, x: usize) -> Option<u64> { self.source(x).map(|s| s.surface.surface_id) }
 }
 impl FrameGroups {

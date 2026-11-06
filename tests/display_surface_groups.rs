@@ -1128,3 +1128,41 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
  }}
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();FOCUSED_SURFACE_ID=0;
 }}
+
+#[test]fn fast_rows_match_the_pixel_compositor_exactly(){unsafe{
+ let check=|name:&str,w:usize,h:usize,focus:u64|{
+  let scene=capture_scene(w,h,focus);
+  let mut fast=vec![0u32;w*h];let mut slow=vec![0u32;w*h];
+  for y in 51..h{
+   APP_PRESENT_BITS=0;raster_row(fast.as_mut_ptr(),y,0,w,w,h,&scene);let fast_bits=APP_PRESENT_BITS;
+   APP_PRESENT_BITS=0;let mut row=scene.groups.row_winners(&scene.surfaces,focus,y,w,h);
+   for x in 0..w{slow[y*w+x]=if let Some(row)=row.as_mut(){composite_pixel_source(x,y,w,h,bg(y,h),row.source(x),&scene)}else{composite_pixel(x,y,w,h,bg(y,h),focus,&scene)};}
+   assert_eq!(fast_bits,APP_PRESENT_BITS,"{name} present bits y={y}");
+   for x in 0..w{assert_eq!(fast[y*w+x],slow[y*w+x],"{name} x={x} y={y}");}
+  }
+  // A damage rectangle paints the same pixels and nothing outside it.
+  let mut part=vec![7u32;w*h];for y in 60..(h-1).min(200){raster_row(part.as_mut_ptr(),y,w/3,w*2/3,w,h,&scene);}
+  for y in 0..h{for x in 0..w{let inside=y>=60&&y<(h-1).min(200)&&x>=w/3&&x<w*2/3;assert_eq!(part[y*w+x],if inside{slow[y*w+x]}else{7},"{name} damage x={x} y={y}");}}
+ };
+ for(w,h)in[(320,240),(640,400)]{
+  let parent=spindle_catalog(12).frame_surface_id().unwrap();
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();FRAME_GROUPS.register(spindle_catalog(12));
+  let text="plain ascii row\nA\u{e9}\u{20ac}\u{1f600}\tZ unicode\n\nabcdefghijklmnopqrstuvwxyz0123456789 a long row that wraps at the width of this window and keeps going\n".as_bytes();
+  let mut scene=spindle_children(12);
+  scene[0]=Surface{x:10,y:60,w:w as u32-20,h:h as u32-70,chrome_flags:SURFACE_CHROME_TOP_BAR,..surf(3,parent)};
+  scene[1].text_len=text.len() as u16;scene[1].text_buf=[0;TEXT_BUF_CAP];scene[1].text_buf[..text.len()].copy_from_slice(text);scene[1].selection_start=4;scene[1].selection_end=30;
+  SURFACES[..5].copy_from_slice(&scene);FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);recompute_text_lines(&mut SURFACES[1]);
+  check("selected text",w,h,parent);check("unfocused",w,h,0);
+  SURFACES[1].selection_start=0;SURFACES[1].selection_end=0;check("plain text",w,h,parent);
+  // A fill rect over the whole run, then over part of it.
+  SURFACES[1].fill_count=1;SURFACES[1].fill_sx[0]=0;SURFACES[1].fill_sy[0]=0;SURFACES[1].fill_sw[0]=4000;SURFACES[1].fill_sh[0]=30;SURFACES[1].fill_color[0]=0xff102030;check("whole fill",w,h,parent);
+  SURFACES[1].fill_sx[0]=25;SURFACES[1].fill_sw[0]=40;check("partial fill",w,h,parent);
+  SURFACES[1].fill_count=0;
+  // Off the screen edge, then a surface without a frame.
+  SURFACES[0].x=w as i32-100;FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);recompute_text_lines(&mut SURFACES[1]);check("clipped",w,h,parent);
+  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+  let mut alone=Surface{x:40,y:70,w:(w as u32).min(200),h:90,..surf(9,156)};alone.text_len=text.len() as u16;alone.text_buf[..text.len()].copy_from_slice(text);SURFACES[0]=alone;recompute_text_lines(&mut SURFACES[0]);
+  check("independent",w,h,0);check("independent focused",w,h,156);
+ }
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}

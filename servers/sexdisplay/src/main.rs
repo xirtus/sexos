@@ -593,6 +593,105 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
     c
 }
 
+/// Paint one row run of plain surface content without asking pixel by pixel.
+/// False means this run needs composite_pixel_source: chrome, a bitmap, or a
+/// fill rect covering part of it. Must match that function exactly.
+fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene:&scene::SceneSnapshot)->bool{
+    let surf=source.surface;
+    let (sx,sy,sw,sh)=clamp_surface(surf,w,h);
+    if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||y<sy||y>=sy+sh{return false;}
+    let content=if source.chrome{
+        let ly=y-sy;
+        let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX}else{FRAME_RIM_PX};
+        if y<BAR_BG_H+1||ly<top||ly>=sh.saturating_sub(FRAME_RIM_PX)
+            ||x0-sx<FRAME_RIM_PX||x1-sx>sw.saturating_sub(FRAME_RIM_PX){return false;}
+        source.content
+    }else{surf};
+    if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
+    let mut base=content.color;
+    let (lx0,lx1,ly)=(x0 as i32-content.x,x1 as i32-content.x,y as i32-content.y);
+    for i in 0..content.fill_count as usize{
+        if content.fill_sw[i]==0||content.fill_sh[i]==0
+            ||ly<content.fill_sy[i]||ly>=content.fill_sy[i]+content.fill_sh[i] as i32
+            ||lx1<=content.fill_sx[i]||lx0>=content.fill_sx[i]+content.fill_sw[i] as i32{continue;}
+        if lx0<content.fill_sx[i]||lx1>content.fill_sx[i]+content.fill_sw[i] as i32{return false;}
+        base=content.fill_color[i];
+    }
+    let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
+    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
+    let row=unsafe{fb.add(y*w)};
+    for x in x0..x1{unsafe{core::ptr::write_volatile(row.add(x),base);}}
+    text_run(row,x0,x1,y,content);
+    true
+}
+
+/// The ink and selection of `surface_text_fg_at` for one row run.
+fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
+    if surf.text_len==0||surf.line_count==0{return;}
+    const GLYPH_W:usize=sex_pdx::desktop_style::GLYPH_WIDTH as usize;
+    const GLYPH_H:usize=sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
+    let scale=surface_text_scale(surf);
+    let tx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
+    let top_inset=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
+    let ty=(surf.y.max(0) as usize).saturating_add(top_inset);
+    if y<ty{return;}
+    let line=(y-ty)/((GLYPH_H+2)*scale);
+    if line>=surf.line_count as usize{return;}
+    let py=((y-ty)/scale)%(GLYPH_H+2);
+    let advance=(GLYPH_W+1)*scale;
+    let first=x0.saturating_sub(tx)/advance;
+    let last=(x1.saturating_sub(tx)+advance-1)/advance;
+    let row_start=surf.line_cells[line] as usize;
+    let row_end=if line+1<surf.line_count as usize{surf.line_cells[line+1]}else{surf.cell_count} as usize;
+    let len=(surf.text_len as usize).min(TEXT_BUF_CAP);
+    let cells=(surf.wrap_cols as usize).min(row_end.saturating_sub(row_start)).min(last);
+    for col in first..cells{
+        let ordinal=row_start+col;
+        if ordinal>=surf.cell_count as usize{break;}
+        let index=surf.cell_starts[ordinal] as usize;
+        let Some((scalar,end))=sex_pdx::text_encoding::cell(&surf.text_buf[..len],index)else{continue;};
+        if scalar==10{continue;}
+        let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
+            &&surf.selection_end as usize<=surf.text_len as usize;
+        let bits=if py<GLYPH_H{scalar_glyph(scalar)[py]}else{0};
+        if bits==0&&!selected{continue;}
+        let left=tx+col*advance;
+        for x in left.max(x0)..(left+advance).min(x1){
+            let px=(x-left)/scale;
+            let ink=px<GLYPH_W&&(bits>>(GLYPH_W-1-px))&1!=0;
+            if ink{unsafe{core::ptr::write_volatile(row.add(x),surf.text_color);}}
+            else if selected{unsafe{core::ptr::write_volatile(row.add(x),0xff36577c);}}
+        }
+    }
+}
+
+/// One framebuffer row from x0 to x1: fast runs where possible.
+fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene:&scene::SceneSnapshot){
+    let focused=scene.focus;
+    let back=bg(y,h);
+    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
+    let mut x=x0;
+    while x<x1{
+        let (end,source)=match row.as_mut(){Some(row)=>row.run(x),None=>(x1,None)};
+        let end=end.min(x1);
+        if row.is_some(){
+            if let Some(source)=source{
+                if fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
+            }else{
+                for px in x..end{unsafe{core::ptr::write_volatile(fb.add(y*w+px),back);}}
+                x=end;continue;
+            }
+        }
+        while x<end{
+            let color=if let Some(row)=row.as_mut(){
+                composite_pixel_source(x,y,w,h,back,row.source(x),scene)
+            }else{composite_pixel(x,y,w,h,back,focused,scene)};
+            unsafe{core::ptr::write_volatile(fb.add(y*w+x),color);}
+            x+=1;
+        }
+    }
+}
+
 /// For each active fill rect in the surface, if the global pixel (x,y) falls
 /// within the rect, update the running color (painter's order: last match wins).
 /// Used in both passes of composite_pixel to prevent logic drift.
@@ -1899,24 +1998,19 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
     let clock_lines=civil_clock_lines(&bar.civil_clock);
-    for y in 0..h {
-        let mut row=if y>50 {unsafe{scene.groups.row_winners(&scene.surfaces,focused_id,y,w,h)}}else{None};
+    let _=focused_id;
+    if total_pixels<w*h{return false;}
+    for y in 0..h.min(51) {
         for x in 0..w {
             let c: u32 = if y < 50 {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
-            } else if y == 50 {
-                DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
-                if let Some(row)=row.as_mut(){
-                    composite_pixel_source(x,y,w,h,bg(y,h),row.source(x), scene)
-                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id, scene)}
+                DEFAULT_THEME.panel_glow // low-contrast bar edge
             };
-            let idx = y * w + x;
-            if idx < total_pixels {
-                unsafe { core::ptr::write_volatile(fb.add(idx), c); }
-            }
+            unsafe { core::ptr::write_volatile(fb.add(y*w+x), c); }
         }
     }
+    for y in 51..h{raster_row(fb,y,0,w,w,h,scene);}
     true
 }
 
@@ -2150,24 +2244,9 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
             if hot_log() { serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h); }
         }
     }
-    let bar=&scene.bar;
-    let focused_id=scene.focus;
-    for y in 50..h {
-        let mut row=if y>50 {unsafe{scene.groups.row_winners(&scene.surfaces,focused_id,y,w,h)}}else{None};
-        for x in 0..w {
-            let c: u32 = if y == 50 {
-                DEFAULT_THEME.panel_glow // low-contrast bar edge
-            } else {
-                if let Some(row)=row.as_mut(){
-                    composite_pixel_source(x,y,w,h,bg(y,h),row.source(x), scene)
-                }else{composite_pixel(x,y,w,h,bg(y,h),focused_id, scene)}
-            };
-            let idx = y * w + x;
-            if idx < total_pixels {
-                unsafe { core::ptr::write_volatile(fb.add(idx), c); }
-            }
-        }
-    }
+    if total_pixels<w*h{return false;}
+    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(50*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
+    for y in 51..h{raster_row(fb,y,0,w,w,h,scene);}
     true
 }
 
@@ -2197,15 +2276,8 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &
     }
     let Some(total) = w.checked_mul(h) else { return false; };
     let bar=&scene.bar;
-    let focused=scene.focus;
     for y in rect.y..rect.bottom {
-        let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
-        for x in rect.x..rect.right {
-            let color=if let Some(row)=row.as_mut() {
-                composite_pixel_source(x,y,w,h,bg(y,h),row.source(x), scene)
-            } else { composite_pixel(x,y,w,h,bg(y,h),focused, scene) };
-            unsafe { core::ptr::write_volatile(fb.add(y*w+x),color); }
-        }
+        raster_row(fb,y,rect.x,rect.right,w,h,scene);
     }
     true
 }
