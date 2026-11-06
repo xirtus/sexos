@@ -1045,7 +1045,6 @@ fn quil_storage_cap_probe() {
 
 // ── Title bar (rect_index=1, persists independently from palette rect0) ─────
 const QUIL_TITLE_BAR_H: u64 = 32;
-const QUIL_TITLE_BAR_COLOR: u64 = 0x00302E56; // deep blue-purple, matches silk-shell QUIL_LIST_HEADER_COLOR
 
 // ── Text line visuals (rect_indices 2-7) ─────────────────────────────────────
 const QUIL_TEXT_AREA_Y: u64 = QUIL_TITLE_BAR_H + 4;
@@ -1079,9 +1078,6 @@ fn pad_text_line(line: &[u8], out: &mut [u8], max_out: usize) -> usize {
     w
 }
 
-const QUIL_GLYPH_COLOR: u64 = 0x00D4FF7A;
-const QUIL_RECT_SLOT_MIN: u64 = 2;
-const QUIL_RECT_SLOT_MAX: u64 = 7;
 
 // ── Palette (existing command area, rect_index=0, same as before) ────────────
 const QUIL_ROWS: u8 = 5;
@@ -1168,20 +1164,6 @@ fn validate_buffer(buf: &[u8]) -> bool {
             buf.len(), QUIL_BUFFER_MAX_LEN);
     }
     valid
-}
-
-/// Draw the title bar fill rect (rect_index=1).
-fn draw_title_bar() {
-    pdx_call(
-        SLOT_DISPLAY,
-        0xEF,
-        quil_content_sid(),
-        0u64,
-        (1u64 << 56)
-            | (QUIL_TITLE_BAR_COLOR << 32)
-            | (QUIL_TITLE_BAR_H << 16)
-            | SURFACE_W,
-    );
 }
 
 /// QUIL_TEXT_V3: move the cursor one display line up (dir=-1) or down
@@ -1298,63 +1280,6 @@ fn document_action(action: u8, palette: &mut bool, row: &mut u8) {
     unsafe {
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
-}
-
-fn emit_rect_slot(slot: u64, x: u64, y: u64, w: u64, h: u64, color: u64) {
-    pdx_call(
-        SLOT_DISPLAY,
-        0xEF,
-        quil_content_sid(),
-        (y << 32) | x,
-        (slot << 56) | (color << 32) | (h << 16) | w,
-    );
-}
-
-/// Draw bounded pseudo-glyph letters using existing rect slots.
-/// Slot cap is strict: only slot indices 2..7 are used (6 rects max).
-/// This can render only a prefix of the target phrase safely.
-fn draw_rect_glyph_text() {
-    let text = b"QUIL TEXT ALIVE";
-    let mut slot = QUIL_RECT_SLOT_MIN;
-    let x = 462u64;
-    let y = 6u64;
-    let cw = 14u64;
-    let ch = 18u64;
-
-    // Q (2 rects): block + tail
-    if slot <= QUIL_RECT_SLOT_MAX {
-        emit_rect_slot(slot, x + 0, y + 0, cw, ch, QUIL_GLYPH_COLOR);
-        slot += 1;
-    }
-    if slot <= QUIL_RECT_SLOT_MAX {
-        emit_rect_slot(slot, x + 9, y + 12, 5, 6, QUIL_TITLE_BAR_COLOR);
-        slot += 1;
-    }
-
-    // U (3 rects): left/right stems + base
-    if slot <= QUIL_RECT_SLOT_MAX {
-        emit_rect_slot(slot, x + 18, y + 0, 3, ch - 3, QUIL_GLYPH_COLOR);
-        slot += 1;
-    }
-    if slot <= QUIL_RECT_SLOT_MAX {
-        emit_rect_slot(slot, x + 27, y + 0, 3, ch - 3, QUIL_GLYPH_COLOR);
-        slot += 1;
-    }
-    if slot <= QUIL_RECT_SLOT_MAX {
-        emit_rect_slot(slot, x + 18, y + ch - 3, 12, 3, QUIL_GLYPH_COLOR);
-        slot += 1;
-    }
-
-    // I (1 rect): center stem
-    if slot <= QUIL_RECT_SLOT_MAX {
-        emit_rect_slot(slot, x + 38, y + 0, 3, ch, QUIL_GLYPH_COLOR);
-        slot += 1;
-    }
-
-    let emitted = slot - QUIL_RECT_SLOT_MIN;
-    // 6 rect cap means only prefix can be rendered safely.
-    let shown_chars = if emitted >= 6 { 3 } else if emitted >= 5 { 2 } else { 1 };
-    serial_println!("[quil.rect_glyph_text.v1] text=QUIL_TEXT_ALIVE shown={} rects={}", shown_chars, emitted);
 }
 
 fn draw_palette(selected: u8) {
@@ -3538,16 +3463,10 @@ pub extern "C" fn _start() -> ! {
     }
 
     // ── One-shot boot draw ────────────────────────────────────────────────
-    // Title bar (rect_index=1, persists across palette rect_index=0 redraws).
-    draw_title_bar();
-    serial_println!("[quil.text.title.bar] w={} h={} color={:#010x}",
-        SURFACE_W, QUIL_TITLE_BAR_H, QUIL_TITLE_BAR_COLOR);
-
     // Text buffer lines (rect_indices 2..7).
     unsafe {
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
-    draw_rect_glyph_text();
 
     // Palette (rect_index=0, redrawn on each keypress).
     let mut selected_row: u8 = 0;

@@ -45,8 +45,8 @@ def main():
         wait(r'\[shell.app.registered.reply\] target=15 .*committed=1')
         # Keep the actual software cursor away from inspected title/text pixels.
         pointer_start=len(text())
-        q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]})
-        wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',pointer_start)
+        q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]})
+        wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',pointer_start)
         from desktop_focus import focus_surface
         def focus(sid):return focus_surface(sid,text,key)
         font=font_from_source((pathlib.Path(__file__).resolve().parents[1]/'servers/sexdisplay/src/main.rs').read_text())

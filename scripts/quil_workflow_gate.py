@@ -115,8 +115,8 @@ def main():
    wait(r'\[sexinput.ps2.scancode\] raw=0x9d(?=\n|$)',start);return found
   def park_pointer():
    start=len(text())
-   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]})
-   wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
+   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]})
+   wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
   def toolbar(action,pattern):
    v=wait_view(text);per=4 if v['cols']>=32 else 2 if v['cols']>=16 else 1 if v['cols']>=8 else 0;scale=2 if v['w']>=256 else 1;i=action-1
    if not per or v['rows']<4//per+2:raise ValueError('toolbar is hidden in the actual short viewport')

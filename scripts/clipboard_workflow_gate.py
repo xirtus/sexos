@@ -608,7 +608,7 @@ def run_boot(root,iso,binding,seed,out,contract,model,resolution_text,recovery=F
   q=QMP(sock)
   if resolution_text=='1024x768':wait(r'SexOS compact 1024x768',timeout=15);press('down');press('ret')
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]')
-  start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
+  start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
   if recovery:reopen(expected['object']);picture('quil-cold-reopened','quil')
   else:
    focus_surface(300,text,key);key('h',r'\[browser.http.document\] ticket=2 path=/welcome status=200 private_bytes=12288 positive_release=1');press('v');picture('browser-reader')

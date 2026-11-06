@@ -279,7 +279,7 @@ def run_boot(root,iso,binding,seed,out,contract,model,resolution_text,recovery=F
    time.sleep(.02)
   q=QMP(sock)
   if resolution_text=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
-  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]');start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start);focus_surface(300,text,key)
+  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]');start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start);focus_surface(300,text,key)
   if recovery:
    open_linen();select_and_open(meta['object']);collision=collision_disk(seed.read_bytes(),disk.read_bytes(),meta['object'])
   else:

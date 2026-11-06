@@ -51,8 +51,8 @@ def main():
         def key(code,pattern):start=len(text());q.key(code);return wait(pattern,start)
         def focus(sid):return focus_surface(sid,text,key)
         wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[linen.disk.publish.done\]')
-        start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]})
-        wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
+        start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]})
+        wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
         focus(200)
         for _ in range(20):
             start=len(text());q.key('j');m=wait(r'\[shell.action.select_next_linen\] id=(\d+)',start);selected=int(m[1])

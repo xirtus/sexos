@@ -228,7 +228,7 @@ def main():
   d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-resolution[0])+d['CLOCK_W']//2;y=d['CHIP_Y']+d['CHIP_H']//2
   for expected in('open','close'):
    start=len(text());sent=time.monotonic();q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(resolution[0]-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(resolution[1]-1))}}]});wait(r'\[shell.pointer.abs\]|\[silk-shell.pointer.recv\].*class=|\[shell.abs.normalize\]',start);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]});wait(r'\[shell.clock.'+expected+r'.ok\] id=0x94',start);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});record('clock_panel_'+expected,start,sent)
-  start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':30000}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=30000 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
+  start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
  def zoom():
   from quil_workflow_gate import palette_commands,palette_select
   palette_select(key,'ZoomToggle',palette_commands(root))
