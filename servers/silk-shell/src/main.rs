@@ -8590,6 +8590,11 @@ unsafe fn tile_active_scene_frames() {
             (ry as u64) << 32 | rx as u64,
             (rh as u64) << 32 | rw as u64);
 
+        // The band between a Spindle frame's title bar and its terminal pane.
+        if app_catalog::spindle_views().any(|view|view.frame()==sid) && rw > 16 {
+            pdx_call(SLOT_DISPLAY, 0xEF, sid, (28u64 << 32) | 8,
+                (LINEN_LIST_BG_COLOR as u64) << 32 | (8u64 << 16) | (rw as u64 - 16));
+        }
         // Quil visual placeholder: set distinctive fill rect after geometry update.
         if sid == SURFACE_ID_QUIL {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
