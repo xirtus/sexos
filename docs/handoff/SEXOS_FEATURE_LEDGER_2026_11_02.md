@@ -1730,3 +1730,27 @@ The wire format is unchanged.
   native regression set and need review.
 - **Still open:** Spindle remains four panes of 20 columns; g, p, q, y have no
   descenders. Screenshot: `assets/sexos-alpha-full-window-reader-2026-11-06.png`.
+
+## Spindle full-window terminal (2026-11-06)
+
+ABI input changed under Andreas's direction to build it as the docs require:
+`spindle_view` layout and limits. The catalog still reserves four Spindle
+surfaces; the three children stay at zero height and hold no text.
+
+- One terminal pane fills the frame: 103 x 38 maximized at 1280x800, 81 x 37 at
+  1024x768, 49 x 17 in a half-window tile. Before: 40 x 12 split across four
+  panes, so sentences broke at the pane edges. Scrollback lines hold 110 bytes.
+- Text goes through the atomic batch and waits for Applied, so partial frames no
+  longer show. Atomic outboxes re-send a batch after 4096 polls with no reply.
+- Native: master gate GREEN; `connected_desktop`, `spindle_calc`,
+  `network_contention`, `spindle_reserve_probe`, `https_document`. Maximized
+  Spindle at both sizes passes the `check_spindle_viewport_pixels` oracle using
+  a local script, not a committed gate.
+- Typing cost is high: about 0.22 s per key maximized on QEMU, since a full
+  batch is about 490 chunks. Delta batches are next.
+- Not green: `launcher_workflow_gate.py` stops at launcher-exhausted because it
+  expects Spindle to be out of reopens while 7 remain; the gate predates the
+  larger reserve but was not re-run on an older image. `spindle_viewport_gate.py`
+  needs a journal disk from an earlier boot and has not run here.
+  `desktop_close_gate.py` times out waiting for `[quil.palette.action] kind=esc`, the same on the Q10 image.
+- Screenshot: `assets/sexos-alpha-spindle-full-window-2026-11-06.png`.
