@@ -1696,3 +1696,37 @@ Evidence: `docs/handoff/assets/batch-regression-2026-11-05/`.
   scheduling before relying on screenshots for app output.
 - (Fixed in F11) Guest HTTPS fetch failed at connection close for a ~1.1 KB
   response.
+
+## Full-window text (2026-11-06)
+
+Approved ABI change (Andreas, in thread): `text_batch::CAPACITY` 512 to 6144;
+`document_view` limits 79 to 110 columns and 24 to 48 rows; abi hash updated.
+The wire format is unchanged.
+
+- **Browser** reader fills its window: 104 columns and 39 rows at maximized
+  1280x800 (36 body rows), 83 columns at 1024x768. Before: 47 x 10.
+- **Quil** paints its whole tile. The leftover title bar and indicator rects
+  that drew over the status row are gone.
+- **Typing cost.** A keystroke in a 3.5 KB Quil document on QEMU: 0.089 s on
+  the old image, 0.25 s with capacity raised, 0.035 s median after the fix
+  (`changed_text_rows` in Display repaints only rows whose bytes differ).
+  Chunk pacing and serial logging were measured and were not the cause. A change
+  touching every row (scrolling) still repaints the body, about 170 ms for a
+  half-window tile; the per-pixel compositor is the next cost to cut.
+- **Delivery.** Quil sends up to 128 chunks a pass and re-sends a batch after
+  4096 polls with no reply. Display refuses a Begin while it owes a reply, and
+  the slower pacing used to hide that loss.
+- **Gates.** 14 host gates and 1,132 Python tests pass. Native, source-bound:
+  master gate GREEN; `http_content`, `quil_autosave`, `clipboard_workflow`,
+  `quil_readability`, `https_document` at 1280x800 and 1024x768;
+  `connected_desktop`, `quil_workflow`, `https_import`, `spindle_calc` at 1280x800.
+  Gates now park the pointer on the frame rim, because the larger text reaches
+  where it used to sit.
+- **Not green, not caused by this:** `quil_cursor_gate.sh` fails the same rows
+  on the Q10 image (insert_mid_line, delete_at_cursor, backspace_joins_lines,
+  dirty_during_edit, exact_final_content). `quil_editor_gate.sh` also fails
+  (quil_dirty_tracking) but was not compared with Q10, and `quil_viewport_gate.sh`
+  was stopped after 7 minutes with no result. These older gates are outside the
+  native regression set and need review.
+- **Still open:** Spindle remains four panes of 20 columns; g, p, q, y have no
+  descenders. Screenshot: `assets/sexos-alpha-full-window-reader-2026-11-06.png`.
