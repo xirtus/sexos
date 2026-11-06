@@ -161,6 +161,19 @@ pub fn init_uiir(producer: u32, consumer: u32) {
     crate::serial_println!("[boot.uiir.stream] producer={} consumer={} ring_region={} cursor_region={} runtime_mint=0", producer, consumer, RING_REGION_ID, CURSOR_REGION_ID);
 }
 
+/// One app-writable, Display-readable text region per catalog row. Nothing is
+/// minted later; a reused slot would mean the catalog and this graph disagree.
+pub fn init_text_regions(display: u32) {
+    use sex_pdx::text_region::{BYTES, CLIENT_SLOT, display_slot, region_id};
+    require_boot();
+    if display == 0 { return; }
+    for (index, row) in sex_pdx::app_catalog::INCARNATIONS.iter().enumerate() {
+        if DOMAIN_REGISTRY.get(row.target).is_none() { continue; }
+        paired_at(row.target, display, CLIENT_SLOT, display_slot(index), region_id(index), BYTES, false);
+    }
+    crate::serial_println!("[boot.text.regions] display={} rows={} bytes={} runtime_mint=0", display, sex_pdx::app_catalog::COUNT, BYTES);
+}
+
 /// Permanent BOOT budget, separate from reclaimable app-private pages. Each
 /// successor gets different backing and an immutable, exact provider peer.
 /// Runtime Load still uses scalar transport until snapshot publication exists.

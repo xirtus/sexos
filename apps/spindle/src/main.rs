@@ -2240,7 +2240,7 @@ pub extern "C" fn _start() -> ! {
     assert!(catalog.task_id!=0,"SPINDLE_EXACT_NETWORK_TASK");
     assert_eq!(sex_pdx::device_network_config(sex_pdx::SLOT_NET),Err(sex_pdx::pci_command::DENIED),"SPINDLE_ROUTE_HAS_NO_NIC_METADATA");
     sex_pdx::serial_record!("[spindle.net.idle] target={} task={} explicit_intent=1 nic_metadata=0",catalog.target_pd,catalog.task_id);
-    unsafe{HISTORY_IO.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO.bind(catalog.target_pd);}
+    unsafe{HISTORY_IO.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO.bind(catalog.target_pd);if let Ok(region)=sex_pdx::text_region_client(){DISPLAY_IO.use_region(region);}}
     sex_pdx::serial_record!("[spindle.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[spindle.init.start]");
     serial_println!("[spindle.boot]");

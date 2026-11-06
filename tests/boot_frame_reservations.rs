@@ -34,10 +34,10 @@ fn overlapping_owners_and_bad_bounds_fail_without_losing_original_owner() {
 #[test]
 fn reservation_capacity_failure_keeps_all_existing_ranges() {
     let mut owner = BootFrameReservations::new();
-    for i in 1..=32 { owner.reserve(i*8192,4096,|_|false).unwrap(); }
-    assert!(owner.reserve(33*8192,4096,|_|false).is_err());
-    for i in 1..=32 { assert!(owner.contains(i*8192)); }
-    assert!(!owner.contains(33*8192));
+    for i in 1..=96 { owner.reserve(i*8192,4096,|_|false).unwrap(); }
+    assert!(owner.reserve(97*8192,4096,|_|false).is_err());
+    for i in 1..=96 { assert!(owner.contains(i*8192)); }
+    assert!(!owner.contains(97*8192));
 }
 
 #[test]

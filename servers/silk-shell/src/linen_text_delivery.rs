@@ -15,7 +15,7 @@ pub enum Admission { Accepted, Full, Rejected(u64) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Poll { Idle, Pending, Deferred, Complete(Receipt), Rejected(u64) }
 #[derive(Clone, Copy)]
-struct Batch { waits: u32, resent: bool, delta: bool, bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool, selection:(u16,u16), selection_sent:bool }
+struct Batch { waits: u32, resent: bool, bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool, selection:(u16,u16), selection_sent:bool }
 impl Batch {
     fn erase(&mut self) {
         for byte in &mut self.bytes {unsafe{core::ptr::write_volatile(byte,0);}}
@@ -25,14 +25,14 @@ impl Batch {
         }
     }
 }
-pub struct Outbox { surface: u64, active: Option<Batch>, latest: Option<Batch>, atomic:bool, sequence:u32, deltas:bool, applied:[u8;CAPACITY], applied_len:Option<usize> }
+pub struct Outbox { surface: u64, active: Option<Batch>, latest: Option<Batch>, atomic:bool, sequence:u32, region:u64 }
 impl Outbox {
-    pub const fn new(surface: u64) -> Self { Self { surface, active: None, latest: None, atomic:false, sequence:0, deltas:false, applied:[0;CAPACITY], applied_len:None } }
-    pub const fn atomic(surface:u64)->Self {Self{surface,active:None,latest:None,atomic:true,sequence:0,deltas:false,applied:[0;CAPACITY],applied_len:None}}
+    pub const fn new(surface: u64) -> Self { Self { surface, active: None, latest: None, atomic:false, sequence:0, region:0 } }
+    pub const fn atomic(surface:u64)->Self {Self{surface,active:None,latest:None,atomic:true,sequence:0,region:0}}
     /// In place form of `atomic` for a static outbox (no large move).
     pub fn bind_atomic(&mut self,surface:u64){self.surface=surface;self.atomic=true;}
-    /// Send only changed chunks once Display holds an applied text.
-    pub fn enable_delta(&mut self){self.deltas=true;}
+    /// This app's BOOT text region: batches go by one copy, not by chunks.
+    pub fn use_region(&mut self,region:u64){self.region=region;}
     /// An oversized input leaves both existing batches untouched. Replacement
     /// affects only the not-yet-started batch, never interleaves active chunks.
     pub fn queue(&mut self, text: &[u8], color: u32, metadata: Metadata) -> bool {
@@ -52,7 +52,7 @@ impl Outbox {
             || !sex_pdx::text_encoding::is_boundary(text,end as usize)) { return false; }
         let Some(sequence)=self.sequence.checked_add(1) else {return false;};
         self.sequence=sequence;
-        let mut batch = Batch { waits: 0, resent: false, delta: false, bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false, selection, selection_sent:false };
+        let mut batch = Batch { waits: 0, resent: false, bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false, selection, selection_sent:false };
         batch.bytes[..text.len()].copy_from_slice(text);
         if self.active.is_none() { self.active = Some(batch); self.latest = None; }
         else { self.latest = Some(batch); }
@@ -62,16 +62,14 @@ impl Outbox {
     pub fn cancel(&mut self) {
         if let Some(b)=self.active.as_mut(){b.erase();}
         if let Some(b)=self.latest.as_mut(){b.erase();}
-        self.active=None;self.latest=None;self.applied_len=None;
+        self.active=None;self.latest=None;
     }
     pub fn receive(&mut self,caller:u32,value:u64)->Option<Receipt> {
         if !self.atomic{return None;}
         let applied=sex_pdx::text_batch::Applied::decode(caller,value)?;
         let b=self.active.as_mut()?;
         if !(b.awaiting||b.resent) || applied.surface as u64!=self.surface || applied.sequence!=b.sequence{return None;}
-        let receipt=Receipt{metadata:b.metadata,bytes:b.len};
-        if self.deltas{self.applied[..b.len].copy_from_slice(&b.bytes[..b.len]);self.applied_len=Some(b.len);}
-        b.erase();self.active=None;Some(receipt)
+        let receipt=Receipt{metadata:b.metadata,bytes:b.len};b.erase();self.active=None;Some(receipt)
     }
     /// At most `budget` calls. Full preserves the exact operation; unexpected
     /// errors abandon only the active batch without a success receipt. A queued
@@ -85,23 +83,17 @@ impl Outbox {
                 b.waits+=1;
                 if b.waits<REPLY_RETRY {return Poll::Pending;}
                 // No reply: the surface was scrubbed or Display refused the batch.
-                // Display holds a failed delta poisoned under its old number.
-                if b.delta {self.sequence=self.sequence.saturating_add(1);b.sequence=self.sequence;}
-                (b.cleared,b.offset,b.selection_sent,b.awaiting,b.waits,b.resent,b.delta)=(false,0,false,false,0,true,false);
+                (b.cleared,b.offset,b.selection_sent,b.awaiting,b.waits,b.resent)=(false,0,false,false,0,true);
             }
-            if b.cleared&&b.delta {
-                let applied=self.applied_len.unwrap_or(0);
-                while b.offset<b.len {
-                    let end=b.offset+(b.len-b.offset).min(8);
-                    if end>applied||b.bytes[b.offset..end]!=self.applied[b.offset..end] {break;}
-                    b.offset=end;
-                }
-            }
-            let start_delta=!b.cleared&&!b.resent&&self.deltas&&self.applied_len.is_some();
             let chunk = (b.len - b.offset).min(8);
             let operation = if self.atomic {
                 use sex_pdx::text_batch::{Request,hash,selected_hash};
-                let req=if start_delta {Request::BeginDelta{sequence:b.sequence,len:b.len,color:b.color}}
+                let fill=b.cleared&&b.offset<b.len&&self.region!=0;
+                if fill {
+                    let region=self.region as *mut u8;
+                    for i in 0..b.len {unsafe{core::ptr::write_volatile(region.add(i),b.bytes[i]);}}
+                }
+                let req=if fill {Request::Fill{sequence:b.sequence}}
                     else if !b.cleared {Request::Begin{sequence:b.sequence,len:b.len,color:b.color}}
                     else if b.offset<b.len {let mut bytes=[0;8];bytes[..chunk].copy_from_slice(&b.bytes[b.offset..b.offset+chunk]);Request::Chunk{sequence:b.sequence,offset:b.offset,count:chunk,bytes}}
                     else if b.selection!=(0,0) && !b.selection_sent {Request::Select{sequence:b.sequence,start:b.selection.0 as usize,end:b.selection.1 as usize}}
@@ -120,7 +112,7 @@ impl Outbox {
                 Admission::Rejected(status) => { b.erase();self.active = None; return Poll::Rejected(status); }
                 Admission::Accepted => {
                     if self.atomic {
-                        if !b.cleared{b.cleared=true;b.delta=start_delta;}else if b.offset<b.len{b.offset+=chunk;}
+                        if !b.cleared{b.cleared=true;}else if b.offset<b.len{b.offset+=if self.region!=0{b.len}else{chunk};}
                         else if b.selection!=(0,0) && !b.selection_sent {b.selection_sent=true;}else{b.awaiting=true;}
                         continue;
                     }

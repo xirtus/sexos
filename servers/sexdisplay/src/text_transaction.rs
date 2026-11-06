@@ -53,8 +53,6 @@ pub struct Stage {
     poisoned: bool,
     reply_pending: bool,
     reply_released: bool,
-    /// Seeded from committed text, so a chunk may replace its covered bytes.
-    seeded: bool,
     bytes: [u8; CAPACITY],
 }
 impl Stage {
@@ -73,7 +71,6 @@ impl Stage {
         poisoned: false,
         reply_pending: false,
         reply_released: false,
-        seeded: false,
         bytes: [0; CAPACITY],
     };
     pub fn diagnostic(&self)->(u32,u64,u32,usize,u64,bool,bool){(self.owner,self.sid,self.sequence,self.len,self.coverage[0],self.sealed,self.poisoned)}
@@ -155,22 +152,18 @@ impl Stage {
             self.reply_released = false;
         }
     }
-    /// As Begin, seeded from this surface's committed text. It grants nothing:
-    /// the same owner receives its own bytes, and Commit verifies the whole hash.
-    pub fn begin_delta(&mut self, owner: u32, task: u32, sid: u64, sequence: u32, len: usize, color: u32, committed: &[u8]) {
-        let before = self.sequence;
-        self.receive(owner, task, sid, Request::Begin { sequence, len, color });
-        if self.sequence != sequence || before == sequence || (self.owner, self.task, self.sid) != (owner, task, sid) {
-            return;
-        }
-        let keep = committed.len().min(len);
-        self.bytes[..keep].copy_from_slice(&committed[..keep]);
-        let chunks = (len + 7) / 8;
+    /// All chunks at once, from the sender's own region. Display's copy is what
+    /// Commit hashes, so the sender cannot change it afterwards.
+    pub fn fill(&mut self, owner: u32, task: u32, sid: u64, sequence: u32, region: &[u8]) {
+        if (self.owner, self.task, self.sid, self.sequence) != (owner, task, sid, sequence)
+            || self.sealed || self.poisoned { return; }
+        if self.selection_present || region.len() < self.len { self.poisoned = true; return; }
+        for i in 0..self.len { self.bytes[i] = unsafe { core::ptr::read_volatile(region.as_ptr().add(i)) }; }
+        let chunks = (self.len + 7) / 8;
         for word in 0..COVERAGE_WORDS {
             let want = chunks.saturating_sub(word * 64);
             self.coverage[word] = if want >= 64 { u64::MAX } else { (1u64 << want) - 1 };
         }
-        self.seeded = true;
     }
     /// Caller identity and live surface ownership must already be attested by display.
     /// A new (owner,task,sid) binding cannot consume a previous binding's partial bytes.
@@ -187,8 +180,8 @@ impl Stage {
             return None;
         }
         match request {
-            // Display calls begin_delta, which supplies the committed text.
-            Request::BeginDelta { .. } => return None,
+            // Display calls fill, which supplies the sender's region.
+            Request::Fill { .. } => return None,
             Request::Begin {
                 sequence,
                 len,
@@ -244,7 +237,7 @@ impl Stage {
                     return None;
                 }
                 let (word, bit) = (offset / 8 / 64, 1u64 << (offset / 8 % 64));
-                if !self.seeded && self.coverage[word] & bit != 0 && self.bytes[offset..offset + count] != bytes[..count]
+                if self.coverage[word] & bit != 0 && self.bytes[offset..offset + count] != bytes[..count]
                 {
                     self.poisoned = true;
                     return None;

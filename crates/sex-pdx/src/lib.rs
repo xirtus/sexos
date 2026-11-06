@@ -736,6 +736,22 @@ fn uiir_views(producer: bool, peer: u32) -> Result<(u64, u64), u64> {
     }
     Ok((out[0], out[1]))
 }
+/// This app's writable text region, or an error when BOOT granted none.
+pub fn text_region_client() -> Result<u64, u64> {
+    use memory_region::{QUERY_VIEW, READ, WRITE};
+    let view = memory_region_view(text_region::CLIENT_SLOT, 0, text_region::BYTES, QUERY_VIEW | READ | WRITE)?;
+    Ok(view.virtual_address)
+}
+/// Display's read-only view of one catalog row's text region, checked against
+/// that row's exact peer.
+pub fn text_region_display(index: usize) -> Result<u64, u64> {
+    use memory_region::{QUERY_VIEW, READ};
+    let slot = text_region::display_slot(index);
+    let info = memory_region_info(slot)?;
+    if info.region_id != text_region::region_id(index) || info.peer_pd != Some(app_catalog::INCARNATIONS[index].target)
+        || info.length != text_region::BYTES || info.rights != QUERY_VIEW | READ { return Err(ERR_CAP_INVALID); }
+    Ok(memory_region_view(slot, 0, text_region::BYTES, QUERY_VIEW | READ)?.virtual_address)
+}
 pub fn uiir_producer(peer: u32) -> Result<uiir::Producer, u64> {
     let (ring, cursor) = uiir_views(true, peer)?;
     Ok(unsafe { uiir::Producer::attach(ring as *mut u8, cursor as *const u8) })
@@ -1081,6 +1097,7 @@ pub mod display_boot;
 pub mod display_frames;
 
 pub mod text_batch;
+pub mod text_region;
 pub mod text_selection;
 pub mod text_encoding;
 pub mod clipboard;

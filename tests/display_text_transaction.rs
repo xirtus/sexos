@@ -782,35 +782,41 @@ fn incomplete_poisoned_or_malformed_text_never_produces_a_pending_view() {
 }
 
 #[test]
-fn delta_seeds_committed_text_and_commit_still_verifies_the_whole_hash() {
-    let committed=b"hello world, this is text";
-    let mut new=*committed;new[8]=b'X';
-    let request=Request::BeginDelta{sequence:7,len:new.len(),color:1};
+fn fill_copies_the_region_once_and_commit_verifies_that_copy() {
+    let text=b"hello world, this is text";
+    let request=Request::Fill{sequence:7};
     let(op,a,b)=request.wire();
-    assert_eq!(op,text_batch::BEGIN_DELTA);
-    assert!(matches!(Request::decode(op,a,b),Some(Request::BeginDelta{sequence:7,..})));
-    assert!(Request::decode(text_batch::BEGIN_DELTA,(CAPACITY as u64+1)<<32|1,0).is_none());
-    let chunk=|text:&[u8],offset:usize|{let count=(text.len()-offset).min(8);let mut bytes=[0;8];bytes[..count].copy_from_slice(&text[offset..offset+count]);Request::Chunk{sequence:7,offset,count,bytes}};
-    let commit=|text:&[u8]|Request::Commit{sequence:7,hash:text_batch::hash(text)};
-    // Only the changed chunk, replacing bytes the seed already covered.
-    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,new.len(),1,committed);
-    s.receive(9,90,156,chunk(&new,8));
-    let(len,_,bytes)=s.receive(9,90,156,commit(&new)).unwrap();assert_eq!(&bytes[..len],&new);
-    // A sender whose idea of the committed text is wrong never publishes.
-    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,new.len(),1,b"other text entirely here!");
-    s.receive(9,90,156,chunk(&new,8));
-    assert!(s.receive(9,90,156,commit(&new)).is_none());assert!(s.pending().is_none());
-    // Longer than the committed text: the uncovered tail starts empty.
-    let longer=b"hello world, this is text and more";
-    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,longer.len(),1,committed);
-    s.receive(9,90,156,chunk(longer,24));s.receive(9,90,156,chunk(longer,32));
-    assert!(s.receive(9,90,156,commit(longer)).is_some());
-    // A plain Begin never reads the seed path, and a delta Request alone stages nothing.
-    let mut s=Stage::EMPTY;assert!(s.receive(9,90,156,Request::BeginDelta{sequence:7,len:4,color:1}).is_none());
-    assert!(s.receive(9,90,156,commit(b"text")).is_none());
-    // An owed reply refuses the seed as it refuses Begin.
-    let mut s=Stage::EMPTY;s.begin_delta(9,90,156,7,committed.len(),1,committed);
-    assert!(s.receive(9,90,156,commit(committed)).is_some());
-    s.begin_delta(9,90,156,8,new.len(),1,committed);
-    assert!(s.pending().is_some_and(|p|p.context().sequence()==7));
+    assert_eq!(op,text_batch::FILL);
+    assert_eq!(Request::decode(op,a,b),Some(request));
+    assert!(Request::decode(text_batch::FILL,0,0).is_none());
+    assert!(Request::decode(text_batch::FILL,1<<32,0).is_none());
+    assert!(Request::decode(text_batch::FILL,7,1).is_none());
+    let commit=|bytes:&[u8]|Request::Commit{sequence:7,hash:text_batch::hash(bytes)};
+    let mut region=[0u8;8192];region[..text.len()].copy_from_slice(text);
+    // One copy completes every chunk, and later writes to the region change nothing.
+    let mut s=Stage::EMPTY;begin(&mut s,7,text.len());s.fill(9,90,156,7,&region);
+    region[0]=b'X';
+    let(len,_,bytes)=s.receive(9,90,156,commit(text)).unwrap();assert_eq!(&bytes[..len],text);
+    // A region that disagrees with the declared hash never publishes.
+    let mut s=Stage::EMPTY;begin(&mut s,7,text.len());s.fill(9,90,156,7,&region);
+    assert!(s.receive(9,90,156,commit(text)).is_none());assert!(s.pending().is_none());
+    // Only the staged tuple can fill: wrong owner, surface or sequence stage nothing.
+    region[0]=b'h';
+    let mut s=Stage::EMPTY;begin(&mut s,7,text.len());
+    s.fill(10,90,156,7,&region);s.fill(9,91,156,7,&region);s.fill(9,90,157,7,&region);s.fill(9,90,156,8,&region);
+    assert!(s.receive(9,90,156,commit(text)).is_none());
+    // A short region poisons, and a Fill request alone stages nothing.
+    let mut s=Stage::EMPTY;begin(&mut s,7,text.len());s.fill(9,90,156,7,&region[..4]);
+    assert!(s.receive(9,90,156,commit(text)).is_none());
+    let mut s=Stage::EMPTY;assert!(s.receive(9,90,156,Request::Fill{sequence:7}).is_none());
+    // A sealed stage ignores Fill while it owes a reply.
+    let mut s=Stage::EMPTY;begin(&mut s,7,text.len());s.fill(9,90,156,7,&region);
+    assert!(s.receive(9,90,156,commit(text)).is_some());
+    region[0]=b'X';s.fill(9,90,156,7,&region);
+    assert_eq!(s.pending().unwrap().bytes()[0],b'h');
+    // Selection still works after a Fill.
+    region[0]=b'h';
+    let mut s=Stage::EMPTY;begin(&mut s,7,text.len());s.fill(9,90,156,7,&region);
+    s.receive(9,90,156,Request::Select{sequence:7,start:0,end:5});
+    assert!(s.receive(9,90,156,Request::Commit{sequence:7,hash:text_batch::selected_hash(text,0,5).unwrap()}).is_some());
 }

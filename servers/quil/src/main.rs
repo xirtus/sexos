@@ -3404,7 +3404,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[quil.no_fb_write]");
     serial_println!("[quil.text.surface] title={}", QUIL_TITLE);
 
-    unsafe{DOCUMENT_DISPLAY.enable_delta();}
+    unsafe{if let Ok(region)=sex_pdx::text_region_client(){DOCUMENT_DISPLAY.use_region(region);}}
     // ── Initialize mutable buffer ─────────────────────────────────────────
     init_buffer();
     unsafe{assert!(QUIL_CLIPBOARD.bind(sex_pdx::clipboard::Participant::from_catalog(catalog).expect("QUIL_CLIPBOARD_AUTHORITY")));quil_selection_bind();}

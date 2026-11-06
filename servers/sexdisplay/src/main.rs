@@ -1610,9 +1610,13 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
     }
 }
 
-/// Seed for a delta batch. Reading it changes nothing canonical.
-fn committed_text(slot:&Surface)->&[u8]{
-    &slot.text_buf[..(slot.text_len as usize).min(TEXT_BUF_CAP)]
+/// Read-only views of each app's BOOT text region, resolved once at startup.
+static mut TEXT_REGIONS:[u64;sex_pdx::app_catalog::COUNT]=[0;sex_pdx::app_catalog::COUNT];
+fn text_region_of(owner:u32)->Option<&'static [u8]>{
+    let index=sex_pdx::text_region::index_of(owner)?;
+    let base=unsafe{TEXT_REGIONS[index]};
+    if base==0{return None;}
+    Some(unsafe{core::slice::from_raw_parts(base as *const u8,sex_pdx::text_region::BYTES as usize)})
 }
 
 fn legacy_text_clear(slot:&mut Surface)->bool{
@@ -3479,6 +3483,8 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[sexdisplay.ready]");
     let mut ready_publisher = sex_pdx::display_ready::ReadyPublisher::new();
+    unsafe{for index in 0..sex_pdx::app_catalog::COUNT{TEXT_REGIONS[index]=sex_pdx::text_region_display(index).unwrap_or(0);}}
+    sex_pdx::serial_record!("[display.text.regions] count={} ok={}",sex_pdx::app_catalog::COUNT,unsafe{TEXT_REGIONS.iter().filter(|v|**v!=0).count()});
     let mut uiir = match sex_pdx::uiir_consumer(sex_pdx::uiir::SHELL_PD) {
         Ok(c) => {sex_pdx::serial_record!("[uiir.display.attached] peer={} ok=1",sex_pdx::uiir::SHELL_PD);Some(c)},
         Err(e) => {sex_pdx::serial_record!("[uiir.display.attached] peer={} ok=0 error={:#x}",sex_pdx::uiir::SHELL_PD,e);None},
@@ -4398,14 +4404,14 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::SELECT | sex_pdx::text_batch::COMMIT | sex_pdx::text_batch::BEGIN_DELTA => {
+                sex_pdx::text_batch::BEGIN | sex_pdx::text_batch::CHUNK | sex_pdx::text_batch::SELECT | sex_pdx::text_batch::COMMIT | sex_pdx::text_batch::FILL => {
                     if !browser_text_binding_live(&lifecycle, msg.caller_pd, msg.caller_task, msg.arg0) { continue; }
                     let Some(request) = sex_pdx::text_batch::Request::decode(msg.type_id, msg.arg1, msg.arg2) else { continue; };
                     unsafe {
                         for (index, slot) in SURFACES.iter().enumerate() {
                             if !slot.active || slot.surface_id != msg.arg0 || slot.owner_pd != msg.caller_pd { continue; }
-                            if let sex_pdx::text_batch::Request::BeginDelta{sequence,len,color}=request{
-                                TEXT_STAGES[index].begin_delta(msg.caller_pd,msg.caller_task,msg.arg0,sequence,len,color,committed_text(slot));
+                            if let sex_pdx::text_batch::Request::Fill{sequence}=request{
+                                if let Some(region)=text_region_of(msg.caller_pd){TEXT_STAGES[index].fill(msg.caller_pd,msg.caller_task,msg.arg0,sequence,region);}
                             } else if TEXT_STAGES[index].receive(msg.caller_pd,msg.caller_task,msg.arg0,request).is_some() {
                                 // Commit seals a candidate; canonical Surface text is
                                 // unchanged until its captured Full publication succeeds.

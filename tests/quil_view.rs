@@ -1124,21 +1124,20 @@ fn home_and_end_stay_on_the_carets_line() {
 }
 
 #[test]
-fn enabled_delta_sends_only_changed_chunks_after_an_applied_paint() {
-    let mut out=delivery::Outbox::new();out.enable_delta();
+fn region_replaces_chunks_with_one_fill_and_a_lost_reply_sends_it_again() {
+    let mut region=vec![0u8;8192];
+    let mut out=delivery::Outbox::new();out.use_region(region.as_mut_ptr() as u64);
     let mut text=view::Text::new();text.len=80;text.bytes[..80].fill(b'a');
     out.queue(text,10);
-    let mut first=Vec::new();out.poll(156,|op,_,a,b|{first.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
-    assert!(matches!(first[0],text_batch::Request::Begin{..}));
+    let mut ops=Vec::new();out.poll(156,|op,_,a,b|{ops.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
+    assert_eq!(ops.len(),3);
+    assert!(matches!(ops[0],text_batch::Request::Begin{..}));
+    assert!(matches!(ops[1],text_batch::Request::Fill{sequence:10}));
+    assert!(matches!(ops[2],text_batch::Request::Commit{hash,..}if hash==text_batch::hash(&text.bytes[..80])));
+    assert_eq!(&region[..80],&text.bytes[..80]);
+    let mut again=Vec::new();
+    for _ in 0..5000{out.poll(156,|op,_,a,b|{again.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});if !again.is_empty(){break}}
+    assert!(matches!(again[0],text_batch::Request::Begin{sequence:10,..}));
     let receipt=text_batch::Applied{surface:156,sequence:10}.encode().unwrap();
-    assert_eq!(out.receive(1,receipt),Some((10,80)));
-    text.bytes[17]=b'z';out.queue(text,11);
-    let mut second=Vec::new();out.poll(156,|op,_,a,b|{second.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
-    assert!(matches!(second[0],text_batch::Request::BeginDelta{..}));
-    assert_eq!(second.iter().filter(|r|matches!(r,text_batch::Request::Chunk{..})).count(),1);
-    assert!(matches!(second.last(),Some(text_batch::Request::Commit{..})));
-    // A new binding has no applied text to change.
-    let receipt=text_batch::Applied{surface:156,sequence:11}.encode().unwrap();out.receive(1,receipt);out.rebind();
-    out.queue(text,12);let mut third=Vec::new();out.poll(156,|op,_,a,b|{third.push(text_batch::Request::decode(op,a,b).unwrap());Ok(())},|_,_|{});
-    assert!(matches!(third[0],text_batch::Request::Begin{..}));
+    assert_eq!(out.receive(1,receipt),Some((10,80)));assert!(!out.pending());
 }

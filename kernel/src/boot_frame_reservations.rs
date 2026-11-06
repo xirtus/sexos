@@ -32,9 +32,10 @@ impl BootstrapPlanner {
         Ok(if start < end { Some(Range {start,end}) } else { None })
     }
 }
-pub struct BootFrameReservations { ranges: [Range; 32], count: usize }
+const CAPACITY: usize = 96;
+pub struct BootFrameReservations { ranges: [Range; CAPACITY], count: usize }
 impl BootFrameReservations {
-    pub const fn new() -> Self { Self { ranges: [Range {start:0,end:0};32], count:0 } }
+    pub const fn new() -> Self { Self { ranges: [Range {start:0,end:0};CAPACITY], count:0 } }
     pub fn reserve(&mut self, start: u64, length: u64, mut already_consumed: impl FnMut(Range)->bool) -> Result<(), &'static str> {
         let end = start.checked_add(length).ok_or("BOOT_FRAME_RANGE_OVERFLOW")?;
         if start == 0 || length == 0 || start % 4096 != 0 || length % 4096 != 0 { return Err("BOOT_FRAME_RANGE_ALIGNMENT"); }

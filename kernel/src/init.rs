@@ -818,6 +818,7 @@ pub fn init() {
     crate::boot_memory::init_documents(sexfiles_id, sex_pdx::app_catalog::QUIL_TARGETS);
     assert_eq!((silkshell_id, sexdisp_id), (sex_pdx::uiir::SHELL_PD, sex_pdx::uiir::DISPLAY_PD), "BOOT_UIIR_DOMAINS");
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
+    crate::boot_memory::init_text_regions(sexdisp_id);
     assert!(sext_id != 0 && kaleido_id != 0 && sexbell_id != 0, "BOOT_PAGING_DOMAINS_MISSING");
     // Replace the client's initial self-management edge at static genesis.
     // The capability graph remains sealed throughout runtime fault recovery.
