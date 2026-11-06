@@ -8,25 +8,22 @@ FONT=font_from_source((Path(__file__).resolve().parents[2]/'servers/sexdisplay/s
 ROOT=Path(__file__).resolve().parents[2]
 def fixture_layout(w,h,threshold=128):
     # Independent fixture policy, never reads the oracle or production scale.
-    body_w=max(0,w-16);body_h=max(0,h-44);left=max(0,body_w-8)//2;right=max(0,body_w-left-8)
-    scales=[2 if width>=threshold else 1 for width in (left,right)];largest=max(scales)
-    split=body_h>=2*(12+7*largest)+8
-    upper=max(0,body_h-8)//2 if split else 0;lower=max(0,body_h-upper-8)if split else body_h
-    cols=min(20,max(0,min(max(0,width-16)//(6*scale)for width,scale in zip((left,right),scales))-1))
-    rows=[min(6,1+(height-12-7*largest)//(9*largest))if height>=12+7*largest and cols else 0 for height in (upper,lower)]
-    bottom_y=36+upper+8 if split else 36
-    return [(8,36,left,upper),(16+left,36,right,upper),(8,bottom_y,left,lower),(16+left,bottom_y,right,lower)],cols,rows
+    body_w=max(0,w-16);body_h=max(0,h-44);scale=2 if body_w>=threshold else 1
+    cols=min(110,max(0,max(0,body_w-16)//(6*scale)-1))
+    rows=min(48,1+(body_h-12-7*scale)//(9*scale))if body_h>=12+7*scale and cols else 0
+    empty=(8,36,body_w,0)
+    return [(8,36,body_w,body_h),empty,empty,empty],cols,[rows,0]
 def fixture(w=1280,h=134,target=12,task=None,caption=None,threshold=128,glyph_threshold=None):
     task=target if task is None else task
     width,height=1280,800;data=bytearray(width*height*3);x,y=0,50;panes,cols,rows=fixture_layout(w,h,threshold);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317],25:[318,320,321,322],26:[323,325,326,327],27:[328,330,331,332],28:[333,335,336,337],29:[338,340,341,342],40:[353,355,356,357]}[target]
     text=boot({target:task})+f'[spindle.view.accepted] target={target} task={task} sequence=2 w={w} h={h} cols={cols} top_rows={rows[0]} bottom_rows={rows[1]} sender=3\n'
-    prompt=b'> echo spindle17'.ljust(cols*2)
-    for i,(sid,(px,py,pw,ph))in enumerate(zip(sids,panes)):
-        r=rows[i//2];lines=[b' '*cols for _ in range(r)]
-        if r and i//2==0 and caption is not None:lines[0]=caption.encode().ljust(cols*2)[(i%2)*cols:(i%2+1)*cols]
-        if r and i//2==1:lines[-1]=prompt[(i%2)*cols:(i%2+1)*cols]
+    prompt=b'> echo spindle17'.ljust(cols)
+    for sid,(px,py,pw,ph)in zip(sids,panes):text+=f'[shell.app.viewport] target={target} sid={sid} x={x+px} y={y+py} w={pw} h={ph}\n'
+    for i,(sid,(px,py,pw,ph))in enumerate(zip(sids[:1],panes)):
+        r=rows[0];lines=[b' '*cols for _ in range(r)]
+        if r and caption is not None:lines[0]=caption.encode().ljust(cols)
+        if r:lines[-1]=prompt
         payload=b''.join(line+b'\n'for line in lines);c=cols if r else 0
-        text+=f'[shell.app.viewport] target={target} sid={sid} x={x+px} y={y+py} w={pw} h={ph}\n'
         text+=f'[spindle.view.text] target={target} sid={sid} sequence=2 paint={i+1} cols={c} rows={r} bytes={len(payload)}\n'
         for off in range(0,len(payload),48):text+=f'[spindle.view.bytes] target={target} sid={sid} seq=2 paint={i+1} off={off} hex={payload[off:off+48].hex()}\n'
         scale=2 if pw>=(threshold if glyph_threshold is None else glyph_threshold)else 1
@@ -48,12 +45,12 @@ class Check(unittest.TestCase):
         return root
     def test_independent_128_threshold_layout_goldens(self):
         self.assertEqual(_scale_threshold(),128)
-        self.assertEqual(layout(512,134),([(8,36,244,41),(260,36,244,41),(8,85,244,41),(260,85,244,41)],18,[1,1]))
-        self.assertEqual(layout(278,134)[1:],(17,[3,3]))
-        self.assertEqual(layout(280,134)[1:],(8,[1,1]))
+        self.assertEqual(layout(512,134),([(8,36,496,90),(8,36,496,0),(8,36,496,0),(8,36,496,0)],39,[4,0]))
+        self.assertEqual(layout(278,134)[1:],(19,[4,0]))
+        self.assertEqual(layout(1280,750)[1:],(103,[38,0]))
         for height in range(90,104):
             panes,cols,rows=layout(512,height)
-            self.assertEqual((panes[0][3],panes[1][3],panes[2][1],cols,rows),(0,0,36,18,[0,2]))
+            self.assertEqual((panes[0][3],panes[1][3],cols,rows),(height-44,0,39,[2,0]))
             text,ppm=fixture(512,height)
             self.assertEqual(verify(text,ppm,FONT,12,'> echo spindle17',True,False),[])
         text,ppm=fixture(278,134)
@@ -65,15 +62,15 @@ class Check(unittest.TestCase):
         source=(ROOT/SCALE_SOURCE).read_text()
         old=self.source_root(source.replace('width>=128','width>=256'))
         self.assertEqual(_scale_threshold(old),256)
-        self.assertEqual(layout(512,134,old)[1:],(20,[3,3]))
-        text,ppm=fixture(512,134,threshold=256)
+        self.assertEqual(layout(260,134,old)[1:],(37,[8,0]))
+        text,ppm=fixture(260,134,threshold=256)
         self.assertEqual(verify(text,ppm,FONT,12,'> echo spindle17',True,False,root=old),[])
         self.assertTrue(verify(text,ppm,FONT,12,'> echo spindle17',True,False))
-        text,ppm=fixture(512,134)
+        text,ppm=fixture(260,134)
         self.assertEqual(verify(text,ppm,FONT,12,'> echo spindle17',True,False),[])
         self.assertTrue(verify(text,ppm,FONT,12,'> echo spindle17',True,False,root=old))
         # Correct 128-layout metadata cannot bless old 1x ink at pane width244.
-        text,ppm=fixture(512,134,glyph_threshold=256)
+        text,ppm=fixture(260,134,glyph_threshold=256)
         self.assertTrue(verify(text,ppm,FONT,12,'> echo spindle17',True,False))
     def test_scale_source_missing_ambiguous_or_unsupported_fails_closed(self):
         source=(ROOT/SCALE_SOURCE).read_text()
@@ -99,9 +96,9 @@ class Check(unittest.TestCase):
         text,ppm=fixture();blank=ppm[:ppm.index(b'255\n')+4]+bytes(1280*800*3);self.assertTrue(verify(text,blank,FONT,12,'> echo spindle17',True,False))
     def test_stale_layout_wrong_owner_or_geometry_cannot_pass(self):
         text,ppm=fixture()
-        for old,new in [('sid=161 sequence=2','sid=161 sequence=1'),('task=12 sequence=2','task=17 sequence=2'),('bottom_rows=1','bottom_rows=6'),('h=41','h=42')]:self.assertTrue(verify(text.replace(old,new),ppm,FONT,12,'> echo spindle17',True,False),(old,new))
+        for old,new in [('sid=154 sequence=2','sid=154 sequence=1'),('task=12 sequence=2','task=17 sequence=2'),('bottom_rows=0','bottom_rows=6'),('h=90','h=91')]:self.assertTrue(verify(text.replace(old,new),ppm,FONT,12,'> echo spindle17',True,False),(old,new))
     def test_empty_or_partial_hex_payload_is_not_a_paint(self):
-        text,ppm=fixture();self.assertTrue(verify(text.replace('bytes=21','bytes=20'),ppm,FONT,12,None,False,False));self.assertTrue(verify(text.replace('hex=3e','hex=0'),ppm,FONT,12,None,False,False))
+        text,ppm=fixture();self.assertTrue(verify(text.replace('bytes=416','bytes=415'),ppm,FONT,12,None,False,False));self.assertTrue(verify(text.replace('off=0 hex=2020','off=0 hex=0'),ppm,FONT,12,None,False,False))
     def test_all_nine_catalog_grids_and_unequal_held_task_have_exact_current_pixels(self):
         for target,task in [(12,12),(17,17),(24,24),(24,240),(25,250),(26,260),(27,270),(28,280),(29,290),(40,400)]:
             text,ppm=fixture(512,134,target,task,caption='NET / verified')
@@ -112,14 +109,14 @@ class Check(unittest.TestCase):
     def test_third_grid_wrong_task_layout_sequence_unknown_and_one_pixel_reject(self):
         text,ppm=fixture(640,134,24,240,caption='NET / verified')
         for changed in [text.replace('task=240 sequence=2','task=24 sequence=2'),
-                        text.replace('sid=313','sid=302'),text.replace('sid=315 sequence=2','sid=315 sequence=1'),
+                        text.replace('sid=313','sid=302'),text.replace('sid=313 sequence=2','sid=313 sequence=1'),
                         text.replace('task=240 sequence=2','task=240 sequence=0')]:
             self.assertTrue(verify(changed,ppm,FONT,24,None,False,False))
         self.assertTrue(verify(text,ppm,FONT,30,None,False,False))
         header,rgb=ppm.split(b'255\n',1);changed=bytearray(rgb);at=changed.index(b'\xe8\xff\xff');changed[at]=0xe7
         self.assertTrue(verify(text,header+b'255\n'+changed,FONT,24,None,False,False))
         # An unused physical text column may not retain old foreground ink.
-        changed=bytearray(rgb);offset=((50+36+12)*1280+(8+8+20*12))*3;changed[offset:offset+3]=b'\xe8\xff\xff'
+        changed=bytearray(rgb);offset=((50+36+12)*1280+(8+8+49*12))*3;changed[offset:offset+3]=b'\xe8\xff\xff'
         self.assertTrue(verify(text,header+b'255\n'+changed,FONT,24,None,False,False))
 
     def test_required_caption_comes_only_from_latest_current_pane_payload(self):
@@ -140,7 +137,7 @@ class Check(unittest.TestCase):
         self.assertTrue(verify(text[text.index('[spindle.view.accepted]'):],ppm,FONT,24,None,False,False))
         self.assertTrue(verify(text.replace('index=2 target=24 task=240','index=2 target=24 task=24'),ppm,FONT,24,None,False,False))
         root=Path(__file__).resolve().parents[2];source=(root/'crates/sex-pdx/src/app_catalog.rs').read_text()
-        for children in ['315, 316, 316','315, 316','315, 316, 318']:
+        for children in ['315, 316, 316','315, 316']:
             with tempfile.TemporaryDirectory() as temporary:
                 custom=Path(temporary);path=custom/'crates/sex-pdx/src/app_catalog.rs';path.parent.mkdir(parents=True)
                 path.write_text(source.replace('children: &[315, 316, 317]','children: &['+children+']'))

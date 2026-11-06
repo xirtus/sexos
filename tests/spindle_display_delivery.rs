@@ -3,56 +3,72 @@ extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
+#[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
+#[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../apps/spindle/src/viewport.rs"]mod viewport;
+#[path="../servers/silk-shell/src/linen_text_delivery.rs"]mod text_delivery;
 #[path="../apps/spindle/src/display_delivery.rs"]mod delivery;
 use delivery::*;
-fn text(byte:u8)->viewport::Text{let mut t=viewport::Text{bytes:[byte;126],len:126,cols:20,rows:6};for row in 0..6{t.bytes[row*21+20]=b'\n';}t}
+use text_batch::{Applied,Request};
+fn text(byte:u8)->viewport::Text{
+ let v=spindle_view::Layout::new(640,375);let line=[byte;40];
+ viewport::render(v,b"",20,0,|_|&line)
+}
 fn stamp(paint:u64)->Stamp{Stamp{sequence:1,paint}}
-fn drain(o:&mut Outbox)->(Vec<Operation>,Vec<Receipt>){let mut ops=Vec::new();let mut receipts=Vec::new();while o.pending(){o.poll(4,|op|{ops.push(op);Ok(())},|r|receipts.push(r)).unwrap();}(ops,receipts)}
-fn batches(ops:&[Operation])->Vec<Vec<u8>>{let mut out:Vec<Vec<u8>>=Vec::new();for op in ops{if op.opcode==0xFA{out.push(Vec::new());}if op.opcode==0xFB{let off=(op.b&255)as usize;let n=((op.b>>8)&15)as usize;let t=out.last_mut().unwrap();t.resize(t.len().max(off+n),0);t[off..off+n].copy_from_slice(&op.a.to_le_bytes()[..n]);}}out}
-#[test]fn every_full_boundary_preserves_exact_create_clear_and_text_for_both_incarnations(){
- for (target,sid)in[(12,154),(17,302)]{for full in 0..18{let mut o=Outbox::new(target);o.create(0,0x1234,0x5678);o.text(0,text(b'x'),stamp(1),0xabcdef);let mut ops=Vec::new();let mut receipt=Vec::new();let mut blocked=None;
- while o.pending(){let attempts=o.poll(4,|op|{assert_eq!(op.surface,sid);if ops.len()==full&&blocked.is_none(){blocked=Some(op);Err(ERR_SERVICE_NOT_READY)}else{if ops.len()==full{assert_eq!(Some(op),blocked);}ops.push(op);Ok(())}},|r|receipt.push(r)).unwrap();assert!(attempts<=4);}
- assert_eq!(receipt.len(),1);assert_eq!(receipt[0].stamp,stamp(1));assert_eq!(ops[0],Operation{opcode:0xEC,surface:sid,a:0x1234,b:0x5678});assert_eq!(batches(&ops),vec![text(b'x').bytes.to_vec()]);}}
-}
-#[test]fn repaint_coalescing_never_mixes_active_chunks_with_new_input(){let mut o=Outbox::new(12);o.text(2,text(b'a'),stamp(1),1);let mut ops=Vec::new();o.poll(2,|op|{ops.push(op);Ok(())},|_|panic!()).unwrap();o.text(2,text(b'b'),stamp(2),2);o.text(2,text(b'c'),stamp(3),3);let(rest,r)=drain(&mut o);ops.extend(rest);assert_eq!(r.iter().map(|r|r.stamp.paint).collect::<Vec<_>>(),vec![1,3]);assert_eq!(batches(&ops),vec![text(b'a').bytes.to_vec(),text(b'c').bytes.to_vec()]);}
-#[test]fn bounded_fair_poll_leaves_input_turns_between_display_operations(){let mut o=Outbox::new(17);for i in 0..4{o.create(i,10,20);o.text(i,text(b'x'),stamp(1),1);}let mut ops=Vec::new();assert_eq!(o.poll(4,|op|{ops.push(op);Ok(())},|_|panic!()),Ok(4));assert_eq!(ops.iter().map(|o|o.surface).collect::<Vec<_>>(),vec![302,303,304,305]);assert!(ops.iter().all(|o|o.opcode==0xEC));assert_eq!(o.poll(0,|_|panic!(),|_|panic!()),Ok(0));assert!(o.pending());}
-#[test]fn cancellation_discards_work_and_permanently_fences_queued_recreation(){let mut o=Outbox::new(12);o.text(0,text(b'x'),stamp(1),1);o.poll(4,|_|Err(ERR_SERVICE_NOT_READY),|_|panic!()).unwrap();assert_eq!(o.cancel(),1);o.create(0,1,2);o.text(0,text(b'z'),stamp(2),1);o.destroy(0);assert!(!o.pending());assert_eq!(o.poll(4,|_|panic!(),|_|panic!()),Ok(0));}
-#[test]fn destroy_preempts_unsent_text_and_reopen_starts_a_fresh_batch(){let mut o=Outbox::new(12);o.text(0,text(b'a'),stamp(1),1);o.poll(2,|_|Ok(()),|_|panic!()).unwrap();o.destroy(0);let(ops,r)=drain(&mut o);assert!(r.is_empty());assert_eq!(ops.iter().map(|o|o.opcode).collect::<Vec<_>>(),vec![0xEE]);o.create(0,1,2);o.text(0,text(b'b'),stamp(2),1);let(ops,r)=drain(&mut o);assert_eq!(ops[0].opcode,0xEC);assert_eq!(batches(&ops),vec![text(b'b').bytes.to_vec()]);assert_eq!(r[0].stamp.paint,2);}
-#[test]fn rejection_is_terminal_without_a_fake_completion_or_retry(){let mut o=Outbox::new(17);o.text(0,text(b'x'),stamp(1),1);assert_eq!(o.poll(4,|_|Err(3),|_|panic!()),Err(3));assert!(!o.pending());o.text(0,text(b'y'),stamp(2),1);assert_eq!(o.poll(4,|_|panic!(),|_|panic!()),Ok(0));}
-#[test]fn unrecognized_subject_cannot_create_or_send_any_surface(){let mut o=Outbox::new(9);o.create(0,1,2);o.text(0,text(b'x'),stamp(1),1);assert!(!o.pending());o.poll(4,|_|panic!(),|_|panic!()).unwrap();}
-#[test]fn clear_only_batches_complete_only_after_admission(){let mut o=Outbox::new(12);let mut t=text(b'x');t.len=0;o.text(0,t,stamp(1),1);o.poll(4,|_|Err(ERR_SERVICE_NOT_READY),|_|panic!()).unwrap();let(ops,r)=drain(&mut o);assert_eq!(ops.len(),1);assert_eq!(ops[0].opcode,0xFA);assert_eq!(r[0].bytes,0);}
-
-fn sized_text(byte:u8,len:usize)->viewport::Text{let mut value=text(byte);value.len=len;value}
-fn gap_case(target:u32,pane:usize,len:usize,full_at:Option<usize>){
- let sid=app_catalog::spindle_grid(target).unwrap()[pane];let mut out=Outbox::new(target);
- let a=sized_text(b'a',len);let b=sized_text(b'b',len);let c=sized_text(b'c',len);
- out.text(pane,a,stamp(7),1);out.text(pane,b,stamp(9),2);
- let total=1+(len+7)/8;let mut accepted=Vec::new();let mut receipts=Vec::new();let mut blocked=None;
- while receipts.is_empty(){
-  // Match production's four-call budget. The last poll has exactly the
-  // remaining A operations, so it ends after A without promoting queued B.
-  let budget=(total-accepted.len()).min(4);
-  let attempts=out.poll(budget,|op|{
-   assert_eq!(op.surface,sid);
-   if full_at==Some(accepted.len())&&blocked.is_none(){blocked=Some(op);return Err(ERR_SERVICE_NOT_READY)}
-   if full_at==Some(accepted.len()){assert_eq!(Some(op),blocked);}
-   if op.opcode==0xFB{assert_eq!(op.b>>32,1);}
-   accepted.push(op);Ok(())
-  },|receipt|receipts.push(receipt)).unwrap();assert!(attempts<=budget);
+fn outbox(target:u32)->Box<Outbox>{let mut o=Box::new(Outbox::new());o.bind(target);o}
+fn drain(o:&mut Outbox)->Vec<Operation>{let mut ops=Vec::new();for _ in 0..64{o.poll(128,|op|{ops.push(op);Ok(())}).unwrap();}ops}
+fn decode(op:&Operation)->Request{Request::decode(op.opcode,op.a,op.b).unwrap()}
+fn begun(op:&Operation)->u32{match decode(op){Request::Begin{sequence,..}=>sequence,other=>panic!("{other:?}")}}
+fn applied(sid:u64,sequence:u32)->u64{Applied{surface:sid as u16,sequence}.encode().unwrap()}
+#[test]fn create_precedes_one_atomic_terminal_batch_on_the_first_catalog_surface(){
+ for(target,sid)in[(12,154),(17,302)]{
+  let mut o=outbox(target);let t=text(b'x');o.create(0,0x1234,0x5678);o.text(&t,stamp(1),0xabcdef);
+  let ops=drain(&mut o);
+  assert_eq!(ops[0],Operation{opcode:0xEC,surface:sid,a:0x1234,b:0x5678});
+  assert!(ops[1..].iter().all(|op|op.surface==sid));
+  let sequence=begun(&ops[1]);assert!(matches!(decode(ops.last().unwrap()),Request::Commit{..}));
+  let mut bytes=vec![0;t.len];
+  for op in &ops[1..]{if let Request::Chunk{offset,count,bytes:b,..}=decode(op){bytes[offset..offset+count].copy_from_slice(&b[..count]);}}
+  assert_eq!(&bytes[..],&t.bytes[..t.len]);
+  assert!(o.pending());
+  let r=o.receive(1,applied(sid,sequence)).unwrap();
+  assert_eq!((r.surface,r.stamp,r.bytes),(sid,stamp(1),t.len));assert!(!o.pending());
  }
- assert_eq!(accepted.len(),total);assert_eq!(receipts.iter().map(|r|r.stamp.paint).collect::<Vec<_>>(),vec![7]);assert!(out.pending());
- out.text(pane,c,stamp(11),3);
- let (rest,more)=drain(&mut out);assert!(rest.iter().all(|op|op.surface==sid));receipts.extend(more);
- assert_eq!(receipts.iter().map(|r|r.stamp.paint).collect::<Vec<_>>(),vec![7,11],"obsolete B after newer C: target={target} pane={pane} len={len} full_at={full_at:?}");
- assert!(rest.iter().filter(|op|op.opcode==0xFB).all(|op|op.b>>32==3));accepted.extend(rest);
- assert_eq!(batches(&accepted),vec![a.bytes[..len].to_vec(),c.bytes[..len].to_vec()]);assert!(!out.pending());
 }
-#[test]fn between_poll_gap_supersedes_old_latest_for_every_catalog_pane_and_payload_length(){
- let mut cases=0;for target in app_catalog::SPINDLE_TARGETS{for pane in 0..4{for len in[126,0,1,8,9]{gap_case(target,pane,len,None);cases+=1;}}}
- assert_eq!(cases,app_catalog::SPINDLE_COUNT*4*5);println!("[spindle.display.gap] cases={cases} full=0");
+#[test]fn full_retains_the_exact_operation_and_budget_is_bounded(){
+ let mut o=outbox(12);o.create(1,10,20);o.text(&text(b'x'),stamp(1),1);
+ let mut blocked=None;o.poll(128,|op|{blocked=Some(op);Err(ERR_SERVICE_NOT_READY)}).unwrap();
+ let mut retried=None;o.poll(1,|op|{retried=Some(op);Ok(())}).unwrap();assert_eq!(blocked,retried);
+ let mut calls=0;assert_eq!(o.poll(4,|_|{calls+=1;Ok(())}).unwrap(),4);assert_eq!(calls,4);
 }
-#[test]fn full_clear_and_final_chunk_retry_preserve_active_then_newest_desire(){
- let mut cases=0;for target in app_catalog::SPINDLE_TARGETS{for pane in 0..4{for len in[126,0,1,8,9]{for full_at in[0,(len+7)/8]{gap_case(target,pane,len,Some(full_at));cases+=1;}}}}
- assert_eq!(cases,app_catalog::SPINDLE_COUNT*4*5*2);println!("[spindle.display.gap] cases={cases} full=clear_and_final");
+#[test]fn repaint_coalescing_keeps_the_active_batch_and_only_the_newest_desire(){
+ let mut o=outbox(12);let(a,b,c)=(text(b'a'),text(b'b'),text(b'c'));
+ o.text(&a,stamp(1),1);o.text(&b,stamp(2),1);o.text(&c,stamp(3),1);
+ let ops=drain(&mut o);let first=begun(&ops[0]);
+ assert!(o.receive(1,applied(154,first)).is_some());
+ let ops=drain(&mut o);let second=begun(&ops[0]);
+ let r=o.receive(1,applied(154,second)).unwrap();assert_eq!(r.stamp,stamp(3));assert!(!o.pending());
+}
+#[test]fn lost_reply_sends_the_batch_again_and_the_late_reply_still_completes_it(){
+ let mut o=outbox(12);o.text(&text(b'x'),stamp(1),1);let ops=drain(&mut o);let sequence=begun(&ops[0]);
+ let mut again=Vec::new();for _ in 0..5000{o.poll(128,|op|{again.push(op);Ok(())}).unwrap();if !again.is_empty(){break}}
+ assert_eq!(begun(&again[0]),sequence);
+ assert!(o.receive(1,applied(154,sequence)).is_some());assert!(!o.pending());
+}
+#[test]fn destroy_drops_unsent_text_and_reopen_accepts_a_fresh_batch(){
+ let mut o=outbox(12);o.text(&text(b'a'),stamp(1),1);o.poll(2,|_|Ok(())).unwrap();o.destroy(0);
+ let ops=drain(&mut o);assert_eq!(ops.len(),1);assert_eq!(ops[0].opcode,0xEE);assert!(!o.pending());
+ o.text(&text(b'b'),stamp(2),1);assert!(!o.pending());
+ o.create(0,1,2);o.text(&text(b'c'),stamp(3),1);
+ let ops=drain(&mut o);assert_eq!(ops[0].opcode,0xEC);begun(&ops[1]);
+}
+#[test]fn cancellation_fences_all_later_work(){
+ let mut o=outbox(12);o.text(&text(b'x'),stamp(1),1);assert_eq!(o.cancel(),1);assert!(!o.pending());
+ o.create(0,1,2);o.text(&text(b'y'),stamp(2),1);assert!(!o.pending());o.poll(4,|_|panic!()).unwrap();
+}
+#[test]fn rejection_is_terminal_without_a_fake_completion_or_retry(){
+ let mut o=outbox(17);o.text(&text(b'x'),stamp(1),1);assert_eq!(o.poll(4,|_|Err(3)),Err(3));assert!(!o.pending());o.poll(4,|_|panic!()).unwrap();
+}
+#[test]fn unrecognized_subject_cannot_create_or_send_any_surface(){
+ let mut o=outbox(9);o.create(0,1,2);o.text(&text(b'x'),stamp(1),1);assert!(!o.pending());o.poll(4,|_|panic!()).unwrap();
 }

@@ -139,7 +139,7 @@ def verify(result,frames,text,rows,*,out=None):
         recovered=dict(source=pre,source_task=pre_task,generation=int(p[1]),bytes=int(p[3]),source_hash=p[4],owned_hash=recovery[1],data_hash=recovery[2],handle=int(loaded[1]),count=int(loaded[2]))
         if step.get('recovery')!=recovered:raise ValueError('recovery result metadata differs')
         _one(text,rf'\[sext.app.pool.ready\] target={pre} task={pre_task} bytes=[1-9]\d* zeroed=[1-9]\d* workspace_records=\d+ reused=1 zero_owner=sext ok=1',0,a)
-        for sid in [row['surface']]+_children(ROOT,target):
+        for sid in [row['surface']]:
             if not re.search(rf'\[spindle.view.text\] target={target} sid={sid} sequence=\d+ paint=\d+ cols=\d+ rows=\d+ bytes=\d+'+END,text[a:b]):raise ValueError('missing current pane')
         recall='echo alpha'+str(pre)
         _one(text,rf'\[spindle.history.nav\] dir=up idx=0 len={len(recall)} ok=1',b,c)
@@ -235,7 +235,7 @@ def run(c,close,command):
         recovered=wait(rf'\[files.history.recovered\] logical=12 source={pre} source_task={pre_task} target={target} generation=(\d+) bytes=(\d+) source_hash=(0x[0-9a-f]+) owned_hash=(0x[0-9a-f]+) data_hash=(0x[0-9a-f]+) boot_grant=53'+END,start)
         loaded=wait(rf'\[spindle.history.receipt\] target={target} task={task} kind=loaded handle=([1-9]\d*) bytes={recovered[2]} count=(\d+) hash={recovered[4]} error=0'+END,start)
         step['recovery']=dict(source=pre,source_task=pre_task,generation=int(recovered[1]),bytes=int(recovered[2]),source_hash=recovered[3],owned_hash=recovered[4],data_hash=recovered[5],handle=int(loaded[1]),count=int(loaded[2]))
-        for sid in [row['surface']]+_children(root,target):wait(rf'\[spindle.view.text\] target={target} sid={sid} ',start)
+        wait(rf'\[spindle.view.text\] target={target} sid={row["surface"]} ',start)
         focus(row['frame']);step['recall_start']=len(text());recall='echo alpha'+str(pre)
         key('up',rf'\[spindle.history.nav\] dir=up idx=0 len={len(recall)} ok=1')
         step['recall_frame']=c['capture'](f'reserve-spindle-{target}-recall','> '+recall,kind='spindle',target=target)

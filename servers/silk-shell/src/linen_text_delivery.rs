@@ -2,6 +2,8 @@
 //! Nonblocking admission of complete Linen text repaints. There is one immutable
 //! active batch and one replaceable latest desired batch; no receive or allocation.
 pub const CAPACITY: usize = sex_pdx::text_batch::CAPACITY;
+/// Polls to wait for Display's reply before sending an atomic batch again.
+const REPLY_RETRY: u32 = 4096;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Metadata { pub count: usize, pub first: usize, pub rows: usize, pub selected: u64 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,7 +15,7 @@ pub enum Admission { Accepted, Full, Rejected(u64) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Poll { Idle, Pending, Deferred, Complete(Receipt), Rejected(u64) }
 #[derive(Clone, Copy)]
-struct Batch { bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool, selection:(u16,u16), selection_sent:bool }
+struct Batch { waits: u32, resent: bool, bytes: [u8; CAPACITY], len: usize, color: u32, metadata: Metadata, cleared: bool, offset: usize, sequence: u32, awaiting: bool, selection:(u16,u16), selection_sent:bool }
 impl Batch {
     fn erase(&mut self) {
         for byte in &mut self.bytes {unsafe{core::ptr::write_volatile(byte,0);}}
@@ -48,7 +50,7 @@ impl Outbox {
             || !sex_pdx::text_encoding::is_boundary(text,end as usize)) { return false; }
         let Some(sequence)=self.sequence.checked_add(1) else {return false;};
         self.sequence=sequence;
-        let mut batch = Batch { bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false, selection, selection_sent:false };
+        let mut batch = Batch { waits: 0, resent: false, bytes: [0;CAPACITY], len: text.len(), color, metadata, cleared: false, offset: 0, sequence, awaiting:false, selection, selection_sent:false };
         batch.bytes[..text.len()].copy_from_slice(text);
         if self.active.is_none() { self.active = Some(batch); self.latest = None; }
         else { self.latest = Some(batch); }
@@ -64,7 +66,7 @@ impl Outbox {
         if !self.atomic{return None;}
         let applied=sex_pdx::text_batch::Applied::decode(caller,value)?;
         let b=self.active.as_mut()?;
-        if !b.awaiting || applied.surface as u64!=self.surface || applied.sequence!=b.sequence{return None;}
+        if !(b.awaiting||b.resent) || applied.surface as u64!=self.surface || applied.sequence!=b.sequence{return None;}
         let receipt=Receipt{metadata:b.metadata,bytes:b.len};b.erase();self.active=None;Some(receipt)
     }
     /// At most `budget` calls. Full preserves the exact operation; unexpected
@@ -75,7 +77,12 @@ impl Outbox {
         if self.active.is_none() { return Poll::Idle; }
         for _ in 0..budget {
             let b = self.active.as_mut().unwrap();
-            if b.awaiting {return Poll::Pending;}
+            if b.awaiting {
+                b.waits+=1;
+                if b.waits<REPLY_RETRY {return Poll::Pending;}
+                // No reply: the surface was scrubbed or Display refused the batch.
+                (b.cleared,b.offset,b.selection_sent,b.awaiting,b.waits,b.resent)=(false,0,false,false,0,true);
+            }
             let chunk = (b.len - b.offset).min(8);
             let operation = if self.atomic {
                 use sex_pdx::text_batch::{Request,hash,selected_hash};

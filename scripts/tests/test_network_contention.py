@@ -45,11 +45,10 @@ class ContentionOracle(unittest.TestCase):
   lines=good.splitlines();lines[-2],lines[-1]=lines[-1],lines[-2]
   with self.assertRaises(ValueError):gate.cleanup_receipts('\n'.join(lines),12,120,0)
  def test_visible_text_joins_latest_left_right_panes_and_rejects_missing_bytes(self):
-  value=''
-  for sid,data in zip([154,160,161,162],[b'NET / ve\n',b'rified  \n',b'> echo  \n',b'ready   \n']):
-   value+=f'[spindle.view.text] target=12 sid={sid} sequence=2 paint=3 cols=8 rows=1 bytes=9\n[spindle.view.bytes] target=12 sid={sid} seq=2 paint=3 off=0 hex={data.hex()}\n'
+  data=b'NET / verified  \n'
+  value=f'[spindle.view.text] target=12 sid=154 sequence=2 paint=3 cols=16 rows=1 bytes=17\n[spindle.view.bytes] target=12 sid=154 seq=2 paint=3 off=0 hex={data.hex()}\n'
   self.assertIn(b'NET / verified',gate.visible_spindle_text(value,12))
-  with self.assertRaises(ValueError):gate.visible_spindle_text(value.replace('sid=160 seq=2','sid=999 seq=2'),12)
+  with self.assertRaises(ValueError):gate.visible_spindle_text(value.replace('sid=154 seq=2','sid=999 seq=2'),12)
  def test_binding_requires_exact_image_sources_and_frozen_runner(self):
   with tempfile.TemporaryDirectory()as directory:
    root=Path(directory);(root/'scripts').mkdir();(root/'source.rs').write_bytes(b'source');(root/'scripts/network_contention_gate.py').write_bytes(b'runner');iso=root/'image.iso';iso.write_bytes(b'image');path=root/'binding.json'

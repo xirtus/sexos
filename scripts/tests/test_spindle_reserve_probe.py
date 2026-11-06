@@ -192,7 +192,7 @@ class ReserveProbe(unittest.TestCase):
             values=list(fixture());values[0]['chain'][0]['commands'][0]['saved'][field]=value
             with self.assertRaises(ValueError):self.check(values)
     def test_missing_or_wrong_fresh_receipts_fail(self):
-        for old,new in [('source_task=170','source_task=171'),('source_hash=0x11','source_hash=0x99'),('sid=317','sid=318'),('job=Fill(5, 33, true)','job=Fill(6, 33, true)'),('view=Verified private_job=0','view=Verified private_job=1'),('role=8 acked=15','role=4 acked=15'),('all_flushed=1','all_flushed=0'),('RESERVE EXHAUSTED','RESERVE AVAILABLE')]:
+        for old,new in [('source_task=170','source_task=171'),('source_hash=0x11','source_hash=0x99'),('sid=313','sid=318'),('job=Fill(5, 33, true)','job=Fill(6, 33, true)'),('view=Verified private_job=0','view=Verified private_job=1'),('role=8 acked=15','role=4 acked=15'),('all_flushed=1','all_flushed=0'),('RESERVE EXHAUSTED','RESERVE AVAILABLE')]:
             values=list(fixture());values[2]=values[2].replace(old,new)
             # Even a recomputed prefix binding cannot repair a false receipt.
             for frame in values[1]:frame['serial_sha256']=hashlib.sha256(values[2][:frame['serial_end']].encode()).hexdigest()

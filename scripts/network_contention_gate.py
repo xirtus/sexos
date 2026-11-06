@@ -66,19 +66,17 @@ def owner_joins(trace,raw,owners):
  return dict(ok=not errors,errors=errors,joins=joined)
 
 def visible_spindle_text(trace,target):
- sids={12:[154,160,161,162],17:[302,303,304,305]}[target];panes=[]
- for sid in sids:
-  records=re.findall(rf'\[spindle.view.text\] target={target} sid={sid} sequence=(\d+) paint=(\d+) cols=(\d+) rows=(\d+) bytes=(\d+)',trace)
-  if not records:raise ValueError('missing actual Spindle pane')
-  seq,paint,cols,rows,length=map(int,records[-1]);data=bytearray()
-  for offset,part in re.findall(rf'\[spindle.view.bytes\] target={target} sid={sid} seq={seq} paint={paint} off=(\d+) hex=([0-9a-f]*)',trace):
-   if int(offset)!=len(data):raise ValueError('noncontiguous current Spindle pane')
-   data.extend(bytes.fromhex(part))
-  if len(data)!=length:raise ValueError('incomplete actual Spindle pane')
-  lines=bytes(data).split(b'\n')
-  if rows and (len(lines)!=rows+1 or any(len(line)!=cols for line in lines[:-1])):raise ValueError('malformed actual Spindle rows')
-  panes.append(lines[:-1]if rows else[])
- return b'\n'.join(left+right for a,b in ((0,1),(2,3))for left,right in zip(panes[a],panes[b]))
+ sid={12:154,17:302}[target]
+ records=re.findall(rf'\[spindle.view.text\] target={target} sid={sid} sequence=(\d+) paint=(\d+) cols=(\d+) rows=(\d+) bytes=(\d+)',trace)
+ if not records:raise ValueError('missing actual Spindle pane')
+ seq,paint,cols,rows,length=map(int,records[-1]);data=bytearray()
+ for offset,part in re.findall(rf'\[spindle.view.bytes\] target={target} sid={sid} seq={seq} paint={paint} off=(\d+) hex=([0-9a-f]*)',trace):
+  if int(offset)!=len(data):raise ValueError('noncontiguous current Spindle pane')
+  data.extend(bytes.fromhex(part))
+ if len(data)!=length:raise ValueError('incomplete actual Spindle pane')
+ lines=bytes(data).split(b'\n')
+ if rows and (len(lines)!=rows+1 or any(len(line)!=cols for line in lines[:-1])):raise ValueError('malformed actual Spindle rows')
+ return b'\n'.join(lines[:-1]if rows else[])
 
 def cleanup_receipts(trace,target,task,start):
  suffix=trace[start:];roles={int(n)for n in re.findall(rf'\[app.service.ack\] target={target} task={task} holder=\d+ role=(\d+) ',suffix)}

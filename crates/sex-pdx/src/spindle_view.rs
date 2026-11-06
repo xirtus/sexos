@@ -1,25 +1,28 @@
 //! Bounded terminal layout data over existing BOOT shell→Spindle edges.
 //! Rectangles are relative to the shell frame, never pointers or authority.
 pub const OP:u64=0x270;
-pub const MAX_TEXT:usize=126;
+pub const MAX_TEXT:usize=6144;
+pub const MAX_COLUMNS:usize=110;
+pub const MAX_ROWS:usize=48;
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub struct Rect{pub x:u32,pub y:u32,pub w:u32,pub h:u32}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Layout{pub panes:[Rect;4],pub cols:usize,pub rows:[usize;2]}
-/// Spindle panes trade bounded columns for readable doubled glyphs from 128px.
+/// Readable doubled glyphs from 128px.
 pub const fn scale(width:u32)->u32{if width>=128{2}else{1}}
-fn rows(height:u32,scale:u32)->usize{let usable=height.saturating_sub(12);if usable<7*scale{0}else{(1+(usable-7*scale)/(9*scale)).min(6)as usize}}
+fn rows(height:u32,scale:u32)->usize{let usable=height.saturating_sub(12);if usable<7*scale{0}else{(1+(usable-7*scale)/(9*scale)).min(MAX_ROWS as u32)as usize}}
 impl Layout{
+ /// One terminal fills the frame body. The other three catalog surfaces stay
+ /// allocated at zero height and carry no text.
  pub fn new(w:u32,h:u32)->Self{
-  let bw=w.saturating_sub(16);let bh=h.saturating_sub(44);let cw=bw.saturating_sub(8)/2;let rw=bw.saturating_sub(cw+8);
-  let max_scale=scale(cw).max(scale(rw));let split=bh>=2*(12+7*max_scale)+8;
-  let top=if split{bh.saturating_sub(8)/2}else{0};let bottom=if split{bh.saturating_sub(top+8)}else{bh};let by=36+if split{top+8}else{0};
-  let panes=[Rect{x:8,y:36,w:cw,h:top},Rect{x:16+cw,y:36,w:rw,h:top},Rect{x:8,y:by,w:cw,h:bottom},Rect{x:16+cw,y:by,w:rw,h:bottom}];
+  let bw=w.saturating_sub(16);let bh=h.saturating_sub(44);let s=scale(bw);
+  let empty=Rect{x:8,y:36,w:bw,h:0};
   // Keep one physical column free so an explicit newline cannot wrap twice.
-  let cols=((cw.saturating_sub(16)/(6*scale(cw))).min(rw.saturating_sub(16)/(6*scale(rw)))).saturating_sub(1).min(20)as usize;
-  let rows=if cols==0{[0,0]}else{[rows(top,max_scale),rows(bottom,max_scale)]};Self{panes,cols,rows}
+  let cols=(bw.saturating_sub(16)/(6*s)).saturating_sub(1).min(MAX_COLUMNS as u32)as usize;
+  let rows=if cols==0{[0,0]}else{[rows(bh,s),0]};
+  Self{panes:[Rect{x:8,y:36,w:bw,h:bh},empty,empty,empty],cols,rows}
  }
- pub fn columns(self)->usize{self.cols*2}
+ pub fn columns(self)->usize{self.cols}
  pub fn lines(self)->usize{self.rows[0]+self.rows[1]}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]

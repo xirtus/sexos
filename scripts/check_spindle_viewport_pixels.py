@@ -21,13 +21,12 @@ def _scale_threshold(root=None):
     return int(matches[0][1])
 
 def layout(w,h,root=None):
-    bw=max(0,w-16);bh=max(0,h-44);left=max(0,bw-8)//2;right=max(0,bw-left-8)
-    threshold=_scale_threshold(root);scale=lambda width:2 if width>=threshold else 1
-    largest=max(scale(left),scale(right));split=bh>=2*(12+7*largest)+8
-    top=max(0,bh-8)//2 if split else 0;bottom=max(0,bh-top-8)if split else bh;by=36+(top+8 if split else 0)
-    cols=min(20,max(0,min(max(0,left-16)//(6*scale(left)),max(0,right-16)//(6*scale(right)))-1))
-    def rows(height):return min(6,1+(height-12-7*largest)//(9*largest))if height>=12+7*largest and cols else 0
-    return [(8,36,left,top),(16+left,36,right,top),(8,by,left,bottom),(16+left,by,right,bottom)],cols,[rows(top),rows(bottom)]
+    bw=max(0,w-16);bh=max(0,h-44)
+    threshold=_scale_threshold(root);scale=2 if bw>=threshold else 1
+    cols=min(110,max(0,max(0,bw-16)//(6*scale)-1))
+    rows=min(48,1+(bh-12-7*scale)//(9*scale))if bh>=12+7*scale and cols else 0
+    empty=(8,36,bw,0)
+    return [(8,36,bw,bh),empty,empty,empty],cols,[rows,0]
 
 def _source_grid(root,target):
     rows=source_spindles(root)
@@ -63,9 +62,9 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         threshold=_scale_threshold(root)
         if (cols,[top,bottom])!=(expected_cols,rows):raise ValueError('wrong viewport text capacity')
         views={int(sid):tuple(map(int,(x,y,w,h)))for sid,x,y,w,h in re.findall(rf'\[shell.app.viewport\] target={target} sid=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',text)if int(sid)in sids}
-        if set(views)!=set(sids):raise ValueError('missing catalog viewport quadrants')
+        if sids[0]not in views:raise ValueError('missing catalog terminal viewport')
         x=views[sids[0]][0]-8;y=views[sids[0]][1]-36
-        if any(views[sid]!=(x+px,y+py,pw,ph)for sid,(px,py,pw,ph)in zip(sids,panes)):raise ValueError('layout does not match shell geometry')
+        if views[sids[0]]!=(x+panes[0][0],y+panes[0][1],panes[0][2],panes[0][3]):raise ValueError('layout does not match shell geometry')
         width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
         if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
         if x<0 or y<50 or x+w>width or y+h>height:raise ValueError('viewport outside framebuffer')
@@ -78,20 +77,20 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
                 if off!=len(joined) or len(data)!=min(48,int(n)-off):raise ValueError('partial or duplicated viewport byte chunks')
                 joined.extend(data)
             records[int(sid)]=(int(c),int(r),int(n),bytes(joined))
-        if set(records)!=set(sids):raise ValueError('missing exact current-layout text payloads')
+        if sids[0]not in records or set(records)-{sids[0]}:raise ValueError('missing exact current-layout text payloads')
         rendered=[];errors=[]
-        for index,sid in enumerate(sids):
-            c,r,n,data=records[sid];px,py,pw,ph=panes[index];sx,sy=x+px,y+py;scale=2 if pw>=threshold else 1;expected_rows=rows[index//2]
+        for index,sid in enumerate(sids[:1]):
+            c,r,n,data=records[sid];px,py,pw,ph=panes[index];sx,sy=x+px,y+py;scale=2 if pw>=threshold else 1;expected_rows=rows[0]
             if expected_rows==0:
                 if (c,r,n,data)!=(0,0,0,b''):raise ValueError('collapsed pane retained text')
                 rendered.append([]);continue
-            if (c,r,n)!=(cols,expected_rows,expected_rows*(cols+1))or len(data)!=n or n>126:raise ValueError('wrong bounded pane payload')
+            if (c,r,n)!=(cols,expected_rows,expected_rows*(cols+1))or len(data)!=n or n>6144:raise ValueError('wrong bounded pane payload')
             lines=data.split(b'\n')
             if lines[-1]!=b'' or len(lines)!=r+1 or any(len(line)!=c or any(not 32<=v<=126 for v in line)for line in lines[:-1]):raise ValueError('invalid explicit text rows')
             lines=lines[:-1];rendered.append(lines);ink=0;mismatch=0
             # Include unused physical columns and former rows: stale glyphs
             # after a shorter repaint must not masquerade as current content.
-            physical_cols=min(80,max(0,pw-16)//(6*scale));physical_rows=min(7,max(0,1+(ph-12-7*scale)//(9*scale)))
+            physical_cols=min(110,max(0,pw-16)//(6*scale));physical_rows=min(48,max(0,1+(ph-12-7*scale)//(9*scale)))
             for row in range(physical_rows):
                 for col in range(physical_cols):
                     char=chr(lines[row][col])if row<r and col<c else' '
@@ -110,9 +109,9 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         if require_text is not None:
             if not isinstance(require_text,str)or not require_text:raise ValueError('expected current text must be nonempty ASCII')
             needle=require_text.encode('ascii')
-            current=[left+right for band in (0,2)for left,right in zip(rendered[band],rendered[band+1])]
+            current=rendered[0]
             if not any(needle in line for line in current):raise ValueError('missing expected current rendered text')
-        prompt=(rendered[2][-1]+rendered[3][-1]).decode()if rendered[2]and rendered[3]else''
+        prompt=rendered[0][-1].decode()if rendered[0]else''
         if require_prompt and require_prompt not in prompt:raise ValueError('missing exact visible prompt')
         return errors
     except (ValueError,KeyError,OverflowError)as e:return[str(e)]

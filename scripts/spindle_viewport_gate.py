@@ -56,7 +56,7 @@ def validate_relative_layout(record,resolution,phase,tiled=None,after_sequence=0
     sequence,w,h,cols,top,bottom=record
     if type(after_sequence)is not int or after_sequence<0 or not after_sequence<sequence<1<<64:raise ValueError('stale/invalid viewport sequence')
     if not 0<w<=resolution[0]or not 0<h<=resolution[1]-50:raise ValueError('viewport outside actual desktop')
-    if not 1<=cols<=20 or not 0<=top<=6 or not 1<=bottom<=6 or max(top,bottom)*(cols+1)>126:raise ValueError('invalid accepted text capacity')
+    if not 1<=cols<=110 or not 1<=top<=48 or bottom!=0 or top*(cols+1)>6144:raise ValueError('invalid accepted text capacity')
     shape=(w,h,cols,top,bottom)
     if tiled is not None and (not isinstance(tiled,tuple)or len(tiled)!=5 or any(type(v)is not int for v in tiled)):raise ValueError('malformed cached tiled layout')
     if phase=='tiled':

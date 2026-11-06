@@ -93,6 +93,9 @@ static mut NETWORK_GENERATION:u64=0;
 static mut STORAGE_PROBE:storage_probe::Client=storage_probe::Client::new();
 mod viewport;
 mod scroll_view;
+#[path="../../../servers/silk-shell/src/linen_text_delivery.rs"]
+#[allow(dead_code)]
+mod text_delivery;
 mod display_delivery;
 mod sextime_command;
 mod calc_command;
@@ -540,10 +543,10 @@ const OUTPUT_ROW_START: u32 = 5;
 /// Max scrollback lines in the ring buffer.
 const MAX_SCROLLBACK: usize = scroll_view::CAPACITY;
 /// Max chars per scrollback line (matches COLS = 80).
-const MAX_LINE_BYTES: usize = 80;
+const MAX_LINE_BYTES: usize = 110;
 
 struct Scrollback {
-    /// Fixed ring buffer: 1024 lines of 80 bytes each = 80 KiB.
+    /// Fixed ring buffer: 1024 lines of 110 bytes each.
     ring: [[u8; MAX_LINE_BYTES]; MAX_SCROLLBACK],
     /// Index in ring where the next line will be written.
     write_pos: usize,
@@ -597,11 +600,11 @@ impl Scrollback {
 }
 
 // ── BSS storage (moved off stack to stay within 64 KiB PD stack limit) ──
-// Scrollback: [[u8; 80]; 1024] = 80 KiB → BSS
+// Scrollback: [[u8; 110]; 1024] = 110 KiB → BSS
 // History:    [[u8; 256]; 128] = 32 KiB → BSS
 // EventRing + CmdLine remain on stack (~4 KiB combined, safe).
 static mut SPINDLE_SCROLLBACK: Scrollback = Scrollback {
-    ring: [[0u8; 80]; 1024],
+    ring: [[0u8; MAX_LINE_BYTES]; MAX_SCROLLBACK],
     write_pos: 0,
     total_lines: 0,
     scroll_offset: 0,
@@ -699,7 +702,7 @@ fn parse_doc_id(args: &[u8]) -> Option<u64> {
     if any { Some(v) } else { None }
 }
 
-static mut DISPLAY_IO:display_delivery::Outbox=display_delivery::Outbox::new(12);
+static mut DISPLAY_IO:display_delivery::Outbox=display_delivery::Outbox::new();
 
 /// WINDOW_LIFECYCLE_V1: create (or re-create) the 2x2 surface grid.
 fn spindle_grid_create() {
@@ -1320,7 +1323,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             // cycle would leak 4 slots if destroy didn't free them.
             spindle_grid_destroy();
             spindle_grid_create();
-            unsafe { GRID_PREV = [None;4]; }
+            unsafe { GRID_PREV = None; }
             sb.push(b"WINDOWS RECREATED.");
             serial_println!("[spindle.winreset] ok=1");
             true
@@ -2190,7 +2193,7 @@ const CONTENT_TEXT_COLOR: u64 = 0x00E8FFFF;
 /// Per-surface subgrid cache for dirty-diffing: a plain keystroke only
 /// reflushes the prompt-band surface it lands in; Enter/scroll reflushes
 /// all four. Zero-init (not 0x20) so the first render flushes everything.
-static mut GRID_PREV:[Option<viewport::Text>;4]=[None;4];
+static mut GRID_PREV:Option<viewport::Text>=None;
 static mut VIEW_SIZE:(u32,u32)=(288,212);
 static mut VIEW_SEQUENCE:u64=0;
 static mut VIEW_PAINT:u64=0;
@@ -2207,17 +2210,16 @@ unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
     sb.scroll_offset=scroll_view::clamp(sb.scroll_offset,sb.total_lines,view.lines().saturating_sub(1));
     let p=viewport::prompt(line.as_bytes(),line.cur,view.columns());
     sex_pdx::serial_record!("[spindle.cursor.view] target={} sequence={} pos={} len={} start={} end={} caret={}",instance_pd(),VIEW_SEQUENCE,line.cur,line.len,p.start,p.end,p.caret.unwrap_or(0));
-    let texts=viewport::render_at(view,line.as_bytes(),line.cur,sb.retained(),sb.scroll_offset as usize,|index|sb.get_retained(index));
-    for (i,text) in texts.iter().enumerate(){if GRID_PREV[i]==Some(*text){continue}
-        VIEW_PAINT=VIEW_PAINT.checked_add(1).expect("SPINDLE_PAINT_EXHAUSTED");
-        sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={}",instance_pd(),grid_sids()[i],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len);
-        for (chunk,bytes) in text.bytes[..text.len].chunks(48).enumerate(){
-            let mut hex=[0u8;96];let alphabet=b"0123456789abcdef";
-            for(n,b)in bytes.iter().enumerate(){hex[n*2]=alphabet[(b>>4)as usize];hex[n*2+1]=alphabet[(b&15)as usize];}
-            sex_pdx::serial_record!("[spindle.view.bytes] target={} sid={} seq={} paint={} off={} hex={}",instance_pd(),grid_sids()[i],VIEW_SEQUENCE,VIEW_PAINT,chunk*48,core::str::from_utf8(&hex[..bytes.len()*2]).unwrap());
-        }
-        DISPLAY_IO.text(i,*text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);GRID_PREV[i]=Some(*text);
+    let text=viewport::render_at(view,line.as_bytes(),line.cur,sb.retained(),sb.scroll_offset as usize,|index|sb.get_retained(index));
+    if GRID_PREV==Some(text){return}
+    VIEW_PAINT=VIEW_PAINT.checked_add(1).expect("SPINDLE_PAINT_EXHAUSTED");
+    sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len);
+    for (chunk,bytes) in text.bytes[..text.len].chunks(48).enumerate(){
+        let mut hex=[0u8;96];let alphabet=b"0123456789abcdef";
+        for(n,b)in bytes.iter().enumerate(){hex[n*2]=alphabet[(b>>4)as usize];hex[n*2+1]=alphabet[(b&15)as usize];}
+        sex_pdx::serial_record!("[spindle.view.bytes] target={} sid={} seq={} paint={} off={} hex={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,chunk*48,core::str::from_utf8(&hex[..bytes.len()*2]).unwrap());
     }
+    DISPLAY_IO.text(&text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);GRID_PREV=Some(text);
 }
 
 /// Check only metadata from a successful held SELF_CATALOG query. The
@@ -2238,7 +2240,7 @@ pub extern "C" fn _start() -> ! {
     assert!(catalog.task_id!=0,"SPINDLE_EXACT_NETWORK_TASK");
     assert_eq!(sex_pdx::device_network_config(sex_pdx::SLOT_NET),Err(sex_pdx::pci_command::DENIED),"SPINDLE_ROUTE_HAS_NO_NIC_METADATA");
     sex_pdx::serial_record!("[spindle.net.idle] target={} task={} explicit_intent=1 nic_metadata=0",catalog.target_pd,catalog.task_id);
-    unsafe{HISTORY_IO.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO=display_delivery::Outbox::new(catalog.target_pd);}
+    unsafe{HISTORY_IO.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO.bind(catalog.target_pd);}
     sex_pdx::serial_record!("[spindle.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[spindle.init.start]");
     serial_println!("[spindle.boot]");
@@ -2557,7 +2559,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         unsafe{NETWORK_PROBE.advance(sex_pdx::get_ticks());}
         if unsafe{NETWORK_GENERATION!=NETWORK_PROBE.status_generation()} {network_note(sb);unsafe{content_render(&line,sb);}}
-        let display_result=unsafe{DISPLAY_IO.poll(4,|op|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op.opcode,op.surface,op.a,op.b).map(|_|()),|r|sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes))};
+        let display_result=unsafe{DISPLAY_IO.poll(128,|op|sex_pdx::pdx_call_checked(SLOT_DISPLAY,op.opcode,op.surface,op.a,op.b).map(|_|()))};
         if let Err(error)=display_result{sex_pdx::serial_record!("[spindle.display.denied] target={} status={}",instance_pd(),error);sex_pdx::task_finish(3);}
         if registration_pending{
             match sex_pdx::pdx_call_checked(SLOT_SHELL,0xFA,catalog.surface_id,1,(catalog.target_pd as u64)<<8){Ok(_)=>registration_pending=false,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{},Err(_)=>sex_pdx::task_finish(3)}
@@ -2570,9 +2572,13 @@ pub extern "C" fn _start() -> ! {
         let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
+        if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
+            sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);
+            continue;
+        }
         if msg.type_id==sex_pdx::spindle_view::OP {
             if let Some(n)=sex_pdx::spindle_view::Notice::decode(msg.caller_pd,instance_pd(),catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],unsafe{VIEW_SEQUENCE}) {
-                unsafe{VIEW_SIZE=(n.w,n.h);VIEW_SEQUENCE=n.sequence;HISTORY_STATUS.refresh();GRID_PREV=[None;4];}
+                unsafe{VIEW_SIZE=(n.w,n.h);VIEW_SEQUENCE=n.sequence;HISTORY_STATUS.refresh();GRID_PREV=None;}
                 let v=sex_pdx::spindle_view::Layout::new(n.w,n.h);
                 sb.scroll_offset=scroll_view::clamp(sb.scroll_offset,sb.total_lines,v.lines().saturating_sub(1));
                 sex_pdx::serial_record!("[spindle.view.accepted] target={} task={} sequence={} w={} h={} cols={} top_rows={} bottom_rows={} sender=3",instance_pd(),catalog.task_id,n.sequence,n.w,n.h,v.cols,v.rows[0],v.rows[1]);
