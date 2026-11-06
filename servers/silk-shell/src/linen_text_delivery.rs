@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Nonblocking admission of complete Linen text repaints. There is one immutable
 //! active batch and one replaceable latest desired batch; no receive or allocation.
-pub const CAPACITY: usize = 512;
+pub const CAPACITY: usize = sex_pdx::text_batch::CAPACITY;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Metadata { pub count: usize, pub first: usize, pub rows: usize, pub selected: u64 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +27,8 @@ pub struct Outbox { surface: u64, active: Option<Batch>, latest: Option<Batch>, 
 impl Outbox {
     pub const fn new(surface: u64) -> Self { Self { surface, active: None, latest: None, atomic:false, sequence:0 } }
     pub const fn atomic(surface:u64)->Self {Self{surface,active:None,latest:None,atomic:true,sequence:0}}
+    /// In place form of `atomic` for a static outbox (no large move).
+    pub fn bind_atomic(&mut self,surface:u64){self.surface=surface;self.atomic=true;}
     /// An oversized input leaves both existing batches untouched. Replacement
     /// affects only the not-yet-started batch, never interleaves active chunks.
     pub fn queue(&mut self, text: &[u8], color: u32, metadata: Metadata) -> bool {

@@ -33,6 +33,7 @@ impl<'a> Pending<'a> {
     pub const fn selection(&self) -> (u16, u16) { self.selection }
     pub const fn bytes(&self) -> &'a [u8; CAPACITY] { self.bytes }
 }
+const COVERAGE_WORDS: usize = CAPACITY.div_ceil(8).div_ceil(64);
 #[derive(Clone, Copy)]
 pub struct Stage {
     owner: u32,
@@ -43,7 +44,8 @@ pub struct Stage {
     sequence: u32,
     len: usize,
     color: u32,
-    coverage: u64,
+    /// One bit per 8-byte chunk of `bytes`.
+    coverage: [u64; COVERAGE_WORDS],
     selection_start: u16,
     selection_end: u16,
     selection_present: bool,
@@ -61,7 +63,7 @@ impl Stage {
         sequence: 0,
         len: 0,
         color: 0,
-        coverage: 0,
+        coverage: [0; COVERAGE_WORDS],
         selection_start: 0,
         selection_end: 0,
         selection_present: false,
@@ -71,7 +73,7 @@ impl Stage {
         reply_released: false,
         bytes: [0; CAPACITY],
     };
-    pub fn diagnostic(&self)->(u32,u64,u32,usize,u64,bool,bool){(self.owner,self.sid,self.sequence,self.len,self.coverage,self.sealed,self.poisoned)}
+    pub fn diagnostic(&self)->(u32,u64,u32,usize,u64,bool,bool){(self.owner,self.sid,self.sequence,self.len,self.coverage[0],self.sealed,self.poisoned)}
     pub fn reset(&mut self) {
         // Explicitly erase inline text and selection before terminal reuse.
         for byte in &mut self.bytes { unsafe { core::ptr::write_volatile(byte, 0); } }
@@ -86,9 +88,13 @@ impl Stage {
     pub fn selection(&self) -> (u16, u16) {
         if self.sealed { (self.selection_start, self.selection_end) } else { (0, 0) }
     }
-    fn complete(&self) -> u64 {
+    /// Every chunk of the declared length has arrived.
+    fn complete(&self) -> bool {
         let chunks = (self.len + 7) / 8;
-        if chunks == 64 { u64::MAX } else { (1u64 << chunks) - 1 }
+        (0..COVERAGE_WORDS).all(|w| {
+            let want = chunks.saturating_sub(w * 64);
+            self.coverage[w] == if want >= 64 { u64::MAX } else { (1u64 << want) - 1 }
+        })
     }
     pub fn retire(&mut self, owner: u32, task: u32) {
         if (self.owner, self.task) == (owner, task) {
@@ -215,19 +221,19 @@ impl Stage {
                     self.poisoned = true;
                     return None;
                 }
-                let bit = 1u64 << (offset / 8);
-                if self.coverage & bit != 0 && self.bytes[offset..offset + count] != bytes[..count]
+                let (word, bit) = (offset / 8 / 64, 1u64 << (offset / 8 % 64));
+                if self.coverage[word] & bit != 0 && self.bytes[offset..offset + count] != bytes[..count]
                 {
                     self.poisoned = true;
                     return None;
                 }
                 self.bytes[offset..offset + count].copy_from_slice(&bytes[..count]);
-                self.coverage |= bit;
+                self.coverage[word] |= bit;
             }
             Request::Select { sequence, start, end } => {
                 if (self.owner, self.task, self.sid, self.sequence) != (owner, task, sid, sequence)
                     || self.sealed || self.poisoned { return None; }
-                if self.coverage != self.complete() || start > end || end > self.len
+                if !self.complete() || start > end || end > self.len
                     || !sex_pdx::text_encoding::is_boundary(&self.bytes[..self.len],start)
                     || !sex_pdx::text_encoding::is_boundary(&self.bytes[..self.len],end)
                     || (start == end && start != 0)
@@ -252,7 +258,7 @@ impl Stage {
                 let integrity = if self.selection_present {
                     selected_hash(&self.bytes[..self.len], self.selection_start as usize, self.selection_end as usize)
                 } else { Some(hash(&self.bytes[..self.len])) };
-                if self.coverage != self.complete() || integrity != Some(expected)
+                if !self.complete() || integrity != Some(expected)
                     || !sex_pdx::text_encoding::valid_text(&self.bytes[..self.len]) {
                     self.poisoned = true;
                     return None;

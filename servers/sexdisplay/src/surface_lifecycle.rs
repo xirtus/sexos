@@ -58,8 +58,8 @@ impl Surface {
 }
 
 pub const MAX_SURFACES: usize = 16;
-pub const TEXT_BUF_CAP: usize = 512;
-pub const TEXT_MAX_ROWS: usize = 24;
+pub const TEXT_BUF_CAP: usize = 6144;
+pub const TEXT_MAX_ROWS: usize = 48;
 pub const TEXT_LEGACY_COLS: u8 = 20;
 pub const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,

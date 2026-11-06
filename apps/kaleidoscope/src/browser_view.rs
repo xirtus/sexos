@@ -3,7 +3,11 @@
 //! capability authority or permission to contact an endpoint.
 use crate::{dns_probe,http_probe,network_probe};
 
-pub struct Text { pub bytes:[u8;512], pub len:usize }
+pub struct Text { pub bytes:[u8;sex_pdx::text_batch::CAPACITY], pub len:usize }
+impl Text {
+ /// A panel's smaller frame in the common delivery buffer.
+ pub fn small(bytes:&[u8],len:usize)->Self{let mut b=[0;sex_pdx::text_batch::CAPACITY];b[..bytes.len()].copy_from_slice(bytes);Self{bytes:b,len}}
+}
 
 /// Presentation metadata only; this tag grants no service or surface access.
 pub const TLS_TAG:u64=1<<25;
@@ -57,7 +61,7 @@ pub fn compose(preview:&[u8],echo:network_probe::View,dns:dns_probe::View,http:h
  let len=preview.len().checked_add(64*3+2+64)?;
  if len>512||!readable(preview) { return None; }
  if matches!(http,http_probe::View::Ready)&&!readable(body) { return None; }
- let mut text=Text {bytes:[b' ';512],len};text.bytes[..preview.len()].copy_from_slice(preview);
+ let mut text=Text {bytes:[b' ';sex_pdx::text_batch::CAPACITY],len};text.bytes[..preview.len()].copy_from_slice(preview);
  let echo_label:&[u8]=match echo {
   network_probe::View::Pending=>b"\n\nPeer probe: checking\nR retry  C cancel",
   network_probe::View::Verified=>b"\n\nPeer probe: bytes verified\nR retry  C cancel",

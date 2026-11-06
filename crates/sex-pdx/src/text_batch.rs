@@ -5,7 +5,7 @@ pub const CHUNK: u64 = 0x277;
 pub const COMMIT: u64 = 0x278;
 /// Optional final metadata, after all chunks and before Commit.
 pub const SELECT: u64 = 0x28b;
-pub const CAPACITY: usize = 512;
+pub const CAPACITY: usize = 6144;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Begin {

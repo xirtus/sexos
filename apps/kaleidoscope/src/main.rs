@@ -135,8 +135,8 @@ struct Browser {
     resources_last:Option<(heap::Usage,usize,bool,bool,bool,Option<Intent>,bool)>,
     navigation:http_navigation::Navigation,
     preview:body_text::Preview,
-    ui:text_delivery::Outbox,
-    ui_last:[u8;512],
+    ui:&'static mut text_delivery::Outbox,
+    ui_last:&'static mut [u8;sex_pdx::text_batch::CAPACITY],
     ui_last_len:usize,
     ui_metadata:Option<text_delivery::Metadata>,
     ui_dirty:bool,
@@ -679,7 +679,7 @@ impl Browser {
             importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
             dns:dns_probe::Client::new(),dns_view:dns_probe::View::Idle,seed:entropy_probe::Client::new(),seed_view:entropy_probe::View::Idle,clock:clock_probe::Client::new(),clock_view:clock_probe::View::Idle,clock_panel:false,trust:trust_probe::Client::new(),trust_view:trust_probe::View::Idle,tls:tls_probe::Probe::new(),tls_view:tls_probe::View::Idle,tls_panel:false,exchange:{let mut e=tls_exchange::Client::new();e.set_page_text(page_text);e},peer_view:tls_exchange::View::Idle,peer_panel:false,peer_generation:0,peer_sequence:0,peer_ticket_logged:0,http:http_probe::Client::new(),http_view:http_probe::View::Idle,
-            intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:text_delivery::Outbox::atomic(surface),ui_last:[0;512],ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
+            intent:None,app_turn:0,resources_last:None,navigation:http_navigation::Navigation::new(),preview,ui:unsafe{let ui=&mut *core::ptr::addr_of_mut!(BROWSER_UI);ui.bind_atomic(surface);ui},ui_last:unsafe{&mut *core::ptr::addr_of_mut!(BROWSER_UI_LAST)},ui_last_len:0,ui_metadata:None,ui_dirty:true,ui_failed:false,ui_retries:0 }
 
     }
 
@@ -920,18 +920,31 @@ impl Browser {
             bitmap_delivery::Poll::InvalidPixels|bitmap_delivery::Poll::Closed=>self.fence_asset("invalid_display_state"),_=>{},
         }
         }
+        self.compose_ui();
+        if let text_delivery::Poll::Rejected(error)=self.ui.poll(128,|op|{
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_DISPLAY,op.opcode,op.surface,op.packed,op.control){
+                Ok(_)=>text_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>text_delivery::Admission::Full,Err(e)=>text_delivery::Admission::Rejected(e),
+            }
+        }){self.ui.cancel();self.ui_dirty=true;self.ui_retries=self.ui_retries.saturating_add(1);self.ui_failed=self.ui_retries>=3;sex_pdx::serial_record!("[browser.view.rejected] error={} attempts={} terminal={} accepted_network_replay=0",error,self.ui_retries,self.ui_failed as u8);}
+        if self.clipboard_progress()||self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
+        true
+    }
+    /// Composes the visible frame and queues it when changed. Its full-window
+    /// buffers stay out of `run`'s frame, which page conversion runs under.
+    #[inline(never)]
+    fn compose_ui(&mut self) {
         self.sync_selection();
         let mut visible_selection=(0,0);
         let mut reader_layout=None;
         let mut tls_layout=None;
         let composed=if self.asset_panel{
             let f=asset_view::render_titled(self.import_viewport.0,self.import_viewport.1,self.asset_status,self.asset_presentation.mode(),self.image.width,self.image.height,if self.asset_png{b"PNG / controlled HTTPS lab root"}else{b"QOI / controlled HTTPS lab root"});
-            Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.asset_presentation.generation()as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:(1<<20)|((self.asset_status as u64)<<21)}))
+            Some((browser_view::Text::small(&f.bytes,f.len),text_delivery::Metadata{count:self.asset_presentation.generation()as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:(1<<20)|((self.asset_status as u64)<<21)}))
         }else if self.import_panel{
             let f=import_view::render(self.import_viewport.0,self.import_viewport.1,self.import_status,self.import_editor.as_bytes());
             let metadata=text_delivery::Metadata{count:public_fingerprint(&f.bytes[..f.len])as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:1024|((self.import_status as u64)<<11)};
-            if self.ui_last_len!=f.len||self.ui_last!=f.bytes||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.import.layout] state={:?} name={} bytes={} cols={} rows={} viewport={} hash={:#x} pixels=unconfirmed",self.import_status,core::str::from_utf8(self.import_editor.as_bytes()).unwrap(),f.len,f.cols,f.rows,self.viewport_sequence,metadata.count);}
-            Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
+            if self.ui_last_len!=f.len||self.ui_last[..f.bytes.len()]!=f.bytes[..]||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.import.layout] state={:?} name={} bytes={} cols={} rows={} viewport={} hash={:#x} pixels=unconfirmed",self.import_status,core::str::from_utf8(self.import_editor.as_bytes()).unwrap(),f.len,f.cols,f.rows,self.viewport_sequence,metadata.count);}
+            Some((browser_view::Text::small(&f.bytes,f.len),metadata))
         }else if self.visible_reader()&&self.reading_https{
             let body=if self.exchange.has_document(){self.exchange.document()}else if let Some(body)=self.import_source.as_ref(){body.as_bytes()}else{self.importer.document().unwrap().as_bytes()};
             let f=self.reader.render_https_selected(body,if !self.page_html{sex_tls::HTTPS_PATH}else if let Some(p)=self.page_path.as_ref(){p.as_bytes()}else{&b"/page.html"[..]},self.selection.range());visible_selection=f.selection;reader_layout=Some((f.first,f.end,f.body_rows,f.rows,f.cols,f.total_lines));
@@ -942,15 +955,15 @@ impl Browser {
         }else if self.clock_panel{
             let f=clock_view::render(self.import_viewport.0,self.import_viewport.1,self.clock_view);
             let metadata=text_delivery::Metadata{count:public_fingerprint(&f.bytes[..f.len])as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:1<<24};
-            if self.ui_last_len!=f.len||self.ui_last!=f.bytes||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.clock.layout] bytes={} hash={:#x} cols={} rows={} viewport={} state={:?} snapshot_only=1 pixels=unconfirmed",f.len,metadata.count,f.cols,f.rows,self.viewport_sequence,self.clock_view);}
-            Some((browser_view::Text{bytes:f.bytes,len:f.len},metadata))
+            if self.ui_last_len!=f.len||self.ui_last[..f.bytes.len()]!=f.bytes[..]||self.ui_metadata!=Some(metadata){sex_pdx::serial_record!("[browser.clock.layout] bytes={} hash={:#x} cols={} rows={} viewport={} state={:?} snapshot_only=1 pixels=unconfirmed",f.len,metadata.count,f.cols,f.rows,self.viewport_sequence,self.clock_view);}
+            Some((browser_view::Text::small(&f.bytes,f.len),metadata))
         }else if self.tls_panel&&!self.https_panel&&!self.peer_panel&&self.tls_view!=tls_probe::View::Idle{
             browser_view::tls_panel(self.import_viewport.0,self.import_viewport.1,tls_probe::label(self.tls_view)).map(|f|{
                 // Existing immutable outbox metadata binds the positive ACK to
                 // this exact frame. Width/height join through its held viewport.
                 let metadata=tls_frame_metadata(&f,self.viewport_sequence,self.tls_view);
                 tls_layout=Some(self.import_viewport);
-                (browser_view::Text{bytes:f.bytes,len:f.len},metadata)
+                (browser_view::Text::small(&f.bytes,f.len),metadata)
             })
         }else{browser_view::compose(self.preview.as_bytes(),self.probe.view(),self.dns.view(),self.http.view(),self.http.preview()).and_then(|text|{
             if self.https_panel{browser_view::with_https(text,https_label(self.https_view,self.exchange.failure(),self.exchange.http_failure()))}
@@ -978,13 +991,13 @@ impl Browser {
                 }};
                 if !label.is_empty(){if let Some((_,_,_,rows,cols,_))=reader_layout{if rows>1{document_reader::replace_footer(&mut text.bytes,text.len,cols,label);}}}
             }
-            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&self.https_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
-            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&self.peer_panel&&self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
-            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed_view).is_some()&&self.ui_last!=text.bytes{
+            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&self.https_panel&&*self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.https.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.https_view);}
+            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&self.peer_panel&&*self.ui_last!=text.bytes{sex_pdx::serial_record!("[browser.tls.peer.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.peer_view);}
+            if reader_layout.is_none()&&!self.asset_panel&&!self.import_panel&&!self.https_panel&&!self.peer_panel&&!self.tls_panel&&!self.clock_panel&&seed_label(self.seed_view).is_some()&&*self.ui_last!=text.bytes{
                 sex_pdx::serial_record!("[browser.entropy.layout] base={} bytes=64 viewport={} state={:?} pixels=unconfirmed",text.len-64,self.viewport_sequence,self.seed_view);
             }
-            if self.ui_last_len!=text.len||self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata)||self.ui_last_selection!=visible_selection{
-                self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_metadata=Some(metadata);self.ui_last_selection=visible_selection;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
+            if self.ui_last_len!=text.len||*self.ui_last!=text.bytes||self.ui_metadata!=Some(metadata)||self.ui_last_selection!=visible_selection{
+                *self.ui_last=text.bytes;self.ui_last_len=text.len;self.ui_metadata=Some(metadata);self.ui_last_selection=visible_selection;self.ui_dirty=true;self.ui_failed=false;self.ui_retries=0;
                 if let Some((first,end,body_rows,rows,cols,total_lines))=reader_layout{if self.reading_https{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=authenticated_body tls=1 public_test_root=1 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.https_body().len(),self.viewport_sequence);}else{sex_pdx::serial_record!("[browser.reader.layout] first={} end={} body_rows={} rows={} cols={} total_lines={} source_bytes={} viewport={} origin=validated_body tls=0 pixels=unconfirmed",first,end,body_rows,rows,cols,total_lines,self.http.document().len(),self.viewport_sequence);}sex_pdx::serial_record!("[browser.reader.position] anchor={} viewport={} tls={} retained_body_only=1",self.reader.source_anchor(),self.viewport_sequence,self.reading_https as u8);}
             }
             if self.ui_dirty&&!self.ui_failed{
@@ -996,13 +1009,6 @@ impl Browser {
                 }
             }
         }
-        if let text_delivery::Poll::Rejected(error)=self.ui.poll(4,|op|{
-            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_DISPLAY,op.opcode,op.surface,op.packed,op.control){
-                Ok(_)=>text_delivery::Admission::Accepted,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>text_delivery::Admission::Full,Err(e)=>text_delivery::Admission::Rejected(e),
-            }
-        }){self.ui.cancel();self.ui_dirty=true;self.ui_retries=self.ui_retries.saturating_add(1);self.ui_failed=self.ui_retries>=3;sex_pdx::serial_record!("[browser.view.rejected] error={} attempts={} terminal={} accepted_network_replay=0",error,self.ui_retries,self.ui_failed as u8);}
-        if self.clipboard_progress()||self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some(){sex_pdx::sys_wait_self_ticks(2).expect("BROWSER_SELF_WAIT_AUTHORITY");}
-        true
     }
 
 
@@ -1057,6 +1063,9 @@ fn find_char(code:u8)->Option<u8>{
     if code==0x39{return Some(b' ')}
     ROWS.iter().find_map(|(first,keys)|code.checked_sub(*first).and_then(|i|keys.get(i as usize)).copied())
 }
+/// Full-window text frames are too large for the stack-built state.
+static mut BROWSER_UI: text_delivery::Outbox = text_delivery::Outbox::new(0);
+static mut BROWSER_UI_LAST: [u8; sex_pdx::text_batch::CAPACITY] = [0; sex_pdx::text_batch::CAPACITY];
 static mut BROWSER: core::mem::MaybeUninit<Browser> = core::mem::MaybeUninit::uninit();
 struct App;
 impl SexApp for App {

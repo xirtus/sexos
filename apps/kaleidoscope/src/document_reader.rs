@@ -4,13 +4,14 @@
 use sex_pdx::desktop_style::{scale, ADVANCE, INSET, LINE};
 use sex_pdx::text_encoding as text;
 
-const CAPACITY: usize = 512;
+const CAPACITY: usize = 6144;
+const _: () = assert!(CAPACITY == sex_pdx::text_batch::CAPACITY);
 const MAX_BODY: usize = 12288;
 /// Match Display's bounded whole-frame row index, including all chrome.
-const MAX_ROWS: usize = 24;
+const MAX_ROWS: usize = 48;
 /// A readable measure also leaves room for seven body rows in a tall view
 /// without enlarging the fixed display transaction or shrinking the font.
-pub const MAX_COLUMNS: usize = 47;
+pub const MAX_COLUMNS: usize = 110;
 const TOP: u32 = 28 + INSET;
 const GLYPH_HEIGHT: u32 = 7;
 const HOST: &[u8] = sex_pdx::network_config::HOST_NAME;
@@ -118,7 +119,8 @@ impl Reader {
         // The renderer wraps immediately on its last physical column. Reserve
         // one column so an explicit newline cannot produce an extra blank row.
         let cols = ((self.width.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1) as usize).min(MAX_COLUMNS);
-        let first_bottom = TOP + GLYPH_HEIGHT*factor;
+        // The frame's bottom rim covers the last INSET pixels of the tile.
+        let first_bottom = TOP + GLYPH_HEIGHT*factor + INSET;
         if cols == 0 || self.height < first_bottom { return (0,0); }
         let physical = 1 + (self.height-first_bottom)/(LINE*factor);
         let rows = (physical as usize).min(MAX_ROWS).min(CAPACITY/(cols+1));

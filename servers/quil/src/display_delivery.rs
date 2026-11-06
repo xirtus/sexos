@@ -8,7 +8,11 @@ struct Batch {
     offset: usize,
     selected: bool,
     awaiting: Option<u16>,
+    /// Polls spent waiting for the reply; a lost reply re-sends the batch.
+    waits: u32,
 }
+/// Polls to wait for Display's reply before sending the batch again.
+const REPLY_RETRY: u32 = 512;
 pub struct Outbox {
     active: Option<Batch>,
     latest: Option<Batch>,
@@ -30,7 +34,7 @@ impl Outbox {
         }
         if paint == 0
             || paint > u32::MAX as u64
-            || text.len > 512
+            || text.len > super::view::CAPACITY
             || text
                 .selection
                 .is_some_and(|(start, end)| start >= end || end > text.len)
@@ -49,6 +53,7 @@ impl Outbox {
             offset: 0,
             selected: false,
             awaiting: None,
+            waits: 0,
         };
         if self.active.is_none() {
             // An ACK can leave latest queued until the next poll. A newer
@@ -80,13 +85,17 @@ impl Outbox {
         if self.dead {
             return;
         }
+        // A committed batch stays until its reply: Display refuses a new Begin
+        // while it owes that reply, so a fresh paint must not overtake it.
         if let Some(b) = self.active.as_mut() {
-            b.text.bytes.fill(0);
+            if b.awaiting.is_none() {
+                b.text.bytes.fill(0);
+                self.active = None;
+            }
         }
         if let Some(b) = self.latest.as_mut() {
             b.text.bytes.fill(0);
         }
-        self.active = None;
         self.latest = None;
     }
     pub fn close(&mut self) {
@@ -117,16 +126,28 @@ impl Outbox {
             self.close();
             return;
         }
-        for _ in 0..4 {
+        for _ in 0..128 {
             if self.active.is_none() {
                 self.active = self.latest.take()
             }
-            let Some(b) = self.active.as_ref() else {
+            let Some(b) = self.active.as_mut() else {
                 return;
             };
             if b.awaiting.is_some() {
-                return;
+                b.waits += 1;
+                if b.waits < REPLY_RETRY {
+                    return;
+                }
+                // No reply (its surface may have been scrubbed): the newest
+                // desire is sent again, not lost.
+                if let Some(next) = self.latest.take() {
+                    b.text.bytes.fill(0);
+                    *b = next;
+                } else {
+                    (b.begun, b.offset, b.selected, b.awaiting, b.waits) = (false, 0, false, None, 0);
+                }
             }
+            let b = self.active.as_ref().unwrap();
             let request = if !b.begun {
                 sex_pdx::text_batch::Request::Begin {
                     sequence: b.paint as u32,

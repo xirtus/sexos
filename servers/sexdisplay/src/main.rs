@@ -1391,7 +1391,7 @@ fn recompute_text_lines(surf: &mut Surface) {
     let has_newline = surf.text_buf[..len].iter().any(|&b| b == b'\n');
     surf.wrap_cols = if has_newline {
         let advance = 6 * surface_text_scale(surf) as u32;
-        (surf.w.saturating_sub(16) / advance).clamp(1, 80) as u8
+        (surf.w.saturating_sub(16) / advance).clamp(1, 160) as u8
     } else {
         TEXT_LEGACY_COLS
     };

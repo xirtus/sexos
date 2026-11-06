@@ -415,7 +415,7 @@ def reader_frame(body,width,height,contract,anchor=0,expected_path=None):
  if type(anchor)is not int or not 0<=anchor<=contract['reader_max_body']:raise ValueError('requested source anchor outside bounded body extent')
  factor=2 if width>=contract['scale_threshold']else 1
  cols=min(contract['reader_max_columns'],max(0,(width-2*contract['inset'])//(contract['advance']*factor)-1))
- available=height-contract['top']-contract['glyph_height']*factor
+ available=height-contract['top']-contract['glyph_height']*factor-contract['inset']
  rows=min(contract['max_rows'],contract['reader_capacity']//(cols+1),1+available//(contract['line']*factor))if cols and available>=0 else 0
  if rows<4:raise ValueError('actual reader tile has no fully visible body row')
  sanitized=bytes(b if b==10 or 32<=b<=126 else 32 if b<128 else 63 for b in body).rstrip(b' \n')

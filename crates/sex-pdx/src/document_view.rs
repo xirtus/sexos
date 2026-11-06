@@ -27,7 +27,7 @@ impl Layout {
         let scale = s::scale(w);
         let cols = (w.saturating_sub(2 * s::INSET) / (s::ADVANCE * scale))
             .saturating_sub(1)
-            .clamp(1, 79) as usize;
+            .clamp(1, 110) as usize;
         // Frameless document holders draw their own top chrome band.
         let top = if crate::app_catalog::app_of(target).is_some()&&!crate::app_catalog::has_shell_frame(target)&&!crate::app_catalog::is_spindle(target) { 36 } else { s::TEXT_TOP };
         let desired_toolbar = if cols >= 4 * TOOLBAR_CELL {
@@ -71,10 +71,10 @@ impl Layout {
         self.header_rows() + self.toolbar_rows + self.hint_rows()
     }
     pub fn body_rows(self) -> usize {
-        // Display indexes at most 24 rows in the entire committed text frame,
+        // Display indexes at most 48 rows in the entire committed text frame,
         // including chrome. A tall narrow view must not scroll its caret into
         // unindexed rows merely because all of those bytes fit the transport.
-        self.rows.saturating_sub(self.chrome_rows()).min(24usize.saturating_sub(self.chrome_rows()))
+        self.rows.saturating_sub(self.chrome_rows()).min(48usize.saturating_sub(self.chrome_rows()))
     }
     pub fn hit(self, x: u32, y: u32) -> Option<u8> {
         let per = self.toolbar_per_row();

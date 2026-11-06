@@ -1,21 +1,23 @@
 //! Pure bounded document layout. Rendering never modifies stored bytes.
 use sex_pdx::{document_view::{Layout,TOOLBAR_CELL,TOOLBAR_LABELS},text_encoding as utf8};
+/// Display's whole-frame text limit.
+pub const CAPACITY: usize = sex_pdx::text_batch::CAPACITY;
 #[derive(Clone, Copy)]
 pub struct Text {
-    pub bytes: [u8; 512],
+    pub bytes: [u8; CAPACITY],
     pub len: usize,
     pub selection: Option<(usize, usize)>,
 }
 impl Text {
     pub const fn new() -> Self {
         Self {
-            bytes: [0; 512],
+            bytes: [0; CAPACITY],
             len: 0,
             selection: None,
         }
     }
     fn byte(&mut self, b: u8) {
-        if self.len < 512 {
+        if self.len < CAPACITY {
             self.bytes[self.len] = b;
             self.len += 1;
         }
@@ -144,7 +146,7 @@ pub fn render_selection(
         at=end;
     }
     max_row_bytes=max_row_bytes.max(row_bytes);
-    let rows = l.body_rows().min(512usize.saturating_sub(chrome_budget) / (max_row_bytes + 2));
+    let rows = l.body_rows().min(CAPACITY.saturating_sub(chrome_budget) / (max_row_bytes + 2));
     if rows == 0 {
         return t;
     }
