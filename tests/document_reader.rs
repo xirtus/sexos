@@ -24,23 +24,23 @@ fn row(frame: &document_reader::Frame, index: usize) -> &[u8] {
 
 #[test]fn tall_wide_compact_and_restored_views_keep_readable_measure_and_seven_body_rows(){
     let body=[b'x';12288];let mut reader=document_reader::Reader::new();
-    for (w,h) in [(1280,750),(1024,718),(624,706)] {
+    for (w,h,cols,rows,lines) in [(1280,750,104,39,119),(1024,718,83,37,149),(624,706,49,37,251)] {
         reader.resize(w,h);let frame=reader.render_https(&body,b"/welcome");
-        assert_eq!((frame.cols,frame.rows,frame.body_rows,frame.len),(47,10,7,479));
+        assert_eq!((frame.cols,frame.rows,frame.body_rows,frame.len),(cols,rows,rows-3,(cols+1)*rows-1));
         assert!(row(&frame,0).starts_with(b"Controlled HTTPS / lab root"));
         assert!(row(&frame,1).starts_with(b"probe.sexos.test:46080 /welcome"));
-        assert!(row(&frame,frame.rows-1).ends_with(b"1-7/262"));
+        assert!(row(&frame,frame.rows-1).ends_with(format!("1-{}/{}",rows-3,lines).as_bytes()));
         assert!(frame.bytes[frame.len..].iter().all(|&byte|byte==0));
     }
 }
 
 #[test]fn exact_source_anchor_survives_repeated_wrap_and_unusable_resize_roundtrips(){
-    let body=[b'x';600];let mut reader=document_reader::Reader::new();reader.resize(82,160);
+    let body=[b'x';600];let mut reader=document_reader::Reader::new();reader.resize(82,168);
     assert!(reader.navigate(&body,document_reader::Move::PageDown));
     assert!(reader.navigate(&body,document_reader::Move::Down));
     assert_eq!(reader.source_anchor(),120);assert_eq!(reader.render(&body).first,12);
     for _ in 0..4 {
-        for (w,h) in [(124,160),(142,160),(624,706),(0,0),(82,160)] {
+        for (w,h) in [(124,168),(142,168),(624,706),(0,0),(82,168)] {
             reader.resize(w,h);let frame=reader.render(&body);
             assert_eq!(reader.source_anchor(),120);assert_eq!(frame.source_anchor,120);
         }
@@ -51,7 +51,7 @@ fn row(frame: &document_reader::Frame, index: usize) -> &[u8] {
 }
 
 #[test]fn footer_reports_actual_visible_range_end_home_and_empty_without_extra_row(){
-    let body=[b'x';600];let mut reader=document_reader::Reader::new();reader.resize(624,706);
+    let body=[b'x';600];let mut reader=document_reader::Reader::new();reader.resize(624,220);
     let first=reader.render(&body);assert_eq!((first.first,first.end,first.total_lines),(0,7,13));
     assert!(row(&first,9).starts_with(b"PgUp PgDn Home End V back"));
     assert!(row(&first,9).ends_with(b"1-7/13"));
@@ -60,40 +60,40 @@ fn row(frame: &document_reader::Frame, index: usize) -> &[u8] {
     assert!(reader.navigate(&body,document_reader::Move::Home));let home=reader.render(&body);
     assert!(row(&home,9).ends_with(b"1-7/13"));reader.clear();
     let empty=reader.render(b"");assert!(row(&empty,9).ends_with(b"0-0/0"));
-    assert_eq!((empty.rows,empty.body_rows,empty.len),(10,7,479));
+    assert_eq!((empty.rows,empty.body_rows,empty.len),(10,7,499));
 }
 
 #[test]fn short_tiles_preserve_truthful_lab_header_complete_controls_and_numeric_range(){
     let body=[b'x';2048];let mut reader=document_reader::Reader::new();
-    reader.resize(160,100);let frame=reader.render_https(&body,b"/welcome");
+    reader.resize(160,108);let frame=reader.render_https(&body,b"/welcome");
     assert_eq!((frame.cols,frame.rows,frame.body_rows),(23,7,4));
     assert!(row(&frame,0).starts_with(b"HTTPS / lab root"));
     assert!(row(&frame,6).starts_with(b"PgUp PgDn V I"));
     assert!(row(&frame,6).ends_with(b"1-4/90"));
-    reader.resize(256,118);let frame=reader.render_https(&body,b"/welcome");
+    reader.resize(256,126);let frame=reader.render_https(&body,b"/welcome");
     assert_eq!(frame.cols,19);assert!(row(&frame,0).starts_with(b"HTTPS / lab root"));
     assert!(row(&frame,frame.rows-1).starts_with(b"V I"));
     assert!(row(&frame,frame.rows-1).ends_with(b"1-1/108"));
     // With no visible body rows the old complete short-height controls remain.
-    reader.resize(160,61);let frame=reader.render_https(&body,b"/welcome");
+    reader.resize(160,69);let frame=reader.render_https(&body,b"/welcome");
     assert_eq!(frame.body_rows,0);assert!(row(&frame,0).starts_with(b"HTTPS / lab root"));
     assert!(row(&frame,2).starts_with(b"V I"));
 }
 
 #[test]fn maximum_line_numbers_are_bounded_and_tiny_footer_does_not_clip_a_range(){
     let mut body=[b'\n';12288];body[12287]=b'Z';let mut reader=document_reader::Reader::new();
-    reader.resize(624,706);reader.navigate(&body,document_reader::Move::End);let frame=reader.render_https(&body,b"/welcome");
+    reader.resize(624,220);reader.navigate(&body,document_reader::Move::End);let frame=reader.render_https(&body,b"/welcome");
     assert_eq!((frame.first,frame.end,frame.total_lines),(12281,12288,12288));
     assert!(row(&frame,frame.rows-1).ends_with(b"12282-12288/12288"));
     assert!(row(&frame,frame.rows-1).starts_with(b"PgUp PgDn V back I import"));
-    reader.resize(82,160);let narrow=reader.render_https(&body,b"/welcome");
+    reader.resize(82,168);let narrow=reader.render_https(&body,b"/welcome");
     assert_eq!(narrow.cols,10);assert!(row(&narrow,narrow.rows-1).starts_with(b"V I"));
     assert!(!row(&narrow,narrow.rows-1).contains(&b'/'));
     assert!(narrow.len<=512);assert_eq!(reader.source_anchor(),frame.source_anchor);
 }
 
 #[test]fn shorter_and_cleared_body_remove_previous_progress_body_and_trust_text(){
-    let body=[b'x';12288];let mut reader=document_reader::Reader::new();reader.resize(624,706);
+    let body=[b'x';12288];let mut reader=document_reader::Reader::new();reader.resize(624,220);
     reader.navigate(&body,document_reader::Move::End);reader.render_https(&body,b"/welcome");
     reader.clear();let small=reader.render_path(b"ok",b"/");assert_eq!(small.source_anchor,0);
     assert!(row(&small,0).starts_with(b"Plain HTTP / no TLS"));assert!(row(&small,9).ends_with(b"1-1/1"));
@@ -104,7 +104,7 @@ fn row(frame: &document_reader::Frame, index: usize) -> &[u8] {
 }
 
 fn utf8_rows(frame:&document_reader::Frame)->Vec<&str>{
- assert!(frame.len<=512);assert!(frame.bytes[frame.len..].iter().all(|b|*b==0));
+ assert!(frame.len<=document_reader::CAPACITY);assert!(frame.bytes[frame.len..].iter().all(|b|*b==0));
  let text=core::str::from_utf8(&frame.bytes[..frame.len]).unwrap();let rows:Vec<_>=text.split('\n').collect();
  assert_eq!(rows.len(),frame.rows);for row in &rows{assert_eq!(row.chars().count(),frame.cols);assert!(row.chars().all(|c|!c.is_control()));}rows
 }
@@ -124,7 +124,7 @@ fn utf8_rows(frame:&document_reader::Frame)->Vec<&str>{
 }
 #[test]fn maximum_four_byte_text_and_invalid_readonly_bytes_produce_complete_bounded_frames(){
  let body="😀".repeat(3072);let original=body.clone();let mut r=document_reader::Reader::new();r.resize(624,706);
- let f=r.render_https(body.as_bytes(),b"/welcome");let rows=utf8_rows(&f);assert_eq!(f.body_rows,1);assert!(rows[2].starts_with('😀'));
+ let f=r.render_https(body.as_bytes(),b"/welcome");let rows=utf8_rows(&f);assert_eq!(f.body_rows,30);assert!(rows[2].starts_with('😀'));
  assert!(r.navigate(body.as_bytes(),document_reader::Move::End));let f=r.render_https(body.as_bytes(),b"/");utf8_rows(&f);assert_eq!(f.end,f.total_lines);assert_eq!(body,original);
  let raw=b"a\xff\xc0\x80\0\r\xc2\x80\tZ";let f=r.render(raw);let rows=utf8_rows(&f);assert!(rows[2].starts_with("a������ Z"));assert_eq!(raw,b"a\xff\xc0\x80\0\r\xc2\x80\tZ");
 }
@@ -142,14 +142,14 @@ fn utf8_rows(frame:&document_reader::Frame)->Vec<&str>{
  assert_eq!(&frame.bytes[..footer],&before[..footer]);assert_eq!(frame.selection,selection);assert!((selection.1 as usize)<footer);
  let rows=utf8_rows(&frame);assert!(rows.last().unwrap().starts_with("COPIED / CTRL A C"));
  let before=frame.bytes;assert!(!document_reader::replace_footer(&mut frame.bytes,frame.len,frame.cols,"é".as_bytes()));assert_eq!(frame.bytes,before);
- assert!(!document_reader::replace_footer(&mut frame.bytes,513,frame.cols,b"label"));assert_eq!(frame.bytes,before);
+ assert!(!document_reader::replace_footer(&mut frame.bytes,document_reader::CAPACITY+1,frame.cols,b"label"));assert_eq!(frame.bytes,before);
 }
 
 #[test]fn tall_narrow_mixed_utf8_caps_the_whole_frame_and_caret_selection_at_display_rows(){
  let body="éabcdefghi\n".repeat(100);let bytes=body.as_bytes();let mut reader=document_reader::Reader::new();reader.resize(82,2000);
- let frame=reader.render_https_selected(bytes,b"/welcome",Some((0,602)));utf8_rows(&frame);assert_eq!((frame.rows,frame.body_rows),(24,21));
+ let frame=reader.render_https_selected(bytes,b"/welcome",Some((0,602)));utf8_rows(&frame);assert_eq!((frame.rows,frame.body_rows),(48,45));
  assert!(reader.reveal(bytes,602));let frame=reader.render_https_selected(bytes,b"/welcome",Some((0,602)));utf8_rows(&frame);
- assert_eq!((frame.rows,frame.body_rows,frame.end),(24,21,51));assert_eq!(reader.source_anchor()%12,0);
+ assert_eq!((frame.rows,frame.body_rows,frame.end),(48,45,51));assert_eq!(reader.source_anchor()%12,0);
  assert!(frame.selection.0<frame.selection.1);assert!((frame.selection.1 as usize)<frame.len);
  let serialized=core::str::from_utf8(&frame.bytes[..frame.len]).unwrap();assert!(serialized.is_char_boundary(frame.selection.0 as usize));assert!(serialized.is_char_boundary(frame.selection.1 as usize));
  assert_eq!(reader.selection_move(bytes,602,document_reader::Move::Up),590);

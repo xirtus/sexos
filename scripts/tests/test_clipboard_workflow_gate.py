@@ -270,7 +270,7 @@ class UTF8ClipboardWorkflow(unittest.TestCase):
   self.assertTrue({(2,1),(3,1),(3,2),(4,1),(4,2),(4,3)}<=splits)
  def test_native_sized_both_profile_tiles_have_scalar_pixels_and_exact_byte_selection(self):
   for w,h,resolution in ((624,706,(1280,800)),(496,674,(1024,768))):
-   f=self.frame(w=w,h=h);check=self.check(f,w=w,h=h,resolution=resolution);self.assertTrue(check['ok'],check);self.assertLessEqual(f['bytes'],512);self.assertEqual(f['bytes'],len(b'\n'.join(f['lines'])));self.assertEqual(f['selection'][1]-f['selection'][0],7)
+   f=self.frame(w=w,h=h);check=self.check(f,w=w,h=h,resolution=resolution);self.assertTrue(check['ok'],check);self.assertLessEqual(f['bytes'],6144);self.assertEqual(f['bytes'],len(b'\n'.join(f['lines'])));self.assertEqual(f['selection'][1]-f['selection'][0],7)
    self.assertEqual(len(f['lines'][2].decode()),f['cols']);self.assertIn('Aé€🙂漢 ',f['lines'][2].decode());self.assertGreater(len(f['lines'][2]),f['cols'])
  def test_midscalar_selection_anchor_and_partial_byte_range_cannot_be_painted(self):
   for selection in ((2,3),(6,9),(7,13),(-1,1),(0,12289),(1.0,3)):
@@ -285,9 +285,9 @@ class UTF8ClipboardWorkflow(unittest.TestCase):
   tab=self.frame((13,14));self.assertEqual(tab['selection'][1]-tab['selection'][0],1);self.assertTrue(self.check(tab,selection=(13,14))['ok'])
  def test_full_frame_budget_reserves_worst_serialized_row_and_footer_after_final_lf(self):
   body='🙂'.encode()*3072;f=gate.utf8_reader_frame(body,1280,750,self.c,0,(0,len(body)),b'Copied / exact bytes')
-  self.assertEqual((f['cols'],f['body_rows'],f['rows']),(47,1,4));self.assertEqual(f['max_row_cost'],189);self.assertLessEqual(f['bytes'],512)
+  self.assertEqual((f['cols'],f['body_rows'],f['rows']),(104,13,16));self.assertEqual(f['max_row_cost'],417);self.assertLessEqual(f['bytes'],6144)
   joined=b'\n'.join(f['lines']);self.assertEqual(f['row_offsets'][-1],joined.rfind(b'\n')+1);self.assertTrue(joined[f['row_offsets'][-1]:].startswith(b'Copied / exact bytes'))
-  self.assertLess(f['selection'][1],f['row_offsets'][-1]);self.assertEqual(len(f['lines'][2].decode()),47)
+  self.assertLess(f['selection'][1],f['row_offsets'][-1]);self.assertEqual(len(f['lines'][2].decode()),104)
   # Final whitespace is retained in raw data but never invents visible cells.
   blank=gate.utf8_reader_frame('é\t\n   '.encode(),624,706,self.c,0,(2,7))
   self.assertEqual(blank['selection'],(0,0))

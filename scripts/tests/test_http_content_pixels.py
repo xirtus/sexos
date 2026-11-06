@@ -30,7 +30,7 @@ class HttpPixels(unittest.TestCase):
  def test_actual_utf8_reader_body_and_footer_contracts_cannot_silently_drift(self):
   self.assertEqual(self.contract['reader_encoding'],'utf-8-scalars');self.assertEqual(self.contract['reader_replacement'],0xfffd)
   actual=Path.read_text
-  changes=(('apps/kaleidoscope/src/document_reader.rs','const MAX_ROWS: usize = 24;','const MAX_ROWS: usize = 32;'),
+  changes=(('apps/kaleidoscope/src/document_reader.rs','const MAX_ROWS: usize = 48;','const MAX_ROWS: usize = 64;'),
            ('apps/kaleidoscope/src/document_reader.rs','end=text::next(body,end);cells+=1;','end+=1;cells+=1;'),
            ('apps/kaleidoscope/src/document_reader.rs','(CAPACITY-(3*cols+2))/cost','CAPACITY/cost'),
            ('apps/kaleidoscope/src/http_probe.rs','self.document[self.document_len]=byte;',"self.document[self.document_len]=b'?';"),

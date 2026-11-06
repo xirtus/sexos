@@ -12,7 +12,7 @@ struct Batch {
     waits: u32,
 }
 /// Polls to wait for Display's reply before sending the batch again.
-const REPLY_RETRY: u32 = 16384;
+const REPLY_RETRY: u32 = 4096;
 pub struct Outbox {
     active: Option<Batch>,
     latest: Option<Batch>,
@@ -89,14 +89,10 @@ impl Outbox {
         if self.dead {
             return;
         }
-        // A committed batch stays until its reply: Display refuses a new Begin
-        // while it owes that reply, so a fresh paint must not overtake it.
         if let Some(b) = self.active.as_mut() {
-            if b.awaiting.is_none() {
-                b.text.bytes.fill(0);
-                self.active = None;
-            }
+            b.text.bytes.fill(0);
         }
+        self.active = None;
         if let Some(b) = self.latest.as_mut() {
             b.text.bytes.fill(0);
         }
@@ -142,8 +138,8 @@ impl Outbox {
                 if b.waits < REPLY_RETRY {
                     return;
                 }
-                // No reply (its surface may have been scrubbed): the newest
-                // desire is sent again, not lost.
+                // No reply: Display refused this batch while it still owed the
+                // previous one, or scrubbed the surface. Send the newest again.
                 if let Some(next) = self.latest.take() {
                     b.text.bytes.fill(0);
                     *b = next;

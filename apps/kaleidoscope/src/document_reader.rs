@@ -4,8 +4,7 @@
 use sex_pdx::desktop_style::{scale, ADVANCE, INSET, LINE};
 use sex_pdx::text_encoding as text;
 
-const CAPACITY: usize = 6144;
-const _: () = assert!(CAPACITY == sex_pdx::text_batch::CAPACITY);
+pub const CAPACITY: usize = 6144;
 const MAX_BODY: usize = 12288;
 /// Match Display's bounded whole-frame row index, including all chrome.
 const MAX_ROWS: usize = 48;
@@ -129,7 +128,7 @@ impl Reader {
 
     /// Reserve complete padded rows plus the ASCII chrome/footer. A bounded
     /// source pass finds the largest serialized wrapped row, so even a page of
-    /// four-byte scalars fits the same 512-byte transaction without clipping.
+    /// four-byte scalars fits the same transaction without clipping.
     fn source_geometry(&self,body:&[u8])->(usize,usize){
         let(cols,rows)=self.geometry();if cols==0||rows<=3{return(cols,rows)}
         let body=content(body);let mut cursor=0;let mut cost=cols+1;
@@ -377,7 +376,7 @@ mod tests {
         let body=(0..1000).map(|n|format!("{n:04} café 中 😀\n")).collect::<String>();
         let original=body.as_bytes().to_vec();
         for wheel in i8::MIN..=i8::MAX {
-            let mut r=reader(624,706);
+            let mut r=reader(624,714);
             r.navigate(body.as_bytes(),Move::PageDown);
             let prior=r.render(body.as_bytes());
             let desired=(prior.first as i32-wheel as i32*3).clamp(0,(prior.total_lines-prior.body_rows)as i32)as usize;
@@ -387,7 +386,7 @@ mod tests {
             assert!(body.is_char_boundary(r.source_anchor()));valid(&frame,624,706);
             assert_eq!(body.as_bytes(),original);
         }
-        let mut r=reader(624,706);
+        let mut r=reader(624,714);
         assert!(!r.scroll_wheel(body.as_bytes(),1));assert!(r.scroll_wheel(body.as_bytes(),-1));
         assert_eq!(r.render(body.as_bytes()).first,3);assert!(r.scroll_wheel(body.as_bytes(),1));
         assert_eq!(r.source_anchor(),0);
@@ -395,7 +394,7 @@ mod tests {
         let end=r.render(body.as_bytes());assert_eq!(end.end,end.total_lines);
     }
     #[test] fn wheel_is_inert_without_visible_body_and_preserves_anchor_over_resize() {
-        let body=[b'x';MAX_BODY];let mut r=reader(82,160);r.scroll_wheel(&body,-3);
+        let body=[b'x';MAX_BODY];let mut r=reader(82,168);r.scroll_wheel(&body,-3);
         let anchor=r.source_anchor();assert_eq!(anchor,90);
         for (w,h) in [(0,0),(160,43),(160,52),(160,61)] {
             r.resize(w,h);assert!(!r.scroll_wheel(&body,-1));assert_eq!(r.source_anchor(),anchor);
@@ -407,9 +406,9 @@ mod tests {
     fn reader(w: u32,h: u32) -> Reader { let mut reader=Reader::new();reader.resize(w,h);reader }
     fn row(frame: &Frame,index: usize) -> &[u8] { frame.bytes[..frame.len].split(|b|*b==b'\n').nth(index).unwrap() }
     fn valid(frame: &Frame,w: u32,h: u32) {
-        assert!(frame.len<=512);assert!(frame.cols<=MAX_COLUMNS);assert!(frame.rows<=MAX_ROWS);
+        assert!(frame.len<=CAPACITY);assert!(frame.cols<=MAX_COLUMNS);assert!(frame.rows<=MAX_ROWS);
         if frame.rows==0 {assert_eq!(frame.len,0);return;}
-        assert!(frame.rows<=512/(frame.cols+1));assert!(frame.first<=frame.end);assert!(frame.end<=frame.total_lines);
+        assert!(frame.rows<=CAPACITY/(frame.cols+1));assert!(frame.first<=frame.end);assert!(frame.end<=frame.total_lines);
         let factor=scale(w);assert!((frame.cols as u32+1)*ADVANCE*factor<=w.saturating_sub(2*INSET));
         assert!(TOP+GLYPH_HEIGHT*factor+(frame.rows as u32-1)*LINE*factor<=h);
         let serialized=core::str::from_utf8(&frame.bytes[..frame.len]).unwrap();
@@ -420,32 +419,32 @@ mod tests {
     #[test] fn unknown_zero_and_unusable_geometry_produce_empty_whole_replacement() {
         let mut unknown=Reader::new();assert_eq!(unknown.render(b"body").len,0);
         for (w,h) in [(0,100),(100,0),(16,100),(22,100),(100,42),(300,49)] {
-            let mut r=reader(w,h);let frame=r.render(b"body");assert_eq!(frame.len,0);assert_eq!(frame.bytes,[0;512]);assert!(!r.navigate(b"body",Move::End));
+            let mut r=reader(w,h);let frame=r.render(b"body");assert_eq!(frame.len,0);assert_eq!(frame.bytes,[0;CAPACITY]);assert!(!r.navigate(b"body",Move::End));
         }
     }
     #[test] fn actual_viewport_metrics_caps_and_explicit_newlines_avoid_implicit_wrap() {
         for (w,h) in [(624,706),(1280,800),(1024,768),(255,200),(256,200),(28,800),(u32::MAX,u32::MAX)] {
             let mut r=reader(w,h);let frame=r.render(&[b'x';2048]);valid(&frame,w,h);
         }
-        let frame=reader(624,706).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows,frame.len),(47,10,7,479));
-        let frame=reader(1280,800).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows),(47,10,7));
+        let frame=reader(624,714).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows,frame.len),(49,37,34,1849));
+        let frame=reader(1280,808).render(b"body");assert_eq!((frame.cols,frame.rows,frame.body_rows),(104,42,39));
     }
     #[test] fn one_two_and_three_rows_keep_only_available_chrome_and_disable_hidden_scrolling() {
-        for (h,rows) in [(43,1),(52,2),(61,3)] {
+        for (h,rows) in [(51,1),(60,2),(69,3)] {
             let mut r=reader(160,h);let frame=r.render(b"many\nbody\nlines\nhere");assert_eq!(frame.rows,rows);assert_eq!(frame.body_rows,0);assert_eq!((frame.first,frame.end),(0,0));assert_eq!(frame.total_lines,4);assert!(!r.navigate(b"many\nbody\nlines\nhere",Move::End));valid(&frame,160,h);
             assert!(row(&frame,0).starts_with(b"Plain HTTP / no TLS"));if rows>1 {assert!(row(&frame,rows-1).starts_with(b"V back"));}
         }
-        let frame=reader(28,52).render(b"body");assert_eq!(frame.cols,1);assert_eq!(row(&frame,0),b"P");assert_eq!(row(&frame,1),b"V");
+        let frame=reader(28,60).render(b"body");assert_eq!(frame.cols,1);assert_eq!(row(&frame,0),b"P");assert_eq!(row(&frame,1),b"V");
     }
     #[test] fn fixed_host_path_and_footer_are_separate_from_body_controls() {
-        let mut r=reader(624,706);let frame=r.render(b"hello\n\nworld");assert!(row(&frame,0).starts_with(b"Plain HTTP / no TLS"));assert!(row(&frame,1).starts_with(b"probe.sexos.test /welcome"));assert!(row(&frame,frame.rows-1).starts_with(b"PgUp PgDn Home End V back"));
+        let mut r=reader(624,714);let frame=r.render(b"hello\n\nworld");assert!(row(&frame,0).starts_with(b"Plain HTTP / no TLS"));assert!(row(&frame,1).starts_with(b"probe.sexos.test /welcome"));assert!(row(&frame,frame.rows-1).starts_with(b"PgUp PgDn Home End V back"));
         assert_eq!(frame.total_lines,3);assert!(row(&frame,2).starts_with(b"hello"));assert!(row(&frame,3).iter().all(|b|*b==b' '));assert!(row(&frame,4).starts_with(b"world"));
     }
     #[test] fn preserves_utf8_and_visibly_replaces_unsupported_controls_without_injecting_chrome() {
-        let frame=reader(624,706).render(b"a\t\rb\x00\x1bc\x7f\xc3\xa9\nnext");assert!(row(&frame,2).starts_with("a \u{fffd}b\u{fffd}\u{fffd}c\u{fffd}é".as_bytes()));assert!(row(&frame,3).starts_with(b"next"));valid(&frame,624,706);
+        let frame=reader(624,714).render(b"a\t\rb\x00\x1bc\x7f\xc3\xa9\nnext");assert!(row(&frame,2).starts_with("a \u{fffd}b\u{fffd}\u{fffd}c\u{fffd}é".as_bytes()));assert!(row(&frame,3).starts_with(b"next"));valid(&frame,624,706);
     }
     #[test] fn final_path_replaces_initial_chrome_without_injecting_rows_or_stale_bytes() {
-        let mut r=reader(624,706);let final_view=r.render_path(b"final body",b"/guide/text");
+        let mut r=reader(624,714);let final_view=r.render_path(b"final body",b"/guide/text");
         assert!(row(&final_view,1).starts_with(b"probe.sexos.test /guide/text"));
         assert!(row(&final_view,2).starts_with(b"final body"));valid(&final_view,624,706);
         let shorter=r.render_path(b"new",b"/");assert!(row(&shorter,1).starts_with(b"probe.sexos.test /"));
@@ -454,44 +453,44 @@ mod tests {
         assert!(row(&hostile,2).starts_with(b"safe"));valid(&hostile,624,706);
     }
     #[test] fn hard_wrap_and_explicit_newline_boundary_do_not_double_paragraph_rows() {
-        let frame=reader(82,160).render(b"0123456789\nabcdefghijk\n\nlast\n");assert_eq!(frame.cols,10);assert_eq!(frame.total_lines,5);
+        let frame=reader(82,168).render(b"0123456789\nabcdefghijk\n\nlast\n");assert_eq!(frame.cols,10);assert_eq!(frame.total_lines,5);
         assert_eq!(row(&frame,2),b"0123456789");assert_eq!(row(&frame,3),b"abcdefghij");assert_eq!(row(&frame,4),b"k         ");assert_eq!(row(&frame,5),b"          ");assert_eq!(row(&frame,6),b"last      ");
     }
     #[test] fn reads_beyond_preview64_and_end_includes_last_actual_source_byte() {
-        let mut body=[b'x';300];body[220..225].copy_from_slice(b"TAIL!");body[299]=b'Z';let mut r=reader(82,160);
+        let mut body=[b'x';300];body[220..225].copy_from_slice(b"TAIL!");body[299]=b'Z';let mut r=reader(82,168);
         let first=r.render(&body);assert_eq!((first.first,first.end),(0,11));assert!(r.navigate(&body,Move::End));let last=r.render(&body);assert_eq!((last.first,last.end,last.total_lines),(19,30,30));assert!(last.bytes[..last.len].windows(5).any(|v|v==b"TAIL!"));assert_eq!(row(&last,last.rows-2)[9],b'Z');assert!(!r.navigate(&body,Move::Down));
     }
     #[test] fn line_and_page_navigation_clamp_and_home_end_are_exact() {
-        let body=[b'x';600];let mut r=reader(82,160);let page=r.render(&body).body_rows;assert_eq!(page,11);
+        let body=[b'x';600];let mut r=reader(82,168);let page=r.render(&body).body_rows;assert_eq!(page,11);
         assert!(!r.navigate(&body,Move::Up));assert!(r.navigate(&body,Move::Down));assert_eq!(r.render(&body).first,1);
         assert!(r.navigate(&body,Move::PageDown));assert_eq!(r.render(&body).first,1+page);
         assert!(r.navigate(&body,Move::PageUp));assert_eq!(r.render(&body).first,1);assert!(r.navigate(&body,Move::Home));assert!(!r.navigate(&body,Move::Home));
         assert!(r.navigate(&body,Move::End));let last=r.render(&body);assert_eq!((last.first,last.end,last.total_lines),(49,60,60));assert!(!r.navigate(&body,Move::End));assert!(!r.navigate(&body,Move::PageDown));
     }
     #[test] fn empty_and_trailing_newlines_do_not_create_blank_tail_pages() {
-        let mut r=reader(82,160);let frame=r.render(b"");assert_eq!((frame.total_lines,frame.first,frame.end),(0,0,0));assert!(!r.navigate(b"",Move::End));
+        let mut r=reader(82,168);let frame=r.render(b"");assert_eq!((frame.total_lines,frame.first,frame.end),(0,0,0));assert!(!r.navigate(b"",Move::End));
         for body in [b"one\n" as &[u8],b"0123456789\n"] {let frame=r.render(body);assert_eq!(frame.total_lines,1);assert_eq!(frame.end,1);}
         let frame=r.render(b"\n");assert_eq!(frame.total_lines,0);
         let frame=r.render(b"a\n\n\n");assert_eq!(frame.total_lines,1);assert_eq!(frame.end,1);
         let mut tail=[b'\n';1024];tail[..4].copy_from_slice(b"last");tail[1000..].fill(b' ');assert!(!r.navigate(&tail,Move::End));let frame=r.render(&tail);assert_eq!((frame.total_lines,frame.first,frame.end),(1,0,1));assert!(row(&frame,2).starts_with(b"last"));
     }
     #[test] fn maximum_body_and_defensive_oversize_input_stay_bounded() {
-        let mut r=reader(82,160);let body=[b'q';MAX_BODY+2];assert!(r.navigate(&body,Move::End));let frame=r.render(&body);assert_eq!(frame.total_lines,1229);assert_eq!((frame.first,frame.end),(1218,1229));assert_eq!(&row(&frame,frame.rows-2)[..8],b"qqqqqqqq");assert_eq!(&row(&frame,frame.rows-2)[8..],b"  ");valid(&frame,82,160);
+        let mut r=reader(82,168);let body=[b'q';MAX_BODY+2];assert!(r.navigate(&body,Move::End));let frame=r.render(&body);assert_eq!(frame.total_lines,1229);assert_eq!((frame.first,frame.end),(1218,1229));assert_eq!(&row(&frame,frame.rows-2)[..8],b"qqqqqqqq");assert_eq!(&row(&frame,frame.rows-2)[8..],b"  ");valid(&frame,82,160);
         let mut paragraphs=[b'\n';MAX_BODY];paragraphs[MAX_BODY-1]=b'Z';r.navigate(&paragraphs,Move::End);let frame=r.render(&paragraphs);assert_eq!(frame.total_lines,MAX_BODY);assert_eq!(frame.end,MAX_BODY);assert_eq!(row(&frame,frame.rows-2)[0],b'Z');valid(&frame,82,160);
     }
     #[test] fn resize_aligns_old_source_anchor_to_new_wrap_and_clamps_away_blank_tail() {
-        let body=[b'x';600];let mut r=reader(82,160);r.navigate(&body,Move::PageDown);r.navigate(&body,Move::Down);let before=r.render(&body);assert_eq!(r.anchor,120);assert_eq!(before.first,12);
+        let body=[b'x';600];let mut r=reader(82,168);r.navigate(&body,Move::PageDown);r.navigate(&body,Move::Down);let before=r.render(&body);assert_eq!(r.anchor,120);assert_eq!(before.first,12);
         r.resize(142,160);let resized=r.render(&body);assert_eq!(resized.cols,20);assert_eq!(resized.first,6);assert_eq!(r.anchor,120);
         r.resize(112,160);let resized=r.render(&body);assert_eq!(resized.cols,15);assert_eq!(r.anchor,120);
         r.resize(124,160);let resized=r.render(&body);assert_eq!(resized.cols,17);assert_eq!(r.anchor,120);assert_eq!(resized.source_anchor,120);
-        r.navigate(&body,Move::End);r.resize(624,706);let last=r.render(&body);assert_eq!(last.end,last.total_lines);assert_eq!(last.first,last.total_lines-last.body_rows);assert!(last.first>0);
+        r.navigate(&body,Move::End);r.resize(624,214);let last=r.render(&body);assert_eq!(last.end,last.total_lines);assert_eq!(last.first,last.total_lines-last.body_rows);assert!(last.first>0);
     }
     #[test] fn clear_resets_anchor_and_shorter_replacement_erases_old_rows_with_padding() {
-        let mut r=reader(82,160);r.navigate(&[b'x';600],Move::End);r.clear();let frame=r.render(b"ok");assert_eq!(r.anchor,0);assert_eq!((frame.first,frame.end),(0,1));assert_eq!(row(&frame,2),b"ok        ");for index in 3..frame.rows-1 {assert_eq!(row(&frame,index),b"          ");}
-        r.resize(0,0);let empty=r.render(b"ok");assert_eq!(empty.len,0);assert_eq!(empty.bytes,[0;512]);
+        let mut r=reader(82,168);r.navigate(&[b'x';600],Move::End);r.clear();let frame=r.render(b"ok");assert_eq!(r.anchor,0);assert_eq!((frame.first,frame.end),(0,1));assert_eq!(row(&frame,2),b"ok        ");for index in 3..frame.rows-1 {assert_eq!(row(&frame,index),b"          ");}
+        r.resize(0,0);let empty=r.render(b"ok");assert_eq!(empty.len,0);assert_eq!(empty.bytes,[0;CAPACITY]);
     }
     #[test] fn selected_source_bytes_exclude_chrome_and_terminal_padding_and_normalize_reverse() {
-        let body=b"alpha\nbeta\nlast   ";let mut r=reader(82,160);
+        let body=b"alpha\nbeta\nlast   ";let mut r=reader(82,168);
         let frame=r.render_path_selected(body,b"/secret",Some((2,9)));
         let start=2*(frame.cols+1)+2;let end=3*(frame.cols+1)+3;
         assert_eq!(frame.selection,(start as u16,end as u16));
@@ -508,7 +507,7 @@ mod tests {
         assert_eq!(r.render(body).selection,(0,0));
     }
     #[test] fn selected_hard_wrap_reflow_and_viewport_clipping_keep_exact_source_endpoints() {
-        let body=[b'x';600];let mut r=reader(82,160);
+        let body=[b'x';600];let mut r=reader(82,168);
         let narrow=r.render_path_selected(&body,b"/",Some((7,23)));
         assert_eq!(narrow.selection,((2*11+7)as u16,(4*11+3)as u16));
         assert!(r.navigate(&body,Move::Down));let anchor=r.source_anchor();
@@ -520,7 +519,7 @@ mod tests {
         r.resize(0,0);assert_eq!(r.render_path_selected(&body,b"/",Some((0,600))).selection,(0,0));
     }
     #[test] fn selection_vertical_page_motion_matches_wrap_and_clamps_short_lines_and_raw_end() {
-        let mut r=reader(82,160);let body=b"0123456789abcdefghij\nxy\n0123456789end   ";
+        let mut r=reader(82,168);let body=b"0123456789abcdefghij\nxy\n0123456789end   ";
         assert_eq!(r.selection_move(body,7,Move::Down),17);
         assert_eq!(r.selection_move(body,17,Move::Down),23); // short row's newline
         assert_eq!(r.selection_move(body,22,Move::Up),11);
@@ -532,7 +531,7 @@ mod tests {
         r.resize(0,0);assert_eq!(r.selection_move(body,usize::MAX,Move::Down),body.len());
     }
     #[test] fn explicit_reveal_follows_caret_both_directions_and_normal_render_never_moves_anchor() {
-        let body=[b'x';600];let mut r=reader(82,160);
+        let body=[b'x';600];let mut r=reader(82,168);
         assert!(!r.reveal(&body,5));assert_eq!(r.source_anchor(),0);
         assert!(r.reveal(&body,250));assert_eq!(r.source_anchor(),150);
         let frame=r.render_path_selected(&body,b"/",Some((240,251)));

@@ -38,7 +38,7 @@ fn surface(width:u32,text:&[u8])->Surface{
  assert_ne!(ascii_glyph_index(b'i'),ascii_glyph_index(b'I'));assert_eq!(ascii_glyph_index(b'\n'),None);
 }
 #[test]fn newline_wrap_uses_scaled_advance_and_clamps_before_narrowing(){
- for(width,cols)in[(1,1),(200,30),(256,20),(300,23),(640,52),(8192,80)]{
+ for(width,cols)in[(1,1),(200,30),(256,20),(300,23),(640,52),(8192,160)]{
      let s=surface(width,b"a\nb");assert_eq!(s.wrap_cols,cols,"width {}",width);
  }
 }

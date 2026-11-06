@@ -84,7 +84,7 @@ for name in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','scene_bar_blur_row
 parent_path=out/'parent.rs';parent_path.write_text('\n'.join(parent))
 lease=[]
 for name in ['RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID','RENDER_FRAME_COUNTER','TEXT_STAGES','TOKEN_BUF_CALL1_RECEIVED','TOKEN_BUF_OWNER','TOKEN_BUF_ARG0','TOKEN_BUF_ARG1','TOKEN_BUF_ARG2','CURSOR_UNDER_VALID','APP_PRESENT_BITS','CLOCK_CANON_SS','FRAME_OUTPUT','PREPARED_CURSOR']:lease.append(item(source,name))
-lease +=[block(source,'struct PublishedFrame{'),'#[derive(Clone,Copy)]\n'+block(source,'struct PreparedCursor{'),block(source,'struct SceneLease {'),block(source,'impl SceneLease {'),block(source,'impl Drop for SceneLease {'),function(source,'prepare_app_cleanup'),function(source,'typed_completion_needs_publication'),function(source,'text_projection_requirement'),function(source,'commit_published_text'),function(source,'finish_display_transactions')]
+lease +=[block(source,'struct PublishedFrame{'),'#[derive(Clone,Copy)]\n'+block(source,'struct PreparedCursor{'),block(source,'struct SceneLease {'),block(source,'impl SceneLease {'),block(source,'impl Drop for SceneLease {'),function(source,'prepare_app_cleanup'),function(source,'typed_completion_needs_publication'),function(source,'text_projection_requirement'),function(source,'changed_text_rows'),function(source,'commit_published_text'),function(source,'finish_display_transactions')]
 lease_source='\n'.join(lease);lease_path=out/'lease.rs';lease_path.write_text(lease_source)
 # Re-resolve ordinary module paths from the canonical repository tests folder,
 # even when a temporary proposed fixture is supplied before promotion.

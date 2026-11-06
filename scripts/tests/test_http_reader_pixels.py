@@ -35,24 +35,24 @@ class ReaderPixels(unittest.TestCase):
   return verify_reader_pixels(trace or self.trace(frame,body,w,h),screen or self.screen(frame),body,self.contract,anchor)
  def test_exact_2048_fixture_complete_home_chrome_and_body(self):
   self.assertEqual(len(READER_BODY),2048);self.assertTrue(READER_BODY.endswith(READER_TAIL));self.assertTrue(all(b==10 or 32<=b<=126 for b in READER_BODY))
-  frame=self.frame();self.assertEqual((frame['cols'],frame['rows'],frame['body_rows'],frame['bytes']),(47,10,7,479));self.assertTrue(self.result(frame)['ok'])
+  frame=self.frame();self.assertEqual((frame['cols'],frame['rows'],frame['body_rows'],frame['bytes']),(49,37,34,1849));self.assertTrue(self.result(frame)['ok'])
   self.assertEqual(frame['lines'][0].rstrip(),b'Plain HTTP / no TLS');self.assertEqual(frame['lines'][1].rstrip(),b'probe.sexos.test /welcome')
  def test_tall_narrow_whole_frame_matches_display_and_source_row_cap(self):
-  self.assertEqual(self.contract['reader_max_rows'],24);self.assertEqual(self.contract['max_rows'],24)
+  self.assertEqual(self.contract['reader_max_rows'],48);self.assertEqual(self.contract['max_rows'],48)
   frame=self.frame(b'abcdefghij\n'*100,w=82,h=2000)
-  self.assertEqual((frame['rows'],frame['body_rows']),(24,21));self.assertLessEqual(frame['bytes'],512)
+  self.assertEqual((frame['rows'],frame['body_rows']),(48,45));self.assertLessEqual(frame['bytes'],6144)
  def test_end_reaches_final_source_byte_well_beyond_preview(self):
   start=self.frame();anchor=reader_move(start,'end');end=self.frame(anchor=anchor)
   self.assertGreater(anchor,64);self.assertEqual(end['end'],end['total_lines']);self.assertIn(READER_TAIL,b''.join(end['lines'][2:-1]));self.assertTrue(self.result(end,anchor=anchor)['ok'])
   corrupt=copy.deepcopy(end);last=next(i for i in range(len(corrupt['lines'])-2,1,-1)if b'Z'in corrupt['lines'][i]);corrupt['lines'][last]=corrupt['lines'][last].replace(b'Z',b'X')
   self.assertFalse(self.result(end,anchor=anchor,screen=self.screen(corrupt))['ok'])
  def test_line_page_home_end_navigation_and_no_wrap_at_bounds(self):
-  body=b'0123456789'*60;frame=self.frame(body,w=82,h=160);self.assertEqual((frame['cols'],frame['body_rows'],frame['total_lines']),(10,11,60))
-  for key,first in [('up',0),('down',1),('pgdn',12),('pgup',1),('home',0),('end',49),('down',49),('pgdn',49),('up',48)]:
+  body=b'0123456789'*60;frame=self.frame(body,w=82,h=160);self.assertEqual((frame['cols'],frame['body_rows'],frame['total_lines']),(10,10,60))
+  for key,first in [('up',0),('down',1),('pgdn',11),('pgup',1),('home',0),('end',50),('down',50),('pgdn',50),('up',49)]:
    frame=self.frame(body,w=82,h=160,anchor=reader_move(frame,key));self.assertEqual(frame['first'],first)
  def test_resize_uses_source_anchor_and_latest_geometry(self):
   frame=self.frame();anchor=reader_move(frame,'pgdn');frame=self.frame(anchor=anchor);anchor=frame['anchor']
-  expanded=self.frame(w=1280,h=706,anchor=anchor);self.assertEqual(expanded['cols'],47)
+  expanded=self.frame(w=1280,h=706,anchor=anchor);self.assertEqual(expanded['cols'],104)
   # Tile is deliberately moved to fit this actual synthetic framebuffer.
   trace=self.trace(expanded,w=1280,h=706,x=0);screen=self.screen(expanded,x=0)
   self.assertTrue(verify_reader_pixels(trace,screen,READER_BODY,self.contract,anchor)['ok'])
@@ -78,8 +78,8 @@ class ReaderPixels(unittest.TestCase):
   body=b'first\n\nlast';frame=self.frame(body);self.assertEqual(frame['total_lines'],3);self.assertEqual(frame['lines'][3],b' '*frame['cols']);self.assertTrue(self.result(frame,body)['ok'])
   wrong=copy.deepcopy(frame);wrong['lines'][6]=b'STALE'.ljust(frame['cols'],b' ');self.assertFalse(self.result(frame,body,screen=self.screen(wrong))['ok'])
  def test_readable_measure_and_exact_requested_anchor_survive_wrap_roundtrip(self):
-  for width,height in((1280,750),(1024,718),(624,706)):
-   frame=self.frame(STREAM_BODY,w=width,h=height);self.assertEqual((frame['cols'],frame['rows'],frame['body_rows'],frame['bytes']),(47,10,7,479));self.assertTrue(frame['lines'][-1].endswith(frame['progress'].encode()))
+  for width,height,cols,rows in((1280,750,104,39),(1024,718,83,37),(624,706,49,37)):
+   frame=self.frame(STREAM_BODY,w=width,h=height);self.assertEqual((frame['cols'],frame['rows'],frame['body_rows']),(cols,rows,rows-3));self.assertTrue(frame['lines'][-1].endswith(frame['progress'].encode()))
   body=b'x'*600;anchor=120
   for _ in range(4):
    for width in(82,124,142,624,82):
@@ -90,10 +90,10 @@ class ReaderPixels(unittest.TestCase):
    with self.assertRaises(ValueError):self.frame(anchor=invalid)
  def test_progress_is_exact_empty_end_and_fully_checked_pixels(self):
   for body in(b'',b'x'*600):
-   frame=self.frame(body);self.assertEqual(frame['progress'],'0-0/0'if not body else'1-7/13');self.assertTrue(self.result(frame,body)['ok'])
+   frame=self.frame(body);self.assertEqual(frame['progress'],'0-0/0'if not body else'1-13/13');self.assertTrue(self.result(frame,body)['ok'])
   body=b'\n'*12287+b'Z';first=self.frame(body);anchor=reader_move(first,'end');last=self.frame(body,anchor=anchor)
-  self.assertEqual(last['progress'],'12282-12288/12288');self.assertTrue(self.result(last,body,anchor=anchor)['ok'])
-  wrong=copy.deepcopy(last);wrong['lines'][-1]=wrong['lines'][-1].replace(b'12282',b'12281')
+  self.assertEqual(last['progress'],'12255-12288/12288');self.assertTrue(self.result(last,body,anchor=anchor)['ok'])
+  wrong=copy.deepcopy(last);wrong['lines'][-1]=wrong['lines'][-1].replace(b'12255',b'12254')
   self.assertFalse(self.result(last,body,anchor=anchor,screen=self.screen(wrong))['ok'])
  def test_responsive_https_header_and_complete_controls_preserve_lab_scope(self):
   contract=copy.deepcopy(self.contract);contract['reader_header']=contract['reader_https_headers'][0];contract['reader_footers']=contract['https_reader_footers'];contract['request']=b'GET /welcome HTTP/1.1\r\nHost: probe.sexos.test:46080\r\n\r\n'
@@ -160,7 +160,7 @@ class ReaderPixels(unittest.TestCase):
  def test_full_12288_stream_end_and_last_byte_are_independent_pixels(self):
   self.assertEqual(len(STREAM_BODY),12288);self.assertTrue(STREAM_BODY.endswith(STREAM_TAIL));self.assertEqual(self.contract['wire_max_body'],len(STREAM_BODY));self.assertEqual(self.contract['reader_max_body'],len(STREAM_BODY))
   first=self.frame(STREAM_BODY);anchor=reader_move(first,'end');last=self.frame(STREAM_BODY,anchor=anchor)
-  self.assertGreater(anchor,11000);self.assertEqual(last['end'],last['total_lines']);self.assertIn(STREAM_TAIL,b''.join(last['lines'][2:-1]));self.assertTrue(self.result(last,STREAM_BODY,anchor=anchor)['ok'])
+  self.assertGreater(anchor,10000);self.assertEqual(last['end'],last['total_lines']);self.assertIn(STREAM_TAIL,b''.join(last['lines'][2:-1]));self.assertTrue(self.result(last,STREAM_BODY,anchor=anchor)['ok'])
   bad=copy.deepcopy(last);index=next(i for i in range(len(bad['lines'])-2,1,-1)if b'Z'in bad['lines'][i]);bad['lines'][index]=bad['lines'][index].replace(b'Z',b'X')
   self.assertFalse(self.result(last,STREAM_BODY,anchor=anchor,screen=self.screen(bad))['ok'])
  def test_source_bound_oversize_and_short_stream_wire_are_distinct(self):

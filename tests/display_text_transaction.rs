@@ -39,7 +39,7 @@ fn chunk(s: &mut Stage, seq: u32, offset: usize, input: &[u8]) {
 }
 #[test]
 fn every_partial_prefix_is_private_and_empty_or_full_commit_is_exact() {
-    for len in [0, 1, 7, 8, 9, 511, 512] {
+    for len in [0, 1, 7, 8, 9, 511, 512, CAPACITY-1, CAPACITY] {
         let text = vec![b'a'; len];
         let mut s = Stage::EMPTY;
         begin(&mut s, 1, len);
@@ -195,7 +195,7 @@ fn actual_owner_surface_retirement_and_slot_rebinding_fence_partial_data() {
 }
 #[test]
 fn wire_rejects_reserved_bits_zero_wrapping_sequences_bounds_and_padding() {
-    for len in [0, 1, 512] {
+    for len in [0, 1, 512, CAPACITY] {
         let r = Request::Begin {
             sequence: u32::MAX,
             len,
@@ -206,12 +206,12 @@ fn wire_rejects_reserved_bits_zero_wrapping_sequences_bounds_and_padding() {
     }
     for (op, a, b) in [
         (text_batch::BEGIN, 1 << 48, 0),
-        (text_batch::BEGIN, 513 << 32 | 1, 0),
+        (text_batch::BEGIN, (CAPACITY as u64 + 1) << 32 | 1, 0),
         (text_batch::BEGIN, 1, 1 << 32),
         (text_batch::BEGIN, 0, 0),
         (text_batch::COMMIT, 1 << 32, 0),
         (text_batch::CHUNK, 0, 1 << 32 | 1 << 24 | 1),
-        (text_batch::CHUNK, 0, 1 << 32 | 512 << 8 | 1),
+        (text_batch::CHUNK, 0, 1 << 32 | (CAPACITY as u64) << 8 | 1),
         (text_batch::CHUNK, 0, 1 << 32 | 1 << 8 | 1),
         (text_batch::CHUNK, 0, 1 << 32 | 9),
         (text_batch::CHUNK, 0x6161, 1 << 32 | 1),
@@ -374,11 +374,11 @@ fn selected(s: &mut Stage, seq: u32, start: usize, end: usize) {
 }
 #[test]
 fn selection_wire_is_canonical_and_integrity_binds_range_length_and_text() {
-    for (start,end) in [(0,0),(0,512),(123,511)] {
+    for (start,end) in [(0,0),(0,CAPACITY),(123,511)] {
         let request=Request::Select{sequence:u32::MAX,start,end};
         let(op,a,b)=request.wire();assert_eq!(Request::decode(op,a,b),Some(request));
     }
-    for(a,b)in[(0,0),(1<<32,0),(1,1<<32),(1,513<<16),(1,2|(1<<16)),(1,1|(1<<16))]{
+    for(a,b)in[(0,0),(1<<32,0),(1,1<<32),(1,(CAPACITY as u64+1)<<16),(1,2|(1<<16)),(1,1|(1<<16))]{
         assert!(Request::decode(text_batch::SELECT,a,b).is_none());
     }
     let h=text_batch::selected_hash(b"abcdef",1,4).unwrap();
@@ -442,7 +442,7 @@ fn selected_full_capacity_and_retirement_clear_metadata_bytes_and_pending_receip
     for(i,b)in text.chunks(8).enumerate(){chunk(&mut s,1,i*8,b);}
     selected(&mut s,1,0,CAPACITY);
     s.receive(9, 90,156,Request::Commit{sequence:1,hash:text_batch::selected_hash(&text,0,CAPACITY).unwrap()}).unwrap();
-    assert_eq!(s.selection(),(0,512));s.retire(16,160);assert_eq!(s.selection(),(0,512));
+    assert_eq!(s.selection(),(0,CAPACITY as u16));s.retire(16,160);assert_eq!(s.selection(),(0,CAPACITY as u16));
     s.retire(9,90);assert_eq!(s.selection(),(0,0));s.poll_reply(|_,_|panic!("retired receipt"));
     assert_eq!(s.diagnostic(),(0,0,0,0,0,false,false));
     // Actual production reset includes volatile erasure of every inline byte and
@@ -553,12 +553,12 @@ fn whole_text_validation_rejects_controls_and_malformed_utf8_without_rewriting_o
         assert!(stage.receive(9, 90,156,Request::Commit{sequence:1,hash:hash(b"?")}).is_none());
     }
     for complete in[false,true]{
-        let mut text=[b'a';512];text[510]=0xc3;text[511]=if complete{0xa9}else{0x20};
+        let mut text=[b'a';CAPACITY];text[CAPACITY-2]=0xc3;text[CAPACITY-1]=if complete{0xa9}else{0x20};
         let mut stage=Stage::EMPTY;begin(&mut stage,1,text.len());
         for(i,part)in text.chunks(8).enumerate(){chunk(&mut stage,1,i*8,part);}
         let result=stage.receive(9, 90,156,Request::Commit{sequence:1,hash:hash(&text)});
         assert_eq!(result.is_some(),complete);
-        if let Some((len,_,bytes))=result{assert_eq!(len,512);assert_eq!(&bytes[..len],&text);}
+        if let Some((len,_,bytes))=result{assert_eq!(len,CAPACITY);assert_eq!(&bytes[..len],&text);}
     }
 }
 

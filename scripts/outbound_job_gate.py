@@ -14,7 +14,7 @@ def browser_publication_binding(root,paths,sources):
  """
  compact=lambda text:re.sub(r'\s+','',re.sub(r'//[^\n]*','',text))
  app=compact(sources['app'])
- constructors=re.findall(r'ui:text_delivery::Outbox::atomic\(([^()]*)\)',app)
+ constructors=re.findall(r'(?:ui:text_delivery::Outbox::atomic|ui\.bind_atomic)\(([^()]*)\)',app)
  # Round148 already selects held identity for Close while output is literal.
  # A current local surface binding paired with literal output is a rewire.
  if constructors==['300'] and not re.search(r'let(?:mut)?surface=',app):
@@ -32,7 +32,7 @@ def browser_publication_binding(root,paths,sources):
  code_body=re.sub(r'"(?:\\.|[^"\\])*"','""',body)
  if not body.startswith(binding) or any(len(re.findall(r'(?:let(?:mut)?|(?<![\w.]))'+name+r'=(?!=)',code_body))!=1 for name in ('identity','selected','surface')):
   raise ValueError('missing or ambiguous held Browser surface binding')
- if 'ui:text_delivery::Outbox::atomic(surface)'not in body:raise ValueError('publication outside held constructor')
+ if 'ui.bind_atomic(surface)'not in body:raise ValueError('publication outside held constructor')
  for key,path in [('identity','apps/kaleidoscope/src/incarnation.rs'),('catalog','crates/sex-pdx/src/app_catalog.rs'),('lifecycle','crates/sex-pdx/src/app_lifecycle.rs')]:
   paths[key]=path;sources[key]=(root/path).read_text()
  identity=compact(sources['identity'])

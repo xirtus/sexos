@@ -33,7 +33,7 @@ fn caret_stays_in_bounded_visible_text_for_long_documents_and_small_tiles() {
                     None,
                     None,
                 );
-                assert!(t.len <= 512);
+                assert!(t.len <= view::CAPACITY);
                 if l.body_rows() > 0 {
                     assert!(t.bytes[..t.len].contains(&b'#'), "{target} {w} {h}");
                 }
@@ -128,7 +128,7 @@ fn arbitrary_header_lengths_are_bounded_without_changing_document_bytes() {
     let body=b"document bytes";let source=*body;let l=Layout::new(9,496,319);
     for naming in [None,Some(&[b'n';200][..])] {
         let t=view::render(body,body.len(),&mut 0,l,&[b'x';200],true,&[b'Y';200],None,naming);
-        assert!(t.len<=512);assert_eq!(*body,source);
+        assert!(t.len<=view::CAPACITY);assert_eq!(*body,source);
         for line in t.bytes[..t.len].split(|b|*b==b'\n'){assert!(line.len()<=l.cols);}
         assert!(t.bytes[..t.len].contains(&b'#'));
     }
@@ -929,7 +929,7 @@ fn status_and_name_changes_cannot_scroll_or_reflow_the_editor_body() {
                     .map(|(start, end)| (start - offset, end - offset)),
                 body_selection
             );
-            assert!(current.len <= 512);
+            assert!(current.len <= view::CAPACITY);
             if layout.body_rows() > 0 {
                 assert!(expected.contains(&b'#'));
             }
@@ -946,7 +946,7 @@ fn utf8_views_preserve_source_bytes_scalar_columns_and_complete_selected_glyphs(
         for caret in (0..=body.len()).filter(|&n|text_encoding::is_boundary(body,n)) {
             let t=view::render_selection(body,caret,&mut 0,l,b"note",true,b"READY",None,None,Some((1,body.len())));
             let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();assert_eq!(body,original);
-            assert!(t.len<=512);if l.body_rows()>0 {assert!(text.contains('#'));}
+            assert!(t.len<=view::CAPACITY);if l.body_rows()>0 {assert!(text.contains('#'));}
             for row in text.split('\n'){assert!(row.chars().count()<=l.cols,"{w} {h}: {row:?}");}
             if let Some((a,b))=t.selection {assert!(text_encoding::is_boundary(&t.bytes[..t.len],a));assert!(text_encoding::is_boundary(&t.bytes[..t.len],b));}
         }
@@ -961,7 +961,7 @@ fn utf8_full_capacity_view_keeps_caret_and_never_splits_frame_or_vertical_target
     for (w,h) in [(1280,700),(624,706),(496,319),(220,150),(80,80)] {
         let l=Layout::new(9,w,h);let mut top=0;
         let t=view::render(body,body.len(),&mut top,l,b"utf8",true,b"READY",None,None);
-        assert!(core::str::from_utf8(&t.bytes[..t.len]).unwrap().contains('#'));assert!(t.len<=512);
+        assert!(core::str::from_utf8(&t.bytes[..t.len]).unwrap().contains('#'));assert!(t.len<=view::CAPACITY);
         let mut goal=usize::MAX;let mut caret=body.len();
         for _ in 0..40 {if let Some(to)=view::vertical(body,caret,l.cols,&mut goal,true){assert!(text_encoding::is_boundary(body,to));assert!(to<=caret);caret=to;}}
     }
@@ -980,8 +980,8 @@ fn tall_narrow_caret_stays_inside_the_actual_display_line_table() {
         for w in [22,40,82,100,144,220,496,624] {
             let l=Layout::new(9,w,700);let t=view::render(body.as_bytes(),body.len(),&mut 0,l,b"note",false,b"READY",None,None);
             let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();
-            assert!(text.lines().count()<=24,"{w}: {} rows",text.lines().count());
-            if l.rows>0 {assert!(text.lines().position(|r|r.contains('#')).unwrap()<24);}
+            assert!(text.lines().count()<=48,"{w}: {} rows",text.lines().count());
+            if l.rows>0 {assert!(text.lines().position(|r|r.contains('#')).unwrap()<48);}
         }
     }
 }
@@ -991,7 +991,7 @@ fn one_four_byte_character_does_not_collapse_otherwise_ascii_viewport() {
     let mut body=("a".repeat(40)+"\n").repeat(20);body.push('🙂');
     let l=Layout::new(9,624,706);let t=view::render(body.as_bytes(),body.len(),&mut 0,l,b"note",false,b"READY",None,None);
     let text=core::str::from_utf8(&t.bytes[..t.len]).unwrap();
-    assert!(text.lines().count()>=l.chrome_rows()+5);assert!(text.ends_with("🙂#"));assert!(t.len<=512);
+    assert!(text.lines().count()>=l.chrome_rows()+5);assert!(text.ends_with("🙂#"));assert!(t.len<=view::CAPACITY);
 }
 
 #[test]

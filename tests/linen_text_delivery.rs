@@ -43,7 +43,7 @@ fn decode(ops:&[Operation])->Vec<Vec<u8>>{let mut batches:Vec<Vec<u8>>=Vec::new(
  if !queued{assert!(!o.pending());o.queue(b"recovery",2,metadata(2));}let(ops,rs)=flush(&mut o);assert_eq!(decode(&ops),vec![b"recovery".to_vec()]);assert_eq!(rs.len(),1);assert_eq!(rs[0].metadata.selected,2);}
 }
 #[test]fn empty_text_is_a_retained_clear_only_and_invalid_input_is_atomic(){
- let mut o=Outbox::new(200);o.queue(b"",1,metadata(1));assert!(!o.queue(&[0;513],1,metadata(2)));assert_eq!(o.poll(4,|_|Admission::Full),Poll::Deferred);
+ let mut o=Outbox::new(200);o.queue(b"",1,metadata(1));assert!(!o.queue(&[0;6145],1,metadata(2)));assert_eq!(o.poll(4,|_|Admission::Full),Poll::Deferred);
  let(ops,rs)=flush(&mut o);assert_eq!(decode(&ops),vec![Vec::<u8>::new()]);assert_eq!(rs,vec![Receipt{metadata:metadata(1),bytes:0}]);
 }
 fn op(opcode:u64,surface:u64)->Operation{Operation{opcode,surface,packed:11,control:22}}
@@ -172,7 +172,7 @@ fn op(opcode:u64,surface:u64)->Operation{Operation{opcode,surface,packed:11,cont
 // Admission callbacks model a full/closed transport, not native IPC authority.
 #[test]fn utf8_reader_frame_crosses_every_full_boundary_and_only_exact_applied_publishes_metadata(){
  let body="1234567é€😀\tZ\nsecond é row".as_bytes();let original=body.to_vec();
- for(w,h)in[(1280,750),(1024,718)]{
+ for(w,h)in[(1270,750),(1024,718)]{
   let mut reader=document_reader::Reader::new();reader.resize(w,h);
   let frame=reader.render_path_selected(body,b"/utf8",Some((7,16)));
   let bytes=&frame.bytes[..frame.len];let(start,end)=frame.selection;

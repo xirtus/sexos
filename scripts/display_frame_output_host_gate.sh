@@ -98,7 +98,7 @@ production='\n\n'.join(parts)+'\n';production_path=out/'actual-main-pipeline.rs'
 parent=[item(n)for n in ['MAX_FB_W','MAX_FB_H','BAR_BG_H','FOCUS_SURFACE_COLOR','FRAME_RIM_COLOR','FRAME_TOP_BAR_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','FRAME_LIGHT_CLOSE_COLOR','FRAME_LIGHT_MINIMIZE_COLOR','FRAME_LIGHT_ZOOM_COLOR','DEFAULT_RENDER_TOKENS','SURFACE_CHROME_TOP_BAR','FRAME_TOP_BAR_HEIGHT_PX']]
 parent+=['#[derive(Clone, Copy)]\n#[repr(C)]\n'+block(main,'struct RenderTokensV1 {')]
 parent+=['use surface_lifecycle::{TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};']
-parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement']]
+parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement','changed_text_rows']]
 parent+=[fn(main,'scene_bar_blur_rows').replace('fn scene_bar_blur_rows(', 'fn actual_scene_bar_blur_rows(',1)]
 parent_path=out/'actual-scene-parent.rs';parent_path.write_text('\n\n'.join(parent))
 acquire_path=out/'actual-sdk-acquisition.rs';acquire_path.write_text('pub '+fn(sdk,'display_frame_backing')+'\n');(out/'main-source.rs').write_text(main)

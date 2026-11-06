@@ -30,6 +30,9 @@ pub mod clipboard_client;
 pub mod desktop_style;
 #[path = "../crates/sex-pdx/src/document_view.rs"]
 pub mod document_view;
+#[path = "../crates/sex-pdx/src/text_batch.rs"]
+#[allow(dead_code)]
+pub mod text_batch;
 #[path = "../crates/sex-pdx/src/text_selection.rs"]
 pub mod text_selection;
 #[path = "../servers/quil/src/view.rs"]

@@ -34,7 +34,7 @@ def main_wiring(source):
         if body.count(compact(name))!=1:raise ValueError('ambiguous selected identity/surface binding')
     required=(
         'bitmap:bitmap_delivery::Outbox::new(selected)',
-        'ui:text_delivery::Outbox::atomic(surface)',
+        'ui.bind_atomic(surface)',
         'service_call::enqueue(sex_pdx::SLOT_DISPLAY,0xEC,[surface,',
         'service_call::enqueue(sex_pdx::SLOT_DISPLAY,0xFB,[surface,packed,arg2])',
         'service_call::enqueue(sex_pdx::SLOT_DISPLAY,0xEB,[surface,50,100])',
@@ -47,7 +47,7 @@ def main_wiring(source):
     )
     for expected in required:
         if compact(expected)not in body:raise ValueError('unbound App::new output: '+expected.split('(')[0])
-    for constructor in ('bitmap_delivery::Outbox::new(', 'text_delivery::Outbox::atomic('):
+    for constructor in ('bitmap_delivery::Outbox::new(', 'ui.bind_atomic('):
         if whole.count(constructor)!=1:raise ValueError('ambiguous output constructor wiring')
     if 'constBROWSER_TITLE_ID:u64=300;'not in whole:raise ValueError('descriptive Browser family title changed')
     for forwarding in (
@@ -102,7 +102,7 @@ def check(root,out,baseline_binary=None):
     changes=(
         ('let surface=selected.surface();','let surface=300;'),
         ('bitmap:bitmap_delivery::Outbox::new(selected)','bitmap:bitmap_delivery::Outbox::new(original)'),
-        ('ui:text_delivery::Outbox::atomic(surface)','ui:text_delivery::Outbox::atomic(300)'),
+        ('ui.bind_atomic(surface)','ui:text_delivery::Outbox::atomic(300)'),
         ('[surface, BROWSER_TITLE_ID, (selected.target() as u64) << 8]','[300, BROWSER_TITLE_ID, (15u64) << 8]'),
         ('OP_APP_PRESENT, [surface, 1, 0]','OP_APP_PRESENT, [300, 1, 0]'),
     )

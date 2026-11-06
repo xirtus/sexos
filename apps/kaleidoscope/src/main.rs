@@ -1064,6 +1064,7 @@ fn find_char(code:u8)->Option<u8>{
     ROWS.iter().find_map(|(first,keys)|code.checked_sub(*first).and_then(|i|keys.get(i as usize)).copied())
 }
 /// Full-window text frames are too large for the stack-built state.
+const _: () = assert!(document_reader::CAPACITY == sex_pdx::text_batch::CAPACITY);
 static mut BROWSER_UI: text_delivery::Outbox = text_delivery::Outbox::new(0);
 static mut BROWSER_UI_LAST: [u8; sex_pdx::text_batch::CAPACITY] = [0; sex_pdx::text_batch::CAPACITY];
 static mut BROWSER: core::mem::MaybeUninit<Browser> = core::mem::MaybeUninit::uninit();

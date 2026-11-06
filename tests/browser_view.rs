@@ -75,7 +75,7 @@ fn padded(bytes:&[u8])->[u8;64] { let mut out=[b' ';64];out[..bytes.len()].copy_
 }
 #[test]fn seed_status_rejects_unknown_labels_or_capacity_without_truncation(){
  for label in [b"secret bytes" as &[u8],b"ready\0",b"READY"]{let text=compose(PREVIEW,E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_seed(text,Some(label)).is_none());}
- let text=compose(&[b'p';254],E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();assert!(browser_view::with_seed(text,Some(b"checking")).is_none());
+ let mut text=compose(&[b'p';254],E::Verified,D::Idle,H::Idle,&[0;64]).unwrap();text.len=text.bytes.len()-63;assert!(browser_view::with_seed(text,Some(b"checking")).is_none());
 }
 
 #[test]fn clock_snapshot_chrome_replaces_one_auxiliary_extent_without_clipping(){

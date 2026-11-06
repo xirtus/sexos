@@ -789,9 +789,9 @@ fn reference_contrast(a:u32,b:u32)->f64{
   assert!(legacy_text_clear(&mut surface));assert_eq!(surface.cell_count,0);
   assert!(surface.cell_starts.iter().chain(&surface.line_cells).chain(&surface.line_starts).all(|&x|x==0));
  }
- let mut maximum=Surface{w:1000,text_len:512,..surf(9,156)};maximum.text_buf.fill(b'A');maximum.text_buf[511]=b'\n';recompute_text_lines(&mut maximum);
- assert_eq!(maximum.cell_count as usize,TEXT_BUF_CAP);assert_eq!(maximum.cell_starts[511],511);
- assert_eq!(maximum.cell_starts.len(),512);assert_eq!(maximum.line_cells.len(),24);
+ let mut maximum=Surface{w:8192,text_len:TEXT_BUF_CAP as u16,..surf(9,156)};maximum.text_buf.fill(b'A');maximum.text_buf[TEXT_BUF_CAP-1]=b'\n';recompute_text_lines(&mut maximum);
+ assert_eq!(maximum.cell_count as usize,TEXT_BUF_CAP);assert_eq!(maximum.cell_starts[TEXT_BUF_CAP-1]as usize,TEXT_BUF_CAP-1);
+ assert_eq!(maximum.cell_starts.len(),TEXT_BUF_CAP);assert_eq!(maximum.line_cells.len(),48);
  maximum.text_len=1;maximum.text_buf[0]=b'x';recompute_text_lines(&mut maximum);
  assert_eq!(maximum.cell_count,1);assert!(maximum.cell_starts[1..].iter().all(|&x|x==0));
 }

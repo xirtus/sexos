@@ -82,7 +82,7 @@ class PublicationBinding(unittest.TestCase):
  def test_archival_held_close_with_literal_output_remains_supported(self):
   root=self.fixture()
   self.mutate(root,'apps/kaleidoscope/src/main.rs','let surface=selected.surface();','')
-  self.mutate(root,'apps/kaleidoscope/src/main.rs','ui:text_delivery::Outbox::atomic(surface)','ui:text_delivery::Outbox::atomic(300)')
+  self.mutate(root,'apps/kaleidoscope/src/main.rs','ui.bind_atomic(surface)','ui.bind_atomic(300)')
   (root/'apps/kaleidoscope/src/incarnation.rs').unlink()
   self.assertEqual(len(load_pixel_contract(root)['source_sha256']),6)
  def test_missing_ambiguous_or_rewired_main_binding_rejects(self):
@@ -90,11 +90,11 @@ class PublicationBinding(unittest.TestCase):
    ('let surface=selected.surface();','let surface=300;'),
    ('let selected=incarnation::select(identity).expect("BROWSER_EXACT_BOOT_IDENTITY");','let selected=fake_identity();'),
    ('catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT)','catalog(0)'),
-   ('Outbox::atomic(surface)','Outbox::atomic(343)'),
-   ('Outbox::atomic(surface)','Outbox::atomic(300)'),
+   ('ui.bind_atomic(surface)','ui.bind_atomic(343)'),
+   ('ui.bind_atomic(surface)','ui.bind_atomic(300)'),
    ('let surface=selected.surface();','let surface=selected.surface();let surface=300;'),
    ('let surface=selected.surface();','let mut surface=selected.surface();surface=343;'),
-   ('ui:text_delivery::Outbox::atomic(surface)','ui:text_delivery::Outbox::atomic(surface),other:text_delivery::Outbox::atomic(surface),ui:text_delivery::Outbox::atomic(surface)'),
+   ('ui.bind_atomic(surface)','ui.bind_atomic(surface);ui.bind_atomic(surface)'),
   ]
   for old,new in changes:
    with self.subTest(new=new):
