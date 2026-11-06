@@ -12,7 +12,7 @@ struct Batch {
     waits: u32,
 }
 /// Polls to wait for Display's reply before sending the batch again.
-const REPLY_RETRY: u32 = 512;
+const REPLY_RETRY: u32 = 16384;
 pub struct Outbox {
     active: Option<Batch>,
     latest: Option<Batch>,
@@ -67,7 +67,11 @@ impl Outbox {
     pub fn receive(&mut self, caller: u32, value: u64) -> Option<(u64, usize)> {
         let applied = sex_pdx::text_batch::Applied::decode(caller, value)?;
         let b = self.active.as_mut()?;
-        if b.awaiting != Some(applied.surface) || b.paint != applied.sequence as u64 {
+        // A reply may land while a re-send of the same paint is under way.
+        if b.awaiting.is_some_and(|surface| surface != applied.surface)
+            || !b.begun
+            || b.paint != applied.sequence as u64
+        {
             return None;
         }
         let done = (b.paint, b.text.len);

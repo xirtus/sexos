@@ -1456,7 +1456,39 @@ fn text_projection_requirement(old:&Surface,new:&Surface,w:usize,h:usize)->scene
     let mut required=damage::Damage::new();
     required.add(text_surface_damage(old,w,h),w,h);
     required.add(text_surface_damage(new,w,h),w,h);
-    match required.rect(){Some(rect)=>scene::TextCoverage::Body(rect),None=>scene::TextCoverage::NoPixels}
+    match required.rect(){Some(rect)=>scene::TextCoverage::Body(changed_text_rows(old,new,rect)),None=>scene::TextCoverage::NoPixels}
+}
+
+/// Rows whose bytes are identical paint identical pixels, so a keystroke need
+/// not repaint the whole body. Anything else that moves or restyles cells
+/// keeps the whole rectangle.
+fn changed_text_rows(old:&Surface,new:&Surface,rect:damage::Rect)->damage::Rect{
+    if (old.x,old.y,old.w,old.h,old.chrome_flags)!=(new.x,new.y,new.w,new.h,new.chrome_flags)
+        ||old.wrap_cols!=new.wrap_cols||old.text_color!=new.text_color
+        ||surface_text_scale(old)!=surface_text_scale(new)
+        ||old.selection_start<old.selection_end||new.selection_start<new.selection_end
+        ||old.line_count==0||new.line_count==0{return rect;}
+    fn row(surf:&Surface,index:usize)->&[u8]{
+        let len=(surf.text_len as usize).min(TEXT_BUF_CAP);
+        let start=(surf.line_starts[index] as usize).min(len);
+        let end=if index+1<surf.line_count as usize{(surf.line_starts[index+1] as usize).min(len)}else{len};
+        &surf.text_buf[start..end.max(start)]
+    }
+    let (old_rows,new_rows)=(old.line_count as usize,new.line_count as usize);
+    let (mut first,mut last)=(usize::MAX,0usize);
+    for index in 0..old_rows.max(new_rows){
+        if index>=old_rows||index>=new_rows||row(old,index)!=row(new,index){
+            first=first.min(index);last=index;
+        }
+    }
+    if first==usize::MAX{return rect;}
+    let top=if new.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {FRAME_TOP_BAR_HEIGHT_PX+8} else {sex_pdx::desktop_style::TEXT_TOP as usize};
+    let line=9*surface_text_scale(new);
+    let origin=(new.y.max(0) as usize).saturating_add(top);
+    let y=origin.saturating_add(first*line).max(rect.y).min(rect.bottom);
+    let bottom=origin.saturating_add((last+1)*line).min(rect.bottom).max(y);
+    if y==bottom{return rect;}
+    damage::Rect{x:rect.x,y,right:rect.right,bottom}
 }
 
 fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
