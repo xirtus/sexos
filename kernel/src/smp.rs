@@ -48,11 +48,9 @@ pub fn boot_aps(smp: &MpResponse) {
 }
 
 extern "C" fn limine_ap_entry(info: &MpInfo) -> ! {
-    use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr3Flags, Cr4, Cr4Flags};
+    use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
     use x86_64::registers::model_specific::{Efer, EferFlags};
     use x86_64::registers::xcontrol::{XCr0, XCr0Flags};
-    use x86_64::structures::paging::PhysFrame;
-    use x86_64::PhysAddr;
     x86_64::instructions::interrupts::disable();
     unsafe {
         Efer::write(EferFlags::from_bits_truncate(EFER.load(Ordering::Acquire)));
@@ -60,7 +58,8 @@ extern "C" fn limine_ap_entry(info: &MpInfo) -> ! {
         Cr4::write(Cr4Flags::from_bits_truncate(CR4.load(Ordering::Acquire)));
         let xcr0 = XCR0.load(Ordering::Acquire);
         if xcr0 != 0 { XCr0::write(XCr0Flags::from_bits_truncate(xcr0)); }
-        Cr3::write(PhysFrame::containing_address(PhysAddr::new(CR3.load(Ordering::Acquire))), Cr3Flags::empty());
+        // One address space: the bootloader hands every core the same root.
+        assert_eq!(Cr3::read().0.start_address().as_u64(), CR3.load(Ordering::Acquire), "SMP_SECOND_TRANSLATION_ROOT");
         let tss = crate::gdt::init_core();
         crate::interrupts::init_idt();
         let core = NEXT_CORE.fetch_add(1, Ordering::Relaxed);

@@ -647,7 +647,7 @@ pub extern "C" fn scheduler_finish_switch() {
 unsafe fn leave_dead_task(sched: &Scheduler, current: *mut Task) -> ! {
     assert!((*current).state.begin_switch_out(sched.core_id));
     assert!(sched.pending_outgoing.swap(current, Ordering::AcqRel).is_null());
-    assert_eq!(sched.current_task.swap(ptr::null_mut(), Ordering::AcqRel), current);
+    assert!(sched.current_task.compare_exchange(current, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok());
     let stack = crate::core_local::CoreLocal::get().idle_stack;
     core::arch::asm!("mov rsp, {stack}", "and rsp, -16", "call {idle}", "ud2",
         stack = in(reg) stack, idle = sym idle_core, options(noreturn));
