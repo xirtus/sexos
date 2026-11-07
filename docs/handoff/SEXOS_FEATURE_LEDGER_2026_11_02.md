@@ -2160,3 +2160,31 @@ row no longer waits for the row before it to end.
   refusals, background programs, reboot). Program disk, launch and records, filesystem,
   fetch, browser web and SMP at 1 core on the final kernel. Python tests and all non-QEMU
   gates except the older ones listed earlier.
+
+## Eight program windows at once (2026-11-08)
+
+- **What runs now.** Eight programs open side by side, up from three, tiled in a grid
+  that stays near square once there are five or more windows (it used to stack thin rows).
+  A program that ran before gets its row back first, from `run` and from the palette.
+- **Why it was three.** Each windowed program had its own PKU key, and x86 has sixteen,
+  nearly all held by services. That, not any table, was the ceiling.
+- **Design.** Rows from the fourth on share one key (`organs::SHARED_PROGRAM_KEY`) and take
+  turns being present (`kernel/src/program_tenancy.rs`), as background records already do.
+  Before a shared row's task runs, the kernel clears the present bit on the last tenant's
+  pages and sets it on the new one's, compare-and-swap so a leaf cleared by a retire stays
+  cleared. Restores write shared rows' leaves absent, and checks count an evicted page as
+  the row's own. All program rows already run on core 0, which is what makes one set of
+  present bits enough in one address space.
+- **Isolation evidence.** `program_isolation_probe.py` on an ISO built with
+  `SEXOS_PROGRAM_ISOLATION_PROBE=4`, fourth argument `4`: row 45 reads its own first page,
+  then live row 44's, which shares its key. The read takes `[paging.fault.trap] pd=45
+  addr=0x6b000000 error=0x4` (not present), only row 45 ends, and the next program starts.
+- **ABI.** Five catalog rows (targets 45 to 49, surfaces 362 to 366, Shell slots 420 to
+  439), so `app_catalog::COUNT` is 37. Display holds 32 surfaces, Shell 24 frames.
+- **Limits.** Shared-key programs never run in parallel with each other. The catalog's
+  64 presentation bits cap rows. Program windows still have no title bar when several are
+  open (true before this change too), so they close by keyboard only. Records and windowed
+  programs are still separate kinds.
+- **Gates.** Program disk (eight at once) at 1 and 4 cores, program launch, program file,
+  records, filesystem, fetch, browser web and SMP at 1 core on the final kernel; the probe
+  above; Python tests and all non-QEMU gates except the older ones listed earlier.

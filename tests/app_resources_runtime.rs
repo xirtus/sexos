@@ -71,6 +71,7 @@ mod ipc{
 }
 #[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
 #[path="../kernel/src/program_image.rs"]mod program_image;
+mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,value:u64)->u64{value}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}}
 mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}}}
 mod boot_memory{pub fn program_image(_:usize)->Option<&'static [u8]>{None}pub fn reserve_window(_:u64,_:u8,_:&mut [u64])->u64{0}pub fn write_frames(_:u64,_:&[u8]){}
  pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
@@ -237,15 +238,15 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
   return;
  };
  use capability::{ProtectionDomain,CapabilityData};use app_resource_state::{LifecycleGrant,QUERY};
- assert_eq!(app_catalog::TARGETS,[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44]);
- for pd in 1..=44{
+ assert_eq!(app_catalog::TARGETS,[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49]);
+ for pd in 1..=49{
   let key=app_catalog::by_target(pd).map_or(pd as u8,|r|if r.app==app_catalog::App::Program{organs::program_key(r.ordinal)}else{app_catalog::boot_incarnation(r.app).target as u8});
   let domain=ProtectionDomain::new_key(pd,key);
   // Deliberately distinct task namespace, with the actual context pointer
   // established by new_key. The production capturer reads these Task objects.
   unsafe{(*domain.main_task.load(Ordering::Acquire)).id=pd*10;}
  }
- assert_eq!(REGISTRY.iter().filter(|p|!p.load(Ordering::Acquire).is_null()).count(),44);
+ assert_eq!(REGISTRY.iter().filter(|p|!p.load(Ordering::Acquire).is_null()).count(),49);
  app_resources::plan_boot_apps(&app_catalog::TARGETS);
  let mut owned_leaves=Vec::new();
  for(index,row)in app_catalog::INCARNATIONS.iter().enumerate(){
@@ -290,5 +291,5 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
   };
   assert!(message.contains(expected),"case {case} failed for an unrelated reason: {message}");
  }
- assert_eq!(owned_leaves.len(),32);
+ assert_eq!(owned_leaves.len(),37);
 }

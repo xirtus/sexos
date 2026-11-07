@@ -362,6 +362,7 @@ impl Scheduler {
 
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
             crate::program_records::before_dispatch((*next_task).context.pd_id);
+            crate::program_tenancy::before_dispatch((*next_task).context.pd_id);
             if !self.ran_task.swap(true, Ordering::Relaxed) {
                 serial_println!("[smp.core.first_task] core={} pd={}", self.core_id, (*next_task).context.pd_id);
             }

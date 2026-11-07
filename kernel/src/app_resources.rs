@@ -304,10 +304,12 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
             || state.phase!=Phase::Constructed || state.owner_core.is_some() || state.exited{return Err(DENIED)}
         if !tramp.is_null(){let s=unsafe{(*tramp).state.snapshot()};
             if s.phase!=Phase::Constructed || s.owner_core.is_some() || s.exited{return Err(DENIED)}}
+        let id=new.target;
         let count=restore_reserved_pages(&new.pages[..new.count],
             |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
-            |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,value)},
+            |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,value))},
             |va|crate::smp::tlb::flush(va))?;
+        crate::program_tenancy::adopt(id,&new.pages[..new.count]);
         // All fallible validation is above. IF is masked by the syscall
         // entry. Publish authority and receipt before scheduler publication.
         let new=&mut apps[ni];new.activated=true;
@@ -389,10 +391,12 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     if app.acked!=REQUIRED {return Ok(5)}
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
+    let id=app.target;
     let count=restore_reserved_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
-        |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,value)},
+        |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,value))},
         |va|crate::smp::tlb::flush(va))?;
+    crate::program_tenancy::adopt(id,&app.pages[..app.count]);
     app.rebirthing=false;app.acked=0;
     DORMANT[index].store(false,Ordering::Release);
     assert!(crate::scheduler::SCHEDULERS[0].activate_task(main),"REBIRTH_EXCLUSIVE_COMMIT");
@@ -415,8 +419,9 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         dead(app)?;
         if app.acked!=REQUIRED || !crate::paging::target_cleanup_complete(app.target)?{return Err(RETRY)}
         TERMINAL[index].store(true,Ordering::Release);
+        let id=app.target;crate::program_tenancy::release(id);
         let count=retire_private_pages(&app.pages[..app.count],
-            |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
+            |leaf|crate::program_tenancy::read(id,leaf),
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
             |va|crate::smp::tlb::flush(va))?;
         if app.reusable{

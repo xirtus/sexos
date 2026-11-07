@@ -20,10 +20,12 @@ pub const fn service_key(domain: u8) -> u8 {
 pub const RECORD_KEY: u8 = 10;
 /// Guests: each program row runs on a key no service holds, and no other live
 /// row holds. Row 0 only anchors the chain and is gone before row 1 starts.
+/// Rows from the third on share this key and take turns being present.
+pub const SHARED_PROGRAM_KEY: u8 = 8;
 pub const fn program_key(ordinal: u8) -> u8 {
     match ordinal {
         0 | 1 => 5,
         2 => 6,
-        _ => 8,
+        _ => SHARED_PROGRAM_KEY,
     }
 }

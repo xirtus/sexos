@@ -58,8 +58,10 @@ pub extern "C" fn _start() -> ! {
     show(surface, region);
     call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
     // Test builds only: try to read the row before this one, whose memory is on
-    // another hardware key. The kernel should end this program and nothing else.
-    if option_env!("SEXOS_PROGRAM_ISOLATION_PROBE").is_some() && row.ordinal == 2 {
+    // another hardware key, or for shared-key rows is absent while this one runs.
+    // The kernel should end this program and nothing else. `1` probes from row 2.
+    let probe = match option_env!("SEXOS_PROGRAM_ISOLATION_PROBE") { Some("1") => Some(2), Some(v) => v.parse::<u8>().ok(), None => None };
+    if probe == Some(row.ordinal) {
         let own = 0x4000_0000u64 + (identity.target_pd as u64 - 1) * 0x0100_0000;
         let neighbour = own - 0x0100_0000;
         let byte = unsafe { core::ptr::read_volatile(own as *const u8) };

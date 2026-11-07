@@ -14,13 +14,18 @@ def text_ink(path,frame,font,advance=12,line=18):
  x0,y0=frame[0]+8,frame[1]+36
  bottom=frame[1]+frame[3]-8
  missing=0;ink=0
- for row,content in enumerate(TEXT.split('\n')):
+ # Display wraps at the window's width, a character at a time.
+ cols=max(1,(frame[2]-16)//advance);lines=[]
+ for content in TEXT.split('\n'):lines+=[content[i:i+cols] for i in range(0,len(content),cols)] or ['']
+ for row,content in enumerate(lines):
   for col,char in enumerate(content):
    for gy,bits in enumerate(glyph(font,char)):
     for gx in range(5):
      if bits&(1<<(4-gx)):
       x=x0+col*advance+gx*2;y=y0+row*line+gy*2
       if y>=bottom:continue
+      # The pointer rests at the screen's centre and may cover a glyph.
+      if 636<=x<660 and 398<=y<432:continue
       ink+=1
       missing+=pixels[(y*width+x)*3:(y*width+x)*3+3]!=b'\xe0\xf0\xff'
  return ink,missing

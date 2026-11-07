@@ -8435,7 +8435,7 @@ unsafe fn tile_visible_frames() {
 }
 
 /// B3: Deterministic tiling for the active scene.
-/// Layout rules: 1=full, 2=vertical split, 3=master+stack, 4=2x2 grid, 5+=rows.
+/// Layout rules: 1=full, 2=vertical split, 3=master+stack, 4=2x2 grid, 5+=near-square grid.
 /// Filters: skips Minimized, Zoomed, Closing, Tombstoned, Destroyed, Hidden,
 /// dead surfaces, stale-generation tabs, and lifecyle-non-focusable surfaces.
 /// Sends 0xEC (upsert geometry) to sexdisplay for each tiled surface.
@@ -8543,13 +8543,18 @@ unsafe fn tile_active_scene_frames() {
                 _ => (0i32, P.bar_height, cw, ch),
             }
         } else {
-            let row_h = ch / count as u32;
-            let y_off = P.bar_height + (row_h * i as u32) as i32;
-            (0i32, y_off, cw, if i + 1 == count { ch - (row_h * i as u32) } else { row_h })
+            // A grid as square as the count allows; the last row may be short.
+            let mut cols = 1u32; while cols * cols < count as u32 { cols += 1; }
+            let rows = (count as u32).div_ceil(cols);
+            let (col, row) = (i as u32 % cols, i as u32 / cols);
+            let (cell_w, cell_h) = (cw / cols, ch / rows);
+            let w = if col + 1 == cols { cw - cell_w * col } else { cell_w };
+            let h = if row + 1 == rows { ch - cell_h * row } else { cell_h };
+            ((cell_w * col) as i32, P.bar_height + (cell_h * row) as i32, w, h)
         };
 
         // [shell.tile.apply]: budgeted tiled geometry application proof.
-        static mut SHELL_TILE_APPLY_BUDGET: u32 = 256;
+        static mut SHELL_TILE_APPLY_BUDGET: u32 = 4096;
         let b = &mut SHELL_TILE_APPLY_BUDGET;
         if *b > 0 {
             *b -= 1;
@@ -8679,8 +8684,8 @@ struct WindowState {
 
 /// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
 const MAX_TABS_PER_FRAME: u8 = 8;
-/// Maximum concurrent frames (overkill for current app count, allows future splits).
-const MAX_FRAMES: usize = 9;
+/// Maximum concurrent frames: room for the built-in apps and every program row.
+const MAX_FRAMES: usize = 24;
 
 /// A tab wraps an existing surface_id with shell-level metadata.
 /// The surface remains the app/display object; the tab is shell policy only.
@@ -16112,11 +16117,18 @@ fn program_launcher_status()->(bool,&'static str,&'static str){
     if program_rows().any(|(_,_,state)|matches!(state,a::ACTIVATION_READY|a::ACTIVATION_REUSABLE|a::ACTIVATION_ACTIVE)){(true,"RUN PROGRAM","program_ready")}
     else{(false,"CLEANING / PLEASE WAIT","program_cleanup_pending")}
 }
-/// Start a program on a fresh or fully cleaned row, side by side with any others.
+/// Start a program on a fully cleaned or fresh row, side by side with any others.
 /// Only when every row is in use does this focus one of them.
 unsafe fn open_program_in_active_scene()->bool{
     use sex_pdx::app_lifecycle as a;
     if PROGRAM_REBIRTH.is_some(){return true}
+    // A row that ran before goes first, as for `run`, so fresh rows wait for crowds.
+    if let Some((_,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE){
+        launcher_focus_discard();
+        if a::rebirth(slot).is_err(){return false}
+        PROGRAM_REBIRTH=Some(slot);
+        return true;
+    }
     if let Some((row,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY){
         launcher_focus_discard();
         let active=match a::activation(slot,true){Ok(active)=>active,Err(status)=>{sex_pdx::serial_record!("[shell.program.denied] reason=commit status={}",status);return false}};
@@ -16125,21 +16137,16 @@ unsafe fn open_program_in_active_scene()->bool{
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         return true;
     }
-    if let Some((_,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE){
-        launcher_focus_discard();
-        if a::rebirth(slot).is_err(){return false}
-        PROGRAM_REBIRTH=Some(slot);
-        return true;
-    }
     if let Some((row,_,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_ACTIVE){
         return launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true);
     }
     false
 }
-/// A row a disk program can start on, if any: a fresh one first.
+/// A row a disk program can start on, if any: one that ran before first, so fresh
+/// rows stay for when several programs are open at once.
 fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
     use sex_pdx::app_lifecycle as a;
-    program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE))
+    program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY))
 }
 static mut PROGRAM_READING: bool = false;
 /// Background copies still to start from the file Files last read, and its length.

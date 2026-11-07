@@ -48,6 +48,11 @@ fn observed(target: u32) -> Observed {
         42 => (359, 41, 2, 41, true),
         43 => (360, 41, 3, 42, true),
         44 => (361, 41, 4, 43, true),
+        45 => (362, 41, 5, 44, true),
+        46 => (363, 41, 6, 45, true),
+        47 => (364, 41, 7, 46, true),
+        48 => (365, 41, 8, 47, true),
+        49 => (366, 41, 9, 48, true),
         _ => panic!("not a current BOOT subject"),
     };
     Observed {
@@ -74,7 +79,7 @@ fn row(target: u32) -> &'static Incarnation {
 
 #[test]
 fn all_twenty_eight_current_boot_subjects_validate_without_changing_observations() {
-    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44]);
+    assert_eq!(INCARNATIONS.map(|row| row.target), [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]);
     assert_eq!(validate_layout(&INCARNATIONS), Ok(()));
     for row in &INCARNATIONS {
         let actual = observed(row.target);
@@ -174,7 +179,7 @@ fn domain_routes_cannot_target_another_incarnation() {
 
 #[test]
 fn activation_presence_is_exact_for_originals_and_successors() {
-    for target in [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44] {
+    for target in [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49] {
         let mut actual = observed(target);actual.activation = None;
         assert_eq!(validate(row(target), &actual, 3), Err(Error::MissingActivation));
     }
@@ -211,7 +216,7 @@ fn fabricated_catalog_rows_are_not_new_authority() {
 
 #[test]
 fn malformed_catalog_identity_order_and_slot_layouts_reject() {
-    let mutations: [(fn(&mut [Incarnation; 32]), Error); 11] = [
+    let mutations: [(fn(&mut [Incarnation; 37]), Error); 11] = [
         (|r| r[1].target = 9, Error::CatalogTarget),
         (|r| r[0].target = 0, Error::CatalogTarget),
         (|r| r[0].target = 3, Error::CatalogTarget),

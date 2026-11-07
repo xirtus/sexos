@@ -10,13 +10,13 @@ use app_catalog::{by_surface, by_target, is_document_app, App, INCARNATIONS};
 fn catalog_slots_equal_the_lifecycle_protocol_constants() {
     let lifecycle: Vec<usize> = INCARNATIONS.iter().map(|i| i.lifecycle_slot).collect();
     assert_eq!(lifecycle, app_lifecycle::SLOTS.to_vec());
-    assert_eq!(lifecycle, [38,39,40,45,50,54,110,114,118,122,126,130,134,138,142,146,150,154,158,162,166,170,174,178,182,186,190,194,240,244,248,252]);
+    assert_eq!(lifecycle, [38,39,40,45,50,54,110,114,118,122,126,130,134,138,142,146,150,154,158,162,166,170,174,178,182,186,190,194,240,244,248,252,420,424,428,432,436]);
     let closes: Vec<u64> = INCARNATIONS.iter().map(|i| i.close_slot).collect();
     assert_eq!(&closes[..3], &app_lifecycle::CLOSE_SLOTS.map(|s| s as u64));
     assert_eq!(closes[3..6], [app_lifecycle::SUCCESSOR_CLOSE_SLOT, app_lifecycle::SPINDLE_CLOSE_SLOT, app_lifecycle::QUIL_THIRD_CLOSE_SLOT]);
-    assert_eq!(closes[6..], [111, 115, 119, 123, 127, 131, 135, 139, 143, 147, 151,155,159,163,167,171,175,179,183,187,191,195,241,245,249,253]);
+    assert_eq!(closes[6..], [111, 115, 119, 123, 127, 131, 135, 139, 143, 147, 151,155,159,163,167,171,175,179,183,187,191,195,241,245,249,253,421,425,429,433,437]);
     let activations: Vec<Option<usize>> = INCARNATIONS.iter().map(|i| i.activation_slot).collect();
-    assert_eq!(activations, [None, None, None, Some(app_lifecycle::ACTIVATION_SLOT), Some(app_lifecycle::SPINDLE_ACTIVATION_SLOT), Some(app_lifecycle::QUIL_THIRD_ACTIVATION_SLOT), Some(112), Some(116), Some(120), Some(124), Some(128), Some(132), Some(136), Some(140), Some(144), Some(148), Some(152),Some(156),Some(160),Some(164),Some(168),Some(172),Some(176),Some(180),Some(184),Some(188),Some(192),Some(196), None, Some(246), Some(250), Some(254)]);
+    assert_eq!(activations, [None, None, None, Some(app_lifecycle::ACTIVATION_SLOT), Some(app_lifecycle::SPINDLE_ACTIVATION_SLOT), Some(app_lifecycle::QUIL_THIRD_ACTIVATION_SLOT), Some(112), Some(116), Some(120), Some(124), Some(128), Some(132), Some(136), Some(140), Some(144), Some(148), Some(152),Some(156),Some(160),Some(164),Some(168),Some(172),Some(176),Some(180),Some(184),Some(188),Some(192),Some(196), None, Some(246), Some(250), Some(254), Some(422), Some(426), Some(430), Some(434), Some(438)]);
     assert_eq!(app_lifecycle::QUIL_THIRD_LIFECYCLE_SLOT, INCARNATIONS[5].lifecycle_slot);
     assert_eq!(app_lifecycle::SPINDLE_LIFECYCLE_SLOT, INCARNATIONS[4].lifecycle_slot);
 }
@@ -34,10 +34,10 @@ fn kernel_boot_plan_is_built_from_the_catalog() {
     for stale in ["Some(16),16,9", "Some(17),17,12", "Some(18),18,9", "SUCCESSOR_CLOSE_SLOT", "QUIL_THIRD_ACTIVATION_SLOT"] {
         assert!(!init.contains(stale), "{stale}");
     }
-    assert_eq!(app_catalog::TARGETS, [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44]);
-    assert_eq!(app_catalog::CONTENT, [(9,156), (12,154), (15,300), (16,301), (17,302), (18,307), (19,308), (20,309), (21,310), (22,311), (23,312), (24,313), (25,318), (26,323), (27,328), (28,333), (29,338),(30,343),(31,344),(32,345),(33,346),(34,347),(35,348),(36,349),(37,350),(38,351),(39,352),(40,353),(41,358),(42,359),(43,360),(44,361)]);
+    assert_eq!(app_catalog::TARGETS, [9, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49]);
+    assert_eq!(app_catalog::CONTENT, [(9,156), (12,154), (15,300), (16,301), (17,302), (18,307), (19,308), (20,309), (21,310), (22,311), (23,312), (24,313), (25,318), (26,323), (27,328), (28,333), (29,338),(30,343),(31,344),(32,345),(33,346),(34,347),(35,348),(36,349),(37,350),(38,351),(39,352),(40,353),(41,358),(42,359),(43,360),(44,361),(45,362),(46,363),(47,364),(48,365),(49,366)]);
     let chain: Vec<(u32, u32)> = INCARNATIONS.iter().filter(|i| i.ordinal != 0).map(|i| (app_catalog::predecessor(i).unwrap().target, i.target)).collect();
-    assert_eq!(chain, [(9, 16), (12, 17), (16, 18), (18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (17, 24), (24,25), (25,26), (26,27), (27,28), (28,29),(15,30),(30,31),(23,32),(32,33),(33,34),(34,35),(35,36),(36,37),(37,38),(38,39),(29,40),(41,42),(42,43),(43,44)]);
+    assert_eq!(chain, [(9, 16), (12, 17), (16, 18), (18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (17, 24), (24,25), (25,26), (26,27), (27,28), (28,29),(15,30),(30,31),(23,32),(32,33),(33,34),(34,35),(35,36),(36,37),(37,38),(38,39),(29,40),(41,42),(42,43),(43,44),(44,45),(45,46),(46,47),(47,48),(48,49)]);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn identities_are_unique_and_ordinals_follow_activation() {
 fn lookups_require_the_exact_pair() {
     assert_eq!(by_surface(9, 156).map(|i| i.shell_surface), Some(Some(201)));
     assert!(by_surface(9, 301).is_none() && by_surface(16, 156).is_none());
-    assert!(by_target(0).is_none() && by_target(3).is_none() && by_target(45).is_none() && by_target(u32::MAX).is_none());
+    assert!(by_target(0).is_none() && by_target(3).is_none() && by_target(50).is_none() && by_target(u32::MAX).is_none());
     assert!([9, 16, 18, 19, 20, 21, 22, 23,32,33,34,35,36,37,38,39].iter().all(|&t| is_document_app(t)) && ![12, 15, 17, 24, 25, 26, 27, 28, 29,40,30,31, 0].iter().any(|&t| is_document_app(t)));
 }
 
@@ -78,7 +78,7 @@ fn shell_view_tables_preserve_old_rows_and_append_reserved_quils() {
 
 #[test]
 fn display_tables_preserve_old_bits_and_assign_exact_new_bits() {
-    let old = |owner: u32, sid: u64| -> u64 { match (owner, sid) { (41,358) => 1<<28, (42,359) => 1<<29, (43,360) => 1<<30, (44,361) => 1<<31, (9,156) => 1, (12,154|160|161|162) => 2, (15,300) => 4, (16,301) => 8, (17,302|303|304|305) => 16, (18,307) => 32, (19,308) => 64, (20,309) => 128, (21,310) => 256, (22,311) => 512, (23,312) => 1024, (24,313|315|316|317) => 2048, (25,318|320|321|322) => 4096, (26,323|325|326|327) => 8192, (27,328|330|331|332) => 16384, (28,333|335|336|337) => 32768, (29,338|340|341|342) => 65536, (30,343) => 131072, (31,344) => 262144, (32,345) => 524288, (33,346) => 1048576, (34,347) => 2097152, (35,348) => 4194304, (36,349) => 8388608, (37,350) => 16777216, (38,351) => 33554432, (39,352) => 67108864, (40,353|355|356|357) => 134217728, _ => 0 } };
+    let old = |owner: u32, sid: u64| -> u64 { match (owner, sid) { (41,358) => 1<<28, (42,359) => 1<<29, (43,360) => 1<<30, (44,361) => 1<<31, (45,362) => 1<<32, (46,363) => 1<<33, (47,364) => 1<<34, (48,365) => 1<<35, (49,366) => 1<<36, (9,156) => 1, (12,154|160|161|162) => 2, (15,300) => 4, (16,301) => 8, (17,302|303|304|305) => 16, (18,307) => 32, (19,308) => 64, (20,309) => 128, (21,310) => 256, (22,311) => 512, (23,312) => 1024, (24,313|315|316|317) => 2048, (25,318|320|321|322) => 4096, (26,323|325|326|327) => 8192, (27,328|330|331|332) => 16384, (28,333|335|336|337) => 32768, (29,338|340|341|342) => 65536, (30,343) => 131072, (31,344) => 262144, (32,345) => 524288, (33,346) => 1048576, (34,347) => 2097152, (35,348) => 4194304, (36,349) => 8388608, (37,350) => 16777216, (38,351) => 33554432, (39,352) => 67108864, (40,353|355|356|357) => 134217728, _ => 0 } };
     for owner in 0..48u32 { for sid in 0..400u64 { assert_eq!(app_catalog::native_pixel_bit(owner, sid), old(owner, sid), "{owner}/{sid}"); } }
     const BIT: u64 = app_catalog::native_pixel_bit(17, 304);
     assert_eq!(BIT, 16, "usable in const context");
@@ -95,11 +95,11 @@ fn sex_pdx_policy_helpers_match_explicit_twenty_eight_subject_sets() {
         assert_eq!(app_catalog::is_browser(t), matches!(t,15|30|31), "{t}");
         // document_view: frameless document holders used a 36-cell top band.
         let frameless_doc = app_catalog::app_of(t).is_some() && !app_catalog::has_shell_frame(t) && !app_catalog::is_spindle(t);
-        assert_eq!(frameless_doc, matches!(t, 15 | 16 | 18 | 19 | 20 | 21 | 22 | 23 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 41 | 42 | 43 | 44), "{t}");
+        assert_eq!(frameless_doc, matches!(t, 15 | 16 | 18 | 19 | 20 | 21 | 22 | 23 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 41 | 42 | 43 | 44 | 45 | 46 | 47 | 48 | 49), "{t}");
         for s in 0..400u64 {
             // desktop_style::native_canvas
             let native = app_catalog::native_pixel_bit(t, s) != 0 && !app_catalog::is_browser(t);
-            let old = matches!((t, s), (41,358)|(42,359)|(43,360)|(44,361)|(9,156)|(16,301)|(18,307)|(19,308)|(20,309)|(21,310)|(22,311)|(23,312)|(12,154|160|161|162)|(17,302|303|304|305)|(24,313|315|316|317)|(25,318|320|321|322)|(26,323|325|326|327)|(27,328|330|331|332)|(28,333|335|336|337)|(29,338|340|341|342)|(32,345)|(33,346)|(34,347)|(35,348)|(36,349)|(37,350)|(38,351)|(39,352)|(40,353|355|356|357));
+            let old = matches!((t, s), (41,358)|(42,359)|(43,360)|(44,361)|(45,362)|(46,363)|(47,364)|(48,365)|(49,366)|(9,156)|(16,301)|(18,307)|(19,308)|(20,309)|(21,310)|(22,311)|(23,312)|(12,154|160|161|162)|(17,302|303|304|305)|(24,313|315|316|317)|(25,318|320|321|322)|(26,323|325|326|327)|(27,328|330|331|332)|(28,333|335|336|337)|(29,338|340|341|342)|(32,345)|(33,346)|(34,347)|(35,348)|(36,349)|(37,350)|(38,351)|(39,352)|(40,353|355|356|357));
             assert_eq!(native, old, "{t}/{s}");
             // clipboard::Participant routes
             let new = by_surface(t, s).filter(|i| i.app != App::Spindle && i.app != App::Program).map(|i| (i.close_slot, i.app == App::Quil));
@@ -133,13 +133,13 @@ fn exact_new_reserve_rows_and_last_identity_have_no_aliases() {
     }
     // Exactly sixteen BOOT-reserved Quil instances; no implicit next reserve.
     assert_eq!(app_catalog::count(App::Quil),16);
-    assert!(by_target(45).is_none());
+    assert!(by_target(50).is_none());
 }
 
 #[test]fn app_surface_inventory_covers_all_frames_content_and_panes_once(){
- assert_eq!(app_catalog::APP_SURFACE_COUNT,69);
- assert_eq!(1+app_catalog::APP_SURFACE_COUNT,70);
- assert_eq!(app_catalog::APP_SURFACES,[201,153,300,301,306,307,308,309,310,311,312,314,319,324,329,334,339,343,344,345,346,347,348,349,350,351,352,354,358,359,360,361,156,154,160,161,162,302,303,304,305,313,315,316,317,318,320,321,322,323,325,326,327,328,330,331,332,333,335,336,337,338,340,341,342,353,355,356,357]);
+ assert_eq!(app_catalog::APP_SURFACE_COUNT,74);
+ assert_eq!(1+app_catalog::APP_SURFACE_COUNT,75);
+ assert_eq!(app_catalog::APP_SURFACES,[201,153,300,301,306,307,308,309,310,311,312,314,319,324,329,334,339,343,344,345,346,347,348,349,350,351,352,354,358,359,360,361,362,363,364,365,366,156,154,160,161,162,302,303,304,305,313,315,316,317,318,320,321,322,323,325,326,327,328,330,331,332,333,335,336,337,338,340,341,342,353,355,356,357]);
  for(i,sid)in app_catalog::APP_SURFACES.iter().enumerate(){assert!(!app_catalog::APP_SURFACES[..i].contains(sid));}
 }
 
@@ -167,7 +167,7 @@ fn exact_new_reserve_rows_and_last_identity_have_no_aliases() {
  for(owner,sid)in[(24,305),(17,315),(25,313),(24|(1u32<<31),313),
   (24,313|(1u64<<32)),(24,315|(1u64<<32))]{assert_eq!(app_catalog::native_pixel_bit(owner,sid),0);}
  assert!(app_catalog::document_view_index(24).is_none());assert!(!is_document_app(24));
- assert!(by_target(45).is_none());
+ assert!(by_target(50).is_none());
 }
 
 #[test]
@@ -202,8 +202,8 @@ fn eight_spindle_chain_has_exact_independent_groups_and_last_bit() {
     }
     const LAST:u64=app_catalog::native_pixel_bit(29,342);
     assert_eq!(LAST,1<<16);
-    assert_eq!(INCARNATIONS.len(),32);
-    assert!(by_target(45).is_none());
+    assert_eq!(INCARNATIONS.len(),37);
+    assert!(by_target(50).is_none());
 }
 
 #[test]
@@ -248,12 +248,12 @@ fn sixteen_quil_nine_spindle_append_exact_rows_without_reusing_old_slots_or_bits
     assert_eq!(app_catalog::native_pixel_bit(40,354),0);
     assert!(by_surface(40,354).is_none());
     assert_eq!(app_catalog::native_pixel_bit(40|(1u32<<31),353),0);
-    assert!(by_target(45).is_none());
+    assert!(by_target(50).is_none());
     // The 17 original Shell metadata entries include original Quil/Spindle.
     // Every later reserve and original Browser retains one additional entry.
     let retained:Vec<_>=INCARNATIONS.iter().filter(|r|r.ordinal>0||matches!(r.app,App::Browser|App::Program)).map(|r|r.frame()).collect();
-    assert_eq!(retained,[300,301,306,307,308,309,310,311,312,314,319,324,329,334,339,343,344,345,346,347,348,349,350,351,352,354,358,359,360,361]);
-    assert_eq!(17+retained.len(),47);
+    assert_eq!(retained,[300,301,306,307,308,309,310,311,312,314,319,324,329,334,339,343,344,345,346,347,348,349,350,351,352,354,358,359,360,361,362,363,364,365,366]);
+    assert_eq!(17+retained.len(),52);
     let mut slots=std::collections::HashMap::new();
     for r in INCARNATIONS {
         for slot in [Some(r.lifecycle_slot as u64),Some(r.close_slot),r.activation_slot.map(|s|s as u64),Some(r.route_slot)].into_iter().flatten() {

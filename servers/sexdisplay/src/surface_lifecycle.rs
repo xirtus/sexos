@@ -57,7 +57,7 @@ impl Surface {
     }
 }
 
-pub const MAX_SURFACES: usize = 16;
+pub const MAX_SURFACES: usize = 32;
 pub const TEXT_BUF_CAP: usize = 6144;
 pub const TEXT_MAX_ROWS: usize = 48;
 pub const TEXT_LEGACY_COLS: u8 = 20;

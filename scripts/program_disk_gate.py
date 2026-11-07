@@ -9,6 +9,8 @@ from quil_workflow_gate import palette_select,palette_commands
 from check_desktop_pixels import font_from_source
 ROOT=Path(__file__).resolve().parents[1]
 FORTUNE=(ROOT/'apps/fortune/src/main.rs').read_text()
+# Every program row but the boot image's own.
+ROWS=(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text().count('app: App::Program, ordinal:')-1
 HELLO_TEXT=launch.TEXT
 FORTUNE_TEXT=re.search(r'const TEXT: &\[u8\] = b"(.*?)";',FORTUNE,re.S)[1]
 def writable_code(elf):
@@ -59,8 +61,8 @@ def main():
   m=g['wait'](r'\[hello.ready\] target=(\d+) task=(\d+) surface=(\d+) bytes=',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(2)
   path=a.out/'hello-after.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5);hello=drawn(path,m[3],HELLO_TEXT);close(m[1],int(m[2]),'hello')
   # All rows at once, and one more refused rather than displacing any of them.
-  live=[started('run fortune') for _ in range(3)]
-  assert len({row[0]for row in live})==3,'programs were not on separate rows'
+  live=[started('run fortune') for _ in range(ROWS)]
+  assert len({row[0]for row in live})==ROWS,'programs were not on separate rows'
   s=len(t());run('run fortune');g['wait'](r'\[shell.program.denied\] reason=no_free_row',s,60)
   path=a.out/'side-by-side.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(1)
   side=[drawn(path,sid,text) for _,_,sid in live]

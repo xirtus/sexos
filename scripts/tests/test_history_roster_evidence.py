@@ -76,14 +76,15 @@ class HistoryRoster(unittest.TestCase):
                   (36,349,9,13,35,178,179,181,1), (37,350,9,14,36,182,183,185,1),
                   (38,351,9,15,37,186,187,189,1), (39,352,9,16,38,190,191,193,1),
                   (41,358,41,1,0,240,241,243,0), (42,359,41,2,41,244,245,247,1),
-                  (43,360,41,3,42,248,249,251,1), (44,361,41,4,43,252,253,255,1)]
+                  (43,360,41,3,42,248,249,251,1), (44,361,41,4,43,252,253,255,1),
+                  (45,362,41,5,44,420,421,423,1), (46,363,41,6,45,424,425,427,1), (47,364,41,7,46,428,429,431,1), (48,365,41,8,47,432,433,435,1), (49,366,41,9,48,436,437,439,1)]
         extra = ""
         for target, surface, logical, inc, pred, lifecycle, close, route, dormant in others:
             extra += (f"[boot.app.catalog] target={target} task={target*10} surface={surface} logical={logical} "
                       f"incarnation={inc} predecessor={pred} lifecycle={lifecycle} close={close} route={route} "
                       f"dormant={dormant} grants_verified=1 data_only=1\n")
         actual_rows=ROWS[:2]+[(2,24,313,314,130,131,132,133),(3,25,318,319,134,135,136,137),(4,26,323,324,138,139,140,141),(5,27,328,329,142,143,144,145),(6,28,333,334,146,147,148,149),(7,29,338,339,150,151,152,153),(8,40,353,354,194,195,196,197)]
-        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=9", extra + "[boot.app.catalog.complete] rows=32")
+        text = trace(actual_rows).replace("[boot.app.catalog.complete] rows=9", extra + "[boot.app.catalog.complete] rows=37")
         self.assertEqual(h.verify_boot_roster(ROOT, text)["participants"],
                          [dict(target=12, task=120), dict(target=17, task=170),dict(target=24,task=240),dict(target=25,task=250),dict(target=26,task=260),dict(target=27,task=270),dict(target=28,task=280),dict(target=29,task=290),dict(target=40,task=400)])
         # Descriptive Browser/Quil rows do not create Spindle writer authority.

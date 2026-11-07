@@ -550,7 +550,7 @@ unsafe fn span_text_fill(index:usize) {
  assert!(FRAME_GROUPS.row_winners(&oversized,0,60,320,240).is_none());
  // Fixed storage remains bounded even when every active rectangle contributes
  // both outer edges; no dynamic allocation or pointer crosses an IPC boundary.
- assert!(core::mem::size_of::<surface_groups::RowWinners<'_>>()<=4096);
+ assert!(core::mem::size_of::<surface_groups::RowWinners<'_>>()<=8192);
 }}
 
 #[test]fn actual_selection_cells_cover_spaces_and_spacing_skip_newlines_preserve_ink(){

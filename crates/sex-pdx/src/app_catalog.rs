@@ -43,7 +43,7 @@ const fn quil(ordinal: u8, target: u32, surface: u64, shell_surface: Option<u64>
 }
 
 /// Every BOOT-reserved app incarnation, in activation order per app.
-pub const INCARNATIONS: [Incarnation; 32] = [
+pub const INCARNATIONS: [Incarnation; 37] = [
     quil(0, 9, 156, Some(201), 38, 41, None, 11),
     Incarnation { app: App::Spindle, ordinal: 0, target: 12, surface: 154, shell_surface: Some(153), lifecycle_slot: 39, close_slot: 42, activation_slot: None, route_slot: 14, children: &[160, 161, 162] },
     // Browser's document notices share its BOOT close route.
@@ -77,6 +77,12 @@ pub const INCARNATIONS: [Incarnation; 32] = [
     Incarnation { app: App::Program, ordinal: 1, target: 42, surface: 359, shell_surface: None, lifecycle_slot: 244, close_slot: 245, activation_slot: Some(246), route_slot: 247, children: &[] },
     Incarnation { app: App::Program, ordinal: 2, target: 43, surface: 360, shell_surface: None, lifecycle_slot: 248, close_slot: 249, activation_slot: Some(250), route_slot: 251, children: &[] },
     Incarnation { app: App::Program, ordinal: 3, target: 44, surface: 361, shell_surface: None, lifecycle_slot: 252, close_slot: 253, activation_slot: Some(254), route_slot: 255, children: &[] },
+    // Rows from here share one key with row 3 and take turns being present.
+    Incarnation { app: App::Program, ordinal: 4, target: 45, surface: 362, shell_surface: None, lifecycle_slot: 420, close_slot: 421, activation_slot: Some(422), route_slot: 423, children: &[] },
+    Incarnation { app: App::Program, ordinal: 5, target: 46, surface: 363, shell_surface: None, lifecycle_slot: 424, close_slot: 425, activation_slot: Some(426), route_slot: 427, children: &[] },
+    Incarnation { app: App::Program, ordinal: 6, target: 47, surface: 364, shell_surface: None, lifecycle_slot: 428, close_slot: 429, activation_slot: Some(430), route_slot: 431, children: &[] },
+    Incarnation { app: App::Program, ordinal: 7, target: 48, surface: 365, shell_surface: None, lifecycle_slot: 432, close_slot: 433, activation_slot: Some(434), route_slot: 435, children: &[] },
+    Incarnation { app: App::Program, ordinal: 8, target: 49, surface: 366, shell_surface: None, lifecycle_slot: 436, close_slot: 437, activation_slot: Some(438), route_slot: 439, children: &[] },
 ];
 
 /// Compile-time storage sizing; descriptive catalog data never grants authority.
