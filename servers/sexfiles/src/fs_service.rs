@@ -66,6 +66,8 @@ fn bring_up() -> State {
         Err(Error::Unformatted) => match Fs::format(Disk { blocks }, memory()) {
             Ok(fs) => {
                 sex_pdx::serial_record!("[files.fs.formatted] total={}", fs.statfs().total);
+                let mut fs = fs;
+                if fs.mkdir(b"/bin", 0).and_then(|_| fs.commit()).is_err() { sex_pdx::serial_record!("[files.fs.bin.failed]"); }
                 State::Ready(fs)
             }
             Err(e) => { sex_pdx::serial_record!("[files.fs.format.failed] error={:?}", e); State::Absent }
@@ -120,6 +122,52 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             w::reply(r.seq, status(e), 0)
         }
     }
+}
+/// One path waiting for Shell to ask for it, and the ticket that names it.
+static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
+static mut NEXT_TICKET: u32 = 0;
+pub enum Program { Absent, Failed(u32), Loaded(u32) }
+/// Copies a file into `image`. A disk with no filesystem has no such file.
+fn read_program(path: &[u8], image: &mut [u8]) -> Program {
+    use sex_pdx::program_store as store;
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return Program::Absent };
+    let st = match fs.open(path) {
+        Ok(st) => st,
+        Err(Error::NotFound | Error::NotDir) => return Program::Absent,
+        Err(_) => return Program::Failed(store::IO),
+    };
+    if st.kind == Kind::Dir { return Program::Failed(store::NOT_A_PROGRAM); }
+    if st.size == 0 { return Program::Failed(store::NOT_A_PROGRAM); }
+    if st.size > image.len() as u64 { return Program::Failed(store::TOO_LARGE); }
+    let (mut done, size) = (0usize, st.size as usize);
+    while done < size {
+        match fs.read(st.id, done as u64, &mut image[done..size]) {
+            Ok(0) => return Program::Failed(store::CORRUPT),
+            Ok(n) => done += n,
+            Err(Error::Corrupt) => return Program::Failed(store::CORRUPT),
+            Err(_) => return Program::Failed(store::IO),
+        }
+    }
+    sex_pdx::serial_record!("[files.program.file] bytes={}", size);
+    Program::Loaded(size as u32)
+}
+/// A bare name looks in the program directory.
+pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
+    use sex_pdx::program_store as store;
+    let mut path = [0u8; 32];
+    let at = store::BIN.len();
+    path[..at].copy_from_slice(store::BIN);
+    path[at..at + name.len()].copy_from_slice(name);
+    read_program(&path[..at + name.len()], image)
+}
+/// The prepared path, once. A stale ticket finds nothing.
+pub fn read_ticket(ticket: u64, image: &mut [u8]) -> Program {
+    let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
+    if prepared.1 == 0 || prepared.2 as u64 != ticket { return Program::Absent; }
+    let len = core::mem::take(&mut prepared.1);
+    read_program(&prepared.0[..len], image)
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
     let now = 0;
@@ -180,6 +228,17 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
         }
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }
         w::SYNC => { fs.commit()?; Ok(0) }
+        w::PREPARE => {
+            let st = fs.open(path)?;
+            if st.kind == Kind::Dir { return Err(Error::IsDir); }
+            let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
+            prepared.0[..path.len()].copy_from_slice(path);
+            prepared.1 = path.len();
+            // Never zero, and within the reply's 24 bits.
+            let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
+            prepared.2 = ticket;
+            Ok(ticket)
+        }
         w::STATFS => {
             let s = fs.statfs();
             data[..8].copy_from_slice(&s.total.to_le_bytes());

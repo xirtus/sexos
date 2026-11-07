@@ -20,12 +20,34 @@ pub const IMAGE_REGION_ID: u32 = 0x4000;
 pub const SHELL_ROUTE_SLOT: u64 = 256;
 /// Spindle asks Shell to run a program by name.
 pub const OP_RUN: u64 = 0x4F;
+/// Shell tells Spindle why a program did not start.
+pub const OP_REFUSED: u64 = 0x53;
+/// Where a bare program name is looked for first.
+pub const BIN: &[u8] = b"/bin/";
+/// A name word no packed name can have: the second word is a ticket from fs::PREPARE.
+pub const TICKET: u64 = 0;
 
 pub const REPLY_TAG: u64 = 0x50;
 pub const NOT_FOUND: u32 = 1;
 pub const TOO_LARGE: u32 = 2;
 pub const IO: u32 = 3;
 pub const CORRUPT: u32 = 4;
+/// Refusals only Shell decides.
+pub const NOT_A_PROGRAM: u32 = 5;
+pub const NO_FREE_ROW: u32 = 6;
+pub const NO_MORE_RECORDS: u32 = 7;
+pub fn refusal(code: u64) -> &'static [u8] {
+    match code as u32 {
+        NOT_FOUND => b"No program by that name.",
+        TOO_LARGE => b"That program is over the 1 MiB limit.",
+        IO => b"The disk failed while reading the program.",
+        CORRUPT => b"The program file is damaged.",
+        NOT_A_PROGRAM => b"That file is not a program SexOS can run.",
+        NO_FREE_ROW => b"All program windows are in use. Close one first.",
+        NO_MORE_RECORDS => b"This machine has room for no more background programs.",
+        _ => b"The program did not start.",
+    }
+}
 pub const fn loaded(len: u32) -> u64 { REPLY_TAG << 56 | 1 << 48 | len as u64 }
 pub const fn failed(error: u32) -> u64 { REPLY_TAG << 56 | error as u64 }
 pub fn decode_reply(value: u64) -> Option<Result<u32, u32>> {

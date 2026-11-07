@@ -18,6 +18,20 @@ fn try_load(name: [u64; 2]) -> Result<u32, u32> {
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
     let view = sex_pdx::memory_region_view(store::IMAGE_SLOT_FILES, 0, store::IMAGE_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| store::IO)?;
     let image = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, store::IMAGE_BYTES) };
+    // A ticket names a path Spindle prepared. A bare name tries the program directory.
+    let found = if name[0] == store::TICKET { crate::fs_service::read_ticket(name[1], image) } else {
+        let (a, b) = (name[0].to_le_bytes(), name[1].to_le_bytes());
+        let mut bytes = [0u8; store::NAME_BYTES];
+        bytes[..8].copy_from_slice(&a); bytes[8..].copy_from_slice(&b);
+        let len = bytes.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES);
+        crate::fs_service::read_named(&bytes[..len], image)
+    };
+    match found {
+        crate::fs_service::Program::Loaded(len) => return Ok(len),
+        crate::fs_service::Program::Failed(error) => return Err(error),
+        crate::fs_service::Program::Absent if name[0] == store::TICKET => return Err(store::NOT_FOUND),
+        crate::fs_service::Program::Absent => {}
+    }
     let mut directory = [0u8; store::SECTOR];
     read(store::DIRECTORY_LBA, store::SECTOR as u64, &mut directory, buf_va)?;
     let entry = store::find(&directory, name).ok_or(store::NOT_FOUND)?;

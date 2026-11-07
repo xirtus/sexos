@@ -780,7 +780,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc x = 2   name a value (up to 8)");
             sb.push(b"  calc 255 in hex   also in bin / in oct");
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
-            sb.push(b"  run NAME     start a program from the disk store");
+            sb.push(b"  run NAME     start a program: a name in /bin, or a path");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
@@ -905,6 +905,17 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"");
             sb.push(b"Type 'daily' for full daily-driver readiness summary.");
             sb.push(b"Type 'blockers' for known V1 limitations.");
+            true
+        }
+        // A slash makes it a path. A bare name looks in /bin, then the older disk store.
+        b"run" if args.contains(&b'/') => {unsafe{fs_commands::FS.submit_program(args,0,sb);}true}
+        b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {
+            let mut words = args.splitn(2, |b| *b == b' ');
+            let target = words.next().unwrap_or(b"");
+            match words.next().and_then(|n| core::str::from_utf8(n).ok()).and_then(|n| n.trim().parse::<u64>().ok()) {
+                Some(count) if count > 0 => unsafe{fs_commands::FS.submit_program(target,count,sb);},
+                _ => sb.push(b"Usage: spawn NAME COUNT"),
+            }
             true
         }
         b"run" => {
@@ -2626,6 +2637,12 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
             sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);
+            continue;
+        }
+        if msg.type_id==sex_pdx::program_store::OP_REFUSED&&msg.caller_pd==3{
+            sb.push(sex_pdx::program_store::refusal(msg.arg0));
+            sex_pdx::serial_record!("[spindle.program.refused] code={}",msg.arg0);
+            unsafe{content_render(&line,sb);}
             continue;
         }
         if msg.type_id==sex_pdx::spindle_view::OP {

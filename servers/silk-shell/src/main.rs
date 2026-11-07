@@ -16153,11 +16153,14 @@ unsafe fn record_spawn_poll(){
     let (status,made,live)=store::record_call(store::RECORD_START,RECORD_SPAWN_LEN,RECORD_SPAWN_LEFT);
     if status!=0||made==0{
         sex_pdx::serial_record!("[shell.records.spawn.ended] left={} status={} live={}",RECORD_SPAWN_LEFT,status,live);
+        program_refused(if status==0{store::NO_MORE_RECORDS}else{store::NOT_A_PROGRAM});
         RECORD_SPAWN_LEFT=0;return;
     }
     RECORD_SPAWN_LEFT-=made;
     if RECORD_SPAWN_LEFT==0{sex_pdx::serial_record!("[shell.records.spawned] live={}",live);}
 }
+/// Tells Spindle why, since the person who asked is looking there.
+fn program_refused(code:u32){let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
@@ -16178,7 +16181,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id==store::OP_RUN {
         if !app_catalog::is_spindle(msg.caller_pd){return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
-            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");return true;
+            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
@@ -16191,16 +16194,16 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     if RECORD_SPAWN_WANTED!=0{
         match result{
             Ok(len)=>{RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;},
-            Err(error)=>sex_pdx::serial_record!("[shell.records.denied] reason=store error={}",error),
+            Err(error)=>{sex_pdx::serial_record!("[shell.records.denied] reason=store error={}",error);program_refused(error);},
         }
         RECORD_SPAWN_WANTED=0;
         return true;
     }
-    let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);return true}};
-    let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");return true};
+    let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
+    let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true};
     launcher_focus_discard();
     let loaded=a::load_program(slot,len);
-    if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);return true}
+    if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);program_refused(store::NOT_A_PROGRAM);return true}
     if state==a::ACTIVATION_READY{
         let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");return true};
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);

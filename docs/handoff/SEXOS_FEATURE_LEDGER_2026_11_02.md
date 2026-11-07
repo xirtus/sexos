@@ -2135,3 +2135,28 @@ row no longer waits for the row before it to end.
 - **Gates.** `browser_web` at 1 and 4 cores (public sites at 1), `fetch`, `filesystem`, `smp`,
   program records and program disk at 1 core on the final kernel. Python tests and all
   non-QEMU gates except the older ones listed earlier. Not the full native suite.
+
+## Programs are files (2026-11-07)
+
+- **What runs now.** `run NAME` looks for `/bin/NAME` in the filesystem, then in the older
+  disk store. `run PATH` (anything with a slash, relative or absolute) runs that file, and
+  `spawn` takes either form for background programs. A program installs with
+  `fetch URL /bin/NAME`. A new filesystem starts with `/bin`. Programs survive a reboot.
+- **Answers.** Shell now tells Spindle why a program didn't start: not found, over 1 MiB,
+  disk error, damaged, not a program SexOS can run, all program windows in use, or no
+  memory for more background programs. The path errors (not found, is a directory) come
+  straight from Files.
+- **Design.** A path never reaches Shell. Spindle asks Files to `PREPARE` a path; Files
+  checks it and answers with a one-use ticket, which Spindle hands to Shell in place of a
+  name. A name or ticket still selects data only: the program runs with exactly what its
+  BOOT row holds, and the kernel checks every file before it touches a page.
+- **ABI.** `fs::PREPARE` (12), `program_store::OP_REFUSED` (0x53), the `TICKET` name word,
+  and refusal codes 5 to 7.
+- **Limits.** Still three windowed rows and, at the default 512 MiB, 16 background records.
+  Programs get no arguments, no environment and no working directory. Files holds one
+  prepared path at a time. No signatures or install manifest: anything that is a valid
+  program file runs. The older store stays as a fallback until the gates stop using it.
+- **Gates.** New `program_file` at 1 and 4 cores (download, by name, by path, relative,
+  refusals, background programs, reboot). Program disk, launch and records, filesystem,
+  fetch, browser web and SMP at 1 core on the final kernel. Python tests and all non-QEMU
+  gates except the older ones listed earlier.

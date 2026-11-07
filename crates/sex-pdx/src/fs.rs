@@ -25,6 +25,9 @@ pub const WRITE: u8 = 8;
 pub const TRUNCATE: u8 = 9;
 pub const SYNC: u8 = 10;
 pub const STATFS: u8 = 11;
+/// Checks a file can be a program and holds its path for one load. The reply's value is
+/// the ticket Shell passes back to Files.
+pub const PREPARE: u8 = 12;
 
 pub const OK: u8 = 0;
 pub const UNAVAILABLE: u8 = 1;
