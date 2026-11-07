@@ -174,3 +174,21 @@ fn startup_send_has_explicit_retry_exhaustion() {
     });
     assert_eq!(STARTUP_INBOX_CAPACITY, 256);
 }
+
+#[test]
+fn repeated_kernel_hints_cannot_fill_the_inbox_but_other_repeats_are_kept() {
+    let mut inbox = StartupInbox::<4>::new();
+    let hint = PdxMessage { type_id: 0x10E, arg0: 41, arg1: 41, arg2: 0, caller_pd: 0 };
+    for _ in 0..100 { assert_eq!(inbox.observe(hint), Ok(Observe::Deferred)); }
+    let other = PdxMessage { arg0: 42, ..hint };
+    assert_eq!(inbox.observe(other), Ok(Observe::Deferred));
+    let key = PdxMessage { type_id: 7, arg0: 1, arg1: 1, arg2: 0, caller_pd: 4 };
+    assert_eq!(inbox.observe(key), Ok(Observe::Deferred));
+    assert_eq!(inbox.observe(key), Ok(Observe::Deferred));
+    assert_eq!(inbox.observe(key), Err(key));
+    assert_eq!(inbox.pop(), Some(hint));
+    assert_eq!(inbox.pop(), Some(other));
+    assert_eq!(inbox.pop(), Some(key));
+    assert_eq!(inbox.pop(), Some(key));
+    assert_eq!(inbox.pop(), None);
+}

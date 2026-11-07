@@ -389,7 +389,10 @@ impl Scheduler {
 
     pub fn admit_task(&self, task: *mut Task) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
-        unsafe { (*task).state.try_admit(|| self.runqueue.try_push(task)) }
+        // A task's queue is decided by the task, not by the core that woke it:
+        // records run on the guest core and everything else on core 0, for now.
+        let home = &SCHEDULERS[if crate::program_records::is_record(unsafe { (*task).context.pd_id }) { crate::smp::guest_core() as usize } else { 0 }];
+        unsafe { (*task).state.try_admit(|| home.runqueue.try_push(task)) }
     }
 
     /// First admission is explicit; wake cannot activate unfinished trampolines.
@@ -417,14 +420,9 @@ impl Scheduler {
         }
     }
 
-    fn attempt_steal(&self) -> *mut Task {
-        for i in 1..128 {
-            let victim_id = (self.core_id + i) % 128;
-            let task = SCHEDULERS[victim_id as usize].runqueue.steal();
-            if !task.is_null() { return task; }
-        }
-        ptr::null_mut()
-    }
+    /// Tasks do not move between cores yet: services assume core 0, and only one
+    /// core at a time may run records on their shared key.
+    fn attempt_steal(&self) -> *mut Task { ptr::null_mut() }
 
     #[unsafe(naked)]
     pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) -> ! {
@@ -646,6 +644,27 @@ pub extern "C" fn scheduler_finish_switch() {
     }
 }
 
+unsafe fn leave_dead_task(sched: &Scheduler, current: *mut Task) -> ! {
+    assert!((*current).state.begin_switch_out(sched.core_id));
+    assert!(sched.pending_outgoing.swap(current, Ordering::AcqRel).is_null());
+    assert_eq!(sched.current_task.swap(ptr::null_mut(), Ordering::AcqRel), current);
+    let stack = crate::core_local::CoreLocal::get().idle_stack;
+    core::arch::asm!("mov rsp, {stack}", "and rsp, -16", "call {idle}", "ud2",
+        stack = in(reg) stack, idle = sym idle_core, options(noreturn));
+}
+
+/// A core with no task: on its own stack, waiting for work.
+pub extern "C" fn idle_core() -> ! {
+    scheduler_finish_switch();
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    unsafe {
+        let next = wait_for_local_resume_or_switch(&SCHEDULERS[core]);
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new((*next).kstack_top + 168));
+        Scheduler::switch_to(ptr::null_mut(), next);
+    }
+    unreachable!("IDLE_CORE_RETURNED")
+}
+
 /// Preserves the attached owner until a real replacement exists or its pending
 /// event can resume it locally. The caller has already saved the user frame.
 /// IRQs are enabled only around HLT; every state/selection check runs with IF=0.
@@ -661,6 +680,11 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         match sched.tick() {
             ScheduleDecision::Switch { next, .. } => return next,
             ScheduleDecision::NoRunnable => {}
+        }
+        // A dead task with nothing to replace it would hold this core and its own
+        // memory for good. Leave its stack so it can finish dying.
+        if !current.is_null() && (*current).state.snapshot().exited {
+            leave_dead_task(sched, current);
         }
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
@@ -724,7 +748,6 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
 /// Called for both user and kernel timer frames. BOOT inventory reads and
 /// atomic wake/admission only: no domain registry lock or context-frame edit.
 pub fn poll_self_wait_deadlines(now:u64){
-    crate::program_records::poll(now);
     SELF_WAIT_TASKS.visit(|task|unsafe{
         if let Some(deadline)=(*task).wait_deadline.take_due(now){
             let n=TIMER_WAKES.fetch_add(1,Ordering::Relaxed)+1;

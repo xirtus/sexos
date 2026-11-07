@@ -410,7 +410,9 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     {
         serial_println!("timer.tick.enter");
     }
-    TICKS.fetch_add(1, Ordering::Relaxed);
+    // One clock for the whole machine, kept by core 0.
+    let timekeeper = crate::core_local::CoreLocal::get().core_id == 0;
+    if timekeeper { TICKS.fetch_add(1, Ordering::Relaxed); }
     // Boot-phase guard: skip scheduler tick until SchedulerRunning.
     // Early LAPIC timer interrupts fire before userland PDs are spawned.
     // Accumulate TICKS harmlessly; defer sched.tick() until the boot
@@ -433,8 +435,11 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     }
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
-    crate::scheduler::poll_paging_exit_notifications();
-    crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
+    if timekeeper {
+        crate::scheduler::poll_paging_exit_notifications();
+        crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
+    }
+    if core_id == crate::smp::guest_core() { crate::program_records::poll(TICKS.load(Ordering::Relaxed)); }
 
     // Timer fired in kernel mode (CS.RPL=0) means a task is mid-syscall on the shared
     // CoreLocal kernel stack. Saving context there is unsafe: other tasks' syscalls reuse

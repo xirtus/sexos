@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Starts the other cores. Each gets its own GDT, TSS, kernel stack and CoreLocal,
-//! and the boot core's control registers. No task runs on them yet: they idle, and
-//! answer TLB shootdowns so a page removed on one core is gone on all of them.
+//! and the boot core's control registers. All answer TLB shootdowns, so a page removed
+//! on one core is gone on all of them. Core 1 is the guest core and runs program
+//! records, away from the desktop; the rest idle until services can move.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use limine::mp::MpInfo;
 use limine::request::MpResponse;
@@ -13,6 +14,9 @@ static CR4: AtomicU64 = AtomicU64::new(0);
 static EFER: AtomicU64 = AtomicU64::new(0);
 static XCR0: AtomicU64 = AtomicU64::new(0);
 static NEXT_CORE: AtomicU32 = AtomicU32::new(1);
+static GUEST: AtomicU32 = AtomicU32::new(0);
+/// Where records run: core 1, or core 0 on a machine with only one.
+pub fn guest_core() -> u32 { GUEST.load(Ordering::Acquire) }
 
 pub fn boot_aps(smp: &MpResponse) {
     use x86_64::registers::control::{Cr0, Cr3, Cr4};
@@ -38,6 +42,7 @@ pub fn boot_aps(smp: &MpResponse) {
             assert!(spins < 40_000_000_000, "SMP_CORE_NEVER_ONLINE");
         }
     }
+    if ONLINE.load(Ordering::Acquire) > 1 { GUEST.store(1, Ordering::Release); }
     tlb::COVERED.store(ONLINE.load(Ordering::Acquire), Ordering::Release);
     crate::serial_println!("[smp.online] cores={} present={}", ONLINE.load(Ordering::Acquire), smp.cpus().len());
 }
@@ -63,8 +68,19 @@ extern "C" fn limine_ap_entry(info: &MpInfo) -> ! {
         crate::serial_println!("[smp.core.online] core={} lapic={}", core, info.lapic_id);
     }
     crate::apic::enable_local();
+    let core = crate::core_local::CoreLocal::get().core_id;
+    if core == 1 { crate::apic::start_local_timer(); }
     ONLINE.fetch_add(1, Ordering::Release);
-    loop { x86_64::instructions::interrupts::enable_and_hlt(); }
+    if core != 1 { loop { x86_64::instructions::interrupts::enable_and_hlt(); } }
+    unsafe {
+        // The timer wakes this core until BOOT is done; its handler defers until then.
+        while (crate::ipc::BOOT_CONTROLLER.phase() as u8) < (crate::ipc::BootPhase::SchedulerRunning as u8)
+            || !crate::core_local::INITIALIZED.load(Ordering::Acquire) {
+            x86_64::instructions::interrupts::enable_and_hlt();
+            x86_64::instructions::interrupts::disable();
+        }
+    }
+    crate::scheduler::idle_core()
 }
 
 /// True when every core that has ever started answers shootdowns. Code that retires

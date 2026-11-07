@@ -342,6 +342,7 @@ pub fn init_timer() {
                 ticks_per_ms, elapsed, CALIB_MS);
             lapic_ptr.offset(0x320 / 4).write_volatile(0x20000 | 0x20);
             lapic_ptr.offset(0x380 / 4).write_volatile(ticks_per_ms);
+            TIMER_COUNT.store(ticks_per_ms, core::sync::atomic::Ordering::Release);
         }
 
         serial_println!("APIC: LAPIC Timer initialized at Vector 0x20.");
@@ -354,6 +355,16 @@ pub fn init_timer() {
 }
 
 /// Turn on this core's local APIC, for a core started after the boot core set it up.
+static TIMER_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1_000_000);
+/// This core's timer, at the rate core 0 measured.
+pub fn start_local_timer() {
+    let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *mut u32;
+    unsafe {
+        lapic.offset(0x3E0 / 4).write_volatile(0x3);
+        lapic.offset(0x320 / 4).write_volatile(0x20000 | 0x20);
+        lapic.offset(0x380 / 4).write_volatile(TIMER_COUNT.load(core::sync::atomic::Ordering::Acquire));
+    }
+}
 pub fn enable_local() {
     let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *mut u32;
     assert!(!lapic.is_null(), "SMP_NO_LAPIC");

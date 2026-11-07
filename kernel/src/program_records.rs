@@ -5,7 +5,8 @@
 //!
 //! All records share one hardware key, and only the record about to run has its
 //! pages present. A sleeping record costs no key, and a key change costs one write
-//! per page of the two records involved. One core only: smp.rs parks the others.
+//! per page of the two records involved. Only one core runs records, so their page
+//! changes stay local to it, and `LOCK` covers what Shell does from another core.
 use crate::capability::ProtectionDomain;
 use crate::scheduler::Task;
 use alloc::boxed::Box;
@@ -69,6 +70,12 @@ const fn sizing(free_bytes:u64)->(usize,u64){
     (if records>CAPACITY as u64{CAPACITY}else{records as usize},pool)
 }
 
+static LOCKED:AtomicBool=AtomicBool::new(false);
+struct Held;
+impl Drop for Held{fn drop(&mut self){LOCKED.store(false,Ordering::Release);}}
+/// Interrupts must be off. Shell on core 0 and the guest core meet here.
+fn lock()->Held{while LOCKED.swap(true,Ordering::Acquire){core::hint::spin_loop();}Held}
+fn try_lock()->Option<Held>{if LOCKED.swap(true,Ordering::Acquire){None}else{Some(Held)}}
 pub fn count()->u32{COUNT.load(Ordering::Relaxed) as u32}
 pub fn is_record(pd:u64)->bool{pd>=BASE as u64&&pd<BASE as u64+COUNT.load(Ordering::Relaxed) as u64}
 fn record(index:usize)->&'static mut Record{unsafe{&mut *RECORDS.add(index)}}
@@ -134,6 +141,7 @@ fn set_present(index:usize,present:bool){
 /// Called before any task runs. Only the record about to run has pages present.
 pub fn before_dispatch(pd:u64){
     if !is_record(pd){return}
+    let _held=lock();
     let index=(pd-BASE as u64) as usize;
     if record(index).killed{evict();return}
     let tenant=TENANT.load(Ordering::Relaxed);
@@ -230,7 +238,6 @@ fn start(len:u64,count:u64)->[u64;3]{
 fn stop(force:bool)->[u64;3]{
     STOP.store(true,Ordering::Relaxed);
     let total=COUNT.load(Ordering::Relaxed);let mut marked=0;
-    if force{evict();}
     for index in 0..total{
         let rec=record(index);
         if rec.state==State::Live{rec.killed=force;marked+=1;unsafe{crate::scheduler::wake_record(rec.task);}}
@@ -247,11 +254,14 @@ fn census()->[u64;3]{
 pub fn call(pd:&ProtectionDomain,op:u64,a:u64,b:u64)->[u64;3]{
     if op==store::RECORD_STOP_REQUESTED{return [0,(is_record(pd.id as u64)&&STOP.load(Ordering::Relaxed)) as u64,0]}
     if !matches!(pd.find_capability(store::RECORD_SLOT_SHELL as u32).map(|c|c.data),Some(crate::capability::CapabilityData::RecordPool)){return [1,0,0]}
-    x86_64::instructions::interrupts::without_interrupts(||match op{
-        store::RECORD_START=>start(a,b),
-        store::RECORD_STOP=>stop(a!=0),
-        store::RECORD_CENSUS=>census(),
-        _=>[1,0,0],
+    x86_64::instructions::interrupts::without_interrupts(||{
+        let _held=lock();
+        match op{
+            store::RECORD_START=>start(a,b),
+            store::RECORD_STOP=>stop(a!=0),
+            store::RECORD_CENSUS=>census(),
+            _=>[1,0,0],
+        }
     })
 }
 /// A record's own sleep deadline: wake it by bucket, never by scanning every record.
@@ -262,6 +272,10 @@ pub fn armed(pd:u64,at:u64){
 /// Timer path. Costs nothing while no record lives.
 pub fn poll(now:u64){
     if LIVE.load(Ordering::Relaxed)==0{LAST_POLLED.store(now,Ordering::Relaxed);return}
+    let Some(_held)=try_lock()else{return};
+    // A running record that was ended loses its pages now: it faults on return.
+    let tenant=TENANT.load(Ordering::Relaxed);
+    if tenant!=0&&record(tenant-1).killed{evict();}
     let last=LAST_POLLED.swap(now,Ordering::Relaxed);
     let from=if now.wrapping_sub(last)>WHEEL_SLOTS as u64{now-WHEEL_SLOTS as u64+1}else{last+1};
     for tick in from..=now{

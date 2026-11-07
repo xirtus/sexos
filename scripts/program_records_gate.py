@@ -2,7 +2,7 @@
 """Thousands of background programs stay alive at once, stay isolated, and all end when told, with the desktop still answering."""
 import argparse,os,re,shutil,statistics,time
 from pathlib import Path
-os.environ['SEXOS_GATE_MEMORY']='4G';os.environ['SEXOS_GATE_BOUND']='1500'
+os.environ.setdefault('SEXOS_GATE_CORES','1');os.environ['SEXOS_GATE_MEMORY']='4G';os.environ['SEXOS_GATE_BOUND']='1500'
 from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]

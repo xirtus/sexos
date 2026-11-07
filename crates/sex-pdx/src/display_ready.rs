@@ -83,6 +83,11 @@ impl<const N: usize> StartupInbox<N> {
             }
             return Ok(Observe::RejectedControl);
         }
+        // The kernel repeats a lifecycle hint until it is answered, for as long as
+        // startup takes. One queued copy says everything the rest would.
+        let repeat = |m: &PdxMessage| m.caller_pd == 0 && m.type_id == msg.type_id
+            && m.arg0 == msg.arg0 && m.arg1 == msg.arg1 && m.arg2 == msg.arg2;
+        if msg.caller_pd == 0 && self.messages.iter().flatten().any(repeat) { return Ok(Observe::Deferred); }
         if self.len == N { return Err(msg); }
         self.messages[(self.head + self.len) % N] = Some(msg);
         self.len += 1;

@@ -18,6 +18,8 @@ pub struct CoreLocal {
     pub pdx_ring: crate::ipc_ring::SpscRing<crate::ipc::messages::Message>,
     /// This core's own TSS, or null for the boot core's static one.
     pub tss: *mut x86_64::structures::tss::TaskStateSegment,
+    /// This core's own stack, for when no task owns the core.
+    pub idle_stack: u64,
 }
 
 impl CoreLocal {
@@ -51,12 +53,14 @@ impl CoreLocal {
             syscall_msg_ptr: msg_va,
             pdx_ring: crate::ipc_ring::SpscRing::new(),
             tss,
+            idle_stack: 0,
         });
         
         // Allocate 64KB kernel stack
         let stack = alloc::vec![0u8; 65536];
         let stack_ptr = stack.as_ptr() as u64 + 65536;
         core_local.kernel_stack = stack_ptr;
+        core_local.idle_stack = stack_ptr;
         core::mem::forget(stack); // Leak stack for simplicity
         
         let ptr = alloc::boxed::Box::into_raw(core_local);
