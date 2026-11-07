@@ -76,3 +76,45 @@ times leaks nothing. A hostile test program cannot read another domain's memory.
 
 Step 2's interim key sharing weakens isolation between the two sharing services
 until step 4 lands, so it must be named in the ledger and removed by step 4.
+
+## Update, 2026-11-07: what building it showed
+
+**Agreed direction.** Andreas proposed organs: a hardware key belongs to an organ
+system, a group of tasks, not to one program. Thousands of tasks can share about 11
+systems. Very few parts are vital; everything else must restart after a crash.
+Activity-shared keys are only the fallback for untrusted native programs.
+Measured on QEMU: 5 domains run per second at idle, 7-8 at peak while typing.
+
+**Order changed.** Organ keys wait until programs run side by side. Before that,
+sharing keys weakens isolation and gains nothing, because only one program runs at
+a time and every call still enters the kernel.
+
+**Why a reusable slot is not a small change.** Identity is immutable by design:
+
+- `LifecycleGrant` holds the target and task in each service's capability, and
+  `authorize` compares against `app.task`. A new task id breaks every holder.
+- `ServiceCustody.retired` records one notice per row, forever. Display and Shell
+  keep tombstones per surface. All assume a row dies once.
+- `retire` revokes capabilities permanently and gives the frames to sext's pool.
+- `Task` has one life: `Constructed` to `Dead`, with a boot-allocated kernel stack
+  and a sealed self-wait inventory that holds its pointer.
+
+**Proposed design.** Add a generation to identity, so (target, generation) replaces
+"target died once":
+
+1. Kernel: `App` gains `generation`. Grants keep their immutable target and rights
+   but authorize against the row's current task and generation. For program rows
+   `retire` keeps capabilities and frames, and zeroes the frames itself.
+2. Kernel: a `rebirth` activation kind, allowed only after every service has acked
+   and cleanup is complete. It reloads the ELF with W^X, resets the same Task object
+   with a fresh task id, then admits it.
+3. Services: `ServiceCustody` and Shell's `app_custody` learn the new generation
+   and clear their per-row record only on a kernel-attested rebirth. Display clears
+   the surface tombstone the same way. Old messages carry the old task id and stay
+   fenced.
+4. Gate: run hello 100 times, leak nothing, and show a message from an old run is
+   refused.
+
+Open question: whether the same generation should later replace reserved rows for
+Quil, Spindle and Browser. It would remove the fixed reopen counts and shrink the
+catalog, so it probably should.
