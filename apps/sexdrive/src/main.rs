@@ -7,7 +7,7 @@ use sex_pdx::{
     pdx_call, pdx_reply, pdx_listen_raw, serial_println,
     SLOT_SHELL, SLOT_USB_HOST,
     SLOT_DMA_REGION, SLOT_FRAME_REGION, SLOT_BLOCK_BUFFER,
-    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_CAPACITY,
     BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
     BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER,
 };
@@ -146,9 +146,11 @@ struct NvmeIoState {
     cq_head: u32,
     cq_phase: u32,
     next_cid: u16,
+    sectors: u64,
 }
 
 static mut NVME_IO_STATE: NvmeIoState = NvmeIoState {
+    sectors: 0,
     ready: false,
     map_va: 0,
     io_sq_va: 0,
@@ -642,7 +644,14 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     0u64
 }
 
+/// What the namespace says, or just the original fixed area if it could not say.
+fn device_sectors() -> u64 {
+    match unsafe { NVME_IO_STATE.sectors } { 0 => WRITE_PROOF_LBA + 1, sectors => sectors }
+}
+
 fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
+    // Everything past the fixed DiskFS area belongs to Files' filesystem and program store.
+    if offset >= sex_pdx::DISK_TOTAL_SECTORS * NVME_LBA_BYTES && buf_cap == SLOT_BLOCK_BUFFER { return true; }
     let expected_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
     let manifest_offset = MANIFEST_LBA * NVME_LBA_BYTES;
     let object_start_offset = PROOF_OBJECT_START_LBA * NVME_LBA_BYTES;
@@ -739,7 +748,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     // timeout/quarantine and actual FLUSH receipts remain unconditional.
     if size == 0 || size > PAGE_SIZE || size > BLOCK_MAX_XFER
         || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
-        || offset.checked_add(size).map_or(true,|end|end>(WRITE_PROOF_LBA+1)*NVME_LBA_BYTES)
+        || offset.checked_add(size).map_or(true,|end|end>device_sectors()*NVME_LBA_BYTES)
         || src_va == 0 || src_va == u64::MAX {
         serial_println!(
             "[sexdrive.nvme.write.err] reason=bad_args offset={:#x} size={} src_va={:#x}",
@@ -2643,6 +2652,43 @@ fn nvme_probe_bar() {
         admin_cq_phase as u64
     );
 
+    // How big is this disk? Failure leaves only the original fixed area writable.
+    let mut device_size = 0u64;
+    let ns_phys = reserve_dma_phys(PAGE_SIZE);
+    let ns_va = own_dma_virtual(ns_phys, PAGE_SIZE);
+    if ns_phys != 0 && ns_phys != u64::MAX && ns_va != 0 && ns_va != u64::MAX {
+        let cid: u16 = 0x0045;
+        let sqe = (asq_owned_va as *mut u8).wrapping_add((admin_sq_tail as usize) * 64) as *mut u32;
+        unsafe {
+            for i in 0..16usize { core::ptr::write_volatile(sqe.add(i), 0); }
+            core::ptr::write_volatile(sqe.add(0), 0x06u32 | ((cid as u32) << 16));
+            core::ptr::write_volatile(sqe.add(1), 1u32);
+            core::ptr::write_volatile(sqe.add(6), (ns_phys & 0xFFFF_FFFF) as u32);
+            core::ptr::write_volatile(sqe.add(7), (ns_phys >> 32) as u32);
+        }
+        compiler_fence(Ordering::SeqCst);
+        admin_sq_tail = (admin_sq_tail + 1) % q_entries;
+        unsafe { core::ptr::write_volatile((map_va + NVME_SQ0TDBL) as *mut u32, admin_sq_tail); }
+        for poll in 0..ADMIN_POLLS {
+            if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+            let cqe = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
+            let dw3 = unsafe { core::ptr::read_volatile(cqe.add(3)) };
+            if dw3 & 0xFFFF == cid as u32 && (dw3 >> 16) & 1 == admin_cq_phase {
+                admin_cq_head = (admin_cq_head + 1) % q_entries;
+                if admin_cq_head == 0 { admin_cq_phase ^= 1; }
+                unsafe { core::ptr::write_volatile((map_va + NVME_CQ0HDBL) as *mut u32, admin_cq_head); }
+                if (dw3 >> 17) & 0x7FFF == 0 {
+                    let (size, format) = unsafe { (core::ptr::read_volatile(ns_va as *const u64),
+                        core::ptr::read_volatile((ns_va + 26) as *const u8) & 0xF) };
+                    let shift = unsafe { core::ptr::read_volatile((ns_va + 128 + 4 * format as u64 + 2) as *const u8) };
+                    if shift == 9 { device_size = size; }
+                    sex_pdx::serial_record!("[sexdrive.nvme.namespace] sectors={} lba_shift={}", size, shift);
+                }
+                break;
+            }
+        }
+    }
+
     let sq1tdbl = 0x1000u64 + ((2u64 * 1u64) << (2 + cap_dstrd));
     let cq1hdbl = 0x1000u64 + ((2u64 * 1u64 + 1u64) << (2 + cap_dstrd));
     serial_println!(
@@ -2655,6 +2701,7 @@ fn nvme_probe_bar() {
     );
     unsafe {
         NVME_IO_STATE.ready = true;
+        NVME_IO_STATE.sectors = device_size;
         NVME_IO_STATE.map_va = map_va;
         NVME_IO_STATE.io_sq_va = io_sq_va;
         NVME_IO_STATE.io_cq_va = io_cq_va;
@@ -3015,6 +3062,7 @@ fn service_next_request(){
                 BLOCK_ERR_NO_DEVICE
             }
         }
+        BLOCK_CAPACITY => device_sectors(),
         BLOCK_SYNC => {
             let status=nvme_flush();
             sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_nvme_flush=1",status);

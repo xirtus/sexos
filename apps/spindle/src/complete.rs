@@ -5,6 +5,16 @@
 
 /// Every command `dispatch` recognises, sorted.
 pub const COMMANDS: &[&[u8]] = &[
+    b"append",
+    b"cat",
+    b"cd",
+    b"df",
+    b"mkdir",
+    b"mv",
+    b"pwd",
+    b"rm",
+    b"touch",
+    b"write",
     b"about",
     b"app-info",
     b"app-state",

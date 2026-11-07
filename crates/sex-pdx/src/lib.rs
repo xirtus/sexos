@@ -846,6 +846,7 @@ pub fn sys_map_mem_lend(cap_slot: u64) -> u64 {
 pub const BLOCK_READ:  u64 = 1; // Read sectors from block device
 pub const BLOCK_WRITE: u64 = 2; // Write sectors to block device
 pub const BLOCK_SYNC:  u64 = 3; // Flush/barrier (no data transfer)
+pub const BLOCK_CAPACITY: u64 = 4; // Replies with the device's size in sectors
 
 // Block protocol status codes — returned as pdx_reply value.
 pub const BLOCK_OK:           u64 = 0; // Success
@@ -1121,6 +1122,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod fs;
 pub mod organs;
 pub mod text_selection;
 pub mod text_encoding;

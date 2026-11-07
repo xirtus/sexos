@@ -884,6 +884,7 @@ dependencies = [
  "sex-object-model",
  "sex-pdx",
  "sex-rt",
+ "sexfs",
  "spin",
 ]
 

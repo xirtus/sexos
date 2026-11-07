@@ -16,6 +16,7 @@ mod sexobject;
 mod spindle_history;
 mod spindle_probe;
 mod program_store;
+mod fs_service;
 mod document;
 mod document_journal;
 mod history_journal;
