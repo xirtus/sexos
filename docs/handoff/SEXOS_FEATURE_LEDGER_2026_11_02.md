@@ -2090,3 +2090,28 @@ row no longer waits for the row before it to end.
   The fixed 64 MiB program store sits in front of it and should move into it.
 - **Gates.** `sexfs_host`, `filesystem` at 1 and 4 cores (three repeats at 4), full one-core
   regression and 4-core subset one commit earlier, all non-QEMU gates except older listed ones.
+
+## The real internet (2026-11-07)
+
+- **What runs now.** `fetch URL FILE` in Spindle downloads over HTTP or HTTPS into the
+  filesystem. In QEMU user networking it got an address by DHCP, used the leased resolver,
+  and saved `https://www.wikipedia.org/` (122 KB), `https://github.com/` (525 KB) and
+  `https://www.cloudflare.com/` (1.2 MB). A 300 KB local download took about 11 s, emulated.
+- **Trust.** TLS 1.3 with the bundled public root store: full chain, host name and date,
+  RSA PKCS#1 and PSS, ECDSA P-256 and P-384, and the server's handshake signature. A
+  self-signed local server is refused. It lives in the network service, so all programs will
+  share one checked implementation. The service therefore sees plaintext.
+- **Design.** A second, open side of the network service, started the first time something
+  asks, leaving the fixed controlled paths and their exact logs alone. An address is data:
+  the right to use the network is the BOOT route and a BOOT region shared with the service.
+- **ABI.** The `web` protocol (0x211), Spindle slot 259, network slots 340 and up. `sexnet`
+  now has a heap and rebuilds with the scalar crypto flags, growing from 237 KB to 830 KB.
+- **Limits.** One flow at a time across the machine. Spindle only: the Browser still reaches
+  just its fixed test endpoint, so it can't open a real site yet. `fetch` doesn't follow
+  redirects or check Content-Length. A TLS 1.3 server that won't use AES-128-GCM with P-256
+  fails, and TLS 1.2-only servers fail. No revocation checks. The root store is compiled in.
+  Randomness and time use a BOOT grant labelled for the Browser, until the service has its
+  own. Throughput is capped near one frame per service turn. IPv4 only. Only tested against
+  QEMU's user network, never a real network card or LAN.
+- **Gates.** `fetch` at 1 and 4 cores against public sites, plus full one-core regression and
+  a 4-core subset on the same kernel. All non-QEMU gates except the older ones listed earlier.

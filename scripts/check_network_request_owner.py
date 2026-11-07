@@ -8,7 +8,7 @@ def function(source,name):
  while depth:depth+=(source[end]=='{')-(source[end]=='}');end+=1
  return source[start:end]
 def check(root,out):
- source=(root/'servers/sexnet/src/main.rs').read_text();assert source.count('network_request_owner(req.caller_pd,req.caller_task)')==5;assert 'network_owner(req.caller_pd)'not in source
+ source=(root/'servers/sexnet/src/main.rs').read_text();assert source.count('network_request_owner(req.caller_pd,req.caller_task)')==6;assert 'network_owner(req.caller_pd)'not in source
  policy='\n'.join(function(source,n)for n in ['network_owner','network_request_owner']);fixture=(root/'tests/network_request_owner.rs').read_text();fixture=re.sub(r'\.\./crates/[^"\n]+',lambda m:str(root/m[0][3:]),fixture)
  for name,text,rejected in [('actual',policy,False),('missing-task-check',policy.replace('if caller_task!=owner.task{return None;}',''),True),('task-equals-domain',policy.replace('caller_task!=owner.task','caller_task!=owner.pd'),True)]:
   assert not rejected or text!=policy;path=out/(name+'-policy.rs');path.write_text(text);test=out/(name+'.rs');test.write_text(fixture);binary=out/name
