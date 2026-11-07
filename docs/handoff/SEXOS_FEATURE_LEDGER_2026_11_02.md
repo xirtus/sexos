@@ -1930,3 +1930,38 @@ row no longer waits for the row before it to end.
   `https_document`, `spindle_calc`, `spindle_reserve_probe`, `https_png`,
   `network_contention` at 1280x800.
 - Screenshot: `assets/sexos-alpha-programs-side-by-side-2026-11-07.png`.
+
+## Programs from disk (2026-11-07)
+
+- **What runs now.** `run fortune` in Spindle starts a program whose file is on the
+  disk and in no boot image or Limine module. Spindle asks Shell, Shell asks Files,
+  Files reads the store at LBA 2048 into a BOOT region, and the kernel checks the
+  file and lays it out on a free program row. `scripts/install_program.py` writes
+  the store from the host.
+- **Authority.** A name selects bytes and grants nothing. The program holds exactly
+  what its BOOT row holds. BOOT-only genesis is unchanged.
+- **Checks.** `kernel/src/program_image.rs` accepts only x86-64 position-independent
+  ELF, no segment both writable and executable, no two segments sharing a page, all
+  inside a 1 MiB window, entry in code, relative relocations only. Host test: every
+  truncation and 200,000 corrupted files, with overflow checks on. Natively, a
+  missing name, a bad hash, writable code and a disk with no store are each refused
+  by a plain denial with the system still working.
+- **Clean start.** Stack and image frames are zeroed before each load, and the boot
+  image's hello still runs on a row a disk program used.
+- **ABI.** New `program_store` protocol (ops 0x4E, 0x4F, Files image slot 100, Shell
+  route slot 256), and activation kind 3 with a length in rdx.
+- **Limits.** Still three programs at once, on rows from the BOOT catalog of at most
+  64. Each row reserves 1 MiB of frames at boot, which is not how thousands will
+  work. The file hash is FNV: it catches a damaged disk, not an attacker, and there
+  is no signing. The store is a one-sector directory of 15 names, one file at most
+  1 MiB, installed from the host only, with no `programs` listing yet. The whole
+  DiskFS is 1 MiB (`DISK_TOTAL_SECTORS=2048`), far below a real filesystem. Program
+  windows stack as thin rows with no title bar.
+- **Gates.** All non-QEMU gates except the older ones listed earlier, 1,132 Python
+  tests, master gate GREEN on its second attempt (attempt one reported `missing
+  init` in BOOTGRAPH_GATE; cause not investigated). Native: `program_disk` and
+  `program_launch` at both sizes; `http_content`, `quil_autosave`,
+  `clipboard_workflow`, `quil_readability`, `connected_desktop`, `quil_workflow`,
+  `https_document`, `spindle_calc`, `spindle_reserve_probe`, `https_png`,
+  `network_contention` at 1280x800.
+- Screenshot: `assets/sexos-alpha-programs-from-disk-2026-11-07.png`.
