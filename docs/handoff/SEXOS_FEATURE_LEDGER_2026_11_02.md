@@ -1811,3 +1811,28 @@ GREEN. Native: `http_content` and `clipboard_workflow` at both sizes;
 `quil_autosave`, `quil_readability`, `connected_desktop`, `quil_workflow`,
 `https_document`, `spindle_calc`, `spindle_reserve_probe`, `https_png`,
 `network_contention` at 1280x800.
+
+## First program outside the built-in apps (2026-11-07)
+
+`Run Hello` in the launcher starts `apps/hello` in its own domain: a window, text
+through its BOOT text region, closed with F11, run again on the next row.
+
+ABI: `App::Program` and four catalog rows (32 rows total); `PROGRAM_KEY`; the
+clipboard participant check excludes programs.
+
+- **Limits.** Each run uses up a row, so three runs per boot. Row 41 only anchors
+  the chain and exits at BOOT. The image is a Limine module, not a file from
+  storage. Program rows run one at a time.
+- **Interim isolation change.** sexusb shares sexinput's PKU key, so a bug in
+  either can reach the other's memory. This frees key 5 for programs. Capabilities
+  still decide access. It becomes the Senses organ under the organ design Andreas
+  agreed: keys map to organ systems, with few vital parts and restartable services.
+- **Found on the way.** F11 closes a window; Spindle's help says Alt+F4, which does
+  not close it. `shell.tile.apply` had a log budget of 24 that gates rely on as
+  geometry, raised to 64; gates reading budgeted logs as truth remain a risk.
+- **Gates.** New `program_launch_gate.py`, native at both sizes. All host gates and
+  Python tests pass. On the final commit: master gate GREEN, `connected_desktop`,
+  `network_contention`, `spindle_reserve_probe`. One commit earlier, with only the
+  log budget and hello's text differing: `http_content`, `quil_autosave`,
+  `clipboard_workflow`, `quil_readability`, `quil_workflow`, `https_document`,
+  `spindle_calc`, `https_png`, at 1280x800.
