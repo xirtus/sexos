@@ -738,6 +738,9 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
     if pd.main_task.load(Ordering::Acquire)!=task{return false;}
     if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty(){return true;}
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
+    // A waker on another core may have cancelled just before this task armed its last
+    // wait, then woken it. That deadline can only be stale: its owner is running here.
+    (*task).wait_deadline.cancel();
     let Some(deadline)=(*task).wait_deadline.arm(now,ticks)else{return false;};
     if record{crate::program_records::armed((*task).context.pd_id,deadline);}
     match (*task).state.park(core.core_id){
