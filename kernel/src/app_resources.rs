@@ -112,7 +112,10 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     let old_task=old.task;let old_key=old.pkey;
     let next=old.identity.next().expect("SUCCESSOR_INCARNATION_EXHAUSTED");
     let index=apps.iter().position(|a|a.ready&&a.target==successor).expect("SUCCESSOR_NO_IMAGE");
-    let app=&mut apps[index];assert!(app.predecessor==0 && successor!=predecessor && app.pkey==old_key,"SUCCESSOR_BIND");
+    let app=&mut apps[index];assert!(app.predecessor==0 && successor!=predecessor,"SUCCESSOR_BIND");
+    // Program rows run side by side, each on its own key; others replace their predecessor.
+    let program=sex_pdx::app_catalog::app_of(successor)==Some(sex_pdx::app_catalog::App::Program);
+    assert!(program || app.pkey==old_key,"SUCCESSOR_KEY");
     let task=unsafe{&*(app.main as *const crate::scheduler::Task)};
     assert!(task.state.snapshot().phase==Phase::Constructed,"SUCCESSOR_ALREADY_ACTIVE");
     app.predecessor=predecessor;app.identity=next;
@@ -250,7 +253,8 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
         // Once consumed, replay never revalidates or restores retired leaves.
         if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,
             if TERMINAL[ni].load(Ordering::Acquire){3}else{2}])}
-        let ready=old.retired && old.acked==REQUIRED && dead(old).is_ok();
+        // A program row can start once the row before it has started; it need not have ended.
+        let ready=if old.reusable{old.activated}else{old.retired && old.acked==REQUIRED && dead(old).is_ok()};
         let reply=[0,new.target as u64,new.task as u64,new.surface,if ready{1}else{0}];
         if kind==0{return Ok(reply)}
         if kind==2{return Err(DENIED)}

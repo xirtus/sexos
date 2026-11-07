@@ -16112,13 +16112,11 @@ fn program_launcher_status()->(bool,&'static str,&'static str){
     if program_rows().any(|(_,_,state)|matches!(state,a::ACTIVATION_READY|a::ACTIVATION_REUSABLE|a::ACTIVATION_ACTIVE)){(true,"RUN PROGRAM","program_ready")}
     else{(false,"CLEANING / PLEASE WAIT","program_cleanup_pending")}
 }
-/// A live program is focused; otherwise a fresh or fully cleaned row starts.
+/// Start a program on a fresh or fully cleaned row, side by side with any others.
+/// Only when every row is in use does this focus one of them.
 unsafe fn open_program_in_active_scene()->bool{
     use sex_pdx::app_lifecycle as a;
     if PROGRAM_REBIRTH.is_some(){return true}
-    if let Some((row,_,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_ACTIVE){
-        return launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true);
-    }
     if let Some((row,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY){
         launcher_focus_discard();
         let Ok(active)=a::activation(slot,true)else{return false};
@@ -16132,6 +16130,9 @@ unsafe fn open_program_in_active_scene()->bool{
         if a::rebirth(slot).is_err(){return false}
         PROGRAM_REBIRTH=Some(slot);
         return true;
+    }
+    if let Some((row,_,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_ACTIVE){
+        return launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true);
     }
     false
 }

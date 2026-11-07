@@ -21,6 +21,7 @@ static WAKES:AtomicUsize=AtomicUsize::new(0);
 #[path="../kernel/src/app_resource_state.rs"]mod app_resource_state;
 #[path="../kernel/src/app_catalog_state.rs"]mod app_catalog_state;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
+#[path="../crates/sex-pdx/src/organs.rs"]pub mod organs;
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/task_ownership.rs"]pub mod ownership;
 #[path="../kernel/src/ipc_ring.rs"]mod ring;
@@ -234,7 +235,7 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
  use capability::{ProtectionDomain,CapabilityData};use app_resource_state::{LifecycleGrant,QUERY};
  assert_eq!(app_catalog::TARGETS,[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44]);
  for pd in 1..=44{
-  let key=app_catalog::by_target(pd).map_or(pd as u8,|r|if r.app==app_catalog::App::Program{app_catalog::PROGRAM_KEY}else{app_catalog::boot_incarnation(r.app).target as u8});
+  let key=app_catalog::by_target(pd).map_or(pd as u8,|r|if r.app==app_catalog::App::Program{organs::program_key(r.ordinal)}else{app_catalog::boot_incarnation(r.app).target as u8});
   let domain=ProtectionDomain::new_key(pd,key);
   // Deliberately distinct task namespace, with the actual context pointer
   // established by new_key. The production capturer reads these Task objects.
@@ -244,7 +245,7 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
  app_resources::plan_boot_apps(&app_catalog::TARGETS);
  let mut owned_leaves=Vec::new();
  for(index,row)in app_catalog::INCARNATIONS.iter().enumerate(){
-  let key=if row.app==app_catalog::App::Program{app_catalog::PROGRAM_KEY}else{app_catalog::boot_incarnation(row.app).target as u8};
+  let key=if row.app==app_catalog::App::Program{organs::program_key(row.ordinal)}else{app_catalog::boot_incarnation(row.app).target as u8};
   let base=0x4000_0000+index as u64*0x10_0000;let top=base+0x3_0000;
   let mut leaves=Box::new([0u64;17]);
   for page in 0..17{let va=if page==0{base}else{top-65536+(page as u64-1)*4096};

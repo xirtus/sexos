@@ -57,6 +57,16 @@ pub extern "C" fn _start() -> ! {
     call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
     show(surface, region);
     call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
+    // Test builds only: try to read the row before this one, whose memory is on
+    // another hardware key. The kernel should end this program and nothing else.
+    if option_env!("SEXOS_PROGRAM_ISOLATION_PROBE").is_some() && row.ordinal == 2 {
+        let own = 0x4000_0000u64 + (identity.target_pd as u64 - 1) * 0x0100_0000;
+        let neighbour = own - 0x0100_0000;
+        let byte = unsafe { core::ptr::read_volatile(own as *const u8) };
+        sex_pdx::serial_record!("[hello.probe.own] addr={:#x} byte={}", own, byte);
+        let byte = unsafe { core::ptr::read_volatile(neighbour as *const u8) };
+        sex_pdx::serial_record!("[hello.probe.breach] addr={:#x} byte={}", neighbour, byte);
+    }
     sex_pdx::serial_record!("[hello.ready] target={} task={} surface={} bytes={}", identity.target_pd, identity.task_id, surface, TEXT.len());
     loop {
         let message = sex_pdx::pdx_listen_raw(0);

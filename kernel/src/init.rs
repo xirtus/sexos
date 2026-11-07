@@ -106,10 +106,9 @@ pub fn init() {
             let path = module.path();
             if path.contains(target) {
                 serial_println!("[bootgraph.pd.spawn.begin] pd={}", target);
-                // sexusb shares sexinput's key, leaving one for program rows until
-                // virtual keys exist. Both are trusted hardware input services.
-                let spawned=if domain_id==sex_pdx::app_catalog::PROGRAM_KEY {
-                    crate::pd::create::create_boot_domain(path,None,domain_id,4)
+                let key=sex_pdx::organs::service_key(domain_id);
+                let spawned=if key!=domain_id {
+                    crate::pd::create::create_boot_domain(path,None,domain_id,key)
                 }else{pdx_spawn(path, domain_id)};
                 match spawned {
                     Ok(id) => {
@@ -189,7 +188,7 @@ pub fn init() {
     for incarnation in apps::INCARNATIONS.iter().filter(|i|i.ordinal!=0||i.app==App::Program) {
         let name=match incarnation.app{App::Quil=>"quil",App::Spindle=>"spindle",App::Browser=>"kaleidoscope",App::Program=>"hello"};
         let module=modules.modules().iter().find(|m|m.path().contains(name)).expect("BOOT_SUCCESSOR_MODULE");
-        let key=if incarnation.app==App::Program{apps::PROGRAM_KEY as u32}else{apps::boot_incarnation(incarnation.app).target};
+        let key=if incarnation.app==App::Program{sex_pdx::organs::program_key(incarnation.ordinal) as u32}else{apps::boot_incarnation(incarnation.app).target};
         let (layout,pkey)=(u8::try_from(incarnation.target).expect("BOOT_SUCCESSOR_LAYOUT"),u8::try_from(key).expect("BOOT_SUCCESSOR_KEY"));
         let created=crate::pd::create::create_boot_domain(module.path(),Some(incarnation.target),layout,pkey).expect("BOOT_SUCCESSOR");
         assert_eq!(created,incarnation.target,"BOOT_SUCCESSOR_IDENTITY");

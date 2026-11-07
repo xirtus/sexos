@@ -1098,6 +1098,7 @@ pub mod display_frames;
 
 pub mod text_batch;
 pub mod text_region;
+pub mod organs;
 pub mod text_selection;
 pub mod text_encoding;
 pub mod clipboard;

@@ -79,10 +79,6 @@ pub const INCARNATIONS: [Incarnation; 32] = [
     Incarnation { app: App::Program, ordinal: 3, target: 44, surface: 361, shell_surface: None, lifecycle_slot: 252, close_slot: 253, activation_slot: Some(254), route_slot: 255, children: &[] },
 ];
 
-/// The hardware key program rows share. They run one at a time, so no two ever
-/// hold it together. Freed by sexusb sharing sexinput's key until virtual keys.
-pub const PROGRAM_KEY: u8 = 5;
-
 /// Compile-time storage sizing; descriptive catalog data never grants authority.
 pub const COUNT: usize = INCARNATIONS.len();
 /// Display's presentation receipt mask has one bit per reserved incarnation.
