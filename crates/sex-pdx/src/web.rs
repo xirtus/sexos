@@ -16,6 +16,16 @@ pub const STATE: u8 = 4;
 pub const SEND: u8 = 5;
 pub const RECEIVE: u8 = 6;
 pub const CLOSE: u8 = 7;
+/// Encrypt the flow just connected. The region holds the host name to check against.
+pub const TLS_START: u8 = 8;
+pub const TLS_STAGE: u8 = 9;
+pub const FINISH_REQUEST: u8 = 10;
+
+pub const TLS_HANDSHAKE: u32 = 0;
+pub const TLS_READY: u32 = 1;
+pub const TLS_FAILED_CERTIFICATE: u32 = 2;
+pub const TLS_FAILED_SIGNATURE: u32 = 3;
+pub const TLS_FAILED_OTHER: u32 = 4;
 
 pub const OK: u8 = 0;
 pub const WAIT: u8 = 1;

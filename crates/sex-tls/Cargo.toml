@@ -17,3 +17,11 @@ sex-trust-config = { path = "../sex-trust-config" }
 webpki = { package = "rustls-webpki", version = "=0.103.16", default-features = false }
 rustls-pki-types = { version = "=1.14.0", default-features = false }
 p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa"] }
+
+# Trust and algorithms for the public web. Only the network service enables this.
+rsa = { version = "=0.9.8", default-features = false, optional = true, features = ["sha2"] }
+p384 = { version = "=0.13.1", default-features = false, features = ["ecdsa"], optional = true }
+webpki-roots = { version = "=1.0.4", default-features = false, optional = true }
+
+[features]
+open-web = ["dep:rsa", "dep:p384", "dep:webpki-roots"]

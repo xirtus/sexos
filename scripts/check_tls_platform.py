@@ -19,6 +19,8 @@ PINS = {'embedded-tls': '0.19.0', 'embedded-io': '0.7.1',
         'webpki': '0.103.16', 'rustls-pki-types': '1.14.0'}
 PACKAGE_NAMES = {'webpki': 'rustls-webpki'}
 DIRECT_FEATURES = {'sha2': ['force-soft'], 'p256': ['ecdsa']}
+# Public-web trust, only for the network service, optional so the Browser's graph is unchanged.
+OPEN_WEB = {'rsa': '0.9.8', 'p384': '0.13.1', 'webpki-roots': '1.0.4'}
 LOCAL = {'sex-trust-config': '../sex-trust-config', 'sex-http': '../sex-http'}
 VENDOR = 'vendor/embedded-tls-0.19.0'
 VENDOR_DEP_PATH = '../../' + VENDOR
@@ -43,7 +45,13 @@ BLOCKED = {'libc', 'getrandom', 'rand_os', 'rustix', 'nix', 'ring', 'openssl',
 
 def check_manifests(tls, workspace, app, trust=None):
     errors = []
-    deps = tls.get('dependencies', {})
+    deps = dict(tls.get('dependencies', {}))
+    for name, version in OPEN_WEB.items():
+        dep = deps.pop(name, None)
+        if not isinstance(dep, dict) or dep.get('version') != '=' + version or dep.get('optional') is not True or dep.get('default-features') is not False:
+            errors.append('noncanonical open-web dependency policy: ' + name)
+    if tls.get('features', {}) != {'open-web': ['dep:' + name for name in OPEN_WEB]}:
+        errors.append('open-web must be the only TLS feature and only add its reviewed dependencies')
     if set(deps) != set(PINS) | set(LOCAL):
         errors.append('TLS direct dependency set changed; review backend policy')
     for name, version in PINS.items():

@@ -15,6 +15,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
+# A server with a certificate nothing trusts. The machine must refuse to use it.
+import ssl,subprocess,tempfile
+tmp=tempfile.mkdtemp();key,crt=tmp+'/k.pem',tmp+'/c.pem'
+subprocess.run(['openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:prime256v1','-nodes','-keyout',key,'-out',crt,'-subj','/CN=10.0.2.2','-days','2'],check=True,capture_output=True)
+untrusted=Quiet(('127.0.0.1',0),Handler);context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(crt,key)
+untrusted.socket=context.wrap_socket(untrusted.socket,server_side=True);UNTRUSTED=untrusted.server_address[1]
+threading.Thread(target=untrusted.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
@@ -44,8 +51,9 @@ def main():
   assert fetched(f'{base}/missing','x.txt').startswith('fetch: HTTP 404')
   assert 'to http://example.test/small.txt' in fetched(f'{base}/moved','y.txt')
   assert 'name not found' in fetched('http://no-such-name.invalid/','z.txt') or True
-  public=None
-  if a.public:public=fetched(a.public,'public.html')
+  assert 'not trusted' in fetched(f'https://10.0.2.2:{UNTRUSTED}/small.txt','bad.txt'),t()[-400:]
+  public={}
+  for url in a.public.split(',') if a.public else []:public[url]=fetched(url,'public.html')
   assert 'KERNEL PANIC'not in t()
  finally:g['stop']()
  # The bytes on disk are the bytes sent: read them back through a fresh boot.

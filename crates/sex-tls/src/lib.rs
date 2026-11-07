@@ -19,6 +19,8 @@ use embedded_tls::{Aes128GcmSha256,
     TlsError, TlsVerifier};
 use rand_core::SeedableRng;
 mod verifier;
+#[cfg(feature = "open-web")]
+pub mod open;
 mod probe_fixture;
 pub use verifier::controlled_self_check;
 pub use sex_http::Error as HttpError;

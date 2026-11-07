@@ -1,4 +1,4 @@
-//! `fetch URL FILE`: plain HTTP into the filesystem. One step at a time, driven from the
+//! `fetch URL FILE`: HTTP and HTTPS into the filesystem. One step at a time, driven from the
 //! main loop, so typing keeps working while a download runs.
 use crate::Scrollback;
 use sex_pdx::fs;
@@ -6,15 +6,15 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 use sex_pdx::web as w;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Phase { Idle, Up, ResolveAsk, ResolveWait, Connect, Opening, Send, CreateFile, CutFile, Receive, CheckPeer, Store, Close }
-const HEAD_MAX: usize = 4096;
+enum Phase { Idle, Up, ResolveAsk, ResolveWait, Connect, Opening, TlsStart, TlsWait, Send, FinishRequest, CreateFile, CutFile, Receive, CheckPeer, Store, Close }
+const HEAD_MAX: usize = 16 * 1024;
 const TICK_POLL: u64 = 5;
 pub struct Fetch {
     phase: Phase, seq: u32, sent: bool, to_files: bool, next_at: u64, deadline: u64, host: [u8; 256], host_len: usize, port: u16, address: [u8; 4],
     request: [u8; 900], request_len: usize, request_sent: usize, path_len: usize, head: [u8; HEAD_MAX], head_len: usize, in_body: bool,
-    written: u64, chunk: usize, fs_seq: u32, peer_done: bool, status: u32,
+    written: u64, chunk: usize, fs_seq: u32, peer_done: bool, status: u32, tls: bool,
 }
-pub static mut FETCH: Fetch = Fetch { phase: Phase::Idle, seq: 0, sent: false, to_files: false, next_at: 0, deadline: 0, host: [0; 256], host_len: 0, port: 80, address: [0; 4], request: [0; 900], request_len: 0, request_sent: 0, path_len: 0, head: [0; HEAD_MAX], head_len: 0, in_body: false, written: 0, chunk: 0, fs_seq: 0x80_0000, peer_done: false, status: 0 };
+pub static mut FETCH: Fetch = Fetch { phase: Phase::Idle, seq: 0, sent: false, to_files: false, next_at: 0, deadline: 0, host: [0; 256], host_len: 0, port: 80, address: [0; 4], request: [0; 900], request_len: 0, request_sent: 0, path_len: 0, head: [0; HEAD_MAX], head_len: 0, in_body: false, written: 0, chunk: 0, fs_seq: 0x80_0000, peer_done: false, status: 0, tls: false };
 
 fn net() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -63,16 +63,17 @@ impl Fetch {
         if self.busy() { sb.push(b"A download is already running."); return; }
         let mut words = args.splitn(2, |b| *b == b' ');
         let (url, file) = (words.next().unwrap_or(&[]), words.next().unwrap_or(&[]));
-        let Some(rest) = url.strip_prefix(b"http://") else {
-            if url.starts_with(b"https://") { sb.push(b"fetch: https is not supported yet."); } else { sb.push(b"Usage: fetch http://HOST[:PORT]/PATH FILE"); }
-            return;
+        let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) {
+            (Some(rest), _) => (rest, true),
+            (_, Some(rest)) => (rest, false),
+            _ => { sb.push(b"Usage: fetch URL FILE"); return; }
         };
-        if file.is_empty() { sb.push(b"Usage: fetch http://HOST[:PORT]/PATH FILE"); return; }
+        if file.is_empty() { sb.push(b"Usage: fetch URL FILE"); return; }
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
         let (host, port) = match authority.iter().position(|b| *b == b':') {
             Some(i) => (&authority[..i], authority[i + 1..].iter().try_fold(0u32, |v, b| if b.is_ascii_digit() { Some(v * 10 + (*b - b'0') as u32) } else { None }).filter(|p| (1..=65535).contains(p)).map(|p| p as u16)),
-            None => (authority, Some(80)),
+            None => (authority, Some(if tls { 443 } else { 80 })),
         };
         let Some(port) = port else { sb.push(b"fetch: bad port"); return };
         if host.is_empty() || host.len() > 253 { sb.push(b"fetch: bad host"); return; }
@@ -84,6 +85,7 @@ impl Fetch {
         self.host_len = host.len();
         self.host[..host.len()].copy_from_slice(host);
         self.port = port;
+        self.tls = tls;
         // HTTP/1.0 so the reply needs no chunk decoding, and ends when the peer closes.
         let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
         let total: usize = parts.iter().map(|p| p.len()).sum();
@@ -121,6 +123,9 @@ impl Fetch {
             Phase::ResolveWait => self.net_call(w::RESOLVE, 0),
             Phase::Connect => self.net_call(w::CONNECT, w::address_port(self.address, self.port)),
             Phase::Opening => self.net_call(w::STATE, 0),
+            Phase::TlsStart => { region[..self.host_len].copy_from_slice(&self.host[..self.host_len]); self.net_call(w::TLS_START, self.host_len as u64); }
+            Phase::TlsWait => self.net_call(w::TLS_STAGE, 0),
+            Phase::FinishRequest => self.net_call(w::FINISH_REQUEST, 0),
             Phase::Send => {
                 let left = &self.request[self.request_sent..self.request_len];
                 region[..left.len()].copy_from_slice(left);
@@ -213,14 +218,25 @@ impl Fetch {
                 self.phase = Phase::Receive;
             }
             Phase::Opening => match value {
-                w::STATE_OPEN => self.phase = Phase::Send,
+                w::STATE_OPEN => self.phase = if self.tls { Phase::TlsStart } else { Phase::Send },
                 w::STATE_OPENING => self.next_at = now + TICK_POLL,
                 _ => self.fail(sb, "could not connect"),
             },
+            Phase::TlsStart => { self.phase = Phase::TlsWait; self.next_at = now + TICK_POLL; }
+            Phase::TlsWait => match value {
+                w::TLS_READY => { sex_pdx::serial_record!("[spindle.fetch.tls] verified=1"); self.phase = Phase::Send; }
+                w::TLS_HANDSHAKE => self.next_at = now + TICK_POLL,
+                w::TLS_FAILED_CERTIFICATE => self.fail(sb, "the site's certificate is not trusted"),
+                w::TLS_FAILED_SIGNATURE => self.fail(sb, "the site's signature is not valid"),
+                _ => self.fail(sb, "secure connection failed"),
+            },
             Phase::Send => {
                 self.request_sent += value as usize;
-                if self.request_sent >= self.request_len { self.phase = Phase::CreateFile; } else { self.next_at = now + TICK_POLL; }
+                if self.request_sent < self.request_len { self.next_at = now + TICK_POLL; }
+                else if self.tls { self.phase = Phase::FinishRequest; }
+                else { self.phase = Phase::CreateFile; }
             }
+            Phase::FinishRequest => self.phase = Phase::CreateFile,
             Phase::Receive => {
                 if value == 0 {
                     if self.peer_done { self.end(); return true; }

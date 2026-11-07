@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "311847a7e9e4db83fbfa09082c4bd1bd4ca92e3dcb95904ebc2a2b3894e33565"
+abi_version_hash = "1963fe39674f48b079fec6c5beab5857045510f7ed91fca37a8a78ab761a36d0"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -171,6 +171,7 @@ action = "cargo_manifest"
 manifest = "servers/sexnet/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexnet"
 dest_artifact = "iso_root/servers/sexnet"
+rustflags = "--cfg aes_force_soft --cfg polyval_force_soft"
 
 [[stage]]
 id = "build_kaleidoscope"

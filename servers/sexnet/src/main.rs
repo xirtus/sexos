@@ -24,6 +24,7 @@ mod certificate_time;
 mod trust_policy;
 mod source_denial;
 mod web;
+extern crate sex_rt;
 mod source_binding;
 // One BOOT Net main task owns this fixed error-only backing. No large stack
 // temporary or provider state is created while denying unsupported requests.
@@ -934,6 +935,7 @@ fn command_probe() {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    sex_rt::heap_init();
     command_probe();
     for slot in [0,(1u64<<32)|sex_pdx::SLOT_NIC,sex_pdx::SLOT_DMA_REGION,sex_pdx::SLOT_DISPLAY] {
         assert_eq!(sex_pdx::device_identity(slot),Err(sex_pdx::pci_command::DENIED),"NIC_BOOT_IDENTITY_PROBE");
@@ -5424,6 +5426,7 @@ pub extern "C" fn _start() -> ! {
                     transfer_changes=transfer_changes.saturating_add(1);
                     if transfer_changes<=64||transfer_changes.is_power_of_two(){sex_pdx::serial_record!("[sexnet.transport.bytes] flow={} received={} queued={} receive_hash={:#x} queue_hash={:#x} scope=private_custody_not_delivery",after.flow,after.flow_received,after.flow_queued,after.flow_receive_hash,after.flow_queue_hash);}
                 }
+                web.pump(unsafe{&mut *(engine as *mut sex_net::Engine<'static>)});
                 if engine.failure()!=failure{sex_pdx::serial_record!("[sexnet.transport.failed] error={:?}",engine.failure());}
                 let previous=outbound.snapshot();
                 let duplex=outbound.is_duplex();
