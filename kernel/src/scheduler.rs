@@ -135,6 +135,34 @@ impl Task {
     }
 }
 
+impl Task {
+    /// A dead task's control block and kernel stack start one new run. Only for a
+    /// task proven Dead with no owning core: nothing else can hold it running.
+    pub fn rearm(&mut self, id: u32, entry: u64, stack_top: u64, pd: &ProtectionDomain) {
+        let forged = unsafe {
+            let mut ksp = self.kstack_top as *mut u64;
+            ksp = ksp.sub(1); *ksp = 0x23;
+            ksp = ksp.sub(1); *ksp = stack_top;
+            ksp = ksp.sub(1); *ksp = 0x202;
+            ksp = ksp.sub(1); *ksp = 0x2B;
+            ksp = ksp.sub(1); *ksp = entry;
+            ksp = ksp.sub(1); *ksp = 0;
+            for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; }
+            ksp as u64
+        };
+        let (pd_id, pd_ptr, pkru) = (self.context.pd_id, self.context.pd_ptr, pd.current_pkru_mask.load(Ordering::SeqCst));
+        self.id = id;
+        self.context = unsafe { core::mem::zeroed() };
+        self.context.pd_id = pd_id; self.context.pd_ptr = pd_ptr; self.context.pkru = pkru as u64;
+        self.context.rip = entry; self.context.rsp = stack_top; self.context.rflags = 0x202;
+        self.context.cs = 0x2B; self.context.ss = 0x23; self.context.kstack_top = forged;
+        self.state = TaskOwnership::new();
+        self.fault = fault_transaction::FaultSlot::new();
+        self.resume_observation_pending = AtomicBool::new(false);
+        self.wait_deadline = self_wait::Deadline::new();
+    }
+}
+
 pub const QUEUE_SIZE: usize = 512;
 // Host-tested independently of the privileged context-switch assembly.
 #[path = "scheduler_queue.rs"]

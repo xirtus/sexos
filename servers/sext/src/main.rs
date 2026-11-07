@@ -230,6 +230,8 @@ pub extern "C" fn _start() -> ! {
         for i in 0..sex_pdx::app_lifecycle::SLOTS.len() {
             let Some(n)=app_pending[i] else{continue};
             match sex_pdx::app_lifecycle::retire(sex_pdx::app_lifecycle::SLOTS[i]) {
+                // A reusable row keeps its frames for its next run.
+                Ok(pool) if pool.length==0 => { assert_eq!(pool.task_id,n.task_id,"APP_POOL_TASK"); app_pending[i]=None; },
                 Ok(pool)=>{
                     assert_eq!(pool.task_id,n.task_id,"APP_POOL_TASK");
                     let mut workspace=unsafe{workspace::Workspace::admit(pool.base,pool.length)};

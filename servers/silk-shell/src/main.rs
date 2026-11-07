@@ -189,6 +189,28 @@ unsafe fn shell_catalog_init() {
     sex_pdx::serial_record!("[spindle.activation.negative] dormant_route=denied early_activation=retry ok=1");
 }
 unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN {
+        if msg.caller_pd != 0 { return true; }
+        let (target,task)=(msg.arg0 as u32,msg.arg1 as u32);
+        if let Some(entry)=APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target) {
+            if sex_pdx::app_lifecycle::catalog(entry.slot).is_ok_and(|c|c.task_id==task) {
+                if entry.task!=task {
+                    *entry=app_custody::Entry::new(entry.slot,target,task,entry.surface);
+                    // The old run's frame is Destroyed; the new run registers afresh.
+                    let frame=entry.shell_surface().unwrap_or(entry.surface);
+                    for record in LIFECYCLE_TABLE.iter_mut() {
+                        if record.as_ref().is_some_and(|(sid,r)|*sid==frame&&r.state==LifecycleState::Destroyed){*record=None;}
+                    }
+                    for event in TOMBSTONE_RING.iter_mut() {
+                        if event.as_ref().is_some_and(|ev|ev.surface_id==frame){*event=None;}
+                    }
+                }
+                let acked=sex_pdx::app_lifecycle::ack(entry.slot,task).is_ok();
+                sex_pdx::serial_record!("[shell.app.reborn.ack] target={} task={} ok={}",target,task,acked as u8);
+            }
+        }
+        return true;
+    }
     if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
     for e in APP_CUSTODY.iter_mut().flatten() { e.hint(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2); }
     shell_lifecycle_poll();
@@ -8526,7 +8548,7 @@ unsafe fn tile_active_scene_frames() {
         };
 
         // [shell.tile.apply]: budgeted tiled geometry application proof.
-        static mut SHELL_TILE_APPLY_BUDGET: u32 = 64;
+        static mut SHELL_TILE_APPLY_BUDGET: u32 = 256;
         let b = &mut SHELL_TILE_APPLY_BUDGET;
         if *b > 0 {
             *b -= 1;
@@ -16078,22 +16100,55 @@ fn browser_active_frame()->Option<(u32,u64)>{
     if row.app!=app_catalog::App::Browser || !native_launcher_status(row.target).0{return None}
     Some((row.target,row.frame()))
 }
-/// A live program is focused; otherwise the next program row is activated.
+static mut PROGRAM_REBIRTH: Option<usize> = None;
+/// What each program row can do right now, from the rows' own held grants.
+fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
+    app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
+        .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
+}
+fn program_launcher_status()->(bool,&'static str,&'static str){
+    use sex_pdx::app_lifecycle as a;
+    if program_rows().any(|(_,_,state)|matches!(state,a::ACTIVATION_READY|a::ACTIVATION_REUSABLE|a::ACTIVATION_ACTIVE)){(true,"RUN PROGRAM","program_ready")}
+    else{(false,"CLEANING / PLEASE WAIT","program_cleanup_pending")}
+}
+/// A live program is focused; otherwise a fresh or fully cleaned row starts.
 unsafe fn open_program_in_active_scene()->bool{
-    let app=app_catalog::App::Program;
-    let Ok(instance)=app_activation_info(app,false)else{return false};
-    if instance.state==1 {
+    use sex_pdx::app_lifecycle as a;
+    if PROGRAM_REBIRTH.is_some(){return true}
+    if let Some((row,_,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_ACTIVE){
+        return launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true);
+    }
+    if let Some((row,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY){
         launcher_focus_discard();
-        let Ok(active)=app_activation_info(app,true)else{return false};
-        if active.state!=2 {return false}
-        let Some(row)=app_catalog::by_surface(active.successor,active.surface).filter(|r|r.app==app)else{return false};
+        let Ok(active)=a::activation(slot,true)else{return false};
+        if active.state!=a::ACTIVATION_ACTIVE {return false}
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         return true;
     }
-    if instance.state!=2 {return false}
-    let Some(row)=app_catalog::by_surface(instance.successor,instance.surface)else{return false};
-    launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true)
+    if let Some((_,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE){
+        launcher_focus_discard();
+        if a::rebirth(slot).is_err(){return false}
+        PROGRAM_REBIRTH=Some(slot);
+        return true;
+    }
+    false
+}
+/// Advance a started run: the kernel admits it once every service has forgotten
+/// the old one. Focus follows the app's own registration, as for any launch.
+unsafe fn program_rebirth_poll(){
+    use sex_pdx::app_lifecycle as a;
+    let Some(slot)=PROGRAM_REBIRTH else{return};
+    match a::rebirth(slot){
+        Ok(active) if active.state==a::ACTIVATION_ACTIVE=>{
+            PROGRAM_REBIRTH=None;
+            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{return};
+            sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
+            launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
+        },
+        Ok(_)|Err(a::RETRY)=>{},
+        Err(status)=>{PROGRAM_REBIRTH=None;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);},
+    }
 }
 unsafe fn open_browser_in_active_scene()->bool{
     if app_catalog::count(app_catalog::App::Browser)>1 {
@@ -16152,7 +16207,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
         Command::FocusSpindle => spindle_launcher_status(),
         Command::FocusQuil => quil_launcher_status(),
         Command::FocusBrowser => browser_launcher_status(),
-        Command::FocusProgram => app_launcher_status(app_catalog::App::Program),
+        Command::FocusProgram => program_launcher_status(),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -24271,7 +24326,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { program_rebirth_poll(); workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {

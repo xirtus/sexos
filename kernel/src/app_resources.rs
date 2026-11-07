@@ -12,10 +12,13 @@ struct App {
     pages:[PrivatePage;MAX_PAGES],count:usize,captured:bool,ready:bool,
     pool:u64,coordinator:u32,pager:u32,services:[u32;5],acked:u8,
     identity:Incarnation,predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
+    /// Program rows run again. The grants name boot_task; `task` is the current run.
+    reusable:bool,boot_task:u32,generation:u32,rebirthing:bool,pristine:u64,entry:u64,stack_top:u64,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:[PrivatePage::EMPTY;MAX_PAGES],count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,stack_top:0,last_hint:[0;6],hinted:0,kicked:false}}}
+static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];
 static DORMANT:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
@@ -75,7 +78,7 @@ pub fn init(pager:u32,coordinator:u32,catalog:&[(u32,u64)],services:[u32;5]){
         let app=&mut apps[index];assert!(app.captured && !app.ready && app.count!=0,"APP_IMAGE_NOT_READY");
         let pd=crate::ipc::DOMAIN_REGISTRY.get(target).expect("APP_TARGET_MISSING");
         let main=pd.main_task.load(Ordering::Acquire);assert!(!main.is_null(),"APP_NO_MAIN");
-        app.main=main as usize;app.task=unsafe{(*main).id};app.trampoline=pd.trampoline_task.load(Ordering::Acquire) as usize;
+        app.main=main as usize;app.task=unsafe{(*main).id};app.boot_task=app.task;app.trampoline=pd.trampoline_task.load(Ordering::Acquire) as usize;
         app.surface=surface;app.pager=pager;app.coordinator=coordinator;app.services=services;
         let bytes=app.count*4096;let alias=crate::memory::va_allocator::allocate_va(bytes).expect("APP_NO_ALIAS_VA");
         {let mut vas=crate::memory::manager::GLOBAL_VAS.lock();let vas=vas.as_mut().expect("APP_NO_GLOBAL_VAS");
@@ -114,6 +117,16 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     assert!(task.state.snapshot().phase==Phase::Constructed,"SUCCESSOR_ALREADY_ACTIVE");
     app.predecessor=predecessor;app.identity=next;
     DORMANT[index].store(true,Ordering::Release);
+    if sex_pdx::app_catalog::app_of(successor)==Some(sex_pdx::app_catalog::App::Program){
+        // Keep the loaded image, so a later run starts exactly as this one would.
+        let hhdm=crate::HHDM_REQUEST.response().expect("PROGRAM_NO_HHDM").offset;
+        let pristine=crate::boot_memory::backing(app.count as u64*4096);
+        for (i,page) in app.pages[..app.count].iter().enumerate(){unsafe{
+            core::ptr::copy_nonoverlapping(((page.expected&PHYSICAL_MASK)+hhdm) as *const u8,(pristine+i as u64*4096+hhdm) as *mut u8,4096);
+        }}
+        app.pristine=pristine;app.reusable=true;
+        app.entry=task.context.rip;app.stack_top=task.context.rsp;
+    }
     retire_private_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
         |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
@@ -210,7 +223,7 @@ pub fn accepts_ipc(target:u32)->bool{
 pub fn status(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
     let result=(||{let g=grant(pd,slot)?;let apps=APPS.try_lock().ok_or(RETRY)?;
         let app=apps.iter().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
-        g.authorize(pd.id,app.target,app.task,QUERY)?;
+        g.authorize(pd.id,app.target,app.boot_task,QUERY)?;
         if kind==1{return Ok([0,app.target as u64,app.task as u64,app.surface,app.coordinator as u64])}
         if kind!=0{return Err(INVALID)}dead(app)?;
         Ok([0,app.target as u64,app.task as u64,REQUIRED as u64,app.acked as u64])
@@ -220,21 +233,28 @@ pub fn status(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
 /// ELF loading, capability minting, or predecessor identity mutation.
 pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
     let result=(||{
-        if kind>1{return Err(INVALID)}
+        if kind>2{return Err(INVALID)}
         let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(INVALID)?;
         let g=match pd.find_capability(slot).map(|c|c.data){Some(CapabilityData::AppActivation(g))=>g,_=>return Err(INVALID)};
         let mut apps=APPS.try_lock().ok_or(RETRY)?;
         let oi=apps.iter().position(|a|a.ready&&a.target==g.predecessor).ok_or(DENIED)?;
         let ni=apps.iter().position(|a|a.ready&&a.target==g.successor).ok_or(DENIED)?;
         let old=&apps[oi];let new=&apps[ni];
-        g.authorize(pd.id,old.target,old.task,new.target,new.task,old.identity,new.identity)?;
+        g.authorize(pd.id,old.target,old.boot_task,new.target,new.boot_task,old.identity,new.identity)?;
         if new.predecessor!=old.target{return Err(DENIED)}
+        let reply_of=|a:&App,state:u64|[0,a.target as u64,a.task as u64,a.surface,state];
+        if new.reusable&&new.activated{
+            if new.rebirthing&&kind!=2{return Ok(reply_of(new,5))}
+            if new.retired&&!new.rebirthing&&kind!=2{return Ok(reply_of(new,4))}
+            if kind==2{return rebirth(&mut apps,ni).map(|state|reply_of(&apps[ni],state))}
+        }
         // Once consumed, replay never revalidates or restores retired leaves.
         if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,
             if TERMINAL[ni].load(Ordering::Acquire){3}else{2}])}
         let ready=old.retired && old.acked==REQUIRED && dead(old).is_ok();
         let reply=[0,new.target as u64,new.task as u64,new.surface,if ready{1}else{0}];
         if kind==0{return Ok(reply)}
+        if kind==2{return Err(DENIED)}
         if !ready{return Err(RETRY)}
         // Local TLB retirement is valid only while exactly the BSP has ever
         // initialized execution. Fail closed if another core is introduced.
@@ -263,10 +283,50 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
         Ok([0,new.target as u64,new.task as u64,new.surface,2])
     })();result.unwrap_or_else(|e|[e,0,0,0,0])
 }
+/// A new run of a reusable row, in two steps so no service sees it live early.
+/// First: fresh task id, zeroed-then-restored image, every service told. Then,
+/// once all five have forgotten the old run: map the image and admit the task.
+fn rebirth(apps:&mut [App;MAX_APPS],index:usize)->Result<u64,u64>{
+    let app=&mut apps[index];
+    if !app.rebirthing {
+        if !app.retired || app.acked!=REQUIRED {return Err(RETRY)}
+        dead(app)?;
+        if crate::core_local::INITIALIZED_CORES.load(Ordering::Acquire)!=1
+            || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
+        let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
+        for (i,page) in app.pages[..app.count].iter().enumerate(){unsafe{
+            core::ptr::copy_nonoverlapping((app.pristine+i as u64*4096+hhdm) as *const u8,((page.expected&PHYSICAL_MASK)+hhdm) as *mut u8,4096);
+        }}
+        app.generation=app.generation.checked_add(1).ok_or(DENIED)?;
+        // Distinct from every boot task and every earlier run of any row, for good.
+        let task=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
+        if task==u32::MAX{return Err(DENIED)}
+        let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
+        let main=target.main_task.load(Ordering::Acquire);
+        unsafe{(*main).rearm(task,app.entry,app.stack_top,target);}
+        app.task=task;app.acked=0;app.hinted=0;app.kicked=false;app.retired=false;app.rebirthing=true;
+        DORMANT[index].store(true,Ordering::Release);
+        TERMINAL[index].store(false,Ordering::Release);
+        crate::serial_println!("[app.rebirth.begin] target={} task={} generation={}",app.target,task,app.generation);
+        return Ok(5);
+    }
+    if app.acked!=REQUIRED {return Ok(5)}
+    let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
+    let main=target.main_task.load(Ordering::Acquire);
+    let count=restore_reserved_pages(&app.pages[..app.count],
+        |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
+        |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,value)},
+        |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
+    app.rebirthing=false;app.acked=0;
+    DORMANT[index].store(false,Ordering::Release);
+    assert!(crate::scheduler::SCHEDULERS[0].activate_task(main),"REBIRTH_EXCLUSIVE_COMMIT");
+    crate::serial_println!("[app.rebirth.committed] target={} task={} generation={} pages={}",app.target,app.task,app.generation,count);
+    Ok(2)
+}
 pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
     let result=(||{let g=grant(pd,slot)?;let mut apps=APPS.try_lock().ok_or(RETRY)?;
         let app=apps.iter_mut().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
-        g.authorize(pd.id,app.target,app.task,ACK)?;if task!=app.task as u64{return Err(DENIED)}dead(app)?;
+        g.authorize(pd.id,app.target,app.boot_task,ACK)?;if task!=app.task as u64{return Err(DENIED)}if !app.rebirthing{dead(app)?;}
         let old=app.acked;app.acked|=g.ack_bit;
         if app.acked!=old{crate::serial_println!("[app.service.ack] target={} task={} holder={} role={} acked={} required={}",app.target,app.task,pd.id,g.ack_bit,app.acked,REQUIRED);}
         Ok(())})();result.map_or_else(|e|e,|()|0)
@@ -274,7 +334,7 @@ pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
 pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
     let result=(||{let g=grant(pd,slot)?;let mut apps=APPS.try_lock().ok_or(RETRY)?;
         let index=apps.iter().position(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
-        let app=&mut apps[index];g.authorize(pd.id,app.target,app.task,RETIRE)?;
+        let app=&mut apps[index];g.authorize(pd.id,app.target,app.boot_task,RETIRE)?;
         if app.retired{return Ok([0,app.pool,app.count as u64*4096,app.task as u64])}
         dead(app)?;
         if app.acked!=REQUIRED || !crate::paging::target_cleanup_complete(app.target)?{return Err(RETRY)}
@@ -283,6 +343,19 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
             |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
             |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
+        if app.reusable{
+            // The row keeps its authority and its frames for the next run.
+            let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
+            for page in &app.pages[..app.count]{unsafe{core::ptr::write_bytes(((page.expected&PHYSICAL_MASK)+hhdm) as *mut u8,0,4096);}}
+            let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
+            while unsafe{(*target.message_ring).dequeue()}.is_some(){}
+            while unsafe{(*target.signal_ring).dequeue()}.is_some(){}
+            crate::ipc::messages::IpcReply::erase_queue(&mut target.incoming_replies.lock());
+            target.reply_credits.lock().clear();
+            app.retired=true;
+            crate::serial_println!("[app.private.retired] target={} task={} pages={} reusable=1",app.target,app.task,count);
+            return Ok([0,app.pool,0,app.task as u64]);
+        }
         // No pointer-owning control object is freed. Late refs remain valid but
         // routing is fenced, and all private-payload consumers acknowledged.
         let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
@@ -307,6 +380,24 @@ pub fn poll_exit_notifications(){
     let Some(mut apps)=APPS.try_lock()else{return};
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     for (index,app) in apps.iter_mut().enumerate(){
+        if app.ready && app.rebirthing {
+            // Everyone has forgotten the old run: wake the coordinator to commit.
+            if app.acked==REQUIRED && app.hinted&32==0 {
+                let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(app.coordinator)else{continue};
+                let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::app_lifecycle::OP_APP_REBORN,arg0:app.target as u64,arg1:app.task as u64,arg2:0,caller_pd:0,caller_task:0};
+                if unsafe{(*pd.message_ring).enqueue(msg)}.is_ok(){app.hinted|=32;crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
+                continue;
+            }
+            for recipient in 0..5 {
+                let bit=1u8<<recipient;
+                if app.acked&bit!=0 || (app.hinted&bit!=0 && now.wrapping_sub(app.last_hint[recipient])<16){continue}
+                let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(app.services[recipient])else{continue};
+                let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::app_lifecycle::OP_APP_REBORN,arg0:app.target as u64,arg1:app.task as u64,arg2:0,caller_pd:0,caller_task:0};
+                app.hinted|=bit;app.last_hint[recipient]=now;
+                if unsafe{(*pd.message_ring).enqueue(msg)}.is_ok(){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
+            }
+            continue;
+        }
         if !app.ready || app.retired{continue}
         let main=app.main as *mut crate::scheduler::Task;
         if !unsafe{(*main).state.snapshot().exited}{continue}

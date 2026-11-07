@@ -580,6 +580,9 @@ pub extern "C" fn _start() -> ! {
         }
         let msg = paging_probe::next_message();
         paging_probe::check_retained();
+        if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2]){
+            sex_pdx::serial_record!("[bell.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
+        }
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|n| {

@@ -3829,6 +3829,19 @@ pub extern "C" fn _start() -> ! {
             }
 
             // A hint cannot authorize cleanup: capability status above is the authority.
+            if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN {
+                if msg.caller_pd==0 {
+                    let (target,task)=(msg.arg0 as u32,msg.arg1 as u32);
+                    let slot=sex_pdx::app_catalog::by_target(target).map(|row|row.lifecycle_slot);
+                    if let Some(slot)=slot.filter(|slot|sex_pdx::app_lifecycle::catalog(*slot).is_ok_and(|c|c.target_pd==target&&c.task_id==task)) {
+                        if lifecycle.reborn(target,task)==Some(slot) {
+                            let acked=sex_pdx::app_lifecycle::ack(slot,task).is_ok();
+                            sex_pdx::serial_record!("[display.app.reborn.ack] target={} task={} ok={}",target,task,acked as u8);
+                        }
+                    }
+                }
+                continue;
+            }
             if msg.type_id == sex_pdx::app_lifecycle::OP_APP_EXIT {
                 if sex_pdx::app_lifecycle::ExitNotice::decode(msg.type_id, msg.caller_pd as u64,
                     [msg.arg0, msg.arg1, msg.arg2]).is_ok()

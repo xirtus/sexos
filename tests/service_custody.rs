@@ -7,7 +7,7 @@ impl Auth{fn new()->Self{Self{catalog:CatalogInfo{target_pd:15,task_id:71,surfac
 impl Authority for Auth{
  fn catalog(&mut self,slot:usize)->Result<CatalogInfo,u64>{self.queries+=1;if slot==38{Ok(self.catalog)}else{Err(INVALID)}}
  fn info(&mut self,_:usize)->Result<LifecycleInfo,u64>{self.queries+=1;self.info}
- fn ack(&mut self,slot:usize,task:u32)->Result<(),u64>{assert_eq!((slot,task),(38,71));self.acks+=1;self.ack}
+ fn ack(&mut self,slot:usize,task:u32)->Result<(),u64>{assert_eq!((slot,task),(38,self.catalog.task_id));self.acks+=1;self.ack}
 }
 #[test]fn forged_hints_have_no_queries_fences_or_effects(){
  for(op,caller,args)in[(0x108,0,[15,71,0]),(0x107,15,[15,71,0]),(0x107,0,[0,71,0]),(0x107,0,[15,0,0]),(0x107,0,[1<<32,71,0]),(0x107,0,[15,1<<32,0]),(0x107,0,[15,71,1])]{
@@ -72,4 +72,24 @@ impl Authority for Auth{
  assert!(c.is_subject(18,307,3));
  for bad in [CatalogInfo{task_id:0,..c},CatalogInfo{target_pd:16,..c},CatalogInfo{surface_id:301,..c},CatalogInfo{coordinator_pd:9,..c}]{assert!(!bad.is_subject(18,307,3));}
  assert!(!c.is_subject(0,307,3));assert!(!c.is_subject(18,0,3));assert!(!c.is_subject(18,307,18));
+}
+
+#[test]fn new_run_lifts_the_fence_only_for_the_task_the_kernel_reports(){
+ let reborn=|c:&mut ServiceCustody,a:&mut Auth,op,caller,args|c.reborn(a,op,caller,args);
+ let mut c=ServiceCustody::new();let mut a=Auth::new();
+ c.receive(&mut a,OP_APP_EXIT,0,[15,71,0],|_|{}).unwrap();assert!(c.is_retired(15));
+ // Forged sender, wrong opcode, or a task the grant does not report: still fenced.
+ for(op,caller,args)in[(OP_APP_REBORN,15,[15,72,0]),(OP_APP_EXIT,0,[15,72,0]),(OP_APP_REBORN,0,[15,72,0]),(OP_APP_REBORN,0,[16,71,0])]{
+  assert!(reborn(&mut c,&mut a,op,caller,args).is_none());assert!(c.is_retired(15));
+ }
+ a.catalog.task_id=72;let acks=a.acks;
+ assert_eq!(reborn(&mut c,&mut a,OP_APP_REBORN,0,[15,72,0]).unwrap(),(ExitNotice{target_pd:15,task_id:72},true));
+ assert!(!c.is_retired(15));assert_eq!(a.acks,acks+1);
+ // The old run's replayed exit cannot fence or clean up the new run.
+ assert!(c.receive(&mut a,OP_APP_EXIT,0,[15,71,0],|_|panic!("old run effect")).is_none());assert!(!c.is_retired(15));
+ // The new run's own death cleans up exactly once, and fences again.
+ a.info=Ok(LifecycleInfo{target_pd:15,task_id:72,required_mask:REQUIRED_SERVICES,acked_mask:0});
+ let effects=Cell::new(0);
+ assert!(c.receive(&mut a,OP_APP_EXIT,0,[15,72,0],|_|effects.set(effects.get()+1)).is_some());
+ assert_eq!(effects.get(),1);assert!(c.is_retired(15));
 }

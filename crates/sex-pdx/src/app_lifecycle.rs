@@ -3,6 +3,8 @@
 //! every service attests custody through its own capability before retirement.
 pub const SLOTS: [usize; crate::app_catalog::COUNT] = crate::app_catalog::LIFECYCLE_SLOTS;
 pub const OP_APP_EXIT: u64 = 0x107;
+/// A reusable row has a new task: forget the old run, then acknowledge.
+pub const OP_APP_REBORN: u64 = 0x10F;
 pub const OP_APP_CLOSE: u64 = 0x108;
 pub const OP_APP_PRESENT: u64 = 0x109;
 pub const CLOSE_SLOTS: [usize;3] = [41,42,43];
@@ -148,6 +150,20 @@ impl ServiceCustody {
         }
         None
     }
+    /// A kernel-attested new run of a reusable row: the fence for the old task
+    /// lifts only if the row's held grant now reports exactly this task.
+    pub fn reborn<A:Authority>(&mut self,a:&mut A,opcode:u64,caller:u64,args:[u64;3])->Option<(ExitNotice,bool)> {
+        if opcode!=OP_APP_REBORN {return None}
+        let notice=ExitNotice::decode(OP_APP_EXIT,caller,args).ok()?;
+        for (index,slot) in SLOTS.into_iter().enumerate() {
+            let Ok(c)=a.catalog(slot) else {continue};
+            if c.target_pd!=notice.target_pd {continue}
+            if c.task_id!=notice.task_id {return None}
+            self.retired[index]=None;self.acked[index]=false;
+            return Some((notice,a.ack(slot,notice.task_id).is_ok()));
+        }
+        None
+    }
 }
 
 /// Immutable BOOT grants for the finite second Quil incarnation.
@@ -169,15 +185,25 @@ pub const ACTIVATION_RESERVED:u64=0;
 pub const ACTIVATION_READY:u64=1;
 pub const ACTIVATION_ACTIVE:u64=2;
 pub const ACTIVATION_EXHAUSTED:u64=3;
+/// A reusable row's last run has been fully cleaned up.
+pub const ACTIVATION_REUSABLE:u64=4;
+/// A new run is waiting for every service to forget the old one.
+pub const ACTIVATION_REBIRTHING:u64=5;
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct ActivationInfo{pub successor:u32,pub task:u32,pub surface:u64,pub state:u64}
 /// kind0 observes; kind1 consumes the fixed one-shot grant or replays its
 /// receipt. No caller supplies a domain, image, address or replacement grant.
 #[cfg(target_arch="x86_64")]
-pub fn activation(slot:usize,commit:bool)->Result<ActivationInfo,u64>{
+pub fn activation(slot:usize,commit:bool)->Result<ActivationInfo,u64>{activation_kind(slot,commit as u64)}
+/// Start, or continue, a new run of a reusable row. No caller supplies a domain,
+/// image or address; the row's own BOOT grant names all of them.
+#[cfg(target_arch="x86_64")]
+pub fn rebirth(slot:usize)->Result<ActivationInfo,u64>{activation_kind(slot,2)}
+#[cfg(target_arch="x86_64")]
+fn activation_kind(slot:usize,kind:u64)->Result<ActivationInfo,u64>{
     let (status,pd,task,surface,state):(u64,u64,u64,u64,u64);
     unsafe{core::arch::asm!("syscall",inlateout("rax") SYS_ACTIVATION=>status,
-        in("rdi") slot as u64,inlateout("rsi") commit as u64=>pd,
+        in("rdi") slot as u64,inlateout("rsi") kind=>pd,
         lateout("rdx") task,lateout("r10") surface,lateout("r8") state,
         out("rcx") _,out("r11") _,options(nostack));}
     if status!=OK{return Err(status)}

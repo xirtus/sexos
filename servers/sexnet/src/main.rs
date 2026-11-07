@@ -5491,6 +5491,9 @@ pub extern "C" fn _start() -> ! {
                 },
             }
         } else { unsafe { pdx_listen_raw(0) } };
+        if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2]){
+            sex_pdx::serial_record!("[net.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
+        }
         if req.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|notice| {

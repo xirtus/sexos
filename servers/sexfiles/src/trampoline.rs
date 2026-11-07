@@ -258,6 +258,9 @@ pub extern "C" fn trampoline_main() {
             arg0: msg_a0, arg1: msg_a1, arg2: msg_a2,
         };
         let caller = msg.caller_pd;
+        if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2]){
+            sex_pdx::serial_record!("[files.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
+        }
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {

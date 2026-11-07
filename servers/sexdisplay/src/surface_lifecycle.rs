@@ -246,6 +246,17 @@ impl Lifecycle {
             Some(e) if e.phase == Phase::Prepared => { e.phase = Phase::Committed; true }, _ => false,
         }
     }
+    /// A reusable row's old run is fully retired and the kernel attests a new
+    /// task: this row is live again. Returns its grant slot, also for a replay.
+    pub fn reborn(&mut self, target: u32, task: u32) -> Option<usize> {
+        let entry = self.entries.iter_mut().flatten().find(|e| e.catalog.target_pd == target)?;
+        if entry.catalog.task_id == task && entry.phase == Phase::Live { return Some(entry.catalog.slot); }
+        if entry.phase != Phase::Acknowledged { return None; }
+        entry.catalog.task_id = task;
+        entry.phase = Phase::Live;
+        entry.presentation = Presentation::EMPTY;
+        Some(entry.catalog.slot)
+    }
     pub fn acknowledge(&mut self, index: usize, target: u32, task: u32) -> bool {
         match self.entries.get_mut(index).and_then(|e| e.as_mut()) {
             Some(e) if e.catalog.target_pd == target && e.catalog.task_id == task && e.phase == Phase::Committed => {

@@ -173,3 +173,25 @@ fn create(l:&Lifecycle,s:&mut[Surface],caller:u32,sid:u64)->bool {
  let mut refs=SceneRefs::default();assert_eq!(l.prepare(5,18,0x8012,&mut surfaces,&mut refs),Some(1));
  assert!(!create(&l,&mut surfaces,18,307));assert!(!create(&l,&mut surfaces,3,307));
 }
+
+#[test]
+fn reusable_row_goes_live_again_only_after_its_cleanup_is_acknowledged() {
+    let mut l=Lifecycle::new();assert!(l.register(catalog(38,9,156)));
+    let mut surfaces=[SURFACE_EMPTY;16];assert!(create(&l,&mut surfaces,9,156));
+    let task=l.catalog(0).unwrap().task_id;
+    // A live run, and every step short of the acknowledgement, cannot be replaced.
+    assert_eq!(l.reborn(9,task+1),None);
+    let mut refs=SceneRefs::default();
+    assert!(l.prepare(0,9,task,&mut surfaces,&mut refs).is_some());
+    assert_eq!(l.reborn(9,task+1),None);assert!(!l.caller_live(9));
+    assert!(l.scene_committed(0));assert_eq!(l.reborn(9,task+1),None);
+    assert!(l.acknowledge(0,9,task));assert!(!l.caller_live(9));
+    assert_eq!(l.reborn(10,task+1),None);
+    // Acknowledged: exactly the new task, replayable, and live again.
+    assert_eq!(l.reborn(9,task+1),Some(38));assert!(l.caller_live(9));assert_eq!(l.catalog(0).unwrap().task_id,task+1);
+    assert_eq!(l.reborn(9,task+1),Some(38));
+    assert_eq!(l.reborn(9,task+2),None);
+    assert!(create(&l,&mut surfaces,9,156));
+    // The old task's death notice can no longer touch the new run.
+    assert_eq!(l.prepare(0,9,task,&mut surfaces,&mut refs),None);assert!(l.caller_live(9));
+}
