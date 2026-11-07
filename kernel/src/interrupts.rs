@@ -58,6 +58,7 @@ lazy_static! {
         idt[0x40].set_handler_fn(revoke_key_handler);
         idt[0x21].set_handler_fn(keyboard_interrupt_handler);
         idt[0x22].set_handler_fn(generic_irq_handler); 
+        idt[crate::smp::tlb::VECTOR].set_handler_fn(tlb_shootdown_handler);
         idt
     };
 }
@@ -688,6 +689,11 @@ extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFram
         stack_frame.stack_pointer.as_u64()
     );
     panic!("EXCEPTION: INVALID OPCODE");
+}
+
+extern "x86-interrupt" fn tlb_shootdown_handler(_frame: InterruptStackFrame) {
+    crate::smp::tlb::service();
+    unsafe { send_eoi(); }
 }
 
 pub unsafe fn send_eoi() {

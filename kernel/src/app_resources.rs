@@ -138,7 +138,7 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     retire_private_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
         |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
-        |va|x86_64::instructions::tlb::flush(VirtAddr::new(va))).expect("SUCCESSOR_RESERVE_LEAVES");
+        |va|crate::smp::tlb::flush(va)).expect("SUCCESSOR_RESERVE_LEAVES");
     if app.reusable{
         let (base,key)=(app.window_base,app.pkey);
         app.window=crate::boot_memory::reserve_window(base,key,&mut app.window_leaves);
@@ -282,9 +282,9 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         if kind==0{return Ok(reply)}
         if kind==2{return Err(DENIED)}
         if !ready{return Err(RETRY)}
-        // Local TLB retirement is valid only while exactly the BSP has ever
-        // initialized execution. Fail closed if another core is introduced.
-        if crate::core_local::INITIALIZED_CORES.load(Ordering::Acquire)!=1
+        // TLB retirement is valid only when it reaches every core ever started.
+        // Fail closed if a core is present that shootdowns do not cover.
+        if !crate::smp::shootdown_covers_all()
             || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
         let target=crate::ipc::DOMAIN_REGISTRY.get(new.target).ok_or(DENIED)?;
         let main=target.main_task.load(Ordering::Acquire);
@@ -299,7 +299,7 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         let count=restore_reserved_pages(&new.pages[..new.count],
             |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
             |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,value)},
-            |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
+            |va|crate::smp::tlb::flush(va))?;
         // All fallible validation is above. IF is masked by the syscall
         // entry. Publish authority and receipt before scheduler publication.
         let new=&mut apps[ni];new.activated=true;
@@ -356,7 +356,7 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     if !app.rebirthing {
         if !app.retired || app.acked!=REQUIRED {return Err(RETRY)}
         dead(app)?;
-        if crate::core_local::INITIALIZED_CORES.load(Ordering::Acquire)!=1
+        if !crate::smp::shootdown_covers_all()
             || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
         app.generation=app.generation.checked_add(1).ok_or(DENIED)?;
         // Distinct from every boot task and every earlier run of any row, for good.
@@ -384,7 +384,7 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     let count=restore_reserved_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
         |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,value)},
-        |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
+        |va|crate::smp::tlb::flush(va))?;
     app.rebirthing=false;app.acked=0;
     DORMANT[index].store(false,Ordering::Release);
     assert!(crate::scheduler::SCHEDULERS[0].activate_task(main),"REBIRTH_EXCLUSIVE_COMMIT");
@@ -410,7 +410,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         let count=retire_private_pages(&app.pages[..app.count],
             |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
-            |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
+            |va|crate::smp::tlb::flush(va))?;
         if app.reusable{
             // The row keeps its authority and its frames for the next run.
             for page in &app.pages[..app.count]{crate::boot_memory::zero_frame(page.expected&PHYSICAL_MASK);}

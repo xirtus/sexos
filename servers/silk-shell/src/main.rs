@@ -16119,7 +16119,7 @@ unsafe fn open_program_in_active_scene()->bool{
     if PROGRAM_REBIRTH.is_some(){return true}
     if let Some((row,slot,_))=program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY){
         launcher_focus_discard();
-        let Ok(active)=a::activation(slot,true)else{return false};
+        let active=match a::activation(slot,true){Ok(active)=>active,Err(status)=>{sex_pdx::serial_record!("[shell.program.denied] reason=commit status={}",status);return false}};
         if active.state!=a::ACTIVATION_ACTIVE {return false}
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);

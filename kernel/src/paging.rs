@@ -133,7 +133,7 @@ pub fn commit(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64, frame: u64, 
         state.ledger.install(binding,map.quota)?;
         unsafe {
             core::ptr::write_volatile(leaf,physical | flags);
-            x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(fault.page_addr));
+            crate::smp::tlb::flush(fault.page_addr);
         }
         crate::serial_println!("[paging.leaf.commit] token={} target={} page={:#x} frame={} rights={} pkey={} zero=1 runtime_alloc=0",
             token,map.target_pd,fault.page_addr,frame,rights,state.target_pkeys[range]);
@@ -177,7 +177,7 @@ pub fn reclaim(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64, frame: u64,
     let page = map.base_va + binding.page_index as u64 * PAGE;
     unsafe {
         core::ptr::write_volatile(leaf,0);
-        x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(page));
+        crate::smp::tlb::flush(page);
     }
     state.ledger.retire(binding).expect("PAGING_RETIRE_IDENTITY");
     crate::serial_println!("[paging.leaf.reclaim] token={} target={} page={:#x} frame={} cleared=1 tlb=1 runtime_alloc=0",
@@ -223,7 +223,7 @@ pub fn cleanup(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64) -> [u64;3] 
             let page = map.base_va + binding.page_index as u64 * PAGE;
             unsafe {
                 core::ptr::write_volatile(state.leaf_addresses[range][binding.page_index] as *mut u64,0);
-                x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(page));
+                crate::smp::tlb::flush(page);
             }
             count += 1;
             crate::serial_println!("[paging.leaf.cleanup] target={} task={} token={} page={:#x} frame={} finalized={} cleared=1 tlb=1 runtime_alloc=0",

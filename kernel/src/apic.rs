@@ -352,3 +352,26 @@ pub fn init_timer() {
             lapic_vaddr, ticks_per_ms, lvt_val, cur_cnt);
     }
 }
+
+/// Turn on this core's local APIC, for a core started after the boot core set it up.
+pub fn enable_local() {
+    let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *mut u32;
+    assert!(!lapic.is_null(), "SMP_NO_LAPIC");
+    unsafe {
+        lapic.offset(0x080 / 4).write_volatile(0);
+        let svr = lapic.offset(0x0F0 / 4);
+        svr.write_volatile(svr.read_volatile() | 0x1FF);
+    }
+}
+pub fn local_id() -> u32 {
+    let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *const u32;
+    unsafe { lapic.offset(0x020 / 4).read_volatile() >> 24 }
+}
+/// Fixed delivery to every core but this one.
+pub fn send_to_others(vector: u8) {
+    let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *mut u32;
+    unsafe {
+        while lapic.offset(0x300 / 4).read_volatile() & (1 << 12) != 0 { core::hint::spin_loop(); }
+        lapic.offset(0x300 / 4).write_volatile((0b11 << 18) | (1 << 14) | vector as u32);
+    }
+}

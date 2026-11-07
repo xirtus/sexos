@@ -240,8 +240,8 @@ fn stop(force:bool)->[u64;3]{
 fn census()->[u64;3]{
     let (started,ended,live)=(STARTED.load(Ordering::Relaxed),ENDED.load(Ordering::Relaxed),LIVE.load(Ordering::Relaxed));
     let (switches,cycles)=(SWITCHES.load(Ordering::Relaxed),SWITCH_CYCLES.load(Ordering::Relaxed));
-    crate::serial_println!("[records.census] live={} started={} ended={} capacity={} pool_free={} pool_total={} switches={} switch_cycles={} kstack_peak={}",
-        live,started,ended,COUNT.load(Ordering::Relaxed),POOL_FREE.load(Ordering::Relaxed),POOL_TOTAL.load(Ordering::Relaxed),switches,cycles,KSTACK_PEAK.load(Ordering::Relaxed));
+    crate::serial_println!("[records.census] live={} started={} ended={} capacity={} pool_free={} pool_total={} switches={} switch_cycles={} kstack_peak={} tlb_shootdowns={}",
+        live,started,ended,COUNT.load(Ordering::Relaxed),POOL_FREE.load(Ordering::Relaxed),POOL_TOTAL.load(Ordering::Relaxed),switches,cycles,KSTACK_PEAK.load(Ordering::Relaxed),crate::smp::tlb::sent());
     [0,live as u64,POOL_FREE.load(Ordering::Relaxed) as u64]
 }
 pub fn call(pd:&ProtectionDomain,op:u64,a:u64,b:u64)->[u64;3]{

@@ -168,6 +168,11 @@ pub static MODULE_REQUEST: ModulesRequest = ModulesRequest::new();
 #[cfg(target_arch = "x86_64")]
 #[used]
 #[link_section = ".limine_requests"]
+pub static MP_REQUEST: limine::request::MpRequest = limine::request::MpRequest::new(0);
+
+#[cfg(target_arch = "x86_64")]
+#[used]
+#[link_section = ".limine_requests"]
 static _STACK_SIZE: StackSizeRequest = StackSizeRequest::new(1024 * 1024); // 1 MiB
 
 #[cfg(target_arch = "x86_64")]
@@ -210,6 +215,9 @@ pub fn kernel_init() {
     serial_println!("kernel: RSDP Physical Address: {:#x}", rsdp_phys);
 
     hal::init_advanced(rsdp_phys as u64, hhdm.offset);
+
+    // 3.5 The other cores, set up and idle. Nothing runs on them yet.
+    if let Some(mp) = MP_REQUEST.response() { smp::boot_aps(mp); }
 
     // Initialize PS/2 Keyboard
     keyboard::init();

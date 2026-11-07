@@ -16,10 +16,14 @@ pub struct CoreLocal {
     pub user_stack: u64,
     pub syscall_msg_ptr: u64,
     pub pdx_ring: crate::ipc_ring::SpscRing<crate::ipc::messages::Message>,
+    /// This core's own TSS, or null for the boot core's static one.
+    pub tss: *mut x86_64::structures::tss::TaskStateSegment,
 }
 
 impl CoreLocal {
-    pub unsafe fn init(core_id: u32) {
+    pub unsafe fn init(core_id: u32) { Self::init_with_tss(core_id, core::ptr::null_mut()) }
+
+    pub unsafe fn init_with_tss(core_id: u32, tss: *mut x86_64::structures::tss::TaskStateSegment) {
         INITIALIZED_CORES.fetch_add(1, Ordering::AcqRel);
         use x86_64::structures::paging::PageTableFlags;
         use crate::memory::manager::GLOBAL_VAS;
@@ -46,6 +50,7 @@ impl CoreLocal {
             user_stack: 0,
             syscall_msg_ptr: msg_va,
             pdx_ring: crate::ipc_ring::SpscRing::new(),
+            tss,
         });
         
         // Allocate 64KB kernel stack
@@ -54,12 +59,13 @@ impl CoreLocal {
         core_local.kernel_stack = stack_ptr;
         core::mem::forget(stack); // Leak stack for simplicity
         
-        // Phase 32: Update TSS for Ring 3 -> Ring 0 transition safety
-        crate::gdt::update_tss_rsp0(VirtAddr::new(stack_ptr));
-
         let ptr = alloc::boxed::Box::into_raw(core_local);
         GsBase::write(VirtAddr::from_ptr(ptr));
         x86_64::registers::model_specific::KernelGsBase::write(VirtAddr::from_ptr(ptr));
+
+        // Phase 32: Update TSS for Ring 3 -> Ring 0 transition safety. After GS, so
+        // the write reaches this core's TSS and no other's.
+        crate::gdt::update_tss_rsp0(VirtAddr::new(stack_ptr));
     }
 
     pub fn init_first_core(pd_ptr: *mut crate::capability::ProtectionDomain) {

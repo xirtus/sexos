@@ -25,9 +25,16 @@ lazy_static! {
     };
 }
 
+/// This core's TSS: the static one until this core's CoreLocal says otherwise.
+fn current_tss() -> *mut TaskStateSegment {
+    let gs = x86_64::registers::model_specific::GsBase::read().as_u64();
+    let local = if gs == 0 { core::ptr::null_mut() } else { unsafe { (*(gs as *const crate::core_local::CoreLocal)).tss } };
+    if local.is_null() { core::ptr::addr_of_mut!(TSS) } else { local }
+}
+
 pub fn update_tss_rsp0(addr: VirtAddr) {
     unsafe {
-        TSS.privilege_stack_table[0] = addr;
+        (*current_tss()).privilege_stack_table[0] = addr;
         if crate::core_local::INITIALIZED.load(core::sync::atomic::Ordering::Acquire) {
             crate::core_local::CoreLocal::get_mut().kernel_stack = addr.as_u64();
         }
@@ -61,7 +68,40 @@ pub fn debug_dump_user_selectors() {
 }
 
 pub fn debug_tss_rsp0() -> u64 {
-    unsafe { TSS.privilege_stack_table[0].as_u64() }
+    unsafe { (*current_tss()).privilege_stack_table[0].as_u64() }
+}
+
+/// A started core's own GDT and TSS. A TSS is marked busy when loaded, so no two
+/// cores can share one, and each needs its own stack for double faults.
+pub fn init_core() -> *mut TaskStateSegment {
+    use x86_64::instructions::segmentation::{CS, DS, ES, FS, GS, SS};
+    use x86_64::instructions::tables::load_tss;
+    let stack = alloc::vec![0u8; 32 * 1024].leak();
+    let mut tss = TaskStateSegment::new();
+    // The IDT asks for IST index + 1.
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX + 1] = VirtAddr::from_ptr(stack.as_ptr()) + stack.len() as u64;
+    let tss: &'static mut TaskStateSegment = alloc::boxed::Box::leak(alloc::boxed::Box::new(tss));
+    let pointer = tss as *mut TaskStateSegment;
+    let mut gdt = GlobalDescriptorTable::new();
+    gdt.append(Descriptor::kernel_code_segment());
+    gdt.append(Descriptor::kernel_data_segment());
+    gdt.append(Descriptor::user_code_segment());
+    gdt.append(Descriptor::user_data_segment());
+    gdt.append(Descriptor::user_code_segment());
+    gdt.append(unsafe { Descriptor::tss_segment(&*pointer) });
+    let gdt: &'static GlobalDescriptorTable = alloc::boxed::Box::leak(alloc::boxed::Box::new(gdt));
+    gdt.load();
+    let selectors = get_selectors();
+    unsafe {
+        CS::set_reg(selectors.kernel_cs);
+        SS::set_reg(selectors.kernel_ss);
+        DS::set_reg(selectors.kernel_ss);
+        ES::set_reg(selectors.kernel_ss);
+        FS::set_reg(selectors.kernel_ss);
+        GS::set_reg(selectors.kernel_ss);
+        load_tss(selectors.tss);
+    }
+    pointer
 }
 
 pub fn init() {
