@@ -1965,3 +1965,49 @@ row no longer waits for the row before it to end.
   `https_document`, `spindle_calc`, `spindle_reserve_probe`, `https_png`,
   `network_contention` at 1280x800.
 - Screenshot: `assets/sexos-alpha-programs-from-disk-2026-11-07.png`.
+
+## Thousands of programs alive (2026-11-07)
+
+- **What runs now.** `spawn hum 4000` in Spindle starts 4,000 programs from one file
+  on disk, all alive at once, on one core of a 4 GiB QEMU machine. `records` counts
+  them; `stopall` asks them to end and `stopall force` ends them regardless.
+- **Design.** BOOT makes program records, up to 4,096 and sized by RAM (16 below
+  about 768 MiB), from one template: a domain, a task and a page table each, sharing
+  one empty sealed capability table and pair of rings. A load takes memory from a
+  pool and a fresh task id. BOOT stays the only capability genesis. Records share
+  key 10, and only the running record's pages are present.
+- **Measured, 4,000 programs, QEMU emulation, 60 s hold.** 44 KiB of program memory
+  each, plus about 19 KiB of kernel memory reserved per record whether used or not.
+  21.8 s to start them, in small batches. 4,000 idle programs caused 0 record switches
+  in 60 s, and typing took 45 ms (35 ms with none). 4,000 programs that wake about
+  every 32 ticks took typing to 422 ms median, 815 ms worst. A switch between records
+  averaged 6,468 TSC cycles under emulation, which says little about real hardware.
+  Deepest record kernel stack 1,904 bytes of 16 KiB, across all runs.
+- **Isolation.** `snoop` reads the next program's memory: it is stopped by a page
+  fault on that read, alone, and the others stay alive. `hum` checks its memory on
+  every wake and no corruption appeared. `spin` never yields and ignores requests;
+  `stopall force` still ends it. All memory returned to the pool after every round.
+- **Bugs this found.** The NVMe driver relied on firmware to enable DMA and set queue
+  entry sizes, which QEMU's firmware does at 512 MiB and not at 4 GiB, so the disk
+  failed on the larger machine. Creating I/O queues gave up after a fixed poll count,
+  so a boot could occasionally lose its disk, and the master gate passed such a boot.
+  All three are fixed, and the gate now fails on a queue setup error. The kernel also
+  now checks program files in a private copy, so Files can't change one after the check.
+- **ABI.** Syscall 79, `RecordPool` capability, `program_store` record operations.
+  Domain space 8,192. Reply bookkeeping is a table of 128 distinct callers per domain,
+  and a domain past that refuses new callers without losing any.
+- **Organs.** sexbell joined the senses organ on key 4, giving up isolation from
+  sexinput and sexusb, to free key 10.
+- **Limits.** These programs hold no routes: no windows, files or network, so they
+  can compute and sleep and nothing else. Windowed programs are still three at once.
+  There's no scheduling priority, so busy programs slow the desktop, and one spinning
+  program roughly triples typing latency. The capacity is fixed at boot, and the
+  kernel memory is spent whether records are used or not. All numbers are on QEMU;
+  none of this has run on real hardware. One core only: `kernel/src/smp.rs` parks the
+  others, and record key sharing assumes one core.
+- **Gates.** All non-QEMU gates except the older ones listed earlier, 1,132 Python
+  tests, master gate GREEN. Native on the final commit: `program_records` at 1,000 and
+  4,000; `program_disk` and `program_launch` at both sizes; `quil_readability`,
+  `connected_desktop`, `quil_autosave`, `quil_workflow`, `https_document`,
+  `http_content`, `clipboard_workflow`, `spindle_calc` at 1280x800, and
+  `spindle_reserve_probe`, `https_png`, `network_contention`.
