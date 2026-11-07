@@ -20,7 +20,7 @@ FUNCTIONS = (
     'launcher_focus_existing', 'quil_activation_edge', 'app_activation_info',
     'app_reserve_remaining', 'app_launcher_status', 'browser_activation_info',
     'browser_launcher_status', 'browser_reserve_label', 'browser_active_frame',
-    'open_browser_in_active_scene', 'quil_activation_info', 'spindle_activation_info',
+    'open_browser_in_active_scene', 'open_program_in_active_scene', 'quil_activation_info', 'spindle_activation_info',
     'palette_item_status', 'palette_execute_selected', 'command_palette_selected_accent',
 )
 CASES = (
@@ -110,7 +110,7 @@ def run(out, fixture, name, body, catalog, *, enabled=True, expected=None):
         print('[browser.launch.control] rejected=' + name + ' case=' + expected)
         return 1
     count = 8 if enabled else 5
-    assert result.returncode == 0 and f'test result: ok. {count} passed;' in log, name + ': fixture failed/count changed'
+    assert result.returncode == 0 and f'test result: ok. {count} passed;' in log, name + ': fixture failed/count changed\n'+log[-1200:]
     for case in CASES if enabled else CASES[:3]:
         assert f'test {case} ... ok' in log, name + ': missing ' + case
     print(log, end='')

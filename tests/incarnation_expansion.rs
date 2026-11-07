@@ -5,6 +5,7 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../servers/silk-shell/src/linen_text_delivery.rs"]mod admission;
+use admission as text_delivery;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/document.rs"]pub mod document;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;

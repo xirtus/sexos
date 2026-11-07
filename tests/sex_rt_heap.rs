@@ -71,9 +71,9 @@ fn exhaustion_returns_null_and_free_coalesces() {
         let pointer = unsafe { allocator.alloc(layout) };
         if pointer.is_null() { break; }
         allocations.push(pointer);
-        assert!(allocations.len() <= 16);
+        assert!(allocations.len() <= HEAP_BYTES / 4096);
     }
-    assert_eq!(allocations.len(), 16);
+    assert_eq!(allocations.len(), HEAP_BYTES / 4096);
     for pointer in allocations { unsafe { allocator.dealloc(pointer, layout); } }
     let whole = Layout::from_size_align(HEAP_BYTES, 4096).unwrap();
     let pointer = unsafe { allocator.alloc(whole) };

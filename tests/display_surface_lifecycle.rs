@@ -165,7 +165,8 @@ fn create(l:&Lifecycle,s:&mut[Surface],caller:u32,sid:u64)->bool {
  let mut l=Lifecycle::new();
  for (slot,pd,sid) in [(38,9,156),(39,12,154),(40,15,300),(45,16,301),(50,17,302),(54,18,307),(110,19,308),(114,20,309),(118,21,310),(122,22,311),(126,23,312),(130,24,313),(134,25,318),(138,26,323),(142,27,328),(146,28,333),(150,29,338),(154,30,343),(158,31,344)] {assert!(l.register(catalog(slot,pd,sid)));}
  for (slot,pd,sid) in [(162,32,345),(166,33,346),(170,34,347),(174,35,348),(178,36,349),(182,37,350),(186,38,351),(190,39,352),(194,40,353)] {assert!(l.register(catalog(slot,pd,sid)));}
- assert!(!l.register(catalog(198,41,358)));
+ for (slot,pd,sid) in [(240,41,358),(244,42,359),(248,43,360),(252,44,361)] {assert!(l.register(catalog(slot,pd,sid)));}
+ assert!(!l.register(catalog(256,45,362)));
  let mut surfaces=[SURFACE_EMPTY;16];assert!(create(&l,&mut surfaces,18,307));
  assert!(!create(&l,&mut surfaces,16,307));assert!(!create(&l,&mut surfaces,18,301));
  assert_eq!(native_pixel_bit(18,307),32);assert_eq!(native_pixel_bit(16,307),0);

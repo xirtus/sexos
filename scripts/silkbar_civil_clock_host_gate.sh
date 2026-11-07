@@ -33,7 +33,7 @@ for name in [('raster_full'if prepared else'render'),('raster_strip'if prepared 
     actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
     assert actual[0].count('civil_clock_lines(&bar.civil_clock)')==1
     assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index('top_strip_pixel(')
-    pixel_loop='for y in 0..h {'if name in('render','raster_full')else'for y in 0..51 {'
+    pixel_loop='for y in 0..h.min(51) {'if name=='raster_full'else'for y in 0..h {'if name=='render'else'for y in 0..51 {'
     assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index(pixel_loop)
     if not prepared:
         assert actual[0].index('core::ptr::write_volatile(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+('full'if name=='render'else'strip')+'")')

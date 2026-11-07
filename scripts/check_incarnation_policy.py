@@ -8,7 +8,7 @@ def main():
  # Independent current roster expectation. Synthetic policy rows are descriptive
  # host metadata; they neither create grants nor assign/infer registered tasks.
  browsers=re.findall(r'Incarnation\s*\{\s*app:\s*App::Browser,\s*ordinal:\s*(\d+),\s*target:\s*(\d+),\s*surface:\s*(\d+),',catalog)
- assert int(m[1])==28 and browsers==[('0','15','300'),('1','30','343'),('2','31','344')], 'current source roster changed'
+ assert int(m[1])==32 and browsers==[('0','15','300'),('1','30','343'),('2','31','344')], 'current source roster changed'
  quils=re.findall(r'^\s*quil\((\d+),\s*(\d+),',catalog,re.M)
  spindles=re.findall(r'Incarnation\s*\{\s*app:\s*App::Spindle,\s*ordinal:\s*(\d+),\s*target:\s*(\d+),',catalog)
  # Independent actual roster goldens; only subsequent synthetic ordinals are
@@ -36,7 +36,7 @@ def main():
   fixture=re.sub(r'#\[path="(\.\./[^"]+)"\]',lambda m:'#[path='+json.dumps(str(cp if m[1].endswith('/app_catalog.rs')else(root/m[1][3:]).resolve()))+']',fixture)
   fixture+=r'''
 #[test]fn explicit_expanded_lineage_preserves_actual_three_browser_rows(){
- assert_eq!(app_catalog::COUNT,31);
+ assert_eq!(app_catalog::COUNT,35);
  let browsers:Vec<_>=app_catalog::INCARNATIONS.iter().filter(|r|r.app==app_catalog::App::Browser)
   .map(|r|(r.ordinal,r.target,r.surface,r.lifecycle_slot,r.close_slot,r.activation_slot,r.route_slot)).collect();
  assert_eq!(browsers,[(0,15,300,40,43,None,43),(1,30,343,154,155,Some(156),157),
