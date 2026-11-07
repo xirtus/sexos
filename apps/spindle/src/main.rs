@@ -459,7 +459,7 @@ fn complete_command(line: &mut CmdLine) -> bool {
     }
     for &b in extra { line.insert_at(line.len, b); }
     if matches == 1 { line.insert_at(line.len, b' '); }
-    serial_println!("[spindle.complete] matches={} added={} len={}", matches, extra.len() + (matches == 1) as usize, line.len);
+    sex_pdx::serial_record!("[spindle.complete] matches={} added={} len={}", matches, extra.len() + (matches == 1) as usize, line.len);
     true
 }
 
