@@ -2038,3 +2038,31 @@ row no longer waits for the row before it to end.
   a94e2fe7; on the final commit, which differs only by two small corrections, master,
   `program_launch`, `program_disk`, `quil_workflow`, `smp_gate`, `program_records`. All
   non-QEMU gates except the older ones listed earlier, 1,132 Python tests.
+
+## Services across cores (2026-11-07)
+
+- **What runs now.** On 4 or more cores, the network stack, Files, Storage, the disk
+  driver, Quil, Spindle, Browser and every reserved incarnation of them run on cores 2
+  and up, spread across what's there. Shell, Display, SilkBar, input and the rest stay
+  on core 0, records stay on core 1. On 1 or 2 cores nothing moves off core 0 but records.
+  Every core has a timer, and an IPI wakes a halted core when work arrives for it.
+- **Bugs this found and fixed.** Serial lines from different cores interleaved, which
+  also broke every log-based gate. Kernel lifecycle and paging locks gave up at once on
+  contention, and a service read that as a denied caller. Those locks now wait, and answer
+  shootdowns while waiting, since the holder may be waiting on that core. A waker's cancel
+  could land just before a task armed its next wait, which then got refused and crashed
+  sexnet. The boot core's double-fault stack was never set, now fixed.
+- **Honest scope.** Tasks have a fixed home core and do not migrate or balance. Shell and
+  Display still share core 0, so the desktop's own hot path gains nothing yet. Device
+  interrupts all go to core 0. A real speedup hasn't been measured: QEMU multi-threaded
+  emulation on an ARM host says little about real x86, and has never run on real hardware.
+  Locks still spin with interrupts off, which is fine for this load but not a design that
+  scales to many cores.
+- **Gates.** On the final kernel: `https_document`, `network_contention` and
+  `http_content` five times each at 4 cores, and `https_document`, `network_contention`,
+  `connected_desktop`, `quil_autosave` at 2 and 8. One commit earlier, at 2, 3, 4 and 8
+  cores: `smp_gate`, `http_content`, `https_document`, `network_contention`,
+  `connected_desktop`, `program_disk`, `program_launch`, `quil_autosave`, `quil_workflow`,
+  `clipboard_workflow`, where a failure led to the wake fix above. `program_records` with
+  4,000 at 4 cores, typing 32 ms median while loaded. One-core regression, all non-QEMU
+  gates except the older ones listed earlier, and 1,132 Python tests pass.

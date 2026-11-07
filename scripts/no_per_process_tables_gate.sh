@@ -67,7 +67,7 @@ rejected=0
 with tempfile.TemporaryDirectory() as temporary:
     for name,(target,addition) in MUTANTS.items():
         copy=Path(temporary)/name
-        shutil.copytree(root,copy,ignore=shutil.ignore_patterns('target','target_debug','.git','docs','vendor','attic','archive','limine','iso_root','logs','sex-src','sex-repo','relibc','*.iso','*.img'))
+        shutil.copytree(root,copy,ignore=shutil.ignore_patterns('.evidence','target','target_debug','.git','docs','vendor','attic','archive','limine','iso_root','logs','sex-src','sex-repo','relibc','*.iso','*.img'))
         (copy/target).write_text((copy/target).read_text()+addition)
         _,mutant_errors=scan(copy)
         if not mutant_errors:print(f'[no_per_process_tables.negative] FAIL {name} accepted');sys.exit(1)
