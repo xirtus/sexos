@@ -326,6 +326,7 @@ impl Scheduler {
 
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
             core.set_pd(next_pd_ptr);
+            note_dispatch((*next_task).context.pd_id);
         }
 
         if SCHED_PICK_NEXT_LOG_BUDGET
@@ -855,6 +856,38 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);
     poll_paging_exit_notifications();
     yield_and_switch(regs_ptr)
+}
+
+/// How many domains actually run close together, which is how many hardware
+/// keys they would want at once. Measurement only: decides nothing.
+static ACTIVE_WINDOW_MASK: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_SECOND_MASK: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_WINDOW_START: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_SECOND_START: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_WINDOW_PEAK: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_SWITCHES: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_LOG_BUDGET: AtomicU32 = AtomicU32::new(600);
+const ACTIVE_WINDOW_TICKS: u64 = 10;
+const ACTIVE_SECOND_TICKS: u64 = 1000;
+fn note_dispatch(pd: u64) {
+    let bit = 1u64 << (pd & 63);
+    ACTIVE_WINDOW_MASK.fetch_or(bit, Ordering::Relaxed);
+    ACTIVE_SECOND_MASK.fetch_or(bit, Ordering::Relaxed);
+    ACTIVE_SWITCHES.fetch_add(1, Ordering::Relaxed);
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    if now.wrapping_sub(ACTIVE_WINDOW_START.load(Ordering::Relaxed)) >= ACTIVE_WINDOW_TICKS {
+        ACTIVE_WINDOW_START.store(now, Ordering::Relaxed);
+        let distinct = ACTIVE_WINDOW_MASK.swap(0, Ordering::Relaxed).count_ones() as u64;
+        ACTIVE_WINDOW_PEAK.fetch_max(distinct, Ordering::Relaxed);
+    }
+    if now.wrapping_sub(ACTIVE_SECOND_START.load(Ordering::Relaxed)) >= ACTIVE_SECOND_TICKS {
+        ACTIVE_SECOND_START.store(now, Ordering::Relaxed);
+        if ACTIVE_LOG_BUDGET.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1)).is_ok() {
+            serial_println!("[sched.active] tick={} second_distinct={} window_peak={} switches={}", now,
+                ACTIVE_SECOND_MASK.swap(0, Ordering::Relaxed).count_ones(),
+                ACTIVE_WINDOW_PEAK.swap(0, Ordering::Relaxed), ACTIVE_SWITCHES.swap(0, Ordering::Relaxed));
+        }
+    }
 }
 
 pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) -> ! {
