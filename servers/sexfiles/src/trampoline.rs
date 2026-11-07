@@ -285,6 +285,10 @@ pub extern "C" fn trampoline_main() {
             msg.type_id, caller, msg.arg0, msg.arg1
         ); }
 
+        if msg.type_id==sex_pdx::program_store::OP{
+            if caller==3{pdx_reply(caller,crate::program_store::load([msg.arg0,msg.arg1]));}
+            continue;
+        }
         if msg.type_id==sex_pdx::document::OP{
             if let Some(r)=sex_pdx::document::Request::decode(msg.arg0,msg.arg1,msg.arg2){
                 let live=document_caller_live(caller);

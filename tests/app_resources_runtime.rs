@@ -69,7 +69,10 @@ mod ipc{
  pub struct Registry;pub static DOMAIN_REGISTRY:Registry=Registry;
  impl Registry{pub fn get(&self,id:u32)->Option<&'static crate::capability::ProtectionDomain>{crate::REGISTRY.get(id as usize).and_then(|p|unsafe{p.load(crate::Ordering::Acquire).as_ref()})}}
 }
-mod boot_memory{pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
+#[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
+#[path="../kernel/src/program_image.rs"]mod program_image;
+mod boot_memory{pub fn program_image(_:usize)->Option<&'static [u8]>{None}pub fn reserve_window(_:u64,_:u8,_:&mut [u64])->u64{0}pub fn write_frames(_:u64,_:&[u8]){}
+ pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
  pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}pub fn zero_frame(_:u64){}}
 mod memory{
  pub mod va_allocator{pub fn allocate_va(_:usize)->Option<u64>{Some(0x9000_0000)}}
@@ -122,10 +125,10 @@ fn fixture_elf()->Vec<u8>{
  let reserved=*next_leaves;assert_eq!(reserved,[0;17]);assert!(!app_resources::activation_permitted(16));assert!(!app_resources::accepts_ipc(16));
  FLUSHES.lock().clear();
  let shell=ipc::DOMAIN_REGISTRY.get(3).unwrap();
- assert_eq!(app_resources::activation(shell,44,0),[0,16,16,301,0]);
- assert_eq!(app_resources::activation(shell,44,1),[RETRY,0,0,0,0]);
- assert_eq!(app_resources::activation(pager,44,1),[INVALID,0,0,0,0]);
- assert_eq!(app_resources::activation(shell,0x1_0000_002c,1),[INVALID,0,0,0,0]);
+ assert_eq!(app_resources::activation(shell,44,0,0),[0,16,16,301,0]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[RETRY,0,0,0,0]);
+ assert_eq!(app_resources::activation(pager,44,1,0),[INVALID,0,0,0,0]);
+ assert_eq!(app_resources::activation(shell,0x1_0000_002c,1,0),[INVALID,0,0,0,0]);
  assert_eq!(app_resources::status(shell,38,1),[0,15,15,300,3]);
  assert_eq!(app_resources::status(shell,38,0),[LIVE,0,0,0,0]);
  assert_eq!(app_resources::status(shell,0x1_0000_0026,1),[INVALID,0,0,0,0]);
@@ -158,62 +161,62 @@ fn fixture_elf()->Vec<u8>{
  assert!(held.holds_none(|_|true));for id in 1..=4{assert!(held.find(id).is_none());}
  assert_eq!(app_resources::retire(pager,38),result);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(ipc::DOMAIN_REGISTRY.get(15).unwrap().main_task.load(Ordering::Acquire),target.main_task.load(Ordering::Acquire));
- assert_eq!(app_resources::activation(shell,44,0),[0,16,16,301,1]);
+ assert_eq!(app_resources::activation(shell,44,0,0),[0,16,16,301,1]);
  core_local::INITIALIZED_CORES.store(2,Ordering::Release);
- assert_eq!(app_resources::activation(shell,44,1),[DENIED,0,0,0,0]);assert_eq!(*next_leaves,[0;17]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[DENIED,0,0,0,0]);assert_eq!(*next_leaves,[0;17]);
  core_local::INITIALIZED_CORES.store(1,Ordering::Release);
  let next_task=next.main_task.load(Ordering::Acquire);
  unsafe{(*next_task).context.pd_id=15;}
- assert_eq!(app_resources::activation(shell,44,1),[DENIED,0,0,0,0]);assert_eq!(*next_leaves,[0;17]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[DENIED,0,0,0,0]);assert_eq!(*next_leaves,[0;17]);
  unsafe{(*next_task).context.pd_id=16;}
  next_leaves[16]=1;let before=FLUSHES.lock().len();
- assert_eq!(app_resources::activation(shell,44,1),[DENIED,0,0,0,0]);assert_eq!(next_leaves[0],0);assert_eq!(FLUSHES.lock().len(),before);next_leaves[16]=0;
- assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,2]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[DENIED,0,0,0,0]);assert_eq!(next_leaves[0],0);assert_eq!(FLUSHES.lock().len(),before);next_leaves[16]=0;
+ assert_eq!(app_resources::activation(shell,44,1,0),[0,16,16,301,2]);
  assert!(next_leaves.iter().all(|p|*p!=0));assert!(app_resources::accepts_ipc(16));assert!(!app_resources::accepts_ipc(15));
  assert_eq!(unsafe{(*next_task).state.snapshot().phase},Phase::Detached);
- let before=FLUSHES.lock().len();assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,2]);assert_eq!(FLUSHES.lock().len(),before);
+ let before=FLUSHES.lock().len();assert_eq!(app_resources::activation(shell,44,1,0),[0,16,16,301,2]);assert_eq!(FLUSHES.lock().len(),before);
  // Old task custody is still permanently dead; receipt replay after successor
  // death reports exhaustion and cannot resurrect either identity.
  unsafe{(*next_task).state.exit();}app_resources::poll_exit_notifications();
- assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,3]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[0,16,16,301,3]);
  assert_eq!(unsafe{(*next_task).state.snapshot().phase},Phase::Dead);assert_eq!(task.state.snapshot().phase,Phase::Dead);
 
  // A third subject cannot skip second-incarnation cleanup, reuse its leaves,
  // or turn either consumed receipt back into an activation.
- assert_eq!(app_resources::activation(shell,55,0),[0,18,18,307,0]);
- assert_eq!(app_resources::activation(shell,55,1),[RETRY,0,0,0,0]);assert_eq!(*third_leaves,[0;17]);
+ assert_eq!(app_resources::activation(shell,55,0,0),[0,18,18,307,0]);
+ assert_eq!(app_resources::activation(shell,55,1,0),[RETRY,0,0,0,0]);assert_eq!(*third_leaves,[0;17]);
  for id in &services[..4]{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(*id).unwrap(),39,16),0);}
  assert_eq!(app_resources::retire(pager,39)[0],RETRY);
- assert_eq!(app_resources::activation(shell,55,1),[RETRY,0,0,0,0]);
+ assert_eq!(app_resources::activation(shell,55,1,0),[RETRY,0,0,0,0]);
  assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(services[4]).unwrap(),39,16),0);
  assert_eq!(app_resources::retire(pager,39)[0],0);assert_eq!(*next_leaves,[0;17]);
- assert_eq!(app_resources::activation(shell,55,0),[0,18,18,307,1]);
- assert_eq!(app_resources::activation(shell,55,1),[0,18,18,307,2]);
+ assert_eq!(app_resources::activation(shell,55,0,0),[0,18,18,307,1]);
+ assert_eq!(app_resources::activation(shell,55,1,0),[0,18,18,307,2]);
  assert!(third_leaves.iter().all(|p|*p!=0));assert!(!app_resources::accepts_ipc(16));assert!(app_resources::accepts_ipc(18));
  let task18=third.main_task.load(Ordering::Acquire);unsafe{(*task18).state.exit();}app_resources::poll_exit_notifications();
  for id in services{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(id).unwrap(),50,18),0);}
  assert_eq!(app_resources::retire(pager,50)[0],0);assert_eq!(*third_leaves,[0;17]);
  let before=FLUSHES.lock().len();
- assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,3]);
- assert_eq!(app_resources::activation(shell,55,1),[0,18,18,307,3]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[0,16,16,301,3]);
+ assert_eq!(app_resources::activation(shell,55,1,0),[0,18,18,307,3]);
  assert_eq!(FLUSHES.lock().len(),before);assert!(!app_resources::accepts_ipc(18));
 
  // A second logical app consumes only its own reserved identity/grant, even
  // after the first pair has exhausted its receipt.
- assert_eq!(app_resources::activation(shell,49,0),[0,17,17,302,0]);
- assert_eq!(app_resources::activation(shell,49,1),[RETRY,0,0,0,0]);assert_eq!(*spindle_next_leaves,[0;17]);
+ assert_eq!(app_resources::activation(shell,49,0,0),[0,17,17,302,0]);
+ assert_eq!(app_resources::activation(shell,49,1,0),[RETRY,0,0,0,0]);assert_eq!(*spindle_next_leaves,[0;17]);
  let spindle_task=spindle.main_task.load(Ordering::Acquire);unsafe{(*spindle_task).state.exit();}app_resources::poll_exit_notifications();
  for id in services{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(id).unwrap(),40,12),0);}
  assert_eq!(app_resources::retire(pager,40)[0],0);assert_eq!(*spindle_leaves,[0;17]);
- assert_eq!(app_resources::activation(shell,49,0),[0,17,17,302,1]);
- assert_eq!(app_resources::activation(shell,44,1),[0,16,16,301,3]);assert_eq!(*spindle_next_leaves,[0;17]);
- assert_eq!(app_resources::activation(shell,49,1),[0,17,17,302,2]);let before=FLUSHES.lock().len();
- assert_eq!(app_resources::activation(shell,49,1),[0,17,17,302,2]);assert_eq!(FLUSHES.lock().len(),before);
+ assert_eq!(app_resources::activation(shell,49,0,0),[0,17,17,302,1]);
+ assert_eq!(app_resources::activation(shell,44,1,0),[0,16,16,301,3]);assert_eq!(*spindle_next_leaves,[0;17]);
+ assert_eq!(app_resources::activation(shell,49,1,0),[0,17,17,302,2]);let before=FLUSHES.lock().len();
+ assert_eq!(app_resources::activation(shell,49,1,0),[0,17,17,302,2]);assert_eq!(FLUSHES.lock().len(),before);
  assert!(app_resources::accepts_ipc(17));assert!(!app_resources::accepts_ipc(12));assert!(!app_resources::accepts_ipc(16));
  let task17=spindle_next.main_task.load(Ordering::Acquire);unsafe{(*task17).state.exit();}app_resources::poll_exit_notifications();
  for id in services{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(id).unwrap(),45,17),0);}
  assert_eq!(app_resources::retire(pager,45)[0],0);assert_eq!(*spindle_next_leaves,[0;17]);
- assert_eq!(app_resources::activation(shell,49,1),[0,17,17,302,3]);
+ assert_eq!(app_resources::activation(shell,49,1,0),[0,17,17,302,3]);
 
 }
 

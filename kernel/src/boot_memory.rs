@@ -28,6 +28,52 @@ pub(crate) fn backing(length: u64) -> u64 {
     physical
 }
 
+static PROGRAM_IMAGE_PHYSICAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// The one region Files reads program files into. Shell's load call decides when
+/// the kernel looks at it; Files gets no say over what the kernel does with it.
+pub fn init_program_image(files: u32) {
+    use sex_pdx::program_store::{IMAGE_BYTES, IMAGE_REGION_ID, IMAGE_SLOT_FILES};
+    require_boot();
+    if files == 0 { return; }
+    let pd = DOMAIN_REGISTRY.get(files).expect("BOOT_PROGRAM_IMAGE_FILES");
+    let length = IMAGE_BYTES as u64;
+    let physical = backing(length);
+    let virtual_base = alias(pd, physical, length, true, false);
+    grant(pd, IMAGE_SLOT_FILES, RegionGrant { region_id: IMAGE_REGION_ID, virtual_base, length,
+        rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None });
+    PROGRAM_IMAGE_PHYSICAL.store(physical, core::sync::atomic::Ordering::Release);
+}
+/// The file Files last read, as bytes. Checked by program_image before any use.
+pub fn program_image(len: usize) -> Option<&'static [u8]> {
+    let physical = PROGRAM_IMAGE_PHYSICAL.load(core::sync::atomic::Ordering::Acquire);
+    if physical == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    Some(unsafe { core::slice::from_raw_parts((physical + hhdm) as *const u8, len) })
+}
+/// Frames and page-table leaves for a program row's whole image window, unmapped
+/// until a program is loaded. Leaves already present stay as the BOOT image left them.
+pub fn reserve_window(base: u64, pkey: u8, leaves: &mut [u64]) -> u64 {
+    require_boot();
+    let physical = backing(leaves.len() as u64 * 4096);
+    for (index, leaf) in leaves.iter_mut().enumerate() {
+        let va = base + index as u64 * 4096;
+        if existing_leaf_address(va).is_none() {
+            let flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+            crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
+                .map_physical_range(VirtAddr::new(va), physical + index as u64 * 4096, 4096, flags, pkey)
+                .expect("BOOT_PROGRAM_WINDOW_MAP");
+        }
+        *leaf = existing_leaf_address(va).expect("BOOT_PROGRAM_WINDOW_LEAF");
+        unsafe { core::ptr::write_volatile(*leaf as *mut u64, 0); }
+        x86_64::instructions::tlb::flush(VirtAddr::new(va));
+    }
+    physical
+}
+pub(crate) fn write_frames(physical: u64, bytes: &[u8]) {
+    let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_WRITE_NO_HHDM").offset;
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), (physical + hhdm) as *mut u8, bytes.len()); }
+}
+
 /// One physical page to another, through the kernel's direct map.
 pub(crate) fn copy_frame(from: u64, to: u64) {
     let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_COPY_NO_HHDM").offset;

@@ -473,7 +473,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
         66 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
-            let reply=crate::app_resources::activation(pd,rdi,rsi);
+            let reply=crate::app_resources::activation(pd,rdi,rsi,rdx);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 

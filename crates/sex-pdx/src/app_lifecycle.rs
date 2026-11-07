@@ -199,12 +199,18 @@ pub fn activation(slot:usize,commit:bool)->Result<ActivationInfo,u64>{activation
 /// image or address; the row's own BOOT grant names all of them.
 #[cfg(target_arch="x86_64")]
 pub fn rebirth(slot:usize)->Result<ActivationInfo,u64>{activation_kind(slot,2)}
+/// Load the file Files just read into a program row. A fresh row then commits as
+/// usual; a reusable one continues with `rebirth`.
 #[cfg(target_arch="x86_64")]
-fn activation_kind(slot:usize,kind:u64)->Result<ActivationInfo,u64>{
+pub fn load_program(slot:usize,len:u32)->Result<ActivationInfo,u64>{activation_call(slot,3,len as u64)}
+#[cfg(target_arch="x86_64")]
+fn activation_kind(slot:usize,kind:u64)->Result<ActivationInfo,u64>{activation_call(slot,kind,0)}
+#[cfg(target_arch="x86_64")]
+fn activation_call(slot:usize,kind:u64,len:u64)->Result<ActivationInfo,u64>{
     let (status,pd,task,surface,state):(u64,u64,u64,u64,u64);
     unsafe{core::arch::asm!("syscall",inlateout("rax") SYS_ACTIVATION=>status,
         in("rdi") slot as u64,inlateout("rsi") kind=>pd,
-        lateout("rdx") task,lateout("r10") surface,lateout("r8") state,
+        inlateout("rdx") len=>task,lateout("r10") surface,lateout("r8") state,
         out("rcx") _,out("r11") _,options(nostack));}
     if status!=OK{return Err(status)}
     Ok(ActivationInfo{successor:u32::try_from(pd).map_err(|_|INVALID)?,

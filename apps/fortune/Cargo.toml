@@ -1,0 +1,11 @@
+[package]
+name = "fortune"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fortune"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }

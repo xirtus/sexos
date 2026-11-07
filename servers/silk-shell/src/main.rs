@@ -16136,6 +16136,40 @@ unsafe fn open_program_in_active_scene()->bool{
     }
     false
 }
+/// A row a disk program can start on, if any: a fresh one first.
+fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
+    use sex_pdx::app_lifecycle as a;
+    program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE))
+}
+static mut PROGRAM_READING: bool = false;
+/// Spindle's `run NAME`, and Files' answer once it has read the file.
+unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::{app_lifecycle as a,program_store as store};
+    if msg.type_id==store::OP_RUN {
+        if !app_catalog::is_spindle(msg.caller_pd){return true}
+        if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
+            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");return true;
+        }
+        let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
+        PROGRAM_READING=status==0;
+        if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
+        return true;
+    }
+    if !PROGRAM_READING||msg.caller_pd!=11||msg.type_id!=1{return false}
+    let Some(result)=store::decode_reply(msg.arg0)else{return false};
+    PROGRAM_READING=false;
+    let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);return true}};
+    let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");return true};
+    launcher_focus_discard();
+    let loaded=a::load_program(slot,len);
+    if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);return true}
+    if state==a::ACTIVATION_READY{
+        let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");return true};
+        sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
+        launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
+    }else{PROGRAM_REBIRTH=Some(slot);}
+    true
+}
 /// Advance a started run: the kernel admits it once every service has forgotten
 /// the old one. Focus follows the app's own registration, as for any launch.
 unsafe fn program_rebirth_poll(){
@@ -25017,6 +25051,7 @@ pub extern "C" fn _start() -> ! {
         };
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }

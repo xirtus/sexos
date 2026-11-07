@@ -19,6 +19,7 @@ members = [
     "apps/sexdrive",
     "apps/kaleidoscope",
     "apps/hello",
+    "apps/fortune",
     "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-net",

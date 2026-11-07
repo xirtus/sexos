@@ -53,7 +53,7 @@ run_stage() {
   case "$action" in
     prep_iso_root)
       rm -rf iso_root 2>/dev/null || true
-      mkdir -p iso_root/servers iso_root/apps iso_root/boot/limine
+      mkdir -p iso_root/servers iso_root/apps iso_root/programs iso_root/boot/limine
       ;;
     copy_limine)
       cp limine/limine-bios-cd.bin iso_root/boot/limine/

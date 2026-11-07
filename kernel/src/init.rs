@@ -823,6 +823,12 @@ pub fn init() {
     assert_eq!((silkshell_id, sexdisp_id), (sex_pdx::uiir::SHELL_PD, sex_pdx::uiir::DISPLAY_PD), "BOOT_UIIR_DOMAINS");
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
     crate::boot_memory::init_text_regions(sexdisp_id);
+    crate::boot_memory::init_program_image(sexfiles_id);
+    {
+        let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
+        assert!(shell.find_capability(sex_pdx::program_store::SHELL_ROUTE_SLOT as u32).is_none(),"BOOT_PROGRAM_ROUTE_SLOT");
+        shell.grant_capability(sex_pdx::program_store::SHELL_ROUTE_SLOT,crate::capability::CapabilityData::Domain(sexfiles_id));
+    }
     assert!(sext_id != 0 && kaleido_id != 0 && sexbell_id != 0, "BOOT_PAGING_DOMAINS_MISSING");
     // Replace the client's initial self-management edge at static genesis.
     // The capability graph remains sealed throughout runtime fault recovery.

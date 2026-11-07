@@ -14,10 +14,13 @@ struct App {
     identity:Incarnation,predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
     /// Program rows run again. The grants name boot_task; `task` is the current run.
     reusable:bool,boot_task:u32,generation:u32,rebirthing:bool,pristine:u64,entry:u64,stack_top:u64,
+    /// The BOOT image's manifest, and the span a disk program loads into.
+    boot_pages:[PrivatePage;64],boot_count:usize,window:u64,window_base:u64,window_leaves:[u64;WINDOW_PAGES],
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:[PrivatePage::EMPTY;MAX_PAGES],count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,stack_top:0,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,window:0,window_base:0,window_leaves:[0;WINDOW_PAGES],last_hint:[0;6],hinted:0,kicked:false}}}
+const WINDOW_PAGES:usize=sex_pdx::program_store::IMAGE_BYTES/4096;
 static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];
@@ -128,11 +131,18 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
         }
         app.pristine=pristine;app.reusable=true;
         app.entry=task.context.rip;app.stack_top=task.context.rsp;
+        assert!(app.count<=app.boot_pages.len(),"PROGRAM_BOOT_MANIFEST");
+        app.boot_pages[..app.count].copy_from_slice(&app.pages[..app.count]);app.boot_count=app.count;
+        app.window_base=app.pages[..app.count].iter().map(|p|p.va).min().expect("PROGRAM_NO_PAGES");
     }
     retire_private_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
         |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
         |va|x86_64::instructions::tlb::flush(VirtAddr::new(va))).expect("SUCCESSOR_RESERVE_LEAVES");
+    if app.reusable{
+        let (base,key)=(app.window_base,app.pkey);
+        app.window=crate::boot_memory::reserve_window(base,key,&mut app.window_leaves);
+    }
     let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
     assert!(coordinator.find_capability(slot as u32).is_none());
     coordinator.grant_capability(slot as u64,CapabilityData::AppActivation(ActivationGrant{
@@ -233,9 +243,9 @@ pub fn status(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
 }
 /// BSP serialized snapshot/preflight/commit. No runtime frame selection,
 /// ELF loading, capability minting, or predecessor identity mutation.
-pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
+pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
     let result=(||{
-        if kind>2{return Err(INVALID)}
+        if kind>3{return Err(INVALID)}
         let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(INVALID)?;
         let g=match pd.find_capability(slot).map(|c|c.data){Some(CapabilityData::AppActivation(g))=>g,_=>return Err(INVALID)};
         let mut apps=APPS.try_lock().ok_or(RETRY)?;
@@ -245,10 +255,23 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
         g.authorize(pd.id,old.target,old.boot_task,new.target,new.boot_task,old.identity,new.identity)?;
         if new.predecessor!=old.target{return Err(DENIED)}
         let reply_of=|a:&App,state:u64|[0,a.target as u64,a.task as u64,a.surface,state];
+        if kind==3{
+            // A program from disk, on a row that has not started or has fully ended.
+            if !new.reusable{return Err(DENIED)}
+            let len=usize::try_from(len).map_err(|_|INVALID)?;
+            if !new.activated{
+                let ready=if old.reusable{old.activated}else{old.retired&&old.acked==REQUIRED&&dead(old).is_ok()};
+                if !ready{return Err(RETRY)}
+                let task=apps[ni].boot_task;
+                load_program(&mut apps[ni],len,task)?;
+                return Ok(reply_of(&apps[ni],1));
+            }
+            return rebirth(&mut apps,ni,Some(len)).map(|state|reply_of(&apps[ni],state));
+        }
         if new.reusable&&new.activated{
             if new.rebirthing&&kind!=2{return Ok(reply_of(new,5))}
             if new.retired&&!new.rebirthing&&kind!=2{return Ok(reply_of(new,4))}
-            if kind==2{return rebirth(&mut apps,ni).map(|state|reply_of(&apps[ni],state))}
+            if kind==2{return rebirth(&mut apps,ni,None).map(|state|reply_of(&apps[ni],state))}
         }
         // Once consumed, replay never revalidates or restores retired leaves.
         if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,
@@ -289,23 +312,66 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
 /// A new run of a reusable row, in two steps so no service sees it live early.
 /// First: fresh task id, zeroed-then-restored image, every service told. Then,
 /// once all five have forgotten the old run: map the image and admit the task.
-fn rebirth(apps:&mut [App;MAX_APPS],index:usize)->Result<u64,u64>{
+/// Check a program file, lay it out in the row's window, and point the row's task
+/// at it. All checks precede the first write. The leaves stay clear until commit.
+fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
+    use crate::program_image as image;
+    let elf=crate::boot_memory::program_image(len).ok_or(INVALID)?;
+    let parsed=image::parse(elf,(WINDOW_PAGES*4096) as u64).map_err(|reason|{
+        crate::serial_println!("[app.program.rejected] target={} bytes={} reason={:?}",app.target,len,reason);DENIED})?;
+    let stack_low=app.stack_top.checked_sub(65536).ok_or(DENIED)?;
+    let mut pages=[PrivatePage::EMPTY;MAX_PAGES];let mut count=0;
+    for page in app.boot_pages[..app.boot_count].iter().filter(|p|p.va>=stack_low&&p.va<app.stack_top){pages[count]=*page;count+=1;}
+    for segment in &parsed.segments[..parsed.count]{
+        let first=segment.window/4096;let last=(segment.window+segment.memory-1)/4096;
+        for index in first..=last{
+            if count==MAX_PAGES{return Err(DENIED)}
+            let frame=app.window+index*4096;
+            let mut flags=frame|5|((app.pkey as u64)<<59);
+            if segment.writable{flags|=2}
+            if !segment.executable{flags|=1<<63}
+            pages[count]=PrivatePage{va:app.window_base+index*4096,leaf:app.window_leaves[index as usize],expected:flags};count+=1;
+        }
+    }
+    // Nothing of an earlier run or another program survives into this one.
+    for page in &pages[..count]{crate::boot_memory::zero_frame(page.expected&PHYSICAL_MASK);}
+    for segment in &parsed.segments[..parsed.count]{
+        let from=segment.offset as usize;
+        crate::boot_memory::write_frames(app.window+segment.window,&elf[from..from+segment.file as usize]);
+    }
+    for index in 0..parsed.rela_count{
+        let (at,value)=image::relocation(elf,&parsed,index,app.window_base).ok_or(DENIED)?;
+        crate::boot_memory::write_frames(app.window+at,&value.to_le_bytes());
+    }
+    app.pages=pages;app.count=count;
+    let entry=app.window_base+parsed.entry;
+    let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
+    let main=target.main_task.load(Ordering::Acquire);
+    unsafe{(*main).rearm(task,entry,app.stack_top,target);}
+    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x}",app.target,task,len,count,entry);
+    Ok(())
+}
+fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64,u64>{
     let app=&mut apps[index];
     if !app.rebirthing {
         if !app.retired || app.acked!=REQUIRED {return Err(RETRY)}
         dead(app)?;
         if crate::core_local::INITIALIZED_CORES.load(Ordering::Acquire)!=1
             || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
-        for (i,page) in app.pages[..app.count].iter().enumerate(){
-            crate::boot_memory::copy_frame(app.pristine+i as u64*4096,page.expected&PHYSICAL_MASK);
-        }
         app.generation=app.generation.checked_add(1).ok_or(DENIED)?;
         // Distinct from every boot task and every earlier run of any row, for good.
         let task=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
         if task==u32::MAX{return Err(DENIED)}
-        let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
-        let main=target.main_task.load(Ordering::Acquire);
-        unsafe{(*main).rearm(task,app.entry,app.stack_top,target);}
+        if let Some(len)=image{load_program(app,len,task)?;}
+        else{
+            let count=app.boot_count;app.pages[..count].copy_from_slice(&app.boot_pages[..count]);app.count=count;
+            for (i,page) in app.boot_pages[..count].iter().enumerate(){
+                crate::boot_memory::copy_frame(app.pristine+i as u64*4096,page.expected&PHYSICAL_MASK);
+            }
+            let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
+            let main=target.main_task.load(Ordering::Acquire);
+            unsafe{(*main).rearm(task,app.entry,app.stack_top,target);}
+        }
         app.task=task;app.acked=0;app.hinted=0;app.kicked=false;app.retired=false;app.rebirthing=true;
         DORMANT[index].store(true,Ordering::Release);
         TERMINAL[index].store(false,Ordering::Release);
