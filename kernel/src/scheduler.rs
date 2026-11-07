@@ -180,6 +180,7 @@ pub struct Scheduler {
     pub current_task: AtomicPtr<Task>,
     pending_outgoing: AtomicPtr<Task>,
     retry_cursor: AtomicU32,
+    ran_task: AtomicBool,
     pub core_id: u32,
 }
 
@@ -213,6 +214,7 @@ impl Scheduler {
             current_task: AtomicPtr::new(ptr::null_mut()),
             pending_outgoing: AtomicPtr::new(ptr::null_mut()),
             retry_cursor: AtomicU32::new(0),
+            ran_task: AtomicBool::new(false),
             core_id,
         }
     }
@@ -360,6 +362,9 @@ impl Scheduler {
 
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
             crate::program_records::before_dispatch((*next_task).context.pd_id);
+            if !self.ran_task.swap(true, Ordering::Relaxed) {
+                serial_println!("[smp.core.first_task] core={} pd={}", self.core_id, (*next_task).context.pd_id);
+            }
             core.set_pd(next_pd_ptr);
             note_dispatch((*next_task).context.pd_id);
         }
@@ -389,10 +394,13 @@ impl Scheduler {
 
     pub fn admit_task(&self, task: *mut Task) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
-        // A task's queue is decided by the task, not by the core that woke it:
-        // records run on the guest core and everything else on core 0, for now.
-        let home = &SCHEDULERS[if crate::program_records::is_record(unsafe { (*task).context.pd_id }) { crate::smp::guest_core() as usize } else { 0 }];
-        unsafe { (*task).state.try_admit(|| home.runqueue.try_push(task)) }
+        // A task's queue is decided by the task, not by the core that woke it.
+        let home_core = crate::smp::home_core(unsafe { (*task).context.pd_id });
+        let home = &SCHEDULERS[home_core as usize];
+        let admitted = unsafe { (*task).state.try_admit(|| home.runqueue.try_push(task)) };
+        // That core may be halted, and its next tick is up to a millisecond away.
+        if admitted == Admission::Published && home_core != self.core_id { crate::apic::send_to_core(home_core, crate::smp::WAKE_VECTOR); }
+        admitted
     }
 
     /// First admission is explicit; wake cannot activate unfinished trampolines.
@@ -420,8 +428,8 @@ impl Scheduler {
         }
     }
 
-    /// Tasks do not move between cores yet: services assume core 0, and only one
-    /// core at a time may run records on their shared key.
+    /// Tasks stay on their home core. Only one core may run records on their shared
+    /// key, and a service moves only once it has been proven away from core 0.
     fn attempt_steal(&self) -> *mut Task { ptr::null_mut() }
 
     #[unsafe(naked)]

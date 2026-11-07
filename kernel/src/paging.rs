@@ -16,6 +16,12 @@ struct PagingState {
     ledger: MappingLedger,
 }
 static STATE: Mutex<Option<PagingState>> = Mutex::new(None);
+/// Callers run with interrupts off, so a holder on another core finishes soon.
+macro_rules! state_lock{()=>{{
+    let mut held=None;
+    for _ in 0..200_000{held=STATE.try_lock();if held.is_some(){break}core::hint::spin_loop();}
+    held
+}}}
 
 pub(crate) fn initialize(pool: FramePoolGrant, mappings: [PagerMappingGrant; CLIENTS], pager_pd: u32,
     target_pkeys: [u8; CLIENTS], physical: u64, leaf_addresses: [[u64; PAGES]; CLIENTS])
@@ -50,7 +56,7 @@ pub fn query(pd: &ProtectionDomain, slot: u64, token: u64) -> [u64;5] {
     let result = (|| {
         let map = mapping(pd,slot)?;
         {
-            let guard = STATE.try_lock().ok_or(RETRY)?;
+            let guard = state_lock!().ok_or(RETRY)?;
             let state = guard.as_ref().ok_or(INVALID)?;
             if !state.mappings.contains(&map) || pd.id != state.pager_pd
                 || state.ledger.cleanup_record(map.range_id).is_some() { return Err(DENIED); }
@@ -90,7 +96,7 @@ pub fn commit(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64, frame: u64, 
     let map = match mapping(pd,map_slot) { Ok(map)=>map, Err(error)=>return error };
     let pool = match cap(pd,pool_slot) { Some(CapabilityData::FramePool(pool))=>pool, _=>return INVALID };
     let existing = {
-        let Some(guard) = STATE.try_lock() else { return RETRY; };
+        let Some(guard) = state_lock!() else { return RETRY; };
         let Some(state) = guard.as_ref() else { return INVALID; };
         if !state.mappings.contains(&map) || pool != state.pool || pd.id != state.pager_pd { return DENIED; }
         if state.ledger.cleanup_record(map.range_id).is_some() { return DENIED; }
@@ -115,7 +121,7 @@ pub fn commit(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64, frame: u64, 
         pager_pd:fault.pager_pd,page:fault.page_addr,error:fault.error_code as u64},frame,rights);
     let prepared = (|| {
         let binding = binding?;
-        let Some(mut guard) = STATE.try_lock() else { return Err(RETRY); };
+        let Some(mut guard) = state_lock!() else { return Err(RETRY); };
         let state = guard.as_mut().ok_or(INVALID)?;
         state.ledger.check_new(binding,map.quota)?;
         let range = binding.range_id as usize - 1;
@@ -155,7 +161,7 @@ pub fn reclaim(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64, frame: u64,
     let map = match mapping(pd,map_slot) { Ok(map)=>map, Err(error)=>return error };
     let pool = match cap(pd,pool_slot) { Some(CapabilityData::FramePool(pool))=>pool, _=>return INVALID };
     if frame >= PAGES as u64 || token == 0 { return DENIED; }
-    let Some(mut guard) = STATE.try_lock() else { return RETRY; };
+    let Some(mut guard) = state_lock!() else { return RETRY; };
     let Some(state) = guard.as_mut() else { return INVALID; };
     if !state.mappings.contains(&map) || pool != state.pool || pd.id != state.pager_pd { return DENIED; }
     let exact = |b: Binding| b.token == token && b.target_pd == map.target_pd
@@ -193,7 +199,7 @@ pub fn cleanup(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64) -> [u64;3] 
     let result = (|| {
         let map = mapping(pd,map_slot)?;
         let pool = match cap(pd,pool_slot) { Some(CapabilityData::FramePool(pool))=>pool, _=>return Err(INVALID) };
-        let mut guard = STATE.try_lock().ok_or(RETRY)?;
+        let mut guard = state_lock!().ok_or(RETRY)?;
         let state = guard.as_mut().ok_or(INVALID)?;
         if !state.mappings.contains(&map) || pool != state.pool || pd.id != state.pager_pd { return Err(DENIED); }
         if let Some(done) = state.ledger.cleanup_record(map.range_id) {
@@ -243,7 +249,7 @@ pub fn cleanup(pd: &ProtectionDomain, map_slot: u64, pool_slot: u64) -> [u64;3] 
 /// Private-image retirement must wait for every demand range of this boot app.
 /// Apps with no demand grant have no paging cleanup obligation.
 pub fn target_cleanup_complete(target:u32)->Result<bool,u64>{
-    let guard=STATE.try_lock().ok_or(RETRY)?;
+    let guard=state_lock!().ok_or(RETRY)?;
     let state=guard.as_ref().ok_or(INVALID)?;
     Ok(state.mappings.iter().filter(|map|map.target_pd==target)
         .all(|map|state.ledger.cleanup_record(map.range_id).is_some()))

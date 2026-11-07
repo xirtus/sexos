@@ -104,10 +104,18 @@ pub fn init_core() -> *mut TaskStateSegment {
     pointer
 }
 
+static mut DOUBLE_FAULT_STACK: [u8; 32 * 1024] = [0; 32 * 1024];
+
 pub fn init() {
     use x86_64::instructions::segmentation::{CS, DS, ES, FS, GS, SS};
     use x86_64::instructions::tables::load_tss;
     use x86_64::structures::DescriptorTablePointer;
+
+    // The IDT asks for IST index + 1. Before the GDT and TSS are loaded.
+    unsafe {
+        let top = core::ptr::addr_of!(DOUBLE_FAULT_STACK) as u64 + 32 * 1024;
+        (*core::ptr::addr_of_mut!(TSS)).interrupt_stack_table[DOUBLE_FAULT_IST_INDEX + 1] = VirtAddr::new(top);
+    }
 
     // Load GDT
     unsafe {

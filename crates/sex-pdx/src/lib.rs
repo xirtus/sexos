@@ -70,6 +70,27 @@ macro_rules! serial_record {
     ($($arg:tt)*) => { $crate::write_serial_record(core::format_args!($($arg)*)) };
 }
 
+/// Gathers a line and writes it in one raw print, so another core's output cannot
+/// land in the middle of it. A line longer than the buffer goes out in pieces.
+pub struct SerialLine { bytes: [u8; 512], len: usize }
+impl SerialLine {
+    pub const fn new() -> Self { Self { bytes: [0; 512], len: 0 } }
+    pub fn flush(&mut self) {
+        if self.len != 0 { let _ = pdx_call(0, 69, self.bytes.as_ptr() as u64, self.len as u64, 0); }
+        self.len = 0;
+    }
+}
+impl core::fmt::Write for SerialLine {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for chunk in s.as_bytes().chunks(self.bytes.len()) {
+            if self.len + chunk.len() > self.bytes.len() { self.flush(); }
+            self.bytes[self.len..self.len + chunk.len()].copy_from_slice(chunk);
+            self.len += chunk.len();
+        }
+        Ok(())
+    }
+}
+
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let _ = pdx_call(0, 69, s.as_ptr() as u64, s.len() as u64, 0);
@@ -81,9 +102,10 @@ impl core::fmt::Write for SerialWriter {
 macro_rules! serial_println {
     ($($arg:tt)*) => ({
         use core::fmt::Write as _;
-        let mut _w = $crate::SerialWriter;
+        let mut _w = $crate::SerialLine::new();
         let _ = core::write!(_w, $($arg)*);
         let _ = core::write!(_w, "\n");
+        _w.flush();
     });
 }
 

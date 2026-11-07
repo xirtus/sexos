@@ -23,6 +23,13 @@ impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,s
 const WINDOW_PAGES:usize=sex_pdx::program_store::IMAGE_BYTES/4096;
 static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
+/// Syscalls run with interrupts off, so a holder on another core finishes soon.
+/// The timer path keeps its plain try_lock: it can wait for the next tick.
+macro_rules! apps_lock{()=>{{
+    let mut held=None;
+    for _ in 0..200_000{held=APPS.try_lock();if held.is_some(){break}core::hint::spin_loop();}
+    held
+}}}
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];
 static DORMANT:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
 static TERMINAL:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
@@ -233,7 +240,7 @@ pub fn accepts_ipc(target:u32)->bool{
     !TARGETS.iter().enumerate().any(|(i,t)|t.load(Ordering::Acquire)==target && (TERMINAL[i].load(Ordering::Acquire)||DORMANT[i].load(Ordering::Acquire)))
 }
 pub fn status(pd:&ProtectionDomain,slot:u64,kind:u64)->[u64;5]{
-    let result=(||{let g=grant(pd,slot)?;let apps=APPS.try_lock().ok_or(RETRY)?;
+    let result=(||{let g=grant(pd,slot)?;let apps=apps_lock!().ok_or(RETRY)?;
         let app=apps.iter().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
         g.authorize(pd.id,app.target,app.boot_task,QUERY)?;
         if kind==1{return Ok([0,app.target as u64,app.task as u64,app.surface,app.coordinator as u64])}
@@ -248,7 +255,7 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         if kind>3{return Err(INVALID)}
         let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(INVALID)?;
         let g=match pd.find_capability(slot).map(|c|c.data){Some(CapabilityData::AppActivation(g))=>g,_=>return Err(INVALID)};
-        let mut apps=APPS.try_lock().ok_or(RETRY)?;
+        let mut apps=apps_lock!().ok_or(RETRY)?;
         let oi=apps.iter().position(|a|a.ready&&a.target==g.predecessor).ok_or(DENIED)?;
         let ni=apps.iter().position(|a|a.ready&&a.target==g.successor).ok_or(DENIED)?;
         let old=&apps[oi];let new=&apps[ni];
@@ -392,7 +399,7 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     Ok(2)
 }
 pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
-    let result=(||{let g=grant(pd,slot)?;let mut apps=APPS.try_lock().ok_or(RETRY)?;
+    let result=(||{let g=grant(pd,slot)?;let mut apps=apps_lock!().ok_or(RETRY)?;
         let app=apps.iter_mut().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
         g.authorize(pd.id,app.target,app.boot_task,ACK)?;if task!=app.task as u64{return Err(DENIED)}if !app.rebirthing{dead(app)?;}
         let old=app.acked;app.acked|=g.ack_bit;
@@ -400,7 +407,7 @@ pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
         Ok(())})();result.map_or_else(|e|e,|()|0)
 }
 pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
-    let result=(||{let g=grant(pd,slot)?;let mut apps=APPS.try_lock().ok_or(RETRY)?;
+    let result=(||{let g=grant(pd,slot)?;let mut apps=apps_lock!().ok_or(RETRY)?;
         let index=apps.iter().position(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
         let app=&mut apps[index];g.authorize(pd.id,app.target,app.boot_task,RETIRE)?;
         if app.retired{return Ok([0,app.pool,app.count as u64*4096,app.task as u64])}

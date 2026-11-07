@@ -221,6 +221,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                         } else {
                             unsafe {
                                 let slice = core::slice::from_raw_parts(ptr, len);
+                                // The kernel's own prints hold this lock, so whole lines stay whole.
+                                let _line = crate::serial::SERIAL1.lock();
                                 for &b in slice {
                                     use x86_64::instructions::port::Port;
                                     let mut port = Port::new(0x3f8);

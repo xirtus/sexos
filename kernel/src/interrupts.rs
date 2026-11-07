@@ -59,6 +59,7 @@ lazy_static! {
         idt[0x21].set_handler_fn(keyboard_interrupt_handler);
         idt[0x22].set_handler_fn(generic_irq_handler); 
         idt[crate::smp::tlb::VECTOR].set_handler_fn(tlb_shootdown_handler);
+        idt[crate::smp::WAKE_VECTOR].set_handler_fn(wake_handler);
         idt
     };
 }
@@ -694,6 +695,12 @@ extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFram
         stack_frame.stack_pointer.as_u64()
     );
     panic!("EXCEPTION: INVALID OPCODE");
+}
+
+/// Only ends a halt: the idle loop looks at its queue when this returns, and a
+/// running task reaches its queue at the next tick.
+extern "x86-interrupt" fn wake_handler(_frame: InterruptStackFrame) {
+    unsafe { send_eoi(); }
 }
 
 extern "x86-interrupt" fn tlb_shootdown_handler(_frame: InterruptStackFrame) {

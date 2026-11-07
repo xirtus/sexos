@@ -2,7 +2,7 @@
 //! Starts the other cores. Each gets its own GDT, TSS, kernel stack and CoreLocal,
 //! and the boot core's control registers. All answer TLB shootdowns, so a page removed
 //! on one core is gone on all of them. Core 1 is the guest core and runs program
-//! records, away from the desktop; the rest idle until services can move.
+//! records, away from the desktop. Cores 2 and up run the services that have moved.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use limine::mp::MpInfo;
 use limine::request::MpResponse;
@@ -17,6 +17,22 @@ static NEXT_CORE: AtomicU32 = AtomicU32::new(1);
 static GUEST: AtomicU32 = AtomicU32::new(0);
 /// Where records run: core 1, or core 0 on a machine with only one.
 pub fn guest_core() -> u32 { GUEST.load(Ordering::Acquire) }
+pub const WAKE_VECTOR: u8 = 0xF1;
+/// Services proven to run away from core 0, as domain ids. Shell and Display stay:
+/// the kernel's lifecycle paths and the desktop's hot path still assume core 0.
+const MOVED: [u64; 1] = [13];
+/// The core a domain's task belongs to.
+pub fn home_core(pd: u64) -> u32 {
+    if crate::program_records::is_record(pd) { return guest_core(); }
+    let spare = COVERED_SPARE.load(Ordering::Acquire);
+    if spare == 0 { return 0; }
+    match MOVED.iter().position(|m| *m == pd) { Some(index) => 2 + index as u32 % spare, None => 0 }
+}
+static LAPIC_OF: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
+pub fn local_apic_of(core: u32) -> Option<u32> {
+    LAPIC_OF.get(core as usize)?.load(Ordering::Acquire).checked_sub(1)
+}
+static COVERED_SPARE: AtomicU32 = AtomicU32::new(0);
 
 pub fn boot_aps(smp: &MpResponse) {
     use x86_64::registers::control::{Cr0, Cr3, Cr4};
@@ -29,6 +45,7 @@ pub fn boot_aps(smp: &MpResponse) {
         XCR0.store(x86_64::registers::xcontrol::XCr0::read().bits(), Ordering::Release);
     }
     let bsp_id = smp.bsp_lapic_id;
+    LAPIC_OF[0].store(bsp_id + 1, Ordering::Release);
     let mut expected = 1u32;
     for cpu in smp.cpus() {
         if cpu.lapic_id == bsp_id { continue; }
@@ -43,6 +60,7 @@ pub fn boot_aps(smp: &MpResponse) {
         }
     }
     if ONLINE.load(Ordering::Acquire) > 1 { GUEST.store(1, Ordering::Release); }
+    COVERED_SPARE.store(ONLINE.load(Ordering::Acquire).saturating_sub(2), Ordering::Release);
     tlb::COVERED.store(ONLINE.load(Ordering::Acquire), Ordering::Release);
     crate::serial_println!("[smp.online] cores={} present={}", ONLINE.load(Ordering::Acquire), smp.cpus().len());
 }
@@ -64,13 +82,12 @@ extern "C" fn limine_ap_entry(info: &MpInfo) -> ! {
         crate::interrupts::init_idt();
         let core = NEXT_CORE.fetch_add(1, Ordering::Relaxed);
         crate::core_local::CoreLocal::init_with_tss(core, tss);
+        LAPIC_OF[core as usize].store(info.lapic_id + 1, Ordering::Release);
         crate::serial_println!("[smp.core.online] core={} lapic={}", core, info.lapic_id);
     }
     crate::apic::enable_local();
-    let core = crate::core_local::CoreLocal::get().core_id;
-    if core == 1 { crate::apic::start_local_timer(); }
+    crate::apic::start_local_timer();
     ONLINE.fetch_add(1, Ordering::Release);
-    if core != 1 { loop { x86_64::instructions::interrupts::enable_and_hlt(); } }
     unsafe {
         // The timer wakes this core until BOOT is done; its handler defers until then.
         while (crate::ipc::BOOT_CONTROLLER.phase() as u8) < (crate::ipc::BootPhase::SchedulerRunning as u8)
