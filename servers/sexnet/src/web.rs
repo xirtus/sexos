@@ -60,7 +60,10 @@ impl Service {
         let seq = (a & 0xFF_FFFF) as u32;
         let kind = (a >> 32) as u8;
         let Some(engine) = engine else { return w::reply(seq, w::OFFLINE, 0) };
-        let Some(index) = sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == who.pd) else { return w::reply(seq, w::DENIED, 0) };
+        let spindles = sex_pdx::app_catalog::SPINDLE_TARGETS;
+        let index = spindles.iter().position(|t| *t == who.pd)
+            .or_else(|| sex_pdx::browser_sources::PLANS.iter().position(|p| p.target() == who.pd).map(|i| spindles.len() + i));
+        let Some(index) = index else { return w::reply(seq, w::DENIED, 0) };
         let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(seq, w::FAILED, 0) };
         let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
         if self.owner.is_some_and(|o| o != who) { return w::reply(seq, w::BUSY, 0); }

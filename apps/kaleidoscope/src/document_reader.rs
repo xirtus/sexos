@@ -6,6 +6,8 @@ use sex_pdx::text_encoding as text;
 
 pub const CAPACITY: usize = 6144;
 const MAX_BODY: usize = 12288;
+/// A web page's converted text is longer than the older reader documents.
+pub const LONG_BODY: usize = 131072;
 /// Match Display's bounded whole-frame row index, including all chrome.
 const MAX_ROWS: usize = 48;
 /// A readable measure also leaves room for seven body rows in a tall view
@@ -38,7 +40,7 @@ pub struct Frame {
 
 /// Geometry and one source-byte anchor are the entire retained reader state.
 /// No body copy or per-byte/per-line table is retained.
-pub struct Reader { width: u32, height: u32, anchor: usize }
+pub struct Reader { width: u32, height: u32, anchor: usize, limit: usize }
 
 struct Line { start: usize, end: usize, next: usize }
 struct Layout { total: usize, first: usize, offset: usize }
@@ -50,8 +52,8 @@ fn clean(byte: u8) -> u8 {
 /// Blank-only trailing lines/spaces have no final readable text. Excluding that
 /// suffix keeps End on the final actual text while preserving interior blanks
 /// and every retained source-byte position. The original body is never changed.
-fn content(body: &[u8]) -> &[u8] {
-    let body = &body[..text::prefix(body,MAX_BODY)];
+fn content(body: &[u8], limit: usize) -> &[u8] {
+    let body = &body[..text::prefix(body,limit)];
     let mut end = body.len();
     while end > 0 && matches!(body[end-1],b'\n'|b'\t'|b' ') { end -= 1; }
     &body[..end]
@@ -107,9 +109,10 @@ fn layout(body: &[u8], cols: usize, visible: usize, anchor: usize) -> Layout {
 }
 
 impl Reader {
-    pub const fn new() -> Self { Self { width: 0, height: 0, anchor: 0 } }
+    pub const fn new() -> Self { Self { width: 0, height: 0, anchor: 0, limit: MAX_BODY } }
     pub fn resize(&mut self, w: u32, h: u32) { self.width = w; self.height = h; }
     pub fn clear(&mut self) { self.anchor = 0; }
+    pub fn long_text(&mut self,long:bool) { self.limit=if long {LONG_BODY} else {MAX_BODY}; }
     pub fn source_anchor(&self) -> usize { self.anchor }
 
     fn geometry(&self) -> (usize, usize) {
@@ -131,7 +134,7 @@ impl Reader {
     /// four-byte scalars fits the same transaction without clipping.
     fn source_geometry(&self,body:&[u8])->(usize,usize){
         let(cols,rows)=self.geometry();if cols==0||rows<=3{return(cols,rows)}
-        let body=content(body);let mut cursor=0;let mut cost=cols+1;
+        let body=content(body,self.limit);let mut cursor=0;let mut cost=cols+1;
         while cursor<body.len(){let row=line(body,cursor,cols);cost=cost.max(encoded_row_cost(body,&row,cols));cursor=row.next;}
         let body_rows=(rows-3).min((CAPACITY-(3*cols+2))/cost);
         (cols,body_rows+3)
@@ -148,6 +151,9 @@ impl Reader {
     pub fn render_path_selected(&mut self,body:&[u8],path:&[u8],selection:Option<(usize,usize)>)->Frame {
         self.render_source(body,path,b"Plain HTTP / no TLS",HOST,selection)
     }
+    pub fn render_web(&mut self,body:&[u8],path:&[u8],banner:&[u8])->Frame {
+        self.render_source(body,b"",banner,path,None)
+    }
     pub fn render_https(&mut self,body:&[u8],path:&[u8])->Frame {
         self.render_https_selected(body,path,None)
     }
@@ -155,14 +161,14 @@ impl Reader {
         self.render_source(body,path,b"Controlled HTTPS / lab root",b"probe.sexos.test:46080",selection)
     }
     fn render_source(&mut self,body:&[u8],path:&[u8],banner:&[u8],host:&[u8],selection:Option<(usize,usize)>)->Frame {
-        let body=&body[..text::prefix(body,MAX_BODY)];
+        let body=&body[..text::prefix(body,self.limit)];
         let valid_utf8=core::str::from_utf8(body).is_ok();
         let selected = selection.and_then(|(a,b)| {
             let (lo,hi)=(a.min(b),a.max(b));
             (lo<hi && hi<=body.len() && (!valid_utf8 ||
                 (text::is_boundary(body,lo)&&text::is_boundary(body,hi)))).then_some((lo,hi))
         });
-        let body = content(body);
+        let body = content(body,self.limit);
         let (cols,rows) = self.source_geometry(body);
         let mut frame = Frame { bytes: [0;CAPACITY], len: 0, selection: (0,0), first: 0, end: 0,
             body_rows: rows.saturating_sub(3), rows, cols, total_lines: 0, source_anchor: self.anchor };
@@ -218,12 +224,12 @@ impl Reader {
     /// No retained preferred-column or body copy is introduced. Home/End remain
     /// exact raw-body endpoints, including a copyable but unpainted blank tail.
     pub fn selection_move(&self, body:&[u8], caret:usize, action:Move)->usize {
-        let raw_len=text::prefix(body,MAX_BODY);
+        let raw_len=text::prefix(body,self.limit);
         if action==Move::Home {return 0;}
         if action==Move::End {return raw_len;}
         let (cols,rows)=self.source_geometry(body);let visible=rows.saturating_sub(3);
         if cols==0 || visible==0 {return caret.min(raw_len);}
-        let body=content(body);if body.is_empty(){return 0;}
+        let body=content(body,self.limit);if body.is_empty(){return 0;}
         let caret=caret.min(body.len());
         let mut cursor=0;let mut index=0usize;let mut current=0usize;let mut column=0;
         while cursor<body.len() {
@@ -248,7 +254,7 @@ impl Reader {
     pub fn reveal(&mut self,body:&[u8],caret:usize)->bool {
         let (cols,rows)=self.source_geometry(body);let visible=rows.saturating_sub(3);
         if cols==0 || visible==0 {return false;}
-        let body=content(body);let caret=caret.min(body.len());
+        let body=content(body,self.limit);let caret=caret.min(body.len());
         let info=layout(body,cols,visible,self.anchor);
         let mut cursor=0;let mut index=0;let mut wanted=0;
         while cursor<body.len() {
@@ -271,7 +277,7 @@ impl Reader {
         let (cols,rows) = self.source_geometry(body);
         let visible = rows.saturating_sub(3);
         if cols == 0 || visible == 0 { return false; }
-        let body = content(body);
+        let body = content(body,self.limit);
         let info = layout(body,cols,visible,self.anchor);
         let last = info.total.saturating_sub(visible);
         let delta = -(wheel as i16) * 3;
@@ -285,7 +291,7 @@ impl Reader {
         let (cols,rows) = self.source_geometry(body);
         let visible = rows.saturating_sub(3);
         if cols == 0 || visible == 0 { return false; }
-        let body = content(body);
+        let body = content(body,self.limit);
         let info = layout(body,cols,visible,self.anchor);
         let last = info.total.saturating_sub(visible);
         let first = match action {

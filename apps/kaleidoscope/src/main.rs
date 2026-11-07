@@ -7,6 +7,7 @@ mod service_call;
 mod incarnation;
 mod body_text;
 mod network_probe;
+mod web_page;
 mod dns_probe;
 mod entropy_probe;
 mod clock_probe;
@@ -67,6 +68,7 @@ struct Browser {
     viewport_sequence:u64,
     viewport_ready:bool,
     reader:document_reader::Reader,
+    web:&'static mut web_page::Web,
     selection:sex_pdx::text_selection::Selection,
     selection_generation:u64,
     selection_body:Option<(bool,usize,u64)>,
@@ -237,6 +239,24 @@ impl Browser {
     fn receive_wheel(&mut self,req:&sex_pdx::PdxMessage){
         if req.type_id!=0x202 || req.caller_pd!=3 || req.caller_task!=3 {return;}
         if let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(req.arg0,req.arg1,req.arg2){self.scroll_input(scroll);}
+    }
+    /// The web page takes its keys and wheel before the older reader sees them.
+    fn web_key(&mut self,key:sex_pdx::app_key::Key)->bool{
+        self.reader.long_text(self.web.shown);
+        if key.control&&key.code==0x26{self.web.begin_edit();return true}
+        if self.web.shown&&!key.control{
+            if self.web.key(key.code,key.shift,sex_pdx::get_ticks()){return true}
+            let movement=match key.code{0x67=>Some(document_reader::Move::Up),0x6C=>Some(document_reader::Move::Down),0x68=>Some(document_reader::Move::PageUp),0x6D=>Some(document_reader::Move::PageDown),0x66=>Some(document_reader::Move::Home),0x6B=>Some(document_reader::Move::End),_=>None};
+            if let Some(movement)=movement{let body=self.web.text();if self.reader.navigate(body,movement){self.ui_dirty=true;}}
+            return true
+        }
+        false
+    }
+    fn web_wheel(&mut self,req:&sex_pdx::PdxMessage)->bool{
+        self.reader.long_text(self.web.shown);
+        if !self.web.shown||req.type_id!=0x202||req.caller_pd!=3||req.caller_task!=3{return false}
+        if let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(req.arg0,req.arg1,req.arg2){let body=self.web.text();if self.reader.scroll_wheel(body,scroll.vertical()){self.ui_dirty=true;}}
+        true
     }
     fn key_input(&mut self,key:sex_pdx::app_key::Key){
         self.sync_selection();
@@ -674,7 +694,7 @@ impl Browser {
         unsafe{assert!(CLIPBOARD.bind(sex_pdx::clipboard::Participant::from_catalog(identity).expect("BROWSER_CLIPBOARD_POLICY")));}
         #[cfg(app_resource_cleanup_proof)]
         if selected.is_original(){full_resource_cleanup_proof();}
-        Self { identity,viewport_sequence:0,viewport_ready:true,reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,page_html:false,page_path:None,page_links:alloc::boxed::Box::new([(0,0);16]),find:None,page_history:alloc::boxed::Box::new([None;8]),page_depth:0,https_view:tls_exchange::View::Idle,https_progress_logged:0,
+        Self { identity,viewport_sequence:0,viewport_ready:true,web:unsafe{&mut *core::ptr::addr_of_mut!(web_page::WEB)},reader:document_reader::Reader::new(),selection:sex_pdx::text_selection::Selection::new(),selection_generation:0,selection_body:None,clipboard_view:sex_pdx::clipboard_client::View::Idle,ui_last_selection:(0,0),reading:false,reading_https:false,https_panel:false,page_html:false,page_path:None,page_links:alloc::boxed::Box::new([(0,0);16]),find:None,page_history:alloc::boxed::Box::new([None;8]),page_depth:0,https_view:tls_exchange::View::Idle,https_progress_logged:0,
             asset_panel:false,asset_png:false,asset_ticket:0,asset_status:asset_view::Status::Cleared,asset_peer_view:tls_exchange::View::Idle,image:asset_decode::Image::new(),bitmap:bitmap_delivery::Outbox::new(selected),asset_presentation:asset_presentation::Presentation::new(),asset_fenced:false,
             importer:document_import::Client::new(),import_source:None,import_editor:import_view::Editor::new(),import_status:import_view::Status::NoDocument,import_panel:false,import_ticket:0,import_viewport:(0,0),workspace:sex_pdx::document_view::WorkspaceRefresh::new(identity.target_pd,identity.task_id),files_pending:false,
             live_text,live_len,probe:network_probe::Probe::new(),probe_view:network_probe::View::Pending,
@@ -686,7 +706,11 @@ impl Browser {
     fn run(&mut self, _pdx: u32) -> bool {
         self.app_turn=self.app_turn.checked_add(1).expect("BROWSER_TURN_EXHAUSTED");
         if self.viewport_ready&&sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL,sex_pdx::document_view::READY,self.identity.target_pd as u64,self.identity.task_id as u64,0).is_ok(){self.viewport_ready=false;}
-        let pending=self.clipboard_progress()||self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
+        let was_busy=self.web.busy();
+        self.web.step(sex_pdx::get_ticks(),|html,out|html_text::convert(html,out));
+        if was_busy&&!self.web.busy(){self.reader.clear();}
+        if core::mem::take(&mut self.web.dirty){self.ui_dirty=true;}
+        let pending=self.web.busy()||self.clipboard_progress()||self.image.pending()||self.bitmap.pending()||self.importer.busy()||self.workspace.pending()||self.files_pending||self.viewport_ready||self.probe.busy()||self.dns.busy()||self.http.busy()||self.seed.busy()||self.clock.busy()||self.trust.busy()||self.tls.busy()||self.exchange.busy()||self.ui.pending()||(self.ui_dirty&&!self.ui_failed)||self.intent.is_some();
         let message=if pending{sex_pdx::pdx_try_listen_raw(0)}else{Some(sex_pdx::pdx_listen_raw(0))};
         if let Some(req)=message{
             if req.caller_pd==3&&req.caller_task==3&&(sex_pdx::app_lifecycle::close_requested(req.type_id,req.caller_pd,[req.arg0,req.arg1,req.arg2],self.identity.target_pd,self.identity.task_id)
@@ -734,7 +758,8 @@ impl Browser {
                 }
             }
             if req.type_id==1&&req.caller_pd==11{self.importer.reply(req.arg0,sex_pdx::get_ticks());self.record_import_control();}
-            if req.type_id==1&&req.caller_pd==13{
+            if req.type_id==1&&req.caller_pd==13&&sex_pdx::web::decode_reply(req.arg0).is_some(){self.web.receive(req.arg0,sex_pdx::get_ticks());}
+            else if req.type_id==1&&req.caller_pd==13{
                 if matches!(req.arg0>>56,0x7C|0xEC){self.trust.reply(req.arg0,sex_pdx::get_ticks());}
                 else if matches!(req.arg0>>56,0x7B|0xEB){self.clock.reply(req.arg0,sex_pdx::get_ticks());}
                 else if matches!(req.arg0>>56,0x7A|0xEA){self.seed.reply(req.arg0,sex_pdx::get_ticks());}
@@ -778,9 +803,9 @@ impl Browser {
             }
             if sex_pdx::clipboard::response_opcode(req.type_id){unsafe{CLIPBOARD.receive(sex_pdx::clipboard::Subject{pd:req.caller_pd,task:req.caller_task},req.type_id,[req.arg0,req.arg1,req.arg2],sex_pdx::get_ticks());}}
             if req.type_id==0x202&&req.caller_pd==3&&req.caller_task==3{
-                if let Some(key)=sex_pdx::app_key::Key::decode(req.arg0,req.arg1,req.arg2){self.key_input(key);}
+                if let Some(key)=sex_pdx::app_key::Key::decode(req.arg0,req.arg1,req.arg2){if !self.web_key(key){self.key_input(key);}}
             }
-            self.receive_wheel(&req);
+            if !self.web_wheel(&req){self.receive_wheel(&req);}
 
         }
         self.clipboard_events();
@@ -937,7 +962,15 @@ impl Browser {
         let mut visible_selection=(0,0);
         let mut reader_layout=None;
         let mut tls_layout=None;
-        let composed=if self.asset_panel{
+        self.reader.long_text(self.web.shown);
+        let composed=if self.web.shown{
+            let mut banner=[0u8;120];let mut at=0;
+            let parts:[&[u8];3]=if self.web.editing{[b"Address: ",self.web.typed(),b"_"]}else if !self.web.message().is_empty(){[self.web.message(),b"",b""]}else{[b"Ctrl+L address  number+Enter link  Backspace back  Esc close",b"",b""]};
+            for part in parts{let n=part.len().min(banner.len()-at);banner[at..at+n].copy_from_slice(&part[..n]);at+=n;}
+            let url=self.web.url();let url=&url[..url.len().min(100)];
+            let f=self.reader.render_web(self.web.text(),url,&banner[..at]);
+            Some((browser_view::Text{bytes:f.bytes,len:f.len},text_delivery::Metadata{count:self.web.text().len(),first:f.first,rows:f.body_rows,selected:(1<<25)|(self.web.busy()as u64)}))
+        }else if self.asset_panel{
             let f=asset_view::render_titled(self.import_viewport.0,self.import_viewport.1,self.asset_status,self.asset_presentation.mode(),self.image.width,self.image.height,if self.asset_png{b"PNG / controlled HTTPS lab root"}else{b"QOI / controlled HTTPS lab root"});
             Some((browser_view::Text::small(&f.bytes,f.len),text_delivery::Metadata{count:self.asset_presentation.generation()as usize,first:self.viewport_sequence as usize,rows:f.rows,selected:(1<<20)|((self.asset_status as u64)<<21)}))
         }else if self.import_panel{
@@ -1084,7 +1117,7 @@ app_main!(App);
 
 fn peer_label(view:tls_exchange::View)->&'static[u8]{match view{tls_exchange::View::Idle=>b"idle",tls_exchange::View::Pending=>b"checking",tls_exchange::View::Verified=>b"peer verified",tls_exchange::View::Unavailable=>b"unavailable",tls_exchange::View::Cancelled=>b"cancelled",tls_exchange::View::Uncertain=>b"waiting receipt"}}
 fn page_text(html:&[u8],out:&mut [u8])->tls_exchange::PageStats{
-    let t0=sex_pdx::get_ticks();let c=html_text::convert(html,out);let ticks=sex_pdx::get_ticks().saturating_sub(t0);tls_exchange::PageStats{ticks,source:html.len(),len:c.len,links:c.links,truncated:c.truncated,targets:c.targets,scripts_run:c.scripts_run,scripts_refused:c.scripts_refused}
+    let t0=sex_pdx::get_ticks();let c=html_text::convert(html,out);let ticks=sex_pdx::get_ticks().saturating_sub(t0);tls_exchange::PageStats{ticks,source:html.len(),len:c.len,links:c.links,truncated:c.truncated,targets:{let mut t=[(0,0);16];t.copy_from_slice(&c.targets[..16]);t},scripts_run:c.scripts_run,scripts_refused:c.scripts_refused}
 }
 /// Fixed request size: the WelcomeText request is 94 bytes and only the path
 /// and Accept value differ between fixed resources on the same BOOT endpoint.

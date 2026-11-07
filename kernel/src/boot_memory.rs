@@ -55,6 +55,11 @@ pub fn init_web_regions(net: u32) {
         paired_at(net, client, w::PROVIDER_SLOT_BASE + index as u64, w::CLIENT_SLOT,
             w::REGION_ID_BASE + index as u32, w::REGION_BYTES as u64, true);
     }
+    let first_browser = sex_pdx::app_catalog::SPINDLE_TARGETS.len();
+    for (index, plan) in sex_pdx::browser_sources::PLANS.iter().enumerate() {
+        paired_at(net, plan.target(), w::PROVIDER_SLOT_BASE + (first_browser + index) as u64, w::CLIENT_SLOT,
+            w::REGION_ID_BASE + (first_browser + index) as u32, w::REGION_BYTES as u64, true);
+    }
 }
 /// One region per possible Spindle for the file protocol, shared with Files alone.
 pub fn init_fs_regions(files: u32) {

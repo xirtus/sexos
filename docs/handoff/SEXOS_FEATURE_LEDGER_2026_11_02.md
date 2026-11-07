@@ -2115,3 +2115,23 @@ row no longer waits for the row before it to end.
   QEMU's user network, never a real network card or LAN.
 - **Gates.** `fetch` at 1 and 4 cores against public sites, plus full one-core regression and
   a 4-core subset on the same kernel. All non-QEMU gates except the older ones listed earlier.
+
+## The Browser opens real websites (2026-11-07)
+
+- **What runs now.** Ctrl+L opens an address bar. Type a URL and Enter, or a bare name for
+  HTTPS. Type a link's number and Enter to follow it, Backspace goes back, Esc closes. Up to
+  five redirects. In QEMU user networking it showed `https://example.com/`,
+  `https://www.rust-lang.org/` (after its 301), and Wikipedia's Microkernel article (278 KB
+  of source, 49 KB of text, 1,339 rows). A self-signed site is refused with a message.
+- **Design.** The same open side of the network service that `fetch` uses, so there is still
+  one checked TLS. The Browser gets its own BOOT route and shared region, paired by plan.
+- **ABI.** Browser rows in the `web` slots of `kernel/src/boot_memory.rs`, which changes the
+  hash. The Shell's Browser key queue grew from 8 to 32 and now passes every typing key.
+- **Limits.** A text reader, not a browser engine: no layout, CSS, images, forms, cookies or
+  JavaScript. Menus and page furniture show up as text. 512 KiB of source and 128 KiB of text,
+  and only the first 128 links of a page are numbered. HTTP/1.0. One flow at a time across the
+  machine. Keys can still be dropped past 32 queued ones; the gate types at about 60 ms a key.
+  All the `fetch` network limits apply.
+- **Gates.** `browser_web` at 1 and 4 cores (public sites at 1), `fetch`, `filesystem`, `smp`,
+  program records and program disk at 1 core on the final kernel. Python tests and all
+  non-QEMU gates except the older ones listed earlier. Not the full native suite.

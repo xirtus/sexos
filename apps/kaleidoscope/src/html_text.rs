@@ -10,7 +10,7 @@
 //! `template` and comments contribute nothing. The
 //! output never exceeds the caller's buffer; a cut is marked, never silent.
 
-pub const MAX_LINKS: usize = 16;
+pub const MAX_LINKS: usize = 128;
 const TRUNCATED: &[u8] = b"\n[page truncated]";
 
 pub struct Output<'a> {
