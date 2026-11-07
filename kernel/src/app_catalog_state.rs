@@ -87,7 +87,7 @@ fn slots(row: &Incarnation) -> [u64; 4] {
 pub fn validate_layout(rows: &[Incarnation]) -> Result<(), Error> {
     if rows.len() > MAX_APPS { return Err(Error::CatalogCapacity); }
     if rows.len() != INCARNATIONS.len() { return Err(Error::CatalogLength); }
-    for app in [App::Quil, App::Spindle, App::Browser] {
+    for app in [App::Quil, App::Spindle, App::Browser, App::Program] {
         if !rows.iter().any(|row| row.app == app) { return Err(Error::CatalogMissingApp); }
     }
     for (index, row) in rows.iter().enumerate() {

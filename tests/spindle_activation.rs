@@ -65,7 +65,7 @@ unsafe fn info(state:u64){
  FOCUSED_SURFACE_ID=301;assert!(!spindle_has_focus());
  }}
 #[test]fn third_edge_waits_for_terminal_predecessor_and_cleanup_then_commits_only_132(){let _l=LOCK.lock().unwrap();unsafe{
- assert_eq!(app_catalog::COUNT,28);assert_eq!(app_catalog::SPINDLE_TARGETS,[12,17,24,25,26,27,28,29,40]);
+ assert_eq!(app_catalog::COUNT,32);assert_eq!(app_catalog::SPINDLE_TARGETS,[12,17,24,25,26,27,28,29,40]);
  for state in [0,1,2]{info(state);INFO[1].as_mut().unwrap().state=1;
   assert_eq!(spindle_activation_info(false).unwrap().successor,17);assert_eq!(CALLS,[(49,false)]);
  }

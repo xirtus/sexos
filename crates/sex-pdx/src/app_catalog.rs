@@ -6,7 +6,7 @@
 //! its actual objects and held grants.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum App { Quil, Spindle, Browser }
+pub enum App { Quil, Spindle, Browser, Program }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Incarnation {
@@ -43,7 +43,7 @@ const fn quil(ordinal: u8, target: u32, surface: u64, shell_surface: Option<u64>
 }
 
 /// Every BOOT-reserved app incarnation, in activation order per app.
-pub const INCARNATIONS: [Incarnation; 28] = [
+pub const INCARNATIONS: [Incarnation; 32] = [
     quil(0, 9, 156, Some(201), 38, 41, None, 11),
     Incarnation { app: App::Spindle, ordinal: 0, target: 12, surface: 154, shell_surface: Some(153), lifecycle_slot: 39, close_slot: 42, activation_slot: None, route_slot: 14, children: &[160, 161, 162] },
     // Browser's document notices share its BOOT close route.
@@ -73,7 +73,15 @@ pub const INCARNATIONS: [Incarnation; 28] = [
     quil(14, 38, 351, None, 186, 187, Some(188), 189),
     quil(15, 39, 352, None, 190, 191, Some(192), 193),
     Incarnation { app: App::Spindle, ordinal: 8, target: 40, surface: 353, shell_surface: Some(354), lifecycle_slot: 194, close_slot: 195, activation_slot: Some(196), route_slot: 197, children: &[355, 356, 357] },
+    Incarnation { app: App::Program, ordinal: 0, target: 41, surface: 358, shell_surface: None, lifecycle_slot: 240, close_slot: 241, activation_slot: None, route_slot: 243, children: &[] },
+    Incarnation { app: App::Program, ordinal: 1, target: 42, surface: 359, shell_surface: None, lifecycle_slot: 244, close_slot: 245, activation_slot: Some(246), route_slot: 247, children: &[] },
+    Incarnation { app: App::Program, ordinal: 2, target: 43, surface: 360, shell_surface: None, lifecycle_slot: 248, close_slot: 249, activation_slot: Some(250), route_slot: 251, children: &[] },
+    Incarnation { app: App::Program, ordinal: 3, target: 44, surface: 361, shell_surface: None, lifecycle_slot: 252, close_slot: 253, activation_slot: Some(254), route_slot: 255, children: &[] },
 ];
+
+/// The hardware key program rows share. They run one at a time, so no two ever
+/// hold it together. Freed by sexusb sharing sexinput's key until virtual keys.
+pub const PROGRAM_KEY: u8 = 5;
 
 /// Compile-time storage sizing; descriptive catalog data never grants authority.
 pub const COUNT: usize = INCARNATIONS.len();

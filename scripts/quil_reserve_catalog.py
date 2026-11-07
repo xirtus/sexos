@@ -41,7 +41,7 @@ def surface_families(root):
   surface=re.search(r'\bsurface\s*:\s*(\d+)',line)
   frame=re.search(r'\bshell_surface\s*:\s*(None|Some\((\d+)\))',line)
   children=re.search(r'\bchildren\s*:\s*&\[([\d,\s]*)\]',line)
-  if not all([family,surface,frame,children])or family[1]not in ['Spindle','Browser']:raise ValueError('unparsed app visual row')
+  if not all([family,surface,frame,children])or family[1]not in ['Spindle','Browser','Program']:raise ValueError('unparsed app visual row')
   sids=[int(surface[1])]+([int(frame[2])]if frame[2]else[])+[int(value)for value in children[1].split(',')if value.strip()]
   add(family[1],sids);count+=1
  if count!=int(head[1]):raise ValueError('incomplete app visual inventory')

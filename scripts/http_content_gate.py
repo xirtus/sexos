@@ -157,6 +157,7 @@ def _wheel_shell_contract(source,root):
   expect(participant,'valid','self.pd!=0&&self.task!=0')
   expect(participant,'from_catalog',"""if !c.is_subject(c.target_pd,c.surface_id,3){return None}
    let Some(i)=crate::app_catalog::by_surface(c.target_pd,c.surface_id).filter(|i|i.app!=crate::app_catalog::App::Spindle)else{return None};
+   if i.app==crate::app_catalog::App::Program{return None}
    let(route,can_read)=(i.close_slot,i.app==crate::app_catalog::App::Quil);
    Some(Self{subject:Subject{pd:c.target_pd,task:c.task_id},surface:c.surface_id,route,can_read})""")
  else:

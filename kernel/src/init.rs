@@ -106,7 +106,12 @@ pub fn init() {
             let path = module.path();
             if path.contains(target) {
                 serial_println!("[bootgraph.pd.spawn.begin] pd={}", target);
-                match pdx_spawn(path, domain_id) {
+                // sexusb shares sexinput's key, leaving one for program rows until
+                // virtual keys exist. Both are trusted hardware input services.
+                let spawned=if domain_id==sex_pdx::app_catalog::PROGRAM_KEY {
+                    crate::pd::create::create_boot_domain(path,None,domain_id,4)
+                }else{pdx_spawn(path, domain_id)};
+                match spawned {
                     Ok(id) => {
                         serial_println!("✓ Spawned PD {}: {} (Domain {})", id, path, domain_id);
                         serial_println!(
@@ -181,10 +186,10 @@ pub fn init() {
     // that predecessor has no private translations/custody.
     use sex_pdx::app_catalog::{self as apps, App};
     assert_eq!((quil_id,spindle_id,kaleido_id),(apps::boot_incarnation(App::Quil).target,apps::boot_incarnation(App::Spindle).target,apps::boot_incarnation(App::Browser).target),"BOOT_CATALOG_SPAWN_ORDER");
-    for incarnation in apps::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
-        let name=match incarnation.app{App::Quil=>"quil",App::Spindle=>"spindle",App::Browser=>"kaleidoscope"};
+    for incarnation in apps::INCARNATIONS.iter().filter(|i|i.ordinal!=0||i.app==App::Program) {
+        let name=match incarnation.app{App::Quil=>"quil",App::Spindle=>"spindle",App::Browser=>"kaleidoscope",App::Program=>"hello"};
         let module=modules.modules().iter().find(|m|m.path().contains(name)).expect("BOOT_SUCCESSOR_MODULE");
-        let key=apps::boot_incarnation(incarnation.app).target;
+        let key=if incarnation.app==App::Program{apps::PROGRAM_KEY as u32}else{apps::boot_incarnation(incarnation.app).target};
         let (layout,pkey)=(u8::try_from(incarnation.target).expect("BOOT_SUCCESSOR_LAYOUT"),u8::try_from(key).expect("BOOT_SUCCESSOR_KEY"));
         let created=crate::pd::create::create_boot_domain(module.path(),Some(incarnation.target),layout,pkey).expect("BOOT_SUCCESSOR");
         assert_eq!(created,incarnation.target,"BOOT_SUCCESSOR_IDENTITY");
@@ -851,7 +856,7 @@ pub fn init() {
         [silkshell_id,sexdisp_id,sexfiles_id,sexnet_id,sexbell_id]);
     // Each successor's service edges and Shell's close/route edges to it.
     let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).unwrap();
-    for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
+    for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0||i.app==sex_pdx::app_catalog::App::Program) {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(incarnation.target).unwrap();
         let spindle=incarnation.app==sex_pdx::app_catalog::App::Spindle;
         for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_LINEN,linen_id),(sex_pdx::SLOT_BELL,sexbell_id)].into_iter().take(if spindle{5}else{3}){

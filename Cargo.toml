@@ -18,6 +18,7 @@ members = [
     "servers/sext",
     "apps/sexdrive",
     "apps/kaleidoscope",
+    "apps/hello",
     "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-net",

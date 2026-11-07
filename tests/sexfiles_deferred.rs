@@ -7,8 +7,8 @@ pub mod app_lifecycle;
 #[path = "../servers/sexfiles/src/defer_queue.rs"]
 mod queue;
 use app_lifecycle::OP_APP_EXIT;
-// Independent actual-BOOT goldens: 28 terminal lanes, 19 document clients.
-const APP_TARGETS:[u64;28]=[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40];
+// Independent actual-BOOT goldens: 32 terminal lanes, 19 document clients.
+const APP_TARGETS:[u64;32]=[9,12,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44];
 const DOCUMENT_TARGETS:[u32;19]=[9,16,18,19,20,21,22,23,32,33,34,35,36,37,38,39,15,30,31];
 #[test]
 fn full_ordinary_backlog_cannot_consume_kernel_terminal_capacity() {
@@ -23,7 +23,7 @@ fn full_ordinary_backlog_cannot_consume_kernel_terminal_capacity() {
     for pd in APP_TARGETS {
         assert!(q.push((OP_APP_EXIT, 0, pd, pd, 0)));
     }
-    assert_eq!(q.len(), 36);
+    assert_eq!(q.len(), 40);
     // Replayed hints coalesce and cannot crowd out another terminal subject.
     for _ in 0..100 {
         assert!(q.push((OP_APP_EXIT, 0, 9, 9, 0)));
@@ -67,7 +67,7 @@ fn ordinary_pressure_cannot_steal_any_incarnation_document_window(){
  for pd in DOCUMENT_TARGETS{let r=document::Request{seq:5,kind:document::READ,object:3,offset:16,a:4,b:0};assert!(!q.push((document::OP,pd,r.header(),r.a,r.b)));}
  assert!(!q.push((0x99,12,8,0,0)));
  for pd in APP_TARGETS{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}
- assert_eq!(q.len(),112);
+ assert_eq!(q.len(),116);
  for pd in APP_TARGETS{assert_eq!(q.pop(),Some((OP_APP_EXIT,0,pd,pd,0)));}
  for m in expected{assert_eq!(q.pop(),Some(m));assert!(q.push(m));assert_eq!(q.len(),84);}
  // The second pass preserves the same FIFO and restores all capacity.
@@ -87,7 +87,7 @@ fn exact_abort_has_independent_capacity_after_all_data_and_ordinary_slots(){
  for pd in DOCUMENT_TARGETS{for seq in 1..=4{let r=document::Request{seq,kind:document::WRITE,object:3,offset:(seq-1)*16,a:0,b:0};let m=(document::OP,pd,r.header(),0,0);assert!(q.push(m));expected.push(m);}}
  for pd in DOCUMENT_TARGETS{let r=document::Request{seq:5,kind:document::ABORT,object:0,offset:0,a:0,b:0};let m=(document::OP,pd,r.header(),0,0);assert!(q.push(m));assert!(q.push(m));expected.push(m);}
  assert_eq!(q.len(),103);
- for pd in APP_TARGETS{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}assert_eq!(q.len(),131);
+ for pd in APP_TARGETS{assert!(q.push((OP_APP_EXIT,0,pd,pd,0)));}assert_eq!(q.len(),135);
  for pd in APP_TARGETS{assert_eq!(q.pop(),Some((OP_APP_EXIT,0,pd,pd,0)));}
  for m in expected{assert_eq!(q.pop(),Some(m));}assert_eq!(q.pop(),None);
 }

@@ -318,7 +318,7 @@ pub extern "C" fn trampoline_main() {
 /// supplies the task identity; a document request carries no replacement task.
 fn document_caller_live(caller:u32)->bool {
     const _:()=assert!(sex_pdx::app_catalog::DOCUMENT_COUNT<=64);
-    let Some(i)=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app!=sex_pdx::app_catalog::App::Spindle)else{return false};
+    let Some(i)=sex_pdx::app_catalog::by_target(caller).filter(|i|i.app!=sex_pdx::app_catalog::App::Spindle&&i.app!=sex_pdx::app_catalog::App::Program)else{return false};
     let Some(index)=sex_pdx::app_catalog::DOCUMENT_TARGETS.iter().position(|target|*target==caller)else{return false};
     let(slot,surface)=(i.lifecycle_slot,i.surface);
     let Ok(c)=sex_pdx::app_lifecycle::catalog(slot)else{return false};

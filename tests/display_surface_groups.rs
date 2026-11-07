@@ -431,6 +431,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
    app_catalog::App::Quil=>("Quil",0x00cba6f7),
    app_catalog::App::Spindle=>("Spindle",0x0089b4fa),
    app_catalog::App::Browser=>("Browser",0x005ed9c3),
+   app_catalog::App::Program=>("Program",0x00f9e2af),
   };
   for sid in [row.frame(),row.surface].into_iter().chain(row.children.iter().copied()) {
    assert_eq!(desktop_style::native_label(sid),Some(label),"sid={sid}");

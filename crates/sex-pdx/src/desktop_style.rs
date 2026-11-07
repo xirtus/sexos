@@ -40,6 +40,7 @@ pub const fn native_label(surface:u64)->Option<&'static str>{
         Some(App::Quil)=>Some("Quil"),
         Some(App::Spindle)=>Some("Spindle"),
         Some(App::Browser)=>Some("Browser"),
+        Some(App::Program)=>Some("Program"),
         None=>None,
     }
 }
@@ -50,6 +51,7 @@ pub const fn native_indicator(surface:u64)->Option<u32>{
         Some(App::Quil)=>Some(0x00CBA6F7),
         Some(App::Spindle)=>Some(0x0089B4FA),
         Some(App::Browser)=>Some(0x005ED9C3),
+        Some(App::Program)=>Some(0x00F9E2AF),
         None=>None,
     }
 }

@@ -12,7 +12,7 @@ LEGACY=(('FocusSpindle','Open Spindle'),('FocusQuil','Open Quil'),('FocusLinen',
         ('FocusAtlas','Open Atlas'),('FocusBell','Open Bell'),('FocusCollar','Open Collar'),
         ('FocusMesh','Open Mesh'),('RestoreMinimized','Restore Minimized'),
         ('ZoomToggle','Zoom Toggle'),('MinimizeFocused','Minimize Focused'))
-CURRENT=LEGACY+(('FocusBrowser','Open Browser'),)
+CURRENT=LEGACY+(('FocusBrowser','Open Browser'),('FocusProgram','Run Hello'))
 FUTURE=CURRENT+(('HostFixtureOnly','Host fixture only'),)
 
 def catalog(commands):
@@ -32,8 +32,8 @@ class PaletteCommands(unittest.TestCase):
 
     def test_zoom_paths_are_independent_literal_goldens(self):
         # Appending commands changes wrap distance, without moving Zoom's row8.
-        paths=[(LEGACY,[(0,9),(9,8)]),(CURRENT,[(0,10),(10,9),(9,8)]),
-               (FUTURE,[(0,11),(11,10),(10,9),(9,8)])]
+        paths=[(LEGACY,[(0,9),(9,8)]),(CURRENT,[(0,11),(11,10),(10,9),(9,8)]),
+               (FUTURE,[(0,12),(12,11),(11,10),(10,9),(9,8)])]
         for commands,path in paths:
             receipts=[('grave_accent',f'[shell.palette.open] ok=1 selected=0 count={len(commands)}\n')]
             receipts += [('k',f'[shell.palette.select] old={old} new={new}\n')for old,new in path]
@@ -47,8 +47,8 @@ class PaletteCommands(unittest.TestCase):
 
     def test_forward_origin_and_browser_targets_have_exact_receipts(self):
         for command,target,path in [('FocusSpindle',0,[]),('FocusLinen',2,[('j',0,1),('j',1,2)]),
-                                    ('FocusBrowser',10,[('k',0,10)])]:
-            receipts=[('grave_accent','[shell.palette.open] ok=1 selected=0 count=11\n')]+[
+                                    ('FocusBrowser',10,[('k',0,11),('k',11,10)])]:
+            receipts=[('grave_accent','[shell.palette.open] ok=1 selected=0 count=12\n')]+[
                 (code,f'[shell.palette.select] old={old} new={new}\n')for code,old,new in path]
             sent=[]
             def key(code,pattern):
@@ -65,7 +65,7 @@ class PaletteCommands(unittest.TestCase):
 
     def test_source_count_duplicate_inference_and_legacy_changes_fail(self):
         source=catalog(CURRENT)
-        cases=[source.replace('CommandDef; 11','CommandDef; 10'),source+source,
+        cases=[source.replace('CommandDef; 12','CommandDef; 11'),source+source,
                source.replace('Command::FocusBrowser','Command::ZoomToggle'),
                source.replace('name: "Open Browser"','name: "Zoom Toggle"'),
                source.replace('Command::ZoomToggle','pick_command()'),
@@ -77,12 +77,12 @@ class PaletteCommands(unittest.TestCase):
             with self.subTest(changed=changed[-100:]),self.assertRaises(ValueError):self.read(changed)
 
     def test_stale_truncated_wrong_count_or_transition_prevents_enter(self):
-        good=['[shell.palette.open] ok=1 selected=0 count=11\n',
-              '[shell.palette.select] old=0 new=10\n','[shell.palette.select] old=10 new=9\n',
-              '[shell.palette.select] old=9 new=8\n']
-        mutations=[(0,good[0].replace('count=11','count=10')),(0,good[0].replace('selected=0','selected=8')),
-                   (0,'[shell.palette.item] idx=0\n'),(1,good[1].replace('new=10','new=9')),
-                   (1,good[1].rstrip('\n')),(2,good[2].replace('new=9','new=90')),(3,'')]
+        good=['[shell.palette.open] ok=1 selected=0 count=12\n',
+              '[shell.palette.select] old=0 new=11\n','[shell.palette.select] old=11 new=10\n',
+              '[shell.palette.select] old=10 new=9\n','[shell.palette.select] old=9 new=8\n']
+        mutations=[(0,good[0].replace('count=12','count=11')),(0,good[0].replace('selected=0','selected=8')),
+                   (0,'[shell.palette.item] idx=0\n'),(1,good[1].replace('new=11','new=9')),
+                   (1,good[1].rstrip('\n')),(2,good[2].replace('new=10','new=90')),(4,'')]
         for index,bad in mutations:
             sent=[];current=list(good);current[index]=bad
             def key(code,pattern):

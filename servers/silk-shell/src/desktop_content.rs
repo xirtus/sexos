@@ -63,7 +63,7 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
                 let view=sex_pdx::spindle_view::Layout::new(w,h);
                 for(i,sid)in ids.iter().enumerate(){let p=view.panes[i];result[i]=Some(Child{sid:*sid,x:x.saturating_add(p.x as i32),y:y.saturating_add(p.y as i32),w:p.w,h:p.h});}
             },
-            crate::app_catalog::App::Browser=>{},
+            crate::app_catalog::App::Browser|crate::app_catalog::App::Program=>{},
         }
     }
     result

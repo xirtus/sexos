@@ -7458,7 +7458,7 @@ const fn native_lifecycle_surface_count() -> usize {
     let mut index = 0;
     while index < app_catalog::COUNT {
         let row = &app_catalog::INCARNATIONS[index];
-        if row.ordinal > 0 || matches!(row.app, app_catalog::App::Browser) {
+        if row.ordinal > 0 || matches!(row.app, app_catalog::App::Browser | app_catalog::App::Program) {
             count += 1;
         }
         index += 1;
@@ -14082,6 +14082,7 @@ enum Command {
     ZoomToggle = 8,
     MinimizeFocused = 9,
     FocusBrowser = 10,
+    FocusProgram = 11,
 }
 
 /// Static display info for each command in the palette.
@@ -14091,7 +14092,7 @@ struct CommandDef {
 }
 
 /// Daily-driver commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 11] = [
+const COMMAND_LIST: [CommandDef; 12] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusQuil, name: "Open Quil" },
     CommandDef { command: Command::FocusLinen, name: "Open Linen" },
@@ -14103,6 +14104,7 @@ const COMMAND_LIST: [CommandDef; 11] = [
     CommandDef { command: Command::ZoomToggle, name: "Zoom Toggle" },
     CommandDef { command: Command::MinimizeFocused, name: "Minimize Focused" },
     CommandDef { command: Command::FocusBrowser, name: "Open Browser" },
+    CommandDef { command: Command::FocusProgram, name: "Run Hello" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -15589,6 +15591,7 @@ fn command_kind_color(cmd: Command) -> u32 {
         Command::ZoomToggle => 0x00306030,         // muted olive
         Command::MinimizeFocused => 0x00304030,    // muted slate
         Command::FocusBrowser => 0x00205550,        // native Browser teal
+        Command::FocusProgram => 0x00504818,
     }
 }
 
@@ -15612,6 +15615,7 @@ fn command_palette_selected_accent() -> u32 {
             Command::ZoomToggle => 0x0080C060,         // bright olive
             Command::MinimizeFocused => 0x00708080,    // bright slate
             Command::FocusBrowser => 0x005ED9C3,        // native Browser teal
+            Command::FocusProgram => 0x00F9E2AF,
         }
     }
 }
@@ -15646,6 +15650,7 @@ unsafe fn palette_render_list() {
             Command::FocusSpindle=>Some(app_catalog::App::Spindle),
             Command::FocusQuil=>Some(app_catalog::App::Quil),
             Command::FocusBrowser=>Some(app_catalog::App::Browser),
+            Command::FocusProgram=>Some(app_catalog::App::Program),
             _=>None,
         };
         // Preserve Spindle's active I/O and recovery messages. A reserve hint
@@ -16073,6 +16078,23 @@ fn browser_active_frame()->Option<(u32,u64)>{
     if row.app!=app_catalog::App::Browser || !native_launcher_status(row.target).0{return None}
     Some((row.target,row.frame()))
 }
+/// A live program is focused; otherwise the next program row is activated.
+unsafe fn open_program_in_active_scene()->bool{
+    let app=app_catalog::App::Program;
+    let Ok(instance)=app_activation_info(app,false)else{return false};
+    if instance.state==1 {
+        launcher_focus_discard();
+        let Ok(active)=app_activation_info(app,true)else{return false};
+        if active.state!=2 {return false}
+        let Some(row)=app_catalog::by_surface(active.successor,active.surface).filter(|r|r.app==app)else{return false};
+        sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
+        launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
+        return true;
+    }
+    if instance.state!=2 {return false}
+    let Some(row)=app_catalog::by_surface(instance.successor,instance.surface)else{return false};
+    launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true)
+}
 unsafe fn open_browser_in_active_scene()->bool{
     if app_catalog::count(app_catalog::App::Browser)>1 {
         let Ok(instance)=browser_activation_info(false)else{return false};
@@ -16130,6 +16152,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
         Command::FocusSpindle => spindle_launcher_status(),
         Command::FocusQuil => quil_launcher_status(),
         Command::FocusBrowser => browser_launcher_status(),
+        Command::FocusProgram => app_launcher_status(app_catalog::App::Program),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -16209,6 +16232,11 @@ unsafe fn palette_execute_selected() -> bool {
             let open_ok=open_browser_in_active_scene();
             let sid=if open_ok{browser_active_frame().map_or(0,|(_,frame)|frame)}else{0};
             sex_pdx::serial_record!("[shell.palette.focus.result] target=BROWSER sid={} ok={}",sid,open_ok as u8);
+            open_ok
+        }
+        Command::FocusProgram => {
+            let open_ok=open_program_in_active_scene();
+            sex_pdx::serial_record!("[shell.palette.focus.result] target=PROGRAM ok={}",open_ok as u8);
             open_ok
         }
         Command::FocusLinen => {
@@ -19538,6 +19566,9 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
             Command::FocusBrowser => {
                 let sid=browser_active_frame().map_or(0,|(_,frame)|frame);
                 palette_batch_emit_app_focus("Browser",sid,ok,if ok{"ok"}else{"open_or_focus_reject"});
+            }
+            Command::FocusProgram => {
+                palette_batch_emit_app_focus("Program",0,ok,if ok{"ok"}else{"open_or_focus_reject"});
             }
             Command::ZoomToggle | Command::MinimizeFocused => {}
         }

@@ -1451,7 +1451,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -
     let py = (ly - title_y) / SCALE;
     if px >= GLYPH_W { return None; }
     let title: &[u8] = if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
-        match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser"}
+        match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser",app_catalog::App::Program=>b"Program"}
     }else{match surface_id{200=>b"Linen",100=>b"App",_=>return None}};
     let glyph = ascii_glyph_index(*title.get(col)?)?;
     if (FONT_ASCII_5X7[glyph][py] >> (4 - px)) & 1 != 0 { Some(sex_pdx::desktop_style::contrast_ink(background)) } else { None }
