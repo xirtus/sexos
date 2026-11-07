@@ -651,7 +651,9 @@ fn device_sectors() -> u64 {
 
 fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
     // Everything past the fixed DiskFS area belongs to Files' filesystem and program store.
-    if offset >= (WRITE_PROOF_LBA + 1) * NVME_LBA_BYTES && buf_cap == SLOT_BLOCK_BUFFER { return true; }
+    if offset >= (WRITE_PROOF_LBA + 1) * NVME_LBA_BYTES && buf_cap == SLOT_BLOCK_BUFFER {
+        return offset.checked_add(size).is_some_and(|end| end <= device_sectors() * NVME_LBA_BYTES);
+    }
     let expected_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
     let manifest_offset = MANIFEST_LBA * NVME_LBA_BYTES;
     let object_start_offset = PROOF_OBJECT_START_LBA * NVME_LBA_BYTES;
