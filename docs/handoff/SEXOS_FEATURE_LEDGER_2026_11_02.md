@@ -1900,3 +1900,33 @@ ABI: `OP_APP_REBORN` (0x10F), activation kind 2, activation states 4 (reusable) 
   `program_launch` at 1024x768, `http_content`, `quil_autosave`,
   `clipboard_workflow`, `quil_readability`, `quil_workflow`, `https_document`,
   `spindle_reserve_probe`, `https_png`, `network_contention` at 1280x800.
+
+## Programs side by side, first organs (2026-11-07)
+
+Three programs run at once, each on its own hardware key.
+
+ABI: new `organs` module; `app_catalog::PROGRAM_KEY` removed. Activation of a program
+row no longer waits for the row before it to end.
+
+- **Organs (`organs.rs`).** Senses: sexusb with sexinput. Core: silkbar with
+  sexdisplay. Storage: sexstore with sexfiles. **These pairs can now read each
+  other's memory;** capabilities still decide what they may ask for. Keys 5, 6 and 8
+  go to program rows. Other services keep their own keys, since nothing needs them yet.
+- **Isolation evidence.** `program_isolation_probe.py` on an ISO built with
+  `SEXOS_PROGRAM_ISOLATION_PROBE=1`: row 43 reads its own first page, then row 42's.
+  The second read takes `[paging.fault.trap] pd=43 addr=0x69000000 error=0x25`
+  (protection-key bit set), the kernel ends only row 43, its cleanup completes, row
+  42 stays live and closes normally, and another program starts. This covers one
+  read in one direction, and it is not part of the normal gate run because it needs
+  that build. The shipped hello has no probe code.
+- **Limits.** Three programs at once; a fourth launch focuses a live one. All are
+  hello from a Limine module. More than four windows stack as thin rows and only the
+  focused window shows a title bar, so this desktop layout will not scale. Calls
+  between organ members still enter the kernel, so organs give no speed gain yet.
+- **Gates.** All non-QEMU gates except the older ones listed earlier, 1,132 Python
+  tests, master gate GREEN. Native on the final commit: `program_launch` at both
+  sizes with three live programs checked by pixels; `http_content`, `quil_autosave`,
+  `clipboard_workflow`, `quil_readability`, `connected_desktop`, `quil_workflow`,
+  `https_document`, `spindle_calc`, `spindle_reserve_probe`, `https_png`,
+  `network_contention` at 1280x800.
+- Screenshot: `assets/sexos-alpha-programs-side-by-side-2026-11-07.png`.
