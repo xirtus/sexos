@@ -8,7 +8,7 @@ use sex_pdx::text_batch::{hash, Request};
 use sex_pdx::{app_lifecycle as lifecycle, pdx_call_checked, SLOT_DISPLAY, SLOT_SHELL};
 
 const TITLE_ID: u64 = 300;
-const TEXT: &[u8] = b"Hello from a SexOS program.\n\nThis window belongs to its own protection domain.\nIt holds only what BOOT granted its catalog row.\n\nClose it with the red light.\n";
+const TEXT: &[u8] = b"Hello from a SexOS program.\n\nThis window has its own domain.\nIt holds only what BOOT granted.\n";
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {

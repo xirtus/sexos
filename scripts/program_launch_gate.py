@@ -35,7 +35,7 @@ def main():
   tile=re.findall(rf'\[shell.tile.apply\] sid={sid} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())
   assert tile,'no tile for program';x,y,_,_=map(int,tile[-1])
   path=a.out/f'program-{target}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
-  ink,missing=text_ink(path,(x,y),font);assert ink>1000 and missing==0,f'text ink {ink} missing {missing}'
+  ink,missing=text_ink(path,(x,y),font);assert ink>500 and missing==0,f'text ink {ink} missing {missing}'
   return dict(target=target,ink=ink)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)

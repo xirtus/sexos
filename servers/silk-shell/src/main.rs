@@ -8526,7 +8526,7 @@ unsafe fn tile_active_scene_frames() {
         };
 
         // [shell.tile.apply]: budgeted tiled geometry application proof.
-        static mut SHELL_TILE_APPLY_BUDGET: u32 = 24;
+        static mut SHELL_TILE_APPLY_BUDGET: u32 = 64;
         let b = &mut SHELL_TILE_APPLY_BUDGET;
         if *b > 0 {
             *b -= 1;
