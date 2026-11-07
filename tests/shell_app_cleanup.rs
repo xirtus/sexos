@@ -11,6 +11,7 @@ impl Retired{fn retire(&mut self,subject:clipboard::Subject){self.0.push(subject
 static mut CLIPBOARD:Retired=Retired(Vec::new());static mut APP_INPUT:Retired=Retired(Vec::new());static mut CLIPBOARD_INTAKE:Retired=Retired(Vec::new());
 unsafe fn retired_once(){let want=vec![clipboard::Subject{pd:15,task:80}];assert_eq!(CLIPBOARD.0,want);assert_eq!(APP_INPUT.0,want);assert_eq!(CLIPBOARD_INTAKE.0,want);}
 pub mod app_lifecycle {
+  pub const OP_APP_REBORN:u64=0x10F;
  pub const OP_APP_EXIT:u64=0x107;
  pub const OP_APP_CLOSE:u64=0x108;
  pub const OP_APP_CLOSE_DECLINED:u64=0x10A;pub const CLOSE_ASK:u64=0;pub const CLOSE_CONFIRMED:u64=1;pub const DECLINE_UNSAVED:u64=1;
@@ -26,6 +27,7 @@ struct Desc{window_id:u64}struct Window{desc:Desc}
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]enum InteractionState{Idle,ClickPending,Dragging{surface_id:u64},Resizing{surface_id:u64},TabDragging{frame_id:u32}}
 enum UpdateKind{SetActiveApp}
 const MAX_TABS_PER_FRAME:u8=4;const HOVER_NONE:u32=0;const FRAME_LIGHT_NONE:u8=0;
+unsafe fn shell_program_reborn(_:&sex_pdx::PdxMessage){}
 static mut APP_CUSTODY:[Option<app_custody::Entry>;3]=[None;3];
 static mut FRAMES:[Option<Frame>;3]=[None;3];static mut COLLAR_GRANTS:[Option<Grant>;3]=[None;3];
 static mut WINDOWS:Vec<Window>=Vec::new();

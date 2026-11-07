@@ -31,8 +31,9 @@ extern crate alloc;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
 mod scheduler{
  pub use crate::ownership as task_ownership;
- pub struct Context{pub pd_id:u64,pub pd_ptr:*const crate::capability::ProtectionDomain,pub rip:u64}
+ pub struct Context{pub pd_id:u64,pub pd_ptr:*const crate::capability::ProtectionDomain,pub rip:u64,pub rsp:u64}
  pub struct Task{pub id:u32,pub context:Context,pub state:crate::ownership::TaskOwnership}
+ impl Task{pub fn rearm(&mut self,_:u32,_:u64,_:u64,_:&crate::capability::ProtectionDomain){}}
  pub struct Scheduler;pub static SCHEDULERS:[Scheduler;1]=[Scheduler];
  impl Scheduler{pub fn activate_task(&self,t:*mut Task)->bool{unsafe{if !crate::app_resources::activation_permitted((*t).context.pd_id as u32){return false}(*t).state.activate()}}}
  pub fn unpark_thread(task:*mut Task){if !task.is_null(){unsafe{(*task).state.wake();}crate::WAKES.fetch_add(1,crate::Ordering::Relaxed);}}
@@ -53,8 +54,8 @@ mod capability{
   }
   pub fn new(id:u32)->&'static Self{Self::new_key(id,id as u8)}
   pub fn new_key(id:u32,key:u8)->&'static Self{
-   let task=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0x4000},state:ownership::TaskOwnership::new()}));
-   let tramp=Box::into_raw(Box::new(scheduler::Task{id:id|0x8000,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0},state:ownership::TaskOwnership::new()}));
+   let task=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0x4000,rsp:0},state:ownership::TaskOwnership::new()}));
+   let tramp=Box::into_raw(Box::new(scheduler::Task{id:id|0x8000,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0,rsp:0},state:ownership::TaskOwnership::new()}));
    let pd=Box::leak(Box::new(Self{id,pku_key:key,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(reply_credit::ReplyCredits::new()),cap_table:Box::into_raw(Box::new(capability_table::CapabilityTable::new())),caps:Mutex::new(Vec::new())}));
    unsafe{(*task).context.pd_ptr=pd;(*tramp).context.pd_ptr=pd;}
    REGISTRY[id as usize].store(pd,Ordering::Release);pd
@@ -67,7 +68,8 @@ mod ipc{
  pub struct Registry;pub static DOMAIN_REGISTRY:Registry=Registry;
  impl Registry{pub fn get(&self,id:u32)->Option<&'static crate::capability::ProtectionDomain>{crate::REGISTRY.get(id as usize).and_then(|p|unsafe{p.load(crate::Ordering::Acquire).as_ref()})}}
 }
-mod boot_memory{pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}}
+mod boot_memory{pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
+ pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}pub fn zero_frame(_:u64){}}
 mod memory{
  pub mod va_allocator{pub fn allocate_va(_:usize)->Option<u64>{Some(0x9000_0000)}}
  pub mod manager{

@@ -13,6 +13,16 @@ fn require_boot() {
         BootPhase::RegistryBuild as u8, "BOOT_MEMORY_AFTER_GENESIS");
 }
 
+/// One physical page to another, through the kernel's direct map.
+pub(crate) fn copy_frame(from: u64, to: u64) {
+    let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_COPY_NO_HHDM").offset;
+    unsafe { core::ptr::copy_nonoverlapping((from + hhdm) as *const u8, (to + hhdm) as *mut u8, 4096); }
+}
+pub(crate) fn zero_frame(frame: u64) {
+    let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_ZERO_NO_HHDM").offset;
+    unsafe { core::ptr::write_bytes((frame + hhdm) as *mut u8, 0, 4096); }
+}
+
 pub(crate) fn backing(length: u64) -> u64 {
     require_boot();
     assert!(length > 0 && length % 4096 == 0);

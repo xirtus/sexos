@@ -20,7 +20,7 @@ FUNCTIONS = (
     'launcher_focus_existing', 'quil_activation_edge', 'app_activation_info',
     'app_reserve_remaining', 'app_launcher_status', 'browser_activation_info',
     'browser_launcher_status', 'browser_reserve_label', 'browser_active_frame',
-    'open_browser_in_active_scene', 'open_program_in_active_scene', 'quil_activation_info', 'spindle_activation_info',
+    'open_browser_in_active_scene', 'quil_activation_info', 'spindle_activation_info',
     'palette_item_status', 'palette_execute_selected', 'command_palette_selected_accent',
 )
 CASES = (

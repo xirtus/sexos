@@ -82,6 +82,8 @@ unsafe fn try_set_focus_inner(sid:u64,_:bool)->bool{FOCUSED_SURFACE_ID=sid;LAST_
 unsafe fn try_set_focus(sid:u64)->bool{try_set_focus_inner(sid,true)}
 unsafe fn launcher_focus_discard(){}
 unsafe fn launcher_queue_focus(target:u32,frame:u64,_:launcher::LiveAction,_:u8,_:bool)->bool{let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==target)else{return false};EFFECTS.push(Effect::Queued(target,e.task,frame));true}
+unsafe fn open_program_in_active_scene()->bool{false}
+fn program_launcher_status()->(bool,&'static str,&'static str){(false,"","")}
 unsafe fn launcher_action_record(target:u32,frame:u64,_:launcher::LiveAction,_:u8,activated:bool,_:bool){if activated{EFFECTS.push(Effect::Activated(target,frame));}}
 unsafe fn first_minimized_frame_id()->Option<u32>{None}
 unsafe fn open_spindle_in_active_scene()->bool{false}unsafe fn open_quil_in_active_scene()->bool{false}unsafe fn open_linen_in_active_scene()->bool{false}

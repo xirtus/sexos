@@ -188,29 +188,30 @@ unsafe fn shell_catalog_init() {
     assert_eq!(raw_pdx_call(sex_pdx::app_lifecycle::SPINDLE_ROUTE_SLOT,0,0,0,0).0,sex_pdx::ERR_SERVICE_NOT_READY);
     sex_pdx::serial_record!("[spindle.activation.negative] dormant_route=denied early_activation=retry ok=1");
 }
-unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
-    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN {
-        if msg.caller_pd != 0 { return true; }
-        let (target,task)=(msg.arg0 as u32,msg.arg1 as u32);
-        if let Some(entry)=APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target) {
-            if sex_pdx::app_lifecycle::catalog(entry.slot).is_ok_and(|c|c.task_id==task) {
-                if entry.task!=task {
-                    *entry=app_custody::Entry::new(entry.slot,target,task,entry.surface);
-                    // The old run's frame is Destroyed; the new run registers afresh.
-                    let frame=entry.shell_surface().unwrap_or(entry.surface);
-                    for record in LIFECYCLE_TABLE.iter_mut() {
-                        if record.as_ref().is_some_and(|(sid,r)|*sid==frame&&r.state==LifecycleState::Destroyed){*record=None;}
-                    }
-                    for event in TOMBSTONE_RING.iter_mut() {
-                        if event.as_ref().is_some_and(|ev|ev.surface_id==frame){*event=None;}
-                    }
+/// A reusable row's new run: forget the old one, then acknowledge.
+unsafe fn shell_program_reborn(msg: &sex_pdx::PdxMessage) {
+    if msg.caller_pd != 0 { return; }
+    let (target,task)=(msg.arg0 as u32,msg.arg1 as u32);
+    if let Some(entry)=APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target) {
+        if sex_pdx::app_lifecycle::catalog(entry.slot).is_ok_and(|c|c.task_id==task) {
+            if entry.task!=task {
+                *entry=app_custody::Entry::new(entry.slot,target,task,entry.surface);
+                // The old run's frame is Destroyed; the new run registers afresh.
+                let frame=entry.shell_surface().unwrap_or(entry.surface);
+                for record in LIFECYCLE_TABLE.iter_mut() {
+                    if record.as_ref().is_some_and(|(sid,r)|*sid==frame&&r.state==LifecycleState::Destroyed){*record=None;}
                 }
-                let acked=sex_pdx::app_lifecycle::ack(entry.slot,task).is_ok();
-                sex_pdx::serial_record!("[shell.app.reborn.ack] target={} task={} ok={}",target,task,acked as u8);
+                for event in TOMBSTONE_RING.iter_mut() {
+                    if event.as_ref().is_some_and(|ev|ev.surface_id==frame){*event=None;}
+                }
             }
+            let acked=sex_pdx::app_lifecycle::ack(entry.slot,task).is_ok();
+            sex_pdx::serial_record!("[shell.app.reborn.ack] target={} task={} ok={}",target,task,acked as u8);
         }
-        return true;
     }
+}
+unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN { shell_program_reborn(msg); return true; }
     if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
     for e in APP_CUSTODY.iter_mut().flatten() { e.hint(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2); }
     shell_lifecycle_poll();
@@ -24326,7 +24327,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        unsafe { program_rebirth_poll(); workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { program_rebirth_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {

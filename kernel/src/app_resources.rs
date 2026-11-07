@@ -119,11 +119,10 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     DORMANT[index].store(true,Ordering::Release);
     if sex_pdx::app_catalog::app_of(successor)==Some(sex_pdx::app_catalog::App::Program){
         // Keep the loaded image, so a later run starts exactly as this one would.
-        let hhdm=crate::HHDM_REQUEST.response().expect("PROGRAM_NO_HHDM").offset;
         let pristine=crate::boot_memory::backing(app.count as u64*4096);
-        for (i,page) in app.pages[..app.count].iter().enumerate(){unsafe{
-            core::ptr::copy_nonoverlapping(((page.expected&PHYSICAL_MASK)+hhdm) as *const u8,(pristine+i as u64*4096+hhdm) as *mut u8,4096);
-        }}
+        for (i,page) in app.pages[..app.count].iter().enumerate(){
+            crate::boot_memory::copy_frame(page.expected&PHYSICAL_MASK,pristine+i as u64*4096);
+        }
         app.pristine=pristine;app.reusable=true;
         app.entry=task.context.rip;app.stack_top=task.context.rsp;
     }
@@ -293,10 +292,9 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize)->Result<u64,u64>{
         dead(app)?;
         if crate::core_local::INITIALIZED_CORES.load(Ordering::Acquire)!=1
             || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
-        let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
-        for (i,page) in app.pages[..app.count].iter().enumerate(){unsafe{
-            core::ptr::copy_nonoverlapping((app.pristine+i as u64*4096+hhdm) as *const u8,((page.expected&PHYSICAL_MASK)+hhdm) as *mut u8,4096);
-        }}
+        for (i,page) in app.pages[..app.count].iter().enumerate(){
+            crate::boot_memory::copy_frame(app.pristine+i as u64*4096,page.expected&PHYSICAL_MASK);
+        }
         app.generation=app.generation.checked_add(1).ok_or(DENIED)?;
         // Distinct from every boot task and every earlier run of any row, for good.
         let task=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
@@ -345,8 +343,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
             |va|x86_64::instructions::tlb::flush(VirtAddr::new(va)))?;
         if app.reusable{
             // The row keeps its authority and its frames for the next run.
-            let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
-            for page in &app.pages[..app.count]{unsafe{core::ptr::write_bytes(((page.expected&PHYSICAL_MASK)+hhdm) as *mut u8,0,4096);}}
+            for page in &app.pages[..app.count]{crate::boot_memory::zero_frame(page.expected&PHYSICAL_MASK);}
             let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
             while unsafe{(*target.message_ring).dequeue()}.is_some(){}
             while unsafe{(*target.signal_ring).dequeue()}.is_some(){}
