@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 SOURCE=(ROOT/'apps/hello/src/main.rs').read_text()
 TEXT=re.search(r'const TEXT: &\[u8\] = b"(.*?)";',SOURCE)[1].encode().decode('unicode_escape')
 def text_ink(path,frame,font,advance=12,line=18):
- width,_,pixels=ppm_rgb(path.read_bytes())
+ width,_,pixels=ppm_rgb(path.read_bytes(),min_width=1,min_height=1)
  x0,y0=frame[0]+8,frame[1]+36
  missing=0;ink=0
  for row,content in enumerate(TEXT.split('\n')):
