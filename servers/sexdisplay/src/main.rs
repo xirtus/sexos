@@ -358,7 +358,7 @@ fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, foc
         .map(|surface| surface_groups::PixelSource {
             surface,
             content: scene.groups.content(surface, &scene.surfaces, x, y, w, h),
-            chrome: surface.surface_id == focused_id || scene.groups.is_frame(surface),
+            chrome: surface.surface_id == focused_id || scene.groups.is_frame(surface) || scene.groups.is_program_frame(surface),
         }) };
     composite_pixel_source(x,y,w,h,bg,source, scene)
 }

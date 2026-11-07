@@ -51,6 +51,12 @@ impl FrameGroups {
         self.groups.iter().flatten().any(|g| g.catalog.coordinator_pd == s.owner_pd
             && g.catalog.frame_surface_id() == Some(s.surface_id))
     }
+    /// A program row's own surface is its frame: it keeps its title bar when unfocused,
+    /// so several open programs can each be told apart and closed with the mouse.
+    pub fn is_program_frame(&self, s: &Surface) -> bool {
+        crate::app_catalog::by_surface(s.owner_pd, s.surface_id)
+            .is_some_and(|i| i.app == crate::app_catalog::App::Program && i.shell_surface.is_none())
+    }
     /// Spindle's exact catalog children are retained data, never standalone
     /// windows, even before the sanctioned Shell parent has first appeared.
     /// Other groups retain their existing early-surface presentation policy.
@@ -155,7 +161,7 @@ impl FrameGroups {
             let x = edges[i-1];
             let source = self.winner(surfaces,focused,x,y,w,h).map(|surface| PixelSource {
                 surface, content: self.content(surface,surfaces,x,y,w,h),
-                chrome: surface.surface_id == focused || self.is_frame(surface),
+                chrome: surface.surface_id == focused || self.is_frame(surface) || self.is_program_frame(surface),
             });
             result.runs[result.count] = RowRun { end: edges[i], source }; result.count += 1;
         } }

@@ -2182,9 +2182,11 @@ row no longer waits for the row before it to end.
 - **ABI.** Five catalog rows (targets 45 to 49, surfaces 362 to 366, Shell slots 420 to
   439), so `app_catalog::COUNT` is 37. Display holds 32 surfaces, Shell 24 frames.
 - **Limits.** Shared-key programs never run in parallel with each other. The catalog's
-  64 presentation bits cap rows. Program windows still have no title bar when several are
-  open (true before this change too), so they close by keyboard only. Records and windowed
-  programs are still separate kinds.
+  64 presentation bits cap rows. Records and windowed programs are still separate kinds.
+- **Title bars (same day).** A program's window kept its title bar only while focused,
+  since a program row's own surface is its frame and Display only drew chrome for Shell
+  frames or the focused surface. Display now treats a program row's surface as a frame,
+  so every open program shows its bar. The title still says "Program", not its name.
 - **Gates.** Program disk (eight at once) at 1 and 4 cores, program launch, program file,
   records, filesystem, fetch, browser web and SMP at 1 core on the final kernel; the probe
   above; Python tests and all non-QEMU gates except the older ones listed earlier.
