@@ -487,6 +487,7 @@ FAULT_PATTERNS=(
     "TEST FAILED:"
     "fault\.kill"
     "FATAL"
+    "sexdrive.nvme.ioq.err"
 )
 
 FAULT_HIT=""

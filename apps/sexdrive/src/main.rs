@@ -199,6 +199,7 @@ fn own_dma_virtual(phys: u64, size: u64) -> u64 {
     }
 }
 
+const ADMIN_POLLS: u32 = 64_000_000;
 fn stop_uncertain_io() {
     unsafe { NVME_IO_STATE.ready = false; }
     serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
@@ -2504,7 +2505,9 @@ fn nvme_probe_bar() {
     let mut cq_done = false;
     let mut cq_cqe_dw2 = 0u32;
     let mut cq_cqe_dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    // The device only moves when something lets it: count no polls as time.
+    for poll in 0..ADMIN_POLLS {
+        if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
         let cqe_ptr = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
         let dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
@@ -2587,7 +2590,9 @@ fn nvme_probe_bar() {
 
     let mut sq_done = false;
     let mut sq_cqe_dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    // The device only moves when something lets it: count no polls as time.
+    for poll in 0..ADMIN_POLLS {
+        if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
         let cqe_ptr = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
         let dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
         let cid_now = dw3 & 0xFFFF;
@@ -2792,7 +2797,9 @@ fn nvme_probe_bar() {
     let mut rd_dw1 = 0u32;
     let mut rd_dw2 = 0u32;
     let mut rd_dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    // The device only moves when something lets it: count no polls as time.
+    for poll in 0..ADMIN_POLLS {
+        if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((io_cq_head as usize) * 16) as *const u32;
         let dw0 = unsafe { core::ptr::read_volatile(cqe_ptr.add(0)) };
         let dw1 = unsafe { core::ptr::read_volatile(cqe_ptr.add(1)) };
