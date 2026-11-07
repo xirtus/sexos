@@ -3,7 +3,7 @@
 //! the network's DHCP and DNS say. Holding the BOOT route to the network service and
 //! the region shared with it is the right. An address is data, not authority.
 
-pub const OP: u64 = 0x20E;
+pub const OP: u64 = 0x211;
 pub const CLIENT_SLOT: u64 = 259;
 pub const PROVIDER_SLOT_BASE: u64 = 340;
 pub const REGION_ID_BASE: u32 = 0x5100;
