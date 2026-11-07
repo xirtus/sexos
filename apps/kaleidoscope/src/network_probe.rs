@@ -35,7 +35,8 @@ impl Probe{
   if !self.accepted||!matches!(word>>56,0x78|0xE8)||((word>>32)&w::MAX_SEQ as u64)!=r.seq as u64{return;}
   self.pending=None;self.accepted=false;
   self.seq=r.seq+1;
-  let value=match w::decode_reply(word,r.seq){Ok(v)=>v,Err(_)=>{
+  let value=match w::decode_reply(word,r.seq){Ok(v)=>v,Err(code)=>{
+   sex_pdx::serial_record!("[browser.net.job.unavailable] reason=reply_error kind={} code={} seq={} offset={} ticket={} word={:#x}",r.kind,code,r.seq,r.offset,r.ticket,word);
    self.view=View::Unavailable;
    if r.kind==w::RELEASE{self.step=Step::Held;self.view=View::Uncertain;}else if self.ticket==0{self.step=Step::Done;}else{self.step=Step::Release;}return;
   }};
@@ -45,10 +46,10 @@ impl Probe{
    w::START=>{if value!=0{self.stop();return;}self.next_poll=now;self.step=Step::Poll;},
    w::STATUS=>{let Some((state,len))=w::decode_status(value)else{self.stop();return;};match state{
     w::State::Complete=>{if len!=BYTES{self.view=View::Unavailable;self.step=Step::Release;}else{self.length=len;self.offset=0;self.hash=0xcbf29ce484222325;self.step=Step::Read;}},
-    w::State::Failed|w::State::Cancelled|w::State::Idle=>{self.view=View::Unavailable;self.step=Step::Release;},
+    w::State::Failed|w::State::Cancelled|w::State::Idle=>{self.view=View::Unavailable;sex_pdx::serial_record!("[browser.net.job.unavailable] reason=state {:?}",state);self.step=Step::Release;},
     _=>{self.next_poll=now.saturating_add(25);},
    }},
-   w::READ=>{for(i,b)in value.to_le_bytes()[..r.length as usize].iter().enumerate(){if *b!=byte(self.offset+i){self.view=View::Unavailable;self.step=Step::Release;return;}self.hash=(self.hash^*b as u64).wrapping_mul(0x100000001b3);}self.offset+=r.length as usize;if self.offset==self.length{self.view=View::Verified;self.step=Step::Release;sex_pdx::serial_record!("[browser.net.job.bytes] ticket={} length={} hash={:#x} exact=1 endpoint=controlled_peer tls=0 web=0",self.ticket,self.length,self.hash);}},
+   w::READ=>{for(i,b)in value.to_le_bytes()[..r.length as usize].iter().enumerate(){if *b!=byte(self.offset+i){self.view=View::Unavailable;sex_pdx::serial_record!("[browser.net.job.unavailable] reason=byte offset={} got={} want={}",self.offset+i,*b,byte(self.offset+i));self.step=Step::Release;return;}self.hash=(self.hash^*b as u64).wrapping_mul(0x100000001b3);}self.offset+=r.length as usize;if self.offset==self.length{self.view=View::Verified;self.step=Step::Release;sex_pdx::serial_record!("[browser.net.job.bytes] ticket={} length={} hash={:#x} exact=1 endpoint=controlled_peer tls=0 web=0",self.ticket,self.length,self.hash);}},
    w::CANCEL=>{if value!=0{self.stop();return;}self.view=View::Cancelled;self.step=Step::Release;},
    w::RELEASE=>{
     if value!=0{self.step=Step::Held;self.view=View::Uncertain;return;}
@@ -70,6 +71,7 @@ impl Probe{
    }
    // Queue Full is known pre-effect. A previously acquired job still needs a
    // fresh correlated RELEASE; an unaccepted BEGIN holds no service resource.
+   sex_pdx::serial_record!("[browser.net.job.unavailable] reason=unaccepted step={:?} now={} deadline={}",self.step,now,self.deadline);
    self.pending=None;self.accepted=false;self.view=View::Unavailable;
    if self.ticket==0{self.step=Step::Done;return;}
    let Some(seq)=self.seq.checked_add(1).filter(|n|*n<=w::MAX_SEQ)else{self.stop();return;};

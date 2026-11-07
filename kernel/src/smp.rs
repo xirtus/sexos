@@ -20,12 +20,14 @@ pub fn guest_core() -> u32 { GUEST.load(Ordering::Acquire) }
 pub const WAKE_VECTOR: u8 = 0xF1;
 /// Services proven to run away from core 0, as domain ids. Shell and Display stay:
 /// the kernel's lifecycle paths and the desktop's hot path still assume core 0.
-const MOVED: [u64; 1] = [13];
+const MOVED: [u64; 4] = [13, 11, 8, 2];
 /// The core a domain's task belongs to.
 pub fn home_core(pd: u64) -> u32 {
     if crate::program_records::is_record(pd) { return guest_core(); }
     let spare = COVERED_SPARE.load(Ordering::Acquire);
     if spare == 0 { return 0; }
+    // Apps of every incarnation follow, spread by domain.
+    if sex_pdx::app_catalog::app_of(pd as u32).is_some_and(|app| app != sex_pdx::app_catalog::App::Program) { return 2 + pd as u32 % spare; }
     match MOVED.iter().position(|m| *m == pd) { Some(index) => 2 + index as u32 % spare, None => 0 }
 }
 static LAPIC_OF: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
@@ -122,6 +124,7 @@ pub mod tlb {
     /// interrupt from user mode arrives with the user's GS still loaded.
     pub fn service() {
         let generation = GENERATION.load(Ordering::Acquire);
+        if generation == 0 { return; }
         let core = crate::apic::local_id() as usize;
         if SERVED[core].load(Ordering::Relaxed) == generation { return; }
         SERVED[core].store(generation, Ordering::Relaxed);

@@ -71,7 +71,7 @@ mod ipc{
 }
 #[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
 #[path="../kernel/src/program_image.rs"]mod program_image;
-mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}}}
+mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}}}
 mod boot_memory{pub fn program_image(_:usize)->Option<&'static [u8]>{None}pub fn reserve_window(_:u64,_:u8,_:&mut [u64])->u64{0}pub fn write_frames(_:u64,_:&[u8]){}
  pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
  pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}pub fn zero_frame(_:u64){}}

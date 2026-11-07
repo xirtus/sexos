@@ -19,7 +19,8 @@ static STATE: Mutex<Option<PagingState>> = Mutex::new(None);
 /// Callers run with interrupts off, so a holder on another core finishes soon.
 macro_rules! state_lock{()=>{{
     let mut held=None;
-    for _ in 0..200_000{held=STATE.try_lock();if held.is_some(){break}core::hint::spin_loop();}
+    // Its holder may be waiting for this core to answer a shootdown.
+    for _ in 0..(1u32<<24){held=STATE.try_lock();if held.is_some(){break}crate::smp::tlb::service();core::hint::spin_loop();}
     held
 }}}
 

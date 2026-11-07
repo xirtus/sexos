@@ -27,7 +27,8 @@ static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 /// The timer path keeps its plain try_lock: it can wait for the next tick.
 macro_rules! apps_lock{()=>{{
     let mut held=None;
-    for _ in 0..200_000{held=APPS.try_lock();if held.is_some(){break}core::hint::spin_loop();}
+    // Its holder may be waiting for this core to answer a shootdown.
+    for _ in 0..(1u32<<24){held=APPS.try_lock();if held.is_some(){break}crate::smp::tlb::service();core::hint::spin_loop();}
     held
 }}}
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];

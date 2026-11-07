@@ -81,7 +81,7 @@ mod scheduler {
         ACKS.fetch_add(1,core::sync::atomic::Ordering::Relaxed);true
     }
 }
-mod smp{pub mod tlb{pub fn flush(va:u64){x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va))}}}
+mod smp{pub mod tlb{pub fn service(){}pub fn flush(va:u64){x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va))}}}
 #[path="../kernel/src/paging.rs"] mod paging;
 use capability::*;
 use paging_state::*;
