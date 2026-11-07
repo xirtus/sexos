@@ -2066,3 +2066,27 @@ row no longer waits for the row before it to end.
   `clipboard_workflow`, where a failure led to the wake fix above. `program_records` with
   4,000 at 4 cores, typing 32 ms median while loaded. One-core regression, all non-QEMU
   gates except the older ones listed earlier, and 1,132 Python tests pass.
+
+## A real filesystem (2026-11-07)
+
+- **What runs now.** On a disk over about 192 MiB, Files formats a filesystem once and
+  mounts it afterward. Spindle has `ls`, `cd`, `pwd`, `mkdir`, `cat`, `write`, `append`,
+  `touch`, `rm`, `mv`, `df`. Tested with a 1 GiB disk: 960 MiB usable, directories, and
+  files that survive a reboot and an abrupt QEMU stop.
+- **Design (`crates/sexfs`).** Copy-on-write: one checksummed B+tree holds inodes, directory
+  entries and a block map with a checksum per data block. Nothing committed is overwritten.
+  A commit writes new blocks, flushes, then writes one of two superblocks and flushes. Free
+  space is not stored: mounting walks the tree, so it can't leak or disagree.
+- **Evidence.** Host: a random model across eight seeds and remounts, 400 power cuts at any
+  write or flush with torn sectors, every single-block bit flip, a full disk, and three
+  mutants of the commit ordering that the power-cut test must catch. Native at 1 and 4 cores.
+- **Disk driver.** It asks the namespace its size and no longer refuses writes past 1 MiB.
+- **ABI.** `BLOCK_CAPACITY`, the `fs` protocol, Spindle slot 258, Files slots 300 and up.
+- **Limits.** Only Spindle can use it. Quil and Linen still use the 15-slot DiskFS. No
+  timestamps, permissions or per-client roots yet: any Spindle reads and writes everything.
+  16 GiB is the most it will use of any disk, and mounting takes longer as data grows. Each
+  operation blocks Files, so one big write stalls every Files client. The native stop kills
+  QEMU, which keeps what it already wrote, so only the host tests model a true power cut.
+  The fixed 64 MiB program store sits in front of it and should move into it.
+- **Gates.** `sexfs_host`, `filesystem` at 1 and 4 cores (three repeats at 4), full one-core
+  regression and 4-core subset one commit earlier, all non-QEMU gates except older listed ones.
