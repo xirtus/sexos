@@ -12,7 +12,7 @@ start = source.index('fn block_buffer_view(')
 end = source.index('\nfn ', start + 1)
 Path(sys.argv[2]).write_text(source[start:end])
 parts = []
-for name in ['nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
+for name in ['device_sectors','nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
     start = source.index('fn ' + name + '(')
     end = source.index('\nfn ', start + 1)
     parts.append(source[start:end])
@@ -51,7 +51,7 @@ assert 'loop { service_next_request(); }' in entry
 assert 'pdx_try_listen_raw'not in s and '0..2_000_000'not in entry
 Path(sys.argv[2]).write_text('\n'.join(parts))
 abi=(Path(sys.argv[1])/'crates/sex-pdx/src/lib.rs').read_text()
-names=['BLOCK_READ','BLOCK_WRITE','BLOCK_SYNC','BLOCK_MAX_XFER','BLOCK_SECTOR_SIZE','BLOCK_ERR_BAD_LEN','BLOCK_ERR_NO_DEVICE','BLOCK_ERR_BAD_CMD','SLOT_BLOCK_BUFFER']
+names=['BLOCK_READ','BLOCK_WRITE','BLOCK_SYNC','BLOCK_CAPACITY','BLOCK_MAX_XFER','BLOCK_SECTOR_SIZE','BLOCK_ERR_BAD_LEN','BLOCK_ERR_NO_DEVICE','BLOCK_ERR_BAD_CMD','SLOT_BLOCK_BUFFER']
 constants=[]
 for name in names:
  match=re.search(r'pub const '+name+r'\s*:\s*u64\s*=\s*[^;]+;',abi)

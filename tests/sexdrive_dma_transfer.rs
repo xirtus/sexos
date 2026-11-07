@@ -154,12 +154,12 @@ mod driver_read {
     const SEXFS_V0_OBJECT_START_LBA:u64=128;const SEXFS_V0_OBJECT_END_LBA:u64=2019;
     const WRITE_PROOF_MAGIC:u64=0x3156455449525753;
     fn hot_log() -> bool { false }
-    struct NvmeState {
+    struct NvmeState { sectors: u64,
         ready: bool, map_va: u64, io_sq_va: u64, io_cq_va: u64,
         sq1tdbl: u64, cq1hdbl: u64, sq_tail: u32, cq_head: u32,
         cq_phase: u32, next_cid: u16,
     }
-    static mut NVME_IO_STATE: NvmeState = NvmeState { ready: false,
+    static mut NVME_IO_STATE: NvmeState = NvmeState { sectors: 0, ready: false,
         map_va: 0, io_sq_va: 0, io_cq_va: 0, sq1tdbl: 0, cq1hdbl: 0,
         sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 1 };
     static mut READ_LEASE: Option<DmaLease> = None;
@@ -203,7 +203,7 @@ mod driver_read {
                 physical_address: 0x200000, length: 4096,
             }));
             if write { WRITE_LEASE = lease; } else { READ_LEASE = lease; }
-            NVME_IO_STATE = NvmeState { ready: true,
+            NVME_IO_STATE = NvmeState { sectors: 0, ready: true,
                 map_va: doorbells.as_mut_ptr() as u64, io_sq_va: sq.as_mut_ptr() as u64,
                 io_cq_va: cq.as_ptr() as u64, sq1tdbl: 0, cq1hdbl: 4,
                 sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 42 };
@@ -249,7 +249,7 @@ mod driver_read {
         let _lock=LOCK.lock().unwrap();let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];let mut buffer=[0u64;512];let source=[0xa5u8;512];
         unsafe{
             NOW=10;cq[15*4+3]=42|(1<<16);WRITE_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:buffer.as_mut_ptr()as u64,physical_address:0x200000,length:4096}));
-            NVME_IO_STATE=NvmeState{ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:15,cq_head:15,cq_phase:1,next_cid:42};
+            NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:15,cq_head:15,cq_phase:1,next_cid:42};
         }
         assert_eq!(nvme_write_one_block(0,512,source.as_ptr()as u64),0);assert_eq!(db,[0,0]);
         unsafe{assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.cq_phase,NVME_IO_STATE.next_cid),(0,0,0,43));assert!(!WRITE_LEASE.as_ref().unwrap().is_quarantined());WRITE_LEASE=None;NVME_IO_STATE.ready=false;}
@@ -261,7 +261,7 @@ mod driver_read {
             unsafe{
                 NOW=10;WAITS=0;DELAY=if success{3}else{0};CLOCK_MODE=0;COMPLETION=42|(1<<16);cq[3]=26;
                 CQ_PTR=cq.as_mut_ptr();DOORBELLS=db.as_ptr();DEST_PTR=core::ptr::null();DEST_LEN=0;
-                NVME_IO_STATE=NvmeState{ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:0,cq_head:0,cq_phase:1,next_cid:42};
+                NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:0,cq_head:0,cq_phase:1,next_cid:42};
             }
             assert_eq!(nvme_flush(),if success{0}else{BLOCK_ERR_NO_DEVICE});assert_eq!(db[0],1);
             unsafe{assert_eq!(NVME_IO_STATE.ready,success);assert_eq!(NVME_IO_STATE.next_cid,43);assert_eq!(NVME_IO_STATE.cq_head,success as u32);assert_eq!(db[1],success as u32);if !success{assert_eq!(nvme_flush(),BLOCK_ERR_NO_DEVICE);assert_eq!(NVME_IO_STATE.next_cid,43);assert_eq!(db[0],1);}CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();}
