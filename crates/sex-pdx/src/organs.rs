@@ -10,10 +10,14 @@ pub const fn service_key(domain: u8) -> u8 {
         5 => 4,  // Senses: sexusb with sexinput.
         6 => 1,  // Core: silkbar with sexdisplay.
         8 => 11, // Storage: sexstore with sexfiles.
+        10 => 4, // Senses: sexbell with sexinput and sexusb.
         other => other,
     }
 }
 
+/// Program records all hold this key. Only the running record's pages are present,
+/// so sharing it costs them nothing against each other.
+pub const RECORD_KEY: u8 = 10;
 /// Guests: each program row runs on a key no service holds, and no other live
 /// row holds. Row 0 only anchors the chain and is gone before row 1 starts.
 pub const fn program_key(ordinal: u8) -> u8 {

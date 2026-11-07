@@ -21,11 +21,11 @@ SCOPE='Native QEMU power-cut recovery of a Quil idle draft through the held docu
 
 def boot(iso,disk,out,tag,resolution):
  serial=out/f'{tag}-serial.log';sock=Path('/tmp')/f'sex-autosave-{os.getpid()}-{tag}.sock'
- cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-m','512M','-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none']
+ cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none']
  proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic()
  def text():return serial.read_text(errors='replace')if serial.exists()else''
  def health():
-  if time.monotonic()-began>300:raise TimeoutError(tag+' bounded 300 s')
+  if time.monotonic()-began>int(os.environ.get('SEXOS_GATE_BOUND','300')):raise TimeoutError(tag+' over its time bound')
   if proc.poll()is not None:raise RuntimeError(tag+' guest exited')
   if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text()):raise RuntimeError(tag+' guest failure')
  def wait(pattern,start=0,timeout=120):

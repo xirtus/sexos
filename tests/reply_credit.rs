@@ -2,7 +2,7 @@
 #[path = "../kernel/src/ipc/reply_credit.rs"]
 mod reply_credit;
 
-use reply_credit::{Grant, ReplyCredits, REPLY_CREDIT_CAPACITY};
+use reply_credit::{Grant, ReplyCredits, REPLY_CALLERS, REPLY_CREDIT_CAPACITY};
 
 #[test]
 fn domain_id_without_invocation_cannot_reply() {
@@ -43,13 +43,14 @@ fn withdrawn_reservation_grants_nothing() {
 }
 
 #[test]
-fn all_legal_registry_callers_retain_independent_reply_rights() {
+fn callers_up_to_the_table_size_retain_independent_reply_rights() {
     let mut credits = ReplyCredits::new();
-    for caller in 1..REPLY_CREDIT_CAPACITY as u32 {
+    for caller in 1..=REPLY_CALLERS as u32 {
         assert_eq!(credits.grant(caller), Grant::Added);
     }
-    assert_eq!(credits.outstanding(), (REPLY_CREDIT_CAPACITY - 1) as u128);
-    for caller in (1..REPLY_CREDIT_CAPACITY as u32).rev() {
+    assert_eq!(credits.grant(REPLY_CALLERS as u32 + 1), Grant::Full);
+    assert_eq!(credits.outstanding(), REPLY_CALLERS as u128);
+    for caller in (1..=REPLY_CALLERS as u32).rev() {
         assert!(credits.holds(caller));
         assert!(credits.consume(caller));
         assert!(!credits.consume(caller));

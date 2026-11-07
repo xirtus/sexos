@@ -1,0 +1,23 @@
+[package]
+name = "hum"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hum"
+path = "src/bin/hum.rs"
+
+[[bin]]
+name = "snoop"
+path = "src/bin/snoop.rs"
+
+[[bin]]
+name = "spin"
+path = "src/bin/spin.rs"
+
+[[bin]]
+name = "doze"
+path = "src/bin/doze.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }

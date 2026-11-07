@@ -29,6 +29,7 @@ pub(crate) fn backing(length: u64) -> u64 {
 }
 
 static PROGRAM_IMAGE_PHYSICAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static PROGRAM_IMAGE_PRIVATE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// The one region Files reads program files into. Shell's load call decides when
 /// the kernel looks at it; Files gets no say over what the kernel does with it.
 pub fn init_program_image(files: u32) {
@@ -42,13 +43,30 @@ pub fn init_program_image(files: u32) {
     grant(pd, IMAGE_SLOT_FILES, RegionGrant { region_id: IMAGE_REGION_ID, virtual_base, length,
         rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None });
     PROGRAM_IMAGE_PHYSICAL.store(physical, core::sync::atomic::Ordering::Release);
+    PROGRAM_IMAGE_PRIVATE.store(backing(length), core::sync::atomic::Ordering::Release);
 }
-/// The file Files last read, as bytes. Checked by program_image before any use.
+/// The file Files last read, as a copy only the kernel can reach: Files keeps write
+/// access to its region, and a checked file must stay the file that gets used.
 pub fn program_image(len: usize) -> Option<&'static [u8]> {
     let physical = PROGRAM_IMAGE_PHYSICAL.load(core::sync::atomic::Ordering::Acquire);
-    if physical == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
+    let private = PROGRAM_IMAGE_PRIVATE.load(core::sync::atomic::Ordering::Acquire);
+    if physical == 0 || private == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    Some(unsafe { core::slice::from_raw_parts((physical + hhdm) as *const u8, len) })
+    unsafe {
+        core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, (private + hhdm) as *mut u8, len);
+        Some(core::slice::from_raw_parts((private + hhdm) as *const u8, len))
+    }
+}
+/// The page table for a 2 MiB span, with all of its entries clear.
+pub fn reserve_table(base: u64, pkey: u8, any_frame: u64) -> *mut u64 {
+    require_boot();
+    let flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+    crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
+        .map_physical_range(VirtAddr::new(base), any_frame, 4096, flags, pkey).expect("BOOT_RECORD_TABLE_MAP");
+    let leaf = existing_leaf_address(base).expect("BOOT_RECORD_TABLE_LEAF");
+    unsafe { core::ptr::write_volatile(leaf as *mut u64, 0); }
+    x86_64::instructions::tlb::flush(VirtAddr::new(base));
+    leaf as *mut u64
 }
 /// Frames and page-table leaves for a program row's whole image window, unmapped
 /// until a program is loaded. Leaves already present stay as the BOOT image left them.

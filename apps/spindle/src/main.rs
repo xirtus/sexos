@@ -779,6 +779,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc 255 in hex   also in bin / in oct");
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  run NAME     start a program from the disk store");
+            sb.push(b"  spawn N C    start C background copies of program N");
+            sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
@@ -908,6 +910,34 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                     Err(_) => sb.push(b"Could not reach the shell."),
                 },
                 None => sb.push(b"Usage: run NAME (up to 16 letters, digits or marks)"),
+            }
+            true
+        }
+        b"spawn" => {
+            let mut words = args.splitn(2, |b| *b == b' ');
+            let name = words.next().and_then(sex_pdx::program_store::pack_name);
+            let count = words.next().and_then(|n| core::str::from_utf8(n).ok()).and_then(|n| n.trim().parse::<u64>().ok());
+            match (name, count) {
+                (Some(name), Some(count)) if count > 0 => match sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::program_store::OP_SPAWN, name[0], name[1], count) {
+                    Ok(_) => sb.push(b"Asked for background programs. Check with: records"),
+                    Err(_) => sb.push(b"Could not reach the shell."),
+                },
+                _ => sb.push(b"Usage: spawn NAME COUNT"),
+            }
+            true
+        }
+        b"stopall" => {
+            let force = (args == b"force") as u64;
+            match sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::program_store::OP_RECORDS_STOP, force, 0, 0) {
+                Ok(_) => sb.push(b"Asked background programs to stop."),
+                Err(_) => sb.push(b"Could not reach the shell."),
+            }
+            true
+        }
+        b"records" => {
+            match sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::program_store::OP_RECORDS_CENSUS, 0, 0, 0) {
+                Ok(_) => sb.push(b"Asked for the count. The log has it."),
+                Err(_) => sb.push(b"Could not reach the shell."),
             }
             true
         }

@@ -2060,7 +2060,8 @@ fn nvme_probe_bar() {
     serial_println!("[sexdrive.nvme.reprovision.program.acq] acq={:#x}", acq_phys);
 
     serial_println!("[sexdrive.nvme.reprovision.enable.begin] cc_before={:#x}", cc_disabled as u64);
-    let cc_enabled = cc_disabled | 1u32;
+    // A controller the firmware never touched reads CC=0: entry sizes are ours to set.
+    let cc_enabled = (cc_disabled & !0x00FF_FFF1u32) | (4u32 << 20) | (6u32 << 16) | 1u32;
     unsafe {
         core::ptr::write_volatile((map_va + 0x0014) as *mut u32, cc_enabled);
     }

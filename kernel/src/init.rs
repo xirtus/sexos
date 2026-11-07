@@ -824,6 +824,7 @@ pub fn init() {
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_program_image(sexfiles_id);
+    crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
         assert!(shell.find_capability(sex_pdx::program_store::SHELL_ROUTE_SLOT as u32).is_none(),"BOOT_PROGRAM_ROUTE_SLOT");
@@ -1004,7 +1005,7 @@ pub fn init() {
     serial_println!("init: Revoking kernel write access...");
 
     // Enqueue all registered PD tasks onto scheduler runqueue
-    for pd_id in 1..crate::ipc::MAX_DOMAINS as u32 {
+    for pd_id in 1..crate::program_records::BASE {
         if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
             if !crate::app_resources::activation_permitted(pd_id) {continue;}
             let task_ptr = pd.main_task.load(core::sync::atomic::Ordering::Acquire);

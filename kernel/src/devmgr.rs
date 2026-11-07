@@ -20,6 +20,10 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                 serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
                 let bar0_pa = dev.get_bar(0);
                 serial_println!("[kernel.pci.nvme.bar0] pa={:#x}", bar0_pa);
+                // Firmware may leave the controller cold, with DMA off. BOOT turns it on
+                // here; the status half of this register is write-one-to-clear.
+                let command = unsafe { crate::hal::pci::pci_config_read(dev.bus, dev.dev, dev.func, 0x04) } & 0xFFFF;
+                unsafe { crate::hal::pci::pci_config_write(dev.bus, dev.dev, dev.func, 0x04, command | 0x0006); }
                 if let Some(pd) = DOMAIN_REGISTRY.get(sexdrive_pd_id) {
                     // Grant at SLOT_NVME_HOST (16) so sexdrive can call MAP_PCI_BAR(16, ...).
                     pd.grant_capability(SLOT_NVME_HOST, CapabilityData::Pci(PciCapData {

@@ -16142,9 +16142,39 @@ fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
     program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE))
 }
 static mut PROGRAM_READING: bool = false;
+/// Background copies still to start from the file Files last read, and its length.
+static mut RECORD_SPAWN_LEFT: u64 = 0;
+static mut RECORD_SPAWN_WANTED: u64 = 0;
+static mut RECORD_SPAWN_LEN: u64 = 0;
+/// A few at a time, so starting thousands never stalls the desktop.
+unsafe fn record_spawn_poll(){
+    use sex_pdx::program_store as store;
+    if RECORD_SPAWN_LEFT==0{return}
+    let (status,made,live)=store::record_call(store::RECORD_START,RECORD_SPAWN_LEN,RECORD_SPAWN_LEFT);
+    if status!=0||made==0{
+        sex_pdx::serial_record!("[shell.records.spawn.ended] left={} status={} live={}",RECORD_SPAWN_LEFT,status,live);
+        RECORD_SPAWN_LEFT=0;return;
+    }
+    RECORD_SPAWN_LEFT-=made;
+    if RECORD_SPAWN_LEFT==0{sex_pdx::serial_record!("[shell.records.spawned] live={}",live);}
+}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
+    if matches!(msg.type_id,store::OP_RECORDS_STOP|store::OP_RECORDS_CENSUS){
+        if !app_catalog::is_spindle(msg.caller_pd){return true}
+        if msg.type_id==store::OP_RECORDS_STOP{RECORD_SPAWN_LEFT=0;let _=store::record_call(store::RECORD_STOP,msg.arg0,0);}
+        else{let _=store::record_call(store::RECORD_CENSUS,0,0);}
+        return true;
+    }
+    if msg.type_id==store::OP_SPAWN {
+        if !app_catalog::is_spindle(msg.caller_pd){return true}
+        if PROGRAM_READING||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
+        let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
+        PROGRAM_READING=status==0;
+        RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
+        return true;
+    }
     if msg.type_id==store::OP_RUN {
         if !app_catalog::is_spindle(msg.caller_pd){return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
@@ -16158,6 +16188,14 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     if !PROGRAM_READING||msg.caller_pd!=11||msg.type_id!=1{return false}
     let Some(result)=store::decode_reply(msg.arg0)else{return false};
     PROGRAM_READING=false;
+    if RECORD_SPAWN_WANTED!=0{
+        match result{
+            Ok(len)=>{RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;},
+            Err(error)=>sex_pdx::serial_record!("[shell.records.denied] reason=store error={}",error),
+        }
+        RECORD_SPAWN_WANTED=0;
+        return true;
+    }
     let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);return true}};
     let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");return true};
     launcher_focus_discard();
@@ -24363,6 +24401,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         unsafe { program_rebirth_poll(); }
+        unsafe { record_spawn_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
@@ -25042,7 +25081,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }

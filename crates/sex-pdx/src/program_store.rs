@@ -59,3 +59,28 @@ pub fn find(directory: &[u8], name: [u64; 2]) -> Option<Entry> {
     }
     None
 }
+
+/// Program records: small background programs, made at BOOT from one template.
+/// They hold no routes, so a record starts with only its own memory and time.
+pub const RECORD_SLOT_SHELL: u64 = 257;
+pub const SYSCALL_RECORDS: u64 = 79;
+/// Spindle to Shell: name, name, how many.
+pub const OP_SPAWN: u64 = 0x50;
+/// Spindle to Shell: 0 asks records to finish, 1 ends them whatever they do.
+pub const OP_RECORDS_STOP: u64 = 0x51;
+pub const OP_RECORDS_CENSUS: u64 = 0x52;
+pub const RECORD_START: u64 = 0;
+pub const RECORD_STOP: u64 = 1;
+pub const RECORD_CENSUS: u64 = 2;
+/// The one operation a record itself may make.
+pub const RECORD_STOP_REQUESTED: u64 = 3;
+#[cfg(target_arch = "x86_64")]
+pub fn record_call(op: u64, a: u64, b: u64) -> (u64, u64, u64) {
+    let (status, first, second): (u64, u64, u64);
+    unsafe {
+        core::arch::asm!("syscall", inlateout("rax") SYSCALL_RECORDS => status,
+            inlateout("rdi") op => _, inlateout("rsi") a => first, inlateout("rdx") b => second,
+            out("rcx") _, out("r11") _, lateout("r10") _, lateout("r8") _);
+    }
+    (status, first, second)
+}

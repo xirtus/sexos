@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "37e6a77742be75fe6873fdf0b7c92c1495ef3f302bbf9ab2aa7f7b39d560c8f1"
+abi_version_hash = "43d5477f37c649f150b870af884598e31494772d031289cb64e0f0f5ff6422fc"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -44,7 +44,8 @@ crates = [
   "servers/sext/Cargo.toml",
   "apps/kaleidoscope/Cargo.toml",
   "apps/hello/Cargo.toml",
-  "apps/fortune/Cargo.toml"
+  "apps/fortune/Cargo.toml",
+  "apps/hum/Cargo.toml"
 ]
 
 [[stage]]
@@ -192,6 +193,34 @@ action = "cargo_manifest"
 manifest = "apps/fortune/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/fortune"
 dest_artifact = "iso_root/programs/fortune"
+
+[[stage]]
+id = "build_hum"
+action = "cargo_manifest"
+manifest = "apps/hum/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/hum"
+dest_artifact = "iso_root/programs/hum"
+
+[[stage]]
+id = "build_snoop"
+action = "cargo_manifest"
+manifest = "apps/hum/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/snoop"
+dest_artifact = "iso_root/programs/snoop"
+
+[[stage]]
+id = "build_spin"
+action = "cargo_manifest"
+manifest = "apps/hum/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/spin"
+dest_artifact = "iso_root/programs/spin"
+
+[[stage]]
+id = "build_doze"
+action = "cargo_manifest"
+manifest = "apps/hum/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/doze"
+dest_artifact = "iso_root/programs/doze"
 
 [[stage]]
 id = "build_sext"

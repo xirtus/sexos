@@ -98,6 +98,8 @@ pub enum CapabilityData {
     EntropySource(sex_pdx::entropy_source::Grant),
     ClockSource(sex_pdx::clock_source::Grant),
     TrustPolicy(sex_pdx::trust_source::Grant),
+    /// Shell's right to start and stop program records. Held once, from BOOT.
+    RecordPool,
     InputRing, MessageQueue,
 }
 
@@ -178,6 +180,24 @@ impl ProtectionDomain {
         // Slot 0 is an explicit syscall bridge, not an entry in this
         // one-indexed capability table. PDX_LISTEN handles the self ring.
         pd
+    }
+
+    /// A program record: its own identity and bookkeeping over one capability table
+    /// and one pair of rings that every record shares. The table is empty and sealed,
+    /// and holding no route to a record, nothing can ever put a message in the rings.
+    pub fn record(id: u32, pku_key: u8, cap_table: *mut CapabilityTable, signal_ring: *mut RingBuffer<u8, 32>, message_ring: *mut RingBuffer<MessageType, 256>) -> Self {
+        let pkru_mask = PkruValue::for_domain(pku_key);
+        Self {
+            id, pku_key,
+            base_pkru_mask: pkru_mask,
+            current_pkru_mask: AtomicU32::new(pkru_mask),
+            cap_table, signal_ring, message_ring,
+            signal_handlers: AtomicPtr::new(alloc::boxed::Box::into_raw(alloc::boxed::Box::new(BTreeMap::new()))),
+            main_task: AtomicPtr::new(ptr::null_mut()),
+            trampoline_task: AtomicPtr::new(ptr::null_mut()),
+            incoming_replies: Mutex::new(VecDeque::new()),
+            reply_credits: Mutex::new(crate::ipc::reply_credit::ReplyCredits::new()),
+        }
     }
 
     pub fn grant(&self, data: CapabilityData) -> u32 {

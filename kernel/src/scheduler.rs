@@ -72,6 +72,7 @@ pub struct Task {
     pub fault: fault_transaction::FaultSlot,
     pub signal_ring: *mut RingBuffer<u8, 32>,
     pub kstack_top: u64,
+    pub kstack_bytes: u64,
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
     wait_deadline:self_wait::Deadline,
@@ -79,6 +80,10 @@ pub struct Task {
 
 impl Task {
     pub fn new(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, is_user: bool) -> Self {
+        Self::with_kernel_stack(id, entry_point, stack_top, pd, is_user, 65536)
+    }
+
+    pub fn with_kernel_stack(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, is_user: bool, kstack_bytes: usize) -> Self {
         let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
 
@@ -88,8 +93,8 @@ impl Task {
             (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
 
-        let kstack = alloc::vec![0u8; 65536];
-        let kstack_alloc_top = kstack.as_ptr() as u64 + 65536;
+        let kstack = alloc::vec![0u8; kstack_bytes];
+        let kstack_alloc_top = kstack.as_ptr() as u64 + kstack_bytes as u64;
         core::mem::forget(kstack);
 
         // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
@@ -128,6 +133,7 @@ impl Task {
             fault: fault_transaction::FaultSlot::new(),
             signal_ring: pd.signal_ring,
             kstack_top: kstack_alloc_top,  // initial alloc top (for TSS RSP0)
+            kstack_bytes: kstack_bytes as u64,
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
@@ -353,6 +359,7 @@ impl Scheduler {
             let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
 
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
+            crate::program_records::before_dispatch((*next_task).context.pd_id);
             core.set_pd(next_pd_ptr);
             note_dispatch((*next_task).context.pd_id);
         }
@@ -398,7 +405,8 @@ impl Scheduler {
         const BATCH: u32 = 32;
         let start = self.retry_cursor.fetch_add(BATCH, Ordering::Relaxed);
         for offset in 0..BATCH {
-            let id = start.wrapping_add(offset) % crate::ipc::MAX_DOMAINS as u32;
+            // Runnable records can pass the queue's size, so they share the sweep.
+            let id = start.wrapping_add(offset) % (crate::program_records::BASE + crate::program_records::count());
             if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(id) {
                 for task in [pd.main_task.load(Ordering::Acquire), pd.trampoline_task.load(Ordering::Acquire)] {
                     if !task.is_null() && unsafe { (*task).state.needs_admission() } {
@@ -625,9 +633,10 @@ pub extern "C" fn scheduler_finish_switch() {
         let rsp: u64;
         core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, preserves_flags));
         let top = (*old).kstack_top;
-        assert!(rsp < top - 65536 || rsp >= top, "OUTGOING_STACK_NOT_RELEASED");
+        let bottom = top - (*old).kstack_bytes;
+        assert!(rsp < bottom || rsp >= top, "OUTGOING_STACK_NOT_RELEASED");
         let frame = (*old).context.kstack_top;
-        assert!(frame >= top - 65536 && frame <= top - 168, "OUTGOING_FRAME_OUTSIDE_STACK");
+        assert!(frame >= bottom && frame <= top - 168, "OUTGOING_FRAME_OUTSIDE_STACK");
         log_wake_event("post_stack_release", old);
         assert!((*old).state.release_after_stack_switch(core), "OUTGOING_CUSTODY_MISMATCH");
         // After release, access only immutable fields or the atomic protocol.
@@ -690,12 +699,15 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
     let core=crate::core_local::CoreLocal::get();
     let sched=&SCHEDULERS[core.core_id as usize];
     let task=sched.current_task.load(Ordering::Acquire);
-    if !SELF_WAIT_TASKS.contains(task)||ticks==0||ticks>self_wait::MAX_TICKS{return false;}
+    let record=crate::program_records::is_record((*task).context.pd_id);
+    if record{if ticks==0||ticks>self_wait::MAX_TICKS{return false;}}
+    else{if !SELF_WAIT_TASKS.contains(task)||ticks==0||ticks>self_wait::MAX_TICKS{return false;}}
     let pd=core.current_pd_ref();
     if pd.main_task.load(Ordering::Acquire)!=task{return false;}
     if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty(){return true;}
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     let Some(deadline)=(*task).wait_deadline.arm(now,ticks)else{return false;};
+    if record{crate::program_records::armed((*task).context.pd_id,deadline);}
     match (*task).state.park(core.core_id){
         ParkResult::WakeConsumed=>{(*task).wait_deadline.cancel();true},
         ParkResult::Blocked=>{
@@ -712,6 +724,7 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
 /// Called for both user and kernel timer frames. BOOT inventory reads and
 /// atomic wake/admission only: no domain registry lock or context-frame edit.
 pub fn poll_self_wait_deadlines(now:u64){
+    crate::program_records::poll(now);
     SELF_WAIT_TASKS.visit(|task|unsafe{
         if let Some(deadline)=(*task).wait_deadline.take_due(now){
             let n=TIMER_WAKES.fetch_add(1,Ordering::Relaxed)+1;
@@ -722,6 +735,11 @@ pub fn poll_self_wait_deadlines(now:u64){
         }
     });
 }
+
+/// A record's sleep ended or it was stopped. Waking a task that is not parked is
+/// a no-op by the ownership rules, like any coalesced wake.
+pub unsafe fn wake_record(task:*mut Task){(*task).wait_deadline.cancel();wake_owned_thread(task);}
+pub unsafe fn wake_record_if_due(task:*mut Task,now:u64){if (*task).wait_deadline.take_due(now).is_some(){wake_owned_thread(task);}}
 
 pub fn park_current_thread() {
     let core_id = crate::core_local::CoreLocal::get().core_id;
@@ -771,8 +789,8 @@ pub fn seal_self_wait_inventory(){
     let mut count=0;
     for id in 1..crate::ipc::MAX_DOMAINS as u32{
         if let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(id){
-            let task=pd.main_task.load(Ordering::Acquire);
-            if task.is_null(){continue;}
+            if id>=crate::program_records::BASE{continue;}
+            let task=pd.main_task.load(Ordering::Acquire);if task.is_null(){continue;}
             assert!(SELF_WAIT_TASKS.register(count,task),"BOOT_SELF_WAIT_INVENTORY");count+=1;
         }
     }
@@ -785,7 +803,7 @@ pub fn bootstrap_enqueue_all_domains() -> usize {
     let sched = &SCHEDULERS[0];
     let mut count = 0usize;
 
-    for pd_id in 0..crate::ipc::MAX_DOMAINS as u32 {
+    for pd_id in 0..crate::program_records::BASE {
         if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
             let task_ptr = pd.main_task.load(Ordering::Acquire);
             if task_ptr.is_null() {
@@ -881,7 +899,7 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
     (*task).wait_deadline.cancel();
     (*task).state.exit();
-    serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);
+    if !crate::program_records::is_record((*task).context.pd_id){serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);}
     poll_paging_exit_notifications();
     yield_and_switch(regs_ptr)
 }

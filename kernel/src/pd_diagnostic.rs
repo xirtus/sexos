@@ -7,7 +7,7 @@ pub fn dump_pd_map(reason: &'static str) {
     
     let mut count = 0;
     
-    for id in 1..crate::ipc::MAX_DOMAINS as u32 {
+    for id in 1..crate::program_records::BASE {
         if let Some(pd) = DOMAIN_REGISTRY.get(id) {
             count += 1;
             
