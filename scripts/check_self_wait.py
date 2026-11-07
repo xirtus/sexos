@@ -31,9 +31,10 @@ def inspect(text,active=True,*,browser_tasks=(15,)):
   # since round 105 the
   # sexdrive main task (2) waits 1 tick for NVMe completions. Park records
   # are sampled (first four, then powers of two), so either may appear.
-  if (int(p[1]),int(p[2]))not in((13,2),(2,1))+tuple((task,2)for task in selected) or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
+  # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
+  if (int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+tuple((task,2)for task in selected) or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
  for e in expiries:
-  if int(e[1])not in(13,2)+selected or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
+  if int(e[1])not in(13,2,1,6,4,5)+selected or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
