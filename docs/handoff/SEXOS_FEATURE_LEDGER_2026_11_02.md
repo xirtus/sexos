@@ -1836,3 +1836,30 @@ clipboard participant check excludes programs.
   log budget and hello's text differing: `http_content`, `quil_autosave`,
   `clipboard_workflow`, `quil_readability`, `quil_workflow`, `https_document`,
   `spindle_calc`, `https_png`, at 1280x800.
+
+## Idle cost and active-domain measurement (2026-11-07)
+
+- `[sched.active]` reports, per 1000 ticks, how many distinct domains ran, the
+  peak within 10 ticks, the switch count and which domains. On QEMU with 44
+  domains registered: 5 running at idle, 7-8 peak while typing. This is today's
+  small desktop, not yet many tabs or a music player.
+- Display, sexinput, sexusb and SilkBar sleep when idle instead of spinning on
+  yield: about 19,000 switches per second at idle before, about 2,700 after.
+  sexinput still wakes about 2,500 times a second to poll; interrupts would end that.
+  Input now has up to one tick of added latency. Maximized Spindle typing is 0.066 s.
+- **Gate repair and correction.** Running every non-QEMU gate script showed that
+  my usual list had been too small: `desktop_content`, `silkbar_civil_clock`,
+  `sex_rt_heap`, `launcher`, `app_catalog`, `app_resources`,
+  `display_surface_lifecycle` failed on stale expectations, some on master since
+  earlier merges in this work. All are fixed. No OS behaviour was wrong.
+- **Still failing, not investigated further:** `gate_no_alpha`, `gate_render`,
+  `audit_invariant_gates`, `daily_driver_master_gate` and these runtime gates:
+  `app_resource`, `desktop_close`, `memory_authority`, `paging_recovery`,
+  `scheduler_ownership`, `task_exit_cleanup`. Most are older than this work, and
+  `desktop_close` fails the same on the Q10 image; the rest were not compared. Four
+  others only need arguments or a log file. They should be repaired or retired.
+- Native, final commit: master gate GREEN; `connected_desktop`, `https_document`
+  at both sizes, `clipboard_workflow` at 1024x768. One commit earlier, with only
+  the timed-wait checker differing: `program_launch`, `http_content`,
+  `quil_autosave`, `clipboard_workflow`, `quil_workflow`, `spindle_calc`,
+  `spindle_reserve_probe`, `network_contention` at 1280x800.
