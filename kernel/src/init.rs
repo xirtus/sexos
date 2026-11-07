@@ -825,6 +825,7 @@ pub fn init() {
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
+    crate::boot_memory::init_web_regions(sexnet_id);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");

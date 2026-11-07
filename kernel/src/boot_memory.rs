@@ -45,6 +45,17 @@ pub fn init_program_image(files: u32) {
     PROGRAM_IMAGE_PHYSICAL.store(physical, core::sync::atomic::Ordering::Release);
     PROGRAM_IMAGE_PRIVATE.store(backing(length), core::sync::atomic::Ordering::Release);
 }
+/// One region per possible Spindle for the open-internet stream, shared with the
+/// network service alone.
+pub fn init_web_regions(net: u32) {
+    use sex_pdx::web as w;
+    require_boot();
+    if net == 0 { return; }
+    for (index, client) in sex_pdx::app_catalog::SPINDLE_TARGETS.into_iter().enumerate() {
+        paired_at(net, client, w::PROVIDER_SLOT_BASE + index as u64, w::CLIENT_SLOT,
+            w::REGION_ID_BASE + index as u32, w::REGION_BYTES as u64, true);
+    }
+}
 /// One region per possible Spindle for the file protocol, shared with Files alone.
 pub fn init_fs_regions(files: u32) {
     use sex_pdx::fs as w;

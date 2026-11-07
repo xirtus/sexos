@@ -41,7 +41,7 @@ fn shown(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?") }
 impl Client {
     pub fn busy(&self) -> bool { self.cmd.is_some() }
     /// `path` made absolute against the working directory, without `.` and `..`.
-    fn join(&self, path: &[u8], out: &mut [u8]) -> Option<usize> {
+    pub fn join(&self, path: &[u8], out: &mut [u8]) -> Option<usize> {
         let mut len = 0;
         let mut add = |part: &[u8], out: &mut [u8], len: &mut usize| -> Option<()> {
             for piece in part.split(|b| *b == b'/').filter(|p| !p.is_empty()) {

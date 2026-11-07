@@ -13,7 +13,7 @@ static mut DNS_RX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_TX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_RX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 static mut DNS_TX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
-static mut TRANSPORT_STORAGE:[sex_net::Storage<'static>;3]=[sex_net::Storage::EMPTY,sex_net::Storage::EMPTY,sex_net::Storage::EMPTY];
+static mut TRANSPORT_STORAGE:[sex_net::Storage<'static>;6]=[sex_net::Storage::EMPTY;6];
 mod nic;
 mod ethernet;
 mod arp;
@@ -23,6 +23,7 @@ mod entropy;
 mod certificate_time;
 mod trust_policy;
 mod source_denial;
+mod web;
 mod source_binding;
 // One BOOT Net main task owns this fixed error-only backing. No large stack
 // temporary or provider state is created while denying unsupported requests.
@@ -5355,6 +5356,7 @@ pub extern "C" fn _start() -> ! {
     let mut transport_changes=0u64;
     let mut transfer_changes=0u64;
     let mut timed_waits=0u64;
+    let mut web=web::Service::new();let mut web_reply:Option<(u32,u64)>=None;
     loop {
         let preparing = if let Some(dev) = device.as_mut() {
             let before = dev.phase();
@@ -5473,7 +5475,8 @@ pub extern "C" fn _start() -> ! {
         }
         poll_source_receipts(&mut seed,&mut clock,&mut trust);
         poll_source_denials(source_denials);
-        let reply_pending=outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
+        if let Some((pd,word))=web_reply{if pdx_reply(pd,word)==0{web_reply=None;}}
+        let reply_pending=web_reply.is_some()||outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
         let pending=preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
@@ -5498,6 +5501,7 @@ pub extern "C" fn _start() -> ! {
             if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|notice| {
                     outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut(),false));
+                    web.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},transport.as_mut());
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
                     seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
                     clock.retire(sex_pdx::clock_source::Identity{pd:notice.target_pd,task:notice.task_id});
@@ -5516,6 +5520,13 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if app_custody.is_retired(req.caller_pd) {continue}
+        if req.type_id==sex_pdx::web::OP{
+            web_reply=Some((req.caller_pd,match network_request_owner(req.caller_pd,req.caller_task){
+                Some(owner)=>web.handle(owner,req.arg0,req.arg1,transport.as_mut()),
+                None=>sex_pdx::web::reply((req.arg0&0xFF_FFFF)as u32,sex_pdx::web::DENIED,0),
+            }));
+            continue;
+        }
 
         if req.type_id==sex_pdx::trust_policy::OP{
             let request=sex_pdx::trust_policy::Request::decode([req.arg0,req.arg1,req.arg2]);

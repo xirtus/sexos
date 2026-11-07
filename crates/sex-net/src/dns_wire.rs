@@ -41,6 +41,34 @@ pub fn query(id: u16, out: &mut [u8; MAX_BYTES]) -> Result<usize, Error> {
     Ok(QUERY_BYTES)
 }
 
+/// `host` as DNS labels, ending in the root label. None if it isn't a usable name.
+pub fn encode_name(host: &[u8], out: &mut [u8; MAX_NAME]) -> Option<usize> {
+    if host.is_empty() || host.len() > 253 { return None; }
+    let mut at = 0;
+    for label in host.split(|b| *b == b'.') {
+        if label.is_empty() || label.len() > 63 { return None; }
+        if !label.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_') { return None; }
+        out[at] = label.len() as u8;
+        for (i, b) in label.iter().enumerate() { out[at + 1 + i] = b.to_ascii_lowercase(); }
+        at += 1 + label.len();
+    }
+    out[at] = 0;
+    Some(at + 1)
+}
+/// The same question as `query`, for any name already in wire form.
+pub fn query_name(id: u16, name: &[u8], out: &mut [u8; MAX_BYTES]) -> Result<usize, Error> {
+    if id == 0 { return Err(Error::InvalidId); }
+    let length = 12 + name.len() + 4;
+    if length > MAX_BYTES { return Err(Error::Oversized); }
+    out[..length].fill(0);
+    out[..2].copy_from_slice(&id.to_be_bytes());
+    out[2] = 1;
+    out[5] = 1;
+    out[12..12 + name.len()].copy_from_slice(name);
+    out[length - 4..length].copy_from_slice(&[0, 1, 0, 1]);
+    Ok(length)
+}
+
 fn take<'a>(bytes: &'a [u8], cursor: &mut usize, length: usize) -> Result<&'a [u8], Error> {
     let end = cursor.checked_add(length).ok_or(Error::Malformed)?;
     let data = bytes.get(*cursor..end).ok_or(Error::Truncated)?;
@@ -207,7 +235,9 @@ fn validate_aliases(bytes: &[u8], records: &[Record], known: &mut Boundaries, le
 /// None. A positive answer requires full validation of all sections and extent.
 /// Only the exact question's answer-section CNAME chain can select an A RRset;
 /// authority/additional data never supplies its address or extends authority.
-pub fn parse(expected_id: u16, response: &[u8]) -> Result<Option<Answer>, Error> {
+pub fn parse(expected_id: u16, response: &[u8]) -> Result<Option<Answer>, Error> { parse_name(expected_id, NAME, response) }
+/// The same strict parse, for the name a `query_name` asked about.
+pub fn parse_name(expected_id: u16, wanted: &[u8], response: &[u8]) -> Result<Option<Answer>, Error> {
     if expected_id == 0 { return Err(Error::InvalidId); }
     if response.len() > MAX_BYTES { return Err(Error::Oversized); }
     if response.len() < 12 { return Err(Error::Truncated); }
@@ -220,7 +250,7 @@ pub fn parse(expected_id: u16, response: &[u8]) -> Result<Option<Answer>, Error>
     let mut scratch = Name::new();
     let mut cursor = name(response, 12, &mut known, true, &mut current)?;
     let question_tail = take(response, &mut cursor, 4)?;
-    if current.bytes[..current.length] != *NAME || question_tail != [0, 1, 0, 1] { return Ok(None); }
+    if !current.bytes[..current.length].eq_ignore_ascii_case(wanted) || question_tail != [0, 1, 0, 1] { return Ok(None); }
     let flags = u16_at(response, 2)?;
     if flags & 0x8000 == 0 { return Err(Error::Malformed); }
     if flags & 0x7840 != 0 { return Err(Error::Unsupported); }

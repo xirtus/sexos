@@ -21,7 +21,7 @@ SCOPE='Native QEMU power-cut recovery of a Quil idle draft through the held docu
 
 def boot(iso,disk,out,tag,resolution):
  serial=out/f'{tag}-serial.log';sock=Path('/tmp')/f'sex-autosave-{os.getpid()}-{tag}.sock'
- cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-smp',os.environ.get('SEXOS_GATE_CORES','1'),*(['-accel','tcg,thread=multi']if os.environ.get('SEXOS_GATE_CORES','1')!='1'else[]),'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown','-nic','none']
+ cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-smp',os.environ.get('SEXOS_GATE_CORES','1'),*(['-accel','tcg,thread=multi']if os.environ.get('SEXOS_GATE_CORES','1')!='1'else[]),'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown',*os.environ.get('SEXOS_GATE_NIC','-nic none').split()]
  proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic()
  def text():return serial.read_text(errors='replace')if serial.exists()else''
  def health():

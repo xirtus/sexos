@@ -88,6 +88,7 @@ use sex_graphics::{WindowBuffer, font};
 mod history_persistence;
 mod storage_probe;
 mod fs_commands;
+mod fetch_command;
 mod network_probe;
 static mut NETWORK_PROBE:network_probe::Client=network_probe::Client::new();
 static mut NETWORK_GENERATION:u64=0;
@@ -783,6 +784,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
+            sb.push(b"  fetch URL FILE   download a file");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
@@ -1347,6 +1349,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"ls" if unsafe{fs_commands::FS.submit_line(cmd,args,sb)} => true,
+        b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
         b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         b"ls"=>{let accepted=unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::List)};sb.push(if accepted{b"Object listing queued."}else{b"Object listing unavailable."});true}
         b"probe-help"=>{sb.push(b"DISK/LS  DISK-STAT <ID>  MKDOC <NAME>");sb.push(b"FILLDOCX <ID> <BYTES>  CATDOCX <ID>");sb.push(b"TRUNCDOC <ID> <BYTES>  MVDOC <ID> <NAME>");sb.push(b"RMDOC <ID>  PROBE-STATUS/CANCEL/RETRY");sb.push(b"Mutations may be partial; retry reads only.");true},
@@ -2615,9 +2618,11 @@ pub extern "C" fn _start() -> ! {
         unsafe{HISTORY_STATUS.update(desktop_storage_state(storage_owner));HISTORY_STATUS.poll(|n|{let a=n.args();sex_pdx::pdx_call_checked(SLOT_SHELL,sex_pdx::spindle_status::OP,a[0],a[1],a[2]).map(|_|())});}
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
         if unsafe{fs_commands::FS.send()}{}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()}{
+        if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
+        if msg.type_id==1&&unsafe{fetch_command::FETCH.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
             sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);

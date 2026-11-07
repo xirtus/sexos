@@ -5,7 +5,7 @@
 #[cfg(test)] extern crate std;
 
 use smoltcp::{iface::{Config as InterfaceConfig,Interface,SocketHandle,SocketSet,SocketStorage},
-    phy::{self,Device,DeviceCapabilities,Medium},socket::{tcp,udp},
+    phy::{self,Device,DeviceCapabilities,Medium},socket::{dhcpv4,tcp,udp},
     time::{Duration,Instant},wire::{EthernetAddress,IpAddress,IpCidr,Ipv4Address}};
 pub use smoltcp::socket::tcp::State;
 pub use smoltcp::iface::SocketStorage as Storage;
@@ -89,13 +89,20 @@ fn hash(mut value:u64,bytes:&[u8])->u64{for b in bytes{value=(value^*b as u64).w
 /// handle is internal data, never an app-visible capability or file descriptor.
 pub struct Engine<'a>{network:sex_net_config::Config,iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
     stopped:bool,failed:Option<Error>,pending:[u8;TURN_BYTES],pending_length:usize,pending_offset:usize,
-    active_flow:bool,stats:Statistics}
+    active_flow:bool,stats:Statistics,open:Option<Open>}
+/// The open-internet side: its own TCP flow, DNS socket and DHCP client, attached the
+/// first time something asks for them, so nothing else ever sees their traffic.
+struct Open{tcp:SocketHandle,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,query_id:u16,query_name:[u8;255],query_len:usize,resolver:[u8;4]}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Lease{pub address:[u8;4],pub prefix:u8,pub gateway:Option<[u8;4]>,pub dns:Option<[u8;4]>}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum OpenState{Opening,Open,PeerClosed,Closed}
+pub const OPEN_PORT_BASE:u16=40000;
+pub struct OpenBuffers<'a>{pub rx:&'a mut[u8],pub tx:&'a mut[u8],pub dns_rx_meta:&'a mut[udp::PacketMetadata],pub dns_rx:&'a mut[u8],pub dns_tx_meta:&'a mut[udp::PacketMetadata],pub dns_tx:&'a mut[u8]}
 impl<'a> Engine<'a>{
     /// `seed` is explicit input. A predictable development seed does not provide
     /// hostile-peer sequence protection, entropy or TLS security. The immutable
     /// checked BOOT gateway supplies exactly one private default route. No app
     /// can change the route table or obtain authority by naming a destination.
-    pub fn new(network:sex_net_config::Config,mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;3])->Result<Self,Error>{
+    pub fn new(network:sex_net_config::Config,mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;6])->Result<Self,Error>{
         // Configuration is copied data, not an authority source. Reject before
         // touching borrowed storage or constructing any interface/socket state.
         if !network.valid(){return Err(Error::Config);}
@@ -116,9 +123,104 @@ impl<'a> Engine<'a>{
         let dns=udp::Socket::new(udp::PacketBuffer::new(&mut dns_rxmeta[..],&mut dns_rx[..]),
             udp::PacketBuffer::new(&mut dns_txmeta[..],&mut dns_tx[..]));
         let dns_handle=flows.add(dns);
-        Ok(Self{network,iface,flows,handle,client_handle,dns_handle,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
+        Ok(Self{network,iface,flows,handle,client_handle,dns_handle,open:None,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
     }
     pub fn state(&self)->State{self.flows.get::<tcp::Socket>(self.handle).state()}
+    /// Start the open-internet side. Asks for an address on the local network.
+    pub fn open_attach(&mut self,b:OpenBuffers<'a>)->Result<(),Error>{
+        if self.open.is_some(){return Ok(());}
+        let mut flow=tcp::Socket::new(tcp::SocketBuffer::new(b.rx),tcp::SocketBuffer::new(b.tx));
+        flow.set_timeout(Some(Duration::from_secs(30)));flow.set_nagle_enabled(false);
+        let dns=udp::Socket::new(udp::PacketBuffer::new(b.dns_rx_meta,b.dns_rx),udp::PacketBuffer::new(b.dns_tx_meta,b.dns_tx));
+        let tcp=self.flows.add(flow);let dns=self.flows.add(dns);let dhcp=self.flows.add(dhcpv4::Socket::new());
+        self.open=Some(Open{tcp,dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,query_id:1,query_name:[0;255],query_len:0,resolver:[0;4]});
+        Ok(())
+    }
+    pub fn open_lease(&self)->Option<Lease>{self.open.as_ref()?.lease}
+    fn open_poll_dhcp(&mut self){
+        let Some(open)=self.open.as_mut() else{return};
+        let event=self.flows.get_mut::<dhcpv4::Socket>(open.dhcp).poll();
+        match event{
+            Some(dhcpv4::Event::Configured(config))=>{
+                let address=config.address.address().octets();
+                let lease=Lease{address,prefix:config.address.prefix_len(),gateway:config.router.map(|r|r.octets()),dns:config.dns_servers.first().map(|d|d.octets())};
+                self.iface.update_ip_addrs(|ips|{ips.clear();let _=ips.push(IpCidr::Ipv4(config.address));});
+                if let Some(router)=config.router{let _=self.iface.routes_mut().add_default_ipv4_route(router);}
+                self.network.local=address;
+                open.lease=Some(lease);
+            }
+            Some(dhcpv4::Event::Deconfigured)=>{open.lease=None;}
+            None=>{}
+        }
+    }
+    /// Ask the leased resolver about `host`. `open_resolved` gives the answer.
+    pub fn open_resolve(&mut self,host:&[u8])->Result<(),Error>{
+        let local=self.network.local;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        let lease=open.lease.ok_or(Error::Config)?;
+        let resolver=lease.dns.ok_or(Error::Config)?;
+        open.query_len=dns_wire::encode_name(host,&mut open.query_name).ok_or(Error::Length)?;
+        open.query_id=open.query_id.wrapping_add(1).max(1);open.resolver=resolver;
+        let mut query=[0u8;DNS_BYTES];
+        let length=dns_wire::query_name(open.query_id,&open.query_name[..open.query_len],&mut query).map_err(|_|Error::Protocol)?;
+        let port=OPEN_PORT_BASE-1;
+        let socket=self.flows.get_mut::<udp::Socket>(open.dns);
+        socket.close();
+        socket.bind((IpAddress::v4(local[0],local[1],local[2],local[3]),port)).map_err(|_|Error::Protocol)?;
+        socket.send_slice(&query[..length],(IpAddress::v4(resolver[0],resolver[1],resolver[2],resolver[3]),53)).map_err(|_|Error::Protocol)
+    }
+    /// The next answer to the current question, if one arrived. Err for a final failure.
+    pub fn open_resolved(&mut self)->Result<Option<[u8;4]>,Error>{
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        let socket=self.flows.get_mut::<udp::Socket>(open.dns);
+        while socket.can_recv(){
+            let (bytes,meta)=socket.recv().map_err(|_|Error::Protocol)?;
+            if meta.endpoint.addr!=IpAddress::v4(open.resolver[0],open.resolver[1],open.resolver[2],open.resolver[3])||meta.endpoint.port!=53{continue;}
+            match dns_wire::parse_name(open.query_id,&open.query_name[..open.query_len],bytes){
+                Ok(Some(answer))=>return Ok(Some(answer.address)),
+                Ok(None)=>continue,
+                Err(_)=>return Err(Error::Protocol),
+            }
+        }
+        Ok(None)
+    }
+    pub fn open_connect(&mut self,address:[u8;4],remote:u16)->Result<(),Error>{
+        let local=self.network.local;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        if open.lease.is_none(){return Err(Error::Config);}
+        open.next_port=if open.next_port>=OPEN_PORT_BASE+7000{OPEN_PORT_BASE}else{open.next_port+1};
+        let port=open.next_port;
+        let flow=self.flows.get_mut::<tcp::Socket>(open.tcp);
+        flow.abort();
+        flow.connect(self.iface.context(),(IpAddress::v4(address[0],address[1],address[2],address[3]),remote),
+            (IpAddress::v4(local[0],local[1],local[2],local[3]),port)).map_err(|_|Error::Protocol)
+    }
+    pub fn open_state(&self)->OpenState{
+        let Some(open)=self.open.as_ref() else{return OpenState::Closed};
+        let flow=self.flows.get::<tcp::Socket>(open.tcp);
+        match flow.state(){
+            State::SynSent|State::SynReceived=>OpenState::Opening,
+            State::Established=>OpenState::Open,
+            _ if flow.can_recv()=>OpenState::PeerClosed,
+            State::CloseWait|State::FinWait1|State::FinWait2|State::Closing|State::LastAck|State::TimeWait=>OpenState::PeerClosed,
+            _=>OpenState::Closed,
+        }
+    }
+    pub fn open_send(&mut self,bytes:&[u8])->Result<usize,Error>{
+        let open=self.open.as_ref().ok_or(Error::Config)?;
+        let flow=self.flows.get_mut::<tcp::Socket>(open.tcp);
+        if !flow.can_send(){return Ok(0);}
+        flow.send_slice(bytes).map_err(|_|Error::Protocol)
+    }
+    pub fn open_receive(&mut self,out:&mut[u8])->Result<usize,Error>{
+        let open=self.open.as_ref().ok_or(Error::Config)?;
+        let flow=self.flows.get_mut::<tcp::Socket>(open.tcp);
+        if !flow.can_recv(){return Ok(0);}
+        flow.recv_slice(out).map_err(|_|Error::Protocol)
+    }
+    pub fn open_close(&mut self){
+        if let Some(open)=self.open.as_ref(){self.flows.get_mut::<tcp::Socket>(open.tcp).abort();}
+    }
     pub fn statistics(&self)->Statistics{self.stats}
     pub fn failure(&self)->Option<Error>{self.failed}
     pub fn can_receive(&self)->bool{!self.stopped&&self.adapter.rx.is_none()}
@@ -243,6 +345,7 @@ impl<'a> Engine<'a>{
             if connection.listen((IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),self.network.listen_port)).is_err(){self.stop(Error::Protocol);return;}
         }
         self.iface.poll_egress(time,&mut self.adapter,&mut self.flows);
+        self.open_poll_dhcp();
     }
 }
 

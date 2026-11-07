@@ -44,6 +44,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"editor",
     b"events",
     b"faults",
+    b"fetch",
     b"files",
     b"filldoc",
     b"filldocx",
