@@ -172,7 +172,7 @@ def future_catalog(source):
  if len(matches)!=1:raise ValueError('missing/ambiguous literal catalog inventory')
  inventory=matches[0];rows=[]
  quil=re.compile(r'quil\((\d+),\s*(\d+),\s*(\d+),\s*(None|Some\(\d+\)),\s*(\d+),\s*(\d+),\s*(None|Some\(\d+\)),\s*(\d+)\),')
- direct=re.compile(r'Incarnation\s*\{\s*app:\s*App::(Quil|Spindle|Browser),\s*ordinal:\s*(\d+),\s*target:\s*(\d+),\s*surface:\s*(\d+),\s*shell_surface:\s*(None|Some\(\d+\)),\s*lifecycle_slot:\s*(\d+),\s*close_slot:\s*(\d+),\s*activation_slot:\s*(None|Some\(\d+\)),\s*route_slot:\s*(\d+),\s*children:\s*&\[([0-9, ]*)\]\s*\},')
+ direct=re.compile(r'Incarnation\s*\{\s*app:\s*App::(Quil|Spindle|Browser|Program),\s*ordinal:\s*(\d+),\s*target:\s*(\d+),\s*surface:\s*(\d+),\s*shell_surface:\s*(None|Some\(\d+\)),\s*lifecycle_slot:\s*(\d+),\s*close_slot:\s*(\d+),\s*activation_slot:\s*(None|Some\(\d+\)),\s*route_slot:\s*(\d+),\s*children:\s*&\[([0-9, ]*)\]\s*\},')
  for line in inventory[2].splitlines():
   line=line.strip()
   if not line or line.startswith('//'):continue
