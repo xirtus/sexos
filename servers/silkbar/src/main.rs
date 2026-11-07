@@ -564,7 +564,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        sex_pdx::sys_yield();
+        // The clock changes once a second: sleep until a message or the next check.
+        let _=sex_pdx::sys_wait_self_ticks(8);
         if cadence_yields < cadence_threshold {
             continue;
         }

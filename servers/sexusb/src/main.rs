@@ -4345,7 +4345,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                sys_yield();
+                let _=sex_pdx::sys_wait_self_ticks(1);
                 continue;
             }
             let ev_type = (ev_d3 >> 10) & 0x3F;
@@ -5256,8 +5256,9 @@ pub extern "C" fn _start() -> ! {
         }
         i = i.wrapping_add(1);
         // Option B: budgeted yield — give scheduler a tick every iteration
-        // so other PDs (silk-shell, sexdisplay) can make progress.
-        sys_yield();
+        // so other PDs (silk-shell, sexdisplay) can make progress. Sleep one tick
+        // between polls rather than spinning.
+        let _=sex_pdx::sys_wait_self_ticks(1);
         unsafe {
             static mut POLL_YIELD_BUDGET: u32 = 64;
             let rem = &mut POLL_YIELD_BUDGET;

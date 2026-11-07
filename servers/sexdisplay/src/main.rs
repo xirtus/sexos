@@ -4676,7 +4676,10 @@ pub extern "C" fn _start() -> ! {
 
         // ── Yield once regardless of whether messages remain queued ──
         loop_iter = loop_iter.wrapping_add(1);
-        sex_pdx::sys_yield();
+        // Nothing arrived and nothing was painted: sleep until a message or the
+        // next clock check, so an idle desktop does not spin.
+        if drained==0 && plan.is_empty() { let _=sex_pdx::sys_wait_self_ticks(8); }
+        else { sex_pdx::sys_yield(); }
     }
 }
 

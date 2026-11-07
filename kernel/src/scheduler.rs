@@ -883,9 +883,10 @@ fn note_dispatch(pd: u64) {
     if now.wrapping_sub(ACTIVE_SECOND_START.load(Ordering::Relaxed)) >= ACTIVE_SECOND_TICKS {
         ACTIVE_SECOND_START.store(now, Ordering::Relaxed);
         if ACTIVE_LOG_BUDGET.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1)).is_ok() {
-            serial_println!("[sched.active] tick={} second_distinct={} window_peak={} switches={}", now,
-                ACTIVE_SECOND_MASK.swap(0, Ordering::Relaxed).count_ones(),
-                ACTIVE_WINDOW_PEAK.swap(0, Ordering::Relaxed), ACTIVE_SWITCHES.swap(0, Ordering::Relaxed));
+            let mask = ACTIVE_SECOND_MASK.swap(0, Ordering::Relaxed);
+            serial_println!("[sched.active] tick={} second_distinct={} window_peak={} switches={} domains={:#x}", now,
+                mask.count_ones(),
+                ACTIVE_WINDOW_PEAK.swap(0, Ordering::Relaxed), ACTIVE_SWITCHES.swap(0, Ordering::Relaxed), mask);
         }
     }
 }

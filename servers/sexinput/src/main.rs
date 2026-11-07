@@ -1208,6 +1208,7 @@ pub extern "C" fn _start() -> ! {
             pdx_call(SLOT_SHELL, OP_AUTODEMO_TICK, 0, 0, 0);
         }
 
-        sys_yield();
+        // Polled devices: one tick of latency, not a spin.
+        let _=sex_pdx::sys_wait_self_ticks(1);
     }
 }
