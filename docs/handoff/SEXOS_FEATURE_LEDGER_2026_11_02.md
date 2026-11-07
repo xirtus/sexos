@@ -2011,3 +2011,30 @@ row no longer waits for the row before it to end.
   `connected_desktop`, `quil_autosave`, `quil_workflow`, `https_document`,
   `http_content`, `clipboard_workflow`, `spindle_calc` at 1280x800, and
   `spindle_reserve_probe`, `https_png`, `network_contention`.
+
+## More than one core, first stage (2026-11-07)
+
+- **What runs now.** Every core starts, with its own GDT, TSS, double-fault stack, idle
+  stack and CoreLocal. Before this, the other cores were never started at all. TLB
+  shootdowns reach every core by IPI, and page retirement refuses to run if a started
+  core isn't covered. Core 1 schedules for real, with its own timer, and runs program
+  records. Core 0 keeps the clock and runs every service. Any further cores idle.
+- **Measured, 4,000 busy programs, QEMU emulation.** One core against two: typing
+  755 ms against 37 ms median, 2,483 ms against 64 ms worst; start 27.8 s against
+  3.6 s. With one spinning program too: 814 ms against 41 ms. Idle cost unchanged.
+- **Honest scope.** This is isolation of load, not parallel speed for one program: the
+  whole desktop still shares core 0, and records share core 1 at one at a time, since
+  they share a key and a present page is visible to any core holding that key. Tasks
+  do not move between cores, so work stealing is off. Core 2 and up do nothing but
+  answer shootdowns. Device interrupts all go to core 0. All on QEMU multi-threaded
+  emulation, whose memory ordering is not a real x86 chip's, and never real hardware.
+- **Bugs found.** A dead task with nothing to replace it held its core and memory for
+  good, now fixed with a per-core idle stack. The kernel's repeated exit hints could
+  fill Shell's startup inbox and crash it if Display started slowly, now deduplicated.
+  The double-fault IST entry the IDT names was never set on the boot core, which is
+  still true there: a double fault on core 0 would not reach its handler cleanly.
+- **Gates.** New `smp_gate` at 4 cores. `program_records` at 1, 2 and 4 cores,
+  `program_launch` and `program_disk` at 1 and 2. Full native regression at 1 core on
+  a94e2fe7; on the final commit, which differs only by two small corrections, master,
+  `program_launch`, `program_disk`, `quil_workflow`, `smp_gate`, `program_records`. All
+  non-QEMU gates except the older ones listed earlier, 1,132 Python tests.
