@@ -1863,3 +1863,40 @@ clipboard participant check excludes programs.
   the timed-wait checker differing: `program_launch`, `http_content`,
   `quil_autosave`, `clipboard_workflow`, `quil_workflow`, `spindle_calc`,
   `spindle_reserve_probe`, `network_contention` at 1280x800.
+
+## Reusable program rows (2026-11-07)
+
+`Run Hello` no longer runs out. A closed program's row runs again under a new task.
+
+ABI: `OP_APP_REBORN` (0x10F), activation kind 2, activation states 4 (reusable) and
+5 (rebirthing).
+
+- **Kernel.** Grants keep naming the row's boot task; `App.task` is the current run.
+  Program rows keep their capabilities and frames at retirement, and their frames
+  are zeroed. `rebirth` restores the image from a pristine copy taken at BOOT, rearms
+  the same Task with a task id never used before, and tells every service. The task
+  starts only after all five have forgotten the old run. Capabilities are not minted.
+- **Services.** `ServiceCustody::reborn` lifts its fence only for the task the held
+  grant now reports; Display's `Lifecycle::reborn` only from Acknowledged. Shell
+  resets its custody entry, lifecycle record and tombstone for that frame.
+- **Evidence.** 100 launch-and-close cycles in one boot on QEMU, 97 on one row and
+  each with a new task id, no panic. `program_launch_gate.py --runs 8` also checks
+  text pixels each run. Host tests cover forged notices, an old run's replayed exit,
+  and a new run's own death. No test yet sends a live message from an old run's task
+  on a booted system. Rebirth allocates nothing by construction, but kernel memory
+  use was not measured across the 100 runs.
+- **Limits.** Programs still run one at a time, on one shared key. The image is still
+  a Limine module holding hello. Rows of Quil, Spindle and Browser still use fixed
+  reopen chains. Net and Files reset only their custody fence on rebirth; programs
+  hold no network or document routes today, so their per-target state is untested
+  across a rebirth.
+- **Log fix.** `spindle_calc` failed about half the time because `[spindle.complete]`
+  was printed in several pieces and other output could land inside it. It is now
+  one record. Other `serial_println!` receipts have the same risk.
+- **Gates.** Every non-QEMU gate except the older ones listed above, 1,132 Python
+  tests, `memory_region_authority_gate`, master gate GREEN. Native, final commit:
+  `program_launch` (8 runs), `spindle_calc` twice, `connected_desktop`. Two commits
+  earlier, differing by that log line and the move of two frame helpers:
+  `program_launch` at 1024x768, `http_content`, `quil_autosave`,
+  `clipboard_workflow`, `quil_readability`, `quil_workflow`, `https_document`,
+  `spindle_reserve_probe`, `https_png`, `network_contention` at 1280x800.
