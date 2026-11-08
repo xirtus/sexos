@@ -63,8 +63,10 @@ def main():
   m=g['wait'](rf'\[heaptest\.(all|fail)\] target={big["target"]} task={big["task"]} ([^\n]*)\n',s,900)
   assert m[1]=='all',f'fill failed: {m[0]}'
   filled=int(dict(kv.split('=')for kv in m[2].split())['full_mib']);assert filled>=64,f'filled only {filled} MiB'
-  big.update(filled=filled,free=int(re.findall(r'free_pages=(\d+)',t()[s:])[-1]),held=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=(\d+)',t())[-1]))
-  assert big['free']<1024,f"memory left over after filling: {big['free']} pages"
+  big.update(filled=filled,free=int(re.findall(r'free_pages=(\d+)',t()[s:])[-1]),held=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=(\d+)',t())[-1]),window=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=\d+ base=0x[0-9a-f]+ window_pages=(\d+)',t())[-1]))
+  # Filled means the machine ran out, or the program reached its arena (all but its
+  # image, stack and guard page).
+  assert big['free']<1024 or big['held']>=big['window']-1024,f"memory left over after filling: {big}"
   close(big)
   after=started();close(after)
   assert after['free']+after['held']>=big['free']+big['held']-64,f"pages leaked: {big} then {after}"

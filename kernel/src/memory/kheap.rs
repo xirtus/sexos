@@ -39,7 +39,7 @@ fn grow(heap: &mut Heap, layout: Layout) -> bool {
     let want = (layout.size() + layout.align() + 4096).max(STEP).next_multiple_of(4096);
     let end = crate::HEAP_START + crate::HEAP_SIZE;
     let want = want.min(end.saturating_sub(top)) & !4095;
-    if want < layout.size() + layout.align() { return false; }
+    if want == 0 { return false; }
     let mut mapped = 0;
     while mapped < want {
         let va = (top + mapped) as u64;
@@ -50,8 +50,9 @@ fn grow(heap: &mut Heap, layout: Layout) -> bool {
     }
     if mapped == 0 { return false; }
     unsafe { heap.extend(mapped); }
-    // No logging here: the heap lock is held, and logging may allocate.
-    mapped >= layout.size() + layout.align()
+    // No logging here: the heap lock is held, and logging may allocate. The new pages may
+    // join a free tail, so the caller retries whenever any were added.
+    true
 }
 
 /// Page tables for the heap's whole address space, every leaf past BOOT's part clear.
