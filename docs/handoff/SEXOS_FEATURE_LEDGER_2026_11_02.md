@@ -2349,3 +2349,19 @@ row no longer waits for the row before it to end.
   real machine. BIOS-only machines can't boot it.
 - **Gates.** New `install` at 1 core. Python tests and all non-QEMU gates; `fetch` itself ran
   only inside the install gate on this build.
+
+## A program that ignores Close is ended (2026-11-08)
+
+- **What runs now.** If a program hasn't ended five seconds after the person closed it, Shell
+  ends it. In the probe, a program built to ignore Close was gone 7.7 seconds after F11, was
+  cleaned up like any exit, and its row started the next program normally.
+- **Design.** `app_lifecycle::force_end` (syscall 80) lets the coordinator holding the row's
+  lifecycle grant clear the run's page leaves, program rows only. The program faults the next
+  time it runs, which Close's own retries guarantee, and the kernel ends it there; the usual
+  service acknowledgements and retire follow, with retire skipping its check of the already
+  cleared leaves. Nothing new can be reached this way: it only takes away.
+- **Limits.** Quil, Spindle and Browser keep the patient close, since they may hold unsaved work.
+  Five seconds is fixed. A program on a key-isolated row and one on the shared key end the same way.
+- **Gates.** `program_force_probe.py` on an ISO built with `SEXOS_PROGRAM_HANG_PROBE=1`, at 1 and
+  4 cores. Program disk, launch, Jot, program net, records and SMP at 1 core on the normal
+  kernel. Python tests and all non-QEMU gates except the older ones.

@@ -14,12 +14,14 @@ struct App {
     identity:Incarnation,predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
     /// Program rows run again. The grants name boot_task; `task` is the current run.
     reusable:bool,boot_task:u32,generation:u32,rebirthing:bool,pristine:u64,entry:u64,stack_top:u64,
+    /// Shell took this run's pages because it ignored Close; retire need not find them.
+    forced:bool,
     /// The BOOT image's manifest, and the span a disk program loads into.
     boot_pages:[PrivatePage;64],boot_count:usize,window:u64,window_base:u64,window_leaves:[u64;WINDOW_PAGES],
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:[PrivatePage::EMPTY;MAX_PAGES],count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,window:0,window_base:0,window_leaves:[0;WINDOW_PAGES],last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,window:0,window_base:0,window_leaves:[0;WINDOW_PAGES],last_hint:[0;6],hinted:0,kicked:false}}}
 const WINDOW_PAGES:usize=sex_pdx::program_store::IMAGE_BYTES/4096;
 static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
@@ -382,7 +384,7 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
             let main=target.main_task.load(Ordering::Acquire);
             unsafe{(*main).rearm(task,app.entry,app.stack_top,target);}
         }
-        app.task=task;app.acked=0;app.hinted=0;app.kicked=false;app.retired=false;app.rebirthing=true;
+        app.task=task;app.acked=0;app.hinted=0;app.kicked=false;app.retired=false;app.rebirthing=true;app.forced=false;
         DORMANT[index].store(true,Ordering::Release);
         TERMINAL[index].store(false,Ordering::Release);
         crate::serial_println!("[app.rebirth.begin] target={} task={} generation={}",app.target,task,app.generation);
@@ -403,6 +405,24 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     crate::serial_println!("[app.rebirth.committed] target={} task={} generation={} pages={}",app.target,app.task,app.generation,count);
     Ok(2)
 }
+/// Shell ends a program run that ignores Close: its pages go, so it faults the next
+/// time it runs and is ended there, and its cleanup then runs as for any exit. Only the
+/// coordinator holding the row's lifecycle grant may, and only for program rows.
+pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
+    let result=(||{let g=grant(pd,slot)?;let mut apps=apps_lock!().ok_or(RETRY)?;
+        let app=apps.iter_mut().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
+        g.authorize(pd.id,app.target,app.boot_task,QUERY)?;
+        if pd.id!=app.coordinator||!app.reusable{return Err(DENIED)}
+        if app.forced||app.retired||app.rebirthing{return Ok(())}
+        let id=app.target;crate::program_tenancy::release(id);
+        for page in &app.pages[..app.count]{
+            unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};
+            crate::smp::tlb::flush(page.va);
+        }
+        app.forced=true;
+        crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
+        Ok(())})();result.map_or_else(|e|e,|()|0)
+}
 pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
     let result=(||{let g=grant(pd,slot)?;let mut apps=apps_lock!().ok_or(RETRY)?;
         let app=apps.iter_mut().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
@@ -420,10 +440,11 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         if app.acked!=REQUIRED || !crate::paging::target_cleanup_complete(app.target)?{return Err(RETRY)}
         TERMINAL[index].store(true,Ordering::Release);
         let id=app.target;crate::program_tenancy::release(id);
-        let count=retire_private_pages(&app.pages[..app.count],
+        // A forced run's leaves are already clear.
+        let count=if app.forced {app.count} else {retire_private_pages(&app.pages[..app.count],
             |leaf|crate::program_tenancy::read(id,leaf),
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
-            |va|crate::smp::tlb::flush(va))?;
+            |va|crate::smp::tlb::flush(va))?};
         if app.reusable{
             // The row keeps its authority and its frames for the next run.
             for page in &app.pages[..app.count]{crate::boot_memory::zero_frame(page.expected&PHYSICAL_MASK);}

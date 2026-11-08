@@ -109,6 +109,16 @@ pub fn retire(slot: usize) -> Result<RetiredPool,u64> {
     Ok(RetiredPool { base,length,task_id:u32::try_from(task).map_err(|_|INVALID)? })
 }
 
+pub const SYS_FORCE_END: u64 = 80;
+/// Shell ends a program run that ignored Close. It still exits and is cleaned up as usual.
+#[cfg(target_arch = "x86_64")]
+pub fn force_end(slot: usize) -> Result<(),u64> {
+    let status: u64;
+    unsafe { core::arch::asm!("syscall",inlateout("rax") SYS_FORCE_END=>status,
+        in("rdi") slot as u64,out("rcx") _,out("r11") _,lateout("rsi") _,lateout("rdx") _,lateout("r10") _,lateout("r8") _,options(nostack)); }
+    if status == OK { Ok(()) } else { Err(status) }
+}
+
 /// A service applies retirement once, then retries only its own acknowledgement.
 /// The terminal identity remains fenced even when ACK delivery is delayed.
 pub trait Authority {

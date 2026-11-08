@@ -242,6 +242,16 @@ unsafe fn shell_close_poll() {
         // Even successful enqueue can be consumed by an app's nested wait.
         // Keep retry ownership until attested death, rate-limited by ticks.
         entry.attempted_close(tick);
+        // A program that ignores Close for five seconds is ended. Quil and the other
+        // built-in apps may hold unsaved work, and keep the old patient behaviour.
+        let now=sex_pdx::get_ticks();
+        let since=*entry.close_since.get_or_insert(now);
+        if !entry.forced && now.saturating_sub(since)>=5_000
+            && app_catalog::by_surface(entry.target,entry.surface).is_some_and(|r|r.app==app_catalog::App::Program) {
+            entry.forced=true;
+            let result=sex_pdx::app_lifecycle::force_end(entry.slot);
+            sex_pdx::serial_record!("[shell.app.force] target={} task={} ok={}",entry.target,entry.task,result.is_ok() as u8);
+        }
         let accepted = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE,
             entry.target as u64, entry.task as u64, entry.close_kind()).is_ok();
         sex_pdx::serial_record!("[shell.app.close.send] target={} task={} slot={} tick={} accepted={}",entry.target,entry.task,slot,tick,accepted as u8);

@@ -70,6 +70,8 @@ pub extern "C" fn _start() -> ! {
         sex_pdx::serial_record!("[hello.probe.breach] addr={:#x} byte={}", neighbour, byte);
     }
     sex_pdx::serial_record!("[hello.ready] target={} task={} surface={} bytes={}", identity.target_pd, identity.task_id, surface, TEXT.len());
+    // Test builds only: a program that never answers Close, so Shell must end it.
+    if option_env!("SEXOS_PROGRAM_HANG_PROBE").is_some() { loop { sex_pdx::sys_yield(); } }
     loop {
         let message = sex_pdx::pdx_listen_raw(0);
         if message.caller_pd == 3
