@@ -297,6 +297,137 @@ sandboxed runtimes. Wasm is that sandbox:
   QuickJS or Boa, relibc and the first C guests (FFmpeg, SQLite).
 - Throughout: adapt Redox drivers for real hardware when the PKU PC arrives.
 
+## 7. Lessons from browser projects
+
+### What each one teaches
+
+| Project | Licence | Lesson for SexOS |
+|---|---|---|
+| **Ladybird** (C++) | BSD-2 | A from-scratch engine that renders the real web, built by a small team by working through Web Platform Tests and Test262 one failure at a time. Splits into WebContent, RequestServer and ImageDecoder processes: the decoder that parses hostile images runs alone with no other rights. SexOS can copy that split as separate tasks with typed capabilities. |
+| **Servo** (Rust) | MPL-2.0 | Parallel style and layout (Stylo), html5ever, a "constellation" that owns one pipeline per site. Its crates (Stylo, html5ever, cssparser, selectors, url) are what Blitz builds on. Embeddable since 2025. |
+| **Chromium** | BSD-3 | Site isolation: each site gets its own sandboxed renderer. V8 uses **PKU** to keep JIT code write-protected. SexOS already has PKU, so it can give JIT engines the same protection natively. |
+| **Firefox / Gecko** | MPL-2.0 | **RLBox**: C libraries (fonts, XML, codecs) compiled to Wasm and run inside the browser in a sandbox. SexOS can do the same with any C library, with no native libc. |
+| **WebKit** | LGPL/BSD | JavaScriptCore's tiered JITs; WebKit runs on many small platforms, which is a reference for a minimal porting layer. |
+| **Blitz** (Rust) | MIT/Apache | A lightweight HTML/CSS engine assembled from Servo parts. The best ready-made engine for SexOS once `std` exists (section 1b). |
+| **Dillo** (C) | GPL-3.0+ | A tiny, fast browser with no JS. Its licence is compatible with SexOS's, and it shows how much a small engine can render. |
+| **NetSurf** (C) | GPL-2.0 core, MIT libs | Its CSS (libcss) and HTML (hubbub) libraries are MIT and usable; the browser itself is GPL-2.0 and should only be read. |
+| **litehtml** (C++) | BSD-3 | HTML/CSS layout only; the host draws. Shows the smallest useful engine interface. |
+| **"Let's build a browser engine"** (Robinson, Rust) and **browser.engineering** (book) | MIT/Apache; free online | How to write tokenizer, cascade, layout, painting and JS bindings step by step. Good training for whoever works on the SexOS browser. |
+
+### Design rules to take
+
+1. **Split the browser into tasks inside a Browser organ:** network (only the network
+   capability), image and media decoders (no rights at all, just "bytes in, pixels out"),
+   one content task per site, and the window/compositor side. A crash or exploit in one
+   costs one tab, and Display never sees untrusted code.
+2. **Hostile parsers get nothing:** every decoder of web data runs where a bug can't reach
+   files, network or other sites. Wasm (RLBox style) is the cheap way to get that inside
+   the organ without spending a hardware key per tab.
+3. **Measure with real test suites:** Web Platform Tests (BSD-3), Test262 (BSD) and the
+   html5lib tests. They are behaviour tests, which matches the plan to replace
+   source-text gates.
+4. **Zero-copy pixels:** content tasks paint into a per-window pixel buffer that the
+   compositor maps read-only, which a single address space makes free.
+
+## 8. Lessons from media players and media frameworks
+
+| Project | Licence | Lesson for SexOS |
+|---|---|---|
+| **mpv** | GPL-2.0+ or LGPL-2.1+ build | Clean layers: demux → decode → filter → video out, with audio as the master clock and display-synced playback. libmpv's render API lets a host draw video into its own surface. libplacebo (LGPL-2.1) does high-quality scaling, colour management and HDR. |
+| **VLC / libvlc** | LGPL-2.1+ | Everything is a plugin (access, demux, codec, output); plays anything because each format is one module. |
+| **GStreamer** | LGPL-2.1 (many Rust plugins MIT/MPL) | Media as a graph of typed elements with negotiated formats. Maps well onto SexOS tasks connected by typed capabilities. |
+| **PipeWire** | MIT | Graph-based audio and video routing in shared memory, low latency, per-client permissions. The right model for a SexOS sound service. |
+| **FFmpeg** | LGPL-2.1+ / GPL | libavformat (containers), libavcodec (codecs), libswscale/libswresample. Everyone builds on it. |
+| **Haiku Media Kit** | MIT | A native OS media API with codec "add-ons" system-wide, so every app plays every format. |
+| **Android media / Stagefright** | Apache-2.0 | The warning: media parsers caused a flood of remote exploits, so Android moved extractors and codecs into separate sandboxed processes. |
+| **Rust players** (`rodio`, `cpal`, Symphonia, Ruffle) | MIT/Apache, MPL-2.0 | Pure-Rust playback and decoding; Ruffle shows a complete media runtime in Rust on wgpu. |
+
+Design rules to take:
+
+1. **One system media service in a Media organ** with a typed API ("open this file or
+   stream, decode into this buffer, play on this output"), so every program plays every
+   format, Haiku style.
+2. **Decoders sandboxed:** native Rust decoders inside the organ; C codecs (FFmpeg, libvpx,
+   libopus) compiled to Wasm and run there, RLBox style, until a native libc guest exists.
+3. **Audio clock is master,** video frames are dropped or repeated to match it (mpv).
+4. **Pull-model audio through shared ring buffers** (PipeWire, CoreAudio): the mixer pulls
+   from each client's buffer, no copies.
+
+## 9. How to get HTML + JS + three.js running on SexOS
+
+three.js needs five things: a modern JavaScript engine (ES2020+ with modules), a `<canvas>`
+element, `requestAnimationFrame`, **WebGL 2** (WebGL 1 support was dropped in r163) or
+**WebGPU** (its newer renderer), plus `fetch`/image decoding for textures and models. A full
+HTML engine is not needed to run it. That gives a staircase where each step is usable:
+
+### Step A: a JavaScript runtime with a canvas, no HTML (weeks)
+
+Like Node or Deno with only a window. A SexOS app `js` that runs a script with these
+globals: `console`, timers, `requestAnimationFrame`, `fetch` (over sexnet with `+net`),
+`TextEncoder`, `URL`, a minimal `document.createElement('canvas')` and Canvas 2D.
+
+- **Engine:** QuickJS-NG (MIT, ES2023, small C). Two ways to run it:
+  - compile it to **Wasm with wasi-sdk** (Apache/MIT) and run it under wasmi/wasmtime.
+    This needs no native libc on SexOS at all, so it can happen right after the Wasm
+    runtime lands; or
+  - native via relibc later, for speed.
+  Boa (Rust, MIT/Unlicense) is the pure-Rust alternative once `std` exists.
+- **Canvas 2D:** map the Canvas API onto tiny-skia (paths, fills, strokes, gradients,
+  `drawImage` with zune-decoded images, text with the font stack).
+- **Web API code to borrow:** Deno's implementations of URL, streams, `fetch`, `TextEncoder`
+  and events are MIT; many are written in JS and run on any engine.
+
+Result: 2D canvas demos and games, and a scripting language for SexOS itself.
+
+### Step B: WebGL 2 in software, then three.js (1–3 months)
+
+Two routes. Recommend the first.
+
+1. **Pure Rust (fits SexOS best):** `naga` (wgpu's shader translator, MIT/Apache) parses
+   GLSL ES 3.0 shaders. Compile them to native code with Cranelift (Apache-2.0+LLVM
+   exception, already inside wasmtime) or run them through a simple interpreter first. A
+   tile-based, multi-core triangle rasterizer (like `euc`, MIT/Apache, which runs shaders as
+   Rust closures) draws into the window's pixel buffer. Implement the WebGL 2 calls three.js
+   actually uses (buffers, VAOs, textures, framebuffers, draw calls) rather than all of
+   OpenGL ES.
+2. **Port the C++ stack:** ANGLE (BSD-3, what Chrome uses to turn WebGL into Vulkan) on top
+   of SwiftShader (Apache-2.0, Chrome's CPU Vulkan) or Mesa's lavapipe (MIT). Proven and
+   complete, but needs a C++ toolchain and runtime first, so it's months later.
+
+Then three.js (MIT) runs unmodified: `new THREE.WebGLRenderer({ canvas })`. A software
+renderer on 8+ cores manages simple scenes at interactive rates; heavy scenes need the GPU.
+
+### Step C: the same JS inside real web pages (after `std`)
+
+Blitz (HTML/CSS) plus the Step A engine plus DOM bindings gives pages with scripts. DOM
+in Rust can follow Servo's `script` crate design. A shortcut for prototyping: run a DOM
+written in JS (linkedom or happy-dom, both MIT) inside the engine and sync only the
+rendered tree to Blitz. Events, forms, `fetch`, `<img>`, `<video>` (from the Media
+service) and `<canvas>` with Step B's WebGL then make sites like three.js examples load
+as pages.
+
+### Step D: speed (long term)
+
+- **A JIT:** V8 (BSD-3) or SpiderMonkey (MPL-2.0). SexOS needs a "JIT memory" capability:
+  pages a task may write, then flip to executable, never both. PKU makes that cheap,
+  exactly as V8 already uses it on Linux. Until then, V8's `--jitless` mode or Hermes (MIT,
+  no JIT) are options.
+- **WebGPU:** `wgpu` (MIT/Apache, the WebGPU implementation in Firefox and Deno) on Vulkan.
+  `deno_webgpu` (MIT) shows how to bind it to JS. three.js's WebGPURenderer then works.
+- **GPU:** in QEMU, virtio-gpu with Venus (Vulkan) or virgl (OpenGL) forwards to the host
+  GPU through Mesa's drivers (MIT); on real hardware, Mesa's radv (AMD) and anv (Intel)
+  Vulkan drivers, which need a DRM-like kernel interface of SexOS's own design. This is
+  the biggest single project in this report; software rendering keeps everything working
+  until it lands.
+
+### What to build first
+
+1. Wasm runtime + wasi-sdk (also unlocks C libraries without a libc).
+2. QuickJS-NG on Wasm → `js` app with console, timers, `fetch`.
+3. Canvas 2D on tiny-skia → 2D demos run.
+4. naga + software WebGL 2 subset → three.js "spinning cube" example runs in a window.
+5. Then Blitz pages with scripts, and a JIT, as section 1b and Step D land.
+
 Sources spot-checked for current status: [harfrust on docs.rs](https://docs.rs/crate/harfrust/0.13.2),
 [wasmtime min-platform example](https://sources.debian.org/src/rust-wasmtime/26.0.1%2Bdfsg-3/examples/min-platform/README.md),
 [wasmtime platform support](https://docs.rs/crate/wasmtime-cli/45.0.0/source/docs/stability-platform-support.md),
