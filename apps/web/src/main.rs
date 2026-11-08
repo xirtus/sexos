@@ -476,6 +476,7 @@ pub extern "C" fn _start() -> ! {
         match event {
             Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
             Event::Key(key) => b.key(key),
+            Event::Resize { .. } => {}
         }
     }
 }

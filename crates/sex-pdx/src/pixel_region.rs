@@ -4,12 +4,36 @@
 //! pixels; Display takes a size only from the row that owns the surface.
 use crate::app_catalog::{App, INCARNATIONS};
 
-/// The largest picture shown, and room behind it for a decoder's own work.
+/// Every surface holds at least an 800 by 600 picture. BOOT sizes the regions to the
+/// screen (four bytes per screen pixel, rounded up to 1 MiB), so a full-screen
+/// window is all pixels; programs read the real length from their grant.
 pub const MAX_W: usize = 800;
 pub const MAX_H: usize = 600;
 pub const PIXELS: usize = MAX_W * MAX_H;
+/// The smallest region BOOT grants.
 pub const BYTES: u64 = 4 * 1024 * 1024;
 const _: () = assert!(PIXELS as u64 * 4 <= BYTES);
+/// The region length BOOT grants for a screen of `width` by `height`.
+pub const fn bytes_for_screen(width: u64, height: u64) -> u64 {
+    let want = (width * height * 4 + (1 << 20) - 1) & !((1 << 20) - 1);
+    if want > BYTES { want } else { BYTES }
+}
+/// Where a program's pixels start inside its framed window: below the title bar,
+/// inside the border. Display draws there and Shell reports the size left.
+pub const LEFT: u32 = crate::desktop_style::INSET;
+pub const TOP: u32 = 28 + 8;
+/// The pixel area of a framed window `width` by `height`.
+pub const fn area(width: u32, height: u32) -> (u32, u32) {
+    (width.saturating_sub(2 * LEFT), height.saturating_sub(TOP + LEFT))
+}
+/// Shell to program, as an input event (`app_key` opcode 0x202): the window's pixel
+/// area is now `word >> 32` by `word & 0xFFFF_FFFF`.
+pub const RESIZE_CLASS: u64 = 6;
+pub const fn resize_wire(width: u32, height: u32) -> u64 { ((width as u64) << 32) | height as u64 }
+pub fn resize_decode(word: u64, reserved: u64, class: u64) -> Option<(u32, u32)> {
+    if reserved != 0 || class != RESIZE_CLASS { return None; }
+    Some(((word >> 32) as u32, word as u32))
+}
 /// The program's own view, writable.
 pub const CLIENT_SLOT: u64 = 97;
 /// Display's read-only views, one per program row.

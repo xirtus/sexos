@@ -4,7 +4,9 @@
 use sex_pdx::{app_key::Key, clipboard::{Action,Participant,Subject}};
 pub const CAPACITY:usize=32;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum Input { Key(Key), Clipboard(Action), Scroll(sex_pdx::app_scroll::Scroll) }
+pub enum Input { Key(Key), Clipboard(Action), Scroll(sex_pdx::app_scroll::Scroll),
+    /// A program window's pixel area changed to this width and height.
+    Resize(u32, u32) }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct Item { pub destination:Participant, pub input:Input }
 pub struct Queue { items:[Option<Item>;CAPACITY], head:usize, len:usize }

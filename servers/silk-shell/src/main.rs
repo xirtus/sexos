@@ -91,8 +91,9 @@ unsafe fn focused_clipboard_participant()->Option<sex_pdx::clipboard::Participan
 }
 /// A focused program gets typed keys on its close route. It takes no part in the
 /// clipboard, so this participant never reaches clipboard issue paths.
-unsafe fn focused_program_participant()->Option<sex_pdx::clipboard::Participant>{
-    let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(FOCUSED_SURFACE_ID)&&!e.dead&&!e.retired&&!e.close_pending)?;
+unsafe fn focused_program_participant()->Option<sex_pdx::clipboard::Participant>{program_participant(FOCUSED_SURFACE_ID)}
+unsafe fn program_participant(sid:u64)->Option<sex_pdx::clipboard::Participant>{
+    let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(sid)&&!e.dead&&!e.retired&&!e.close_pending)?;
     let row=app_catalog::by_surface(e.target,e.surface).filter(|r|r.app==app_catalog::App::Program&&r.lifecycle_slot==e.slot)?;
     let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
     if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
@@ -167,6 +168,12 @@ unsafe fn app_input_poll(){
             if browser_input_participant(item.destination)&&status==0{
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
+        },
+        app_input::Input::Resize(width,height)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,sex_pdx::pixel_region::resize_wire(width,height),0,sex_pdx::pixel_region::RESIZE_CLASS);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            sex_pdx::serial_record!("[shell.program.resize] pd={} task={} w={} h={} status={}",item.destination.subject.pd,item.destination.subject.task,width,height,status);
         },
         app_input::Input::Scroll(scroll)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL);
@@ -8451,7 +8458,17 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
 /// One window's place on screen: Shell's own record, then Display, then the
 /// placeholder fills some built-in frames carry.
 unsafe fn apply_window_geometry(sid: u64, rx: i32, ry: i32, rw: u32, rh: u32) {
+    let before = get_surface_bounds(sid).map(|(_, _, w, h)| (w, h));
     update_local_geometry(sid, rx, ry, rw, rh);
+    // A program learns its new pixel area as an input event, after the keys before it.
+    if before != Some((rw, rh)) {
+        if let Some(destination) = program_participant(sid) {
+            let (w, h) = sex_pdx::pixel_region::area(rw, rh);
+            if !APP_INPUT.push(app_input::Item { destination, input: app_input::Input::Resize(w, h) }) {
+                sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0", destination.subject.pd, destination.subject.task);
+            }
+        }
+    }
     match sid {
         SURFACE_ID_APP => {
             if let Some(w) = WINDOWS.get_mut(1) {

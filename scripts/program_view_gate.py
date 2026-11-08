@@ -73,11 +73,21 @@ def main():
     jchecked+=1;worst=max(worst,max(abs(c-d) for c,d in zip(img.getpixel((bx+px,by+py)),JPG.getpixel((px,py)))))
   assert jchecked>100 and worst<=8,f'JPEG pixels off by up to {worst} over {jchecked}'
   close(m)
-  # 900x700 is shrunk to 771x600 to fit the 800x600 window.
-  s=len(t());expect('run view @big.png',r'\[view.shown\] w=771 h=600 bytes=\d+ scaled=1')
-  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);close(m)
+  # 900x700 is shrunk to fit the window's pixel area, and fitted again when Shell
+  # gives the window its place: the last picture fits the last size Shell reported.
+  s=len(t());expect('run view @big.png',r'\[view.shown\] w=\d+ h=\d+ bytes=\d+ scaled=1')
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);time.sleep(4)
+  resized=re.findall(rf'\[shell.program.resize\] pd={m[1]} task={m[2]} w=(\d+) h=(\d+) status=0',t()[s:])
+  assert resized,'View was never told its window size'
+  aw,ah=map(int,resized[-1])
+  bw,bh,fw,fh=map(int,re.findall(r'\[view.shown\] w=(\d+) h=(\d+) bytes=\d+ scaled=1 fit=(\d+)x(\d+)',t()[s:])[-1])
+  tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=-?\d+ y=-?\d+ w=(\d+) h=(\d+)',t()[s:]);tw,th=map(int,tile[-1])
+  assert (fw,fh)==(aw,ah)==(tw-16,th-44),f'fit {fw}x{fh}, resize {aw}x{ah}, tile {tw}x{th}'
+  assert bw<=aw and bh<=ah and (bw==aw or bh==ah),f'{bw}x{bh} does not fit {aw}x{ah}'
+  big=(bw,bh,aw,ah)
+  close(m)
   expect('run view @note.txt',r'\[view.failed\] That file is not a PNG or JPEG picture.')
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'pixels_checked':checked,'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
+  print({'ok':True,'big':big,'pixels_checked':checked,'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
  finally:g['stop']()
 if __name__=='__main__':main()
