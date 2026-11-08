@@ -2691,7 +2691,7 @@ row no longer waits for the row before it to end.
   pen positions come from one function, so text lands where layout put it. `sex-app::net`
   gains `fetch`, which keeps headers (`Reply::header`) for redirects; `get` is unchanged.
   The parser runs in the program's confinement, never in Display. No ABI change.
-- **Evidence.** 15 host tests in sex-html. `scripts/program_web_gate.py`: the welcome page,
+- **Evidence.** 15 host tests in sex-html (block-level images, inline fragment anchors and cell alignment among them). `scripts/program_web_gate.py`: the welcome page,
   after Down, and with a link focused match `cargo run -p sex-web --example page`
   exactly (0 of 9020 sampled pixels differ, each). `scripts/program_web_net_gate.py`
   serves `scripts/web_site` over HTTP: a 302 is followed, 1 sheet and 1 PNG load, the page

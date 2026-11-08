@@ -168,3 +168,24 @@ fn resolves_links() {
     assert_eq!(resolve(base, "mailto:x@y"), None);
     assert_eq!(resolve("https://a.org", "b").as_deref(), Some("https://a.org/b"));
 }
+
+#[test]
+fn block_images_inline_anchors_and_cell_alignment() {
+    // A block-level picture keeps its size and pushes the next line down.
+    let page = render("<body style=margin:0><img src=cat.png style='display:block;width:100px'><p style=margin:0>after</p>", 300, 600, &Fixed);
+    assert!(page.items.iter().any(|i| matches!(i, Item::Image { x: 0, y: 0, w: 100, h: 50, .. })));
+    assert!(texts(&page)[0].1 > 50);
+    // Fragment targets inside lines are recorded where their line is.
+    let page = render("<body style=margin:0><p style=margin:0>one</p><p style=margin:0>two <span id=t>x</span><a name=n></a></p>", 300, 600, &Fixed);
+    let y = |id: &str| page.anchors.iter().find(|(a, _)| a == id).map(|(_, y)| *y);
+    assert!(y("t").unwrap() > 0, "{:?}", page.anchors);
+    assert_eq!(y("t"), y("n"));
+    // Centring a short cell must not move its taller neighbour.
+    let page = render("<table><tr><td>short<td>a<br>b<br>c</table>", 300, 600, &Fixed);
+    let t = texts(&page);
+    let a = t.iter().find(|x| x.2 == "a").unwrap().1;
+    let c = t.iter().find(|x| x.2 == "c").unwrap().1;
+    let short = t.iter().find(|x| x.2 == "short").unwrap().1;
+    assert_eq!(short, t.iter().find(|x| x.2 == "b").unwrap().1);
+    assert!(a < short && short < c);
+}

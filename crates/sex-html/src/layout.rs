@@ -106,6 +106,9 @@ fn collapse(s: &str) -> String {
     out
 }
 
+/// Elements whose content is not their children: drawn at their own (or intrinsic) size.
+const REPLACED: &[&str] = &["img", "svg", "canvas", "video", "iframe", "object", "embed", "input", "select", "textarea"];
+
 struct BlockResult { height: i32, margin_top: i32, margin_bottom: i32, first_baseline: Option<i32>, width: i32 }
 
 struct Layout<'a> {
@@ -126,11 +129,13 @@ enum Piece {
     Break,
     Atomic { items: Vec<Item>, links: Vec<Link>, width: i32, height: i32, link: Option<NodeId> },
     Gap(i32),
+    /// An `id` (or `<a name>`) inside the line: where a `#fragment` link scrolls to.
+    Anchor(String),
 }
 
 impl Piece {
     fn width(&self) -> i32 {
-        match self { Piece::Word { width, .. } | Piece::Space { width, .. } | Piece::Atomic { width, .. } | Piece::Gap(width) => *width, Piece::Break => 0 }
+        match self { Piece::Word { width, .. } | Piece::Space { width, .. } | Piece::Atomic { width, .. } | Piece::Gap(width) => *width, Piece::Break | Piece::Anchor(_) => 0 }
     }
 }
 
@@ -164,6 +169,21 @@ impl<'a> Layout<'a> {
     /// containing block `cw` wide. `force_width` sets the border-box width (flex items, cells).
     fn block(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
         let s = self.style(n).unwrap();
+        if let Some(tag) = self.dom.tag(n).filter(|t| REPLACED.contains(t)) {
+            // Pictures and controls keep their own size in block flow too.
+            let mt = s.margin[TOP].or_zero(cw);
+            let mb = s.margin[BOTTOM].or_zero(cw);
+            let pushed = self.push_link(n);
+            let piece = self.atomic(n, s, tag);
+            if pushed { self.link_stack.pop(); }
+            if let Some(Piece::Atomic { mut items, links, width, height, link }) = piece {
+                for it in &mut items { it.offset(x, y - mt); }
+                self.items.extend(items);
+                for mut l in links { l.x += x; l.y += y - mt; self.links.push(l); }
+                if let Some(a) = link.or_else(|| self.link_stack.last().copied()) { self.add_link(a, x, y, width, height - mt - mb); }
+                return BlockResult { height: (height - mt - mb).max(0), margin_top: mt, margin_bottom: mb, first_baseline: None, width };
+            }
+        }
         let (_, bp, _) = sum_h(s, cw);
         let mut ml = s.margin[LEFT].or_zero(cw);
         let mut mr = s.margin[RIGHT].or_zero(cw);
@@ -355,7 +375,10 @@ impl<'a> Layout<'a> {
         let mut space_before = true;
         for &n in run { self.collect(n, cs, &mut pieces, &mut space_before); }
         while matches!(pieces.last(), Some(Piece::Space { breakable: true, .. })) { pieces.pop(); }
-        if pieces.iter().all(|p| matches!(p, Piece::Space { .. })) { return None; }
+        if pieces.iter().all(|p| matches!(p, Piece::Space { .. } | Piece::Anchor(_))) {
+            for p in pieces { if let Piece::Anchor(id) = p { self.anchors.push((id, y)); } }
+            return None;
+        }
         Some(self.lines(cs, pieces, x, y, w))
     }
 
@@ -384,6 +407,10 @@ impl<'a> Layout<'a> {
                     }
                     if let Some(p) = self.atomic(n, s, tag) { out.push(p); *space_before = false; }
                     return;
+                }
+                for name in ["id", "name"] {
+                    if name == "name" && tag != "a" { continue; }
+                    if let Some(id) = self.dom.attr(n, name) { out.push(Piece::Anchor(String::from(id))); }
                 }
                 let pushed = self.push_link(n);
                 let left = s.margin[LEFT].or_zero(0) + s.padding[LEFT].or_zero(0) + s.border[LEFT];
@@ -645,6 +672,7 @@ impl<'a> Layout<'a> {
                         x += sw;
                     }
                     Piece::Gap(g) => { flush(self, &mut run); x += g; }
+                    Piece::Anchor(id) => self.anchors.push((id, line_top)),
                     Piece::Atomic { mut items, links, width: aw, height: ah, link } => {
                         flush(self, &mut run);
                         let top = baseline - ah;
@@ -792,18 +820,19 @@ impl<'a> Layout<'a> {
                 let res = self.block(c, x, y, w, Some(w));
                 if first.is_none() { first = res.first_baseline; }
                 row_h = row_h.max(res.height);
-                placed.push((c, x, w, res.height, start_items, start_links));
+                placed.push((c, x, w, res.height, start_items..self.items.len(), start_links..self.links.len()));
                 x += w + spacing;
                 col = end;
             }
             // Cells stretch to the row height; middle vertical alignment by default.
-            for (c, x, w, h, start_items, start_links) in placed {
+            for (c, x, w, h, item_range, link_range) in placed {
+                let start_items = item_range.start;
                 let cs = self.style(c).unwrap();
                 let valign = self.dom.attr(c, "valign").map(|v| v.to_ascii_lowercase()).or_else(|| self.dom.attr(r, "valign").map(|v| v.to_ascii_lowercase()));
                 let dy = match valign.as_deref() { Some("top") => 0, Some("bottom") => row_h - h, _ => (row_h - h) / 2 };
                 if dy != 0 {
-                    for it in &mut self.items[start_items..] { it.offset(0, dy); }
-                    for l in &mut self.links[start_links..] { l.y += dy; }
+                    for it in &mut self.items[item_range.clone()] { it.offset(0, dy); }
+                    for l in &mut self.links[link_range] { l.y += dy; }
                 }
                 // Grow the cell's own background to the full row.
                 if dy != 0 || h != row_h {
@@ -913,13 +942,13 @@ impl<'a> Layout<'a> {
                     r.height + mt + r.margin_bottom
                 };
                 line_h = line_h.max(h);
-                placed.push((h, start_items, start_links));
+                placed.push((h, start_items..self.items.len(), start_links..self.links.len()));
                 x += w + between;
             }
             if s.align_center {
                 for (h, si, sl) in placed {
                     let dy = (line_h - h) / 2;
-                    if dy > 0 { for it in &mut self.items[si..] { it.offset(0, dy); } for l in &mut self.links[sl..] { l.y += dy; } }
+                    if dy > 0 { for it in &mut self.items[si] { it.offset(0, dy); } for l in &mut self.links[sl] { l.y += dy; } }
                 }
             }
             y += line_h + if s.flex_wrap { gap } else { 0 };
