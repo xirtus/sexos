@@ -3,12 +3,26 @@
 //! program's window, its files are a subfolder of the program's folder, and `fetch`
 //! uses the program's network grant, which exists only for a `run +net` start.
 use crate::{Event, Host, Refusal};
+use alloc::vec::Vec;
 use sex_app::{files, net, Window};
 
-pub struct AppHost { pub window: Window }
+pub struct AppHost {
+    pub window: Window,
+    /// The text the guest last showed, so the program can add to it after the guest ends.
+    pub shown: Vec<u8>,
+    /// The person closed the window and the guest was told.
+    pub closed: bool,
+}
+impl AppHost {
+    pub fn new(window: Window) -> Self { Self { window, shown: Vec::new(), closed: false } }
+}
 
 impl Host for AppHost {
-    fn show(&mut self, text: &[u8]) { self.window.show(text); }
+    fn show(&mut self, text: &[u8]) {
+        self.shown.clear();
+        self.shown.extend_from_slice(text);
+        self.window.show(text);
+    }
     fn title(&mut self, name: &[u8]) { self.window.title(name); }
     fn log(&mut self, line: &[u8]) {
         let line = core::str::from_utf8(line).unwrap_or("<bytes>");
@@ -17,7 +31,7 @@ impl Host for AppHost {
     fn next(&mut self) -> Event {
         loop {
             match self.window.next() {
-                sex_app::Event::Close => return Event::Close,
+                sex_app::Event::Close => { self.closed = true; return Event::Close; }
                 sex_app::Event::Key(key) => {
                     if key.code == 0x1C { return Event::Char(b'\n'); }
                     if key.code == 0x0E { return Event::Char(8); }

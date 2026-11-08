@@ -23,6 +23,7 @@ members = [
     "apps/jot",
     "apps/peek",
     "apps/view",
+    "apps/wasm",
     "apps/heaptest",
     "crates/sex-app",
     "apps/hum",
@@ -46,3 +47,27 @@ license = "GPL-3.0-only"
 
 [profile.release]
 panic = "abort"
+
+# The Wasm runner must fit the 1 MiB program image: build the interpreter for size.
+[profile.release.package.wasmi]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmi_core]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmi_ir]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmi_collections]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmparser]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.sex-wasm]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasm]
+opt-level = "z"
+codegen-units = 1
+strip = true

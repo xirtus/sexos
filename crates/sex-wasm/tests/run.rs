@@ -308,3 +308,18 @@ fn overlapping_writes_are_capped_in_total() {
     let (o, _) = run(&wat::parse_str(wat).unwrap(), &g, Rec::default());
     assert_eq!(o, Outcome::Exited(4096));
 }
+
+/// The `wasm` program's built-in guest. `SEX_WASM_BLESS=1 cargo test -p sex-wasm` rebuilds it.
+#[test]
+fn hello_guest_is_current() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("guests/hello");
+    let built = wat::parse_file(dir.join("hello.wat")).unwrap();
+    if std::env::var_os("SEX_WASM_BLESS").is_some() { std::fs::write(dir.join("hello.wasm"), &built).unwrap(); }
+    assert_eq!(std::fs::read(dir.join("hello.wasm")).unwrap(), built, "hello.wasm is stale: rerun with SEX_WASM_BLESS=1");
+    let keys = vec![Event::Char(b'h'), Event::Char(b'x'), Event::Char(8), Event::Char(b'i'), Event::Nav(0), Event::Char(b'\n')];
+    let (o, h) = run(&built, &guest(Grants::default()), Rec { keys, ..Default::default() });
+    assert_eq!(o, Outcome::Exited(2));
+    assert!(h.shown.last().unwrap().ends_with(b"> hi"));
+    assert_eq!(h.titles, vec![b"Hello".to_vec()]);
+    assert_eq!(h.logs, vec![b"hello.ready".to_vec()]);
+}

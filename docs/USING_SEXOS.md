@@ -56,6 +56,9 @@ choices at launch, not settings inside the program.
 
 - **Jot** is a notepad: arrows move, Ctrl+S saves, `edit FILE` opens a file in it.
 - **Peek** shows a web page's text: `run +net peek https://example.com/`.
+- **Wasm** runs WebAssembly programs, including Rust or C built for `wasm32-wasip1`:
+  `run wasm @/hello.wasm`. They print to the window and read typed lines. `run wasm`
+  alone shows a small built-in one.
 - **View** shows a picture: `run view @photo.png`. PNG up to 800x600 for now.
 
 Writing your own: see `crates/sex-app` (a window, keys, files, the network, pixels) and `apps/jot`.
