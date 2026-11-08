@@ -12,8 +12,13 @@ pub const ENTRY_BYTES: usize = 32;
 /// Directory: 8 byte magic, 8 reserved, then entries of name[16], lba u32, len u32, hash u64.
 pub const MAX_ENTRIES: usize = (SECTOR - 16) / ENTRY_BYTES;
 pub const NAME_BYTES: usize = 16;
-/// One program's largest file. Rows reserve the same span of frames.
+/// One program's largest file.
 pub const IMAGE_BYTES: usize = 1024 * 1024;
+/// The span of frames each program row reserves at BOOT: one run's image first, then
+/// the memory it asks for while it runs (`program_memory`). Bigger than the largest
+/// file, so a program can hold more than it was shipped with.
+pub const WINDOW_BYTES: usize = 8 * 1024 * 1024;
+const _: () = assert!(IMAGE_BYTES <= WINDOW_BYTES && WINDOW_BYTES % 4096 == 0);
 pub const IMAGE_SLOT_FILES: u64 = 100;
 pub const IMAGE_REGION_ID: u32 = 0x4000;
 /// Shell's route to Files, for this protocol alone.

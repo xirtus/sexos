@@ -2465,6 +2465,31 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
+## View opens JPEG; PNG and JPEG through zune (2026-11-08)
+
+- **What exists now.** `crates/sex-image`: `sex_image::decode(bytes, &Limits)` returns
+  width, height and `Vec<u32>` pixels in the usual unpremultiplied `0xAARRGGBB`. PNG (every
+  colour type and depth, palette, tRNS, Adam7, first APNG frame) through `zune-png`; JPEG
+  (baseline, progressive, 4:4:4/4:2:0, grayscale, CMYK) through `zune-jpeg`. Both are pure
+  Rust, MIT/Apache-2.0/Zlib, built `no_std` + `alloc` without SIMD for the soft-float target.
+  `Image::fit_within(w, h)` shrinks a photo to a surface with an alpha-weighted box filter.
+- **Design.** Decoding belongs in the program that opened the file, never in Display or a
+  server. `Limits` (`PHOTO` 12 MP, `SURFACE` 800x600) is checked right after the header,
+  before the pixel buffer is reserved, and that reservation is fallible, so a lying header
+  is an error, not a heap exhaustion. The decoder writes into the pixel buffer itself and is
+  widened in place, so a picture costs one buffer. The in-house `sex_graphics::png` stays
+  for the allocation-free 48x48 path.
+- **Found upstream.** zune-jpeg 0.5's CMYK to RGBA conversion steps 3 bytes per 4-byte
+  pixel; sex-image asks for RGB and adds alpha itself.
+- **View.** `run view @photo.jpg` works. A picture that fits is decoded straight into the
+  program's pixel surface (`decode_into`); a larger one, up to 3200x2400 and as far as the
+  8 MiB program heap allows, is decoded on the heap and shrunk to fit 800x600. Needs the
+  program heap (PR #17).
+- **Limits.** No GIF/WebP. A 12 MP phone photo does not fit the heap yet (no DCT downscaling).
+- **Gates.** 14 host tests against Pillow/ImageMagick fixtures, including 3,000 bit-flipped,
+  truncated and marker-damaged files that must error or decode, never panic.
+  `program_view_gate` (PNG exact, JPEG within 2 levels, 900x700 shown at 771x600, a text
+  file refused) passes at 1 and 4 cores with the heap branch merged.
 
 ## Sound on a virtio sound card (2026-11-08)
 
@@ -2511,6 +2536,38 @@ row no longer waits for the row before it to end.
 - **Gates.** New `window_resize` (corner drag of 120x80 pixels, exact new bounds, then a
   program opens and the tiling leaves the window alone), window float and program launch
   at 1 core; Python tests and all non-QEMU gates except the older ones.
+
+## Programs get a heap (2026-11-08)
+
+- **What runs now.** SDK programs (`sex-app`) can use `alloc`: `Vec`, `String`, `Box`,
+  `BTreeMap`, and the `no_std` crates that need them (fonts, images, tiny-skia, rustls,
+  Taffy). Peek now reads up to 1 MiB of a page instead of 64 KiB, on the heap. A program
+  can hold up to 8 MiB (its image plus heap) instead of 1 MiB.
+- **Design.** Each program row already reserved, at BOOT, a window of frames on its own
+  hardware key for the image it loads. The window grows from 1 MiB to 8 MiB
+  (`program_store::WINDOW_BYTES`, separate from the 1 MiB file limit `IMAGE_BYTES`). A
+  run asks for the window's pages after its image with a self-only call
+  (`sex_pdx::program_memory::grow`, syscall 81): the kernel finds the row by the caller's
+  domain, checks it is the row's live current run, zeroes the pages and sets their
+  leaves on the row's key. No frame, capability or key is created at runtime. The pages
+  join the run's manifest, so Close, a forced end and retire take them back like the
+  image; a shared-key row's new pages take turns with the rest (`program_tenancy::grant`).
+  The leaves were clear, so a local TLB flush is enough. `sex_app::heap` puts talc (MIT,
+  `no_std`) over that span as the `#[global_allocator]`, growing it in 64 KiB+ steps; when
+  the window is full an allocation is refused (`try_reserve` sees it), not faulted.
+- **ABI.** New syscall 81 `SYS_PROGRAM_MEMORY` (rdi pages ≤ 256, 0 queries → rax status,
+  rsi first page, rdx pages held); `WINDOW_BYTES` 8 MiB; kernel `MAX_PAGES` 512 → 2064.
+  `program_memory.rs` joins the ABI inputs; hash updated.
+- **Cost.** 8 MiB of frames reserved per reusable program row (eight rows: 64 MiB, was 8)
+  and about 1.5 MB more kernel bss for the larger page manifests. Boots and runs in 512 MiB.
+- **Evidence.** New `heaptest` program and `scripts/program_heap_gate.py`: each run starts
+  with no pages, finds every granted page zero, uses Vec/Box/BTreeMap/String, reuses
+  freed memory, fills the window until refused (7 MiB past a 48-page image), then
+  allocates again. Four runs on a reused row, all eight rows side by side (shared-key
+  rows included), each retire taking the grown pages.
+- **Limits.** The window is fixed per row; a program needing more than 8 MiB needs a
+  bigger constant or, later, frames from a shared pool. Pages return only at exit.
+  Background program records (`program_records.rs`) don't get a heap yet.
 
 ## Geist at any size (2026-11-08)
 
