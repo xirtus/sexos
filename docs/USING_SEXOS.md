@@ -21,7 +21,7 @@ the [feature ledger](handoff/SEXOS_FEATURE_LEDGER_2026_11_02.md) says what each 
 | F11 | Close the focused window. A program that doesn't close within five seconds is ended |
 | Scroll Lock | Show or hide Spindle |
 
-Windows tile themselves. Up to eight programs can be open at once, beside the built-in apps.
+Windows tile themselves. Drag a title bar to move a window, or an edge or corner to resize it; either way the tiling then leaves it where you put it, until you zoom it. Up to eight programs can be open at once, beside the built-in apps.
 
 ## Spindle, the terminal
 
