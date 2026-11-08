@@ -86,6 +86,22 @@ pub fn adopt(target: u32, pages: &[PrivatePage]) {
     row.pages[..pages.len()].copy_from_slice(pages);
     row.count = pages.len();
 }
+/// A running row was given one more page: its leaf is set, present only while the row
+/// holds the turn, and the page takes turns with the rest from now on.
+pub fn grant(target: u32, page: PrivatePage) {
+    if !shared(target) {
+        unsafe { core::ptr::write_volatile(page.leaf as *mut u64, page.expected) };
+        return;
+    }
+    let mut pool = POOL.lock();
+    let pool = &mut *pool;
+    let present = pool.tenant == target;
+    let row = row_mut(pool, target);
+    assert!(row.count < MAX_PAGES, "PROGRAM_POOL_PAGES");
+    row.pages[row.count] = page;
+    row.count += 1;
+    unsafe { core::ptr::write_volatile(page.leaf as *mut u64, if present { page.expected } else { page.expected & !PRESENT }) };
+}
 /// Before a retire clears the leaves: the row stops taking turns.
 pub fn release(target: u32) {
     if !shared(target) { return; }

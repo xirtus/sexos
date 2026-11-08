@@ -52,6 +52,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
+
+[[package]]
 name = "aml"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -411,6 +417,14 @@ checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
 dependencies = [
  "hash32",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "heaptest"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -910,6 +924,7 @@ name = "sex-app"
 version = "0.1.0"
 dependencies = [
  "sex-pdx",
+ "talc",
 ]
 
 [[package]]
@@ -1290,6 +1305,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "talc"
+version = "5.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53f8ad14fa1c1b8635114abf9721076fe1e869572a5f26a52690f407292c80dc"
+dependencies = [
+ "allocator-api2",
+ "lock_api",
 ]
 
 [[package]]
