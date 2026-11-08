@@ -21,7 +21,7 @@ def text_ink(path,frame,font,advance=12,line=18):
  for content in TEXT.split('\n'):lines+=[content[i:i+cols] for i in range(0,len(content),cols)] or ['']
  for row,content in enumerate(lines):
   for col,char in enumerate(content):
-   for gx,gy in geist_cells.solid(char):
+   for gx,gy in geist_cells.solid(char,advance,line):
     x=x0+col*advance+gx;y=y0+row*line+gy
     if y>=bottom:continue
     # The pointer rests at the screen's centre and may cover a glyph.

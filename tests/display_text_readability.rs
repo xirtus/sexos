@@ -125,3 +125,18 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  }
  for y in 72..90{for x in 76..88{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
 }
+#[test]fn zoom_steps_redraw_geist_at_each_size_and_rewrap(){
+ let mut s=surface(640,b"A\nb");assert_eq!((surface_text_scale(&s),s.wrap_cols),(2,52));
+ // One step larger: 18x27 cells, Geist drawn for them, fewer columns.
+ assert!(apply_text_zoom(&mut s,1));assert_eq!((surface_text_scale(&s),s.wrap_cols),(3,34));
+ let cell=glyphs::mono_cell(65,18,27).unwrap();assert!(cell.iter().filter(|a|**a==255).count()>40);
+ for y in 0..27{for x in 0..18{let a=cell[y*18+x];let want=if a==0{None}else{Some(coverage_blend(s.text_color,s.color,a))};
+  assert_eq!(surface_text_fg_at(28+x,72+y,&s),want,"x={x} y={y}");}}
+ // Larger stops at the largest scale, and one step back acts at once.
+ for _ in 0..10{apply_text_zoom(&mut s,1);}assert_eq!(surface_text_scale(&s),5);
+ assert!(apply_text_zoom(&mut s,-1));assert_eq!(surface_text_scale(&s),4);
+ // Smaller reaches the 5x7 font, then reset returns to the width's default.
+ for _ in 0..10{apply_text_zoom(&mut s,-1);}assert_eq!((surface_text_scale(&s),s.text_zoom),(1,-1));
+ assert!(apply_text_zoom(&mut s,0));assert_eq!((surface_text_scale(&s),s.text_zoom,s.wrap_cols),(2,0,52));
+ assert!(!apply_text_zoom(&mut s,0));
+}

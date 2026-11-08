@@ -1500,13 +1500,30 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -
 /// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
 /// Exact Spindle panes share the terminal layout scale for their narrower tiles.
 fn surface_text_scale(surf: &Surface) -> usize {
-    if sex_pdx::app_catalog::is_spindle(surf.owner_pd)
+    let base = if sex_pdx::app_catalog::is_spindle(surf.owner_pd)
         && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0
     {
-        sex_pdx::spindle_view::scale(surf.w) as usize
+        sex_pdx::spindle_view::scale(surf.w)
     } else {
-        sex_pdx::desktop_style::scale(surf.w) as usize
-    }
+        sex_pdx::desktop_style::scale(surf.w)
+    };
+    // The window's own text size: whole steps from its width's default, Geist
+    // drawn fresh for each.
+    (base as i32 + surf.text_zoom as i32).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32) as usize
+}
+/// A zoom step on a surface: +1 larger, -1 smaller, 0 the default. The stored step
+/// stays within what the scale can show, so the opposite key acts at once.
+fn apply_text_zoom(surf: &mut Surface, step: i64) -> bool {
+    let before = surface_text_scale(surf);
+    let zoom = surf.text_zoom;
+    surf.text_zoom = 0;
+    let base = surface_text_scale(surf) as i32;
+    surf.text_zoom = zoom;
+    let wanted = if step == 0 { 0 } else { surf.text_zoom as i32 + step.signum() as i32 };
+    surf.text_zoom = ((base + wanted).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32) - base) as i8;
+    let changed = surface_text_scale(surf) != before;
+    if changed { recompute_text_lines(surf); }
+    changed
 }
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
@@ -3948,6 +3965,18 @@ pub extern "C" fn _start() -> ! {
                         sex_pdx::serial_record!("[display.app.title] target={} surface={}", msg.caller_pd, msg.arg0);
                     }
                 }
+                sex_pdx::desktop_style::OP_TEXT_ZOOM => {
+                    // Shell, as window manager, sizes the text of the window it has focused.
+                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                    if wm_pd == 0 || msg.caller_pd != wm_pd { continue; }
+                    let step = msg.arg1 as i64;
+                    unsafe {
+                        if let Some(slot) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == msg.arg0 && msg.arg0 != 0) {
+                            if apply_text_zoom(slot, step) { needs_full_redraw = true; }
+                            sex_pdx::serial_record!("[display.text.zoom] surface={} step={} zoom={} scale={}", msg.arg0, step, slot.text_zoom, surface_text_scale(slot));
+                        }
+                    }
+                }
                 sex_pdx::pixel_region::OP => {
                     // Only the program row that owns this surface shows pixels in it.
                     if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
@@ -4234,6 +4263,7 @@ pub extern "C" fn _start() -> ! {
                                     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
                                     line_starts: [0u16; TEXT_MAX_ROWS], cell_starts: [0; TEXT_BUF_CAP],
                                     line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+                                    text_zoom: 0,
                                 };
                                 break;
                             }

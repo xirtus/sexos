@@ -46,6 +46,8 @@ pub struct Surface {
     pub cell_count: u16,
     pub line_count: u8,
     pub wrap_cols: u8,
+    /// Text size steps above (or below) the width's default scale, set by Shell.
+    pub text_zoom: i8,
 }
 
 impl Surface {
@@ -71,7 +73,7 @@ pub const SURFACE_EMPTY: Surface = Surface {
     selection_start: 0, selection_end: 0,
     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
     line_starts: [0u16; TEXT_MAX_ROWS], cell_starts: [0; TEXT_BUF_CAP],
-    line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+    line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS, text_zoom: 0,
 };
 
 pub const CATALOG_CAPACITY: usize = crate::app_catalog::COUNT;

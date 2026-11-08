@@ -15,10 +15,10 @@ const SANS: u8 = 2;
 const MAX_W: usize = 128;
 const MAX_H: usize = 96;
 
-static mut CACHE: GlyphCache<2048, { 192 * 1024 }> = GlyphCache::new();
+static mut CACHE: GlyphCache<2048, { 512 * 1024 }> = GlyphCache::new();
 static mut ACC: [i32; scratch_len(MAX_W, MAX_H)] = [0; scratch_len(MAX_W, MAX_H)];
 
-fn cache() -> &'static mut GlyphCache<2048, { 192 * 1024 }> { unsafe { &mut *core::ptr::addr_of_mut!(CACHE) } }
+fn cache() -> &'static mut GlyphCache<2048, { 512 * 1024 }> { unsafe { &mut *core::ptr::addr_of_mut!(CACHE) } }
 fn acc() -> &'static mut [i32] { unsafe { &mut *core::ptr::addr_of_mut!(ACC) } }
 
 static mut FONTS: Option<(Font<'static>, Font<'static>)> = None;

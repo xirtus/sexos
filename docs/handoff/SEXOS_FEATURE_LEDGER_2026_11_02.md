@@ -2490,3 +2490,21 @@ row no longer waits for the row before it to end.
   is the next visible step and needs only a scale per surface now.
 - **Gates.** sex-font unit tests; display text readability and surface groups host gates;
   program launch (pixel oracle) at 1 and 4 cores in QEMU (UEFI/OVMF boot).
+
+## Text size per window (2026-11-08)
+
+- **What runs now.** Alt+= makes the focused window's text larger, Alt+- smaller and
+  Alt+0 restores it. Each step is a whole text scale (cells 6s x 9s, s from 1 to 5), so
+  Geist Mono is drawn fresh at 18x27, 24x36 and 30x45 as well as 12x18; scale 1 is the
+  5x7 font. Text rewraps to the new width at once.
+- **Design.** Display owns it: `Surface::text_zoom` is a step from the width's default
+  scale, stored clamped so the opposite key always acts. Shell's `desktop_keys` turns the
+  Alt shortcuts into `OP_TEXT_ZOOM` (new, 0x2D4, `sex_pdx::desktop_style`; ABI change),
+  which Display accepts only from the window manager. The shortcut's release never
+  reaches the app. Display's glyph cache grew to 512 KiB for the larger cells.
+- **Limits.** Not remembered across runs. Apps that lay out their own rows for the
+  default scale (Browser) wrap at Display's columns when zoomed.
+- **Gates.** New `text_zoom_gate.py` (default, two steps up, one down, reset; every fully
+  covered pixel exact against sex-font's cells) at 1 and 4 cores; program launch at 1
+  core; display text, scene, cursor, frame output and surface-group host gates; Shell key
+  routing in the clipboard host gate.
