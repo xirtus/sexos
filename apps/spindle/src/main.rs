@@ -787,6 +787,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
             sb.push(b"  fetch URL FILE   download a file");
+            sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
@@ -1430,6 +1431,21 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 args.len(), status, if status == 0 { 0 } else { status as i64 }
             );
             serial_println!("[spindle.bell.command] name=notify ok=1 reason=fire_and_forget");
+            true
+        }
+        b"beep" => {
+            // A note on the Bell service's sound card: 880 Hz for 200 ms unless told.
+            let mut words = args.split(|&b| b == b' ').filter(|w| !w.is_empty())
+                .map(|w| core::str::from_utf8(w).ok().and_then(|t| t.parse::<u64>().ok()));
+            let mut next = |default: u64| words.next().map_or(Some(default), |w| w);
+            match (next(880), next(200), next(30)) {
+                (Some(hz), Some(ms), Some(volume)) if hz <= 20_000 && (1..=5000).contains(&ms) && volume <= 100 => {
+                    let (status, _) = pdx_call(SLOT_BELL, sex_pdx::OP_BELL_TONE, hz, ms, volume.max(1));
+                    sb.push(if status == 0 { b"Beep sent to the sound card." } else { b"Beep failed: Bell service unreachable." });
+                    serial_println!("[spindle.beep] hz={} ms={} volume={} status={}", hz, ms, volume, status);
+                }
+                _ => sb.push(b"Use: beep [HZ 0-20000] [MS 1-5000] [VOLUME 1-100]"),
+            }
             true
         }
         b"bell-test" => {

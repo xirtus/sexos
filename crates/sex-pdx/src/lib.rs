@@ -179,6 +179,7 @@ pub const OP_BELL_CLEAR:       u64 = 0xC4; // Shell → Bell: clear events in a 
 pub const OP_BELL_SUBSCRIBE:   u64 = 0xC5; // SilkBar → Bell: subscribe to lane-summary updates
 pub const OP_BELL_SET_POLICY:  u64 = 0xC6; // Shell → Bell: set per-app user policy override
 pub const OP_BELL_MUTE_SENDER: u64 = 0xC7; // Shell → Bell: mute a sender PD
+pub const OP_BELL_TONE:        u64 = 0xC8; // Any holder → Bell: play a note (arg0 Hz, arg1 ms, arg2 volume %)
 
 // OP_BELL_NOTIFY category field reservation (BELL_ATTENTION_FIREWALL_V1).
 // category is a u8 packed into arg0 bits [7:0] of OP_BELL_NOTIFY — this is a
@@ -1111,6 +1112,7 @@ pub mod document;
 pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
+pub mod virtio;
 pub mod network_config;
 
 pub mod desktop_style;

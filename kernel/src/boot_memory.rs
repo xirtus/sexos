@@ -487,6 +487,39 @@ pub fn nic_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64
     g
 }
 
+/// The one BAR holding a supported virtio device's register blocks, if the
+/// whole layout fits the leased prefix.
+pub fn virtio_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,layout:&sex_pdx::virtio::Layout)->Option<RegionGrant>{
+    require_boot();
+    if !crate::virtio_boot::supported(dev.vendor_id,dev.device_id){return None}
+    let(physical,actual_length)=dev.probe_boot_bar(bar)?;
+    let length=actual_length.min(sex_pdx::virtio::VIEW_MAX);
+    if !layout.valid(length){return None}
+    Some(pci_view(pd,slot,physical,actual_length,length))
+}
+
+pub fn virtio_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,view:RegionGrant,layout:&sex_pdx::virtio::Layout)
+    -> sex_pdx::pci_command::Grant
+{
+    require_boot();
+    assert!(crate::virtio_boot::supported(dev.vendor_id,dev.device_id),"BOOT_VIRTIO_COMMAND_SUBJECT");
+    assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_VIRTIO_COMMAND_VIEW_ID");
+    assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok() && layout.valid(view.length)
+        && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_VIRTIO_COMMAND_VIEW");
+    let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
+        vendor_id:dev.vendor_id,device_id:dev.device_id,allowed:sex_pdx::pci_command::NIC_BITS};
+    assert!(sex_pdx::pci_command::authorize(Some(&g),pd.id,0,0).is_ok(),"BOOT_VIRTIO_COMMAND_GRANT");
+    crate::serial_println!("[boot.virtio.command] pd={} slot={} bus={} device={} function={} product={:#x} allowed={} dma_region={:#x} runtime_mint=0",
+        pd.id,slot,g.bus,g.device,g.function,g.device_id,g.allowed,sex_pdx::virtio::DMA_REGION_ID);
+    g
+}
+
+/// The DMA pool a virtio driver's queues and bounce buffers live in.
+pub fn virtio_dma(pd_id:u32){
+    require_boot();
+    dma(pd_id,sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES);
+}
+
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
     require_boot();
     let virtual_base = alias(pd, physical, length, true, true);
