@@ -1,0 +1,13 @@
+/* Served separately and fetched by the browser. */
+body { margin: 0; background: #f4f1ea; color: #2b2b2b; font: 15px/1.5 Geist, system-ui, sans-serif }
+nav { background: #2d3a2e; padding: 8px 14px }
+nav a { color: #e8f5e9; text-decoration: none; margin-right: 12px; font-weight: 600 }
+article { padding: 4px 14px 24px }
+h1 { color: #2d3a2e; font-size: 26px; margin: 12px 0 6px }
+.lede { font-size: 16px; color: #555 }
+figure { margin: 10px 0; text-align: center; background: white; border-radius: 10px; padding: 10px; border: 1px solid #ddd }
+figcaption { font-size: 12px; color: #777 }
+.checks li:nth-child(odd) { background: #ebe6da }
+.checks li.done { color: #2e7d32; font-weight: bold }
+pre { background: #2b2b2b; color: #f5f5f5; border-radius: 6px }
+#end { border-top: 2px dashed #b0a999; padding-top: 8px }

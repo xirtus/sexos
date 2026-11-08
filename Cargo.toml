@@ -26,7 +26,10 @@ members = [
     "apps/wasm",
     "apps/heaptest",
     "apps/shapes",
+    "apps/web",
     "crates/sex-app",
+    "crates/sex-html",
+    "crates/sex-web",
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",
@@ -75,3 +78,13 @@ codegen-units = 1
 opt-level = "z"
 codegen-units = 1
 strip = true
+[profile.release.package.web]
+opt-level = "z"
+codegen-units = 1
+strip = true
+[profile.release.package.sex-html]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.sex-web]
+opt-level = "z"
+codegen-units = 1

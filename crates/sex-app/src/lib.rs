@@ -263,6 +263,30 @@ pub mod net {
     fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).position(|w| w == needle) }
     /// Fetches `url` into `out`: the HTTP status and the body's length, cut at `out.len()`.
     pub fn get(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<(u32, usize), Error> {
+        let r = fetch(window, url, out)?;
+        out.copy_within(r.body..r.end, 0);
+        Ok((r.status, r.end - r.body))
+    }
+    /// A reply as it arrived in `out`: headers in `..body`, the body in `body..end`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Reply { pub status: u32, pub body: usize, pub end: usize }
+    impl Reply {
+        /// The value of header `name` (ASCII case-insensitive), from the bytes `fetch` filled.
+        pub fn header<'a>(&self, out: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+            out[..self.body].split(|b| *b == b'\n').skip(1).find_map(|line| {
+                let colon = line.iter().position(|b| *b == b':')?;
+                line[..colon].eq_ignore_ascii_case(name).then(|| {
+                    let v = &line[colon + 1..];
+                    let start = v.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(v.len());
+                    let end = v.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(start, |e| e + 1);
+                    &v[start..end.max(start)]
+                })
+            })
+        }
+    }
+    /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
+    /// and read the content type.
+    pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
@@ -330,7 +354,6 @@ pub mod net {
         let end = find(&out[..got], b"\r\n\r\n").ok_or(Error::Failed)?;
         let line = &out[..find(&out[..end + 2], b"\r\n").unwrap_or(end)];
         let status = line.split(|b| *b == b' ').nth(1).and_then(|c| core::str::from_utf8(c).ok()?.parse::<u32>().ok()).unwrap_or(0);
-        out.copy_within(end + 4..got, 0);
-        Ok((status, got - end - 4))
+        Ok(Reply { status, body: end + 4, end: got })
     }
 }
