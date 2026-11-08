@@ -139,6 +139,9 @@ pub struct Program {
     pub frag_depth: Option<u32>,
     /// Lanes of interpolated data per vertex (the varyings, packed).
     pub varying_lanes: u32,
+    /// WebGPU: clip depth 0..w, and the resources by group and binding.
+    pub zero_one: bool,
+    pub gpu: Vec<crate::gpu::GpuBind>,
 }
 
 impl Program {
@@ -216,6 +219,11 @@ impl Program {
             }
         }
 
+        Self::assemble(vs_code, fs_code, uniforms, samplers, attributes)
+    }
+
+    /// The rest of linking, shared with WebGPU pipelines: varyings, outputs, memory.
+    pub(crate) fn assemble(vs_code: StageCode, fs_code: StageCode, uniforms: Vec<Uniform>, samplers: Vec<Sampler>, attributes: Vec<(String, u32, u32, u32)>) -> Result<Program, String> {
         // Varyings: pack the vertex outputs that the fragment stage reads.
         let mut links = Vec::new();
         let mut varying_lanes = 0;
@@ -236,6 +244,7 @@ impl Program {
             vs_uniforms: alloc::vec![0; vs_code.uniform_len as usize],
             fs_uniforms: alloc::vec![0; fs_code.uniform_len as usize],
             vs: vs_code, fs: fs_code, uniforms, samplers, attributes, links, position, point_size, color, frag_depth, varying_lanes,
+            zero_one: false, gpu: Vec::new(),
         })
     }
 
@@ -300,12 +309,12 @@ fn reflect(m: &Module) -> Vec<(String, UniformSlot)> {
     out
 }
 
-fn crate_lanes(m: &Module, ty: naga::Handle<naga::Type>) -> u32 {
+pub(crate) fn crate_lanes(m: &Module, ty: naga::Handle<naga::Type>) -> u32 {
     match &m.types[ty].inner {
         TypeInner::Scalar(_) => 1,
         TypeInner::Vector { size, .. } => *size as u32,
         TypeInner::Matrix { columns, rows, .. } => *columns as u32 * *rows as u32,
-        TypeInner::Array { base, size, .. } => crate_lanes(m, *base) * match size { ArraySize::Constant(n) => n.get(), _ => 1 },
+        TypeInner::Array { base, size, .. } => crate_lanes(m, *base) * match size { ArraySize::Constant(n) => n.get(), _ => crate::exec::RUNTIME_ARRAY_LEN },
         TypeInner::Struct { members, .. } => members.iter().map(|x| crate_lanes(m, x.ty)).sum(),
         _ => 1,
     }

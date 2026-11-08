@@ -2934,6 +2934,35 @@ row no longer waits for the row before it to end.
   Web, games and three.js gates at 1 and 4 cores.
 - **Next.** WebGPU (WGSL) on the same rasterizer and interpreter.
 
+## WebGPU in Web pages (2026-11-08)
+
+- **What runs now.** `navigator.gpu` with render pipelines: adapter and device, buffers
+  (`mappedAtCreation`, `queue.writeBuffer`, vertex, index, uniform, read-only storage),
+  textures (`writeTexture`, `copyExternalImageToTexture` from page pictures), samplers,
+  WGSL shader modules, bind groups (`layout: 'auto'`), render pipelines (vertex formats,
+  topology, culling, depth compare and write, blending, write masks), command encoders,
+  render passes (clear, viewport, scissor, `draw`, `drawIndexed`) and
+  `canvas.getContext('webgpu')`.
+- **How.** It runs on the same software renderer as WebGL. `sex_gl::Program::from_wgsl`
+  builds a program from a WGSL module's vertex and fragment entry points (naga
+  `wgsl-in`). Each uniform or storage binding maps WGSL's byte layout (member offsets,
+  array strides, matrix column padding) onto the interpreter's lanes. Textures and samplers
+  bind by group and binding, and a sampler sets the filters and wrapping of the textures
+  sampled with it. Clip depth runs 0..w. The page side (`prelude.js`) keeps buffers and
+  textures, records passes, and replays them on `queue.submit` as GL batches with four
+  new commands (`gp`, `gb`, `gx`, `gs`). Vertex and fragment modules are parsed
+  separately, so they may reuse names. Integer vertex formats (and WebGL 2
+  `vertexAttribIPointer`, new command `aip`) reach shaders as integers. Runtime-sized
+  storage arrays hold up to 1024 elements, filled from the bound buffer. No ABI change.
+- **Not yet.** Compute passes, render targets other than the canvas, instancing beyond
+  repeated draws, and `@builtin(instance_index)`.
+- **Evidence.** Tests `wgsl_pipeline_with_uniform_layout_texture_and_sampler` and
+  `wgsl_separate_modules_integer_attributes_and_storage_arrays`. The gate
+  `scripts/program_web_webgpu_gate.py` serves `scripts/web_site/webgpu.html` (a lit,
+  textured, depth-tested cube in WGSL) and matches the host render pixel for pixel at 1 and
+  4 cores, before and after a click turns it six frames. The WebGL, JS and Web gates still
+  pass.
+- Screenshot: `assets/sexos-web-webgpu-2026-11-08.png`.
 ## Games: 3D Chess on three.js (2026-11-08)
 
 - **What runs now.** `run chess3d` (also `about:chess3d`, listed at `about:games`): the chess
