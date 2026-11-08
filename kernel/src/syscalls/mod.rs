@@ -471,6 +471,11 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             crate::app_resources::force_end(pd,rdi)
         },
+        81 => { // SYS_PROGRAM_MEMORY: self-only, pages from the caller's own row window.
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::app_resources::grow(pd,rdi);
+            regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+        },
 
         79 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
