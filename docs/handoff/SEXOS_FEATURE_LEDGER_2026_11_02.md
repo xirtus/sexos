@@ -2871,3 +2871,22 @@ row no longer waits for the row before it to end.
   timer ticks so it can think longer, and the three.js games (3D chess, maze, pinball,
   three-quake) once WebGL lands. The upstream cards repo has no licence, so it was not used.
 - Screenshot: `assets/sexos-games-solitaire-chess-2026-11-08.png`.
+
+## Games: Maze in WebGL (2026-11-08)
+
+- **What runs now.** `run maze` (also `about:maze`, listed at `about:games`): walk a 9x9 brick
+  maze in first person and find the turning gold diamond. Up walks a cell, Down steps back,
+  Left/Right turn, A walks by itself with a hand on the right wall, N makes a new maze.
+  Original page in plain WebGL 1 (`apps/web/src/games/maze.html`): a depth-first carved maze,
+  textures made in the page from bytes (brick, floor tiles, ceiling), one textured shader
+  with per-vertex distance light, depth test and culling. The maze95 site named in the
+  request publishes no source repository or licence, so it was not used.
+- **Games and the script limit.** Each game now draws its first frame on a timer tick, and
+  chess draws after the computer's move on its own tick, so setup, thinking and drawing
+  each get the page's 2 s script budget. The gate fails on any `InternalError: interrupted`.
+- **Speed.** The maze matches the host render pixel for pixel, but under QEMU TCG a 410x274
+  frame takes about 2 s with soft-float programs and about 1.1 s on the SSE branch (#18), so
+  a step or turn is 3 frames. Faster software GL (or a GPU) is what makes 3D games playable.
+- **Gate.** `scripts/program_games_gate.py` now also starts Maze, compares its first frame and
+  the frame after one step with the host render, and times the step.
+- Screenshot: `assets/sexos-games-maze-2026-11-08.png`.
