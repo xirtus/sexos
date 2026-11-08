@@ -56,8 +56,9 @@ choices at launch, not settings inside the program.
 
 - **Jot** is a notepad: arrows move, Ctrl+S saves, `edit FILE` opens a file in it.
 - **Peek** shows a web page's text: `run +net peek https://example.com/`.
+- **View** shows a picture: `run view @photo.png`. PNG up to 800x600 for now.
 
-Writing your own: see `crates/sex-app` (a window, keys, files, the network) and `apps/jot`.
+Writing your own: see `crates/sex-app` (a window, keys, files, the network, pixels) and `apps/jot`.
 
 ## The Browser
 

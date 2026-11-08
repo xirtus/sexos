@@ -766,6 +766,21 @@ pub fn text_region_client() -> Result<u64, u64> {
 }
 /// Display's read-only view of one catalog row's text region, checked against
 /// that row's exact peer.
+/// Display's read-only view of a program row's pixel surface, checked against that row.
+pub fn pixel_region_display(k: usize) -> Result<u64, u64> {
+    use memory_region::{QUERY_VIEW, READ};
+    let row = app_catalog::INCARNATIONS.iter().filter(|r| r.app == app_catalog::App::Program).nth(k).ok_or(ERR_CAP_INVALID)?;
+    let slot = pixel_region::display_slot(k);
+    let info = memory_region_info(slot)?;
+    if info.region_id != pixel_region::region_id(k) || info.peer_pd != Some(row.target)
+        || info.length != pixel_region::BYTES || info.rights != QUERY_VIEW | READ { return Err(ERR_CAP_INVALID); }
+    Ok(memory_region_view(slot, 0, pixel_region::BYTES, QUERY_VIEW | READ)?.virtual_address)
+}
+/// A program's own writable pixel surface.
+pub fn pixel_region_client() -> Result<u64, u64> {
+    use memory_region::{QUERY_VIEW, READ, WRITE};
+    Ok(memory_region_view(pixel_region::CLIENT_SLOT, 0, pixel_region::BYTES, QUERY_VIEW | READ | WRITE)?.virtual_address)
+}
 pub fn text_region_display(index: usize) -> Result<u64, u64> {
     use memory_region::{QUERY_VIEW, READ};
     let slot = text_region::display_slot(index);
@@ -1115,6 +1130,7 @@ pub mod network_config;
 
 pub mod desktop_style;
 pub mod font_geist;
+pub mod pixel_region;
 pub mod document_view;
 
 pub mod display_boot;
