@@ -65,7 +65,8 @@ pub fn format(fmt: &[u8], args: &mut dyn Args, out: &mut dyn Sink) -> usize {
             i += 1;
         }
         if i < fmt.len() && fmt[i] == b'*' {
-            let w = args.int();
+            // A C `int`: the upper half of the slot may hold anything.
+            let w = args.int() as i32;
             if w < 0 {
                 s.left = true;
             }
@@ -80,7 +81,7 @@ pub fn format(fmt: &[u8], args: &mut dyn Args, out: &mut dyn Sink) -> usize {
         if i < fmt.len() && fmt[i] == b'.' {
             i += 1;
             if i < fmt.len() && fmt[i] == b'*' {
-                let p = args.int();
+                let p = args.int() as i32;
                 s.precision = if p < 0 { None } else { Some(p as usize) };
                 i += 1;
             } else {
@@ -466,6 +467,8 @@ mod tests {
         assert_eq!(f("[%s] [%5s] [%-5s] [%.2s] %c %%", vec![A::S(b"ab\0"), A::S(b"ab\0"), A::S(b"ab\0"), A::S(b"abc\0"), A::I(b'z' as i64)]), "[ab] [   ab] [ab   ] [ab] z %");
         assert_eq!(f("%*d|%-*d|%.*s", vec![A::I(4), A::I(1), A::I(3), A::I(2), A::I(1), A::S(b"xyz\0")]), "   1|2  |x");
         assert_eq!(f("%p", vec![A::I(0x1234)]), "0x1234");
+        // `*` arguments are C ints, so a zero-extended -5 still means left-aligned in 5.
+        assert_eq!(f("%*d|%.*d", vec![A::I(0xffff_fffb), A::I(42), A::I(0xffff_ffff), A::I(7)]), "42   |7");
     }
 
     #[test]

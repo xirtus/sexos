@@ -13,7 +13,7 @@ extern crate sex_libc;
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, c_void};
 use sex_app::{files, Event, Window};
-use sex_pdx::pixel_region::{MAX_H, MAX_W, PIXELS};
+use sex_pdx::pixel_region::{MAX_H, MAX_W};
 
 /// Largest file Play reads; the rest of the heap is the decoder's.
 const MAX_FILE: usize = 3 * 1024 * 1024 / 2;
@@ -131,11 +131,18 @@ fn play(window: &mut Window, bytes: Vec<u8>) -> Result<u32, c_int> {
         "[play.opened] codec={} w={} h={} fps={}/{} ms={} shown={}x{}",
         core::str::from_utf8(&codec).unwrap_or("?"), info.width, info.height, num, den, info.duration_ms, w, h
     );
-    let out = &mut window.pixels()[..PIXELS];
+    // Frames decode into a private buffer: Display reads the window's pixels whenever
+    // it composes, so decoding straight into them would show half-made frames.
+    let mut frame = Vec::new();
+    if frame.try_reserve_exact(w * h).is_err() {
+        unsafe { sx_close(s) };
+        return Err(-12); // AVERROR(ENOMEM)
+    }
+    frame.resize(w * h, 0u32);
     let start = sex_pdx::get_ticks();
     let mut frames = 0u32;
     loop {
-        let r = unsafe { sx_next(s, out.as_mut_ptr(), w as c_int, h as c_int) };
+        let r = unsafe { sx_next(s, frame.as_mut_ptr(), w as c_int, h as c_int) };
         if r < 0 {
             unsafe { sx_close(s) };
             return Err(r);
@@ -157,10 +164,11 @@ fn play(window: &mut Window, bytes: Vec<u8>) -> Result<u32, c_int> {
             }
             let _ = sex_pdx::sys_wait_self_ticks((due - now).clamp(1, 64));
         }
+        window.pixels()[..w * h].copy_from_slice(&frame);
         window.show_pixels(w, h);
         if frames < 3 || frames % 10 == 0 {
-            let hash = out[..w * h].iter().fold(0xcbf2_9ce4_8422_2325u64, |a, &p| (a ^ p as u64).wrapping_mul(0x100_0000_01b3));
-            sex_pdx::serial_record!("[play.frame] n={} hash={:016x} probe={:06x}", frames, hash, out[(h / 2) * w + 3 * w / 4] & 0xFF_FFFF);
+            let hash = frame.iter().fold(0xcbf2_9ce4_8422_2325u64, |a, &p| (a ^ p as u64).wrapping_mul(0x100_0000_01b3));
+            sex_pdx::serial_record!("[play.frame] n={} hash={:016x} probe={:06x}", frames, hash, frame[(h / 2) * w + 3 * w / 4] & 0xFF_FFFF);
         }
         frames += 1;
     }
