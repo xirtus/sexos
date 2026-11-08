@@ -1,0 +1,11 @@
+[package]
+name = "sex-canvas"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Anti-aliased shapes, rounded corners and soft shadows for SexOS window pixel buffers (tiny-skia)"
+
+[dependencies]
+# BSD-3-Clause. no_std + alloc; float maths through libm.
+tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-float"] }
+libm = "0.2"

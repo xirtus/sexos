@@ -61,6 +61,8 @@ choices at launch, not settings inside the program.
   `run wasm @/hello.wasm`. They print to the window and read typed lines. `run wasm`
   alone shows a small built-in one.
 - **View** shows a picture: `run view @photo.png`. PNG up to 800x600 for now.
+- **Shapes** shows anti-aliased drawing (rounded windows, soft shadows): `run shapes`.
+  The arrow keys move the front window, Home puts it back.
 
 Writing your own: see `crates/sex-app` (a window, keys, files, the network, pixels) and `apps/jot`.
 

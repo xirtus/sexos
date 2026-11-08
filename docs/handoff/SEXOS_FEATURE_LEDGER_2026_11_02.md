@@ -2495,6 +2495,31 @@ row no longer waits for the row before it to end.
   rerun passed.
 - **Next.** WASI files over a preopened folder, guest pixels on the program pixel
   surfaces, `wasmtime` for speed, then QuickJS on Wasm.
+## View opens JPEG; PNG and JPEG through zune (2026-11-08)
+
+- **What exists now.** `crates/sex-image`: `sex_image::decode(bytes, &Limits)` returns
+  width, height and `Vec<u32>` pixels in the usual unpremultiplied `0xAARRGGBB`. PNG (every
+  colour type and depth, palette, tRNS, Adam7, first APNG frame) through `zune-png`; JPEG
+  (baseline, progressive, 4:4:4/4:2:0, grayscale, CMYK) through `zune-jpeg`. Both are pure
+  Rust, MIT/Apache-2.0/Zlib, built `no_std` + `alloc` without SIMD for the soft-float target.
+  `Image::fit_within(w, h)` shrinks a photo to a surface with an alpha-weighted box filter.
+- **Design.** Decoding belongs in the program that opened the file, never in Display or a
+  server. `Limits` (`PHOTO` 12 MP, `SURFACE` 800x600) is checked right after the header,
+  before the pixel buffer is reserved, and that reservation is fallible, so a lying header
+  is an error, not a heap exhaustion. The decoder writes into the pixel buffer itself and is
+  widened in place, so a picture costs one buffer. The in-house `sex_graphics::png` stays
+  for the allocation-free 48x48 path.
+- **Found upstream.** zune-jpeg 0.5's CMYK to RGBA conversion steps 3 bytes per 4-byte
+  pixel; sex-image asks for RGB and adds alpha itself.
+- **View.** `run view @photo.jpg` works. A picture that fits is decoded straight into the
+  program's pixel surface (`decode_into`); a larger one, up to 3200x2400 and as far as the
+  8 MiB program heap allows, is decoded on the heap and shrunk to fit 800x600. Needs the
+  program heap (PR #17).
+- **Limits.** No GIF/WebP. A 12 MP phone photo does not fit the heap yet (no DCT downscaling).
+- **Gates.** 14 host tests against Pillow/ImageMagick fixtures, including 3,000 bit-flipped,
+  truncated and marker-damaged files that must error or decode, never panic.
+  `program_view_gate` (PNG exact, JPEG within 2 levels, 900x700 shown at 771x600, a text
+  file refused) passes at 1 and 4 cores with the heap branch merged.
 
 ## Sound on a virtio sound card (2026-11-08)
 
@@ -2573,3 +2598,27 @@ row no longer waits for the row before it to end.
 - **Limits.** The window is fixed per row; a program needing more than 8 MiB needs a
   bigger constant or, later, frames from a shared pool. Pages return only at exit.
   Background program records (`program_records.rs`) don't get a heap yet.
+
+## Anti-aliased drawing with tiny-skia (2026-11-08)
+
+- **What runs now.** `run shapes` draws rounded windows with soft shadows, gradients,
+  circles and smooth lines in its own window; the arrow keys move the front window and
+  redraw it. Any SDK program can do the same with `sex-canvas`.
+- **Design.** New crate `crates/sex-canvas` over tiny-skia 0.11.4 (BSD-3, `no_std` +
+  `alloc`, floats through libm). It draws straight into SexOS `0xAARRGGBB` words with no
+  copy: colours go to tiny-skia with red and blue swapped, so its `R,G,B,A` bytes land
+  as SexOS words. Soft shadows are analytic (Gaussian falloff of the distance to the
+  rounded rectangle, from a 256-step table), with no blur pass or scratch buffer.
+  `Canvas::window` draws a whole frame and returns its content rectangle; `Layer`
+  composites an owned buffer into any strided one. Uses the program heap and the
+  program pixel surface. No ABI change.
+- **Evidence.** 11 host tests in sex-canvas. `scripts/program_shapes_gate.py` installs
+  Shapes, runs it, and compares the window's pixels with the same scene rendered on the
+  host by `cargo run -p sex-canvas --example desktop`: exact (0 of 3712 sampled pixels
+  differ) before and after an arrow key, at 1 and 4 cores, then F11 retires the run.
+- **Limits.** Programs are built soft-float (`x86_64-sex.json`: `-sse,+soft-float`), so
+  tiny-skia's float maths is emulated: a full 400x320 scene takes about 0.7 to 1 s under
+  QEMU TCG (about 5 ms natively with SSE on the host). Letting programs use SSE needs the
+  kernel to save and restore FPU/SSE state per task. Shapes draws at a fixed 400x320
+  because a program can't yet learn its window's size. sexdisplay's own chrome is not
+  drawn with sex-canvas yet (it has no heap).

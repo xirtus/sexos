@@ -1,0 +1,13 @@
+[package]
+name = "shapes"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "shapes"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-canvas = { path = "../../crates/sex-canvas" }
