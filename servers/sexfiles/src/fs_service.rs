@@ -83,13 +83,15 @@ impl Device for Disk {
 fn place(blocks: u64) {
     use alloc::vec::Vec;
     let words = (blocks as usize).div_ceil(64) + 1;
-    fn grab<T: Clone>(n: usize, v: T) -> Option<*mut T> {
+    fn grab<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
         let mut x: Vec<T> = Vec::new();
         x.try_reserve_exact(n).ok()?;
         x.resize(n, v);
-        Some(x.leak().as_mut_ptr())
+        Some(x)
     }
-    let big = (|| Some((grab(CACHE, [0u8; BLOCK])?, grab(CACHE, Slot::EMPTY)?, grab(words, 0u64)?, grab(words, 0u64)?)))();
+    // Kept owned until all four exist, so a failure frees what was already taken.
+    let big = (|| Some((grab(CACHE, [0u8; BLOCK])?, grab(CACHE, Slot::EMPTY)?, grab(words, 0u64)?, grab(words, 0u64)?)))()
+        .map(|(c, s, u, p)| (c.leak().as_mut_ptr(), s.leak().as_mut_ptr(), u.leak().as_mut_ptr(), p.leak().as_mut_ptr()));
     unsafe {
         PLACE = match big {
             Some((cache, slots, used, pending)) => (cache, slots, CACHE, words, used, pending),
