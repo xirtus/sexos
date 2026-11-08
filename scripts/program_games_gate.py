@@ -52,6 +52,8 @@ def main():
   s=len(t());run(f'run {name}')
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=m[1],m[2]
   loaded=g['wait'](r'\[web.loaded\] .*script_ticks=(\d+) scripted=(\d)',s,60);assert loaded[2]=='1',loaded[0]
+  # The games draw their first frame on a timer tick after loading.
+  g['wait'](r'\[web.loaded\][^\n]*\n(?:.*\n)*?\[web.shown\]',s,120)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
   tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
@@ -80,7 +82,8 @@ def main():
   text=t()
   assert '[web.script] trapped' not in text,'the computer ran past the script time limit'
   close(target,task)
-  target,task,surface,tile,maze_ticks=start('maze')
+  s=len(t());target,task,surface,tile,maze_ticks=start('maze')
+  g['wait'](r'\[web.console\] level=0 maze ready',s,120);time.sleep(2)
   checked.append(compare('maze',tile))
   g['focus'](surface);time.sleep(.3)
   s=len(t());began=time.time();q.key('up')

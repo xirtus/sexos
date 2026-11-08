@@ -236,6 +236,7 @@ function newMaze() {
   carve(); build();
   cell = 0; facing = (open[0] & 2) ? 1 : 2; angle = yaw(facing); px = pz = CELL / 2; steps = 0; won = false; anim = null; auto = false;
   say(); draw();
+  console.log('maze ready cells ' + SIZE * SIZE + ' exit ' + exit);
 }
 document.addEventListener('keydown', e => {
   switch (e.key) {
