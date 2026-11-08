@@ -52,6 +52,9 @@ impl HardwareAbstractionLayer for X86Hal {
             serial_println!("PKU: unsupported on this CPU/QEMU path; PKRU ops gated off");
         }
 
+        // SSE for programs; APs copy CR0/CR4/XCR0 from here.
+        unsafe { crate::fpu::init_core(); }
+        serial_println!("[fpu.ready] sse=1 xsave_state=x87+sse");
         serial_println!("X86Hal: Initializing GDT/IDT...");
         gdt::init();
 

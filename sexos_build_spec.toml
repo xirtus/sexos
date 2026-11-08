@@ -50,7 +50,8 @@ crates = [
   "apps/peek/Cargo.toml",
   "apps/heaptest/Cargo.toml",
   "apps/view/Cargo.toml",
-  "apps/shapes/Cargo.toml"
+  "apps/shapes/Cargo.toml",
+  "apps/fputest/Cargo.toml"
 ]
 
 [[stage]]
@@ -196,71 +197,89 @@ dest_artifact = "iso_root/apps/hello"
 [[stage]]
 id = "build_fortune"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/fortune/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/fortune"
+source_artifact = "target/x86_64-sex-app/release/fortune"
 dest_artifact = "iso_root/programs/fortune"
 
 [[stage]]
 id = "build_jot"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/jot/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/jot"
+source_artifact = "target/x86_64-sex-app/release/jot"
 dest_artifact = "iso_root/programs/jot"
 
 [[stage]]
 id = "build_peek"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/peek/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/peek"
+source_artifact = "target/x86_64-sex-app/release/peek"
 dest_artifact = "iso_root/programs/peek"
 
 [[stage]]
 id = "build_view"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/view/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/view"
+source_artifact = "target/x86_64-sex-app/release/view"
 dest_artifact = "iso_root/programs/view"
 
 [[stage]]
 id = "build_heaptest"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/heaptest/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/heaptest"
+source_artifact = "target/x86_64-sex-app/release/heaptest"
 dest_artifact = "iso_root/programs/heaptest"
 
 [[stage]]
 id = "build_shapes"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/shapes/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/shapes"
+source_artifact = "target/x86_64-sex-app/release/shapes"
 dest_artifact = "iso_root/programs/shapes"
+
+[[stage]]
+id = "build_fputest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/fputest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/fputest"
+dest_artifact = "iso_root/programs/fputest"
 
 [[stage]]
 id = "build_hum"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/hum"
+source_artifact = "target/x86_64-sex-app/release/hum"
 dest_artifact = "iso_root/programs/hum"
 
 [[stage]]
 id = "build_snoop"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/snoop"
+source_artifact = "target/x86_64-sex-app/release/snoop"
 dest_artifact = "iso_root/programs/snoop"
 
 [[stage]]
 id = "build_spin"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/spin"
+source_artifact = "target/x86_64-sex-app/release/spin"
 dest_artifact = "iso_root/programs/spin"
 
 [[stage]]
 id = "build_doze"
 action = "cargo_manifest"
+target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
-source_artifact = "target/x86_64-sex/release/doze"
+source_artifact = "target/x86_64-sex-app/release/doze"
 dest_artifact = "iso_root/programs/doze"
 
 [[stage]]

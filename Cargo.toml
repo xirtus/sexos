@@ -25,6 +25,7 @@ members = [
     "apps/heaptest",
     "apps/view",
     "apps/shapes",
+    "apps/fputest",
     "crates/sex-app",
     "apps/hum",
     "purple-scanout",
