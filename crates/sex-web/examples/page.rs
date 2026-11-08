@@ -15,10 +15,12 @@ fn settle(script: &mut sex_js::Script<sex_js::Document>, canvases: &mut sex_web:
     for _ in 0..1000 {
         let queue = std::mem::take(&mut script.page_mut().canvas_queue);
         canvases.run_queue(fonts, &script.page().dom, queue);
+        sex_web::canvas::present_gl(fonts, &mut script.page_mut().gl);
         let next = script.dispatch("tick").unwrap();
         if next < 0 {
             let queue = std::mem::take(&mut script.page_mut().canvas_queue);
             canvases.run_queue(fonts, &script.page().dom, queue);
+            sex_web::canvas::present_gl(fonts, &mut script.page_mut().gl);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(next as u64));

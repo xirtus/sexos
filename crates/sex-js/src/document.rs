@@ -24,6 +24,8 @@ pub struct Document {
     pub canvas_queue: Vec<(NodeId, String)>,
     /// Text width for `measureText`: (CSS font, text) to pixels.
     pub measure: fn(&str, &str) -> i32,
+    /// WebGL contexts, by canvas element.
+    pub gl: crate::webgl::GlCanvases,
 }
 
 /// A rough width when the browser gives no measure: 0.55 em per character.
@@ -34,7 +36,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default() }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -62,6 +64,30 @@ fn valid_name(name: &str) -> bool {
 
 impl Page for Document {
     fn now_ns(&mut self) -> u64 { (self.clock)() }
+
+    fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
+        let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
+        let node: NodeId = text(0).parse().ok()?;
+        if node >= self.dom.nodes.len() { return None; }
+        match operation {
+            op::GL => {
+                let canvas = self.gl.by_node.get_mut(&node)?;
+                canvas.run(text(1), a.get(2).copied().unwrap_or(&[]));
+                Some(Vec::new())
+            }
+            op::GL_QUERY => {
+                if text(1) == "init" {
+                    // init W H ALPHA: makes (or keeps) the canvas's context.
+                    let (w, h) = (text(2).parse().unwrap_or(300), text(3).parse().unwrap_or(150));
+                    let alpha = text(4) != "0";
+                    self.gl.by_node.entry(node).or_insert_with(|| crate::webgl::GlCanvas::new(w, h, alpha));
+                    return Some(Vec::from(&b"1"[..]));
+                }
+                self.gl.by_node.get_mut(&node)?.query(text(1), &a[2..])
+            }
+            _ => None,
+        }
+    }
 
     fn call(&mut self, operation: u32, a: &[&str]) -> Option<String> {
         let none = String::new;

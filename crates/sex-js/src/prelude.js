@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65 };
   const nodes = new Map();
 
   function fmt(v) {
@@ -388,10 +388,15 @@
     get height() { return +(this.getAttribute('height') || 150); }
     set height(v) { this.setAttribute('height', Math.max(0, Math.floor(+v) || 0)); this._resized(); }
     // Setting either size, even to the same value, clears the bitmap and the context's state.
-    _resized() { if (this._ctx) this._ctx._resize(this.width, this.height); }
-    getContext(kind) {
-      if (String(kind).toLowerCase() !== '2d') return null;
-      return this._ctx || (this._ctx = new CanvasRenderingContext2D(this));
+    _resized() { if (this._ctx) this._ctx._resize(this.width, this.height); if (this._gl) this._gl._resize(this.width, this.height); }
+    getContext(kind, attrs) {
+      kind = String(kind).toLowerCase();
+      if (kind === '2d') return this._gl ? null : this._ctx || (this._ctx = new CanvasRenderingContext2D(this));
+      if (kind !== 'webgl' && kind !== 'experimental-webgl' && kind !== 'webgl2') return null;
+      if (this._ctx) return null;
+      const v2 = kind === 'webgl2';
+      if (this._gl) return this._gl._v2 === v2 || !v2 ? this._gl : null;
+      return (this._gl = v2 ? new WebGL2RenderingContext(this, attrs) : new WebGLRenderingContext(this, attrs));
     }
     toDataURL() { return 'data:,'; }
   }
@@ -564,6 +569,501 @@
   const document = new Document();
   nodes.set(0, document);
 
+  // ---- WebGL ----
+  // Calls are queued as commands (fields split by \x1f, commands by \x1e) with their bulk
+  // data gathered into one ArrayBuffer, and sent in batches like Canvas 2D. Calls that
+  // need an answer flush the batch first and ask the browser (OP.GL_QUERY).
+  const GL_CONSTANTS = {
+    DEPTH_BUFFER_BIT: 0x100, STENCIL_BUFFER_BIT: 0x400, COLOR_BUFFER_BIT: 0x4000,
+    POINTS: 0, LINES: 1, LINE_LOOP: 2, LINE_STRIP: 3, TRIANGLES: 4, TRIANGLE_STRIP: 5, TRIANGLE_FAN: 6,
+    ZERO: 0, ONE: 1, SRC_COLOR: 0x300, ONE_MINUS_SRC_COLOR: 0x301, SRC_ALPHA: 0x302, ONE_MINUS_SRC_ALPHA: 0x303,
+    DST_ALPHA: 0x304, ONE_MINUS_DST_ALPHA: 0x305, DST_COLOR: 0x306, ONE_MINUS_DST_COLOR: 0x307, SRC_ALPHA_SATURATE: 0x308,
+    FUNC_ADD: 0x8006, BLEND_EQUATION: 0x8009, BLEND_EQUATION_RGB: 0x8009, BLEND_EQUATION_ALPHA: 0x883D,
+    FUNC_SUBTRACT: 0x800A, FUNC_REVERSE_SUBTRACT: 0x800B, MIN: 0x8007, MAX: 0x8008,
+    BLEND_DST_RGB: 0x80C8, BLEND_SRC_RGB: 0x80C9, BLEND_DST_ALPHA: 0x80CA, BLEND_SRC_ALPHA: 0x80CB,
+    CONSTANT_COLOR: 0x8001, ONE_MINUS_CONSTANT_COLOR: 0x8002, CONSTANT_ALPHA: 0x8003, ONE_MINUS_CONSTANT_ALPHA: 0x8004, BLEND_COLOR: 0x8005,
+    ARRAY_BUFFER: 0x8892, ELEMENT_ARRAY_BUFFER: 0x8893, ARRAY_BUFFER_BINDING: 0x8894, ELEMENT_ARRAY_BUFFER_BINDING: 0x8895,
+    STREAM_DRAW: 0x88E0, STATIC_DRAW: 0x88E4, DYNAMIC_DRAW: 0x88E8, BUFFER_SIZE: 0x8764, BUFFER_USAGE: 0x8765,
+    CURRENT_VERTEX_ATTRIB: 0x8626, FRONT: 0x404, BACK: 0x405, FRONT_AND_BACK: 0x408,
+    CULL_FACE: 0xB44, BLEND: 0xBE2, DITHER: 0xBD0, STENCIL_TEST: 0xB90, DEPTH_TEST: 0xB71, SCISSOR_TEST: 0xC11,
+    POLYGON_OFFSET_FILL: 0x8037, SAMPLE_ALPHA_TO_COVERAGE: 0x809E, SAMPLE_COVERAGE: 0x80A0, RASTERIZER_DISCARD: 0x8C89,
+    NO_ERROR: 0, INVALID_ENUM: 0x500, INVALID_VALUE: 0x501, INVALID_OPERATION: 0x502, OUT_OF_MEMORY: 0x505, INVALID_FRAMEBUFFER_OPERATION: 0x506,
+    CW: 0x900, CCW: 0x901, LINE_WIDTH: 0xB21, ALIASED_POINT_SIZE_RANGE: 0x846D, ALIASED_LINE_WIDTH_RANGE: 0x846E,
+    CULL_FACE_MODE: 0xB45, FRONT_FACE: 0xB46, DEPTH_RANGE: 0xB70, DEPTH_WRITEMASK: 0xB72, DEPTH_CLEAR_VALUE: 0xB73, DEPTH_FUNC: 0xB74,
+    STENCIL_CLEAR_VALUE: 0xB91, STENCIL_FUNC: 0xB92, STENCIL_FAIL: 0xB94, STENCIL_PASS_DEPTH_FAIL: 0xB95, STENCIL_PASS_DEPTH_PASS: 0xB96,
+    STENCIL_REF: 0xB97, STENCIL_VALUE_MASK: 0xB93, STENCIL_WRITEMASK: 0xB98, STENCIL_BACK_FUNC: 0x8800, STENCIL_BACK_FAIL: 0x8801,
+    STENCIL_BACK_PASS_DEPTH_FAIL: 0x8802, STENCIL_BACK_PASS_DEPTH_PASS: 0x8803, STENCIL_BACK_REF: 0x8CA3, STENCIL_BACK_VALUE_MASK: 0x8CA4,
+    STENCIL_BACK_WRITEMASK: 0x8CA5, VIEWPORT: 0xBA2, SCISSOR_BOX: 0xC10, COLOR_CLEAR_VALUE: 0xC22, COLOR_WRITEMASK: 0xC23,
+    UNPACK_ALIGNMENT: 0xCF5, PACK_ALIGNMENT: 0xD05, MAX_TEXTURE_SIZE: 0xD33, MAX_VIEWPORT_DIMS: 0xD3A, SUBPIXEL_BITS: 0xD50,
+    RED_BITS: 0xD52, GREEN_BITS: 0xD53, BLUE_BITS: 0xD54, ALPHA_BITS: 0xD55, DEPTH_BITS: 0xD56, STENCIL_BITS: 0xD57,
+    POLYGON_OFFSET_UNITS: 0x2A00, POLYGON_OFFSET_FACTOR: 0x8038, TEXTURE_BINDING_2D: 0x8069, SAMPLE_BUFFERS: 0x80A8, SAMPLES: 0x80A9,
+    SAMPLE_COVERAGE_VALUE: 0x80AA, SAMPLE_COVERAGE_INVERT: 0x80AB, COMPRESSED_TEXTURE_FORMATS: 0x86A3,
+    DONT_CARE: 0x1100, FASTEST: 0x1101, NICEST: 0x1102, GENERATE_MIPMAP_HINT: 0x8192,
+    BYTE: 0x1400, UNSIGNED_BYTE: 0x1401, SHORT: 0x1402, UNSIGNED_SHORT: 0x1403, INT: 0x1404, UNSIGNED_INT: 0x1405, FLOAT: 0x1406,
+    DEPTH_COMPONENT: 0x1902, ALPHA: 0x1906, RGB: 0x1907, RGBA: 0x1908, LUMINANCE: 0x1909, LUMINANCE_ALPHA: 0x190A,
+    UNSIGNED_SHORT_4_4_4_4: 0x8033, UNSIGNED_SHORT_5_5_5_1: 0x8034, UNSIGNED_SHORT_5_6_5: 0x8363,
+    FRAGMENT_SHADER: 0x8B30, VERTEX_SHADER: 0x8B31, MAX_VERTEX_ATTRIBS: 0x8869, MAX_VERTEX_UNIFORM_VECTORS: 0x8DFB,
+    MAX_VARYING_VECTORS: 0x8DFC, MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8B4D, MAX_VERTEX_TEXTURE_IMAGE_UNITS: 0x8B4C,
+    MAX_TEXTURE_IMAGE_UNITS: 0x8872, MAX_FRAGMENT_UNIFORM_VECTORS: 0x8DFD, SHADER_TYPE: 0x8B4F, DELETE_STATUS: 0x8B80,
+    LINK_STATUS: 0x8B82, VALIDATE_STATUS: 0x8B83, ATTACHED_SHADERS: 0x8B85, ACTIVE_UNIFORMS: 0x8B86, ACTIVE_ATTRIBUTES: 0x8B89,
+    SHADING_LANGUAGE_VERSION: 0x8B8C, CURRENT_PROGRAM: 0x8B8D, NEVER: 0x200, LESS: 0x201, EQUAL: 0x202, LEQUAL: 0x203,
+    GREATER: 0x204, NOTEQUAL: 0x205, GEQUAL: 0x206, ALWAYS: 0x207, KEEP: 0x1E00, REPLACE: 0x1E01, INCR: 0x1E02, DECR: 0x1E03,
+    INVERT: 0x150A, INCR_WRAP: 0x8507, DECR_WRAP: 0x8508, VENDOR: 0x1F00, RENDERER: 0x1F01, VERSION: 0x1F02,
+    NEAREST: 0x2600, LINEAR: 0x2601, NEAREST_MIPMAP_NEAREST: 0x2700, LINEAR_MIPMAP_NEAREST: 0x2701, NEAREST_MIPMAP_LINEAR: 0x2702,
+    LINEAR_MIPMAP_LINEAR: 0x2703, TEXTURE_MAG_FILTER: 0x2800, TEXTURE_MIN_FILTER: 0x2801, TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803,
+    TEXTURE_2D: 0xDE1, TEXTURE: 0x1702, TEXTURE_CUBE_MAP: 0x8513, TEXTURE_BINDING_CUBE_MAP: 0x8514,
+    TEXTURE_CUBE_MAP_POSITIVE_X: 0x8515, TEXTURE_CUBE_MAP_NEGATIVE_X: 0x8516, TEXTURE_CUBE_MAP_POSITIVE_Y: 0x8517,
+    TEXTURE_CUBE_MAP_NEGATIVE_Y: 0x8518, TEXTURE_CUBE_MAP_POSITIVE_Z: 0x8519, TEXTURE_CUBE_MAP_NEGATIVE_Z: 0x851A,
+    MAX_CUBE_MAP_TEXTURE_SIZE: 0x851C, ACTIVE_TEXTURE: 0x84E0, REPEAT: 0x2901, CLAMP_TO_EDGE: 0x812F, MIRRORED_REPEAT: 0x8370,
+    FLOAT_VEC2: 0x8B50, FLOAT_VEC3: 0x8B51, FLOAT_VEC4: 0x8B52, INT_VEC2: 0x8B53, INT_VEC3: 0x8B54, INT_VEC4: 0x8B55, BOOL: 0x8B56,
+    BOOL_VEC2: 0x8B57, BOOL_VEC3: 0x8B58, BOOL_VEC4: 0x8B59, FLOAT_MAT2: 0x8B5A, FLOAT_MAT3: 0x8B5B, FLOAT_MAT4: 0x8B5C,
+    SAMPLER_2D: 0x8B5E, SAMPLER_CUBE: 0x8B60, VERTEX_ATTRIB_ARRAY_ENABLED: 0x8622, VERTEX_ATTRIB_ARRAY_SIZE: 0x8623,
+    VERTEX_ATTRIB_ARRAY_STRIDE: 0x8624, VERTEX_ATTRIB_ARRAY_TYPE: 0x8625, VERTEX_ATTRIB_ARRAY_NORMALIZED: 0x886A,
+    VERTEX_ATTRIB_ARRAY_POINTER: 0x8645, VERTEX_ATTRIB_ARRAY_BUFFER_BINDING: 0x889F, IMPLEMENTATION_COLOR_READ_TYPE: 0x8B9A,
+    IMPLEMENTATION_COLOR_READ_FORMAT: 0x8B9B, COMPILE_STATUS: 0x8B81, LOW_FLOAT: 0x8DF0, MEDIUM_FLOAT: 0x8DF1, HIGH_FLOAT: 0x8DF2,
+    LOW_INT: 0x8DF3, MEDIUM_INT: 0x8DF4, HIGH_INT: 0x8DF5, FRAMEBUFFER: 0x8D40, RENDERBUFFER: 0x8D41, RGBA4: 0x8056, RGB5_A1: 0x8057,
+    RGB565: 0x8D62, DEPTH_COMPONENT16: 0x81A5, STENCIL_INDEX8: 0x8D48, DEPTH_STENCIL: 0x84F9, RENDERBUFFER_WIDTH: 0x8D42,
+    RENDERBUFFER_HEIGHT: 0x8D43, RENDERBUFFER_INTERNAL_FORMAT: 0x8D44, COLOR_ATTACHMENT0: 0x8CE0, DEPTH_ATTACHMENT: 0x8D00,
+    STENCIL_ATTACHMENT: 0x8D20, DEPTH_STENCIL_ATTACHMENT: 0x821A, NONE: 0, FRAMEBUFFER_COMPLETE: 0x8CD5,
+    FRAMEBUFFER_INCOMPLETE_ATTACHMENT: 0x8CD6, FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: 0x8CD7, FRAMEBUFFER_UNSUPPORTED: 0x8CDD,
+    FRAMEBUFFER_BINDING: 0x8CA6, RENDERBUFFER_BINDING: 0x8CA7, MAX_RENDERBUFFER_SIZE: 0x84E8, UNPACK_FLIP_Y_WEBGL: 0x9240,
+    UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241, CONTEXT_LOST_WEBGL: 0x9242, UNPACK_COLORSPACE_CONVERSION_WEBGL: 0x9243, BROWSER_DEFAULT_WEBGL: 0x9244,
+  };
+  const GL2_CONSTANTS = {
+    RED: 0x1903, RG: 0x8227, R8: 0x8229, RG8: 0x822B, RGB8: 0x8051, RGBA8: 0x8058, SRGB8: 0x8C41, SRGB8_ALPHA8: 0x8C43,
+    R16F: 0x822D, RG16F: 0x822F, RGB16F: 0x881B, RGBA16F: 0x881A, R32F: 0x822E, RG32F: 0x8230, RGB32F: 0x8815, RGBA32F: 0x8814,
+    HALF_FLOAT: 0x140B, RED_INTEGER: 0x8D94, RG_INTEGER: 0x8228, RGB_INTEGER: 0x8D98, RGBA_INTEGER: 0x8D99,
+    DEPTH_COMPONENT24: 0x81A6, DEPTH_COMPONENT32F: 0x8CAC, DEPTH24_STENCIL8: 0x88F0, UNSIGNED_INT_24_8: 0x84FA,
+    TEXTURE_3D: 0x806F, TEXTURE_2D_ARRAY: 0x8C1A, TEXTURE_WRAP_R: 0x8072, TEXTURE_MIN_LOD: 0x813A, TEXTURE_MAX_LOD: 0x813B,
+    TEXTURE_BASE_LEVEL: 0x813C, TEXTURE_MAX_LEVEL: 0x813D, TEXTURE_COMPARE_MODE: 0x884C, TEXTURE_COMPARE_FUNC: 0x884D,
+    COMPARE_REF_TO_TEXTURE: 0x884E, MAX_3D_TEXTURE_SIZE: 0x8073, MAX_ARRAY_TEXTURE_LAYERS: 0x88FF, MAX_SAMPLES: 0x8D57,
+    MAX_DRAW_BUFFERS: 0x8824, MAX_COLOR_ATTACHMENTS: 0x8CDF, MAX_UNIFORM_BUFFER_BINDINGS: 0x8A2F, MAX_UNIFORM_BLOCK_SIZE: 0x8A30,
+    MAX_VERTEX_UNIFORM_COMPONENTS: 0x8B4A, MAX_FRAGMENT_UNIFORM_COMPONENTS: 0x8B49, MAX_ELEMENT_INDEX: 0x8D6B,
+    UNIFORM_BUFFER: 0x8A11, COPY_READ_BUFFER: 0x8F36, COPY_WRITE_BUFFER: 0x8F37, PIXEL_PACK_BUFFER: 0x88EB, PIXEL_UNPACK_BUFFER: 0x88EC,
+    TRANSFORM_FEEDBACK_BUFFER: 0x8C8E, VERTEX_ARRAY_BINDING: 0x85B5, READ_FRAMEBUFFER: 0x8CA8, DRAW_FRAMEBUFFER: 0x8CA9,
+    UNSIGNED_INT_VEC2: 0x8DC6, UNSIGNED_INT_VEC3: 0x8DC7, UNSIGNED_INT_VEC4: 0x8DC8, SAMPLER_3D: 0x8B5F, SAMPLER_2D_SHADOW: 0x8B62,
+    SAMPLER_2D_ARRAY: 0x8DC1, STATIC_READ: 0x88E5, DYNAMIC_READ: 0x88E9, STREAM_READ: 0x88E1, STATIC_COPY: 0x88E6,
+    DYNAMIC_COPY: 0x88EA, STREAM_COPY: 0x88E2, UNPACK_ROW_LENGTH: 0xCF2, UNPACK_SKIP_ROWS: 0xCF3, UNPACK_SKIP_PIXELS: 0xCF4,
+    PACK_ROW_LENGTH: 0xD02, UNPACK_IMAGE_HEIGHT: 0x806E, UNPACK_SKIP_IMAGES: 0x806D, COLOR_ATTACHMENT1: 0x8CE1, DRAW_BUFFER0: 0x8825,
+    SYNC_GPU_COMMANDS_COMPLETE: 0x9117, ALREADY_SIGNALED: 0x911A, TIMEOUT_EXPIRED: 0x911B, CONDITION_SATISFIED: 0x911C,
+    WAIT_FAILED: 0x911D, SYNC_FLUSH_COMMANDS_BIT: 0x1, TIMEOUT_IGNORED: -1, ANY_SAMPLES_PASSED: 0x8C2F,
+    QUERY_RESULT: 0x8866, QUERY_RESULT_AVAILABLE: 0x8867, INVALID_INDEX: 0xFFFFFFFF, VERTEX_ATTRIB_ARRAY_DIVISOR: 0x88FE,
+    VERTEX_ATTRIB_ARRAY_INTEGER: 0x88FD, UNIFORM_BLOCK_INDEX: 0x8A3A, UNIFORM_OFFSET: 0x8A3B, ACTIVE_UNIFORM_BLOCKS: 0x8A36,
+    UNIFORM_BLOCK_DATA_SIZE: 0x8A40, MAX_SERVER_WAIT_TIMEOUT: 0x9111, MAX_TEXTURE_LOD_BIAS: 0x84FD,
+  };
+  const bytesOf = v => v instanceof ArrayBuffer ? new Uint8Array(v) : ArrayBuffer.isView(v) ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : null;
+  let glNextId = 1;
+  class WebGLObject { constructor() { this._id = glNextId++; } }
+  class WebGLBuffer extends WebGLObject {}
+  class WebGLTexture extends WebGLObject {}
+  class WebGLProgram extends WebGLObject {}
+  class WebGLShader extends WebGLObject {}
+  class WebGLFramebuffer extends WebGLObject {}
+  class WebGLRenderbuffer extends WebGLObject {}
+  class WebGLVertexArrayObject extends WebGLObject {}
+  class WebGLQuery extends WebGLObject {}
+  class WebGLSampler extends WebGLObject {}
+  class WebGLSync extends WebGLObject {}
+  class WebGLTransformFeedback extends WebGLObject {}
+  class WebGLUniformLocation { constructor(p, loc) { this._p = p; this._loc = loc; } }
+  class WebGLActiveInfo { constructor(name, type, size) { this.name = name; this.type = type; this.size = size; } }
+  class WebGLShaderPrecisionFormat { constructor(r, p) { this.rangeMin = r; this.rangeMax = r; this.precision = p; } }
+  const numStr = v => { v = +v; return Number.isFinite(v) ? String(v) : '0'; };
+
+  class WebGLRenderingContext {
+    constructor(canvas, attrs, v2) {
+      this.canvas = canvas;
+      this._v2 = !!v2;
+      this._attrs = Object.assign({ alpha: true, depth: true, stencil: false, antialias: true, premultipliedAlpha: true,
+        preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false, desynchronized: false }, attrs || {});
+      this._q = []; this._bin = []; this._binLen = 0;
+      this._s = { program: null, array: null, vao: null, unit: 0, tex: [], clear: [0, 0, 0, 0], depthClear: 1, viewport: [0, 0, canvas.width, canvas.height],
+        scissor: [0, 0, canvas.width, canvas.height], enabled: {}, depthFunc: 0x201, depthMask: true, colorMask: [true, true, true, true],
+        blend: [1, 0, 1, 0], blendEq: [0x8006, 0x8006], cullFace: 0x405, frontFace: 0x901, flipY: false, premul: false, align: 4,
+        lineWidth: 1, elem: new Map(), fb: null, rb: null };
+      this._progInfo = new Map();
+      H(OP.GL_QUERY, canvas._id, 'init', canvas.width, canvas.height, this._attrs.alpha === false ? 0 : 1);
+    }
+    get drawingBufferWidth() { return this.canvas.width; }
+    get drawingBufferHeight() { return this.canvas.height; }
+    get drawingBufferColorSpace() { return 'srgb'; }
+    set drawingBufferColorSpace(v) {}
+    _c(...a) { this._q.push(a.join(FS)); dirtyContexts.add(this); if (this._q.length >= 4096) this._flush(); }
+    _data(v) {
+      const b = bytesOf(v);
+      if (!b) return [0, 0];
+      const off = this._binLen;
+      this._bin.push(b.slice());
+      this._binLen += b.byteLength;
+      return [off, b.byteLength];
+    }
+    _flush() {
+      if (!this._q.length) return;
+      const all = new Uint8Array(this._binLen);
+      let at = 0;
+      for (const b of this._bin) { all.set(b, at); at += b.byteLength; }
+      const q = this._q.join('\x1e');
+      this._q = []; this._bin = []; this._binLen = 0;
+      H(OP.GL, this.canvas._id, q, all.buffer);
+    }
+    _ask(what, ...a) { this._flush(); return H(OP.GL_QUERY, this.canvas._id, what, ...a.map(String)); }
+    _resize(w, h) { this._c('rz', w, h); this._s.viewport = [0, 0, w, h]; }
+    getContextAttributes() { return Object.assign({}, this._attrs); }
+    isContextLost() { return false; }
+    getSupportedExtensions() { return ['OES_element_index_uint', 'OES_standard_derivatives', 'OES_vertex_array_object', 'OES_texture_float',
+      'OES_texture_half_float', 'EXT_blend_minmax', 'WEBGL_lose_context', 'EXT_color_buffer_float', 'EXT_color_buffer_half_float']; }
+    getExtension(name) {
+      const gl = this;
+      switch (String(name)) {
+        case 'OES_element_index_uint': case 'OES_texture_float': case 'OES_texture_float_linear': case 'EXT_color_buffer_float':
+        case 'EXT_color_buffer_half_float': case 'OES_texture_half_float_linear': case 'EXT_float_blend': return {};
+        case 'OES_standard_derivatives': return { FRAGMENT_SHADER_DERIVATIVE_HINT_OES: 0x8B8B };
+        case 'OES_texture_half_float': return { HALF_FLOAT_OES: 0x8D61 };
+        case 'EXT_blend_minmax': return { MIN_EXT: 0x8007, MAX_EXT: 0x8008 };
+        case 'WEBGL_lose_context': return { loseContext() {}, restoreContext() {} };
+        case 'OES_vertex_array_object': return { VERTEX_ARRAY_BINDING_OES: 0x85B5,
+          createVertexArrayOES: () => gl.createVertexArray(), deleteVertexArrayOES: v => gl.deleteVertexArray(v),
+          bindVertexArrayOES: v => gl.bindVertexArray(v), isVertexArrayOES: v => v instanceof WebGLVertexArrayObject };
+        default: return null;
+      }
+    }
+    getShaderPrecisionFormat(shaderType, precisionType) {
+      return precisionType >= 0x8DF3 ? new WebGLShaderPrecisionFormat(31, 0) : new WebGLShaderPrecisionFormat(127, 23);
+    }
+    getParameter(p) {
+      const s = this._s, v2 = this._v2;
+      switch (p) {
+        case 0x1F00: return 'SexOS';
+        case 0x1F01: return 'sex-gl';
+        case 0x1F02: return v2 ? 'WebGL 2.0 (sex-gl)' : 'WebGL 1.0 (sex-gl)';
+        case 0x8B8C: return v2 ? 'WebGL GLSL ES 3.00 (sex-gl)' : 'WebGL GLSL ES 1.0 (sex-gl)';
+        case 0xD33: case 0x851C: case 0x84E8: case 0x8073: return 4096;
+        case 0x8869: return 16;
+        case 0x8872: case 0x8B4C: return 16;
+        case 0x8B4D: return 32;
+        case 0x8DFC: return 15;
+        case 0x8DFB: case 0x8DFD: return 1024;
+        case 0x8B4A: case 0x8B49: return 4096;
+        case 0x8D57: return 0;
+        case 0x8824: case 0x8CDF: return 1;
+        case 0x88FF: return 256;
+        case 0x8A2F: return 24;
+        case 0x8A30: return 16384;
+        case 0x84FD: return 2;
+        case 0x9111: return 0;
+        case 0x8D6B: return 4294967295;
+        case 0xD3A: return new Int32Array([4096, 4096]);
+        case 0x846E: return new Float32Array([1, 1]);
+        case 0x846D: return new Float32Array([1, 256]);
+        case 0xBA2: return new Int32Array(s.viewport);
+        case 0xC10: return new Int32Array(s.scissor);
+        case 0xC22: return new Float32Array(s.clear);
+        case 0xB73: return s.depthClear;
+        case 0xB74: return s.depthFunc;
+        case 0xB72: return s.depthMask;
+        case 0xC23: return s.colorMask.slice();
+        case 0x8B8D: return s.program;
+        case 0x8894: return s.array;
+        case 0x8895: return s.elem.get(s.vao) || null;
+        case 0x85B5: return s.vao;
+        case 0x84E0: return 0x84C0 + s.unit;
+        case 0x8069: return (s.tex[s.unit] || {})[0xDE1] || null;
+        case 0x8514: return (s.tex[s.unit] || {})[0x8513] || null;
+        case 0x8CA6: case 0x8CAA: return s.fb;
+        case 0x8CA7: return s.rb;
+        case 0xB45: return s.cullFace;
+        case 0xB46: return s.frontFace;
+        case 0xB21: return s.lineWidth;
+        case 0xD52: case 0xD53: case 0xD54: case 0xD55: return 8;
+        case 0xD56: return 24;
+        case 0xD57: return 0;
+        case 0xD50: return 4;
+        case 0x80A8: case 0x80A9: return 0;
+        case 0xCF5: return s.align;
+        case 0x9240: return s.flipY;
+        case 0x9241: return s.premul;
+        case 0x9243: return 0x9244;
+        case 0x80C9: return s.blend[0];
+        case 0x80C8: return s.blend[1];
+        case 0x80CB: return s.blend[2];
+        case 0x80CA: return s.blend[3];
+        case 0x8009: return s.blendEq[0];
+        case 0x883D: return s.blendEq[1];
+        case 0x86A3: return new Uint32Array(0);
+        case 0x8B9A: return 0x1401;
+        case 0x8B9B: return 0x1908;
+        default: return (p in s.enabled) ? s.enabled[p] : null;
+      }
+    }
+    getError() { return +this._ask('error'); }
+    // State
+    enable(cap) { this._s.enabled[cap] = true; this._c('en', cap, 1); }
+    disable(cap) { this._s.enabled[cap] = false; this._c('en', cap, 0); }
+    isEnabled(cap) { return !!this._s.enabled[cap]; }
+    viewport(x, y, w, h) { this._s.viewport = [x | 0, y | 0, w | 0, h | 0]; this._c('vp', x | 0, y | 0, w | 0, h | 0); }
+    scissor(x, y, w, h) { this._s.scissor = [x | 0, y | 0, w | 0, h | 0]; this._c('sc', x | 0, y | 0, w | 0, h | 0); }
+    clearColor(r, g, b, a) { this._s.clear = [+r, +g, +b, +a]; this._c('cc', numStr(r), numStr(g), numStr(b), numStr(a)); }
+    clearDepth(d) { this._s.depthClear = +d; this._c('cd', numStr(d)); }
+    clearStencil() {}
+    colorMask(r, g, b, a) { this._s.colorMask = [!!r, !!g, !!b, !!a]; this._c('cm', +!!r, +!!g, +!!b, +!!a); }
+    depthMask(m) { this._s.depthMask = !!m; this._c('dm', +!!m); }
+    depthFunc(f) { this._s.depthFunc = f; this._c('df', f); }
+    depthRange(n, f) { this._c('dr', numStr(n), numStr(f)); }
+    cullFace(m) { this._s.cullFace = m; this._c('cf', m); }
+    frontFace(m) { this._s.frontFace = m; this._c('ff', m); }
+    blendFunc(s, d) { this.blendFuncSeparate(s, d, s, d); }
+    blendFuncSeparate(sr, dr, sa, da) { this._s.blend = [sr, dr, sa, da]; this._c('bf', sr, dr, sa, da); }
+    blendEquation(m) { this.blendEquationSeparate(m, m); }
+    blendEquationSeparate(r, a) { this._s.blendEq = [r, a]; this._c('be', r, a); }
+    blendColor(r, g, b, a) { this._c('bc', numStr(r), numStr(g), numStr(b), numStr(a)); }
+    polygonOffset(f, u) { this._c('po', numStr(f), numStr(u)); }
+    pixelStorei(p, v) {
+      if (p === 0x9240) this._s.flipY = !!v;
+      if (p === 0x9241) this._s.premul = !!v;
+      if (p === 0xCF5) this._s.align = v;
+      this._c('ps', p, typeof v === 'boolean' ? +v : v | 0);
+    }
+    lineWidth(w) { this._s.lineWidth = +w; }
+    hint() {} sampleCoverage() {} stencilFunc() {} stencilFuncSeparate() {} stencilMask() {} stencilMaskSeparate() {}
+    stencilOp() {} stencilOpSeparate() {}
+    clear(mask) { this._c('cl', mask); }
+    flush() { this._flush(); }
+    finish() { this._flush(); }
+    // Buffers
+    createBuffer() { return new WebGLBuffer(); }
+    deleteBuffer(b) { if (b) this._c('db', b._id); }
+    isBuffer(b) { return b instanceof WebGLBuffer; }
+    bindBuffer(t, b) {
+      if (t === 0x8892) this._s.array = b; else if (t === 0x8893) this._s.elem.set(this._s.vao, b);
+      this._c('bb', t, b ? b._id : 0);
+    }
+    bufferData(t, data, usage, srcOffset, length) {
+      if (typeof data === 'number') { this._c('bz', t, data | 0); return; }
+      let v = data;
+      if (srcOffset !== undefined && ArrayBuffer.isView(v)) v = v.subarray(srcOffset, length ? srcOffset + length : undefined);
+      const [o, l] = this._data(v);
+      this._c('bd', t, o, l);
+    }
+    bufferSubData(t, offset, data, srcOffset, length) {
+      let v = data;
+      if (srcOffset !== undefined && ArrayBuffer.isView(v)) v = v.subarray(srcOffset, length ? srcOffset + length : undefined);
+      const [o, l] = this._data(v);
+      this._c('bs', t, offset | 0, o, l);
+    }
+    getBufferParameter() { return 0; }
+    // Vertex attributes
+    enableVertexAttribArray(i) { this._c('ea', i, 1); }
+    disableVertexAttribArray(i) { this._c('ea', i, 0); }
+    vertexAttribPointer(i, size, type, norm, stride, offset) { this._c('ap', i, size, type, +!!norm, stride | 0, offset | 0); }
+    vertexAttrib1f(i, x) { this._c('va', i, numStr(x), 0, 0, 1); }
+    vertexAttrib2f(i, x, y) { this._c('va', i, numStr(x), numStr(y), 0, 1); }
+    vertexAttrib3f(i, x, y, z) { this._c('va', i, numStr(x), numStr(y), numStr(z), 1); }
+    vertexAttrib4f(i, x, y, z, w) { this._c('va', i, numStr(x), numStr(y), numStr(z), numStr(w)); }
+    vertexAttrib1fv(i, v) { this.vertexAttrib1f(i, v[0]); }
+    vertexAttrib2fv(i, v) { this.vertexAttrib2f(i, v[0], v[1]); }
+    vertexAttrib3fv(i, v) { this.vertexAttrib3f(i, v[0], v[1], v[2]); }
+    vertexAttrib4fv(i, v) { this.vertexAttrib4f(i, v[0], v[1], v[2], v[3]); }
+    getVertexAttrib() { return null; }
+    getVertexAttribOffset() { return 0; }
+    // Vertex arrays (WebGL 2, and OES_vertex_array_object)
+    createVertexArray() { return new WebGLVertexArrayObject(); }
+    deleteVertexArray(v) { if (v) this._c('dva', v._id); }
+    bindVertexArray(v) { this._s.vao = v || null; this._c('ba', v ? v._id : 0); }
+    isVertexArray(v) { return v instanceof WebGLVertexArrayObject; }
+    vertexAttribDivisor(i, d) { this._c('ad', i, d); }
+    // Textures
+    createTexture() { return new WebGLTexture(); }
+    deleteTexture(t) { if (t) this._c('dt', t._id); }
+    isTexture(t) { return t instanceof WebGLTexture; }
+    activeTexture(u) { this._s.unit = u - 0x84C0; this._c('at', u); }
+    bindTexture(t, tex) {
+      (this._s.tex[this._s.unit] || (this._s.tex[this._s.unit] = {}))[t] = tex;
+      this._c('bt', t, tex ? tex._id : 0);
+    }
+    _boundTex(target) {
+      const t = (target >= 0x8515 && target <= 0x851A) ? 0x8513 : target;
+      const tex = (this._s.tex[this._s.unit] || {})[t];
+      return tex ? tex._id : 0;
+    }
+    texParameteri(t, p, v) { this._c('tp', t, p, v); }
+    texParameterf(t, p, v) { this._c('tp', t, p, v | 0); }
+    getTexParameter() { return null; }
+    generateMipmap() {}
+    _picture(target, src) {
+      if (src && src.tagName === 'IMG') { this._c('tP', target, this._boundTex(target), src.getAttribute('src') || ''); return true; }
+      if (src && src.tagName === 'CANVAS') { this._c('tP', target, this._boundTex(target), 'canvas:' + src._id); return true; }
+      if (src && typeof src.width === 'number' && src.data && ArrayBuffer.isView(src.data)) {
+        const [o, l] = this._data(src.data);
+        this._c('ti', target, 0, src.width, src.height, 0x1908, 0x1401, o, l);
+        return true;
+      }
+      return false;
+    }
+    texImage2D(target, level, ifmt, a, b, c, d, e, f) {
+      if (arguments.length === 6) { if (!this._picture(target, c)) this._c('ti', target, level, 0, 0, 0x1908, 0x1401); return; }
+      const [w, h, fmt, type, pixels] = [a, b, d, e, f];
+      if (pixels && !ArrayBuffer.isView(pixels) && !(pixels instanceof ArrayBuffer)) { this._picture(target, pixels); return; }
+      const f2 = fmt === 0x1908 || fmt === 0x1907 ? fmt : (ifmt === 0x1907 || ifmt === 0x8051 ? 0x1907 : fmt);
+      if (pixels) { const [o, l] = this._data(pixels); this._c('ti', target, level, w, h, f2, type, o, l); }
+      else this._c('ti', target, level, w, h, f2, type);
+    }
+    texSubImage2D(target, level, x, y, a, b, c, d, e) {
+      if (arguments.length === 7) return; // pictures into part of a texture: not yet
+      const [w, h, fmt, type, pixels] = [a, b, c, d, e];
+      if (!pixels || !(ArrayBuffer.isView(pixels) || pixels instanceof ArrayBuffer)) return;
+      const [o, l] = this._data(pixels);
+      this._c('ts', target, level, x, y, w, h, fmt, type, o, l);
+    }
+    texStorage2D(target, levels, ifmt, w, h) {
+      if (target === 0x8513) { for (let f = 0; f < 6; f++) this._c('ti', 0x8515 + f, 0, w, h, 0x1908, 0x1401); }
+      else this._c('ti', target, 0, w, h, 0x1908, 0x1401);
+    }
+    copyTexImage2D() {} copyTexSubImage2D() {} compressedTexImage2D() {} compressedTexSubImage2D() {}
+    texImage3D() {} texSubImage3D() {} texStorage3D() {}
+    // Shaders and programs
+    createShader(type) { const s = new WebGLShader(); s._type = type; s._src = ''; this._c('cs', s._id, type); return s; }
+    shaderSource(s, src) { s._src = String(src); this._ask('source', s._id, s._src); }
+    getShaderSource(s) { return s ? s._src : null; }
+    compileShader(s) { this._c('co', s._id); s._status = null; }
+    getShaderParameter(s, p) {
+      if (p === 0x8B4F) return s._type;
+      if (p === 0x8B80) return false;
+      if (s._status == null) { const r = this._ask('shader', s._id).split('\x1f'); s._status = r[0] === '1'; s._log = r[1] || ''; }
+      return p === 0x8B81 ? s._status : null;
+    }
+    getShaderInfoLog(s) { this.getShaderParameter(s, 0x8B81); return s._log || ''; }
+    deleteShader(s) { if (s) this._c('ds', s._id); }
+    isShader(s) { return s instanceof WebGLShader; }
+    createProgram() { const p = new WebGLProgram(); p._shaders = []; this._c('cp', p._id); return p; }
+    attachShader(p, s) { p._shaders.push(s); this._c('as', p._id, s._id); }
+    detachShader(p, s) { p._shaders = p._shaders.filter(x => x !== s); }
+    getAttachedShaders(p) { return p._shaders.slice(); }
+    bindAttribLocation(p, i, name) { this._c('bl', p._id, i, String(name).replace(/[\x1e\x1f]/g, '')); }
+    linkProgram(p) { this._c('lp', p._id); p._info = null; p._locs = new Map(); }
+    _info(p) {
+      if (!p._info) {
+        const r = this._ask('program', p._id).split('\x1f');
+        p._info = { ok: r[0] === '1', log: r[1] || '', uniforms: +r[2] || 0, attribs: +r[3] || 0, u: null, a: null };
+      }
+      return p._info;
+    }
+    getProgramParameter(p, q) {
+      const i = this._info(p);
+      switch (q) {
+        case 0x8B82: return i.ok;
+        case 0x8B83: return i.ok;
+        case 0x8B80: return false;
+        case 0x8B85: return p._shaders.length;
+        case 0x8B86: return i.uniforms;
+        case 0x8B89: return i.attribs;
+        case 0x8A36: return 0;
+        default: return null;
+      }
+    }
+    getProgramInfoLog(p) { return this._info(p).log; }
+    validateProgram() {}
+    useProgram(p) { this._s.program = p || null; this._c('up', p ? p._id : 0); }
+    deleteProgram(p) { if (p) this._c('dp', p._id); }
+    isProgram(p) { return p instanceof WebGLProgram; }
+    getActiveUniform(p, i) {
+      const info = this._info(p);
+      if (!info.u) info.u = (this._ask('uniforms', p._id) || '').split('\x1e').filter(Boolean).map(r => r.split('\x1f'));
+      const r = info.u[i];
+      return r ? new WebGLActiveInfo(r[0], +r[1], +r[2]) : null;
+    }
+    getActiveAttrib(p, i) {
+      const info = this._info(p);
+      if (!info.a) info.a = (this._ask('attribs', p._id) || '').split('\x1e').filter(Boolean).map(r => r.split('\x1f'));
+      const r = info.a[i];
+      return r ? new WebGLActiveInfo(r[0], +r[1], +r[2]) : null;
+    }
+    getAttribLocation(p, name) { return +this._ask('aloc', p._id, name); }
+    getUniformLocation(p, name) {
+      if (!p._locs) p._locs = new Map();
+      if (p._locs.has(name)) return p._locs.get(name);
+      const r = this._ask('uloc', p._id, name);
+      const loc = r === '' || r == null ? null : new WebGLUniformLocation(p, +r);
+      p._locs.set(name, loc);
+      return loc;
+    }
+    getUniform() { return null; }
+    getUniformBlockIndex() { return 0xFFFFFFFF; }
+    uniformBlockBinding() {} bindBufferBase() {} bindBufferRange() {}
+    getActiveUniformBlockParameter() { return null; } getActiveUniformBlockName() { return null; }
+    getUniformIndices() { return null; } getActiveUniforms() { return null; }
+    _uf(l, vals) { if (!l) return; const [o, n] = this._data(Float32Array.from(vals)); this._c('uf', l._loc, o, n); }
+    _ui(l, vals) { if (!l) return; const [o, n] = this._data(Int32Array.from(vals)); this._c('ui', l._loc, o, n); }
+    uniform1f(l, x) { this._uf(l, [x]); }
+    uniform2f(l, x, y) { this._uf(l, [x, y]); }
+    uniform3f(l, x, y, z) { this._uf(l, [x, y, z]); }
+    uniform4f(l, x, y, z, w) { this._uf(l, [x, y, z, w]); }
+    uniform1i(l, x) { this._ui(l, [x]); }
+    uniform2i(l, x, y) { this._ui(l, [x, y]); }
+    uniform3i(l, x, y, z) { this._ui(l, [x, y, z]); }
+    uniform4i(l, x, y, z, w) { this._ui(l, [x, y, z, w]); }
+    uniform1ui(l, x) { this._ui(l, [x]); }
+    uniform2ui(l, x, y) { this._ui(l, [x, y]); }
+    uniform3ui(l, x, y, z) { this._ui(l, [x, y, z]); }
+    uniform4ui(l, x, y, z, w) { this._ui(l, [x, y, z, w]); }
+    uniform1fv(l, v) { this._uf(l, v); } uniform2fv(l, v) { this._uf(l, v); } uniform3fv(l, v) { this._uf(l, v); } uniform4fv(l, v) { this._uf(l, v); }
+    uniform1iv(l, v) { this._ui(l, v); } uniform2iv(l, v) { this._ui(l, v); } uniform3iv(l, v) { this._ui(l, v); } uniform4iv(l, v) { this._ui(l, v); }
+    uniform1uiv(l, v) { this._ui(l, v); } uniform2uiv(l, v) { this._ui(l, v); } uniform3uiv(l, v) { this._ui(l, v); } uniform4uiv(l, v) { this._ui(l, v); }
+    _mat(l, t, v, n) {
+      if (!l) return;
+      if (!t) return this._uf(l, v);
+      const out = [];
+      for (let m = 0; m + n * n <= v.length; m += n * n) for (let c = 0; c < n; c++) for (let r = 0; r < n; r++) out.push(v[m + r * n + c]);
+      this._uf(l, out);
+    }
+    uniformMatrix2fv(l, t, v) { this._mat(l, t, v, 2); }
+    uniformMatrix3fv(l, t, v) { this._mat(l, t, v, 3); }
+    uniformMatrix4fv(l, t, v) { this._mat(l, t, v, 4); }
+    // Drawing
+    drawArrays(mode, first, count) { this._c('da', mode, first | 0, count | 0); }
+    drawElements(mode, count, type, offset) { this._c('de', mode, count | 0, type, offset | 0); }
+    drawArraysInstanced(mode, first, count, n) { if (n > 0) this.drawArrays(mode, first, count); }
+    drawElementsInstanced(mode, count, type, offset, n) { if (n > 0) this.drawElements(mode, count, type, offset); }
+    drawRangeElements(mode, start, end, count, type, offset) { this.drawElements(mode, count, type, offset); }
+    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} blitFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    clearBufferuiv() {} clearBufferfi() {}
+    readPixels(x, y, w, h, format, type, out) {
+      if (!out) return;
+      this._flush();
+      const buf = H(OP.GL_QUERY | 0x10000, this.canvas._id, 'read', String(x | 0), String(y | 0), String(w | 0), String(h | 0));
+      if (buf instanceof ArrayBuffer) {
+        const src = new Uint8Array(buf);
+        const dst = bytesOf(out);
+        dst.set(src.subarray(0, Math.min(src.length, dst.length)));
+      }
+    }
+    // Framebuffers and renderbuffers: drawing goes to the canvas for now.
+    createFramebuffer() { return new WebGLFramebuffer(); }
+    bindFramebuffer(t, f) { this._s.fb = f || null; }
+    deleteFramebuffer() {} isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
+    framebufferTexture2D() {} framebufferRenderbuffer() {} framebufferTextureLayer() {}
+    checkFramebufferStatus() { return 0x8CD5; }
+    getFramebufferAttachmentParameter() { return null; }
+    createRenderbuffer() { return new WebGLRenderbuffer(); }
+    bindRenderbuffer(t, r) { this._s.rb = r || null; }
+    deleteRenderbuffer() {} isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
+    renderbufferStorage() {} renderbufferStorageMultisample() {} getRenderbufferParameter() { return 0; }
+    // WebGL 2 odds and ends
+    createQuery() { return new WebGLQuery(); } deleteQuery() {} beginQuery() {} endQuery() {} getQueryParameter() { return 0; }
+    createSampler() { return new WebGLSampler(); } deleteSampler() {} bindSampler() {} samplerParameteri() {} samplerParameterf() {}
+    fenceSync() { return new WebGLSync(); } deleteSync() {} clientWaitSync() { return 0x911A; } waitSync() {} getSyncParameter() { return 0x9119; }
+    createTransformFeedback() { return new WebGLTransformFeedback(); } bindTransformFeedback() {} beginTransformFeedback() {}
+    endTransformFeedback() {} transformFeedbackVaryings() {} deleteTransformFeedback() {}
+    vertexAttribIPointer(i, size, type, stride, offset) { this._c('ap', i, size, type, 0, stride | 0, offset | 0); }
+    vertexAttribI4i(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); } vertexAttribI4ui(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); }
+    getBufferSubData() {} copyBufferSubData() {} getIndexedParameter() { return null; } getInternalformatParameter() { return new Int32Array(0); }
+  }
+  for (const k in GL_CONSTANTS) { WebGLRenderingContext.prototype[k] = GL_CONSTANTS[k]; WebGLRenderingContext[k] = GL_CONSTANTS[k]; }
+  class WebGL2RenderingContext extends WebGLRenderingContext {
+    constructor(canvas, attrs) { super(canvas, attrs, true); }
+  }
+  for (const k in GL2_CONSTANTS) { WebGL2RenderingContext.prototype[k] = GL2_CONSTANTS[k]; WebGL2RenderingContext[k] = GL2_CONSTANTS[k]; }
+  for (const k in GL_CONSTANTS) WebGL2RenderingContext[k] = GL_CONSTANTS[k];
+
   // ---- URLs and location ----
   function resolveUrl(h) {
     h = String(h);
@@ -665,6 +1165,9 @@
     Event, UIEvent, MouseEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
+    WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
+    WebGLRenderbuffer, WebGLVertexArrayObject, WebGLUniformLocation, WebGLActiveInfo, WebGLShaderPrecisionFormat,
+    WebGLQuery, WebGLSampler, WebGLSync, WebGLTransformFeedback,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {

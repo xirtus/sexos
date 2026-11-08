@@ -1,0 +1,11 @@
+[package]
+name = "sex-gl"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Software WebGL for SexOS: GLSL ES shaders (translated and parsed by naga) run by an interpreter, and a rasterizer with depth, blending and textures"
+
+[dependencies]
+naga = { version = "30.0.1", default-features = false, features = ["glsl-in", "wgsl-in"] }
+pp-rs = "0.2.1"
+libm = "0.2"

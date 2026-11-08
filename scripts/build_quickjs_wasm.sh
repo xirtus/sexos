@@ -2,7 +2,7 @@
 # Builds crates/sex-js/quickjs.wasm: QuickJS-NG (MIT) with the sex-js glue, for wasm32-wasip1.
 # Needs wasi-sdk 25 (WASI_SDK=path) and a QuickJS-NG v0.10.1 checkout (QJS=path, commit
 # 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2). The output is reproducible:
-# sha256 b9f1cc41de9c3e29e5be9d1e237b40a7ec2293f356ca55fd709762fa310fc83b.
+# sha256 3c2a3f1411de25f946c9190c9129374ca63cd543c29704b2175976ca7af8792d.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${WASI_SDK:?set WASI_SDK to a wasi-sdk-25.0 directory}"

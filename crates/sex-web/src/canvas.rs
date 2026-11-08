@@ -404,6 +404,29 @@ impl Canvases {
     }
 }
 
+/// Feeds WebGL canvases the pictures they wait for, and shows each canvas that drew a new
+/// frame. True if any changed.
+pub fn present_gl(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -> bool {
+    let mut any = false;
+    for (node, canvas) in gl.by_node.iter_mut() {
+        for (target, tex, src, flip, premul) in core::mem::take(&mut canvas.pictures) {
+            let Some((_, img)) = fonts.images.iter().find(|(s, _)| *s == src) else { continue };
+            canvas.ctx.upload_picture(target, tex, img.width as u32, img.height as u32, &img.pixels, flip, premul);
+        }
+        if canvas.ctx.frame == canvas.shown { continue; }
+        canvas.shown = canvas.ctx.frame;
+        let (width, height) = (canvas.ctx.width as usize, canvas.ctx.height as usize);
+        let image = Image { width, height, pixels: canvas.ctx.present(canvas.alpha) };
+        let name = alloc::format!("canvas:{node}");
+        match fonts.images.iter_mut().find(|(s, _)| *s == name) {
+            Some(slot) => slot.1 = image,
+            None => fonts.images.push((name, image)),
+        }
+        any = true;
+    }
+    any
+}
+
 /// A canvas element's drawing size: its `width` and `height` attributes, 300 by 150 by default.
 pub fn canvas_size(dom: &sex_html::dom::Dom, node: usize) -> (u32, u32) {
     let get = |name, default| dom.attr(node, name).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(default);

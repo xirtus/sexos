@@ -264,7 +264,7 @@ impl Browser {
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let painted = self.canvases.run_queue(&mut self.fonts, &doc.dom, queue);
+        let painted = self.canvases.run_queue(&mut self.fonts, &doc.dom, queue) | sex_web::canvas::present_gl(&mut self.fonts, &mut doc.gl);
         if dirty { self.relayout(); }
         if draw && (dirty || painted) { self.draw(); return true; }
         false
@@ -455,3 +455,4 @@ pub extern "C" fn _start() -> ! {
         }
     }
 }
+

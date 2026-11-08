@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0"]
+exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1"]
 members = [
     "kernel",
     "servers/sexbell",
@@ -32,6 +32,7 @@ members = [
     "crates/sex-app",
     "crates/sex-html",
     "crates/sex-js",
+    "crates/sex-gl",
     "crates/sex-web",
     "apps/hum",
     "purple-scanout",
@@ -102,3 +103,11 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.wasmparser]
 opt-level = 3
+# naga's GLSL front end runs in programs: its preprocessor, made no_std (vendor/pp-rs-0.2.1).
+[patch.crates-io]
+pp-rs = { path = "vendor/pp-rs-0.2.1" }
+# The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
+[profile.dev.package.sex-gl]
+opt-level = 3
+[profile.dev.package.naga]
+opt-level = 2
