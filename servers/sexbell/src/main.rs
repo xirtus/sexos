@@ -584,8 +584,9 @@ pub extern "C" fn _start() -> ! {
         // While sound plays, keep feeding the card between messages.
         let msg = loop {
             if !sound::busy() { break paging_probe::next_message(); }
-            if let Some(m) = paging_probe::try_next_message() { break m; }
+            // Feed the card first, so a steady inbox can't starve playback.
             sound::pump();
+            if let Some(m) = paging_probe::try_next_message() { break m; }
             if sound::busy() { let _ = sex_pdx::sys_wait_self_ticks(1); }
         };
         paging_probe::check_retained();
@@ -1392,9 +1393,11 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::OP_BELL_TONE => {
                 // Fire and forget, like a notification: arg0 Hz (0 rests), arg1 ms, arg2 volume %.
                 let volume = if msg.arg2 == 0 { 30 } else { msg.arg2 };
-                let queued = sound::tone(msg.arg0, msg.arg1, volume);
-                sex_pdx::serial_record!("[bell.sound.tone] caller_pd={} hz={} ms={} volume={} queued={} card={}",
-                    msg.caller_pd, msg.arg0, msg.arg1, volume, queued as u8, sound::present() as u8);
+                // Sound draws attention, so a muted or noisy sender plays nothing.
+                let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd) && check_spam_budget(msg.caller_pd);
+                let queued = allowed && sound::tone(msg.arg0, msg.arg1, volume);
+                sex_pdx::serial_record!("[bell.sound.tone] caller_pd={} hz={} ms={} volume={} queued={} card={} allowed={}",
+                    msg.caller_pd, msg.arg0, msg.arg1, volume, queued as u8, sound::present() as u8, allowed as u8);
             }
 
             _ => {
