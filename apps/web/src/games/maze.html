@@ -140,7 +140,7 @@ function diamond(t) {
 }
 
 // ---- the walker ----
-let lastDir = 1, drawn = 0, cell = 0, facing = 1, angle = 0, px = CELL / 2, pz = CELL / 2, anim = null, auto = false, steps = 0, won = false, clock = 0;
+let raf = 0, lastDir = 1, drawn = 0, cell = 0, facing = 1, angle = 0, px = CELL / 2, pz = CELL / 2, anim = null, auto = false, steps = 0, won = false, clock = 0;
 const yaw = d => d * Math.PI / 2;
 function multiply(a, b) {
   const o = new Float32Array(16);
@@ -192,7 +192,7 @@ function begin(kind, d) {
     anim = { kind, fx: px, fz: pz, tx: (next % SIZE + 0.5) * CELL, tz: ((next / SIZE | 0) + 0.5) * CELL, t: 0 };
     cell = next; steps++; lastDir = dir;
   }
-  requestAnimationFrame(frame);
+  raf = requestAnimationFrame(frame);
 }
 function frame() {
   clock += 0.15;
@@ -211,7 +211,7 @@ function frame() {
   const t0 = performance.now();
   draw();
   drawn++;
-  if (anim) requestAnimationFrame(frame);
+  if (anim) raf = requestAnimationFrame(frame);
   else console.log('maze stopped cell ' + cell + ' facing ' + facing + ' frames ' + drawn + ' ms ' + Math.round(performance.now() - t0));
 }
 // On reaching the gold, step back to the doorway and look at it.
@@ -222,7 +222,7 @@ function showGold() {
   while (angle - to > Math.PI) to += 2 * Math.PI;
   facing = lastDir;
   anim = { kind: 'win', from: angle, to, fx: px, fz: pz, tx: cx + DX[back] * CELL * 0.45, tz: cz + DZ[back] * CELL * 0.45, t: 0 };
-  requestAnimationFrame(frame);
+  raf = requestAnimationFrame(frame);
 }
 // Right-hand rule: turn right if open, else go ahead, else turn left.
 function autoStep() {
@@ -234,6 +234,7 @@ function autoStep() {
 }
 let autoTurned = -1;
 function newMaze() {
+  cancelAnimationFrame(raf); // a step in progress belongs to the old maze
   carve(); build();
   cell = 0; facing = (open[0] & 2) ? 1 : 2; angle = yaw(facing); px = pz = CELL / 2; steps = 0; won = false; anim = null; auto = false;
   say(); draw();
