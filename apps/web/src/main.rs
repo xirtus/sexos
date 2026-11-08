@@ -30,6 +30,8 @@ const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
 const MAX_REDIRECTS: usize = 6;
 const MAX_SCRIPTS: usize = 32;
+/// Layout recurses per nesting level, and scripts call back into it.
+const STACK_BYTES: usize = 2 << 20;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -42,7 +44,8 @@ fn clock() -> u64 { sex_pdx::get_ticks().saturating_mul(1_000_000) }
 /// The page's tree, with the script engine that owns it when the page has scripts.
 enum Doc {
     Plain(Document),
-    Scripted(Script<Document>),
+    /// Boxed: the engine is large, and programs have small stacks.
+    Scripted(alloc::boxed::Box<Script<Document>>),
 }
 impl Doc {
     fn get(&mut self) -> &mut Document { match self { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() } }
@@ -195,6 +198,7 @@ impl Browser {
     }
 
     /// The page's classic scripts in document order: inline text, or fetched from `src`.
+    #[inline(never)]
     fn scripts(&mut self, dom: &sex_html::dom::Dom, base: &str) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for n in dom.descendants(sex_html::dom::Dom::ROOT) {
@@ -216,6 +220,7 @@ impl Browser {
         out
     }
 
+    #[inline(never)]
     fn run_scripts(&mut self, scripts: Vec<(String, String)>) {
         let Doc::Plain(doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock))) else { return };
         let started = sex_pdx::get_ticks();
@@ -232,12 +237,13 @@ impl Browser {
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
         let _ = script.dispatch("ready");
-        self.doc = Doc::Scripted(script);
+        self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
         self.after_script(false);
     }
 
     /// After any script ran: print its console, take a navigation, and lay out again
     /// when it changed the page. Returns true if it drew.
+    #[inline(never)]
     fn after_script(&mut self, draw: bool) -> bool {
         let doc = self.doc.get();
         for (level, text) in doc.log.drain(..) {
@@ -256,6 +262,7 @@ impl Browser {
     }
 
     /// Styles and lays the page out again from the tree.
+    #[inline(never)]
     fn relayout(&mut self) {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
@@ -268,6 +275,7 @@ impl Browser {
     }
 
     /// Runs due timers and animation frames.
+    #[inline(never)]
     fn tick(&mut self) {
         let Some(script) = self.doc.script() else { self.timer = None; return };
         let next = script.dispatch("tick");
@@ -277,6 +285,7 @@ impl Browser {
     }
 
     /// Gives the page a key first. True if a handler kept it.
+    #[inline(never)]
     fn page_key(&mut self, key: sex_pdx::app_key::Key) -> bool {
         let name: String = match (nav(key), key.code) {
             (Some(Nav::Up), _) => "ArrowUp".into(),
@@ -398,7 +407,9 @@ impl Browser {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start() -> ! { sex_app::with_stack(STACK_BYTES, main) }
+
+extern "C" fn main() -> ! {
     let mut window = Window::open();
     window.title(b"Web");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
