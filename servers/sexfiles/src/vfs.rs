@@ -62,6 +62,14 @@ static DISKFS_SELECT_USED: AtomicU64 = AtomicU64::new(0);
 
 static DISKFS_BRIDGE_REUSE_PRINTED: AtomicU64 = AtomicU64::new(0);
 
+static DISKFS_BRIDGE_BUF_LEN: AtomicU64 = AtomicU64::new(0);
+
+/// Bytes of the block buffer one command may move; 0 until the buffer is viewed.
+pub(crate) fn diskfs_bridge_buf_len() -> u64 {
+    if diskfs_bridge_get_buf_va() == u64::MAX { return 0; }
+    DISKFS_BRIDGE_BUF_LEN.load(Ordering::Relaxed)
+}
+
 pub(crate) fn diskfs_bridge_get_buf_va() -> u64 {
     let va = DISKFS_BRIDGE_BUF_VA.load(Ordering::Relaxed);
     if va != 0 && va != u64::MAX {
@@ -77,10 +85,12 @@ pub(crate) fn diskfs_bridge_get_buf_va() -> u64 {
     let Ok(info) = sex_pdx::memory_region_info(sex_pdx::SLOT_BLOCK_BUFFER)
         else { return u64::MAX; };
     if info.peer_pd.is_none() || info.length < 4096 { return u64::MAX; }
+    let length = info.length.min(sex_pdx::BLOCK_MAX_RUN) & !4095;
     let new_va = sex_pdx::memory_region_view(
-        sex_pdx::SLOT_BLOCK_BUFFER, 0, 4096, QUERY_VIEW | READ | WRITE,
+        sex_pdx::SLOT_BLOCK_BUFFER, 0, length, QUERY_VIEW | READ | WRITE,
     ).map(|view| view.virtual_address).unwrap_or(u64::MAX);
     if new_va != 0 && new_va != u64::MAX {
+        DISKFS_BRIDGE_BUF_LEN.store(length, Ordering::Relaxed);
         DISKFS_BRIDGE_BUF_VA.store(new_va, Ordering::Relaxed);
         sex_pdx::serial_record!(
             "[sexfiles.bridge.diskfs.buf.ready] buf_va={:#x} region_id={} length={} peer_pd={}",

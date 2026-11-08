@@ -15,6 +15,8 @@ static mut SLOTS: [Slot; CACHE] = [Slot::EMPTY; CACHE];
 static mut USED: [u64; MAP_WORDS] = [0; MAP_WORDS];
 static mut PENDING: [u64; MAP_WORDS] = [0; MAP_WORDS];
 static mut SCRATCH: [u8; BLOCK] = [0; BLOCK];
+/// Files' own copy of one request's data.
+static mut OWN: [u8; w::DATA_MAX] = [0; w::DATA_MAX];
 static mut STATE: State = State::Untried;
 /// Writes are not committed one request at a time (each commit costs two device
 /// flushes). They are committed on SYNC, before any other change, once this many bytes
@@ -37,20 +39,34 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
 pub struct Disk { blocks: u64 }
+impl Disk {
+    /// The shared block buffer, as long as one command may move.
+    fn buffer() -> Result<&'static mut [u8], ()> {
+        let va = crate::vfs::diskfs_bridge_get_buf_va();
+        let len = crate::vfs::diskfs_bridge_buf_len() as usize;
+        if va == 0 || va == u64::MAX || len < BLOCK { return Err(()); }
+        Ok(unsafe { core::slice::from_raw_parts_mut(va as *mut u8, len) })
+    }
+    fn offset(block: u64) -> u64 { (w::BASE_LBA + block * SECTORS) * 512 }
+}
 impl Device for Disk {
     fn blocks(&self) -> u64 { self.blocks }
-    fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> {
-        let va = crate::vfs::diskfs_bridge_get_buf_va();
-        if va == 0 || va == u64::MAX { return Err(()); }
-        if DiskFs::diskfs_block_read((w::BASE_LBA + block * SECTORS) * 512, BLOCK as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
-        out.copy_from_slice(unsafe { core::slice::from_raw_parts(va as *const u8, BLOCK) });
+    fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> { self.read_run(block, out) }
+    fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> Result<(), ()> { self.write_run(block, data) }
+    fn run_blocks(&self) -> usize { crate::vfs::diskfs_bridge_buf_len() as usize / BLOCK }
+    // One command per run: per-command cost, not bytes, is what a disk charges for.
+    fn read_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
+        let buf = Self::buffer()?;
+        if out.is_empty() || out.len() % BLOCK != 0 || out.len() > buf.len() { return Err(()); }
+        if DiskFs::diskfs_block_read(Self::offset(first), out.len() as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
+        out.copy_from_slice(&buf[..out.len()]);
         Ok(())
     }
-    fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> Result<(), ()> {
-        let va = crate::vfs::diskfs_bridge_get_buf_va();
-        if va == 0 || va == u64::MAX { return Err(()); }
-        unsafe { core::slice::from_raw_parts_mut(va as *mut u8, BLOCK) }.copy_from_slice(data);
-        if DiskFs::diskfs_block_write((w::BASE_LBA + block * SECTORS) * 512, BLOCK as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
+    fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
+        let buf = Self::buffer()?;
+        if data.is_empty() || data.len() % BLOCK != 0 || data.len() > buf.len() { return Err(()); }
+        buf[..data.len()].copy_from_slice(data);
+        if DiskFs::diskfs_block_write(Self::offset(first), data.len() as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         Ok(())
     }
     fn flush(&mut self) -> Result<(), ()> {
@@ -357,28 +373,25 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             fs.commit()?;
             Ok(0)
         }
+        // Both go through private memory: the client can change its region at any time, and
+        // checksums must be over the bytes we keep, not bytes it might still be changing.
         w::READ => {
             let st = fs.open(path)?;
-            let want = (r.length as usize).min(data.len());
-            Ok(fs.read(st.id, r.offset, &mut data[..want])? as u32)
+            let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+            let want = (r.length as usize).min(data.len()).min(own.len());
+            let n = fs.read(st.id, r.offset, &mut own[..want])?;
+            data[..n].copy_from_slice(&own[..n]);
+            Ok(n as u32)
         }
         w::WRITE => {
-            if r.length as usize > data.len() { return Err(Error::TooBig); }
+            let total = r.length as usize;
+            let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+            if total > data.len() || total > own.len() { return Err(Error::TooBig); }
             let st = fs.open(path)?;
-            let mut own = [0u8; BLOCK];
-            let (mut done, total) = (0usize, r.length as usize);
-            while done < total {
-                let take = (total - done).min(BLOCK);
-                own[..take].copy_from_slice(&data[done..done + take]);
-                // After progress, an error ends the write short: the prefix is real and
-                // counted, so it commits with the rest (a short write, as on Linux).
-                let wrote = match fs.write(st.id, r.offset + done as u64, &own[..take], now) {
-                    Ok(n) => n, Err(e) if done == 0 || matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) => return Err(e), Err(_) => break,
-                };
-                done += wrote;
-                if wrote < take { break; }
-            }
-            Ok(done as u32)
+            own[..total].copy_from_slice(&data[..total]);
+            // sexfs ends the write short after progress, as Linux does, so the counted
+            // prefix commits with the rest.
+            Ok(fs.write(st.id, r.offset, &own[..total], now)? as u32)
         }
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }
         w::SYNC => { fs.commit()?; Ok(0) }

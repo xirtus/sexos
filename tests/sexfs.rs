@@ -6,9 +6,23 @@ use sexfs::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Default)]
-struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u8; BLOCK]>)> , size: u64, writes: u64, flushes: u64, crash_flush: Option<u64>, crash_at: Option<u64>, seed: u64, fail_reads: bool }
+struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u8; BLOCK]>)> , size: u64, writes: u64, flushes: u64, crash_flush: Option<u64>, crash_at: Option<u64>, seed: u64, fail_reads: bool, runs: usize, run_cmds: u64 }
 impl Device for Disk {
     fn blocks(&self) -> u64 { self.size }
+    fn run_blocks(&self) -> usize { self.runs.max(1) }
+    // Runs still land block by block, so a power cut can tear a run anywhere.
+    fn write_run(&mut self, first: u64, data: &[u8]) -> std::result::Result<(), ()> {
+        assert!(data.len() % BLOCK == 0 && data.len() / BLOCK <= self.runs.max(1));
+        self.run_cmds += 1;
+        for (i, c) in data.chunks_exact(BLOCK).enumerate() { self.write(first + i as u64, c.try_into().unwrap())?; }
+        Ok(())
+    }
+    fn read_run(&mut self, first: u64, out: &mut [u8]) -> std::result::Result<(), ()> {
+        assert!(out.len() % BLOCK == 0 && out.len() / BLOCK <= self.runs.max(1));
+        self.run_cmds += 1;
+        for (i, c) in out.chunks_exact_mut(BLOCK).enumerate() { self.read(first + i as u64, c.try_into().unwrap())?; }
+        Ok(())
+    }
     fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> std::result::Result<(), ()> {
         if self.fail_reads { return Err(()); }
         if let Some((_, b)) = self.volatile.iter().rev().find(|(i, _)| *i == block) { *out = **b; return Ok(()); }
@@ -190,6 +204,37 @@ fn holes_and_large_files_read_back() {
     assert!(fs.verify().unwrap().1 >= (data.len() / BLOCK) as u64);
 }
 #[test]
+fn whole_blocks_travel_in_runs() {
+    let mut fs = fresh(40960);
+    fs.device().runs = 32;
+    let id = fs.create(b"big", 1).unwrap();
+    let data = bytes_of(7, 1 << 20);
+    // 1 MiB in 64 KiB writes: 16 writes of 16 blocks, each one run.
+    for (i, chunk) in data.chunks(65536).enumerate() { assert_eq!(fs.write(id, i as u64 * 65536, chunk, 1).unwrap(), 65536); }
+    let writes = fs.device().run_cmds;
+    assert_eq!(writes, 16, "one device command per write");
+    fs.commit().unwrap();
+    let mut back = vec![0u8; 1 << 20];
+    for (i, chunk) in back.chunks_mut(131072).enumerate() { assert_eq!(fs.read(id, i as u64 * 131072, chunk).unwrap(), 131072); }
+    assert!(back == data);
+    // Tree nodes allocated between writes can split a read in two, never into pages.
+    let reads = fs.device().run_cmds - writes;
+    assert!((8..=16).contains(&reads), "{reads} device commands for 1 MiB of reads");
+    // Unaligned edges and a partly overwritten middle still read back, through remount.
+    let patch = bytes_of(9, 70000);
+    fs.write(id, 5000, &patch, 2).unwrap();
+    let mut want = data.clone();
+    want[5000..75000].copy_from_slice(&patch);
+    fs.commit().unwrap();
+    let (dev, mem) = fs.into_parts();
+    let mut fs = Fs::mount(dev, mem).unwrap();
+    let mut back = vec![0u8; 1 << 20];
+    assert_eq!(fs.read(id, 0, &mut back).unwrap(), 1 << 20);
+    assert!(back == want);
+    // A run read checks every block: damage inside a run is caught.
+    fs.verify().unwrap();
+}
+#[test]
 fn deleting_gives_all_space_back_after_commit() {
     let mut fs = fresh(8192);
     let start = fs.statfs().free;
@@ -231,6 +276,7 @@ fn matches_a_model_through_remounts() {
     for seed in 1..=8u64 {
         let mut r = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
         let mut fs = fresh(20000);
+        if seed % 2 == 1 { fs.device().runs = 32; }
         let mut model = Model::new();
         for tick in 0..4000 {
             step(&mut fs, &mut model, &mut r, tick).unwrap();
@@ -270,6 +316,7 @@ fn a_power_cut_at_any_write_leaves_a_whole_commit() {
     for seed in 1..=400u64 {
         let mut r = Rng(seed.wrapping_mul(0xD1342543DE82EF95) | 1);
         let mut fs = fresh(20000);
+        if seed % 4 < 2 { fs.device().runs = 1 + (seed % 32) as usize; }
         let mut model = Model::new();
         let mut committed = Model::new();
         // Run far enough to have real state, then cut power at a random write.

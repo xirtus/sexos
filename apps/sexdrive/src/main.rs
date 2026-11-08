@@ -9,7 +9,7 @@ use sex_pdx::{
     SLOT_DMA_REGION, SLOT_FRAME_REGION, SLOT_BLOCK_BUFFER,
     BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_CAPACITY,
     BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
-    BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER,
+    BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_MAX_RUN,
 };
 
 
@@ -169,8 +169,9 @@ fn init_dma_region() -> bool {
         _ => return false,
     };
     let mut pool = match DmaRegionPool::new(view) { Ok(pool) => pool, Err(_) => return false };
-    let read = match pool.reserve(PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
-    let write = match pool.reserve(PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
+    // Each bounce lease holds one whole run plus, after it, the page of its PRP list.
+    let read = match pool.reserve(BLOCK_MAX_RUN + PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
+    let write = match pool.reserve(BLOCK_MAX_RUN + PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
     unsafe {
         DMA_VIEW = Some(view);
         DMA_POOL = Some(pool);
@@ -205,6 +206,22 @@ const ADMIN_POLLS: u32 = 64_000_000;
 fn stop_uncertain_io() {
     unsafe { NVME_IO_STATE.ready = false; }
     serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
+}
+
+/// PRP2 for `size` bytes of a lease buffer: none for one page, the second page for two,
+/// otherwise the PRP list kept in the page after the run. The buffer is physically
+/// contiguous (one BOOT DMA region), so entry i is simply base + i pages.
+fn prp2_for(buffer: &sex_pdx::dma_pool::DmaBuffer, size: u64) -> Option<u64> {
+    let pages = size.div_ceil(PAGE_SIZE);
+    if pages == 0 || pages > BLOCK_MAX_RUN / PAGE_SIZE { return None; }
+    if pages == 1 { return Some(0); }
+    if pages == 2 { return Some(buffer.physical_address + PAGE_SIZE); }
+    if buffer.length < BLOCK_MAX_RUN + PAGE_SIZE { return None; }
+    let list = (buffer.virtual_address + BLOCK_MAX_RUN) as *mut u64;
+    for i in 1..pages {
+        unsafe { core::ptr::write_volatile(list.add((i - 1) as usize), buffer.physical_address + i * PAGE_SIZE); }
+    }
+    Some(buffer.physical_address + BLOCK_MAX_RUN)
 }
 
 fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
@@ -434,7 +451,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
 // Called only with the peer-checked BOOT view from typed command admission.
 // The public block contract permits one page, not only the early 512-byte demo.
 fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->u64{
-    if size==0 || size>BLOCK_MAX_XFER || size>PAGE_SIZE
+    if size==0 || size>BLOCK_MAX_RUN
         || size%NVME_LBA_BYTES!=0 || offset%NVME_LBA_BYTES!=0
         || offset.checked_add(size).is_none(){return BLOCK_ERR_BAD_LEN}
     if buf_cap!=SLOT_BLOCK_BUFFER{return BLOCK_ERR_NO_DEVICE}
@@ -446,8 +463,7 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
 
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     if size == 0
-        || size > BLOCK_MAX_XFER
-        || size > PAGE_SIZE
+        || size > BLOCK_MAX_RUN
         || (offset % NVME_LBA_BYTES) != 0
         || (size % NVME_LBA_BYTES) != 0
         || dst_va == 0
@@ -510,11 +526,9 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    unsafe {
-        for i in 0..(PAGE_SIZE / 8) as usize {
-            core::ptr::write_volatile((data_va as *mut u64).add(i), 0);
-        }
-    }
+    if transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }
+    unsafe { core::ptr::write_bytes(data_va as *mut u8, 0, size as usize); }
+    let Some(prp2) = prp2_for(&transfer.buffer, size) else { return BLOCK_ERR_BAD_LEN; };
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES).saturating_sub(1);
@@ -534,13 +548,15 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(1), 1u32); // NSID=1
         core::ptr::write_volatile(sqe_ptr.add(6), (data_phys & 0xFFFF_FFFF) as u32); // PRP1 low
         core::ptr::write_volatile(sqe_ptr.add(7), (data_phys >> 32) as u32); // PRP1 high
+        core::ptr::write_volatile(sqe_ptr.add(8), (prp2 & 0xFFFF_FFFF) as u32); // PRP2 low
+        core::ptr::write_volatile(sqe_ptr.add(9), (prp2 >> 32) as u32); // PRP2 high
         core::ptr::write_volatile(sqe_ptr.add(10), (slba & 0xFFFF_FFFF) as u32); // SLBA low
         core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=typed op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=capability_region last_lba={}",
-        cid as u64, 1u64, slba, nlb, size, data_phys, 0u64, dst_va, data_phys, SLOT_BLOCK_BUFFER, last_lba
+        cid as u64, 1u64, slba, nlb, size, data_phys, prp2, dst_va, data_phys, SLOT_BLOCK_BUFFER, last_lba
     ); }
     compiler_fence(Ordering::SeqCst);
     if hot_log() { serial_println!(
@@ -635,15 +651,8 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         NVME_IO_STATE.cq_phase = cq_phase;
     }
 
-    unsafe {
-        let src = data_va as *const u8;
-        let dst = dst_va as *mut u8;
-        let mut i = 0usize;
-        while i < size as usize {
-            core::ptr::write_volatile(dst.add(i), core::ptr::read_volatile(src.add(i)));
-            i += 1;
-        }
-    }
+    // The CQE was observed (acquire) above, so the device's data is complete.
+    unsafe { core::ptr::copy_nonoverlapping(data_va as *const u8, dst_va as *mut u8, size as usize); }
     if hot_log() { serial_println!(
         "[sexdrive.block.read.handoff.copy.ok] phase=B len={}",
         size
@@ -755,7 +764,7 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     // Success chatter shares the existing finite hot-log budget. Device errors,
     // timeout/quarantine and actual FLUSH receipts remain unconditional.
-    if size == 0 || size > PAGE_SIZE || size > BLOCK_MAX_XFER
+    if size == 0 || size > BLOCK_MAX_RUN
         || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
         || offset.checked_add(size).map_or(true,|end|end>device_sectors()*NVME_LBA_BYTES)
         || src_va == 0 || src_va == u64::MAX {
@@ -806,17 +815,9 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    unsafe {
-        for i in 0..(PAGE_SIZE as usize) {
-            core::ptr::write_volatile((write_va as *mut u8).add(i), 0u8);
-        }
-        let mut i = 0usize;
-        while i < size as usize {
-            let b = core::ptr::read_volatile((src_va as *const u8).add(i));
-            core::ptr::write_volatile((write_va as *mut u8).add(i), b);
-            i += 1;
-        }
-    }
+    // A private copy: the client cannot change the bytes after we hand them to the device.
+    unsafe { core::ptr::copy_nonoverlapping(src_va as *const u8, write_va as *mut u8, size as usize); }
+    let Some(prp2) = prp2_for(&transfer.buffer, size) else { return BLOCK_ERR_BAD_LEN; };
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES - 1) as u32;
@@ -836,6 +837,8 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(1), 1u32);
         core::ptr::write_volatile(sqe_ptr.add(6), (write_phys & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(sqe_ptr.add(7), (write_phys >> 32) as u32);
+        core::ptr::write_volatile(sqe_ptr.add(8), (prp2 & 0xFFFF_FFFF) as u32);
+        core::ptr::write_volatile(sqe_ptr.add(9), (prp2 >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr.add(10), (slba & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr.add(12), nlb);
@@ -850,7 +853,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     ); }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=typed op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=capability_region last_lba={}",
-        write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, src_va, write_phys, SLOT_BLOCK_BUFFER, last_lba
+        write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, prp2, src_va, write_phys, SLOT_BLOCK_BUFFER, last_lba
     ); }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
@@ -2998,7 +3001,7 @@ fn service_next_request(){
     } else { None };
     // [sexblock.abi.request.decode] — dispatch on typed command
     let reply_val: u64 = if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
-        && (size == 0 || size > BLOCK_MAX_XFER || offset % BLOCK_SECTOR_SIZE != 0) {
+        && (size == 0 || size > BLOCK_MAX_RUN || offset % BLOCK_SECTOR_SIZE != 0) {
         BLOCK_ERR_BAD_LEN
     } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && block_view.is_none() {
         serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
