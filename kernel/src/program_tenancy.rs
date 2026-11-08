@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Windowed program rows past the first few share one hardware key, as there are only
 //! sixteen. They take turns: only the row about to run has its pages present, so a row
-//! can never reach another's memory. All of them run on core 0, one at a time, which
+//! can never reach another's memory. All of them run on one core, one at a time, which
 //! is what makes one set of present bits enough in a single address space.
 use crate::app_resource_state::{PrivatePage, MAX_PAGES};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -97,7 +97,7 @@ pub fn release(target: u32) {
 pub fn before_dispatch(pd: u64) {
     let Ok(target) = u32::try_from(pd) else { return };
     if !shared(target) { return; }
-    assert_eq!(crate::core_local::CoreLocal::get().core_id, 0, "PROGRAM_POOL_CORE");
+    assert_eq!(crate::core_local::CoreLocal::get().core_id, crate::smp::home_core(pd), "PROGRAM_POOL_CORE");
     let mut pool = POOL.lock();
     if pool.tenant == target { return; }
     let old = pool.tenant;

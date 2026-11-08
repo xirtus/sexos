@@ -2,7 +2,8 @@
 //! Starts the other cores. Each gets its own GDT, TSS, kernel stack and CoreLocal,
 //! and the boot core's control registers. All answer TLB shootdowns, so a page removed
 //! on one core is gone on all of them. Core 1 is the guest core and runs program
-//! records, away from the desktop. Cores 2 and up run the services that have moved.
+//! records, away from the desktop. Cores 2 and up run the services that have moved, apps
+//! and programs.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use limine::mp::MpInfo;
 use limine::request::MpResponse;
@@ -28,6 +29,10 @@ pub fn home_core(pd: u64) -> u32 {
     if spare == 0 { return 0; }
     // Apps of every incarnation follow, spread by domain.
     if sex_pdx::app_catalog::app_of(pd as u32).is_some_and(|app| app != sex_pdx::app_catalog::App::Program) { return 2 + pd as u32 % spare; }
+    // Programs leave the desktop's core too. Rows sharing a key take turns on one core,
+    // the last spare, since one set of present bits serves one core at a time.
+    if crate::program_tenancy::shared(pd as u32) { return 2 + spare - 1; }
+    if sex_pdx::app_catalog::app_of(pd as u32) == Some(sex_pdx::app_catalog::App::Program) { return 2 + pd as u32 % spare; }
     match MOVED.iter().position(|m| *m == pd) { Some(index) => 2 + index as u32 % spare, None => 0 }
 }
 static LAPIC_OF: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];

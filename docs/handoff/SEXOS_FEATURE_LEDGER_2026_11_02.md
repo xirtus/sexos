@@ -2392,3 +2392,16 @@ row no longer waits for the row before it to end.
 - **Timing.** Rounds took 83 to 147 seconds of wall time, but a steady 57 to 59 thousand guest
   ticks each, so the guest did the same work in the same guest time throughout; the growth was
   on the host side (the gate rereads a 140 MB serial log). Not proof of a full day on hardware.
+
+## Programs leave the desktop's core (2026-11-08)
+
+- **What runs now.** On a machine with spare cores, program rows no longer run on core 0 with
+  Shell and Display. Rows on their own keys spread over the spare cores; the rows that share
+  a key take turns on the last spare core, which their single set of present bits needs.
+  A busy program can no longer slow the desktop's own core. One core still runs everything.
+- **Evidence.** At 4 cores: eight programs side by side, Jot, program launch, the shared-key
+  isolation probe (row 45 reading live row 44 is ended, no breach) and the forced-close probe.
+  The tenancy now asserts that a shared row runs on its home core, so a misplaced row would
+  stop the kernel rather than share present bits across cores. At 1 core: program disk, Jot
+  and launch on the same kernel.
+- **Limits.** Shared-key programs still never run in parallel with each other.
