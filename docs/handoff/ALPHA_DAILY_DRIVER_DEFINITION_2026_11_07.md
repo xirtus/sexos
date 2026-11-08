@@ -29,7 +29,7 @@ One person can install SexOS on a real Intel or AMD PC with PKU, and for a worki
 
 | | Need | Today | Gap |
 |---|---|---|---|
-| 1 | Install and boot | Boots from ISO in QEMU only | **Never run on real hardware.** No installer |
+| 1 | Install and boot | `install` writes a boot image to the disk; boots from it under UEFI, in QEMU | **Never run on real hardware.** Image built on a host; MBR only |
 | 2 | Files | sexfs: COW B-tree, directories, gigabytes, crash-safe commits | Bigger caches, fsck tooling, real-disk testing |
 | 3 | Internet | DHCP, DNS, checked TLS 1.3; `fetch` and a Browser that opens real sites | TLS 1.2, more cipher suites, one flow at a time, no real NIC tested |
 | 4 | Programs | Installed as files, 8 windowed at once with keys and their own folder, `sex-app` SDK, 4,096 background | Network for programs, arguments, more rows, signed installs |
@@ -37,7 +37,7 @@ One person can install SexOS on a real Intel or AMD PC with PKU, and for a worki
 | 5 | Windows | Tiling grid, title bars on every window | **Move, resize, overlap** |
 | 5 | Graphics | Fixed bitmap font, text-first | **Scalable font, pixel surfaces** |
 | 6 | Apps | Spindle, Quil, Linen, Browser (text reader of real sites), Jot | Settings, image viewer, layout and CSS in the browser |
-| 7 | Reliability | 30 minutes qualified, services don't restart | **Restartable services, day-long soak** |
+| 7 | Reliability | Network and Files restart after a crash; multi-hour soak of a working session | Display, Shell and drivers don't restart; day-long soak on hardware |
 | 8 | Design | Held throughout | Keep holding it |
 
 ## Order of work
