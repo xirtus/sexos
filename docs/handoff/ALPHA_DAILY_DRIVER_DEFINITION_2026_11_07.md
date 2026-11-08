@@ -25,18 +25,18 @@ One person can install SexOS on a real Intel or AMD PC with PKU, and for a worki
 8. **Stay honest about the design.** One address space, boot-only capability genesis,
    typed authority, PKU, no Unix process model. A POSIX layer may come later, as a guest.
 
-## Where it stands
+## Where it stands (updated 2026-11-08)
 
 | | Need | Today | Gap |
 |---|---|---|---|
 | 1 | Install and boot | Boots from ISO in QEMU only | **Never run on real hardware.** No installer |
-| 2 | Files | DiskFS is 1 MiB, 15 slots, flat | **A real filesystem** |
-| 3 | Internet | One fixed BOOT endpoint, no DHCP | **DHCP, any DNS name, any HTTPS site** |
-| 4 | Programs | 3 windowed, 4,096 with no routes, host-installed | **Dynamic windowed programs with routes, install on the machine, SDK** |
+| 2 | Files | sexfs: COW B-tree, directories, gigabytes, crash-safe commits | Bigger caches, fsck tooling, real-disk testing |
+| 3 | Internet | DHCP, DNS, checked TLS 1.3; `fetch` and a Browser that opens real sites | TLS 1.2, more cipher suites, one flow at a time, no real NIC tested |
+| 4 | Programs | Installed as files, 8 windowed at once with keys and their own folder, `sex-app` SDK, 4,096 background | Network for programs, arguments, more rows, signed installs |
 | 4 | Cores | Services and apps spread across cores | Shell and Display on core 0, no balancing, no interrupt routing |
-| 5 | Windows | Tiling rows, title bar on focus only | **Real window management** |
+| 5 | Windows | Tiling grid, title bars on every window | **Move, resize, overlap** |
 | 5 | Graphics | Fixed bitmap font, text-first | **Scalable font, pixel surfaces** |
-| 6 | Apps | Spindle, Quil, Linen, Browser (reader, no CSS, script subset) | Settings, image viewer, a much better browser |
+| 6 | Apps | Spindle, Quil, Linen, Browser (text reader of real sites), Jot | Settings, image viewer, layout and CSS in the browser |
 | 7 | Reliability | 30 minutes qualified, services don't restart | **Restartable services, day-long soak** |
 | 8 | Design | Held throughout | Keep holding it |
 
