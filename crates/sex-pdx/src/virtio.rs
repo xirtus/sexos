@@ -65,6 +65,7 @@ impl Layout {
 }
 
 /// The layout of the virtio device held at `slot`, checked against its view.
+#[cfg(target_arch = "x86_64")]
 pub fn layout(slot: u64) -> Result<Layout, u64> {
     let mut pages = [[0u64; 4]; 2];
     for (page, words) in pages.iter_mut().enumerate() {
@@ -79,6 +80,10 @@ pub fn layout(slot: u64) -> Result<Layout, u64> {
     }
     Ok(Layout::from_pages(pages[0], pages[1]))
 }
+
+/// Host builds (tests) have no kernel to ask.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn layout(_slot: u64) -> Result<Layout, u64> { Err(u64::MAX) }
 
 #[cfg(test)]
 mod tests {

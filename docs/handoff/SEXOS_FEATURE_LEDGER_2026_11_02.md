@@ -2665,3 +2665,18 @@ row no longer waits for the row before it to end.
   covered pixel exact against sex-font's cells) at 1 and 4 cores; program launch at 1
   core; display text, scene, cursor, frame output and surface-group host gates; Shell key
   routing in the clipboard host gate.
+
+## Tiles fill the space a floating window leaves (2026-11-08)
+
+- **What runs now.** When you let go of a window you moved or resized, the remaining tiled
+  windows retile across the whole content area; the floating one stays where it was put,
+  above them. The resize grip is now 8 pixels, the rim plus the content inset, so a mouse
+  can find it without covering any text.
+- **Gates.** `window_resize` now also checks the retile (`[shell.window.retile]`, another
+  window tiled from the left edge, the resized one untouched); window float.
+- **CI.** Master's GitHub CI had been red for weeks. The fixes so far: fetch crates before the
+  offline host gates; read `cargo tree` without CI's colour codes in the TLS platform check;
+  install mtools for the boot image; and update two log checkers to today's truth (more
+  than seven BOOT region grants, a 128 KiB runtime heap, PKU keys that no longer equal PD
+  ids, with leaves checked against each client's own key). Host builds on ARM got
+  non-x86 stubs for `program_memory::grow` and `virtio::layout`.
