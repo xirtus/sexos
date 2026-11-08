@@ -40,6 +40,7 @@ Type `help` for the full list.
 | `run NAME @FILE` | Give the program that one file of yours |
 | `spawn NAME COUNT`, `records`, `stopall [force]` | Background programs, thousands at once |
 | `install [FILE]` | Make this disk start SexOS |
+| `beep [HZ] [MS] [VOL]` | Play a note on the sound card (virtio sound in QEMU) |
 
 ## Programs
 

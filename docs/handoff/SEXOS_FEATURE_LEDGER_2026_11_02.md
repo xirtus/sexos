@@ -2442,3 +2442,31 @@ row no longer waits for the row before it to end.
   pixel gates) weren't rerun and will need the new oracle.
 - **Gates.** Program disk, launch, file, Jot, net and browser web at 1 core; Display's host
   gates rewritten for Geist; Python tests and all non-QEMU gates except the older ones.
+
+## Sound on a virtio sound card (2026-11-08)
+
+- **What runs now.** With a virtio sound card (QEMU `-device virtio-sound-pci`), SexOS plays
+  sound. Spindle's `beep [HZ] [MS] [VOL]` plays a note, and a notification Bell files in the
+  "now" lane plays a two-note chime. Without a card nothing changes: Bell logs
+  `[bell.sound.absent]` and `beep` does nothing.
+- **Design.** BOOT leases virtio PCI devices the way it leases the NIC: one BAR view (the
+  BAR holding all four virtio register blocks, at most 64 KiB), the block offsets as
+  immutable BOOT metadata (`sex_pdx::virtio::Layout`, read with syscall 75), a 256 KiB DMA
+  pool and the memory/bus-master command bits. No driver sees a physical register address.
+  `kernel/src/virtio_boot.rs` parses the vendor capabilities; `devmgr` routes each virtio
+  kind to its service. The Bell service (Senses organ) drives the card with the
+  `virtio-drivers` crate (rcore-os, MIT) through `servers/sexbell/src/sound.rs`: a transport
+  over the leased view, and a DMA layer that bounces buffers through the pool. Notes queue
+  (16) and stream a period (43 ms) at a time while Bell waits for messages, so Bell never
+  blocks on playback. The kernel restart path already quiesces any held PCI device.
+- **ABI.** Syscall 75 (virtio layout); `OP_BELL_TONE` 0xC8 (arg0 Hz, arg1 ms, arg2 volume);
+  `virtio::SLOT_SOUND` 20; virtio DMA region id 0x4200; `PciCapData.virtio`;
+  `devmgr::init` takes the Bell domain. `crates/sex-pdx/src/virtio.rs` joined the ABI inputs.
+- **Limits.** Fixed 48 kHz stereo S16, sine notes only: no PCM streaming from programs or
+  files yet (needs a shared buffer from the caller and a mixer). Only modern (non-transitional)
+  virtio ids. virtio-net, virtio-blk and virtio-input aren't leased yet; the same lease and
+  transport take them next (`virtio_boot::supported` and `devmgr::virtio`).
+- **Gates.** New `sound_gate.py`: QEMU records the card to WAV; 440 Hz/400 ms and
+  1000 Hz/300 ms notes come out at 440.0 and 1000.1 Hz, 400 and 310 ms, at 1 and 4 cores;
+  `--no-card` boots without a card. QEMU's WAV backend writes only delivered audio, so the
+  gate checks pitch and length, not the gap between notes. Program launch at 1 core.

@@ -22,7 +22,7 @@ def segments(path,rate=48000):
  while i<len(loud):
   if not loud[i]:i+=1;continue
   j=i
-  while j<len(loud) and (loud[j] or any(loud[j:j+3])):j+=1
+  while j<len(loud) and loud[j]:j+=1
   part=samples[i*window:j*window];ups=[k for k,(a,b) in enumerate(zip(part,part[1:])) if a<0<=b]
   hz=(len(ups)-1)*rate/(ups[-1]-ups[0]) if len(ups)>1 else 0
   found.append((i/100,(j-i)/100,hz));i=j
