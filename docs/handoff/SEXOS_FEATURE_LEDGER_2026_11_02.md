@@ -2490,3 +2490,21 @@ row no longer waits for the row before it to end.
   truncated and marker-damaged files that must error or decode, never panic.
   `program_view_gate` (PNG exact, JPEG within 2 levels, 900x700 shown at 771x600, a text
   file refused) passes at 1 and 4 cores with the heap branch merged.
+
+## Resize a window by its edges (2026-11-08)
+
+- **What runs now.** Drag a window's left, right or bottom edge, or a corner, and it changes
+  size; the text inside rewraps. A window sized by hand floats, so the tiling leaves it at
+  that size when other windows open. Zoom puts it back under the tiling.
+- **Design.** Shell already had resize hit zones and a Resizing state, but it sent the new
+  size straight to Display and to one local record, and the tiling then put the window
+  back. Resizing now goes through `apply_window_geometry`, the same step tiling and moves
+  use, sets `FRAME_FLAG_FLOATING` at the start of the drag, and follows absolute pointers
+  (tablets, QEMU) as well as relative ones.
+- **Limits.** The resize zone is the 4-pixel rim, which is narrow for a real mouse. The
+  other tiled windows don't grow into the space a shrunk window leaves until the next
+  tiling. Programs get no resize event; the text grid rewraps in Display, and a pixel
+  picture keeps its size. Not tried with a physical mouse.
+- **Gates.** New `window_resize` (corner drag of 120x80 pixels, exact new bounds, then a
+  program opens and the tiling leaves the window alone), window float and program launch
+  at 1 core; Python tests and all non-QEMU gates except the older ones.
