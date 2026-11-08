@@ -129,14 +129,14 @@ pub fn round_rect_path(rect: Rect, radii: impl Into<Radii>) -> Option<Path> {
     if !(rect.w > 0.0 && rect.h > 0.0) {
         return None;
     }
-    let max = rect.w.min(rect.h) / 2.0;
     let r = radii.into();
-    let (tl, tr, br, bl) = (
-        r.top_left.clamp(0.0, max),
-        r.top_right.clamp(0.0, max),
-        r.bottom_right.clamp(0.0, max),
-        r.bottom_left.clamp(0.0, max),
-    );
+    let (tl, tr, br, bl) =
+        (r.top_left.max(0.0), r.top_right.max(0.0), r.bottom_right.max(0.0), r.bottom_left.max(0.0));
+    // As CSS does: when the two corners sharing an edge overlap, shrink
+    // every radius by the same factor, so top-only radii can use the full height.
+    let fit = |edge: f32, a: f32, b: f32| if a + b > edge { edge / (a + b) } else { 1.0 };
+    let f = fit(rect.w, tl, tr).min(fit(rect.w, bl, br)).min(fit(rect.h, tl, bl)).min(fit(rect.h, tr, br));
+    let (tl, tr, br, bl) = (tl * f, tr * f, br * f, bl * f);
     let (l, t, rt, b) = (rect.x, rect.y, rect.right(), rect.bottom());
     let k = KAPPA;
     let mut p = PathBuilder::new();
@@ -523,6 +523,29 @@ mod tests {
         assert_eq!(c.pixel(29, 0), Some(0));
         assert_eq!(c.pixel(0, 29), Some(0xFFFF_0000));
         assert_eq!(c.pixel(29, 29), Some(0xFFFF_0000));
+    }
+
+    #[test]
+    fn top_radii_fit_a_bar_shorter_than_twice_the_radius() {
+        // A 30px title bar under 20px window corners must match the body's arc.
+        let mut body = canvas_buf(100, 100);
+        let mut c = Canvas::new(&mut body, 100, 100).unwrap();
+        c.fill_round_rect(Rect::new(0.0, 0.0, 100.0, 100.0), 20.0, RED);
+        let mut bar = canvas_buf(100, 100);
+        let mut c = Canvas::new(&mut bar, 100, 100).unwrap();
+        c.fill_round_rect(Rect::new(0.0, 0.0, 100.0, 30.0), Radii::top(20.0), RED);
+        for y in 0..20 {
+            for x in 0..100 {
+                let (b, t) = (body[(y * 100 + x) as usize] >> 24, bar[(y * 100 + x) as usize] >> 24);
+                assert!(t <= b + 1, "bar outside body silhouette at ({x},{y}): {t} > {b}");
+            }
+        }
+        // Overlapping corners shrink proportionally instead of crossing.
+        let mut buf = canvas_buf(20, 10);
+        let mut c = Canvas::new(&mut buf, 20, 10).unwrap();
+        c.fill_round_rect(Rect::new(0.0, 0.0, 20.0, 10.0), 100.0, RED);
+        assert_eq!(c.pixel(10, 5), Some(0xFFFF_0000));
+        assert_eq!(c.pixel(0, 0), Some(0));
     }
 
     #[test]
