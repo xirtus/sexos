@@ -4,10 +4,12 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+use alloc::vec;
 use sex_app::{files, net, Event, Window};
 
-static mut PAGE: [u8; 65536] = [0; 65536];
-static mut SCREEN: [u8; 6000] = [0; 6000];
+/// The most of a page Peek reads. It lives on the heap, so it costs only while Peek runs.
+const PAGE_BYTES: usize = 1024 * 1024;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -48,7 +50,7 @@ pub extern "C" fn _start() -> ! {
     window.title(b"Peek");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let url = files::args(&mut window, &mut args);
-    let (page, screen) = unsafe { (&mut *core::ptr::addr_of_mut!(PAGE), &mut *core::ptr::addr_of_mut!(SCREEN)) };
+    let mut screen = vec![0u8; sex_pdx::text_region::BYTES as usize];
     let head: &[u8] = b"Peek. F11 closes.\n\n";
     screen[..head.len()].copy_from_slice(head);
     let mut n = head.len();
@@ -56,9 +58,10 @@ pub extern "C" fn _start() -> ! {
         let say = b"Usage: run +net peek URL";
         screen[n..n + say.len()].copy_from_slice(say); n += say.len();
     } else {
-        match net::get(&mut window, url, page) {
+        let mut page = vec![0u8; PAGE_BYTES];
+        match net::get(&mut window, url, &mut page) {
             Ok((status, len)) => {
-                sex_pdx::serial_record!("[peek.got] status={} bytes={}", status, len);
+                sex_pdx::serial_record!("[peek.got] status={} bytes={} heap={}", status, len, sex_app::heap::held());
                 n += text(&page[..len], &mut screen[n..]);
             }
             Err(e) => {

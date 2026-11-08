@@ -1123,6 +1123,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod program_memory;
 pub mod fs;
 pub mod web;
 pub mod organs;
