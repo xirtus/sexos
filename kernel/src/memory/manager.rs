@@ -221,6 +221,7 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
 
     frame_allocator.buddy = true;
     *GLOBAL_VAS.lock() = Some(GlobalVas { mapper, frame_allocator });
+    crate::memory::kheap::prepare_growth();
 }
 
 pub unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable {
