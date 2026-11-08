@@ -238,6 +238,20 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - Long term, free space should live in the tree (extents), so memory stays flat
     however big the disk is.
 
+- Stage 3, fourth part (request size):
+  - A request could end in the middle of a block, because `DATA_MAX` (the region less
+    its 1 KiB path area, so 63 KiB) is not a whole number of 4 KiB blocks. That cost
+    Files a read-modify-write of one block per request. New `fs::IO_MAX` is `DATA_MAX` rounded down to whole blocks, and sex-app
+    reads and writes in IO_MAX pieces.
+  - The file region a program shares with Files grows from 64 KiB to 256 KiB, so one
+    request carries up to 252 KiB.
+  - ABI changes: `fs::REGION_BYTES` 64 KiB -> 256 KiB (and with it `DATA_MAX`); new
+    `fs::IO_MAX`.
+  - Bench, cycles per MiB (1 core): file write 107M -> 67M, read 49M -> 26M. Against
+    Linux on raw NVMe: read is now even (26M), and write is 2.2x slower (30M).
+  - Next for writes: queue depth (several commands in flight), so a request's runs
+    don't wait on each other.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be
