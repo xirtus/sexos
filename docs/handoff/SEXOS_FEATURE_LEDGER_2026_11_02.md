@@ -2910,3 +2910,18 @@ row no longer waits for the row before it to end.
 - **Gate.** `scripts/program_games_gate.py` now also starts Maze, compares its first frame and
   the frame after one step with the host render, and times the step.
 - Screenshot: `assets/sexos-games-maze-2026-11-08.png`.
+
+## Faster software shaders (2026-11-08)
+
+- **What changed.** `sex-gl` no longer walks the naga shader tree for every pixel. Each
+  shader is lowered once into a flat program (`Step`s with jumps; calls inlined, loops as
+  counted back-jumps), and common expressions become prepared operations (copy, swizzle,
+  compose, load, field, float binary ops, mat*vec, dot, normalize, min/max/clamp/mix) with
+  their operand shapes worked out ahead of time.
+- **Effect.** The lit textured cube bench (`cargo run --release -p sex-gl --example bench`,
+  410x274) goes from 24 ms to about 14 ms per frame on the host with an identical pixel
+  hash; host renders of the maze, WebGL and three.js pages are byte-identical before and
+  after. No ABI change.
+- **Evidence.** `cargo test -p sex-gl -p sex-js -p sex-web`, and the WebGL, Canvas, JS,
+  Web, games and three.js gates at 1 and 4 cores.
+- **Next.** Shade many pixels per step, then WebGPU (WGSL) on the same rasterizer.

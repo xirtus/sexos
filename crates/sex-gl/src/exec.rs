@@ -151,6 +151,101 @@ struct Code {
     arg_off: Vec<u32>,
     arg_lanes: Vec<u32>,
     ret_off: u32,
+    /// For `Access`/`AccessIndex`, by expression: element lanes and count, or for a
+    /// struct member (or constant index) the lane offset itself as `(offset, u32::MAX)`
+    /// with `fixed` set. Worked out once, so a run never looks at types.
+    acc: Vec<Acc>,
+    /// By expression: in `once`, in `on_entry`.
+    is_once: Vec<bool>,
+    is_on_entry: Vec<bool>,
+    /// One prepared operation per expression, run in place of `eval` for the common
+    /// cases (slots, sizes and shapes resolved once).
+    ops: Vec<Op>,
+}
+
+/// Copies `n` lanes within `r`; most values are 1 to 4 lanes, too few for `memmove`.
+#[inline(always)]
+fn lanes(r: &mut [u32], src: usize, dst: usize, n: usize) {
+    if n == 1 { r[dst] = r[src]; } else { r.copy_within(src..src + n, dst); }
+}
+
+/// One step of a stage's flat program: the entry point with every call inlined (shaders
+/// can't recurse) and control flow turned into jumps.
+#[derive(Clone, Debug)]
+enum Step {
+    /// A prepared expression.
+    Op(Op),
+    /// An expression `eval` runs: code (0.. functions, then the entry) and expression.
+    Eval { code: u32, h: Handle<naga::Expression> },
+    Store { ptr: u32, val: u32, n: u32 },
+    /// Copies registers into private memory (a local's initial value).
+    ToMem { off: u32, src: u32, n: u32 },
+    Zero { off: u32, n: u32 },
+    Jump(u32),
+    JumpIfZero { cond: u32, to: u32 },
+    JumpIfNonZero { cond: u32, to: u32 },
+    JumpIfEq { sel: u32, val: u32, to: u32 },
+    /// Starts loop counter `ctr`; `LoopBack` counts an iteration and jumps back unless
+    /// the loop ran `LOOP_LIMIT` times.
+    LoopEnter(u32),
+    LoopBack { ctr: u32, to: u32 },
+    Kill,
+    Nop,
+}
+
+/// Jumps waiting for a label while a body is lowered.
+#[derive(Default)]
+struct Lowering {
+    steps: Vec<Step>,
+    loops: u32,
+    /// Innermost last: jumps to patch at the end of the enclosing loop or switch.
+    breaks: Vec<Vec<usize>>,
+    /// Innermost loop last: jumps to patch at its continuing block.
+    continues: Vec<Vec<usize>>,
+    /// Jumps to patch at the end of the function being inlined.
+    returns: Vec<Vec<usize>>,
+}
+
+impl Lowering {
+    fn here(&self) -> u32 { self.steps.len() as u32 }
+    fn jump(&mut self, s: Step) -> usize { self.steps.push(s); self.steps.len() - 1 }
+    fn patch(&mut self, at: &[usize], to: u32) {
+        for &i in at {
+            match &mut self.steps[i] {
+                Step::Jump(t) | Step::JumpIfZero { to: t, .. } | Step::JumpIfNonZero { to: t, .. } | Step::JumpIfEq { to: t, .. } => *t = to,
+                _ => {}
+            }
+        }
+    }
+}
+
+/// A prepared expression. `Generic` falls back to `eval`.
+#[derive(Clone, Debug)]
+enum Op {
+    Generic,
+    Copy { dst: u32, src: u32, n: u32 },
+    Splat { dst: u32, src: u32, n: u32 },
+    Swizzle { dst: u32, src: u32, pat: [u8; 4], n: u32 },
+    Compose { dst: u32, parts: Box<[(u32, u32)]> },
+    Ptr { dst: u32, space: u32, off: u32 },
+    Load { dst: u32, ptr: u32, n: u32 },
+    /// A fixed offset into a pointer (`ptr`) or a value of `base_lanes` lanes.
+    Field { dst: u32, base: u32, off: u32, n: u32, ptr: bool, base_lanes: u32 },
+    /// Float arithmetic or comparison, lane by lane; `sa`/`sb` broadcast a scalar side.
+    FBin { op: B, dst: u32, a: u32, b: u32, n: u32, sa: bool, sb: bool },
+    FMatVec { dst: u32, m: u32, v: u32, rows: u32, cols: u32 },
+    Dot { dst: u32, a: u32, b: u32, n: u32 },
+    Normalize { dst: u32, a: u32, n: u32 },
+    FMax { dst: u32, a: u32, b: u32, n: u32, sb: bool },
+    FMin { dst: u32, a: u32, b: u32, n: u32, sb: bool },
+    Clamp { dst: u32, a: u32, lo: u32, hi: u32, n: u32, s: bool },
+    Mix { dst: u32, a: u32, b: u32, t: u32, n: u32, st: bool },
+}
+#[derive(Clone, Copy, Default)]
+struct Acc {
+    elem: u32,
+    count: u32,
+    fixed: Option<u32>,
 }
 
 /// A sampled texture lookup, answered by the draw call.
@@ -222,6 +317,10 @@ pub struct StageCode {
     /// Texture globals by name (`<sampler>_sxt`).
     pub textures: Vec<(String, u32)>,
     consts: Vec<u32>,
+    /// The entry point as one flat program.
+    steps: Vec<Step>,
+    loop_count: u32,
+    fhandles: Vec<Handle<Function>>,
 }
 
 /// Per-invocation memory for one stage.
@@ -230,15 +329,9 @@ pub struct Machine {
     mem: Vec<u32>,
     pub out: Vec<u32>,
     killed: bool,
+    loops: Vec<u32>,
 }
 
-enum Flow {
-    Next,
-    Break,
-    Continue,
-    Return,
-    Kill,
-}
 
 impl StageCode {
     pub fn new(module: Module, info: ModuleInfo) -> Result<Self, String> {
@@ -303,10 +396,27 @@ impl StageCode {
         }
         let mut st = Self {
             module: Box::new(module), info: Box::new(info), layout, funcs, entry, globals, regs_len, private_len, private_init,
-            global_off, uniform_len, inputs, outputs, out_lanes, textures, consts: Vec::new(),
+            global_off, uniform_len, inputs, outputs, out_lanes, textures, consts: Vec::new(), steps: Vec::new(), loop_count: 0, fhandles: Vec::new(),
         };
+        st.globals.acc = st.access_shapes(&st.globals, &st.module.global_expressions);
+        for i in 0..st.funcs.len() {
+            let (fh, _) = st.module.functions.iter().nth(i).unwrap();
+            st.funcs[i].acc = st.access_shapes(&st.funcs[i], &st.module.functions[fh].expressions);
+            st.funcs[i].ops = st.prepare(&st.funcs[i], &st.module.functions[fh].expressions);
+        }
+        st.entry.acc = st.access_shapes(&st.entry, &st.module.entry_points[0].function.expressions);
+        st.entry.ops = st.prepare(&st.entry, &st.module.entry_points[0].function.expressions);
+        st.fhandles = st.module.functions.iter().map(|(h, _)| h).collect();
+        let mut lw = Lowering::default();
+        st.lower_function(&mut lw, st.funcs.len());
+        st.steps = lw.steps;
+        // A jump to the very next step (a return at the end of a function) does nothing.
+        for i in 0..st.steps.len() {
+            if matches!(st.steps[i], Step::Jump(t) if t as usize == i + 1) { st.steps[i] = Step::Nop; }
+        }
+        st.loop_count = lw.loops;
         // Constant expressions, once.
-        let mut m = Machine { regs: vec![0; st.regs_len as usize], mem: vec![0; st.private_len as usize], out: Vec::new(), killed: false };
+        let mut m = Machine { regs: vec![0; st.regs_len as usize], mem: vec![0; st.private_len as usize], out: Vec::new(), killed: false, loops: Vec::new() };
         let empty: [u32; 0] = [];
         let no_tex = NoTextures;
         for h in st.globals.once.clone() { st.eval(&mut m, &st.globals, &st.module.global_expressions, h, &empty, &no_tex); }
@@ -362,11 +472,18 @@ impl StageCode {
             }
             if let Some(r) = &f.result { ret_off = *regs_len; *regs_len += layout.of(r.ty); }
         }
-        Code { src, slot, ty: tys.to_vec(), on_entry, once, local_off, local_init, arg_off, arg_lanes, ret_off }
+        let mut is_once = vec![false; exprs.len()];
+        for h in &once { is_once[h.index()] = true; }
+        let mut is_on_entry = vec![false; exprs.len()];
+        for h in &on_entry { is_on_entry[h.index()] = true; }
+        Code { src, slot, ty: tys.to_vec(), on_entry, once, local_off, local_init, arg_off, arg_lanes, ret_off, acc: Vec::new(), ops: Vec::new(), is_once, is_on_entry }
     }
 
+    /// The flat program's steps, for looking at.
+    pub fn describe(&self) -> alloc::vec::Vec<alloc::string::String> { self.steps.iter().map(|s| alloc::format!("{s:?}")).collect() }
+
     pub fn machine(&self) -> Machine {
-        Machine { regs: self.consts.clone(), mem: vec![0; self.private_len as usize], out: vec![0; self.out_lanes as usize], killed: false }
+        Machine { regs: self.consts.clone(), mem: vec![0; self.private_len as usize], out: vec![0; self.out_lanes as usize], killed: false, loops: vec![0; self.loop_count as usize] }
     }
 
     /// Runs the entry point. `input` fills each input binding's lanes; outputs land in `m.out`.
@@ -380,9 +497,7 @@ impl StageCode {
             }
         }
         for &(io, off, n) in &self.inputs { input(io, &mut m.regs[off as usize..(off + n) as usize]); }
-        let ep = &self.module.entry_points[0].function;
-        let flow = self.call(m, &self.entry, ep, uniforms, tex);
-        if matches!(flow, Flow::Kill) || m.killed { return false; }
+        if !self.exec(m, uniforms, tex) { return false; }
         let n = self.out_lanes as usize;
         if n > 0 {
             let s = self.entry.ret_off as usize;
@@ -392,118 +507,345 @@ impl StageCode {
         true
     }
 
-    fn call(&self, m: &mut Machine, c: &Code, f: &Function, u: &[u32], tex: &dyn Textures) -> Flow {
-        for &(off, n, init) in &c.local_init {
-            match init {
-                Some(h) => {
-                    // Locals are initialised from a constant or an expression evaluated on entry.
-                    if !c.once.contains(&h) && !c.on_entry.contains(&h) { m.mem[off as usize..(off + n) as usize].fill(0); continue; }
-                    if c.on_entry.contains(&h) { self.eval(m, c, &f.expressions, h, u, tex); }
-                    let s = c.slot[h.index()] as usize;
-                    let (r, mm) = (&m.regs, &mut m.mem);
-                    mm[off as usize..(off + n) as usize].copy_from_slice(&r[s..s + n as usize]);
-                }
-                None => m.mem[off as usize..(off + n) as usize].fill(0),
-            }
-        }
-        for &h in &c.on_entry { self.eval(m, c, &f.expressions, h, u, tex); }
-        match self.block(m, c, f, &f.body, u, tex) {
-            Flow::Kill => Flow::Kill,
-            _ => Flow::Return,
+    /// Code `i` (a function, or the entry after the functions) and its function.
+    fn code(&self, i: usize) -> (&Code, &Function) {
+        if i < self.funcs.len() {
+            (&self.funcs[i], &self.module.functions[self.fhandles[i]])
+        } else {
+            (&self.entry, &self.module.entry_points[0].function)
         }
     }
 
-    fn block(&self, m: &mut Machine, c: &Code, f: &Function, b: &naga::Block, u: &[u32], tex: &dyn Textures) -> Flow {
+    fn step_for(c: &Code, ci: usize, h: Handle<naga::Expression>) -> Step {
+        match &c.ops[h.index()] {
+            Op::Generic => Step::Eval { code: ci as u32, h },
+            op => Step::Op(op.clone()),
+        }
+    }
+
+    /// Inlines function `ci` (with its locals' initial values) into `lw`.
+    fn lower_function(&self, lw: &mut Lowering, ci: usize) {
+        let (c, f) = self.code(ci);
+        for &(off, n, init) in &c.local_init {
+            match init {
+                Some(h) if c.is_once[h.index()] || c.is_on_entry[h.index()] => {
+                    if c.is_on_entry[h.index()] { lw.steps.push(Self::step_for(c, ci, h)); }
+                    lw.steps.push(Step::ToMem { off, src: c.slot[h.index()], n });
+                }
+                _ => lw.steps.push(Step::Zero { off, n }),
+            }
+        }
+        for &h in &c.on_entry { lw.steps.push(Self::step_for(c, ci, h)); }
+        // Loops and switches around a call don't reach into the callee.
+        let (brk, cnt) = (core::mem::take(&mut lw.breaks), core::mem::take(&mut lw.continues));
+        lw.returns.push(Vec::new());
+        self.lower_block(lw, ci, &f.body);
+        let rets = lw.returns.pop().unwrap();
+        let end = lw.here();
+        lw.patch(&rets, end);
+        lw.breaks = brk;
+        lw.continues = cnt;
+    }
+
+    fn lower_block(&self, lw: &mut Lowering, ci: usize, b: &naga::Block) {
+        let (c, _) = self.code(ci);
         for st in b.iter() {
-            let flow = match st {
-                S::Emit(range) => { for h in range.clone() { self.eval(m, c, &f.expressions, h, u, tex); } Flow::Next }
-                S::Block(inner) => self.block(m, c, f, inner, u, tex),
+            match st {
+                S::Emit(range) => for h in range.clone() { lw.steps.push(Self::step_for(c, ci, h)); },
+                S::Block(inner) => self.lower_block(lw, ci, inner),
                 S::If { condition, accept, reject } => {
-                    if m.regs[c.slot[condition.index()] as usize] != 0 { self.block(m, c, f, accept, u, tex) } else { self.block(m, c, f, reject, u, tex) }
+                    let skip = lw.jump(Step::JumpIfZero { cond: c.slot[condition.index()], to: 0 });
+                    self.lower_block(lw, ci, accept);
+                    if reject.is_empty() {
+                        let end = lw.here();
+                        lw.patch(&[skip], end);
+                    } else {
+                        let over = lw.jump(Step::Jump(0));
+                        let at = lw.here();
+                        lw.patch(&[skip], at);
+                        self.lower_block(lw, ci, reject);
+                        let end = lw.here();
+                        lw.patch(&[over], end);
+                    }
                 }
                 S::Switch { selector, cases } => {
-                    let v = m.regs[c.slot[selector.index()] as usize];
-                    let mut matched = false;
-                    let mut flow = Flow::Next;
-                    for pass in 0..2 {
-                        for case in cases {
-                            let hit = match case.value {
-                                SwitchValue::I32(x) => pass == 0 && x as u32 == v,
-                                SwitchValue::U32(x) => pass == 0 && x == v,
-                                SwitchValue::Default => pass == 1,
-                            };
-                            if !(matched || hit) { continue; }
-                            matched = true;
-                            flow = self.block(m, c, f, &case.body, u, tex);
-                            if !case.fall_through || !matches!(flow, Flow::Next) { break; }
-                        }
-                        if matched { break; }
+                    let sel = c.slot[selector.index()];
+                    let mut tests = Vec::new();
+                    for case in cases.iter() {
+                        let val = match case.value { SwitchValue::I32(x) => x as u32, SwitchValue::U32(x) => x, SwitchValue::Default => continue };
+                        tests.push(lw.jump(Step::JumpIfEq { sel, val, to: 0 }));
                     }
-                    match flow { Flow::Break => Flow::Next, other => other }
+                    let to_default = lw.jump(Step::Jump(0));
+                    lw.breaks.push(Vec::new());
+                    let (mut t, mut default_at) = (0, None);
+                    for case in cases.iter() {
+                        let at = lw.here();
+                        match case.value {
+                            SwitchValue::Default => default_at = Some(at),
+                            _ => { let i = tests[t]; lw.patch(&[i], at); t += 1; }
+                        }
+                        self.lower_block(lw, ci, &case.body);
+                        if !case.fall_through {
+                            let i = lw.jump(Step::Jump(0));
+                            lw.breaks.last_mut().unwrap().push(i);
+                        }
+                    }
+                    let end = lw.here();
+                    lw.patch(&[to_default], default_at.unwrap_or(end));
+                    let brk = lw.breaks.pop().unwrap();
+                    lw.patch(&brk, end);
                 }
                 S::Loop { body, continuing, break_if } => {
-                    let mut n = 0;
-                    loop {
-                        n += 1;
-                        if n > LOOP_LIMIT { break Flow::Next; }
-                        match self.block(m, c, f, body, u, tex) {
-                            Flow::Break => break Flow::Next,
-                            Flow::Return => break Flow::Return,
-                            Flow::Kill => break Flow::Kill,
-                            Flow::Next | Flow::Continue => {}
-                        }
-                        match self.block(m, c, f, continuing, u, tex) {
-                            Flow::Break => break Flow::Next,
-                            Flow::Return => break Flow::Return,
-                            Flow::Kill => break Flow::Kill,
-                            _ => {}
-                        }
-                        if let Some(h) = break_if { if m.regs[c.slot[h.index()] as usize] != 0 { break Flow::Next; } }
+                    let ctr = lw.loops;
+                    lw.loops += 1;
+                    lw.steps.push(Step::LoopEnter(ctr));
+                    let start = lw.here();
+                    lw.breaks.push(Vec::new());
+                    lw.continues.push(Vec::new());
+                    self.lower_block(lw, ci, body);
+                    let cont = lw.here();
+                    let conts = lw.continues.pop().unwrap();
+                    lw.patch(&conts, cont);
+                    self.lower_block(lw, ci, continuing);
+                    if let Some(h) = break_if {
+                        let i = lw.jump(Step::JumpIfNonZero { cond: c.slot[h.index()], to: 0 });
+                        lw.breaks.last_mut().unwrap().push(i);
                     }
+                    lw.steps.push(Step::LoopBack { ctr, to: start });
+                    let end = lw.here();
+                    let brk = lw.breaks.pop().unwrap();
+                    lw.patch(&brk, end);
                 }
-                S::Break => Flow::Break,
-                S::Continue => Flow::Continue,
+                S::Break => {
+                    let i = lw.jump(Step::Jump(0));
+                    if let Some(b) = lw.breaks.last_mut() { b.push(i); }
+                }
+                S::Continue => {
+                    let i = lw.jump(Step::Jump(0));
+                    if let Some(b) = lw.continues.last_mut() { b.push(i); }
+                }
                 S::Return { value } => {
                     if let Some(v) = value {
-                        let n = c.ty[v.index()].lanes as usize;
-                        let s = c.slot[v.index()] as usize;
-                        m.regs.copy_within(s..s + n, c.ret_off as usize);
+                        lw.steps.push(Step::Op(Op::Copy { dst: c.ret_off, src: c.slot[v.index()], n: c.ty[v.index()].lanes }));
                     }
-                    Flow::Return
+                    let i = lw.jump(Step::Jump(0));
+                    lw.returns.last_mut().unwrap().push(i);
                 }
-                S::Kill => { m.killed = true; Flow::Kill }
+                S::Kill => lw.steps.push(Step::Kill),
                 S::Store { pointer, value } => {
-                    let p = c.slot[pointer.index()] as usize;
-                    let (space, off) = (m.regs[p], m.regs[p + 1] as usize);
-                    let n = c.ty[value.index()].lanes as usize;
-                    let s = c.slot[value.index()] as usize;
-                    if space == SPACE_PRIVATE && off + n <= m.mem.len() {
-                        let (r, mm) = (&m.regs, &mut m.mem);
-                        mm[off..off + n].copy_from_slice(&r[s..s + n]);
-                    }
-                    Flow::Next
+                    lw.steps.push(Step::Store { ptr: c.slot[pointer.index()], val: c.slot[value.index()], n: c.ty[value.index()].lanes });
                 }
                 S::Call { function, arguments, result } => {
                     let callee = &self.funcs[function.index()];
                     for (i, a) in arguments.iter().enumerate() {
-                        let n = callee.arg_lanes[i] as usize;
-                        let s = c.slot[a.index()] as usize;
-                        m.regs.copy_within(s..s + n, callee.arg_off[i] as usize);
+                        lw.steps.push(Step::Op(Op::Copy { dst: callee.arg_off[i], src: c.slot[a.index()], n: callee.arg_lanes[i] }));
                     }
-                    let cf = &self.module.functions[*function];
-                    if let Flow::Kill = self.call(m, callee, cf, u, tex) { Flow::Kill } else {
-                        if let Some(r) = result {
-                            let n = c.ty[r.index()].lanes as usize;
-                            m.regs.copy_within(callee.ret_off as usize..callee.ret_off as usize + n, c.slot[r.index()] as usize);
-                        }
-                        Flow::Next
+                    self.lower_function(lw, function.index());
+                    if let Some(r) = result {
+                        lw.steps.push(Step::Op(Op::Copy { dst: c.slot[r.index()], src: callee.ret_off, n: c.ty[r.index()].lanes }));
                     }
                 }
-                _ => Flow::Next,
-            };
-            match flow { Flow::Next => {} other => return other }
+                _ => {}
+            }
         }
-        Flow::Next
+    }
+
+    /// Runs the flat program. False if the invocation was discarded.
+    fn exec(&self, m: &mut Machine, u: &[u32], tex: &dyn Textures) -> bool {
+        let steps = &self.steps[..];
+        let mut pc = 0usize;
+        while pc < steps.len() {
+            match &steps[pc] {
+                Step::Op(op) => self.run_op(m, op, u),
+                &Step::Eval { code, h } => {
+                    let (c, f) = self.code(code as usize);
+                    self.eval(m, c, &f.expressions, h, u, tex);
+                }
+                &Step::Store { ptr, val, n } => {
+                    let (space, off) = (m.regs[ptr as usize], m.regs[ptr as usize + 1] as usize);
+                    let (s, n) = (val as usize, n as usize);
+                    if space == SPACE_PRIVATE && off + n <= m.mem.len() {
+                        if n == 1 { m.mem[off] = m.regs[s]; } else { m.mem[off..off + n].copy_from_slice(&m.regs[s..s + n]); }
+                    }
+                }
+                &Step::ToMem { off, src, n } => {
+                    let (o, s, n) = (off as usize, src as usize, n as usize);
+                    m.mem[o..o + n].copy_from_slice(&m.regs[s..s + n]);
+                }
+                &Step::Zero { off, n } => m.mem[off as usize..(off + n) as usize].fill(0),
+                &Step::Jump(to) => { pc = to as usize; continue; }
+                &Step::JumpIfZero { cond, to } => if m.regs[cond as usize] == 0 { pc = to as usize; continue; },
+                &Step::JumpIfNonZero { cond, to } => if m.regs[cond as usize] != 0 { pc = to as usize; continue; },
+                &Step::JumpIfEq { sel, val, to } => if m.regs[sel as usize] == val { pc = to as usize; continue; },
+                &Step::LoopEnter(ctr) => m.loops[ctr as usize] = 0,
+                &Step::LoopBack { ctr, to } => {
+                    let k = &mut m.loops[ctr as usize];
+                    *k += 1;
+                    if *k < LOOP_LIMIT { pc = to as usize; continue; }
+                }
+                Step::Kill => { m.killed = true; return false; }
+                Step::Nop => {}
+            }
+            pc += 1;
+        }
+        true
+    }
+
+    /// Prepares one operation per expression of `c`.
+    fn prepare(&self, c: &Code, exprs: &naga::Arena<naga::Expression>) -> Vec<Op> {
+        let module = &*self.module;
+        exprs.iter().map(|(h, e)| {
+            let i = h.index();
+            let dst = c.slot[i];
+            let t = c.ty[i];
+            let n = t.lanes;
+            let sl = |x: Handle<naga::Expression>| c.slot[x.index()];
+            let ty = |x: Handle<naga::Expression>| c.ty[x.index()];
+            match e {
+                E::Splat { value, .. } => Op::Splat { dst, src: sl(*value), n },
+                E::Swizzle { vector, pattern, .. } if n <= 4 => {
+                    let mut pat = [0u8; 4];
+                    for (j, p) in pattern.iter().take(n as usize).enumerate() { pat[j] = *p as u8; }
+                    Op::Swizzle { dst, src: sl(*vector), pat, n }
+                }
+                E::Compose { components, .. } => Op::Compose { dst, parts: components.iter().map(|x| (sl(*x), ty(*x).lanes)).collect() },
+                E::FunctionArgument(a) => Op::Copy { dst, src: c.arg_off[*a as usize], n },
+                E::Constant(k) => Op::Copy { dst, src: self.globals.slot[module.constants[*k].init.index()], n },
+                E::GlobalVariable(g) => {
+                    let (space, off) = self.global_off[g.index()];
+                    if space == u32::MAX { Op::Generic } else { Op::Ptr { dst, space, off } }
+                }
+                E::LocalVariable(l) => Op::Ptr { dst, space: SPACE_PRIVATE, off: c.local_off[l.index()] },
+                E::Load { pointer } => Op::Load { dst, ptr: sl(*pointer), n },
+                E::AccessIndex { base, .. } => match c.acc[i].fixed {
+                    Some(off) => Op::Field { dst, base: sl(*base), off, n, ptr: ty(*base).ptr, base_lanes: ty(*base).lanes },
+                    None => Op::Generic,
+                },
+                E::Binary { op, left, right } => {
+                    let (lt, rt) = (ty(*left), ty(*right));
+                    let arith = matches!(op, B::Add | B::Subtract | B::Multiply | B::Divide | B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equal | B::NotEqual);
+                    if lt.kind == K::F && rt.kind == K::F && arith && lt.cols == 1 && rt.cols == 1 {
+                        Op::FBin { op: *op, dst, a: sl(*left), b: sl(*right), n, sa: lt.lanes == 1, sb: rt.lanes == 1 }
+                    } else if *op == B::Multiply && lt.kind == K::F && lt.cols > 1 && rt.cols == 1 && rt.lanes > 1 {
+                        Op::FMatVec { dst, m: sl(*left), v: sl(*right), rows: lt.rows as u32, cols: lt.cols as u32 }
+                    } else { Op::Generic }
+                }
+                E::Math { fun, arg, arg1, arg2, .. } if ty(*arg).kind == K::F && ty(*arg).cols == 1 => match (fun, arg1, arg2) {
+                    (M::Dot, Some(b), _) => Op::Dot { dst, a: sl(*arg), b: sl(*b), n: ty(*arg).lanes },
+                    (M::Normalize, _, _) => Op::Normalize { dst, a: sl(*arg), n },
+                    (M::Max, Some(b), _) if ty(*arg).lanes == n => Op::FMax { dst, a: sl(*arg), b: sl(*b), n, sb: ty(*b).lanes == 1 },
+                    (M::Min, Some(b), _) if ty(*arg).lanes == n => Op::FMin { dst, a: sl(*arg), b: sl(*b), n, sb: ty(*b).lanes == 1 },
+                    (M::Clamp, Some(lo), Some(hi)) if ty(*arg).lanes == n && ty(*lo).lanes == ty(*hi).lanes => {
+                        Op::Clamp { dst, a: sl(*arg), lo: sl(*lo), hi: sl(*hi), n, s: ty(*lo).lanes == 1 && n > 1 }
+                    }
+                    (M::Mix, Some(b), Some(t)) if ty(*arg).lanes == n && ty(*b).lanes == n => {
+                        Op::Mix { dst, a: sl(*arg), b: sl(*b), t: sl(*t), n, st: ty(*t).lanes == 1 && n > 1 }
+                    }
+                    _ => Op::Generic,
+                },
+                _ => Op::Generic,
+            }
+        }).collect()
+    }
+
+    /// Runs a prepared operation.
+    #[inline(always)]
+    fn run_op(&self, m: &mut Machine, op: &Op, u: &[u32]) {
+        let r = &mut m.regs;
+        let f = |r: &[u32], i: u32| f32::from_bits(r[i as usize]);
+        match op {
+            Op::Generic => {}
+            &Op::Copy { dst, src, n } => lanes(r, src as usize, dst as usize, n as usize),
+            &Op::Splat { dst, src, n } => { let v = r[src as usize]; r[dst as usize..(dst + n) as usize].fill(v); }
+            &Op::Swizzle { dst, src, pat, n } => {
+                let tmp = [r[src as usize + pat[0] as usize], r[src as usize + pat[1] as usize], r[src as usize + pat[2] as usize], r[src as usize + pat[3] as usize]];
+                r[dst as usize..(dst + n) as usize].copy_from_slice(&tmp[..n as usize]);
+            }
+            Op::Compose { dst, parts } => {
+                let mut at = *dst as usize;
+                for &(s, k) in parts.iter() {
+                    lanes(r, s as usize, at, k as usize);
+                    at += k as usize;
+                }
+            }
+            &Op::Ptr { dst, space, off } => { r[dst as usize] = space; r[dst as usize + 1] = off; }
+            &Op::Load { dst, ptr, n } => {
+                let (space, off) = (r[ptr as usize], r[ptr as usize + 1] as usize);
+                let (d, n) = (dst as usize, n as usize);
+                let from: &[u32] = if space == SPACE_UNIFORM { u } else { &m.mem };
+                if off + n <= from.len() {
+                    if n == 1 { r[d] = from[off]; } else { r[d..d + n].copy_from_slice(&from[off..off + n]); }
+                } else if space == SPACE_UNIFORM {
+                    r[d..d + n].fill(0);
+                }
+            }
+            &Op::Field { dst, base, off, n, ptr, base_lanes } => {
+                if ptr {
+                    r[dst as usize] = r[base as usize];
+                    r[dst as usize + 1] = r[base as usize + 1] + off;
+                } else if off + n <= base_lanes {
+                    let s = (base + off) as usize;
+                    lanes(r, s, dst as usize, n as usize);
+                } else {
+                    r[dst as usize..(dst + n) as usize].fill(0);
+                }
+            }
+            &Op::FBin { op, dst, a, b, n, sa, sb } => {
+                for j in 0..n {
+                    let x = f(r, if sa { a } else { a + j });
+                    let y = f(r, if sb { b } else { b + j });
+                    r[(dst + j) as usize] = match op {
+                        B::Add => (x + y).to_bits(),
+                        B::Subtract => (x - y).to_bits(),
+                        B::Multiply => (x * y).to_bits(),
+                        B::Divide => (x / y).to_bits(),
+                        B::Less => (x < y) as u32,
+                        B::LessEqual => (x <= y) as u32,
+                        B::Greater => (x > y) as u32,
+                        B::GreaterEqual => (x >= y) as u32,
+                        B::Equal => (x == y) as u32,
+                        _ => (x != y) as u32,
+                    };
+                }
+            }
+            &Op::FMatVec { dst, m: mt, v, rows, cols } => {
+                let mut out = [0f32; 4];
+                for row in 0..rows.min(4) {
+                    let mut s = 0.0;
+                    for k in 0..cols { s += f(r, mt + k * rows + row) * f(r, v + k); }
+                    out[row as usize] = s;
+                }
+                for row in 0..rows.min(4) { r[(dst + row) as usize] = out[row as usize].to_bits(); }
+            }
+            &Op::Dot { dst, a, b, n } => {
+                let mut s = 0.0;
+                for j in 0..n { s += f(r, a + j) * f(r, b + j); }
+                r[dst as usize] = s.to_bits();
+            }
+            &Op::Normalize { dst, a, n } => {
+                let mut s = 0.0;
+                for j in 0..n { let v = f(r, a + j); s += v * v; }
+                let k = 1.0 / libm::sqrtf(s);
+                for j in 0..n { r[(dst + j) as usize] = (f(r, a + j) * k).to_bits(); }
+            }
+            &Op::FMax { dst, a, b, n, sb } => for j in 0..n {
+                let (x, y) = (f(r, a + j), f(r, if sb { b } else { b + j }));
+                r[(dst + j) as usize] = x.max(y).to_bits();
+            },
+            &Op::FMin { dst, a, b, n, sb } => for j in 0..n {
+                let (x, y) = (f(r, a + j), f(r, if sb { b } else { b + j }));
+                r[(dst + j) as usize] = x.min(y).to_bits();
+            },
+            &Op::Clamp { dst, a, lo, hi, n, s } => for j in 0..n {
+                let k = if s { 0 } else { j };
+                let (x, l, h) = (f(r, a + j), f(r, lo + k), f(r, hi + k));
+                r[(dst + j) as usize] = x.max(l).min(h).to_bits();
+            },
+            &Op::Mix { dst, a, b, t, n, st } => for j in 0..n {
+                let (x, y, w) = (f(r, a + j), f(r, b + j), f(r, if st { t } else { t + j }));
+                r[(dst + j) as usize] = (x * (1.0 - w) + y * w).to_bits();
+            },
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -570,9 +912,9 @@ impl StageCode {
             }
             E::Access { base, index } => {
                 let idx = m.regs[c.slot[index.index()] as usize] as i32;
-                self.access(m, c, exprs, *base, idx.max(0) as u32, dst, n, i);
+                self.access(m, c, *base, idx.max(0) as u32, dst, n, i);
             }
-            E::AccessIndex { base, index } => self.access(m, c, exprs, *base, *index, dst, n, i),
+            E::AccessIndex { base, index } => self.access(m, c, *base, *index, dst, n, i),
             E::Unary { op, expr } => {
                 let s = c.slot[expr.index()] as usize;
                 let k = c.ty[expr.index()].kind;
@@ -653,26 +995,45 @@ impl StageCode {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn access(&self, m: &mut Machine, c: &Code, exprs: &naga::Arena<naga::Expression>, base: Handle<naga::Expression>, index: u32, dst: usize, n: usize, me: usize) {
+    /// The shape of each `Access`/`AccessIndex` in `c`.
+    fn access_shapes(&self, c: &Code, exprs: &naga::Arena<naga::Expression>) -> Vec<Acc> {
+        let mut out = vec![Acc::default(); exprs.len()];
+        for (h, e) in exprs.iter() {
+            let (base, index) = match e {
+                E::Access { base, .. } => (*base, None),
+                E::AccessIndex { base, index } => (*base, Some(*index)),
+                _ => continue,
+            };
+            out[h.index()] = self.shape(c, exprs, base, index);
+        }
+        out
+    }
+
+    fn shape(&self, c: &Code, exprs: &naga::Arena<naga::Expression>, base: Handle<naga::Expression>, index: Option<u32>) -> Acc {
         let module = &*self.module;
-        let bt = c.ty[base.index()];
-        let base_inner = self.inner_of(c, exprs, base);
-        let (elem, count, member) = match base_inner {
+        let member = |ty: Handle<Type>| Acc { elem: 0, count: u32::MAX, fixed: Some(self.layout.member(ty, index.unwrap_or(0))) };
+        let (elem, count) = match self.inner_of(c, exprs, base) {
             Some(TypeInner::Pointer { base: pt, .. }) => match &module.types[pt].inner {
-                TypeInner::Struct { .. } => (0, u32::MAX, Some(self.layout.member(pt, index))),
-                inner => { let (e, k) = index_shape(module, &self.layout, inner); (e, k, None) }
+                TypeInner::Struct { .. } => return member(pt),
+                inner => index_shape(module, &self.layout, inner),
             },
-            Some(TypeInner::ValuePointer { size, .. }) => (1, size.map_or(1, |s| s as u32), None),
-            Some(inner @ TypeInner::Struct { .. }) => {
-                let th = self.type_handle_of(c, exprs, base);
-                let _ = inner;
-                (0, u32::MAX, Some(th.map_or(0, |th| self.layout.member(th, index))))
-            }
-            Some(inner) => { let (e, k) = index_shape(module, &self.layout, &inner); (e, k, None) }
-            None => (1, 1, None),
+            Some(TypeInner::ValuePointer { size, .. }) => (1, size.map_or(1, |s| s as u32)),
+            Some(TypeInner::Struct { .. }) => return match self.type_handle_of(c, exprs, base) {
+                Some(th) => member(th),
+                None => Acc { elem: 0, count: u32::MAX, fixed: Some(0) },
+            },
+            Some(inner) => index_shape(module, &self.layout, &inner),
+            None => (1, 1),
         };
-        let off = match member { Some(o) => o, None => index.min(count.saturating_sub(1)) * elem };
+        let fixed = index.map(|i| i.min(count.saturating_sub(1)) * elem);
+        Acc { elem, count, fixed }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn access(&self, m: &mut Machine, c: &Code, base: Handle<naga::Expression>, index: u32, dst: usize, n: usize, me: usize) {
+        let a = c.acc[me];
+        let off = match a.fixed { Some(o) => o, None => index.min(a.count.saturating_sub(1)) * a.elem };
+        let bt = c.ty[base.index()];
         let bs = c.slot[base.index()] as usize;
         if bt.ptr {
             m.regs[dst] = m.regs[bs];
@@ -681,7 +1042,6 @@ impl StageCode {
             let o = off as usize;
             if o + n <= bt.lanes as usize { m.regs.copy_within(bs + o..bs + o + n, dst); } else { m.regs[dst..dst + n].fill(0); }
         }
-        let _ = me;
     }
 
     fn inner_of(&self, c: &Code, exprs: &naga::Arena<naga::Expression>, h: Handle<naga::Expression>) -> Option<TypeInner> {
