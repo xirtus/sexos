@@ -41,6 +41,8 @@ pub struct Fixed {
     pub cull_face: u32,
     pub front_ccw: bool,
     pub polygon_offset: Option<[f32; 2]>,
+    /// Clip-space depth runs 0..w (WebGPU) instead of -w..w (GL).
+    pub zero_one: bool,
 }
 
 pub mod gl {
@@ -241,6 +243,7 @@ fn finish(t: &mut Target, fx: &Fixed, i: usize, z: f32, (c, fz): ([f32; 4], Opti
 fn window(fx: &Fixed, p: [f32; 4]) -> [f32; 4] {
     let iw = 1.0 / p[3];
     let (nx, ny, nz) = (p[0] * iw, p[1] * iw, p[2] * iw);
+    let nz = if fx.zero_one { nz * 2.0 - 1.0 } else { nz };
     let [vx, vy, vw, vh] = fx.viewport;
     [
         vx as f32 + (nx + 1.0) * 0.5 * vw as f32,
@@ -257,10 +260,10 @@ fn lerp_vert(a: &Vert, b: &Vert, t: f32) -> Vert {
 }
 
 /// Clips a triangle against the near (z >= -w) and far (z <= w) planes.
-fn clip(tri: [&Vert; 3]) -> Vec<Vert> {
+fn clip(tri: [&Vert; 3], zero_one: bool) -> Vec<Vert> {
     let mut poly: Vec<Vert> = tri.iter().map(|v| (*v).clone()).collect();
     for plane in 0..2 {
-        let dist = |v: &Vert| if plane == 0 { v.pos[2] + v.pos[3] } else { v.pos[3] - v.pos[2] };
+        let dist = |v: &Vert| if plane == 0 { if zero_one { v.pos[2] } else { v.pos[2] + v.pos[3] } } else { v.pos[3] - v.pos[2] };
         if poly.iter().all(|v| dist(v) >= 0.0) { continue; }
         let mut out = Vec::with_capacity(poly.len() + 2);
         for i in 0..poly.len() {
@@ -280,9 +283,10 @@ pub fn triangle(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &m
     for axis in 0..2 {
         if [a, b, c].iter().all(|v| v.pos[axis] > v.pos[3]) || [a, b, c].iter().all(|v| v.pos[axis] < -v.pos[3]) { return; }
     }
-    let needs_clip = [a, b, c].iter().any(|v| v.pos[2] < -v.pos[3] || v.pos[2] > v.pos[3] || v.pos[3] <= 0.0);
+    let near = |v: &Vert| if fx.zero_one { 0.0 } else { -v.pos[3] };
+    let needs_clip = [a, b, c].iter().any(|v| v.pos[2] < near(v) || v.pos[2] > v.pos[3] || v.pos[3] <= 0.0);
     if needs_clip {
-        let poly = clip([a, b, c]);
+        let poly = clip([a, b, c], fx.zero_one);
         // The winding is decided on the unclipped triangle in clip space via the first fan.
         for i in 1..poly.len().saturating_sub(1) { raster_tri(t, fx, &poly[0], &poly[i], &poly[i + 1], sh, scratch); }
     } else {

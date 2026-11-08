@@ -23,6 +23,9 @@ const SPACE_PRIVATE: u32 = 0;
 const SPACE_UNIFORM: u32 = 1;
 /// Loops stop after this many iterations (a runaway shader must not hang the page).
 const LOOP_LIMIT: u32 = 1 << 16;
+/// Elements a runtime-sized array (a WGSL storage buffer's `array<T>`) holds; bindings
+/// fill as many as the bound buffer has bytes for.
+pub const RUNTIME_ARRAY_LEN: u32 = 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum K {
@@ -76,7 +79,7 @@ impl Layout {
                     at
                 }
                 TypeInner::Array { base, size, .. } | TypeInner::BindingArray { base, size } => {
-                    let n = match size { ArraySize::Constant(n) => n.get(), _ => 1 };
+                    let n = match size { ArraySize::Constant(n) => n.get(), _ => RUNTIME_ARRAY_LEN };
                     lanes[base.index()] * n
                 }
                 inner => inner_lanes(inner),
@@ -108,7 +111,7 @@ fn ty_of(module: &Module, layout: &Layout, inner: &TypeInner) -> Ty {
         }
         TypeInner::Pointer { .. } | TypeInner::ValuePointer { .. } => Ty { kind: K::U, cols: 1, rows: 1, lanes: 2, ptr: true },
         TypeInner::Array { base, size, .. } => {
-            let n = match size { ArraySize::Constant(n) => n.get(), _ => 1 };
+            let n = match size { ArraySize::Constant(n) => n.get(), _ => RUNTIME_ARRAY_LEN };
             let e = ty_of(module, layout, &module.types[*base].inner);
             Ty { kind: e.kind, cols: 1, rows: 1, lanes: layout.of(*base) * n, ptr: false }
         }
@@ -126,7 +129,7 @@ fn index_shape(module: &Module, layout: &Layout, inner: &TypeInner) -> (u32, u32
         TypeInner::Vector { size, .. } => (1, *size as u32),
         TypeInner::Matrix { columns, rows, .. } => (*rows as u32, *columns as u32),
         TypeInner::Array { base, size, .. } | TypeInner::BindingArray { base, size } => {
-            (layout.of(*base), match size { ArraySize::Constant(n) => n.get(), _ => u32::MAX })
+            (layout.of(*base), match size { ArraySize::Constant(n) => n.get(), _ => RUNTIME_ARRAY_LEN })
         }
         TypeInner::Pointer { base, .. } => index_shape(module, layout, &module.types[*base].inner),
         TypeInner::ValuePointer { size: Some(size), .. } => (1, *size as u32),
@@ -368,7 +371,7 @@ impl StageCode {
         for (h, g) in module.global_variables.iter() {
             let n = layout.of(g.ty);
             match g.space {
-                naga::AddressSpace::Uniform | naga::AddressSpace::Immediate => { global_off.push((SPACE_UNIFORM, uniform_len)); uniform_len += n; }
+                naga::AddressSpace::Uniform | naga::AddressSpace::Immediate | naga::AddressSpace::Storage { .. } => { global_off.push((SPACE_UNIFORM, uniform_len)); uniform_len += n; }
                 naga::AddressSpace::Handle => {
                     global_off.push((u32::MAX, h.index() as u32));
                     if let Some(name) = &g.name { textures.push((name.clone(), h.index() as u32)); }

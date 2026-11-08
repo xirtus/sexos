@@ -388,12 +388,17 @@
     get height() { return +(this.getAttribute('height') || 150); }
     set height(v) { this.setAttribute('height', Math.max(0, Math.floor(+v) || 0)); this._resized(); }
     // Setting either size, even to the same value, clears the bitmap and the context's state.
-    _resized() { if (this._ctx) this._ctx._resize(this.width, this.height); if (this._gl) this._gl._resize(this.width, this.height); }
+    _resized() {
+      if (this._ctx) this._ctx._resize(this.width, this.height);
+      if (this._gl) this._gl._resize(this.width, this.height);
+      if (this._gpu) this._gpu._resize(this.width, this.height);
+    }
     getContext(kind, attrs) {
       kind = String(kind).toLowerCase();
-      if (kind === '2d') return this._gl ? null : this._ctx || (this._ctx = new CanvasRenderingContext2D(this));
+      if (kind === '2d') return this._gl || this._gpu ? null : this._ctx || (this._ctx = new CanvasRenderingContext2D(this));
+      if (kind === 'webgpu') return this._ctx || this._gl ? null : this._gpu || (this._gpu = new GPUCanvasContext(this));
       if (kind !== 'webgl' && kind !== 'experimental-webgl' && kind !== 'webgl2') return null;
-      if (this._ctx) return null;
+      if (this._ctx || this._gpu) return null;
       const v2 = kind === 'webgl2';
       if (this._gl) return this._gl._v2 === v2 || !v2 ? this._gl : null;
       return (this._gl = v2 ? new WebGL2RenderingContext(this, attrs) : new WebGLRenderingContext(this, attrs));
@@ -1053,7 +1058,7 @@
     fenceSync() { return new WebGLSync(); } deleteSync() {} clientWaitSync() { return 0x911A; } waitSync() {} getSyncParameter() { return 0x9119; }
     createTransformFeedback() { return new WebGLTransformFeedback(); } bindTransformFeedback() {} beginTransformFeedback() {}
     endTransformFeedback() {} transformFeedbackVaryings() {} deleteTransformFeedback() {}
-    vertexAttribIPointer(i, size, type, stride, offset) { this._c('ap', i, size, type, 0, stride | 0, offset | 0); }
+    vertexAttribIPointer(i, size, type, stride, offset) { this._c('aip', i, size, type, stride | 0, offset | 0); }
     vertexAttribI4i(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); } vertexAttribI4ui(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); }
     getBufferSubData() {} copyBufferSubData() {} getIndexedParameter() { return null; } getInternalformatParameter() { return new Int32Array(0); }
   }
@@ -1120,6 +1125,371 @@
     return next;
   }
 
+  // ---- WebGPU ----
+  // Render pipelines on the same software renderer as WebGL. Buffers and textures live
+  // here and are copied into a canvas's GL context when a pass there uses them; command
+  // encoders record passes, and queue.submit replays them as GL commands, with WGSL
+  // programs ('gp') and bind group entries ('gb' buffers, 'gx' textures, 'gs' samplers).
+  const GPU_BLEND = { zero: 0, one: 1, src: 0x300, 'one-minus-src': 0x301, 'src-alpha': 0x302, 'one-minus-src-alpha': 0x303,
+    dst: 0x306, 'one-minus-dst': 0x307, 'dst-alpha': 0x304, 'one-minus-dst-alpha': 0x305, 'src-alpha-saturated': 0x308,
+    constant: 0x8001, 'one-minus-constant': 0x8002 };
+  const GPU_BLEND_OP = { add: 0x8006, subtract: 0x800A, 'reverse-subtract': 0x800B, min: 0x8007, max: 0x8008 };
+  const GPU_COMPARE = { never: 0x200, less: 0x201, equal: 0x202, 'less-equal': 0x203, greater: 0x204, 'not-equal': 0x205,
+    'greater-equal': 0x206, always: 0x207 };
+  const GPU_TOPOLOGY = { 'point-list': 0, 'line-list': 1, 'line-strip': 3, 'triangle-list': 4, 'triangle-strip': 5 };
+  // Vertex formats: components, GL type, normalized.
+  const GPU_VERTEX = { float32: [1, 0x1406, 0], float32x2: [2, 0x1406, 0], float32x3: [3, 0x1406, 0], float32x4: [4, 0x1406, 0],
+    float16x2: [2, 0x140B, 0], float16x4: [4, 0x140B, 0], unorm8x2: [2, 0x1401, 1], unorm8x4: [4, 0x1401, 1],
+    snorm8x2: [2, 0x1400, 1], snorm8x4: [4, 0x1400, 1], uint8x2: [2, 0x1401, 0], uint8x4: [4, 0x1401, 0],
+    sint8x2: [2, 0x1400, 0], sint8x4: [4, 0x1400, 0], unorm16x2: [2, 0x1403, 1], unorm16x4: [4, 0x1403, 1],
+    snorm16x2: [2, 0x1402, 1], snorm16x4: [4, 0x1402, 1], uint16x2: [2, 0x1403, 0], uint16x4: [4, 0x1403, 0],
+    sint16x2: [2, 0x1402, 0], sint16x4: [4, 0x1402, 0], uint32: [1, 0x1405, 0], uint32x2: [2, 0x1405, 0],
+    uint32x3: [3, 0x1405, 0], uint32x4: [4, 0x1405, 0], sint32: [1, 0x1404, 0], sint32x2: [2, 0x1404, 0],
+    sint32x3: [3, 0x1404, 0], sint32x4: [4, 0x1404, 0] };
+  const GPU_FILTER = { nearest: 0x2600, linear: 0x2601 };
+  const GPU_WRAP = { repeat: 0x2901, 'clamp-to-edge': 0x812F, 'mirror-repeat': 0x8370 };
+  const GPUBufferUsage = { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128,
+    INDIRECT: 256, QUERY_RESOLVE: 512 };
+  const GPUTextureUsage = { COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8, RENDER_ATTACHMENT: 16 };
+  const GPUShaderStage = { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 };
+  const GPUMapMode = { READ: 1, WRITE: 2 };
+  const GPUColorWrite = { RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8, ALL: 15 };
+  const gpuSize = s => Array.isArray(s) || (s && typeof s[Symbol.iterator] === 'function' && !('width' in s))
+    ? [...s].concat([1, 1, 1]).slice(0, 3).map(Number) : [+(s.width || 0), +(s.height || 1), +(s.depthOrArrayLayers || 1)];
+  const gpuOrigin = o => !o ? [0, 0, 0] : Array.isArray(o) || ArrayBuffer.isView(o)
+    ? [...o].concat([0, 0, 0]).slice(0, 3).map(Number) : [+(o.x || 0), +(o.y || 0), +(o.z || 0)];
+  const gpuColor = c => Array.isArray(c) ? [c[0] || 0, c[1] || 0, c[2] || 0, c[3] === undefined ? 1 : c[3]]
+    : [+(c && c.r) || 0, +(c && c.g) || 0, +(c && c.b) || 0, c && c.a !== undefined ? +c.a : 1];
+
+  class GPUObjectBase { constructor(d) { this.label = (d && d.label) || ''; this._id = glNextId++; } }
+  class GPUBuffer extends GPUObjectBase {
+    constructor(d) {
+      super(d);
+      this.size = Math.max(0, +d.size || 0); this.usage = d.usage | 0;
+      this._bytes = new Uint8Array((this.size + 3) & ~3); this._ver = 1; this._in = new Map();
+      this.mapState = d.mappedAtCreation ? 'mapped' : 'unmapped';
+    }
+    getMappedRange(offset = 0, size) {
+      const end = size === undefined ? this.size : offset + size;
+      // A copy of the range; unmap writes it back.
+      const ab = new ArrayBuffer(end - offset);
+      new Uint8Array(ab).set(this._bytes.subarray(offset, end));
+      (this._maps || (this._maps = [])).push([ab, offset]);
+      return ab;
+    }
+    unmap() {
+      for (const [ab, off] of this._maps || []) this._bytes.set(new Uint8Array(ab), off);
+      this._maps = null; this._ver++; this.mapState = 'unmapped';
+    }
+    mapAsync() { this.mapState = 'mapped'; return Promise.resolve(); }
+    destroy() {}
+    _upload(gl) {
+      if (this._in.get(gl) === this._ver) return;
+      this._in.set(gl, this._ver);
+      const [o, l] = gl._data(this._bytes);
+      gl._c('bb', 0x8892, this._id); gl._c('bd', 0x8892, o, l);
+    }
+  }
+  class GPUTexture extends GPUObjectBase {
+    constructor(d, canvasCtx) {
+      super(d);
+      [this.width, this.height, this.depthOrArrayLayers] = gpuSize(d.size || [1, 1, 1]);
+      this.format = d.format || 'rgba8unorm'; this.usage = d.usage | 0; this.dimension = d.dimension || '2d';
+      this.mipLevelCount = d.mipLevelCount || 1; this.sampleCount = d.sampleCount || 1;
+      this._canvas = canvasCtx || null; this._px = null; this._pic = null; this._ver = 1; this._in = new Map();
+    }
+    createView(d) { return new GPUTextureView(this, d); }
+    destroy() {}
+    _upload(gl, unit) {
+      gl._c('at', 0x84C0 + unit); gl._c('bt', 0xDE1, this._id);
+      if (this._in.get(gl) === this._ver) return;
+      this._in.set(gl, this._ver);
+      if (this._pic) { gl._c('ps', 0x9240, this._pic[1] ? 1 : 0); gl._c('ps', 0x9241, 0); gl._c('tP', 0xDE1, this._id, this._pic[0]); gl._c('ps', 0x9240, 0); return; }
+      const px = this._px || new Uint8Array(this.width * this.height * 4);
+      const [o, l] = gl._data(px);
+      gl._c('ps', 0xCF5, 1);
+      gl._c('ti', 0xDE1, 0, this.width, this.height, 0x1908, 0x1401, o, l);
+    }
+  }
+  class GPUTextureView extends GPUObjectBase { constructor(t, d) { super(d); this.texture = t; } }
+  class GPUSampler extends GPUObjectBase {
+    constructor(d) {
+      super(d); d = d || {};
+      this._f = [GPU_FILTER[d.minFilter] || 0x2600, GPU_FILTER[d.magFilter] || 0x2600,
+        GPU_WRAP[d.addressModeU] || 0x812F, GPU_WRAP[d.addressModeV] || 0x812F];
+    }
+  }
+  class GPUShaderModule extends GPUObjectBase {
+    constructor(d) { super(d); this._code = String(d.code || ''); }
+    getCompilationInfo() { return Promise.resolve({ messages: [] }); }
+  }
+  class GPUBindGroupLayout extends GPUObjectBase {}
+  class GPUPipelineLayout extends GPUObjectBase {}
+  class GPUBindGroup extends GPUObjectBase { constructor(d) { super(d); this._entries = d.entries || []; } }
+  class GPUQuerySet extends GPUObjectBase { destroy() {} }
+  class GPURenderPipeline extends GPUObjectBase {
+    constructor(d) {
+      super(d); this._d = d; this._in = new Set();
+      this._vs = d.vertex.module._code;
+      this._fs = d.fragment ? d.fragment.module._code : this._vs;
+    }
+    getBindGroupLayout() { return new GPUBindGroupLayout(); }
+    _program(gl) {
+      if (this._in.has(gl)) return;
+      this._in.add(gl);
+      const enc = new TextEncoderLite();
+      const [vo, vl] = gl._data(enc.encode(this._vs));
+      const [fo, fl] = this._fs === this._vs ? [vo, vl] : gl._data(enc.encode(this._fs));
+      gl._c('gp', this._id, vo, vl, this._d.vertex.entryPoint || '', fo, fl, (this._d.fragment && this._d.fragment.entryPoint) || '');
+      const st = gl._ask('program', this._id).split('\x1f');
+      if (st[0] !== '1') console.error('WebGPU pipeline:', st[1]);
+    }
+  }
+  // UTF-8 for shader text (QuickJS has no TextEncoder).
+  class TextEncoderLite {
+    encode(s) {
+      const out = [];
+      for (const ch of String(s)) {
+        let c = ch.codePointAt(0);
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xC0 | c >> 6, 0x80 | c & 63);
+        else if (c < 0x10000) out.push(0xE0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+        else out.push(0xF0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+      }
+      return new Uint8Array(out);
+    }
+  }
+
+  class GPURenderPassEncoder {
+    constructor(enc, d) { this._cmds = []; enc._passes.push({ d, cmds: this._cmds }); }
+    setPipeline(p) { this._cmds.push(['pipe', p]); }
+    setVertexBuffer(slot, buf, offset = 0, size) { this._cmds.push(['vb', slot, buf, offset]); }
+    setIndexBuffer(buf, format, offset = 0) { this._cmds.push(['ib', buf, format, offset]); }
+    setBindGroup(i, g) { this._cmds.push(['bg', i, g]); }
+    setViewport(x, y, w, h, mn, mx) { this._cmds.push(['vp', x, y, w, h, mn, mx]); }
+    setScissorRect(x, y, w, h) { this._cmds.push(['sc', x, y, w, h]); }
+    setBlendConstant(c) { this._cmds.push(['bc', gpuColor(c)]); }
+    setStencilReference() {}
+    draw(n, inst = 1, first = 0) { this._cmds.push(['draw', n, inst, first]); }
+    drawIndexed(n, inst = 1, first = 0, base = 0) { this._cmds.push(['drawi', n, inst, first, base]); }
+    pushDebugGroup() {} popDebugGroup() {} insertDebugMarker() {}
+    end() {}
+  }
+  class GPUCommandBuffer extends GPUObjectBase {}
+  class GPUCommandEncoder extends GPUObjectBase {
+    constructor(d) { super(d); this._passes = []; }
+    beginRenderPass(d) { return new GPURenderPassEncoder(this, d); }
+    beginComputePass() { return { setPipeline() {}, setBindGroup() {}, dispatchWorkgroups() {}, end() {} }; }
+    copyBufferToBuffer(src, so, dst, doff, size) { this._passes.push({ copy: () => { dst._bytes.set(src._bytes.subarray(so, so + size), doff); dst._ver++; } }); }
+    copyTextureToTexture() {} copyBufferToTexture() {} copyTextureToBuffer() {} clearBuffer() {} resolveQuerySet() {}
+    pushDebugGroup() {} popDebugGroup() {} insertDebugMarker() {}
+    finish() { const b = new GPUCommandBuffer(); b._passes = this._passes; return b; }
+  }
+
+  function gpuRunPass(pass) {
+    const d = pass.d;
+    const ca = d.colorAttachments && d.colorAttachments[0];
+    const tex = ca && ca.view && (ca.view.texture || ca.view);
+    const cc = tex && tex._canvas;
+    if (!cc || !cc._gl) return;
+    const gl = cc._gl, W = cc.canvas.width, H = cc.canvas.height;
+    gl._c('vp', 0, 0, W, H); gl._c('dr', 0, 1); gl._c('en', 0xC11, 0); gl._c('cm', 1, 1, 1, 1); gl._c('dm', 1);
+    let mask = 0;
+    if (ca.loadOp === 'clear') { gl._c('cc', ...gpuColor(ca.clearValue || ca.clearColor).map(numStr)); mask |= 0x4000; }
+    const ds = d.depthStencilAttachment;
+    if (ds && ds.depthLoadOp === 'clear') { gl._c('cd', numStr(ds.depthClearValue === undefined ? 1 : ds.depthClearValue)); mask |= 0x100; }
+    if (mask) gl._c('cl', mask);
+    let pipe = null, index = null;
+    const vbs = [], groups = [];
+    const apply = () => {
+      const p = pipe._d;
+      pipe._program(gl);
+      gl._c('up', pipe._id);
+      // Vertex buffers.
+      (p.vertex.buffers || []).forEach((layout, slot) => {
+        const vb = vbs[slot];
+        if (!layout || !vb) return;
+        vb[0]._upload(gl);
+        gl._c('bb', 0x8892, vb[0]._id);
+        for (const at of layout.attributes || []) {
+          const f = GPU_VERTEX[at.format] || GPU_VERTEX.float32x4;
+          gl._c('ea', at.shaderLocation, 1);
+          const off = (vb[1] | 0) + (at.offset | 0);
+          // uint/sint formats reach the shader as integers.
+          if (f[1] !== 0x1406 && f[1] !== 0x140B && !f[2]) gl._c('aip', at.shaderLocation, f[0], f[1], layout.arrayStride | 0, off);
+          else gl._c('ap', at.shaderLocation, f[0], f[1], f[2], layout.arrayStride | 0, off);
+        }
+      });
+      // Fixed state.
+      const prim = p.primitive || {};
+      gl._c('en', 0xB44, prim.cullMode === 'front' || prim.cullMode === 'back' ? 1 : 0);
+      if (prim.cullMode === 'front') gl._c('cf', 0x404); else if (prim.cullMode === 'back') gl._c('cf', 0x405);
+      gl._c('ff', prim.frontFace === 'cw' ? 0x900 : 0x901);
+      const dss = p.depthStencil;
+      gl._c('en', 0xB71, dss ? 1 : 0);
+      if (dss) { gl._c('df', GPU_COMPARE[dss.depthCompare] || 0x207); gl._c('dm', dss.depthWriteEnabled ? 1 : 0); }
+      const tg = p.fragment && p.fragment.targets && p.fragment.targets[0];
+      const b = tg && tg.blend;
+      gl._c('en', 0xBE2, b ? 1 : 0);
+      if (b) {
+        const c = b.color || {}, a = b.alpha || {};
+        gl._c('bf', GPU_BLEND[c.srcFactor] ?? 1, GPU_BLEND[c.dstFactor] ?? 0, GPU_BLEND[a.srcFactor] ?? 1, GPU_BLEND[a.dstFactor] ?? 0);
+        gl._c('be', GPU_BLEND_OP[c.operation] || 0x8006, GPU_BLEND_OP[a.operation] || 0x8006);
+      }
+      const wm = tg && tg.writeMask !== undefined ? tg.writeMask : 15;
+      gl._c('cm', wm & 1 ? 1 : 0, wm & 2 ? 1 : 0, wm & 4 ? 1 : 0, wm & 8 ? 1 : 0);
+      // Bind groups: buffers and textures, then samplers (they set their textures' filters).
+      let unit = 0;
+      const samplers = [];
+      groups.forEach((g, gi) => {
+        if (!g) return;
+        for (const e of g._entries) {
+          const r = e.resource;
+          if (r instanceof GPUSampler) { samplers.push([gi, e.binding, r]); continue; }
+          const t = r instanceof GPUTextureView ? r.texture : r instanceof GPUTexture ? r : null;
+          if (t) { t._upload(gl, unit); gl._c('gx', pipe._id, gi, e.binding, unit); unit++; continue; }
+          const buf = r && (r.buffer || r);
+          if (buf instanceof GPUBuffer) {
+            buf._upload(gl);
+            const off = r.offset | 0;
+            gl._c('gb', pipe._id, gi, e.binding, buf._id, off, r.size === undefined ? buf.size - off : r.size | 0);
+          }
+        }
+      });
+      for (const [gi, bi, s] of samplers) gl._c('gs', pipe._id, gi, bi, ...s._f);
+    };
+    for (const c of pass.cmds) {
+      switch (c[0]) {
+        case 'pipe': pipe = c[1]; break;
+        case 'vb': vbs[c[1]] = [c[2], c[3]]; break;
+        case 'ib': index = [c[1], c[2], c[3]]; break;
+        case 'bg': groups[c[1]] = c[2]; break;
+        case 'vp': gl._c('vp', c[1] | 0, (H - c[2] - c[4]) | 0, c[3] | 0, c[4] | 0); gl._c('dr', numStr(c[5] || 0), numStr(c[6] === undefined ? 1 : c[6])); break;
+        case 'sc': gl._c('en', 0xC11, 1); gl._c('sc', c[1] | 0, (H - c[2] - c[4]) | 0, c[3] | 0, c[4] | 0); break;
+        case 'bc': gl._c('bc', ...c[1].map(numStr)); break;
+        case 'draw': {
+          if (!pipe) break;
+          apply();
+          const mode = GPU_TOPOLOGY[(pipe._d.primitive || {}).topology] ?? 4;
+          for (let i = 0; i < c[2]; i++) gl._c('da', mode, c[3] | 0, c[1] | 0);
+          break;
+        }
+        case 'drawi': {
+          if (!pipe || !index) break;
+          apply();
+          const [buf, fmt, off] = index;
+          buf._upload(gl);
+          gl._c('bb', 0x8893, buf._id);
+          const size = fmt === 'uint32' ? 4 : 2;
+          const mode = GPU_TOPOLOGY[(pipe._d.primitive || {}).topology] ?? 4;
+          for (let i = 0; i < c[2]; i++) gl._c('de', mode, c[1] | 0, size === 4 ? 0x1405 : 0x1403, (off | 0) + (c[3] | 0) * size);
+          break;
+        }
+      }
+    }
+  }
+
+  class GPUQueue extends GPUObjectBase {
+    submit(buffers) {
+      for (const b of buffers || []) for (const p of b._passes || []) { if (p.copy) p.copy(); else gpuRunPass(p); }
+    }
+    writeBuffer(buf, offset, data, dataOffset = 0, size) {
+      const src = bytesOf(data);
+      if (!src) return;
+      const el = ArrayBuffer.isView(data) && data.BYTES_PER_ELEMENT ? data.BYTES_PER_ELEMENT : 1;
+      const from = dataOffset * el, len = size === undefined ? src.byteLength - from : size * el;
+      buf._bytes.set(src.subarray(from, from + len), offset);
+      buf._ver++;
+    }
+    writeTexture(dst, data, layout, size) {
+      const t = dst.texture, src = bytesOf(data);
+      if (!t || !src) return;
+      const [w, h] = gpuSize(size);
+      const [ox, oy] = gpuOrigin(dst.origin);
+      const bpr = (layout && layout.bytesPerRow) || w * 4, base = (layout && layout.offset) || 0;
+      if (!t._px) t._px = new Uint8Array(t.width * t.height * 4);
+      const bgra = t.format.startsWith('bgra');
+      for (let y = 0; y < h && oy + y < t.height; y++) {
+        for (let x = 0; x < w && ox + x < t.width; x++) {
+          const s = base + y * bpr + x * 4, d = ((oy + y) * t.width + ox + x) * 4;
+          t._px[d] = src[s + (bgra ? 2 : 0)]; t._px[d + 1] = src[s + 1]; t._px[d + 2] = src[s + (bgra ? 0 : 2)]; t._px[d + 3] = src[s + 3];
+        }
+      }
+      t._pic = null; t._ver++;
+    }
+    copyExternalImageToTexture(src, dst) {
+      const s = src.source || src, t = dst.texture;
+      if (!t || !s) return;
+      const addr = s.tagName === 'IMG' ? s.getAttribute('src') || '' : s.tagName === 'CANVAS' ? 'canvas:' + s._id : null;
+      if (addr === null) return;
+      t._pic = [addr, !!src.flipY]; t._ver++;
+    }
+    onSubmittedWorkDone() { return Promise.resolve(); }
+  }
+
+  const GPU_LIMITS = { maxTextureDimension1D: 4096, maxTextureDimension2D: 4096, maxTextureDimension3D: 256, maxTextureArrayLayers: 256,
+    maxBindGroups: 4, maxBindingsPerBindGroup: 640, maxDynamicUniformBuffersPerPipelineLayout: 8, maxDynamicStorageBuffersPerPipelineLayout: 4,
+    maxSampledTexturesPerShaderStage: 16, maxSamplersPerShaderStage: 16, maxStorageBuffersPerShaderStage: 8,
+    maxStorageTexturesPerShaderStage: 4, maxUniformBuffersPerShaderStage: 12, maxUniformBufferBindingSize: 65536,
+    maxStorageBufferBindingSize: 134217728, minUniformBufferOffsetAlignment: 256, minStorageBufferOffsetAlignment: 256,
+    maxVertexBuffers: 8, maxBufferSize: 268435456, maxVertexAttributes: 16, maxVertexBufferArrayStride: 2048,
+    maxInterStageShaderVariables: 16, maxColorAttachments: 8, maxColorAttachmentBytesPerSample: 32,
+    maxComputeWorkgroupStorageSize: 16384, maxComputeInvocationsPerWorkgroup: 256, maxComputeWorkgroupSizeX: 256,
+    maxComputeWorkgroupSizeY: 256, maxComputeWorkgroupSizeZ: 64, maxComputeWorkgroupsPerDimension: 65535 };
+  class GPUDevice extends EventTarget {
+    constructor(adapter) {
+      super();
+      this.adapter = adapter; this.features = new Set(); this.limits = Object.assign({}, GPU_LIMITS);
+      this.queue = new GPUQueue(); this.lost = new Promise(() => {}); this.label = '';
+    }
+    createBuffer(d) { return new GPUBuffer(d); }
+    createTexture(d) { return new GPUTexture(d); }
+    createSampler(d) { return new GPUSampler(d); }
+    createShaderModule(d) { return new GPUShaderModule(d); }
+    createBindGroupLayout(d) { return new GPUBindGroupLayout(d); }
+    createPipelineLayout(d) { return new GPUPipelineLayout(d); }
+    createBindGroup(d) { return new GPUBindGroup(d); }
+    createRenderPipeline(d) { return new GPURenderPipeline(d); }
+    createRenderPipelineAsync(d) { return Promise.resolve(new GPURenderPipeline(d)); }
+    createComputePipeline(d) { return { label: '', getBindGroupLayout: () => new GPUBindGroupLayout() }; }
+    createComputePipelineAsync(d) { return Promise.resolve(this.createComputePipeline(d)); }
+    createCommandEncoder(d) { return new GPUCommandEncoder(d); }
+    createQuerySet(d) { return new GPUQuerySet(d); }
+    pushErrorScope() {}
+    popErrorScope() { return Promise.resolve(null); }
+    destroy() {}
+  }
+  class GPUAdapter {
+    constructor() {
+      this.features = new Set(); this.limits = Object.assign({}, GPU_LIMITS); this.isFallbackAdapter = true;
+      this.info = { vendor: 'SexOS', architecture: 'sex-gl', device: 'software', description: 'SexOS software renderer' };
+    }
+    requestDevice() { return Promise.resolve(new GPUDevice(this)); }
+    requestAdapterInfo() { return Promise.resolve(this.info); }
+  }
+  class GPU {
+    constructor() { this.wgslLanguageFeatures = new Set(); }
+    requestAdapter() { return Promise.resolve(new GPUAdapter()); }
+    getPreferredCanvasFormat() { return 'bgra8unorm'; }
+  }
+  class GPUCanvasContext {
+    constructor(canvas) { this.canvas = canvas; this._gl = null; this._cfg = null; this._tex = null; }
+    configure(cfg) {
+      this._cfg = cfg;
+      if (!this._gl) this._gl = new WebGLRenderingContext(this.canvas, { alpha: cfg.alphaMode === 'premultiplied', depth: true });
+    }
+    unconfigure() { this._cfg = null; }
+    getConfiguration() { return this._cfg; }
+    getCurrentTexture() {
+      const c = this.canvas;
+      if (!this._tex || this._tex.width !== c.width || this._tex.height !== c.height) {
+        this._tex = new GPUTexture({ size: [c.width, c.height], format: (this._cfg && this._cfg.format) || 'bgra8unorm', usage: 16 }, this);
+      }
+      return this._tex;
+    }
+    _resize(w, h) { if (this._gl) this._gl._resize(w, h); }
+  }
+
   const storage = () => {
     const m = new Map();
     return {
@@ -1146,7 +1516,7 @@
   Object.setPrototypeOf(window, EventTarget.prototype);
   const globals = {
     window, self: window, globalThis: window, document, location, console, performance,
-    navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', language: 'en', languages: ['en'], platform: 'SexOS', onLine: true },
+    navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', language: 'en', languages: ['en'], platform: 'SexOS', onLine: true, gpu: new GPU() },
     screen: { get width() { return view()[0]; }, get height() { return view()[1]; } },
     history: { length: 1, state: null, pushState() {}, replaceState() {}, back() {}, forward() {}, go() {} },
     localStorage: storage(), sessionStorage: storage(),
@@ -1168,6 +1538,10 @@
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
     WebGLRenderbuffer, WebGLVertexArrayObject, WebGLUniformLocation, WebGLActiveInfo, WebGLShaderPrecisionFormat,
     WebGLQuery, WebGLSampler, WebGLSync, WebGLTransformFeedback,
+    GPU, GPUAdapter, GPUDevice, GPUBuffer, GPUTexture, GPUTextureView, GPUSampler, GPUShaderModule, GPUBindGroup,
+    GPUBindGroupLayout, GPUPipelineLayout, GPURenderPipeline, GPUCommandEncoder, GPUCommandBuffer, GPURenderPassEncoder,
+    GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
+    createImageBitmap: src => Promise.resolve(src),
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {

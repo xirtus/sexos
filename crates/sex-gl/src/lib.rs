@@ -8,6 +8,7 @@ extern crate alloc;
 
 pub mod exec;
 pub mod glsl;
+pub mod gpu;
 pub mod program;
 pub mod raster;
 
@@ -93,10 +94,13 @@ pub struct Attrib {
     pub stride: u32,
     pub offset: u32,
     pub divisor: u32,
+    /// Integer components reach the shader as integers (vertexAttribIPointer, WebGPU
+    /// uint/sint formats), not converted to floats.
+    pub integer: bool,
 }
 
 impl Default for Attrib {
-    fn default() -> Self { Self { enabled: false, buffer: 0, size: 4, ty: FLOAT, normalized: false, stride: 0, offset: 0, divisor: 0 } }
+    fn default() -> Self { Self { enabled: false, buffer: 0, size: 4, ty: FLOAT, normalized: false, stride: 0, offset: 0, divisor: 0, integer: false } }
 }
 
 #[derive(Clone, Default)]
@@ -260,7 +264,7 @@ impl Context {
             fixed: Fixed {
                 viewport: [0, 0, w as i32, h as i32], scissor: None, depth_test: false, depth_func: rg::LESS, depth_mask: true,
                 depth_range: [0.0, 1.0], blend: false, blend_src: [rg::ONE; 2], blend_dst: [rg::ZERO; 2], blend_eq: [rg::FUNC_ADD; 2],
-                blend_color: [0.0; 4], color_mask: [true; 4], cull: false, cull_face: rg::BACK, front_ccw: true, polygon_offset: None,
+                blend_color: [0.0; 4], color_mask: [true; 4], cull: false, cull_face: rg::BACK, front_ccw: true, polygon_offset: None, zero_one: false,
             },
             scissor_box: [0, 0, w as i32, h as i32], scissor_test: false, polygon_offset: [0.0; 2], polygon_offset_fill: false,
             clear_color: [0.0; 4], clear_depth: 1.0, unpack_alignment: 4, flip_y: false, premultiply: false, error: NO_ERROR, frame: 0,
@@ -395,7 +399,12 @@ impl Context {
         if i as usize >= MAX_ATTRIBS { return self.err(INVALID_VALUE); }
         let buffer = self.array_buffer;
         let a = &mut self.vao_mut().attribs[i as usize];
-        *a = Attrib { enabled: a.enabled, buffer, size: size.clamp(1, 4), ty, normalized, stride, offset, divisor: a.divisor };
+        *a = Attrib { enabled: a.enabled, buffer, size: size.clamp(1, 4), ty, normalized, stride, offset, divisor: a.divisor, integer: false };
+    }
+    /// An integer attribute: components keep their integer values.
+    pub fn attrib_ipointer(&mut self, i: u32, size: u32, ty: u32, stride: u32, offset: u32) {
+        self.attrib_pointer(i, size, ty, false, stride, offset);
+        if (i as usize) < MAX_ATTRIBS { self.vao_mut().attribs[i as usize].integer = true; }
     }
     pub fn attrib_divisor(&mut self, i: u32, d: u32) { if (i as usize) < MAX_ATTRIBS { self.vao_mut().attribs[i as usize].divisor = d; } }
     pub fn vertex_attrib(&mut self, i: u32, v: [f32; 4]) { if (i as usize) < MAX_ATTRIBS { self.generic[i as usize] = v; } }
@@ -593,6 +602,49 @@ impl Context {
         }
     }
     pub fn use_program(&mut self, id: u32) { self.current = id; }
+
+    /// WebGPU: a render pipeline's program from WGSL modules, as program `id`.
+    pub fn gpu_program(&mut self, id: u32, vs_code: &str, vs_entry: &str, fs_code: &str, fs_entry: &str) {
+        let (linked, log) = match Program::from_wgsl(vs_code, vs_entry, fs_code, fs_entry) {
+            Ok(p) => (Some(p), String::new()),
+            Err(e) => (None, e),
+        };
+        self.programs.insert(id, ProgramObj { linked, log, ..Default::default() });
+    }
+
+    /// WebGPU: binds `size` bytes of buffer `buf` from `offset` to a buffer binding.
+    pub fn gpu_bind_buffer(&mut self, prog: u32, group: u32, binding: u32, buf: u32, offset: usize, size: usize) {
+        let bytes: Vec<u8> = match self.buffers.get(&buf) {
+            Some(b) => { let end = offset.saturating_add(size).min(b.len()); b.get(offset.min(end)..end).unwrap_or(&[]).to_vec() }
+            None => return,
+        };
+        if let Some(p) = self.programs.get_mut(&prog).and_then(|p| p.linked.as_mut()) { p.bind_buffer(group, binding, &bytes); }
+    }
+
+    /// WebGPU: a texture binding samples the texture bound to `unit`.
+    pub fn gpu_bind_texture(&mut self, prog: u32, group: u32, binding: u32, unit: u32) {
+        let Some(p) = self.programs.get_mut(&prog).and_then(|p| p.linked.as_mut()) else { return };
+        let Some(b) = p.gpu.iter().find(|b| b.group == group && b.binding == binding) else { return };
+        if let gpu::BindKind::Texture(i) = b.kind { p.samplers[i].units = alloc::vec![unit as i32]; }
+    }
+
+    /// WebGPU: a sampler binding sets the filters and wrapping of the textures it samples.
+    pub fn gpu_bind_sampler(&mut self, prog: u32, group: u32, binding: u32, filters: [u32; 4]) {
+        let Some(p) = self.programs.get(&prog).and_then(|p| p.linked.as_ref()) else { return };
+        let Some(b) = p.gpu.iter().find(|b| b.group == group && b.binding == binding) else { return };
+        let gpu::BindKind::Sampler(texs) = &b.kind else { return };
+        let mut ids = Vec::new();
+        for &i in texs {
+            let s = &p.samplers[i];
+            let unit = s.units.first().copied().unwrap_or(0).clamp(0, MAX_UNITS as i32 - 1) as usize;
+            ids.push(self.units[unit][if s.kind == SamplerKind::Cube { 1 } else { 0 }]);
+        }
+        for id in ids {
+            if let Some(t) = self.textures.get_mut(&id) {
+                [t.min_filter, t.mag_filter, t.wrap_s, t.wrap_t] = filters;
+            }
+        }
+    }
     pub fn program(&self, id: u32) -> Option<&Program> { self.programs.get(&id).and_then(|p| p.linked.as_ref()) }
 
     /// A uniform location (an index for this program), or `None`.
@@ -630,6 +682,23 @@ impl Context {
         let csize = match a.ty { BYTE | UNSIGNED_BYTE => 1, SHORT | UNSIGNED_SHORT | HALF_FLOAT | HALF_FLOAT_OES => 2, _ => 4 };
         let stride = if a.stride == 0 { a.size * csize } else { a.stride } as usize;
         let base = a.offset as usize + i as usize * stride;
+        if a.integer {
+            let mut v = [0u32, 0, 0, 1];
+            for c in 0..a.size as usize {
+                let o = base + c * csize as usize;
+                if o + csize as usize > buf.len() { return; }
+                let b = &buf[o..o + csize as usize];
+                v[c] = match a.ty {
+                    UNSIGNED_BYTE => b[0] as u32,
+                    BYTE => b[0] as i8 as i32 as u32,
+                    UNSIGNED_SHORT => u16::from_le_bytes([b[0], b[1]]) as u32,
+                    SHORT => i16::from_le_bytes([b[0], b[1]]) as i32 as u32,
+                    _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                };
+            }
+            for (j, o) in out.iter_mut().enumerate().take(lanes.min(4)) { *o = v[j]; }
+            return;
+        }
         let mut v = [0f32, 0.0, 0.0, 1.0];
         for c in 0..a.size as usize {
             let o = base + c * csize as usize;
@@ -733,6 +802,7 @@ impl Context {
         let mut fixed = self.fixed;
         fixed.scissor = if self.scissor_test { Some(self.scissor_box) } else { None };
         fixed.polygon_offset = if self.polygon_offset_fill { Some(self.polygon_offset) } else { None };
+        fixed.zero_one = prog.zero_one;
         let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin };
         let mut target = Target { width: self.width as i32, height: self.height as i32, color, depth };
         raster::assemble(&mut target, &fixed, mode, &local, &verts, &mut shader);
