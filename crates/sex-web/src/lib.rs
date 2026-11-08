@@ -34,7 +34,8 @@ pub struct Fonts {
     cache: Box<Cache>,
     acc: Vec<i32>,
     /// Decoded pictures by address, for layout sizes and painting.
-    pub images: Vec<(String, Image)>,
+    /// Decoded pictures by `src` (`canvas:<node>` for canvases), shared with scripts.
+    pub images: Vec<(String, alloc::rc::Rc<Image>)>,
 }
 
 impl Fonts {

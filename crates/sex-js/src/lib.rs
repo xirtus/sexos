@@ -13,6 +13,7 @@
 extern crate alloc;
 
 pub mod document;
+pub mod webgl;
 pub use document::Document;
 
 use alloc::{format, string::String, vec::Vec};
@@ -63,11 +64,18 @@ pub mod op {
     pub const CANVAS: u32 = 24;
     /// (css font, text): width in pixels.
     pub const MEASURE: u32 = 25;
+    /// WebGL batch for canvas NODE: commands, then the batch's bytes (an ArrayBuffer).
+    pub const GL: u32 = 64;
+    /// WebGL query for canvas NODE: what, then its arguments; answers text or bytes.
+    pub const GL_QUERY: u32 = 65;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.
 pub trait Page {
     fn call(&mut self, op: u32, args: &[&str]) -> Option<String>;
+    /// Ops from [`BYTE_OPS`] up take raw byte arguments (ArrayBuffers) and may answer
+    /// with bytes (an ArrayBuffer when the script asks for one).
+    fn call_bytes(&mut self, op: u32, args: &[&[u8]]) -> Option<Vec<u8>> { let _ = (op, args); None }
     /// Nanoseconds on a monotonic clock, for `Date.now`, timers and the time budget.
     fn now_ns(&mut self) -> u64;
 }
@@ -85,9 +93,12 @@ impl Default for Limits {
     fn default() -> Self { Self { memory_bytes: 24 << 20, heap_bytes: 16 << 20, budget_ms: 2000 } }
 }
 
+/// The first op whose arguments are bytes rather than text.
+pub const BYTE_OPS: u32 = 64;
+
 struct State<P> {
     page: P,
-    result: String,
+    result: Vec<u8>,
     limits: StoreLimits,
 }
 
@@ -112,15 +123,14 @@ pub enum Error {
     Trapped(String),
 }
 
-fn args_of(data: &[u8], ptr: i32, len: i32) -> Option<Vec<&str>> {
+fn args_of(data: &[u8], ptr: i32, len: i32) -> Option<Vec<&[u8]>> {
     let start = ptr as u32 as usize;
     let end = start.checked_add(len as u32 as usize)?;
     let mut bytes = data.get(start..end)?;
     let mut out = Vec::new();
     while bytes.len() >= 4 {
         let n = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
-        let s = bytes.get(4..4 + n)?;
-        out.push(core::str::from_utf8(s).ok()?);
+        out.push(bytes.get(4..4 + n)?);
         bytes = &bytes[4 + n..];
     }
     Some(out)
@@ -138,7 +148,7 @@ impl<P: Page + 'static> Script<P> {
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
         let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        let mut store = Store::new(&engine, State { page, result: String::new(), limits: store_limits });
+        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits });
         store.limiter(|s| &mut s.limits);
         let mut linker = Linker::<State<P>>::new(&engine);
         link(&mut linker).map_err(|_| e("link"))?;
@@ -203,7 +213,11 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let Some(m) = mem(&c) else { return -1 };
         let (data, state) = m.data_and_store_mut(&mut c);
         let Some(args) = args_of(data, ptr, len) else { return -1 };
-        match state.page.call(op as u32, &args) {
+        let r = if op as u32 >= BYTE_OPS { state.page.call_bytes(op as u32, &args) } else {
+            let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return -1 };
+            state.page.call(op as u32, &text).map(String::into_bytes)
+        };
+        match r {
             Some(r) => { let n = r.len() as i32; state.result = r; n }
             None => -1,
         }
@@ -213,7 +227,7 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let (data, state) = m.data_and_store_mut(&mut c);
         let r = core::mem::take(&mut state.result);
         let at = out as u32 as usize;
-        if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(r.as_bytes()); }
+        if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
     })?;
     const W: &str = "wasi_snapshot_preview1";
     linker.func_wrap(W, "clock_time_get", |mut c: C<'_, P>, _id: i32, _p: i64, at: i32| -> i32 {

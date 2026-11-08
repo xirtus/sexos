@@ -40,28 +40,34 @@ static JSValue js_host(JSContext *c, JSValueConst this_val, int argc, JSValueCon
     int n = argc - 1 > MAX_ARGS ? MAX_ARGS : argc - 1;
     const char *s[MAX_ARGS];
     size_t l[MAX_ARGS];
+    // ArrayBuffer arguments pass as their raw bytes (not strings, not to be freed).
+    bool raw[MAX_ARGS];
     size_t total = 0;
     for (int i = 0; i < n; i++) {
-        s[i] = JS_ToCStringLen(c, &l[i], argv[i + 1]);
-        if (!s[i]) { for (int j = 0; j < i; j++) JS_FreeCString(c, s[j]); return JS_EXCEPTION; }
+        raw[i] = JS_IsArrayBuffer(argv[i + 1]);
+        s[i] = raw[i] ? (const char *)JS_GetArrayBuffer(c, &l[i], argv[i + 1]) : JS_ToCStringLen(c, &l[i], argv[i + 1]);
+        if (raw[i] && !s[i]) { s[i] = ""; l[i] = 0; }
+        if (!s[i]) { for (int j = 0; j < i; j++) if (!raw[j]) JS_FreeCString(c, s[j]); return JS_EXCEPTION; }
         total += 4 + l[i];
     }
     char *buf = malloc(total + 1);
-    if (!buf) { for (int j = 0; j < n; j++) JS_FreeCString(c, s[j]); return JS_ThrowOutOfMemory(c); }
+    if (!buf) { for (int j = 0; j < n; j++) if (!raw[j]) JS_FreeCString(c, s[j]); return JS_ThrowOutOfMemory(c); }
     char *p = buf;
     for (int i = 0; i < n; i++) {
         uint32_t len = (uint32_t)l[i];
         memcpy(p, &len, 4); p += 4;
         memcpy(p, s[i], l[i]); p += l[i];
-        JS_FreeCString(c, s[i]);
+        if (!raw[i]) JS_FreeCString(c, s[i]);
     }
-    int r = host_call(op, buf, (int)total);
+    // Bit 16 of the op asks for the result as an ArrayBuffer.
+    int binary = op & 0x10000;
+    int r = host_call(op & 0xFFFF, buf, (int)total);
     free(buf);
     if (r < 0) return JS_NULL;
     char *out = malloc((size_t)r + 1);
     if (!out) return JS_ThrowOutOfMemory(c);
     host_result(out);
-    JSValue v = JS_NewStringLen(c, out, (size_t)r);
+    JSValue v = binary ? JS_NewArrayBufferCopy(c, (const uint8_t *)out, (size_t)r) : JS_NewStringLen(c, out, (size_t)r);
     free(out);
     return v;
 }

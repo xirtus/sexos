@@ -2777,6 +2777,45 @@ row no longer waits for the row before it to end.
 - **Limits.** No `clip`, `drawImage`, `getImageData`/`putImageData` (zeros), patterns,
   shadows or line dashes yet; `arcTo` is a straight line; `strokeText` fills. WebGL next.
 
+## WebGL in Web pages (2026-11-08)
+
+- **What runs now.** `canvas.getContext('webgl')` (also `experimental-webgl`, and
+  `webgl2` with the same feature set for now) in `run web`: buffers, vertex arrays, element
+  draws (8/16/32-bit indices), GLSL ES 1.00 and 3.00 shaders, uniforms of every type
+  (arrays, matrices, samplers), 2D and cube textures from bytes or from a page picture
+  (`<img>` or another canvas) with flip-y and premultiply, depth test, culling, blending,
+  scissor, color mask, polygon offset, points and lines, `readPixels`, and the
+  `getParameter`/`getShaderParameter`/`getActiveUniform` queries libraries use.
+- **Design.** New crate `crates/sex-gl` (`no_std` + `alloc`): a WebGL 1-shaped `Context`
+  over a software rasterizer (near/far clipping, top-left fill rule, perspective-correct
+  varyings). Shaders: GLSL ES is preprocessed by pp-rs (MIT/Apache, vendored as
+  `vendor/pp-rs-0.2.1`, ported to `no_std`, its 35 tests pass), rewritten to GLSL 450
+  (loose uniforms to blocks, combined samplers split, explicit locations, ES built-ins
+  renamed), parsed and validated by naga 30 (MIT/Apache), and run by a small interpreter
+  over naga's IR. The prelude queues WebGL calls like Canvas 2D, with one ArrayBuffer of
+  bulk data per batch; queries flush the batch and ask synchronously. Web shows each canvas
+  that drew a new frame as the picture `canvas:<node>` (`sex_web::canvas::present_gl`).
+  The workspace now has one `[patch.crates-io]` entry (pp-rs), allowed by name in
+  `check_tls_platform.py`.
+- **ABI change (guest/host, sex-js only).** The QuickJS guest passes `ArrayBuffer`
+  arguments to `__host` as raw bytes, and an op with bit 16 set returns an `ArrayBuffer`;
+  ops 64 and up take byte arguments (`Page::call_bytes`). `quickjs.wasm` rebuilt (sha256 in
+  `build_quickjs_wasm.sh`). No kernel or system ABI change.
+- **Evidence.** sex-gl tests: shader translation, a colored triangle, a lit textured cube,
+  ES 3.00 with blending and scissor, and the ES 3.00 forms three.js uses (precision on
+  declarations, `const in` parameters, boolean uniforms, struct uniforms, `modf`).
+  sex-js test `webgl_draws_a_triangle_from_js`. On the host, three.js r170 (unmodified
+  `three.cjs`) renders a `MeshStandardMaterial` cube lit by ambient and directional light.
+  `scripts/program_web_webgl_gate.py` serves `scripts/web_site/webgl.html` (a lit cube
+  textured with the page's logo, six animation frames, six more after a button click): both
+  states match the host render exactly, 0 of 9020 sampled pixels differ, at 1 and 4 cores.
+  The page, net, JS and canvas gates still pass.
+- **Limits.** Framebuffers and renderbuffers are stubs (drawing goes to the canvas), no
+  mipmaps (level 0 only), derivatives are 0, no WebGL 2 instancing draws, uniform blocks,
+  3D textures or transform feedback yet: those are next, for three.js. Shader compiles take
+  a moment in software float until programs get SSE. three.js in `run web` still needs a
+  longer script time budget (loading its 1.3 MB takes about a second on the host).
+
 ## Master CI green again (2026-11-08)
 
 - GitHub CI on master passes every step for the first time in weeks (run 42502328687,

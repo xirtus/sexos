@@ -186,7 +186,7 @@ impl Browser {
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
                 if let Ok((_, body)) = self.fetch(&abs) {
-                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), img)); }
+                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), alloc::rc::Rc::new(img))); }
                 }
             }
             self.buf = Vec::new();
@@ -201,6 +201,7 @@ impl Browser {
         self.timer = None;
         let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
         doc.measure = sex_web::canvas::measure_css;
+        doc.pictures = self.fonts.images.clone();
         self.doc = Doc::Plain(doc);
         self.canvases = sex_web::canvas::Canvases::new();
         let script_begun = sex_pdx::get_ticks();
@@ -278,7 +279,7 @@ impl Browser {
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let painted = self.canvases.run_queue(&mut self.fonts, &doc.dom, queue);
+        let painted = self.canvases.run_queue(&mut self.fonts, &doc.dom, queue) | sex_web::canvas::present_gl(&mut self.fonts, &mut doc.gl);
         if dirty { self.relayout(); }
         if draw && (dirty || painted) { self.draw(); return true; }
         false
@@ -469,3 +470,4 @@ pub extern "C" fn _start() -> ! {
         }
     }
 }
+
