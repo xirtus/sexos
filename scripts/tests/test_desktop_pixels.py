@@ -32,19 +32,29 @@ LOG='''[linen.list.text] x=640 y=50 w=640 h=670 scale=2 text_color=0xf0f8ff rows
 [linen.list.label] id=2 row=1 text=beta-file
 '''
 
+def draw(pixels,width,x0,y0,char,scale,color):
+    """One cell as Display draws it: Geist Mono at scale 2 and up (fully covered pixels
+    only), else the 5x7 font scaled; non-ASCII always the 5x7 font."""
+    if scale>=2 and 32<=ord(char)<=126:
+        import geist_cells
+        for gx,gy in geist_cells.solid(char,6*scale,9*scale):
+            pixels[((y0+gy)*width+x0+gx)*3:((y0+gy)*width+x0+gx)*3+3]=color
+        return
+    for gy,bits in enumerate(checker.glyph(FONT,char)):
+        for gx in range(5):
+            if not bits&(1<<(4-gx)):continue
+            for dy in range(scale):
+                for dx in range(scale):
+                    x=x0+gx*scale+dx;y=y0+gy*scale+dy
+                    pixels[(y*width+x)*3:(y*width+x)*3+3]=color
+
 def image(log=LOG):
     view,labels=checker.final_view(log);width,height=1280,800
     pixels=bytearray(width*height*3)
     for identity,row,name in labels:
         value=('> 'if identity==view['selected']else'  ')+name
         for col,char in enumerate(value):
-            for gy,bits in enumerate(checker.glyph(FONT,char)):
-                for gx in range(5):
-                    if not bits&(1<<(4-gx)):continue
-                    for dy in range(2):
-                        for dx in range(2):
-                            x=view['x']+8+(col*6+gx)*2+dx;y=view['y']+view['row_y']+row*36+gy*2+dy
-                            pixels[(y*width+x)*3:(y*width+x)*3+3]=b'\xf0\xf8\xff'
+            draw(pixels,width,view['x']+8+col*12,view['y']+view['row_y']+row*36,char,2,b'\xf0\xf8\xff')
     return b'P6\n1280 800\n255\n'+pixels
 
 class PixelChecks(unittest.TestCase):
@@ -89,13 +99,7 @@ def kaleido_image(x=640,y=385,w=640,lines=('Kaleidoscope','Cached / sample netwo
     for row,line in enumerate(lines):
         y0=y+36+(row*9*scale if status_offset is None or row==0 else status_offset)
         for col,char in enumerate(line):
-            for gy,bits in enumerate(checker.glyph(FONT,char)):
-                for gx in range(5):
-                    if not bits&(1<<(4-gx)):continue
-                    for dy in range(scale):
-                        for dx in range(scale):
-                            px=x+8+(col*6+gx)*scale+dx;py=y0+gy*scale+dy
-                            pixels[(py*width+px)*3:(py*width+px)*3+3]=color
+            draw(pixels,width,x+8+col*6*scale,y0,char,scale,color)
     return b'P6\n1280 800\n255\n'+pixels
 
 class KaleidoPixelChecks(unittest.TestCase):

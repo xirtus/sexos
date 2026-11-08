@@ -84,6 +84,33 @@ def final_view(text):
     return values,labels
 
 
+def cell_errors(pixels,width,x0,y0,char,scale,color,font):
+    """(mismatches, ink) for one text cell at (x0, y0). Windows at text scale 2 and up
+    draw Geist Mono: fully covered pixels must be the text colour, uncovered ones must
+    not be. Smaller windows draw the 5x7 font, scaled."""
+    mismatch=ink=0
+    if scale>=2 and (char==' ' or 32<=ord(char)<=126):
+        import geist_cells
+        w,h=6*scale,9*scale
+        cell=geist_cells.cells(w,h)[ord(char)-32]
+        for i,a in enumerate(cell):
+            if 0<a<255:continue
+            x=x0+i%w;y=y0+i//w
+            actual=pixels[(y*width+x)*3:(y*width+x)*3+3]==color
+            mismatch+=actual!=(a==255);ink+=a==255
+        return mismatch,ink
+    bitmap=glyph(font,char) if char!=' ' else (0,)*7
+    for gy,bits in enumerate(bitmap):
+        for gx in range(6):
+            on=gx<5 and bool(bits&(1<<(4-gx)))
+            for dy in range(scale):
+                for dx in range(scale):
+                    x=x0+gx*scale+dx;y=y0+gy*scale+dy
+                    actual=pixels[(y*width+x)*3:(y*width+x)*3+3]==color
+                    mismatch+=actual!=on;ink+=on
+    return mismatch,ink
+
+
 def verify(text,ppm,font,resolution=None):
     errors=[]
     try:
@@ -101,15 +128,8 @@ def verify(text,ppm,font,resolution=None):
             if len(rendered)>columns or y0<view['y'] or y0+7*scale>view['y']+view['h']:raise ValueError('label outside view')
             mismatch=0;ink=0
             for column in range(columns):
-                bitmap=glyph(font,rendered[column]) if column<len(rendered) else (0,)*7
-                for gy,bits in enumerate(bitmap):
-                    for gx in range(6):
-                        on=gx<5 and bool(bits&(1<<(4-gx)))
-                        for dy in range(scale):
-                            for dx in range(scale):
-                                x=x0+(column*6+gx)*scale+dx;y=y0+gy*scale+dy
-                                actual=pixels[(y*width+x)*3:(y*width+x)*3+3]==color
-                                mismatch+=actual!=on;ink+=on
+                m,i=cell_errors(pixels,width,x0+column*6*scale,y0,rendered[column] if column<len(rendered) else ' ',scale,color,font)
+                mismatch+=m;ink+=i
             if mismatch or ink==0:errors.append(f'name_id={identity} glyph_mismatches={mismatch} ink={ink}')
         return errors
     except (ValueError,KeyError,OverflowError,UnicodeError) as exc:
@@ -160,16 +180,8 @@ def verify_kaleido_layout(text,ppm,font,resolution=None):
                 raise ValueError('Kaleido title/status outside tile')
             mismatch=0
             for column in range(columns):
-                bitmap=glyph(font,line[column]) if column<len(line) else (0,)*7
-                for gy,bits in enumerate(bitmap):
-                    for gx in range(6):
-                        on=gx<5 and bool(bits&(1<<(4-gx)))
-                        for dy in range(scale):
-                            for dx in range(scale):
-                                px=x+8+(column*6+gx)*scale+dx
-                                py=y0+gy*scale+dy
-                                actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==b'\xcd\xd6\xf4'
-                                mismatch+=actual!=on
+                m,_=cell_errors(pixels,width,x+8+column*6*scale,y0,line[column] if column<len(line) else ' ',scale,b'\xcd\xd6\xf4',font)
+                mismatch+=m
             if mismatch:errors.append(f'Kaleido line={row} glyph_mismatches={mismatch}')
         return errors
     except (ValueError,KeyError,OverflowError,UnicodeError) as exc:

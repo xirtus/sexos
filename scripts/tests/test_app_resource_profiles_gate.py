@@ -3,6 +3,7 @@
 These tests prove orchestration/restoration, not guest or rendering behavior.
 """
 from pathlib import Path
+import re
 import os
 import shutil
 import subprocess
@@ -23,6 +24,9 @@ class AppResourceProfilesTests(unittest.TestCase):
         self.original = 'abi_hash = "preserve-this-hash"\n' + ''.join(
             f'[[stage]]\nid = "{stage}"\nrustflags = ""\n' for stage in
             ('build_kernel', 'build_sexinput', 'build_sexbell', 'build_kaleidoscope'))
+        # The Browser's normal flags are its TLS soft-crypto cfgs.
+        self.original = self.original.replace('id = "build_kaleidoscope"\nrustflags = ""',
+            'id = "build_kaleidoscope"\nrustflags = "--cfg aes_force_soft --cfg polyval_force_soft"')
         self.original += '[[stage]]\nid = "build_quil"\nrustflags = "--cfg sexfiles_quil_persistence_proof"\n'
         (self.root/'sexos_build_spec.toml').write_text(self.original)
         (self.root/'sexos-v1.0.0.iso').write_text('original image')
@@ -76,8 +80,8 @@ if [[ "${CORRUPT_CLOSE:-}" == 1 ]]; then printf corrupt > "$ISO"; fi
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual((self.root/'events').read_text().splitlines(),
                          ['build:resource','resource:check','build:normal','normal:check','desktop:close3'])
-        expected = self.original.replace('id = "build_kaleidoscope"\nrustflags = ""',
-            'id = "build_kaleidoscope"\nrustflags = "--cfg app_resource_cleanup_proof"')
+        expected = self.original.replace('id = "build_kaleidoscope"\nrustflags = "--cfg aes_force_soft --cfg polyval_force_soft"',
+            'id = "build_kaleidoscope"\nrustflags = "--cfg aes_force_soft --cfg polyval_force_soft --cfg app_resource_cleanup_proof"')
         for artifact in ('observed-spec.toml','tested-spec.toml','tested.iso','tested.kernel'):
             self.assertEqual((self.root/'evidence/resource'/artifact).read_text(), expected)
             self.assertEqual((self.root/'evidence/normal'/artifact).read_text(), self.original)
@@ -100,7 +104,7 @@ if [[ "${CORRUPT_CLOSE:-}" == 1 ]]; then printf corrupt > "$ISO"; fi
     def test_all_mutated_normal_stages_rejected_before_any_build(self):
         for stage in ('build_kernel','build_sexinput','build_sexbell','build_kaleidoscope'):
             with self.subTest(stage=stage):
-                custom=self.original.replace(f'id = "{stage}"\nrustflags = ""',f'id = "{stage}"\nrustflags = "--cfg custom"')
+                custom=re.sub(f'id = "{stage}"\nrustflags = "[^"]*"',f'id = "{stage}"\nrustflags = "--cfg custom"',self.original)
                 (self.root/'sexos_build_spec.toml').write_text(custom)
                 result=self.run_gate()
                 self.assertNotEqual(result.returncode,0)
