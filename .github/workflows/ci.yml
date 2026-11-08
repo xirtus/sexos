@@ -29,6 +29,8 @@ jobs:
       run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Host proof regressions
       run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+    - name: Fetch crates for offline host gates
+      run: cargo fetch --locked
     - name: Host kernel-model regressions
       run: |
         python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"
