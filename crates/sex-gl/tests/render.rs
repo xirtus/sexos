@@ -275,7 +275,7 @@ void main() {
 #[test]
 fn wgsl_pipeline_with_uniform_layout_texture_and_sampler() {
     let mut ctx = Context::new(16, 16);
-    ctx.gpu_program(5, r#"
+    let code = r#"
 struct U { tint: vec3f, scale: f32, m: mat2x2f, z: f32 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var t: texture_2d<f32>;
@@ -289,7 +289,8 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 }
 @fragment fn fs(v: V) -> @location(0) vec4f {
   return vec4f(textureSample(t, s, v.uv).rgb * u.tint, 1.0);
-}"#, "vs", "fs");
+}"#;
+    ctx.gpu_program(5, code, "vs", code, "fs");
     let log = ctx.programs[&5].log.clone();
     assert!(ctx.program(5).is_some(), "{log}");
     // tint (0.5, 1, 1), scale 1 at byte 12, m = identity at byte 16 (columns 8 bytes
@@ -319,4 +320,50 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
     assert_eq!(px(&ctx, 8, 8), [128, 255, 255, 255]);
     // WebGPU depth: z 0.5 lands at 0.5 (GL would give 0.75).
     assert!((ctx.depth[8 * 16 + 8] - 0.5).abs() < 1e-6, "{}", ctx.depth[8 * 16 + 8]);
+}
+
+/// Separate vertex and fragment modules that reuse names, an integer vertex attribute
+/// (`u32`, not converted to float) and a runtime-sized storage array read past its first
+/// element.
+#[test]
+fn wgsl_separate_modules_integer_attributes_and_storage_arrays() {
+    let mut ctx = Context::new(8, 8);
+    let vs = r#"
+struct U { scale: f32 };
+@group(0) @binding(0) var<uniform> u: U;
+struct V { @builtin(position) pos: vec4f, @location(0) @interpolate(flat) pick: u32 };
+@vertex fn main(@location(0) p: vec2f, @location(1) pick: u32) -> V {
+  var o: V;
+  o.pos = vec4f(p * u.scale, 0.5, 1.0);
+  o.pick = pick;
+  return o;
+}"#;
+    let fs = r#"
+struct U { colors: array<vec4f> };
+@group(0) @binding(1) var<storage, read> u: U;
+@fragment fn main(@location(0) @interpolate(flat) pick: u32) -> @location(0) vec4f { return u.colors[pick]; }"#;
+    ctx.gpu_program(5, vs, "", fs, "");
+    let log = ctx.programs[&5].log.clone();
+    assert!(ctx.program(5).is_some(), "{log}");
+    ctx.use_program(5);
+    ctx.bind_buffer(ARRAY_BUFFER, 20);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[1.0, 0.0, 0.0, 0.0]));
+    ctx.gpu_bind_buffer(5, 0, 0, 20, 0, 16);
+    // Three colors: pick 2 is green.
+    ctx.bind_buffer(ARRAY_BUFFER, 21);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[1., 0., 0., 1., 0., 0., 1., 1., 0., 1., 0., 1.]));
+    ctx.gpu_bind_buffer(5, 0, 1, 21, 0, 48);
+    // Positions (float) then picks (u32) in one buffer.
+    let mut vb = bytes(&[-1., -1., 1., -1., 1., 1., -1., -1., 1., 1., -1., 1.]);
+    for _ in 0..6 { vb.extend_from_slice(&2u32.to_le_bytes()); }
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &vb);
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    ctx.enable_attrib(1, true);
+    ctx.attrib_ipointer(1, 1, UNSIGNED_INT, 4, 48);
+    ctx.clear(COLOR_BUFFER_BIT);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 6);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 4, 4), [0, 255, 0, 255]);
 }

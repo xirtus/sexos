@@ -94,10 +94,13 @@ pub struct Attrib {
     pub stride: u32,
     pub offset: u32,
     pub divisor: u32,
+    /// Integer components reach the shader as integers (vertexAttribIPointer, WebGPU
+    /// uint/sint formats), not converted to floats.
+    pub integer: bool,
 }
 
 impl Default for Attrib {
-    fn default() -> Self { Self { enabled: false, buffer: 0, size: 4, ty: FLOAT, normalized: false, stride: 0, offset: 0, divisor: 0 } }
+    fn default() -> Self { Self { enabled: false, buffer: 0, size: 4, ty: FLOAT, normalized: false, stride: 0, offset: 0, divisor: 0, integer: false } }
 }
 
 #[derive(Clone, Default)]
@@ -396,7 +399,12 @@ impl Context {
         if i as usize >= MAX_ATTRIBS { return self.err(INVALID_VALUE); }
         let buffer = self.array_buffer;
         let a = &mut self.vao_mut().attribs[i as usize];
-        *a = Attrib { enabled: a.enabled, buffer, size: size.clamp(1, 4), ty, normalized, stride, offset, divisor: a.divisor };
+        *a = Attrib { enabled: a.enabled, buffer, size: size.clamp(1, 4), ty, normalized, stride, offset, divisor: a.divisor, integer: false };
+    }
+    /// An integer attribute: components keep their integer values.
+    pub fn attrib_ipointer(&mut self, i: u32, size: u32, ty: u32, stride: u32, offset: u32) {
+        self.attrib_pointer(i, size, ty, false, stride, offset);
+        if (i as usize) < MAX_ATTRIBS { self.vao_mut().attribs[i as usize].integer = true; }
     }
     pub fn attrib_divisor(&mut self, i: u32, d: u32) { if (i as usize) < MAX_ATTRIBS { self.vao_mut().attribs[i as usize].divisor = d; } }
     pub fn vertex_attrib(&mut self, i: u32, v: [f32; 4]) { if (i as usize) < MAX_ATTRIBS { self.generic[i as usize] = v; } }
@@ -595,9 +603,9 @@ impl Context {
     }
     pub fn use_program(&mut self, id: u32) { self.current = id; }
 
-    /// WebGPU: a render pipeline's program from WGSL, as program `id`.
-    pub fn gpu_program(&mut self, id: u32, code: &str, vs_entry: &str, fs_entry: &str) {
-        let (linked, log) = match Program::from_wgsl(code, vs_entry, fs_entry) {
+    /// WebGPU: a render pipeline's program from WGSL modules, as program `id`.
+    pub fn gpu_program(&mut self, id: u32, vs_code: &str, vs_entry: &str, fs_code: &str, fs_entry: &str) {
+        let (linked, log) = match Program::from_wgsl(vs_code, vs_entry, fs_code, fs_entry) {
             Ok(p) => (Some(p), String::new()),
             Err(e) => (None, e),
         };
@@ -674,6 +682,23 @@ impl Context {
         let csize = match a.ty { BYTE | UNSIGNED_BYTE => 1, SHORT | UNSIGNED_SHORT | HALF_FLOAT | HALF_FLOAT_OES => 2, _ => 4 };
         let stride = if a.stride == 0 { a.size * csize } else { a.stride } as usize;
         let base = a.offset as usize + i as usize * stride;
+        if a.integer {
+            let mut v = [0u32, 0, 0, 1];
+            for c in 0..a.size as usize {
+                let o = base + c * csize as usize;
+                if o + csize as usize > buf.len() { return; }
+                let b = &buf[o..o + csize as usize];
+                v[c] = match a.ty {
+                    UNSIGNED_BYTE => b[0] as u32,
+                    BYTE => b[0] as i8 as i32 as u32,
+                    UNSIGNED_SHORT => u16::from_le_bytes([b[0], b[1]]) as u32,
+                    SHORT => i16::from_le_bytes([b[0], b[1]]) as i32 as u32,
+                    _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                };
+            }
+            for (j, o) in out.iter_mut().enumerate().take(lanes.min(4)) { *o = v[j]; }
+            return;
+        }
         let mut v = [0f32, 0.0, 0.0, 1.0];
         for c in 0..a.size as usize {
             let o = base + c * csize as usize;

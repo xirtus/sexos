@@ -1058,7 +1058,7 @@
     fenceSync() { return new WebGLSync(); } deleteSync() {} clientWaitSync() { return 0x911A; } waitSync() {} getSyncParameter() { return 0x9119; }
     createTransformFeedback() { return new WebGLTransformFeedback(); } bindTransformFeedback() {} beginTransformFeedback() {}
     endTransformFeedback() {} transformFeedbackVaryings() {} deleteTransformFeedback() {}
-    vertexAttribIPointer(i, size, type, stride, offset) { this._c('ap', i, size, type, 0, stride | 0, offset | 0); }
+    vertexAttribIPointer(i, size, type, stride, offset) { this._c('aip', i, size, type, stride | 0, offset | 0); }
     vertexAttribI4i(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); } vertexAttribI4ui(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); }
     getBufferSubData() {} copyBufferSubData() {} getIndexedParameter() { return null; } getInternalformatParameter() { return new Int32Array(0); }
   }
@@ -1228,15 +1228,17 @@
   class GPURenderPipeline extends GPUObjectBase {
     constructor(d) {
       super(d); this._d = d; this._in = new Set();
-      const vm = d.vertex.module, fm = d.fragment ? d.fragment.module : vm;
-      this._code = vm === fm ? vm._code : vm._code + '\n' + fm._code;
+      this._vs = d.vertex.module._code;
+      this._fs = d.fragment ? d.fragment.module._code : this._vs;
     }
     getBindGroupLayout() { return new GPUBindGroupLayout(); }
     _program(gl) {
       if (this._in.has(gl)) return;
       this._in.add(gl);
-      const [o, l] = gl._data(new TextEncoderLite().encode(this._code));
-      gl._c('gp', this._id, o, l, this._d.vertex.entryPoint || '', (this._d.fragment && this._d.fragment.entryPoint) || '');
+      const enc = new TextEncoderLite();
+      const [vo, vl] = gl._data(enc.encode(this._vs));
+      const [fo, fl] = this._fs === this._vs ? [vo, vl] : gl._data(enc.encode(this._fs));
+      gl._c('gp', this._id, vo, vl, this._d.vertex.entryPoint || '', fo, fl, (this._d.fragment && this._d.fragment.entryPoint) || '');
       const st = gl._ask('program', this._id).split('\x1f');
       if (st[0] !== '1') console.error('WebGPU pipeline:', st[1]);
     }
@@ -1310,7 +1312,10 @@
         for (const at of layout.attributes || []) {
           const f = GPU_VERTEX[at.format] || GPU_VERTEX.float32x4;
           gl._c('ea', at.shaderLocation, 1);
-          gl._c('ap', at.shaderLocation, f[0], f[1], f[2], layout.arrayStride | 0, (vb[1] | 0) + (at.offset | 0));
+          const off = (vb[1] | 0) + (at.offset | 0);
+          // uint/sint formats reach the shader as integers.
+          if (f[1] !== 0x1406 && f[1] !== 0x140B && !f[2]) gl._c('aip', at.shaderLocation, f[0], f[1], layout.arrayStride | 0, off);
+          else gl._c('ap', at.shaderLocation, f[0], f[1], f[2], layout.arrayStride | 0, off);
         }
       });
       // Fixed state.

@@ -2950,10 +2950,14 @@ row no longer waits for the row before it to end.
   bind by group and binding, and a sampler sets the filters and wrapping of the textures
   sampled with it. Clip depth runs 0..w. The page side (`prelude.js`) keeps buffers and
   textures, records passes, and replays them on `queue.submit` as GL batches with four
-  new commands (`gp`, `gb`, `gx`, `gs`). No ABI change.
+  new commands (`gp`, `gb`, `gx`, `gs`). Vertex and fragment modules are parsed
+  separately, so they may reuse names. Integer vertex formats (and WebGL 2
+  `vertexAttribIPointer`, new command `aip`) reach shaders as integers. Runtime-sized
+  storage arrays hold up to 1024 elements, filled from the bound buffer. No ABI change.
 - **Not yet.** Compute passes, render targets other than the canvas, instancing beyond
   repeated draws, and `@builtin(instance_index)`.
-- **Evidence.** Test `wgsl_pipeline_with_uniform_layout_texture_and_sampler`. The gate
+- **Evidence.** Tests `wgsl_pipeline_with_uniform_layout_texture_and_sampler` and
+  `wgsl_separate_modules_integer_attributes_and_storage_arrays`. The gate
   `scripts/program_web_webgpu_gate.py` serves `scripts/web_site/webgpu.html` (a lit,
   textured, depth-tested cube in WGSL) and matches the host render pixel for pixel at 1 and
   4 cores, before and after a click turns it six frames. The WebGL, JS and Web gates still

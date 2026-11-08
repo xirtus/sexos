@@ -314,7 +314,7 @@ pub(crate) fn crate_lanes(m: &Module, ty: naga::Handle<naga::Type>) -> u32 {
         TypeInner::Scalar(_) => 1,
         TypeInner::Vector { size, .. } => *size as u32,
         TypeInner::Matrix { columns, rows, .. } => *columns as u32 * *rows as u32,
-        TypeInner::Array { base, size, .. } => crate_lanes(m, *base) * match size { ArraySize::Constant(n) => n.get(), _ => 1 },
+        TypeInner::Array { base, size, .. } => crate_lanes(m, *base) * match size { ArraySize::Constant(n) => n.get(), _ => crate::exec::RUNTIME_ARRAY_LEN },
         TypeInner::Struct { members, .. } => members.iter().map(|x| crate_lanes(m, x.ty)).sum(),
         _ => 1,
     }

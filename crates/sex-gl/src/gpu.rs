@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! WebGPU render pipelines on the same interpreter and rasterizer as WebGL: a WGSL
-//! module's vertex and fragment entry points become a `Program`, and its resources are
+//! WebGPU render pipelines on the same interpreter and rasterizer as WebGL: the vertex
+//! and fragment entry points of WGSL modules (one each, possibly the same) become a
+//! `Program`, and its resources are
 //! listed by group and binding so the page can feed them. Uniform (and read-only storage)
 //! buffers keep WGSL's byte layout in the page; each binding maps those bytes to the
 //! interpreter's lanes.
@@ -17,8 +18,9 @@ use naga::{AddressSpace, ArraySize, Expression as E, ImageClass, ImageDimension,
 
 #[derive(Clone, Debug)]
 pub enum BindKind {
-    /// A buffer: (lane in the uniform memory, byte in the buffer) for every lane.
-    Buffer(Vec<(u32, u32)>),
+    /// A buffer: (lane in the stage's uniform memory, byte in the buffer) for every lane,
+    /// for the vertex and the fragment stage.
+    Buffer([Vec<(u32, u32)>; 2]),
     /// A texture, sampled through `Program::samplers[_]`.
     Texture(usize),
     /// A sampler, used with these textures (`Program::samplers` indices).
@@ -42,7 +44,7 @@ fn walk(m: &Module, ty: naga::Handle<naga::Type>, lane: &mut u32, byte: u32, out
             for c in 0..*columns as u32 { for r in 0..*rows as u32 { out.push((*lane, byte + c * stride + 4 * r)); *lane += 1; } }
         }
         TypeInner::Array { base, size, stride } => {
-            let n = match size { ArraySize::Constant(n) => n.get(), _ => 1 };
+            let n = match size { ArraySize::Constant(n) => n.get(), _ => crate::exec::RUNTIME_ARRAY_LEN };
             for i in 0..n { walk(m, *base, lane, byte + i * stride, out); }
         }
         TypeInner::Struct { members, .. } => for mem in members { walk(m, mem.ty, lane, byte + mem.offset, out); },
@@ -78,54 +80,75 @@ fn pairs(m: &Module) -> Vec<(u32, u32)> {
 }
 
 impl Program {
-    /// A render pipeline's program from WGSL `code` and its entry points (empty: the first
-    /// of that stage).
-    pub fn from_wgsl(code: &str, vs_entry: &str, fs_entry: &str) -> Result<Program, String> {
-        let module = naga::front::wgsl::parse_str(code).map_err(|e| format!("{}", e.message()))?;
-        let vs = stage_code(&module, vs_entry, ShaderStage::Vertex)?;
-        let fs = stage_code(&module, fs_entry, ShaderStage::Fragment)?;
-        let mut gpu = Vec::new();
+    /// A render pipeline's program from WGSL: the vertex entry point of `vs_code` and the
+    /// fragment entry point of `fs_code` (empty names: the first of that stage). The two
+    /// modules are parsed separately, so they may reuse names.
+    pub fn from_wgsl(vs_code: &str, vs_entry: &str, fs_code: &str, fs_entry: &str) -> Result<Program, String> {
+        let parse = |code: &str| naga::front::wgsl::parse_str(code).map_err(|e| format!("{}", e.message()));
+        let vm = parse(vs_code)?;
+        let fm = if fs_code == vs_code { vm.clone() } else { parse(fs_code)? };
+        let vs = stage_code(&vm, vs_entry, ShaderStage::Vertex)?;
+        let fs = stage_code(&fm, fs_entry, ShaderStage::Fragment)?;
+        let mut gpu: Vec<GpuBind> = Vec::new();
         let mut samplers: Vec<Sampler> = Vec::new();
-        let mut sampler_globals = Vec::new();
-        let mut base = 0u32;
-        for (h, g) in module.global_variables.iter() {
-            let buffer = matches!(g.space, AddressSpace::Uniform | AddressSpace::Immediate | AddressSpace::Storage { .. });
-            if buffer {
-                if let Some(b) = &g.binding {
-                    let mut lane = base;
-                    let mut map = Vec::new();
-                    walk(&module, g.ty, &mut lane, 0, &mut map);
-                    gpu.push(GpuBind { group: b.group, binding: b.binding, kind: BindKind::Buffer(map) });
+        for (st, module) in [(0usize, &vm), (1, &fm)] {
+            let slot = |gpu: &mut Vec<GpuBind>, group: u32, binding: u32, kind: BindKind| -> usize {
+                match gpu.iter().position(|b| b.group == group && b.binding == binding) {
+                    Some(i) => i,
+                    None => { gpu.push(GpuBind { group, binding, kind }); gpu.len() - 1 }
                 }
-                base += crate_lanes(&module, g.ty);
-                continue;
+            };
+            // (sampler binding, this stage's sampler global)
+            let mut stage_samplers = Vec::new();
+            let mut base = 0u32;
+            for (h, g) in module.global_variables.iter() {
+                let buffer = matches!(g.space, AddressSpace::Uniform | AddressSpace::Immediate | AddressSpace::Storage { .. });
+                if buffer {
+                    if let Some(b) = &g.binding {
+                        let mut lane = base;
+                        let mut map = Vec::new();
+                        walk(module, g.ty, &mut lane, 0, &mut map);
+                        let i = slot(&mut gpu, b.group, b.binding, BindKind::Buffer([Vec::new(), Vec::new()]));
+                        if let BindKind::Buffer(maps) = &mut gpu[i].kind { maps[st] = map; }
+                    }
+                    base += crate_lanes(module, g.ty);
+                    continue;
+                }
+                let Some(b) = &g.binding else { continue };
+                let gi = h.index() as u32;
+                match &module.types[g.ty].inner {
+                    TypeInner::Image { dim, arrayed, class } => {
+                        let kind = match (dim, arrayed, class) {
+                            (ImageDimension::Cube, _, _) => SamplerKind::Cube,
+                            (ImageDimension::D3, _, _) => SamplerKind::D3,
+                            (_, _, ImageClass::Depth { .. }) => SamplerKind::D2Shadow,
+                            (_, true, _) => SamplerKind::D2Array,
+                            _ => SamplerKind::D2,
+                        };
+                        let i = slot(&mut gpu, b.group, b.binding, BindKind::Texture(samplers.len()));
+                        let BindKind::Texture(si) = gpu[i].kind else { continue };
+                        if si == samplers.len() {
+                            samplers.push(Sampler { name: g.name.clone().unwrap_or_default(), kind, units: vec![0], vs_globals: Vec::new(), fs_globals: Vec::new() });
+                        }
+                        if st == 0 { samplers[si].vs_globals.push(gi) } else { samplers[si].fs_globals.push(gi) }
+                    }
+                    TypeInner::Sampler { .. } => {
+                        let i = slot(&mut gpu, b.group, b.binding, BindKind::Sampler(Vec::new()));
+                        stage_samplers.push((i, gi));
+                    }
+                    _ => {}
+                }
             }
-            let Some(b) = &g.binding else { continue };
-            match &module.types[g.ty].inner {
-                TypeInner::Image { dim, arrayed, class } => {
-                    let kind = match (dim, arrayed, class) {
-                        (ImageDimension::Cube, _, _) => SamplerKind::Cube,
-                        (ImageDimension::D3, _, _) => SamplerKind::D3,
-                        (_, _, ImageClass::Depth { .. }) => SamplerKind::D2Shadow,
-                        (_, true, _) => SamplerKind::D2Array,
-                        _ => SamplerKind::D2,
-                    };
-                    let gi = h.index() as u32;
-                    samplers.push(Sampler { name: g.name.clone().unwrap_or_default(), kind, units: vec![0], vs_globals: vec![gi], fs_globals: vec![gi] });
-                    gpu.push(GpuBind { group: b.group, binding: b.binding, kind: BindKind::Texture(samplers.len() - 1) });
+            // Which textures each sampler samples in this stage.
+            let used = pairs(module);
+            for (at, sg) in stage_samplers {
+                for (img, _) in used.iter().filter(|(_, s)| *s == sg) {
+                    let found = samplers.iter().position(|x| if st == 0 { x.vs_globals.contains(img) } else { x.fs_globals.contains(img) });
+                    if let (Some(t), BindKind::Sampler(list)) = (found, &mut gpu[at].kind) {
+                        if !list.contains(&t) { list.push(t); }
+                    }
                 }
-                TypeInner::Sampler { .. } => {
-                    sampler_globals.push((gpu.len(), h.index() as u32));
-                    gpu.push(GpuBind { group: b.group, binding: b.binding, kind: BindKind::Sampler(Vec::new()) });
-                }
-                _ => {}
             }
-        }
-        let used = pairs(&module);
-        for (at, sg) in sampler_globals {
-            let tex: Vec<usize> = used.iter().filter(|(_, s)| *s == sg)
-                .filter_map(|(i, _)| samplers.iter().position(|x| x.fs_globals[0] == *i)).collect();
-            gpu[at].kind = BindKind::Sampler(tex);
         }
         let mut attributes = Vec::new();
         for (io, _, lanes) in &vs.inputs {
@@ -143,11 +166,11 @@ impl Program {
     /// Copies a bound buffer's bytes into the uniform memory of binding `group`/`binding`.
     pub fn bind_buffer(&mut self, group: u32, binding: u32, bytes: &[u8]) {
         let Some(b) = self.gpu.iter().find(|b| b.group == group && b.binding == binding) else { return };
-        let BindKind::Buffer(map) = &b.kind else { return };
-        for &(lane, byte) in map {
-            let at = byte as usize;
-            let v = bytes.get(at..at + 4).map_or(0, |x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
-            for mem in [&mut self.vs_uniforms, &mut self.fs_uniforms] {
+        let BindKind::Buffer(maps) = &b.kind else { return };
+        for (map, mem) in maps.iter().zip([&mut self.vs_uniforms, &mut self.fs_uniforms]) {
+            for &(lane, byte) in map {
+                let at = byte as usize;
+                let v = bytes.get(at..at + 4).map_or(0, |x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
                 if let Some(slot) = mem.get_mut(lane as usize) { *slot = v; }
             }
         }
