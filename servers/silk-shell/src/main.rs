@@ -10218,6 +10218,13 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::TextZoom(step)=>{
+            // Display owns text layout; Shell only names the focused window and the step.
+            let sid=FOCUSED_SURFACE_ID;
+            let (status,_)=pdx_call(SLOT_DISPLAY,sex_pdx::desktop_style::OP_TEXT_ZOOM,sid,step as i64 as u64,0);
+            sex_pdx::serial_record!("[shell.text.zoom] sid={} step={} status={:#x}",sid,step,status);
+            true
+        }
     }
 }
 

@@ -18,6 +18,8 @@ the [feature ledger](handoff/SEXOS_FEATURE_LEDGER_2026_11_02.md) says what each 
 |---|---|
 | backtick | Command palette: open apps and programs |
 | Alt+Tab | Next window |
+| Alt+= / Alt+- | Larger / smaller text in the focused window |
+| Alt+0 | Text back to its usual size |
 | F11 | Close the focused window. A program that doesn't close within five seconds is ended |
 | Scroll Lock | Show or hide Spindle |
 

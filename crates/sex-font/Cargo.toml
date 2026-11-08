@@ -1,0 +1,11 @@
+[package]
+name = "sex-font"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Runtime TrueType glyph rendering for SexOS: any size, anti-aliased, integer-only raster"
+
+[dependencies]
+# MIT/Apache-2.0, zero-allocation, no_std. `no-std-float` supplies the few float
+# helpers it needs without std; the outline coordinates leave it as plain numbers.
+ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float", "opentype-layout"] }
