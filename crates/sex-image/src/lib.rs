@@ -193,14 +193,29 @@ pub fn dimensions(bytes: &[u8]) -> Result<(Format, usize, usize), Error> {
     }
 }
 
-/// Decodes a PNG or JPEG file, chosen by its signature.
+/// Decodes a PNG or JPEG file, chosen by its signature, into a new buffer.
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
     if bytes.len() > limits.max_input_bytes {
         return Err(Error::InputTooLarge);
     }
+    let (_, width, height) = dimensions(bytes)?;
+    let mut pixels = reserve_pixels(limits.admit(width, height)?)?;
+    decode_into(bytes, limits, &mut pixels)?;
+    Ok(Image { width, height, pixels })
+}
+
+/// Decodes into memory the caller already holds, such as a program's pixel
+/// surface, and returns the picture's width and height. Rows are packed
+/// (`width` pixels each) at the front of `out`; a picture with more pixels
+/// than `out` holds is refused as `TooLarge`. The decoders still allocate
+/// their own working memory from the heap.
+pub fn decode_into(bytes: &[u8], limits: &Limits, out: &mut [u32]) -> Result<(usize, usize), Error> {
+    if bytes.len() > limits.max_input_bytes {
+        return Err(Error::InputTooLarge);
+    }
     match sniff(bytes).ok_or(Error::UnknownFormat)? {
-        Format::Png => decode_png(bytes, limits),
-        Format::Jpeg => decode_jpeg(bytes, limits),
+        Format::Png => png_into(bytes, limits, out),
+        Format::Jpeg => jpeg_into(bytes, limits, out),
     }
 }
 
@@ -230,31 +245,21 @@ fn jpeg_options() -> DecoderOptions {
 
 /// Decodes a PNG (any colour type and depth, palette, tRNS, Adam7). For an
 /// animated PNG this is the first frame.
-pub fn decode_png(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
-    if bytes.len() > limits.max_input_bytes {
-        return Err(Error::InputTooLarge);
-    }
+fn png_into(bytes: &[u8], limits: &Limits, out: &mut [u32]) -> Result<(usize, usize), Error> {
     let mut decoder = zune_png::PngDecoder::new_with_options(ZCursor::new(bytes), png_options());
     decoder.decode_headers().map_err(|_| Error::Png)?;
     let (width, height) = decoder.dimensions().ok_or(Error::Png)?;
     let count = limits.admit(width, height)?;
     let colorspace = decoder.colorspace().ok_or(Error::Png)?;
     let size = decoder.output_buffer_size().ok_or(Error::Png)?;
-    let mut pixels = reserve_pixels(count)?;
-    let bytes_out = as_bytes(&mut pixels);
-    if size > bytes_out.len() {
-        return Err(Error::Unsupported);
-    }
+    let bytes_out = target(out, count, size)?;
     decoder.decode_into(&mut bytes_out[..size]).map_err(|_| Error::Png)?;
     expand_in_place(bytes_out, count, colorspace)?;
-    Ok(Image { width, height, pixels })
+    Ok((width, height))
 }
 
 /// Decodes a baseline or progressive JPEG (grayscale, YCbCr, CMYK, YCCK).
-pub fn decode_jpeg(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
-    if bytes.len() > limits.max_input_bytes {
-        return Err(Error::InputTooLarge);
-    }
+fn jpeg_into(bytes: &[u8], limits: &Limits, out: &mut [u32]) -> Result<(usize, usize), Error> {
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), jpeg_options());
     decoder.decode_headers().map_err(|_| Error::Jpeg)?;
     let info = decoder.info().ok_or(Error::Jpeg)?;
@@ -262,14 +267,21 @@ pub fn decode_jpeg(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
     let count = limits.admit(width, height)?;
     let colorspace = decoder.output_colorspace().ok_or(Error::Jpeg)?;
     let size = decoder.output_buffer_size().ok_or(Error::Jpeg)?;
-    let mut pixels = reserve_pixels(count)?;
-    let bytes_out = as_bytes(&mut pixels);
-    if size > bytes_out.len() {
-        return Err(Error::Unsupported);
-    }
+    let bytes_out = target(out, count, size)?;
     decoder.decode_into(&mut bytes_out[..size]).map_err(|_| Error::Jpeg)?;
     expand_in_place(bytes_out, count, colorspace)?;
-    Ok(Image { width, height, pixels })
+    Ok((width, height))
+}
+
+/// The first `count` pixels of `out` as bytes, if they fit and can hold the
+/// decoder's `size` bytes of packed samples.
+fn target(out: &mut [u32], count: usize, size: usize) -> Result<&mut [u8], Error> {
+    let pixels = out.get_mut(..count).ok_or(Error::TooLarge)?;
+    let bytes = as_bytes(pixels);
+    if size > bytes.len() {
+        return Err(Error::Unsupported);
+    }
+    Ok(bytes)
 }
 
 fn reserve_pixels(count: usize) -> Result<Vec<u32>, Error> {

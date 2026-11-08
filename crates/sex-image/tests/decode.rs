@@ -187,3 +187,19 @@ fn corrupted_files_never_panic() {
         }
     }
 }
+
+#[test]
+fn decode_into_caller_memory() {
+    let mut surface = vec![0xdead_beefu32; 64 * 48 + 7];
+    let (w, h) = sex_image::decode_into(&fixture("gradient.png"), &Limits::SURFACE, &mut surface).unwrap();
+    assert_eq!((w, h), (64, 48));
+    let image = Image { width: w, height: h, pixels: surface[..w * h].to_vec() };
+    assert_gradient(&image, 0);
+    assert_eq!(surface[64 * 48], 0xdead_beef, "pixels past the picture stay untouched");
+
+    let (w, h) = sex_image::decode_into(&fixture("gradient_q95.jpg"), &Limits::SURFACE, &mut surface).unwrap();
+    assert_gradient(&Image { width: w, height: h, pixels: surface[..w * h].to_vec() }, 6);
+
+    let mut small = vec![0u32; 100];
+    assert_eq!(sex_image::decode_into(&fixture("gradient.png"), &Limits::PHOTO, &mut small), Err(Error::TooLarge));
+}
