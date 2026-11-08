@@ -4,6 +4,10 @@ use crate::capability::{CapabilityData,ProtectionDomain};
 use sex_pdx::{pci_command as w,memory_region as m};
 
 fn held(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->Option<(u32,w::Update)> {
+    held_device(pd,slot,set,clear).map(|(slot,update,_)|(slot,update))
+}
+
+fn held_device(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->Option<(u32,w::Update,crate::capability::PciCapData)> {
     let slot=crate::capability_slot::decode_capability_slot(slot)?;
     let CapabilityData::Pci(device)=pd.find_capability(slot)?.data else {return None;};
     let update=w::authorize(device.command.as_ref(),pd.id,set,clear).ok()?;
@@ -13,8 +17,14 @@ fn held(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->Option<(u32,w::Update)
     let expected=pd.id.checked_mul(1024).and_then(|n|n.checked_add(0x10000)).and_then(|n|n.checked_add(slot));
     if expected!=Some(view.region_id) || m::resolve_info(Some(&view)).is_err()
         || view.rights!=m::QUERY_VIEW|m::READ|m::WRITE || view.dma_base.is_some() || view.peer_pd.is_some()
-        || view.length<crate::nic_boot::REGISTERS_END || view.length>65536 {return None;}
-    Some((slot,update))
+        || view.length>65536 {return None;}
+    // A virtio lease is sized by its register layout, a NIC's by its fixed registers.
+    let complete=match device.virtio {
+        Some(layout)=>crate::virtio_boot::supported(device.vendor_id,device.device_id)&&layout.valid(view.length),
+        None=>view.length>=crate::nic_boot::REGISTERS_END,
+    };
+    if !complete {return None;}
+    Some((slot,update,device))
 }
 
 pub fn identity(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5] {
@@ -24,6 +34,15 @@ pub fn identity(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5] 
     let grant=update.grant();
     crate::serial_println!("[pci.device.identity] pd={} slot={} vendor={} product={} runtime_mint=0",pd.id,slot,grant.vendor_id,grant.device_id);
     [0,grant.vendor_id as u64,grant.device_id as u64,0,0]
+}
+
+/// Where the held virtio device's register blocks sit inside its leased view.
+pub fn virtio_layout(pd:&ProtectionDomain,slot:u64,page:u64,a:u64,b:u64,c:u64)->[u64;5]{
+    let fail=[w::DENIED,0,0,0,0];
+    if a|b|c!=0{return fail;}
+    let Some((_,_,device))=held_device(pd,slot,0,0)else{return fail;};
+    let Some(words)=device.virtio.and_then(|layout|layout.page(page))else{return fail;};
+    [0,words[0],words[1],words[2],words[3]]
 }
 
 /// Read BOOT data only after the exact held device lease passes sex-pdx checks.
@@ -38,14 +57,15 @@ pub fn network_config(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u
 pub fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64,reserved0:u64,reserved1:u64)->[u64;5] {
     let fail=[w::DENIED,0,0,0,0];
     if reserved0!=0 || reserved1!=0 { return fail; }
-    let Some((slot,update))=held(pd,slot,set,clear)else{return fail;};
+    let Some((slot,update,device))=held_device(pd,slot,set,clear)else{return fail;};
+    let (region_id,bytes)=if device.virtio.is_some(){(sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES)}else{(w::DMA_REGION_ID,w::DMA_BYTES)};
     // Only bus-master enable needs DMA authority; querying or disabling a
     // controller remains possible when DMA metadata is absent or invalid.
     if update.needs_dma() {
         let dma=match pd.find_capability(sex_pdx::SLOT_DMA_REGION as u32).map(|c|c.data) {
             Some(CapabilityData::Region(g))=>g,_=>return fail,
         };
-        if dma.region_id!=w::DMA_REGION_ID || dma.length!=w::DMA_BYTES || dma.peer_pd.is_some()
+        if dma.region_id!=region_id || dma.length!=bytes || dma.peer_pd.is_some()
             || m::resolve_view(Some(&dma),m::ViewRequest {offset:0,length:dma.length,
                 rights:m::QUERY_VIEW|m::READ|m::WRITE|m::DMA_ADDRESS}).is_err() {return fail;}
     }

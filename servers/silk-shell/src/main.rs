@@ -10115,6 +10115,11 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
             clear_drag_if_dead();
             let _ = drag_move_focused(delta_x, delta_y);
         }
+        if (delta_x != 0 || delta_y != 0) && matches!(INTERACTION, InteractionState::Resizing { .. }) {
+            clear_resize_if_dead();
+            let _ = resize_accumulate_delta(delta_x, delta_y);
+            let _ = apply_resize_geometry(delta_x, delta_y);
+        }
         serial_println!("[usb.tablet.abs.pass] ok=1");
     } else {
         if reason == "zero_init" || reason == "duplicate_sample" {
@@ -22955,10 +22960,8 @@ unsafe fn apply_resize_geometry(dx: i32, dy: i32) -> bool {
         }
     }
     serial_println!("[silk.resize.apply] sid={} edge={:?} x={} y={} w={} h={}", surface_id, edge, nx, ny, nw, nh);
-    pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
-        (ny as u64) << 32 | nx as u64,
-        (nh as u64) << 32 | nw as u64);
-    update_local_geometry(surface_id, nx, ny, nw, nh);
+    // The same geometry step as tiling and moves, so every record of the window agrees.
+    apply_window_geometry(surface_id, nx, ny, nw, nh);
     unsafe {
         static mut RESIZE_FLUSH_BUDGET: u32 = 16;
         let b = &mut RESIZE_FLUSH_BUDGET;
@@ -23527,6 +23530,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                         if let Some((bx, by, bw, bh)) = get_surface_bounds(surface_id) {
                             let edge = compute_resize_edge(px, py, bx, by, bw, bh);
                             serial_println!("[silk.resize.hit] frame={} surface={} edge={:?} x={} y={}", frame_id, surface_id, edge, px, py);
+                            // A window sized by hand stays that size: the tiling leaves it be.
+                            if !frame_is_zoomed(frame_id) { set_frame_floating(frame_id, true); }
                             try_transition(InteractionState::Resizing {
                                 surface_id,
                                 edge,
