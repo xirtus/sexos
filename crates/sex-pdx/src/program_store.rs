@@ -16,9 +16,10 @@ pub const NAME_BYTES: usize = 16;
 pub const IMAGE_BYTES: usize = 16 * 1024 * 1024;
 /// The most address space a program row's arena spans: one run's image first, then the
 /// memory it asks for while it runs (`program_memory`). Frames are lent per page as the
-/// run asks, from memory every program shares, so the arena costs page tables, not RAM.
+/// run asks, from memory every program shares, and page tables are made as pages are first
+/// used, so an unused arena costs nothing.
 /// The kernel sizes each arena at BOOT to what the machine can hold, up to this.
-pub const WINDOW_BYTES: usize = 4 * 1024 * 1024 * 1024;
+pub const WINDOW_BYTES: usize = 256 * 1024 * 1024 * 1024;
 const _: () = assert!(IMAGE_BYTES <= WINDOW_BYTES && WINDOW_BYTES % 4096 == 0);
 pub const IMAGE_SLOT_FILES: u64 = 100;
 pub const IMAGE_REGION_ID: u32 = 0x4000;

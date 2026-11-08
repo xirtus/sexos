@@ -34,6 +34,7 @@ def main():
   g['wait'](rf'\[heaptest.ready\] target={target} task={task}',s,60);g['wait'](rf'\[display.text.committed\] target={target} ',s,60)
   grants=re.findall(rf'\[app.program.memory\] target={target} task={task} granted=(\d+) held=(\d+) base=(0x[0-9a-f]+) window_pages=(\d+)',t()[s:])
   assert grants,'no grant evidence'
+  assert re.search(rf'\[app\.program\.loaded\] target={target} task={task} [^\n]* stack_pages=1024\n',t()[s:]),'the 4 MiB stack heaptest asks for was not given'
   assert int(grants[0][1])==16 and len({b for *_,b,_ in grants})==1,'grants are not one span from the window start'
   peak=int(fields['peak']);assert 12*1024*1024<peak<=WINDOW,f'peak {peak}'
   assert int(fields['full_mib'])>=12,f"filled only {fields['full_mib']} MiB"
@@ -66,10 +67,17 @@ def main():
   big.update(filled=filled,free=int(re.findall(r'free_pages=(\d+)',t()[s:])[-1]),held=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=(\d+)',t())[-1]),window=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=\d+ base=0x[0-9a-f]+ window_pages=(\d+)',t())[-1]))
   # Filled means the machine ran out, or the program reached its arena (all but its
   # image, stack and guard page).
-  assert big['free']<1024 or big['held']>=big['window']-1024,f"memory left over after filling: {big}"
+  assert big['free']<1024 or big['held']>=big['window']-2048,f"memory left over after filling: {big}"
   close(big)
   after=started();close(after)
   assert after['free']+after['held']>=big['free']+big['held']-64,f"pages leaked: {big} then {after}"
+  # A deep call fits the 4 MiB stack; running past it hits the guard page and ends
+  # only that run, never the machine.
+  deep=started();s=len(t());g['focus'](SURFACE[deep['target']]);time.sleep(.5);q.key('s')
+  g['wait'](rf'\[heaptest\.deep\] target={deep["target"]} task={deep["task"]} frames=20 ',s,120)
+  s=len(t());q.key('o')
+  g['wait'](rf'\[heaptest\.overflow\] target={deep["target"]} task={deep["task"]}\n',s,60)
+  g['wait'](rf'fault\.kill \[paging\.fault\.terminal\] pd={deep["target"]} ',s,120)
   text=t();assert 'KERNEL PANIC'not in text and '[heaptest.fatal]'not in text and '[heaptest.fail]'not in text
   print({'ok':True,'runs':runs,'side_by_side':live,'all':big,'after':after})
  finally:g['stop']()

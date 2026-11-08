@@ -127,7 +127,27 @@ pub extern "C" fn _start() -> ! {
                     Err(why) => sex_pdx::serial_record!("[heaptest.fail] target={} task={} why={}", target, task, why),
                 }
             }
+            // S: use over 1 MiB of stack, which fits the 4 MiB this program asks for.
+            Event::Key(key) if key.code == 0x1F => {
+                let sum = deep(20);
+                sex_pdx::serial_record!("[heaptest.deep] target={} task={} frames=20 sum={}", target, task, sum);
+            }
+            // O: overflow the stack; the guard page below it must end this run.
+            Event::Key(key) if key.code == 0x18 => {
+                sex_pdx::serial_record!("[heaptest.overflow] target={} task={}", target, task);
+                let sum = deep(usize::MAX);
+                sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=overflow returned {}", target, task, sum);
+            }
             _ => {}
         }
     }
+}
+/// Each frame holds 64 KiB, so `n` frames use `n * 64` KiB of stack.
+#[inline(never)]
+fn deep(n: usize) -> u64 {
+    let mut block = [0u8; 64 * 1024];
+    block[n % block.len()] = n as u8;
+    let block = core::hint::black_box(block);
+    if n == 0 || n == 1 { return block[1] as u64; }
+    block[n % block.len()] as u64 + deep(n - 1)
 }

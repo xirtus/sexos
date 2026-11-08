@@ -133,9 +133,10 @@ pub fn reserve_table(base: u64, pkey: u8, any_frame: u64) -> *mut u64 {
     x86_64::instructions::tlb::flush(VirtAddr::new(base));
     leaf as *mut u64
 }
-/// Address space for one program row's arena, with its page tables made now and every
-/// leaf clear: frames are lent per run (`program_frames`). The size is set once, from
-/// what this machine can hold, so a small machine spends little on page tables.
+/// Address space for one program row's arena; no page tables yet, every page absent.
+/// Tables are made on first use (`arena_leaf`) and frames are lent per run
+/// (`program_frames`), so the size, set once from what this machine holds, costs
+/// nothing until a program uses it: one program may use all of the machine's memory.
 pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     require_boot();
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -144,7 +145,6 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     let mut pages = PAGES.load(Ordering::Acquire);
     if pages == 0 {
         let free = crate::memory::allocator::debug_global_free_frames() * 4096;
-        // Room for one program to use all of it; address space and tables are cheap.
         let bytes = free.max(1).next_power_of_two().clamp(8 * 1024 * 1024, sex_pdx::program_store::WINDOW_BYTES as u64);
         pages = (bytes / 4096) as usize;
         PAGES.store(pages, Ordering::Release);
@@ -152,12 +152,41 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     let bytes = pages as u64 * 4096;
     let va = crate::memory::va_allocator::allocate_va((bytes + SPAN) as usize).expect("BOOT_ARENA_NO_VA");
     let base = (va + SPAN - 1) & !(SPAN - 1);
-    let scratch = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0).expect("BOOT_ARENA_NO_FRAME");
-    let mut span = base;
-    while span < base + bytes { reserve_table(span, pkey, scratch); span += SPAN; }
-    crate::memory::allocator::GLOBAL_ALLOCATOR.free(scratch, 0);
-    crate::serial_println!("[boot.program.arena] base={:#x} pages={} bytes={} key={} tables={}", base, pages, bytes, pkey, bytes / SPAN);
+    crate::serial_println!("[boot.program.arena] base={:#x} pages={} bytes={} key={}", base, pages, bytes, pkey);
     (base, pages)
+}
+/// The leaf for `va` in a program arena, making its page tables on the span's first use.
+/// The leaf comes back clear; the caller maps it. Tables are linked directly, zeroed,
+/// so no page is ever present while they are made (a temporary mapping would be
+/// visible to a program on another core that shares the key). One lock orders makers,
+/// so two cores cannot both create one table.
+pub fn arena_leaf(va: u64, _pkey: u8) -> Option<u64> {
+    use x86_64::registers::control::Cr3;
+    static MAKE: spin::Mutex<()> = spin::Mutex::new(());
+    if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
+    let _held = MAKE.lock();
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    // Present, writable, user: the leaf alone decides access and carries the key.
+    const LINK: u64 = 0b111;
+    let mut table = Cr3::read().0.start_address().as_u64();
+    for shift in [39, 30, 21] {
+        let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
+        let mut entry = unsafe { core::ptr::read_volatile(slot) };
+        if entry & 1 == 0 {
+            let frame = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0)?;
+            zero_frame(frame);
+            entry = frame | LINK;
+            unsafe { core::ptr::write_volatile(slot, entry); }
+        }
+        if entry & (1 << 7) != 0 { return None; }
+        if entry & LINK != LINK {
+            // A kernel mapping made this table; user and write here only let the leaf decide.
+            entry |= LINK;
+            unsafe { core::ptr::write_volatile(slot, entry); }
+        }
+        table = entry & 0x000f_ffff_ffff_f000;
+    }
+    existing_leaf_address(va)
 }
 pub(crate) fn write_frames(physical: u64, bytes: &[u8]) {
     let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_WRITE_NO_HHDM").offset;
