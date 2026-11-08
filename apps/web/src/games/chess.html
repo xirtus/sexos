@@ -243,7 +243,7 @@ function search(depth, alpha, beta, ply, n) {
   return alpha;
 }
 function think(limit) {
-  nodes = 0; budget = limit; deadline = performance.now() + 1500;
+  nodes = 0; budget = limit; deadline = performance.now() + 1300;
   let moves = legal();
   MV.set(moves, 0);
   scoreMoves(0, moves.length);
@@ -305,7 +305,8 @@ function computer() {
   busy = false;
   note = 'Depth ' + r.depth + ', ' + r.nodes + ' positions';
   console.log('chess move ' + history[history.length - 1].text + ' depth ' + r.depth + ' nodes ' + r.nodes + ' ms ' + Math.round(performance.now() - t));
-  draw();
+  // Drawn on the next tick: thinking may have used most of this one's script time.
+  setTimeout(draw, 0);
 }
 
 // ---- drawing ----
@@ -439,6 +440,7 @@ function key(k) {
 }
 document.addEventListener('keydown', e => { if (key(e.key)) e.preventDefault(); });
 newGame();
-draw();
+// Drawn on the first timer tick, so setting up and drawing each get the page's full script time.
+setTimeout(draw, 0);
 </script>
 </body>

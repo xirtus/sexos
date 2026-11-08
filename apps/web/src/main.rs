@@ -32,12 +32,13 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("about:games", include_str!("games/index.html")),
     ("about:solitaire", include_str!("games/solitaire.html")),
     ("about:chess", include_str!("games/chess.html")),
+    ("about:maze", include_str!("games/maze.html")),
 ];
 fn built_in(url: &str) -> Option<&'static str> { BUILT_IN.iter().find(|(a, _)| *a == url).map(|(_, p)| *p) }
 /// The page a run without arguments opens: this program is also built as `solitaire`
-/// and `chess`, which start on their game.
+/// `chess` and `maze`, which start on their game.
 fn first_page() -> &'static str {
-    match env!("CARGO_BIN_NAME") { "solitaire" => "about:solitaire", "chess" => "about:chess", _ => "about:welcome" }
+    match env!("CARGO_BIN_NAME") { "solitaire" => "about:solitaire", "chess" => "about:chess", "maze" => "about:maze", _ => "about:welcome" }
 }
 const SOURCE_MAX: usize = 1536 * 1024;
 const MAX_SHEETS: usize = 8;
