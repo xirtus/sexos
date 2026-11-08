@@ -25,6 +25,20 @@ use sex_web::{Fonts, BAR};
 const W: i32 = 410;
 const H: i32 = 330;
 const WELCOME: &str = include_str!("welcome.html");
+/// Pages built into the program, by `about:` address. The games are plain HTML and
+/// JavaScript on Canvas 2D, so they exercise the same engine as any web page.
+const BUILT_IN: &[(&str, &str)] = &[
+    ("about:welcome", WELCOME),
+    ("about:games", include_str!("games/index.html")),
+    ("about:solitaire", include_str!("games/solitaire.html")),
+    ("about:chess", include_str!("games/chess.html")),
+];
+fn built_in(url: &str) -> Option<&'static str> { BUILT_IN.iter().find(|(a, _)| *a == url).map(|(_, p)| *p) }
+/// The page a run without arguments opens: this program is also built as `solitaire`
+/// and `chess`, which start on their game.
+fn first_page() -> &'static str {
+    match env!("CARGO_BIN_NAME") { "solitaire" => "about:solitaire", "chess" => "about:chess", _ => "about:welcome" }
+}
 const SOURCE_MAX: usize = 1536 * 1024;
 const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
@@ -133,8 +147,8 @@ impl Browser {
         self.url = String::from(url);
         self.draw();
         let begun = sex_pdx::get_ticks();
-        let (html, base) = if url == "about:welcome" || url.is_empty() {
-            (String::from(WELCOME), String::from("about:welcome"))
+        let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
+            (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
             self.buf.resize(SOURCE_MAX, 0);
             match files::read(&mut self.window, file.as_bytes(), &mut self.buf) {
@@ -375,7 +389,7 @@ impl Browser {
             if kept || navigated || href.is_empty() { return; }
         }
         if href.is_empty() || href.starts_with("javascript:") { return; }
-        let target = if href == "about:welcome" { Some(href) } else if self.url.starts_with('@') || self.url == "about:welcome" {
+        let target = if built_in(&href).is_some() { Some(href) } else if self.url.starts_with('@') || self.url.starts_with("about:") {
             if href.starts_with("http") || href.starts_with('#') { Some(href) } else { None }
         } else { sex_html::url::resolve(&self.url, &href) };
         match target {
@@ -435,7 +449,7 @@ pub extern "C" fn _start() -> ! {
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
     let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new() };
-    let first = given.split_ascii_whitespace().next().unwrap_or("about:welcome").to_string();
+    let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
     loop {

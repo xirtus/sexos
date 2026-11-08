@@ -2806,3 +2806,29 @@ row no longer waits for the row before it to end.
   match the clip, the last frame is on screen, and a text file is refused.
 - **Next.** Sound (AAC/MP3 through Bell's virtio sound card), SSE in programs for larger video,
   and a presented/consumed handshake with Display so frames never overlap their presentation.
+
+## Games: Solitaire and Chess (2026-11-08)
+
+- **What runs now.** `run solitaire` (Klondike, draw one) and `run chess` (White against the
+  computer) open in their own windows. `run web` links to `about:games`, which lists both.
+  They are original pages in plain JavaScript on Canvas 2D (`apps/web/src/games/`), built into
+  Web as `about:solitaire` and `about:chess`, so every game is also a test of the browser.
+- **How.** `apps/web` builds the same `main.rs` three times, as `web`, `solitaire` and `chess`;
+  `first_page()` picks the start page from `CARGO_BIN_NAME`. Two `copy_file` stages put the
+  copies in `iso_root/programs`. Built-in pages are a table of `about:` addresses.
+- **Play.** Programs get keys only (no mouse yet), so both games are keyboard games. Solitaire:
+  arrows move, Enter picks up/puts down, Up takes more of a column, Space draws, A sends a
+  card home, U undoes, N deals. Chess: arrows, Enter picks a piece then its square, Esc lets
+  go, U takes back, N, L for Easy/Medium/Hard. Full rules (castling, en passant, promotion to
+  a queen, mate, stalemate); perft matches the standard counts except under-promotion.
+- **Engine.** Alpha-beta with quiescence, incremental piece-square score, moves in typed
+  arrays. It stops at a node budget (100/400/1500) or 1.5 s, whichever comes first, to stay
+  inside the page's 2 s script limit. QuickJS on wasmi under QEMU TCG manages about 160
+  positions a second, so the computer searches only 2 plies: a beginner's opponent.
+- **Gate.** `scripts/program_games_gate.py`: both games match the host render pixel for pixel
+  when started and after one move (0 of 9020 sampled pixels differ), and the computer answers
+  e2-e4 without hitting the script limit. `program_web_gate.py` still passes.
+- **Next.** Pointer input for programs (clicks and drags), splitting the chess search across
+  timer ticks so it can think longer, and the three.js games (3D chess, maze, pinball,
+  three-quake) once WebGL lands. The upstream cards repo has no licence, so it was not used.
+- Screenshot: `assets/sexos-games-solitaire-chess-2026-11-08.png`.
