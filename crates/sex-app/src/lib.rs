@@ -197,7 +197,7 @@ pub mod files {
     pub fn read(window: &mut Window, path: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         let mut done = 0;
         while done < out.len() {
-            let want = (out.len() - done).min(w::DATA_MAX);
+            let want = (out.len() - done).min(w::IO_MAX);
             let got = request(window, w::READ, path, done as u64, want as u64)? as usize;
             out[done..done + got].copy_from_slice(&region()?[w::PATH_BYTES..w::PATH_BYTES + got]);
             done += got;
@@ -216,7 +216,7 @@ pub mod files {
         }
         let mut done = 0;
         while done < data.len() {
-            let n = (data.len() - done).min(w::DATA_MAX);
+            let n = (data.len() - done).min(w::IO_MAX);
             region()?[w::PATH_BYTES..w::PATH_BYTES + n].copy_from_slice(&data[done..done + n]);
             let wrote = request(window, w::WRITE, path, done as u64, n as u64)? as usize;
             if wrote < n { return Err(w::NO_SPACE); }
