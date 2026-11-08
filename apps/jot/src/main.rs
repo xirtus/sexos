@@ -32,8 +32,12 @@ fn render(window: &mut Window, note: &[u8], status: &[u8]) {
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Jot");
+    // A file the person gave, as `@/path`, or the notes in Jot's own folder.
+    let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+    let given = files::args(&mut window, &mut args);
+    let file: &[u8] = match given.split(|b| *b == b' ').find(|w| w.first() == Some(&b'@')) { Some(f) => f, None => FILE };
     let note = unsafe { &mut *core::ptr::addr_of_mut!(NOTE) };
-    let mut len = match files::read(&mut window, FILE, note) {
+    let mut len = match files::read(&mut window, file, note) {
         Ok(n) => { sex_pdx::serial_record!("[jot.loaded] bytes={}", n); n }
         Err(e) => { sex_pdx::serial_record!("[jot.loaded] bytes=0 status={}", e); 0 }
     };
@@ -43,7 +47,7 @@ pub extern "C" fn _start() -> ! {
         let status: &[u8] = match window.next() {
             Event::Close => { sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task); window.close() }
             // Ctrl+S saves.
-            Event::Key(key) if key.control && key.code == 0x1F => match files::write(&mut window, FILE, &note[..len]) {
+            Event::Key(key) if key.control && key.code == 0x1F => match files::write(&mut window, file, &note[..len]) {
                 Ok(()) => { sex_pdx::serial_record!("[jot.saved] bytes={}", len); b"Saved." }
                 Err(e) => { sex_pdx::serial_record!("[jot.save.failed] status={}", e); files::message(e) }
             },

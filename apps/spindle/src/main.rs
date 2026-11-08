@@ -781,6 +781,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc 255 in hex   also in bin / in oct");
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
+            sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
@@ -908,6 +909,14 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // A slash makes it a path. A bare name looks in /bin, then the older disk store.
+        // Jot, given exactly this one file.
+        b"edit" if !args.is_empty() => {
+            let mut given = [0u8; 256];
+            let n = args.len().min(255);
+            given[0] = b'@'; given[1..1 + n].copy_from_slice(&args[..n]);
+            unsafe{fs_commands::FS.submit_program(b"jot",&given[..1 + n],0,0,sb);}
+            true
+        }
         // `+net` first lets this run reach the network. Words after the name are its arguments.
         b"run" if args.contains(&b'/') || args.contains(&b' ') || args.starts_with(b"+net") => {
             let (flags, rest) = match args.strip_prefix(b"+net") { Some(r) => (sex_pdx::program_store::RUN_NETWORK, r.trim_ascii_start()), None => (0, args) };

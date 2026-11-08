@@ -146,6 +146,14 @@ pub fn bind(target: u32, task: u32) {
 }
 /// A program's path inside its folder. `..` never climbs out: it is refused.
 fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    // `@/path` names a file the person gave this run when starting it, and only that file.
+    if path.first() == Some(&b'@') {
+        let granted = binding.args[..binding.args_len].split(|b| *b == b' ').any(|token| token == path);
+        let abs = &path[1..];
+        if !granted || abs.first() != Some(&b'/') || abs.split(|b| *b == b'/').any(|p| p == b".." || p == b".") || abs.len() > out.len() { return None; }
+        out[..abs.len()].copy_from_slice(abs);
+        return Some(abs.len());
+    }
     let mut n = binding.len;
     out[..n].copy_from_slice(&binding.root[..n]);
     for part in path.split(|b| *b == b'/').filter(|p| !p.is_empty() && *p != b".") {

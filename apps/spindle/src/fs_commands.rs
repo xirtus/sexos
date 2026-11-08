@@ -136,9 +136,28 @@ impl Client {
             &named[..bin.len() + target.len()]
         };
         let Some(n) = self.join(target, &mut path) else { sb.push(b"Path too long."); return };
+        // `@PATH` gives the program that one file: it travels as `@/absolute/path`.
+        let mut given = [0u8; w::ARGS_MAX];
+        let mut m = 0;
+        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty()) {
+            let mut piece = [0u8; w::ARGS_MAX];
+            let word: &[u8] = match word.strip_prefix(b"@") {
+                Some(file) => {
+                    let Some(k) = self.join(file, &mut piece[1..]) else { sb.push(b"Path too long."); return };
+                    piece[0] = b'@';
+                    &piece[..k + 1]
+                }
+                None => word,
+            };
+            let sep = (m > 0) as usize;
+            if m + sep + word.len() > given.len() { sb.push(b"Arguments too long."); return; }
+            if sep == 1 { given[m] = b' '; }
+            given[m + sep..m + sep + word.len()].copy_from_slice(word);
+            m += sep + word.len();
+        }
         region[..n].copy_from_slice(&path[..n]);
-        region[w::PATH_BYTES..w::PATH_BYTES + args.len()].copy_from_slice(args);
-        self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, args.len() as u64);
+        region[w::PATH_BYTES..w::PATH_BYTES + m].copy_from_slice(&given[..m]);
+        self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, m as u64);
     }
     /// Delivers the current request. Retries a full queue on the next pass.
     pub fn send(&mut self) -> bool {

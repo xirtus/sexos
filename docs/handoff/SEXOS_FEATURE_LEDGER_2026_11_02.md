@@ -2306,3 +2306,18 @@ row no longer waits for the row before it to end.
   knows it only as a program row.
 - **Gates.** Jot (checks the title arrives), program net and program disk at 1 core; both
   Display host gates that compile the title path.
+
+## Give a program one file (2026-11-08)
+
+- **What runs now.** `edit todo.txt` opens that file in Jot; typing and Ctrl+S save it, and
+  Spindle reads the change back. More generally `run NAME @FILE` gives any program that one
+  file, and the program names it as `@/absolute/path`.
+- **Design.** Spindle, which holds the person's whole filesystem, is the one that hands out
+  files: an `@` word is resolved to an absolute path and travels with the program's
+  arguments to Files at `PREPARE`. Files lets the bound run reach exactly the `@` paths in
+  its own arguments, besides its folder, and refuses `..` or `.` in them. A program can't
+  prepare runs, so it can't hand itself more.
+- **Limits.** Whole-file grants only, read and write together. No grant of a folder. The grant
+  lasts for the run.
+- **Gates.** Jot's gate now edits a file given with `edit`, at 1 core. Program net, program
+  file and filesystem on the same build. Python tests and all non-QEMU gates.
