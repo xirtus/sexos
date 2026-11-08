@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86
+      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools
     - name: Prepare Limine
       run: |
         git init limine
