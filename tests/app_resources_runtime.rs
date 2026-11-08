@@ -70,8 +70,10 @@ mod ipc{
  impl Registry{pub fn get(&self,id:u32)->Option<&'static crate::capability::ProtectionDomain>{crate::REGISTRY.get(id as usize).and_then(|p|unsafe{p.load(crate::Ordering::Acquire).as_ref()})}}
 }
 #[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
+#[path="../crates/sex-pdx/src/program_memory.rs"]pub mod program_memory;
+pub fn sys_yield(){}
 #[path="../kernel/src/program_image.rs"]mod program_image;
-mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,value:u64)->u64{value}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}}
+mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,value:u64)->u64{value}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}
 mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}}}
 mod boot_memory{pub fn program_image(_:usize)->Option<&'static [u8]>{None}pub fn reserve_window(_:u64,_:u8,_:&mut [u64])->u64{0}pub fn write_frames(_:u64,_:&[u8]){}
  pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}

@@ -3,5 +3,13 @@ name = "sex-app"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# The SDK's #[global_allocator]. A program that brings its own turns this off.
+default = ["heap"]
+heap = []
+
 [dependencies]
 sex-pdx = { path = "../sex-pdx" }
+# The program's heap allocator (MIT, no_std). Its memory comes from the kernel's
+# per-run program window: see sex_app::heap.
+talc = { version = "5.1.1", default-features = false }
