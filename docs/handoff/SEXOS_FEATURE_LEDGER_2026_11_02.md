@@ -2218,3 +2218,30 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_jot` at 1 and 4 cores. Program disk, launch, file, records,
   filesystem, fetch, browser web and SMP at 1 core on the final kernel, and the shared-key
   isolation probe again. Python tests and all non-QEMU gates except the older ones.
+
+## The network service comes back after a crash (2026-11-08)
+
+- **What runs now.** If the network service dies, from a bad pointer or anything else that
+  ends its task, the kernel starts it again within a tick. In the probe below it crashed in
+  the middle of a Browser request, came back, reset the network card, got a new DHCP lease
+  and served the next page. Nothing else restarted, and the desktop stayed up.
+- **Design (`kernel/src/service_restart.rs`).** At BOOT, before the service first runs, the
+  kernel copies every page it owns: code and data in its 16 MiB slot, and its 64 KiB stack.
+  When its task is dead, the kernel stops DMA on every PCI device it holds (clears bus
+  mastering), puts the pages back, drops the old run's queued messages, signals, replies
+  and reply credits, and rearms the same task at the same entry. The domain, its key and
+  every capability stay exactly as BOOT made them; nothing is minted. The heap lives in the
+  ELF's own pages, so it comes back clean too. The new run finds the card idle and proves
+  DMA custody again, as at BOOT, instead of trusting a controller someone else left running.
+- **Evidence.** `browser_web_gate.py --crash` on an ISO built with `SEXOS_NET_CRASH_PROBE=1`:
+  `[sexnet.crash.probe]`, `fault.kill ... pd=13`, `[pci.command.quiesce] pd=13 slot=19
+  before=263 after=259`, `[service.restarted] pd=13 task=13 restarts=1 pages=255`, the card
+  goes Cold to Quiescent, a new lease, then `[browser.web.page]`. At 1 and 4 cores.
+- **ABI.** The network service's panic handler now ends its task instead of spinning.
+- **Limits.** Only the network service restarts; Files, Display and Shell don't yet. A
+  service that dies eight times stays down. Requests in flight are lost, so the Browser
+  waits out its 60 second deadline before saying the site took too long. Each restart
+  re-runs DHCP. Restarting doesn't help a bug that the same input triggers again.
+- **Gates.** The crash probe above at 1 and 4 cores; browser web, fetch, Jot, program disk,
+  SMP, filesystem and records at 1 core on the normal kernel. Python tests and all non-QEMU
+  gates except the older ones listed earlier.

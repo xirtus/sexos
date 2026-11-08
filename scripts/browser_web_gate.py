@@ -20,7 +20,7 @@ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--public',default='');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--public',default='');p.add_argument('--crash',action='store_true',help='needs an ISO built with SEXOS_NET_CRASH_PROBE=1');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  g=boot(a.iso,disk,a.out,'web',a.resolution);t=g['text'];q=g['q']
  def typed(text):
@@ -40,6 +40,12 @@ def main():
   base=f'http://10.0.2.2:{PORT}'
   s=address(base+'/');m=page(s);assert m[3]=='2',m[0]
   time.sleep(2);q.cmd('screendump',{'filename':str(a.out/'front.ppm')})
+  if a.crash:
+   # The network service falls over; the kernel starts it again, and browsing works.
+   s=address('http://crash.invalid/');g['wait'](r'\[sexnet.crash.probe\]',s,120);m=g['wait'](r'\[service.restarted\] pd=(\d+) task=\d+ restarts=1 ',s,120)
+   g['wait'](r'\[browser.web.status\] (The site took too long|[^\n]*)',s,120);time.sleep(2)
+   s=address(base+'/');m=page(s,240);assert m[3]=='2',m[0]
+   assert 'KERNEL PANIC'not in t();print({'ok':True,'crash':'restarted'});return
   s=len(t());q.key('1');time.sleep(.2);q.key('ret');m=page(s);assert 'url=http://10.0.2.2' in t()[s:] and '/second.html' in t()[s:],t()[s:][-300:]
   s=len(t());q.key('backspace');m=page(s);assert m[3]=='2','back did not return to the front page'
   s=address(base+'/moved');m=page(s);assert '[browser.web.status.code] 302' in t()[s:] and '[browser.web.status.code] 200' in t()[s:]

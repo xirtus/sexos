@@ -57,3 +57,16 @@ pub fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64,reserved0:u64,rese
         Err(error)=>[error,0,0,0,0],
     }
 }
+
+/// When the kernel restarts a service, devices it held stop DMA first: the new run
+/// finds them idle, as at BOOT, and proves custody again before enabling them.
+pub fn quiesce(pd:&ProtectionDomain){
+    for slot in 0..1024u32 {
+        let Some(CapabilityData::Pci(device))=pd.find_capability(slot).map(|c|c.data)else{continue};
+        let Ok(update)=w::authorize(device.command.as_ref(),pd.id,0,w::BUS_MASTER as u64)else{continue};
+        match crate::hal::pci::apply_command(update) {
+            Ok(r)=>{crate::serial_println!("[pci.command.quiesce] pd={} slot={} before={} after={}",pd.id,slot,r.before,r.after);}
+            Err(error)=>{crate::serial_println!("[pci.command.quiesce] pd={} slot={} error={}",pd.id,slot,error);}
+        }
+    }
+}

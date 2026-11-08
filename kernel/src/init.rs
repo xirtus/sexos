@@ -827,6 +827,8 @@ pub fn init() {
     crate::boot_memory::init_fs_regions(sexfiles_id);
     crate::boot_memory::init_web_regions(sexnet_id);
     crate::program_tenancy::claim_regions();
+    // The network service parses the internet, so it is the one most likely to fall over.
+    crate::service_restart::capture(sexnet_id, 13);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");

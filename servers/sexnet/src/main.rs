@@ -5657,5 +5657,6 @@ pub extern "C" fn _start() -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[sexnet.fatal] {}",info);
-    loop {sex_pdx::sys_yield();}
+    // Ending lets the kernel start a fresh run in its place.
+    sex_pdx::task_finish(1);
 }

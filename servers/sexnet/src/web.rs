@@ -95,6 +95,8 @@ impl Service {
                     if len > 253 { return w::reply(seq, w::INVALID, 0); }
                     let mut name = [0u8; 253];
                     name[..len].copy_from_slice(&region[..len]);
+                    // Test builds only: a name that makes the service fall over, to show it comes back.
+                    if option_env!("SEXOS_NET_CRASH_PROBE").is_some() && &name[..len] == b"crash.invalid" { sex_pdx::serial_record!("[sexnet.crash.probe]"); unsafe { core::ptr::write_volatile(8 as *mut u8, 1) }; }
                     return match engine.open_resolve(&name[..len]) { Ok(()) => w::reply(seq, w::WAIT, 0), Err(_) => w::reply(seq, w::NO_NAME, 0) };
                 }
                 match engine.open_resolved() {
