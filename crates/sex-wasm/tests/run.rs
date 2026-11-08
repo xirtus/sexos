@@ -287,3 +287,24 @@ fn an_empty_read_takes_no_input() {
     assert_eq!(o, Outcome::Exited(b'q' as i32));
     assert!(h.shown.is_empty());
 }
+
+#[test]
+fn overlapping_writes_are_capped_in_total() {
+    // 1024 iovecs, each the whole 1 MiB memory: one write may take at most io_bytes.
+    let wat = r#"(module
+        (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+        (import "sex" "exit" (func $exit (param i32)))
+        (memory (export "memory") 16)
+        (func (export "_start") (local $i i32)
+            (loop $l
+                (i32.store (i32.add (i32.const 64) (i32.mul (local.get $i) (i32.const 8))) (i32.const 0))
+                (i32.store (i32.add (i32.const 68) (i32.mul (local.get $i) (i32.const 8))) (i32.const 1048576))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br_if $l (i32.lt_u (local.get $i) (i32.const 1024))))
+            (drop (call $write (i32.const 1) (i32.const 64) (i32.const 1024) (i32.const 0)))
+            (call $exit (i32.load (i32.const 0)))))"#;
+    let mut g = guest(Grants::default());
+    g.limits.io_bytes = 4096;
+    let (o, _) = run(&wat::parse_str(wat).unwrap(), &g, Rec::default());
+    assert_eq!(o, Outcome::Exited(4096));
+}

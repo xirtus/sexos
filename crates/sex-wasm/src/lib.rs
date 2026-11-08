@@ -358,8 +358,13 @@ fn link_wasi<H: Host + 'static>(linker: &mut Linker<State<H>>) -> Result<(), was
     linker.func_wrap(W, "fd_write", |mut c: C<'_, H>, fd: i32, iovs: i32, count: i32, written: i32| -> i32 {
         wasi(&mut c, |d, s| {
             if fd != 1 && fd != 2 { return Ok(errno::BADF); }
+            // Iovecs may overlap, so cap the total, not each one: a short write is allowed.
             let mut bytes = Vec::new();
-            for r in iovecs(d, iovs, count)? { bytes.extend_from_slice(&d[r]); }
+            for r in iovecs(d, iovs, count)? {
+                let room = s.limits.io_bytes - bytes.len();
+                bytes.extend_from_slice(&d[r.start..r.end.min(r.start + room)]);
+                if bytes.len() == s.limits.io_bytes { break; }
+            }
             if fd == 2 { for line in bytes.split(|b| *b == b'\n').filter(|l| !l.is_empty()) { s.host.log(&line[..line.len().min(512)]); } }
             s.print(&bytes);
             put_u32(d, written, bytes.len() as u32)?;
