@@ -201,6 +201,24 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - Also found: `fs_service` keeps its free-space bitmap in memory, sized for 16 GiB
     (`MAP_WORDS`), and caches only 64 blocks. Both are fixed limits to remove.
 
+- Stage 3, second part (large disk commands):
+  - One NVMe command now moves up to 128 KiB (`BLOCK_MAX_RUN`). sexdrive's two bounce
+    leases are each 128 KiB plus a page holding the command's PRP list. Two pages use
+    PRP2 directly. `BLOCK_MAX_XFER` (4 KiB) is unchanged for its existing page-sized users.
+  - ABI changes: new `sex_pdx::BLOCK_MAX_RUN = 128 KiB`; BOOT's Files/drive block
+    buffer (SLOT_BLOCK_BUFFER, region 4) grows from 4 KiB to 128 KiB; the block
+    protocol accepts READ/WRITE up to 128 KiB.
+  - sexfs: `Device` gains `run_blocks`, `read_run` and `write_run` (defaults loop over
+    blocks). Whole-block file writes take side-by-side free blocks and write them with
+    one command; reads of side-by-side blocks use one command and check every block's
+    checksum. A partial write after progress now ends short inside sexfs itself.
+  - Files copies each READ and WRITE through its own buffer, so checksums cover bytes a
+    client can no longer change.
+  - Bench, cycles per MiB (1 core): file write 0.63G -> 107M (5.9x), read 205M -> 49M
+    (4.2x). Against Linux on raw NVMe: write 3.5x slower (was 63x), read 1.9x slower
+    (was 25x). A request is still at most 63 KiB (the client region), so a 1 MiB write
+    is 16 requests; a larger client region and queue depth are the next steps.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

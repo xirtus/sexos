@@ -24,7 +24,7 @@ def validate(text):
         matches = [r for r in rows if r[2] == region]
         if len(matches) != 1 or matches[0][1:] != (32, region, size, 15, 0):
             errors.append(f"wrong DMA grant budget or rights for region {region}")
-    for region, slot, size, rights in ((4, 17, 4096, [7, 7]), (5, 33, 3145728, [3, 7])):
+    for region, slot, size, rights in ((4, 17, 131072, [7, 7]), (5, 33, 3145728, [3, 7])):
         pair = [r for r in rows if r[2] == region]
         if len(pair) != 2 or sorted(r[4] for r in pair) != rights or any(r[1] != slot or r[3] != size for r in pair):
             errors.append(f"wrong paired region {region} extent or rights")
@@ -38,7 +38,7 @@ def validate(text):
         if len(frame) != 1 or frame[0][4] != 7 or len(block) != 1:
             errors.append("drive must own writable frame and paired block views")
         consumers = list(re.finditer(r"\[sexfiles\.bridge\.diskfs\.buf\.ready\] buf_va=(0x[0-9a-fA-F]+) region_id=(\d+) length=(\d+) peer_pd=(\d+)", text))
-        if not consumers or any(int(c[1], 16) == 0 or tuple(map(int, c.groups()[1:])) != (4, 4096, producer) for c in consumers):
+        if not consumers or any(int(c[1], 16) == 0 or tuple(map(int, c.groups()[1:])) != (4, 131072, producer) for c in consumers):
             errors.append("sexfiles resolved view must match actual drive peer and block grant")
     negative = list(re.finditer(r"\[memory\.authority\.negative\.selftest\] denied=15 idempotent=1024 output_zero=1 ok=1", text))
     if len(negative) != 1 or (seals and negative[0].start() > seals[0].start()):
@@ -46,7 +46,7 @@ def validate(text):
     for marker in (
         r"\[sexusb\.memory\.dma\.ready\] region_id=1 length=262144",
         r"\[sexdrive\.dma\.region\] slot=32 bytes=524288 reusable_buffers=2",
-        r"\[sexfiles\.bridge\.diskfs\.buf\.ready\].*region_id=4 length=4096 peer_pd=\d+",
+        r"\[sexfiles\.bridge\.diskfs\.buf\.ready\].*region_id=4 length=131072 peer_pd=\d+",
         r"\[sexfiles\.memory\.authority\.negative\] empty=1 wrong_kind=1 dma_right=1 ok=1",
         r"\[runtime\.heap\.ready\] backing=elf_owned bytes=[1-9]\d* runtime_mapping=0",
     ):

@@ -142,6 +142,7 @@ mod driver_read {
     macro_rules! serial_println { ($($tokens:tt)*) => {}; }
     const PAGE_SIZE: u64 = 4096;
     const BLOCK_MAX_XFER: u64 = 4096;
+    const BLOCK_MAX_RUN: u64 = 128 * 1024;
     const BLOCK_ERR_BAD_LEN: u64 = 2;
     const BLOCK_ERR_NO_DEVICE: u64 = 4;
     const NVME_LBA_BYTES: u64 = 512;
@@ -193,7 +194,7 @@ mod driver_read {
         let mut sq = [0u64; 128];
         let mut cq = [0u32; 64];
         let mut doorbells = [0u32; 2];
-        let mut buffer = [0u64; 512];
+        let mut buffer = vec![0u64; ((BLOCK_MAX_RUN + PAGE_SIZE) / 8) as usize];
         let mut destination = vec![0xa5u8; size];
         cq[3] = cqe;
         unsafe {
@@ -201,7 +202,7 @@ mod driver_read {
             DEST_PTR=destination.as_ptr();DEST_LEN=size;DOORBELLS=doorbells.as_ptr();
             let lease = Some(DmaLease::new(dma_pool::DmaBuffer {
                 virtual_address: buffer.as_mut_ptr() as u64,
-                physical_address: 0x200000, length: 4096,
+                physical_address: 0x200000, length: BLOCK_MAX_RUN + PAGE_SIZE,
             }));
             if write { WRITE_LEASE = lease; } else { READ_LEASE = lease; }
             NVME_IO_STATE = NvmeState { sectors: 0, ready: true,
@@ -221,6 +222,20 @@ mod driver_read {
             if expected == 0 {
                 assert_eq!(destination, if write { vec![0xa5; size] } else { vec![0; size] });
                 assert_eq!(*((sq.as_ptr() as *const u32).add(12)), (size/512-1)as u32);
+                // PRP1 is the lease; PRP2 is nothing, the second page, or the list after the run.
+                let dw=|i:usize|*((sq.as_ptr() as *const u32).add(i)) as u64;
+                assert_eq!(dw(6)|dw(7)<<32,0x200000);
+                let pages=(size as u64).div_ceil(PAGE_SIZE);
+                let prp2=dw(8)|dw(9)<<32;
+                match pages {
+                    1=>assert_eq!(prp2,0),
+                    2=>assert_eq!(prp2,0x200000+PAGE_SIZE),
+                    _=>{
+                        assert_eq!(prp2,0x200000+BLOCK_MAX_RUN);
+                        let list=(buffer.as_ptr() as *const u64).add((BLOCK_MAX_RUN/8) as usize);
+                        for i in 1..pages{assert_eq!(*list.add((i-1)as usize),0x200000+i*PAGE_SIZE);}
+                    }
+                }
                 if write {
                     assert!(std::slice::from_raw_parts(buffer.as_ptr() as *const u8,size).iter().all(|&b|b==0xA5));
                 }
@@ -323,6 +338,13 @@ mod driver_read {
         exercise_size(false,42|(1<<16),0,false,true,4096);
     }
     #[test]
+    fn runs_of_two_pages_and_whole_runs_use_one_command_with_prp2_or_a_prp_list(){
+        for size in [8192usize,12288,65536,131072]{
+            exercise_size(true,42|(1<<16),0,false,true,size);
+            exercise_size(false,42|(1<<16),0,false,true,size);
+        }
+    }
+    #[test]
     fn typed_page_read_error_and_timeout_never_publish_bytes(){
         exercise_size(false,0,BLOCK_ERR_NO_DEVICE,true,false,4096);
         exercise_size(false,42|(1<<16)|(2<<17),BLOCK_ERR_NO_DEVICE,false,false,4096);
@@ -332,7 +354,9 @@ mod driver_read {
         let _lock=LOCK.lock().unwrap();
         let view=RegionView{region_id:5,virtual_address:0x400000,dma_address:None,length:4096};
         unsafe{NVME_IO_STATE.ready=false;}
-        for size in [0,1,513,4097,8192,u64::MAX]{assert_eq!(typed_read_handoff(0,size,17,Some(view)),BLOCK_ERR_BAD_LEN);}
+        for size in [0,1,513,4097,BLOCK_MAX_RUN+512,u64::MAX]{assert_eq!(typed_read_handoff(0,size,17,Some(view)),BLOCK_ERR_BAD_LEN);}
+        // A run larger than the caller's view is refused before the queue is touched.
+        assert_eq!(typed_read_handoff(0,8192,17,Some(view)),BLOCK_ERR_NO_DEVICE);
         assert_eq!(typed_read_handoff(1,4096,17,Some(view)),BLOCK_ERR_BAD_LEN);
         assert_eq!(typed_read_handoff(u64::MAX-511,4096,17,Some(view)),BLOCK_ERR_BAD_LEN);
         assert_eq!(typed_read_handoff(0,4096,99,Some(view)),BLOCK_ERR_NO_DEVICE);
