@@ -1331,7 +1331,7 @@ name = "view"
 version = "0.1.0"
 dependencies = [
  "sex-app",
- "sex-graphics",
+ "sex-image",
  "sex-pdx",
 ]
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A picture is shown: View, a program, decodes a PNG it was given and Display composites its pixels exactly; a picture too large is refused in words."""
+"""A picture is shown: View, a program, decodes a PNG and a JPEG it was given and Display composites their pixels (the PNG exactly); a picture larger than the window is shrunk to fit; a file that is not a picture is refused in words."""
 import argparse,http.server,io,os,re,shutil,threading,time
 from pathlib import Path
 from PIL import Image
@@ -10,7 +10,12 @@ def png(w,h):
  b=io.BytesIO();img.save(b,'PNG');return img,b.getvalue()
 PIC,PIC_BYTES=png(300,200)
 _,BIG_BYTES=png(900,700)
-FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES}
+def jpeg(w,h):
+ img=Image.new('RGB',(w,h))
+ img.putdata([((x*255)//w,(y*255)//h,96) for y in range(h) for x in range(w)])
+ b=io.BytesIO();img.save(b,'JPEG',quality=95,subsampling=0);return img,b.getvalue()
+JPG,JPG_BYTES=jpeg(240,160)
+FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/note.txt':b'not a picture\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -40,8 +45,8 @@ def main():
   m=expect(f'fetch http://10.0.2.2:{PORT}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png')
-  s=len(t());expect('run view @pic.png',r'\[view.shown\] w=300 h=200')
+  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/note.txt','note.txt')
+  s=len(t());expect('run view @pic.png',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
   shot=a.out/'view.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
@@ -52,9 +57,27 @@ def main():
     if 636<=bx+px<660 and 398<=by+py<432:continue
     checked+=1;bad+=img.getpixel((bx+px,by+py))!=PIC.getpixel((px,py))
   assert checked>100 and bad==0,f'{bad} of {checked} pixels differ'
-  s2=len(t());g['focus'](int(m[3]));time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s2,90)
-  expect('run view @big.png',r'\[view.failed\] That picture is larger than 800 by 600')
+  def close(m):
+   s2=len(t());g['focus'](int(m[3]));time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s2,90)
+  close(m)
+  # JPEG: lossy, so each sampled pixel within a small distance of the source.
+  s=len(t());expect('run view @pic.jpg',r'\[view.shown\] w=240 h=160 bytes=\d+ scaled=0')
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=240 h=160',s,60);time.sleep(3)
+  shot=a.out/'view-jpeg.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
+  tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
+  img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
+  jchecked=worst=0
+  for py in range(0,min(160,h-44),7):
+   for px in range(0,min(240,w-16),11):
+    if 636<=bx+px<660 and 398<=by+py<432:continue
+    jchecked+=1;worst=max(worst,max(abs(c-d) for c,d in zip(img.getpixel((bx+px,by+py)),JPG.getpixel((px,py)))))
+  assert jchecked>100 and worst<=8,f'JPEG pixels off by up to {worst} over {jchecked}'
+  close(m)
+  # 900x700 is shrunk to 771x600 to fit the 800x600 window.
+  s=len(t());expect('run view @big.png',r'\[view.shown\] w=771 h=600 bytes=\d+ scaled=1')
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);close(m)
+  expect('run view @note.txt',r'\[view.failed\] That file is not a PNG or JPEG picture.')
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'pixels_checked':checked})
+  print({'ok':True,'pixels_checked':checked,'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
  finally:g['stop']()
 if __name__=='__main__':main()
