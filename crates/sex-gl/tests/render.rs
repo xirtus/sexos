@@ -268,3 +268,55 @@ void main() {
         }
     }
 }
+
+/// A WebGPU pipeline: WGSL with a uniform struct in WGSL byte layout (a vec3 then a
+/// float in its padding, a mat2x2 with 8-byte columns), a texture and a sampler, and
+/// depth from 0 (near) to 1.
+#[test]
+fn wgsl_pipeline_with_uniform_layout_texture_and_sampler() {
+    let mut ctx = Context::new(16, 16);
+    ctx.gpu_program(5, r#"
+struct U { tint: vec3f, scale: f32, m: mat2x2f, z: f32 };
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var t: texture_2d<f32>;
+@group(0) @binding(2) var s: sampler;
+struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@location(0) p: vec2f) -> V {
+  var o: V;
+  o.pos = vec4f(u.m * p * u.scale, u.z, 1.0);
+  o.uv = p * 0.5 + vec2f(0.5);
+  return o;
+}
+@fragment fn fs(v: V) -> @location(0) vec4f {
+  return vec4f(textureSample(t, s, v.uv).rgb * u.tint, 1.0);
+}"#, "vs", "fs");
+    let log = ctx.programs[&5].log.clone();
+    assert!(ctx.program(5).is_some(), "{log}");
+    // tint (0.5, 1, 1), scale 1 at byte 12, m = identity at byte 16 (columns 8 bytes
+    // apart), z 0.5 at byte 32; struct size 48.
+    let mut ub = bytes(&[0.5, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.5]);
+    ub.resize(48, 0);
+    ctx.bind_buffer(ARRAY_BUFFER, 20);
+    ctx.buffer_data(ARRAY_BUFFER, &ub);
+    ctx.use_program(5);
+    ctx.gpu_bind_buffer(5, 0, 0, 20, 0, 48);
+    // A 1x1 white texture on unit 3, nearest and clamped by the sampler.
+    ctx.active_texture(TEXTURE0 + 3);
+    ctx.bind_texture(TEXTURE_2D, 30);
+    ctx.tex_image(TEXTURE_2D, 0, 1, 1, RGBA, UNSIGNED_BYTE, Some(&[255, 255, 255, 255]));
+    ctx.gpu_bind_texture(5, 0, 1, 3);
+    ctx.gpu_bind_sampler(5, 0, 2, [NEAREST, NEAREST, CLAMP_TO_EDGE, CLAMP_TO_EDGE]);
+    assert_eq!(ctx.textures[&30].min_filter, NEAREST);
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 1., -1., 1., 1., -1., -1., 1., 1., -1., 1.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    ctx.enable(DEPTH_TEST, true);
+    ctx.clear_color([0.0, 0.0, 0.0, 1.0]);
+    ctx.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 6);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 8, 8), [128, 255, 255, 255]);
+    // WebGPU depth: z 0.5 lands at 0.5 (GL would give 0.75).
+    assert!((ctx.depth[8 * 16 + 8] - 0.5).abs() < 1e-6, "{}", ctx.depth[8 * 16 + 8]);
+}

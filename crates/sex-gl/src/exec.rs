@@ -368,7 +368,7 @@ impl StageCode {
         for (h, g) in module.global_variables.iter() {
             let n = layout.of(g.ty);
             match g.space {
-                naga::AddressSpace::Uniform | naga::AddressSpace::Immediate => { global_off.push((SPACE_UNIFORM, uniform_len)); uniform_len += n; }
+                naga::AddressSpace::Uniform | naga::AddressSpace::Immediate | naga::AddressSpace::Storage { .. } => { global_off.push((SPACE_UNIFORM, uniform_len)); uniform_len += n; }
                 naga::AddressSpace::Handle => {
                     global_off.push((u32::MAX, h.index() as u32));
                     if let Some(name) = &g.name { textures.push((name.clone(), h.index() as u32)); }

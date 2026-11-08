@@ -94,6 +94,14 @@ impl GlCanvas {
                 "ui" => if let Some(d) = blob(data, a, 1) { c.uniform(n(a, 0), None, Some(&i32s(d))) },
                 "da" => c.draw_arrays(n(a, 0), n(a, 1), n(a, 2)),
                 "de" => c.draw_elements(n(a, 0), n(a, 1), n(a, 2), n(a, 3)),
+                // WebGPU: gp id code(off len) vs fs; gb/gx/gs program group binding ...
+                "gp" => {
+                    let code = blob(data, a, 1).and_then(|d| core::str::from_utf8(d).ok()).unwrap_or("");
+                    c.gpu_program(n(a, 0), code, a.get(3).copied().unwrap_or(""), a.get(4).copied().unwrap_or(""));
+                }
+                "gb" => c.gpu_bind_buffer(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5)),
+                "gx" => c.gpu_bind_texture(n(a, 0), n(a, 1), n(a, 2), n(a, 3)),
+                "gs" => c.gpu_bind_sampler(n(a, 0), n(a, 1), n(a, 2), [n(a, 3), n(a, 4), n(a, 5), n(a, 6)]),
                 _ => {}
             }
         }
