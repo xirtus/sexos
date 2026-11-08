@@ -169,3 +169,10 @@ fn prelude_loads() {
     let r = Script::with_engine(wasm, Raw::default(), Limits::default());
     if let Err(e) = r { panic!("{e:?}"); }
 }
+
+#[test]
+fn startup_time() {
+    let t = std::time::Instant::now();
+    let _s = page("");
+    eprintln!("STARTUP {:?}", t.elapsed());
+}

@@ -128,7 +128,10 @@ impl<P: Page + 'static> Script<P> {
 
     pub fn with_engine(wasm: &[u8], page: P, limits: Limits) -> Result<Self, Error> {
         let e = |m: &str| Error::Engine(String::from(m));
-        let engine = Engine::new(&Config::default());
+        let mut config = Config::default();
+        // Translate each function when it first runs: a page uses a small part of the engine.
+        config.compilation_mode(wasmi::CompilationMode::Lazy);
+        let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
         let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
         let mut store = Store::new(&engine, State { page, result: String::new(), limits: store_limits });
