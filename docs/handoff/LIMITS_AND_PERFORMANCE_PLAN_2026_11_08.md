@@ -162,6 +162,27 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
    per-core page caches, PCID so a switch does not flush the TLB.
 8. **Real hardware**: re-run the bench on the PKU PC; XSAVE/AVX after PR #18.
 
+## Progress
+
+- Stage 1 merged (PR #21). One program went from 7 MiB to 107 MiB on a 512 MiB VM.
+- Stage 2, first half (PR #23): the kernel heap starts at 32 MiB and grows on demand.
+  One program fills 323 MiB of 512 MiB. The slab is still to come.
+- Large machines (follow-up PR): every gate used to run at 512 MiB, but real machines
+  have 4-32 GB. At 8 GB one program filled its full 4 GiB arena. Changes:
+  - Arena page tables are made on first use, not at BOOT. The tables for 4 GiB had cost
+    8 MiB per row.
+  - Arenas are sized to the machine's memory. ABI, named: `WINDOW_BYTES` 4 GiB -> 256 GiB
+    (the maximum arena).
+  - The VA allocator ends at the kernel heap's fixed range (0x4444_4444_0000). Before,
+    a large enough reservation could have run into it.
+  - The kernel heap's growth limit is a quarter of RAM, at least 1 GiB (VA up to 64 GiB).
+  - At 8 GB, program records use about 90 MiB of kernel heap (4,096 records, each with a
+    16 KiB kernel stack). That's by design, about 1% of RAM.
+- Program stacks (same PR): the stack moved from BOOT's fixed 64 KiB to the top of
+  the arena. Its size comes from the file (`-z stack-size`, PT_GNU_STACK); without one
+  it's 1 MiB, and the most is 256 MiB. An unmapped guard page sits below it.
+  heaptest proves that an overflow ends only that run.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

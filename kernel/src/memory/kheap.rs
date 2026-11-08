@@ -5,12 +5,14 @@
 //! A 512 MiB machine used to give half its memory to a heap that held 15 MiB.
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use linked_list_allocator::Heap;
 
 /// Least the heap grows by, so growth is rare.
 const STEP: usize = 4 * 1024 * 1024;
 static TABLES: AtomicBool = AtomicBool::new(false);
+/// How far the heap may grow, set once its page tables are made.
+static LIMIT: AtomicUsize = AtomicUsize::new(0);
 
 pub struct KernelHeap(spin::Mutex<Heap>);
 impl KernelHeap {
@@ -37,7 +39,7 @@ fn grow(heap: &mut Heap, layout: Layout) -> bool {
     if !TABLES.load(Ordering::Acquire) { return false; }
     let top = heap.top() as usize;
     let want = (layout.size() + layout.align() + 4096).max(STEP).next_multiple_of(4096);
-    let end = crate::HEAP_START + crate::HEAP_SIZE;
+    let end = crate::HEAP_START + LIMIT.load(Ordering::Acquire);
     let want = want.min(end.saturating_sub(top)) & !4095;
     if want == 0 { return false; }
     let mut mapped = 0;
@@ -61,7 +63,11 @@ pub fn prepare_growth() {
     use x86_64::structures::paging::PageTableFlags as F;
     const SPAN: u64 = 2 * 1024 * 1024;
     let first = ((crate::HEAP_START + crate::HEAP_INITIAL) as u64).next_multiple_of(SPAN);
-    let end = (crate::HEAP_START + crate::HEAP_SIZE) as u64;
+    // A quarter of the machine's memory, at least 1 GiB: page tables cost 1/512 of it.
+    let free = crate::memory::allocator::debug_global_free_frames() as usize * 4096;
+    let limit = (free / 4).next_power_of_two().clamp(1 << 30, crate::HEAP_SIZE);
+    LIMIT.store(limit, Ordering::Release);
+    let end = (crate::HEAP_START + limit) as u64;
     let scratch = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0).expect("KHEAP_TABLE_SCRATCH");
     let mut span = first;
     while span < end {
@@ -76,5 +82,5 @@ pub fn prepare_growth() {
     }
     crate::memory::allocator::GLOBAL_ALLOCATOR.free(scratch, 0);
     TABLES.store(true, Ordering::Release);
-    crate::serial_println!("[kernel.heap.tables] initial={} max={}", crate::HEAP_INITIAL, crate::HEAP_SIZE);
+    crate::serial_println!("[kernel.heap.tables] initial={} max={}", crate::HEAP_INITIAL, limit);
 }

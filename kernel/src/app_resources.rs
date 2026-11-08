@@ -364,7 +364,7 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
         let first=segment.window/4096;let last=(segment.window+segment.memory-1)/4096;
         for index in first..=last{
             let va=app.arena+index*4096;
-            let (Some(leaf),Some(frame))=(crate::boot_memory::existing_leaf_address(va),crate::program_frames::take())else{
+            let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),crate::program_frames::take())else{
                 fail(app,count,"no_memory");return Err(DENIED)};
             let mut flags=frame|5|((app.pkey as u64)<<59);
             if segment.writable{flags|=2}
@@ -401,7 +401,7 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
     if image_pages+stack_pages+1>app.arena_pages{fail(app,count,"stack_room");return Err(DENIED)}
     for index in app.arena_pages-stack_pages..app.arena_pages{
         let va=app.arena+(index*4096) as u64;
-        let (Some(leaf),Some(frame))=(crate::boot_memory::existing_leaf_address(va),crate::program_frames::take())else{
+        let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),crate::program_frames::take())else{
             fail(app,count,"no_memory");return Err(DENIED)};
         app.put(count,PrivatePage{va,leaf,expected:frame|7|((app.pkey as u64)<<59)|(1<<63)});count+=1;
     }
@@ -437,7 +437,7 @@ pub fn grow(pd:&ProtectionDomain,want:u64)->[u64;3]{
         if first+want+1+app.stack_pages>app.arena_pages{return Err(m::FULL)}
         let mut leaves=[0u64;m::MAX_PAGES_PER_CALL as usize];
         for (i,index) in (first..first+want).enumerate(){
-            let leaf=crate::boot_memory::existing_leaf_address(app.arena+(index*4096) as u64).ok_or(m::DENIED)?;
+            let leaf=crate::boot_memory::arena_leaf(app.arena+(index*4096) as u64,app.pkey).ok_or(m::FULL)?;
             if unsafe{core::ptr::read_volatile(leaf as *const u64)}!=0{return Err(m::DENIED)}
             leaves[i]=leaf;
         }
