@@ -125,14 +125,14 @@ wait_marker '\[linen\.disk\.publish\.done\]' "$L" 300 || echo "[dpg] WARN publis
 sleep 6
 
 # Spindle: focus, type "disk", run — all marker-verified
-kv scroll_lock 'reason=ToggleSpindle' "$L" 8
+kv scroll_lock '\[shell\.action\.spindle\] toggle' "$L" 8
 sleep 2
 kv d '\[spindle\.input\.echo\.ok\] key=32' "$L" 6
 kv i '\[spindle\.input\.echo\.ok\] key=23' "$L" 6
 kv s '\[spindle\.input\.echo\.ok\] key=31' "$L" 6
 kv k '\[spindle\.input\.echo\.ok\] key=37' "$L" 6
-kv ret '\[spindle\.disk\.command\]' "$L" 20
-kv scroll_lock 'reason=ToggleSpindle' "$L" 8
+kv ret '\[spindle\.probe\.result\] .*kind=done job=List' "$L" 20
+kv scroll_lock '\[shell\.action\.spindle\] toggle' "$L" 8
 sleep 1
 
 # Quil: open via shell palette idx1, type "hi", palette save (row1)
@@ -193,7 +193,8 @@ has2() { grep -qE "$1" "$GATE_DIR/b2.log" 2>/dev/null; }
 
 has1 '\[linen\.disk\.publish\.done\] count=3' && r linen_disk_publish_b1 PASS || r linen_disk_publish_b1 FAIL
 has2 '\[linen\.disk\.publish\.done\] count=3' && r linen_disk_publish_b2 PASS || r linen_disk_publish_b2 FAIL
-has1 '\[spindle\.disk\.command\] found=3 ok=1' && r spindle_disk_cmd PASS || r spindle_disk_cmd FAIL
+# Spindle's `disk` lists the published objects through its storage probe.
+has1 '\[spindle\.probe\.result\] .*kind=done job=List' && [[ $(count_re '\[spindle\.probe\.entry\] object=' "$GATE_DIR/b1.log") -ge 3 ]] && r spindle_disk_cmd PASS || r spindle_disk_cmd FAIL
 has1 '\[quil\.persist\.save\.ok\]' && r quil_persist_save PASS || r quil_persist_save FAIL
 has2 '\[quil\.persist\.load\.ok\]' && r quil_persist_load_reboot PASS || r quil_persist_load_reboot FAIL
 
@@ -204,7 +205,12 @@ python3 scripts/check_disk_persistence.py logs "$GATE_DIR/b1.log" "$GATE_DIR/b2.
 cat "$GATE_DIR/persistrows.txt"
 
 has2 '\[linen\.quil\.disk_doc\.intent\].*ok=1' && r linen_disk_open_intent PASS || r linen_disk_open_intent FAIL
-has2 '\[quil\.open\.disk_doc\.recv\]' && r quil_disk_doc_recv PASS || r quil_disk_doc_recv FAIL
+# Quil no longer logs the receipt itself; the load it starts must follow Linen's intent.
+python3 - "$GATE_DIR/b2.log" <<'PY' && r quil_disk_doc_recv PASS || r quil_disk_doc_recv FAIL
+import re,sys
+t=open(sys.argv[1],errors='replace').read();i=re.search(r'\[linen\.quil\.disk_doc\.intent\].*ok=1',t)
+sys.exit(0 if i and re.search(r'\[quil\.persist\.load\.ok\]',t[i.end():]) else 1)
+PY
 [[ $(count_re '\[quil\.persist\.load\.ok\]' "$GATE_DIR/b2.log") -ge 2 ]] && r quil_disk_doc_load PASS || r quil_disk_doc_load FAIL
 grep -qE "$FAULT_RE" "$GATE_DIR/b1.log" && r fault_free_b1 FAIL || r fault_free_b1 PASS
 grep -qE "$FAULT_RE" "$GATE_DIR/b2.log" && r fault_free_b2 FAIL || r fault_free_b2 PASS
