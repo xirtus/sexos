@@ -9,6 +9,7 @@ extern crate self as sex_pdx;
 #[path = "../crates/sex-pdx/src/app_scroll.rs"] pub mod app_scroll;
 pub const EV_WHEEL:u64=app_scroll::CLASS;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
+#[path = "../crates/sex-pdx/src/desktop_style.rs"] pub mod desktop_style;
 #[path = "../crates/sex-pdx/src/text_selection.rs"] pub mod text_selection;
 #[path = "../crates/sex-pdx/src/clipboard.rs"] pub mod clipboard;
 #[path = "../servers/silk-shell/src/app_input.rs"] mod app_input;
@@ -111,6 +112,7 @@ mod shell {
     use super::*;
     mod clipboard {pub use crate::clipboard::*;pub use crate::broker::Admission;}
     const OP_HID_EVENT:u64=0x100;
+    const SLOT_DISPLAY:u64=2;
     const EV_KEY:u64=1;
     static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
     static mut APP_INPUT:Queue=Queue::new();
@@ -202,6 +204,17 @@ mod shell {
     #[test] fn actual_alt_tab_consumes_one_switch_and_modifiers_release_correctly_after_focus_change(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();for code in [0x2a,0x36,0x1d,0x61]{assert!(desktop_shortcut(code,1));}COMMAND_PALETTE_OPEN=true;assert!(desktop_shortcut(0x38,1));assert!(desktop_shortcut(0x0f,1));assert_eq!(FOCUSED_SURFACE_ID,300);assert_eq!(FOCUS_CHANGES,1);assert_eq!(PALETTE_TOGGLES,1);assert!(!COMMAND_PALETTE_OPEN);assert!(desktop_shortcut(0x0f,1));assert_eq!(FOCUS_CHANGES,1);assert!(desktop_shortcut(0x0f,0));assert!(desktop_shortcut(0x38,0));assert!(SENT.is_empty());
         assert!(desktop_shortcut(0x2a,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x4b,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,43);assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x69,shift:true,control:true}));assert!(desktop_shortcut(0x36,0));assert!(desktop_shortcut(0x61,0));assert!(desktop_shortcut(0x30,1));let(_,_,args)=*SENT.last().unwrap();assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x30,shift:false,control:false}));assert_eq!(FOCUS_CHANGES,1);}
+    }
+    #[test] fn alt_plus_minus_and_zero_size_the_focused_windows_text_and_never_reach_the_app(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        assert!(desktop_shortcut(0x38,1));
+        for (code,step) in [(0x0d,1u64),(0x0c,u64::MAX),(0x0b,0)]{
+            assert!(desktop_shortcut(code,1));assert_eq!(*SENT.last().unwrap(),(SLOT_DISPLAY,desktop_style::OP_TEXT_ZOOM,[300,step,0]));
+            let sent=SENT.len();assert!(desktop_shortcut(code,0));assert_eq!(SENT.len(),sent);
+        }
+        assert!(desktop_shortcut(0x38,0));assert!(!APP_INPUT.pending());assert_eq!(SENT.len(),3);
+        // Without Alt, '=' is the app's own key.
+        assert!(desktop_shortcut(0x0d,1));assert!(APP_INPUT.pending()||SENT.len()>3);assert!(SENT.iter().skip(3).all(|s|s.1!=desktop_style::OP_TEXT_ZOOM));}
     }
     #[test] fn plain_tab_reaches_shell_focus_cycle_for_quil_and_browser_but_alt_tab_keeps_capture(){
         let _lock=LOCK.lock().unwrap();unsafe{for focus in [156,300]{reset();FOCUSED_SURFACE_ID=focus;assert!(!desktop_shortcut(0x0f,1));assert!(!APP_INPUT.pending());assert!(SENT.is_empty());assert_eq!(FOCUS_CHANGES,0);assert!(desktop_shortcut(0x0f,0));

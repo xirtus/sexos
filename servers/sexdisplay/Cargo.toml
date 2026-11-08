@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 silkbar-model = { path = "../../crates/silkbar-model", default-features = false }
 sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
+sex-font = { path = "../../crates/sex-font" }
 sex-graphics = { path = "../../crates/sex-graphics", default-features = false }
 sex-rt = { path = "../../sex-rt" }
 sex-time = { path = "../../crates/sex-time", default-features = false }

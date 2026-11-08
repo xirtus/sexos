@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "97a6ab2a7c4d16d822d0f9361940bbe777304df1f85040048ee07d68aa4d7ebc"
+abi_version_hash = "b1457cd0dc83e6a68e6ace5a931f9ea19732eeb3789e14ea2f21dc430e5c422a"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -48,9 +48,11 @@ crates = [
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/peek/Cargo.toml",
+  "apps/view/Cargo.toml",
   "apps/heaptest/Cargo.toml",
   "apps/bench/Cargo.toml",
-  "apps/view/Cargo.toml"
+  "apps/wasm/Cargo.toml",
+  "apps/shapes/Cargo.toml"
 ]
 
 [[stage]]
@@ -234,6 +236,20 @@ action = "cargo_manifest"
 manifest = "apps/bench/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/bench"
 dest_artifact = "iso_root/programs/bench"
+
+[[stage]]
+id = "build_wasm"
+action = "cargo_manifest"
+manifest = "apps/wasm/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/wasm"
+dest_artifact = "iso_root/programs/wasm"
+
+[[stage]]
+id = "build_shapes"
+action = "cargo_manifest"
+manifest = "apps/shapes/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/shapes"
+dest_artifact = "iso_root/programs/shapes"
 
 [[stage]]
 id = "build_hum"

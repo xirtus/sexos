@@ -36,6 +36,7 @@ impl Memory {
 }
 
 /// Asks for `pages` more pages, all or none. `grow(0)` reports what the run holds.
+#[cfg(target_arch = "x86_64")]
 pub fn grow(pages: u64) -> Result<Memory, u64> {
     loop {
         let (status, base, held): (u64, u64, u64);
@@ -54,3 +55,7 @@ pub fn grow(pages: u64) -> Result<Memory, u64> {
         }
     }
 }
+
+/// Host builds (tests) have no kernel to ask.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn grow(_pages: u64) -> Result<Memory, u64> { Err(u64::MAX) }

@@ -8880,7 +8880,9 @@ const FRAME_CHROME_RESIZE: u32 = 3;
 /// Thickness of the neon rim edge band in pixels.
 const FRAME_RIM_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.rim_px;
 /// Resize hit zone thickness in pixels (same as rim).
-const FRAME_RESIZE_ZONE_PX: i32 = FRAME_RIM_PX;
+/// The rim plus the content inset, so a real mouse can find the edge; text starts
+/// inside the inset, so the zone never covers any of it.
+const FRAME_RESIZE_ZONE_PX: i32 = sex_pdx::desktop_style::INSET as i32;
 /// Pixels from left/right screen edge that trigger drag-to-snap.
 const SNAP_EDGE_PX: i32 = 24;
 /// Pixels below the SilkBar that trigger drag-to-top-snap (zoom).
@@ -10218,6 +10220,13 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::TextZoom(step)=>{
+            // Display owns text layout; Shell only names the focused window and the step.
+            let sid=FOCUSED_SURFACE_ID;
+            let (status,_)=pdx_call(SLOT_DISPLAY,sex_pdx::desktop_style::OP_TEXT_ZOOM,sid,step as i64 as u64,0);
+            sex_pdx::serial_record!("[shell.text.zoom] sid={} step={} status={:#x}",sid,step,status);
+            true
+        }
     }
 }
 
@@ -11019,11 +11028,13 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         DRAG_PENDING_ACTIVE = false;
                         silk_drag_end_mark(surface_id);
                         let _ = try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y);
+                        retile_around_floating(surface_id);
                         try_transition(InteractionState::Idle);
                     }
                     InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
                         serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
                             surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
+                        retile_around_floating(surface_id);
                         try_transition(InteractionState::Idle);
                     }
                     InteractionState::TabDragging { frame_id, start_tab, current_tab, .. } => {
@@ -20640,6 +20651,17 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
 /// Toggle zoom state for the given frame. If zoomed, unzoom. If not zoomed, zoom.
 /// Returns true if the state changed.
 /// A floating window keeps the place it was moved to; tiling skips it.
+/// After a window is let go of floating, the tiled windows take the whole content
+/// area again; the floating one stays where it was put, above them.
+unsafe fn retile_around_floating(surface_id: u64) {
+    let Some(fid) = frame_for_surface(surface_id) else { return };
+    let floating = FRAMES.iter().flatten().any(|f| f.frame_id == fid && (f.flags & FRAME_FLAG_FLOATING) != 0);
+    if floating && !frame_is_zoomed(fid) {
+        serial_println!("[shell.window.retile] frame={} sid={}", fid, surface_id);
+        tile_active_scene_frames();
+    }
+}
+
 unsafe fn set_frame_floating(frame_id: u32, floating: bool) {
     for f in FRAMES.iter_mut().flatten() {
         if f.frame_id == frame_id { if floating { f.flags |= FRAME_FLAG_FLOATING; } else { f.flags &= !FRAME_FLAG_FLOATING; } }
@@ -20937,7 +20959,7 @@ unsafe fn maybe_run_silk_de_integrated_interaction_proof() {
         }
     };
     let resize_x = sx + sw2 as i32 / 2;
-    let resize_y = sy + sh2 as i32 - 2; // bottom edge, within FRAME_RESIZE_ZONE_PX=4
+    let resize_y = sy + sh2 as i32 - 2; // bottom edge, within FRAME_RESIZE_ZONE_PX
     handle_hid_event(EV_ABS, abs_screen_to_raw(resize_x, desktop_width()), abs_screen_to_raw(resize_y, desktop_height()));
     handle_hid_event(EV_BTN, 1, 1); // pointer.recv + resize.begin (bottom resize zone)
     handle_hid_event(EV_BTN, 1, 0); // resize.end
@@ -25315,11 +25337,13 @@ pub extern "C" fn _start() -> ! {
                                     if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
                                         mutated = true;
                                     }
+                                    retile_around_floating(surface_id);
                                     try_transition(InteractionState::Idle);
                                 }
                                 InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
                                     serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
                                         surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
+                                    retile_around_floating(surface_id);
                                     try_transition(InteractionState::Idle);
                                 }
                                 _ => {}
@@ -26938,11 +26962,13 @@ pub extern "C" fn _start() -> ! {
                                             if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
                                                 mutated = true;
                                             }
+                                            retile_around_floating(surface_id);
                                             try_transition(InteractionState::Idle);
                                         }
                                         InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
                                             serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
                                                 surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
+                                            retile_around_floating(surface_id);
                                             try_transition(InteractionState::Idle);
                                         }
                                         InteractionState::TabDragging { frame_id, start_tab, current_tab, .. } => {

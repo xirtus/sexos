@@ -16,7 +16,9 @@ def validate(text):
     elif not (max(g.start() for g in grants) < seals[0].start() < running.start()):
         errors.append("region genesis must precede seal and task execution")
     rows = [tuple(map(int, g.groups())) for g in grants]
-    if len(rows) != 7 or len({(r[0], r[1]) for r in rows}) != len(rows):
+    # The seven fixed device regions below, plus every app, program and pixel region
+    # BOOT mints since; each (domain, slot) holds one grant.
+    if len(rows) < 7 or len({(r[0], r[1]) for r in rows}) != len(rows):
         errors.append("missing/duplicate fixed boot region slots")
     for region, size in ((1, 262144), (2, 262144), (3, 524288)):
         matches = [r for r in rows if r[2] == region]
@@ -46,7 +48,7 @@ def validate(text):
         r"\[sexdrive\.dma\.region\] slot=32 bytes=524288 reusable_buffers=2",
         r"\[sexfiles\.bridge\.diskfs\.buf\.ready\].*region_id=4 length=4096 peer_pd=\d+",
         r"\[sexfiles\.memory\.authority\.negative\] empty=1 wrong_kind=1 dma_right=1 ok=1",
-        r"\[runtime\.heap\.ready\] backing=elf_owned bytes=65536 runtime_mapping=0",
+        r"\[runtime\.heap\.ready\] backing=elf_owned bytes=[1-9]\d* runtime_mapping=0",
     ):
         if not re.search(marker, text):
             errors.append("missing migrated consumer proof: " + marker)

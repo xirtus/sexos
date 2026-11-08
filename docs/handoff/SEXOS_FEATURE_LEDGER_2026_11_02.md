@@ -2465,6 +2465,36 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
+## Wasm guests on wasmi (2026-11-08)
+
+- **What runs now.** `run wasm @/FILE.wasm ARGS` runs a WebAssembly program in its own
+  window; `run wasm` alone runs a small built-in guest. An unmodified Rust `std` program
+  built for `wasm32-wasip1` prints, reads typed lines and exits (gate
+  `program_wasm_gate.py`, source in `crates/sex-wasm/guests/greet`). This is the start of
+  the Guests organ: a guest touches only its own linear memory and the calls it was linked
+  with, so many guests can share one hardware key.
+- **Design.** `crates/sex-wasm` wraps `wasmi` 2.0 (MIT/Apache-2.0, `no_std` + `alloc`) with
+  two import sets. `sex` (native): `show`, `title`, `log`, `next` (keys and close),
+  `read`/`write` in the guest's folder, `fetch` (one page), `now`, `exit`.
+  `wasi_snapshot_preview1` (subset): console, keyboard lines, arguments, clocks, random
+  bytes, exit; other WASI calls link but answer `ENOSYS`. Feature `sexos` gives
+  `sexos::AppHost` over `sex_app`. `apps/wasm` is the runner, on the program heap.
+- **Authority.** `Grants` only narrow the program's: files in `guests/NAME/` of the
+  program's folder (`..`, `.`, empty parts, `\` and a leading `/` refused), `fetch` only
+  in a `run +net` run. No environment. Unknown imports are refused by name.
+- **Limits.** Guest memory 4 MiB in the runner (16 MiB default in the crate), optional
+  fuel, 1 MiB per I/O call and per write in total, about 8 KiB of console. Modules up to
+  2 MiB. A guest that keeps waiting after Close is ended; Close during a read is end of
+  input.
+- **Size.** The runner is 984 KB, under the 1 MiB image limit, because the interpreter is
+  built for size (`opt-level = "z"`, one codegen unit, stripped; per-package profiles in
+  the workspace `Cargo.toml`) and uses wasmi's loop dispatch, which is slower than its
+  tail-call dispatch (1028 KB). Raising `IMAGE_BYTES` would allow the faster one.
+- **Gates.** `cargo test -p sex-wasm` (17 tests); `program_wasm_gate.py` at 1 and 4 cores.
+  One 1-core attempt saw no keys reach Spindle at all before any wasm code ran; the
+  rerun passed.
+- **Next.** WASI files over a preopened folder, guest pixels on the program pixel
+  surfaces, `wasmtime` for speed, then QuickJS on Wasm.
 ## View opens JPEG; PNG and JPEG through zune (2026-11-08)
 
 - **What exists now.** `crates/sex-image`: `sex_image::decode(bytes, &Limits)` returns
@@ -2568,3 +2598,85 @@ row no longer waits for the row before it to end.
 - **Limits.** The window is fixed per row; a program needing more than 8 MiB needs a
   bigger constant or, later, frames from a shared pool. Pages return only at exit.
   Background program records (`program_records.rs`) don't get a heap yet.
+
+## Anti-aliased drawing with tiny-skia (2026-11-08)
+
+- **What runs now.** `run shapes` draws rounded windows with soft shadows, gradients,
+  circles and smooth lines in its own window; the arrow keys move the front window and
+  redraw it. Any SDK program can do the same with `sex-canvas`.
+- **Design.** New crate `crates/sex-canvas` over tiny-skia 0.11.4 (BSD-3, `no_std` +
+  `alloc`, floats through libm). It draws straight into SexOS `0xAARRGGBB` words with no
+  copy: colours go to tiny-skia with red and blue swapped, so its `R,G,B,A` bytes land
+  as SexOS words. Soft shadows are analytic (Gaussian falloff of the distance to the
+  rounded rectangle, from a 256-step table), with no blur pass or scratch buffer.
+  `Canvas::window` draws a whole frame and returns its content rectangle; `Layer`
+  composites an owned buffer into any strided one. Uses the program heap and the
+  program pixel surface. No ABI change.
+- **Evidence.** 11 host tests in sex-canvas. `scripts/program_shapes_gate.py` installs
+  Shapes, runs it, and compares the window's pixels with the same scene rendered on the
+  host by `cargo run -p sex-canvas --example desktop`: exact (0 of 3712 sampled pixels
+  differ) before and after an arrow key, at 1 and 4 cores, then F11 retires the run.
+- **Limits.** Programs are built soft-float (`x86_64-sex.json`: `-sse,+soft-float`), so
+  tiny-skia's float maths is emulated: a full 400x320 scene takes about 0.7 to 1 s under
+  QEMU TCG (about 5 ms natively with SSE on the host). Letting programs use SSE needs the
+  kernel to save and restore FPU/SSE state per task. Shapes draws at a fixed 400x320
+  because a program can't yet learn its window's size. sexdisplay's own chrome is not
+  drawn with sex-canvas yet (it has no heap).
+
+## Geist at any size (2026-11-08)
+
+- **What runs now.** Display draws Geist from the TrueType files at run time instead of
+  a table rendered once at one size. Grid text at 2x and up is Geist Mono fitted to the
+  cell the text scale gives (12x18 today, any 6s x 9s cell later); window titles are
+  Geist Sans, kerned (GPOS `kern`) and placed to a quarter pixel.
+- **Design.** New `crates/sex-font` (no_std, no heap): `ttf-parser` (MIT/Apache-2.0)
+  reads the fonts without allocating, and its own rasterizer turns outlines into 8-bit
+  coverage by signed-area accumulation in fixed point (1/256 px), integer-only, so the
+  softfloat target and host tests give bit-identical pixels. `sex_font::draw_cell` sizes
+  a monospaced font to any cell (19 px at 12x18, as before). Display keeps drawn glyphs in
+  a fixed cache (`servers/sexdisplay/src/glyphs.rs`: 2048 slots over 192 KiB, emptied
+  whole when full) and recent title layouts, so a size costs one draw per character.
+  The generated `sex-pdx::font_geist` table and `scripts/make_font.py` are gone; the
+  `abi_version_hash` returns to its pre-table value since `sex-pdx/src/lib.rs` lost that line.
+- **Oracles.** `scripts/geist_cells.py` now asks sex-font's `cells` example for the
+  cells, so pixel oracles check the screen against the renderer Display runs. Display's
+  host gates link sex-font (built for the host with cargo) and test titles by layout.
+- **Limits.** 1x text keeps the 5x7 bitmap font (crisper at 6x9). No text shaping yet:
+  `harfrust` needs a heap, so it waits for the app heap work. No hinting, so stems are a
+  little lighter than FreeType's. Text is still a fixed grid; per-window text size (zoom)
+  is the next visible step and needs only a scale per surface now.
+- **Gates.** sex-font unit tests; display text readability and surface groups host gates;
+  program launch (pixel oracle) at 1 and 4 cores in QEMU (UEFI/OVMF boot).
+
+## Text size per window (2026-11-08)
+
+- **What runs now.** Alt+= makes the focused window's text larger, Alt+- smaller and
+  Alt+0 restores it. Each step is a whole text scale (cells 6s x 9s, s from 1 to 5), so
+  Geist Mono is drawn fresh at 18x27, 24x36 and 30x45 as well as 12x18; scale 1 is the
+  5x7 font. Text rewraps to the new width at once.
+- **Design.** Display owns it: `Surface::text_zoom` is a step from the width's default
+  scale, stored clamped so the opposite key always acts. Shell's `desktop_keys` turns the
+  Alt shortcuts into `OP_TEXT_ZOOM` (new, 0x2D4, `sex_pdx::desktop_style`; ABI change),
+  which Display accepts only from the window manager. The shortcut's release never
+  reaches the app. Display's glyph cache grew to 512 KiB for the larger cells.
+- **Limits.** Not remembered across runs. Apps that lay out their own rows for the
+  default scale (Browser) wrap at Display's columns when zoomed.
+- **Gates.** New `text_zoom_gate.py` (default, two steps up, one down, reset; every fully
+  covered pixel exact against sex-font's cells) at 1 and 4 cores; program launch at 1
+  core; display text, scene, cursor, frame output and surface-group host gates; Shell key
+  routing in the clipboard host gate.
+
+## Tiles fill the space a floating window leaves (2026-11-08)
+
+- **What runs now.** When you let go of a window you moved or resized, the remaining tiled
+  windows retile across the whole content area; the floating one stays where it was put,
+  above them. The resize grip is now 8 pixels, the rim plus the content inset, so a mouse
+  can find it without covering any text.
+- **Gates.** `window_resize` now also checks the retile (`[shell.window.retile]`, another
+  window tiled from the left edge, the resized one untouched); window float.
+- **CI.** Master's GitHub CI had been red for weeks. The fixes so far: fetch crates before the
+  offline host gates; read `cargo tree` without CI's colour codes in the TLS platform check;
+  install mtools for the boot image; and update two log checkers to today's truth (more
+  than seven BOOT region grants, a 128 KiB runtime heap, PKU keys that no longer equal PD
+  ids, with leaves checked against each client's own key). Host builds on ARM got
+  non-x86 stubs for `program_memory::grow` and `virtio::layout`.
