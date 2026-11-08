@@ -7,13 +7,18 @@ use sex_pdx::SLOT_BUF_LEND;
 use sexfs::{Device, Error, Fs, Kind, Memory, Slot, BLOCK};
 
 const SECTORS: u64 = (BLOCK / 512) as u64;
-const CACHE: usize = 64;
-/// 16 GiB until free space stops needing a bitmap held in memory.
-const MAP_WORDS: usize = 65536;
-static mut CACHE_BLOCKS: [[u8; BLOCK]; CACHE] = [[0; BLOCK]; CACHE];
-static mut SLOTS: [Slot; CACHE] = [Slot::EMPTY; CACHE];
-static mut USED: [u64; MAP_WORDS] = [0; MAP_WORDS];
-static mut PENDING: [u64; MAP_WORDS] = [0; MAP_WORDS];
+/// Blocks of tree cached in memory, once Files' memory has grown to hold them.
+const CACHE: usize = 1024;
+/// What Files has when its memory cannot grow: 64 blocks and a map for 16 GiB.
+const SMALL_CACHE: usize = 64;
+const SMALL_MAP_WORDS: usize = 65536;
+static mut SMALL_BLOCKS: [[u8; BLOCK]; SMALL_CACHE] = [[0; BLOCK]; SMALL_CACHE];
+static mut SMALL_SLOTS: [Slot; SMALL_CACHE] = [Slot::EMPTY; SMALL_CACHE];
+static mut SMALL_USED: [u64; SMALL_MAP_WORDS] = [0; SMALL_MAP_WORDS];
+static mut SMALL_PENDING: [u64; SMALL_MAP_WORDS] = [0; SMALL_MAP_WORDS];
+/// Where the filesystem's memory lives: (cache, slots, words, used, pending).
+static mut PLACE: (*mut [u8; BLOCK], *mut Slot, usize, usize, *mut u64, *mut u64) =
+    (core::ptr::null_mut(), core::ptr::null_mut(), 0, 0, core::ptr::null_mut(), core::ptr::null_mut());
 static mut SCRATCH: [u8; BLOCK] = [0; BLOCK];
 /// Files' own copy of one request's data.
 static mut OWN: [u8; w::DATA_MAX] = [0; w::DATA_MAX];
@@ -73,13 +78,40 @@ impl Device for Disk {
         if DiskFs::diskfs_block_sync() == 0 { Ok(()) } else { Err(()) }
     }
 }
+/// Memory sized to the disk: a free-space bit per block, so any disk fits whole.
+/// Falls back to the fixed 16 GiB maps if Files' memory cannot grow that far.
+fn place(blocks: u64) {
+    use alloc::vec::Vec;
+    let words = (blocks as usize).div_ceil(64) + 1;
+    fn grab<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
+        let mut x: Vec<T> = Vec::new();
+        x.try_reserve_exact(n).ok()?;
+        x.resize(n, v);
+        Some(x)
+    }
+    // Kept owned until all four exist, so a failure frees what was already taken.
+    let big = (|| Some((grab(CACHE, [0u8; BLOCK])?, grab(CACHE, Slot::EMPTY)?, grab(words, 0u64)?, grab(words, 0u64)?)))()
+        .map(|(c, s, u, p)| (c.leak().as_mut_ptr(), s.leak().as_mut_ptr(), u.leak().as_mut_ptr(), p.leak().as_mut_ptr()));
+    unsafe {
+        PLACE = match big {
+            Some((cache, slots, used, pending)) => (cache, slots, CACHE, words, used, pending),
+            None => (core::ptr::addr_of_mut!(SMALL_BLOCKS).cast(), core::ptr::addr_of_mut!(SMALL_SLOTS).cast(), SMALL_CACHE,
+                SMALL_MAP_WORDS, core::ptr::addr_of_mut!(SMALL_USED).cast(), core::ptr::addr_of_mut!(SMALL_PENDING).cast()),
+        };
+    }
+    let (_, _, cache, words, _, _) = unsafe { PLACE };
+    sex_pdx::serial_record!("[files.fs.memory] blocks={} cache_blocks={} map_words={} grown={}", blocks, cache, words, big.is_some() as u8);
+}
 fn memory() -> Memory<'static> {
     unsafe {
+        let (cache, slots, n, words, used, pending) = PLACE;
+        // Every slot is reset by mount/format; only one Fs holds these at a time.
+        for i in 0..n { *slots.add(i) = Slot::EMPTY; }
         Memory {
-            cache: &mut *core::ptr::addr_of_mut!(CACHE_BLOCKS),
-            slots: &mut *core::ptr::addr_of_mut!(SLOTS),
-            used: &mut *core::ptr::addr_of_mut!(USED),
-            pending: &mut *core::ptr::addr_of_mut!(PENDING),
+            cache: core::slice::from_raw_parts_mut(cache, n),
+            slots: core::slice::from_raw_parts_mut(slots, n),
+            used: core::slice::from_raw_parts_mut(used, words),
+            pending: core::slice::from_raw_parts_mut(pending, words),
             scratch: &mut *core::ptr::addr_of_mut!(SCRATCH),
         }
     }
@@ -91,6 +123,7 @@ fn bring_up() -> State {
         return State::Absent;
     }
     let blocks = (sectors - w::BASE_LBA) / SECTORS;
+    place(blocks);
     match Fs::mount(Disk { blocks }, memory()) {
         Ok(fs) => {
             let s = fs.statfs();

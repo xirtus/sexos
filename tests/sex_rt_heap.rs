@@ -143,3 +143,50 @@ fn coherent_usage_preserves_live_bytes_and_returns_to_empty_after_reuse() {
         assert_eq!(allocator.usage().used,0);assert_eq!(allocator.usage().free,HEAP_BYTES);
     }
 }
+
+// Pages a fake kernel grants: contiguous from one base, as the service arena is.
+static GROWN: std::sync::Mutex<(usize, u64, u64)> = std::sync::Mutex::new((0, 0, 0));
+fn fake_grow(pages: u64) -> Result<(u64, u64), u64> {
+    let mut g = GROWN.lock().unwrap();
+    if g.0 == 0 {
+        let region = Box::leak(vec![0u8; (1 << 24) + 4096].into_boxed_slice());
+        g.0 = (region.as_mut_ptr() as usize + 4095) & !4095;
+    }
+    g.2 += 1;
+    if g.1 + pages > 4096 { return Err(6); }
+    g.1 += pages;
+    Ok((g.0 as u64, g.1))
+}
+fn denied(_: u64) -> Result<(u64, u64), u64> { Err(3) }
+
+#[test]
+fn full_arena_grows_into_granted_pages_and_frees_back() {
+    let allocator = BoundedAllocator::growing(Box::leak(Box::new(Arena::new())), fake_grow);
+    // Far past the fixed arena: one 4 MiB block and many small ones.
+    let big = Layout::from_size_align(4 << 20, 4096).unwrap();
+    let p = unsafe { allocator.alloc(big) };
+    assert!(!p.is_null());
+    unsafe { core::ptr::write_bytes(p, 0x5a, big.size()); }
+    let small = Layout::from_size_align(1000, 8).unwrap();
+    let many: Vec<_> = (0..2000).map(|_| unsafe { allocator.alloc(small) }).collect();
+    assert!(many.iter().all(|q| !q.is_null()));
+    let usage = allocator.usage();
+    assert!(usage.total > (4 << 20) + 1_000_000);
+    unsafe { allocator.dealloc(p, big); }
+    for q in many { unsafe { allocator.dealloc(q, small); } }
+    // Freed granted memory is reused, not asked for again.
+    let calls = GROWN.lock().unwrap().2;
+    let again = unsafe { allocator.alloc(big) };
+    assert!(!again.is_null());
+    assert_eq!(GROWN.lock().unwrap().2, calls);
+    // More than the kernel grants fails cleanly.
+    assert!(unsafe { allocator.alloc(Layout::from_size_align(32 << 20, 8).unwrap()) }.is_null());
+}
+
+#[test]
+fn a_domain_without_an_arena_keeps_the_fixed_bound() {
+    let allocator = BoundedAllocator::growing(Box::leak(Box::new(Arena::new())), denied);
+    assert!(unsafe { allocator.alloc(Layout::from_size_align(HEAP_BYTES + 1, 8).unwrap()) }.is_null());
+    let ok = Layout::from_size_align(640, 8).unwrap();
+    assert!(!unsafe { allocator.alloc(ok) }.is_null());
+}

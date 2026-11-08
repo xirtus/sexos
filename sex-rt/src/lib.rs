@@ -9,7 +9,11 @@ mod heap;
 // subdivides its own bytes; it has no frame allocation or mapping authority.
 static HEAP_ARENA: heap::Arena = heap::Arena::new();
 #[global_allocator]
-static ALLOCATOR: heap::BoundedAllocator = heap::BoundedAllocator::new(&HEAP_ARENA);
+static ALLOCATOR: heap::BoundedAllocator = heap::BoundedAllocator::growing(&HEAP_ARENA, grow_pages);
+/// Pages a service with a growable arena may add once the ELF arena is full.
+fn grow_pages(pages: u64) -> Result<(u64, u64), u64> {
+    sex_pdx::program_memory::grow(pages).map(|m| (m.base, m.pages))
+}
 static HEAP_INIT_REPORTED: AtomicBool = AtomicBool::new(false);
 
 pub fn sys_exit(status: usize) -> ! {

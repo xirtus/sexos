@@ -203,6 +203,7 @@ fn split_into(left: &mut [u8; BLOCK], right: &mut [u8; BLOCK]) -> Key {
     key_at(right, 0)
 }
 
+#[derive(Clone, Copy)]
 pub struct Slot { block: u64, dirty: bool, stamp: u64, pins: u16 }
 impl Slot { pub const EMPTY: Slot = Slot { block: u64::MAX, dirty: false, stamp: 0, pins: 0 }; }
 
@@ -225,6 +226,8 @@ pub struct Fs<'a, D: Device> {
     tx: u64,
     free: u64,
     pending_count: u64,
+    /// Words of `pending` that may hold bits, so a commit never walks the whole map.
+    pending_span: (usize, usize),
     cursor: u64,
     clock: u64,
     changed: bool,
@@ -271,13 +274,14 @@ impl<'a, D: Device> Fs<'a, D> {
     }
 
     fn empty(dev: D, mem: Memory<'a>, total: u64) -> Self {
-        Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, cursor: SB_SLOTS, clock: 0,
+        Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, pending_span: (usize::MAX, 0), cursor: SB_SLOTS, clock: 0,
             changed: false, poisoned: false, value: [0; VALUE_MAX], value_len: 0 }
     }
 
     fn reset_maps(&mut self) {
         self.mem.used.fill(0);
         self.mem.pending.fill(0);
+        self.pending_span = (usize::MAX, 0);
         for s in 0..SB_SLOTS { set_bit(self.mem.used, s, true); }
         self.free = self.total - SB_SLOTS;
         self.pending_count = 0;
@@ -406,7 +410,12 @@ impl<'a, D: Device> Fs<'a, D> {
     }
     /// Free once the commit that stops using it is on disk.
     fn release(&mut self, block: u64) {
-        if !bit(self.mem.pending, block) { set_bit(self.mem.pending, block, true); self.pending_count += 1; }
+        if !bit(self.mem.pending, block) {
+            set_bit(self.mem.pending, block, true);
+            self.pending_count += 1;
+            let w = (block / 64) as usize;
+            self.pending_span = (self.pending_span.0.min(w), self.pending_span.1.max(w + 1));
+        }
     }
     fn new_node(&mut self, lvl: u8) -> Result<(u64, usize)> {
         let block = self.alloc()?;
@@ -926,7 +935,8 @@ impl<'a, D: Device> Fs<'a, D> {
         self.tx = generation + 1;
         self.changed = false;
         // Only now can what the old commit used be reused.
-        for w in 0..self.mem.pending.len() {
+        let (lo, hi) = core::mem::replace(&mut self.pending_span, (usize::MAX, 0));
+        for w in lo..hi {
             let bits = self.mem.pending[w];
             if bits != 0 {
                 self.mem.used[w] &= !bits;
