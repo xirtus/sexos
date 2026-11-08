@@ -219,6 +219,25 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
     (was 25x). A request is still at most 63 KiB (the client region), so a 1 MiB write
     is 16 requests; a larger client region and queue depth are the next steps.
 
+- Stage 3, third part (service memory, filesystem size):
+  - BOOT services had only a fixed 128 KiB heap, so Files kept a 16 GiB free-space map
+    and a 64-block cache in its ELF. A BOOT service may now get an arena like a program
+    row's (`kernel/src/service_memory.rs`; BOOT gives one to Files). SYS_PROGRAM_MEMORY
+    grows it page by page, from the same frames programs borrow.
+  - sex-rt's allocator falls back to those pages once its fixed arena is full. A domain
+    without an arena keeps the old bound, which costs one denied call, once.
+  - Files sizes its free-space maps to the disk it finds (a bit per 4 KiB block in each
+    of two maps: 64 MiB for a 1 TiB disk) and caches 1024 tree blocks. When memory can't
+    grow, it falls back to the old fixed sizes.
+  - ABI change: SYS_PROGRAM_MEMORY (81) also serves BOOT services that have an arena.
+  - A commit now walks only the words of the pending map it touched, not the whole map.
+  - Tested: a 1 TiB disk (4 GB VM) formats, mounts, survives a power cut and reports
+    1,048,512 MiB; Files grew to 68 MiB.
+  - A disk command may now take 30 s before it counts as lost (was 1 s), as on Linux.
+    Under host load a flush took up to 1.4 s, which used to quarantine the drive.
+  - Long term, free space should live in the tree (extents), so memory stays flat
+    however big the disk is.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

@@ -2,8 +2,9 @@
 //! Bounded observation of one already submitted NVMe command. This helper
 //! neither submits, consumes a CQE, reclaims DMA nor receives another request.
 pub const POLL_QUANTUM:u32=64;
-pub const MAX_TICKS:u64=1000;
-pub const MAX_TURNS:u32=4096;
+/// As long as Linux gives a command (30 s): a flush on a busy or slow disk can take seconds.
+pub const MAX_TICKS:u64=30_000;
+pub const MAX_TURNS:u32=32_768;
 pub const MAX_POLLS:u32=POLL_QUANTUM*MAX_TURNS;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Failure{Deadline,ClockRollback,ClockOverflow,TurnLimit,WaitDenied(u64)}
