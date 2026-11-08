@@ -2466,6 +2466,34 @@ row no longer waits for the row before it to end.
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
 
+## Sound on a virtio sound card (2026-11-08)
+
+- **What runs now.** With a virtio sound card (QEMU `-device virtio-sound-pci`), SexOS plays
+  sound. Spindle's `beep [HZ] [MS] [VOL]` plays a note, and a notification Bell files in the
+  "now" lane plays a two-note chime. Without a card nothing changes: Bell logs
+  `[bell.sound.absent]` and `beep` does nothing.
+- **Design.** BOOT leases virtio PCI devices the way it leases the NIC: one BAR view (the
+  BAR holding all four virtio register blocks, at most 64 KiB), the block offsets as
+  immutable BOOT metadata (`sex_pdx::virtio::Layout`, read with syscall 75), a 256 KiB DMA
+  pool and the memory/bus-master command bits. No driver sees a physical register address.
+  `kernel/src/virtio_boot.rs` parses the vendor capabilities; `devmgr` routes each virtio
+  kind to its service. The Bell service (Senses organ) drives the card with the
+  `virtio-drivers` crate (rcore-os, MIT) through `servers/sexbell/src/sound.rs`: a transport
+  over the leased view, and a DMA layer that bounces buffers through the pool. Notes queue
+  (16) and stream a period (43 ms) at a time while Bell waits for messages, so Bell never
+  blocks on playback. The kernel restart path already quiesces any held PCI device.
+- **ABI.** Syscall 75 (virtio layout); `OP_BELL_TONE` 0xC8 (arg0 Hz, arg1 ms, arg2 volume);
+  `virtio::SLOT_SOUND` 20; virtio DMA region id 0x4200; `PciCapData.virtio`;
+  `devmgr::init` takes the Bell domain. `crates/sex-pdx/src/virtio.rs` joined the ABI inputs.
+- **Limits.** Fixed 48 kHz stereo S16, sine notes only: no PCM streaming from programs or
+  files yet (needs a shared buffer from the caller and a mixer). Only modern (non-transitional)
+  virtio ids. virtio-net, virtio-blk and virtio-input aren't leased yet; the same lease and
+  transport take them next (`virtio_boot::supported` and `devmgr::virtio`).
+- **Gates.** New `sound_gate.py`: QEMU records the card to WAV; 440 Hz/400 ms and
+  1000 Hz/300 ms notes come out at 440.0 and 1000.1 Hz, 400 and 310 ms, at 1 and 4 cores;
+  `--no-card` boots without a card. QEMU's WAV backend writes only delivered audio, so the
+  gate checks pitch and length, not the gap between notes. Program launch at 1 core.
+
 ## Resize a window by its edges (2026-11-08)
 
 - **What runs now.** Drag a window's left, right or bottom edge, or a corner, and it changes
@@ -2483,3 +2511,35 @@ row no longer waits for the row before it to end.
 - **Gates.** New `window_resize` (corner drag of 120x80 pixels, exact new bounds, then a
   program opens and the tiling leaves the window alone), window float and program launch
   at 1 core; Python tests and all non-QEMU gates except the older ones.
+
+## Programs get a heap (2026-11-08)
+
+- **What runs now.** SDK programs (`sex-app`) can use `alloc`: `Vec`, `String`, `Box`,
+  `BTreeMap`, and the `no_std` crates that need them (fonts, images, tiny-skia, rustls,
+  Taffy). Peek now reads up to 1 MiB of a page instead of 64 KiB, on the heap. A program
+  can hold up to 8 MiB (its image plus heap) instead of 1 MiB.
+- **Design.** Each program row already reserved, at BOOT, a window of frames on its own
+  hardware key for the image it loads. The window grows from 1 MiB to 8 MiB
+  (`program_store::WINDOW_BYTES`, separate from the 1 MiB file limit `IMAGE_BYTES`). A
+  run asks for the window's pages after its image with a self-only call
+  (`sex_pdx::program_memory::grow`, syscall 81): the kernel finds the row by the caller's
+  domain, checks it is the row's live current run, zeroes the pages and sets their
+  leaves on the row's key. No frame, capability or key is created at runtime. The pages
+  join the run's manifest, so Close, a forced end and retire take them back like the
+  image; a shared-key row's new pages take turns with the rest (`program_tenancy::grant`).
+  The leaves were clear, so a local TLB flush is enough. `sex_app::heap` puts talc (MIT,
+  `no_std`) over that span as the `#[global_allocator]`, growing it in 64 KiB+ steps; when
+  the window is full an allocation is refused (`try_reserve` sees it), not faulted.
+- **ABI.** New syscall 81 `SYS_PROGRAM_MEMORY` (rdi pages ≤ 256, 0 queries → rax status,
+  rsi first page, rdx pages held); `WINDOW_BYTES` 8 MiB; kernel `MAX_PAGES` 512 → 2064.
+  `program_memory.rs` joins the ABI inputs; hash updated.
+- **Cost.** 8 MiB of frames reserved per reusable program row (eight rows: 64 MiB, was 8)
+  and about 1.5 MB more kernel bss for the larger page manifests. Boots and runs in 512 MiB.
+- **Evidence.** New `heaptest` program and `scripts/program_heap_gate.py`: each run starts
+  with no pages, finds every granted page zero, uses Vec/Box/BTreeMap/String, reuses
+  freed memory, fills the window until refused (7 MiB past a 48-page image), then
+  allocates again. Four runs on a reused row, all eight rows side by side (shared-key
+  rows included), each retire taking the grown pages.
+- **Limits.** The window is fixed per row; a program needing more than 8 MiB needs a
+  bigger constant or, later, frames from a shared pool. Pages return only at exit.
+  Background program records (`program_records.rs`) don't get a heap yet.

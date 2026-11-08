@@ -4,6 +4,9 @@
 //! BOOT row already holds; this crate adds no authority, only less boilerplate.
 #![no_std]
 
+extern crate alloc;
+pub mod heap;
+
 use sex_pdx::app_key::Key;
 use sex_pdx::text_batch::{hash, Request};
 use sex_pdx::{app_lifecycle as lifecycle, pdx_call_checked, SLOT_DISPLAY, SLOT_SHELL};

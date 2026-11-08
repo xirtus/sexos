@@ -417,7 +417,7 @@ pub fn init() {
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.

@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
+extern crate alloc;
 mod paging_probe;
+mod sound;
 
-use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
+use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};
 
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
@@ -544,6 +546,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
     paging_probe::run();
+    sound::init();
 
     // ── Bell Bridge status stub (Phase 1): marker-only, no IPC ──
     unsafe { maybe_run_bell_bridge_status_stub(); }
@@ -578,7 +581,14 @@ pub extern "C" fn _start() -> ! {
             exit_probe_pending = false;
             paging_probe::exit_reuse();
         }
-        let msg = paging_probe::next_message();
+        // While sound plays, keep feeding the card between messages.
+        let msg = loop {
+            if !sound::busy() { break paging_probe::next_message(); }
+            // Feed the card first, so a steady inbox can't starve playback.
+            sound::pump();
+            if let Some(m) = paging_probe::try_next_message() { break m; }
+            if sound::busy() { let _ = sex_pdx::sys_wait_self_ticks(1); }
+        };
         paging_probe::check_retained();
         if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2]){
             sex_pdx::serial_record!("[bell.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
@@ -779,6 +789,9 @@ pub extern "C" fn _start() -> ! {
                                 serial_println!("[bell.notify.ok] caller_pd={} final_lane={} event_id={}",
                                     caller_pd, final_lane, event_id);
                             }
+                        }
+                        if effective_lane == LANE_NOW && sound::chime() {
+                            sex_pdx::serial_record!("[bell.sound.chime] event_id={}", event_id);
                         }
                         bump_generation();
                     }
@@ -1375,6 +1388,16 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[bell.subscribe.reply] gen={}", gen);
                     }
                 }
+            }
+
+            sex_pdx::OP_BELL_TONE => {
+                // Fire and forget, like a notification: arg0 Hz (0 rests), arg1 ms, arg2 volume %.
+                let volume = if msg.arg2 == 0 { 30 } else { msg.arg2 };
+                // Sound draws attention, so a muted or noisy sender plays nothing.
+                let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd) && check_spam_budget(msg.caller_pd);
+                let queued = allowed && sound::tone(msg.arg0, msg.arg1, volume);
+                sex_pdx::serial_record!("[bell.sound.tone] caller_pd={} hz={} ms={} volume={} queued={} card={} allowed={}",
+                    msg.caller_pd, msg.arg0, msg.arg1, volume, queued as u8, sound::present() as u8, allowed as u8);
             }
 
             _ => {

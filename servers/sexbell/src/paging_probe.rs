@@ -14,6 +14,17 @@ pub fn next_message() -> sex_pdx::PdxMessage {
     }
     sex_pdx::pdx_listen_raw(0)
 }
+/// The next message if one is waiting, deferred ones first.
+pub fn try_next_message() -> Option<sex_pdx::PdxMessage> {
+    unsafe {
+        if DEFERRED_READ < DEFERRED_COUNT {
+            let index = DEFERRED_READ;
+            DEFERRED_READ += 1;
+            return DEFERRED[index].take();
+        }
+    }
+    sex_pdx::pdx_try_listen_raw(0)
+}
 pub fn run() {
     let info = sex_pdx::paging_info(SLOT_DEMAND_REGION).expect("BELL_DEMAND_REGION_MISSING");
     serial_record!("[paging.client.begin] pd={} base={:#x} bytes={}", info.target_pd, info.base, info.length);
