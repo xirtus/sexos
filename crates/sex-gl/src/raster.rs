@@ -90,6 +90,46 @@ pub trait Shade {
     fn shade(&mut self, frag: &Frag, vary: &[f32]) -> Option<([f32; 4], Option<f32>)>;
     /// True if the shader writes depth: the depth test then waits for its value.
     fn writes_depth(&self) -> bool { false }
+    /// How many fragments `shade_many` takes at once (1: it isn't used).
+    fn batch(&self) -> usize { 1 }
+    /// Shades `frags` (at most `batch()`), fragment `i` with varyings `vary[i * stride..]`.
+    fn shade_many(&mut self, frags: &[Frag], vary: &[f32], stride: usize, out: &mut [Option<([f32; 4], Option<f32>)>]) {
+        for (i, f) in frags.iter().enumerate() { out[i] = self.shade(f, &vary[i * stride..(i + 1) * stride]); }
+    }
+}
+
+/// Fragments of one primitive waiting to be shaded together. They cover different pixels,
+/// so shading them as a group and then writing them in order is the same as one by one.
+#[derive(Default)]
+pub struct Batch {
+    frags: Vec<Frag>,
+    at: Vec<(usize, f32)>,
+    vary: Vec<f32>,
+    out: Vec<Option<([f32; 4], Option<f32>)>>,
+}
+
+impl Batch {
+    fn push(&mut self, t: &mut Target, fx: &Fixed, i: usize, z: f32, sh: &mut dyn Shade, frag: Frag, vary: &[f32]) {
+        if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
+        self.frags.push(frag);
+        self.at.push((i, z));
+        self.vary.extend_from_slice(vary);
+        if self.frags.len() >= sh.batch() { self.flush(t, fx, sh, vary.len()); }
+    }
+
+    fn flush(&mut self, t: &mut Target, fx: &Fixed, sh: &mut dyn Shade, stride: usize) {
+        if self.frags.is_empty() { return; }
+        self.out.clear();
+        self.out.resize(self.frags.len(), None);
+        sh.shade_many(&self.frags, &self.vary, stride, &mut self.out);
+        for k in 0..self.frags.len() {
+            let (i, z) = self.at[k];
+            if let Some(r) = self.out[k] { finish(t, fx, i, z, r); }
+        }
+        self.frags.clear();
+        self.at.clear();
+        self.vary.clear();
+    }
 }
 
 pub struct Frag {
@@ -177,7 +217,12 @@ fn bounds(t: &Target, fx: &Fixed) -> (i32, i32, i32, i32) {
 fn write(t: &mut Target, fx: &Fixed, x: i32, y: i32, z: f32, sh: &mut dyn Shade, frag: &Frag, vary: &[f32]) {
     let i = (y * t.width + x) as usize;
     if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
-    let Some((c, fz)) = sh.shade(frag, vary) else { return };
+    let Some(r) = sh.shade(frag, vary) else { return };
+    finish(t, fx, i, z, r);
+}
+
+/// Writes a shaded fragment at pixel `i` (depth `z` before the shader).
+fn finish(t: &mut Target, fx: &Fixed, i: usize, z: f32, (c, fz): ([f32; 4], Option<f32>)) {
     let z = fz.unwrap_or(z);
     if fx.depth_test && fz.is_some() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
     if fx.depth_test && fx.depth_mask { t.depth[i] = z; }
@@ -285,6 +330,8 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
         }
         None => 0.0,
     };
+    let mut batch = Batch::default();
+    let wide = sh.batch() > 1;
     for y in miny..=maxy {
         let py = y as f32 + 0.5;
         for x in minx..=maxx {
@@ -300,9 +347,14 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
             let (q0, q1, q2) = (l0 * p0[3] / iw, l1 * p1[3] / iw, l2 * p2[3] / iw);
             for k in 0..n { scratch[k] = q0 * v0.vary[k] + q1 * v1.vary[k] + q2 * v2.vary[k]; }
             let frag = Frag { x: px, y: py, z, inv_w: iw, front, point: [0.0, 0.0] };
-            write(t, fx, x, y, z.clamp(0.0, 1.0), sh, &frag, scratch);
+            if wide {
+                batch.push(t, fx, (y * t.width + x) as usize, z.clamp(0.0, 1.0), sh, frag, scratch);
+            } else {
+                write(t, fx, x, y, z.clamp(0.0, 1.0), sh, &frag, scratch);
+            }
         }
     }
+    batch.flush(t, fx, sh, n);
 }
 
 pub fn line(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, sh: &mut dyn Shade, scratch: &mut Vec<f32>) {
