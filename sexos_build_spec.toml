@@ -279,6 +279,12 @@ src = "target/x86_64-sex/release/maze"
 dst = "iso_root/programs/maze"
 
 [[stage]]
+id = "stage_chess3d"
+action = "copy_file"
+src = "target/x86_64-sex/release/chess3d"
+dst = "iso_root/programs/chess3d"
+
+[[stage]]
 id = "build_hum"
 action = "cargo_manifest"
 manifest = "apps/hum/Cargo.toml"

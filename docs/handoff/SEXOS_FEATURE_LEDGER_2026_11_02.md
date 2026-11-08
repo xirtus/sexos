@@ -2963,3 +2963,30 @@ row no longer waits for the row before it to end.
   4 cores, before and after a click turns it six frames. The WebGL, JS and Web gates still
   pass.
 - Screenshot: `assets/sexos-web-webgpu-2026-11-08.png`.
+## Games: 3D Chess on three.js (2026-11-08)
+
+- **What runs now.** `run chess3d` (also `about:chess3d`, listed at `about:games`): the chess
+  game on a three.js board with lathe-turned pieces, an extruded knight, Phong lighting, a
+  cursor ring, move and check marks, and the same keys as 2D Chess. Original page
+  (`apps/web/src/games/chess3d.html`) on the unmodified three.js r170 already in the tree.
+- **Shared engine.** The rules, computer player and keys moved to
+  `apps/web/src/games/chess-engine.js`, used by both chess pages. Built-in pages now load
+  their relative `<script src>` from Web's built-in table (`about:chess-engine.js`,
+  `about:three.cjs`; `games/three.cjs` links to `scripts/web_site/three/three.cjs`). The
+  computer may think up to 4 s now that handlers get 10 s.
+- **Fitting the script limit.** three.js builds each material's shader program on first
+  use, about 6 s apiece here, so the page builds them one per timer tick
+  (`renderer.compile` on a small scene), then uploads the piece shapes and renders the
+  empty board on their own ticks, before the first real frame.
+- **Speed in QEMU (soft-float).** three.js loads in about 20 s; setup takes about 25 s
+  more; each redraw after a key takes about 12 s (2 s of three.js scene work in QuickJS,
+  the rest software shading). Playable, but slow.
+- **Gate.** `scripts/program_games_gate.py` starts 3D Chess, matches the host render after
+  setup and after picking a pawn (0 of 9020 sampled pixels differ), and plays e2-e4 to the
+  computer's reply. `SEXOS_GAMES=chess3d,maze` runs only some games.
+- **Not done, and why.** Graveyard Pinball publishes no source or licence and needs WebGPU
+  with TSL. three-quake (GPL-2 code, shareware data) needs ES modules (99 files), `fetch`
+  of an 18 MB pak, pointer lock and real-time drawing; a bundle of it into one classic
+  script plus `fetch` would be the first step. The 3D-Chess-Game repo (MIT) needs a mouse,
+  GLTF models and a Stockfish worker.
+- Screenshot: `assets/sexos-games-chess3d-2026-11-08.png`.
