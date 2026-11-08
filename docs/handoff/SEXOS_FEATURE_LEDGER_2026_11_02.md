@@ -2343,8 +2343,7 @@ row no longer waits for the row before it to end.
 - **ABI.** `fs::INSTALL` (14), `fs::BOOT_LBA`, `fs::BOOT_SECTORS`. The program store must stay
   below LBA 65536. `quil_autosave_gate.boot()` takes `SEXOS_GATE_FIRMWARE` and
   `SEXOS_GATE_NO_CDROM`.
-- **Limits.** The boot image has to come from somewhere: today a host builds it and the machine
-  fetches it. There's no installer that copies the running system, no partition editor, and
+- **Limits.** No partition editor, and
   an MBR, not GPT, so it overwrites whatever partition table the disk had. Not tried on a
   real machine. BIOS-only machines can't boot it.
 - **Gates.** New `install` at 1 core. Python tests and all non-QEMU gates; `fetch` itself ran
@@ -2365,3 +2364,19 @@ row no longer waits for the row before it to end.
 - **Gates.** `program_force_probe.py` on an ISO built with `SEXOS_PROGRAM_HANG_PROBE=1`, at 1 and
   4 cores. Program disk, launch, Jot, program net, records and SMP at 1 core on the normal
   kernel. Python tests and all non-QEMU gates except the older ones.
+
+## Install from the running system (2026-11-08)
+
+- **What runs now.** `install` with no file writes the system that is running: boot the ISO
+  (a USB stick on a real machine), type `install`, and the disk starts SexOS on its own.
+  The gate booted the ISO, installed, and booted the disk alone under UEFI with its files.
+- **Design.** The build now makes the boot image (`boot_image` stage) and puts it on the ISO;
+  Limine loads it beside the kernel as the module `boot.img`. At BOOT the kernel maps that
+  module, read-only, into Files (`fs::BOOT_IMAGE_SLOT`); nothing else can see it. The image's
+  own `limine.cfg` leaves out `boot.img`, so an installed disk doesn't carry a second copy.
+- **Costs.** The ISO grows from 9.8 MB to 22 MB, and 12 MiB more memory holds the image.
+- **Also fixed.** The Shell app-cleanup host gate failed to compile after the forced-close
+  change; its fixture now has the new call, and sex-pdx has a host stub for it.
+- **Gates.** `install` (now the running system by default, `--fetch` for the network path),
+  filesystem and program disk at 1 core; the master gate with the extra module. Python tests
+  and all non-QEMU gates except the older ones.

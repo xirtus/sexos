@@ -17,7 +17,9 @@ def main():
   run('mcopy','-i',str(a.root/'boot/limine/limine-uefi-cd.bin'),'::/EFI/BOOT/BOOTX64.EFI',str(efi))
   for d in ('::/EFI','::/EFI/BOOT','::/servers','::/apps'):run('mmd','-i',str(img),d)
   run('mcopy','-i',str(img),str(efi),'::/EFI/BOOT/BOOTX64.EFI')
- run('mcopy','-i',str(img),str(a.root/'limine.cfg'),'::/limine.cfg')
+ # The installed system boots without the image it was installed from.
+ cfg=Path(tmp_cfg:=str(img)+'.cfg');cfg.write_text(''.join(l for l in (a.root/'limine.cfg').read_text().splitlines(True) if 'boot:///boot.img' not in l))
+ run('mcopy','-i',str(img),str(cfg),'::/limine.cfg');cfg.unlink()
  run('mcopy','-i',str(img),str(a.root/'sexos-kernel'),'::/sexos-kernel')
  for sub in ('servers','apps'):
   for f in sorted((a.root/sub).iterdir()):

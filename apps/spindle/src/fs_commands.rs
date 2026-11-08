@@ -76,9 +76,11 @@ impl Client {
             return true;
         }
         if cmd == b"df" { self.start(Cmd::Df, w::STATFS, 0, 0, 0); return true; }
-        if first.is_empty() && !matches!(cmd, b"ls" | b"cd") { say!(sb, "Usage: {} PATH", shown(cmd)); return true; }
+        if first.is_empty() && !matches!(cmd, b"ls" | b"cd" | b"install") { say!(sb, "Usage: {} PATH", shown(cmd)); return true; }
         let mut path = [0u8; w::PATH_BYTES];
         let Some(mut n) = self.join(first, &mut path) else { sb.push(b"Path too long."); return true };
+        // `install` alone writes the system this machine booted with.
+        if cmd == b"install" && first.is_empty() { n = 0; }
         if cmd == b"cd" && first.is_empty() { self.cwd_len = 0; return true; }
         match cmd {
             b"ls" | b"cd" | b"cat" | b"install" => {}

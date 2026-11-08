@@ -45,6 +45,24 @@ pub fn init_program_image(files: u32) {
     PROGRAM_IMAGE_PHYSICAL.store(physical, core::sync::atomic::Ordering::Release);
     PROGRAM_IMAGE_PRIVATE.store(backing(length), core::sync::atomic::Ordering::Release);
 }
+/// The boot image Limine loaded beside the kernel, if any, mapped read-only into Files
+/// so `install` can write the very system that is running. It grants only reading it.
+pub fn init_boot_image(files: u32) {
+    use sex_pdx::fs as w;
+    require_boot();
+    if files == 0 { return; }
+    let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(w::BOOT_IMAGE_MODULE))) else { return };
+    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_IMAGE_NO_HHDM").offset;
+    let data = module.data();
+    let virt = data.as_ptr() as u64;
+    let length = (data.len() as u64).next_multiple_of(4096);
+    if virt % 4096 != 0 || length == 0 { return; }
+    let pd = DOMAIN_REGISTRY.get(files).expect("BOOT_IMAGE_FILES");
+    let virtual_base = alias(pd, virt - hhdm, length, false, false);
+    grant(pd, w::BOOT_IMAGE_SLOT, RegionGrant { region_id: w::BOOT_IMAGE_REGION_ID, virtual_base, length,
+        rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
+    crate::serial_println!("[boot.image.region] files={} bytes={}", files, data.len());
+}
 /// One region per possible Spindle for the open-internet stream, shared with the
 /// network service alone.
 pub fn init_web_regions(net: u32) {

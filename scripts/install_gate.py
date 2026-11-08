@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SexOS installs itself: a boot image fetched over the network is written to the disk, and the machine then starts from that disk alone, under UEFI, with the files it had."""
+"""SexOS installs itself: the running system (or, with --fetch, an image from the network) is written to the disk, and the machine then starts from that disk alone, under UEFI, with the files it had."""
 import argparse,http.server,os,shutil,subprocess,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 FIRMWARE=os.environ.get('SEXOS_UEFI_CODE','/opt/homebrew/share/qemu/edk2-x86_64-code.fd')
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--fetch',action='store_true',help='install an image fetched over the network instead of the running system');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  image=a.out/'boot.img';subprocess.run(['python3',str(ROOT/'scripts/make_boot_image.py'),'--out',str(image)],check=True,capture_output=True)
@@ -34,8 +34,13 @@ def main():
  g,t,expect=session('cd')
  try:
   expect('write kept.txt from before the install',r'\[spindle.fs.result\] kind=8 status=0')
-  m=expect(f'fetch http://10.0.2.2:{server.server_address[1]}/boot.img boot.img',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',1800);assert m[1]==f'Saved {len(body)} bytes',m[1]
-  expect('install boot.img',r'\[files.install.done\] bytes='+str(len(body)),300)
+  if a.fetch:
+   m=expect(f'fetch http://10.0.2.2:{server.server_address[1]}/boot.img boot.img',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',1800);assert m[1]==f'Saved {len(body)} bytes',m[1]
+   expect('install boot.img',r'\[files.install.done\] bytes='+str(len(body)),300)
+  else:
+   # The system that is running, as Limine loaded it beside the kernel.
+   assert '[boot.image.region]' in t(),'no boot image loaded'
+   expect('install',r'\[files.install.done\] bytes=\d+',300)
   assert 'KERNEL PANIC' not in t()
  finally:g['stop']()
  # No ISO now: UEFI finds the disk's boot partition.

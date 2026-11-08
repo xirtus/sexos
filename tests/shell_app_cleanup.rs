@@ -13,6 +13,7 @@ unsafe fn retired_once(){let want=vec![clipboard::Subject{pd:15,task:80}];assert
 pub mod app_lifecycle {
   pub const OP_APP_REBORN:u64=0x10F;
  pub const OP_APP_EXIT:u64=0x107;
+ pub fn force_end(_:usize)->Result<(),u64>{Err(1)}
  pub const OP_APP_CLOSE:u64=0x108;
  pub const OP_APP_CLOSE_DECLINED:u64=0x10A;pub const CLOSE_ASK:u64=0;pub const CLOSE_CONFIRMED:u64=1;pub const DECLINE_UNSAVED:u64=1;
  pub struct Info {pub target_pd:u32,pub task_id:u32,pub required_mask:u64}

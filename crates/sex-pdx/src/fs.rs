@@ -39,6 +39,11 @@ pub const INSTALL: u8 = 14;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;
+/// The boot image the running system came with, read-only in Files: `install` with no
+/// file writes this one.
+pub const BOOT_IMAGE_SLOT: u64 = 101;
+pub const BOOT_IMAGE_REGION_ID: u32 = 0x4100;
+pub const BOOT_IMAGE_MODULE: &str = "boot.img";
 
 pub const OK: u8 = 0;
 pub const UNAVAILABLE: u8 = 1;

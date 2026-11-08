@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "09731644aedcfa0c455ded7e6b25e9509c6b4d8fe2af9a81afc6ffe057b05ac9"
+abi_version_hash = "773f2044b14e08c09172ded7606fc90381fd9d01e160e87a9ae28ab22bf483c0"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -252,6 +252,11 @@ action = "copy_file"
 src = "limine.cfg"
 dst = "iso_root/limine.cfg"
 artifacts = ["iso_root/limine.cfg"]
+
+[[stage]]
+id = "boot_image"
+action = "boot_image"
+artifacts = ["iso_root/boot.img"]
 
 [[stage]]
 id = "package_iso"

@@ -96,6 +96,10 @@ run_stage() {
       dst="$(rg -n '^dst\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       cp "$src" "$dst"
       ;;
+    boot_image)
+      # The disk image `install` writes, built from this ISO's own files.
+      python3 scripts/make_boot_image.py --root iso_root --out iso_root/boot.img
+      ;;
     package_iso)
       rm -f sexos-v1.0.0.iso
       xorriso -as mkisofs -R -r -J \

@@ -825,6 +825,7 @@ pub fn init() {
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
+    crate::boot_memory::init_boot_image(sexfiles_id);
     crate::boot_memory::init_web_regions(sexnet_id);
     crate::program_tenancy::claim_regions();
     // The network service parses the internet, so it is the one most likely to fall over.

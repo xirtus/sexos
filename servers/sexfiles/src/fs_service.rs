@@ -358,9 +358,19 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             Ok(ticket)
         }
         w::INSTALL => {
-            let st = fs.open(path)?;
-            if st.kind == Kind::Dir { return Err(Error::IsDir); }
-            if st.size == 0 || st.size > w::BOOT_SECTORS * 512 || st.size % 512 != 0 { return Err(Error::TooBig); }
+            // No file: the image this system booted with.
+            let system = if path.is_empty() {
+                let info = sex_pdx::memory_region_info(w::BOOT_IMAGE_SLOT).map_err(|_| Error::NotFound)?;
+                let view = sex_pdx::memory_region_view(w::BOOT_IMAGE_SLOT, 0, info.length, QUERY_VIEW | READ).map_err(|_| Error::NotFound)?;
+                Some(unsafe { core::slice::from_raw_parts(view.virtual_address as *const u8, view.length as usize) })
+            } else { None };
+            let (id, size) = match system {
+                Some(image) => (0, (image.len() as u64) & !511),
+                None => { let st = fs.open(path)?; if st.kind == Kind::Dir { return Err(Error::IsDir); } (st.id, st.size) }
+            };
+            if size == 0 || size > w::BOOT_SECTORS * 512 || size % 512 != 0 { return Err(Error::TooBig); }
+            struct Source { id: u64, size: u64 }
+            let st = Source { id, size };
             let va = crate::vfs::diskfs_bridge_get_buf_va();
             if va == 0 || va == u64::MAX { return Err(Error::Io); }
             let mut own = [0u8; BLOCK];
@@ -368,7 +378,10 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             while at < st.size {
                 let take = (st.size - at).min(BLOCK as u64) as usize;
                 own[take..].fill(0);
-                if fs.read(st.id, at, &mut own[..take])? != take { return Err(Error::Corrupt); }
+                match system {
+                    Some(image) => own[..take].copy_from_slice(&image[at as usize..at as usize + take]),
+                    None => if fs.read(st.id, at, &mut own[..take])? != take { return Err(Error::Corrupt); },
+                }
                 unsafe { core::slice::from_raw_parts_mut(va as *mut u8, BLOCK) }.copy_from_slice(&own);
                 if DiskFs::diskfs_block_write(w::BOOT_LBA * 512 + at, BLOCK as u64, SLOT_BUF_LEND) != 0 { return Err(Error::Io); }
                 at += take as u64;
