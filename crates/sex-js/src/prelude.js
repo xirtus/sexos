@@ -1156,6 +1156,8 @@
   const GPUColorWrite = { RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8, ALL: 15 };
   const gpuSize = s => Array.isArray(s) || (s && typeof s[Symbol.iterator] === 'function' && !('width' in s))
     ? [...s].concat([1, 1, 1]).slice(0, 3).map(Number) : [+(s.width || 0), +(s.height || 1), +(s.depthOrArrayLayers || 1)];
+  const gpuOrigin = o => !o ? [0, 0, 0] : Array.isArray(o) || ArrayBuffer.isView(o)
+    ? [...o].concat([0, 0, 0]).slice(0, 3).map(Number) : [+(o.x || 0), +(o.y || 0), +(o.z || 0)];
   const gpuColor = c => Array.isArray(c) ? [c[0] || 0, c[1] || 0, c[2] || 0, c[3] === undefined ? 1 : c[3]]
     : [+(c && c.r) || 0, +(c && c.g) || 0, +(c && c.b) || 0, c && c.a !== undefined ? +c.a : 1];
 
@@ -1403,7 +1405,7 @@
       const t = dst.texture, src = bytesOf(data);
       if (!t || !src) return;
       const [w, h] = gpuSize(size);
-      const [ox, oy] = dst.origin ? gpuSize(dst.origin) : [0, 0];
+      const [ox, oy] = gpuOrigin(dst.origin);
       const bpr = (layout && layout.bytesPerRow) || w * 4, base = (layout && layout.offset) || 0;
       if (!t._px) t._px = new Uint8Array(t.width * t.height * 4);
       const bgra = t.format.startsWith('bgra');
