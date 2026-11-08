@@ -88,9 +88,14 @@ pub struct Limits {
     pub heap_bytes: usize,
     /// Longest a single script or event handler may run before it is stopped.
     pub budget_ms: u32,
+    /// Longest a page's own script (`eval`) may run: loading a large library on a slow
+    /// machine takes far longer than any event handler should.
+    pub load_budget_ms: u32,
 }
 impl Default for Limits {
-    fn default() -> Self { Self { memory_bytes: 24 << 20, heap_bytes: 16 << 20, budget_ms: 2000 } }
+    // Libraries like three.js take about a second to load on a fast host and need room
+    // for their scenes; browsers let a script run for about ten seconds before they ask.
+    fn default() -> Self { Self { memory_bytes: 64 << 20, heap_bytes: 48 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
 }
 
 /// The first op whose arguments are bytes rather than text.
@@ -111,6 +116,7 @@ pub struct Script<P: Page + 'static> {
     eval: TypedFunc<(i32, i32, i32, i32, i32), i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
     budget_ms: i32,
+    load_budget_ms: i32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -161,12 +167,13 @@ impl<P: Page + 'static> Script<P> {
             free: instance.get_typed_func(&store, "sx_free").map_err(|_| e("sx_free"))?,
             eval: instance.get_typed_func(&store, "sx_eval").map_err(|_| e("sx_eval"))?,
             dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
-            store, memory, budget_ms: 0,
+            store, memory, budget_ms: 0, load_budget_ms: 0,
         };
         if start.call(&mut script.store, limits.heap_bytes as i32).map_err(|x| Error::Engine(format!("{x}")))? != 0 { return Err(e("init")); }
         // The prelude is ours: no time budget, which a slow machine could exceed.
         script.eval(PRELUDE, "prelude.js")?;
         script.budget_ms = limits.budget_ms as i32;
+        script.load_budget_ms = limits.load_budget_ms as i32;
         Ok(script)
     }
 
@@ -184,7 +191,7 @@ impl<P: Page + 'static> Script<P> {
     pub fn eval(&mut self, source: &str, name: &str) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.eval.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.budget_ms));
+        let r = self.eval.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms));
         let _ = self.free.call(&mut self.store, src);
         let _ = self.free.call(&mut self.store, nm);
         let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) };
