@@ -110,7 +110,7 @@ pub fn release(target: u32) {
     if !shared(target) { return; }
     let mut pool = POOL.lock();
     step_out(&mut pool, target);
-    if let Some(row) = pool.rows.iter_mut().find(|r| r.target == target) { row.count = 0; }
+    if let Some(row) = pool.rows.iter_mut().find(|r| r.target == target) { row.count = 0; row.pages = Vec::new(); }
 }
 /// Called before any task runs. Only the shared row about to run has pages present.
 pub fn before_dispatch(pd: u64) {

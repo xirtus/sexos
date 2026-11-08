@@ -539,6 +539,8 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
                 if app.in_arena(va){crate::program_frames::give(frame)}else{crate::boot_memory::zero_frame(frame)}
             }
             app.count=0;
+            // Release the manifest's capacity too: a large run must not pin its heap after it ends.
+            app.pages=alloc::vec::Vec::new();
             let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
             while unsafe{(*target.message_ring).dequeue()}.is_some(){}
             while unsafe{(*target.signal_ring).dequeue()}.is_some(){}
