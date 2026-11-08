@@ -50,23 +50,19 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 // (same pattern as apps/sexdrive, kernel, sex-rt, crates/silk-client).
 #[no_mangle]
 pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    for i in 0..n { *dest.add(i) = *src.add(i); }
+    sex_pdx::mem::copy_forward(dest, src, n);
     dest
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
-    for i in 0..n { *dest.add(i) = c as u8; }
+    sex_pdx::mem::fill(dest, c as u8, n);
     dest
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    if (dest as usize) <= (src as usize) {
-        for i in 0..n { *dest.add(i) = *src.add(i); }
-    } else {
-        for i in (0..n).rev() { *dest.add(i) = *src.add(i); }
-    }
+    sex_pdx::mem::move_bytes(dest, src, n);
     dest
 }
 

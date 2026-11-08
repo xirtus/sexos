@@ -6,6 +6,7 @@
 
 #![no_std]
 
+pub mod mem;
 pub mod pagefault;
 pub mod app_catalog;
 pub mod browser_sources;

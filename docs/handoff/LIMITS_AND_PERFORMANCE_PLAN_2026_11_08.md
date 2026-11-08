@@ -252,6 +252,20 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - Next for writes: queue depth (several commands in flight), so a request's runs
     don't wait on each other.
 
+- Stage 3, fifth part (fast memory copies):
+  - memcpy, memmove and memset were byte-by-byte loops in the kernel, sex-rt (Files and
+    every app), sexdrive and spindle. Each disk request is copied twice (program region
+    to Files, Files to the DMA bounce buffer), so the loops dominated write cost.
+  - New `sex_pdx::mem`: `rep movsq` + `rep movsb` copies, a backward `rep movsb` for
+    overlapping moves, `rep stosq` fills. On CPUs with ERMS/FSRM these are the fastest
+    general copy, as in Linux's `memcpy`. A host test checks them against std at many
+    sizes, offsets and overlaps (`tests/sex_pdx_mem.rs`).
+  - No ABI change.
+  - Bench, cycles per MiB: 1 core write 67M -> 31M, read 26M -> 15M; 4 cores write
+    41M -> 34M, read 29M -> 23M. Against Linux on raw NVMe (30M write, 26M read):
+    write is now even, and read is 1.7x faster.
+  - Next: queue depth (several commands in flight).
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be
