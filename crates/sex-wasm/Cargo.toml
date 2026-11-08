@@ -1,0 +1,23 @@
+[package]
+name = "sex-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Wasm guests for SexOS: wasmi with a small host API over a program's own grants"
+
+[dependencies]
+# MIT/Apache-2.0. no_std + alloc; `libm` gives float math without std.
+# portable-dispatch: the loop interpreter. Smaller than tail-call dispatch, which keeps
+# the `wasm` program under the 1 MiB image limit, and it never grows the stack per
+# instruction in unoptimized builds.
+wasmi = { version = "2.0.0", default-features = false, features = ["validate", "libm", "portable-dispatch"] }
+
+sex-app = { path = "../sex-app", optional = true }
+sex-pdx = { path = "../sex-pdx", optional = true }
+
+[dev-dependencies]
+wat = "1"
+
+[features]
+# The Host for a SexOS program: its window, its folder, and the network if granted.
+sexos = ["dep:sex-app", "dep:sex-pdx"]

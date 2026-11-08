@@ -22,8 +22,9 @@ members = [
     "apps/fortune",
     "apps/jot",
     "apps/peek",
-    "apps/heaptest",
     "apps/view",
+    "apps/wasm",
+    "apps/heaptest",
     "apps/shapes",
     "crates/sex-app",
     "apps/hum",
@@ -42,6 +43,7 @@ members = [
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
+    "crates/sex-wasm",
     "apps/spindle",
 ]
 [workspace.package]
@@ -49,3 +51,27 @@ license = "GPL-3.0-only"
 
 [profile.release]
 panic = "abort"
+
+# The Wasm runner must fit the 1 MiB program image: build the interpreter for size.
+[profile.release.package.wasmi]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmi_core]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmi_ir]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmi_collections]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasmparser]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.sex-wasm]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasm]
+opt-level = "z"
+codegen-units = 1
+strip = true

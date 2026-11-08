@@ -2465,6 +2465,36 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
+## Wasm guests on wasmi (2026-11-08)
+
+- **What runs now.** `run wasm @/FILE.wasm ARGS` runs a WebAssembly program in its own
+  window; `run wasm` alone runs a small built-in guest. An unmodified Rust `std` program
+  built for `wasm32-wasip1` prints, reads typed lines and exits (gate
+  `program_wasm_gate.py`, source in `crates/sex-wasm/guests/greet`). This is the start of
+  the Guests organ: a guest touches only its own linear memory and the calls it was linked
+  with, so many guests can share one hardware key.
+- **Design.** `crates/sex-wasm` wraps `wasmi` 2.0 (MIT/Apache-2.0, `no_std` + `alloc`) with
+  two import sets. `sex` (native): `show`, `title`, `log`, `next` (keys and close),
+  `read`/`write` in the guest's folder, `fetch` (one page), `now`, `exit`.
+  `wasi_snapshot_preview1` (subset): console, keyboard lines, arguments, clocks, random
+  bytes, exit; other WASI calls link but answer `ENOSYS`. Feature `sexos` gives
+  `sexos::AppHost` over `sex_app`. `apps/wasm` is the runner, on the program heap.
+- **Authority.** `Grants` only narrow the program's: files in `guests/NAME/` of the
+  program's folder (`..`, `.`, empty parts, `\` and a leading `/` refused), `fetch` only
+  in a `run +net` run. No environment. Unknown imports are refused by name.
+- **Limits.** Guest memory 4 MiB in the runner (16 MiB default in the crate), optional
+  fuel, 1 MiB per I/O call and per write in total, about 8 KiB of console. Modules up to
+  2 MiB. A guest that keeps waiting after Close is ended; Close during a read is end of
+  input.
+- **Size.** The runner is 984 KB, under the 1 MiB image limit, because the interpreter is
+  built for size (`opt-level = "z"`, one codegen unit, stripped; per-package profiles in
+  the workspace `Cargo.toml`) and uses wasmi's loop dispatch, which is slower than its
+  tail-call dispatch (1028 KB). Raising `IMAGE_BYTES` would allow the faster one.
+- **Gates.** `cargo test -p sex-wasm` (17 tests); `program_wasm_gate.py` at 1 and 4 cores.
+  One 1-core attempt saw no keys reach Spindle at all before any wasm code ran; the
+  rerun passed.
+- **Next.** WASI files over a preopened folder, guest pixels on the program pixel
+  surfaces, `wasmtime` for speed, then QuickJS on Wasm.
 ## View opens JPEG; PNG and JPEG through zune (2026-11-08)
 
 - **What exists now.** `crates/sex-image`: `sex_image::decode(bytes, &Limits)` returns

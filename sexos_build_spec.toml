@@ -48,8 +48,9 @@ crates = [
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/peek/Cargo.toml",
-  "apps/heaptest/Cargo.toml",
   "apps/view/Cargo.toml",
+  "apps/heaptest/Cargo.toml",
+  "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml"
 ]
 
@@ -227,6 +228,13 @@ action = "cargo_manifest"
 manifest = "apps/heaptest/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/heaptest"
 dest_artifact = "iso_root/programs/heaptest"
+
+[[stage]]
+id = "build_wasm"
+action = "cargo_manifest"
+manifest = "apps/wasm/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/wasm"
+dest_artifact = "iso_root/programs/wasm"
 
 [[stage]]
 id = "build_shapes"
