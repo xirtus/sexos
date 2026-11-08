@@ -60,21 +60,28 @@ pub fn get_net_diag_body_chunk(idx: usize) -> u64 {
 impl PciDevice {
     /// Boot discovery only. Restore both BAR words and the command register;
     /// upper status bits are W1C and must never be echoed into a config write.
-    pub fn probe_boot_bar0(&self) -> Option<(u64, u64)> {
+    pub fn probe_boot_bar0(&self) -> Option<(u64, u64)> { self.probe_boot_bar(0) }
+
+    /// Boot discovery only. Restore both BAR words and the command register;
+    /// upper status bits are W1C and must never be echoed into a config write.
+    pub fn probe_boot_bar(&self, index: u8) -> Option<(u64, u64)> {
         assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),
             crate::ipc::BootPhase::RegistryBuild as u8, "PCI_PROBE_AFTER_GENESIS");
-        let low = self.read_u32(0x10);
+        if index > 5 { return None; }
+        let at = 0x10 + index * 4;
+        let low = self.read_u32(at);
         if low & 1 != 0 || !matches!((low >> 1) & 3, 0 | 2) { return None; }
         let wide = ((low >> 1) & 3) == 2;
-        let high = if wide { self.read_u32(0x14) } else { 0 };
+        if wide && index == 5 { return None; }
+        let high = if wide { self.read_u32(at + 4) } else { 0 };
         let command = self.read_u32(0x04) & 0xffff;
         self.write_u32(0x04, command & !7);
-        self.write_u32(0x10, u32::MAX);
-        if wide { self.write_u32(0x14, u32::MAX); }
-        let mask_low = self.read_u32(0x10);
-        let mask_high = if wide { self.read_u32(0x14) } else { 0 };
-        self.write_u32(0x10, low);
-        if wide { self.write_u32(0x14, high); }
+        self.write_u32(at, u32::MAX);
+        if wide { self.write_u32(at + 4, u32::MAX); }
+        let mask_low = self.read_u32(at);
+        let mask_high = if wide { self.read_u32(at + 4) } else { 0 };
+        self.write_u32(at, low);
+        if wide { self.write_u32(at + 4, high); }
         self.write_u32(0x04, command);
         crate::pci_bar_bounds::decode_bar0(low, high, mask_low, mask_high)
     }

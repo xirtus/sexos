@@ -27,6 +27,7 @@ pub mod capability_slot;
 pub mod capability_table;
 #[cfg(target_arch = "x86_64")]
 pub mod pci_command;
+pub mod virtio_boot;
 pub mod entropy_source;
 pub mod clock_source;
 pub mod trust_source;

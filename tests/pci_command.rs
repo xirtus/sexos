@@ -11,6 +11,8 @@ pub const SLOT_DMA_REGION:u64=32;
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;
+#[path="../crates/sex-pdx/src/virtio.rs"]pub mod virtio;
+mod virtio_boot{pub fn supported(vendor:u16,device:u16)->bool{vendor==crate::virtio::VENDOR&&device==crate::virtio::SOUND}}
 #[path="../kernel/src/pci_command.rs"]mod mechanism;
 mod ipc{pub const MAX_DOMAINS:usize=1024;}
 use pci_command as w;
@@ -18,7 +20,7 @@ use memory_region as m;
 use std::{cell::Cell,collections::BTreeMap,sync::{Mutex,atomic::{AtomicUsize,Ordering}}};
 mod capability{
  use super::*;
- #[derive(Clone,Copy)]pub struct PciCapData{pub bus:u8,pub dev:u8,pub func:u8,pub vendor_id:u16,pub device_id:u16,pub bar0_view:Option<m::RegionGrant>,pub command:Option<w::Grant>}
+ #[derive(Clone,Copy)]pub struct PciCapData{pub bus:u8,pub dev:u8,pub func:u8,pub vendor_id:u16,pub device_id:u16,pub bar0_view:Option<m::RegionGrant>,pub command:Option<w::Grant>,pub virtio:Option<crate::virtio::Layout>}
  #[derive(Clone,Copy)]pub enum CapabilityData{Pci(PciCapData),Region(m::RegionGrant),Domain(u32)}
  pub struct Capability{pub data:CapabilityData}
  pub struct ProtectionDomain{pub id:u32,pub entries:Vec<(u32,CapabilityData)>,pub lookups:Cell<usize>}
@@ -61,7 +63,7 @@ fn address(offset:u32)->u32{0x8000_1000|offset}
 fn pd()->ProtectionDomain{
  let view=m::RegionGrant{region_id:0x10000+13*1024+19,virtual_base:0x40000000,length:65536,rights:7,dma_base:None,peer_pd:None};
  let dma=m::RegionGrant{region_id:2,virtual_base:0x50000000,length:256*1024,rights:15,dma_base:Some(0x100000),peer_pd:None};
- ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:0x8086,device_id:0x10d3,bar0_view:Some(view),command:Some(grant())})),(32,CapabilityData::Region(dma)),(6,CapabilityData::Domain(3))]}
+ ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:0x8086,device_id:0x10d3,bar0_view:Some(view),command:Some(grant()),virtio:None})),(32,CapabilityData::Region(dma)),(6,CapabilityData::Domain(3))]}
 }
 fn setup(command:u16){*MODEL.lock().unwrap()=Some(Model{selected:0,config:BTreeMap::from([(address(0),0x10d3_8086),(address(4),0xa5a5_0000|command as u32)]),events:vec![],refuse:false,accept_mask:u16::MAX});assert_eq!(CRITICAL.load(Ordering::SeqCst),0);}
 fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->[u64;5]{mechanism::invoke(pd,slot,set,clear,0,0)}
@@ -137,4 +139,26 @@ fn mutate_pci(pd:&mut ProtectionDomain,f:impl FnOnce(&mut PciCapData)){let Capab
  assert_eq!(snapshot.query(0),None);assert_eq!(snapshot.query(12),None);
  let mut p=pd();p.id=12;mutate_pci(&mut p,|d|{d.command.as_mut().unwrap().subject=12;d.bar0_view.as_mut().unwrap().region_id=12*1024+0x10000+19;});
  setup(0);assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();
+}
+
+fn sound()->ProtectionDomain{
+ use virtio::{Layout,Window};
+ let layout=Layout{common:Window{offset:0,length:0x1000},isr:Window{offset:0x1000,length:0x1000},device:Window{offset:0x2000,length:0x1000},notify:Window{offset:0x3000,length:0x1000},notify_multiplier:4};
+ let view=m::RegionGrant{region_id:0x10000+13*1024+19,virtual_base:0x40000000,length:0x4000,rights:7,dma_base:None,peer_pd:None};
+ let dma=m::RegionGrant{region_id:virtio::DMA_REGION_ID,virtual_base:0x50000000,length:virtio::DMA_BYTES,rights:15,dma_base:Some(0x100000),peer_pd:None};
+ let g=w::Grant{vendor_id:virtio::VENDOR,device_id:virtio::SOUND,..grant()};
+ ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:virtio::VENDOR,device_id:virtio::SOUND,bar0_view:Some(view),command:Some(g),virtio:Some(layout)})),(32,CapabilityData::Region(dma))]}
+}
+#[test]fn virtio_lease_is_sized_by_its_layout_and_uses_its_own_dma_pool(){
+ // A 16 KiB virtio view is complete; the layout reads back page by page.
+ let p=sound();
+ assert_eq!(mechanism::virtio_layout(&p,19,1,0,0,0),[0,4,0,0,0]);
+ assert_eq!(mechanism::virtio_layout(&p,19,2,0,0,0)[0],w::DENIED);
+ assert_eq!(mechanism::virtio_layout(&pd(),19,0,0,0,0)[0],w::DENIED);
+ // A view shorter than the layout is not a lease.
+ let mut short=sound();mutate_pci(&mut short,|d|d.bar0_view.as_mut().unwrap().length=0x3000);
+ assert_eq!(mechanism::virtio_layout(&short,19,0,0,0,0)[0],w::DENIED);
+ // Bus master needs the virtio pool, not the NIC's.
+ let mut wrong=sound();wrong.entries[1].1=CapabilityData::Region(m::RegionGrant{region_id:2,virtual_base:0x50000000,length:256*1024,rights:15,dma_base:Some(0x100000),peer_pd:None});
+ setup(0);assert_eq!(invoke(&wrong,19,w::BUS_MASTER as u64,0)[0],w::DENIED);untouched();
 }
