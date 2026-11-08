@@ -20,11 +20,21 @@ pub struct Document {
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
     /// Supplies the monotonic clock.
     pub clock: fn() -> u64,
+    /// Canvas 2D command batches not yet drawn, by canvas element.
+    pub canvas_queue: Vec<(NodeId, String)>,
+    /// Text width for `measureText`: (CSS font, text) to pixels.
+    pub measure: fn(&str, &str) -> i32,
+}
+
+/// A rough width when the browser gives no measure: 0.55 em per character.
+fn rough_measure(font: &str, text: &str) -> i32 {
+    let size = font.split_ascii_whitespace().find_map(|t| t.strip_suffix("px")?.parse::<i32>().ok()).unwrap_or(10);
+    text.chars().count() as i32 * size * 55 / 100
 }
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -161,6 +171,20 @@ impl Page for Document {
                 Some(format!("{x},{y},{w},{h}"))
             }
             op::LOCATION => Some(self.url.clone()),
+            op::CANVAS => {
+                let n = self.element(a.first())?;
+                if self.dom.tag(n) != Some("canvas") { return None; }
+                let batch = *a.get(1)?;
+                // A page that draws without end must not fill memory before the browser runs it.
+                let queued: usize = self.canvas_queue.iter().map(|(_, b)| b.len()).sum();
+                if queued + batch.len() > 8 << 20 { return None; }
+                match self.canvas_queue.last_mut() {
+                    Some((last, b)) if *last == n => { b.push('\u{1e}'); b.push_str(batch); }
+                    _ => self.canvas_queue.push((n, String::from(batch))),
+                }
+                None
+            }
+            op::MEASURE => Some(format!("{}", (self.measure)(a.first()?, a.get(1)?))),
             _ => None,
         }
     }

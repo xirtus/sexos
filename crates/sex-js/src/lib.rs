@@ -59,6 +59,10 @@ pub mod op {
     pub const RECT: u32 = 22;
     /// (): the page's address.
     pub const LOCATION: u32 = 23;
+    /// (canvas, commands): Canvas 2D drawing, queued for the browser to run.
+    pub const CANVAS: u32 = 24;
+    /// (css font, text): width in pixels.
+    pub const MEASURE: u32 = 25;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.
@@ -173,7 +177,10 @@ impl<P: Page + 'static> Script<P> {
         let r = self.eval.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.budget_ms));
         let _ = self.free.call(&mut self.store, src);
         let _ = self.free.call(&mut self.store, nm);
-        match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) }
+        let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) };
+        // Drawing the script queued reaches the page even if it threw afterwards.
+        if !matches!(r, Err(Error::Trapped(_))) { self.dispatch("flush")?; }
+        r
     }
 
     /// Calls the prelude's `__sx_dispatch` with `message`: `tick`, `click\tNODE`,

@@ -69,7 +69,7 @@ choices at launch, not settings inside the program.
   `/bin/web` first for runs with arguments); `run web @page.html` opens a file. Up/Down/Space
   scroll, Right/Left pick a link or button, Enter opens it, Backspace goes back, `/` types an
   address. Page JavaScript runs (QuickJS in a Wasm sandbox): scripts can change the page,
-  answer clicks and keys, and animate with timers. Canvas drawing is not there yet.
+  answer clicks and keys, animate with timers, and draw on a `<canvas>` (Canvas 2D).
   The arrow keys move the front window, Home puts it back.
 
 Writing your own: see `crates/sex-app` (a window, keys, files, the network, pixels) and `apps/jot`.

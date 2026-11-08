@@ -17,6 +17,8 @@ use sex_font::cache::{GlyphCache, Key};
 use sex_font::{Font, GlyphId};
 use sex_html::layout::{Bullet, FontKey, Host, Item, Page};
 pub use sex_html;
+
+pub mod canvas;
 pub use sex_image::Image;
 
 /// Glyph bitmaps kept between paints.
@@ -51,6 +53,30 @@ impl Fonts {
 
     fn face(&self, mono: bool) -> &Font<'static> { if mono { &self.mono } else { &self.sans } }
 
+
+    fn draw_size(size: i32) -> i32 { size.clamp(1, MAX_SIZE) }
+
+    fn advances(&self, text: &str, font: FontKey, each: impl FnMut(char, Option<(u8, GlyphId)>, i32)) -> i32 {
+        Faces { sans: &self.sans, mono: &self.mono }.advances(text, font, each)
+    }
+}
+
+/// The two faces, for measuring without a glyph cache.
+struct Faces<'a> { sans: &'a Font<'static>, mono: &'a Font<'static> }
+
+/// Text width in pixels, as layout measures it, without a [`Fonts`].
+pub fn measure(text: &str, font: FontKey) -> i32 {
+    let (Some(sans), Some(mono)) = (Font::new(sex_font::GEIST_SANS), Font::new(sex_font::GEIST_MONO)) else { return 0 };
+    let faces = Faces { sans: &sans, mono: &mono };
+    let mut any = false;
+    let pen = faces.advances(text, font, |_, _, _| any = true);
+    let bold = if font.bold && any { font.size * 256 / 24 } else { 0 };
+    (pen - bold + 255) / 256
+}
+
+impl Faces<'_> {
+    fn face(&self, mono: bool) -> &Font<'static> { if mono { self.mono } else { self.sans } }
+
     /// The glyph for `c`: from the requested face, else the other one. Spaces that
     /// should not show are mapped to the space glyph.
     fn glyph(&self, c: char, mono: bool) -> Option<(u8, GlyphId)> {
@@ -63,12 +89,10 @@ impl Fonts {
         None
     }
 
-    fn draw_size(size: i32) -> i32 { size.clamp(1, MAX_SIZE) }
-
     /// Pen advances, in 1/256 pixel, for each character of `text`: what layout measures
     /// and where painting puts glyphs.
     fn advances(&self, text: &str, font: FontKey, mut each: impl FnMut(char, Option<(u8, GlyphId)>, i32)) -> i32 {
-        let size = (Self::draw_size(font.size) * 64) as u32;
+        let size = (Fonts::draw_size(font.size) * 64) as u32;
         let scale = |v: i32| if font.size > MAX_SIZE { v * font.size / MAX_SIZE } else { v };
         let bold = if font.bold { font.size * 256 / 24 } else { 0 };
         let mut pen = 0;
@@ -119,8 +143,18 @@ pub struct Target<'a> {
     pub height: i32,
     /// Page y shown at the target's top row.
     pub scroll: i32,
+    /// Words are premultiplied with alpha (a canvas), not opaque screen pixels.
+    pub premul: bool,
     /// Target row where the page starts (room for a toolbar above).
     pub top: i32,
+}
+
+/// Source-over onto a premultiplied word, alpha included (canvas surfaces).
+fn blend_premul(dst: u32, src: u32, alpha: u32) -> u32 {
+    if alpha == 0 { return dst; }
+    let src = (src & 0x00FF_FFFF) | 0xFF00_0000;
+    let mix = |s: u32| ((((src >> s) & 0xFF) * alpha + ((dst >> s) & 0xFF) * (255 - alpha) + 127) / 255) << s;
+    mix(24) | mix(16) | mix(8) | mix(0)
 }
 
 fn blend(dst: u32, src: u32, alpha: u32) -> u32 {
@@ -148,7 +182,7 @@ impl Target<'_> {
                 let cover = if dx > 0 && dy > 0 { corner_cover(dx, dy, r) } else { 16 };
                 if cover == 0 { continue; }
                 let p = &mut self.pixels[row + px as usize];
-                *p = blend(*p, color, a * cover / 16);
+                *p = if self.premul { blend_premul(*p, color, a * cover / 16) } else { blend(*p, color, a * cover / 16) };
             }
         }
     }
@@ -172,7 +206,7 @@ impl Target<'_> {
                 }
                 if c == 0 { continue; }
                 let p = &mut self.pixels[row + px as usize];
-                *p = blend(*p, color, c * a / 255);
+                *p = if self.premul { blend_premul(*p, color, c * a / 255) } else { blend(*p, color, c * a / 255) };
             }
         }
     }
@@ -236,6 +270,7 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
 
 fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32, src: &str, alt: &str) {
     let Some((_, img)) = fonts.images.iter().find(|(s, _)| s == src) else {
+        if src.starts_with("canvas:") { return; }
         target.fill(x, y, w, h, 0xFFF1_F3F4, 0);
         target.fill(x, y, w, 1, 0xFFC4_C7C5, 0);
         target.fill(x, y + h - 1, w, 1, 0xFFC4_C7C5, 0);
@@ -303,9 +338,9 @@ pub const BAR: i32 = 30;
 /// The whole window: a bar showing `bar_text` (the address, or what is being typed,
 /// with a caret when `editing`), then `page` scrolled by `scroll`.
 pub fn frame(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, bar_text: &str, editing: bool) {
-    let mut t = Target { pixels, width, height, scroll, top: BAR };
+    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false };
     paint(page, fonts, &mut t, focus);
-    let mut bar = Target { pixels: t.pixels, width, height: BAR, scroll: 0, top: 0 };
+    let mut bar = Target { pixels: t.pixels, width, height: BAR, scroll: 0, top: 0, premul: false };
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
     bar.fill(6, 4, width - 12, BAR - 8, if editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false };

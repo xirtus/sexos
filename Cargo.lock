@@ -1186,6 +1186,8 @@ dependencies = [
 name = "sex-web"
 version = "0.1.0"
 dependencies = [
+ "libm",
+ "sex-canvas",
  "sex-font",
  "sex-html",
  "sex-image",

@@ -60,6 +60,8 @@ struct Browser {
     sheets: Vec<String>,
     /// When the page's next timer or animation frame is due, in ticks.
     timer: Option<u64>,
+    /// The page's Canvas 2D surfaces.
+    canvases: sex_web::canvas::Canvases,
     url: String,
     history: Vec<String>,
     scroll: i32,
@@ -185,7 +187,10 @@ impl Browser {
         });
         self.sheets = sheets;
         self.timer = None;
-        self.doc = Doc::Plain(Document::new(dom, &base, (W, H - BAR), clock));
+        let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
+        doc.measure = sex_web::canvas::measure_css;
+        self.doc = Doc::Plain(doc);
+        self.canvases = sex_web::canvas::Canvases::new();
         let script_begun = sex_pdx::get_ticks();
         if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
@@ -258,11 +263,12 @@ impl Browser {
             self.open(&url, true);
             return true;
         }
+        let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
-        if dirty {
-            self.relayout();
-            if draw { self.draw(); return true; }
-        }
+        let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
+        let painted = self.canvases.run_queue(&mut self.fonts, &doc.dom, queue);
+        if dirty { self.relayout(); }
+        if draw && (dirty || painted) { self.draw(); return true; }
         false
     }
 
@@ -430,7 +436,7 @@ extern "C" fn main() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new() };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new() };
     let first = given.split_ascii_whitespace().next().unwrap_or("about:welcome").to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

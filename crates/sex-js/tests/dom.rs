@@ -186,3 +186,42 @@ fn onclick_property_makes_clickable() {
     s.dispatch(&format!("click\t{d}")).unwrap();
     assert_eq!(logs(&mut s), ["0:hit"]);
 }
+
+#[test]
+fn canvas_commands_are_queued() {
+    let mut s = page("<canvas id=c width=20 height=10></canvas>");
+    s.eval(r#"
+        const ctx = document.getElementById('c').getContext('2d');
+        console.log(ctx === document.getElementById('c').getContext('2d'), document.getElementById('c').getContext('webgl'));
+        ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 5, NaN); ctx.fillRect(1, 2, 3, 4);
+        console.log(ctx.fillStyle, ctx.measureText('abcd').width > 0);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true null", "0:red true"]);
+    let q = &s.page().canvas_queue;
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].1, "fs\u{1f}c\u{1f}red\u{1e}fr\u{1f}1\u{1f}2\u{1f}3\u{1f}4");
+}
+
+#[test]
+fn canvas_gradient_stops_and_resizes_reach_the_queue() {
+    let mut s = page("<canvas id=c width=20 height=10></canvas>");
+    s.eval(r#"
+        const c = document.getElementById('c'), ctx = c.getContext('2d');
+        const g = ctx.createLinearGradient(0, 0, 10, 0);
+        ctx.fillStyle = g; g.addColorStop(0, 'red'); ctx.fillRect(0, 0, 1, 1);
+        ctx.fillRect(0, 0, 2, 2);
+        ctx.lineWidth = 3; c.width = c.width;
+        console.log(ctx.lineWidth, ctx.fillStyle);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:1 #000000"]);
+    let q = &s.page().canvas_queue;
+    let cmds: Vec<&str> = q[0].1.split('\u{1e}').collect();
+    assert_eq!(cmds, [
+        "fs\u{1f}l\u{1f}0\u{1f}0\u{1f}10\u{1f}0\u{1f}0",
+        "fs\u{1f}l\u{1f}0\u{1f}0\u{1f}10\u{1f}0\u{1f}1\u{1f}0\u{1f}red",
+        "fr\u{1f}0\u{1f}0\u{1f}1\u{1f}1",
+        "fr\u{1f}0\u{1f}0\u{1f}2\u{1f}2",
+        "lw\u{1f}3",
+        "sz\u{1f}20\u{1f}10",
+    ]);
+}

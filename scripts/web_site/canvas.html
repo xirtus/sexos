@@ -1,0 +1,62 @@
+<!doctype html>
+<html><head><title>Canvas test</title>
+<style>body { margin: 12px; } h1 { font-size: 18px; margin: 0 0 6px; } canvas { border: 1px solid #c4c7c5; }</style></head>
+<body>
+<h1>Canvas 2D</h1>
+<canvas id="c" width="380" height="200"></canvas>
+<p><button id="spin">Turn</button> <span id="state">frames: 0</span></p>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+let angle = 0, frames = 0;
+function draw() {
+  ctx.clearRect(0, 0, c.width, c.height);
+  const g = ctx.createLinearGradient(0, 0, 380, 0);
+  g.addColorStop(0, '#1a73e8'); g.addColorStop(1, '#a142f4');
+  ctx.fillStyle = g;
+  ctx.fillRect(10, 10, 360, 40);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Hello, canvas', 190, 30);
+  ctx.beginPath();
+  ctx.arc(70, 125, 50, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(234, 67, 53, 0.85)';
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#202124';
+  ctx.stroke();
+  ctx.save();
+  ctx.translate(200, 125);
+  ctx.rotate(angle);
+  ctx.fillStyle = '#34a853';
+  ctx.fillRect(-35, -35, 70, 70);
+  ctx.restore();
+  ctx.beginPath();
+  ctx.moveTo(280, 170);
+  ctx.quadraticCurveTo(310, 70, 340, 170);
+  ctx.bezierCurveTo(350, 190, 360, 120, 370, 100);
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#fbbc04';
+  ctx.stroke();
+  ctx.textAlign = 'start';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#5f6368';
+  const label = 'angle ' + (angle * 180 / Math.PI).toFixed(0);
+  ctx.fillText(label, 10, 192);
+  ctx.fillRect(14 + ctx.measureText(label).width, 186, 4, 4);
+}
+function step() {
+  angle += Math.PI / 24; frames++;
+  draw();
+  document.getElementById('state').textContent = 'frames: ' + frames;
+  if (frames % 6) requestAnimationFrame(step); else console.log('canvas frames', frames);
+}
+document.getElementById('spin').addEventListener('click', () => requestAnimationFrame(step));
+draw();
+requestAnimationFrame(step);
+</script>
+</body></html>
