@@ -44,11 +44,15 @@ for stage in normal:
     matches = [m for m in blocks if re.search(r'^id = "' + stage + r'"$', m.group(), re.M)]
     if (len(matches) != 1
         or len(re.findall(r'^rustflags =', matches[0].group(), re.M)) != 1
-        or len(re.findall(r'^rustflags = ""$', matches[0].group(), re.M)) != 1):
-        raise SystemExit(f'expected one normal empty declared rustflags for {stage}')
+        or re.search(r'^rustflags = "([^"]*)"$', matches[0].group(), re.M)[1]
+           != ('--cfg aes_force_soft --cfg polyval_force_soft' if stage == 'build_kaleidoscope' else '')):
+        raise SystemExit(f'expected one normal declared rustflags for {stage}')
     if stage == 'build_kaleidoscope': selected = matches[0]
 assert selected is not None
-profile = selected.group().replace('rustflags = ""', 'rustflags = "--cfg app_resource_cleanup_proof"', 1)
+# Kaleido's own declared flags (soft-crypto cfgs) stay; the proof cfg follows them.
+flags = re.search(r'^rustflags = "([^"]*)"$', selected.group(), re.M)
+proof = ' '.join(f for f in (flags[1], '--cfg app_resource_cleanup_proof') if f)
+profile = selected.group().replace(flags[0], f'rustflags = "{proof}"', 1)
 Path('sexos_build_spec.toml').write_text(baseline[:selected.start()] + profile + baseline[selected.end():])
 PY
 GATE_DIR="$PROOF_DIR/resource" ISO="sexos-v1.0.0.iso" bash scripts/master_runtime_gate.sh --probe 50 --keep-log
