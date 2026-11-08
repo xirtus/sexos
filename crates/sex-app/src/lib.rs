@@ -206,17 +206,33 @@ pub mod files {
         Ok(done)
     }
     /// Replaces the file with `data`, creating it if needed.
+    /// Replaces the file with `data`, of any size: it goes over in pieces as big as the
+    /// shared region holds.
     pub fn write(window: &mut Window, path: &[u8], data: &[u8]) -> Result<(), Error> {
-        if data.len() > w::DATA_MAX { return Err(w::NO_SPACE); }
         match request(window, w::STAT, path, 0, 0) {
             Ok(_) => { request(window, w::TRUNCATE, path, 0, 0)?; }
             Err(w::NOT_FOUND) => { request(window, w::CREATE, path, 0, 0)?; }
             Err(e) => return Err(e),
         }
-        region()?[w::PATH_BYTES..w::PATH_BYTES + data.len()].copy_from_slice(data);
-        let wrote = request(window, w::WRITE, path, 0, data.len() as u64)? as usize;
-        if wrote < data.len() { return Err(w::NO_SPACE); }
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::DATA_MAX);
+            region()?[w::PATH_BYTES..w::PATH_BYTES + n].copy_from_slice(&data[done..done + n]);
+            let wrote = request(window, w::WRITE, path, done as u64, n as u64)? as usize;
+            if wrote < n { return Err(w::NO_SPACE); }
+            done += n;
+        }
         Ok(())
+    }
+    /// The file's size, or why there is none.
+    pub fn size(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        request(window, w::STAT, path, 0, 0)?;
+        let r = region()?;
+        Ok(u64::from_le_bytes(r[w::PATH_BYTES + 8..w::PATH_BYTES + 16].try_into().unwrap_or([0; 8])))
+    }
+    /// Makes everything written so far durable.
+    pub fn sync(window: &mut Window) -> Result<(), Error> {
+        request(window, w::SYNC, b"", 0, 0).map(|_| ())
     }
 }
 

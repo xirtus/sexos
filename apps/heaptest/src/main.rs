@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Heap test: a program that uses `alloc` the way real ones will (Vec, Box, String,
-//! BTreeMap), fills its memory window until an allocation is refused, and shows the
-//! numbers. `run heaptest`. Its gate runs it over and over on reused rows and side by
+//! BTreeMap), fills 12 MiB of heap (past the old 8 MiB window), and shows the
+//! numbers. Pressing A then fills all the memory programs may have, until an
+//! allocation is refused. `run heaptest`. Its gate runs it over and over on reused rows and side by
 //! side, so it also checks that a run starts with no memory and gets only zeroed pages.
 #![no_std]
 #![no_main]
@@ -36,6 +37,25 @@ fn fresh_pages() -> Result<u64, &'static str> {
     Ok(m.base)
 }
 
+/// MiB a normal run fills: past the old fixed window, and small enough that every
+/// program row can do it at once on a 512 MiB machine.
+const TARGET_MIB: usize = 12;
+
+/// Fills memory a mebibyte at a time: `limit` of them, or until the kernel says no.
+/// Running out must be a refused allocation, not a fault.
+fn fill(limit: usize) -> Result<usize, &'static str> {
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    if chunks.try_reserve_exact(limit).is_err() { return Err("no room to count chunks"); }
+    while chunks.len() < limit {
+        let mut chunk = Vec::new();
+        if chunk.try_reserve_exact(1024 * 1024).is_err() { break; }
+        chunk.resize(1024 * 1024, chunks.len() as u8);
+        chunks.push(chunk);
+    }
+    if chunks.iter().enumerate().any(|(i, c)| c.iter().any(|b| *b != i as u8)) { return Err("chunk lost data"); }
+    Ok(chunks.len())
+}
+
 fn run(task: u32) -> Result<(String, usize, usize, usize), &'static str> {
     fresh_pages()?;
     // Ordinary use: a growing vector, a boxed buffer, a map, formatted text.
@@ -57,21 +77,10 @@ fn run(task: u32) -> Result<(String, usize, usize, usize), &'static str> {
     let again: Vec<u8> = alloc::vec![7u8; 1024 * 1024];
     if heap::held() != used || again.iter().any(|b| *b != 7) { return Err("freed memory was not reused"); }
     drop(again);
-    // Fill the window a mebibyte at a time until the kernel says no. That must be a
-    // refused allocation, not a fault, and must come before the window's end.
-    let mut chunks: Vec<Vec<u8>> = Vec::with_capacity(64);
-    loop {
-        let mut chunk = Vec::new();
-        if chunk.try_reserve_exact(1024 * 1024).is_err() { break; }
-        chunk.resize(1024 * 1024, chunks.len() as u8);
-        chunks.push(chunk);
-        if chunks.len() == 64 { return Err("the heap never ran out"); }
-    }
-    if chunks.iter().enumerate().any(|(i, c)| c.iter().any(|b| *b != i as u8)) { return Err("chunk lost data"); }
-    let full = chunks.len();
+    let full = fill(TARGET_MIB)?;
+    if full < TARGET_MIB { return Err("the heap ran out before 12 MiB"); }
     let peak = heap::held();
     if peak > sex_pdx::program_store::WINDOW_BYTES { return Err("heap passed the window"); }
-    drop(chunks);
     // Out of memory once is not out of memory for good.
     let small: Vec<u32> = (0..1000).collect();
     if small.iter().sum::<u32>() != 499_500 { return Err("allocation after running out failed"); }
@@ -80,8 +89,8 @@ fn run(task: u32) -> Result<(String, usize, usize, usize), &'static str> {
 
 fn text_of(used: usize, peak: usize, full: usize) -> String {
     let mut s = String::new();
-    let _ = write!(s, "Heap test. F11 closes.\n\nThis run started with no memory and was given zeroed pages.\nVec, Box, BTreeMap and String: {} KiB.\nFilled {} MiB more before the kernel said no.\nPeak: {} KiB of {} KiB.\n\nAll checks passed.\n",
-        used / 1024, full, peak / 1024, sex_pdx::program_store::WINDOW_BYTES / 1024);
+    let _ = write!(s, "Heap test. F11 closes.\n\nThis run started with no memory and was given zeroed pages.\nVec, Box, BTreeMap and String: {} KiB.\nFilled {} MiB more.\nPeak: {} KiB.\n\nAll checks passed.\n",
+        used / 1024, full, peak / 1024);
     s
 }
 
@@ -102,6 +111,23 @@ pub extern "C" fn _start() -> ! {
     }
     sex_pdx::serial_record!("[heaptest.ready] target={} task={}", target, task);
     loop {
-        if let Event::Close = window.next() { sex_pdx::serial_record!("[heaptest.closed] target={} task={}", target, task); window.close() }
+        match window.next() {
+            Event::Close => { sex_pdx::serial_record!("[heaptest.closed] target={} task={}", target, task); window.close() }
+            // A: take all the memory programs may have.
+            Event::Key(key) if key.code == 0x1E => {
+                let limit = sex_pdx::program_store::WINDOW_BYTES / (1024 * 1024);
+                match fill(limit) {
+                    Ok(full) if full < limit => {
+                        sex_pdx::serial_record!("[heaptest.all] target={} task={} full_mib={} peak={}", target, task, full, heap::held());
+                        let mut s = String::new();
+                        let _ = write!(s, "Filled {} MiB until the kernel said no.\nPeak: {} KiB. F11 closes.\n", full, heap::held() / 1024);
+                        window.show(s.as_bytes());
+                    }
+                    Ok(_) => sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=the heap never ran out", target, task),
+                    Err(why) => sex_pdx::serial_record!("[heaptest.fail] target={} task={} why={}", target, task, why),
+                }
+            }
+            _ => {}
+        }
     }
 }

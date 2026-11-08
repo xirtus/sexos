@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pure authority and exact private-image leaf retirement mechanism.
 pub const MAX_APPS:usize=sex_pdx::app_catalog::COUNT;
-/// A program row's whole window (program_store::WINDOW_BYTES), then its 64 KiB stack.
-pub const MAX_PAGES:usize=2048+16;
+/// Most pages one manifest may list: a program row's largest arena, its image and stack.
+pub const MAX_PAGES:usize=(sex_pdx::program_store::WINDOW_BYTES/4096)+64;
 pub const QUERY:u8=1;
 pub const ACK:u8=2;
 pub const RETIRE:u8=4;
@@ -33,28 +33,32 @@ pub fn final_elf_flags(flags:u64,pkey:u8)->u64 {
 pub fn retire_private_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64,
     mut clear:impl FnMut(u64),mut flush:impl FnMut(u64))->Result<usize,u64>{
     if pages.is_empty() || pages.len()>MAX_PAGES{return Err(INVALID)}
-    for (index,page) in pages.iter().enumerate(){
+    for page in pages{
         if page.va==0 || page.va%4096!=0 || page.leaf==0 || page.expected&5!=5
             || read(page.leaf)&!0x60 != page.expected&!0x60 {return Err(DENIED)}
-        for old in &pages[..index]{
-            if old.va==page.va || old.leaf==page.leaf
-                || old.expected&PHYSICAL_MASK==page.expected&PHYSICAL_MASK{return Err(DENIED)}
-        }
     }
+    if !distinct(pages){return Err(DENIED)}
     for page in pages {clear(page.leaf);flush(page.va);}
     Ok(pages.len())
 }
 
+/// No two pages share an address, a leaf or a frame. Sorting makes this O(n log n), so
+/// a program with a big heap ends as fast as a small one.
+pub fn distinct(pages:&[PrivatePage])->bool{
+    let unique=|mut keys:alloc::vec::Vec<u64>|{keys.sort_unstable();keys.windows(2).all(|w|w[0]!=w[1])};
+    unique(pages.iter().map(|p|p.va).collect())
+        && unique(pages.iter().map(|p|p.leaf).collect())
+        && unique(pages.iter().map(|p|p.expected&PHYSICAL_MASK).collect())
+}
 /// A successor restores only BOOT-reserved, non-present exact leaves. All
 /// checks precede publication; backing never comes from a retired workspace.
 pub fn restore_reserved_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64,
     mut write:impl FnMut(u64,u64),mut flush:impl FnMut(u64))->Result<usize,u64>{
     if pages.is_empty() || pages.len()>MAX_PAGES{return Err(INVALID)}
-    for (i,p) in pages.iter().enumerate(){
-        if p.va==0 || p.va%4096!=0 || p.leaf==0 || p.expected&5!=5 || read(p.leaf)!=0
-            || pages[..i].iter().any(|old|old.va==p.va || old.leaf==p.leaf
-                || old.expected&PHYSICAL_MASK==p.expected&PHYSICAL_MASK){return Err(DENIED)}
+    for p in pages{
+        if p.va==0 || p.va%4096!=0 || p.leaf==0 || p.expected&5!=5 || read(p.leaf)!=0{return Err(DENIED)}
     }
+    if !distinct(pages){return Err(DENIED)}
     for p in pages{write(p.leaf,p.expected);flush(p.va);}
     Ok(pages.len())
 }

@@ -216,7 +216,8 @@ fn start_one(index:usize,elf:&[u8],image:&crate::program_image::Image)->Result<(
     Ok(())
 }
 fn start(len:u64,count:u64)->[u64;3]{
-    let Some(elf)=crate::boot_memory::program_image(len as usize)else{return [1,0,0]};
+    let Some(copy)=crate::boot_memory::program_image(len as usize)else{return [1,0,0]};
+    let elf:&[u8]=&copy;
     let image=match crate::program_image::parse(elf,WINDOW_PAGES as u64*PAGE){
         Ok(image)=>image,
         Err(reason)=>{crate::serial_println!("[records.rejected] bytes={} reason={:?}",len,reason);return [1,0,0]},

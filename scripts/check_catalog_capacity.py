@@ -17,9 +17,9 @@ def main():
         for size in (7,64,65):
             rows='\n'.join(f'quil({i},{100+i},{1000+i},None,{1000+4*i},{1001+4*i},'+('None'if i==0 else f'Some({1002+4*i})')+f',{1003+4*i}),'for i in range(size))
             catalog=out/f'catalog-{size}.rs';catalog.write_text(source[:start]+f'pub const INCARNATIONS: [Incarnation; {size}] = [\n'+rows+'\n];'+source[end:])
-            paths=[('app_catalog',catalog),('lifecycle',root/'crates/sex-pdx/src/app_lifecycle.rs'),('resources',root/'kernel/src/app_resource_state.rs'),('display',root/'servers/sexdisplay/src/surface_lifecycle.rs'),('document',root/'crates/sex-pdx/src/document_buffer.rs')]
+            paths=[('app_catalog',catalog),('lifecycle',root/'crates/sex-pdx/src/app_lifecycle.rs'),('program_store',root/'crates/sex-pdx/src/program_store.rs'),('resources',root/'kernel/src/app_resource_state.rs'),('display',root/'servers/sexdisplay/src/surface_lifecycle.rs'),('document',root/'crates/sex-pdx/src/document_buffer.rs')]
             fixture=out/f'fixture-{size}.rs'
-            fixture.write_text('#![allow(dead_code)]\nextern crate self as sex_pdx;\n'+'\n'.join(f'#[path={json.dumps(str(path))}]pub mod {name};'for name,path in paths)+f'''
+            fixture.write_text('#![allow(dead_code)]\nextern crate self as sex_pdx;\nextern crate alloc;\n'+'\n'.join(f'#[path={json.dumps(str(path))}]pub mod {name};'for name,path in paths)+f'''
 #[test]fn expanded_consumers_remain_distinct_and_bounded(){{
  assert_eq!(resources::MAX_APPS,{size});assert_eq!(display::CATALOG_CAPACITY,{size});
  assert_eq!(lifecycle::SLOTS.len(),{size});assert_eq!(document::CLIENT_COUNT,{size});
