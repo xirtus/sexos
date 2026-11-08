@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "bb6d758d30302f7e93dcddd7dc5382e41620f0b81107fff6e2dd40ed6de774b6"
+abi_version_hash = "97a6ab2a7c4d16d822d0f9361940bbe777304df1f85040048ee07d68aa4d7ebc"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -49,6 +49,7 @@ crates = [
   "apps/jot/Cargo.toml",
   "apps/peek/Cargo.toml",
   "apps/heaptest/Cargo.toml",
+  "apps/bench/Cargo.toml",
   "apps/view/Cargo.toml"
 ]
 
@@ -226,6 +227,13 @@ action = "cargo_manifest"
 manifest = "apps/heaptest/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/heaptest"
 dest_artifact = "iso_root/programs/heaptest"
+
+[[stage]]
+id = "build_bench"
+action = "cargo_manifest"
+manifest = "apps/bench/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/bench"
+dest_artifact = "iso_root/programs/bench"
 
 [[stage]]
 id = "build_hum"

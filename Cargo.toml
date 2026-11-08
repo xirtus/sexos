@@ -23,6 +23,7 @@ members = [
     "apps/jot",
     "apps/peek",
     "apps/heaptest",
+    "apps/bench",
     "apps/view",
     "crates/sex-app",
     "apps/hum",
