@@ -2465,6 +2465,31 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
+## View opens JPEG; PNG and JPEG through zune (2026-11-08)
+
+- **What exists now.** `crates/sex-image`: `sex_image::decode(bytes, &Limits)` returns
+  width, height and `Vec<u32>` pixels in the usual unpremultiplied `0xAARRGGBB`. PNG (every
+  colour type and depth, palette, tRNS, Adam7, first APNG frame) through `zune-png`; JPEG
+  (baseline, progressive, 4:4:4/4:2:0, grayscale, CMYK) through `zune-jpeg`. Both are pure
+  Rust, MIT/Apache-2.0/Zlib, built `no_std` + `alloc` without SIMD for the soft-float target.
+  `Image::fit_within(w, h)` shrinks a photo to a surface with an alpha-weighted box filter.
+- **Design.** Decoding belongs in the program that opened the file, never in Display or a
+  server. `Limits` (`PHOTO` 12 MP, `SURFACE` 800x600) is checked right after the header,
+  before the pixel buffer is reserved, and that reservation is fallible, so a lying header
+  is an error, not a heap exhaustion. The decoder writes into the pixel buffer itself and is
+  widened in place, so a picture costs one buffer. The in-house `sex_graphics::png` stays
+  for the allocation-free 48x48 path.
+- **Found upstream.** zune-jpeg 0.5's CMYK to RGBA conversion steps 3 bytes per 4-byte
+  pixel; sex-image asks for RGB and adds alpha itself.
+- **View.** `run view @photo.jpg` works. A picture that fits is decoded straight into the
+  program's pixel surface (`decode_into`); a larger one, up to 3200x2400 and as far as the
+  8 MiB program heap allows, is decoded on the heap and shrunk to fit 800x600. Needs the
+  program heap (PR #17).
+- **Limits.** No GIF/WebP. A 12 MP phone photo does not fit the heap yet (no DCT downscaling).
+- **Gates.** 14 host tests against Pillow/ImageMagick fixtures, including 3,000 bit-flipped,
+  truncated and marker-damaged files that must error or decode, never panic.
+  `program_view_gate` (PNG exact, JPEG within 2 levels, 900x700 shown at 771x600, a text
+  file refused) passes at 1 and 4 cores with the heap branch merged.
 
 ## Sound on a virtio sound card (2026-11-08)
 

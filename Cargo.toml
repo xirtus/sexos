@@ -35,6 +35,7 @@ members = [
     "crates/sex-http",
     "crates/sex-trust-config",
     "crates/sex-graphics",
+    "crates/sex-image",
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
