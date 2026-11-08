@@ -2465,3 +2465,30 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
+## Wasm guests on wasmi (2026-11-08)
+
+- **What runs now.** A new crate, `crates/sex-wasm`, runs WebAssembly programs on `wasmi`
+  2.0 (MIT/Apache-2.0, `no_std` with `alloc`). It is the start of the Guests organ: a guest
+  touches only its own linear memory and the calls it was linked with, so many guests can
+  share one hardware key. Host-tested only; no program in the image uses it yet.
+- **Interface.** Two import sets. `sex` (native): `show`, `title`, `log`, `next` (keys and
+  close), `read`/`write` in the guest's folder, `fetch` (one page), `now`, `exit`.
+  `wasi_snapshot_preview1` (subset): console output, line input from the keyboard,
+  arguments, clocks, random bytes, exit; other WASI calls link but answer `ENOSYS`.
+  An unmodified Rust `std` program built for `wasm32-wasip1` runs (test `rust_std_program_runs`,
+  source in `crates/sex-wasm/guests/greet`).
+- **Authority.** `Grants` only narrow what the hosting program holds: files in a subfolder
+  of the program's own folder (paths with `..`, `.`, empty parts, `\` or a leading `/` are
+  refused), and `fetch` only with the net grant, which a program has only after `run +net`.
+  No environment variables. Unknown imports are refused by name before anything runs.
+- **Limits enforced.** Linear memory cap (16 MiB default), optional fuel, 1 MiB per I/O,
+  6 KiB console tail. A guest that keeps waiting after Close is ended.
+- **SexOS host.** Feature `sexos` gives `sexos::AppHost`, mapping the calls onto
+  `sex_app::Window`, `sex_app::files` and `sex_app::net`.
+- **Next.** A `wasm` program in `/bin` (`run wasm FILE.wasm`) needs the program heap from
+  the heap allocator work: wasmi is about 710 KB of code at `opt-level = "s"`, within the
+  1 MiB image limit, but guests need their memory from a growable heap. Then WASI files
+  as a preopened folder, and `wasmtime` for speed later.
+- **Gates.** `cargo test -p sex-wasm` (14 tests) and a `no_std` build for
+  `x86_64-unknown-none`, with and without `sexos`. No QEMU gate: nothing in the boot image
+  changes.
