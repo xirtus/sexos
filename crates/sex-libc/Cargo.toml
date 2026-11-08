@@ -1,0 +1,10 @@
+[package]
+name = "sex-libc"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "The C library a C program (FFmpeg first) links against inside a SexOS program"
+
+[dependencies]
+# musl's maths, ported to pure Rust (MIT); works on the soft-float target.
+libm = "0.2.16"

@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "bb6d758d30302f7e93dcddd7dc5382e41620f0b81107fff6e2dd40ed6de774b6"
+abi_version_hash = "97054a5f31ebec632a2c2e16f846c94dc97833e9e278ebe5b9d09c60bee71261"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -48,10 +48,13 @@ crates = [
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/peek/Cargo.toml",
-  "apps/heaptest/Cargo.toml",
   "apps/view/Cargo.toml",
+  "apps/heaptest/Cargo.toml",
+  "apps/bench/Cargo.toml",
+  "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml",
-  "apps/fputest/Cargo.toml"
+  "apps/fputest/Cargo.toml",
+  "apps/web/Cargo.toml"
 ]
 
 [[stage]]
@@ -235,6 +238,22 @@ source_artifact = "target/x86_64-sex-app/release/heaptest"
 dest_artifact = "iso_root/programs/heaptest"
 
 [[stage]]
+id = "build_bench"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/bench/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/bench"
+dest_artifact = "iso_root/programs/bench"
+
+[[stage]]
+id = "build_wasm"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/wasm/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/wasm"
+dest_artifact = "iso_root/programs/wasm"
+
+[[stage]]
 id = "build_shapes"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
@@ -249,6 +268,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fputest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fputest"
 dest_artifact = "iso_root/programs/fputest"
+
+[[stage]]
+id = "build_web"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/web/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/web"
+dest_artifact = "iso_root/programs/web"
 
 [[stage]]
 id = "build_hum"

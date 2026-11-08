@@ -20,9 +20,11 @@ def validate(text,spindle=False):
     presented=one('app.surface.presented',target=successor,surface=surface,sequence=1,ok=1)
     retired=one('app.private.retired',target=successor,task=successor,acked=31,required=31,all_flushed=1,pool_reusable=1)
     pool=one('sext.app.pool.ready',target=successor,task=successor,reused=1,zero_owner='sext',ok=1)
-    denied=one('launcher.execute.denied',idx=index,reason='boot_reserve_exhausted')
-    order=[reserve[0],early[0],old[0],commit[0],start[0],accepted[0],presented[0],retired[0],pool[0],denied[0]]
-    if any(p<0 for p in order) or order!=sorted(order) or len(set(order))!=len(order):errors.append('activation/registration/presentation/retirement/exhaustion order invalid')
+    # BOOT now reserves more incarnations than one relaunch uses, so the launcher is
+    # not exhausted here; a denial, if any, must still follow the successor's cleanup.
+    order=[reserve[0],early[0],old[0],commit[0],start[0],accepted[0],presented[0],retired[0],pool[0]]
+    order+=[pos for pos,row in rows('launcher.execute.denied') if row.get('idx')==str(index)]
+    if any(p<0 for p in order) or order!=sorted(order) or len(set(order))!=len(order):errors.append('activation/registration/presentation/retirement order invalid')
     if not commit[0]<replay[0]<retired[0]:errors.append('replay/stale-route probe outside active incarnation')
     for target,before in [(predecessor,old[0]),(successor,retired[0])]:
         acks=[(pos,row) for pos,row in rows('app.service.ack') if row.get('target')==str(target)]

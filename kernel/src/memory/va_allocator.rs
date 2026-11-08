@@ -4,7 +4,10 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 const SHARED_VA_START:u64=0x_4000_0000_0000;
-const USER_VA_END:u64=1<<47;
+/// Reservations end where the kernel heap's fixed range begins (`HEAP_START`), so a
+/// large reservation can never run into it or the program records above it.
+pub const SHARED_VA_END:u64=0x_4444_4444_0000;
+const USER_VA_END:u64=SHARED_VA_END;
 const PAGE_SIZE:u64=4096;
 static NEXT_VA:AtomicU64=AtomicU64::new(SHARED_VA_START);
 

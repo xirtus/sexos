@@ -123,7 +123,15 @@ pub mod tlb {
     static SERVED: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
     static SENT: AtomicU64 = AtomicU64::new(0);
 
-    fn invalidate(va: u64) { x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va)); }
+    /// A request for every translation, not one page: `PAGE` holds this instead of an address.
+    const EVERYTHING: u64 = u64::MAX;
+    /// Past this many pages one request for everything is cheaper than one per page.
+    pub const BATCH: usize = 8;
+    fn invalidate(va: u64) {
+        // User pages are never global, so reloading CR3 drops all of them.
+        if va == EVERYTHING { x86_64::instructions::tlb::flush_all(); }
+        else { x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va)); }
+    }
 
     /// Answer a request not yet answered here. Touches no per-core GS data, since an
     /// interrupt from user mode arrives with the user's GS still loaded.
@@ -139,7 +147,20 @@ pub mod tlb {
 
     /// Remove `va`'s translation on every core. Returns after all have done so. Waits
     /// with interrupts off, so while waiting it answers requests from other cores.
-    pub fn flush(va: u64) {
+    pub fn flush(va: u64) { request(va & !0xFFF) }
+
+    /// Removes every page's translation on every core with one request when there are
+    /// many, so ending a big program costs one round of interrupts, not one per page.
+    /// Callers clear all the leaves first; frames are reusable once this returns.
+    pub fn flush_pages(count: usize, pages: impl Iterator<Item = u64>) {
+        if count > BATCH { request(EVERYTHING); } else { for va in pages { request(va & !0xFFF); } }
+    }
+    /// Only this core's translations, for pages only this core can have used.
+    pub fn flush_pages_local(count: usize, pages: impl Iterator<Item = u64>) {
+        if count > BATCH { invalidate(EVERYTHING); } else { for va in pages { invalidate(va & !0xFFF); } }
+    }
+
+    fn request(va: u64) {
         invalidate(va);
         let others = COVERED.load(Ordering::Acquire).saturating_sub(1);
         if others == 0 { return; }

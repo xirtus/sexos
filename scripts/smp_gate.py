@@ -21,7 +21,8 @@ def main():
   g['focus'](153);time.sleep(.5)
   for k in 'records':q.key(k);time.sleep(.05)
   s=len(t());q.key('ret');shots=int(g['wait'](r'tlb_shootdowns=(\d+)',s,60)[1])
-  assert shots>=24,f'{shots} shootdowns for a retired program'
+  # One batched request now covers a whole run's pages; before, one went per page.
+  assert shots>=1,f'{shots} shootdowns for a retired program'
   print({'ok':True,'cores':int(CORES),'tlb_shootdowns':shots})
  finally:g['stop']()
 if __name__=='__main__':main()

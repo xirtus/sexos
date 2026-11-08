@@ -4,7 +4,7 @@ import copy,json,sys,tempfile,unittest
 from unittest import mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import launcher_workflow_gate as g
-from check_desktop_pixels import glyph
+from check_desktop_pixels import glyph,draw_cell
 ROOT=Path(__file__).resolve().parents[2]
 
 def action(target,kind,origin,to,task=None,queued=0):
@@ -124,12 +124,7 @@ class LauncherWorkflow(unittest.TestCase):
   view,lines=g.launcher_layout(raw);data=bytearray(1280*800*3)
   for row,line in lines:
    for col,char in enumerate(line[:38]):
-    for gy,bits in enumerate(glyph(self.c['font'],char)):
-     for gx in range(5):
-      if bits&(1<<(4-gx)):
-       for dy in range(2):
-        for dx in range(2):
-         x=408+col*12+gx*2+dx;y=236+row*18+gy*2+dy;data[(y*1280+x)*3:(y*1280+x)*3+3]=b'\xf0\xf8\xff'
+    draw_cell(data,1280,408+col*12,236+row*18,char,2,b'\xf0\xf8\xff',self.c['font'])
   image=b'P6\n1280 800\n255\n'+data;frame=dict(name='launcher-12-restore',kind='launcher',target=12,title='Restore Spindle');g.verify_frame(raw,image,frame,self.c,(1280,800))
   for bad_trace,bad_frame in [(raw.replace('applied=1','applied=0'),frame),(raw,dict(frame,title='Focus Spindle')),(raw.replace('name=Restore','name=Open'),frame)]:
    with self.assertRaises(ValueError):g.verify_frame(bad_trace,image,bad_frame,self.c,(1280,800))
@@ -148,13 +143,9 @@ class LauncherErasureControls(unittest.TestCase):
   for row,line in lines:
    if only_row is not None and row!=only_row:continue
    for col,char in enumerate(line[:38]):
-    for gy,bits in enumerate(glyph(self.c['font'],char)):
-     for gx in range(5):
-      if not bits&(1<<(4-gx)):continue
-      for dy in range(2):
-       for dx in range(2):
-        x=v['x']+8+(col*6+gx)*2+dx;y=v['y']+36+(row*9+gy)*2+dy
-        if clip is None or clip[0]<=x<clip[2]and clip[1]<=y<clip[3]:image=pixel(image,1280,x,y,b'\xf0\xf8\xff')
+    data=bytearray(image[len(b'P6\n1280 800\n255\n'):])
+    draw_cell(data,1280,v['x']+8+col*12,v['y']+36+row*18,char,2,b'\xf0\xf8\xff',self.c['font'],clip)
+    image=b'P6\n1280 800\n255\n'+bytes(data)
   return image
  def test_actual_old_signature_and_lower_rows_after_header_erasure_fail(self):
   trace=self.trace();self.assertEqual(g.launcher_erased(trace,ppm(1280,800),self.c,(1280,800))['remaining_launcher_ink'],0)

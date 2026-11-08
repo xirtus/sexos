@@ -22,7 +22,7 @@ id = "build_sexbell"
 rustflags = ""
 [[stage]]
 id = "build_kaleidoscope"
-rustflags = ""
+rustflags = "--cfg aes_force_soft --cfg polyval_force_soft"
 [[stage]]
 id = "tail"
 '''
@@ -61,7 +61,7 @@ cp sexos_build_spec.toml iso_root/sexos-kernel
         self.assertFalse((self.root/'evidence/normal').exists())
 
     def test_existing_custom_flags_are_not_overwritten(self):
-        custom=self.original.replace('rustflags = ""','rustflags = "--cfg custom"',1)
+        custom=self.original.replace('rustflags = "--cfg aes_force_soft --cfg polyval_force_soft"','rustflags = "--cfg aes_force_soft --cfg polyval_force_soft --cfg custom"',1)
         (self.root/'sexos_build_spec.toml').write_text(custom)
         r=self.run_gate(); self.assertNotEqual(r.returncode,0)
         self.assertEqual((self.root/'sexos_build_spec.toml').read_text(),custom)

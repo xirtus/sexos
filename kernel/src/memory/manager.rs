@@ -7,12 +7,15 @@ use lazy_static::lazy_static;
 pub struct BootInfoFrameAllocator {
     memory_map: &'static limine::request::MemmapResponse,
     pub(crate) next: usize,
+    /// Set once the buddy allocator owns free memory: from then on every frame comes
+    /// from it, so a page table can never be a page the buddy allocator also hands out.
+    pub(crate) buddy: bool,
     owned_regions: crate::boot_frame_reservations::BootFrameReservations,
 }
 
 impl BootInfoFrameAllocator {
     pub unsafe fn new(memory_map: &'static limine::request::MemmapResponse) -> Self {
-        BootInfoFrameAllocator { memory_map, next: 0,
+        BootInfoFrameAllocator { memory_map, next: 0, buddy: false,
             owned_regions: crate::boot_frame_reservations::BootFrameReservations::new() }
     }
 
@@ -45,6 +48,9 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     ///
     /// Removed usable_frames() helper — obsolete after this fix.
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        if self.buddy {
+            return crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0).map(|p| PhysFrame::containing_address(PhysAddr::new(p)));
+        }
         'next_candidate: loop {
         let regions = self.memory_map.entries();
         let mut frame_index = 0usize;
@@ -213,7 +219,9 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
     crate::serial_println!("allocator.usable_frames.total={}", usable_frames_total);
     crate::serial_println!("allocator.init.done");
 
+    frame_allocator.buddy = true;
     *GLOBAL_VAS.lock() = Some(GlobalVas { mapper, frame_allocator });
+    crate::memory::kheap::prepare_growth();
 }
 
 pub unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable {

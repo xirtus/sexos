@@ -52,6 +52,15 @@ fn a_good_program_is_laid_out_within_its_window() {
     assert_eq!((at, value), (0x1180, 0x4000_0040));
 }
 #[test]
+fn the_requested_stack_size_is_read() {
+    let mut b = elf();
+    assert_eq!(parse(&b, WINDOW).expect("valid").stack, 0);
+    put(&mut b, 56, &4u16.to_le_bytes());
+    put(&mut b, 64 + 3 * 56, &0x6474_e551u32.to_le_bytes());
+    put(&mut b, 64 + 3 * 56 + 40, &(2u64 << 20).to_le_bytes());
+    assert_eq!(parse(&b, WINDOW).expect("valid").stack, 2 << 20);
+}
+#[test]
 fn writable_code_is_refused() {
     let mut b = elf();
     put(&mut b, 64 + 4, &7u32.to_le_bytes());

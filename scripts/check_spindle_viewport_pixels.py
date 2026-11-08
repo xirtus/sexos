@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 from history_roster_evidence import source_spindles, verify_boot_roster
-from check_desktop_pixels import glyph
+from check_desktop_pixels import cell_errors
 from check_disk_persistence import ppm_rgb
 
 SCALE_SOURCE='crates/sex-pdx/src/spindle_view.rs'
@@ -95,14 +95,8 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
                 for col in range(physical_cols):
                     char=chr(lines[row][col])if row<r and col<c else' '
                     if char!=' 'and(8+col*6*scale+5*scale>pw or 12+row*9*scale+7*scale>ph):raise ValueError('clipped nonblank viewport glyph')
-                    for gy,bits in enumerate(glyph(font,char)):
-                        for gx in range(6):
-                            on=gx<5 and bool(bits&(1<<(4-gx)))
-                            for dy in range(scale):
-                                for dx in range(scale):
-                                    xx=sx+8+col*6*scale+gx*scale+dx;yy=sy+12+row*9*scale+gy*scale+dy
-                                    if xx>=sx+pw or yy>=sy+ph:continue
-                                    actual=pixels[(yy*width+xx)*3:(yy*width+xx)*3+3]==b'\xe8\xff\xff';mismatch+=actual!=on;ink+=on
+                    m,i=cell_errors(pixels,width,sx+8+col*6*scale,sy+12+row*9*scale,char,scale,b'\xe8\xff\xff',font,clip=(sx+pw,sy+ph))
+                    mismatch+=m;ink+=i
             if mismatch:errors.append(f'sid{sid}: viewport glyph mismatch={mismatch}')
             if (require_all_ink or data.strip())and not ink:errors.append(f'sid{sid}: no viewport ink')
         if require_echo and not any(b'spindle17'in line for lines in rendered for line in lines):raise ValueError('missing native command echo')

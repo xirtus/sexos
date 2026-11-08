@@ -1,0 +1,14 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "web"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-web = { path = "../../crates/sex-web" }
+sex-js = { path = "../../crates/sex-js" }

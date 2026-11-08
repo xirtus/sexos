@@ -22,14 +22,22 @@ members = [
     "apps/fortune",
     "apps/jot",
     "apps/peek",
-    "apps/heaptest",
+    "apps/bench",
     "apps/view",
+    "apps/wasm",
+    "apps/heaptest",
     "apps/shapes",
     "apps/fputest",
+    "apps/play",
+    "apps/web",
     "crates/sex-app",
+    "crates/sex-html",
+    "crates/sex-js",
+    "crates/sex-web",
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",
+    "crates/sex-font",
     "crates/sexfs",
     "crates/sex-net",
     "crates/sex-net-config",
@@ -39,9 +47,11 @@ members = [
     "crates/sex-graphics",
     "crates/sex-canvas",
     "crates/sex-image",
+    "crates/sex-libc",
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
+    "crates/sex-wasm",
     "apps/spindle",
 ]
 [workspace.package]
@@ -49,3 +59,47 @@ license = "GPL-3.0-only"
 
 [profile.release]
 panic = "abort"
+
+# Wasm guests and page scripts run on wasmi: build the interpreter for speed.
+[profile.release.package.wasmi]
+opt-level = 3
+codegen-units = 1
+[profile.release.package.wasmi_core]
+opt-level = 3
+codegen-units = 1
+[profile.release.package.wasmi_ir]
+opt-level = 3
+codegen-units = 1
+[profile.release.package.wasmi_collections]
+opt-level = 3
+codegen-units = 1
+[profile.release.package.wasmparser]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.sex-wasm]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.wasm]
+opt-level = "z"
+codegen-units = 1
+strip = true
+[profile.release.package.web]
+opt-level = "z"
+codegen-units = 1
+strip = true
+[profile.release.package.sex-html]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.sex-web]
+opt-level = "z"
+codegen-units = 1
+
+# Scripts run on wasmi; unoptimized it is too slow for the time budget even in tests.
+[profile.dev.package.wasmi]
+opt-level = 3
+[profile.dev.package.wasmi_core]
+opt-level = 3
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+[profile.dev.package.wasmparser]
+opt-level = 3

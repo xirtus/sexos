@@ -1,0 +1,252 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! JavaScript for web pages. The engine is QuickJS-NG (MIT), compiled to WebAssembly
+//! (`quickjs.wasm`, built by `scripts/build_quickjs_wasm.sh` from `guest/sexjs.c`) and
+//! run on wasmi, so scripts are confined by the interpreter: they reach nothing but
+//! their own linear memory and the page operations below. That also keeps every
+//! floating point operation in software, which suits soft-float SexOS programs.
+//!
+//! The guest exposes one native function, `__host(op, ...strings)`. `prelude.js` builds
+//! the DOM API (`document`, elements, events, timers, `console`) on top of it, and a
+//! [`Page`] answers each operation. [`Document`] is the [`Page`] for a
+//! [`sex_html::dom::Dom`].
+#![no_std]
+extern crate alloc;
+
+pub mod document;
+pub use document::Document;
+
+use alloc::{format, string::String, vec::Vec};
+use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
+
+/// The engine, as built by `scripts/build_quickjs_wasm.sh`.
+pub static QUICKJS_WASM: &[u8] = include_bytes!("../quickjs.wasm");
+/// The DOM and browser API, written in JavaScript over `__host`.
+pub static PRELUDE: &str = include_str!("prelude.js");
+
+/// Page operations, `__host`'s first argument. Node ids travel as decimal strings.
+pub mod op {
+    /// (level 0..=2, text): console output.
+    pub const LOG: u32 = 1;
+    pub const BY_ID: u32 = 2;
+    /// (root, selector, all): matching element ids joined by commas.
+    pub const QUERY: u32 = 3;
+    /// (node): "type,TAG" with DOM node types 1, 3 and 9.
+    pub const INFO: u32 = 4;
+    pub const GET_ATTR: u32 = 5;
+    pub const SET_ATTR: u32 = 6;
+    pub const REMOVE_ATTR: u32 = 7;
+    pub const GET_TEXT: u32 = 8;
+    pub const SET_TEXT: u32 = 9;
+    /// (node, outer "1" or "0").
+    pub const GET_HTML: u32 = 10;
+    pub const SET_HTML: u32 = 11;
+    pub const CREATE_ELEMENT: u32 = 12;
+    pub const CREATE_TEXT: u32 = 13;
+    /// (parent, child, before or "").
+    pub const INSERT: u32 = 14;
+    pub const DETACH: u32 = 15;
+    pub const PARENT: u32 = 16;
+    pub const CHILDREN: u32 = 17;
+    /// (node): attribute names joined by newlines.
+    pub const ATTR_NAMES: u32 = 18;
+    /// (): "width,height" of the viewport.
+    pub const VIEWPORT: u32 = 19;
+    /// (url): go to another page once the script returns.
+    pub const NAVIGATE: u32 = 20;
+    /// (node): the element now has a click listener.
+    pub const CLICKABLE: u32 = 21;
+    /// (node): "x,y,w,h" of its box in the last layout.
+    pub const RECT: u32 = 22;
+    /// (): the page's address.
+    pub const LOCATION: u32 = 23;
+    /// (canvas, commands): Canvas 2D drawing, queued for the browser to run.
+    pub const CANVAS: u32 = 24;
+    /// (css font, text): width in pixels.
+    pub const MEASURE: u32 = 25;
+}
+
+/// What scripts act on. A `None` result is JavaScript `null`.
+pub trait Page {
+    fn call(&mut self, op: u32, args: &[&str]) -> Option<String>;
+    /// Nanoseconds on a monotonic clock, for `Date.now`, timers and the time budget.
+    fn now_ns(&mut self) -> u64;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// Largest linear memory for the engine, in bytes.
+    pub memory_bytes: usize,
+    /// QuickJS heap limit, inside that memory.
+    pub heap_bytes: usize,
+    /// Longest a single script or event handler may run before it is stopped.
+    pub budget_ms: u32,
+}
+impl Default for Limits {
+    fn default() -> Self { Self { memory_bytes: 24 << 20, heap_bytes: 16 << 20, budget_ms: 2000 } }
+}
+
+struct State<P> {
+    page: P,
+    result: String,
+    limits: StoreLimits,
+}
+
+/// One page's script engine.
+pub struct Script<P: Page + 'static> {
+    store: Store<State<P>>,
+    memory: Memory,
+    alloc: TypedFunc<i32, i32>,
+    free: TypedFunc<i32, ()>,
+    eval: TypedFunc<(i32, i32, i32, i32, i32), i32>,
+    dispatch: TypedFunc<(i32, i32, i32), i32>,
+    budget_ms: i32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The engine could not be loaded or started.
+    Engine(String),
+    /// The script threw; the message went to the page's log.
+    Thrown,
+    /// The engine itself trapped (out of memory, stack): it is unusable now.
+    Trapped(String),
+}
+
+fn args_of(data: &[u8], ptr: i32, len: i32) -> Option<Vec<&str>> {
+    let start = ptr as u32 as usize;
+    let end = start.checked_add(len as u32 as usize)?;
+    let mut bytes = data.get(start..end)?;
+    let mut out = Vec::new();
+    while bytes.len() >= 4 {
+        let n = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+        let s = bytes.get(4..4 + n)?;
+        out.push(core::str::from_utf8(s).ok()?);
+        bytes = &bytes[4 + n..];
+    }
+    Some(out)
+}
+
+impl<P: Page + 'static> Script<P> {
+    /// Loads the engine and runs the prelude.
+    pub fn new(page: P, limits: Limits) -> Result<Self, Error> { Self::with_engine(QUICKJS_WASM, page, limits) }
+
+    pub fn with_engine(wasm: &[u8], page: P, limits: Limits) -> Result<Self, Error> {
+        let e = |m: &str| Error::Engine(String::from(m));
+        let mut config = Config::default();
+        // Translate each function when it first runs: a page uses a small part of the engine.
+        config.compilation_mode(wasmi::CompilationMode::Lazy);
+        let engine = Engine::new(&config);
+        let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
+        let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
+        let mut store = Store::new(&engine, State { page, result: String::new(), limits: store_limits });
+        store.limiter(|s| &mut s.limits);
+        let mut linker = Linker::<State<P>>::new(&engine);
+        link(&mut linker).map_err(|_| e("link"))?;
+        let instance = linker.instantiate_and_start(&mut store, &module).map_err(|x| Error::Engine(format!("{x}")))?;
+        let memory = instance.get_memory(&store, "memory").ok_or_else(|| e("no memory"))?;
+        if let Ok(init) = instance.get_typed_func::<(), ()>(&store, "_initialize") { init.call(&mut store, ()).map_err(|x| Error::Engine(format!("{x}")))?; }
+        let start = instance.get_typed_func::<i32, i32>(&store, "sx_init").map_err(|_| e("sx_init"))?;
+        let mut script = Self {
+            alloc: instance.get_typed_func(&store, "sx_alloc").map_err(|_| e("sx_alloc"))?,
+            free: instance.get_typed_func(&store, "sx_free").map_err(|_| e("sx_free"))?,
+            eval: instance.get_typed_func(&store, "sx_eval").map_err(|_| e("sx_eval"))?,
+            dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
+            store, memory, budget_ms: 0,
+        };
+        if start.call(&mut script.store, limits.heap_bytes as i32).map_err(|x| Error::Engine(format!("{x}")))? != 0 { return Err(e("init")); }
+        // The prelude is ours: no time budget, which a slow machine could exceed.
+        script.eval(PRELUDE, "prelude.js")?;
+        script.budget_ms = limits.budget_ms as i32;
+        Ok(script)
+    }
+
+    pub fn page(&self) -> &P { &self.store.data().page }
+    pub fn page_mut(&mut self) -> &mut P { &mut self.store.data_mut().page }
+
+    fn put(&mut self, bytes: &[u8]) -> Result<i32, Error> {
+        let p = self.alloc.call(&mut self.store, bytes.len().max(1) as i32).map_err(|x| Error::Trapped(format!("{x}")))?;
+        if p == 0 { return Err(Error::Trapped(String::from("out of memory"))); }
+        self.memory.write(&mut self.store, p as u32 as usize, bytes).map_err(|_| Error::Trapped(String::from("write")))?;
+        Ok(p)
+    }
+
+    /// Runs a classic script. `name` shows in error stacks.
+    pub fn eval(&mut self, source: &str, name: &str) -> Result<(), Error> {
+        let src = self.put(source.as_bytes())?;
+        let nm = self.put(name.as_bytes())?;
+        let r = self.eval.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.budget_ms));
+        let _ = self.free.call(&mut self.store, src);
+        let _ = self.free.call(&mut self.store, nm);
+        let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) };
+        // Drawing the script queued reaches the page even if it threw afterwards.
+        if !matches!(r, Err(Error::Trapped(_))) { self.dispatch("flush")?; }
+        r
+    }
+
+    /// Calls the prelude's `__sx_dispatch` with `message`: `tick`, `click\tNODE`,
+    /// `key\tTYPE\tKEY`, `load`. Returns its result (-1 if it threw).
+    pub fn dispatch(&mut self, message: &str) -> Result<i32, Error> {
+        let m = self.put(message.as_bytes())?;
+        let r = self.dispatch.call(&mut self.store, (m, message.len() as i32, self.budget_ms));
+        let _ = self.free.call(&mut self.store, m);
+        r.map_err(|x| Error::Trapped(format!("{x}")))
+    }
+
+    /// Bytes of linear memory the engine holds.
+    pub fn memory_bytes(&self) -> usize { self.memory.data(&self.store).len() }
+}
+
+fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::errors::LinkerError> {
+    type C<'a, P> = Caller<'a, State<P>>;
+    fn mem<P>(c: &C<'_, P>) -> Option<Memory> { match c.get_export("memory") { Some(Extern::Memory(m)) => Some(m), _ => None } }
+    linker.func_wrap("dom", "call", |mut c: C<'_, P>, op: i32, ptr: i32, len: i32| -> i32 {
+        let Some(m) = mem(&c) else { return -1 };
+        let (data, state) = m.data_and_store_mut(&mut c);
+        let Some(args) = args_of(data, ptr, len) else { return -1 };
+        match state.page.call(op as u32, &args) {
+            Some(r) => { let n = r.len() as i32; state.result = r; n }
+            None => -1,
+        }
+    })?;
+    linker.func_wrap("dom", "result", |mut c: C<'_, P>, out: i32| {
+        let Some(m) = mem(&c) else { return };
+        let (data, state) = m.data_and_store_mut(&mut c);
+        let r = core::mem::take(&mut state.result);
+        let at = out as u32 as usize;
+        if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(r.as_bytes()); }
+    })?;
+    const W: &str = "wasi_snapshot_preview1";
+    linker.func_wrap(W, "clock_time_get", |mut c: C<'_, P>, _id: i32, _p: i64, at: i32| -> i32 {
+        let now = c.data_mut().page.now_ns();
+        let Some(m) = mem(&c) else { return 21 };
+        if m.write(&mut c, at as u32 as usize, &now.to_le_bytes()).is_err() { return 21; }
+        0
+    })?;
+    linker.func_wrap(W, "random_get", |mut c: C<'_, P>, ptr: i32, len: i32| -> i32 {
+        let mut s = c.data_mut().page.now_ns() ^ 0x9E37_79B9_7F4A_7C15;
+        let Some(m) = mem(&c) else { return 21 };
+        let data = m.data_mut(&mut c);
+        let at = ptr as u32 as usize;
+        let Some(out) = data.get_mut(at..at + len as u32 as usize) else { return 21 };
+        for b in out { s ^= s << 13; s ^= s >> 7; s ^= s << 17; *b = s as u8; }
+        0
+    })?;
+    // Console output goes through op::LOG; libc's own stdio has nowhere to write.
+    linker.func_wrap(W, "fd_write", |mut c: C<'_, P>, _fd: i32, iovs: i32, count: i32, written: i32| -> i32 {
+        let Some(m) = mem(&c) else { return 21 };
+        let data = m.data_mut(&mut c);
+        let mut total = 0u32;
+        for i in 0..count.max(0) as usize {
+            let at = iovs as u32 as usize + i * 8;
+            let Some(b) = data.get(at + 4..at + 8) else { return 21 };
+            total += u32::from_le_bytes(b.try_into().unwrap());
+        }
+        let at = written as u32 as usize;
+        if let Some(o) = data.get_mut(at..at + 4) { o.copy_from_slice(&total.to_le_bytes()); }
+        0
+    })?;
+    linker.func_wrap(W, "fd_close", |_: C<'_, P>, _fd: i32| -> i32 { 8 })?;
+    linker.func_wrap(W, "fd_fdstat_get", |_: C<'_, P>, _fd: i32, _at: i32| -> i32 { 8 })?;
+    linker.func_wrap(W, "fd_seek", |_: C<'_, P>, _fd: i32, _o: i64, _w: i32, _at: i32| -> i32 { 8 })?;
+    Ok(())
+}

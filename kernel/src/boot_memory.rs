@@ -29,7 +29,6 @@ pub(crate) fn backing(length: u64) -> u64 {
 }
 
 static PROGRAM_IMAGE_PHYSICAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-static PROGRAM_IMAGE_PRIVATE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// The one region Files reads program files into. Shell's load call decides when
 /// the kernel looks at it; Files gets no say over what the kernel does with it.
 pub fn init_program_image(files: u32) {
@@ -43,7 +42,6 @@ pub fn init_program_image(files: u32) {
     grant(pd, IMAGE_SLOT_FILES, RegionGrant { region_id: IMAGE_REGION_ID, virtual_base, length,
         rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None });
     PROGRAM_IMAGE_PHYSICAL.store(physical, core::sync::atomic::Ordering::Release);
-    PROGRAM_IMAGE_PRIVATE.store(backing(length), core::sync::atomic::Ordering::Release);
 }
 /// The boot image Limine loaded beside the kernel, if any, mapped read-only into Files
 /// so `install` can write the very system that is running. It grants only reading it.
@@ -102,16 +100,27 @@ pub fn init_fs_regions(files: u32) {
     }
 }
 /// The file Files last read, as a copy only the kernel can reach: Files keeps write
-/// access to its region, and a checked file must stay the file that gets used.
-pub fn program_image(len: usize) -> Option<&'static [u8]> {
-    let physical = PROGRAM_IMAGE_PHYSICAL.load(core::sync::atomic::Ordering::Acquire);
-    let private = PROGRAM_IMAGE_PRIVATE.load(core::sync::atomic::Ordering::Acquire);
-    if physical == 0 || private == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
-    let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    unsafe {
-        core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, (private + hhdm) as *mut u8, len);
-        Some(core::slice::from_raw_parts((private + hhdm) as *const u8, len))
+/// access to its region, and a checked file must stay the file that gets used. The copy
+/// is borrowed from free memory for one load and returned when it drops.
+pub struct ImageCopy { physical: u64, order: usize, len: usize }
+impl core::ops::Deref for ImageCopy {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        let hhdm = crate::HHDM_REQUEST.response().expect("IMAGE_COPY_NO_HHDM").offset;
+        unsafe { core::slice::from_raw_parts((self.physical + hhdm) as *const u8, self.len) }
     }
+}
+impl Drop for ImageCopy {
+    fn drop(&mut self) { crate::memory::allocator::GLOBAL_ALLOCATOR.free(self.physical, self.order); }
+}
+pub fn program_image(len: usize) -> Option<ImageCopy> {
+    let physical = PROGRAM_IMAGE_PHYSICAL.load(core::sync::atomic::Ordering::Acquire);
+    if physical == 0 || len == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
+    let order = (len.div_ceil(4096)).next_power_of_two().trailing_zeros() as usize;
+    let private = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(order)?;
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    unsafe { core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, (private + hhdm) as *mut u8, len); }
+    Some(ImageCopy { physical: private, order, len })
 }
 /// The page table for a 2 MiB span, with all of its entries clear.
 pub fn reserve_table(base: u64, pkey: u8, any_frame: u64) -> *mut u64 {
@@ -124,24 +133,60 @@ pub fn reserve_table(base: u64, pkey: u8, any_frame: u64) -> *mut u64 {
     x86_64::instructions::tlb::flush(VirtAddr::new(base));
     leaf as *mut u64
 }
-/// Frames and page-table leaves for a program row's whole image window, unmapped
-/// until a program is loaded. Leaves already present stay as the BOOT image left them.
-pub fn reserve_window(base: u64, pkey: u8, leaves: &mut [u64]) -> u64 {
+/// Address space for one program row's arena; no page tables yet, every page absent.
+/// Tables are made on first use (`arena_leaf`) and frames are lent per run
+/// (`program_frames`), so the size, set once from what this machine holds, costs
+/// nothing until a program uses it: one program may use all of the machine's memory.
+pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     require_boot();
-    let physical = backing(leaves.len() as u64 * 4096);
-    for (index, leaf) in leaves.iter_mut().enumerate() {
-        let va = base + index as u64 * 4096;
-        if existing_leaf_address(va).is_none() {
-            let flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
-            crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
-                .map_physical_range(VirtAddr::new(va), physical + index as u64 * 4096, 4096, flags, pkey)
-                .expect("BOOT_PROGRAM_WINDOW_MAP");
-        }
-        *leaf = existing_leaf_address(va).expect("BOOT_PROGRAM_WINDOW_LEAF");
-        unsafe { core::ptr::write_volatile(*leaf as *mut u64, 0); }
-        x86_64::instructions::tlb::flush(VirtAddr::new(va));
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    static PAGES: AtomicUsize = AtomicUsize::new(0);
+    const SPAN: u64 = 2 * 1024 * 1024;
+    let mut pages = PAGES.load(Ordering::Acquire);
+    if pages == 0 {
+        let free = crate::memory::allocator::debug_global_free_frames() * 4096;
+        let bytes = free.max(1).next_power_of_two().clamp(8 * 1024 * 1024, sex_pdx::program_store::WINDOW_BYTES as u64);
+        pages = (bytes / 4096) as usize;
+        PAGES.store(pages, Ordering::Release);
     }
-    physical
+    let bytes = pages as u64 * 4096;
+    let va = crate::memory::va_allocator::allocate_va((bytes + SPAN) as usize).expect("BOOT_ARENA_NO_VA");
+    let base = (va + SPAN - 1) & !(SPAN - 1);
+    crate::serial_println!("[boot.program.arena] base={:#x} pages={} bytes={} key={}", base, pages, bytes, pkey);
+    (base, pages)
+}
+/// The leaf for `va` in a program arena, making its page tables on the span's first use.
+/// The leaf comes back clear; the caller maps it. Tables are linked directly, zeroed,
+/// so no page is ever present while they are made (a temporary mapping would be
+/// visible to a program on another core that shares the key). One lock orders makers,
+/// so two cores cannot both create one table.
+pub fn arena_leaf(va: u64, _pkey: u8) -> Option<u64> {
+    use x86_64::registers::control::Cr3;
+    static MAKE: spin::Mutex<()> = spin::Mutex::new(());
+    if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
+    let _held = MAKE.lock();
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    // Present, writable, user: the leaf alone decides access and carries the key.
+    const LINK: u64 = 0b111;
+    let mut table = Cr3::read().0.start_address().as_u64();
+    for shift in [39, 30, 21] {
+        let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
+        let mut entry = unsafe { core::ptr::read_volatile(slot) };
+        if entry & 1 == 0 {
+            let frame = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0)?;
+            zero_frame(frame);
+            entry = frame | LINK;
+            unsafe { core::ptr::write_volatile(slot, entry); }
+        }
+        if entry & (1 << 7) != 0 { return None; }
+        if entry & LINK != LINK {
+            // A kernel mapping made this table; user and write here only let the leaf decide.
+            entry |= LINK;
+            unsafe { core::ptr::write_volatile(slot, entry); }
+        }
+        table = entry & 0x000f_ffff_ffff_f000;
+    }
+    existing_leaf_address(va)
 }
 pub(crate) fn write_frames(physical: u64, bytes: &[u8]) {
     let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_WRITE_NO_HHDM").offset;

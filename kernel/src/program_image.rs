@@ -5,6 +5,8 @@ pub const PAGE: u64 = 4096;
 pub const MAX_SEGMENTS: usize = 8;
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
+/// The linker's `-z stack-size=N` lands in this header's memory size.
+const PT_GNU_STACK: u32 = 0x6474_e551;
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const DT_NULL: u64 = 0;
@@ -17,7 +19,7 @@ const RELA_BYTES: u64 = 24;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Segment { pub offset: u64, pub file: u64, pub window: u64, pub memory: u64, pub writable: bool, pub executable: bool }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Image { pub entry: u64, pub segments: [Segment; MAX_SEGMENTS], pub count: usize, pub bias: u64, pub rela: u64, pub rela_count: u64 }
+pub struct Image { pub entry: u64, pub segments: [Segment; MAX_SEGMENTS], pub count: usize, pub bias: u64, pub rela: u64, pub rela_count: u64, pub stack: u64 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reject { Header, Layout, Permissions, Span, Entry, Relocation }
 
@@ -34,12 +36,13 @@ pub fn parse(elf: &[u8], window: u64) -> Result<Image, Reject> {
     let entry = u64_at(elf, 24).ok_or(Header)?;
     let (phoff, phentsize, phnum) = (u64_at(elf, 32).ok_or(Header)?, u16_at(elf, 54).ok_or(Header)? as u64, u16_at(elf, 56).ok_or(Header)? as u64);
     if phentsize < 56 || phnum == 0 || phnum > 64 { return Err(Header); }
-    let mut image = Image { entry: 0, segments: [Segment { offset: 0, file: 0, window: 0, memory: 0, writable: false, executable: false }; MAX_SEGMENTS], count: 0, bias: u64::MAX, rela: 0, rela_count: 0 };
+    let mut image = Image { entry: 0, segments: [Segment { offset: 0, file: 0, window: 0, memory: 0, writable: false, executable: false }; MAX_SEGMENTS], count: 0, bias: u64::MAX, rela: 0, rela_count: 0, stack: 0 };
     let mut dynamic = None;
     let header = |i: u64| phoff.checked_add(i.checked_mul(phentsize)?);
     for i in 0..phnum {
         let at = header(i).ok_or(Header)?;
         let kind = u32_at(elf, at).ok_or(Header)?;
+        if kind == PT_GNU_STACK { image.stack = u64_at(elf, at + 40).ok_or(Header)?; }
         if kind == PT_DYNAMIC {
             dynamic = Some((u64_at(elf, at + 8).ok_or(Header)?, u64_at(elf, at + 32).ok_or(Header)?));
         }

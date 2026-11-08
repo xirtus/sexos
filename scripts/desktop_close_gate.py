@@ -78,8 +78,12 @@ def main():
                 key('tab',r'\[shell.focus.set\] id=\d+')
             raise RuntimeError(f'could not focus {sid}')
         def close(target,sid):
-            focus(sid);key('f11',rf'\[shell.app.close.request\] target={target} task=\d+ surface={sid}')
-            wait(rf'\[sext.app.pool.ready\] target={target} task=\d+ .*ok=1',timeout=180)
+            focus(sid);start=len(text());key('f11',rf'\[shell.app.close.request\] target={target} task=\d+ surface={sid}')
+            # Quil asks first when the document has unsaved changes; F11 again discards.
+            m=wait(rf'\[sext.app.pool.ready\] target={target} task=\d+ .*ok=1|\[shell.app.close.declined\] target={target} .*next_close=confirmed',start,timeout=180)
+            if 'declined' in m[0]:
+                key('f11',rf'\[shell.app.close.request\] target={target} task=\d+ surface={sid}')
+                wait(rf'\[sext.app.pool.ready\] target={target} task=\d+ .*ok=1',timeout=180)
             q.cmd('screendump',{'filename':str(out/f'after-close-{target}.ppm')})
         # Persist in the original incarnation before its irreversible close.
         focus(201)
@@ -105,7 +109,9 @@ def main():
         key('ret',r'\[quil.persist.load.ok\]',timeout=180)
         loaded=re.findall(r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',text())[-1]
         if loaded!=saved:raise RuntimeError('successor did not load exact predecessor saved document')
-        key('esc',r'\[quil.palette.action\] kind=esc clear=1')
+        # Quil closes its palette after a load; Esc then reopens it, and a second Esc clears.
+        if key('esc',r'\[quil.palette.action\] kind=esc (?:clear|toggle_on)=1')[0].endswith('toggle_on=1'):
+            key('esc',r'\[quil.palette.action\] kind=esc clear=1')
         key('z',r'\[quil.text.recv\]')
         status_match=wait(r'\[quil.text.view\] target=16 surface=301 status=([^\r\n]*\* [^\r\n]+)',timeout=30)
         expected_status=status_match[1]
@@ -167,14 +173,12 @@ def main():
         (out/'history-log.json').write_text(json.dumps({'ok':not history_failures,'errors':history_failures},indent=2)+'\n')
         if history_failures:raise RuntimeError('history receipt joins: '+'; '.join(history_failures))
         (out/'spindle-relaunch.json').write_text(json.dumps({'ok':True,'predecessor':12,'successor':17,'task':17,'frame':306,'content':[302,303,304,305],'pixel_errors':spindle_errors,'scope':'real activation, native presentation, Linen observer, Bell notification, command echo glyphs and five-role private cleanup'},indent=2)+'\n')
+        # BOOT reserves more Spindle and Quil incarnations than this walk uses: the
+        # launcher must say how many are left, in readable text.
         key('grave_accent',r'\[shell.palette.item\] idx=0')
-        key('ret',r'\[launcher.execute.denied\] idx=0 .*reason=boot_reserve_exhausted')
-        key('grave_accent',r'\[command_palette.close\]')
-        # Both Quil reservations are terminal. Enter must stay in
-        # the launcher with an explicit denial and actual readable closed text.
-        key('grave_accent',r'\[shell.palette.item\] idx=0')
-        key('j',r'\[shell.palette.select\] old=0 new=1')
-        key('ret',r'\[launcher.execute.denied\] idx=1 .*reason=boot_reserve_exhausted')
+        wait(r'\[launcher.text.row\] index=1 row=1 name=Open Quil status=\d+ RESERVED LEFT')
+        if not re.search(r'\[launcher.text.row\] index=0 row=0 name=Open Spindle status=\d+ RESERVED LEFT',text()):
+            raise RuntimeError('launcher does not count the Spindle reserves left')
         activation_failures=activation_errors(text())+activation_errors(text(),spindle=True)
         (out/'activation-log.json').write_text(json.dumps({'ok':not activation_failures,'errors':activation_failures,'scope':'ordered real activation/retirement records; pixels checked separately'},indent=2)+'\n')
         if activation_failures:raise RuntimeError('activation log: '+'; '.join(activation_failures))

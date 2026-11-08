@@ -33,12 +33,17 @@ for stage in ('build_sexbell', 'build_kaleidoscope'):
     start = s.index(f'id = "{stage}"')
     end = s.index('[[stage]]', start)
     block = s[start:end]
-    if not re.search(r'^rustflags = ""$', block, re.M):
-        raise SystemExit(f'expected normal empty declared rustflags for {stage}')
-    flags = '' if profile == 'normal' else '--cfg ' + (
+    # Normal flags are exact: empty, or the Browser's soft-crypto cfgs (TLS). The
+    # proof cfg is added after them.
+    normal = '--cfg aes_force_soft --cfg polyval_force_soft' if stage == 'build_kaleidoscope' else ''
+    m = re.search(r'^rustflags = "([^"]*)"$', block, re.M)
+    if not m or m[1] != normal:
+        raise SystemExit(f'expected normal declared rustflags for {stage}')
+    proof = '' if profile == 'normal' else '--cfg ' + (
         'paging_quota_proof' if profile == 'quota' and stage == 'build_kaleidoscope'
         else 'paging_exit_cleanup_proof')
-    s = s[:start] + block.replace('rustflags = ""', f'rustflags = "{flags}"') + s[end:]
+    flags = ' '.join(f for f in (m[1], proof) if f)
+    s = s[:start] + block.replace(m[0], f'rustflags = "{flags}"') + s[end:]
 Path('sexos_build_spec.toml').write_text(s)
 PY
 }
