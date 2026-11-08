@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><title>Loading</title>
+<style>
+body { margin: 16px; }
+h1 { font-size: 22px; margin: 0 0 8px; }
+.done { color: #188038; }
+#track { background: #e8eaed; height: 10px; margin: 8px 0; border-radius: 5px; }
+#bar { background: #1a73e8; height: 10px; width: 0; border-radius: 5px; }
+button { padding: 4px 12px; }
+li.odd { color: #b3261e; }
+</style></head>
+<body>
+<h1 id="h">Waiting for the script</h1>
+<p>Clicks: <b id="count">0</b> <button id="more">Add one</button></p>
+<div id="track"><div id="bar"></div></div>
+<ul id="list"></ul>
+<p id="keys">No key yet. Press k.</p>
+<script>
+const h = document.getElementById('h');
+h.textContent = 'Hello from JavaScript';
+document.title = 'Script test';
+const list = document.getElementById('list');
+const fib = [1, 1];
+for (let i = 2; i < 7; i++) fib.push(fib[i - 1] + fib[i - 2]);
+fib.forEach((n, i) => {
+  const li = document.createElement('li');
+  li.textContent = `fib(${i}) = ${n}, sqrt = ${Math.sqrt(n).toFixed(3)}`;
+  if (i % 2) li.className = 'odd';
+  list.appendChild(li);
+});
+let count = 0;
+document.getElementById('more').addEventListener('click', () => {
+  count++;
+  document.getElementById('count').textContent = count;
+  console.log('clicked', count);
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'k') return;
+  document.getElementById('keys').textContent = 'You pressed k.';
+  e.preventDefault();
+  console.log('key k');
+});
+let width = 0;
+const timer = setInterval(() => {
+  width += 25;
+  document.getElementById('bar').style.width = width + '%';
+  if (width >= 100) { clearInterval(timer); h.className = 'done'; console.log('animation done'); }
+}, 40);
+window.addEventListener('load', () => console.log('ready', document.querySelectorAll('li').length));
+</script>
+</body></html>

@@ -100,6 +100,24 @@ impl Window {
             if let Some(event) = self.event(&m) { return event; }
         }
     }
+    /// The next key or close if one is already waiting, otherwise `None` at once.
+    pub fn poll(&mut self) -> Option<Event> {
+        if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if let Some(event) = self.event(&m) { return Some(event); }
+        }
+        None
+    }
+    /// Like [`Window::next`], but gives up after about `ms` milliseconds.
+    pub fn next_within(&mut self, ms: u64) -> Option<Event> {
+        let end = sex_pdx::get_ticks().saturating_add(ms);
+        loop {
+            if let Some(e) = self.poll() { return Some(e); }
+            let now = sex_pdx::get_ticks();
+            if now >= end { return None; }
+            let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
+        }
+    }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.
     pub fn close(self) -> ! { sex_pdx::task_finish(0) }
 }

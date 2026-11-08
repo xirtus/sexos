@@ -1045,6 +1045,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-js"
+version = "0.1.0"
+dependencies = [
+ "sex-html",
+ "wasmi",
+]
+
+[[package]]
 name = "sex-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1157,6 +1165,7 @@ dependencies = [
  "sex-font",
  "sex-html",
  "sex-image",
+ "sex-js",
 ]
 
 [[package]]
@@ -1694,6 +1703,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-js",
  "sex-pdx",
  "sex-web",
 ]

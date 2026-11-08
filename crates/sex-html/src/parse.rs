@@ -20,6 +20,25 @@ const CLOSES_P: &[&str] = &[
 
 pub fn is_void(tag: &str) -> bool { VOID.contains(&tag) }
 
+/// Parses `src` as the contents of an element (`innerHTML`) and moves the resulting
+/// nodes under `parent` in `dom`, after its existing children.
+pub fn parse_into(dom: &mut Dom, parent: NodeId, src: &str) {
+    let mut frag = parse(src);
+    let mut tops = Vec::new();
+    for part in ["head", "body"] {
+        if let Some(p) = frag.find(part) { tops.extend(frag.nodes[p].children.iter().copied()); }
+    }
+    for top in tops { graft(dom, parent, &mut frag, top); }
+}
+
+fn graft(dom: &mut Dom, parent: NodeId, frag: &mut Dom, node: NodeId) {
+    let kind = core::mem::replace(&mut frag.nodes[node].kind, Kind::Document);
+    let id = dom.create(kind);
+    dom.insert(parent, id, None);
+    let children = core::mem::take(&mut frag.nodes[node].children);
+    for c in children { graft(dom, id, frag, c); }
+}
+
 pub fn parse(src: &str) -> Dom {
     let mut b = Builder { dom: Dom::new(), stack: Vec::new(), head: None, body: None };
     let bytes = src.as_bytes();

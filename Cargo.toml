@@ -29,6 +29,7 @@ members = [
     "apps/web",
     "crates/sex-app",
     "crates/sex-html",
+    "crates/sex-js",
     "crates/sex-web",
     "apps/hum",
     "purple-scanout",
@@ -88,3 +89,13 @@ codegen-units = 1
 [profile.release.package.sex-web]
 opt-level = "z"
 codegen-units = 1
+
+# Scripts run on wasmi; unoptimized it is too slow for the time budget even in tests.
+[profile.dev.package.wasmi]
+opt-level = 3
+[profile.dev.package.wasmi_core]
+opt-level = 3
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+[profile.dev.package.wasmparser]
+opt-level = 3

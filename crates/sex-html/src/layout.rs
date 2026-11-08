@@ -55,7 +55,9 @@ impl Item {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Link { pub x: i32, pub y: i32, pub w: i32, pub h: i32, pub href: String }
+/// Something the person can activate: a link, a button, or an element a script listens to.
+/// `href` is empty when it is not a link.
+pub struct Link { pub x: i32, pub y: i32, pub w: i32, pub h: i32, pub href: String, pub node: NodeId }
 
 pub struct Page {
     pub width: i32,
@@ -311,7 +313,7 @@ impl<'a> Layout<'a> {
     }
 
     fn push_link(&mut self, n: NodeId) -> bool {
-        if self.dom.tag(n) == Some("a") && self.dom.attr(n, "href").is_some() { self.link_stack.push(n); true } else { false }
+        if self.dom.activatable(n) { self.link_stack.push(n); true } else { false }
     }
 
     /// Normal flow of a block container's children. Returns content height and first baseline.
@@ -696,9 +698,9 @@ impl<'a> Layout<'a> {
         let href = String::from(self.dom.attr(a, "href").unwrap_or(""));
         // Join with the previous rectangle of the same link on the same line.
         if let Some(last) = self.links.last_mut() {
-            if last.href == href && last.y == y && last.h == h && last.x + last.w >= x - 8 && last.x <= x { last.w = x + w - last.x; return; }
+            if last.node == a && last.y == y && last.h == h && last.x + last.w >= x - 8 && last.x <= x { last.w = x + w - last.x; return; }
         }
-        self.links.push(Link { x, y, w, h, href });
+        self.links.push(Link { x, y, w, h, href, node: a });
     }
 
     fn table_rows(&self, table: NodeId) -> Vec<NodeId> {

@@ -1,7 +1,23 @@
 //! Renders an HTML file to a binary PPM the way the Web program draws it:
 //! `cargo run -p sex-web --example page -- in.html out.ppm [width height scroll focus bar-text]`
 //! With a bar text the whole window is drawn (bar included), as the program does.
+//! Scripts run as in the program; `actions` (after the bar text) is a comma list of
+//! `click<link index>` and `key<character>`, each followed by running timers until none are left.
 use sex_web::{paint, sex_html, Fonts, Target};
+
+fn clock() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64
+}
+
+/// Runs timers and animation frames until the page has none left.
+fn settle(script: &mut sex_js::Script<sex_js::Document>) {
+    for _ in 0..1000 {
+        let next = script.dispatch("tick").unwrap();
+        if next < 0 { return; }
+        std::thread::sleep(std::time::Duration::from_millis(next as u64));
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -21,8 +37,33 @@ fn main() {
     let sheets: Vec<String> = sex_html::stylesheet_links(&dom).iter().filter_map(|l| std::fs::read_to_string(base.join(l)).ok()).collect();
     let sheet_refs: Vec<&str> = sheets.iter().map(|s| s.as_str()).collect();
     let bar_h = if args.len() > 6 { sex_web::BAR } else { 0 };
-    let styles = sex_html::styles(&dom, &sheet_refs, w, h - bar_h);
-    let page = sex_html::layout::layout(&dom, &styles, w, &fonts);
+    let scripts: Vec<String> = dom.descendants(0).into_iter().filter(|&n| dom.tag(n) == Some("script"))
+        .map(|n| match dom.attr(n, "src") { Some(s) => std::fs::read_to_string(base.join(s)).unwrap_or_default(), None => dom.text_content(n) }).collect();
+    let doc = sex_js::Document::new(dom, "", (w, h - bar_h), clock);
+    let lay = |doc: &sex_js::Document, fonts: &Fonts| {
+        let styles = sex_html::styles(&doc.dom, &sheet_refs, w, h - bar_h);
+        sex_html::layout::layout(&doc.dom, &styles, w, fonts)
+    };
+    let mut page = lay(&doc, &fonts);
+    if !scripts.is_empty() {
+        let mut script = sex_js::Script::new(doc, sex_js::Limits::default()).unwrap();
+        for (i, s) in scripts.iter().enumerate() { let _ = script.eval(s, &format!("script{i}")); }
+        script.dispatch("ready").unwrap();
+        settle(&mut script);
+        page = lay(script.page(), &fonts);
+        for action in args.get(7).map(|a| a.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default() {
+            if let Some(i) = action.strip_prefix("click") {
+                let node = page.links[i.parse::<usize>().unwrap()].node;
+                script.dispatch(&format!("click\t{node}")).unwrap();
+            } else if let Some(k) = action.strip_prefix("key") {
+                script.dispatch(&format!("key\tkeydown\t{k}\t\t0")).unwrap();
+                script.dispatch(&format!("key\tkeyup\t{k}\t\t0")).unwrap();
+            }
+            settle(&mut script);
+            page = lay(script.page(), &fonts);
+        }
+        for (l, t) in script.page_mut().log.drain(..) { eprintln!("console {l}: {t}"); }
+    }
     let mut buf = vec![0u32; (w * h) as usize];
     let focus = args.get(5).and_then(|v| v.parse::<i64>().ok()).filter(|f| *f >= 0).map(|f| f as usize);
     match args.get(6) {
