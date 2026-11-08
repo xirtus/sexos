@@ -10,6 +10,8 @@ ROOT=Path(__file__).resolve().parents[1]
 SOURCE=(ROOT/'apps/hello/src/main.rs').read_text()
 TEXT=re.search(r'const TEXT: &\[u8\] = b"(.*?)";',SOURCE)[1].encode().decode('unicode_escape')
 def text_ink(path,frame,font,advance=12,line=18):
+ """Fully covered Geist Mono pixels of TEXT in `frame`, and how many aren't the text colour."""
+ import geist_cells
  width,_,pixels=ppm_rgb(path.read_bytes(),min_width=1,min_height=1)
  x0,y0=frame[0]+8,frame[1]+36
  bottom=frame[1]+frame[3]-8
@@ -19,15 +21,13 @@ def text_ink(path,frame,font,advance=12,line=18):
  for content in TEXT.split('\n'):lines+=[content[i:i+cols] for i in range(0,len(content),cols)] or ['']
  for row,content in enumerate(lines):
   for col,char in enumerate(content):
-   for gy,bits in enumerate(glyph(font,char)):
-    for gx in range(5):
-     if bits&(1<<(4-gx)):
-      x=x0+col*advance+gx*2;y=y0+row*line+gy*2
-      if y>=bottom:continue
-      # The pointer rests at the screen's centre and may cover a glyph.
-      if 636<=x<660 and 398<=y<432:continue
-      ink+=1
-      missing+=pixels[(y*width+x)*3:(y*width+x)*3+3]!=b'\xe0\xf0\xff'
+   for gx,gy in geist_cells.solid(char):
+    x=x0+col*advance+gx;y=y0+row*line+gy
+    if y>=bottom:continue
+    # The pointer rests at the screen's centre and may cover a glyph.
+    if 636<=x<660 and 398<=y<432:continue
+    ink+=1
+    missing+=pixels[(y*width+x)*3:(y*width+x)*3+3]!=b'\xe0\xf0\xff'
  return ink,missing
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--runs',type=int,default=6);a=p.parse_args()

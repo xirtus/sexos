@@ -2422,3 +2422,23 @@ row no longer waits for the row before it to end.
 - **Gates.** New `window_float` (drag, then open a program: the tiling leaves the moved window
   alone), program disk, launch, Jot, browser web and filesystem at 1 core. Python tests and
   all non-QEMU gates except the older ones.
+
+## Geist on screen (2026-11-08)
+
+- **What runs now.** Window text is Geist Mono, anti-aliased, and title bars are Geist Sans,
+  proportional, both by Vercel under the SIL Open Font License 1.1 (`assets/fonts/geist`,
+  with `OFL.txt`). The old 5x7 bitmap font stays for small text (windows under 256 pixels
+  wide), the SilkBar clock, and the few letters Geist lacks.
+- **Design.** `scripts/make_font.py` renders the fonts once into `crates/sex-pdx/src/font_geist.rs`:
+  Geist Mono as 12x18 cells of 8-bit coverage, which are exactly the cells of the existing
+  text grid, so wrapping, selection and every layout metric stay as they were; Geist Sans
+  as 18x18 cells with their own advances for titles. Display blends coverage onto the
+  surface's colour (`coverage_blend`), in both the per-pixel and the row-run paths.
+- **Oracles.** Display's host tests and the program pixel oracles now read the same table
+  (`scripts/geist_cells.py`): a glyph's fully covered pixels must be exactly the text colour.
+- **Limits.** One size. Text is still a fixed grid, so Geist Sans isn't used for body text
+  yet; that needs proportional layout, which the Browser's HTML work will bring. Some older
+  native gates that compare glyph pixels against the 5x7 font (Quil and Browser reader
+  pixel gates) weren't rerun and will need the new oracle.
+- **Gates.** Program disk, launch, file, Jot, net and browser web at 1 core; Display's host
+  gates rewritten for Geist; Python tests and all non-QEMU gates except the older ones.

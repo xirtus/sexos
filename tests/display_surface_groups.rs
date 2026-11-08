@@ -15,6 +15,7 @@ static mut TEXT_STAGES:[text_transaction::Stage;MAX_SURFACES]=[text_transaction:
 static mut BITMAP_STORES:bitmap_stores::Stores<{app_catalog::count(app_catalog::App::Browser)}>=bitmap_stores::Stores::UNBOUND;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/font_geist.rs"]pub mod font_geist;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod surface_lifecycle;
@@ -52,22 +53,35 @@ include!("fixtures/compositor_reference.rs");
   let mut s=Surface{x:0,y:50,w:width,h:100,text_len:1,text_color:0xfedcba,..surf(9,156)};
   s.text_buf[0]=byte;if selected{s.selection_end=1;}recompute_text_lines(&mut s);
   let scale=surface_text_scale(&s);
+  // Full size draws Geist Mono's coverage over the surface colour; small size and
+  // letters Geist lacks keep the 5x7 font.
+  let scalar=sex_pdx::text_encoding::cell(&s.text_buf[..1],0).map(|c|c.0);
+  let geist=if scale==2{scalar.filter(|c|*c!=9&&*c!=10).and_then(font_geist::cell)}else{None};
   for y in 0..9*scale {for x in 0..6*scale {
    let rows=if (32..=126).contains(&byte){FONT_ASCII_5X7[(byte-32)as usize]}else if byte==9{[0;7]}else{[31,17,21,21,21,17,31]};
    let ink=x/scale<5&&y/scale<7&&rows[y/scale]&(1<<(4-x/scale))!=0;
-   let expected=if byte==b'\n'{None}else if ink{Some(0xfedcba)}else if selected{Some(0xff36577c)}else{None};
+   let back=if selected{Some(0xff36577c)}else{None};
+   let expected=if byte==b'\n'{None}else if let Some(cell)=geist{
+    let a=cell[y*font_geist::CELL_W+x];if a==0{back}else{Some(coverage_blend(0xfedcba,back.unwrap_or(s.color),a))}
+   }else if ink{Some(0xfedcba)}else{back};
    assert_eq!(surface_text_fg_at(8+x,62+y,&s),expected,"w={width} byte={byte} selected={selected} x={x} y={y}");
   }}
   assert_eq!(s.text_buf[0],byte);assert_eq!((s.selection_start,s.selection_end),(0,if selected{1}else{0}));
  }}}
 }
 #[test]fn actual_toolbar_titles_keep_lowercase_at_fixed_integer_metrics(){
- let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-14)/2;
+ // Geist Sans, proportional: each glyph at its own advance, blended onto the bar.
+ let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-font_geist::TITLE_H)/2;
  for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..]),(308,&b"Quil"[..]),(309,&b"Quil"[..]),(310,&b"Quil"[..]),(311,&b"Quil"[..]),(312,&b"Quil"[..])]{
-  for (column,byte)in title.iter().enumerate(){for y in 0..14 {for x in 0..12 {
-   let ink=x/2<5&&FONT_ASCII_5X7[(*byte-32)as usize][y/2]&(1<<(4-x/2))!=0;
-   assert_eq!(toolbar_title_fg_at(x0+column*12+x,y0+y,sid,0),if ink{Some(0xffffff)}else{None});
-  }}}
+  let mut left=x0;
+  for byte in title.iter(){let (advance,cell)=&font_geist::TITLE[(*byte-32)as usize];
+   for y in 0..font_geist::TITLE_H {for x in 0..*advance as usize {
+    let a=if x<font_geist::TITLE_W{cell[y*font_geist::TITLE_W+x]}else{0};
+    let want=(a!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(0),0,a));
+    assert_eq!(toolbar_title_fg_at(left+x,y0+y,sid,0),want,"sid={sid} byte={byte} x={x} y={y}");
+   }}
+   left+=*advance as usize;
+  }
  }
 }
 // Literal accepted64 legacy mutation behavior, separate from new helpers.
@@ -116,7 +130,8 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
   assert_eq!(composite_pixel(120,120,600,500,0,focus, &capture_scene(600,500,focus)),before[index]);
  }
  SURFACES[0].text_buf[0]=b'A';SURFACES[0].text_len=1;SURFACES[0].text_color=0xfedcba;recompute_text_lines(&mut SURFACES[0]);
- for focus in[0,300]{assert_eq!(surface_text_fg_at(110,136,&SURFACES[0]),Some(0xfedcba));assert_eq!(composite_pixel(110,136,600,500,0,focus, &capture_scene(600,500,focus)),0xfedcba);}
+ let (ax,ay)=solid_a();let (px,py)=(SURFACES[0].x as usize+8+ax,SURFACES[0].y as usize+FRAME_TOP_BAR_HEIGHT_PX+8+ay);
+ for focus in[0,300]{assert_eq!(surface_text_fg_at(px,py,&SURFACES[0]),Some(0xfedcba));assert_eq!(composite_pixel(px,py,600,500,0,focus, &capture_scene(600,500,focus)),0xfedcba);}
  // Actual surface ownership and actual winner selection both precede sampling.
  SURFACES[0].owner_pd=9;assert_eq!(composite_pixel(170,180,600,500,0,0, &capture_scene(600,500,0)),0x204060);SURFACES[0].owner_pd=15;
  SURFACES[1]=Surface{color:0xabcdef,..surf(8,888)};assert_eq!(composite_pixel(170,180,600,500,0,888, &capture_scene(600,500,888)),0xabcdef);
@@ -193,6 +208,15 @@ unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32
  }}}}
 }}
 fn cat(pd:u32)->Catalog{Catalog{slot:pd as usize,target_pd:pd,task_id:pd,surface_id:if pd==9{156}else{154},coordinator_pd:3}}
+/// Full-size text is Geist Mono where Geist has the letter: its coverage over `back`.
+/// None means the 5x7 font applies.
+fn geist_pixel(scalar:u32,scale:usize,x:usize,y:usize,text:u32,back:u32)->Option<u32>{
+ if scale!=2||scalar==9||scalar==10{return None}
+ let cell=font_geist::cell(scalar)?;let a=cell[y*font_geist::CELL_W+x];
+ Some(if a==0{back}else{coverage_blend(text,back,a)})
+}
+/// A pixel Geist covers fully in 'A', relative to its cell: drawn exactly in the text colour.
+fn solid_a()->(usize,usize){let c=font_geist::cell(b'A' as u32).unwrap();let i=c.iter().position(|a|*a==255).unwrap();(i%font_geist::CELL_W,i/font_geist::CELL_W)}
 fn surf(pd:u32,sid:u64)->Surface{Surface{owner_pd:pd,surface_id:sid,x:100,y:100,w:400,h:300,color:0x123456,active:true,..SURFACE_EMPTY}}
 fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 #[test]fn secondary_ids_reserved_only_by_exact_boot_catalog(){
@@ -235,7 +259,8 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  for focus in[0,201,156]{APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,focus, &capture_scene(1000,800,focus)),0x123456);assert_eq!(APP_PRESENT_BITS,1);
  APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,127,1000,800,0,focus, &capture_scene(1000,800,focus)),FRAME_TOP_BAR_DIVIDER_COLOR);assert_eq!(APP_PRESENT_BITS,0);
  // A top-row glyph foreground uses actual scaled font coordinates.
- assert_eq!(composite_pixel(118,148,1000,800,0,focus, &capture_scene(1000,800,focus)),0xfedcba);}
+ let (ax,ay)=solid_a();let (px,py)=(SURFACES[0].x as usize+8+ax,SURFACES[0].y as usize+12+ay);
+ assert_eq!(composite_pixel(px,py,1000,800,0,focus, &capture_scene(1000,800,focus)),0xfedcba);}
  SURFACES[1]=SURFACE_EMPTY;APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0xabcdef,156, &capture_scene(1000,800,156)),0xabcdef);assert_eq!(APP_PRESENT_BITS,0);
  SURFACES[1]=frame();FRAME_GROUPS.observe(&SURFACES);assert_eq!(composite_pixel(150,180,1000,800,0,201, &capture_scene(1000,800,201)),0x123456);
  // Another focused window occludes children: no false presented bit survives.
@@ -244,7 +269,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  SURFACES[3]=Surface{color:0xaabbcc,..surf(3,152)};
  SURFACES[3].text_len=1;SURFACES[3].text_buf[0]=b'A';SURFACES[3].text_color=0xf0f8ff;recompute_text_lines(&mut SURFACES[3]);
  APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,888, &capture_scene(1000,800,888)),0xaabbcc);assert_eq!(APP_PRESENT_BITS,0);
- assert_eq!(composite_pixel(110,112,1000,800,0,888, &capture_scene(1000,800,888)),0xf0f8ff);
+ let (ax,ay)=solid_a();assert_eq!(composite_pixel(108+ax,112+ay,1000,800,0,888, &capture_scene(1000,800,888)),0xf0f8ff);
 }}
 #[test]fn launcher_overlay_requires_shell_owner_and_hide_restores_app_winner(){
  let g=FrameGroups::new();let mut s=[surf(8,888),surf(3,152)];
@@ -745,13 +770,14 @@ fn reference_contrast(a:u32,b:u32)->f64{
     for x in 162..246{
      let foreground=toolbar_title_fg_at(x-100,y-100,sid,background);
      let want=foreground.unwrap_or(background);
-     if let Some(ink)=foreground{glyph_pixels+=1;assert_eq!(ink,expected);assert!(reference_contrast(ink,background)>=4.5);}
+     // Edges are blended; the fully covered pixels carry the contrasting ink itself.
+     if let Some(ink)=foreground{if ink==expected{glyph_pixels+=1;assert!(reference_contrast(ink,background)>=4.5);}}
      assert_eq!(composite_pixel(x,y,w,h,0x987654,sid, &pixel_scene_13),want,"scalar bg={background:06x} sid={sid} tabs={tabs}");
      assert_eq!(composite_pixel_source(x,y,w,h,0x987654,row.source(x), &pixel_scene_13),want,"scanline bg={background:06x} sid={sid} tabs={tabs}");
      assert_eq!(framebuffer[y*w+x],want,"damage bg={background:06x} sid={sid} tabs={tabs}");
     }
    }
-   assert!(glyph_pixels>0);
+   assert!(glyph_pixels>0,"bg={background:06x} sid={sid} tabs={tabs}");
   }}
  }
  TEST_GLASS_BACKGROUND=None;TEST_BLEND_BACKGROUND=None;SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
@@ -764,7 +790,8 @@ fn reference_contrast(a:u32,b:u32)->f64{
   surface.selection_end=1;
   for y in 62..80{for x in 8..20{if let Some(color)=surface_text_fg_at(x,y,&surface){
    if color==ink{found_ink=true;assert!(reference_contrast(color,desktop_style::NATIVE_CANVAS)>=4.5);assert!(reference_contrast(color,0x36577c)>=4.5);}
-   else{found_background=true;assert_eq!(color,0xff36577c);}
+   // Glyph edges blend the ink into the selection; whatever else shows is the selection.
+   else if color==0xff36577c{found_background=true;}
   }}}
   assert!(found_ink&&found_background);
  }
@@ -813,7 +840,9 @@ fn reference_contrast(a:u32,b:u32)->f64{
     for px in 0..6*factor{let x=28+column*6*factor+px;
      let ink=py/factor<7&&px/factor<5&&glyph[py/factor]&(1<<(4-px/factor))!=0;
      let selected=row==0&&(1..=4).contains(&column);
-     let color=if ink{0xe0f0ff}else if selected{0xff36577c}else{SURFACES[0].color};
+     let scalars=[['A','é','€','😀','\t','Z','\0','\0'],['ö','ß','…','\0','\0','\0','\0','\0']];
+     let back=if selected{0xff36577c}else{SURFACES[0].color};
+     let color=match scalars[row][column]{'\0'=>back,c=>geist_pixel(c as u32,factor,px,py,0xe0f0ff,back).unwrap_or(if ink{0xe0f0ff}else{back})};
      assert_eq!(composite_pixel(x,y,w,h,0,0, &pixel_scene_15),color,"scalar width={width} row={row} col={column}");
      assert_eq!(composite_pixel_source(x,y,w,h,0,cache.source(x), &pixel_scene_15),color,"scanline width={width} row={row} col={column}");
      assert_eq!(framebuffer[y*w+x],color,"damage width={width} row={row} col={column}");
@@ -1014,7 +1043,9 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   for(col,scalar)in['é',' ','X'].into_iter().enumerate(){for y in 0..9*scale{for x in 0..6*scale{
    let rows=scalar_glyph(scalar as u32);
    let marked=x/scale<5&&y/scale<7&&rows[y/scale]&(1<<(4-x/scale))!=0;
-   let expected=if marked{ink+=1;0xfffafafa}else{0xff36577c};
+   let expected=match geist_pixel(scalar as u32,scale,x,y,0xfffafafa,0xff36577c){
+    Some(c)=>{if c!=0xff36577c{ink+=1;}c}
+    None=>if marked{ink+=1;0xfffafafa}else{0xff36577c}};
    assert_eq!(composite_pixel(tx+col*6*scale+x,ty+y,600,300,0xabcdef,focus,&snapshot),expected,"width={width} focus={focus} col={col} x={x} y={y}");
   }}}
   assert!(ink>0);

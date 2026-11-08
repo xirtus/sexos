@@ -4,6 +4,7 @@
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/font_geist.rs"]pub mod font_geist;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
@@ -17,24 +18,35 @@ fn surface(width:u32,text:&[u8])->Surface{
  let mut s=Surface{active:true,x:20,y:60,w:width,h:400,text_color:0x123456,..SURFACE_EMPTY};
  s.text_buf[..text.len()].copy_from_slice(text);s.text_len=text.len()as u16;recompute_text_lines(&mut s);s
 }
+/// What one pixel of a full-size cell shows: Geist Mono coverage where Geist has the
+/// letter, else the 5x7 font doubled; the selection behind either.
+fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
+ let back=if selected{Some(0xff36577c)}else{None};
+ if scalar!=9{if let Some(cell)=font_geist::cell(scalar){
+  let a=cell[y*font_geist::CELL_W+x];return if a==0{back}else{Some(coverage_blend(s.text_color,back.unwrap_or(s.color),a))};
+ }}
+ let glyph=scalar_glyph(scalar);let(row,col)=(y/2,x/2);
+ if row<7&&col<5&&(glyph[row]>>(4-col))&1!=0{Some(s.text_color)}else{back}
+}
 #[test]fn readable_scale_preserves_narrow_overlay_density(){
  assert_eq!(surface_text_scale(&surface(255,b"A")),1);assert_eq!(surface_text_scale(&surface(256,b"A")),2);
  assert_eq!(20*6*2+16,256);
 }
 #[test]fn scaled_glyph_is_exact_four_pixel_replication_with_preserved_color(){
- let s=surface(640,b"A");let glyph=ascii_glyph_index(b'A').unwrap();
- for row in 0..7{for col in 0..5{let want=if(FONT_ASCII_5X7[glyph][row]>>(4-col))&1!=0{Some(s.text_color)}else{None};
- for dy in 0..2{for dx in 0..2{assert_eq!(surface_text_fg_at(28+col*2+dx,72+row*2+dy,&s),want);}}}}
- for y in 72..86{assert_eq!(surface_text_fg_at(38,y,&s),None);assert_eq!(surface_text_fg_at(39,y,&s),None);}
+ // Full size is Geist Mono, one 12x18 cell per character on the same grid.
+ let s=surface(640,b"A");
+ for y in 0..18{for x in 0..12{assert_eq!(surface_text_fg_at(28+x,72+y,&s),cell_pixel(&s,65,x,y,false),"x={x} y={y}");}}
 }
 #[test]fn narrow_glyph_keeps_original_pixel_grid(){
  let s=surface(200,b"A");let glyph=ascii_glyph_index(b'A').unwrap();
  for row in 0..7{for col in 0..5{let want=if(FONT_ASCII_5X7[glyph][row]>>(4-col))&1!=0{Some(s.text_color)}else{None};assert_eq!(surface_text_fg_at(28+col,72+row,&s),want);}}
 }
 #[test]fn lowercase_titles_draw_all_letters_inside_existing_chrome(){
- for(letter,ch)in b"Linen".iter().enumerate(){let mut pixels=0;for y in 0..28{for x in 62+letter*12..62+(letter+1)*12{
-     if toolbar_title_fg_at(x,y,200,0).is_some(){assert!((7..21).contains(&y));pixels+=1;}
- }}assert!(pixels>0,"letter {} ({}) disappeared",letter,*ch);}
+ // Geist Sans, proportional: every letter of the title has ink, inside the bar.
+ let mut left=62;
+ for ch in b"Linen".iter(){let advance=font_geist::TITLE[(*ch-32)as usize].0 as usize;let mut pixels=0;
+  for y in 0..28{for x in left..left+advance{if toolbar_title_fg_at(x,y,200,0).is_some(){assert!((5..23).contains(&y));pixels+=1;}}}
+  assert!(pixels>0,"letter {} disappeared",*ch as char);left+=advance;}
  assert_ne!(ascii_glyph_index(b'i'),ascii_glyph_index(b'I'));assert_eq!(ascii_glyph_index(b'\n'),None);
 }
 #[test]fn newline_wrap_uses_scaled_advance_and_clamps_before_narrowing(){
@@ -50,10 +62,11 @@ fn surface(width:u32,text:&[u8])->Surface{
  let mut s=surface(640,b"A\nB");s.chrome_flags=SURFACE_CHROME_TOP_BAR;
  for y in 60..96{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
  let mut row2pixels=0;for y in 114..128{for x in 28..38{row2pixels+=surface_text_fg_at(x,y,&s).is_some()as usize;}}
- assert!(row2pixels>0);for y in 110..114{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
+ assert!(row2pixels>0);for y in 112..114{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
 }
 #[test]fn native_titles_share_existing_font_and_contrast_ink(){
- for sid in[156,154,300]{let mut pixels=0;for y in 0..28{for x in 62..158{if let Some(color)=toolbar_title_fg_at(x,y,sid,0){assert_eq!(color,0x00FFFFFF);pixels+=1;}}}assert!(pixels>0);}
+ // Fully covered pixels are the contrasting ink itself; edges blend toward the bar.
+ for sid in[156,154,300]{let mut pixels=0;for y in 0..28{for x in 62..158{if toolbar_title_fg_at(x,y,sid,0)==Some(0x00FFFFFF){pixels+=1;}}}assert!(pixels>0);}
 }
 #[test]fn filename_punctuation_keeps_old_indices_and_has_visible_pixels(){
  for ch in b' '..=b'Z'{assert_eq!(ascii_glyph_index(ch),Some((ch-b' ')as usize));}
@@ -93,12 +106,8 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  for (owner,_,panes) in SPINDLE_PANES {for sid in panes {
   let s=owned_surface(owner,sid,244,b"ABCDEFGHIJKLMNOPQRST\nZ");
   assert_eq!(s.wrap_cols,19);assert_eq!(s.line_starts[1],19);
-  let glyph=ascii_glyph_index(b'A').unwrap();
-  for row in 0..7{for col in 0..5{
-   let want=if (FONT_ASCII_5X7[glyph][row]>>(4-col))&1!=0{Some(0x123456)}else{None};
-   for dy in 0..2{for dx in 0..2{assert_eq!(surface_text_fg_at(28+col*2+dx,72+row*2+dy,&s),want);}}
-  }}
-  for y in 72..86{for x in 38..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
+  // Geist uses the whole cell; the next cell is the next letter.
+  for y in 0..18{for x in 0..24{assert_eq!(surface_text_fg_at(28+x,72+y,&s),cell_pixel(&s,if x<12{65}else{66},x%12,y,false));}}
  }}
 }
 #[test]fn terminal_scaled_scalar_controls_and_selection_preserve_cell_boundaries(){
@@ -109,11 +118,8 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  assert_eq!(s.line_starts[1],6);assert_eq!(s.line_cells[1],5);
  s.selection_start=0;s.selection_end=2;
  for (cell,scalar) in [(0,0xe9),(1,9),(2,1),(3,65)] {
-  let glyph=scalar_glyph(scalar);
-  for row in 0..9 {for col in 0..6 {
-   let ink=row<7&&col<5&&(glyph[row]>>(4-col))&1!=0;
-   let want=if ink{Some(s.text_color)}else if cell==0{Some(0xff36577c)}else{None};
-   for dy in 0..2{for dx in 0..2{assert_eq!(surface_text_fg_at(28+cell*12+col*2+dx,72+row*2+dy,&s),want);}}
+  for y in 0..18 {for x in 0..12 {
+   assert_eq!(surface_text_fg_at(28+cell*12+x,72+y,&s),cell_pixel(&s,scalar,x,y,cell==0),"cell={cell} x={x} y={y}");
   }}
  }
  for y in 72..90{for x in 76..88{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
