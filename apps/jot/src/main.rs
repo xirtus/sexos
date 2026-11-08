@@ -31,6 +31,7 @@ fn render(window: &mut Window, note: &[u8], status: &[u8]) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
+    window.title(b"Jot");
     let note = unsafe { &mut *core::ptr::addr_of_mut!(NOTE) };
     let mut len = match files::read(&mut window, FILE, note) {
         Ok(n) => { sex_pdx::serial_record!("[jot.loaded] bytes={}", n); n }

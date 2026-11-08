@@ -45,6 +45,7 @@ fn text(html: &[u8], out: &mut [u8]) -> usize {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
+    window.title(b"Peek");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let url = files::args(&mut window, &mut args);
     let (page, screen) = unsafe { (&mut *core::ptr::addr_of_mut!(PAGE), &mut *core::ptr::addr_of_mut!(SCREEN)) };

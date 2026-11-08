@@ -49,6 +49,14 @@ impl Window {
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
     }
+    /// The name in the window's title bar, up to sixteen characters.
+    pub fn title(&mut self, name: &[u8]) {
+        let mut bytes = [0u8; 16];
+        let n = name.len().min(16);
+        bytes[..n].copy_from_slice(&name[..n]);
+        let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
+        call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+    }
     /// Replaces the window's text. Longer text than the region holds is cut.
     pub fn show(&mut self, text: &[u8]) {
         let text = &text[..text.len().min(sex_pdx::text_region::BYTES as usize)];

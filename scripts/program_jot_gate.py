@@ -37,7 +37,7 @@ def main():
    s=len(t());line('run jot');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
    loaded=g['wait'](r'\[jot.loaded\] bytes=(\d+)',s,60);g['wait'](r'\[jot.ready\]',s,60)
    g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/jot',s,60)
-   g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(2)
+   g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);g['wait'](rf'\[display.app.title\] target={m[1]} surface={m[3]}',s,60);time.sleep(2)
    return int(m[1]),int(m[2]),int(m[3]),int(loaded[1])
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   return g,t,q,keys,expect,chord,jot

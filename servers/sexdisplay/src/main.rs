@@ -1438,6 +1438,24 @@ fn ascii_glyph_index(byte: u8) -> Option<usize> {
     (ASCII_FIRST..=ASCII_LAST).contains(&byte).then(|| (byte - ASCII_FIRST) as usize)
 }
 
+/// Titles programs gave their own windows, by surface. Empty means the catalog's name.
+static mut PROGRAM_TITLES: [(u64, [u8; 16], u8); 16] = [(0, [0; 16], 0); 16];
+fn program_title(surface_id: u64) -> Option<&'static [u8]> {
+    let titles = unsafe { &*core::ptr::addr_of!(PROGRAM_TITLES) };
+    titles.iter().find(|t| t.0 == surface_id && t.2 != 0).map(|t| &t.1[..t.2 as usize])
+}
+fn set_program_title(surface_id: u64, title: Option<[u8; 16]>) {
+    let titles = unsafe { &mut *core::ptr::addr_of_mut!(PROGRAM_TITLES) };
+    let slot = match titles.iter().position(|t| t.0 == surface_id) { Some(i) => i, None => match titles.iter().position(|t| t.0 == 0) { Some(i) => i, None => return } };
+    match title {
+        Some(bytes) => {
+            let len = bytes.iter().position(|b| *b == 0).unwrap_or(16);
+            let ok = len > 0 && bytes[..len].iter().all(|b| (32..127).contains(b));
+            titles[slot] = if ok { (surface_id, bytes, len as u8) } else { (0, [0; 16], 0) };
+        }
+        None => titles[slot] = (0, [0; 16], 0),
+    }
+}
 /// Fixed-position title glyphs choose contrast against the final composed background.
 fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32> {
     const SCALE: usize = 2;
@@ -1450,7 +1468,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -
     let px = ((lx - title_x) / SCALE) % (GLYPH_W + 1);
     let py = (ly - title_y) / SCALE;
     if px >= GLYPH_W { return None; }
-    let title: &[u8] = if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
+    let title: &[u8] = if let Some(own)=program_title(surface_id) { own } else if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
         match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser",app_catalog::App::Program=>b"Program"}
     }else{match surface_id{200=>b"Linen",100=>b"App",_=>return None}};
     let glyph = ascii_glyph_index(*title.get(col)?)?;
@@ -3866,7 +3884,20 @@ pub extern "C" fn _start() -> ! {
                 && msg.arg0 as u32 == UpdateKind::SetActiveApp as u32
                 && !lifecycle.sid_live(msg.arg1 as u32 as u64) { continue; }
             match msg.type_id {
+                sex_pdx::app_lifecycle::OP_APP_TITLE => {
+                    // Only the program row that owns this surface may name it.
+                    if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program && row.shell_surface.is_none()) {
+                        let mut bytes = [0u8; 16];
+                        bytes[..8].copy_from_slice(&msg.arg1.to_le_bytes());
+                        bytes[8..].copy_from_slice(&msg.arg2.to_le_bytes());
+                        set_program_title(msg.arg0, Some(bytes));
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.app.title] target={} surface={}", msg.caller_pd, msg.arg0);
+                    }
+                }
                 sex_pdx::app_lifecycle::OP_APP_PRESENT => {
+                    // A new run starts with the catalog's name until it gives its own.
+                    if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program) { set_program_title(msg.arg0, None); }
                     if lifecycle.request_present(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) {
                         sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request={}", msg.caller_pd, msg.arg0, msg.arg1);
                     }

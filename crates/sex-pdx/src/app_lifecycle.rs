@@ -3,6 +3,9 @@
 //! every service attests custody through its own capability before retirement.
 pub const SLOTS: [usize; crate::app_catalog::COUNT] = crate::app_catalog::LIFECYCLE_SLOTS;
 pub const OP_APP_EXIT: u64 = 0x107;
+/// A program names its own window: sixteen bytes of title, little-endian in two words.
+/// Display takes it only from the row that owns the surface, and forgets it at the next present.
+pub const OP_APP_TITLE: u64 = 0x2D1;
 /// A reusable row has a new task: forget the old run, then acknowledge.
 pub const OP_APP_REBORN: u64 = 0x10F;
 pub const OP_APP_CLOSE: u64 = 0x108;

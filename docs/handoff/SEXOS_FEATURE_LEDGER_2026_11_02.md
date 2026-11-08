@@ -2294,3 +2294,15 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_net` at 1 and 4 cores, with example.com over HTTPS at 1. Browser web,
   fetch, filesystem, program disk, records and SMP at 1 core; Jot and program file passed on
   the first build of this change. Python tests and all non-QEMU gates except the older ones.
+
+## Programs name their own windows (2026-11-08)
+
+- **What runs now.** `Window::title` in sex-app puts the program's name in its title bar:
+  Jot's window says "Jot" and Peek's "Peek", instead of "Program".
+- **Design.** `app_lifecycle::OP_APP_TITLE` (0x2D1) carries sixteen printable bytes. Display
+  takes it only from the program row that owns the surface, and forgets it at the row's
+  next present, so a new run starts with the catalog's name until it gives its own.
+- **Limits.** Sixteen characters. Shell's own view of the window (Atlas, the switcher) still
+  knows it only as a program row.
+- **Gates.** Jot (checks the title arrives), program net and program disk at 1 core; both
+  Display host gates that compile the title path.
