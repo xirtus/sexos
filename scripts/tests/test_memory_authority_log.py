@@ -45,6 +45,14 @@ class MemoryLogTests(unittest.TestCase):
         swapped = swapped.replace("region=5 bytes=3145728 rights=3", "region=5 bytes=3145728 rights=7")
         self.assertTrue(checker.validate(swapped.replace("rights=TMP", "rights=3")))
 
+    def test_later_regions_and_heap_size(self):
+        extra = "\n[boot.memory.region] pd=40 slot=97 region=16896 bytes=4194304 rights=7 peer=6"
+        rows = good().splitlines()
+        rows.insert(7, extra.strip())
+        text = "\n".join(rows).replace("bytes=65536 runtime", "bytes=131072 runtime")
+        self.assertFalse(checker.validate(text))
+        self.assertTrue(checker.validate(good().replace("bytes=65536 runtime", "bytes=0 runtime")))
+
     def test_late_genesis(self):
         rows = good().splitlines()
         rows.append(rows.pop(0))
