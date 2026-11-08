@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A window dragged by its corner changes size on screen, keeps it when other windows open, and the program inside keeps running."""
+"""A window dragged by its corner changes size on screen and floats: the other windows tile the whole area again, and the tiling leaves it be when more windows open."""
 import argparse,re,shutil,time
 from pathlib import Path
 from quil_autosave_gate import boot
@@ -24,6 +24,11 @@ def main():
   nx,ny,nw,nh=map(int,got[-1])
   assert (nx,ny)==(x,y) and w-130<=nw<=w-110 and h-90<=nh<=h-70,(x,y,w,h,got[-1])
   assert re.search(r'\[shell.window.float\]|\[silk.resize.hit\] frame=\d+ surface=201',t()[s:])
+  # The tiled windows take the whole area again, the resized one stays put above them.
+  assert re.search(r'\[shell.window.retile\] frame=\d+ sid=201',t()[s:]),'no retile after resize'
+  r=t()[s:];assert not re.search(r'\[shell.tile.apply\] sid=201 ',r),'tiling moved the resized window'
+  others=[(int(m[0]),int(m[1])) for m in re.findall(r'\[shell.tile.apply\] sid=\d+ x=(-?\d+) y=-?\d+ w=(\d+)',r)]
+  assert any(ox==0 for ox,_ in others),others
   q.cmd('screendump',{'filename':str(a.out/'resized.ppm')});time.sleep(.5)
   # Another window opens: the tiling leaves the resized window as it is.
   s=len(t());palette_select(g['key'],'FocusProgram',palette_commands(ROOT));q.key('ret')
