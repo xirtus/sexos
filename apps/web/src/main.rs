@@ -30,8 +30,6 @@ const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
 const MAX_REDIRECTS: usize = 6;
 const MAX_SCRIPTS: usize = 32;
-/// Layout recurses per nesting level, and scripts call back into it.
-const STACK_BYTES: usize = 2 << 20;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -425,10 +423,10 @@ impl Browser {
     }
 }
 
+// The stack size is linked in (build.rs): layout recurses per nesting level, and
+// scripts call back into it.
 #[no_mangle]
-pub extern "C" fn _start() -> ! { sex_app::with_stack(STACK_BYTES, main) }
-
-extern "C" fn main() -> ! {
+pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Web");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
