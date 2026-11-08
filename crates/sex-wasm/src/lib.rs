@@ -378,6 +378,8 @@ fn link_wasi<H: Host + 'static>(linker: &mut Linker<State<H>>) -> Result<(), was
         let (d, s) = mem.data_and_store_mut(&mut c);
         let mut go = || -> Result<i32, Refusal> {
             let vecs = iovecs(d, iovs, count)?;
+            // A read with nowhere to put bytes takes no input.
+            if vecs.iter().all(|r| r.is_empty()) { put_u32(d, read, 0)?; return Ok(errno::SUCCESS); }
             if s.pending.is_empty() && !s.closed {
                 let mut line = Vec::new();
                 loop {

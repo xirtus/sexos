@@ -267,3 +267,23 @@ fn rust_std_program_runs() {
     let text = String::from_utf8(h.shown.last().unwrap().clone()).unwrap();
     assert_eq!(text, "Hello, Andreas, from Rust on Wasm.\nType words; an empty line ends.\nb a b\n\na: 1\nb: 2\n");
 }
+
+#[test]
+fn an_empty_read_takes_no_input() {
+    let wat = r#"(module
+        (import "wasi_snapshot_preview1" "fd_read" (func $read (param i32 i32 i32 i32) (result i32)))
+        (import "sex" "next" (func $next (result i32)))
+        (import "sex" "exit" (func $exit (param i32)))
+        (memory (export "memory") 1)
+        (func (export "_start")
+            (i32.store (i32.const 8) (i32.const 999))
+            (drop (call $read (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 8)))
+            (i32.store (i32.const 0) (i32.const 100)) (i32.store (i32.const 4) (i32.const 0))
+            (drop (call $read (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 12)))
+            (if (i32.or (i32.load (i32.const 8)) (i32.load (i32.const 12))) (then (call $exit (i32.const 70))))
+            ;; The key is still there for the guest.
+            (call $exit (call $next))))"#;
+    let (o, h) = go(wat, Grants::default(), Rec { keys: vec![Event::Char(b'q')], ..Default::default() });
+    assert_eq!(o, Outcome::Exited(b'q' as i32));
+    assert!(h.shown.is_empty());
+}
