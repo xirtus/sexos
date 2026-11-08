@@ -23,11 +23,11 @@ struct App {
     boot_pages:[PrivatePage;64],boot_count:usize,arena:u64,arena_pages:usize,
     /// Arena pages the run's image spans (none for the BOOT image, which lives in its
     /// own slot), and pages it was given past them since it started.
-    image_pages:usize,grown:usize,
+    image_pages:usize,grown:usize,stack_pages:usize,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:alloc::vec::Vec::new(),count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,last_hint:[0;6],hinted:0,kicked:false}}}
 impl App {
     /// Sets manifest entry `i`, growing the manifest by one when `i` is its end.
     fn put(&mut self,i:usize,page:PrivatePage){
@@ -339,6 +339,9 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
 /// once all five have forgotten the old run: map the image and admit the task.
 /// Check a program file, lay it out in the row's window, and point the row's task
 /// at it. All checks precede the first write. The leaves stay clear until commit.
+/// A run's stack when its file names none, and the most one may ask for.
+const STACK_DEFAULT:u64=1<<20;
+const STACK_MAX:u64=256<<20;
 fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
     use crate::program_image as image;
     if app.arena==0{return Err(DENIED)}
@@ -392,12 +395,23 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
         let Some((at,value))=image::relocation(elf,&parsed,index,arena)else{fail(app,count,"relocation");return Err(DENIED)};
         if !write(at,&value.to_le_bytes()){fail(app,count,"relocation");return Err(DENIED)}
     }
-    app.count=count;app.image_pages=image_pages;app.grown=0;
+    // The stack: at the arena's top, sized by the file (`-z stack-size`) or 1 MiB, with
+    // an unmapped guard page below it, so an overflow faults instead of reaching the heap.
+    let stack_pages=(if parsed.stack==0{STACK_DEFAULT}else{parsed.stack.min(STACK_MAX)}).div_ceil(4096) as usize;
+    if image_pages+stack_pages+1>app.arena_pages{fail(app,count,"stack_room");return Err(DENIED)}
+    for index in app.arena_pages-stack_pages..app.arena_pages{
+        let va=app.arena+(index*4096) as u64;
+        let (Some(leaf),Some(frame))=(crate::boot_memory::existing_leaf_address(va),crate::program_frames::take())else{
+            fail(app,count,"no_memory");return Err(DENIED)};
+        app.put(count,PrivatePage{va,leaf,expected:frame|7|((app.pkey as u64)<<59)|(1<<63)});count+=1;
+    }
+    let rsp=app.arena+(app.arena_pages*4096) as u64-16+(app.stack_top&15);
+    app.count=count;app.image_pages=image_pages;app.grown=0;app.stack_pages=stack_pages;
     let entry=app.arena+parsed.entry;
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
-    unsafe{(*main).rearm(task,entry,app.stack_top,target);}
-    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x}",app.target,task,len,count,entry);
+    unsafe{(*main).rearm(task,entry,rsp,target);}
+    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={}",app.target,task,len,count,entry,stack_pages);
     Ok(())
 }
 /// More memory for the calling program's current run: the arena's next pages after its
@@ -419,7 +433,8 @@ pub fn grow(pd:&ProtectionDomain,want:u64)->[u64;3]{
         let base=app.arena+(app.image_pages*4096) as u64;
         let (first,want)=(app.image_pages+app.grown,want as usize);
         if want==0{return Ok([0,base,app.grown as u64])}
-        if first+want>app.arena_pages{return Err(m::FULL)}
+        // The guard page and the stack above it stay out of reach.
+        if first+want+1+app.stack_pages>app.arena_pages{return Err(m::FULL)}
         let mut leaves=[0u64;m::MAX_PAGES_PER_CALL as usize];
         for (i,index) in (first..first+want).enumerate(){
             let leaf=crate::boot_memory::existing_leaf_address(app.arena+(index*4096) as u64).ok_or(m::DENIED)?;
