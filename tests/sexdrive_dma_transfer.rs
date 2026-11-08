@@ -9,6 +9,7 @@ mod dma_transfer;
 #[path="../apps/sexdrive/src/completion_wait.rs"]mod completion_wait;
 pub fn get_ticks()->u64{driver_read::mock_ticks()}
 pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{driver_read::mock_wait(ticks)}
+pub fn sys_yield(){}
 
 use dma_pool::{DmaError, DmaLease, DmaRegionPool};
 use dma_transfer::DmaTransfer;

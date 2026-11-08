@@ -250,7 +250,7 @@ pub extern "C" fn trampoline_main() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
-                let m = if crate::fs_service::replies_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
+                let m = if crate::fs_service::replies_pending()||crate::fs_service::writes_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);crate::fs_service::commit_when_idle();sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
                 (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2)
             };
         let msg = crate::pdx::ReplayMsg {

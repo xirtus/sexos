@@ -217,13 +217,20 @@ fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
 /// The BOOT main-task inventory already sanctions this self-only timed wait.
 /// No inbox receive or new I/O submission occurs while submitted DMA is held.
 fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::Report{
+    const QUICK_TURNS:u32=256;
+    let mut quick=0u32;
     let cqe=(cq_va as *const u8).wrapping_add(head as usize*16)as *const u32;
     let report=completion_wait::wait(cid,phase,||unsafe{
         // Observe the device's phase/status publication before dependent data.
         let dw3=core::ptr::read_volatile(cqe.add(3));compiler_fence(Ordering::Acquire);
         (core::ptr::read_volatile(cqe.add(2)),dw3)
-    },sex_pdx::get_ticks,||sex_pdx::sys_wait_self_ticks(1));
-    if report.turns>0||report.result.is_err(){
+    },sex_pdx::get_ticks,||{
+        // A device usually answers within microseconds: give the core away briefly
+        // first, and only then sleep whole ticks, so a command does not cost a tick.
+        if quick<QUICK_TURNS{quick+=1;sex_pdx::sys_yield();Ok(())}else{sex_pdx::sys_wait_self_ticks(1)}
+    });
+    // Only slow or failed waits are worth a line; the serial port is slow too.
+    if report.turns>QUICK_TURNS||report.result.is_err(){
         sex_pdx::serial_record!("[sexdrive.nvme.wait] cid={} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",cid,head,phase,report.polls,report.turns,report.elapsed,report.result.map(|_|()));
     }
     report
@@ -1070,38 +1077,25 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         sq_tail as u64
     ); }
 
-    let mut done = false;
-    let mut dw2 = 0u32;
-    let mut dw3 = 0u32;
-    let max_polls = 1_000_000u32;
-    let mut polls = 0u32;
-    let mut last_dw3 = 0u32;
+    // Time-bounded and yielding (completion_wait), like every other I/O path: a fixed
+    // poll count could end before a slow or busy device answered.
+    let max_polls = completion_wait::MAX_POLLS;
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=selftest cid={} cq_head={} phase={} max_polls={}",
         write_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
     ); }
-    for _ in 0..max_polls {
-        polls = polls.wrapping_add(1);
-        let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
-        let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
-        let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
-        last_dw3 = rd_dw3;
-        let cid_now = rd_dw3 & 0xFFFF;
-        let phase_now = (rd_dw3 >> 16) & 0x1;
-        if cid_now == write_cid as u32 && phase_now == cq_phase {
-            done = true;
-            dw2 = rd_dw2;
-            dw3 = rd_dw3;
-            serial_println!(
-                "[sexdrive.nvme.write.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
-            serial_println!(
-                "[sexdrive.block.write.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
-            break;
-        }
+    let report = nvme_wait_completion(io_cq_va, cq_head, write_cid, cq_phase);
+    let (polls, last_dw3) = (report.polls, report.last_dw3);
+    let (done, dw2, dw3) = match report.result { Ok(c) => (true, c.dw2, c.dw3), Err(_) => (false, 0u32, 0u32) };
+    if done {
+        serial_println!(
+            "[sexdrive.nvme.write.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            (dw3 & 0xFFFF) as u64, ((dw3 >> 16) & 1) as u64, dw2 as u64, dw3 as u64
+        );
+        serial_println!(
+            "[sexdrive.block.write.api.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            (dw3 & 0xFFFF) as u64, ((dw3 >> 16) & 1) as u64, dw2 as u64, dw3 as u64
+        );
     }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=selftest cid={} found={} status={} cq_head={} phase={} polls={}",
@@ -1215,34 +1209,19 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         sq_tail as u64
     ); }
 
-    let mut rb_done = false;
-    let mut rb_dw2 = 0u32;
-    let mut rb_dw3 = 0u32;
-    let max_polls = 1_000_000u32;
-    let mut polls = 0u32;
-    let mut last_dw3 = 0u32;
+    let max_polls = completion_wait::MAX_POLLS;
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=selftest cid={} cq_head={} phase={} max_polls={}",
         read_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
     ); }
-    for _ in 0..max_polls {
-        polls = polls.wrapping_add(1);
-        let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
-        let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
-        let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
-        last_dw3 = rd_dw3;
-        let cid_now = rd_dw3 & 0xFFFF;
-        let phase_now = (rd_dw3 >> 16) & 0x1;
-        if cid_now == read_cid as u32 && phase_now == cq_phase {
-            rb_done = true;
-            rb_dw2 = rd_dw2;
-            rb_dw3 = rd_dw3;
-            serial_println!(
-                "[sexdrive.nvme.write.readback.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
-                cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
-            break;
-        }
+    let report = nvme_wait_completion(io_cq_va, cq_head, read_cid, cq_phase);
+    let (polls, last_dw3) = (report.polls, report.last_dw3);
+    let (rb_done, rb_dw2, rb_dw3) = match report.result { Ok(c) => (true, c.dw2, c.dw3), Err(_) => (false, 0u32, 0u32) };
+    if rb_done {
+        serial_println!(
+            "[sexdrive.nvme.write.readback.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
+            (rb_dw3 & 0xFFFF) as u64, ((rb_dw3 >> 16) & 1) as u64, rb_dw2 as u64, rb_dw3 as u64
+        );
     }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=selftest cid={} found={} status={} cq_head={} phase={} polls={}",
