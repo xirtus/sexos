@@ -178,11 +178,16 @@ impl Browser {
             self.buf = Vec::new();
         }
         let scripts = self.scripts(&dom, &base);
+        // Inline handlers (`onclick="..."`) and `javascript:` links need the engine too.
+        let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
+            sex_html::dom::Kind::Element { attrs, .. } => attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
+            _ => false,
+        });
         self.sheets = sheets;
         self.timer = None;
         self.doc = Doc::Plain(Document::new(dom, &base, (W, H - BAR), clock));
         let script_begun = sex_pdx::get_ticks();
-        if !scripts.is_empty() { self.run_scripts(scripts); }
+        if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
         self.relayout();
         sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={} script_ticks={} scripted={}",
@@ -285,6 +290,12 @@ impl Browser {
     }
 
     /// Gives the page a key first. True if a handler kept it.
+    /// A handler may have set a timer without changing the page: ask for a tick now,
+    /// which reports when the next one is due.
+    fn timers_changed(&mut self) {
+        if matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
+    }
+
     #[inline(never)]
     fn page_key(&mut self, key: sex_pdx::app_key::Key) -> bool {
         let name: String = match (nav(key), key.code) {
@@ -308,6 +319,7 @@ impl Browser {
         let kept = script.dispatch(&alloc::format!("key\tkeydown\t{}\t\t{}", name, control)).map_or(false, |r| r == 1);
         let _ = script.dispatch(&alloc::format!("key\tkeyup\t{}\t\t{}", name, control));
         self.after_script(true);
+        self.timers_changed();
         kept
     }
 
@@ -355,6 +367,7 @@ impl Browser {
             }
             let navigated = self.doc.get().navigate.is_some();
             self.after_script(true);
+            self.timers_changed();
             if kept || navigated || href.is_empty() { return; }
         }
         if href.is_empty() || href.starts_with("javascript:") { return; }

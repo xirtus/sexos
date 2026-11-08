@@ -176,3 +176,13 @@ fn startup_time() {
     let _s = page("");
     eprintln!("STARTUP {:?}", t.elapsed());
 }
+
+#[test]
+fn onclick_property_makes_clickable() {
+    let mut s = page("<div id=d>x</div>");
+    s.eval("const d = document.getElementById('d'); d.onclick = () => console.log('hit');", "t.js").unwrap();
+    let d = s.page().dom.descendants(0).into_iter().find(|&n| s.page().dom.attr(n, "id") == Some("d")).unwrap();
+    assert!(s.page().dom.activatable(d));
+    s.dispatch(&format!("click\t{d}")).unwrap();
+    assert_eq!(logs(&mut s), ["0:hit"]);
+}
