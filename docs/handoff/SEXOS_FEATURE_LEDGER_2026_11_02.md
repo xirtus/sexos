@@ -2442,3 +2442,26 @@ row no longer waits for the row before it to end.
   pixel gates) weren't rerun and will need the new oracle.
 - **Gates.** Program disk, launch, file, Jot, net and browser web at 1 core; Display's host
   gates rewritten for Geist; Python tests and all non-QEMU gates except the older ones.
+
+## Pictures in program windows (2026-11-08)
+
+- **What runs now.** A program can draw pixels, not only text: `sex_app::pixels()` hands it
+  an 800x600 canvas and `show_pixels(w, h)` puts it in the window. **View** uses it:
+  `run view @photo.png` shows a PNG up to 800x600, alpha blended over the window colour.
+  A larger picture is refused with a message.
+- **Design.** Each program row gets one BOOT-minted 4 MiB pixel region (`sex_pdx::pixel_region`),
+  writable by the program and read-only for Display, the same shape as the text regions;
+  no region is minted at runtime. Program tenancy covers it, so rows sharing PKU key 8
+  can't read each other's pictures. Display composites the region under the window's
+  text area when the program has said how big the picture is (`OP 0x2D2`), and forgets
+  it when the program presents text again. The PNG decoder now runs inside the program,
+  in the program's own memory (`png::decode_into`), so a malformed file can only crash
+  that program, not Display. The regions come from one buddy reservation per eight
+  rows, since one per row ran out the boot frame reservation table.
+- **ABI.** New Display op `0x2D2` (pixel size), new Region capability slots (97 in programs,
+  600+ in Display). ABI hash updated.
+- **Limits.** PNG only (JPEG is next), no scaling or scrolling, pictures don't move with
+  a floating window drag until the next present. 36 MiB of RAM go to pixel regions at boot.
+- **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
+  900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
+  tests and all non-QEMU gates except the older ones.
