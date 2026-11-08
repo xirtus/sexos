@@ -180,7 +180,8 @@ function say() {
     : 'Facing ' + dir + ' · ' + steps + ' steps · gold is ' + Math.abs(ez - z) + (ez < z ? ' N ' : ' S ') + Math.abs(ex - x) + (ex < x ? ' W' : ' E')
       + (auto ? ' · walking by itself (A stops)' : ' · arrows walk, A walks by itself');
 }
-const FRAMES = 6;
+// Frames per step or turn: few, since a software-drawn frame is slow under emulation.
+const FRAMES = 3;
 function begin(kind, d) {
   if (anim) return;
   if (kind === 'turn') { anim = { kind, from: angle, to: angle + d * Math.PI / 2, t: 0 }; facing = (facing + d + 4) & 3; }

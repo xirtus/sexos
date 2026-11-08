@@ -80,7 +80,7 @@ def main():
   s=len(t());q.key('ret')
   reply=g['wait'](r'\[web.console\] level=0 chess move (\S+) depth (\d+) nodes (\d+) ms (\d+)\n',s,120)
   text=t()
-  assert '[web.script] trapped' not in text,'the computer ran past the script time limit'
+  g['wait'](r'\[web.shown\]',s,60)
   close(target,task)
   s=len(t());target,task,surface,tile,maze_ticks=start('maze')
   g['wait'](r'\[web.console\] level=0 maze ready',s,120);time.sleep(2)
@@ -91,7 +91,8 @@ def main():
   g['wait'](r'\[web.shown\]',s,60);time.sleep(2)
   checked.append(compare('maze-walked',tile))
   close(target,task)
-  text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
+  text=t();assert '[web.script] trapped' not in text and 'InternalError: interrupted' not in text,'a game ran past the script time limit'
+  assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'script_ticks':{'solitaire':sol_ticks,'chess':chess_ticks,'maze':maze_ticks},'maze_walk_seconds':walk_s,'reply':reply[1],'depth':int(reply[2]),'nodes':int(reply[3]),'think_ms':int(reply[4]),'checked':checked})
  finally:g['stop']()
 if __name__=='__main__':main()
