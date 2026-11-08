@@ -13,7 +13,7 @@ pub const ENTRY_BYTES: usize = 32;
 pub const MAX_ENTRIES: usize = (SECTOR - 16) / ENTRY_BYTES;
 pub const NAME_BYTES: usize = 16;
 /// One program's largest file.
-pub const IMAGE_BYTES: usize = 1024 * 1024;
+pub const IMAGE_BYTES: usize = 4 * 1024 * 1024;
 /// The span of frames each program row reserves at BOOT: one run's image first, then
 /// the memory it asks for while it runs (`program_memory`). Bigger than the largest
 /// file, so a program can hold more than it was shipped with.
@@ -51,7 +51,7 @@ pub const NO_MORE_RECORDS: u32 = 7;
 pub fn refusal(code: u64) -> &'static [u8] {
     match code as u32 {
         NOT_FOUND => b"No program by that name.",
-        TOO_LARGE => b"That program is over the 1 MiB limit.",
+        TOO_LARGE => b"That program is over the 4 MiB limit.",
         IO => b"The disk failed while reading the program.",
         CORRUPT => b"The program file is damaged.",
         NOT_A_PROGRAM => b"That file is not a program SexOS can run.",

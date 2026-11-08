@@ -92,6 +92,14 @@ impl Window {
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }
+    /// The next key or close if one is waiting, without waiting.
+    pub fn poll(&mut self) -> Option<Event> {
+        if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if let Some(event) = self.event(&m) { return Some(event); }
+        }
+        None
+    }
     /// The next key or close, waiting for one.
     pub fn next(&mut self) -> Event {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take().unwrap(); }
