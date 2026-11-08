@@ -1,0 +1,348 @@
+// Chess rules, the computer player and the keyboard controls, shared by the 2D and 3D
+// chess pages. Original SexOS code, GPL-3.0-only. The page defines draw(), which
+// these call after each change.
+'use strict';
+// ---- the engine ----
+// Squares 0..63, 0 = a8, 63 = h1. White pieces 1..6 (P N B R Q K), black -1..-6.
+const P = 1, N = 2, B = 3, R = 4, Q = 5, K = 6;
+const VALUE = [0, 100, 320, 330, 500, 900, 20000];
+const MATE = 100000;
+const fileOf = s => s & 7, rankOf = s => s >> 3;
+function targets(steps) {
+  const t = [];
+  for (let s = 0; s < 64; s++) {
+    t.push(steps.map(([dr, df]) => [rankOf(s) + dr, fileOf(s) + df]).filter(([r, f]) => r >= 0 && r < 8 && f >= 0 && f < 8).map(([r, f]) => r * 8 + f));
+  }
+  return t;
+}
+const KNIGHT = targets([[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]]);
+const KING = targets([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]);
+const DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
+// RAYS[s][d]: the squares from s outwards in direction d (0-3 straight, 4-7 diagonal).
+const RAYS = [];
+for (let s = 0; s < 64; s++) {
+  RAYS.push(DIRS.map(([dr, df]) => {
+    const out = [];
+    for (let r = rankOf(s) + dr, f = fileOf(s) + df; r >= 0 && r < 8 && f >= 0 && f < 8; r += dr, f += df) out.push(r * 8 + f);
+    return out;
+  }));
+}
+// Piece-square bonuses from White's side (index 0 = a8); Black reads them mirrored.
+const PST = [null,
+  [0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 10, 10, 20, 30, 30, 20, 10, 10, 5, 5, 10, 25, 25, 10, 5, 5,
+   0, 0, 0, 20, 20, 0, 0, 0, 5, -5, -10, 0, 0, -10, -5, 5, 5, 10, 10, -20, -20, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0],
+  [-50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10, 0, -30, -30, 5, 15, 20, 20, 15, 5, -30,
+   -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10, 5, -30, -40, -20, 0, 5, 5, 0, -20, -40, -50, -40, -30, -30, -30, -30, -40, -50],
+  [-20, -10, -10, -10, -10, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 10, 10, 5, 0, -10, -10, 5, 5, 10, 10, 5, 5, -10,
+   -10, 0, 10, 10, 10, 10, 0, -10, -10, 10, 10, 10, 10, 10, 10, -10, -10, 5, 0, 0, 0, 0, 5, -10, -20, -10, -10, -10, -10, -10, -10, -20],
+  [0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, 10, 10, 10, 10, 5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5,
+   -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, 0, 0, 0, 5, 5, 0, 0, 0],
+  [-20, -10, -10, -5, -5, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 5, 5, 5, 0, -10, -5, 0, 5, 5, 5, 5, 0, -5,
+   0, 0, 5, 5, 5, 5, 0, -5, -10, 5, 5, 5, 5, 5, 0, -10, -10, 0, 5, 0, 0, 0, 0, -10, -20, -10, -10, -5, -5, -10, -10, -20],
+  [-30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30,
+   -20, -30, -30, -40, -40, -30, -30, -20, -10, -20, -20, -20, -20, -20, -20, -10, 20, 20, 0, 0, 0, 0, 20, 20, 20, 30, 10, 0, 0, 10, 30, 20],
+];
+
+// Each piece's worth on each square, from White's side: PV[(piece + 6) * 64 + square].
+const PV = new Int32Array(13 * 64);
+for (let p = 1; p <= 6; p++) for (let s = 0; s < 64; s++) {
+  PV[(p + 6) * 64 + s] = VALUE[p] + PST[p][s];
+  PV[(6 - p) * 64 + s] = -(VALUE[p] + PST[p][(7 - rankOf(s)) * 8 + fileOf(s)]);
+}
+const pos = { b: new Int8Array(64), side: 1, castle: 15, ep: -1, king: [60, 4], score: 0 };
+function reset() {
+  const back = [R, N, B, Q, K, B, N, R];
+  pos.b.fill(0);
+  for (let f = 0; f < 8; f++) { pos.b[f] = -back[f]; pos.b[8 + f] = -P; pos.b[48 + f] = P; pos.b[56 + f] = back[f]; }
+  pos.side = 1; pos.castle = 15; pos.ep = -1; pos.king = [60, 4];
+  pos.score = 0;
+  for (let s = 0; s < 64; s++) pos.score += PV[(pos.b[s] + 6) * 64 + s];
+}
+const kingOf = side => pos.king[side > 0 ? 0 : 1];
+
+// Is square s attacked by `by` (1 White, -1 Black)?
+function attacked(s, by) {
+  const b = pos.b, f = fileOf(s);
+  const pr = rankOf(s) + by; // an attacking pawn stands one rank behind, from its own side
+  if (pr >= 0 && pr < 8) {
+    const pp = by * P;
+    if (f > 0 && b[pr * 8 + f - 1] === pp) return true;
+    if (f < 7 && b[pr * 8 + f + 1] === pp) return true;
+  }
+  let t = KNIGHT[s];
+  for (let i = 0; i < t.length; i++) if (b[t[i]] === by * N) return true;
+  t = KING[s];
+  for (let i = 0; i < t.length; i++) if (b[t[i]] === by * K) return true;
+  const rays = RAYS[s], q = by * Q;
+  for (let d = 0; d < 8; d++) {
+    const ray = rays[d], slider = by * (d < 4 ? R : B);
+    for (let i = 0; i < ray.length; i++) {
+      const p = b[ray[i]];
+      if (p === 0) continue;
+      if (p === slider || p === q) return true;
+      break;
+    }
+  }
+  return false;
+}
+
+// Moves: from | to << 6 | promote << 12 | kind << 16 (1 en passant, 2 castle, 3 double step).
+// Generated into MV from index n; returns the new end.
+const MV = new Int32Array(64 * 256), SC = new Int32Array(64 * 256);
+function gen(n, capturesOnly) {
+  const b = pos.b, side = pos.side;
+  for (let s = 0; s < 64; s++) {
+    const p = b[s] * side;
+    if (p <= 0) continue;
+    if (p === P) {
+      const dir = -8 * side, r = rankOf(s), last = side > 0 ? 1 : 6, start = side > 0 ? 6 : 1;
+      const one = s + dir;
+      if ((!capturesOnly || r === last) && b[one] === 0) {
+        if (r === last) { MV[n++] = s | one << 6 | Q << 12; MV[n++] = s | one << 6 | N << 12; }
+        else {
+          MV[n++] = s | one << 6;
+          if (r === start && b[one + dir] === 0) MV[n++] = s | (one + dir) << 6 | 3 << 16;
+        }
+      }
+      const f = fileOf(s);
+      for (let df = -1; df <= 1; df += 2) {
+        if (f + df < 0 || f + df > 7) continue;
+        const t = one + df;
+        if (b[t] * side < 0) {
+          if (r === last) { MV[n++] = s | t << 6 | Q << 12; MV[n++] = s | t << 6 | N << 12; } else MV[n++] = s | t << 6;
+        } else if (t === pos.ep) MV[n++] = s | t << 6 | 1 << 16;
+      }
+    } else if (p === N || p === K) {
+      const ts = (p === N ? KNIGHT : KING)[s];
+      for (let i = 0; i < ts.length; i++) {
+        const t = ts[i], q = b[t] * side;
+        if (q > 0 || (capturesOnly && q === 0)) continue;
+        MV[n++] = s | t << 6;
+      }
+      if (p === K && !capturesOnly) {
+        const home = side > 0 ? 60 : 4, ks = side > 0 ? 1 : 4, qs = side > 0 ? 2 : 8;
+        if (s === home && pos.castle & (ks | qs) && !attacked(s, -side)) {
+          if (pos.castle & ks && !b[s + 1] && !b[s + 2] && b[s + 3] === side * R && !attacked(s + 1, -side)) MV[n++] = s | (s + 2) << 6 | 2 << 16;
+          if (pos.castle & qs && !b[s - 1] && !b[s - 2] && !b[s - 3] && b[s - 4] === side * R && !attacked(s - 1, -side)) MV[n++] = s | (s - 2) << 6 | 2 << 16;
+        }
+      }
+    } else {
+      const rays = RAYS[s], d1 = p === B ? 8 : p === R ? 4 : 8;
+      for (let d = p === R || p === Q ? 0 : 4; d < d1; d++) {
+        const ray = rays[d];
+        for (let i = 0; i < ray.length; i++) {
+          const t = ray[i], q = b[t] * side;
+          if (q > 0) break;
+          if (q < 0) { MV[n++] = s | t << 6; break; }
+          if (!capturesOnly) MV[n++] = s | t << 6;
+        }
+      }
+    }
+  }
+  return n;
+}
+
+const undoStack = [];
+// Castling rights lost when a piece leaves or arrives at these squares.
+const RIGHTS = new Uint8Array(64).fill(15);
+RIGHTS[60] = 15 & ~3; RIGHTS[63] = 15 & ~1; RIGHTS[56] = 15 & ~2; RIGHTS[4] = 15 & ~12; RIGHTS[7] = 15 & ~4; RIGHTS[0] = 15 & ~8;
+function put(s, p) { const b = pos.b; pos.score += PV[(p + 6) * 64 + s] - PV[(b[s] + 6) * 64 + s]; b[s] = p; }
+function make(m) {
+  const b = pos.b, from = m & 63, to = m >> 6 & 63, promo = m >> 12 & 15, kind = m >> 16, p = b[from];
+  undoStack.push(m, b[to], pos.castle, pos.ep, pos.score);
+  put(to, promo ? promo * pos.side : p);
+  put(from, 0);
+  if (kind === 1) put(to + 8 * pos.side, 0);
+  if (kind === 2) { if (to > from) { put(to - 1, b[to + 1]); put(to + 1, 0); } else { put(to + 1, b[to - 2]); put(to - 2, 0); } }
+  if (p === K || p === -K) pos.king[pos.side > 0 ? 0 : 1] = to;
+  pos.castle &= RIGHTS[from] & RIGHTS[to];
+  pos.ep = kind === 3 ? (from + to) >> 1 : -1;
+  pos.side = -pos.side;
+}
+function unmake() {
+  const score = undoStack.pop(), ep = undoStack.pop(), castle = undoStack.pop(), captured = undoStack.pop(), m = undoStack.pop();
+  pos.side = -pos.side; pos.ep = ep; pos.castle = castle;
+  const b = pos.b, from = m & 63, to = m >> 6 & 63, promo = m >> 12 & 15, kind = m >> 16;
+  const p = promo ? P * pos.side : b[to];
+  b[from] = p; b[to] = captured;
+  if (kind === 1) b[to + 8 * pos.side] = -P * pos.side;
+  if (kind === 2) { if (to > from) { b[to + 1] = b[to - 1]; b[to - 1] = 0; } else { b[to - 2] = b[to + 1]; b[to + 1] = 0; } }
+  if (p === K || p === -K) pos.king[pos.side > 0 ? 0 : 1] = from;
+  pos.score = score;
+}
+// Legal moves: pseudo-legal ones that do not leave the mover's king attacked.
+function legal() {
+  const out = [], end = gen(0, false);
+  for (let i = 0; i < end; i++) { const m = MV[i]; make(m); if (!attacked(kingOf(-pos.side), pos.side)) out.push(m); unmake(); }
+  return out;
+}
+const inCheck = () => attacked(kingOf(pos.side), -pos.side);
+
+// Alpha-beta with a node budget, so how well the computer plays does not depend on the clock;
+// the deadline only guards the page's script time limit (10 s) on a slow machine.
+let nodes = 0, budget = 0, deadline = 0;
+const ABORT = {};
+// Scores moves [a, b) for ordering: captures by victim then attacker, promotions, the rest.
+function scoreMoves(a, e) {
+  const b = pos.b;
+  for (let i = a; i < e; i++) {
+    const m = MV[i], v = b[m >> 6 & 63];
+    SC[i] = v ? VALUE[v < 0 ? -v : v] * 16 - VALUE[b[m & 63] < 0 ? -b[m & 63] : b[m & 63]] / 100 : (m >> 12 & 15) ? 8000 : 0;
+  }
+}
+// Moves the best remaining move to index i (picked one at a time: a cutoff skips the rest).
+function pick(i, e) {
+  let best = i;
+  for (let j = i + 1; j < e; j++) if (SC[j] > SC[best]) best = j;
+  if (best !== i) { const m = MV[i], s = SC[i]; MV[i] = MV[best]; SC[i] = SC[best]; MV[best] = m; SC[best] = s; }
+  return MV[i];
+}
+function quiesce(alpha, beta, depth, n) {
+  if (++nodes > budget || (nodes & 15) === 0 && performance.now() > deadline) throw ABORT;
+  const stand = pos.score * pos.side;
+  if (stand >= beta || depth === 0) return stand;
+  if (stand > alpha) alpha = stand;
+  const e = gen(n, true);
+  scoreMoves(n, e);
+  for (let i = n; i < e; i++) {
+    const m = pick(i, e);
+    make(m);
+    if (attacked(kingOf(-pos.side), pos.side)) { unmake(); continue; }
+    const v = -quiesce(-beta, -alpha, depth - 1, e);
+    unmake();
+    if (v >= beta) return v;
+    if (v > alpha) alpha = v;
+  }
+  return alpha;
+}
+function search(depth, alpha, beta, ply, n) {
+  if (depth === 0) return quiesce(alpha, beta, 3, n);
+  if (++nodes > budget || (nodes & 15) === 0 && performance.now() > deadline) throw ABORT;
+  const e = gen(n, false);
+  scoreMoves(n, e);
+  let any = false;
+  for (let i = n; i < e; i++) {
+    const m = pick(i, e);
+    make(m);
+    if (attacked(kingOf(-pos.side), pos.side)) { unmake(); continue; }
+    any = true;
+    const v = -search(depth - 1, -beta, -alpha, ply + 1, e);
+    unmake();
+    if (v >= beta) return v;
+    if (v > alpha) alpha = v;
+  }
+  if (!any) return inCheck() ? -MATE + ply : 0;
+  return alpha;
+}
+function think(limit) {
+  nodes = 0; budget = limit; deadline = performance.now() + 4000;
+  let moves = legal();
+  MV.set(moves, 0);
+  scoreMoves(0, moves.length);
+  moves = moves.map((m, i) => [SC[i], m]).sort((x, y) => y[0] - x[0]).map(x => x[1]);
+  let best = moves[0], depth = 0;
+  const saved = undoStack.length;
+  try {
+    for (let d = 1; d <= 8; d++) {
+      let alpha = -MATE - 1, top = moves[0];
+      const scored = [];
+      for (const m of moves) {
+        make(m);
+        const v = -search(d - 1, -MATE - 1, -alpha, 1, 0);
+        unmake();
+        scored.push([v, m]);
+        if (v > alpha) { alpha = v; top = m; }
+      }
+      best = top; depth = d;
+      // Search the best move first next time.
+      moves = scored.sort((x, y) => y[0] - x[0]).map(x => x[1]);
+      if (alpha > MATE - 100) break;
+    }
+  } catch (e) {
+    if (e !== ABORT) throw e;
+    while (undoStack.length > saved) unmake();
+  }
+  return { move: best, depth, nodes };
+}
+
+
+// ---- the game ----
+const LEVELS = [['Easy', 100], ['Medium', 400], ['Hard', 1500]];
+let level = 1, cur = 52, picked = -1, history = [], lastMove = 0, note = '', over = '', busy = false, flip = false;
+const NAMES = ['', '', 'N', 'B', 'R', 'Q', 'K'];
+const sqName = s => 'abcdefgh'[fileOf(s)] + (8 - rankOf(s));
+function describe(m) {
+  const from = m & 63, to = m >> 6 & 63, kind = m >> 16, p = Math.abs(pos.b[from]);
+  if (kind === 2) return to > from ? 'O-O' : 'O-O-O';
+  const capture = pos.b[to] !== 0 || kind === 1;
+  const promo = m >> 12 & 15;
+  return NAMES[p] + sqName(from) + (capture ? 'x' : '-') + sqName(to) + (promo ? '=' + NAMES[promo] : '');
+}
+function play(m) {
+  const text = describe(m);
+  make(m);
+  history.push({ m, text });
+  lastMove = m;
+  const replies = legal();
+  if (!replies.length) over = inCheck() ? (pos.side > 0 ? 'Checkmate. Black wins.' : 'Checkmate. You win!') : 'Stalemate. A draw.';
+  else if (pos.b.every(p => p === 0 || p === K || p === -K)) over = 'Only kings left. A draw.';
+  else if (history.length >= 400) over = 'A long game: a draw.';
+}
+function newGame() { reset(); undoStack.length = 0; history = []; lastMove = 0; picked = -1; over = ''; cur = 52; note = 'You play White'; }
+function computer() {
+  if (over || pos.side > 0) { busy = false; draw(); return; }
+  const t = performance.now();
+  const r = think(LEVELS[level][1]);
+  play(r.move);
+  busy = false;
+  note = 'Depth ' + r.depth + ', ' + r.nodes + ' positions';
+  console.log('chess move ' + history[history.length - 1].text + ' depth ' + r.depth + ' nodes ' + r.nodes + ' ms ' + Math.round(performance.now() - t));
+  // Drawn on the next tick: thinking may have used most of this one's script time.
+  setTimeout(draw, 0);
+}
+
+
+// ---- controls ----
+function select() {
+  if (over || busy) return;
+  const p = pos.b[cur];
+  if (picked >= 0) {
+    const options = legal().filter(m => (m & 63) === picked && (m >> 6 & 63) === cur);
+    if (options.length) {
+      // A pawn reaching the end becomes a queen.
+      const m = options.find(m => (m >> 12 & 15) === 0 || (m >> 12 & 15) === Q);
+      picked = -1; note = '';
+      play(m);
+      if (!over) { busy = true; setTimeout(computer, 20); }
+      return;
+    }
+  }
+  if (p > 0 && legal().some(m => (m & 63) === cur)) { picked = picked === cur ? -1 : cur; note = ''; }
+  else if (p > 0) { picked = -1; note = 'cannot move'; }
+  else picked = -1;
+}
+function key(k) {
+  const up = flip ? 8 : -8;
+  switch (k) {
+    case 'ArrowUp': if (cur + up >= 0 && cur + up < 64) cur += up; break;
+    case 'ArrowDown': if (cur - up >= 0 && cur - up < 64) cur -= up; break;
+    case 'ArrowLeft': if (fileOf(cur) !== (flip ? 7 : 0)) cur += flip ? 1 : -1; break;
+    case 'ArrowRight': if (fileOf(cur) !== (flip ? 0 : 7)) cur += flip ? -1 : 1; break;
+    case 'Enter': case ' ': select(); break;
+    case 'Escape': picked = -1; break;
+    case 'u': case 'U': case 'Backspace':
+      if (busy) break;
+      picked = -1; over = '';
+      // Take back the computer's reply and your move.
+      for (let i = pos.side < 0 ? 1 : 2; i > 0 && history.length; i--) { history.pop(); unmake(); }
+      lastMove = history.length ? history[history.length - 1].m : 0;
+      note = 'took back';
+      break;
+    case 'n': case 'N': if (!busy) newGame(); break;
+    case 'l': case 'L': level = (level + 1) % LEVELS.length; break;
+    default: return false;
+  }
+  draw();
+  return true;
+}
+document.addEventListener('keydown', e => { if (key(e.key)) e.preventDefault(); });

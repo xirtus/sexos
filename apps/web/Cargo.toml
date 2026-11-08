@@ -20,6 +20,10 @@ path = "src/main.rs"
 name = "maze"
 path = "src/main.rs"
 
+[[bin]]
+name = "chess3d"
+path = "src/main.rs"
+
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-app = { path = "../../crates/sex-app" }
