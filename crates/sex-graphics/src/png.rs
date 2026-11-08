@@ -65,8 +65,21 @@ pub fn decode(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32; M
     result
 }
 
+/// The same decoder for a larger picture, into buffers the caller sizes: up to `max_w` by
+/// `max_h` pixels, with `scratch` holding every inflated scanline (see `scratch_bytes`).
+pub fn decode_into(input: &[u8], scratch: &mut [u8], out: &mut [u32], max_w: usize, max_h: usize) -> Result<(usize, usize), Error> {
+    if out.len() < max_w * max_h { return Err(Error::Size); }
+    let result = decode_with(input, scratch, out, max_w, max_h, usize::MAX);
+    if result.is_err() { for b in scratch.iter_mut() { unsafe { core::ptr::write_volatile(b, 0); } } }
+    result
+}
+/// Inflated bytes a non-interlaced 8-bit RGBA image of this size needs, the common worst case.
+pub const fn scratch_bytes(w: usize, h: usize) -> usize { h * (w * 4 + 1) }
 fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32; MAX_PIXELS]) -> Result<(usize, usize), Error> {
-    if input.len() > MAX_INPUT_BYTES { return Err(Error::InputTooLarge); }
+    decode_with(input, scratch, out, MAX_DIMENSION, MAX_DIMENSION, MAX_INPUT_BYTES)
+}
+fn decode_with(input: &[u8], scratch: &mut [u8], out: &mut [u32], max_w: usize, max_h: usize, max_input: usize) -> Result<(usize, usize), Error> {
+    if input.len() > max_input { return Err(Error::InputTooLarge); }
     if !is_png(input) { return Err(Error::Signature); }
     let mut at = 8;
     let mut header: Option<(usize, usize, u8, u8, bool)> = None;
@@ -90,7 +103,7 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
                 if header.is_some() || at != 8 || len != 13 { return Err(Error::Header); }
                 let (w, h) = (be32(data) as usize, be32(&data[4..]) as usize);
                 let (depth, color, method, filter, interlace) = (data[8], data[9], data[10], data[11], data[12]);
-                if w == 0 || h == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION { return Err(Error::Size); }
+                if w == 0 || h == 0 || w > max_w || h > max_h { return Err(Error::Size); }
                 let depth_ok = match color { 0 => matches!(depth, 1 | 2 | 4 | 8 | 16), 3 => matches!(depth, 1 | 2 | 4 | 8), 2 | 4 | 6 => matches!(depth, 8 | 16), _ => false };
                 if !depth_ok || method != 0 || filter != 0 || interlace > 1 { return Err(Error::Unsupported); }
                 header = Some((w, h, color, depth, interlace == 1));
@@ -142,7 +155,7 @@ fn decode_inner(input: &[u8], scratch: &mut [u8; SCRATCH_BYTES], out: &mut [u32;
     let size = |&(x0, y0, dx, dy): &(usize, usize, usize, usize)| ((w + dx - 1 - x0.min(w)) / dx, (h + dy - 1 - y0.min(h)) / dy);
     let mut need = 0;
     for p in passes { let (pw, ph) = size(p); if pw > 0 && ph > 0 { need += ph * (row_bytes(pw) + 1); } }
-    if need > SCRATCH_BYTES { return Err(Error::Size); }
+    if need > scratch.len() { return Err(Error::Size); }
     let mut z = Bits { src: idat, bit: 0, nbits: 0 };
     // zlib header: CM=8, window <= 32K, no preset dictionary, check bits.
     let (cmf, flg) = (z.byte()?, z.byte()?);

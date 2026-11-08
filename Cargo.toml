@@ -22,6 +22,7 @@ members = [
     "apps/fortune",
     "apps/jot",
     "apps/peek",
+    "apps/view",
     "crates/sex-app",
     "apps/hum",
     "purple-scanout",
