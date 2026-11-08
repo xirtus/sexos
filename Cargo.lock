@@ -1025,6 +1025,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-html"
+version = "0.1.0"
+
+[[package]]
 name = "sex-http"
 version = "0.1.0"
 dependencies = [
@@ -1144,6 +1148,15 @@ dependencies = [
  "sex-pdx",
  "wasmi",
  "wat",
+]
+
+[[package]]
+name = "sex-web"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-html",
+ "sex-image",
 ]
 
 [[package]]
@@ -1674,6 +1687,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc9c5aca783b3f1838be89f3f9937c528b90ec5faa6fb62d809726c16a7d8f7"
 dependencies = [
  "wast",
+]
+
+[[package]]
+name = "web"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-web",
 ]
 
 [[package]]

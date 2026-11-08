@@ -2680,3 +2680,40 @@ row no longer waits for the row before it to end.
   than seven BOOT region grants, a 128 KiB runtime heap, PKU keys that no longer equal PD
   ids, with leaves checked against each client's own key). Host builds on ARM got
   non-x86 stubs for `program_memory::grow` and `virtio::layout`.
+## Web pages with CSS, laid out and drawn in Geist (2026-11-08)
+
+- **What runs now.** `run web` is a graphical browser program: HTML is parsed, styled
+  with CSS and laid out inside the program, then drawn with proportional Geist Sans (Geist
+  Mono for code) into its pixel surface. `run +net web URL` follows redirects and fetches
+  the page's screen style sheets (`<link rel=stylesheet>`, print sheets skipped) and its
+  PNG/JPEG pictures. Up/Down/Space/PgUp/PgDn/Home/End scroll, Right/Left move a focus ring
+  between links, Enter opens one (fragments scroll to the anchor), Backspace goes back,
+  `/` types an address. The text Browser (kaleidoscope) is unchanged.
+- **Design.** Two new crates, both `no_std` + `alloc`, integer-only:
+  `crates/sex-html` (parser with implied `html/head/body`, void and raw-text elements,
+  self-closing `p/li/td`, entities; CSS with compound/descendant/child/sibling selectors,
+  attribute selectors, `:not :nth-child :first-child`, specificity, `!important`, inline
+  `style`, `@media` width queries, `em/rem/%/vw/pt`, `calc()` approximated; the cascade
+  indexes rules by id/class/tag; layout does block flow with sibling margin collapsing,
+  line boxes with half-leading and baseline alignment, `text-align`, `white-space`,
+  lists with markers, automatic table layout from min/max-content (colspan,
+  `border-collapse`), flex rows (grow, basis, shrink, wrap, gap, `justify-content`,
+  `align-items:center`), inline blocks, images, form controls; output is a display list
+  plus link rectangles and anchors) and `crates/sex-web` (a `Host` measuring with
+  sex-font, glyphs through sex-font's cache, synthetic bold and oblique, rounded boxes with
+  4x4-sampled corners, nearest-neighbour pictures from sex-image). Layout widths and paint
+  pen positions come from one function, so text lands where layout put it. `sex-app::net`
+  gains `fetch`, which keeps headers (`Reply::header`) for redirects; `get` is unchanged.
+  The parser runs in the program's confinement, never in Display. No ABI change.
+- **Evidence.** 15 host tests in sex-html (block-level images, inline fragment anchors and cell alignment among them). `scripts/program_web_gate.py`: the welcome page,
+  after Down, and with a link focused match `cargo run -p sex-web --example page`
+  exactly (0 of 9020 sampled pixels differ, each). `scripts/program_web_net_gate.py`
+  serves `scripts/web_site` over HTTP: a 302 is followed, 1 sheet and 1 PNG load, the page
+  matches the host render exactly, Right+Enter opens the second page (exact), Backspace
+  returns (exact). Both at 1 and 4 cores. Welcome layout takes 22 to 102 ticks, a repaint
+  12 to 37 ticks under TCG.
+- **Limits.** Drawn at 410x330, the size Shell tiles a program, because a program can't
+  learn its window size yet. Floats and positioned boxes stay in normal flow; no
+  `::before`, no grid (laid out as blocks), no web fonts, no bold Geist file (synthetic).
+  No scripts yet: next is QuickJS-NG on Wasm with DOM bindings, then Canvas 2D. HTTP/1.0
+  only, so no keep-alive; gzip not requested. Gates need a fresh `--out` directory.

@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<title>Welcome to Web</title>
+<style>
+  body { font-family: Geist, sans-serif; margin: 0; color: #1f1f1f; background: #fafafa }
+  header { background: #0d1420; color: white; padding: 14px 20px }
+  header h1 { margin: 0; font-size: 22px }
+  header p { margin: 4px 0 0; color: #9fb3c8; font-size: 13px }
+  main { padding: 4px 16px 16px; max-width: 760px }
+  @media (max-width: 480px) { .cards { flex-direction: column } header { padding: 10px 16px } }
+  .cards { display: flex; gap: 10px; flex-wrap: wrap }
+  .card { flex: 1; background: white; border: 1px solid #dadce0; border-radius: 8px; padding: 10px 12px; min-width: 150px }
+  .card h3 { margin: 0 0 4px; font-size: 15px; color: #0b57d0 }
+  .card p { margin: 0; font-size: 13px; color: #444 }
+  table { border-collapse: collapse; width: 100% }
+  th { background: #e8f0fe; text-align: left }
+  td, th { padding: 4px 8px; border-bottom: 1px solid #e0e0e0 }
+  code { color: #b3261e }
+  .note { background: #fff8e1; border-left: 4px solid #f9a825; padding: 8px 12px; border-radius: 4px }
+</style>
+</head>
+<body>
+<header>
+  <h1>Web, the SexOS browser</h1>
+  <p>HTML parsed, styled with CSS and laid out in this program, drawn with Geist.</p>
+</header>
+<main>
+<h2>What works</h2>
+<div class="cards">
+  <div class="card"><h3>HTML</h3><p>Forgiving parser: implied tags, entities &amp; tables.</p></div>
+  <div class="card"><h3>CSS</h3><p>Selectors, cascade, <b>!important</b>, media queries.</p></div>
+  <div class="card"><h3>Layout</h3><p>Blocks, lines, lists, tables and flex rows.</p></div>
+</div>
+<p>Text flows in <b>proportional Geist Sans</b>, with <i>emphasis</i>, <u>underlines</u>,
+<s>strikes</s>, <code>code in Geist Mono</code> and <a href="https://example.com/">links you can follow</a>.
+Press <b>→</b> and <b>←</b> to move between links and <b>Enter</b> to open one.</p>
+<ol>
+  <li>Type <code>/</code> then an address to go there</li>
+  <li><b>Up</b>, <b>Down</b> and <b>Space</b> scroll</li>
+  <li><b>Backspace</b> goes back</li>
+</ol>
+<table>
+  <tr><th>Key</th><th>Does</th></tr>
+  <tr><td>→ / ←</td><td>Next or previous link</td></tr>
+  <tr><td>Enter</td><td>Open the link</td></tr>
+  <tr><td>F11</td><td>Close</td></tr>
+</table>
+<p class="note">Pages from the internet need the network: start with <code>run +net web https://example.com</code>.</p>
+<ul><li>Scripts come next, through QuickJS on Wasm.</li><li>Then Canvas 2D, and WebGL for three.js.</li></ul>
+</main>
+</body>
+</html>
