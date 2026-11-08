@@ -33,6 +33,12 @@ pub const PREPARE: u8 = 12;
 /// A program's own arguments, as typed after its name. Programs only.
 pub const ARGS: u8 = 13;
 pub const ARGS_MAX: usize = 256;
+/// Writes a boot partition image, a file, to the disk's boot slot and marks it bootable.
+/// Spindle only: it replaces how the machine starts.
+pub const INSTALL: u8 = 14;
+/// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
+pub const BOOT_LBA: u64 = 65536;
+pub const BOOT_SECTORS: u64 = 65536;
 
 pub const OK: u8 = 0;
 pub const UNAVAILABLE: u8 = 1;

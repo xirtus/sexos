@@ -2325,3 +2325,27 @@ row no longer waits for the row before it to end.
   drawn as a bar, and a long note scrolls to keep the cursor on screen. `sex_app::nav` maps
   movement keys whichever keyboard code Shell passed. The gate moves left into `buy milk`,
   inserts `fresh `, jumps to the end and appends, then Spindle reads `buy fresh milk and eggs`.
+
+## SexOS installs itself to a disk (2026-11-08)
+
+- **What runs now.** `install boot.img` makes the disk start SexOS. In the gate, SexOS booted
+  from the ISO, wrote a file, fetched a 12 MiB boot image over the network, installed it, and
+  then the machine started from the NVMe disk alone, under UEFI firmware with no ISO, and
+  read back the file written before the install.
+- **Design.** `scripts/make_boot_image.py` builds the image on the host: FAT, Limine's UEFI
+  loader taken from the ISO's own Limine files, `limine.cfg`, the kernel and every module.
+  Files' new `INSTALL` writes the image into a boot slot at LBA 65536 (32 MiB, between the
+  program store and the filesystem), syncs, and only then writes one MBR entry, bootable,
+  type EFI System, over the image. A half-written install never boots. Only Spindle may ask.
+  SexOS was first checked to boot under UEFI firmware (OVMF), which it does.
+- **Also fixed.** `fetch` gave up on any download longer than 60 seconds; the deadline now
+  resets whenever bytes arrive, so only a silent server times out.
+- **ABI.** `fs::INSTALL` (14), `fs::BOOT_LBA`, `fs::BOOT_SECTORS`. The program store must stay
+  below LBA 65536. `quil_autosave_gate.boot()` takes `SEXOS_GATE_FIRMWARE` and
+  `SEXOS_GATE_NO_CDROM`.
+- **Limits.** The boot image has to come from somewhere: today a host builds it and the machine
+  fetches it. There's no installer that copies the running system, no partition editor, and
+  an MBR, not GPT, so it overwrites whatever partition table the disk had. Not tried on a
+  real machine. BIOS-only machines can't boot it.
+- **Gates.** New `install` at 1 core. Python tests and all non-QEMU gates; `fetch` itself ran
+  only inside the install gate on this build.

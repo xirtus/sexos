@@ -7,7 +7,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64) }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
 
@@ -81,7 +81,7 @@ impl Client {
         let Some(mut n) = self.join(first, &mut path) else { sb.push(b"Path too long."); return true };
         if cmd == b"cd" && first.is_empty() { self.cwd_len = 0; return true; }
         match cmd {
-            b"ls" | b"cd" | b"cat" => {}
+            b"ls" | b"cd" | b"cat" | b"install" => {}
             b"mkdir" | b"rm" | b"touch" | b"write" | b"append" => {}
             b"mv" => {
                 if rest.is_empty() { sb.push(b"Usage: mv FROM TO"); return true; }
@@ -102,6 +102,7 @@ impl Client {
             b"rm" => self.start(Cmd::Rm, w::REMOVE, n, 0, 0),
             b"mv" => self.start(Cmd::Mv, w::RENAME, n, 0, 0),
             b"cat" => self.start(Cmd::Cat, w::READ, n, 0, 4096),
+            b"install" => { say!(sb, "Installing. Don't turn the machine off."); self.start(Cmd::Install, w::INSTALL, n, 0, 0) }
             b"touch" => self.start(Cmd::Create, w::CREATE, n, 0, 0),
             _ => {
                 // Text after the path, with a line ending. Create it if needed.
@@ -275,6 +276,7 @@ impl Client {
                 say!(sb, "{} MiB free of {} MiB", free * 4096 / (1024 * 1024), total * 4096 / (1024 * 1024));
             }
             Cmd::Mkdir | Cmd::Rm | Cmd::Mv | Cmd::Create => { say!(sb, "ok"); }
+            Cmd::Install => { say!(sb, "Installed {} KiB. This disk now starts SexOS.", value / 2); }
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };

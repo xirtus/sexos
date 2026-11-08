@@ -782,6 +782,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
+            sb.push(b"  install IMG  make this disk start SexOS from a boot image");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
@@ -1378,7 +1379,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"ls" if unsafe{fs_commands::FS.submit_line(cmd,args,sb)} => true,
         b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
-        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
+        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         b"ls"=>{let accepted=unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::List)};sb.push(if accepted{b"Object listing queued."}else{b"Object listing unavailable."});true}
         b"probe-help"=>{sb.push(b"DISK/LS  DISK-STAT <ID>  MKDOC <NAME>");sb.push(b"FILLDOCX <ID> <BYTES>  CATDOCX <ID>");sb.push(b"TRUNCDOC <ID> <BYTES>  MVDOC <ID> <NAME>");sb.push(b"RMDOC <ID>  PROBE-STATUS/CANCEL/RETRY");sb.push(b"Mutations may be partial; retry reads only.");true},
         b"probe-status"=>{let state=unsafe{STORAGE_PROBE.status()};sb.push(state.as_bytes());sex_pdx::serial_record!("[spindle.probe.status] target={} state={}",instance_pd(),state);true},

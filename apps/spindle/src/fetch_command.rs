@@ -245,6 +245,8 @@ impl Fetch {
                     return true;
                 }
                 let mut bytes = value as usize;
+                // A download that keeps arriving may take as long as it needs; only silence ends it.
+                self.deadline = now + 60_000;
                 if !self.in_body {
                     let take = bytes.min(HEAD_MAX - self.head_len);
                     self.head[self.head_len..self.head_len + take].copy_from_slice(&region[..take]);

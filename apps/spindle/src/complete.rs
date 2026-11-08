@@ -59,6 +59,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"history-retry",
     b"history-status",
     b"input",
+    b"install",
     b"keys",
     b"launch",
     b"launch-outcomes",
