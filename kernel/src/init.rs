@@ -823,6 +823,7 @@ pub fn init() {
     assert_eq!((silkshell_id, sexdisp_id), (sex_pdx::uiir::SHELL_PD, sex_pdx::uiir::DISPLAY_PD), "BOOT_UIIR_DOMAINS");
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
     crate::boot_memory::init_text_regions(sexdisp_id);
+    crate::boot_memory::init_pixel_regions(sexdisp_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
     crate::boot_memory::init_boot_image(sexfiles_id);
