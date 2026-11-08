@@ -147,7 +147,11 @@ Wasm guests, programs from disk with arguments, a heap, tiny-skia drawing and Ge
 any size.
 
 Gaps:
-- **Clipboard** between programs (text first, then images). Nothing exists today.
+- **Clipboard for every program.** A text clipboard already works: Shell brokers it
+  (`servers/silk-shell/src/clipboard.rs`, `crates/sex-pdx/src/clipboard.rs`), Ctrl+C/X/V
+  route through it, Quil can copy, cut and paste, and the Browser can copy, up to 12 KiB.
+  Missing: programs run from disk (`App::Program` is refused), Spindle, Jot and View;
+  larger text through a shared region; images and rich text.
 - **Keyboard layouts and compose/dead keys.** Only US QWERTY exists.
 - **Settings**: time zone and clock (sex-time exists), display scale, layout, network,
   sound, default apps, about this system.
@@ -224,8 +228,9 @@ touch `kernel/src/boot_memory.rs` (rows and leases) should merge one at a time.
 
 ### Wave 2: what makes it pleasant every day
 
-7. **Clipboard, keyboard layouts and Settings.** A clipboard service with revocable
-   shared regions, layouts (US, UK, DE, FR, Nordic, Dvorak) with dead keys, a Settings
+7. **Clipboard everywhere, keyboard layouts and Settings.** Extend the existing Shell
+   clipboard broker to disk programs (an SDK call), Spindle, Jot and View, with a
+   revocable shared region for large text and images; layouts (US, UK, DE, FR, Nordic, Dvorak) with dead keys, a Settings
    app for time zone, scale, layout, network and sound.
 8. **Real-PC network and sound drivers.** e1000e and igc (testable on QEMU e1000e and
    igb), Intel HDA with the mixer below. r8169 needs real hardware, so it waits.
@@ -260,7 +265,7 @@ touch `kernel/src/boot_memory.rs` (rows and leases) should merge one at a time.
 - [ ] Wired network on virtio and Intel NICs, parallel flows, TLS 1.2 and 1.3.
 - [ ] Browser shows images, fills forms, keeps cookies, has tabs and downloads.
 - [ ] Sound on HDA and virtio with a mixer; music and video players.
-- [ ] Clipboard, keyboard layouts, Settings.
+- [ ] Clipboard in every program, keyboard layouts, Settings.
 - [ ] Signed A/B updates with rollback.
 - [ ] Crash reports on disk; every desktop service restarts.
 - [ ] 24-hour soak at 4 cores with no fault and flat memory.
