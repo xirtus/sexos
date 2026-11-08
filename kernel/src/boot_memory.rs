@@ -155,22 +155,38 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     crate::serial_println!("[boot.program.arena] base={:#x} pages={} bytes={} key={}", base, pages, bytes, pkey);
     (base, pages)
 }
-/// The leaf for `va` in a program arena, making its page table on the span's first use.
-/// The leaf comes back clear; the caller maps it. Only the arena's owner asks, under the
-/// program rows' lock, so no two callers make one span's table.
-pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
+/// The leaf for `va` in a program arena, making its page tables on the span's first use.
+/// The leaf comes back clear; the caller maps it. Tables are linked directly, zeroed,
+/// so no page is ever present while they are made (a temporary mapping would be
+/// visible to a program on another core that shares the key). One lock orders makers,
+/// so two cores cannot both create one table.
+pub fn arena_leaf(va: u64, _pkey: u8) -> Option<u64> {
+    use x86_64::registers::control::Cr3;
+    static MAKE: spin::Mutex<()> = spin::Mutex::new(());
     if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
-    let flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
-    // The tables are made by mapping one page; it is a zeroed frame, unmapped again at once.
-    let scratch = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0)?;
-    zero_frame(scratch);
-    let mapped = crate::memory::manager::GLOBAL_VAS.lock().as_mut()
-        .map(|vas| vas.map_physical_range(VirtAddr::new(va & !4095), scratch, 4096, flags, pkey).is_ok()).unwrap_or(false);
-    let leaf = existing_leaf_address(va);
-    if let Some(leaf) = leaf { unsafe { core::ptr::write_volatile(leaf as *mut u64, 0); } }
-    x86_64::instructions::tlb::flush(VirtAddr::new(va & !4095));
-    crate::memory::allocator::GLOBAL_ALLOCATOR.free(scratch, 0);
-    if mapped { leaf } else { None }
+    let _held = MAKE.lock();
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    // Present, writable, user: the leaf alone decides access and carries the key.
+    const LINK: u64 = 0b111;
+    let mut table = Cr3::read().0.start_address().as_u64();
+    for shift in [39, 30, 21] {
+        let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
+        let mut entry = unsafe { core::ptr::read_volatile(slot) };
+        if entry & 1 == 0 {
+            let frame = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0)?;
+            zero_frame(frame);
+            entry = frame | LINK;
+            unsafe { core::ptr::write_volatile(slot, entry); }
+        }
+        if entry & (1 << 7) != 0 { return None; }
+        if entry & LINK != LINK {
+            // A kernel mapping made this table; user and write here only let the leaf decide.
+            entry |= LINK;
+            unsafe { core::ptr::write_volatile(slot, entry); }
+        }
+        table = entry & 0x000f_ffff_ffff_f000;
+    }
+    existing_leaf_address(va)
 }
 pub(crate) fn write_frames(physical: u64, bytes: &[u8]) {
     let hhdm = crate::HHDM_REQUEST.response().expect("FRAME_WRITE_NO_HHDM").offset;
