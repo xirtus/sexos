@@ -2569,6 +2569,30 @@ row no longer waits for the row before it to end.
   bigger constant or, later, frames from a shared pool. Pages return only at exit.
   Background program records (`program_records.rs`) don't get a heap yet.
 
+## Anti-aliased drawing with tiny-skia (2026-11-08)
+
+- **What runs now.** `run shapes` draws rounded windows with soft shadows, gradients,
+  circles and smooth lines in its own window; the arrow keys move the front window and
+  redraw it. Any SDK program can do the same with `sex-canvas`.
+- **Design.** New crate `crates/sex-canvas` over tiny-skia 0.11.4 (BSD-3, `no_std` +
+  `alloc`, floats through libm). It draws straight into SexOS `0xAARRGGBB` words with no
+  copy: colours go to tiny-skia with red and blue swapped, so its `R,G,B,A` bytes land
+  as SexOS words. Soft shadows are analytic (Gaussian falloff of the distance to the
+  rounded rectangle, from a 256-step table), with no blur pass or scratch buffer.
+  `Canvas::window` draws a whole frame and returns its content rectangle; `Layer`
+  composites an owned buffer into any strided one. Uses the program heap and the
+  program pixel surface. No ABI change.
+- **Evidence.** 11 host tests in sex-canvas. `scripts/program_shapes_gate.py` installs
+  Shapes, runs it, and compares the window's pixels with the same scene rendered on the
+  host by `cargo run -p sex-canvas --example desktop`: exact (0 of 3712 sampled pixels
+  differ) before and after an arrow key, at 1 and 4 cores, then F11 retires the run.
+- **Limits.** Programs are built soft-float (`x86_64-sex.json`: `-sse,+soft-float`), so
+  tiny-skia's float maths is emulated: a full 400x320 scene takes about 0.7 to 1 s under
+  QEMU TCG (about 5 ms natively with SSE on the host). Letting programs use SSE needs the
+  kernel to save and restore FPU/SSE state per task. Shapes draws at a fixed 400x320
+  because a program can't yet learn its window's size. sexdisplay's own chrome is not
+  drawn with sex-canvas yet (it has no heap).
+
 ## Geist at any size (2026-11-08)
 
 - **What runs now.** Display draws Geist from the TrueType files at run time instead of
