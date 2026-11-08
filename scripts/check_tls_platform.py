@@ -244,6 +244,8 @@ def inspect(root, *, tree_output=None):
             if tree_output is None:
                 env = dict(os.environ)
                 env.pop('RUSTUP_TOOLCHAIN', None)
+                # CI sets CARGO_TERM_COLOR=always; colour codes would read as features.
+                env['CARGO_TERM_COLOR'] = 'never'
                 tree_output = subprocess.run(command, cwd=root, env=env, check=True,
                                              capture_output=True, text=True, timeout=60).stdout
             tree_errors, packages = check_tree(tree_output, root=root)
