@@ -7,7 +7,7 @@ use crate::capability::{CapabilityData, PciCapData, InterruptCapData};
 // Not added to sex-pdx to avoid ABI hash churn; canonical slot number only here.
 const SLOT_NVME_HOST: u64 = 16;
 
-pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32) {
+pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
     let devices = HAL.enumerate_pci();
@@ -34,6 +34,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                         device_id: dev.device_id,
                         bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, SLOT_NVME_HOST)),
                         command: None,
+                        virtio: None,
                     }));
                     serial_println!("[kernel.cap.nvme_bar.grant] pd={} slot={}", sexdrive_pd_id, SLOT_NVME_HOST);
                     // Route IRQ (Simplified vector mapping)
@@ -52,6 +53,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                         device_id: dev.device_id,
                         bar0_view: None,
                         command: None,
+                        virtio: None,
                     }));
                     crate::interrupts::register_irq_route(0x23, sexdisplay_pd_id);
                 }
@@ -74,6 +76,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                         device_id: dev.device_id,
                         bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, sex_pdx::SLOT_USB_HOST)),
                         command: None,
+                        virtio: None,
                     }));
                     pd.grant(CapabilityData::Interrupt(InterruptCapData { irq: irq_line }));
                     serial_println!(
@@ -109,11 +112,13 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                             device_id: dev.device_id,
                             bar0_view: Some(view),
                             command: Some(crate::boot_memory::nic_command(pd,&dev,sex_pdx::SLOT_NIC,view)),
+                            virtio: None,
                         }));
                         serial_println!("[kernel.cap.nic.grant] pd={} slot=19", sexnet_pd_id);
                     }
                 }
             }
+            _ if dev.vendor_id == sex_pdx::virtio::VENDOR => virtio(&dev, sexbell_pd_id),
             _ => {}
         }
     }
@@ -122,4 +127,34 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         serial_println!("[kernel.pci.nvme.absent]");
     }
     serial_println!("DevMgr: Hardware discovery complete.");
+}
+
+/// Virtio devices go to the service that drives that kind of device: sound to
+/// the Bell service. One device per kind; later ones are left alone.
+fn virtio(dev: &crate::hal::pci::PciDevice, sexbell_pd_id: u32) {
+    serial_println!("[kernel.pci.virtio.found] {:02x}:{:02x}.{} product={:#06x}", dev.bus, dev.dev, dev.func, dev.device_id);
+    let (owner, slot) = match dev.device_id {
+        sex_pdx::virtio::SOUND => (sexbell_pd_id, sex_pdx::virtio::SLOT_SOUND),
+        _ => { serial_println!("[kernel.cap.virtio.skip] product={:#06x} reason=no_driver", dev.device_id); return; }
+    };
+    let Some(pd) = DOMAIN_REGISTRY.get(owner).filter(|_| owner != 0) else {
+        serial_println!("[kernel.cap.virtio.skip] product={:#06x} reason=service_absent", dev.device_id); return;
+    };
+    if pd.find_capability(slot as u32).is_some() {
+        serial_println!("[kernel.cap.virtio.skip] product={:#06x} reason=slot_occupied", dev.device_id); return;
+    }
+    let Some((bar, layout)) = crate::virtio_boot::layout(dev) else {
+        serial_println!("[kernel.cap.virtio.skip] product={:#06x} reason=no_modern_layout", dev.device_id); return;
+    };
+    let Some(view) = crate::boot_memory::virtio_bar(pd, dev, slot, bar, &layout) else {
+        serial_println!("[kernel.cap.virtio.skip] product={:#06x} reason=invalid_bar bar={}", dev.device_id, bar); return;
+    };
+    let command = crate::boot_memory::virtio_command(pd, dev, slot, view, &layout);
+    pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
+        bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
+        bar0_view: Some(view), command: Some(command), virtio: Some(layout),
+    }));
+    crate::boot_memory::virtio_dma(owner);
+    serial_println!("[kernel.cap.virtio.grant] pd={} slot={} product={:#06x} bar={} common={:#x} notify={:#x} isr={:#x} device={:#x} multiplier={}",
+        owner, slot, dev.device_id, bar, layout.common.offset, layout.notify.offset, layout.isr.offset, layout.device.offset, layout.notify_multiplier);
 }

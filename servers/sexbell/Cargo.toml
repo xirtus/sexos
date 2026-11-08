@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
+linked_list_allocator = "0.10.5"
+virtio-drivers = { version = "0.13.0", default-features = false, features = ["alloc"] }
+zerocopy = { version = "0.8.40", default-features = false }

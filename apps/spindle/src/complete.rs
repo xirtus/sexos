@@ -13,6 +13,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"apps",
     b"atlas",
     b"authority-status",
+    b"beep",
     b"bell",
     b"bell-launch-events",
     b"bell-status",

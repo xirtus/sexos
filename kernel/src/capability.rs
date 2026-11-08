@@ -49,6 +49,8 @@ pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u
     pub bar0_view: Option<sex_pdx::memory_region::RegionGrant>,
     /// Explicit BOOT-only command-bit permission; a BAR lease alone has none.
     pub command: Option<sex_pdx::pci_command::Grant>,
+    /// Register-block offsets inside `bar0_view` (which then holds the virtio BAR).
+    pub virtio: Option<sex_pdx::virtio::Layout>,
 }
 
 pub struct DisplayHardwareLease {
