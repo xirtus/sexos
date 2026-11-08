@@ -183,6 +183,24 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   it's 1 MiB, and the most is 256 MiB. An unmapped guard page sits below it.
   heaptest proves that an overflow ends only that run.
 
+- Stage 3, first part (storage):
+  - The NVMe self-test busy-polled a fixed 1,000,000 times, so a slow or busy host
+    sometimes saw `readback_timeout` and storage stayed off for that boot. It now uses the
+    time-bounded `completion_wait`, like every other I/O path.
+  - Each command used to sleep a whole tick after 64 polls. It now yields first (256
+    turns) and sleeps only after that, and the per-wait log line is written only for slow
+    waits.
+  - Bench, cycles per MiB: file write 1.89G -> 0.63G (3x), read 660M -> 205M (3.2x).
+  - Files write-back: a WRITE no longer commits. Commits happen on SYNC, before any other
+    change, at 8 MiB uncommitted, and after 20 idle ticks. A read error no longer rolls
+    back other writes. This removed 130 of 134 flushes for a 4 MiB write, but the bench
+    time didn't change.
+  - What remains is about 2.5M cycles per 4 KiB block command (IPC, DMA bounce and key
+    switches under TCG). Next: larger transfers per command (`BLOCK_MAX_XFER` past
+    4 KiB, PRP lists), sexfs extents, and queue depth.
+  - Also found: `fs_service` keeps its free-space bitmap in memory, sized for 16 GiB
+    (`MAP_WORDS`), and caches only 64 blocks. Both are fixed limits to remove.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

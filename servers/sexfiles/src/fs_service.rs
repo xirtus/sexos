@@ -16,6 +16,24 @@ static mut USED: [u64; MAP_WORDS] = [0; MAP_WORDS];
 static mut PENDING: [u64; MAP_WORDS] = [0; MAP_WORDS];
 static mut SCRATCH: [u8; BLOCK] = [0; BLOCK];
 static mut STATE: State = State::Untried;
+/// Writes are not committed one request at a time (each commit costs two device
+/// flushes). They are committed on SYNC, before any other change, once this many bytes
+/// wait, and when no request has come for `COMMIT_DELAY` ticks.
+const COMMIT_BYTES: u64 = 8 * 1024 * 1024;
+const COMMIT_DELAY: u64 = 20;
+static mut UNCOMMITTED: u64 = 0;
+static mut LAST_WRITE: u64 = 0;
+/// Uncommitted writes are waiting: the server polls rather than blocks until they commit.
+pub fn writes_pending() -> bool { unsafe { UNCOMMITTED != 0 } }
+/// Called when no request is waiting. Commits once writes have rested `COMMIT_DELAY` ticks.
+pub fn commit_when_idle() {
+    if !writes_pending() || sex_pdx::get_ticks().saturating_sub(unsafe { LAST_WRITE }) < COMMIT_DELAY { return; }
+    if let State::Ready(fs) = unsafe { &mut *core::ptr::addr_of_mut!(STATE) } { commit_writes(fs); }
+}
+fn commit_writes(fs: &mut Fs<'static, Disk>) {
+    let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
+    if let Err(e) = fs.commit() { sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+}
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
 pub struct Disk { blocks: u64 }
@@ -216,12 +234,28 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         path = own; path_len = n;
     }
     let data = &mut region[w::PATH_BYTES..];
+    // Reads change nothing; a write fails before it changes anything (sexfs checks
+    // first, and a device error poisons the filesystem). Every other change commits
+    // waiting writes first, so its own rollback can only undo itself.
+    let read_only = matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS);
+    let batched = r.kind == w::WRITE;
+    if !read_only && !batched && writes_pending() {
+        commit_writes(fs);
+        if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
+    }
     let result = run(fs, r, &path[..path_len], data);
     match result {
-        Ok(value) => w::reply(r.seq, w::OK, value),
+        Ok(value) => {
+            if batched && value != 0 {
+                unsafe { UNCOMMITTED += value as u64; LAST_WRITE = sex_pdx::get_ticks(); }
+                if unsafe { UNCOMMITTED } >= COMMIT_BYTES { commit_writes(fs); }
+            }
+            if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
+            w::reply(r.seq, w::OK, value)
+        }
         Err(e) => {
             // Nothing half done becomes durable: back to the last commit.
-            if !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); }
+            if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); }
             w::reply(r.seq, status(e), 0)
         }
     }
@@ -336,7 +370,6 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
                 done += wrote;
                 if wrote < take { break; }
             }
-            fs.commit()?;
             Ok(done as u32)
         }
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }

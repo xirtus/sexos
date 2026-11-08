@@ -217,13 +217,20 @@ fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
 /// The BOOT main-task inventory already sanctions this self-only timed wait.
 /// No inbox receive or new I/O submission occurs while submitted DMA is held.
 fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::Report{
+    const QUICK_TURNS:u32=256;
+    let mut quick=0u32;
     let cqe=(cq_va as *const u8).wrapping_add(head as usize*16)as *const u32;
     let report=completion_wait::wait(cid,phase,||unsafe{
         // Observe the device's phase/status publication before dependent data.
         let dw3=core::ptr::read_volatile(cqe.add(3));compiler_fence(Ordering::Acquire);
         (core::ptr::read_volatile(cqe.add(2)),dw3)
-    },sex_pdx::get_ticks,||sex_pdx::sys_wait_self_ticks(1));
-    if report.turns>0||report.result.is_err(){
+    },sex_pdx::get_ticks,||{
+        // A device usually answers within microseconds: give the core away briefly
+        // first, and only then sleep whole ticks, so a command does not cost a tick.
+        if quick<QUICK_TURNS{quick+=1;sex_pdx::sys_yield();Ok(())}else{sex_pdx::sys_wait_self_ticks(1)}
+    });
+    // Only slow or failed waits are worth a line; the serial port is slow too.
+    if report.turns>QUICK_TURNS||report.result.is_err(){
         sex_pdx::serial_record!("[sexdrive.nvme.wait] cid={} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",cid,head,phase,report.polls,report.turns,report.elapsed,report.result.map(|_|()));
     }
     report
