@@ -23,11 +23,22 @@ def boot(iso,disk,out,tag,resolution):
  serial=out/f'{tag}-serial.log';sock=Path('/tmp')/f'sex-autosave-{os.getpid()}-{tag}.sock'
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-smp',os.environ.get('SEXOS_GATE_CORES','1'),*(['-accel','tcg,thread=multi']if os.environ.get('SEXOS_GATE_CORES','1')!='1'else[]),'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0',*([]if os.environ.get('SEXOS_GATE_NO_CDROM')else['-cdrom',str(iso)]),*(['-drive','if=pflash,format=raw,readonly=on,file='+os.environ['SEXOS_GATE_FIRMWARE']]if os.environ.get('SEXOS_GATE_FIRMWARE')else[]),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown',*os.environ.get('SEXOS_GATE_NIC','-nic none').split()]
  proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic()
- def text():return serial.read_text(errors='replace')if serial.exists()else''
+ # The log only grows: read what is new, so hours-long runs don't reread it on every poll.
+ seen={'off':0,'text':'','health':0}
+ def text():
+  if not serial.exists():return ''
+  with serial.open('rb') as f:
+   f.seek(seen['off']);new=f.read()
+  # Decode only whole lines; a partial last line waits for its end.
+  cut=new.rfind(b'\n')+1
+  if cut:seen['off']+=cut;seen['text']+=new[:cut].decode('utf-8','replace')
+  return seen['text']+new[cut:].decode('utf-8','replace') if cut<len(new) else seen['text']
  def health():
   if time.monotonic()-began>int(os.environ.get('SEXOS_GATE_BOUND','300')):raise TimeoutError(tag+' over its time bound')
   if proc.poll()is not None:raise RuntimeError(tag+' guest exited')
-  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text()):raise RuntimeError(tag+' guest failure')
+  # Only text not yet checked, backing up a little for a marker split across reads.
+  now=text();start=max(0,seen.get('health',0)-64);seen['health']=len(now)
+  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',now[start:]):raise RuntimeError(tag+' guest failure')
  def wait(pattern,start=0,timeout=120):
   d=time.monotonic()+timeout
   while time.monotonic()<d:
