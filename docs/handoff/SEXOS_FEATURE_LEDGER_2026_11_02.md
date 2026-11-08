@@ -2380,3 +2380,15 @@ row no longer waits for the row before it to end.
 - **Gates.** `install` (now the running system by default, `--fetch` for the network path),
   filesystem and program disk at 1 core; the master gate with the extra module. Python tests
   and all non-QEMU gates except the older ones.
+
+## Three-hour soak (2026-11-08)
+
+- **Result.** `scripts/soak_gate.py --hours 3` at 4 cores (TCG) on the kernel of commit
+  `7422d3ca`: 97 rounds in 3.04 hours, no panic, no service or app fault (forced-stop record
+  faults excluded, as they are the design), and background-record memory fully back every
+  round. Each round: write and read a file, `df`, download 200 KB, open a page in the Browser,
+  run Jot and save, run four programs side by side and close them, start ten background
+  programs and force them to stop.
+- **Timing.** Rounds took 83 to 147 seconds of wall time, but a steady 57 to 59 thousand guest
+  ticks each, so the guest did the same work in the same guest time throughout; the growth was
+  on the host side (the gate rereads a 140 MB serial log). Not proof of a full day on hardware.
