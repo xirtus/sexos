@@ -289,6 +289,10 @@ pub extern "C" fn trampoline_main() {
             crate::fs_service::reply_later(caller,crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2));
             continue;
         }
+        if msg.type_id==sex_pdx::program_store::OP_BIND{
+            if caller==3{crate::fs_service::bind(msg.arg0 as u32,msg.arg1 as u32);}
+            continue;
+        }
         if msg.type_id==sex_pdx::program_store::OP{
             if caller==3{crate::fs_service::reply_later(caller,crate::program_store::load([msg.arg0,msg.arg1]));}
             continue;

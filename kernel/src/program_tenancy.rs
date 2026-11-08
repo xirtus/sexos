@@ -19,9 +19,12 @@ const fn shared_rows() -> usize {
     }
     n
 }
-struct Row { target: u32, pages: [PrivatePage; MAX_PAGES], count: usize }
+/// Regions the row shares with services are mapped on its key too, so they take turns
+/// with its own pages. They stay for every run; `pages` is one run's.
+const FIXED: usize = 128;
+struct Row { target: u32, pages: [PrivatePage; MAX_PAGES], count: usize, fixed: [PrivatePage; FIXED], fixed_count: usize }
 struct Pool { rows: [Row; ROWS], tenant: u32 }
-static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: [PrivatePage::EMPTY; MAX_PAGES], count: 0 } }; ROWS], tenant: 0 });
+static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: [PrivatePage::EMPTY; MAX_PAGES], count: 0, fixed: [PrivatePage::EMPTY; FIXED], fixed_count: 0 } }; ROWS], tenant: 0 });
 pub static SWITCHES: AtomicU64 = AtomicU64::new(0);
 
 pub fn shared(target: u32) -> bool {
@@ -42,15 +45,44 @@ pub fn read(target: u32, at: u64) -> u64 {
 }
 /// What a restore writes: a shared row's pages wait, absent, for its turn.
 pub fn restored(target: u32, value: u64) -> u64 { if shared(target) { value & !PRESENT } else { value } }
+fn row_mut(pool: &mut Pool, target: u32) -> &mut Row {
+    let index = match pool.rows.iter().position(|r| r.target == target) { Some(i) => i, None => pool.rows.iter().position(|r| r.target == 0).expect("PROGRAM_POOL_ROWS") };
+    let row = &mut pool.rows[index];
+    row.target = target;
+    row
+}
+/// A row stepping out of its turn takes its shared regions with it.
+fn step_out(pool: &mut Pool, target: u32) {
+    if pool.tenant != target { return; }
+    if let Some(row) = pool.rows.iter().find(|r| r.target == target) { present(&row.fixed[..row.fixed_count], false); }
+    pool.tenant = 0;
+}
+/// At BOOT, before anything runs: every region a shared row holds joins its turns.
+pub fn claim_regions() {
+    for row in INCARNATIONS.iter().filter(|r| shared(r.target)) {
+        let pd = crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("PROGRAM_POOL_DOMAIN");
+        let mut pool = POOL.lock();
+        let entry = row_mut(&mut pool, row.target);
+        for slot in 0..1024u32 {
+            let Some(crate::capability::CapabilityData::Region(region)) = pd.find_capability(slot).map(|c| c.data) else { continue };
+            for va in (region.virtual_base..region.virtual_base + region.length).step_by(4096) {
+                let leaf = crate::boot_memory::existing_leaf_address(va).expect("PROGRAM_POOL_REGION_LEAF");
+                assert!(entry.fixed_count < FIXED, "PROGRAM_POOL_REGION_CAPACITY");
+                entry.fixed[entry.fixed_count] = PrivatePage { va, leaf, expected: 0 };
+                entry.fixed_count += 1;
+            }
+        }
+        present(&entry.fixed[..entry.fixed_count], false);
+        crate::serial_println!("[boot.program.pool.regions] target={} pages={}", row.target, entry.fixed_count);
+    }
+}
 /// The row's pages, from the restore that just wrote them.
 pub fn adopt(target: u32, pages: &[PrivatePage]) {
     if !shared(target) { return; }
     let mut pool = POOL.lock();
     let pool = &mut *pool;
-    if pool.tenant == target { pool.tenant = 0; }
-    let row = pool.rows.iter_mut().find(|r| r.target == target).or_else(|| None);
-    let row = match row { Some(row) => row, None => pool.rows.iter_mut().find(|r| r.target == 0).expect("PROGRAM_POOL_ROWS") };
-    row.target = target;
+    step_out(pool, target);
+    let row = row_mut(pool, target);
     row.pages[..pages.len()].copy_from_slice(pages);
     row.count = pages.len();
 }
@@ -58,7 +90,7 @@ pub fn adopt(target: u32, pages: &[PrivatePage]) {
 pub fn release(target: u32) {
     if !shared(target) { return; }
     let mut pool = POOL.lock();
-    if pool.tenant == target { pool.tenant = 0; }
+    step_out(&mut pool, target);
     if let Some(row) = pool.rows.iter_mut().find(|r| r.target == target) { row.count = 0; }
 }
 /// Called before any task runs. Only the shared row about to run has pages present.
@@ -69,8 +101,8 @@ pub fn before_dispatch(pd: u64) {
     let mut pool = POOL.lock();
     if pool.tenant == target { return; }
     let old = pool.tenant;
-    if let Some(row) = pool.rows.iter().find(|r| r.target == old && old != 0) { present(&row.pages[..row.count], false); }
-    if let Some(row) = pool.rows.iter().find(|r| r.target == target) { present(&row.pages[..row.count], true); }
+    if let Some(row) = pool.rows.iter().find(|r| r.target == old && old != 0) { present(&row.pages[..row.count], false); present(&row.fixed[..row.fixed_count], false); }
+    if let Some(row) = pool.rows.iter().find(|r| r.target == target) { present(&row.pages[..row.count], true); present(&row.fixed[..row.fixed_count], true); }
     pool.tenant = target;
     SWITCHES.fetch_add(1, Ordering::Relaxed);
 }

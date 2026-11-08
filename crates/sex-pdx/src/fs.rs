@@ -9,6 +9,8 @@ pub const REGION_ID_BASE: u32 = 0x5000;
 pub const REGION_BYTES: usize = 64 * 1024;
 pub const PATH_BYTES: usize = 1024;
 pub const DATA_MAX: usize = REGION_BYTES - PATH_BYTES;
+/// Program rows follow the Spindles in the provider slots and regions.
+pub const PROGRAM_INDEX_BASE: usize = crate::app_catalog::SPINDLE_TARGETS.len();
 /// First filesystem sector: past the fixed DiskFS area and the program store.
 pub const BASE_LBA: u64 = 131072;
 /// A disk smaller than this has no filesystem.

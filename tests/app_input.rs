@@ -131,6 +131,8 @@ mod shell {
     unsafe fn clipboard_live(subject:Subject)->Option<bool>{LIVE_QUERIES.push(subject);if let Some((source,value))=LIVE_ONCE{if source==subject{LIVE_ONCE=None;return value}}match SOURCE_LIVE{Some((source,value))if source==subject=>value,_=>LIVE}}
     unsafe fn pdx_call(route:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){SENT.push((route,op,[a,b,c]));(STATUS,0)}
     unsafe fn focused_clipboard_participant()->Option<Participant>{match FOCUSED_SURFACE_ID{156=>Some(participant(9,9)),300=>Some(participant(15,15)),301=>Some(participant(16,16)),307=>Some(participant(18,18)),_=>None}}
+    // No program row is focused in these cases; programs get keys by their own path.
+    unsafe fn focused_program_participant()->Option<Participant>{None}
     unsafe fn surface_is_alive(sid:u64)->bool{matches!(sid,156|300|301|307)}
     unsafe fn toggle_command_palette(){COMMAND_PALETTE_OPEN=!COMMAND_PALETTE_OPEN;PALETTE_TOGGLES+=1;}
     unsafe fn focus_next_frame(){FOCUSED_SURFACE_ID=if FOCUSED_SURFACE_ID==156{300}else{156};FOCUS_CHANGES+=1;}

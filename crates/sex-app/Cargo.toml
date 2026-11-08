@@ -1,0 +1,7 @@
+[package]
+name = "sex-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sex-pdx = { path = "../sex-pdx" }

@@ -437,6 +437,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jot"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "kaleidoscope"
 version = "0.1.0"
 dependencies = [
@@ -869,6 +877,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "sex-app"
+version = "0.1.0"
+dependencies = [
+ "sex-pdx",
 ]
 
 [[package]]

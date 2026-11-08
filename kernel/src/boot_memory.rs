@@ -61,13 +61,19 @@ pub fn init_web_regions(net: u32) {
             w::REGION_ID_BASE + (first_browser + index) as u32, w::REGION_BYTES as u64, true);
     }
 }
-/// One region per possible Spindle for the file protocol, shared with Files alone.
+/// One region per possible Spindle and program row for the file protocol, shared with Files alone.
 pub fn init_fs_regions(files: u32) {
     use sex_pdx::fs as w;
     require_boot();
     if files == 0 { return; }
     for (index, client) in sex_pdx::app_catalog::SPINDLE_TARGETS.into_iter().enumerate() {
         paired_at(files, client, w::PROVIDER_SLOT_BASE + index as u64, w::CLIENT_SLOT,
+            w::REGION_ID_BASE + index as u32, w::REGION_BYTES as u64, true);
+    }    // Each program row too: what it may reach there is decided by Files, per run.
+    let programs = sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program);
+    for (k, row) in programs.enumerate() {
+        let index = w::PROGRAM_INDEX_BASE + k;
+        paired_at(files, row.target, w::PROVIDER_SLOT_BASE + index as u64, w::CLIENT_SLOT,
             w::REGION_ID_BASE + index as u32, w::REGION_BYTES as u64, true);
     }
 }

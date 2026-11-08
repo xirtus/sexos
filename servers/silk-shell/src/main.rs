@@ -89,6 +89,15 @@ unsafe fn focused_clipboard_participant()->Option<sex_pdx::clipboard::Participan
     let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
     app_input_participant(e,c)
 }
+/// A focused program gets typed keys on its close route. It takes no part in the
+/// clipboard, so this participant never reaches clipboard issue paths.
+unsafe fn focused_program_participant()->Option<sex_pdx::clipboard::Participant>{
+    let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(FOCUSED_SURFACE_ID)&&!e.dead&&!e.retired&&!e.close_pending)?;
+    let row=app_catalog::by_surface(e.target,e.surface).filter(|r|r.app==app_catalog::App::Program&&r.lifecycle_slot==e.slot)?;
+    let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
+    if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
+    Some(sex_pdx::clipboard::Participant{subject:sex_pdx::clipboard::Subject{pd:e.target,task:e.task},surface:e.surface,route:row.close_slot,can_read:false})
+}
 unsafe fn clipboard_receive(msg:&sex_pdx::PdxMessage)->bool {
     if !sex_pdx::clipboard::request_opcode(msg.type_id){return false}
     let subject=sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task};
@@ -10160,6 +10169,14 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     }
                     app_input_poll();return true;
                 }
+                if let Some(destination)=focused_program_participant(){
+                    if modifier || value!=1{return true;}
+                    if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(APP_MODIFIERS.key(code))}){
+                        sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
+                    }
+                    app_input_poll();return true;
+                }
             }
             false
         },
@@ -16166,6 +16183,10 @@ unsafe fn record_spawn_poll(){
     RECORD_SPAWN_LEFT-=made;
     if RECORD_SPAWN_LEFT==0{sex_pdx::serial_record!("[shell.records.spawned] live={}",live);}
 }
+/// A run started from a file, waiting to tell Files where it runs.
+static mut PROGRAM_BIND_PENDING: bool = false;
+/// Files may then serve the program its own folder, for this run alone.
+fn program_bind(target:u32,task:u32){let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
 /// Tells Spindle why, since the person who asked is looking there.
 fn program_refused(code:u32){let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
@@ -16214,8 +16235,9 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     if state==a::ACTIVATION_READY{
         let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");return true};
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
+        program_bind(active.successor,active.task);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
-    }else{PROGRAM_REBIRTH=Some(slot);}
+    }else{PROGRAM_REBIRTH=Some(slot);PROGRAM_BIND_PENDING=true;}
     true
 }
 /// Advance a started run: the kernel admits it once every service has forgotten
@@ -16228,10 +16250,11 @@ unsafe fn program_rebirth_poll(){
             PROGRAM_REBIRTH=None;
             let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{return};
             sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
+            if core::mem::take(&mut PROGRAM_BIND_PENDING){program_bind(active.successor,active.task);}
             launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         },
         Ok(_)|Err(a::RETRY)=>{},
-        Err(status)=>{PROGRAM_REBIRTH=None;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);},
+        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);},
     }
 }
 unsafe fn open_browser_in_active_scene()->bool{

@@ -20,6 +20,8 @@ members = [
     "apps/kaleidoscope",
     "apps/hello",
     "apps/fortune",
+    "apps/jot",
+    "crates/sex-app",
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",

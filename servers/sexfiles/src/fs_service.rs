@@ -99,19 +99,106 @@ pub fn poll_replies() {
         if sex_pdx::pdx_reply(entry.0, entry.1) == 0 { *entry = (0, 0); }
     }
 }
+/// Each program row's current run and the folder it may use. A run Shell never bound,
+/// such as the boot image's own program, has no files at all.
+const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
+const ROOT_MAX: usize = 64;
+#[derive(Clone, Copy)]
+struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize }
+static mut BINDINGS: [Option<Binding>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
+/// The last program file read, by its base name, waiting for Shell to say where it runs.
+static mut LOADED: ([u8; 32], usize) = ([0; 32], 0);
+fn program_index(target: u32) -> Option<usize> {
+    sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
+}
+pub fn loaded(path: &[u8]) {
+    let name = path.rsplit(|b| *b == b'/').next().unwrap_or(path);
+    let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOADED) };
+    let n = name.len().min(loaded.0.len());
+    loaded.0[..n].copy_from_slice(&name[..n]);
+    loaded.1 = n;
+}
+/// Shell's word that the file just read runs as `target`'s `task`. Its folder is made
+/// here, so the program finds it waiting.
+pub fn bind(target: u32, task: u32) {
+    let Some(index) = program_index(target) else { return };
+    let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOADED) };
+    let bindings = unsafe { &mut *core::ptr::addr_of_mut!(BINDINGS) };
+    if loaded.1 == 0 { bindings[index] = None; return; }
+    let data = sex_pdx::program_store::DATA;
+    let mut root = [0u8; ROOT_MAX];
+    root[..data.len()].copy_from_slice(data);
+    root[data.len()..data.len() + loaded.1].copy_from_slice(&loaded.0[..loaded.1]);
+    let len = data.len() + loaded.1;
+    loaded.1 = 0;
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    if let State::Ready(fs) = state {
+        for end in [data.len() - 1, len] {
+            if fs.open(&root[..end]).is_err() && fs.mkdir(&root[..end], 0).and_then(|_| fs.commit()).is_err() { let _ = fs.rollback(); }
+        }
+    }
+    bindings[index] = Some(Binding { task, root, len });
+    sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
+}
+/// A program's path inside its folder. `..` never climbs out: it is refused.
+fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    let mut n = binding.len;
+    out[..n].copy_from_slice(&binding.root[..n]);
+    for part in path.split(|b| *b == b'/').filter(|p| !p.is_empty() && *p != b".") {
+        if part == b".." || part.contains(&0) { return None; }
+        if n + 1 + part.len() > out.len() { return None; }
+        out[n] = b'/';
+        out[n + 1..n + 1 + part.len()].copy_from_slice(part);
+        n += 1 + part.len();
+    }
+    Some(n)
+}
+/// The row is running, and running the very run Shell bound: the kernel names its task.
+fn program_live(target: u32, task: u32) -> bool {
+    let Some(row) = sex_pdx::app_catalog::by_target(target) else { return false };
+    matches!(sex_pdx::app_lifecycle::catalog(row.lifecycle_slot), Ok(c) if c.is_subject(target, row.surface, 3) && c.task_id == task)
+        && sex_pdx::app_lifecycle::info(row.lifecycle_slot) == Err(sex_pdx::app_lifecycle::LIVE)
+}
 /// The answer for one request. Never touches another client's region.
 pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
-    let Some(index) = sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller) else { return w::reply(r.seq, w::DENIED, 0) };
-    if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); }
+    let program = program_index(caller);
+    let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
+        (Some(index), _) => { if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); } index }
+        (None, Some(k)) => {
+            let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || r.kind == w::PREPARE { return w::reply(r.seq, w::DENIED, 0); }
+            w::PROGRAM_INDEX_BASE + k
+        }
+        _ => return w::reply(r.seq, w::DENIED, 0),
+    };
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
     if matches!(state, State::Untried) { *state = bring_up(); }
     let State::Ready(fs) = state else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
     let mut path = [0u8; w::PATH_BYTES];
-    let path_len = r.path_len as usize;
+    let mut path_len = r.path_len as usize;
     path[..path_len].copy_from_slice(&region[..path_len]);
+    if let Some(k) = program {
+        // Every path, both halves of a rename too, lands inside the program's folder.
+        let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
+        let mut own = [0u8; w::PATH_BYTES];
+        let raw = path;
+        let n = if r.kind == w::RENAME {
+            let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
+            let mut second = [0u8; w::PATH_BYTES];
+            let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };
+            if a + 1 + b > own.len() { return w::reply(r.seq, w::NAME, 0); }
+            own[a] = 0; own[a + 1..a + 1 + b].copy_from_slice(&second[..b]);
+            a + 1 + b
+        } else {
+            let Some(n) = confine(&binding, &raw[..path_len], &mut own) else { return w::reply(r.seq, w::NAME, 0) };
+            n
+        };
+        path = own; path_len = n;
+    }
     let data = &mut region[w::PATH_BYTES..];
     let result = run(fs, r, &path[..path_len], data);
     match result {
@@ -150,11 +237,13 @@ fn read_program(path: &[u8], image: &mut [u8]) -> Program {
             Err(_) => return Program::Failed(store::IO),
         }
     }
+    loaded(path);
     sex_pdx::serial_record!("[files.program.file] bytes={}", size);
     Program::Loaded(size as u32)
 }
 /// A bare name looks in the program directory.
 pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
     use sex_pdx::program_store as store;
     let mut path = [0u8; 32];
     let at = store::BIN.len();
@@ -164,6 +253,7 @@ pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
 }
 /// The prepared path, once. A stale ticket finds nothing.
 pub fn read_ticket(ticket: u64, image: &mut [u8]) -> Program {
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return Program::Absent; }
     let len = core::mem::take(&mut prepared.1);

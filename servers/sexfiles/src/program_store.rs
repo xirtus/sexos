@@ -53,5 +53,7 @@ fn try_load(name: [u64; 2]) -> Result<u32, u32> {
         return Err(store::CORRUPT);
     }
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
+    let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
+    crate::fs_service::loaded(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]);
     Ok(entry.len)
 }

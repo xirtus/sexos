@@ -2190,3 +2190,31 @@ row no longer waits for the row before it to end.
 - **Gates.** Program disk (eight at once) at 1 and 4 cores, program launch, program file,
   records, filesystem, fetch, browser web and SMP at 1 core on the final kernel; the probe
   above; Python tests and all non-QEMU gates except the older ones listed earlier.
+
+## Programs get keys, files and an SDK (2026-11-08)
+
+- **What runs now.** `crates/sex-app` is the first program SDK: `Window::open`, `show`,
+  `next` (keys and close) and `files::{read, write}`. `apps/jot` is a notepad built on it.
+  Installed with `fetch URL /bin/jot` and started with `run jot`, it takes typing, saves
+  with Ctrl+S to `notes.txt`, and finds the note again after a reboot. Spindle reads the
+  same file at `/data/jot/notes.txt`.
+- **Keys.** Shell now sends typed keys to a focused program row on its close route, as it
+  does for Quil and Browser. Programs take no part in the clipboard.
+- **Files, confined.** Each program row has a file region shared with Files alone. A run
+  started from a file is bound by Shell (`OP_BIND`) to `/data/NAME`, NAME being the file's
+  base name; Files makes that folder and roots every path there, both halves of a rename
+  too, and refuses `..`. The binding names the run's task, and Files checks it against the
+  kernel's lifecycle catalog, so a later run on the same row starts with nothing until it
+  is bound itself. The boot image's own program, never bound, has no files.
+- **A gap closed.** Regions a shared-key row holds (its text region, now its file region)
+  were mapped on the shared key and always present, so one shared-key program could have
+  reached another's text region. They now take turns with the row's own pages.
+- **ABI.** `program_store::OP_BIND` (0x55) and `DATA`, `fs::PROGRAM_INDEX_BASE`, file
+  regions and provider slots 309 to 317 for program rows, and the `sex-app` and `jot` crates.
+- **Limits.** One folder per program name, so two copies of a program share it. No file
+  picker or way to grant a program another folder. A file over about 63 KiB can't be
+  written in one go by the SDK. Programs still get no network and no arguments, and the
+  title bar still says "Program".
+- **Gates.** New `program_jot` at 1 and 4 cores. Program disk, launch, file, records,
+  filesystem, fetch, browser web and SMP at 1 core on the final kernel, and the shared-key
+  isolation probe again. Python tests and all non-QEMU gates except the older ones.

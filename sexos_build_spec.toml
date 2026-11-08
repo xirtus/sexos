@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "c7e5586a47bd811849559133bb83fcc4a6dc4cd713e717dbd50ffe9e4b40216b"
+abi_version_hash = "38710dd84f61158ff7a957563d745e847aba78841f6b6787118c92185a4ac0dc"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -45,7 +45,8 @@ crates = [
   "apps/kaleidoscope/Cargo.toml",
   "apps/hello/Cargo.toml",
   "apps/fortune/Cargo.toml",
-  "apps/hum/Cargo.toml"
+  "apps/hum/Cargo.toml",
+  "apps/jot/Cargo.toml"
 ]
 
 [[stage]]
@@ -194,6 +195,13 @@ action = "cargo_manifest"
 manifest = "apps/fortune/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/fortune"
 dest_artifact = "iso_root/programs/fortune"
+
+[[stage]]
+id = "build_jot"
+action = "cargo_manifest"
+manifest = "apps/jot/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/jot"
+dest_artifact = "iso_root/programs/jot"
 
 [[stage]]
 id = "build_hum"

@@ -22,6 +22,11 @@ pub const SHELL_ROUTE_SLOT: u64 = 256;
 pub const OP_RUN: u64 = 0x4F;
 /// Shell tells Spindle why a program did not start.
 pub const OP_REFUSED: u64 = 0x53;
+/// Shell to Files: the file Files last read now runs as this row and task. The program
+/// may then use files inside its own folder, and nowhere else.
+pub const OP_BIND: u64 = 0x55;
+/// Where each program's folder lives.
+pub const DATA: &[u8] = b"/data/";
 /// Where a bare program name is looked for first.
 pub const BIN: &[u8] = b"/bin/";
 /// A name word no packed name can have: the second word is a ticket from fs::PREPARE.
