@@ -33,10 +33,11 @@ for stage in ('build_sexbell', 'build_kaleidoscope'):
     start = s.index(f'id = "{stage}"')
     end = s.index('[[stage]]', start)
     block = s[start:end]
-    # The stage's own declared flags (the Browser's soft-crypto cfgs) stay; the
-    # proof cfg is added after them and must not already be there.
+    # Normal flags are exact: empty, or the Browser's soft-crypto cfgs (TLS). The
+    # proof cfg is added after them.
+    normal = '--cfg aes_force_soft --cfg polyval_force_soft' if stage == 'build_kaleidoscope' else ''
     m = re.search(r'^rustflags = "([^"]*)"$', block, re.M)
-    if not m or 'paging_' in m[1]:
+    if not m or m[1] != normal:
         raise SystemExit(f'expected normal declared rustflags for {stage}')
     proof = '' if profile == 'normal' else '--cfg ' + (
         'paging_quota_proof' if profile == 'quota' and stage == 'build_kaleidoscope'

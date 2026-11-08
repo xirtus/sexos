@@ -105,7 +105,9 @@ def main():
         key('ret',r'\[quil.persist.load.ok\]',timeout=180)
         loaded=re.findall(r'\[quil.persist.load.ok\] bytes=(\d+) hash=(0x[0-9a-f]+) doc=(\d+)',text())[-1]
         if loaded!=saved:raise RuntimeError('successor did not load exact predecessor saved document')
-        key('esc',r'\[quil.palette.action\] kind=esc clear=1')
+        # Quil closes its palette after a load; Esc then reopens it, and a second Esc clears.
+        if key('esc',r'\[quil.palette.action\] kind=esc (?:clear|toggle_on)=1')[0].endswith('toggle_on=1'):
+            key('esc',r'\[quil.palette.action\] kind=esc clear=1')
         key('z',r'\[quil.text.recv\]')
         status_match=wait(r'\[quil.text.view\] target=16 surface=301 status=([^\r\n]*\* [^\r\n]+)',timeout=30)
         expected_status=status_match[1]
