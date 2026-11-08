@@ -130,8 +130,11 @@ pub static ALLOCATOR: crate::memory::kheap::KernelHeap = crate::memory::kheap::K
 #[cfg(target_arch = "x86_64")]
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 #[cfg(target_arch = "x86_64")]
-/// Most address space the kernel heap may grow into.
-pub const HEAP_SIZE: usize = 1024 * 1024 * 1024;
+/// Most address space the kernel heap may grow into; how much of it may be used is
+/// set from the machine's memory at BOOT (memory::kheap).
+pub const HEAP_SIZE: usize = 64 * 1024 * 1024 * 1024;
+#[cfg(target_arch = "x86_64")]
+const _: () = assert!(HEAP_START as u64 >= crate::memory::va_allocator::SHARED_VA_END);
 /// What BOOT maps; the heap grows past it on demand (memory::kheap).
 #[cfg(target_arch = "x86_64")]
 pub const HEAP_INITIAL: usize = 32 * 1024 * 1024;
