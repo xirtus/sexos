@@ -56,9 +56,11 @@ def main():
   expect('write todo.txt buy milk',r'\[spindle.fs.result\] kind=8 status=0')
   s=len(t());expect('edit todo.txt',r'\[jot.ready\]');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[jot.loaded\] bytes=9\b',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
-  g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('backspace');keys(' and eggs');time.sleep(.5);chord('s');g['wait'](r'\[jot.saved\] bytes=17\b',s,60)
+  g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('backspace')
+  for _ in range(4):q.key('left');time.sleep(.06)
+  keys('fresh ');q.key('end');keys(' and eggs');time.sleep(.5);chord('s');g['wait'](r'\[jot.saved\] bytes=23\b',s,60)
   s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,90)
-  expect('cat todo.txt',r'\[spindle.fs.cat\] buy milk and eggs')
+  expect('cat todo.txt',r'\[spindle.fs.cat\] buy fresh milk and eggs')
   # A run Shell never bound, such as the boot image's own program, has no files.
   assert '[files.program.bound]' not in t().split('[app.private.retired] target=41 ')[0]
   assert 'KERNEL PANIC'not in t() and 'panicked' not in t()

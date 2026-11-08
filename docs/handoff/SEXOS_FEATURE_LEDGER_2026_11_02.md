@@ -2321,3 +2321,7 @@ row no longer waits for the row before it to end.
   lasts for the run.
 - **Gates.** Jot's gate now edits a file given with `edit`, at 1 core. Program net, program
   file and filesystem on the same build. Python tests and all non-QEMU gates.
+- **Jot edits in place (same day).** Arrows, Home, End, Delete and Backspace work at a cursor
+  drawn as a bar, and a long note scrolls to keep the cursor on screen. `sex_app::nav` maps
+  movement keys whichever keyboard code Shell passed. The gate moves left into `buy milk`,
+  inserts `fresh `, jumps to the end and appends, then Spindle reads `buy fresh milk and eggs`.

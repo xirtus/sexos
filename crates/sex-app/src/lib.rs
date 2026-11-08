@@ -178,6 +178,16 @@ pub mod files {
     }
 }
 
+/// Movement keys, whichever keyboard code Shell passed (PS/2 set 1 or the normalized one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nav { Left, Right, Up, Down, Home, End, Delete }
+pub fn nav(key: Key) -> Option<Nav> {
+    Some(match key.code {
+        0x4B | 0x69 => Nav::Left, 0x4D | 0x6A => Nav::Right, 0x48 | 0x67 => Nav::Up, 0x50 | 0x6C => Nav::Down,
+        0x47 | 0x66 => Nav::Home, 0x4F | 0x6B => Nav::End, 0x53 => Nav::Delete,
+        _ => return None,
+    })
+}
 /// The character a key types, if any, on the keyboard codes Shell passes through.
 pub fn typed(key: Key) -> Option<u8> {
     let plain: &[u8; 58] = b"\0\x001234567890-=\0\0qwertyuiop[]\0\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
