@@ -10,3 +10,4 @@ description = "JavaScript for SexOS web pages: QuickJS-NG in Wasm on wasmi, with
 wasmi = { version = "2.0.0", default-features = false, features = ["validate", "libm", "portable-dispatch"] }
 sex-html = { path = "../sex-html" }
 sex-gl = { path = "../sex-gl" }
+sex-image = { path = "../sex-image" }

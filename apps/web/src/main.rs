@@ -172,7 +172,7 @@ impl Browser {
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
                 if let Ok((_, body)) = self.fetch(&abs) {
-                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), img)); }
+                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), alloc::rc::Rc::new(img))); }
                 }
             }
             self.buf = Vec::new();
@@ -187,6 +187,7 @@ impl Browser {
         self.timer = None;
         let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
         doc.measure = sex_web::canvas::measure_css;
+        doc.pictures = self.fonts.images.clone();
         self.doc = Doc::Plain(doc);
         self.canvases = sex_web::canvas::Canvases::new();
         let script_begun = sex_pdx::get_ticks();

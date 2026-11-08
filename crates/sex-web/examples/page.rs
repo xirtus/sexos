@@ -38,7 +38,7 @@ fn main() {
     let dom = sex_html::parse::parse(&html);
     for src in sex_html::image_sources(&dom) {
         if let Ok(bytes) = std::fs::read(base.join(src)) {
-            if let Some(img) = sex_web::decode_image(&bytes, (w - 16) as usize, 2000) { fonts.images.push((src.to_string(), img)); }
+            if let Some(img) = sex_web::decode_image(&bytes, (w - 16) as usize, 2000) { fonts.images.push((src.to_string(), std::rc::Rc::new(img))); }
         }
     }
     // Style sheets and pictures come from files beside the page, as the program fetches them.
@@ -49,6 +49,7 @@ fn main() {
         .map(|n| match dom.attr(n, "src") { Some(s) => std::fs::read_to_string(base.join(s)).unwrap_or_default(), None => dom.text_content(n) }).collect();
     let mut doc = sex_js::Document::new(dom, "", (w, h - bar_h), clock);
     doc.measure = sex_web::canvas::measure_css;
+    doc.pictures = fonts.images.clone();
     let mut canvases = sex_web::canvas::Canvases::new();
     let lay = |doc: &sex_js::Document, fonts: &Fonts| {
         let styles = sex_html::styles(&doc.dom, &sheet_refs, w, h - bar_h);

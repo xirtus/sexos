@@ -35,7 +35,7 @@ impl GlCanvas {
     pub fn new(width: u32, height: u32, alpha: bool) -> Self { GlCanvas { ctx: Context::new(width, height), alpha, shown: u64::MAX, pictures: Vec::new() } }
 
     /// Runs one batch.
-    pub fn run(&mut self, cmds: &str, data: &[u8]) {
+    pub fn run(&mut self, cmds: &str, data: &[u8], pictures: &[(String, alloc::rc::Rc<sex_image::Image>)]) {
         let c = &mut self.ctx;
         for cmd in cmds.split('\u{1e}') {
             let f: Vec<&str> = cmd.split('\u{1f}').collect();
@@ -78,7 +78,7 @@ impl GlCanvas {
                     let d = blob(data, a, 6);
                     c.tex_image(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), d);
                 }
-                "tP" => self_pictures(&mut self.pictures, c, a),
+                "tP" => picture(&mut self.pictures, c, a, pictures),
                 "ts" => if let Some(d) = blob(data, a, 8) { c.tex_sub_image(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), n(a, 6), n(a, 7), d) },
                 "cs" => c.create_shader(n(a, 0), n(a, 1)),
                 "ss" => if let Some(d) = blob(data, a, 1) { c.shader_source(n(a, 0), core::str::from_utf8(d).unwrap_or("")) },
@@ -144,13 +144,20 @@ impl GlCanvas {
     }
 }
 
-fn self_pictures(pics: &mut Vec<(u32, u32, String, bool, bool)>, c: &mut Context, a: &[&str]) {
-    // tP target texture src: the picture's pixels arrive after the batch (the browser has
-    // them); keep the unpack state of this moment.
+/// tP target texture src: a page picture is uploaded now. A canvas's picture is drawn by
+/// the browser after the scripts, so it arrives after the batch, with the unpack state of
+/// this moment.
+fn picture(pending: &mut Vec<(u32, u32, String, bool, bool)>, c: &mut Context, a: &[&str], pictures: &[(String, alloc::rc::Rc<sex_image::Image>)]) {
     let target: u32 = n(a, 0);
     let tex: u32 = n(a, 1);
     let src = a.get(2).copied().unwrap_or("");
-    pics.push((target, tex, src.into(), c.flip_y, c.premultiply));
+    match pictures.iter().find(|(s, _)| s == src) {
+        Some((_, img)) => {
+            let (flip, premul) = (c.flip_y, c.premultiply);
+            c.upload_picture(target, tex, img.width as u32, img.height as u32, &img.pixels, flip, premul);
+        }
+        None => pending.push((target, tex, src.into(), c.flip_y, c.premultiply)),
+    }
 }
 
 /// All WebGL canvases of a page.

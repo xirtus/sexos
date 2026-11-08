@@ -50,6 +50,8 @@ pub struct Translated {
     pub outputs: Vec<(String, u32)>,
     /// `true` for `#version 300 es`.
     pub es3: bool,
+    /// Attributes whose location the shader declares itself.
+    pub explicit: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -364,9 +366,12 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
         let is_out = has("out") || (has("varying") && stage == Stage::Vertex);
         if stage == Stage::Vertex && is_in {
             for dc in &d.decls {
-                let loc = explicit_location(d.layout).unwrap_or(attr_loc);
+                let explicit = explicit_location(d.layout);
+                let loc = explicit.unwrap_or(attr_loc);
                 attr_loc = attr_loc.max(loc + 1);
-                body.push(Tok::Id(format!("layout(location={loc}) in {ty_text} {};\n", dc.name)));
+                if explicit.is_some() { out.explicit.push(dc.name.clone()); }
+                // The linker puts the final location in place of `sxaN`.
+                body.push(Tok::Id(format!("layout(location=sxa{}) in {ty_text} {};\n", out.attributes.len(), dc.name)));
                 out.attributes.push((dc.name.clone(), loc));
             }
             continue;
@@ -493,6 +498,17 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
     text(&fixed, &mut src);
     out.source = src;
     Ok(out)
+}
+
+impl Translated {
+    /// The source with each attribute at the location the translation chose.
+    pub fn placed(&self) -> String {
+        let mut src = self.source.clone();
+        for (i, (_, l)) in self.attributes.iter().enumerate().rev() {
+            src = src.replace(&format!("location=sxa{i})"), &format!("location={l})"));
+        }
+        src
+    }
 }
 
 fn explicit_location(layout: Option<&[Tok]>) -> Option<u32> {

@@ -826,6 +826,7 @@ struct FragShader<'a> {
 }
 
 impl Shade for FragShader<'_> {
+    fn writes_depth(&self) -> bool { self.prog.frag_depth.is_some() }
     fn shade(&mut self, frag: &Frag, vary: &[f32]) -> Option<([f32; 4], Option<f32>)> {
         let fin = &self.fin;
         let ok = self.prog.fs.run(&mut self.m, &self.prog.fs_uniforms, self.tex, &mut |io, lanes| {

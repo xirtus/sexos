@@ -202,3 +202,26 @@ fn es3_shaders_blending_and_scissor() {
     assert!((left[0] as i32 - 128).abs() <= 1 && (left[2] as i32 - 128).abs() <= 1, "{left:?}");
     assert_eq!(px(&ctx, 20, 4), [0, 0, 255, 255]);
 }
+
+#[test]
+fn shader_depth_and_declared_attribute_locations() {
+    let mut ctx = Context::new(8, 8);
+    // `p` declares location 3; `q` takes a free one. The depth the shader writes (0.25)
+    // passes LESS against 0.5, though the triangle's own depth (0.75) would not.
+    program(&mut ctx, "#version 300 es\nlayout(location = 3) in vec2 p;\nin float q;\nvoid main(){ gl_Position = vec4(p, 0.5 * q, 1.0); }",
+        "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main(){ o = vec4(0.0, 1.0, 0.0, 1.0); gl_FragDepth = 0.25; }");
+    let attrs = &ctx.program(3).unwrap().attributes;
+    assert_eq!(attrs.iter().find(|a| a.0 == "p").unwrap().1, 3);
+    assert_eq!(attrs.iter().find(|a| a.0 == "q").unwrap().1, 0);
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(3, true);
+    ctx.attrib_pointer(3, 2, FLOAT, false, 0, 0);
+    ctx.vertex_attrib(0, [1.0, 0.0, 0.0, 1.0]);
+    ctx.clear_color([0.0, 0.0, 0.0, 1.0]);
+    ctx.clear_depth(0.5);
+    ctx.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+    ctx.enable(DEPTH_TEST, true);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(px(&ctx, 4, 4), [0, 255, 0, 255]);
+}

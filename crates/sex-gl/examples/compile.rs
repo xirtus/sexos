@@ -9,7 +9,7 @@ fn main() {
     let src = std::fs::read_to_string(&a[1]).unwrap();
     if show {
         match translate(&src, stage, &mut Vec::new()) {
-            Ok(t) => for (i, l) in t.source.lines().enumerate() { println!("{:4} {l}", i + 1) },
+            Ok(t) => for (i, l) in t.placed().lines().enumerate() { println!("{:4} {l}", i + 1) },
             Err(e) => println!("translate: {e}"),
         }
     }

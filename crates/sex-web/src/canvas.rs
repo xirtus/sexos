@@ -388,8 +388,8 @@ impl Canvases {
         let name = alloc::format!("canvas:{node}");
         let image = surface.image();
         match fonts.images.iter_mut().find(|(s, _)| *s == name) {
-            Some(slot) => slot.1 = image,
-            None => fonts.images.push((name, image)),
+            Some(slot) => slot.1 = alloc::rc::Rc::new(image),
+            None => fonts.images.push((name, alloc::rc::Rc::new(image))),
         }
     }
 
@@ -419,8 +419,8 @@ pub fn present_gl(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -> bool
         let image = Image { width, height, pixels: canvas.ctx.present(canvas.alpha) };
         let name = alloc::format!("canvas:{node}");
         match fonts.images.iter_mut().find(|(s, _)| *s == name) {
-            Some(slot) => slot.1 = image,
-            None => fonts.images.push((name, image)),
+            Some(slot) => slot.1 = alloc::rc::Rc::new(image),
+            None => fonts.images.push((name, alloc::rc::Rc::new(image))),
         }
         any = true;
     }

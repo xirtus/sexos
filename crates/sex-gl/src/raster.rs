@@ -88,6 +88,8 @@ pub mod gl {
 /// window x, y (pixel centres), z, 1/w, front-facing, point coordinate and varyings.
 pub trait Shade {
     fn shade(&mut self, frag: &Frag, vary: &[f32]) -> Option<([f32; 4], Option<f32>)>;
+    /// True if the shader writes depth: the depth test then waits for its value.
+    fn writes_depth(&self) -> bool { false }
 }
 
 pub struct Frag {
@@ -174,7 +176,7 @@ fn bounds(t: &Target, fx: &Fixed) -> (i32, i32, i32, i32) {
 /// Writes one shaded fragment, after the depth test.
 fn write(t: &mut Target, fx: &Fixed, x: i32, y: i32, z: f32, sh: &mut dyn Shade, frag: &Frag, vary: &[f32]) {
     let i = (y * t.width + x) as usize;
-    if fx.depth_test && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
+    if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
     let Some((c, fz)) = sh.shade(frag, vary) else { return };
     let z = fz.unwrap_or(z);
     if fx.depth_test && fz.is_some() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }

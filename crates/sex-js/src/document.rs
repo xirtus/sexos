@@ -26,6 +26,9 @@ pub struct Document {
     pub measure: fn(&str, &str) -> i32,
     /// WebGL contexts, by canvas element.
     pub gl: crate::webgl::GlCanvases,
+    /// The page's decoded pictures by `src`, shared with the browser, so WebGL can
+    /// upload one the moment a script asks.
+    pub pictures: Vec<(String, alloc::rc::Rc<sex_image::Image>)>,
 }
 
 /// A rough width when the browser gives no measure: 0.55 em per character.
@@ -36,7 +39,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default() }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new() }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -72,7 +75,7 @@ impl Page for Document {
         match operation {
             op::GL => {
                 let canvas = self.gl.by_node.get_mut(&node)?;
-                canvas.run(text(1), a.get(2).copied().unwrap_or(&[]));
+                canvas.run(text(1), a.get(2).copied().unwrap_or(&[]), &self.pictures);
                 Some(Vec::new())
             }
             op::GL_QUERY => {

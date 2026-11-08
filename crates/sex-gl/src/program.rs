@@ -74,7 +74,7 @@ impl Shader {
     /// "Compiles": translates and parses on its own to report errors now.
     pub fn compile(stage: Stage, source: &str) -> Shader {
         let mut varyings = Vec::new();
-        let res = glsl::translate(source, stage, &mut varyings).and_then(|t| parse(stage, &t.source).map(|_| ()));
+        let res = glsl::translate(source, stage, &mut varyings).and_then(|t| parse(stage, &t.placed()).map(|_| ()));
         match res {
             Ok(()) => Shader { stage, source: source.to_string(), ok: true, log: String::new() },
             Err(e) => Shader { stage, source: source.to_string(), ok: false, log: e },
@@ -147,32 +147,31 @@ impl Program {
         let mut varyings = Vec::new();
         let tv = glsl::translate(&vs.source, Stage::Vertex, &mut varyings)?;
         let tf = glsl::translate(&fs.source, Stage::Fragment, &mut varyings)?;
-        // Bound attribute locations: rewrite `layout(location=N) in` for bound names.
-        let mut vsrc = tv.source.clone();
-        for (name, loc) in &tv.attributes {
-            if let Some(b) = bindings.get(name) {
-                vsrc = vsrc.replace(&format!("layout(location={loc}) in "), &format!("layout(location=sxtmp{b}) in "));
-                let _ = name;
-            }
-        }
-        // Unbound attributes that now collide move to free locations.
+        // Locations bound by the program, and those the shader declares itself
+        // (`layout(location=N)` in ES 3.00), are kept; the rest take free ones.
+        let fixed_loc = |name: &String, loc: u32| bindings.get(name).copied().or(if tv.explicit.contains(name) { Some(loc) } else { None });
+        let used: Vec<u32> = tv.attributes.iter().filter_map(|(n, l)| fixed_loc(n, *l)).collect();
         let mut attrs: Vec<(String, u32)> = Vec::new();
-        let used: Vec<u32> = tv.attributes.iter().filter_map(|(n, _)| bindings.get(n).copied()).collect();
+        let mut vsrc = tv.source.clone();
         let mut next = 0;
-        for (name, loc) in &tv.attributes {
-            let l = match bindings.get(name) {
-                Some(b) => *b,
+        // Highest index first, so `sxa1` doesn't match inside `sxa10`.
+        let mut placed: Vec<(usize, u32)> = Vec::new();
+        for (i, (name, loc)) in tv.attributes.iter().enumerate() {
+            let l = match fixed_loc(name, *loc) {
+                Some(l) => l,
                 None => {
                     while used.contains(&next) || attrs.iter().any(|(_, l)| *l == next) { next += 1; }
-                    let l = next;
-                    vsrc = vsrc.replace(&format!("layout(location={loc}) in "), &format!("layout(location=sxtmp{l}) in "));
                     next += 1;
-                    l
+                    next - 1
                 }
             };
+            placed.push((i, l));
             attrs.push((name.clone(), l));
         }
-        let vsrc = vsrc.replace("location=sxtmp", "location=");
+        for (i, l) in placed.into_iter().rev() {
+            vsrc = vsrc.replace(&format!("location=sxa{i})"), &format!("location={l})"));
+        }
+
         let (vm, vi) = parse(Stage::Vertex, &vsrc)?;
         let (fm, fi) = parse(Stage::Fragment, &tf.source)?;
         let vu = reflect(&vm);
