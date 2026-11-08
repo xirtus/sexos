@@ -628,6 +628,10 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
 
 /// The ink and selection of `surface_text_fg_at` for one row run.
 fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
+    if program_pixel_at(0,0,surf).is_some(){
+        for x in x0..x1{if let Some(Some(c))=program_pixel_at(x,y,surf){unsafe{core::ptr::write_volatile(row.add(x),c);}}}
+        return;
+    }
     if surf.text_len==0||surf.line_count==0{return;}
     const GLYPH_W:usize=sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H:usize=sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
@@ -1645,6 +1649,23 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
     }
 }
 
+/// Program pixel surfaces: Display's read-only view of each row's region, and the size
+/// the row last asked to show (zero is text). Reset when the row presents a new run.
+const PROGRAM_ROWS:usize=sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
+static mut PIXEL_REGIONS:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
+static mut PIXEL_SIZE:[(usize,usize);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
+/// The program row's picture under this pixel, when the surface shows one.
+fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
+    let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
+    if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
+    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
+    if w==0||h==0||base==0{return None;}
+    let bx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
+    let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
+    let by=(surf.y.max(0) as usize).saturating_add(top);
+    if x<bx||y<by||x>=bx+w||y>=by+h{return Some(None);}
+    Some(Some(unsafe{core::ptr::read_volatile((base as *const u32).add((y-by)*w+(x-bx)))}&0x00FF_FFFF))
+}
 /// Read-only views of each app's BOOT text region, resolved once at startup.
 static mut TEXT_REGIONS:[u64;sex_pdx::app_catalog::COUNT]=[0;sex_pdx::app_catalog::COUNT];
 fn text_region_of(owner:u32)->Option<&'static [u8]>{
@@ -1680,6 +1701,8 @@ fn legacy_text_draw(slot:&mut Surface,packed:u64,arg2:u64)->bool{
 }
 
 fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
+    // A program showing pixels shows only them.
+    if let Some(pixel) = program_pixel_at(x, y, surf) { return pixel; }
     if surf.text_len == 0 || surf.line_count == 0 { return None; }
     const GLYPH_W: usize = sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H: usize = sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
@@ -3531,6 +3554,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexdisplay.ready]");
     let mut ready_publisher = sex_pdx::display_ready::ReadyPublisher::new();
     unsafe{for index in 0..sex_pdx::app_catalog::COUNT{TEXT_REGIONS[index]=sex_pdx::text_region_display(index).unwrap_or(0);}}
+    unsafe{for k in 0..PROGRAM_ROWS{PIXEL_REGIONS[k]=sex_pdx::pixel_region_display(k).unwrap_or(0);}}
     sex_pdx::serial_record!("[display.text.regions] count={} ok={}",sex_pdx::app_catalog::COUNT,unsafe{TEXT_REGIONS.iter().filter(|v|**v!=0).count()});
     let mut uiir = match sex_pdx::uiir_consumer(sex_pdx::uiir::SHELL_PD) {
         Ok(c) => {sex_pdx::serial_record!("[uiir.display.attached] peer={} ok=1",sex_pdx::uiir::SHELL_PD);Some(c)},
@@ -3924,9 +3948,21 @@ pub extern "C" fn _start() -> ! {
                         sex_pdx::serial_record!("[display.app.title] target={} surface={}", msg.caller_pd, msg.arg0);
                     }
                 }
+                sex_pdx::pixel_region::OP => {
+                    // Only the program row that owns this surface shows pixels in it.
+                    if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
+                        let (w, h) = (((msg.arg1 >> 32) as usize).min(sex_pdx::pixel_region::MAX_W), ((msg.arg1 & 0xFFFF_FFFF) as usize).min(sex_pdx::pixel_region::MAX_H));
+                        unsafe { PIXEL_SIZE[k] = (w, h); }
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.app.pixels] target={} surface={} w={} h={}", msg.caller_pd, msg.arg0, w, h);
+                    }
+                }
                 sex_pdx::app_lifecycle::OP_APP_PRESENT => {
-                    // A new run starts with the catalog's name until it gives its own.
-                    if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program) { set_program_title(msg.arg0, None); }
+                    // A new run starts with the catalog's name and text until it gives its own.
+                    if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program) {
+                        set_program_title(msg.arg0, None);
+                        if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) { unsafe { PIXEL_SIZE[k] = (0, 0); } }
+                    }
                     if lifecycle.request_present(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) {
                         sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request={}", msg.caller_pd, msg.arg0, msg.arg1);
                     }

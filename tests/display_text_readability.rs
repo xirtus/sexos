@@ -5,6 +5,7 @@ extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
+#[path="../crates/sex-pdx/src/pixel_region.rs"]pub mod pixel_region;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
