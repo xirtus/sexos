@@ -733,7 +733,7 @@ impl Context {
         let mut fixed = self.fixed;
         fixed.scissor = if self.scissor_test { Some(self.scissor_box) } else { None };
         fixed.polygon_offset = if self.polygon_offset_fill { Some(self.polygon_offset) } else { None };
-        let mut shader = FragShader { prog, m: prog.fs.machine(), tex: &tex_fs, fin };
+        let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin };
         let mut target = Target { width: self.width as i32, height: self.height as i32, color, depth };
         raster::assemble(&mut target, &fixed, mode, &local, &verts, &mut shader);
         Ok(())
@@ -821,41 +821,86 @@ impl Textures for DrawTextures<'_> {
 struct FragShader<'a> {
     prog: &'a Program,
     m: exec::Machine,
+    wide: Option<exec::WideMachine>,
     tex: &'a DrawTextures<'a>,
     fin: Vec<(Io, u32, Option<u32>)>,
 }
 
-impl Shade for FragShader<'_> {
-    fn writes_depth(&self) -> bool { self.prog.frag_depth.is_some() }
-    fn shade(&mut self, frag: &Frag, vary: &[f32]) -> Option<([f32; 4], Option<f32>)> {
-        let fin = &self.fin;
-        let ok = self.prog.fs.run(&mut self.m, &self.prog.fs_uniforms, self.tex, &mut |io, lanes| {
-            match io {
-                Io::Location(_) => {
-                    if let Some((_, n, Some(at))) = fin.iter().find(|(i, _, _)| *i == io) {
-                        for k in 0..(*n as usize).min(lanes.len()) { lanes[k] = vary.get(*at as usize + k).copied().unwrap_or(0.0).to_bits(); }
-                    }
+impl FragShader<'_> {
+    fn fill(fin: &[(Io, u32, Option<u32>)], frag: &Frag, vary: &[f32], io: Io, lanes: &mut [u32]) {
+        match io {
+            Io::Location(_) => {
+                if let Some((_, n, Some(at))) = fin.iter().find(|(i, _, _)| *i == io) {
+                    for k in 0..(*n as usize).min(lanes.len()) { lanes[k] = vary.get(*at as usize + k).copied().unwrap_or(0.0).to_bits(); }
                 }
-                Io::Position => {
-                    let v = [frag.x, frag.y, frag.z, frag.inv_w];
-                    for (k, l) in lanes.iter_mut().enumerate().take(4) { *l = v[k].to_bits(); }
-                }
-                Io::FrontFacing => lanes[0] = frag.front as u32,
-                Io::PointCoord => { lanes[0] = frag.point[0].to_bits(); if lanes.len() > 1 { lanes[1] = frag.point[1].to_bits(); } }
-                _ => {}
             }
-        });
-        if !ok { return None; }
-        let out = &self.m.out;
+            Io::Position => {
+                let v = [frag.x, frag.y, frag.z, frag.inv_w];
+                for (k, l) in lanes.iter_mut().enumerate().take(4) { *l = v[k].to_bits(); }
+            }
+            Io::FrontFacing => lanes[0] = frag.front as u32,
+            Io::PointCoord => { lanes[0] = frag.point[0].to_bits(); if lanes.len() > 1 { lanes[1] = frag.point[1].to_bits(); } }
+            _ => {}
+        }
+    }
+
+    fn result(&self, out: impl Fn(u32) -> u32) -> ([f32; 4], Option<f32>) {
         let c = match self.prog.color {
             Some((o, n)) => {
                 let mut c = [0f32, 0.0, 0.0, 1.0];
-                for k in 0..(n as usize).min(4) { c[k] = f32::from_bits(out[o as usize + k]); }
+                for k in 0..(n as usize).min(4) { c[k] = f32::from_bits(out(o + k as u32)); }
                 c
             }
             None => [0.0; 4],
         };
-        let z = self.prog.frag_depth.map(|o| f32::from_bits(out[o as usize]).clamp(0.0, 1.0));
-        Some((c, z))
+        let z = self.prog.frag_depth.map(|o| f32::from_bits(out(o)).clamp(0.0, 1.0));
+        (c, z)
+    }
+}
+
+impl Shade for FragShader<'_> {
+    fn writes_depth(&self) -> bool { self.prog.frag_depth.is_some() }
+    fn batch(&self) -> usize { exec::WIDE }
+    fn shade(&mut self, frag: &Frag, vary: &[f32]) -> Option<([f32; 4], Option<f32>)> {
+        let fin = &self.fin;
+        let ok = self.prog.fs.run(&mut self.m, &self.prog.fs_uniforms, self.tex, &mut |io, lanes| Self::fill(fin, frag, vary, io, lanes));
+        if !ok { return None; }
+        let out = &self.m.out;
+        Some(self.result(|k| out[k as usize]))
+    }
+    fn shade_many(&mut self, frags: &[Frag], vary: &[f32], stride: usize, out: &mut [Option<([f32; 4], Option<f32>)>]) {
+        let mut wm = self.wide.take().unwrap_or_else(|| self.prog.fs.wide_machine());
+        let fs = &self.prog.fs;
+        for (b, (fr, o)) in frags.chunks(exec::WIDE).zip(out.chunks_mut(exec::WIDE)).enumerate() {
+            let base = b * exec::WIDE;
+            for &(io, off, n) in &fs.inputs {
+                match io {
+                    Io::Location(_) => {
+                        let Some(&(_, fnum, Some(at))) = self.fin.iter().find(|(i, _, _)| *i == io) else { continue };
+                        for k in 0..n.min(fnum) {
+                            let row = wm.reg(off + k);
+                            for (l, v) in row.iter_mut().enumerate().take(fr.len()) {
+                                *v = vary.get((base + l) * stride + (at + k) as usize).copied().unwrap_or(0.0).to_bits();
+                            }
+                        }
+                    }
+                    Io::Position => for k in 0..n.min(4) {
+                        let row = wm.reg(off + k);
+                        for (l, f) in fr.iter().enumerate() { row[l] = [f.x, f.y, f.z, f.inv_w][k as usize].to_bits(); }
+                    },
+                    Io::FrontFacing => { let row = wm.reg(off); for (l, f) in fr.iter().enumerate() { row[l] = f.front as u32; } }
+                    Io::PointCoord => for k in 0..n.min(2) {
+                        let row = wm.reg(off + k);
+                        for (l, f) in fr.iter().enumerate() { row[l] = f.point[k as usize].to_bits(); }
+                    },
+                    _ => {}
+                }
+            }
+            let live = fs.run_rows(&mut wm, fr.len(), &self.prog.fs_uniforms, self.tex);
+            for (l, slot) in o.iter_mut().enumerate() {
+                *slot = if (live >> l) & 1 != 0 { Some(self.result(|k| wm.out(l, k))) } else { None };
+            }
+        }
+        self.wide = Some(wm);
     }
 }

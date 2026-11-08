@@ -15,6 +15,10 @@ use naga::{
 };
 use naga::valid::{FunctionInfo, ModuleInfo};
 
+#[path = "wide.rs"]
+mod wide;
+pub use wide::{WideMachine, W as WIDE};
+
 const SPACE_PRIVATE: u32 = 0;
 const SPACE_UNIFORM: u32 = 1;
 /// Loops stop after this many iterations (a runaway shader must not hang the page).
@@ -161,6 +165,8 @@ struct Code {
     /// One prepared operation per expression, run in place of `eval` for the common
     /// cases (slots, sizes and shapes resolved once).
     ops: Vec<Op>,
+    /// By expression: the register runs (slot, lanes) `eval` reads.
+    uses: Vec<Box<[(u32, u32)]>>,
 }
 
 /// Copies `n` lanes within `r`; most values are 1 to 4 lanes, too few for `memmove`.
@@ -240,6 +246,23 @@ enum Op {
     FMin { dst: u32, a: u32, b: u32, n: u32, sb: bool },
     Clamp { dst: u32, a: u32, lo: u32, hi: u32, n: u32, s: bool },
     Mix { dst: u32, a: u32, b: u32, t: u32, n: u32, st: bool },
+    /// A texture lookup: `coord` of `cn` lanes, then an optional array layer (`array_f`:
+    /// a float), level or bias, and depth reference.
+    Sample { dst: u32, n: u32, image: u32, coord: u32, cn: u32, array: Option<u32>, array_f: bool, lod: Option<u32>, dref: Option<u32> },
+}
+
+/// The lookup an `Op::Sample` makes, from lane reads `get(slot)`.
+#[inline(always)]
+fn sample_op(op: &Op, get: impl Fn(u32) -> u32, tex: &dyn Textures) -> [f32; 4] {
+    let &Op::Sample { image, coord, cn, array, array_f, lod, dref, .. } = op else { return [0.0; 4] };
+    let mut c = [0f32; 4];
+    for j in 0..cn.min(4) { c[j as usize] = f32::from_bits(get(coord + j)); }
+    if let Some(a) = array {
+        let v = get(a);
+        c[cn.min(3) as usize] = if array_f { f32::from_bits(v) } else { v as i32 as f32 };
+    }
+    let lod = lod.map_or(0.0, |s| f32::from_bits(get(s)));
+    tex.sample(get(image), c, lod, dref.map(|s| f32::from_bits(get(s))))
 }
 #[derive(Clone, Copy, Default)]
 struct Acc {
@@ -403,9 +426,11 @@ impl StageCode {
             let (fh, _) = st.module.functions.iter().nth(i).unwrap();
             st.funcs[i].acc = st.access_shapes(&st.funcs[i], &st.module.functions[fh].expressions);
             st.funcs[i].ops = st.prepare(&st.funcs[i], &st.module.functions[fh].expressions);
+            st.funcs[i].uses = uses_of(&st.funcs[i], &st.module.functions[fh].expressions);
         }
         st.entry.acc = st.access_shapes(&st.entry, &st.module.entry_points[0].function.expressions);
         st.entry.ops = st.prepare(&st.entry, &st.module.entry_points[0].function.expressions);
+        st.entry.uses = uses_of(&st.entry, &st.module.entry_points[0].function.expressions);
         st.fhandles = st.module.functions.iter().map(|(h, _)| h).collect();
         let mut lw = Lowering::default();
         st.lower_function(&mut lw, st.funcs.len());
@@ -476,7 +501,7 @@ impl StageCode {
         for h in &once { is_once[h.index()] = true; }
         let mut is_on_entry = vec![false; exprs.len()];
         for h in &on_entry { is_on_entry[h.index()] = true; }
-        Code { src, slot, ty: tys.to_vec(), on_entry, once, local_off, local_init, arg_off, arg_lanes, ret_off, acc: Vec::new(), ops: Vec::new(), is_once, is_on_entry }
+        Code { src, slot, ty: tys.to_vec(), on_entry, once, local_off, local_init, arg_off, arg_lanes, ret_off, acc: Vec::new(), ops: Vec::new(), uses: Vec::new(), is_once, is_on_entry }
     }
 
     /// The flat program's steps, for looking at.
@@ -656,7 +681,7 @@ impl StageCode {
         let mut pc = 0usize;
         while pc < steps.len() {
             match &steps[pc] {
-                Step::Op(op) => self.run_op(m, op, u),
+                Step::Op(op) => self.run_op(m, op, u, tex),
                 &Step::Eval { code, h } => {
                     let (c, f) = self.code(code as usize);
                     self.eval(m, c, &f.expressions, h, u, tex);
@@ -730,6 +755,12 @@ impl StageCode {
                         Op::FMatVec { dst, m: sl(*left), v: sl(*right), rows: lt.rows as u32, cols: lt.cols as u32 }
                     } else { Op::Generic }
                 }
+                E::ImageSample { image, coordinate, array_index, level, depth_ref, .. } => Op::Sample {
+                    dst, n, image: sl(*image), coord: sl(*coordinate), cn: ty(*coordinate).lanes,
+                    array: array_index.map(sl), array_f: array_index.is_some_and(|a| ty(a).kind == K::F),
+                    lod: match level { SampleLevel::Exact(e) | SampleLevel::Bias(e) => Some(sl(*e)), _ => None },
+                    dref: depth_ref.map(sl),
+                },
                 E::Math { fun, arg, arg1, arg2, .. } if ty(*arg).kind == K::F && ty(*arg).cols == 1 => match (fun, arg1, arg2) {
                     (M::Dot, Some(b), _) => Op::Dot { dst, a: sl(*arg), b: sl(*b), n: ty(*arg).lanes },
                     (M::Normalize, _, _) => Op::Normalize { dst, a: sl(*arg), n },
@@ -750,10 +781,14 @@ impl StageCode {
 
     /// Runs a prepared operation.
     #[inline(always)]
-    fn run_op(&self, m: &mut Machine, op: &Op, u: &[u32]) {
+    fn run_op(&self, m: &mut Machine, op: &Op, u: &[u32], tex: &dyn Textures) {
         let r = &mut m.regs;
         let f = |r: &[u32], i: u32| f32::from_bits(r[i as usize]);
         match op {
+            &Op::Sample { dst, n, .. } => {
+                let px = sample_op(op, |x| r[x as usize], tex);
+                for j in 0..n.min(4) { r[(dst + j) as usize] = px[j as usize].to_bits(); }
+            }
             Op::Generic => {}
             &Op::Copy { dst, src, n } => lanes(r, src as usize, dst as usize, n as usize),
             &Op::Splat { dst, src, n } => { let v = r[src as usize]; r[dst as usize..(dst + n) as usize].fill(v); }
@@ -1376,6 +1411,22 @@ fn mark(b: &naga::Block, emitted: &mut [bool], results: &mut [bool]) {
             _ => {}
         }
     }
+}
+
+/// The registers each expression's `eval` reads.
+fn uses_of(c: &Code, exprs: &naga::Arena<naga::Expression>) -> Vec<Box<[(u32, u32)]>> {
+    exprs.iter().map(|(_, e)| {
+        let hs = match e {
+            E::ImageSample { image, coordinate, array_index, level, depth_ref, .. } => {
+                let mut v = vec![*image, *coordinate];
+                v.extend([*array_index, *depth_ref].into_iter().flatten());
+                if let SampleLevel::Exact(x) | SampleLevel::Bias(x) = level { v.push(*x); }
+                v
+            }
+            e => operands(e).unwrap_or_default(),
+        };
+        hs.iter().map(|h| (c.slot[h.index()], c.ty[h.index()].lanes)).collect()
+    }).collect()
 }
 
 fn operands(e: &naga::Expression) -> Option<Vec<Handle<naga::Expression>>> {

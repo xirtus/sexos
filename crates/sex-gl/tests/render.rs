@@ -225,3 +225,46 @@ fn shader_depth_and_declared_attribute_locations() {
     ctx.draw_arrays(gl::TRIANGLES, 0, 3);
     assert_eq!(px(&ctx, 4, 4), [0, 255, 0, 255]);
 }
+
+/// Neighbouring pixels take different branches, loop counts, calls and discards; they
+/// are shaded together, so each must still get exactly its own result.
+#[test]
+fn divergent_branches_loops_and_discard_per_pixel() {
+    let mut ctx = Context::new(16, 16);
+    program(&mut ctx, "attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }", r#"
+precision highp float;
+float f(float x) { if (x > 0.5) { return x * 2.0; } return x * 0.5; }
+void main() {
+  float x = floor(gl_FragCoord.x);
+  float y = floor(gl_FragCoord.y);
+  if (mod(x, 5.0) == 0.0 && y > 7.0) discard;
+  float s = 0.0;
+  for (int i = 0; i < 16; i++) {
+    if (float(i) >= x) break;
+    if (mod(float(i), 2.0) == 0.0) continue;
+    s += 1.0;
+  }
+  float c = mod(x + y, 3.0) == 0.0 ? f(0.75) : f(0.25);
+  gl_FragColor = vec4(s / 16.0, c / 2.0, y / 16.0, 1.0);
+}"#);
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 1., -1., 1., 1., -1., -1., 1., 1., -1., 1.]));
+    let p = ctx.program(3).unwrap().attributes.iter().find(|a| a.0 == "p").unwrap().1;
+    ctx.enable_attrib(p, true);
+    ctx.attrib_pointer(p, 2, FLOAT, false, 8, 0);
+    ctx.clear_color([0.0, 0.0, 0.0, 0.0]);
+    ctx.clear(COLOR_BUFFER_BIT);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 6);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let want = if x % 5 == 0 && y > 7 { [0, 0, 0, 0] } else {
+                let s = (x / 2) as f32;
+                let c = if (x + y) % 3 == 0 { 1.5 } else { 0.125 };
+                [b(s / 16.0), b(c / 2.0), b(y as f32 / 16.0), 255]
+            };
+            assert_eq!(px(&ctx, x, y), want, "pixel {x},{y}");
+        }
+    }
+}
