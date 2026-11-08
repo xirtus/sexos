@@ -326,20 +326,36 @@ impl<'a> Canvas<'a> {
         let r = radius.clamp(0.0, rect.w.min(rect.h) / 2.0);
         let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
         let (hx, hy) = (rect.w / 2.0 - r, rect.h / 2.0 - r);
+        // Coverage depends only on the distance, so look it up: 256 steps across
+        // the fade band, each already a premultiplied source word.
+        const STEPS: usize = 256;
         let scale = 1.0 / (sigma * core::f32::consts::SQRT_2);
         let alpha = color.a() as f32;
+        let mut table = [0u32; STEPS + 1];
+        for (i, word) in table.iter_mut().enumerate() {
+            let d = -reach + 2.0 * reach * i as f32 / STEPS as f32;
+            let a = (alpha * 0.5 * libm::erfcf(d * scale) + 0.5) as u32;
+            *word = color.with_alpha(a.min(255) as u8).premultiplied();
+        }
+        let step = STEPS as f32 / (2.0 * reach);
         for y in y0..y1 {
             let qy = libm::fabsf(y as f32 + 0.5 - cy) - hy;
             let row = (y * self.width) as usize;
             for x in x0..x1 {
                 let qx = libm::fabsf(x as f32 + 0.5 - cx) - hx;
-                let outside = libm::sqrtf(qx.max(0.0) * qx.max(0.0) + qy.max(0.0) * qy.max(0.0));
-                let d = outside + qx.max(qy).min(0.0) - r;
-                let a = (alpha * 0.5 * libm::erfcf(d * scale) + 0.5) as u32;
-                if a == 0 {
+                let d = if qx <= 0.0 && qy <= 0.0 {
+                    qx.max(qy) - r
+                } else {
+                    libm::sqrtf(qx.max(0.0) * qx.max(0.0) + qy.max(0.0) * qy.max(0.0)) - r
+                };
+                let i = (d + reach) * step + 0.5;
+                if i >= STEPS as f32 + 0.5 {
                     continue;
                 }
-                let src = color.with_alpha(a.min(255) as u8).premultiplied();
+                let src = table[(i.max(0.0) as usize).min(STEPS)];
+                if src == 0 {
+                    continue;
+                }
                 let px = &mut self.pixels[row + x as usize];
                 *px = over(src, *px);
             }
@@ -464,6 +480,29 @@ impl Layer {
                 *out = over(*src, *out);
             }
         }
+    }
+}
+
+/// A small scene that shows what the crate draws: a desktop gradient, an inactive
+/// window behind and an active one in front, with its top-left offset by
+/// `(dx, dy)` from its resting place. The Shapes program and the host example
+/// both draw it, so a screen can be checked against a host rendering.
+pub fn demo(c: &mut Canvas, dx: f32, dy: f32) {
+    let (w, h) = (c.width() as f32, c.height() as f32);
+    c.fill_round_rect_gradient(Rect::new(0.0, 0.0, w, h), 0.0, Color::rgb(0x2B, 0x3A, 0x67), Color::rgb(0x8E, 0x5B, 0x9C));
+    let style = WindowStyle::default();
+    let back = c.window(Rect::new(w * 0.06, h * 0.08, w * 0.48, h * 0.52), &style, false);
+    c.fill_round_rect(back.inset(16.0), 6.0, Color::rgb(0xE6, 0xE8, 0xEE));
+    let front = c.window(Rect::new(w * 0.36 + dx, h * 0.28 + dy, w * 0.54, h * 0.6), &style, true);
+    let body = front.inset(20.0);
+    c.fill_round_rect(Rect::new(body.x, body.y, body.w * 0.35, 32.0), 16.0, Color::rgb(0x3A, 0x7B, 0xF6));
+    let r = (body.h * 0.3).min(body.w * 0.2);
+    let (cx, cy) = (body.x + body.w * 0.68, body.y + body.h * 0.55);
+    c.fill_circle(cx, cy, r, Color::rgba(0xFF, 0x7A, 0x45, 220));
+    c.stroke_circle(cx, cy, r * 1.25, 3.0, Color::rgba(0x3A, 0x7B, 0xF6, 160));
+    for i in 0..6 {
+        let x = body.x + 8.0 + i as f32 * body.w * 0.06;
+        c.line(x, body.bottom() - 8.0, x + body.w * 0.16, body.y + 48.0, 2.5, Color::rgba(0x20, 0x20, 0x30, 200));
     }
 }
 
