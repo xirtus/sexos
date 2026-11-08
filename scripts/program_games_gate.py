@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Games: `run solitaire` and `run chess` start Web on its built-in game pages, which are
+"""Games: `run solitaire`, `run chess` and `run maze` start Web on its built-in game pages, which are
 JavaScript on Canvas 2D played from the keyboard. Solitaire must match the host render
 (sex-web's page example) pixel for pixel when dealt and after drawing a card; Chess when
 set up and after picking a pawn, and the computer must answer a move within the page's
-script time limit."""
+script time limit. Maze (WebGL) must match the host render when it starts and after
+walking one cell, and its walk is timed."""
 import argparse,re,shutil,subprocess,time
 from pathlib import Path
 from PIL import Image
@@ -19,14 +20,16 @@ def reference(out,page,bar,name,actions=''):
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('solitaire','chess')]
+ progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('solitaire','chess','maze')]
  assert all(e[:4]==b'\x7fELF' for _,e in progs)
  install(disk,progs)
  sol_bar='Solitaire — about:solitaire';chess_bar='Chess — about:chess'
  refs={'solitaire':reference(a.out,GAMES/'solitaire.html',sol_bar,'solitaire'),
   'solitaire-drawn':reference(a.out,GAMES/'solitaire.html',sol_bar,'solitaire-drawn','keyArrowUp,keyEnter'),
   'chess':reference(a.out,GAMES/'chess.html',chess_bar,'chess'),
-  'chess-picked':reference(a.out,GAMES/'chess.html',chess_bar,'chess-picked','keyEnter')}
+  'chess-picked':reference(a.out,GAMES/'chess.html',chess_bar,'chess-picked','keyEnter'),
+  'maze':reference(a.out,GAMES/'maze.html','Maze — about:maze','maze'),
+  'maze-walked':reference(a.out,GAMES/'maze.html','Maze — about:maze','maze-walked','keyArrowUp')}
  g=boot(a.iso,disk,a.out,'games',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
@@ -77,7 +80,15 @@ def main():
   text=t()
   assert '[web.script] trapped' not in text,'the computer ran past the script time limit'
   close(target,task)
+  target,task,surface,tile,maze_ticks=start('maze')
+  checked.append(compare('maze',tile))
+  g['focus'](surface);time.sleep(.3)
+  s=len(t());began=time.time();q.key('up')
+  walk=g['wait'](r'\[web.console\] level=0 maze stopped cell (\d+) facing (\d+) frames (\d+)',s,300);walk_s=round(time.time()-began,1)
+  g['wait'](r'\[web.shown\]',s,60);time.sleep(2)
+  checked.append(compare('maze-walked',tile))
+  close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'script_ticks':{'solitaire':sol_ticks,'chess':chess_ticks},'reply':reply[1],'depth':int(reply[2]),'nodes':int(reply[3]),'think_ms':int(reply[4]),'checked':checked})
+  print({'ok':True,'script_ticks':{'solitaire':sol_ticks,'chess':chess_ticks,'maze':maze_ticks},'maze_walk_seconds':walk_s,'reply':reply[1],'depth':int(reply[2]),'nodes':int(reply[3]),'think_ms':int(reply[4]),'checked':checked})
  finally:g['stop']()
 if __name__=='__main__':main()

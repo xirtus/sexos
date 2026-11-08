@@ -1,0 +1,255 @@
+<!doctype html>
+<title>Maze</title>
+<body style="margin:0;background:#101418;color:#c9d1d9;font-family:Geist,sans-serif;font-size:12px">
+<canvas id="view" width="410" height="274" style="display:block"></canvas>
+<div id="status" style="padding:4px 8px">Finding the way…</div>
+<script>
+// A walk through a brick maze in WebGL, played from the keyboard. Original SexOS game,
+// GPL-3.0-only. Up walks, Down steps back, Left and Right turn, A walks by itself
+// (keeping a hand on the right wall), N makes a new maze.
+'use strict';
+const cv = document.getElementById('view'), gl = cv.getContext('webgl');
+const status = document.getElementById('status');
+const SIZE = 9, CELL = 2, WALL = 2, EYE = 1;
+
+// ---- the maze: a depth-first carve on a SIZE x SIZE grid ----
+let seed = 7;
+const rng = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff);
+// open[c] bit d: the side d of cell c is open (0 north, 1 east, 2 south, 3 west).
+const DX = [0, 1, 0, -1], DZ = [-1, 0, 1, 0];
+let open, exit;
+function carve() {
+  open = new Uint8Array(SIZE * SIZE);
+  const seen = new Uint8Array(SIZE * SIZE), stack = [0];
+  seen[0] = 1;
+  let far = 0, depth = 0;
+  while (stack.length) {
+    const c = stack[stack.length - 1], x = c % SIZE, z = (c / SIZE) | 0;
+    const ways = [];
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DX[d], nz = z + DZ[d];
+      if (nx >= 0 && nz >= 0 && nx < SIZE && nz < SIZE && !seen[nz * SIZE + nx]) ways.push(d);
+    }
+    if (!ways.length) { stack.pop(); continue; }
+    const d = ways[rng() % ways.length], n = (z + DZ[d]) * SIZE + x + DX[d];
+    open[c] |= 1 << d; open[n] |= 1 << ((d + 2) & 3);
+    seen[n] = 1; stack.push(n);
+    if (stack.length > depth) { depth = stack.length; far = n; }
+  }
+  exit = far; // the cell furthest along the carve from the start
+}
+
+// ---- textures, made here ----
+function texture(w, h, fn, smooth) {
+  const px = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = fn(x, y), i = (y * w + x) * 4; px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2]; px[i + 3] = 255; }
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  return t;
+}
+const noise = (x, y) => ((x * 73856093 ^ y * 19349663) >>> 0) % 23;
+const BRICK = () => texture(32, 32, (x, y) => {
+  const row = y >> 3, bx = (x + (row & 1) * 8) & 15;
+  if ((y & 7) === 7 || bx === 15) return [70, 66, 60];
+  const n = noise(x, y), r = 150 + ((row * 37 + ((x + (row & 1) * 8) >> 4) * 53) % 40);
+  return [r + n, 62 + n, 44 + (n >> 1)];
+});
+const FLOOR = () => texture(16, 16, (x, y) => ((x >> 3) ^ (y >> 3)) & 1 ? [64, 72, 86] : [86, 96, 112]);
+const CEIL = () => texture(8, 8, (x, y) => [32 + noise(x, y), 38 + noise(x, y), 52 + noise(x, y)]);
+const GOLD = () => texture(2, 2, () => [255, 206, 64]);
+
+// ---- shaders ----
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error('maze shader: ' + gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, `
+attribute vec3 aPos; attribute vec2 aUv; attribute float aShade;
+uniform mat4 uMvp; uniform vec3 uEye;
+varying vec2 vUv; varying float vLight;
+void main() {
+  vUv = aUv;
+  float d = distance(aPos.xz, uEye.xz);
+  vLight = aShade * clamp(1.15 - d / 14.0, 0.15, 1.0);
+  gl_Position = uMvp * vec4(aPos, 1.0);
+}`));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, `
+precision mediump float;
+uniform sampler2D uTex;
+varying vec2 vUv; varying float vLight;
+void main() { gl_FragColor = vec4(texture2D(uTex, vUv).rgb * vLight, 1.0); }`));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.error('maze link: ' + gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const uMvp = gl.getUniformLocation(prog, 'uMvp'), uEye = gl.getUniformLocation(prog, 'uEye');
+gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
+const aPos = gl.getAttribLocation(prog, 'aPos'), aUv = gl.getAttribLocation(prog, 'aUv'), aShade = gl.getAttribLocation(prog, 'aShade');
+gl.enableVertexAttribArray(aPos); gl.enableVertexAttribArray(aUv); gl.enableVertexAttribArray(aShade);
+gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+
+// ---- geometry: one mesh per texture ----
+function mesh() { return { v: [], i: [] }; }
+function quad(m, a, b, c, d, uw, uh, shade) {
+  const n = m.v.length / 6;
+  for (const [p, u, v] of [[a, 0, uh], [b, uw, uh], [c, uw, 0], [d, 0, 0]]) m.v.push(p[0], p[1], p[2], u, v, shade);
+  m.i.push(n, n + 1, n + 2, n, n + 2, n + 3);
+}
+function upload(m) {
+  const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(m.v), gl.STATIC_DRAW);
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(m.i), gl.STATIC_DRAW);
+  return { vb, ib, n: m.i.length };
+}
+let walls, floor, ceil, goal;
+const tex = {};
+function build() {
+  const w = mesh(), f = mesh(), c = mesh();
+  // A wall on side d of cell (x, z), facing into the cell.
+  const SHADE = [0.95, 0.72, 0.95, 0.72];
+  for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
+    const o = open[z * SIZE + x], x0 = x * CELL, z0 = z * CELL, x1 = x0 + CELL, z1 = z0 + CELL;
+    if (!(o & 1)) quad(w, [x0, 0, z0], [x1, 0, z0], [x1, WALL, z0], [x0, WALL, z0], 1, 1, SHADE[0]);
+    if (!(o & 2)) quad(w, [x1, 0, z0], [x1, 0, z1], [x1, WALL, z1], [x1, WALL, z0], 1, 1, SHADE[1]);
+    if (!(o & 4)) quad(w, [x1, 0, z1], [x0, 0, z1], [x0, WALL, z1], [x1, WALL, z1], 1, 1, SHADE[2]);
+    if (!(o & 8)) quad(w, [x0, 0, z1], [x0, 0, z0], [x0, WALL, z0], [x0, WALL, z1], 1, 1, SHADE[3]);
+    quad(f, [x0, 0, z1], [x1, 0, z1], [x1, 0, z0], [x0, 0, z0], 1, 1, 0.9);
+    quad(c, [x0, WALL, z0], [x1, WALL, z0], [x1, WALL, z1], [x0, WALL, z1], 1, 1, 0.9);
+  }
+  walls = upload(w); floor = upload(f); ceil = upload(c);
+}
+// The exit marker: a gold diamond, rebuilt each frame as it turns.
+function diamond(t) {
+  const m = mesh(), ex = (exit % SIZE + 0.5) * CELL, ez = ((exit / SIZE | 0) + 0.5) * CELL, y = 1 + 0.12 * Math.sin(t * 2), r = 0.35;
+  const top = [ex, y + 0.5, ez], bot = [ex, y - 0.5, ez];
+  const ring = [0, 1, 2, 3].map(k => [ex + r * Math.cos(t + k * Math.PI / 2), y, ez + r * Math.sin(t + k * Math.PI / 2)]);
+  for (let k = 0; k < 4; k++) {
+    const a = ring[k], b = ring[(k + 1) & 3], s = 0.6 + 0.4 * ((k & 1) ? 1 : 0.6);
+    const n = m.v.length / 6;
+    for (const p of [a, top, b]) m.v.push(p[0], p[1], p[2], 0, 0, s);
+    for (const p of [b, bot, a]) m.v.push(p[0], p[1], p[2], 0, 0, s * 0.8);
+    m.i.push(n, n + 1, n + 2, n + 3, n + 4, n + 5);
+  }
+  if (goal) { gl.deleteBuffer(goal.vb); gl.deleteBuffer(goal.ib); }
+  goal = upload(m);
+}
+
+// ---- the walker ----
+let lastDir = 1, drawn = 0, cell = 0, facing = 1, angle = 0, px = CELL / 2, pz = CELL / 2, anim = null, auto = false, steps = 0, won = false, clock = 0;
+const yaw = d => d * Math.PI / 2;
+function multiply(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+    o[c * 4 + r] = s;
+  }
+  return o;
+}
+const fov = 1 / Math.tan(0.55), aspect = cv.width / cv.height, near = 0.05, far = 30;
+const PROJ = [fov / aspect, 0, 0, 0, 0, fov, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
+function draw() {
+  // Angle 0 looks north (-z); forward is (s, 0, -c) and right is (c, 0, s).
+  const s = Math.sin(angle), c = Math.cos(angle);
+  // View = rotation (rows: right, up, back) * translate(-eye), column-major.
+  const view = [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, -(c * px + s * pz), -EYE, s * px - c * pz, 1];
+  gl.uniformMatrix4fv(uMvp, false, multiply(PROJ, view));
+  gl.uniform3f(uEye, px, EYE, pz);
+  gl.clearColor(0.06, 0.08, 0.1, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  diamond(clock);
+  for (const [m, t] of [[walls, tex.brick], [floor, tex.floor], [ceil, tex.ceil], [goal, tex.gold]]) {
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.vb);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 24, 0);
+    gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 24, 12);
+    gl.vertexAttribPointer(aShade, 1, gl.FLOAT, false, 24, 20);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ib);
+    gl.drawElements(gl.TRIANGLES, m.n, gl.UNSIGNED_SHORT, 0);
+  }
+}
+function say() {
+  const ex = exit % SIZE, ez = exit / SIZE | 0, x = cell % SIZE, z = cell / SIZE | 0;
+  const dir = ['north', 'east', 'south', 'west'][facing];
+  status.textContent = won ? 'You found the gold in ' + steps + ' steps! N for a new maze.'
+    : 'Facing ' + dir + ' · ' + steps + ' steps · gold is ' + Math.abs(ez - z) + (ez < z ? ' N ' : ' S ') + Math.abs(ex - x) + (ex < x ? ' W' : ' E')
+      + (auto ? ' · walking by itself (A stops)' : ' · arrows walk, A walks by itself');
+}
+const FRAMES = 6;
+function begin(kind, d) {
+  if (anim) return;
+  if (kind === 'turn') { anim = { kind, from: angle, to: angle + d * Math.PI / 2, t: 0 }; facing = (facing + d + 4) & 3; }
+  else {
+    const dir = d > 0 ? facing : (facing + 2) & 3;
+    if (!(open[cell] & 1 << dir)) { status.textContent = 'A wall.'; return; }
+    const next = cell + DX[dir] + DZ[dir] * SIZE;
+    anim = { kind, fx: px, fz: pz, tx: (next % SIZE + 0.5) * CELL, tz: ((next / SIZE | 0) + 0.5) * CELL, t: 0 };
+    cell = next; steps++; lastDir = dir;
+  }
+  requestAnimationFrame(frame);
+}
+function frame() {
+  clock += 0.15;
+  if (anim) {
+    anim.t++;
+    const k = anim.t / FRAMES, e = k * k * (3 - 2 * k);
+    if (anim.kind !== 'walk') angle = anim.from + (anim.to - anim.from) * e;
+    if (anim.kind !== 'turn') { px = anim.fx + (anim.tx - anim.fx) * e; pz = anim.fz + (anim.tz - anim.fz) * e; }
+    if (anim.t >= FRAMES) {
+      anim = null;
+      if (cell === exit && !won) { won = true; auto = false; showGold(); draw(); return; }
+      say();
+      if (auto && !won) setTimeout(autoStep, 0);
+    }
+  }
+  const t0 = performance.now();
+  draw();
+  drawn++;
+  if (anim) requestAnimationFrame(frame);
+  else console.log('maze stopped cell ' + cell + ' facing ' + facing + ' frames ' + drawn + ' ms ' + Math.round(performance.now() - t0));
+}
+// On reaching the gold, step back to the doorway and look at it.
+function showGold() {
+  const back = (lastDir + 2) & 3, cx = (cell % SIZE + 0.5) * CELL, cz = ((cell / SIZE | 0) + 0.5) * CELL;
+  let to = yaw(lastDir);
+  while (to - angle > Math.PI) to -= 2 * Math.PI;
+  while (angle - to > Math.PI) to += 2 * Math.PI;
+  facing = lastDir;
+  anim = { kind: 'win', from: angle, to, fx: px, fz: pz, tx: cx + DX[back] * CELL * 0.45, tz: cz + DZ[back] * CELL * 0.45, t: 0 };
+  requestAnimationFrame(frame);
+}
+// Right-hand rule: turn right if open, else go ahead, else turn left.
+function autoStep() {
+  if (!auto || anim || won) return;
+  const right = (facing + 1) & 3;
+  if (open[cell] & 1 << right && autoTurned !== cell) { autoTurned = cell; begin('turn', 1); }
+  else if (open[cell] & 1 << facing) { autoTurned = -1; begin('walk', 1); }
+  else begin('turn', -1);
+}
+let autoTurned = -1;
+function newMaze() {
+  carve(); build();
+  cell = 0; facing = (open[0] & 2) ? 1 : 2; angle = yaw(facing); px = pz = CELL / 2; steps = 0; won = false; anim = null; auto = false;
+  say(); draw();
+}
+document.addEventListener('keydown', e => {
+  switch (e.key) {
+    case 'ArrowUp': begin('walk', 1); break;
+    case 'ArrowDown': begin('walk', -1); break;
+    case 'ArrowLeft': begin('turn', -1); break;
+    case 'ArrowRight': begin('turn', 1); break;
+    case 'a': case 'A': auto = !auto; say(); autoStep(); break;
+    case 'n': case 'N': seed += 101; newMaze(); break;
+    default: return;
+  }
+  e.preventDefault();
+});
+tex.brick = BRICK(); tex.floor = FLOOR(); tex.ceil = CEIL(); tex.gold = GOLD();
+newMaze();
+</script>
+</body>
