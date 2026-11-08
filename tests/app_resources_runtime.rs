@@ -79,6 +79,7 @@ mod program_frames{pub fn take()->Option<u64>{None}pub fn give(_:u64){}pub fn av
 pub static ALLOCATOR:HeapLock=HeapLock;pub struct HeapLock;impl HeapLock{pub fn lock(&self)->Heap{Heap}}pub struct Heap;impl Heap{pub fn used(&self)->usize{0}}
 mod boot_memory{pub fn program_image(_:usize)->Option<&'static [u8]>{None}pub fn reserve_arena(_:u8)->(u64,usize){(0,0)}pub fn write_frames(_:u64,_:&[u8]){}
  pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
+ pub fn arena_leaf(va:u64,_:u8)->Option<u64>{existing_leaf_address(va)}
  pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}pub fn zero_frame(_:u64){}}
 mod memory{
  pub mod va_allocator{pub fn allocate_va(_:usize)->Option<u64>{Some(0x9000_0000)}}
