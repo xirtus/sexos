@@ -2752,3 +2752,14 @@ row no longer waits for the row before it to end.
 - **Limits.** No Canvas 2D or WebGL yet (next). No `fetch`/`XMLHttpRequest`, no layout
   boxes for `getBoundingClientRect` (zeros), no text inputs, no ES modules as modules
   (run as classic scripts), pictures a script adds are not loaded.
+
+## Master CI green again (2026-11-08)
+
+- GitHub CI on master passes every step for the first time in weeks (run 42502328687,
+  commit 21db7443). Besides the fixes listed above, the profile gates now name each stage's
+  exact normal rustflags (the Browser's soft-crypto cfgs), the disk persistence and desktop
+  close gates wait for markers the system still prints and follow Quil's unsaved-close
+  prompt, and the desktop, launcher, Quil-successor and Spindle pixel checkers read Geist
+  cells through `check_desktop_pixels.cell_errors` (fixtures use `draw_cell`).
+- Not a bug, though it looked like one: the kernel logs `[ps2.irq1.entry]` only for the
+  first 16 interrupts, so missing entries later in a log don't mean keys were lost.
