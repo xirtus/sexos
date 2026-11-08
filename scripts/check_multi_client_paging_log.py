@@ -74,10 +74,15 @@ def validate(text, quota=False):
         if target in grants or target not in (10, 15):
             errors.append('duplicate/foreign target grant')
         grants[target] = g
-        eq(g, pager=14, pool_pages=8, arena_pages=8, quota=4, target_pkey=target,
+        # Each client's own hardware key, as BOOT assigned it; keys no longer equal PD ids.
+        eq(g, pager=14, pool_pages=8, arena_pages=8, quota=4,
            leaves_absent=8, tables_preallocated=1)
+        if not 0 < n(g, 'target_pkey') < 16:
+            errors.append('target_pkey outside hardware keys')
         if g['_pos'] >= seal['_pos']:
             errors.append('grant after seal')
+    if len({n(g, 'target_pkey') for g in grants.values()}) != len(grants):
+        errors.append('paging clients share a hardware key')
     for r in rows['sext.client.ready']:
         target = n(r, 'target')
         if target in ready:
@@ -145,7 +150,7 @@ def validate(text, quota=False):
             errors.append('frame/target outside authority')
             continue
         if kind == 'commit':
-            eq(r, rights=6, pkey=target, zero=1, runtime_alloc=0)
+            eq(r, rights=6, pkey=n(grants[target], 'target_pkey'), zero=1, runtime_alloc=0)
             p = pending.get(token)
             if not p or n(p, 'target') != target or n(p, 'page') != page or p['_pos'] >= pos:
                 errors.append('leaf does not match pending fault')
