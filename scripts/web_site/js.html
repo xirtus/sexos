@@ -29,11 +29,12 @@ fib.forEach((n, i) => {
   list.appendChild(li);
 });
 let count = 0;
-document.getElementById('more').addEventListener('click', () => {
+// The click only sets a timer: the browser must still run it, though nothing changed yet.
+document.getElementById('more').addEventListener('click', () => setTimeout(() => {
   count++;
   document.getElementById('count').textContent = count;
   console.log('clicked', count);
-});
+}, 10));
 document.addEventListener('keydown', e => {
   if (e.key !== 'k') return;
   document.getElementById('keys').textContent = 'You pressed k.';

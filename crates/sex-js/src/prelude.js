@@ -330,6 +330,12 @@
     click() { this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
   }
   mix(Element, ParentMixin);
+  // el.onclick = fn makes the element clickable, as addEventListener does.
+  Object.defineProperty(Element.prototype, 'onclick', {
+    get() { return this._onclick || null; },
+    set(fn) { this._onclick = typeof fn === 'function' ? fn : null; if (this._onclick) H(OP.CLICKABLE, this._id); },
+    configurable: true,
+  });
   class HTMLElement extends Element {
     get hidden() { return this.hasAttribute('hidden'); }
     set hidden(v) { this.toggleAttribute('hidden', !!v); }
