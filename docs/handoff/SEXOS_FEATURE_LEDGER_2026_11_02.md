@@ -2245,3 +2245,28 @@ row no longer waits for the row before it to end.
 - **Gates.** The crash probe above at 1 and 4 cores; browser web, fetch, Jot, program disk,
   SMP, filesystem and records at 1 core on the normal kernel. Python tests and all non-QEMU
   gates except the older ones listed earlier.
+
+## Files comes back after a crash too (2026-11-08)
+
+- **What runs now.** The kernel's restart covers Files as well as the network service. In
+  the probe, Spindle saved a file, Files crashed on a request, the kernel restarted it, and
+  the next commands read the old file and saved a new one. The filesystem was mounted, not
+  formatted again: its commits are atomic, so a fresh run finds the last committed state.
+  A program then opened and closed, and the new run gave its cleanup acknowledgement, which
+  the kernel retries until every service has answered.
+- **Spindle.** A file request that gets no answer for 15 seconds now ends with "The disk
+  did not answer. Try again." instead of holding the terminal busy forever.
+- **Design.** `service_restart` now keeps up to two services. Files is 486 pages (its block
+  cache and free-space bitmaps live in its own pages), restored in one copy.
+- **Evidence.** `files_restart_probe.py` on an ISO built with `SEXOS_FILES_CRASH_PROBE=1`, at
+  1 and 4 cores: `[files.crash.probe]`, `fault.kill ... pd=11`, `[service.restarted] pd=11`,
+  `[spindle.fs.expired]`, `[files.fs.mounted] ... generation=4`, both files read back, and
+  `[app.private.retired]` for a program closed afterwards.
+- **ABI.** Files' panic handler ends its task.
+- **Limits.** A write in flight when Files dies is lost, and anything not yet committed. Quil's
+  open documents and a program bound to a folder lose their session state in Files: Quil
+  must reopen, and a running program's next file request is refused until it is restarted.
+  Display, Shell and the drivers don't restart.
+- **Gates.** The probe at 1 and 4 cores; filesystem, Jot, program file, program disk, fetch,
+  browser web and SMP at 1 core on the normal kernel. Python tests and all non-QEMU gates
+  except the older ones listed earlier.

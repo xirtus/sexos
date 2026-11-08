@@ -261,6 +261,11 @@ pub fn read_ticket(ticket: u64, image: &mut [u8]) -> Program {
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
     let now = 0;
+    // Test builds only: a path that makes Files fall over, to show it comes back.
+    if option_env!("SEXOS_FILES_CRASH_PROBE").is_some() && path == b"/crash.probe" {
+        sex_pdx::serial_record!("[files.crash.probe]");
+        unsafe { core::ptr::write_volatile(8 as *mut u8, 1) };
+    }
     match r.kind {
         w::STAT => {
             let st = fs.open(path)?;

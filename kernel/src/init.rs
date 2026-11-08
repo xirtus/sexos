@@ -829,6 +829,8 @@ pub fn init() {
     crate::program_tenancy::claim_regions();
     // The network service parses the internet, so it is the one most likely to fall over.
     crate::service_restart::capture(sexnet_id, 13);
+    // Files holds the disk, but its filesystem commits atomically, so a fresh run remounts it.
+    crate::service_restart::capture(sexfiles_id, 11);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");

@@ -8,8 +8,8 @@ const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64) }
-pub struct Client { cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
-pub static mut FS: Client = Client { cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
+pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
+pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
 
 fn region() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -134,11 +134,20 @@ impl Client {
         let r = w::Request { seq: self.seq, kind: self.kind, path_len: self.path_len, offset: self.offset, length: self.length };
         let a = r.args();
         match sex_pdx::pdx_call_checked(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
-            Ok(_) => self.sent = true,
+            Ok(_) => { self.sent = true; self.sent_at = sex_pdx::get_ticks(); }
             Err(sex_pdx::ERR_SERVICE_NOT_READY) => {}
             Err(_) => { self.cmd = None; }
         }
         self.sent
+    }
+    /// A request Files never answers, because it restarted, ends rather than holding the
+    /// terminal busy for good. True if it just ended.
+    pub fn expired(&mut self, now: u64, sb: &mut Scrollback) -> bool {
+        if self.cmd.is_none() || !self.sent || now.saturating_sub(self.sent_at) < 15_000 { return false; }
+        self.cmd = None;
+        sb.push(b"The disk did not answer. Try again.");
+        sex_pdx::serial_record!("[spindle.fs.expired] kind={}", self.kind);
+        true
     }
     fn next(&mut self, kind: u8, offset: u64, length: u64) {
         self.kind = kind; self.offset = offset; self.length = length; self.sent = false;

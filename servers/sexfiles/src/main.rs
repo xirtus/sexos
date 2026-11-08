@@ -46,9 +46,6 @@ pub extern "C" fn _start() -> ! {
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {
-        unsafe {
-            core::arch::asm!("syscall", in("rax") 24, lateout("rcx") _, lateout("r11") _);
-        }
-    }
+    // Ending lets the kernel start a fresh run in its place.
+    sex_pdx::task_finish(1);
 }
