@@ -69,7 +69,11 @@ def validate(text, quota=False):
         quota_policy = one('sext.fault.reject')
         eq(quota_policy, target=15, reason='Quota', used=4, quota=4)
     else:
-        terminal = one('task.finish')
+        # Other tasks finish too (the boot program probe); the terminal one is the client's.
+        finishes = [r for r in rows('task.finish') if r.get('pd') == '15' and r['_pos'] > boundary]
+        if len(finishes) != 1:
+            errors.append(f'task.finish: expected one client record, saw {len(finishes)}')
+        terminal = finishes[0] if len(finishes) == 1 else {}
         eq(trigger, pd=15, resident=4, reason='proof')
         eq(terminal, pd=15, reason=0, terminal=1)
         if rows('paging.fault.rejected') or rows('sext.fault.reject'):
@@ -79,7 +83,7 @@ def validate(text, quota=False):
     if task != initial_tasks.get(15):
         errors.append('terminal task differs from original client main task')
     opposite = 'paging.client.finish' if quota else 'paging.client.quota.begin'
-    if rows(opposite) or (quota and rows('task.finish')):
+    if rows(opposite) or (quota and any(r.get('pd') == '15' for r in rows('task.finish'))):
         errors.append('mixed terminal profiles')
     if task <= 0 or terminal.get('_pos', -1) <= boundary:
         errors.append('terminal task/trigger mismatch')
@@ -132,11 +136,14 @@ def validate(text, quota=False):
     if len(pages) != 3 or sorted(num(r, 'page') for r in pages) != [0, 1, 2]:
         errors.append('missing/duplicate surviving-client instruction proof')
     bases = {num(r, 'pd'): num(r, 'base') for r in rows('paging.client.begin')}
+    # The survivor's own hardware key from BOOT genesis; keys no longer equal PD ids.
+    genesis = re.search(r'\[boot\.paging\.genesis\] pager=\d+ target=10 .*?target_pkey=(\d+)', text)
+    survivor_key = genesis[1] if genesis else None
     tokens, frames = set(), set()
     last_token = max((num(r, 'token') for r in rows('paging.fault.pending') if r['_pos'] < wait.get('_pos', -1)), default=0)
     for index, r in enumerate(commits):
         token, frame = num(r, 'token'), num(r, 'frame')
-        eq(r, target=10, rights=6, pkey=10, zero=1, runtime_alloc=0)
+        eq(r, target=10, rights=6, pkey=survivor_key, zero=1, runtime_alloc=0)
         if token in tokens or frame in frames or frame not in old:
             errors.append('survivor did not reuse unique dead-client backing')
             continue

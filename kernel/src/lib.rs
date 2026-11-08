@@ -119,20 +119,22 @@ pub mod protection;
 pub const MAP_MEMORY_SYSCALL_NUM: u64 = 30;
 pub const ALLOCATE_MEMORY_SYSCALL_NUM: u64 = 31;
 
-#[cfg(target_arch = "x86_64")]
-use linked_list_allocator::LockedHeap;
 
 #[cfg(target_arch = "x86_64")]
 pub use crate::memory::allocator;
 
 #[cfg(target_arch = "x86_64")]
 #[global_allocator]
-pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
+pub static ALLOCATOR: crate::memory::kheap::KernelHeap = crate::memory::kheap::KernelHeap::empty();
 
 #[cfg(target_arch = "x86_64")]
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 #[cfg(target_arch = "x86_64")]
-pub const HEAP_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
+/// Most address space the kernel heap may grow into.
+pub const HEAP_SIZE: usize = 1024 * 1024 * 1024;
+/// What BOOT maps; the heap grows past it on demand (memory::kheap).
+#[cfg(target_arch = "x86_64")]
+pub const HEAP_INITIAL: usize = 32 * 1024 * 1024;
 
 #[cfg(target_arch = "x86_64")]
 use limine::{BaseRevision, RequestsStartMarker, RequestsEndMarker, request::{FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest, RsdpRequest, StackSizeRequest}};
