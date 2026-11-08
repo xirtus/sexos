@@ -77,7 +77,10 @@ assert 'fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color)' not in 
 out.write_text('\n'.join(parts))
 PY
 rustc --edition=2021 --crate-type=rlib --crate-name silkbar_model "$ROOT_DIR/crates/silkbar-model/src/lib.rs" -o "$TEST_DIR/libsilkbar_model.rlib"
-DISPLAY_COMPOSITION_SOURCE="$TEST_DIR/production.rs" rustc --extern silkbar_model="$TEST_DIR/libsilkbar_model.rlib" --edition=2021 --test "$ROOT_DIR/tests/display_surface_groups.rs" -o "$TEST_DIR/tests"
+# Display draws text with sex-font (and ttf-parser); build it for the host once.
+cargo build -q --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-font
+FONT_LIBS=(--extern sex_font="$ROOT_DIR/target/debug/libsex_font.rlib" -L dependency="$ROOT_DIR/target/debug/deps")
+DISPLAY_COMPOSITION_SOURCE="$TEST_DIR/production.rs" rustc --extern silkbar_model="$TEST_DIR/libsilkbar_model.rlib" "${FONT_LIBS[@]}" --edition=2021 --test "$ROOT_DIR/tests/display_surface_groups.rs" -o "$TEST_DIR/tests"
 RUST_MIN_STACK=16777216 "$TEST_DIR/tests" --test-threads=1
 rustc --edition=2021 --test "$ROOT_DIR/tests/display_bitmap_transaction.rs" -o "$TEST_DIR/bitmap-tests"
 "$TEST_DIR/bitmap-tests" --test-threads=1

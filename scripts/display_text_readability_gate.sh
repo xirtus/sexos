@@ -18,6 +18,10 @@ for name in ['program_title','coverage_blend','ascii_glyph_index','scalar_glyph'
     parts.append(s[a:i])
 out.write_text('\n'.join(parts))
 PY
-DISPLAY_TEXT_SOURCE="$TEST_DIR/production.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/display_text_readability.rs" -o "$TEST_DIR/tests"
-"$TEST_DIR/tests"
+# Display draws text with sex-font (and ttf-parser); build it for the host once.
+cargo build -q --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-font
+FONT_LIBS=(--extern sex_font="$ROOT_DIR/target/debug/libsex_font.rlib" -L dependency="$ROOT_DIR/target/debug/deps")
+DISPLAY_TEXT_SOURCE="$TEST_DIR/production.rs" rustc --edition=2021 "${FONT_LIBS[@]}" --test "$ROOT_DIR/tests/display_text_readability.rs" -o "$TEST_DIR/tests"
+# Display's glyph cache is one task's state: one test thread, as in Display.
+"$TEST_DIR/tests" --test-threads=1
 echo '[gate.display_text_readability.result] PASS scope=actual_layout_and_pixel_functions_not_guest_screenshot'

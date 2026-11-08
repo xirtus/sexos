@@ -2442,3 +2442,28 @@ row no longer waits for the row before it to end.
   pixel gates) weren't rerun and will need the new oracle.
 - **Gates.** Program disk, launch, file, Jot, net and browser web at 1 core; Display's host
   gates rewritten for Geist; Python tests and all non-QEMU gates except the older ones.
+
+## Geist at any size (2026-11-08)
+
+- **What runs now.** Display draws Geist from the TrueType files at run time instead of
+  a table rendered once at one size. Grid text at 2x and up is Geist Mono fitted to the
+  cell the text scale gives (12x18 today, any 6s x 9s cell later); window titles are
+  Geist Sans, kerned (GPOS `kern`) and placed to a quarter pixel.
+- **Design.** New `crates/sex-font` (no_std, no heap): `ttf-parser` (MIT/Apache-2.0)
+  reads the fonts without allocating, and its own rasterizer turns outlines into 8-bit
+  coverage by signed-area accumulation in fixed point (1/256 px), integer-only, so the
+  softfloat target and host tests give bit-identical pixels. `sex_font::draw_cell` sizes
+  a monospaced font to any cell (19 px at 12x18, as before). Display keeps drawn glyphs in
+  a fixed cache (`servers/sexdisplay/src/glyphs.rs`: 2048 slots over 192 KiB, emptied
+  whole when full) and recent title layouts, so a size costs one draw per character.
+  The generated `sex-pdx::font_geist` table and `scripts/make_font.py` are gone; the
+  `abi_version_hash` returns to its pre-table value since `sex-pdx/src/lib.rs` lost that line.
+- **Oracles.** `scripts/geist_cells.py` now asks sex-font's `cells` example for the
+  cells, so pixel oracles check the screen against the renderer Display runs. Display's
+  host gates link sex-font (built for the host with cargo) and test titles by layout.
+- **Limits.** 1x text keeps the 5x7 bitmap font (crisper at 6x9). No text shaping yet:
+  `harfrust` needs a heap, so it waits for the app heap work. No hinting, so stems are a
+  little lighter than FreeType's. Text is still a fixed grid; per-window text size (zoom)
+  is the next visible step and needs only a scale per surface now.
+- **Gates.** sex-font unit tests; display text readability and surface groups host gates;
+  program launch (pixel oracle) at 1 and 4 cores in QEMU (UEFI/OVMF boot).

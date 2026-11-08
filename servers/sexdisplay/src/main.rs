@@ -114,6 +114,7 @@ mod surface_lifecycle;
 /// The BOOT incarnation catalog, at crate root for display modules.
 use sex_pdx::app_catalog;
 mod text_transaction;
+mod glyphs;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -654,13 +655,14 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
         let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
             &&surf.selection_end as usize<=surf.text_len as usize;
         let left=tx+col*advance;
-        // Geist Mono at full size, as surface_text_fg_at draws it.
-        if scale==2&&scalar!=9{
-            if let Some(cell)=sex_pdx::font_geist::cell(scalar){
-                let gy=(y-ty)%sex_pdx::font_geist::CELL_H;
+        // Geist Mono drawn for this cell size, as surface_text_fg_at draws it.
+        if scale>=2{
+            let line_h=(GLYPH_H+2)*scale;
+            if let Some(cell)=glyphs::mono_cell(scalar,advance,line_h){
+                let gy=(y-ty)%line_h;
                 let back=if selected{0xff36577c}else{surf.color};
                 for x in left.max(x0)..(left+advance).min(x1){
-                    let alpha=cell[gy*sex_pdx::font_geist::CELL_W+(x-left)];
+                    let alpha=cell[gy*advance+(x-left)];
                     if alpha!=0{unsafe{core::ptr::write_volatile(row.add(x),coverage_blend(surf.text_color,back,alpha));}}
                     else if selected{unsafe{core::ptr::write_volatile(row.add(x),back);}}
                 }
@@ -1478,27 +1480,16 @@ fn set_program_title(surface_id: u64, title: Option<[u8; 16]>) {
 }
 /// Fixed-position title glyphs choose contrast against the final composed background.
 fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32> {
-    use sex_pdx::font_geist::{TITLE, TITLE_H, TITLE_W};
     let title_x = FRAME_TOP_BAR_LIGHT_EXCLUSION_PX + 12;
-    let title_y = (FRAME_TOP_BAR_HEIGHT_PX - TITLE_H) / 2;
-    if lx < title_x || ly < title_y || ly >= title_y + TITLE_H { return None; }
+    let title_y = (FRAME_TOP_BAR_HEIGHT_PX - glyphs::TITLE_H) / 2;
+    if lx + 2 < title_x || ly < title_y || ly >= title_y + glyphs::TITLE_H { return None; }
     let title: &[u8] = if let Some(own)=program_title(surface_id) { own } else if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
         match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser",app_catalog::App::Program=>b"Program"}
     }else{match surface_id{200=>b"Linen",100=>b"App",_=>return None}};
-    // Geist Sans: walk the advances to the glyph under this pixel, then blend its coverage.
-    let mut x = title_x;
-    for &byte in title {
-        let glyph = ascii_glyph_index(byte)?;
-        let (advance, cell) = &TITLE[glyph];
-        if lx < x + *advance as usize {
-            let gx = lx - x;
-            if gx >= TITLE_W { return None; }
-            let alpha = cell[(ly - title_y) * TITLE_W + gx];
-            return (alpha != 0).then(|| coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha));
-        }
-        x += *advance as usize;
-    }
-    None
+    // Geist Sans, kerned, each glyph at its quarter-pixel position; two pixels of
+    // margin left of the first letter catch an overhang.
+    let alpha = glyphs::title_coverage(title, lx as i32 - title_x as i32, ly - title_y);
+    (alpha != 0).then(|| coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha))
 }
 
 /// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column
@@ -1723,12 +1714,14 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
         && char_end > surf.selection_start as usize
         && surf.selection_end as usize <= surf.text_len as usize;
     let background = if selected { Some(0xff36577c) } else { None };
-    // At full size, Geist Mono: its 12x18 cells are exactly this grid's cells, smoothed
-    // onto the surface's own colour. Smaller text and letters Geist lacks keep the 5x7 font.
-    if scale == 2 && scalar != 9 {
-        if let Some(cell) = sex_pdx::font_geist::cell(scalar) {
-            let (gx, gy) = ((x - tx) % sex_pdx::font_geist::CELL_W, (y - ty) % sex_pdx::font_geist::CELL_H);
-            let alpha = cell[gy * sex_pdx::font_geist::CELL_W + gx];
+    // From 2x up, Geist Mono drawn at run time to fill exactly this grid's cells,
+    // smoothed onto the surface's own colour. 1x text and letters Geist lacks keep
+    // the 5x7 font, which is crisper at 6x9.
+    let advance = (GLYPH_W + CHAR_SPACING) * scale;
+    if scale >= 2 {
+        if let Some(cell) = glyphs::mono_cell(scalar, advance, line_h) {
+            let (gx, gy) = ((x - tx) % advance, (y - ty) % line_h);
+            let alpha = cell[gy * advance + gx];
             if alpha == 0 { return background; }
             return Some(coverage_blend(surf.text_color, background.unwrap_or(surf.color), alpha));
         }

@@ -15,7 +15,7 @@ static mut TEXT_STAGES:[text_transaction::Stage;MAX_SURFACES]=[text_transaction:
 static mut BITMAP_STORES:bitmap_stores::Stores<{app_catalog::count(app_catalog::App::Browser)}>=bitmap_stores::Stores::UNBOUND;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
-#[path="../crates/sex-pdx/src/font_geist.rs"]pub mod font_geist;
+#[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod surface_lifecycle;
@@ -56,13 +56,13 @@ include!("fixtures/compositor_reference.rs");
   // Full size draws Geist Mono's coverage over the surface colour; small size and
   // letters Geist lacks keep the 5x7 font.
   let scalar=sex_pdx::text_encoding::cell(&s.text_buf[..1],0).map(|c|c.0);
-  let geist=if scale==2{scalar.filter(|c|*c!=9&&*c!=10).and_then(font_geist::cell)}else{None};
+  let geist=if scale==2{scalar.and_then(|c|glyphs::mono_cell(c,12,18))}else{None};
   for y in 0..9*scale {for x in 0..6*scale {
    let rows=if (32..=126).contains(&byte){FONT_ASCII_5X7[(byte-32)as usize]}else if byte==9{[0;7]}else{[31,17,21,21,21,17,31]};
    let ink=x/scale<5&&y/scale<7&&rows[y/scale]&(1<<(4-x/scale))!=0;
    let back=if selected{Some(0xff36577c)}else{None};
    let expected=if byte==b'\n'{None}else if let Some(cell)=geist{
-    let a=cell[y*font_geist::CELL_W+x];if a==0{back}else{Some(coverage_blend(0xfedcba,back.unwrap_or(s.color),a))}
+    let a=cell[y*12+x];if a==0{back}else{Some(coverage_blend(0xfedcba,back.unwrap_or(s.color),a))}
    }else if ink{Some(0xfedcba)}else{back};
    assert_eq!(surface_text_fg_at(8+x,62+y,&s),expected,"w={width} byte={byte} selected={selected} x={x} y={y}");
   }}
@@ -70,17 +70,21 @@ include!("fixtures/compositor_reference.rs");
  }}}
 }
 #[test]fn actual_toolbar_titles_keep_lowercase_at_fixed_integer_metrics(){
- // Geist Sans, proportional: each glyph at its own advance, blended onto the bar.
- let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-font_geist::TITLE_H)/2;
+ // Geist Sans, kerned and proportional, blended onto the bar; every letter has ink
+ // inside its own advance and nothing is drawn outside the title line.
+ let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-glyphs::TITLE_H)/2;
  for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..]),(308,&b"Quil"[..]),(309,&b"Quil"[..]),(310,&b"Quil"[..]),(311,&b"Quil"[..]),(312,&b"Quil"[..])]{
-  let mut left=x0;
-  for byte in title.iter(){let (advance,cell)=&font_geist::TITLE[(*byte-32)as usize];
-   for y in 0..font_geist::TITLE_H {for x in 0..*advance as usize {
-    let a=if x<font_geist::TITLE_W{cell[y*font_geist::TITLE_W+x]}else{0};
-    let want=(a!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(0),0,a));
-    assert_eq!(toolbar_title_fg_at(left+x,y0+y,sid,0),want,"sid={sid} byte={byte} x={x} y={y}");
-   }}
-   left+=*advance as usize;
+  let mut starts=[0usize;16];let n=glyphs::title_starts(title,&mut starts);assert_eq!(n,title.len());
+  let end=starts[n-1]+12;
+  for y in 0..FRAME_TOP_BAR_HEIGHT_PX {for x in x0-4..x0+end+8 {
+   let a=if y>=y0&&y<y0+glyphs::TITLE_H{glyphs::title_coverage(title,x as i32-x0 as i32,y-y0)}else{0};
+   let want=(a!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(0),0,a));
+   assert_eq!(toolbar_title_fg_at(x,y,sid,0),want,"sid={sid} x={x} y={y}");
+  }}
+  for i in 0..n {
+   let right=if i+1<n{starts[i+1]}else{end};
+   let ink=(starts[i]..right).flat_map(|x|(0..glyphs::TITLE_H).map(move|y|(x,y))).filter(|(x,y)|glyphs::title_coverage(title,*x as i32,*y)>128).count();
+   assert!(ink>3,"sid={sid} letter {} has no ink",title[i] as char);
   }
  }
 }
@@ -211,12 +215,12 @@ fn cat(pd:u32)->Catalog{Catalog{slot:pd as usize,target_pd:pd,task_id:pd,surface
 /// Full-size text is Geist Mono where Geist has the letter: its coverage over `back`.
 /// None means the 5x7 font applies.
 fn geist_pixel(scalar:u32,scale:usize,x:usize,y:usize,text:u32,back:u32)->Option<u32>{
- if scale!=2||scalar==9||scalar==10{return None}
- let cell=font_geist::cell(scalar)?;let a=cell[y*font_geist::CELL_W+x];
+ if scale!=2{return None}
+ let cell=glyphs::mono_cell(scalar,12,18)?;let a=cell[y*12+x];
  Some(if a==0{back}else{coverage_blend(text,back,a)})
 }
 /// A pixel Geist covers fully in 'A', relative to its cell: drawn exactly in the text colour.
-fn solid_a()->(usize,usize){let c=font_geist::cell(b'A' as u32).unwrap();let i=c.iter().position(|a|*a==255).unwrap();(i%font_geist::CELL_W,i/font_geist::CELL_W)}
+fn solid_a()->(usize,usize){let c=glyphs::mono_cell(b'A' as u32,12,18).unwrap();let i=c.iter().position(|a|*a==255).unwrap();(i%12,i/12)}
 fn surf(pd:u32,sid:u64)->Surface{Surface{owner_pd:pd,surface_id:sid,x:100,y:100,w:400,h:300,color:0x123456,active:true,..SURFACE_EMPTY}}
 fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 #[test]fn secondary_ids_reserved_only_by_exact_boot_catalog(){

@@ -1114,7 +1114,6 @@ pub mod pci_command;
 pub mod network_config;
 
 pub mod desktop_style;
-pub mod font_geist;
 pub mod document_view;
 
 pub mod display_boot;

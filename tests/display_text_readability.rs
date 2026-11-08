@@ -4,7 +4,7 @@
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
-#[path="../crates/sex-pdx/src/font_geist.rs"]pub mod font_geist;
+#[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
@@ -22,8 +22,8 @@ fn surface(width:u32,text:&[u8])->Surface{
 /// letter, else the 5x7 font doubled; the selection behind either.
 fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
  let back=if selected{Some(0xff36577c)}else{None};
- if scalar!=9{if let Some(cell)=font_geist::cell(scalar){
-  let a=cell[y*font_geist::CELL_W+x];return if a==0{back}else{Some(coverage_blend(s.text_color,back.unwrap_or(s.color),a))};
+ {if let Some(cell)=glyphs::mono_cell(scalar,12,18){
+  let a=cell[y*12+x];return if a==0{back}else{Some(coverage_blend(s.text_color,back.unwrap_or(s.color),a))};
  }}
  let glyph=scalar_glyph(scalar);let(row,col)=(y/2,x/2);
  if row<7&&col<5&&(glyph[row]>>(4-col))&1!=0{Some(s.text_color)}else{back}
@@ -42,11 +42,11 @@ fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
  for row in 0..7{for col in 0..5{let want=if(FONT_ASCII_5X7[glyph][row]>>(4-col))&1!=0{Some(s.text_color)}else{None};assert_eq!(surface_text_fg_at(28+col,72+row,&s),want);}}
 }
 #[test]fn lowercase_titles_draw_all_letters_inside_existing_chrome(){
- // Geist Sans, proportional: every letter of the title has ink, inside the bar.
- let mut left=62;
- for ch in b"Linen".iter(){let advance=font_geist::TITLE[(*ch-32)as usize].0 as usize;let mut pixels=0;
-  for y in 0..28{for x in left..left+advance{if toolbar_title_fg_at(x,y,200,0).is_some(){assert!((5..23).contains(&y));pixels+=1;}}}
-  assert!(pixels>0,"letter {} disappeared",*ch as char);left+=advance;}
+ // Geist Sans, proportional and kerned: every letter of the title has ink, inside the bar.
+ let mut starts=[0usize;16];let n=glyphs::title_starts(b"Linen",&mut starts);assert_eq!(n,5);
+ for i in 0..n{let left=62+starts[i];let right=if i+1<n{62+starts[i+1]}else{left+10};let mut pixels=0;
+  for y in 0..28{for x in left..right{if toolbar_title_fg_at(x,y,200,0).is_some(){assert!((5..23).contains(&y));pixels+=1;}}}
+  assert!(pixels>0,"letter {} disappeared",b"Linen"[i] as char);}
  assert_ne!(ascii_glyph_index(b'i'),ascii_glyph_index(b'I'));assert_eq!(ascii_glyph_index(b'\n'),None);
 }
 #[test]fn newline_wrap_uses_scaled_advance_and_clamps_before_narrowing(){
