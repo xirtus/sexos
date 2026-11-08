@@ -40,9 +40,28 @@ impl<'a> Raster<'a> {
         let mut row = top / FX;
         while row * FX < bottom {
             let (ya, yb) = (top.max(row * FX), bottom.min(row * FX + FX));
-            if yb > ya { self.span(row as usize, x_at(ya), x_at(yb), yb - ya, dir); }
+            if yb > ya { self.clipped_span(row as usize, x_at(ya), x_at(yb), yb - ya, dir); }
             row += 1;
         }
+    }
+
+    /// A row's piece of an edge, split where it crosses the bitmap's left or right
+    /// side, so each part keeps its own height and clamping moves only parts lying
+    /// wholly outside, whose horizontal position no longer matters.
+    fn clipped_span(&mut self, row: usize, xa: i32, xb: i32, dy: i32, dir: i32) {
+        let right_edge = self.w as i32 * FX;
+        // Visit the sides in the order the piece meets them, from `xa` towards `xb`.
+        let sides = if xa <= xb { [0, right_edge] } else { [right_edge, 0] };
+        let (mut from, mut left) = (xa, dy);
+        for side in sides {
+            if (from < side && side < xb) || (xb < side && side < from) {
+                // The height from `from` to where the piece meets `side`.
+                let h = (left as i64 * (side - from) as i64 / (xb - from) as i64) as i32;
+                self.span(row, from, side, h, dir);
+                (from, left) = (side, left - h);
+            }
+        }
+        self.span(row, from, xb, left, dir);
     }
 
     /// The part of an edge inside one pixel row: `dy` of height, from `xa` to `xb`.
@@ -194,6 +213,23 @@ mod tests {
         // Far outside on every side: clamped, no panic, the visible part is solid.
         let c = square(-40 * FX, -40 * FX, 40 * FX, 40 * FX, 8, 8);
         assert!(c.iter().all(|v| *v == 255));
+    }
+
+    #[test]
+    fn edges_crossing_the_sides_keep_their_area() {
+        // (-1, 0), (1, 1), (1, 0) in pixels over a 1x1 bitmap: three quarters inside.
+        let mut acc = [0; scratch_len(1, 1)];
+        let mut r = Raster::new(1, 1, &mut acc).unwrap();
+        r.line(-FX, 0, FX, FX); r.line(FX, FX, FX, 0); r.line(FX, 0, -FX, 0);
+        let mut out = [0; 1];
+        r.finish(&mut out);
+        assert_eq!(out[0], 191);
+        // Mirrored across the right side.
+        let mut acc = [0; scratch_len(1, 1)];
+        let mut r = Raster::new(1, 1, &mut acc).unwrap();
+        r.line(2 * FX, 0, 0, FX); r.line(0, FX, 0, 0); r.line(0, 0, 2 * FX, 0);
+        r.finish(&mut out);
+        assert_eq!(out[0], 191);
     }
 
     #[test]
