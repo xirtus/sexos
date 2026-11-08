@@ -1,0 +1,14 @@
+[package]
+name = "sex-web"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Draws sex-html pages: Geist text through sex-font, boxes, list markers and sex-image pictures into a pixel buffer, integer-only"
+
+[dependencies]
+sex-html = { path = "../sex-html" }
+sex-font = { path = "../sex-font" }
+sex-image = { path = "../sex-image" }
+
+[dev-dependencies]
+sex-js = { path = "../sex-js" }

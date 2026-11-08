@@ -64,6 +64,12 @@ choices at launch, not settings inside the program.
   alone shows a small built-in one.
 - **View** shows a picture: `run view @photo.png`. PNG up to 800x600 for now.
 - **Shapes** shows anti-aliased drawing (rounded windows, soft shadows): `run shapes`.
+- **Web** is the graphical browser: pages with their CSS, pictures and links, drawn in Geist.
+  `run web` shows its welcome page; `run +net web https://example.com` opens a site (fetch it to
+  `/bin/web` first for runs with arguments); `run web @page.html` opens a file. Up/Down/Space
+  scroll, Right/Left pick a link or button, Enter opens it, Backspace goes back, `/` types an
+  address. Page JavaScript runs (QuickJS in a Wasm sandbox): scripts can change the page,
+  answer clicks and keys, and animate with timers. Canvas drawing is not there yet.
   The arrow keys move the front window, Home puts it back.
 
 Writing your own: see `crates/sex-app` (a window, keys, files, the network, pixels) and `apps/jot`.

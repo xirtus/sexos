@@ -2680,3 +2680,94 @@ row no longer waits for the row before it to end.
   than seven BOOT region grants, a 128 KiB runtime heap, PKU keys that no longer equal PD
   ids, with leaves checked against each client's own key). Host builds on ARM got
   non-x86 stubs for `program_memory::grow` and `virtio::layout`.
+## Web pages with CSS, laid out and drawn in Geist (2026-11-08)
+
+- **What runs now.** `run web` is a graphical browser program: HTML is parsed, styled
+  with CSS and laid out inside the program, then drawn with proportional Geist Sans (Geist
+  Mono for code) into its pixel surface. `run +net web URL` follows redirects and fetches
+  the page's screen style sheets (`<link rel=stylesheet>`, print sheets skipped) and its
+  PNG/JPEG pictures. Up/Down/Space/PgUp/PgDn/Home/End scroll, Right/Left move a focus ring
+  between links, Enter opens one (fragments scroll to the anchor), Backspace goes back,
+  `/` types an address. The text Browser (kaleidoscope) is unchanged.
+- **Design.** Two new crates, both `no_std` + `alloc`, integer-only:
+  `crates/sex-html` (parser with implied `html/head/body`, void and raw-text elements,
+  self-closing `p/li/td`, entities; CSS with compound/descendant/child/sibling selectors,
+  attribute selectors, `:not :nth-child :first-child`, specificity, `!important`, inline
+  `style`, `@media` width queries, `em/rem/%/vw/pt`, `calc()` approximated; the cascade
+  indexes rules by id/class/tag; layout does block flow with sibling margin collapsing,
+  line boxes with half-leading and baseline alignment, `text-align`, `white-space`,
+  lists with markers, automatic table layout from min/max-content (colspan,
+  `border-collapse`), flex rows (grow, basis, shrink, wrap, gap, `justify-content`,
+  `align-items:center`), inline blocks, images, form controls; output is a display list
+  plus link rectangles and anchors) and `crates/sex-web` (a `Host` measuring with
+  sex-font, glyphs through sex-font's cache, synthetic bold and oblique, rounded boxes with
+  4x4-sampled corners, nearest-neighbour pictures from sex-image). Layout widths and paint
+  pen positions come from one function, so text lands where layout put it. `sex-app::net`
+  gains `fetch`, which keeps headers (`Reply::header`) for redirects; `get` is unchanged.
+  The parser runs in the program's confinement, never in Display. No ABI change.
+- **Evidence.** 15 host tests in sex-html (block-level images, inline fragment anchors and cell alignment among them). `scripts/program_web_gate.py`: the welcome page,
+  after Down, and with a link focused match `cargo run -p sex-web --example page`
+  exactly (0 of 9020 sampled pixels differ, each). `scripts/program_web_net_gate.py`
+  serves `scripts/web_site` over HTTP: a 302 is followed, 1 sheet and 1 PNG load, the page
+  matches the host render exactly, Right+Enter opens the second page (exact), Backspace
+  returns (exact). Both at 1 and 4 cores. Welcome layout takes 22 to 102 ticks, a repaint
+  12 to 37 ticks under TCG.
+- **Limits.** Drawn at 410x330, the size Shell tiles a program, because a program can't
+  learn its window size yet. Floats and positioned boxes stay in normal flow; no
+  `::before`, no grid (laid out as blocks), no web fonts, no bold Geist file (synthetic).
+  No scripts yet: next is QuickJS-NG on Wasm with DOM bindings, then Canvas 2D. HTTP/1.0
+  only, so no keep-alive; gzip not requested. Gates need a fresh `--out` directory.
+
+## Web runs page JavaScript (2026-11-08)
+
+- **What runs now.** Pages' classic scripts (inline and `src`, in document order) run in
+  `run web`. They can read and change the page (`document`, `getElementById`,
+  `querySelector(All)`, `createElement`, `appendChild`, `innerHTML`, `textContent`,
+  `classList`, `style`, `dataset`, attributes), listen for clicks and keys
+  (`addEventListener`, `onclick` attributes and properties, bubbling, `preventDefault`), and
+  use `setTimeout`, `setInterval`, `requestAnimationFrame`, promises, `console`,
+  `location`, `localStorage` (per page, in memory). The page is laid out again after any
+  change. Buttons and elements with click listeners join links in Right/Left focus; Enter
+  clicks them. A page's key handlers see each key first and may keep it.
+- **Design.** New crate `crates/sex-js` (`no_std` + `alloc`). The engine is QuickJS-NG
+  v0.10.1 (MIT), compiled to wasm32 by `scripts/build_quickjs_wasm.sh` (wasi-sdk 25,
+  reproducible, 545 KB, checked in as `crates/sex-js/quickjs.wasm`) and run on wasmi, so
+  scripts are confined by the interpreter inside Web's own confinement, and floating point
+  stays in software. The guest has one native call, `__host(op, ...strings)`; the DOM API
+  is JavaScript (`src/prelude.js`) over it, and `Document` answers the ops on sex-html's
+  tree. Long scripts stop after 2 s (QuickJS interrupt handler). sex-html gains tree edits
+  (`create/insert/detach/set_attr/set_text`), HTML serialization and fragment parsing, and
+  styles in tree order. `Link` gains `node`; `Dom::activatable` decides what can be
+  focused. sex-app gains `Window::poll`, `Window::next_within` and `with_stack`: Web now
+  runs on a 2 MiB stack from its heap, as the 64 KiB a run starts with overflowed (a
+  guarded, growable program stack is coming from the limits work). wasmi is now built at
+  opt-level 3 for speed (programs may be 16 MiB since #21). No ABI change.
+- **Evidence.** 11 host tests in sex-js (DOM edits, `innerHTML`, events, timers,
+  navigation, a runaway loop stopped, language features). `scripts/program_web_js_gate.py`
+  serves `scripts/web_site/js.html`: the script builds a list, animates a bar to the end
+  with `setInterval`, a button click and a `k` key change the page; each state matches
+  `cargo run -p sex-web --example page` (which runs the same script) exactly, 0 of 9020
+  sampled pixels differ, at 1 and 4 cores. The engine starts in 1.7 s at 1 core and 0.8 s
+  at 4 cores under TCG.
+- **Limits.** No Canvas 2D or WebGL yet (next). No `fetch`/`XMLHttpRequest`, no layout
+  boxes for `getBoundingClientRect` (zeros), no text inputs, no ES modules as modules
+  (run as classic scripts), pictures a script adds are not loaded.
+
+## Video with FFmpeg: Play (2026-11-08)
+
+- **What runs now.** `run play @VIDEO.mp4` plays an H.264 MP4 in a window, paced to its frame
+  rate. FFmpeg (n7.1.2: libavformat with the MOV demuxer, libavcodec with the H.264 decoder,
+  libswscale, libavutil; LGPL-2.1+, no GPL parts) runs inside Play's own confinement. Play
+  decodes each frame into a private buffer, then copies it into its pixel surface and shows it.
+  Anything that is not a video is refused in words ("Cannot play that video: ...").
+- **How.** `crates/sex-libc` is a small C library in Rust for programs that link C:
+  malloc over the program heap (with alignment up to 4 KiB), string.h, printf/scanf engines,
+  stdio over hooks, libm-backed maths, and time from ticks. `scripts/build_ffmpeg.sh` cross-builds
+  FFmpeg with clang for x86_64-sex's soft-float, no-SSE, no-red-zone code (musl headers with
+  `long double` mapped to `double`). `apps/play/src/ffmpeg.c` is a small bridge (open, next
+  frame as BGR0 scaled to fit 800x600, close); `scripts/build_play.sh` builds Play as a PIE.
+- **Gates.** `scripts/program_play_gate.py`: Spindle fetches Play and a 320x240, 25 fps,
+  50-frame test clip; all 50 frames are shown in about 2 s on 1 and 4 cores, colour probes
+  match the clip, the last frame is on screen, and a text file is refused.
+- **Next.** Sound (AAC/MP3 through Bell's virtio sound card), SSE in programs for larger video,
+  and a presented/consumed handshake with Display so frames never overlap their presentation.

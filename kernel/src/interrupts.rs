@@ -245,7 +245,7 @@ pub unsafe extern "C" fn syscall_entry() {
 
 #[no_mangle]
 pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
-    unsafe { crate::pku::wrpkru(0x00000000); }
+    // syscall_entry already opened every key; a second write only costs time.
     crate::scheduler::observe_user_entry();
     crate::syscalls::dispatch(regs)
 }

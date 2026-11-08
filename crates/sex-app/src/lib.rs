@@ -7,6 +7,16 @@
 extern crate alloc;
 pub mod heap;
 
+/// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
+/// than the 64 KiB a run starts with (deep layout, script engines, decoders).
+#[cfg(all(feature = "heap", target_arch = "x86_64"))]
+pub fn with_stack(bytes: usize, main: extern "C" fn() -> !) -> ! {
+    let stack: &'static mut [u8] = alloc::vec![0u8; bytes].leak();
+    let top = (stack.as_mut_ptr() as usize + bytes) & !15;
+    // A call from a 16-byte aligned rsp leaves `main` the alignment the ABI expects.
+    unsafe { core::arch::asm!("mov rsp, {top}", "xor ebp, ebp", "call {main}", "ud2", top = in(reg) top, main = in(reg) main, options(noreturn)) }
+}
+
 use sex_pdx::app_key::Key;
 use sex_pdx::text_batch::{hash, Request};
 use sex_pdx::{app_lifecycle as lifecycle, pdx_call_checked, SLOT_DISPLAY, SLOT_SHELL};
@@ -92,7 +102,15 @@ impl Window {
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }
-    /// The next key or close if one is waiting, without waiting.
+    /// The next key or close, waiting for one.
+    pub fn next(&mut self) -> Event {
+        if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take().unwrap(); }
+        loop {
+            let m = sex_pdx::pdx_listen_raw(0);
+            if let Some(event) = self.event(&m) { return event; }
+        }
+    }
+    /// The next key or close if one is already waiting, otherwise `None` at once.
     pub fn poll(&mut self) -> Option<Event> {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
         while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
@@ -100,12 +118,14 @@ impl Window {
         }
         None
     }
-    /// The next key or close, waiting for one.
-    pub fn next(&mut self) -> Event {
-        if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take().unwrap(); }
+    /// Like [`Window::next`], but gives up after about `ms` milliseconds.
+    pub fn next_within(&mut self, ms: u64) -> Option<Event> {
+        let end = sex_pdx::get_ticks().saturating_add(ms);
         loop {
-            let m = sex_pdx::pdx_listen_raw(0);
-            if let Some(event) = self.event(&m) { return event; }
+            if let Some(e) = self.poll() { return Some(e); }
+            let now = sex_pdx::get_ticks();
+            if now >= end { return None; }
+            let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.
@@ -186,17 +206,33 @@ pub mod files {
         Ok(done)
     }
     /// Replaces the file with `data`, creating it if needed.
+    /// Replaces the file with `data`, of any size: it goes over in pieces as big as the
+    /// shared region holds.
     pub fn write(window: &mut Window, path: &[u8], data: &[u8]) -> Result<(), Error> {
-        if data.len() > w::DATA_MAX { return Err(w::NO_SPACE); }
         match request(window, w::STAT, path, 0, 0) {
             Ok(_) => { request(window, w::TRUNCATE, path, 0, 0)?; }
             Err(w::NOT_FOUND) => { request(window, w::CREATE, path, 0, 0)?; }
             Err(e) => return Err(e),
         }
-        region()?[w::PATH_BYTES..w::PATH_BYTES + data.len()].copy_from_slice(data);
-        let wrote = request(window, w::WRITE, path, 0, data.len() as u64)? as usize;
-        if wrote < data.len() { return Err(w::NO_SPACE); }
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::DATA_MAX);
+            region()?[w::PATH_BYTES..w::PATH_BYTES + n].copy_from_slice(&data[done..done + n]);
+            let wrote = request(window, w::WRITE, path, done as u64, n as u64)? as usize;
+            if wrote < n { return Err(w::NO_SPACE); }
+            done += n;
+        }
         Ok(())
+    }
+    /// The file's size, or why there is none.
+    pub fn size(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        request(window, w::STAT, path, 0, 0)?;
+        let r = region()?;
+        Ok(u64::from_le_bytes(r[w::PATH_BYTES + 8..w::PATH_BYTES + 16].try_into().unwrap_or([0; 8])))
+    }
+    /// Makes everything written so far durable.
+    pub fn sync(window: &mut Window) -> Result<(), Error> {
+        request(window, w::SYNC, b"", 0, 0).map(|_| ())
     }
 }
 
@@ -271,6 +307,30 @@ pub mod net {
     fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).position(|w| w == needle) }
     /// Fetches `url` into `out`: the HTTP status and the body's length, cut at `out.len()`.
     pub fn get(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<(u32, usize), Error> {
+        let r = fetch(window, url, out)?;
+        out.copy_within(r.body..r.end, 0);
+        Ok((r.status, r.end - r.body))
+    }
+    /// A reply as it arrived in `out`: headers in `..body`, the body in `body..end`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Reply { pub status: u32, pub body: usize, pub end: usize }
+    impl Reply {
+        /// The value of header `name` (ASCII case-insensitive), from the bytes `fetch` filled.
+        pub fn header<'a>(&self, out: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+            out[..self.body].split(|b| *b == b'\n').skip(1).find_map(|line| {
+                let colon = line.iter().position(|b| *b == b':')?;
+                line[..colon].eq_ignore_ascii_case(name).then(|| {
+                    let v = &line[colon + 1..];
+                    let start = v.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(v.len());
+                    let end = v.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(start, |e| e + 1);
+                    &v[start..end.max(start)]
+                })
+            })
+        }
+    }
+    /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
+    /// and read the content type.
+    pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
@@ -338,7 +398,6 @@ pub mod net {
         let end = find(&out[..got], b"\r\n\r\n").ok_or(Error::Failed)?;
         let line = &out[..find(&out[..end + 2], b"\r\n").unwrap_or(end)];
         let status = line.split(|b| *b == b' ').nth(1).and_then(|c| core::str::from_utf8(c).ok()?.parse::<u32>().ok()).unwrap_or(0);
-        out.copy_within(end + 4..got, 0);
-        Ok((status, got - end - 4))
+        Ok(Reply { status, body: end + 4, end: got })
     }
 }

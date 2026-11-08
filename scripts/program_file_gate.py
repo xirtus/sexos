@@ -2,8 +2,10 @@
 """Programs are ordinary files: downloaded into the filesystem, run by name or by path, refused with a plain answer, and still there after a reboot."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
+# A 16 MiB file over the network takes a while under emulation.
+os.environ.setdefault('SEXOS_GATE_BOUND','900')
 ROOT=Path(__file__).resolve().parents[1]
-FILES={'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/big':bytes(1024*1024+4096)}
+FILES={'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/big':bytes(16*1024*1024+4096)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -61,7 +63,7 @@ def main():
   expect('run notes',r'\[spindle.program.refused\] code=5\b')
   expect('run /bin/notes',r'\[spindle.program.refused\] code=5\b')
   expect('run nosuch',r'\[spindle.program.refused\] code=1\b')
-  fetch('/big','/big',360);expect('run /big',r'\[spindle.program.refused\] code=2\b')
+  fetch('/big','/big',900);expect('run /big',r'\[spindle.program.refused\] code=2\b')
   expect('touch /empty',r'\[spindle.fs.line\] ok');expect('run /empty',r'\[spindle.program.refused\] code=5\b')
   # Background programs come from files too.
   fetch('/hum','/bin/hum');expect('spawn hum 10',r'\[shell.records.spawned\] live=10\b',120)

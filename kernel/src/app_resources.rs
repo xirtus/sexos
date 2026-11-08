@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Boot-private app payload ownership. Kernel identities remain permanent.
-//! Sext owns the retired bytes; this module never chooses or allocates frames at runtime.
+//! Sext owns the retired bytes of BOOT apps. Program rows are the exception: a run's
+//! image and heap live in the row's arena, on frames `program_frames` lends per run.
 use core::sync::atomic::{AtomicBool,AtomicU32,Ordering};
 use crate::capability::{CapabilityData,ProtectionDomain};
 use crate::app_resource_state::*;
@@ -9,23 +10,31 @@ use x86_64::VirtAddr;
 use crate::scheduler::task_ownership::Phase;
 struct App {
     target:u32,task:u32,main:usize,trampoline:usize,pkey:u8,surface:u64,
-    pages:[PrivatePage;MAX_PAGES],count:usize,captured:bool,ready:bool,
+    pages:alloc::vec::Vec<PrivatePage>,count:usize,captured:bool,ready:bool,
     pool:u64,coordinator:u32,pager:u32,services:[u32;5],acked:u8,
     identity:Incarnation,predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
     /// Program rows run again. The grants name boot_task; `task` is the current run.
     reusable:bool,boot_task:u32,generation:u32,rebirthing:bool,pristine:u64,entry:u64,stack_top:u64,
     /// Shell took this run's pages because it ignored Close; retire need not find them.
     forced:bool,
-    /// The BOOT image's manifest, and the span a disk program loads into.
-    boot_pages:[PrivatePage;64],boot_count:usize,window:u64,window_base:u64,window_leaves:[u64;WINDOW_PAGES],
-    /// Window pages the run's image spans, and pages it was given past them since it started.
+    /// The BOOT image's manifest, and the arena a disk program and every run's heap use:
+    /// a span of address space only this row maps, with page tables made at BOOT and
+    /// frames lent per run.
+    boot_pages:[PrivatePage;64],boot_count:usize,arena:u64,arena_pages:usize,
+    /// Arena pages the run's image spans (none for the BOOT image, which lives in its
+    /// own slot), and pages it was given past them since it started.
     image_pages:usize,grown:usize,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
-    pages:[PrivatePage::EMPTY;MAX_PAGES],count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,window:0,window_base:0,window_leaves:[0;WINDOW_PAGES],image_pages:0,grown:0,last_hint:[0;6],hinted:0,kicked:false}}}
-const WINDOW_PAGES:usize=sex_pdx::program_store::WINDOW_BYTES/4096;
-const _:()=assert!(WINDOW_PAGES+16<=MAX_PAGES);
+    pages:alloc::vec::Vec::new(),count:0,captured:false,ready:false,pool:0,
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,last_hint:[0;6],hinted:0,kicked:false}}}
+impl App {
+    /// Sets manifest entry `i`, growing the manifest by one when `i` is its end.
+    fn put(&mut self,i:usize,page:PrivatePage){
+        if i<self.pages.len(){self.pages[i]=page}else{assert_eq!(i,self.pages.len(),"APP_MANIFEST_GAP");self.pages.push(page)}
+    }
+    fn in_arena(&self,va:u64)->bool{self.arena!=0&&va>=self.arena&&va<self.arena+(self.arena_pages*4096) as u64}
+}
 static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 /// Syscalls run with interrupts off, so a holder on another core finishes soon.
@@ -58,7 +67,7 @@ fn capture_range(app:&mut App,start:u64,length:u64)->Result<(),&'static str>{
             let expected=unsafe{core::ptr::read_volatile(leaf as *const u64)};
             if expected&5!=5 || (expected>>59)&15!=app.pkey as u64{return Err("APP_PRIVATE_PKEY_OR_ACCESS")}
             if app.pages[..app.count].iter().any(|p|p.expected&PHYSICAL_MASK==expected&PHYSICAL_MASK){return Err("APP_PRIVATE_PHYSICAL_ALIAS")}
-            app.pages[app.count]=PrivatePage{va,leaf,expected:expected&!0x60};app.count+=1;
+            let at=app.count;app.put(at,PrivatePage{va,leaf,expected:expected&!0x60});app.count+=1;
         }
         if va==end{break}va=va.checked_add(4096).ok_or("APP_RANGE_OVERFLOW")?;
     }
@@ -146,16 +155,15 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
         app.entry=task.context.rip;app.stack_top=task.context.rsp;
         assert!(app.count<=app.boot_pages.len(),"PROGRAM_BOOT_MANIFEST");
         app.boot_pages[..app.count].copy_from_slice(&app.pages[..app.count]);app.boot_count=app.count;
-        app.window_base=app.pages[..app.count].iter().map(|p|p.va).min().expect("PROGRAM_NO_PAGES");
-        app.image_pages=boot_image_pages(app);app.grown=0;
+        app.image_pages=0;app.grown=0;
     }
     retire_private_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
         |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
         |va|crate::smp::tlb::flush(va)).expect("SUCCESSOR_RESERVE_LEAVES");
     if app.reusable{
-        let (base,key)=(app.window_base,app.pkey);
-        app.window=crate::boot_memory::reserve_window(base,key,&mut app.window_leaves);
+        let (arena,pages)=crate::boot_memory::reserve_arena(app.pkey);
+        app.arena=arena;app.arena_pages=pages;
     }
     let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
     assert!(coordinator.find_capability(slot as u32).is_none());
@@ -314,7 +322,8 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         let count=restore_reserved_pages(&new.pages[..new.count],
             |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
             |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,value))},
-            |va|crate::smp::tlb::flush(va))?;
+            |_|{})?;
+        crate::smp::tlb::flush_pages(count,new.pages[..new.count].iter().map(|p|p.va));
         crate::program_tenancy::adopt(id,&new.pages[..new.count]);
         // All fallible validation is above. IF is masked by the syscall
         // entry. Publish authority and receipt before scheduler publication.
@@ -332,85 +341,109 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
 /// at it. All checks precede the first write. The leaves stay clear until commit.
 fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
     use crate::program_image as image;
-    let elf=crate::boot_memory::program_image(len).ok_or(INVALID)?;
-    let parsed=image::parse(elf,(WINDOW_PAGES*4096) as u64).map_err(|reason|{
+    if app.arena==0{return Err(DENIED)}
+    let copy=crate::boot_memory::program_image(len).ok_or(INVALID)?;
+    let elf:&[u8]=&copy;
+    let parsed=image::parse(elf,(app.arena_pages*4096) as u64).map_err(|reason|{
         crate::serial_println!("[app.program.rejected] target={} bytes={} reason={:?}",app.target,len,reason);DENIED})?;
     let stack_low=app.stack_top.checked_sub(65536).ok_or(DENIED)?;
-    // The run's manifest is built in place: a whole window of pages is too big for a
-    // kernel stack. The retired run's leaves are clear, so nothing reads it meanwhile.
+    // The retired run's leaves are clear and its frames returned, so nothing reads the
+    // manifest meanwhile. Frames come zeroed, so nothing of another run survives.
     let mut count=0;let mut image_pages=0;
-    for i in 0..app.boot_count{let page=app.boot_pages[i];if page.va>=stack_low&&page.va<app.stack_top{app.pages[count]=page;count+=1;}}
+    for i in 0..app.boot_count{let page=app.boot_pages[i];if page.va>=stack_low&&page.va<app.stack_top{app.put(count,page);count+=1;}}
+    let stack=count;
+    let fail=|app:&mut App,count:usize,why:&str|{
+        for page in &app.pages[stack..count]{crate::program_frames::give(page.expected&PHYSICAL_MASK);}
+        app.count=0;
+        crate::serial_println!("[app.program.rejected] target={} bytes={} reason={}",app.target,len,why);
+    };
     for segment in &parsed.segments[..parsed.count]{
         let first=segment.window/4096;let last=(segment.window+segment.memory-1)/4096;
         for index in first..=last{
-            if count==MAX_PAGES{app.count=0;return Err(DENIED)}
-            let frame=app.window+index*4096;
+            let va=app.arena+index*4096;
+            let (Some(leaf),Some(frame))=(crate::boot_memory::existing_leaf_address(va),crate::program_frames::take())else{
+                fail(app,count,"no_memory");return Err(DENIED)};
             let mut flags=frame|5|((app.pkey as u64)<<59);
             if segment.writable{flags|=2}
             if !segment.executable{flags|=1<<63}
-            app.pages[count]=PrivatePage{va:app.window_base+index*4096,leaf:app.window_leaves[index as usize],expected:flags};count+=1;
+            app.put(count,PrivatePage{va,leaf,expected:flags});count+=1;
         }
         image_pages=image_pages.max(last as usize+1);
     }
-    let pages=&app.pages;
-    // Nothing of an earlier run or another program survives into this one.
-    for page in &pages[..count]{crate::boot_memory::zero_frame(page.expected&PHYSICAL_MASK);}
+    // Arena page index -> frame, for writing the file's bytes and relocations.
+    let mut frames=alloc::vec![0u64;image_pages];
+    for page in &app.pages[stack..count]{frames[((page.va-app.arena)/4096) as usize]=page.expected&PHYSICAL_MASK;}
+    let write=|mut at:u64,mut bytes:&[u8]|->bool{
+        while !bytes.is_empty(){
+            let Some(&frame)=frames.get((at/4096) as usize)else{return false};
+            if frame==0{return false}
+            let n=bytes.len().min(4096-(at as usize&4095));
+            crate::boot_memory::write_frames(frame+(at&4095),&bytes[..n]);
+            at+=n as u64;bytes=&bytes[n..];
+        }
+        true
+    };
+    let arena=app.arena;
     for segment in &parsed.segments[..parsed.count]{
         let from=segment.offset as usize;
-        crate::boot_memory::write_frames(app.window+segment.window,&elf[from..from+segment.file as usize]);
+        if !write(segment.window,&elf[from..from+segment.file as usize]){fail(app,count,"segment");return Err(DENIED)}
     }
     for index in 0..parsed.rela_count{
-        let Some((at,value))=image::relocation(elf,&parsed,index,app.window_base)else{app.count=0;return Err(DENIED)};
-        crate::boot_memory::write_frames(app.window+at,&value.to_le_bytes());
+        let Some((at,value))=image::relocation(elf,&parsed,index,arena)else{fail(app,count,"relocation");return Err(DENIED)};
+        if !write(at,&value.to_le_bytes()){fail(app,count,"relocation");return Err(DENIED)}
     }
     app.count=count;app.image_pages=image_pages;app.grown=0;
-    let entry=app.window_base+parsed.entry;
+    let entry=app.arena+parsed.entry;
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
     unsafe{(*main).rearm(task,entry,app.stack_top,target);}
     crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x}",app.target,task,len,count,entry);
     Ok(())
 }
-/// Window pages the BOOT image spans. Its pages are its own frames; a run's grown
-/// memory takes the window's pages past them.
-fn boot_image_pages(app:&App)->usize{
-    let (base,end)=(app.window_base,app.window_base+(WINDOW_PAGES*4096) as u64);
-    app.boot_pages[..app.boot_count].iter().filter(|p|p.va>=base&&p.va<end).map(|p|((p.va-base)/4096) as usize+1).max().unwrap_or(WINDOW_PAGES)
-}
-/// More memory for the calling program's current run: the row's next window pages
-/// after its image, on its own key, zeroed. Self-only: the caller's domain is the row,
-/// and only a live current run may grow. All checks precede the first write, and the
-/// pages join the run's manifest, so Close, a forced end and retire take them as well.
+/// More memory for the calling program's current run: the arena's next pages after its
+/// image, on its own key, on zeroed frames lent for this run. Self-only: the caller's
+/// domain is the row, and only a live current run may grow. All checks precede the
+/// first write, and the pages join the run's manifest, so Close, a forced end and
+/// retire take them as well.
 pub fn grow(pd:&ProtectionDomain,want:u64)->[u64;3]{
     use sex_pdx::program_memory as m;
     let result=(||{
         if want>m::MAX_PAGES_PER_CALL{return Err(m::INVALID)}
         let mut apps=apps_lock!().ok_or(m::RETRY)?;
         let app=apps.iter_mut().find(|a|a.ready&&a.target==pd.id).ok_or(m::DENIED)?;
-        if !app.reusable||!app.activated||app.window==0||app.image_pages==0||app.retired||app.rebirthing||app.forced{return Err(m::DENIED)}
+        if !app.reusable||!app.activated||app.arena==0||app.retired||app.rebirthing||app.forced{return Err(m::DENIED)}
         let main=pd.main_task.load(Ordering::Acquire);
         if main.is_null()||main as usize!=app.main{return Err(m::DENIED)}
         let task=unsafe{&*main};
         if task.id!=app.task||task.state.snapshot().exited{return Err(m::DENIED)}
-        let base=app.window_base+(app.image_pages*4096) as u64;
+        let base=app.arena+(app.image_pages*4096) as u64;
         let (first,want)=(app.image_pages+app.grown,want as usize);
         if want==0{return Ok([0,base,app.grown as u64])}
-        if first+want>WINDOW_PAGES||app.count+want>MAX_PAGES{return Err(m::FULL)}
-        for index in first..first+want{
-            if unsafe{core::ptr::read_volatile(app.window_leaves[index] as *const u64)}!=0{return Err(m::DENIED)}
+        if first+want>app.arena_pages{return Err(m::FULL)}
+        let mut leaves=[0u64;m::MAX_PAGES_PER_CALL as usize];
+        for (i,index) in (first..first+want).enumerate(){
+            let leaf=crate::boot_memory::existing_leaf_address(app.arena+(index*4096) as u64).ok_or(m::DENIED)?;
+            if unsafe{core::ptr::read_volatile(leaf as *const u64)}!=0{return Err(m::DENIED)}
+            leaves[i]=leaf;
         }
-        for index in first..first+want{
-            let frame=app.window+(index*4096) as u64;
-            crate::boot_memory::zero_frame(frame);
-            let page=PrivatePage{va:app.window_base+(index*4096) as u64,leaf:app.window_leaves[index],
-                expected:frame|7|((app.pkey as u64)<<59)|(1<<63)};
-            app.pages[app.count]=page;app.count+=1;
+        // All or none: the frames are taken before any page is mapped.
+        let mut frames=[0u64;m::MAX_PAGES_PER_CALL as usize];
+        for i in 0..want{
+            match crate::program_frames::take(){Some(f)=>frames[i]=f,None=>{
+                for &f in &frames[..i]{crate::program_frames::give(f);}
+                return Err(m::FULL)}}
+        }
+        app.pages.reserve(want);
+        for (i,index) in (first..first+want).enumerate(){
+            let page=PrivatePage{va:app.arena+(index*4096) as u64,leaf:leaves[i],
+                expected:frames[i]|7|((app.pkey as u64)<<59)|(1<<63)};
+            let at=app.count;app.put(at,page);app.count+=1;
             // The leaf was clear, so no core holds a translation for it: a local flush is enough.
             crate::program_tenancy::grant(app.target,page);
             x86_64::instructions::tlb::flush(VirtAddr::new(page.va));
         }
         app.grown+=want;
-        crate::serial_println!("[app.program.memory] target={} task={} granted={} held={} base={:#x} window_pages={}",app.target,app.task,want,app.grown,base,WINDOW_PAGES);
+        crate::serial_println!("[app.program.memory] target={} task={} granted={} held={} base={:#x} window_pages={} free_pages={} kernel_heap_used={}",app.target,app.task,want,app.grown,base,app.arena_pages,crate::program_frames::available(),crate::ALLOCATOR.lock().used());
         Ok([0,base,app.grown as u64])
     })();result.unwrap_or_else(|e|[e,0,0])
 }
@@ -427,8 +460,8 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
         if task==u32::MAX{return Err(DENIED)}
         if let Some(len)=image{load_program(app,len,task)?;}
         else{
-            let count=app.boot_count;app.pages[..count].copy_from_slice(&app.boot_pages[..count]);app.count=count;
-            app.image_pages=boot_image_pages(app);app.grown=0;
+            let count=app.boot_count;app.pages.clear();app.pages.extend_from_slice(&app.boot_pages[..count]);app.count=count;
+            app.image_pages=0;app.grown=0;
             for (i,page) in app.boot_pages[..count].iter().enumerate(){
                 crate::boot_memory::copy_frame(app.pristine+i as u64*4096,page.expected&PHYSICAL_MASK);
             }
@@ -449,7 +482,8 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     let count=restore_reserved_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
         |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,value))},
-        |va|crate::smp::tlb::flush(va))?;
+        |_|{})?;
+    crate::smp::tlb::flush_pages(count,app.pages[..app.count].iter().map(|p|p.va));
     crate::program_tenancy::adopt(id,&app.pages[..app.count]);
     app.rebirthing=false;app.acked=0;
     DORMANT[index].store(false,Ordering::Release);
@@ -467,10 +501,8 @@ pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
         if pd.id!=app.coordinator||!app.reusable{return Err(DENIED)}
         if app.forced||app.retired||app.rebirthing{return Ok(())}
         let id=app.target;crate::program_tenancy::release(id);
-        for page in &app.pages[..app.count]{
-            unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};
-            crate::smp::tlb::flush(page.va);
-        }
+        for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
+        crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
         app.forced=true;
         crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
         Ok(())})();result.map_or_else(|e|e,|()|0)
@@ -496,10 +528,19 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         let count=if app.forced {app.count} else {retire_private_pages(&app.pages[..app.count],
             |leaf|crate::program_tenancy::read(id,leaf),
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
-            |va|crate::smp::tlb::flush(va))?};
+            |_|{})?};
+        // One shootdown for the whole run, before any frame is reused.
+        if !app.forced{crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));}
         if app.reusable{
-            // The row keeps its authority and its frames for the next run.
-            for page in &app.pages[..app.count]{crate::boot_memory::zero_frame(page.expected&PHYSICAL_MASK);}
+            // The row keeps its authority and its BOOT frames for the next run; frames
+            // lent to this run's arena go back for any program to use.
+            for i in 0..app.count{
+                let (va,frame)=(app.pages[i].va,app.pages[i].expected&PHYSICAL_MASK);
+                if app.in_arena(va){crate::program_frames::give(frame)}else{crate::boot_memory::zero_frame(frame)}
+            }
+            app.count=0;
+            // Release the manifest's capacity too: a large run must not pin its heap after it ends.
+            app.pages=alloc::vec::Vec::new();
             let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
             while unsafe{(*target.message_ring).dequeue()}.is_some(){}
             while unsafe{(*target.signal_ring).dequeue()}.is_some(){}

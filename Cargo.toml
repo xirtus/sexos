@@ -22,12 +22,17 @@ members = [
     "apps/fortune",
     "apps/jot",
     "apps/peek",
+    "apps/bench",
     "apps/view",
     "apps/wasm",
     "apps/heaptest",
     "apps/shapes",
     "apps/play",
+    "apps/web",
     "crates/sex-app",
+    "crates/sex-html",
+    "crates/sex-js",
+    "crates/sex-web",
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",
@@ -54,18 +59,18 @@ license = "GPL-3.0-only"
 [profile.release]
 panic = "abort"
 
-# The Wasm runner must fit the 1 MiB program image: build the interpreter for size.
+# Wasm guests and page scripts run on wasmi: build the interpreter for speed.
 [profile.release.package.wasmi]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 [profile.release.package.wasmi_core]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 [profile.release.package.wasmi_ir]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 [profile.release.package.wasmi_collections]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 [profile.release.package.wasmparser]
 opt-level = "z"
@@ -77,3 +82,23 @@ codegen-units = 1
 opt-level = "z"
 codegen-units = 1
 strip = true
+[profile.release.package.web]
+opt-level = "z"
+codegen-units = 1
+strip = true
+[profile.release.package.sex-html]
+opt-level = "z"
+codegen-units = 1
+[profile.release.package.sex-web]
+opt-level = "z"
+codegen-units = 1
+
+# Scripts run on wasmi; unoptimized it is too slow for the time budget even in tests.
+[profile.dev.package.wasmi]
+opt-level = 3
+[profile.dev.package.wasmi_core]
+opt-level = 3
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+[profile.dev.package.wasmparser]
+opt-level = 3
