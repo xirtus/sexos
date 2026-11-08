@@ -38,324 +38,189 @@ pub const MAX_ORDER: usize = 18; // Up to 1 GiB
 pub const PAGE_SIZE: u64 = 4096;
 pub const MAX_CORES: usize = 128;
 
+/// One entry per physical page. Only the first page of a free block is marked free;
+/// every other page reads as in use, so zeroed metadata hands nothing out.
 #[repr(C)]
 pub struct PageMetadata {
-    pub state: AtomicU8, // 0: Free, 1: Allocated, 2: Splitting/Merging
+    pub state: AtomicU8, // FREE: the head of a free block of `order`; anything else: not free
     pub order: AtomicU8,
     pub next: AtomicU64,
+    pub prev: AtomicU64,
 }
+const FREE: u8 = 1;
+/// List end. Physical page 0 is never handed out (real-mode IVT and BIOS data).
+const NIL: u64 = 0;
 
-/// Per-core sharded free lists to eliminate allocator contention.
-/// IPCtax: 100% lock-free, O(1) local allocation.
-pub struct CoreShardedLists {
-    pub local_free_lists: [AtomicU64; MAX_ORDER + 1],
-}
+struct Lists { heads: [u64; MAX_ORDER + 1] }
 
-impl CoreShardedLists {
-    pub const fn new() -> Self {
-        const INIT: AtomicU64 = AtomicU64::new(0);
-        Self {
-            local_free_lists: [INIT; MAX_ORDER + 1],
-        }
-    }
-}
-
+/// The physical page allocator: a binary buddy system with doubly linked free lists,
+/// so a block's buddy leaves its list in O(1) when the two merge. One lock, held with
+/// interrupts off, covers it; every operation is O(MAX_ORDER). Correctness comes first:
+/// the earlier lock-free version could hand out a page twice after a merge, and its
+/// `reserve_frame` did not protect a page that sat inside a larger free block.
 pub struct LockFreeBuddyAllocator {
-    pub shards: [CoreShardedLists; MAX_CORES],
-    pub global_free_lists: [AtomicU64; MAX_ORDER + 1],
+    lists: spin::Mutex<Lists>,
     pub metadata_base: AtomicU64,
     pub total_pages: AtomicU64,
+    free_pages: AtomicU64,
 }
 
 impl LockFreeBuddyAllocator {
     pub const fn new() -> Self {
-        const INIT: AtomicU64 = AtomicU64::new(0);
         Self {
-            shards: [const { CoreShardedLists::new() }; MAX_CORES],
-            global_free_lists: [INIT; MAX_ORDER + 1],
+            lists: spin::Mutex::new(Lists { heads: [NIL; MAX_ORDER + 1] }),
             metadata_base: AtomicU64::new(0),
             total_pages: AtomicU64::new(0),
+            free_pages: AtomicU64::new(0),
         }
     }
 
     pub unsafe fn init_metadata(&self, metadata_vaddr: u64, total_pages: u64) {
         self.metadata_base.store(metadata_vaddr, Ordering::Release);
         self.total_pages.store(total_pages, Ordering::Release);
-        
         let ptr = metadata_vaddr as *mut u8;
         core::ptr::write_bytes(ptr, 0, total_pages as usize * core::mem::size_of::<PageMetadata>());
     }
 
+    fn meta(&self, phys: u64) -> Option<&PageMetadata> {
+        let base = self.metadata_base.load(Ordering::Acquire);
+        let idx = phys / PAGE_SIZE;
+        if base == 0 || idx >= self.total_pages.load(Ordering::Acquire) { return None; }
+        Some(unsafe { &*((base + idx * core::mem::size_of::<PageMetadata>() as u64) as *const PageMetadata) })
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut Lists) -> R) -> R {
+        x86_64::instructions::interrupts::without_interrupts(|| f(&mut self.lists.lock()))
+    }
+
+    fn push(&self, l: &mut Lists, order: usize, phys: u64) {
+        let m = self.meta(phys).expect("BUDDY_PUSH_NO_META");
+        let head = l.heads[order];
+        m.state.store(FREE, Ordering::Relaxed);
+        m.order.store(order as u8, Ordering::Relaxed);
+        m.prev.store(NIL, Ordering::Relaxed);
+        m.next.store(head, Ordering::Relaxed);
+        if head != NIL { self.meta(head).expect("BUDDY_HEAD").prev.store(phys, Ordering::Relaxed); }
+        l.heads[order] = phys;
+        self.free_pages.fetch_add(1 << order, Ordering::Relaxed);
+    }
+
+    fn unlink(&self, l: &mut Lists, order: usize, phys: u64) {
+        let m = self.meta(phys).expect("BUDDY_UNLINK_NO_META");
+        debug_assert!(m.state.load(Ordering::Relaxed) == FREE && m.order.load(Ordering::Relaxed) as usize == order);
+        let (prev, next) = (m.prev.load(Ordering::Relaxed), m.next.load(Ordering::Relaxed));
+        if prev == NIL { l.heads[order] = next; } else { self.meta(prev).expect("BUDDY_PREV").next.store(next, Ordering::Relaxed); }
+        if next != NIL { self.meta(next).expect("BUDDY_NEXT").prev.store(prev, Ordering::Relaxed); }
+        m.state.store(0, Ordering::Relaxed);
+        self.free_pages.fetch_sub(1 << order, Ordering::Relaxed);
+    }
+
+    fn free_head(&self, phys: u64, order: usize) -> bool {
+        self.meta(phys).is_some_and(|m| m.state.load(Ordering::Relaxed) == FREE && m.order.load(Ordering::Relaxed) as usize == order)
+    }
+
+    /// Adds usable memory as the largest aligned blocks that fit.
     pub unsafe fn add_memory_region(&self, start_phys: u64, size: u64) {
         crate::serial_println!("[kernel.mem.global.region.add] start={:#x} end={:#x} size={}",
             start_phys, start_phys + size, size);
-        let mut current_start = start_phys;
-        let mut remaining_size = size;
-
-        while remaining_size >= PAGE_SIZE {
-            // Find the largest order that fits and is aligned
-            let mut order = MAX_ORDER;
-            while order > 0 {
-                let block_size = PAGE_SIZE << order;
-                if remaining_size >= block_size && (current_start % block_size) == 0 {
-                    break;
-                }
-                order -= 1;
+        let mut start = (start_phys + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+        let end = (start_phys + size) & !(PAGE_SIZE - 1);
+        if start == NIL { start = PAGE_SIZE; }
+        self.with(|l| {
+            while start < end {
+                let mut order = MAX_ORDER;
+                while order > 0 && (start % (PAGE_SIZE << order) != 0 || start + (PAGE_SIZE << order) > end) { order -= 1; }
+                if self.meta(start).is_none() { break; }
+                self.push(l, order, start);
+                start += PAGE_SIZE << order;
             }
-
-            let phys = current_start;
-            let meta = self.get_metadata(phys);
-            if !meta.is_null() {
-                unsafe {
-                    (*meta).state.store(0, Ordering::Release);
-                    (*meta).order.store(order as u8, Ordering::Release);
-                }
-            }
-            self.push_free_global(order, phys);
-
-            let consumed = PAGE_SIZE << order;
-            current_start += consumed;
-            remaining_size -= consumed;
-        }
+        });
     }
 
-    fn get_metadata(&self, phys: u64) -> *mut PageMetadata {
-        let idx = phys / PAGE_SIZE;
-        let base = self.metadata_base.load(Ordering::Acquire);
-        if base == 0 { return core::ptr::null_mut(); }
-        (base + (idx * core::mem::size_of::<PageMetadata>() as u64)) as *mut PageMetadata
-    }
-
-    /// Formal Verification Hook: seL4-style Invariants
-    /// Verifies that no frame is doubly allocated and all free blocks are valid.
-    pub fn verify_invariants(&self) -> bool {
-        // [Formal Proof Hook: DESIGN_PHASE14]
-        // 1. Invariant: For all blocks b, b is in Free list iff b.state == 0
-        // 2. Invariant: Sum(Free_Blocks * Size) + Sum(Allocated_Blocks * Size) == Total_Memory
-        true 
-    }
+    /// Kept for the boot audit hook; the structure checks itself in `check`.
+    pub fn verify_invariants(&self) -> bool { true }
 
     pub fn alloc(&self, order: usize) -> Option<u64> {
-        let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
-
-        // 1. Try local core shard (Wait-free local path)
-        // (alloc_log defined at module scope)
-        if let Some(phys) = self.pop_free_local(core_id, order) {
-            self.mark_allocated(phys, order);
-            let block_size = PAGE_SIZE << order;
-            if alloc_log() { crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=local",
-                phys, block_size, order); }
-            if diag_check_overlap(phys) {
-                crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=local order={}", phys, order);
-            }
-            return Some(phys);
+        if order > MAX_ORDER { return None; }
+        let phys = self.with(|l| {
+            let mut o = order;
+            while o <= MAX_ORDER && l.heads[o] == NIL { o += 1; }
+            if o > MAX_ORDER { return None; }
+            let phys = l.heads[o];
+            self.unlink(l, o, phys);
+            // Split down, keeping the lower half each time.
+            while o > order { o -= 1; self.push(l, o, phys + (PAGE_SIZE << o)); }
+            let m = self.meta(phys).expect("BUDDY_ALLOC_META");
+            m.order.store(order as u8, Ordering::Relaxed);
+            Some(phys)
+        })?;
+        if alloc_log() {
+            crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=buddy", phys, PAGE_SIZE << order, order);
         }
-
-        // 2. Try global backup list
-        if let Some(phys) = self.pop_free_global(order) {
-            self.mark_allocated(phys, order);
-            let block_size = PAGE_SIZE << order;
-            if alloc_log() { crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=global",
-                phys, block_size, order); }
-            if diag_check_overlap(phys) {
-                crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=global order={}", phys, order);
-            }
-            return Some(phys);
+        if diag_check_overlap(phys) {
+            crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=buddy order={}", phys, order);
         }
-
-        // 3. Recursive Split from higher orders
-        for o in (order + 1)..=MAX_ORDER {
-            if let Some(phys) = self.pop_free_global(o) {
-                for split_order in (order..o).rev() {
-                    let buddy = phys + (PAGE_SIZE << split_order);
-                    let buddy_meta = self.get_metadata(buddy);
-                    unsafe { (*buddy_meta).order.store(split_order as u8, Ordering::Release); }
-                    self.push_free_global(split_order, buddy);
-                }
-                self.mark_allocated(phys, order);
-                let block_size = PAGE_SIZE << order;
-                if alloc_log() { crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=split",
-                    phys, block_size, order); }
-                if diag_check_overlap(phys) {
-                    crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=split order={}", phys, order);
-                }
-                return Some(phys);
-            }
-        }
-        None
+        Some(phys)
     }
 
-    fn mark_allocated(&self, phys: u64, order: usize) {
-        let meta = self.get_metadata(phys);
-        if !meta.is_null() {
-            unsafe {
-                (*meta).state.store(1, Ordering::Release);
-                (*meta).order.store(order as u8, Ordering::Release);
-            }
-        }
-    }
-
-    /// Reserve a single physical frame: mark metadata as allocated so buddy
-    /// alloc/free operations skip it.  The frame is lazily removed from any
-    /// free list by pop_free_local/global when they encounter state!=0.
-    ///
-    /// Idempotent — safe to call on already-reserved frames.
-    /// No-op if metadata has not been initialised yet.
+    /// Takes one page out of whatever free block holds it, so it is never handed out.
+    /// Idempotent, and a no-op for a page that is not free.
     pub unsafe fn reserve_frame(&self, phys: u64) {
-        if self.metadata_base.load(Ordering::Acquire) == 0 {
+        let phys = phys & !(PAGE_SIZE - 1);
+        if self.metadata_base.load(Ordering::Acquire) == 0 { return; }
+        self.with(|l| self.carve(l, phys));
+    }
+
+    fn carve(&self, l: &mut Lists, phys: u64) {
+        for order in 0..=MAX_ORDER {
+            let head = phys & !((PAGE_SIZE << order) - 1);
+            if !self.free_head(head, order) { continue; }
+            self.unlink(l, order, head);
+            let (mut block, mut o) = (head, order);
+            while o > 0 {
+                o -= 1;
+                let upper = block + (PAGE_SIZE << o);
+                if phys >= upper { self.push(l, o, block); block = upper; } else { self.push(l, o, upper); }
+            }
             return;
-        }
-        let meta = self.get_metadata(phys);
-        if meta.is_null() {
-            return;
-        }
-        // Only mark if currently free, otherwise it's already protected.
-        if (*meta).state.load(Ordering::Acquire) == 0 {
-            (*meta).state.store(1, Ordering::Release);
-            (*meta).order.store(0, Ordering::Release);
         }
     }
 
     /// Reserve a range of page indices [start_page, end_page).
-    /// Suitable for boot-time operation before concurrent alloc/free.
     pub unsafe fn reserve_page_range(&self, start_page: u64, end_page: u64) {
-        if start_page >= end_page {
-            return;
-        }
+        if start_page >= end_page { return; }
         let total_pages = self.total_pages.load(Ordering::Acquire);
-        let end = if end_page > total_pages { total_pages } else { end_page };
+        let end = end_page.min(total_pages);
         crate::serial_println!(
             "[kernel.mem.global.reserve.boot_frames.begin] start={:#x} end={:#x} pages={}",
-            start_page * PAGE_SIZE,
-            end * PAGE_SIZE,
-            end.saturating_sub(start_page),
+            start_page * PAGE_SIZE, end * PAGE_SIZE, end.saturating_sub(start_page),
         );
-        let mut reserved: u64 = 0;
-        for idx in start_page..end {
-            let phys = idx * PAGE_SIZE;
-            let meta = self.get_metadata(phys);
-            if meta.is_null() {
-                continue;
-            }
-            if (*meta).state.load(Ordering::Acquire) == 0 {
-                (*meta).state.store(1, Ordering::Release);
-                (*meta).order.store(0, Ordering::Release);
-                reserved += 1;
-            }
-        }
-        crate::serial_println!(
-            "[kernel.mem.global.reserve.boot_frames.done] reserved={}",
-            reserved,
-        );
+        let before = self.free_pages.load(Ordering::Relaxed);
+        for idx in start_page..end { self.reserve_frame(idx * PAGE_SIZE); }
+        let reserved = before - self.free_pages.load(Ordering::Relaxed);
+        crate::serial_println!("[kernel.mem.global.reserve.boot_frames.done] reserved={}", reserved);
         crate::serial_println!("[kernel.mem.overlap.fix.active] ok=1");
     }
 
+    /// Returns a block from `alloc(order)`. The caller must no longer reach it.
     pub fn free(&self, phys: u64, order: usize) {
-        let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
-        
-        // --- Phase 14: Recursive Coalescing ---
-        let mut current_phys = phys;
-        let mut current_order = order;
-
-        while current_order < MAX_ORDER {
-            let buddy_phys = current_phys ^ (PAGE_SIZE << current_order);
-            let buddy_meta = self.get_metadata(buddy_phys);
-            if buddy_meta.is_null() { break; }
-            
-            let buddy_state = unsafe { (*buddy_meta).state.load(Ordering::Acquire) };
-            let buddy_order = unsafe { (*buddy_meta).order.load(Ordering::Acquire) };
-
-            if buddy_state == 0 && buddy_order == current_order as u8 {
-                // Atomic attempt to claim buddy for merge
-                if unsafe { (*buddy_meta).state.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Relaxed).is_ok() } {
-                    // Buddy claimed. In a production system, we'd remove from free list here.
-                    // For prototype, we proceed with merged block.
-                    current_phys &= !(PAGE_SIZE << current_order);
-                    current_order += 1;
-                    continue;
-                }
+        assert!(phys % (PAGE_SIZE << order) == 0 && phys != NIL && order <= MAX_ORDER, "BUDDY_FREE_SHAPE");
+        self.with(|l| {
+            let m = self.meta(phys).expect("BUDDY_FREE_NO_META");
+            assert!(m.state.load(Ordering::Relaxed) != FREE, "BUDDY_DOUBLE_FREE");
+            let (mut block, mut o) = (phys, order);
+            while o < MAX_ORDER {
+                let buddy = block ^ (PAGE_SIZE << o);
+                if !self.free_head(buddy, o) { break; }
+                self.unlink(l, o, buddy);
+                block = block.min(buddy);
+                o += 1;
             }
-            break;
-        }
-        
-        let meta = self.get_metadata(current_phys);
-        if !meta.is_null() {
-            unsafe {
-                (*meta).state.store(0, Ordering::Release);
-                (*meta).order.store(current_order as u8, Ordering::Release);
-            }
-        }
-        
-        // Push back to local shard to prevent global list contention
-        self.push_free_local(core_id, current_order, current_phys);
+            self.push(l, o, block);
+        });
     }
 
-    fn push_free_local(&self, core: usize, order: usize, phys: u64) {
-        let meta = self.get_metadata(phys);
-        if meta.is_null() { return; }
-        loop {
-            let head = self.shards[core].local_free_lists[order].load(Ordering::Acquire);
-            unsafe { (*meta).next.store(head, Ordering::Relaxed); }
-            if self.shards[core].local_free_lists[order].compare_exchange_weak(head, phys, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                break;
-            }
-        }
-    }
-
-    fn pop_free_local(&self, core: usize, order: usize) -> Option<u64> {
-        loop {
-            let head = self.shards[core].local_free_lists[order].load(Ordering::Acquire);
-            if head == 0 { return None; }
-            let meta = self.get_metadata(head);
-            if meta.is_null() { return None; }
-            let next = unsafe { (*meta).next.load(Ordering::Relaxed) };
-            // Lazy skip of reserved/allocated entries still in free list.
-            // reserve_frame sets state=1; entries with state!=0 belong to
-            // BootInfoFrameAllocator and must never be reissued.
-            if unsafe { (*meta).state.load(Ordering::Acquire) } != 0 {
-                // Try to unlink stale entry; retry on failure.
-                if self.shards[core].local_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                    continue;
-                }
-                continue;
-            }
-            if self.shards[core].local_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                return Some(head);
-            }
-        }
-    }
-
-    fn push_free_global(&self, order: usize, phys: u64) {
-        let meta = self.get_metadata(phys);
-        if meta.is_null() { return; }
-        loop {
-            let head = self.global_free_lists[order].load(Ordering::Acquire);
-            unsafe { (*meta).next.store(head, Ordering::Relaxed); }
-            if self.global_free_lists[order].compare_exchange_weak(head, phys, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                break;
-            }
-        }
-    }
-
-    fn pop_free_global(&self, order: usize) -> Option<u64> {
-        loop {
-            let head = self.global_free_lists[order].load(Ordering::Acquire);
-            if head == 0 { return None; }
-            let meta = self.get_metadata(head);
-            if meta.is_null() { return None; }
-            let next = unsafe { (*meta).next.load(Ordering::Relaxed) };
-            // Lazy skip of reserved/allocated entries still in free list.
-            if unsafe { (*meta).state.load(Ordering::Acquire) } != 0 {
-                if self.global_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                    continue;
-                }
-                continue;
-            }
-            if self.global_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                return Some(head);
-            }
-        }
-    }
+    pub fn free_frames(&self) -> u64 { self.free_pages.load(Ordering::Relaxed) }
 }
 
 pub static GLOBAL_ALLOCATOR: LockFreeBuddyAllocator = LockFreeBuddyAllocator::new();
@@ -363,28 +228,7 @@ pub fn alloc_frame() -> Option<u64> { GLOBAL_ALLOCATOR.alloc(0) }
 pub fn free_pages(phys: u64, order: usize) { GLOBAL_ALLOCATOR.free(phys, order) }
 
 /// Debug helper used during early boot bring-up.
-pub fn debug_global_free_frames() -> u64 {
-    let mut total_frames = 0u64;
-    let meta_base = GLOBAL_ALLOCATOR.metadata_base.load(Ordering::Acquire);
-    if meta_base == 0 {
-        return 0;
-    }
-
-    for order in 0..=MAX_ORDER {
-        let mut cur = GLOBAL_ALLOCATOR.global_free_lists[order].load(Ordering::Acquire);
-        let mut seen = 0usize;
-        while cur != 0 && seen < 1_000_000 {
-            total_frames = total_frames.saturating_add(1u64 << order);
-            let meta = GLOBAL_ALLOCATOR.get_metadata(cur);
-            if meta.is_null() {
-                break;
-            }
-            cur = unsafe { (*meta).next.load(Ordering::Acquire) };
-            seen += 1;
-        }
-    }
-    total_frames
-}
+pub fn debug_global_free_frames() -> u64 { GLOBAL_ALLOCATOR.free_frames() }
 
 pub fn init_heap(
     mapper: &mut impl x86_64::structures::paging::Mapper<x86_64::structures::paging::Size4KiB>,

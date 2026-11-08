@@ -3,7 +3,8 @@
 //! sixteen. They take turns: only the row about to run has its pages present, so a row
 //! can never reach another's memory. All of them run on one core, one at a time, which
 //! is what makes one set of present bits enough in a single address space.
-use crate::app_resource_state::{PrivatePage, MAX_PAGES};
+use crate::app_resource_state::PrivatePage;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::app_catalog::{App, INCARNATIONS};
 use spin::Mutex;
@@ -22,9 +23,9 @@ const fn shared_rows() -> usize {
 /// Regions the row shares with services are mapped on its key too, so they take turns
 /// with its own pages. They stay for every run; `pages` is one run's.
 const FIXED: usize = 1200;
-struct Row { target: u32, pages: [PrivatePage; MAX_PAGES], count: usize, fixed: [PrivatePage; FIXED], fixed_count: usize }
+struct Row { target: u32, pages: Vec<PrivatePage>, count: usize, fixed: [PrivatePage; FIXED], fixed_count: usize }
 struct Pool { rows: [Row; ROWS], tenant: u32 }
-static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: [PrivatePage::EMPTY; MAX_PAGES], count: 0, fixed: [PrivatePage::EMPTY; FIXED], fixed_count: 0 } }; ROWS], tenant: 0 });
+static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: Vec::new(), count: 0, fixed: [PrivatePage::EMPTY; FIXED], fixed_count: 0 } }; ROWS], tenant: 0 });
 pub static SWITCHES: AtomicU64 = AtomicU64::new(0);
 
 pub fn shared(target: u32) -> bool {
@@ -35,8 +36,9 @@ fn present(pages: &[PrivatePage], on: bool) {
     for page in pages {
         // A leaf cleared since it was adopted stays cleared.
         let _ = leaf(page.leaf).fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| (v != 0).then_some(if on { v | PRESENT } else { v & !PRESENT }));
-        x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(page.va));
     }
+    // Shared rows run on one core, so only its translations can be stale.
+    crate::smp::tlb::flush_pages_local(pages.len(), pages.iter().map(|p| p.va));
 }
 /// How a check sees a leaf: an evicted page still counts as the row's own.
 pub fn read(target: u32, at: u64) -> u64 {
@@ -83,7 +85,8 @@ pub fn adopt(target: u32, pages: &[PrivatePage]) {
     let pool = &mut *pool;
     step_out(pool, target);
     let row = row_mut(pool, target);
-    row.pages[..pages.len()].copy_from_slice(pages);
+    row.pages.clear();
+    row.pages.extend_from_slice(pages);
     row.count = pages.len();
 }
 /// A running row was given one more page: its leaf is set, present only while the row
@@ -97,8 +100,8 @@ pub fn grant(target: u32, page: PrivatePage) {
     let pool = &mut *pool;
     let present = pool.tenant == target;
     let row = row_mut(pool, target);
-    assert!(row.count < MAX_PAGES, "PROGRAM_POOL_PAGES");
-    row.pages[row.count] = page;
+    row.pages.truncate(row.count);
+    row.pages.push(page);
     row.count += 1;
     unsafe { core::ptr::write_volatile(page.leaf as *mut u64, if present { page.expected } else { page.expected & !PRESENT }) };
 }
@@ -107,7 +110,7 @@ pub fn release(target: u32) {
     if !shared(target) { return; }
     let mut pool = POOL.lock();
     step_out(&mut pool, target);
-    if let Some(row) = pool.rows.iter_mut().find(|r| r.target == target) { row.count = 0; }
+    if let Some(row) = pool.rows.iter_mut().find(|r| r.target == target) { row.count = 0; row.pages = Vec::new(); }
 }
 /// Called before any task runs. Only the shared row about to run has pages present.
 pub fn before_dispatch(pd: u64) {
