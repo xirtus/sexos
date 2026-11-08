@@ -52,6 +52,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/text_region.rs
   crates/sex-pdx/src/organs.rs
   crates/sex-pdx/src/program_store.rs
+  crates/sex-pdx/src/program_memory.rs
   crates/sex-pdx/src/fs.rs
   crates/sex-pdx/src/web.rs
   crates/sex-pdx/src/text_selection.rs
