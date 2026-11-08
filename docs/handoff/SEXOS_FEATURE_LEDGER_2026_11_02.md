@@ -2465,7 +2465,7 @@ row no longer waits for the row before it to end.
 - **Gates.** New `program_view` (a 300x200 PNG checked pixel for pixel on screen; a
   900x700 one refused), program Jot and disk at 1 core; Display host gates; Python
   tests and all non-QEMU gates except the older ones.
-## PNG and JPEG decoding crate (2026-11-08)
+## View opens JPEG; PNG and JPEG through zune (2026-11-08)
 
 - **What exists now.** `crates/sex-image`: `sex_image::decode(bytes, &Limits)` returns
   width, height and `Vec<u32>` pixels in the usual unpremultiplied `0xAARRGGBB`. PNG (every
@@ -2481,8 +2481,12 @@ row no longer waits for the row before it to end.
   for the allocation-free 48x48 path.
 - **Found upstream.** zune-jpeg 0.5's CMYK to RGBA conversion steps 3 bytes per 4-byte
   pixel; sex-image asks for RGB and adds alpha itself.
-- **Limits.** Not yet called by any program: wiring needs the program heap and View's pixel
-  surface. No GIF/WebP. Big JPEGs decode at full size (no DCT downscaling).
-- **Gates.** 13 host tests against Pillow/ImageMagick fixtures, including 3,000 bit-flipped,
-  truncated and marker-damaged files that must error or decode, never panic. Builds for
-  `x86_64-sex.json` with `build-std`.
+- **View.** `run view @photo.jpg` works. A picture that fits is decoded straight into the
+  program's pixel surface (`decode_into`); a larger one, up to 3200x2400 and as far as the
+  8 MiB program heap allows, is decoded on the heap and shrunk to fit 800x600. Needs the
+  program heap (PR #17).
+- **Limits.** No GIF/WebP. A 12 MP phone photo does not fit the heap yet (no DCT downscaling).
+- **Gates.** 14 host tests against Pillow/ImageMagick fixtures, including 3,000 bit-flipped,
+  truncated and marker-damaged files that must error or decode, never panic.
+  `program_view_gate` (PNG exact, JPEG within 2 levels, 900x700 shown at 771x600, a text
+  file refused) passes at 1 and 4 cores with the heap branch merged.
