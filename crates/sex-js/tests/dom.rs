@@ -137,7 +137,7 @@ fn location_and_navigation() {
 
 #[test]
 fn runaway_script_is_stopped() {
-    let mut s = Script::new(Document::new(sex_html::parse::parse(""), "", (1, 1), clock), Limits { budget_ms: 200, ..Limits::default() }).unwrap();
+    let mut s = Script::new(Document::new(sex_html::parse::parse(""), "", (1, 1), clock), Limits { budget_ms: 200, load_budget_ms: 200, ..Limits::default() }).unwrap();
     assert_eq!(s.eval("for(;;){}", "loop.js"), Err(sex_js::Error::Thrown));
     s.eval("console.log('alive')", "t.js").unwrap();
     assert_eq!(logs(&mut s).last().unwrap(), "0:alive");

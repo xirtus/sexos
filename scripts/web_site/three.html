@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><title>three.js test</title>
+<style>body { margin: 12px; } h1 { font-size: 18px; margin: 0 0 6px; } canvas { border: 1px solid #c4c7c5; }</style></head>
+<body>
+<h1>three.js</h1>
+<canvas id="c" width="380" height="200"></canvas>
+<p><button id="spin">Turn</button> <span id="state">frames: 0</span></p>
+<script>var exports = {}; var module = { exports: exports };</script>
+<script src="three/three.cjs"></script>
+<script>
+const THREE = exports;
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf4f4f8);
+const camera = new THREE.PerspectiveCamera(50, canvas.width / canvas.height, 0.1, 100);
+camera.position.set(0, 0.6, 4.2);
+camera.lookAt(0, 0, 0);
+const cube = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), new THREE.MeshStandardMaterial({ color: 0x3377ee, roughness: 0.4 }));
+cube.position.x = -1.1;
+const ball = new THREE.Mesh(new THREE.SphereGeometry(0.75, 24, 12), new THREE.MeshPhongMaterial({ color: 0xea4335, shininess: 60 }));
+ball.position.x = 1.1;
+scene.add(cube, ball);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const light = new THREE.DirectionalLight(0xffffff, 2.2);
+light.position.set(2, 3, 4);
+scene.add(light);
+let frames = 0;
+function step() {
+  cube.rotation.x += 0.12; cube.rotation.y += 0.17; ball.rotation.y += 0.2;
+  renderer.render(scene, camera);
+  frames++;
+  document.getElementById('state').textContent = 'frames: ' + frames;
+  if (frames % 6) requestAnimationFrame(step); else console.log('three frames', frames);
+}
+document.getElementById('spin').addEventListener('click', () => requestAnimationFrame(step));
+renderer.render(scene, camera);
+requestAnimationFrame(step);
+</script>
+</body></html>

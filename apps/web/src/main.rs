@@ -39,7 +39,7 @@ fn built_in(url: &str) -> Option<&'static str> { BUILT_IN.iter().find(|(a, _)| *
 fn first_page() -> &'static str {
     match env!("CARGO_BIN_NAME") { "solitaire" => "about:solitaire", "chess" => "about:chess", _ => "about:welcome" }
 }
-const SOURCE_MAX: usize = 1536 * 1024;
+const SOURCE_MAX: usize = 4 << 20;
 const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
 const MAX_REDIRECTS: usize = 6;

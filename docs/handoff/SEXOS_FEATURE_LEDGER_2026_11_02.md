@@ -2816,6 +2816,26 @@ row no longer waits for the row before it to end.
   a moment in software float until programs get SSE. three.js in `run web` still needs a
   longer script time budget (loading its 1.3 MB takes about a second on the host).
 
+## three.js runs in Web (2026-11-08)
+
+- **What runs now.** three.js r170 (MIT), the unmodified `three.cjs` from npm, loads in
+  `run web` and renders with `WebGLRenderer`: `MeshStandardMaterial` (PBR) and
+  `MeshPhongMaterial` meshes under ambient and directional light, animated with
+  `requestAnimationFrame`.
+- **Changes.** Page scripts (`Script::eval`) get their own time budget,
+  `Limits::load_budget_ms` = 120 s, since fetching and loading three.js takes about 12 s
+  and 30 s in QEMU; event handlers and timers keep `budget_ms`, now 10 s (browsers ask
+  about a script after about that long). The engine may grow to 64 MiB with a 48 MiB
+  QuickJS heap. Web accepts pages and scripts up to 4 MiB (was 1.5 MiB). No ABI change.
+- **Evidence.** `scripts/program_web_three_gate.py` serves `scripts/web_site/three.html`
+  with `scripts/web_site/three/three.cjs` (and its MIT licence): a PBR cube and a Phong
+  sphere, six frames, then six more after a button click. Both states match the host
+  render exactly, 0 of 9020 sampled pixels differ, at 1 and 4 cores. The other web gates
+  still pass.
+- **Limits.** Slow: loading three.js takes about 30 s in QEMU (software float, wasmi
+  interpreting QuickJS), and a frame of shading costs thousands of instructions a pixel in
+  the shader interpreter. Next: compile shaders to a flat bytecode, then WebGPU.
+
 ## Master CI green again (2026-11-08)
 
 - GitHub CI on master passes every step for the first time in weeks (run 42502328687,
