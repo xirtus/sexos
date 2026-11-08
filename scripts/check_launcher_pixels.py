@@ -1,6 +1,6 @@
 """Actual launcher text pixels; log intents alone cannot establish visibility."""
 import re
-from check_desktop_pixels import glyph
+from check_desktop_pixels import cell_errors
 from check_disk_persistence import ppm_rgb
 
 def layout(text):
@@ -31,15 +31,7 @@ def verify(text,ppm,font,resolution=None):
             if y0+7*scale>y+h:raise ValueError('launcher line outside surface')
             mismatch=0
             for col in range(columns):
-                bitmap=glyph(font,line[col]) if col<len(line) else (0,)*7
-                for gy,bits in enumerate(bitmap):
-                    for gx in range(6):
-                        on=gx<5 and bool(bits&(1<<(4-gx)))
-                        for dy in range(scale):
-                            for dx in range(scale):
-                                px=x+8+(col*6+gx)*scale+dx;py=y0+gy*scale+dy
-                                actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==b'\xf0\xf8\xff'
-                                mismatch+=on!=actual
+                mismatch+=cell_errors(pixels,width,x+8+col*6*scale,y0,line[col] if col<len(line) else ' ',scale,b'\xf0\xf8\xff',font)[0]
             if mismatch:errors.append(f'launcher line={row} glyph_mismatches={mismatch}')
         return errors
     except (ValueError,KeyError,OverflowError) as error:return [str(error)]

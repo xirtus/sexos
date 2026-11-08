@@ -3,7 +3,7 @@ from pathlib import Path
 import sys,unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import check_launcher_pixels as c
-from check_desktop_pixels import font_from_source,glyph
+from check_desktop_pixels import font_from_source,glyph,draw_cell
 FONT=font_from_source((Path(__file__).resolve().parents[2]/'servers/sexdisplay/src/main.rs').read_text())
 LOG='''[launcher.text.view] x=400 y=200 w=480 h=280 scale=2 selected=1 first=0 rows=2
 [launcher.text.row] index=0 row=0 name=Focus Spindle status=CLOSED / REBOOT TO REOPEN
@@ -13,13 +13,7 @@ def image(log=LOG):
     v,lines=c.layout(log);data=bytearray(1280*800*3)
     for row,line in lines:
         for col,char in enumerate(line[:37]):
-            for gy,bits in enumerate(glyph(FONT,char)):
-                for gx in range(5):
-                    if bits&(1<<(4-gx)):
-                        for dy in range(2):
-                            for dx in range(2):
-                                x=408+col*12+gx*2+dx;y=236+row*18+gy*2+dy
-                                data[(y*1280+x)*3:(y*1280+x)*3+3]=b'\xf0\xf8\xff'
+            draw_cell(data,1280,408+col*12,236+row*18,char,2,b'\xf0\xf8\xff',FONT)
     return b'P6\n1280 800\n255\n'+data
 class LauncherPixels(unittest.TestCase):
     def test_actual_labels_and_statuses(self):self.assertEqual(c.verify(LOG,image(),FONT),[])

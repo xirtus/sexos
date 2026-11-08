@@ -3,7 +3,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from check_spindle_viewport_pixels import verify,layout,_scale_threshold,SCALE_SOURCE
 from history_boot_fixture import boot
-from check_desktop_pixels import font_from_source,glyph
+from check_desktop_pixels import font_from_source,glyph,draw_cell
 FONT=font_from_source((Path(__file__).resolve().parents[2]/'servers/sexdisplay/src/main.rs').read_text())
 ROOT=Path(__file__).resolve().parents[2]
 def fixture_layout(w,h,threshold=128):
@@ -29,12 +29,7 @@ def fixture(w=1280,h=134,target=12,task=None,caption=None,threshold=128,glyph_th
         scale=2 if pw>=(threshold if glyph_threshold is None else glyph_threshold)else 1
         for row,line in enumerate(lines):
             for col,char in enumerate(line):
-                for gy,bits in enumerate(glyph(FONT,chr(char))):
-                    for gx in range(5):
-                        if bits&(1<<(4-gx)):
-                            for dy in range(scale):
-                                for dx in range(scale):
-                                    xx=x+px+8+col*6*scale+gx*scale+dx;yy=y+py+12+row*9*scale+gy*scale+dy;p=(yy*width+xx)*3;data[p:p+3]=b'\xe8\xff\xff'
+                draw_cell(data,width,x+px+8+col*6*scale,y+py+12+row*9*scale,chr(char),scale,b'\xe8\xff\xff',FONT)
     return text,b'P6\n1280 800\n255\n'+data
 class Check(unittest.TestCase):
     def source_root(self,scale_source):
