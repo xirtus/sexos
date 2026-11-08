@@ -250,6 +250,7 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
 });
 tex.brick = BRICK(); tex.floor = FLOOR(); tex.ceil = CEIL(); tex.gold = GOLD();
-newMaze();
+// Built and drawn on the first timer tick, so each part gets the page's full script time.
+setTimeout(newMaze, 0);
 </script>
 </body>
