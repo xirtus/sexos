@@ -225,20 +225,39 @@ impl Surface {
     }
 
     fn text(&mut self, fonts: &mut Fonts, text: &str, x: f32, y: f32) {
-        let s = self.scale();
+        let t = self.state.ctm;
+        // A plain translate and uniform scale draws glyphs straight onto the surface; any
+        // other transform draws them into a scratch surface mapped through the full matrix.
+        let plain = t.kx == 0.0 && t.ky == 0.0 && t.sx > 0.0 && t.sx == t.sy;
+        let s = if plain { t.sx } else { libm::hypotf(t.sx, t.ky).max(libm::hypotf(t.kx, t.sy)) };
         let mut font = self.state.font;
         font.size = ((font.size as f32 * s) + 0.5) as i32;
-        if font.size < 1 { return; }
+        if font.size < 1 || font.size > 1024 { return; }
         let width = fonts.text_width(text, font);
         let (asc, desc) = fonts.metrics(font);
-        let (px, py) = self.map(x, y);
         let dx = match self.state.align { 1 => -width / 2, 2 => -width, _ => 0 };
         let dy = match self.state.baseline { 1 => asc, 2 => (asc - desc) / 2, 3 => -desc, _ => 0 };
         let color = match &self.state.fill { Style::Color(c) => *c, Style::Linear { stops, .. } | Style::Radial { stops, .. } => stops.first().map_or(0xFF00_0000, |s| s.1) };
         let a = ((color >> 24) as f32 * self.state.alpha) as u32;
-        let (w, h) = (self.width as i32, self.height as i32);
-        let mut target = Target { pixels: &mut self.pixels, width: w, height: h, scroll: 0, top: 0, premul: true };
-        text_run(&mut target, fonts, libm::roundf(px) as i32 + dx, libm::roundf(py) as i32 + dy, font, (color & 0x00FF_FFFF) | a.min(255) << 24, text);
+        let color = (color & 0x00FF_FFFF) | a.min(255) << 24;
+        if plain {
+            let (px, py) = self.map(x, y);
+            let (w, h) = (self.width as i32, self.height as i32);
+            let mut target = Target { pixels: &mut self.pixels, width: w, height: h, scroll: 0, top: 0, premul: true };
+            text_run(&mut target, fonts, libm::roundf(px) as i32 + dx, libm::roundf(py) as i32 + dy, font, color, text);
+            return;
+        }
+        if s <= 0.0 { return; }
+        let pad = 2 + font.size / 4;
+        let (tw, th) = ((width + 2 * pad).clamp(1, MAX_SIDE as i32) as u32, (asc + desc + 2 * pad).clamp(1, MAX_SIDE as i32) as u32);
+        let mut scratch = alloc::vec![0u32; (tw * th) as usize];
+        let mut target = Target { pixels: &mut scratch, width: tw as i32, height: th as i32, scroll: 0, top: 0, premul: true };
+        text_run(&mut target, fonts, pad, pad + asc, font, color, text);
+        // Scratch pixel (u, v) sits at user point (x, y) + ((u - pad + dx) / s, (v - pad - asc + dy) / s).
+        let map = t.pre_translate(x, y).pre_scale(1.0 / s, 1.0 / s).pre_translate((dx - pad) as f32, (dy - pad - asc) as f32);
+        let Some(src) = sk::PixmapRef::from_bytes(as_bytes(&mut scratch), tw, th) else { return };
+        let paint = sk::PixmapPaint { opacity: 1.0, blend_mode: self.state.blend, quality: sk::FilterQuality::Bilinear };
+        if let Some(mut pm) = self.pixmap() { pm.draw_pixmap(0, 0, src, &paint, map, None); }
     }
 
     /// Runs one command.
@@ -249,6 +268,11 @@ impl Surface {
             "sv" => { if self.stack.len() < 512 { self.stack.push(self.state.clone()); } }
             "rs" => { if let Some(s) = self.stack.pop() { self.state = s; } }
             "re0" => { self.state = State::new(); self.stack.clear(); self.path = PathBuilder::new(); self.at = None; self.pixels.fill(0); }
+            // Setting the canvas's width or height (even to the same value) clears it and its state.
+            "sz" => {
+                let (w, h) = ((f(a, 0)? as u32).clamp(1, MAX_SIDE), (f(a, 1)? as u32).clamp(1, MAX_SIDE));
+                if w * h <= MAX_PIXELS { *self = Surface::new(w, h); }
+            }
             "st" => self.state.ctm = Transform::from_row(f(a, 0)?, f(a, 1)?, f(a, 2)?, f(a, 3)?, f(a, 4)?, f(a, 5)?),
             "tf" => self.state.ctm = self.state.ctm.pre_concat(Transform::from_row(f(a, 0)?, f(a, 1)?, f(a, 2)?, f(a, 3)?, f(a, 4)?, f(a, 5)?)),
             "fs" => self.state.fill = Self::style(a)?,

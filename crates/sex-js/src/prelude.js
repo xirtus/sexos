@@ -384,9 +384,11 @@
   }
   class HTMLCanvasElement extends HTMLElement {
     get width() { return +(this.getAttribute('width') || 300); }
-    set width(v) { this.setAttribute('width', v); }
+    set width(v) { this.setAttribute('width', Math.max(0, Math.floor(+v) || 0)); this._resized(); }
     get height() { return +(this.getAttribute('height') || 150); }
-    set height(v) { this.setAttribute('height', v); }
+    set height(v) { this.setAttribute('height', Math.max(0, Math.floor(+v) || 0)); this._resized(); }
+    // Setting either size, even to the same value, clears the bitmap and the context's state.
+    _resized() { if (this._ctx) this._ctx._resize(this.width, this.height); }
     getContext(kind) {
       if (String(kind).toLowerCase() !== '2d') return null;
       return this._ctx || (this._ctx = new CanvasRenderingContext2D(this));
@@ -406,8 +408,8 @@
   }
   const num = v => { v = +v; return Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : null; };
   class CanvasGradient {
-    constructor(kind, args) { this._kind = kind; this._args = args; this._stops = []; }
-    addColorStop(offset, color) { this._stops.push([+offset, String(color)]); }
+    constructor(kind, args) { this._kind = kind; this._args = args; this._stops = []; this._v = 0; }
+    addColorStop(offset, color) { this._stops.push([+offset, String(color)]); this._v++; }
     _encode() { return [this._kind, ...this._args.map(num), this._stops.length, ...this._stops.flat().map(String)]; }
   }
   class CanvasPattern {}
@@ -430,10 +432,19 @@
     }
     _flush() { if (this._q.length) { H(OP.CANVAS, this.canvas._id, this._q.join('\x1e')); this._q = []; } }
     _style(which, v) {
-      if (v instanceof CanvasGradient) { this._s[which] = v; this._c(which === 'fillStyle' ? 'fs' : 'ss', ...v._encode()); return; }
+      if (v instanceof CanvasGradient) { this._s[which] = v; this._s[which + 'V'] = v._v; this._c(which === 'fillStyle' ? 'fs' : 'ss', ...v._encode()); return; }
       if (typeof v !== 'string') return;
       this._s[which] = v;
       this._c(which === 'fillStyle' ? 'fs' : 'ss', 'c', v);
+    }
+    // A gradient can gain stops after it is assigned: send it again before drawing with it.
+    _sync(which) {
+      const g = this._s[which];
+      if (g instanceof CanvasGradient && this._s[which + 'V'] !== g._v) this._style(which, g);
+    }
+    _resize(w, h) {
+      this._s = new CanvasRenderingContext2D(this.canvas)._s; this._stack = []; this._dash = [];
+      this._c('sz', w, h);
     }
     get fillStyle() { return this._s.fillStyle; }
     set fillStyle(v) { this._style('fillStyle', v); }
@@ -479,13 +490,13 @@
     arcTo(x1, y1, x2, y2, r) { this._c('at', num(x1), num(y1), num(x2), num(y2), num(r)); }
     rect(x, y, w, h) { this._c('rc', num(x), num(y), num(w), num(h)); }
     roundRect(x, y, w, h, r) { const v = Array.isArray(r) ? r[0] : r; this._c('rr', num(x), num(y), num(w), num(h), num(v || 0)); }
-    fill(a, b) { const rule = typeof a === 'string' ? a : b; this._c('fi', rule === 'evenodd' ? 'evenodd' : 'nonzero'); }
-    stroke() { this._c('sk'); }
+    fill(a, b) { this._sync('fillStyle'); const rule = typeof a === 'string' ? a : b; this._c('fi', rule === 'evenodd' ? 'evenodd' : 'nonzero'); }
+    stroke() { this._sync('strokeStyle'); this._c('sk'); }
     clip() { /* not yet: drawing is not clipped */ }
-    fillRect(x, y, w, h) { this._c('fr', num(x), num(y), num(w), num(h)); }
-    strokeRect(x, y, w, h) { this._c('sr', num(x), num(y), num(w), num(h)); }
+    fillRect(x, y, w, h) { this._sync('fillStyle'); this._c('fr', num(x), num(y), num(w), num(h)); }
+    strokeRect(x, y, w, h) { this._sync('strokeStyle'); this._c('sr', num(x), num(y), num(w), num(h)); }
     clearRect(x, y, w, h) { this._c('cr', num(x), num(y), num(w), num(h)); }
-    fillText(t, x, y) { this._c('ft', String(t).replace(/[\x1e\x1f]/g, ' '), num(x), num(y)); }
+    fillText(t, x, y) { this._sync('fillStyle'); this._c('ft', String(t).replace(/[\x1e\x1f]/g, ' '), num(x), num(y)); }
     strokeText(t, x, y) { this.fillText(t, x, y); }
     measureText(t) {
       const width = +H(OP.MEASURE, this._s.font, String(t));
