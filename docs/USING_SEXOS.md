@@ -1,0 +1,71 @@
+# Using SexOS
+
+What you can do on SexOS today, and how. This is an alpha: rough edges are expected, and
+the [feature ledger](handoff/SEXOS_FEATURE_LEDGER_2026_11_02.md) says what each part can't do yet.
+
+## Starting it
+
+- **From the ISO.** Boot `sexos-v1.0.0.iso` from a USB stick or in QEMU. The desktop opens
+  with Quil (editor), Linen, the Browser and Spindle (terminal).
+- **Installing to the disk.** In Spindle, type `install`. It writes the system you booted to
+  the disk's boot slot and makes the disk bootable under UEFI. Take the stick out and the
+  machine starts from the disk, with your files. `install FILE` writes a boot image you
+  fetched instead. Install replaces the disk's partition table.
+
+## The desktop
+
+| Key | Does |
+|---|---|
+| backtick | Command palette: open apps and programs |
+| Alt+Tab | Next window |
+| F11 | Close the focused window. A program that doesn't close within five seconds is ended |
+| Scroll Lock | Show or hide Spindle |
+
+Windows tile themselves. Up to eight programs can be open at once, beside the built-in apps.
+
+## Spindle, the terminal
+
+Type `help` for the full list.
+
+| Command | Does |
+|---|---|
+| `ls`, `cd`, `pwd`, `mkdir`, `rm`, `mv` | Folders and files |
+| `cat FILE` | Show a file |
+| `write FILE TEXT`, `append FILE TEXT`, `touch FILE` | Make or change a file |
+| `df` | Disk space |
+| `fetch URL FILE` | Download over HTTP or HTTPS into a file |
+| `edit FILE` | Open a file in Jot |
+| `run NAME [ARGS]` | Start a program from `/bin`, or `run PATH` for any program file |
+| `run +net NAME ...` | The same, and let that run use the network |
+| `run NAME @FILE` | Give the program that one file of yours |
+| `spawn NAME COUNT`, `records`, `stopall [force]` | Background programs, thousands at once |
+| `install [FILE]` | Make this disk start SexOS |
+
+## Programs
+
+A program is a file. Install one by downloading it into `/bin`, then run it by name:
+
+```
+fetch https://example.org/jot /bin/jot
+run jot
+```
+
+A program can only reach its own folder, `/data/NAME`, plus any file you hand it with
+`@FILE`. It reaches the network only when you start it with `+net`. These are the person's
+choices at launch, not settings inside the program.
+
+- **Jot** is a notepad: arrows move, Ctrl+S saves, `edit FILE` opens a file in it.
+- **Peek** shows a web page's text: `run +net peek https://example.com/`.
+
+Writing your own: see `crates/sex-app` (a window, keys, files, the network) and `apps/jot`.
+
+## The Browser
+
+Ctrl+L opens the address bar. Type an address and Enter; a bare name means HTTPS. Type a
+link's number and Enter to follow it, Backspace goes back, Esc closes. Pages show as text:
+there's no layout, CSS, images, forms or JavaScript yet.
+
+## When something breaks
+
+If the network service or Files crashes, the kernel starts it again: a page or file request
+in flight is lost, the rest carries on. A program that hangs is ended when you close it.
