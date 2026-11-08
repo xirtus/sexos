@@ -24,18 +24,33 @@ pub unsafe fn copy_forward(dest: *mut u8, src: *const u8, n: usize) {
     { let mut i = 0; while i < n { dest.add(i).write_volatile(src.add(i).read_volatile()); i += 1; } }
 }
 
-/// Copies `n` bytes backward, for overlapping moves with `dest > src`.
+/// Copies `n` bytes backward, for overlapping moves with `dest > src`. Eight bytes
+/// per step from the end, then the head a byte at a time. Plain moves, never `std`:
+/// an interrupt taken with the direction flag set would run handler code (and its
+/// string copies) backward.
 #[inline(always)]
 pub unsafe fn copy_backward(dest: *mut u8, src: *const u8, n: usize) {
-    if n == 0 { return; }
     #[cfg(target_arch = "x86_64")]
     core::arch::asm!(
-        "std",
-        "rep movsb",
-        "cld",
+        "2:",
+        "cmp rcx, 8",
+        "jb 3f",
+        "sub rcx, 8",
+        "mov {t}, qword ptr [rsi + rcx]",
+        "mov qword ptr [rdi + rcx], {t}",
+        "jmp 2b",
+        "3:",
+        "test rcx, rcx",
+        "jz 4f",
+        "dec rcx",
+        "mov {t:l}, byte ptr [rsi + rcx]",
+        "mov byte ptr [rdi + rcx], {t:l}",
+        "jmp 3b",
+        "4:",
+        t = out(reg) _,
         inout("rcx") n => _,
-        inout("rdi") dest.add(n - 1) => _,
-        inout("rsi") src.add(n - 1) => _,
+        in("rdi") dest,
+        in("rsi") src,
         options(nostack),
     );
     #[cfg(not(target_arch = "x86_64"))]
