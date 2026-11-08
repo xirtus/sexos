@@ -11,10 +11,16 @@ fn clock() -> u64 {
 }
 
 /// Runs timers and animation frames until the page has none left.
-fn settle(script: &mut sex_js::Script<sex_js::Document>) {
+fn settle(script: &mut sex_js::Script<sex_js::Document>, canvases: &mut sex_web::canvas::Canvases, fonts: &mut Fonts) {
     for _ in 0..1000 {
+        let queue = std::mem::take(&mut script.page_mut().canvas_queue);
+        canvases.run_queue(fonts, &script.page().dom, queue);
         let next = script.dispatch("tick").unwrap();
-        if next < 0 { return; }
+        if next < 0 {
+            let queue = std::mem::take(&mut script.page_mut().canvas_queue);
+            canvases.run_queue(fonts, &script.page().dom, queue);
+            return;
+        }
         std::thread::sleep(std::time::Duration::from_millis(next as u64));
     }
 }
@@ -39,7 +45,9 @@ fn main() {
     let bar_h = if args.len() > 6 { sex_web::BAR } else { 0 };
     let scripts: Vec<String> = dom.descendants(0).into_iter().filter(|&n| dom.tag(n) == Some("script"))
         .map(|n| match dom.attr(n, "src") { Some(s) => std::fs::read_to_string(base.join(s)).unwrap_or_default(), None => dom.text_content(n) }).collect();
-    let doc = sex_js::Document::new(dom, "", (w, h - bar_h), clock);
+    let mut doc = sex_js::Document::new(dom, "", (w, h - bar_h), clock);
+    doc.measure = sex_web::canvas::measure_css;
+    let mut canvases = sex_web::canvas::Canvases::new();
     let lay = |doc: &sex_js::Document, fonts: &Fonts| {
         let styles = sex_html::styles(&doc.dom, &sheet_refs, w, h - bar_h);
         sex_html::layout::layout(&doc.dom, &styles, w, fonts)
@@ -49,7 +57,7 @@ fn main() {
         let mut script = sex_js::Script::new(doc, sex_js::Limits::default()).unwrap();
         for (i, s) in scripts.iter().enumerate() { let _ = script.eval(s, &format!("script{i}")); }
         script.dispatch("ready").unwrap();
-        settle(&mut script);
+        settle(&mut script, &mut canvases, &mut fonts);
         page = lay(script.page(), &fonts);
         for action in args.get(7).map(|a| a.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default() {
             if let Some(i) = action.strip_prefix("click") {
@@ -59,7 +67,7 @@ fn main() {
                 script.dispatch(&format!("key\tkeydown\t{k}\t\t0")).unwrap();
                 script.dispatch(&format!("key\tkeyup\t{k}\t\t0")).unwrap();
             }
-            settle(&mut script);
+            settle(&mut script, &mut canvases, &mut fonts);
             page = lay(script.page(), &fonts);
         }
         for (l, t) in script.page_mut().log.drain(..) { eprintln!("console {l}: {t}"); }
@@ -68,7 +76,7 @@ fn main() {
     let focus = args.get(5).and_then(|v| v.parse::<i64>().ok()).filter(|f| *f >= 0).map(|f| f as usize);
     match args.get(6) {
         Some(bar) => sex_web::frame(&page, &mut fonts, &mut buf, w, h, scroll, focus, bar, false),
-        None => paint(&page, &mut fonts, &mut Target { pixels: &mut buf, width: w, height: h, scroll, top: 0 }, focus),
+        None => paint(&page, &mut fonts, &mut Target { pixels: &mut buf, width: w, height: h, scroll, top: 0, premul: false }, focus),
     }
     let mut bytes = format!("P6 {w} {h} 255\n").into_bytes();
     for p in &buf { bytes.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }

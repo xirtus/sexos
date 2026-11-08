@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25 };
   const nodes = new Map();
 
   function fmt(v) {
@@ -387,7 +387,122 @@
     set width(v) { this.setAttribute('width', v); }
     get height() { return +(this.getAttribute('height') || 150); }
     set height(v) { this.setAttribute('height', v); }
-    getContext() { return null; }
+    getContext(kind) {
+      if (String(kind).toLowerCase() !== '2d') return null;
+      return this._ctx || (this._ctx = new CanvasRenderingContext2D(this));
+    }
+    toDataURL() { return 'data:,'; }
+  }
+
+  // ---- Canvas 2D ----
+  // Calls are queued as commands (fields split by \x1f, commands by \x1e) and sent in
+  // batches; the browser draws them with tiny-skia and Geist. State lives on both sides:
+  // here for reading back, there for drawing.
+  const FS = '\x1f';
+  const dirtyContexts = new Set();
+  function flushCanvases() {
+    for (const c of dirtyContexts) c._flush();
+    dirtyContexts.clear();
+  }
+  const num = v => { v = +v; return Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : null; };
+  class CanvasGradient {
+    constructor(kind, args) { this._kind = kind; this._args = args; this._stops = []; }
+    addColorStop(offset, color) { this._stops.push([+offset, String(color)]); }
+    _encode() { return [this._kind, ...this._args.map(num), this._stops.length, ...this._stops.flat().map(String)]; }
+  }
+  class CanvasPattern {}
+  class CanvasRenderingContext2D {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this._q = [];
+      this._s = { fillStyle: '#000000', strokeStyle: '#000000', lineWidth: 1, globalAlpha: 1, lineCap: 'butt', lineJoin: 'miter',
+        font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic', globalCompositeOperation: 'source-over',
+        miterLimit: 10, shadowBlur: 0, shadowColor: 'rgba(0, 0, 0, 0)', shadowOffsetX: 0, shadowOffsetY: 0, imageSmoothingEnabled: true,
+        lineDashOffset: 0 };
+      this._stack = [];
+      this._dash = [];
+    }
+    _c(...a) {
+      for (let i = 1; i < a.length; i++) if (a[i] === null) return; // NaN or Infinity: the call is ignored
+      this._q.push(a.join(FS));
+      dirtyContexts.add(this);
+      if (this._q.length >= 2048) this._flush();
+    }
+    _flush() { if (this._q.length) { H(OP.CANVAS, this.canvas._id, this._q.join('\x1e')); this._q = []; } }
+    _style(which, v) {
+      if (v instanceof CanvasGradient) { this._s[which] = v; this._c(which === 'fillStyle' ? 'fs' : 'ss', ...v._encode()); return; }
+      if (typeof v !== 'string') return;
+      this._s[which] = v;
+      this._c(which === 'fillStyle' ? 'fs' : 'ss', 'c', v);
+    }
+    get fillStyle() { return this._s.fillStyle; }
+    set fillStyle(v) { this._style('fillStyle', v); }
+    get strokeStyle() { return this._s.strokeStyle; }
+    set strokeStyle(v) { this._style('strokeStyle', v); }
+    get lineWidth() { return this._s.lineWidth; }
+    set lineWidth(v) { v = +v; if (v > 0 && Number.isFinite(v)) { this._s.lineWidth = v; this._c('lw', num(v)); } }
+    get globalAlpha() { return this._s.globalAlpha; }
+    set globalAlpha(v) { v = +v; if (v >= 0 && v <= 1) { this._s.globalAlpha = v; this._c('ga', num(v)); } }
+    get lineCap() { return this._s.lineCap; }
+    set lineCap(v) { if (['butt', 'round', 'square'].includes(v)) { this._s.lineCap = v; this._c('lc', v); } }
+    get lineJoin() { return this._s.lineJoin; }
+    set lineJoin(v) { if (['miter', 'round', 'bevel'].includes(v)) { this._s.lineJoin = v; this._c('lj', v); } }
+    get font() { return this._s.font; }
+    set font(v) { this._s.font = String(v); this._c('fo', this._s.font); }
+    get textAlign() { return this._s.textAlign; }
+    set textAlign(v) { if (['start', 'end', 'left', 'right', 'center'].includes(v)) { this._s.textAlign = v; this._c('ta', v); } }
+    get textBaseline() { return this._s.textBaseline; }
+    set textBaseline(v) { if (['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'].includes(v)) { this._s.textBaseline = v; this._c('tb', v); } }
+    get globalCompositeOperation() { return this._s.globalCompositeOperation; }
+    set globalCompositeOperation(v) { this._s.globalCompositeOperation = String(v); this._c('co', this._s.globalCompositeOperation); }
+    save() { this._stack.push(Object.assign({}, this._s)); this._c('sv'); }
+    restore() { const s = this._stack.pop(); if (s) { this._s = s; this._c('rs'); } }
+    reset() { this._s = new CanvasRenderingContext2D(this.canvas)._s; this._stack = []; this._c('re0'); }
+    setTransform(a, b, c, d, e, f) {
+      if (typeof a === 'object' && a !== null) ({ a, b, c, d, e, f } = a);
+      if (a === undefined) [a, b, c, d, e, f] = [1, 0, 0, 1, 0, 0];
+      this._c('st', num(a), num(b), num(c), num(d), num(e), num(f));
+    }
+    resetTransform() { this.setTransform(1, 0, 0, 1, 0, 0); }
+    transform(a, b, c, d, e, f) { this._c('tf', num(a), num(b), num(c), num(d), num(e), num(f)); }
+    translate(x, y) { this._c('tf', 1, 0, 0, 1, num(x), num(y)); }
+    scale(x, y) { this._c('tf', num(x), 0, 0, num(y), 0, 0); }
+    rotate(a) { const c = Math.cos(a), s = Math.sin(a); this._c('tf', num(c), num(s), num(-s), num(c), 0, 0); }
+    beginPath() { this._c('bp'); }
+    closePath() { this._c('cp'); }
+    moveTo(x, y) { this._c('mt', num(x), num(y)); }
+    lineTo(x, y) { this._c('lt', num(x), num(y)); }
+    quadraticCurveTo(cx, cy, x, y) { this._c('qc', num(cx), num(cy), num(x), num(y)); }
+    bezierCurveTo(a, b, c, d, x, y) { this._c('bc', num(a), num(b), num(c), num(d), num(x), num(y)); }
+    arc(x, y, r, a0, a1, ccw) { if (r < 0) throw domError('Negative radius'); this._c('el', num(x), num(y), num(r), num(r), 0, num(a0), num(a1), ccw ? 1 : 0); }
+    ellipse(x, y, rx, ry, rot, a0, a1, ccw) { if (rx < 0 || ry < 0) throw domError('Negative radius'); this._c('el', num(x), num(y), num(rx), num(ry), num(rot), num(a0), num(a1), ccw ? 1 : 0); }
+    arcTo(x1, y1, x2, y2, r) { this._c('at', num(x1), num(y1), num(x2), num(y2), num(r)); }
+    rect(x, y, w, h) { this._c('rc', num(x), num(y), num(w), num(h)); }
+    roundRect(x, y, w, h, r) { const v = Array.isArray(r) ? r[0] : r; this._c('rr', num(x), num(y), num(w), num(h), num(v || 0)); }
+    fill(a, b) { const rule = typeof a === 'string' ? a : b; this._c('fi', rule === 'evenodd' ? 'evenodd' : 'nonzero'); }
+    stroke() { this._c('sk'); }
+    clip() { /* not yet: drawing is not clipped */ }
+    fillRect(x, y, w, h) { this._c('fr', num(x), num(y), num(w), num(h)); }
+    strokeRect(x, y, w, h) { this._c('sr', num(x), num(y), num(w), num(h)); }
+    clearRect(x, y, w, h) { this._c('cr', num(x), num(y), num(w), num(h)); }
+    fillText(t, x, y) { this._c('ft', String(t).replace(/[\x1e\x1f]/g, ' '), num(x), num(y)); }
+    strokeText(t, x, y) { this.fillText(t, x, y); }
+    measureText(t) {
+      const width = +H(OP.MEASURE, this._s.font, String(t));
+      const size = (/(\d+(?:\.\d+)?)px/.exec(this._s.font) || [0, 10])[1] * 1;
+      return { width, actualBoundingBoxLeft: 0, actualBoundingBoxRight: width, actualBoundingBoxAscent: size * 0.75,
+        actualBoundingBoxDescent: size * 0.25, fontBoundingBoxAscent: size * 0.9, fontBoundingBoxDescent: size * 0.25 };
+    }
+    createLinearGradient(x0, y0, x1, y1) { return new CanvasGradient('l', [x0, y0, x1, y1]); }
+    createRadialGradient(x0, y0, r0, x1, y1, r1) { return new CanvasGradient('r', [x0, y0, r0, x1, y1, r1]); }
+    createPattern() { return null; }
+    setLineDash(d) { this._dash = Array.isArray(d) ? d.slice() : []; }
+    getLineDash() { return this._dash.slice(); }
+    isPointInPath() { return false; }
+    drawImage() { /* pictures in canvases come later */ }
+    getImageData(x, y, w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
+    createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
+    putImageData() {}
   }
   const ELEMENT_CLASSES = { A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
     TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLInputElement, SELECT: HTMLInputElement };
@@ -538,7 +653,7 @@
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
     Event, UIEvent, MouseEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
-    Document, DocumentFragment, DOMTokenList,
+    Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {
@@ -552,8 +667,12 @@
   const KEY_TYPES = new Set(['keydown', 'keyup', 'keypress']);
   // The browser's entry point: one string, fields split by tabs.
   Object.defineProperty(window, '__sx_dispatch', { value: function (msg) {
+    try { return dispatch(msg); } finally { flushCanvases(); }
+  }, configurable: false, writable: false, enumerable: false });
+  function dispatch(msg) {
     const f = String(msg).split('\t');
     switch (f[0]) {
+      case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
@@ -578,5 +697,5 @@
       }
     }
     return 0;
-  }, configurable: false, writable: false, enumerable: false });
+  }
 })();

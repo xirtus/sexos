@@ -2752,3 +2752,27 @@ row no longer waits for the row before it to end.
 - **Limits.** No Canvas 2D or WebGL yet (next). No `fetch`/`XMLHttpRequest`, no layout
   boxes for `getBoundingClientRect` (zeros), no text inputs, no ES modules as modules
   (run as classic scripts), pictures a script adds are not loaded.
+
+## Canvas 2D in Web pages (2026-11-08)
+
+- **What runs now.** `canvas.getContext('2d')` in `run web`: paths (`moveTo`, `lineTo`,
+  quadratic and cubic curves, `arc`, `ellipse`, `rect`, `roundRect`), `fill` (nonzero and
+  even-odd), `stroke` with width, caps and joins, `fillRect`/`strokeRect`/`clearRect`,
+  solid colours (any CSS colour), linear and radial gradients, `globalAlpha`, the common
+  `globalCompositeOperation`s, `save`/`restore`, transforms, and `fillText`/`measureText`
+  in Geist with `font`, `textAlign` and `textBaseline`. Animation through
+  `requestAnimationFrame` redraws the window.
+- **Design.** The prelude queues each call as a short command (fields split by U+001F,
+  commands by U+001E) and sends them to the host in batches at the end of each script or
+  event. `sex-web::canvas` runs them on a premultiplied surface with tiny-skia (through
+  sex-canvas) and Geist, and the page shows the surface as a picture `canvas:<node>` laid
+  out as a replaced element sized by its `width`/`height`. Path points are transformed when
+  added; stroke widths and text sizes scale with the transform. `sex_web::measure` gives text
+  widths without a glyph cache, for `measureText`. No ABI change.
+- **Evidence.** sex-js test `canvas_commands_are_queued`. `scripts/program_web_canvas_gate.py`
+  serves `scripts/web_site/canvas.html` (gradient, text, stroked arc, rotated square, curves,
+  measured text, six animation frames, six more after a button click): both states match
+  the host render exactly, 0 of 9020 sampled pixels differ, at 1 and 4 cores. The JS gate
+  still passes.
+- **Limits.** No `clip`, `drawImage`, `getImageData`/`putImageData` (zeros), patterns,
+  shadows or line dashes yet; `arcTo` is a straight line; `strokeText` fills. WebGL next.

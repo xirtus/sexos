@@ -312,6 +312,12 @@ impl<'a> Layout<'a> {
         i
     }
 
+    /// A canvas's size from its `width` and `height` attributes (300 by 150 by default).
+    fn canvas_size(&self, n: NodeId) -> (i32, i32) {
+        let get = |name, default| self.dom.attr(n, name).and_then(|v| v.trim().parse::<i32>().ok()).filter(|v| *v >= 0).unwrap_or(default);
+        (get("width", 300).min(4096), get("height", 150).min(4096))
+    }
+
     fn push_link(&mut self, n: NodeId) -> bool {
         if self.dom.activatable(n) { self.link_stack.push(n); true } else { false }
     }
@@ -497,8 +503,8 @@ impl<'a> Layout<'a> {
         let saved_links = core::mem::take(&mut self.links);
         let (w, h) = match tag {
             "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed" => {
-                let src = String::from(self.dom.attr(n, "src").unwrap_or(""));
-                let natural = self.host.image_size(&src);
+                let src = if tag == "canvas" { alloc::format!("canvas:{n}") } else { String::from(self.dom.attr(n, "src").unwrap_or("")) };
+                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else { self.host.image_size(&src) };
                 let (w, h) = match (s.width.resolve(0), s.height.resolve(0), natural) {
                     (Some(w), Some(h), _) => (w, h),
                     (Some(w), None, Some((nw, nh))) if nw > 0 => (w, w * nh / nw),
@@ -1004,7 +1010,8 @@ impl<'a> Layout<'a> {
                 let tag = tag.as_str();
                 if matches!(tag, "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed") {
                     let src = self.dom.attr(n, "src").unwrap_or("");
-                    let w = match (s.height.resolve(0), self.host.image_size(src)) {
+                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else { self.host.image_size(src) };
+                    let w = match (s.height.resolve(0), natural) {
                         (Some(h), Some((nw, nh))) if nh > 0 => h * nw / nh,
                         (_, Some((nw, _))) => nw,
                         _ => if tag == "img" { 0 } else { 300 },

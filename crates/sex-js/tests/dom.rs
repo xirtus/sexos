@@ -186,3 +186,18 @@ fn onclick_property_makes_clickable() {
     s.dispatch(&format!("click\t{d}")).unwrap();
     assert_eq!(logs(&mut s), ["0:hit"]);
 }
+
+#[test]
+fn canvas_commands_are_queued() {
+    let mut s = page("<canvas id=c width=20 height=10></canvas>");
+    s.eval(r#"
+        const ctx = document.getElementById('c').getContext('2d');
+        console.log(ctx === document.getElementById('c').getContext('2d'), document.getElementById('c').getContext('webgl'));
+        ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 5, NaN); ctx.fillRect(1, 2, 3, 4);
+        console.log(ctx.fillStyle, ctx.measureText('abcd').width > 0);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true null", "0:red true"]);
+    let q = &s.page().canvas_queue;
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].1, "fs\u{1f}c\u{1f}red\u{1e}fr\u{1f}1\u{1f}2\u{1f}3\u{1f}4");
+}
