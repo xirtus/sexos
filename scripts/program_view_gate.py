@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""A picture is shown: View, a program, decodes a PNG it was given and Display composites its pixels exactly; a picture too large is refused in words."""
+import argparse,http.server,io,os,re,shutil,threading,time
+from pathlib import Path
+from PIL import Image
+ROOT=Path(__file__).resolve().parents[1]
+def png(w,h):
+ img=Image.new('RGB',(w,h))
+ img.putdata([((x*255)//w,(y*255)//h,(x^y)&255) for y in range(h) for x in range(w)])
+ b=io.BytesIO();img.save(b,'PNG');return img,b.getvalue()
+PIC,PIC_BYTES=png(300,200)
+_,BIG_BYTES=png(900,700)
+FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES}
+class Handler(http.server.BaseHTTPRequestHandler):
+ def do_GET(self):
+  body=FILES.get(self.path)
+  if body is None:self.send_response(404);self.end_headers();return
+  self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+ def log_message(self,*a):pass
+class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
+server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
+threading.Thread(target=server.serve_forever,daemon=True).start()
+os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
+from quil_autosave_gate import boot
+KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
+def main():
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
+ with disk.open('r+b') as f:f.truncate(1024**3)
+ g=boot(a.iso,disk,a.out,'view',a.resolution);t=g['text'];q=g['q']
+ def keys(text):
+  for k in text:
+   if k=='@':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'2'}],'hold-time':80})
+   elif k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
+   else:q.key(KEYS.get(k,k))
+   time.sleep(.06)
+ def expect(text,pattern,timeout=120):
+  g['focus'](153);time.sleep(.5);s=len(t());keys(text);q.key('ret');return g['wait'](pattern,s,timeout)
+ def fetched(url,name):
+  m=expect(f'fetch http://10.0.2.2:{PORT}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
+ try:
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
+  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png')
+  s=len(t());expect('run view @pic.png',r'\[view.shown\] w=300 h=200')
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
+  shot=a.out/'view.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
+  tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
+  img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
+  checked=bad=0
+  for py in range(0,min(200,h-44),7):
+   for px in range(0,min(300,w-16),11):
+    if 636<=bx+px<660 and 398<=by+py<432:continue
+    checked+=1;bad+=img.getpixel((bx+px,by+py))!=PIC.getpixel((px,py))
+  assert checked>100 and bad==0,f'{bad} of {checked} pixels differ'
+  s2=len(t());g['focus'](int(m[3]));time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s2,90)
+  expect('run view @big.png',r'\[view.failed\] That picture is larger than 800 by 600')
+  assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
+  print({'ok':True,'pixels_checked':checked})
+ finally:g['stop']()
+if __name__=='__main__':main()

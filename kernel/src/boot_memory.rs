@@ -304,6 +304,34 @@ pub fn init_text_regions(display: u32) {
     crate::serial_println!("[boot.text.regions] display={} rows={} bytes={} runtime_mint=0", display, sex_pdx::app_catalog::COUNT, BYTES);
 }
 
+/// One pixel surface per program row: the program writes, Display reads.
+pub fn init_pixel_regions(display: u32) {
+    use sex_pdx::pixel_region::{BYTES, CLIENT_SLOT, display_slot, region_id};
+    require_boot();
+    if display == 0 { return; }
+    let second = DOMAIN_REGISTRY.get(display).expect("BOOT_PIXEL_DISPLAY_MISSING");
+    let programs = || sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program);
+    let rows = programs().count();
+    // One buddy reservation per eight rows: per-row backing would spend a
+    // boot frame reservation each and run the table out.
+    const GROUP: usize = 8;
+    let length = BYTES;
+    let mut base = 0u64;
+    for (k, row) in programs().enumerate() {
+        if k % GROUP == 0 { base = backing(length * GROUP.min(rows - k) as u64); }
+        if row.target == 0 { continue; }
+        let physical = base + (k % GROUP) as u64 * length;
+        let first = DOMAIN_REGISTRY.get(row.target).expect("BOOT_PIXEL_PROGRAM_MISSING");
+        let first_va = alias(first, physical, length, true, false);
+        let second_va = alias(second, physical, length, false, false);
+        grant(first, CLIENT_SLOT, RegionGrant { region_id: region_id(k), virtual_base: first_va, length,
+            rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: Some(second.id) });
+        grant(second, display_slot(k), RegionGrant { region_id: region_id(k), virtual_base: second_va, length,
+            rights: QUERY_VIEW | READ, dma_base: None, peer_pd: Some(first.id) });
+    }
+    crate::serial_println!("[boot.pixel.regions] display={} bytes={} runtime_mint=0", display, BYTES);
+}
+
 /// Permanent BOOT budget, separate from reclaimable app-private pages. Each
 /// successor gets different backing and an immutable, exact provider peer.
 /// Runtime Load still uses scalar transport until snapshot publication exists.

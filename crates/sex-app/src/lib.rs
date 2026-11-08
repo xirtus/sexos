@@ -49,6 +49,17 @@ impl Window {
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
     }
+    /// The window's pixel surface: up to `pixel_region::MAX_W` by `MAX_H` pixels of
+    /// 0x00RRGGBB, row-major at the width you show. The rest of the region is the
+    /// program's own scratch.
+    pub fn pixels(&self) -> &'static mut [u32] {
+        let base = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
+        unsafe { core::slice::from_raw_parts_mut(base as *mut u32, (sex_pdx::pixel_region::BYTES / 4) as usize) }
+    }
+    /// Shows the first `width` by `height` pixels in the window instead of its text.
+    pub fn show_pixels(&mut self, width: usize, height: usize) {
+        call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
+    }
     /// The name in the window's title bar, up to sixteen characters.
     pub fn title(&mut self, name: &[u8]) {
         let mut bytes = [0u8; 16];
