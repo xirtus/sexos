@@ -154,7 +154,11 @@ pub fn bind(target: u32, task: u32) {
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
     if matches!(state, State::Untried) { *state = bring_up(); }
     if let State::Ready(fs) = state {
+        // The rollback below must only undo this mkdir: commit waiting writes first,
+        // and make no folder if they cannot be committed.
+        if writes_pending() { commit_writes(fs); }
         for end in [data.len() - 1, len] {
+            if fs.has_changes() { break; }
             if fs.open(&root[..end]).is_err() && fs.mkdir(&root[..end], 0).and_then(|_| fs.commit()).is_err() { let _ = fs.rollback(); }
         }
     }
@@ -366,7 +370,11 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             while done < total {
                 let take = (total - done).min(BLOCK);
                 own[..take].copy_from_slice(&data[done..done + take]);
-                let wrote = fs.write(st.id, r.offset + done as u64, &own[..take], now)?;
+                // After progress, an error ends the write short: the prefix is real and
+                // counted, so it commits with the rest (a short write, as on Linux).
+                let wrote = match fs.write(st.id, r.offset + done as u64, &own[..take], now) {
+                    Ok(n) => n, Err(e) if done == 0 || matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) => return Err(e), Err(_) => break,
+                };
                 done += wrote;
                 if wrote < take { break; }
             }
