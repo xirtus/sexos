@@ -259,6 +259,19 @@ manifest = "apps/web/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/web"
 dest_artifact = "iso_root/programs/web"
 
+# The same program, starting on its game.
+[[stage]]
+id = "stage_solitaire"
+action = "copy_file"
+src = "target/x86_64-sex/release/solitaire"
+dst = "iso_root/programs/solitaire"
+
+[[stage]]
+id = "stage_chess"
+action = "copy_file"
+src = "target/x86_64-sex/release/chess"
+dst = "iso_root/programs/chess"
+
 [[stage]]
 id = "build_hum"
 action = "cargo_manifest"
