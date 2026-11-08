@@ -7,7 +7,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64) }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64) }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
 
@@ -120,13 +120,25 @@ impl Client {
         true
     }
     /// `run` or `spawn` with a path. Files holds the path and answers with a ticket for Shell.
-    pub fn submit_program(&mut self, target: &[u8], count: u64, sb: &mut Scrollback) {
+    /// A bare name means the program directory. `args` reach the program, and `flags`
+    /// carry what the person allowed this run, such as the network.
+    pub fn submit_program(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, sb: &mut Scrollback) {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return; }
         let Some(region) = region() else { sb.push(b"The disk is not available."); return };
+        if args.len() > w::ARGS_MAX { sb.push(b"Arguments too long."); return; }
         let mut path = [0u8; w::PATH_BYTES];
+        let mut named = [0u8; 64];
+        let target = if target.contains(&b'/') { target } else {
+            let bin = sex_pdx::program_store::BIN;
+            if bin.len() + target.len() > named.len() { sb.push(b"Name too long."); return; }
+            named[..bin.len()].copy_from_slice(bin);
+            named[bin.len()..bin.len() + target.len()].copy_from_slice(target);
+            &named[..bin.len() + target.len()]
+        };
         let Some(n) = self.join(target, &mut path) else { sb.push(b"Path too long."); return };
         region[..n].copy_from_slice(&path[..n]);
-        self.start(Cmd::Program(count), w::PREPARE, n, 0, 0);
+        region[w::PATH_BYTES..w::PATH_BYTES + args.len()].copy_from_slice(args);
+        self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, args.len() as u64);
     }
     /// Delivers the current request. Retries a full queue on the next pass.
     pub fn send(&mut self) -> bool {
@@ -244,10 +256,10 @@ impl Client {
                 say!(sb, "{} MiB free of {} MiB", free * 4096 / (1024 * 1024), total * 4096 / (1024 * 1024));
             }
             Cmd::Mkdir | Cmd::Rm | Cmd::Mv | Cmd::Create => { say!(sb, "ok"); }
-            Cmd::Program(count) => {
+            Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
-                let op = if count == 0 { store::OP_RUN } else { store::OP_SPAWN };
-                let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, op, store::TICKET, value as u64, count).is_ok();
+                let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };
+                let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, op, store::TICKET, value as u64, third).is_ok();
                 say!(sb, "{}", if !asked { "Could not reach the shell." } else if count == 0 { "Asked for the program. A window opens if it starts." } else { "Asked for background programs. Check with: records" });
             }
         }

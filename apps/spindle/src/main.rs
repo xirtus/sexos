@@ -780,7 +780,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc x = 2   name a value (up to 8)");
             sb.push(b"  calc 255 in hex   also in bin / in oct");
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
-            sb.push(b"  run NAME     start a program: a name in /bin, or a path");
+            sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
@@ -908,12 +908,20 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // A slash makes it a path. A bare name looks in /bin, then the older disk store.
-        b"run" if args.contains(&b'/') => {unsafe{fs_commands::FS.submit_program(args,0,sb);}true}
+        // `+net` first lets this run reach the network. Words after the name are its arguments.
+        b"run" if args.contains(&b'/') || args.contains(&b' ') || args.starts_with(b"+net") => {
+            let (flags, rest) = match args.strip_prefix(b"+net") { Some(r) => (sex_pdx::program_store::RUN_NETWORK, r.trim_ascii_start()), None => (0, args) };
+            let mut words = rest.splitn(2, |b| *b == b' ');
+            let (target, program_args) = (words.next().unwrap_or(b""), words.next().unwrap_or(b"").trim_ascii_start());
+            if target.is_empty() { sb.push(b"Usage: run [+net] NAME|PATH [ARGS]"); }
+            else { unsafe{fs_commands::FS.submit_program(target,program_args,flags,0,sb);} }
+            true
+        }
         b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {
             let mut words = args.splitn(2, |b| *b == b' ');
             let target = words.next().unwrap_or(b"");
             match words.next().and_then(|n| core::str::from_utf8(n).ok()).and_then(|n| n.trim().parse::<u64>().ok()) {
-                Some(count) if count > 0 => unsafe{fs_commands::FS.submit_program(target,count,sb);},
+                Some(count) if count > 0 => unsafe{fs_commands::FS.submit_program(target,b"",0,count,sb);},
                 _ => sb.push(b"Usage: spawn NAME COUNT"),
             }
             true

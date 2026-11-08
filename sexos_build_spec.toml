@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "de0d9a68406522b1e32fc9082a37d5349ac75f19efcab2e753176eee60484b45"
+abi_version_hash = "2bd29ba536bd6fc07d6ea1183ea1cf39fbb9669781309ae3025c30f34e27080c"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -46,7 +46,8 @@ crates = [
   "apps/hello/Cargo.toml",
   "apps/fortune/Cargo.toml",
   "apps/hum/Cargo.toml",
-  "apps/jot/Cargo.toml"
+  "apps/jot/Cargo.toml",
+  "apps/peek/Cargo.toml"
 ]
 
 [[stage]]
@@ -202,6 +203,13 @@ action = "cargo_manifest"
 manifest = "apps/jot/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/jot"
 dest_artifact = "iso_root/programs/jot"
+
+[[stage]]
+id = "build_peek"
+action = "cargo_manifest"
+manifest = "apps/peek/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/peek"
+dest_artifact = "iso_root/programs/peek"
 
 [[stage]]
 id = "build_hum"

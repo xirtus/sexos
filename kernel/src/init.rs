@@ -953,6 +953,18 @@ pub fn init() {
         let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
         serial_println!("[boot.spindle.net.route] target={} task={} slot=18 service={} fixed_peer=1 nic_metadata=0 runtime_mint=0",target,unsafe{(*task).id},sexnet_id);
     }
+    // Program rows hold the same fixed peer edge; the network service serves only the runs
+    // Shell binds, and Shell holds a route there for that alone.
+    for row in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.app==sex_pdx::app_catalog::App::Program) {
+        let pd=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_PROGRAM_NETWORK_SUBJECT");
+        assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_PROGRAM_NETWORK_COLLISION");
+        pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+    }
+    {
+        let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_NETWORK");
+        assert!(shell.find_capability(sex_pdx::web::SHELL_SLOT as u32).is_none(),"BOOT_SHELL_NETWORK_COLLISION");
+        shell.grant_capability(sex_pdx::web::SHELL_SLOT,crate::capability::CapabilityData::Domain(sexnet_id));
+    }
     // One-shot activation chain: each successor is bound to its exact predecessor.
     for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
         let predecessor=sex_pdx::app_catalog::predecessor(incarnation).expect("BOOT_SUCCESSOR_PREDECESSOR");

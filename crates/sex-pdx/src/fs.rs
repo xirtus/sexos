@@ -30,6 +30,9 @@ pub const STATFS: u8 = 11;
 /// Checks a file can be a program and holds its path for one load. The reply's value is
 /// the ticket Shell passes back to Files.
 pub const PREPARE: u8 = 12;
+/// A program's own arguments, as typed after its name. Programs only.
+pub const ARGS: u8 = 13;
+pub const ARGS_MAX: usize = 256;
 
 pub const OK: u8 = 0;
 pub const UNAVAILABLE: u8 = 1;

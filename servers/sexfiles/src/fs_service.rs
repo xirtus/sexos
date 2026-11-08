@@ -104,10 +104,12 @@ pub fn poll_replies() {
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 const ROOT_MAX: usize = 64;
 #[derive(Clone, Copy)]
-struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize }
+struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, args: [u8; w::ARGS_MAX], args_len: usize }
 static mut BINDINGS: [Option<Binding>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
 /// The last program file read, by its base name, waiting for Shell to say where it runs.
 static mut LOADED: ([u8; 32], usize) = ([0; 32], 0);
+/// The arguments typed with the program last read.
+static mut LOADED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
 fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
@@ -138,7 +140,8 @@ pub fn bind(target: u32, task: u32) {
             if fs.open(&root[..end]).is_err() && fs.mkdir(&root[..end], 0).and_then(|_| fs.commit()).is_err() { let _ = fs.rollback(); }
         }
     }
-    bindings[index] = Some(Binding { task, root, len });
+    let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
+    bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1) });
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
 }
 /// A program's path inside its folder. `..` never climbs out: it is refused.
@@ -181,6 +184,11 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let mut path = [0u8; w::PATH_BYTES];
     let mut path_len = r.path_len as usize;
     path[..path_len].copy_from_slice(&region[..path_len]);
+    if let (Some(k), true) = (program, r.kind == w::ARGS) {
+        let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
+        region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
+        return w::reply(r.seq, w::OK, binding.args_len as u32);
+    }
     if let Some(k) = program {
         // Every path, both halves of a rename too, lands inside the program's folder.
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
@@ -212,6 +220,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
 }
 /// One path waiting for Shell to ask for it, and the ticket that names it.
 static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
+static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
 static mut NEXT_TICKET: u32 = 0;
 pub enum Program { Absent, Failed(u32), Loaded(u32) }
 /// Copies a file into `image`. A disk with no filesystem has no such file.
@@ -243,7 +252,7 @@ fn read_program(path: &[u8], image: &mut [u8]) -> Program {
 }
 /// A bare name looks in the program directory.
 pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
-    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; (*core::ptr::addr_of_mut!(LOADED_ARGS)).1 = 0; }
     use sex_pdx::program_store as store;
     let mut path = [0u8; 32];
     let at = store::BIN.len();
@@ -257,6 +266,7 @@ pub fn read_ticket(ticket: u64, image: &mut [u8]) -> Program {
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return Program::Absent; }
     let len = core::mem::take(&mut prepared.1);
+    unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
     read_program(&prepared.0[..len], image)
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
@@ -329,6 +339,11 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
             prepared.0[..path.len()].copy_from_slice(path);
             prepared.1 = path.len();
+            // Arguments travel with the path, after it in the data area.
+            let args = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED_ARGS) };
+            let n = (r.length as usize).min(w::ARGS_MAX).min(data.len());
+            args.0[..n].copy_from_slice(&data[..n]);
+            args.1 = n;
             // Never zero, and within the reply's 24 bits.
             let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
             prepared.2 = ticket;

@@ -135,6 +135,14 @@ pub mod files {
             }
         }
     }
+    /// The words typed after the program's name, if it was started with any.
+    pub fn args<'a>(window: &mut Window, out: &'a mut [u8; w::ARGS_MAX]) -> &'a [u8] {
+        let Ok(n) = request(window, w::ARGS, b"", 0, 0) else { return &out[..0] };
+        let n = (n as usize).min(w::ARGS_MAX);
+        let Ok(region) = region() else { return &out[..0] };
+        out[..n].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + n]);
+        &out[..n]
+    }
     /// Reads up to `out.len()` bytes of the file from its start.
     pub fn read(window: &mut Window, path: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         let mut done = 0;
@@ -169,4 +177,128 @@ pub fn typed(key: Key) -> Option<u8> {
     if key.control { return None; }
     let c = *if key.shift { upper } else { plain }.get(key.code as usize)?;
     (c != 0).then_some(c)
+}
+
+/// The network, for a run the person started with `run +net`. Otherwise every call is
+/// refused. HTTP and HTTPS, one page at a time, through the network service's checked TLS.
+pub mod net {
+    use super::Window;
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
+    use sex_pdx::web as w;
+
+    const NET: u32 = 13;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Error { NotAllowed, Offline, NoName, Connect, Certificate, Secure, TooSlow, Address, Failed }
+    pub fn message(e: Error) -> &'static [u8] {
+        match e {
+            Error::NotAllowed => b"This program was not given the network. Start it with run +net.",
+            Error::Offline => b"No network.", Error::NoName => b"That name was not found.", Error::Connect => b"Could not connect.",
+            Error::Certificate => b"The site's certificate isn't trusted.", Error::Secure => b"The secure connection failed.",
+            Error::TooSlow => b"The site took too long.", Error::Address => b"That address can't be read.", Error::Failed => b"The request failed.",
+        }
+    }
+    fn region() -> Result<&'static mut [u8], Error> {
+        let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| Error::NotAllowed)?;
+        Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
+    }
+    static mut SEQ: u32 = 0;
+    fn call(window: &mut Window, kind: u8, value: u64) -> Result<(u8, u32), Error> {
+        let seq = unsafe { SEQ = (SEQ + 1) & 0x7F_FFFF; SEQ };
+        loop {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request(seq, kind), value, 0) {
+                Ok(_) => break,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(Error::NotAllowed),
+            }
+        }
+        let began = sex_pdx::get_ticks();
+        loop {
+            if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(Error::TooSlow); }
+            let Some(m) = sex_pdx::pdx_try_listen_raw(0) else { sex_pdx::sys_yield(); continue };
+            if m.type_id == 1 && m.caller_pd == NET {
+                if let Some((got, status, value)) = w::decode_reply(m.arg0) { if got == seq { return Ok((status, value)); } }
+                continue;
+            }
+            if let Some(event) = window.event(&m) {
+                if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+            }
+        }
+    }
+    fn ok(r: (u8, u32)) -> Result<u32, Error> {
+        match r.0 { w::OK | w::WAIT => Ok(r.1), w::DENIED => Err(Error::NotAllowed), w::OFFLINE => Err(Error::Offline), w::NO_NAME => Err(Error::NoName), _ => Err(Error::Failed) }
+    }
+    fn pause() { let until = sex_pdx::get_ticks() + 5; while sex_pdx::get_ticks() < until { sex_pdx::sys_yield(); } }
+    fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).position(|w| w == needle) }
+    /// Fetches `url` into `out`: the HTTP status and the body's length, cut at `out.len()`.
+    pub fn get(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<(u32, usize), Error> {
+        let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
+        let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
+        let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
+        let (host, port) = match authority.iter().position(|b| *b == b':') {
+            Some(i) => (&authority[..i], authority[i + 1..].iter().try_fold(0u32, |v, b| b.is_ascii_digit().then(|| v * 10 + (*b - b'0') as u32)).filter(|p| (1..=65535).contains(p)).ok_or(Error::Address)? as u16),
+            None => (authority, if tls { 443 } else { 80 }),
+        };
+        if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
+        let region = region()?;
+        loop { let r = call(window, w::UP, 0)?; ok(r)?; if r.0 == w::OK { break; } pause(); }
+        let numeric = {
+            let mut a = [0u8; 4]; let mut parts = host.split(|b| *b == b'.'); let mut good = true;
+            for slot in a.iter_mut() { match parts.next().and_then(|p| core::str::from_utf8(p).ok()?.parse::<u8>().ok()) { Some(v) => *slot = v, None => good = false } }
+            (good && parts.next().is_none()).then_some(a)
+        };
+        let address = match numeric {
+            Some(a) => a,
+            None => {
+                region[..host.len()].copy_from_slice(host);
+                ok(call(window, w::RESOLVE, host.len() as u64)?)?;
+                loop { let r = call(window, w::RESOLVE, 0)?; ok(r)?; if r.0 == w::OK { break; } pause(); }
+                [region[0], region[1], region[2], region[3]]
+            }
+        };
+        ok(call(window, w::CONNECT, w::address_port(address, port))?)?;
+        loop {
+            let state = ok(call(window, w::STATE, 0)?)?;
+            if state == w::STATE_OPEN { break; }
+            if state != w::STATE_OPENING { let _ = call(window, w::CLOSE, 0); return Err(Error::Connect); }
+            pause();
+        }
+        if tls {
+            region[..host.len()].copy_from_slice(host);
+            ok(call(window, w::TLS_START, host.len() as u64)?)?;
+            loop {
+                match ok(call(window, w::TLS_STAGE, 0)?)? {
+                    w::TLS_READY => break,
+                    w::TLS_HANDSHAKE => pause(),
+                    w::TLS_FAILED_CERTIFICATE => { let _ = call(window, w::CLOSE, 0); return Err(Error::Certificate); }
+                    _ => { let _ = call(window, w::CLOSE, 0); return Err(Error::Secure); }
+                }
+            }
+        }
+        // HTTP/1.0, so the reply needs no chunk decoding and ends when the peer closes.
+        let mut request = [0u8; 900];
+        let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
+        let mut n = 0;
+        for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
+        let mut sent = 0;
+        while sent < n { region[..n - sent].copy_from_slice(&request[sent..n]); sent += ok(call(window, w::SEND, (n - sent) as u64)?)? as usize; if sent < n { pause(); } }
+        if tls { ok(call(window, w::FINISH_REQUEST, 0)?)?; }
+        let (mut got, mut done) = (0usize, false);
+        let began = sex_pdx::get_ticks();
+        loop {
+            if sex_pdx::get_ticks().saturating_sub(began) > 60_000 { let _ = call(window, w::CLOSE, 0); return Err(Error::TooSlow); }
+            let k = ok(call(window, w::RECEIVE, (out.len() - got).min(32 * 1024).max(1) as u64)?)? as usize;
+            if k > 0 { let take = k.min(out.len() - got); out[got..got + take].copy_from_slice(&region[..take]); got += take; if got == out.len() { break; } continue; }
+            if done { break; }
+            // Bytes can land between the two calls, so a closed peer gets one last read.
+            let state = ok(call(window, w::STATE, 0)?)?;
+            done = matches!(state, w::STATE_PEER_CLOSED | w::STATE_CLOSED);
+            if !done { pause(); }
+        }
+        let _ = call(window, w::CLOSE, 0);
+        let end = find(&out[..got], b"\r\n\r\n").ok_or(Error::Failed)?;
+        let line = &out[..find(&out[..end + 2], b"\r\n").unwrap_or(end)];
+        let status = line.split(|b| *b == b' ').nth(1).and_then(|c| core::str::from_utf8(c).ok()?.parse::<u32>().ok()).unwrap_or(0);
+        out.copy_within(end + 4..got, 0);
+        Ok((status, got - end - 4))
+    }
 }

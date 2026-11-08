@@ -16185,8 +16185,14 @@ unsafe fn record_spawn_poll(){
 }
 /// A run started from a file, waiting to tell Files where it runs.
 static mut PROGRAM_BIND_PENDING: bool = false;
-/// Files may then serve the program its own folder, for this run alone.
-fn program_bind(target:u32,task:u32){let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
+/// The person asked for the run being started to reach the network.
+static mut PROGRAM_NETWORK: bool = false;
+/// Files may then serve the program its own folder, and the network service talk to
+/// it if the person asked, for this run alone.
+fn program_bind(target:u32,task:u32){
+    let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
+    if unsafe{core::mem::take(&mut PROGRAM_NETWORK)}{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
+}
 /// Tells Spindle why, since the person who asked is looking there.
 fn program_refused(code:u32){let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
@@ -16213,6 +16219,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
+        PROGRAM_NETWORK=status==0&&msg.arg2&store::RUN_NETWORK!=0;
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
         return true;
     }

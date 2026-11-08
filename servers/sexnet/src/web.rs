@@ -16,9 +16,14 @@ static mut DNS_TX_META: [sex_net::DnsMetadata; 2] = [sex_net::DnsMetadata::EMPTY
 
 static mut TLS_READ: [u8; 16640] = [0; 16640];
 static mut TLS_WRITE: [u8; 4096] = [0; 4096];
-pub struct Service { owner: Option<Identity>, attached: bool, announced: bool, tls: Option<Session>, tls_used: bool, out: [u8; 1400], out_at: usize, out_len: usize }
+/// Program runs Shell has bound to the network, by row: the run's task.
+const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
+pub struct Service { bound: [u32; PROGRAM_ROWS], owner: Option<Identity>, attached: bool, announced: bool, tls: Option<Session>, tls_used: bool, out: [u8; 1400], out_at: usize, out_len: usize }
+fn program_index(target: u32) -> Option<usize> {
+    sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
+}
 impl Service {
-    pub const fn new() -> Self { Self { owner: None, attached: false, announced: false, tls: None, tls_used: false, out: [0; 1400], out_at: 0, out_len: 0 } }
+    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], owner: None, attached: false, announced: false, tls: None, tls_used: false, out: [0; 1400], out_at: 0, out_len: 0 } }
     pub fn busy(&self) -> bool { self.tls.is_some() }
     /// Moves encrypted bytes between the flow and the session, each turn of the service.
     pub fn pump(&mut self, engine: &mut Engine<'static>) {
@@ -48,6 +53,10 @@ impl Service {
         let seconds = sex_pdx::clock_snapshot(plan.clock_slot()).ok()?.seconds;
         Some((seed, u32::try_from(seconds).ok()?))
     }
+    /// Shell's word that this run of a program row may use the network.
+    pub fn bind(&mut self, target: u32, task: u32) {
+        if let Some(k) = program_index(target) { self.bound[k] = task; sex_pdx::serial_record!("[net.program.bound] target={} task={}", target, task); }
+    }
     /// A program that ended holds nothing here.
     pub fn retire(&mut self, who: Identity, engine: Option<&mut Engine<'static>>) {
         if self.owner == Some(who) {
@@ -61,8 +70,12 @@ impl Service {
         let kind = (a >> 32) as u8;
         let Some(engine) = engine else { return w::reply(seq, w::OFFLINE, 0) };
         let spindles = sex_pdx::app_catalog::SPINDLE_TARGETS;
+        let program = program_index(who.pd);
+        // A program reaches the network only in a run Shell bound, because the person asked.
+        if program.is_some_and(|k| self.bound[k] != who.task || who.task == 0) { return w::reply(seq, w::DENIED, 0); }
         let index = spindles.iter().position(|t| *t == who.pd)
-            .or_else(|| sex_pdx::browser_sources::PLANS.iter().position(|p| p.target() == who.pd).map(|i| spindles.len() + i));
+            .or_else(|| sex_pdx::browser_sources::PLANS.iter().position(|p| p.target() == who.pd).map(|i| spindles.len() + i))
+            .or_else(|| program.map(|k| w::PROGRAM_INDEX_BASE + k));
         let Some(index) = index else { return w::reply(seq, w::DENIED, 0) };
         let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(seq, w::FAILED, 0) };
         let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };

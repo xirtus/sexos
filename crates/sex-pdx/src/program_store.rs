@@ -25,6 +25,8 @@ pub const OP_REFUSED: u64 = 0x53;
 /// Shell to Files: the file Files last read now runs as this row and task. The program
 /// may then use files inside its own folder, and nowhere else.
 pub const OP_BIND: u64 = 0x55;
+/// In OP_RUN's third word: the person asked for this run to reach the network.
+pub const RUN_NETWORK: u64 = 1;
 /// Where each program's folder lives.
 pub const DATA: &[u8] = b"/data/";
 /// Where a bare program name is looked for first.

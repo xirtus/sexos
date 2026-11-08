@@ -2270,3 +2270,27 @@ row no longer waits for the row before it to end.
 - **Gates.** The probe at 1 and 4 cores; filesystem, Jot, program file, program disk, fetch,
   browser web and SMP at 1 core on the normal kernel. Python tests and all non-QEMU gates
   except the older ones listed earlier.
+
+## Programs get arguments, and the network when the person allows it (2026-11-08)
+
+- **What runs now.** `run NAME ARGS` passes the words after the name to the program, which
+  reads them with `sex_app::files::args`. `run +net NAME ...` also lets that run reach the
+  network, through `sex_app::net::get` (HTTP and HTTPS, through the network service's one
+  checked TLS). `apps/peek` shows a page's text: `run +net peek https://example.com/` showed
+  Example Domain's text in its window; `run peek URL` without `+net` is refused.
+- **Design.** Every program row now holds the same fixed route to the network service and a
+  shared region with it, as Spindle does, made at BOOT. Holding them grants nothing: the
+  network service serves a program row only for the run whose task Shell bound there, and
+  Shell binds only when the person typed `+net`. Shell got a BOOT route to the network
+  service for that binding alone. Arguments travel with the path from Spindle to Files at
+  `PREPARE`, and Files hands them to the run it binds.
+- **ABI.** `fs::ARGS` (13), `fs::ARGS_MAX`, `program_store::RUN_NETWORK` in `OP_RUN`'s third
+  word, `web::SHELL_SLOT` (262) and `web::PROGRAM_INDEX_BASE`, network regions and provider
+  slots for program rows, the `peek` crate.
+- **Limits.** The permission is per run and all-or-nothing: any host, no prompt from the
+  program itself, no record of which programs had it. A bare name with arguments always
+  means `/bin/NAME`, not the older store. One network flow at a time across the machine.
+  Peek's text is a crude strip of tags.
+- **Gates.** New `program_net` at 1 and 4 cores, with example.com over HTTPS at 1. Browser web,
+  fetch, filesystem, program disk, records and SMP at 1 core; Jot and program file passed on
+  the first build of this change. Python tests and all non-QEMU gates except the older ones.

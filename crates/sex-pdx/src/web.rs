@@ -52,3 +52,7 @@ pub fn decode_reply(word: u64) -> Option<(u32, u8, u32)> {
 /// args: seq and kind; then a value (name length, address and port, or byte count).
 pub const fn request(seq: u32, kind: u8) -> u64 { (seq as u64 & 0xFF_FFFF) | (kind as u64) << 32 }
 pub const fn address_port(address: [u8; 4], port: u16) -> u64 { (u32::from_be_bytes(address) as u64) << 16 | port as u64 }
+/// Shell's route to the network service, for binding program runs alone.
+pub const SHELL_SLOT: u64 = 262;
+/// Program rows follow the Spindles and Browsers in the provider slots and regions.
+pub const PROGRAM_INDEX_BASE: usize = crate::app_catalog::SPINDLE_TARGETS.len() + crate::browser_sources::PLANS.len();

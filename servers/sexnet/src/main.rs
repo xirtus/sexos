@@ -5522,6 +5522,7 @@ pub extern "C" fn _start() -> ! {
             }
             continue;
         }
+        if req.type_id==sex_pdx::program_store::OP_BIND&&req.caller_pd==3{web.bind(req.arg0 as u32,req.arg1 as u32);continue}
         if app_custody.is_retired(req.caller_pd) {continue}
         if req.type_id==sex_pdx::web::OP{
             web_reply=Some((req.caller_pd,match network_request_owner(req.caller_pd,req.caller_task){

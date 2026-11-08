@@ -59,6 +59,12 @@ pub fn init_web_regions(net: u32) {
     for (index, plan) in sex_pdx::browser_sources::PLANS.iter().enumerate() {
         paired_at(net, plan.target(), w::PROVIDER_SLOT_BASE + (first_browser + index) as u64, w::CLIENT_SLOT,
             w::REGION_ID_BASE + (first_browser + index) as u32, w::REGION_BYTES as u64, true);
+    }    // Program rows too. A run reaches the network only once Shell binds it there.
+    let programs = sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program);
+    for (k, row) in programs.enumerate() {
+        let index = w::PROGRAM_INDEX_BASE + k;
+        paired_at(net, row.target, w::PROVIDER_SLOT_BASE + index as u64, w::CLIENT_SLOT,
+            w::REGION_ID_BASE + index as u32, w::REGION_BYTES as u64, true);
     }
 }
 /// One region per possible Spindle and program row for the file protocol, shared with Files alone.
