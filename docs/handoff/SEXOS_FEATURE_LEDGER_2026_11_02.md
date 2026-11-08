@@ -2763,3 +2763,22 @@ row no longer waits for the row before it to end.
   cells through `check_desktop_pixels.cell_errors` (fixtures use `draw_cell`).
 - Not a bug, though it looked like one: the kernel logs `[ps2.irq1.entry]` only for the
   first 16 interrupts, so missing entries later in a log don't mean keys were lost.
+
+## Video with FFmpeg: Play (2026-11-08)
+
+- **What runs now.** `run play @VIDEO.mp4` plays an H.264 MP4 in a window, paced to its frame
+  rate. FFmpeg (n7.1.2: libavformat with the MOV demuxer, libavcodec with the H.264 decoder,
+  libswscale, libavutil; LGPL-2.1+, no GPL parts) runs inside Play's own confinement. Play
+  decodes each frame into a private buffer, then copies it into its pixel surface and shows it.
+  Anything that is not a video is refused in words ("Cannot play that video: ...").
+- **How.** `crates/sex-libc` is a small C library in Rust for programs that link C:
+  malloc over the program heap (with alignment up to 4 KiB), string.h, printf/scanf engines,
+  stdio over hooks, libm-backed maths, and time from ticks. `scripts/build_ffmpeg.sh` cross-builds
+  FFmpeg with clang for x86_64-sex's soft-float, no-SSE, no-red-zone code (musl headers with
+  `long double` mapped to `double`). `apps/play/src/ffmpeg.c` is a small bridge (open, next
+  frame as BGR0 scaled to fit 800x600, close); `scripts/build_play.sh` builds Play as a PIE.
+- **Gates.** `scripts/program_play_gate.py`: Spindle fetches Play and a 320x240, 25 fps,
+  50-frame test clip; all 50 frames are shown in about 2 s on 1 and 4 cores, colour probes
+  match the clip, the last frame is on screen, and a text file is refused.
+- **Next.** Sound (AAC/MP3 through Bell's virtio sound card), SSE in programs for larger video,
+  and a presented/consumed handshake with Display so frames never overlap their presentation.

@@ -753,6 +753,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "play"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-libc",
+ "sex-pdx",
+]
+
+[[package]]
 name = "polyval"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1087,6 +1096,13 @@ dependencies = [
  "x2apic",
  "x86",
  "x86_64",
+]
+
+[[package]]
+name = "sex-libc"
+version = "0.1.0"
+dependencies = [
+ "libm",
 ]
 
 [[package]]
