@@ -9,6 +9,11 @@ pub const ADVANCE: u32 = 6;
 pub const LINE: u32 = 9;
 pub const TEXT: u32 = 0x00E0F0FF;
 pub const FOCUS: u32 = 0x00E9D36A;
+/// Shell (the window manager) to Display: make a surface's text larger or smaller.
+/// arg0 = surface id, arg1 = +1 larger, -1 (as u64) smaller, 0 back to the default.
+pub const OP_TEXT_ZOOM: u64 = 0x2D4;
+/// Steps of zoom either way; the text scale stays within 1..=MAX_TEXT_SCALE.
+pub const MAX_TEXT_SCALE: u32 = 5;
 pub const fn scale(width: u32) -> u32 {
     if width >= 256 {
         2

@@ -1131,7 +1131,6 @@ pub mod virtio;
 pub mod network_config;
 
 pub mod desktop_style;
-pub mod font_geist;
 pub mod pixel_region;
 pub mod document_view;
 

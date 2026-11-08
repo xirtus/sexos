@@ -114,6 +114,7 @@ mod surface_lifecycle;
 /// The BOOT incarnation catalog, at crate root for display modules.
 use sex_pdx::app_catalog;
 mod text_transaction;
+mod glyphs;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -658,13 +659,14 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
         let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
             &&surf.selection_end as usize<=surf.text_len as usize;
         let left=tx+col*advance;
-        // Geist Mono at full size, as surface_text_fg_at draws it.
-        if scale==2&&scalar!=9{
-            if let Some(cell)=sex_pdx::font_geist::cell(scalar){
-                let gy=(y-ty)%sex_pdx::font_geist::CELL_H;
+        // Geist Mono drawn for this cell size, as surface_text_fg_at draws it.
+        if scale>=2{
+            let line_h=(GLYPH_H+2)*scale;
+            if let Some(cell)=glyphs::mono_cell(scalar,advance,line_h){
+                let gy=(y-ty)%line_h;
                 let back=if selected{0xff36577c}else{surf.color};
                 for x in left.max(x0)..(left+advance).min(x1){
-                    let alpha=cell[gy*sex_pdx::font_geist::CELL_W+(x-left)];
+                    let alpha=cell[gy*advance+(x-left)];
                     if alpha!=0{unsafe{core::ptr::write_volatile(row.add(x),coverage_blend(surf.text_color,back,alpha));}}
                     else if selected{unsafe{core::ptr::write_volatile(row.add(x),back);}}
                 }
@@ -1482,40 +1484,46 @@ fn set_program_title(surface_id: u64, title: Option<[u8; 16]>) {
 }
 /// Fixed-position title glyphs choose contrast against the final composed background.
 fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32> {
-    use sex_pdx::font_geist::{TITLE, TITLE_H, TITLE_W};
     let title_x = FRAME_TOP_BAR_LIGHT_EXCLUSION_PX + 12;
-    let title_y = (FRAME_TOP_BAR_HEIGHT_PX - TITLE_H) / 2;
-    if lx < title_x || ly < title_y || ly >= title_y + TITLE_H { return None; }
+    let title_y = (FRAME_TOP_BAR_HEIGHT_PX - glyphs::TITLE_H) / 2;
+    if lx + 2 < title_x || ly < title_y || ly >= title_y + glyphs::TITLE_H { return None; }
     let title: &[u8] = if let Some(own)=program_title(surface_id) { own } else if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
         match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser",app_catalog::App::Program=>b"Program"}
     }else{match surface_id{200=>b"Linen",100=>b"App",_=>return None}};
-    // Geist Sans: walk the advances to the glyph under this pixel, then blend its coverage.
-    let mut x = title_x;
-    for &byte in title {
-        let glyph = ascii_glyph_index(byte)?;
-        let (advance, cell) = &TITLE[glyph];
-        if lx < x + *advance as usize {
-            let gx = lx - x;
-            if gx >= TITLE_W { return None; }
-            let alpha = cell[(ly - title_y) * TITLE_W + gx];
-            return (alpha != 0).then(|| coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha));
-        }
-        x += *advance as usize;
-    }
-    None
+    // Geist Sans, kerned, each glyph at its quarter-pixel position; two pixels of
+    // margin left of the first letter catch an overhang.
+    let alpha = glyphs::title_coverage(title, lx as i32 - title_x as i32, ly - title_y);
+    (alpha != 0).then(|| coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha))
 }
 
 /// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column
 /// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
 /// Exact Spindle panes share the terminal layout scale for their narrower tiles.
 fn surface_text_scale(surf: &Surface) -> usize {
-    if sex_pdx::app_catalog::is_spindle(surf.owner_pd)
+    let base = if sex_pdx::app_catalog::is_spindle(surf.owner_pd)
         && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0
     {
-        sex_pdx::spindle_view::scale(surf.w) as usize
+        sex_pdx::spindle_view::scale(surf.w)
     } else {
-        sex_pdx::desktop_style::scale(surf.w) as usize
-    }
+        sex_pdx::desktop_style::scale(surf.w)
+    };
+    // The window's own text size: whole steps from its width's default, Geist
+    // drawn fresh for each.
+    (base as i32 + surf.text_zoom as i32).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32) as usize
+}
+/// A zoom step on a surface: +1 larger, -1 smaller, 0 the default. The stored step
+/// stays within what the scale can show, so the opposite key acts at once.
+fn apply_text_zoom(surf: &mut Surface, step: i64) -> bool {
+    let before = surface_text_scale(surf);
+    let zoom = surf.text_zoom;
+    surf.text_zoom = 0;
+    let base = surface_text_scale(surf) as i32;
+    surf.text_zoom = zoom;
+    let wanted = if step == 0 { 0 } else { surf.text_zoom as i32 + step.signum() as i32 };
+    surf.text_zoom = ((base + wanted).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32) - base) as i8;
+    let changed = surface_text_scale(surf) != before;
+    if changed { recompute_text_lines(surf); }
+    changed
 }
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
@@ -1746,12 +1754,14 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
         && char_end > surf.selection_start as usize
         && surf.selection_end as usize <= surf.text_len as usize;
     let background = if selected { Some(0xff36577c) } else { None };
-    // At full size, Geist Mono: its 12x18 cells are exactly this grid's cells, smoothed
-    // onto the surface's own colour. Smaller text and letters Geist lacks keep the 5x7 font.
-    if scale == 2 && scalar != 9 {
-        if let Some(cell) = sex_pdx::font_geist::cell(scalar) {
-            let (gx, gy) = ((x - tx) % sex_pdx::font_geist::CELL_W, (y - ty) % sex_pdx::font_geist::CELL_H);
-            let alpha = cell[gy * sex_pdx::font_geist::CELL_W + gx];
+    // From 2x up, Geist Mono drawn at run time to fill exactly this grid's cells,
+    // smoothed onto the surface's own colour. 1x text and letters Geist lacks keep
+    // the 5x7 font, which is crisper at 6x9.
+    let advance = (GLYPH_W + CHAR_SPACING) * scale;
+    if scale >= 2 {
+        if let Some(cell) = glyphs::mono_cell(scalar, advance, line_h) {
+            let (gx, gy) = ((x - tx) % advance, (y - ty) % line_h);
+            let alpha = cell[gy * advance + gx];
             if alpha == 0 { return background; }
             return Some(coverage_blend(surf.text_color, background.unwrap_or(surf.color), alpha));
         }
@@ -3955,6 +3965,18 @@ pub extern "C" fn _start() -> ! {
                         sex_pdx::serial_record!("[display.app.title] target={} surface={}", msg.caller_pd, msg.arg0);
                     }
                 }
+                sex_pdx::desktop_style::OP_TEXT_ZOOM => {
+                    // Shell, as window manager, sizes the text of the window it has focused.
+                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                    if wm_pd == 0 || msg.caller_pd != wm_pd { continue; }
+                    let step = msg.arg1 as i64;
+                    unsafe {
+                        if let Some(slot) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == msg.arg0 && msg.arg0 != 0) {
+                            if apply_text_zoom(slot, step) { needs_full_redraw = true; }
+                            sex_pdx::serial_record!("[display.text.zoom] surface={} step={} zoom={} scale={}", msg.arg0, step, slot.text_zoom, surface_text_scale(slot));
+                        }
+                    }
+                }
                 sex_pdx::pixel_region::OP => {
                     // Only the program row that owns this surface shows pixels in it.
                     if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
@@ -4241,6 +4263,7 @@ pub extern "C" fn _start() -> ! {
                                     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
                                     line_starts: [0u16; TEXT_MAX_ROWS], cell_starts: [0; TEXT_BUF_CAP],
                                     line_cells: [0; TEXT_MAX_ROWS], cell_count: 0, line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+                                    text_zoom: 0,
                                 };
                                 break;
                             }
