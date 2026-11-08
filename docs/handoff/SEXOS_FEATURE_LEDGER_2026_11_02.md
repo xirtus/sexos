@@ -2405,3 +2405,20 @@ row no longer waits for the row before it to end.
   stop the kernel rather than share present bits across cores. At 1 core: program disk, Jot
   and launch on the same kernel.
 - **Limits.** Shared-key programs still never run in parallel with each other.
+
+## Move a window off the tiling (2026-11-08)
+
+- **What runs now.** Drag a window by its title bar and it moves and floats: the tiling lays
+  out the other windows and leaves this one where it was put, on top while focused. Zoom
+  (the green light) puts it back under the tiling. Dragging into the top bar still
+  maximizes; dragging sideways along the title bar no longer does.
+- **Design.** Shell's move path handled only a few early hard-coded surfaces; it now moves
+  any window it knows the bounds of, through the same geometry step the tiling uses
+  (`apply_window_geometry`). A single-tab title-bar drag starts a window move instead of a
+  tab reorder and sets `FRAME_FLAG_FLOATING`, which the tiling skips. Absolute pointers
+  (tablets, QEMU) now drive window drags as relative ones do.
+- **Limits.** No resize by dragging edges yet for app windows, and unfocused floating windows
+  can sit under tiled ones. Not tried with a physical mouse.
+- **Gates.** New `window_float` (drag, then open a program: the tiling leaves the moved window
+  alone), program disk, launch, Jot, browser web and filesystem at 1 core. Python tests and
+  all non-QEMU gates except the older ones.

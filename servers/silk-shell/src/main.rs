@@ -8448,6 +8448,89 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
 ///   3 frames → top-left, top-right, bottom-full
 ///   4 frames → 2x2 grid
 ///   5+       → stacked rows (full width, equal height)
+/// One window's place on screen: Shell's own record, then Display, then the
+/// placeholder fills some built-in frames carry.
+unsafe fn apply_window_geometry(sid: u64, rx: i32, ry: i32, rw: u32, rh: u32) {
+    update_local_geometry(sid, rx, ry, rw, rh);
+    match sid {
+        SURFACE_ID_APP => {
+            if let Some(w) = WINDOWS.get_mut(1) {
+                w.desc.x = rx; w.desc.y = ry;
+                w.desc.width = rw; w.desc.height = rh;
+            }
+        }
+        SURFACE_ID_STATIC => {
+            SURFACE_101_X = rx; SURFACE_101_Y = ry;
+            SURFACE_101_W = rw; SURFACE_101_H = rh;
+        }
+        SURFACE_ID_TEST3 => {
+            SURFACE_102_X = rx; SURFACE_102_Y = ry;
+            SURFACE_102_W = rw; SURFACE_102_H = rh;
+        }
+        SURFACE_ID_TEST4 => {
+            SURFACE_103_X = rx; SURFACE_103_Y = ry;
+            SURFACE_103_W = rw; SURFACE_103_H = rh;
+        }
+        SURFACE_ID_LINEN => {
+            SURFACE_200_X = rx; SURFACE_200_Y = ry;
+            SURFACE_200_W = rw; SURFACE_200_H = rh;
+        }
+        SURFACE_ID_QUIL => {
+            SURFACE_201_X = rx; SURFACE_201_Y = ry;
+            SURFACE_201_W = rw; SURFACE_201_H = rh;
+        }
+        SURFACE_ID_MESH => {
+            SURFACE_202_X = rx; SURFACE_202_Y = ry;
+            SURFACE_202_W = rw; SURFACE_202_H = rh;
+        }
+        SURFACE_ID_COLLAR => {
+            SURFACE_203_X = rx; SURFACE_203_Y = ry;
+            SURFACE_203_W = rw; SURFACE_203_H = rh;
+        }
+        SURFACE_ID_BELL_PLACEHOLDER => {
+            SURFACE_204_X = rx; SURFACE_204_Y = ry;
+            SURFACE_204_W = rw; SURFACE_204_H = rh;
+        }
+        SURFACE_ID_BROWSER => {
+            SURFACE_205_X = rx; SURFACE_205_Y = ry;
+            SURFACE_205_W = rw; SURFACE_205_H = rh;
+        }
+        SURFACE_ID_SPINDLE => {
+            SURFACE_0x99_X = rx; SURFACE_0x99_Y = ry;
+            SURFACE_0x99_W = rw; SURFACE_0x99_H = rh;
+        }
+        _ => {}
+    }
+
+    // Send 0xEC upsert to sexdisplay (A7-proven move/resize primitive).
+    pdx_call(SLOT_DISPLAY, 0xEC, sid,
+        (ry as u64) << 32 | rx as u64,
+        (rh as u64) << 32 | rw as u64);
+
+    // The band between a Spindle frame's title bar and its terminal pane.
+    if app_catalog::spindle_views().any(|view|view.frame()==sid) && rw > 16 {
+        pdx_call(SLOT_DISPLAY, 0xEF, sid, (28u64 << 32) | 8,
+            (LINEN_LIST_BG_COLOR as u64) << 32 | (8u64 << 16) | (rw as u64 - 16));
+    }
+    // Quil visual placeholder: set distinctive fill rect after geometry update.
+    if sid == SURFACE_ID_QUIL {
+        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
+            (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+    }
+    // APP_SURFACE_PACK_V1: Mesh visual placeholder, same pattern as Quil.
+    if sid == SURFACE_ID_MESH {
+        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
+            (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+        // MESH_READONLY_PD_GRAPH_V1: live PD/app list text over the fill.
+        mesh_render_pd_graph();
+        static MESH_VISIBLE_MARK: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !MESH_VISIBLE_MARK.swap(true, Ordering::Relaxed) {
+            serial_println!("[mesh.surface.visible.ok] sid={}", SURFACE_ID_MESH);
+        }
+    }
+}
+
 unsafe fn tile_visible_frames() {
     serial_println!("[shell.tile.delegate] from=tile_visible_frames to=tile_active_scene_frames");
     tile_active_scene_frames();
@@ -8475,6 +8558,8 @@ unsafe fn tile_active_scene_frames() {
             // Zoomed frames occupy full content area via layout_maximize().
             // Tiling would overwrite the zoomed position.
             if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { continue; }
+            // A window the person moved stays where they put it.
+            if (frame.flags & FRAME_FLAG_FLOATING) != 0 { continue; }
 
             if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
                 let sid = tab.surface_id;
@@ -8581,84 +8666,7 @@ unsafe fn tile_active_scene_frames() {
         }
 
         // Update local shadow state.
-        update_local_geometry(sid, rx, ry, rw, rh);
-        match sid {
-            SURFACE_ID_APP => {
-                if let Some(w) = WINDOWS.get_mut(1) {
-                    w.desc.x = rx; w.desc.y = ry;
-                    w.desc.width = rw; w.desc.height = rh;
-                }
-            }
-            SURFACE_ID_STATIC => {
-                SURFACE_101_X = rx; SURFACE_101_Y = ry;
-                SURFACE_101_W = rw; SURFACE_101_H = rh;
-            }
-            SURFACE_ID_TEST3 => {
-                SURFACE_102_X = rx; SURFACE_102_Y = ry;
-                SURFACE_102_W = rw; SURFACE_102_H = rh;
-            }
-            SURFACE_ID_TEST4 => {
-                SURFACE_103_X = rx; SURFACE_103_Y = ry;
-                SURFACE_103_W = rw; SURFACE_103_H = rh;
-            }
-            SURFACE_ID_LINEN => {
-                SURFACE_200_X = rx; SURFACE_200_Y = ry;
-                SURFACE_200_W = rw; SURFACE_200_H = rh;
-            }
-            SURFACE_ID_QUIL => {
-                SURFACE_201_X = rx; SURFACE_201_Y = ry;
-                SURFACE_201_W = rw; SURFACE_201_H = rh;
-            }
-            SURFACE_ID_MESH => {
-                SURFACE_202_X = rx; SURFACE_202_Y = ry;
-                SURFACE_202_W = rw; SURFACE_202_H = rh;
-            }
-            SURFACE_ID_COLLAR => {
-                SURFACE_203_X = rx; SURFACE_203_Y = ry;
-                SURFACE_203_W = rw; SURFACE_203_H = rh;
-            }
-            SURFACE_ID_BELL_PLACEHOLDER => {
-                SURFACE_204_X = rx; SURFACE_204_Y = ry;
-                SURFACE_204_W = rw; SURFACE_204_H = rh;
-            }
-            SURFACE_ID_BROWSER => {
-                SURFACE_205_X = rx; SURFACE_205_Y = ry;
-                SURFACE_205_W = rw; SURFACE_205_H = rh;
-            }
-            SURFACE_ID_SPINDLE => {
-                SURFACE_0x99_X = rx; SURFACE_0x99_Y = ry;
-                SURFACE_0x99_W = rw; SURFACE_0x99_H = rh;
-            }
-            _ => {}
-        }
-
-        // Send 0xEC upsert to sexdisplay (A7-proven move/resize primitive).
-        pdx_call(SLOT_DISPLAY, 0xEC, sid,
-            (ry as u64) << 32 | rx as u64,
-            (rh as u64) << 32 | rw as u64);
-
-        // The band between a Spindle frame's title bar and its terminal pane.
-        if app_catalog::spindle_views().any(|view|view.frame()==sid) && rw > 16 {
-            pdx_call(SLOT_DISPLAY, 0xEF, sid, (28u64 << 32) | 8,
-                (LINEN_LIST_BG_COLOR as u64) << 32 | (8u64 << 16) | (rw as u64 - 16));
-        }
-        // Quil visual placeholder: set distinctive fill rect after geometry update.
-        if sid == SURFACE_ID_QUIL {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
-                (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
-        }
-        // APP_SURFACE_PACK_V1: Mesh visual placeholder, same pattern as Quil.
-        if sid == SURFACE_ID_MESH {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
-                (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
-            // MESH_READONLY_PD_GRAPH_V1: live PD/app list text over the fill.
-            mesh_render_pd_graph();
-            static MESH_VISIBLE_MARK: core::sync::atomic::AtomicBool =
-                core::sync::atomic::AtomicBool::new(false);
-            if !MESH_VISIBLE_MARK.swap(true, Ordering::Relaxed) {
-                serial_println!("[mesh.surface.visible.ok] sid={}", SURFACE_ID_MESH);
-            }
-        }
+        apply_window_geometry(sid, rx, ry, rw, rh);
     }
 
     // B3: After tiling, validate current focus.
@@ -8919,6 +8927,8 @@ const FRAME_FLAG_ZOOMED: u32 = 1 << 1;
 /// ShellFrame.flags: frame has top bar chrome band (default mode).
 /// When clear (minimal mode), only 4px neon rim is rendered.
 const FRAME_FLAG_TOP_BAR: u32 = 1 << 2;
+/// Moved by the person: tiling leaves it where it was put, until zoom tiles it again.
+const FRAME_FLAG_FLOATING: u32 = 1 << 3;
 
 // ── D2: Accessibility Node Model ──────────────────────────────────────────
 /// Maximum semantic nodes in V1 flat tree. 64 covers ~32 frames+tabs +
@@ -10100,6 +10110,11 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
             }
         }
         send_cursor_checked(POINTER_X, POINTER_Y, "abs");
+        // A window being moved follows an absolute pointer as it does a relative one.
+        if (delta_x != 0 || delta_y != 0) && matches!(INTERACTION, InteractionState::Dragging { .. }) {
+            clear_drag_if_dead();
+            let _ = drag_move_focused(delta_x, delta_y);
+        }
         serial_println!("[usb.tablet.abs.pass] ok=1");
     } else {
         if reason == "zero_init" || reason == "duplicate_sample" {
@@ -20619,7 +20634,15 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
 
 /// Toggle zoom state for the given frame. If zoomed, unzoom. If not zoomed, zoom.
 /// Returns true if the state changed.
+/// A floating window keeps the place it was moved to; tiling skips it.
+unsafe fn set_frame_floating(frame_id: u32, floating: bool) {
+    for f in FRAMES.iter_mut().flatten() {
+        if f.frame_id == frame_id { if floating { f.flags |= FRAME_FLAG_FLOATING; } else { f.flags &= !FRAME_FLAG_FLOATING; } }
+    }
+}
 unsafe fn toggle_zoom_frame(frame_id: u32) -> bool {
+    // Zoom puts a moved window back under the tiling.
+    set_frame_floating(frame_id, false);
     // A5: Reject zoom for Closing/Tombstoned/Destroyed surfaces.
     let surface_id = active_surface_for_frame(frame_id);
     if let Some(sid) = surface_id {
@@ -22602,42 +22625,12 @@ unsafe fn move_surface_by(sid: u64, dx: i32, dy: i32) -> Option<(i32, i32, u8)> 
         SURFACE_103_X = cx; SURFACE_103_Y = cy;
         return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
     }
-    if sid == SURFACE_ID_LINEN {
-        let rx = SURFACE_200_X.wrapping_add(dx);
-        let ry = SURFACE_200_Y.wrapping_add(dy);
-        let (cx, cy) = clamp_position(rx, ry, SURFACE_200_W, SURFACE_200_H);
-        SURFACE_200_X = cx; SURFACE_200_Y = cy;
-        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
-    }
-    if sid == SURFACE_ID_QUIL {
-        let rx = SURFACE_201_X.wrapping_add(dx);
-        let ry = SURFACE_201_Y.wrapping_add(dy);
-        let (cx, cy) = clamp_position(rx, ry, SURFACE_201_W, SURFACE_201_H);
-        SURFACE_201_X = cx; SURFACE_201_Y = cy;
-        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
-    }
-    if sid == SURFACE_ID_MESH {
-        let rx = SURFACE_202_X.wrapping_add(dx);
-        let ry = SURFACE_202_Y.wrapping_add(dy);
-        let (cx, cy) = clamp_position(rx, ry, SURFACE_202_W, SURFACE_202_H);
-        SURFACE_202_X = cx; SURFACE_202_Y = cy;
-        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
-    }
-    if sid == SURFACE_ID_COLLAR {
-        let rx = SURFACE_203_X.wrapping_add(dx);
-        let ry = SURFACE_203_Y.wrapping_add(dy);
-        let (cx, cy) = clamp_position(rx, ry, SURFACE_203_W, SURFACE_203_H);
-        SURFACE_203_X = cx; SURFACE_203_Y = cy;
-        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
-    }
-    if sid == SURFACE_ID_BELL_PLACEHOLDER {
-        let rx = SURFACE_204_X.wrapping_add(dx);
-        let ry = SURFACE_204_Y.wrapping_add(dy);
-        let (cx, cy) = clamp_position(rx, ry, SURFACE_204_W, SURFACE_204_H);
-        SURFACE_204_X = cx; SURFACE_204_Y = cy;
-        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
-    }
-    None
+    // Any other window: where Shell has it now, moved, kept on screen.
+    let (x, y, w, h) = get_surface_bounds(sid)?;
+    let (rx, ry) = (x.wrapping_add(dx), y.wrapping_add(dy));
+    let (cx, cy) = clamp_position(rx, ry, w, h);
+    apply_window_geometry(sid, cx, cy, w, h);
+    Some((cx, cy, ((cx != rx) || (cy != ry)) as u8))
 }
 
 /// Mission drag markers, shared by all drag-begin/end sites.
@@ -22815,7 +22808,9 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
         serial_println!("[silk.snap.reject.dead] sid={} reason=minimized", surface_id);
         return false;
     }
-    let near_top   = py < P.bar_height + SNAP_TOP_PX;
+    // Top snap needs the pointer pushed up into the bar: a title bar dragged sideways
+    // stays in the top band and must not maximize its window.
+    let near_top   = py < P.bar_height.saturating_sub(SNAP_TOP_PX / 2).max(1);
     let near_left  = px < SNAP_EDGE_PX;
     let near_right = px >= desktop_width() - SNAP_EDGE_PX;
     if near_top {
@@ -23986,7 +23981,7 @@ fn snap_validate(snap: &SceneLayoutSnapshot) -> bool {
         if fs.tab_count as usize > MAX_TABS_PER_FRAME as usize { return false; }
         if fs.active_tab as usize >= fs.tab_count as usize { return false; }
         // Flags must not contain reserved bits (only MINIMIZED | ZOOMED | TOP_BAR).
-        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR;
+        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR | FRAME_FLAG_FLOATING;
         if fs.flags & !known_flags != 0 { return false; }
     }
     // Verify checksum.
@@ -26661,7 +26656,16 @@ pub extern "C" fn _start() -> ! {
                                 let pdx = POINTER_X - DRAG_PENDING_START_X;
                                 let pdy = POINTER_Y - DRAG_PENDING_START_Y;
                                 let dist = pdx.abs().max(pdy.abs());
-                                if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 {
+                                if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 && frame_tab_count(TAB_DRAG_PENDING_FRAME_ID) <= 1 {
+                                    // One tab: its title bar moves the window, which then floats.
+                                    if let Some(sid) = active_surface_for_frame(TAB_DRAG_PENDING_FRAME_ID).filter(|s| surface_is_alive(*s)) {
+                                        set_frame_floating(TAB_DRAG_PENDING_FRAME_ID, true);
+                                        try_transition(InteractionState::Dragging { surface_id: sid, current_x: POINTER_X, current_y: POINTER_Y });
+                                        silk_drag_begin_mark(sid, POINTER_X, POINTER_Y);
+                                        serial_println!("[shell.window.float] frame={} sid={} x={} y={}", TAB_DRAG_PENDING_FRAME_ID, sid, POINTER_X, POINTER_Y);
+                                    }
+                                    DRAG_PENDING_ACTIVE = false;
+                                } else if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 {
                                     let fid = TAB_DRAG_PENDING_FRAME_ID;
                                     let stab = TAB_DRAG_PENDING_START_TAB;
                                     serial_println!("[silk.tab.drag.begin] frame={} tab={} x={} y={}", fid, stab, POINTER_X, POINTER_Y);
@@ -26778,7 +26782,16 @@ pub extern "C" fn _start() -> ! {
                                 let pdx = POINTER_X - DRAG_PENDING_START_X;
                                 let pdy = POINTER_Y - DRAG_PENDING_START_Y;
                                 let dist = pdx.abs().max(pdy.abs());
-                                if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 {
+                                if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 && frame_tab_count(TAB_DRAG_PENDING_FRAME_ID) <= 1 {
+                                    // One tab: its title bar moves the window, which then floats.
+                                    if let Some(sid) = active_surface_for_frame(TAB_DRAG_PENDING_FRAME_ID).filter(|s| surface_is_alive(*s)) {
+                                        set_frame_floating(TAB_DRAG_PENDING_FRAME_ID, true);
+                                        try_transition(InteractionState::Dragging { surface_id: sid, current_x: POINTER_X, current_y: POINTER_Y });
+                                        silk_drag_begin_mark(sid, POINTER_X, POINTER_Y);
+                                        serial_println!("[shell.window.float] frame={} sid={} x={} y={}", TAB_DRAG_PENDING_FRAME_ID, sid, POINTER_X, POINTER_Y);
+                                    }
+                                    DRAG_PENDING_ACTIVE = false;
+                                } else if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 {
                                     let fid = TAB_DRAG_PENDING_FRAME_ID;
                                     let stab = TAB_DRAG_PENDING_START_TAB;
                                     serial_println!("[silk.tab.drag.begin] frame={} tab={} x={} y={}", fid, stab, POINTER_X, POINTER_Y);
