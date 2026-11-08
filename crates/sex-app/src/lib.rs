@@ -7,6 +7,16 @@
 extern crate alloc;
 pub mod heap;
 
+/// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
+/// than the 64 KiB a run starts with (deep layout, script engines, decoders).
+#[cfg(all(feature = "heap", target_arch = "x86_64"))]
+pub fn with_stack(bytes: usize, main: extern "C" fn() -> !) -> ! {
+    let stack: &'static mut [u8] = alloc::vec![0u8; bytes].leak();
+    let top = (stack.as_mut_ptr() as usize + bytes) & !15;
+    // A call from a 16-byte aligned rsp leaves `main` the alignment the ABI expects.
+    unsafe { core::arch::asm!("mov rsp, {top}", "xor ebp, ebp", "call {main}", "ud2", top = in(reg) top, main = in(reg) main, options(noreturn)) }
+}
+
 use sex_pdx::app_key::Key;
 use sex_pdx::text_batch::{hash, Request};
 use sex_pdx::{app_lifecycle as lifecycle, pdx_call_checked, SLOT_DISPLAY, SLOT_SHELL};
@@ -98,6 +108,24 @@ impl Window {
         loop {
             let m = sex_pdx::pdx_listen_raw(0);
             if let Some(event) = self.event(&m) { return event; }
+        }
+    }
+    /// The next key or close if one is already waiting, otherwise `None` at once.
+    pub fn poll(&mut self) -> Option<Event> {
+        if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if let Some(event) = self.event(&m) { return Some(event); }
+        }
+        None
+    }
+    /// Like [`Window::next`], but gives up after about `ms` milliseconds.
+    pub fn next_within(&mut self, ms: u64) -> Option<Event> {
+        let end = sex_pdx::get_ticks().saturating_add(ms);
+        loop {
+            if let Some(e) = self.poll() { return Some(e); }
+            let now = sex_pdx::get_ticks();
+            if now >= end { return None; }
+            let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.

@@ -37,8 +37,9 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
     let mut out: Vec<Option<Style>> = alloc::vec![None; dom.nodes.len()];
     let root = Style::initial();
     let mut root_font = 16;
-    // Parents always precede children in the arena, so one forward pass suffices.
-    for id in 0..dom.nodes.len() {
+    // Document order: scripts may move nodes, so arena order is not tree order.
+    let order = dom.descendants(Dom::ROOT);
+    for &id in &order {
         if !matches!(dom.nodes[id].kind, Kind::Element { .. }) { continue; }
         let parent = dom.nodes[id].parent.and_then(|p| out[p].as_ref()).unwrap_or(&root);
         let s = style::compute(dom, &cascade, id, &parent.clone(), root_font, (width, height));
@@ -46,7 +47,7 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
         out[id] = Some(s);
     }
     // display:none hides the subtree; carry it down so layout can skip quickly.
-    for id in 0..dom.nodes.len() {
+    for &id in &order {
         if let Some(p) = dom.nodes[id].parent {
             if out[p].as_ref().map_or(false, |s| s.display == style::Display::None) {
                 if let Some(s) = out[id].as_mut() { s.display = style::Display::None; }
@@ -58,13 +59,13 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
 
 /// `<style>` contents with their `media` attribute.
 fn page_styles(dom: &Dom) -> Vec<(alloc::string::String, Option<alloc::string::String>)> {
-    (0..dom.nodes.len()).filter(|&i| dom.tag(i) == Some("style"))
+    dom.descendants(Dom::ROOT).into_iter().filter(|&i| dom.tag(i) == Some("style"))
         .map(|i| (dom.text_content(i), dom.attr(i, "media").map(alloc::string::String::from))).collect()
 }
 
 /// `<link rel=stylesheet href=...>` addresses, in document order, for the caller to fetch.
 pub fn stylesheet_links(dom: &Dom) -> Vec<&str> {
-    (0..dom.nodes.len()).filter(|&i| dom.tag(i) == Some("link"))
+    dom.descendants(Dom::ROOT).into_iter().filter(|&i| dom.tag(i) == Some("link"))
         .filter(|&i| dom.attr(i, "rel").map_or(false, |r| r.to_ascii_lowercase().split_ascii_whitespace().any(|w| w == "stylesheet")))
         .filter(|&i| dom.attr(i, "media").map_or(true, |m| { let m = m.to_ascii_lowercase(); !m.contains("print") || m.contains("screen") || m.contains("all") }))
         .filter_map(|i| dom.attr(i, "href")).collect()
@@ -72,5 +73,5 @@ pub fn stylesheet_links(dom: &Dom) -> Vec<&str> {
 
 /// `<img src>` addresses, in document order.
 pub fn image_sources(dom: &Dom) -> Vec<&str> {
-    (0..dom.nodes.len()).filter(|&i| dom.tag(i) == Some("img")).filter_map(|i| dom.attr(i, "src")).collect()
+    dom.descendants(Dom::ROOT).into_iter().filter(|&i| dom.tag(i) == Some("img")).filter_map(|i| dom.attr(i, "src")).collect()
 }

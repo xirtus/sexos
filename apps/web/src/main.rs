@@ -5,8 +5,10 @@
 //! Pages are parsed, styled and laid out here by sex-html and drawn by sex-web
 //! (Geist text, boxes, PNG/JPEG pictures) into the window's pixel surface. All of it
 //! runs inside this program's own confinement: a hostile page can only crash this
-//! window. Keys: Up/Down/Space/PgUp/PgDn/Home/End scroll, Right/Left pick a link,
-//! Enter opens it, Backspace goes back, `/` types an address, F11 closes.
+//! window. Page scripts run in QuickJS on wasmi (sex-js), confined again inside that
+//! interpreter. Keys: Up/Down/Space/PgUp/PgDn/Home/End scroll, Right/Left pick a link
+//! or button, Enter opens it, Backspace goes back, `/` types an address, F11 closes.
+//! A page's own key handlers see each key first and may keep it.
 #![no_std]
 #![no_main]
 
@@ -16,6 +18,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use sex_app::{files, nav, net, Event, Nav, Window};
 use sex_web::sex_html::{self, layout::Page, Host};
+use sex_js::{Document, Script};
 use sex_web::{Fonts, BAR};
 
 /// The window's content area as Shell tiles it today (a program can't learn its size yet).
@@ -26,6 +29,9 @@ const SOURCE_MAX: usize = 1536 * 1024;
 const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
 const MAX_REDIRECTS: usize = 6;
+const MAX_SCRIPTS: usize = 32;
+/// Layout recurses per nesting level, and scripts call back into it.
+const STACK_BYTES: usize = 2 << 20;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -33,10 +39,27 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     sex_pdx::task_finish(1);
 }
 
+fn clock() -> u64 { sex_pdx::get_ticks().saturating_mul(1_000_000) }
+
+/// The page's tree, with the script engine that owns it when the page has scripts.
+enum Doc {
+    Plain(Document),
+    /// Boxed: the engine is large, and programs have small stacks.
+    Scripted(alloc::boxed::Box<Script<Document>>),
+}
+impl Doc {
+    fn get(&mut self) -> &mut Document { match self { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() } }
+    fn script(&mut self) -> Option<&mut Script<Document>> { match self { Doc::Scripted(s) => Some(s), _ => None } }
+}
+
 struct Browser {
     window: Window,
     fonts: Fonts,
     page: Page,
+    doc: Doc,
+    sheets: Vec<String>,
+    /// When the page's next timer or animation frame is due, in ticks.
+    timer: Option<u64>,
     url: String,
     history: Vec<String>,
     scroll: i32,
@@ -154,19 +177,138 @@ impl Browser {
             }
             self.buf = Vec::new();
         }
-        let sheet_refs: Vec<&str> = sheets.iter().map(|s| s.as_str()).collect();
-        let styles = sex_html::styles(&dom, &sheet_refs, W, H - BAR);
-        self.page = sex_html::layout::layout(&dom, &styles, W, &self.fonts);
-        drop(styles);
-        drop(dom);
-        sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={}",
-            self.page.items.len(), self.page.links.len(), self.page.height, sheets.len(), self.fonts.images.len(), fetched - begun, sex_pdx::get_ticks() - fetched);
+        let scripts = self.scripts(&dom, &base);
+        self.sheets = sheets;
+        self.timer = None;
+        self.doc = Doc::Plain(Document::new(dom, &base, (W, H - BAR), clock));
+        let script_begun = sex_pdx::get_ticks();
+        if !scripts.is_empty() { self.run_scripts(scripts); }
+        let laid = sex_pdx::get_ticks();
+        self.relayout();
+        sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={} script_ticks={} scripted={}",
+            self.page.items.len(), self.page.links.len(), self.page.height, self.sheets.len(), self.fonts.images.len(), script_begun - begun,
+            sex_pdx::get_ticks() - laid, laid - script_begun, matches!(self.doc, Doc::Scripted(_)) as u8);
+        let _ = fetched;
         self.status = None;
         self.scroll = 0;
         self.focus = None;
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Web" } else { &title });
         self.scroll_to(frag);
+    }
+
+    /// The page's classic scripts in document order: inline text, or fetched from `src`.
+    #[inline(never)]
+    fn scripts(&mut self, dom: &sex_html::dom::Dom, base: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for n in dom.descendants(sex_html::dom::Dom::ROOT) {
+            if out.len() >= MAX_SCRIPTS { break; }
+            if dom.tag(n) != Some("script") { continue; }
+            let ty = dom.attr(n, "type").unwrap_or("").trim().to_ascii_lowercase();
+            if !(ty.is_empty() || ty.contains("javascript") || ty == "module" || ty.contains("ecmascript")) { continue; }
+            match dom.attr(n, "src") {
+                Some(src) => {
+                    let Some(abs) = sex_html::url::resolve(base, src) else { continue };
+                    if !abs.starts_with("http") { continue; }
+                    self.status = Some("Loading scripts…");
+                    if let Ok((_, body)) = self.fetch(&abs) { out.push((text_of(&self.buf[body]), abs)); }
+                    self.buf = Vec::new();
+                }
+                None => out.push((dom.text_content(n), alloc::format!("{}#script{}", base, out.len() + 1))),
+            }
+        }
+        out
+    }
+
+    #[inline(never)]
+    fn run_scripts(&mut self, scripts: Vec<(String, String)>) {
+        let Doc::Plain(doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock))) else { return };
+        let started = sex_pdx::get_ticks();
+        let mut script = match Script::new(doc, sex_js::Limits::default()) {
+            Ok(s) => s,
+            Err(e) => {
+                sex_pdx::serial_record!("[web.script] engine={:?}", e);
+                return;
+            }
+        };
+        sex_pdx::serial_record!("[web.script] engine_ticks={} memory={}", sex_pdx::get_ticks() - started, script.memory_bytes());
+        for (source, name) in scripts.iter() {
+            let r = script.eval(source, name);
+            if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+        }
+        let _ = script.dispatch("ready");
+        self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
+        self.after_script(false);
+    }
+
+    /// After any script ran: print its console, take a navigation, and lay out again
+    /// when it changed the page. Returns true if it drew.
+    #[inline(never)]
+    fn after_script(&mut self, draw: bool) -> bool {
+        let doc = self.doc.get();
+        for (level, text) in doc.log.drain(..) {
+            for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
+        }
+        if let Some(url) = doc.navigate.take() {
+            self.open(&url, true);
+            return true;
+        }
+        let dirty = core::mem::take(&mut doc.dirty);
+        if dirty {
+            self.relayout();
+            if draw { self.draw(); return true; }
+        }
+        false
+    }
+
+    /// Styles and lays the page out again from the tree.
+    #[inline(never)]
+    fn relayout(&mut self) {
+        let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
+        let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
+        let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
+        self.page = sex_html::layout::layout(&doc.dom, &styles, W, &self.fonts);
+        self.scroll = self.scroll.min(self.max_scroll());
+        if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
+        // Ask for the next tick soon: the change may have started timers.
+        if matches!(self.doc, Doc::Scripted(_)) && self.timer.is_none() { self.timer = Some(sex_pdx::get_ticks()); }
+    }
+
+    /// Runs due timers and animation frames.
+    #[inline(never)]
+    fn tick(&mut self) {
+        let Some(script) = self.doc.script() else { self.timer = None; return };
+        let next = script.dispatch("tick");
+        self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
+        if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
+        self.after_script(true);
+    }
+
+    /// Gives the page a key first. True if a handler kept it.
+    #[inline(never)]
+    fn page_key(&mut self, key: sex_pdx::app_key::Key) -> bool {
+        let name: String = match (nav(key), key.code) {
+            (Some(Nav::Up), _) => "ArrowUp".into(),
+            (Some(Nav::Down), _) => "ArrowDown".into(),
+            (Some(Nav::Left), _) => "ArrowLeft".into(),
+            (Some(Nav::Right), _) => "ArrowRight".into(),
+            (Some(Nav::Home), _) => "Home".into(),
+            (Some(Nav::End), _) => "End".into(),
+            (Some(Nav::Delete), _) => "Delete".into(),
+            (_, 0x1C) => "Enter".into(),
+            (_, 0x0E) => "Backspace".into(),
+            (_, 0x01) => "Escape".into(),
+            (_, 0x39) => " ".into(),
+            (_, 0x49) => "PageUp".into(),
+            (_, 0x51) => "PageDown".into(),
+            _ => match sex_app::typed(key) { Some(c) => (c as char).to_string(), None => return false },
+        };
+        let control = if key.control { "1" } else { "0" };
+        let Some(script) = self.doc.script() else { return false };
+        let kept = script.dispatch(&alloc::format!("key\tkeydown\t{}\t\t{}", name, control)).map_or(false, |r| r == 1);
+        let _ = script.dispatch(&alloc::format!("key\tkeyup\t{}\t\t{}", name, control));
+        self.after_script(true);
+        kept
     }
 
     fn scroll_to(&mut self, frag: Option<&str>) {
@@ -204,7 +346,18 @@ impl Browser {
 
     fn follow(&mut self) {
         let Some(l) = self.focus.and_then(|f| self.page.links.get(f)) else { return };
-        let href = l.href.clone();
+        let (href, node) = (l.href.clone(), l.node);
+        if let Some(script) = self.doc.script() {
+            let mut kept = script.dispatch(&alloc::format!("click\t{}", node)).map_or(false, |r| r == 1);
+            if let (false, Some(code)) = (kept, href.strip_prefix("javascript:")) {
+                let _ = script.eval(&sex_html::parse::decode(code), "javascript:");
+                kept = true;
+            }
+            let navigated = self.doc.get().navigate.is_some();
+            self.after_script(true);
+            if kept || navigated || href.is_empty() { return; }
+        }
+        if href.is_empty() || href.starts_with("javascript:") { return; }
         let target = if href == "about:welcome" { Some(href) } else if self.url.starts_with('@') || self.url == "about:welcome" {
             if href.starts_with("http") || href.starts_with('#') { Some(href) } else { None }
         } else { sex_html::url::resolve(&self.url, &href) };
@@ -217,6 +370,7 @@ impl Browser {
 
     fn key(&mut self, key: sex_pdx::app_key::Key) {
         let view = H - BAR;
+        if self.editing.is_none() && self.page_key(key) { return; }
         if let Some(text) = self.editing.as_mut() {
             match key.code {
                 0x01 => { self.editing = None; self.draw(); }
@@ -253,19 +407,32 @@ impl Browser {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start() -> ! { sex_app::with_stack(STACK_BYTES, main) }
+
+extern "C" fn main() -> ! {
     let mut window = Window::open();
     window.title(b"Web");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = String::from(core::str::from_utf8(files::args(&mut window, &mut args)).unwrap_or("").trim());
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
-    let mut b = Browser { window, fonts, page, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new() };
+    let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new() };
     let first = given.split_ascii_whitespace().next().unwrap_or("about:welcome").to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
     loop {
-        match b.window.next() {
+        let event = match b.timer {
+            Some(due) => {
+                let now = sex_pdx::get_ticks();
+                match if due > now { b.window.next_within(due - now) } else { b.window.poll() } {
+                    Some(e) => e,
+                    None => { b.tick(); continue; }
+                }
+            }
+            None => b.window.next(),
+        };
+        match event {
             Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
             Event::Key(key) => b.key(key),
         }

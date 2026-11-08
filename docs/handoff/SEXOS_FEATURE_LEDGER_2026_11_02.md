@@ -2717,3 +2717,38 @@ row no longer waits for the row before it to end.
   `::before`, no grid (laid out as blocks), no web fonts, no bold Geist file (synthetic).
   No scripts yet: next is QuickJS-NG on Wasm with DOM bindings, then Canvas 2D. HTTP/1.0
   only, so no keep-alive; gzip not requested. Gates need a fresh `--out` directory.
+
+## Web runs page JavaScript (2026-11-08)
+
+- **What runs now.** Pages' classic scripts (inline and `src`, in document order) run in
+  `run web`. They can read and change the page (`document`, `getElementById`,
+  `querySelector(All)`, `createElement`, `appendChild`, `innerHTML`, `textContent`,
+  `classList`, `style`, `dataset`, attributes), listen for clicks and keys
+  (`addEventListener`, `onclick` attributes and properties, bubbling, `preventDefault`), and
+  use `setTimeout`, `setInterval`, `requestAnimationFrame`, promises, `console`,
+  `location`, `localStorage` (per page, in memory). The page is laid out again after any
+  change. Buttons and elements with click listeners join links in Right/Left focus; Enter
+  clicks them. A page's key handlers see each key first and may keep it.
+- **Design.** New crate `crates/sex-js` (`no_std` + `alloc`). The engine is QuickJS-NG
+  v0.10.1 (MIT), compiled to wasm32 by `scripts/build_quickjs_wasm.sh` (wasi-sdk 25,
+  reproducible, 545 KB, checked in as `crates/sex-js/quickjs.wasm`) and run on wasmi, so
+  scripts are confined by the interpreter inside Web's own confinement, and floating point
+  stays in software. The guest has one native call, `__host(op, ...strings)`; the DOM API
+  is JavaScript (`src/prelude.js`) over it, and `Document` answers the ops on sex-html's
+  tree. Long scripts stop after 2 s (QuickJS interrupt handler). sex-html gains tree edits
+  (`create/insert/detach/set_attr/set_text`), HTML serialization and fragment parsing, and
+  styles in tree order. `Link` gains `node`; `Dom::activatable` decides what can be
+  focused. sex-app gains `Window::poll`, `Window::next_within` and `with_stack`: Web now
+  runs on a 2 MiB stack from its heap, as the 64 KiB a run starts with overflowed (a
+  guarded, growable program stack is coming from the limits work). wasmi is now built at
+  opt-level 3 for speed (programs may be 16 MiB since #21). No ABI change.
+- **Evidence.** 11 host tests in sex-js (DOM edits, `innerHTML`, events, timers,
+  navigation, a runaway loop stopped, language features). `scripts/program_web_js_gate.py`
+  serves `scripts/web_site/js.html`: the script builds a list, animates a bar to the end
+  with `setInterval`, a button click and a `k` key change the page; each state matches
+  `cargo run -p sex-web --example page` (which runs the same script) exactly, 0 of 9020
+  sampled pixels differ, at 1 and 4 cores. The engine starts in 1.7 s at 1 core and 0.8 s
+  at 4 cores under TCG.
+- **Limits.** No Canvas 2D or WebGL yet (next). No `fetch`/`XMLHttpRequest`, no layout
+  boxes for `getBoundingClientRect` (zeros), no text inputs, no ES modules as modules
+  (run as classic scripts), pictures a script adds are not loaded.

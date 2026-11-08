@@ -9,3 +9,6 @@ description = "Draws sex-html pages: Geist text through sex-font, boxes, list ma
 sex-html = { path = "../sex-html" }
 sex-font = { path = "../sex-font" }
 sex-image = { path = "../sex-image" }
+
+[dev-dependencies]
+sex-js = { path = "../sex-js" }
