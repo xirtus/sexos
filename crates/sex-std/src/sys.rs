@@ -12,7 +12,7 @@ use core::ffi::{c_char, CStr};
 use sex_app::files::direct as files;
 use sex_pdx::fs as w;
 use std::os::hermit::hermit_abi::{self as abi, errno, dirent64, stat, timespec, Tid};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // ---- start and end -------------------------------------------------------------------
 
@@ -230,8 +230,29 @@ pub extern "C" fn sys_futex_wake(address: *mut u32, count: i32) -> i32 {
 
 enum Open {
     Console(usize),
-    File { path: Vec<u8>, pos: u64, read: bool, write: bool, append: bool },
+    /// Shared by a descriptor and its duplicates, as one open file is.
+    File(Arc<OpenFile>),
     Dir { entries: Vec<files::Entry>, given: bool },
+}
+
+struct OpenFile {
+    path: Vec<u8>,
+    read: bool,
+    write: bool,
+    append: bool,
+    /// The position, held from choosing an offset until the read or write has moved
+    /// it, so two tasks on one file never use the same bytes.
+    pos: Mutex<u64>,
+}
+impl OpenFile {
+    fn pos(&self) -> std::sync::MutexGuard<'_, u64> { self.pos.lock().unwrap_or_else(|e| e.into_inner()) }
+}
+fn file(fd: i32) -> Result<Arc<OpenFile>, i32> {
+    match table().get(fd as usize) {
+        Some(Some(Open::File(f))) => Ok(f.clone()),
+        Some(Some(_)) => Err(-errno::EINVAL),
+        _ => Err(-errno::EBADF),
+    }
 }
 
 /// Open descriptors; 0, 1 and 2 are the console.
@@ -298,7 +319,7 @@ pub unsafe extern "C" fn sys_open(name: *const c_char, flags: i32, _mode: i32) -
         Err(w::NOT_FOUND) if flags & abi::O_CREAT != 0 => if let Err(e) = files::create(&p) { return errno_of(e); },
         Err(e) => return errno_of(e),
     }
-    insert(Open::File { path: p, pos: 0, read, write, append: flags & abi::O_APPEND != 0 })
+    insert(Open::File(Arc::new(OpenFile { path: p, pos: Mutex::new(0), read, write, append: flags & abi::O_APPEND != 0 })))
 }
 
 #[no_mangle]
@@ -316,21 +337,18 @@ pub extern "C" fn sys_close(fd: i32) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn sys_read(fd: i32, buf: *mut u8, len: usize) -> isize {
     let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
-    let (path, pos) = {
+    let f = {
         let t = table();
         match t.get(fd as usize) {
             Some(Some(Open::Console(0))) => None,
-            Some(Some(Open::File { path, pos, read: true, .. })) => Some((path.clone(), *pos)),
-            Some(Some(_)) => return -errno::EBADF as isize,
+            Some(Some(Open::File(f))) if f.read => Some(f.clone()),
             _ => return -errno::EBADF as isize,
         }
-    }.map_or((None, 0), |(p, o)| (Some(p), o));
-    let Some(path) = path else { return console::read(out) as isize };
-    match files::read_at(&path, pos, out) {
-        Ok(n) => {
-            if let Some(Some(Open::File { pos, .. })) = table().get_mut(fd as usize) { *pos += n as u64; }
-            n as isize
-        }
+    };
+    let Some(f) = f else { return console::read(out) as isize };
+    let mut pos = f.pos();
+    match files::read_at(&f.path, *pos, out) {
+        Ok(n) => { *pos += n as u64; n as isize }
         Err(e) => errno_of(e) as isize,
     }
 }
@@ -338,21 +356,21 @@ pub unsafe extern "C" fn sys_read(fd: i32, buf: *mut u8, len: usize) -> isize {
 #[no_mangle]
 pub unsafe extern "C" fn sys_write(fd: i32, buf: *const u8, len: usize) -> isize {
     let data = unsafe { core::slice::from_raw_parts(buf, len) };
-    let (path, pos, append) = {
+    let f = {
         let t = table();
         match t.get(fd as usize) {
             Some(Some(Open::Console(n @ (1 | 2)))) => { let n = *n; drop(t); console::write(n - 1, data); return len as isize; }
-            Some(Some(Open::File { path, pos, write: true, append, .. })) => (path.clone(), *pos, *append),
+            Some(Some(Open::File(f))) if f.write => f.clone(),
             _ => return -errno::EBADF as isize,
         }
     };
-    let at = if append { match files::stat(&path) { Ok(st) => st.size, Err(e) => return errno_of(e) as isize } } else { pos };
-    match files::write_at(&path, at, data) {
+    // Appends from two descriptors of one file still race on the end; within one open
+    // file the position lock orders them.
+    let mut pos = f.pos();
+    let at = if f.append { match files::stat(&f.path) { Ok(st) => st.size, Err(e) => return errno_of(e) as isize } } else { *pos };
+    match files::write_at(&f.path, at, data) {
         Ok(0) if !data.is_empty() => -errno::ENOSPC as isize,
-        Ok(n) => {
-            if let Some(Some(Open::File { pos, .. })) = table().get_mut(fd as usize) { *pos = at + n as u64; }
-            n as isize
-        }
+        Ok(n) => { *pos = at + n as u64; n as isize }
         Err(e) => errno_of(e) as isize,
     }
 }
@@ -382,27 +400,24 @@ pub unsafe extern "C" fn sys_writev(fd: i32, iov: *const abi::iovec, count: usiz
 
 #[no_mangle]
 pub extern "C" fn sys_lseek(fd: i32, offset: isize, whence: i32) -> isize {
-    let path = match table().get(fd as usize) {
-        Some(Some(Open::File { path, .. })) => path.clone(),
-        Some(Some(_)) => return -errno::ESPIPE as isize,
-        _ => return -errno::EBADF as isize,
-    };
+    let f = match file(fd) { Ok(f) => f, Err(e) => return if e == -errno::EINVAL { -errno::ESPIPE as isize } else { e as isize } };
+    let mut pos = f.pos();
     let base = match whence {
         abi::SEEK_SET => 0i64,
-        abi::SEEK_CUR => match table().get(fd as usize) { Some(Some(Open::File { pos, .. })) => *pos as i64, _ => 0 },
-        abi::SEEK_END => match files::stat(&path) { Ok(st) => st.size as i64, Err(e) => return errno_of(e) as isize },
+        abi::SEEK_CUR => *pos as i64,
+        abi::SEEK_END => match files::stat(&f.path) { Ok(st) => st.size as i64, Err(e) => return errno_of(e) as isize },
         _ => return -errno::EINVAL as isize,
     };
     let to = base + offset as i64;
     if to < 0 { return -errno::EINVAL as isize; }
-    if let Some(Some(Open::File { pos, .. })) = table().get_mut(fd as usize) { *pos = to as u64; }
+    *pos = to as u64;
     to as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sys_fstat(fd: i32, out: *mut stat) -> i32 {
     let path = match table().get(fd as usize) {
-        Some(Some(Open::File { path, .. })) => path.clone(),
+        Some(Some(Open::File(f))) => f.path.clone(),
         Some(Some(Open::Console(_))) => {
             let mut s: stat = unsafe { core::mem::zeroed() };
             s.st_mode = abi::S_IFCHR | 0o620;
@@ -481,12 +496,8 @@ pub extern "C" fn sys_fsync(fd: i32) -> i32 {
 #[no_mangle]
 pub extern "C" fn sys_ftruncate(fd: i32, size: i64) -> i32 {
     if size < 0 { return -errno::EINVAL; }
-    let path = match table().get(fd as usize) {
-        Some(Some(Open::File { path, write: true, .. })) => path.clone(),
-        Some(Some(_)) => return -errno::EINVAL,
-        _ => return -errno::EBADF,
-    };
-    files::truncate(&path, size as u64).map_or_else(errno_of, |_| 0)
+    let f = match file(fd) { Ok(f) if f.write => f, Ok(_) => return -errno::EINVAL, Err(e) => return e };
+    files::truncate(&f.path, size as u64).map_or_else(errno_of, |_| 0)
 }
 
 #[no_mangle]
@@ -496,7 +507,7 @@ pub extern "C" fn sys_isatty(fd: i32) -> i32 { matches!(table().get(fd as usize)
 pub extern "C" fn sys_dup(fd: i32) -> i32 {
     let copy = match table().get(fd as usize) {
         Some(Some(Open::Console(n))) => Open::Console(*n),
-        Some(Some(Open::File { path, pos, read, write, append })) => Open::File { path: path.clone(), pos: *pos, read: *read, write: *write, append: *append },
+        Some(Some(Open::File(f))) => Open::File(f.clone()),
         Some(Some(Open::Dir { entries, given })) => Open::Dir { entries: entries.clone(), given: *given },
         _ => return -errno::EBADF,
     };

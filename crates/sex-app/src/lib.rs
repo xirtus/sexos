@@ -32,6 +32,10 @@ const FILES: u32 = 11;
 const NET: u32 = 13;
 
 /// An answer from Files or the network service: it belongs to whichever task asked.
+/// How long the main task sleeps before it looks in the mailbox again; anything that
+/// reaches its inbox wakes it at once.
+const MAILBOX_LOOK_TICKS: u64 = 4;
+
 fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
 fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL }
@@ -141,12 +145,11 @@ impl Window {
     /// The next key or close, waiting for one.
     pub fn next(&mut self) -> Event {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take().unwrap(); }
-        while let Some(m) = mailbox::take(is_shell) {
-            if let Some(event) = self.event(&m) { return event; }
-        }
+        // A worker waiting for Files may take a key meant for this task and leave it in
+        // the mailbox, which wakes no one: so sleep only briefly, then look there again.
         loop {
-            let m = sex_pdx::pdx_listen_raw(0);
-            if let Some(event) = self.event(&m) { return event; }
+            if let Some(event) = self.poll() { return event; }
+            let _ = sex_pdx::sys_wait_self_ticks(MAILBOX_LOOK_TICKS);
         }
     }
     /// The next key or close if one is already waiting, otherwise `None` at once.
@@ -242,16 +245,18 @@ pub mod files {
                 Err(_) => return Err(w::UNAVAILABLE),
             }
         }
-        // The main task sleeps until its inbox has something; a worker cannot, so it
-        // looks, and lets others run between looks.
+        // The main task sleeps until its inbox has something (or briefly, to see the
+        // mailbox); a worker cannot sleep that way, so it looks, and lets others run.
         let worker = crate::thread::is_worker();
         let mut idle = 0u32;
         loop {
             let m = match mailbox::take(|m| mine(m, seq)) {
                 Some(m) => m,
-                None if !worker => sex_pdx::pdx_listen_raw(0),
                 None => match sex_pdx::pdx_try_listen_raw(0) {
                     Some(m) => { idle = 0; m }
+                    // Another task may move this answer into the mailbox meanwhile,
+                    // which wakes no one: the main task sleeps briefly and looks again.
+                    None if !worker => { let _ = sex_pdx::sys_wait_self_ticks(super::MAILBOX_LOOK_TICKS); continue; }
                     None => { idle += 1; crate::thread::pause(idle); continue; }
                 },
             };
@@ -405,20 +410,18 @@ pub mod files {
             }
         }
     }
-    /// One request for the window's task, keeping keys and closes that arrive meanwhile.
-    /// The caller fills the data area before and reads it after; that is safe on the
-    /// window's own task, which is the only one that holds a window.
+    /// One request with no data either way, for the window's task, keeping keys and
+    /// closes that arrive meanwhile. Requests with data use [`exchange`]'s `fill` and
+    /// `take`, so another task's request cannot replace the data in between.
     fn request(window: &mut Window, kind: u8, path: &[u8], offset: u64, length: u64) -> Result<u32, Error> {
         exchange(Some(window), kind, path, offset, length, |_| {}, |value, _| value)
     }
+    fn word(d: &[u8], i: usize) -> u64 { u64::from_le_bytes(d[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8])) }
     /// What a path is.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Stat { pub dir: bool, pub size: u64, pub mtime: u64 }
     pub fn stat(window: &mut Window, path: &[u8]) -> Result<Stat, Error> {
-        request(window, w::STAT, path, 0, 0)?;
-        let r = &region()?[w::PATH_BYTES..];
-        let word = |i: usize| u64::from_le_bytes(r[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
-        Ok(Stat { dir: word(0) != 0, size: word(1), mtime: word(2) })
+        exchange(Some(window), w::STAT, path, 0, 0, |_| {}, |_, d| Stat { dir: word(d, 0) != 0, size: word(d, 1), mtime: word(d, 2) })
     }
     /// One entry of a folder.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -428,16 +431,18 @@ pub mod files {
         let mut out = alloc::vec::Vec::new();
         let mut cursor = 0u64;
         loop {
-            let used = request(window, w::LIST, path, cursor, 0)? as usize;
-            let r = &region()?[w::PATH_BYTES..];
-            let next = u64::from_le_bytes(r[..8].try_into().unwrap_or([0; 8]));
-            let mut at = w::LIST_HEAD;
-            while at + w::ENTRY_HEAD <= used {
-                let len = r[at + 1] as usize;
-                let size = u64::from_le_bytes(r[at + 2..at + 10].try_into().unwrap_or([0; 8]));
-                out.push(Entry { name: r[at + w::ENTRY_HEAD..at + w::ENTRY_HEAD + len].to_vec(), dir: r[at] == 1, size });
-                at += w::ENTRY_HEAD + len;
-            }
+            let next = exchange(Some(&mut *window), w::LIST, path, cursor, 0, |_| {}, |used, r| {
+                let used = (used as usize).min(r.len());
+                let mut at = w::LIST_HEAD;
+                while at + w::ENTRY_HEAD <= used {
+                    let len = r[at + 1] as usize;
+                    if at + w::ENTRY_HEAD + len > used { break; }
+                    let size = u64::from_le_bytes(r[at + 2..at + 10].try_into().unwrap_or([0; 8]));
+                    out.push(Entry { name: r[at + w::ENTRY_HEAD..at + w::ENTRY_HEAD + len].to_vec(), dir: r[at] == 1, size });
+                    at += w::ENTRY_HEAD + len;
+                }
+                word(r, 0)
+            })?;
             if next == 0 { return Ok(out); }
             cursor = next;
         }
@@ -460,8 +465,7 @@ pub mod files {
         let mut done = 0;
         while done < data.len() {
             let n = (data.len() - done).min(w::IO_MAX);
-            region()?[w::PATH_BYTES..w::PATH_BYTES + n].copy_from_slice(&data[done..done + n]);
-            let wrote = request(window, w::WRITE, path, offset + done as u64, n as u64)? as usize;
+            let wrote = direct::write_at_held(Some(&mut *window), path, offset + done as u64, &data[done..done + n])?;
             done += wrote;
             if wrote < n { return Err(w::NO_SPACE); }
         }
@@ -469,10 +473,7 @@ pub mod files {
     }
     /// (total, free) bytes of the disk holding `path`.
     pub fn space(window: &mut Window, path: &[u8]) -> Result<(u64, u64), Error> {
-        request(window, w::STATFS, path, 0, 0)?;
-        let r = &region()?[w::PATH_BYTES..];
-        let word = |i: usize| u64::from_le_bytes(r[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
-        Ok((word(0) * 4096, word(1) * 4096))
+        exchange(Some(window), w::STATFS, path, 0, 0, |_| {}, |_, d| (word(d, 0) * 4096, word(d, 1) * 4096))
     }
 
     /// What the picker asks the person for.
@@ -483,19 +484,19 @@ pub mod files {
     /// Closing the window meanwhile cancels. Errors: DENIED when the person cancelled.
     pub fn pick<'a>(window: &mut Window, mode: Pick, suggestion: &[u8], out: &'a mut [u8; w::PATH_BYTES]) -> Result<&'a [u8], Error> {
         let n = suggestion.len().min(w::PICK_HINT_MAX);
-        {
-            let r = &mut region()?[w::PATH_BYTES..];
-            r[0] = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
+        let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
+        let ticket = exchange(Some(&mut *window), w::PICK, b"", 0, n as u64, |r| {
+            r[0] = code;
             r[1..1 + n].copy_from_slice(&suggestion[..n]);
-        }
-        let ticket = request(window, w::PICK, b"", 0, n as u64)?;
+        }, |ticket, _| ticket)?;
         loop {
-            match request(window, w::PICKED, b"", ticket as u64, 0) {
-                Ok(len) => {
-                    let len = (len as usize).min(w::PATH_BYTES);
-                    out[..len].copy_from_slice(&region()?[w::PATH_BYTES..w::PATH_BYTES + len]);
-                    return Ok(&out[..len]);
-                }
+            let picked = exchange(Some(&mut *window), w::PICKED, b"", ticket as u64, 0, |_| {}, |len, d| {
+                let len = (len as usize).min(w::PATH_BYTES).min(d.len());
+                out[..len].copy_from_slice(&d[..len]);
+                len
+            });
+            match picked {
+                Ok(len) => return Ok(&out[..len]),
                 Err(w::PENDING) => {}
                 Err(e) => return Err(e),
             }
@@ -518,23 +519,24 @@ pub mod files {
     pub struct Question { pub row: u8, pub mode: Pick, pub ticket: u32, pub program: alloc::vec::Vec<u8>, pub suggestion: alloc::vec::Vec<u8> }
     /// Questions waiting for the person. Only a run given the whole filesystem may ask.
     pub fn questions(window: &mut Window) -> Result<alloc::vec::Vec<Question>, Error> {
-        let used = request(window, w::PICKS, b"", 0, 0)? as usize;
-        let r = &region()?[w::PATH_BYTES..];
-        let mut out = alloc::vec::Vec::new();
-        let mut at = 0;
-        while at + 7 <= used {
-            let row = r[at];
-            let mode = match r[at + 1] { w::PICK_SAVE => Pick::Save, w::PICK_FOLDER => Pick::Folder, _ => Pick::Open };
-            let ticket = u32::from_le_bytes(r[at + 2..at + 6].try_into().unwrap_or([0; 4]));
-            let name_len = r[at + 6] as usize;
-            let program = r[at + 7..at + 7 + name_len].to_vec();
-            at += 7 + name_len;
-            let hint_len = r[at] as usize;
-            let suggestion = r[at + 1..at + 1 + hint_len].to_vec();
-            at += 1 + hint_len;
-            out.push(Question { row, mode, ticket, program, suggestion });
-        }
-        Ok(out)
+        exchange(Some(window), w::PICKS, b"", 0, 0, |_| {}, |used, r| {
+            let used = (used as usize).min(r.len());
+            let mut out = alloc::vec::Vec::new();
+            let mut at = 0;
+            while at + 7 <= used {
+                let row = r[at];
+                let mode = match r[at + 1] { w::PICK_SAVE => Pick::Save, w::PICK_FOLDER => Pick::Folder, _ => Pick::Open };
+                let ticket = u32::from_le_bytes(r[at + 2..at + 6].try_into().unwrap_or([0; 4]));
+                let name_len = r[at + 6] as usize;
+                let program = r[at + 7..at + 7 + name_len].to_vec();
+                at += 7 + name_len;
+                let hint_len = r[at] as usize;
+                let suggestion = r[at + 1..at + 1 + hint_len].to_vec();
+                at += 1 + hint_len;
+                out.push(Question { row, mode, ticket, program, suggestion });
+            }
+            out
+        })
     }
     /// Answers a question with `path` (`@/...`), or cancels it with `None`.
     pub fn answer(window: &mut Window, q: &Question, path: Option<&[u8]>) -> Result<(), Error> {
