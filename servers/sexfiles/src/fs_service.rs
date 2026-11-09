@@ -355,14 +355,21 @@ pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
     path[at..at + name.len()].copy_from_slice(name);
     read_program(&path[..at + name.len()], image)
 }
-/// The prepared path, once. A stale ticket finds nothing.
-pub fn read_ticket(ticket: u64, image: &mut [u8]) -> Program {
+/// The prepared path, once. A stale ticket finds nothing. When the path is
+/// `/bin/NAME` and no such file exists, the packed NAME comes back too, so the disk
+/// program store can serve it with the same arguments.
+pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>) {
     unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
-    if prepared.1 == 0 || prepared.2 as u64 != ticket { return Program::Absent; }
+    if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
-    read_program(&prepared.0[..len], image)
+    let path = &prepared.0[..len];
+    let found = read_program(path, image);
+    let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
+        .filter(|name| !name.contains(&b'/'))
+        .and_then(sex_pdx::program_store::pack_name);
+    match found { Program::Absent => (Program::Absent, store_name), other => (other, None) }
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
     let now = 0;
@@ -429,8 +436,16 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }
         w::SYNC => { fs.commit()?; Ok(0) }
         w::PREPARE => {
-            let st = fs.open(path)?;
-            if st.kind == Kind::Dir { return Err(Error::IsDir); }
+            // `/bin/NAME` with no such file may still be the disk program store's NAME:
+            // the load looks there, and refuses then if neither has it.
+            let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
+                .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
+            match fs.open(path) {
+                Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
+                Ok(_) => {}
+                Err(Error::NotFound) if store_name => {}
+                Err(e) => return Err(e),
+            }
             let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
             prepared.0[..path.len()].copy_from_slice(path);
             prepared.1 = path.len();
