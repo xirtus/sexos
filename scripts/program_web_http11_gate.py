@@ -46,6 +46,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
    time.sleep(1.5)
    with LOCK:LIVE[0]-=1
    return self.plain(200,b'slow'+m[1].encode(),'text/plain')
+  if self.path=='/tube/drop':
+   # Keep-alive by the headers, then close anyway, as servers do with idle connections.
+   self.plain(200,b'dropped','text/plain');self.close_connection=True;return
+  if self.path=='/tube/after':return self.plain(200,b'after','text/plain')
   if self.path=='/tube/media.bin':
    m=re.fullmatch(r'bytes=(\d+)-(\d+)',self.headers.get('Range',''))
    if not m:return self.plain(200,MEDIA,'application/octet-stream')
@@ -111,11 +115,14 @@ def main():
   assert LIVE[1]==12,('requests at once',LIVE[1])
   beside=g['wait'](r'\[web.console\] level=0 tube beside stuck ([^\n]*)\n',s,300)
   assert beside[1].startswith('slow0 ms=') and int(beside[1].split('ms=')[1])<5000,beside[1]
+  after=g['wait'](r'\[web.console\] level=0 tube after drop ([^\n]*)\n',s,240)
+  assert after[1]=='after',after[1]
+  assert re.search(r'\[net.kept.retry\] flow=\d+ sent=1',t()),'the closed kept connection was not retried'
   made=re.findall(r'\[net.open.flows\] made=(\d+)',t());assert made and int(made[-1])>=12,made
   assert 'gzip' in SEEN.get('accept-encoding',''),SEEN
   assert re.search(r'\[net.receive.stats\] [^\n]*reused=1',t()),'no request went out on a kept connection'
   assert COUNT['requests']>COUNT['connections'],('connections were not reused',COUNT)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1],'beside_stuck':beside[1],'reuse':COUNT})
+  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1],'beside_stuck':beside[1],'reuse':COUNT,'after_drop':after[1]})
  finally:g['stop']()
 if __name__=='__main__':main()

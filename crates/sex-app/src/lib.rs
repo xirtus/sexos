@@ -460,6 +460,7 @@ pub mod net {
         /// A kept connection that failed before any reply byte: the site had closed it.
         /// Start over on a new one (as browsers do), once.
         fn fresh(&mut self, window: &mut Window) -> Result<(), Error> {
+            sex_pdx::serial_record!("[net.kept.retry] flow={} sent={}", self.flow.0, matches!(self.setup, Setup::Done) as u8);
             close(window, self.flow);
             self.flow = take_flow()?;
             self.reused = false;
@@ -531,7 +532,8 @@ pub mod net {
                         self.setup = Setup::Send { at: at + took };
                     } else {
                         if self.tls { ok(call_on(window, flow, w::FINISH_REQUEST, 0)?)?; }
-                        self.out = alloc::vec::Vec::new();
+                        // A kept connection may turn out closed: keep the request to send again.
+                        if !self.reused { self.out = alloc::vec::Vec::new(); }
                         self.setup = Setup::Done;
                     }
                 }
