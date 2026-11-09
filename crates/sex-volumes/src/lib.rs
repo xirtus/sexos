@@ -142,6 +142,8 @@ pub trait Volume {
     /// The volume's own name, if it has one.
     fn label(&self) -> String;
     fn read_only(&self) -> bool;
+    /// The time, Unix seconds, to stamp on what changes from now on.
+    fn set_now(&mut self, _unix: u64) {}
     /// (total bytes, free bytes).
     fn statfs(&mut self, disk: &mut dyn Disk) -> Result<(u64, u64)>;
     fn stat(&mut self, disk: &mut dyn Disk, path: &[u8]) -> Result<Stat>;
