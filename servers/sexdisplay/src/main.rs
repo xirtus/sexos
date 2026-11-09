@@ -628,17 +628,21 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
     let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
     if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
     let row=unsafe{fb.add(y*w)};
-    for x in x0..x1{unsafe{core::ptr::write_volatile(row.add(x),base);}}
+    // The private frame is ordinary memory: a plain fill vectorizes.
+    unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(base);}
     text_run(row,x0,x1,y,content);
     true
 }
 
 /// The ink and selection of `surface_text_fg_at` for one row run.
 fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
-    if program_pixel_at(0,0,surf).is_some(){
-        for x in x0..x1{if let Some(Some(c))=program_pixel_at(x,y,surf){unsafe{core::ptr::write_volatile(row.add(x),c);}}}
+    if let Some((src,from,to))=program_pixel_row(y,x0,x1,surf){
+        // Straight from the program's own region: one span copy per row.
+        let out=unsafe{core::slice::from_raw_parts_mut(row.add(from),to-from)};
+        for(i,o)in out.iter_mut().enumerate(){*o=unsafe{core::ptr::read_volatile(src.add(i))}&0x00FF_FFFF;}
         return;
     }
+    if program_pixel_at(0,0,surf).is_some(){return;}
     if surf.text_len==0||surf.line_count==0{return;}
     const GLYPH_W:usize=sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H:usize=sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
@@ -704,7 +708,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene:&scene
             if let Some(source)=source{
                 if fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
             }else{
-                for px in x..end{unsafe{core::ptr::write_volatile(fb.add(y*w+px),back);}}
+                unsafe{core::slice::from_raw_parts_mut(fb.add(y*w+x),end-x).fill(back);}
                 x=end;continue;
             }
         }
@@ -1699,6 +1703,23 @@ fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
     let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize);
     if x<bx||y<by||x>=bx+w||y>=by+h||x>=right||y>=bottom{return Some(None);}
     Some(Some(unsafe{core::ptr::read_volatile((base as *const u32).add((y-by)*w+(x-bx)))}&0x00FF_FFFF))
+}
+/// The part of row `y` within `x0..x1` that shows the program's picture: where it
+/// starts in the region, and the screen columns it covers. Same bounds as
+/// `program_pixel_at`, computed once per row.
+fn program_pixel_row(y:usize,x0:usize,x1:usize,surf:&Surface)->Option<(*const u32,usize,usize)>{
+    let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
+    if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
+    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
+    if w==0||h==0||base==0{return None;}
+    let bx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
+    let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
+    let by=(surf.y.max(0) as usize).saturating_add(top);
+    let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize).min(bx+w).min(x1);
+    let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize).min(by+h);
+    let from=x0.max(bx);
+    if y<by||y>=bottom||from>=right{return None;}
+    Some((unsafe{(base as *const u32).add((y-by)*w+(from-bx))},from,right))
 }
 /// Read-only views of each app's BOOT text region, resolved once at startup.
 static mut TEXT_REGIONS:[u64;sex_pdx::app_catalog::COUNT]=[0;sex_pdx::app_catalog::COUNT];
