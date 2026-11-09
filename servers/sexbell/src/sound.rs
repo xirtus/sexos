@@ -188,7 +188,7 @@ const STREAMS: usize = 16;
 use sex_pdx::sound_ring as ring;
 
 #[derive(Clone, Copy)]
-struct Stream { ring: ring::Ring, active: bool }
+struct Stream { ring: ring::Ring, active: bool, pd: u32 }
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
@@ -260,7 +260,9 @@ impl Player {
             // A program owns only its own ring: a counter it bent is clamped, not trusted.
             let have = written.wrapping_sub(taken).min(ring::FRAMES) as usize;
             let n = have.min(PERIOD_FRAMES);
-            let volume = r.load(ring::VOLUME).min(100) as i32;
+            // A muted program's sound is taken and counted as played, so its clock
+            // runs on, but not heard.
+            let volume = if crate::sound_muted(st.pd) { 0 } else { r.load(ring::VOLUME).min(100) as i32 };
             let frames = r.frames();
             for f in 0..n {
                 let at = ((taken + f as u64) % ring::FRAMES) as usize;
@@ -375,17 +377,27 @@ pub fn stream(caller: u32) -> bool {
     let Some(k) = ring::index_of(caller).filter(|k| *k < STREAMS) else { return false };
     if p.streams[k].is_none() {
         match sex_pdx::sound_ring_bell(k) {
-            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false }),
+            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller }),
             Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return false; }
         }
     }
     let st = p.streams[k].as_mut().unwrap();
+    st.pd = caller;
     if !st.active {
         st.active = true;
         sex_pdx::serial_record!("[bell.sound.stream.open] row={} caller={} written={} taken={}",
             k, caller, st.ring.load(ring::WRITTEN), st.ring.load(ring::TAKEN));
     }
     p.pump();
+    true
+}
+
+/// A program ended, closed or crashed: stop its stream, whatever its ring says.
+pub fn retire(pd: u32) -> bool {
+    let Some(p) = player() else { return false };
+    let Some(st) = p.streams.iter_mut().flatten().find(|st| st.active && st.pd == pd) else { return false };
+    st.active = false;
+    sex_pdx::serial_record!("[bell.sound.stream.retired] pd={} taken={}", pd, st.ring.load(ring::TAKEN));
     true
 }
 

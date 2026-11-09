@@ -147,8 +147,10 @@ fn name(raw: &[c_char; 16]) -> &str {
 }
 
 /// Ends the run if the person closed the window.
-fn closing(window: &mut Window, s: *mut c_void, shown: u32) {
+fn closing(window: &mut Window, s: *mut c_void, pace: &mut Pace, shown: u32) {
     if let Some(Event::Close) = window.poll() {
+        // Bell stops the stream once the queued sound is played.
+        if let Some(sound) = pace.sound.as_mut() { sound.close(); }
         unsafe { sx_close(s) };
         sex_pdx::serial_record!("[play.closed] target={} task={} frames={}", window.target, window.task, shown);
         sex_pdx::task_finish(0);
@@ -216,6 +218,9 @@ struct Shown { n: u32, late_ms: i64 }
 
 const QUEUE_BYTES: usize = 32 * 1024 * 1024;
 const QUEUE_MAX: usize = 16;
+/// Silence that goes before sound starting later than the pictures; at most this long.
+const PAD_MAX_MS: i64 = 30_000;
+static SILENCE: [[i16; 2]; 1024] = [[0; 2]; 1024];
 
 /// Shows every queued picture whose time has come, oldest first.
 fn present(window: &mut Window, queue: &mut VecDeque<Pic>, free: &mut Vec<Vec<u32>>, pace: &mut Pace,
@@ -284,7 +289,7 @@ fn play(window: &mut Window, src: &mut Source) -> Result<Played, c_int> {
     let mut heard = 0u64;
     let mut eof = false;
     loop {
-        closing(window, s, shown.n);
+        closing(window, s, &mut pace, shown.n);
         present(window, &mut queue, &mut free, &mut pace, &mut shown, w, h);
         if eof && queue.is_empty() {
             break;
@@ -330,21 +335,33 @@ fn play(window: &mut Window, src: &mut Source) -> Result<Played, c_int> {
         if pace.sound.is_none() {
             continue;
         }
+        let mut pad = 0u64;
         if !pace.started {
+            // The sound clock reads this stream time once its first frame plays. Sound
+            // that starts later than now waits behind silence, so it keeps its place.
+            let now = pace.now();
+            let at = at.max(0);
             pace.started = true;
-            // The sound clock reads this stream time once its first frame plays.
-            pace.base_ms = at.max(0);
+            pace.base_ms = at.min(now);
+            pad = ((at - at.min(now)).min(PAD_MAX_MS) as u64) * RATE as u64 / 1000;
             pace.moved = sex_pdx::get_ticks();
         }
         let mut left = &pcm[..frames as usize];
-        while !left.is_empty() {
+        while pad > 0 || !left.is_empty() {
             let Some(sound) = pace.sound.as_mut() else { break };
-            let n = sound.write(left);
-            left = &left[n..];
-            heard += n as u64;
-            if !left.is_empty() {
+            let blocked = if pad > 0 {
+                let n = sound.write(&SILENCE[..pad.min(SILENCE.len() as u64) as usize]);
+                pad -= n as u64;
+                n == 0
+            } else {
+                let n = sound.write(left);
+                left = &left[n..];
+                heard += n as u64;
+                !left.is_empty()
+            };
+            if blocked {
                 // The ring is full: show what is due while it drains.
-                closing(window, s, shown.n);
+                closing(window, s, &mut pace, shown.n);
                 present(window, &mut queue, &mut free, &mut pace, &mut shown, w, h);
                 let _ = sex_pdx::sys_wait_self_ticks(5);
             }
@@ -359,7 +376,7 @@ fn play(window: &mut Window, src: &mut Source) -> Result<Played, c_int> {
         sound.close();
         let end = sex_pdx::get_ticks() + 3000;
         while pace.sound.as_ref().is_some_and(|s| s.pending() > 0) && sex_pdx::get_ticks() < end {
-            closing(window, s, shown);
+            closing(window, s, &mut pace, shown);
             let _ = pace.now();
             let _ = sex_pdx::sys_wait_self_ticks(10);
         }

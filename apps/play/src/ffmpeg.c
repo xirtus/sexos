@@ -106,12 +106,15 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
     return s;
 }
 
+// Times are measured from the file's start, shared by every stream, so a sound track
+// that begins after the pictures keeps its offset.
 static int64_t pts_ms(struct sx *s, int stream, AVFrame *f) {
     int64_t t = f->best_effort_timestamp;
     if (t == AV_NOPTS_VALUE) return -1;
     AVStream *st = s->format->streams[stream];
-    int64_t start = st->start_time == AV_NOPTS_VALUE ? 0 : st->start_time;
-    return av_rescale_q(t - start, st->time_base, (AVRational){1, 1000});
+    int64_t ms = av_rescale_q(t, st->time_base, (AVRational){1, 1000});
+    if (s->format->start_time != AV_NOPTS_VALUE) ms -= s->format->start_time / 1000;
+    return ms;
 }
 
 static int picture(struct sx *s, uint32_t *out, int out_w, int out_h) {
