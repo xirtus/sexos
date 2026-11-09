@@ -91,6 +91,11 @@ struct Browser {
     buf: Vec<u8>,
     /// The window shows no full frame of the page yet, so pictures alone can't update it.
     full_redraw: bool,
+    /// The link node a left press started on: a release follows a link only if it
+    /// ends over that same link, as a click does.
+    press_link: Option<usize>,
+    /// The scroll offset the page script last heard (`window.scrollY`).
+    script_scroll: i32,
 }
 
 /// Text from bytes: UTF-8 when valid, otherwise read as Latin-1.
@@ -298,6 +303,7 @@ impl Browser {
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
         let _ = script.dispatch("ready");
+        self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
         self.after_script(false);
     }
@@ -358,6 +364,7 @@ impl Browser {
     #[inline(never)]
     fn tick(&mut self) {
         self.serve_fetches();
+        self.sync_scroll();
         let Some(script) = self.doc.script() else { self.timer = None; return };
         let next = script.dispatch("tick");
         self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
@@ -436,6 +443,7 @@ impl Browser {
             _ => match sex_app::typed(key) { Some(c) => (c as char).to_string(), None => return false },
         };
         let control = if key.control { "1" } else { "0" };
+        self.sync_scroll();
         let Some(script) = self.doc.script() else { return false };
         let kept = script.dispatch(&alloc::format!("key\tkeydown\t{}\t\t{}", name, control)).map_or(false, |r| r == 1);
         let _ = script.dispatch(&alloc::format!("key\tkeyup\t{}\t\t{}", name, control));
@@ -495,9 +503,17 @@ impl Browser {
             return;
         }
         let (px, py) = (x, y + self.scroll);
-        let link = self.page.links.iter().position(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h);
+        // Links are named by node: a script's relayout rebuilds the list.
+        let link = if y >= 0 { self.page.links.iter().find(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
+        let pressed = match p.kind {
+            Kind::Down { button: 0 } => { self.press_link = link; None }
+            Kind::Up { button: 0 } => self.press_link.take(),
+            Kind::Leave => { self.press_link = None; None }
+            _ => None,
+        };
         let mut kept = false;
         if let Doc::Scripted(_) = self.doc {
+            self.sync_scroll();
             let node = if y >= 0 { self.doc.get().node_at(px, py).map_or(String::new(), |n| alloc::format!("{n}")) } else { String::new() };
             let (kind, button, steps) = match p.kind {
                 Kind::Move => ("move", 0, 0),
@@ -515,7 +531,8 @@ impl Browser {
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
             Kind::Up { button: 0 } if !kept && y >= 0 => {
-                if let Some(i) = link {
+                let i = match (link, pressed) { (Some(n), Some(m)) if n == m => self.page.links.iter().position(|l| l.node == n), _ => None };
+                if let Some(i) = i {
                     self.focus = Some(i);
                     let l = &self.page.links[i];
                     let (href, node) = (l.href.clone(), l.node);
@@ -525,6 +542,13 @@ impl Browser {
             }
             _ => {}
         }
+    }
+
+    /// Tells the page script the current scroll offset when it changed.
+    fn sync_scroll(&mut self) {
+        if self.scroll == self.script_scroll { return; }
+        let y = self.scroll;
+        if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("scroll\t{y}")); self.script_scroll = y; }
     }
 
     fn follow_link(&mut self, href: String, node: usize, click: bool) {
@@ -599,7 +623,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, press_link: None, script_scroll: 0 };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
