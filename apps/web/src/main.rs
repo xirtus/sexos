@@ -251,6 +251,7 @@ impl Browser {
         // Style sheets and pictures from the network, within limits.
         let mut sheets: Vec<String> = Vec::new();
         self.fonts.images.clear();
+        self.fonts.svgs.clear();
         if base.starts_with("http") {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
@@ -266,7 +267,9 @@ impl Browser {
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
                 if let Ok((_, body)) = self.fetch(&abs) {
-                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), alloc::rc::Rc::new(img))); }
+                    let bytes = core::mem::take(&mut self.buf);
+                    self.fonts.add_picture(src, &bytes[body], (W - 16) as usize, 2000);
+                    self.buf = bytes;
                 }
             }
             self.buf = Vec::new();
@@ -405,6 +408,7 @@ impl Browser {
         self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
             || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
         self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
+        sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
         self.scroll = self.scroll.min(self.max_scroll());

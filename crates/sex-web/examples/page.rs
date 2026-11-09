@@ -52,7 +52,7 @@ fn main() {
     let dom = sex_html::parse::parse(&html);
     for src in sex_html::image_sources(&dom) {
         if let Ok(bytes) = std::fs::read(base.join(src)) {
-            if let Some(img) = sex_web::decode_image(&bytes, (w - 16) as usize, 2000) { fonts.images.push((src.to_string(), std::rc::Rc::new(img))); }
+            fonts.add_picture(src, &bytes, (w - 16) as usize, 2000);
         }
     }
     // Style sheets and pictures come from files beside the page, as the program fetches them.
@@ -65,11 +65,13 @@ fn main() {
     doc.measure = sex_web::canvas::measure_css;
     doc.pictures = fonts.images.clone();
     let mut canvases = sex_web::canvas::Canvases::new();
-    let lay = |doc: &sex_js::Document, fonts: &Fonts| {
+    let lay = |doc: &sex_js::Document, fonts: &mut Fonts| {
         let styles = sex_html::styles(&doc.dom, &sheet_refs, w, h - bar_h);
-        sex_html::layout::layout_in(&doc.dom, &styles, w, h - bar_h, fonts)
+        let page = sex_html::layout::layout_in(&doc.dom, &styles, w, h - bar_h, fonts);
+        sex_web::svg::draw_inline(&page, &doc.dom, &styles, fonts);
+        page
     };
-    let mut page = lay(&doc, &fonts);
+    let mut page = lay(&doc, &mut fonts);
     doc.set_boxes(&page.boxes); doc.set_layers(&page.layers);
     if !scripts.is_empty() {
         let mut limits = sex_js::Limits::default();
@@ -78,7 +80,7 @@ fn main() {
         for (i, s) in scripts.iter().enumerate() { let _ = script.eval(s, &format!("script{i}")); }
         script.dispatch("ready").unwrap();
         settle(&mut script, &mut canvases, &mut fonts, &base);
-        page = lay(script.page(), &fonts);
+        page = lay(script.page(), &mut fonts);
         script.page_mut().set_boxes(&page.boxes); script.page_mut().set_layers(&page.layers);
         for action in args.get(7).map(|a| a.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default() {
             if let Some(i) = action.strip_prefix("click") {
@@ -89,7 +91,7 @@ fn main() {
                 script.dispatch(&format!("key\tkeyup\t{k}\t\t0")).unwrap();
             }
             settle(&mut script, &mut canvases, &mut fonts, &base);
-            page = lay(script.page(), &fonts);
+            page = lay(script.page(), &mut fonts);
             script.page_mut().set_boxes(&page.boxes); script.page_mut().set_layers(&page.layers);
         }
         for (l, t) in script.page_mut().log.drain(..) { eprintln!("console {l}: {t}"); }

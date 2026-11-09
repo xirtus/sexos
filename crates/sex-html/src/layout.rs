@@ -654,6 +654,13 @@ impl<'a> Layout<'a> {
         i
     }
 
+    /// An inline `<svg>`'s own size: its viewBox (its width and height attributes are
+    /// presentational hints already).
+    fn svg_size(&self, n: NodeId) -> Option<(i32, i32)> {
+        let v: Vec<f32> = self.dom.attr(n, "viewbox")?.split(|c: char| c == ',' || c.is_ascii_whitespace()).filter(|t| !t.is_empty()).filter_map(|t| t.parse().ok()).collect();
+        (v.len() == 4 && v[2] > 0.0 && v[3] > 0.0).then(|| (v[2] as i32, v[3] as i32))
+    }
+
     /// A canvas's size from its `width` and `height` attributes (300 by 150 by default).
     fn canvas_size(&self, n: NodeId) -> (i32, i32) {
         let get = |name, default| self.dom.attr(n, name).and_then(|v| v.trim().parse::<i32>().ok()).filter(|v| *v >= 0).unwrap_or(default);
@@ -864,8 +871,9 @@ impl<'a> Layout<'a> {
         let saved_boxes = core::mem::take(&mut self.boxes);
         let (w, h) = match tag {
             "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed" => {
-                let src = if tag == "canvas" { alloc::format!("canvas:{n}") } else { String::from(self.dom.attr(n, "src").unwrap_or("")) };
-                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else { self.host.image_size(&src) };
+                let inline_svg = tag == "svg" && self.dom.attr(n, "src").is_none();
+                let src = if tag == "canvas" { alloc::format!("canvas:{n}") } else if inline_svg { alloc::format!("svg:{n}") } else { String::from(self.dom.attr(n, "src").unwrap_or("")) };
+                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if inline_svg { self.svg_size(n) } else { self.host.image_size(&src) };
                 let (w, h) = match (s.width.resolve(0), s.height.resolve(0), natural) {
                     (Some(w), Some(h), _) => (w, h),
                     (Some(w), None, Some((nw, nh))) if nw > 0 => (w, w * nh / nw),
@@ -1588,7 +1596,7 @@ impl<'a> Layout<'a> {
                 let tag = tag.as_str();
                 if matches!(tag, "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed") {
                     let src = self.dom.attr(n, "src").unwrap_or("");
-                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else { self.host.image_size(src) };
+                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if tag == "svg" && src.is_empty() { self.svg_size(n) } else { self.host.image_size(src) };
                     let w = match (s.height.resolve(0), natural) {
                         (Some(h), Some((nw, nh))) if nh > 0 => h * nw / nh,
                         (_, Some((nw, _))) => nw,

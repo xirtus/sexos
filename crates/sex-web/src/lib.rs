@@ -19,6 +19,7 @@ use sex_html::layout::{Bullet, FontKey, Host, Item, Page};
 pub use sex_html;
 
 pub mod canvas;
+pub mod svg;
 pub use sex_image::Image;
 
 /// Glyph bitmaps kept between paints.
@@ -36,6 +37,8 @@ pub struct Fonts {
     /// Decoded pictures by address, for layout sizes and painting.
     /// Decoded pictures by `src` (`canvas:<node>` for canvases), shared with scripts.
     pub images: Vec<(String, alloc::rc::Rc<Image>)>,
+    /// SVG pictures by `src`: their text and own size, redrawn at the size laid out.
+    pub svgs: Vec<(String, alloc::rc::Rc<str>, (i32, i32))>,
 }
 
 impl Fonts {
@@ -49,7 +52,7 @@ impl Fonts {
             if ptr.is_null() { return None; }
             Box::from_raw(ptr)
         };
-        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new() })
+        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new(), svgs: Vec::new() })
     }
 
     fn face(&self, mono: bool) -> &Font<'static> { if mono { &self.mono } else { &self.sans } }
@@ -133,6 +136,7 @@ impl Host for Fonts {
         (up(face.ascender(size)), up(-face.descender(size)))
     }
     fn image_size(&self, src: &str) -> Option<(i32, i32)> {
+        if let Some((_, _, size)) = self.svgs.iter().find(|(s, _, _)| s == src) { return Some(*size); }
         self.images.iter().find(|(s, _)| s == src).map(|(_, i)| (i.width as i32, i.height as i32))
     }
 }
@@ -379,8 +383,23 @@ pub fn text_run(target: &mut Target, fonts: &mut Fonts, x: i32, baseline: i32, f
     }
 }
 
+impl Fonts {
+    /// Decodes the picture `src` from `bytes` (fitted within `max_w` x `max_h`) and keeps it
+    /// for layout and painting.
+    pub fn add_picture(&mut self, src: &str, bytes: &[u8], max_w: usize, max_h: usize) {
+        let Some(img) = decode_image(bytes, max_w, max_h) else { return };
+        if svg::is_svg(bytes) {
+            if let Ok(text) = core::str::from_utf8(bytes) { self.svgs.push((String::from(src), alloc::rc::Rc::from(text), (img.width as i32, img.height as i32))); }
+        }
+        self.images.push((String::from(src), alloc::rc::Rc::new(img)));
+    }
+}
+
 /// Decodes a picture for a page, shrunk to at most `max_w` x `max_h`.
 pub fn decode_image(bytes: &[u8], max_w: usize, max_h: usize) -> Option<Image> {
+    if svg::is_svg(bytes) {
+        return svg::decode(core::str::from_utf8(bytes).ok()?, max_w, max_h);
+    }
     let limits = sex_image::Limits { max_width: 4096, max_height: 4096, max_pixels: 2_000_000, max_input_bytes: 4 << 20 };
     sex_image::decode(bytes, &limits).ok()?.fit_within(max_w, max_h).ok()
 }

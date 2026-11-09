@@ -383,7 +383,7 @@ struct Ctx<'p> { parent: &'p Style, root_font: i32, viewport: (i32, i32) }
 fn presentational_hints(dom: &Dom, node: NodeId, s: &mut Style, ctx: &Ctx) {
     let tag = dom.tag(node).unwrap_or("");
     if let Some(c) = dom.attr(node, "bgcolor").and_then(parse_color) { s.background = c; }
-    if matches!(tag, "td" | "th" | "table" | "img" | "hr" | "div" | "col" | "iframe" | "canvas" | "video") {
+    if matches!(tag, "td" | "th" | "table" | "img" | "hr" | "div" | "col" | "iframe" | "canvas" | "video" | "svg") {
         if let Some(w) = dom.attr(node, "width").and_then(|v| parse_len(v, s, ctx)) { s.width = w; }
         if let Some(h) = dom.attr(node, "height").and_then(|v| parse_len(v, s, ctx)) { s.height = h; }
     }
