@@ -497,3 +497,25 @@ fn transitions_animate_changed_values() {
     assert!(!running);
     assert_eq!(s[a].as_ref().unwrap().background & 0xFFFFFF, 0);
 }
+
+#[test]
+fn transitions_follow_computed_values_lists_and_new_state() {
+    let sheet = "#a { background-color: #000000; transition: background-color 1s linear } #a.on { background: #ff0000 }
+        #b { opacity: 1 } #b.on { opacity: 0; transition: opacity 1s linear }
+        #c { opacity: 1; width: 100px; transition-duration: 1s, 2s; transition-timing-function: linear; transition-property: opacity, width }
+        #c.on { opacity: 0; width: 300px }";
+    let off = parse::parse(&format!("<style>{sheet}</style><div id=a>a</div><div id=b>b</div><div id=c>c</div>"));
+    let on = parse::parse(&format!("<style>{sheet}</style><div id=a class=on>a</div><div id=b class=on>b</div><div id=c class=on>c</div>"));
+    let id = |n: &str| off.descendants(0).into_iter().find(|&i| off.attr(i, "id") == Some(n)).unwrap();
+    let mut tl = sex_html::Timeline::default();
+    sex_html::styles_at(&off, &[], 400, 300, 0, &mut tl);
+    sex_html::styles_at(&on, &[], 400, 300, 1000, &mut tl);
+    let (s, _) = sex_html::styles_at(&on, &[], 400, 300, 1500, &mut tl);
+    // The shorthand's colour is what changed.
+    assert_eq!(s[id("a")].as_ref().unwrap().background & 0xFFFFFF, 0x800000);
+    // The transition came with the new state, from the old opacity.
+    assert_eq!(s[id("b")].as_ref().unwrap().opacity, 127);
+    // Each property keeps its own duration.
+    let c = s[id("c")].as_ref().unwrap();
+    assert_eq!((c.opacity, c.width), (127, style::Len::Px(150)));
+}

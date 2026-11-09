@@ -98,7 +98,8 @@ pub struct Running {
 /// transitions under way, by element and property.
 #[derive(Clone, Debug, Default)]
 pub struct TransitionState {
-    pub last: BTreeMap<(NodeId, String), String>,
+    /// Each element's [`TRANSITIONED`] values, in that order.
+    pub last: BTreeMap<NodeId, Vec<String>>,
     pub running: BTreeMap<(NodeId, String), Running>,
 }
 
@@ -166,8 +167,10 @@ pub struct Style {
     pub shadow: Option<(i32, i32, i32, i32, u32)>,
     /// The first of `animation`.
     pub animation: Option<Animation>,
-    /// `transition`, entry by entry.
+    /// `transition`, entry by entry (from the lists below, after the cascade).
     pub transitions: Vec<Transition>,
+    /// The `transition-*` lists as declared: properties, durations, delays, timings.
+    pub transition_lists: (Vec<String>, Vec<i32>, Vec<i32>, Vec<u32>),
     /// `opacity`, 0 to 255.
     pub opacity: u8,
     /// Custom properties (`--name: value`), inherited; shared until an element sets one.
@@ -232,6 +235,7 @@ impl Style {
             opacity: 255,
             animation: None,
             transitions: Vec::new(),
+            transition_lists: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             shadow: None,
             translate: None,
             vertical_super: 0,
@@ -341,6 +345,8 @@ pub struct Cascade<'a> {
     pub start_default: u64,
     /// The animations styled in this pass, with their starts.
     pub seen: core::cell::RefCell<BTreeMap<(NodeId, String), u64>>,
+    /// Some sheet declares a transition: every element's values are then remembered.
+    pub has_transitions: bool,
     /// Transitions as the last styling left them, and as this one leaves them.
     pub transitions_before: core::cell::RefCell<TransitionState>,
     pub transitions_after: core::cell::RefCell<TransitionState>,
@@ -351,7 +357,7 @@ pub struct Cascade<'a> {
 impl<'a> Cascade<'a> {
     /// `sheets[0]` is the user-agent sheet; the rest are the page's, in document order.
     pub fn new(sheets: Vec<&'a Sheet>) -> Self {
-        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, starts: Default::default(), start_default: 0, seen: Default::default(), transitions_before: Default::default(), transitions_after: Default::default(), animating: core::cell::Cell::new(false) };
+        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, starts: Default::default(), start_default: 0, seen: Default::default(), has_transitions: false, transitions_before: Default::default(), transitions_after: Default::default(), animating: core::cell::Cell::new(false) };
         for (si, sheet) in c.sheets.iter().enumerate() {
             for (ri, rule) in sheet.rules.iter().enumerate() {
                 for (xi, sel) in rule.selectors.iter().enumerate() {
@@ -364,6 +370,7 @@ impl<'a> Cascade<'a> {
                 }
             }
         }
+        c.has_transitions = c.sheets.iter().any(|sh| sh.rules.iter().any(|r| r.declarations.iter().any(|d| d.name.starts_with("transition"))));
         c
     }
 
@@ -440,7 +447,8 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
     // font-size first: other `em` lengths depend on it.
     for d in &ordered { if d.name == "font-size" || d.name == "font" { apply(&mut style, d, &ctx, true); } }
     for d in &ordered { apply(&mut style, d, &ctx, false); }
-    if style.animation.is_some() || !style.transitions.is_empty() {
+    style.transitions = resolve_transitions(&style.transition_lists);
+    if style.animation.is_some() || !style.transitions.is_empty() || cascade.has_transitions {
         let own = style.clone();
         // A property's value as the element's own style has it (a keyframe or
         // transition endpoint that the element does not declare).
@@ -460,7 +468,7 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
             }
         };
         let mut over: Vec<Declaration> = Vec::new();
-        if !own.transitions.is_empty() { over = transition(cascade, node, &own.transitions, &ordered, &underlying); }
+        if cascade.has_transitions || !own.transitions.is_empty() { over = transition(cascade, node, &own.transitions, &own); }
         if let Some(a) = &own.animation {
             if let Some(frames) = cascade.sheets.iter().rev().find_map(|sh| sh.keyframes.iter().rev().find(|(n, _)| *n == a.name)).map(|(_, f)| f) {
                 let key = (node, a.name.clone());
@@ -720,51 +728,107 @@ fn substitute_with(v: &str, lookup: &mut dyn FnMut(&str) -> Option<String>, dept
     Some(out)
 }
 
-/// Properties whose values transitions do not animate.
-fn untransitioned(name: &str) -> bool {
-    name.starts_with("--") || name.starts_with("transition") || name.starts_with("animation") || name == "display" || name == "content"
+/// The properties transitions animate, by the names their values are kept under.
+const TRANSITIONED: [&str; 18] = [
+    "color", "background-color", "opacity", "transform", "width", "height",
+    "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "top", "right", "bottom", "left",
+];
+
+/// `transition-property` names as the properties they cover.
+fn transitioned(name: &str) -> &'static [&'static str] {
+    match name {
+        "all" => &TRANSITIONED,
+        "background" => &["background-color"],
+        "margin" => &TRANSITIONED[6..10],
+        "padding" => &TRANSITIONED[10..14],
+        "inset" => &TRANSITIONED[14..18],
+        "translate" => &["transform"],
+        n => TRANSITIONED.iter().position(|p| *p == n).map_or(&[], |i| &TRANSITIONED[i..i + 1]),
+    }
 }
 
-/// The values running transitions give the element's properties now. A property whose
-/// value changed since the last styling starts a transition from what was shown.
-fn transition(cascade: &Cascade, node: NodeId, list: &[Transition], ordered: &[&Declaration], underlying: &dyn Fn(&str, &str) -> String) -> Vec<Declaration> {
+/// A length as CSS text.
+fn len_text(l: Len) -> String {
+    match l {
+        Len::Px(p) => alloc::format!("{p}px"),
+        Len::Pct(h) => alloc::format!("{}%", h as f32 / 100.0),
+        Len::Auto => String::from("auto"),
+    }
+}
+
+/// Property `name` (one of [`TRANSITIONED`]) of computed style `s`, as CSS text.
+fn computed_text(s: &Style, name: &str) -> String {
+    let side = |n: &str| ["top", "right", "bottom", "left"].iter().position(|x| n.ends_with(x)).unwrap_or(0);
+    match name {
+        "color" => hex(s.color),
+        "background-color" => hex(s.background),
+        "opacity" => alloc::format!("{}", s.opacity as f32 / 255.0),
+        "transform" => match s.translate { Some((x, y)) => alloc::format!("translate({}, {})", len_text(x), len_text(y)), None => String::from("translate(0px, 0px)") },
+        "width" => len_text(s.width),
+        "height" => len_text(s.height),
+        n if n.starts_with("margin-") => len_text(s.margin[side(n)]),
+        n if n.starts_with("padding-") => len_text(s.padding[side(n)]),
+        n => len_text(s.inset[side(n)]),
+    }
+}
+
+/// Builds `transition` entries from the declared lists: one per property, the other
+/// lists repeating as needed.
+fn resolve_transitions((props, durs, delays, timings): &(Vec<String>, Vec<i32>, Vec<i32>, Vec<u32>)) -> Vec<Transition> {
+    let pick = |v: &[i32], i: usize| if v.is_empty() { 0 } else { v[i % v.len()] };
+    let props: Vec<&str> = if props.is_empty() && !durs.is_empty() { alloc::vec!["all"] } else { props.iter().map(|p| p.as_str()).collect() };
+    props.iter().enumerate().filter(|(_, p)| **p != "none").map(|(i, p)| Transition {
+        property: String::from(*p),
+        duration_ms: pick(durs, i).max(0) as u32,
+        delay_ms: pick(delays, i),
+        timing: if timings.is_empty() { 1 } else { timings[i % timings.len()] },
+    }).filter(|t| t.duration_ms > 0 || t.delay_ms > 0).collect()
+}
+
+/// The values running transitions give the element's properties now. Every element's
+/// values are remembered (when the page has transitions at all), so a property whose
+/// computed value changed since the last styling starts a transition from what was
+/// shown, even when the new state is what brought the transition in.
+fn transition(cascade: &Cascade, node: NodeId, list: &[Transition], own: &Style) -> Vec<Declaration> {
     let now = cascade.now_ms;
     let before = cascade.transitions_before.borrow();
     let mut after = cascade.transitions_after.borrow_mut();
     let mut out = Vec::new();
-    // Each property once, with the last entry that names it (or `all`).
-    let mut props: Vec<(String, &Transition)> = Vec::new();
+    // Each property with the last entry that covers it.
+    let mut timing_of: [Option<&Transition>; TRANSITIONED.len()] = [None; TRANSITIONED.len()];
     for t in list {
-        let names: Vec<String> = if t.property == "all" {
-            let mut n: Vec<String> = ordered.iter().filter(|d| !untransitioned(&d.name)).map(|d| d.name.clone()).collect();
-            n.extend(before.last.range((node, String::new())..).take_while(|((n, _), _)| *n == node).map(|((_, p), _)| p.clone()));
-            n
-        } else { alloc::vec![t.property.clone()] };
-        for name in names {
-            match props.iter_mut().find(|(p, _)| *p == name) { Some(e) => e.1 = t, None => props.push((name, t)) }
+        for p in transitioned(&t.property) {
+            if let Some(i) = TRANSITIONED.iter().position(|x| x == p) { timing_of[i] = Some(t); }
         }
     }
-    for (name, t) in props {
-        let key = (node, name.clone());
-        let value = underlying(&name, before.last.get(&key).map_or("", |v| v.as_str()));
-        let mut run = before.running.get(&key).cloned();
-        if let Some(prev) = before.last.get(&key) {
+    let prev_values = before.last.get(&node);
+    let mut values = Vec::with_capacity(TRANSITIONED.len());
+    for (i, name) in TRANSITIONED.iter().enumerate() {
+        let value = computed_text(own, name);
+        let t = timing_of[i];
+        // Most properties of most elements are not transitioning: only compare.
+        let key = || (node, String::from(*name));
+        let mut run = if t.is_some() { before.running.get(&key()).cloned() } else { None };
+        if let (Some(prev), Some(t)) = (prev_values.map(|v| &v[i]), t) {
             if *prev != value && t.duration_ms > 0 {
                 // From what is on screen now (mid-way through a running one).
                 let from = run.as_ref().and_then(|r| progress(r, now).map(|p| interpolate(&r.from, &r.to, p))).unwrap_or_else(|| prev.clone());
                 run = Some(Running { from, to: value.clone(), start: (now as i64 + t.delay_ms as i64).max(0) as u64, duration_ms: t.duration_ms, timing: t.timing });
             }
         }
-        if let Some(r) = run.filter(|r| r.to == value) {
+        if let Some(r) = run.filter(|r| r.to == value && timing_of[i].is_some()) {
             if now < r.start + r.duration_ms as u64 {
                 cascade.animating.set(true);
                 let p = progress(&r, now).unwrap_or(0.0);
-                out.push(Declaration { name: name.clone(), value: interpolate(&r.from, &r.to, p), important: false });
-                after.running.insert(key.clone(), r);
+                out.push(Declaration { name: String::from(*name), value: interpolate(&r.from, &r.to, p), important: false });
+                after.running.insert(key(), r);
             }
         }
-        after.last.insert(key, value);
+        values.push(value);
     }
+    after.last.insert(node, values);
     out
 }
 
@@ -1209,39 +1273,30 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             s.animation = Some(a);
         }
         "transition" => {
-            s.transitions = css::split_top(v, ',').into_iter().filter_map(|item| {
-                let mut t = Transition { property: String::from("all"), duration_ms: 0, delay_ms: 0, timing: 1 };
-                let mut times = 0;
+            let (mut props, mut durs, mut delays, mut timings) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            for item in css::split_top(v, ',') {
+                let (mut prop, mut dur, mut delay, mut code, mut times) = (String::from("all"), 0, 0, 1, 0);
                 for w in words(item.trim()) {
                     let lw = w.to_ascii_lowercase();
-                    if let Some(ms) = parse_time(&lw) { if times == 0 { t.duration_ms = ms.max(0) as u32 } else { t.delay_ms = ms } times += 1; continue; }
-                    if let Some(code) = timing(&lw) { t.timing = code; continue; }
-                    if lw == "none" { return None; }
-                    t.property = lw;
+                    if let Some(ms) = parse_time(&lw) { if times == 0 { dur = ms } else { delay = ms } times += 1; continue; }
+                    if let Some(c) = timing(&lw) { code = c; continue; }
+                    prop = lw;
                 }
-                Some(t)
-            }).collect();
+                props.push(prop);
+                durs.push(dur);
+                delays.push(delay);
+                timings.push(code);
+            }
+            s.transition_lists = (props, durs, delays, timings);
         }
         "transition-property" | "transition-duration" | "transition-delay" | "transition-timing-function" => {
             let items: Vec<String> = css::split_top(v, ',').into_iter().map(|i| i.trim().to_ascii_lowercase()).collect();
-            if d.name == "transition-property" {
-                let old = core::mem::take(&mut s.transitions);
-                s.transitions = items.iter().filter(|p| p.as_str() != "none").enumerate().map(|(i, p)| {
-                    let mut t = old.get(i).or(old.last()).cloned().unwrap_or(Transition { property: String::new(), duration_ms: 0, delay_ms: 0, timing: 1 });
-                    t.property = p.clone();
-                    t
-                }).collect();
-            } else {
-                if s.transitions.is_empty() { s.transitions.push(Transition { property: String::from("all"), duration_ms: 0, delay_ms: 0, timing: 1 }); }
-                for (i, t) in s.transitions.iter_mut().enumerate() {
-                    // Lists shorter than the properties repeat.
-                    let item = &items[i % items.len().max(1)];
-                    match d.name.as_str() {
-                        "transition-duration" => t.duration_ms = parse_time(item).unwrap_or(0).max(0) as u32,
-                        "transition-delay" => t.delay_ms = parse_time(item).unwrap_or(0),
-                        _ => t.timing = timing(item).unwrap_or(1),
-                    }
-                }
+            let l = &mut s.transition_lists;
+            match d.name.as_str() {
+                "transition-property" => l.0 = items,
+                "transition-duration" => l.1 = items.iter().map(|i| parse_time(i).unwrap_or(0)).collect(),
+                "transition-delay" => l.2 = items.iter().map(|i| parse_time(i).unwrap_or(0)).collect(),
+                _ => l.3 = items.iter().map(|i| timing(i).unwrap_or(1)).collect(),
             }
         }
         "opacity" => {
