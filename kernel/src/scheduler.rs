@@ -17,9 +17,13 @@ pub struct TaskContext {
     pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
     pub pd_ptr: *const ProtectionDomain,
     pub kstack_top: u64,
+    /// The task's thread pointer (FS base), loaded on every switch to it. Programs
+    /// set it with `program_threads::TLS`; user code cannot change it otherwise.
+    pub fs_base: u64,
 }
 
 const _: () = assert!(core::mem::offset_of!(TaskContext, kstack_top) == 0xC0);
+const _: () = assert!(core::mem::offset_of!(TaskContext, fs_base) == 0xC8);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,9 +79,12 @@ pub struct Task {
     pub kstack_bytes: u64,
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
-    wait_deadline:self_wait::Deadline,
+    pub(crate) wait_deadline: self_wait::Deadline,
     /// x87/SSE registers while the task is off-core (see crate::fpu).
     fpu: crate::fpu::FpuState,
+    /// The core this task runs on, when not its domain's (a program's workers);
+    /// u32::MAX means `smp::home_core` of its domain.
+    pub home: AtomicU32,
 }
 
 impl Task {
@@ -126,6 +133,7 @@ impl Task {
             ss,
             pd_ptr: pd as *const _,
             kstack_top: forged_ksp,  // active ksp; switch_to saves/loads here
+            fs_base: 0,
         };
 
         Self {
@@ -140,6 +148,7 @@ impl Task {
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
             fpu: crate::fpu::FpuState::INIT,
+            home: AtomicU32::new(u32::MAX),
         }
     }
 }
@@ -413,7 +422,10 @@ impl Scheduler {
     pub fn admit_task(&self, task: *mut Task) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
         // A task's queue is decided by the task, not by the core that woke it.
-        let home_core = crate::smp::home_core(unsafe { (*task).context.pd_id });
+        let home_core = match unsafe { (*task).home.load(Ordering::Acquire) } {
+            u32::MAX => crate::smp::home_core(unsafe { (*task).context.pd_id }),
+            core => core,
+        };
         let home = &SCHEDULERS[home_core as usize];
         let admitted = unsafe { (*task).state.try_admit(|| home.runqueue.try_push(task)) };
         // That core may be halted, and its next tick is up to a millisecond away.
@@ -471,6 +483,11 @@ impl Scheduler {
             "call {finish_switch}",
             "mov rsi, r12",
             "mov rsp, [rsi + 0xC0]",
+            // The next task's thread pointer (TaskContext.fs_base at 0xC8).
+            "mov eax, [rsi + 0xC8]",
+            "mov edx, [rsi + 0xCC]",
+            "mov ecx, 0xC0000100",
+            "wrmsr",
             // Only now narrow PKRU; the Rust callback ran with kernel access.
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
@@ -965,6 +982,8 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
     (*task).wait_deadline.cancel();
     (*task).state.exit();
+    // A worker that ends with an error (a panic) ends its program's run.
+    if (*regs_ptr).rdi != 0 { crate::program_workers::faulted(task); }
     if !crate::program_records::is_record((*task).context.pd_id){serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);}
     poll_paging_exit_notifications();
     yield_and_switch(regs_ptr)

@@ -1,0 +1,14 @@
+[package]
+name = "threads"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "threads"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+# C threads (pthreads) on the same workers: checked by the P-less start-up test.
+sex-libc = { path = "../../crates/sex-libc" }

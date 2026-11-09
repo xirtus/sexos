@@ -44,7 +44,6 @@ lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
-        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
         unsafe {
             idt.double_fault.set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX as u16 + 1);
@@ -52,6 +51,14 @@ lazy_static! {
             // critical stubs (naked)
             idt.page_fault.set_handler_addr(x86_64::VirtAddr::new(page_fault_stub as *const () as u64));
             idt.general_protection_fault.set_handler_addr(x86_64::VirtAddr::new(general_protection_fault_stub as *const () as u64));
+            // Faults a program can cause end only that program (see `end_user_fault`).
+            idt.divide_error.set_handler_addr(x86_64::VirtAddr::new(divide_error_stub as *const () as u64));
+            idt.overflow.set_handler_addr(x86_64::VirtAddr::new(overflow_stub as *const () as u64));
+            idt.bound_range_exceeded.set_handler_addr(x86_64::VirtAddr::new(bound_range_stub as *const () as u64));
+            idt.invalid_opcode.set_handler_addr(x86_64::VirtAddr::new(invalid_opcode_stub as *const () as u64));
+            idt.x87_floating_point.set_handler_addr(x86_64::VirtAddr::new(x87_floating_point_stub as *const () as u64));
+            idt.simd_floating_point.set_handler_addr(x86_64::VirtAddr::new(simd_floating_point_stub as *const () as u64));
+            idt.alignment_check.set_handler_addr(x86_64::VirtAddr::new(alignment_check_stub as *const () as u64));
             idt[0x20].set_handler_addr(x86_64::VirtAddr::new(timer_interrupt_stub as *const () as u64));
         }
 
@@ -392,6 +399,99 @@ pub unsafe extern "C" fn general_protection_fault_stub() {
     );
 }
 
+/// A stub for a CPU fault: saves the registers in the same layout as the page-fault
+/// stub (a dummy error code when the CPU pushes none) and calls `cpu_fault_handler`
+/// with the vector.
+macro_rules! cpu_fault_stub {
+    ($name:ident, $vector:literal, $push_error:literal) => {
+        #[unsafe(naked)]
+        pub unsafe extern "C" fn $name() {
+            core::arch::naked_asm!(
+                $push_error,
+                "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
+                "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
+                "mov rax, [rsp + 136]",
+                "test al, 3",
+                "jz 1f",
+                "swapgs",
+                "1:",
+                "cmp byte ptr [rip + {pku_enabled}], 0",
+                "je 3f",
+                "xor eax, eax",
+                "xor ecx, ecx",
+                "xor edx, edx",
+                "wrpkru",
+                "3:",
+                "sub rsp, 8",
+                "lea rdi, [rsp + 136]",
+                "mov rsi, [rsp + 128]",
+                concat!("mov edx, ", $vector),
+                "call cpu_fault_handler",
+                "add rsp, 8",
+                "mov rax, [rsp + 136]",
+                "test al, 3",
+                "jz 2f",
+                "swapgs",
+                "2:",
+                "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
+                "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
+                "add rsp, 8",
+                "iretq",
+                pku_enabled = sym crate::pku::PKU_ENABLED,
+            );
+        }
+    };
+}
+cpu_fault_stub!(divide_error_stub, "0", "push 0");
+cpu_fault_stub!(overflow_stub, "4", "push 0");
+cpu_fault_stub!(bound_range_stub, "5", "push 0");
+cpu_fault_stub!(invalid_opcode_stub, "6", "push 0");
+cpu_fault_stub!(x87_floating_point_stub, "16", "push 0");
+cpu_fault_stub!(alignment_check_stub, "17", "nop");
+cpu_fault_stub!(simd_floating_point_stub, "19", "push 0");
+
+fn fault_name(vector: u64) -> &'static str {
+    match vector {
+        0 => "divide_error", 4 => "overflow", 5 => "bound_range", 6 => "invalid_opcode",
+        13 => "general_protection", 16 => "x87_floating_point", 17 => "alignment_check",
+        19 => "simd_floating_point", _ => "unknown",
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn cpu_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64, vector: u64) {
+    if stack_frame.code_segment.0 & 3 == 3 {
+        unsafe { end_user_fault(stack_frame, vector, error_code) }
+    }
+    let cur_pd = crate::core_local::CoreLocal::get().current_pd();
+    panic!("EXCEPTION: {} in kernel pd={} err={:#x} rip={:#x} rsp={:#x}",
+        fault_name(vector), cur_pd, error_code,
+        stack_frame.instruction_pointer.as_u64(), stack_frame.stack_pointer.as_u64());
+}
+
+/// A program's own fault (a bad instruction, a divide by zero, a privileged
+/// instruction) ends only the faulting task, and a program worker's fault ends its
+/// whole run, as a page fault outside the pager's reach does. The machine keeps going.
+unsafe fn end_user_fault(stack_frame: &mut InterruptStackFrame, vector: u64, error_code: u64) -> ! {
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    let cur_pd = crate::core_local::CoreLocal::get().current_pd();
+    if current.is_null() { panic!("USER_FAULT_WITHOUT_TASK {}", fault_name(vector)); }
+    let ctx = &mut (*current).context as *mut crate::scheduler::TaskContext;
+    save_user_frame(&mut *ctx, stack_frame);
+    (*current).state.exit();
+    crate::program_workers::faulted(current);
+    serial_println!("fault.kill [cpu.fault.terminal] pd={} kind={} rip={:#x} error={:#x}",
+        cur_pd, fault_name(vector), stack_frame.instruction_pointer.as_u64(), error_code);
+    let next = match sched.tick() {
+        crate::scheduler::ScheduleDecision::Switch { next, .. } => next,
+        crate::scheduler::ScheduleDecision::NoRunnable => crate::scheduler::wait_for_local_resume_or_switch(sched),
+    };
+    crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new((*next).kstack_top + 168));
+    crate::scheduler::Scheduler::switch_to(ctx, next);
+}
+
 // ── Rust Handlers ───────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -439,6 +539,7 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     if timekeeper {
         crate::scheduler::poll_paging_exit_notifications();
         crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
+        crate::program_workers::poll(TICKS.load(Ordering::Relaxed));
     }
     if core_id == crate::smp::guest_core() { crate::program_records::poll(TICKS.load(Ordering::Relaxed)); }
 
@@ -456,8 +557,22 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
 
     let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
         crate::scheduler::ScheduleDecision::NoRunnable => {
-            unsafe { send_eoi(); }
-            return;
+            // A task told to end from another core (a program's worker when its run
+            // ends) must not keep running user code just because nothing else is
+            // ready: save its frame and leave it, as the page-fault path does.
+            let current = sched.current_task.load(Ordering::Acquire);
+            if current.is_null() || !unsafe { (*current).state.snapshot().exited } {
+                unsafe { send_eoi(); }
+                return;
+            }
+            unsafe {
+                let ctx = &mut (*current).context;
+                save_user_frame(ctx, stack_frame);
+                send_eoi();
+                let next = crate::scheduler::wait_for_local_resume_or_switch(sched);
+                crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new((*next).kstack_top + 168));
+                crate::scheduler::Scheduler::switch_to(ctx as *mut _, next);
+            }
         }
         crate::scheduler::ScheduleDecision::Switch { old, next } => (old, next),
     };
@@ -466,8 +581,28 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         // Save old context from interrupt stub's GPR push level on the stack.
         // stack_frame points to RIP.  Stub pushed [rax..r15][dummy=0] above RIP.
         // Layout from RIP downward: [dummy][r15][r14]..[rbx][rax]
-        if !old_ctx_ptr.is_null() {
-            let old_ctx = &mut *old_ctx_ptr;
+        if !old_ctx_ptr.is_null() { save_user_frame(&mut *old_ctx_ptr, stack_frame); }
+
+        let kstack_top = (*next_ctx_ptr).kstack_top;
+        if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
+            serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",
+                (*next_ctx_ptr).pd_id, kstack_top, (*next_ctx_ptr).rip);
+        }
+
+        // RSP0 must be empty kernel-stack top, not saved-context base.
+        // kstack_top is where the context (GPRs+IRET) is saved. 
+        // kstack_top + 168 (15 regs + dummy + 5 iret qwords) = kstack_alloc_top.
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
+
+        send_eoi();
+        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
+    }
+}
+
+
+/// Saves a user frame the timer stub pushed into `old_ctx`: the IRET frame, the
+/// registers above it, and the domain's PKRU.
+unsafe fn save_user_frame(old_ctx: &mut crate::scheduler::TaskContext, stack_frame: &InterruptStackFrame) {
             let base = stack_frame as *const _ as *const u64;
             old_ctx.rip = stack_frame.instruction_pointer.as_u64();
             old_ctx.cs = stack_frame.code_segment.0 as u64;
@@ -503,23 +638,6 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
                 (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64
             };
         }
-
-        let kstack_top = (*next_ctx_ptr).kstack_top;
-        if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
-            serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",
-                (*next_ctx_ptr).pd_id, kstack_top, (*next_ctx_ptr).rip);
-        }
-
-        // RSP0 must be empty kernel-stack top, not saved-context base.
-        // kstack_top is where the context (GPRs+IRET) is saved. 
-        // kstack_top + 168 (15 regs + dummy + 5 iret qwords) = kstack_alloc_top.
-        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
-
-        send_eoi();
-        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
-    }
-}
-
 
 /// Kernel-mode halt loop. Redirect faulted user tasks here so IRETQ
 /// never returns to the faulting RIP (which causes immediate re-fault).
@@ -604,6 +722,7 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
                 }
             } else {
                 (*current_ptr).state.exit();
+                crate::program_workers::faulted(current_ptr);
                 serial_println!("fault.kill [paging.fault.terminal] pd={} reason=ineligible error={:#x}", cur_pd, error_code);
             }
         } else {
@@ -628,6 +747,9 @@ pub extern "C" fn general_protection_fault_handler(
     stack_frame: &mut InterruptStackFrame,
     error_code: u64,
 ) {
+    if stack_frame.code_segment.0 & 3 == 3 {
+        unsafe { end_user_fault(stack_frame, 13, error_code) }
+    }
     #[repr(C, packed)]
     struct Gdtr64 {
         limit: u16,
@@ -686,16 +808,6 @@ pub extern "C" fn general_protection_fault_handler(
     );
 }
 
-extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
-    let cur_pd = crate::core_local::CoreLocal::get().current_pd();
-    serial_println!(
-        "EXCEPTION: UD ENTER pd={} rip={:#x} rsp={:#x}",
-        cur_pd,
-        stack_frame.instruction_pointer.as_u64(),
-        stack_frame.stack_pointer.as_u64()
-    );
-    panic!("EXCEPTION: INVALID OPCODE");
-}
 
 /// Only ends a halt: the idle loop looks at its queue when this returns, and a
 /// running task reaches its queue at the next tick.

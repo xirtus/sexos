@@ -6,6 +6,9 @@
 
 extern crate alloc;
 pub mod heap;
+pub mod code;
+pub mod thread;
+pub mod tls;
 pub mod sound;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
