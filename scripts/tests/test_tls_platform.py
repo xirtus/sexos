@@ -109,6 +109,17 @@ class TLSPlatform(unittest.TestCase):
                       '--cfg aes_force_soft --cfg polyval_force_soft --cfg', '"']:
             self.assertTrue(self.flags(flags), flags)
 
+    def test_network_service_keeps_every_cipher_on_integer_code(self):
+        def service(flags):
+            spec = copy.deepcopy(SPEC)
+            next(s for s in spec['stage'] if s['id'] == 'build_sexnet')['rustflags'] = flags
+            return gate.check_flags(spec)
+        full = '--cfg aes_force_soft --cfg polyval_force_soft --cfg chacha20_force_soft --cfg poly1305_force_soft'
+        self.assertEqual(service(full), [])
+        for name in sorted(gate.SERVICE_FORCE):
+            self.assertTrue(service(full.replace('--cfg ' + name, '')), name)
+        self.assertTrue(service(full + ' -C target-feature=+sse2'))
+
     def test_codegen_cannot_enable_unpreserved_instructions(self):
         base = '--cfg aes_force_soft --cfg polyval_force_soft '
         for suffix in ['-Ctarget-feature=+sse2', '-C target-feature=+avx2',

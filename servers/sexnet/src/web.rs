@@ -28,7 +28,7 @@ const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::Ap
 const RESOLVE_HOLD_TICKS: u64 = 5_000;
 /// One flow of the service: who holds it (and under which of their own numbers) and,
 /// when encrypted, its TLS session and the wire bytes still to send.
-struct Slot { owner: Option<(Identity, u8)>, tls: Option<Session>, out: [u8; 1400], out_at: usize, out_len: usize, read: &'static mut [u8], write: &'static mut [u8] }
+struct Slot { owner: Option<(Identity, u8)>, tls: Option<Session>, told: bool, out: [u8; 1400], out_at: usize, out_len: usize, read: &'static mut [u8], write: &'static mut [u8] }
 fn zeroed(n: usize) -> Option<&'static mut [u8]> {
     let mut v: Vec<u8> = Vec::new();
     v.try_reserve_exact(n).ok()?;
@@ -37,7 +37,7 @@ fn zeroed(n: usize) -> Option<&'static mut [u8]> {
 }
 impl Slot {
     /// A slot for a new flow, with its own TLS buffers; `None` when memory is short.
-    fn new() -> Option<Slot> { Some(Slot { owner: None, tls: None, out: [0; 1400], out_at: 0, out_len: 0, read: zeroed(TLS_READ_BYTES)?, write: zeroed(TLS_WRITE_BYTES)? }) }
+    fn new() -> Option<Slot> { Some(Slot { owner: None, tls: None, told: false, out: [0; 1400], out_at: 0, out_len: 0, read: zeroed(TLS_READ_BYTES)?, write: zeroed(TLS_WRITE_BYTES)? }) }
     /// Moves encrypted bytes between flow `i` and its session.
     fn pump(&mut self, i: usize, engine: &mut Engine<'static>) {
         let Some(tls) = self.tls.as_mut() else { return };
@@ -53,6 +53,11 @@ impl Slot {
             if self.out_at < self.out_len {
                 if let Ok(n) = engine.open_send(i, &self.out[self.out_at..self.out_len]) { self.out_at += n; }
             }
+        }
+        // What the site agreed to, once per session: the version, suite and key exchange.
+        if !self.told && tls.stage() == Stage::Ready {
+            self.told = true;
+            if let Some((version, suite, group)) = tls.agreed() { sex_pdx::serial_record!("[net.tls.agreed] flow={} version={:?} suite={:?} group={:?}", i, version, suite, group); }
         }
     }
     fn free(&mut self, i: usize, engine: Option<&mut Engine<'static>>) {
@@ -194,7 +199,7 @@ impl Service {
                 // is dropped above.
                 let (read, write) = unsafe { (&mut *(&mut *slot.read as *mut [u8]), &mut *(&mut *slot.write as *mut [u8])) };
                 match Session::start(host, &mut seed, seconds, read, write) {
-                    Ok(session) => { slot.tls = Some(session); self.tls_used = true; w::reply(seq, w::OK, 0) }
+                    Ok(session) => { slot.tls = Some(session); slot.told = false; self.tls_used = true; w::reply(seq, w::OK, 0) }
                     Err(_) => w::reply(seq, w::FAILED, 0),
                 }
             }
