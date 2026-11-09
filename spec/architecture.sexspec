@@ -223,7 +223,7 @@
         "bash",
         "scripts/driver_region_host_gate.sh"
       ],
-      "scope": "Actual extracted USB/NIC reservation helpers within boot budgets; mock view lookup, no hardware DMA."
+      "scope": "Actual extracted NIC reservation helper within boot budget, plus USB pool-from-DMA-view and no-legacy-syscall source checks; mock view lookup, no hardware DMA."
     },
     {
       "id": "drive_dma",
