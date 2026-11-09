@@ -3,6 +3,8 @@
 Thread "Run the NVIDIA laptop GPU". Follows section 4 (P3) of
 `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Target: the Alienware x17 R1's RTX 30 laptop GPU
 (GA104 for the 3070/3080 Laptop, GA106 for the 3060 Laptop; no x17 R1 shipped a 3090).
+Andreas's machine is most likely the **RTX 3070 Laptop: GA104, 8 GB, PCI 10de:249d or
+10de:24dd, HDMI audio 10de:228b**. GA104 is the first target for every stage below.
 
 ## Where this stands
 
