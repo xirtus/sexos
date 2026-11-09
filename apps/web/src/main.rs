@@ -102,6 +102,8 @@ struct Browser {
     /// The link node a left press started on: a release follows a link only if it
     /// ends over that same link, as a click does.
     press_link: Option<usize>,
+    /// The page's style sheets use `:hover`: pointer moves restyle it.
+    hover_css: bool,
     /// The scroll offset the page script last heard (`window.scrollY`).
     script_scroll: i32,
 }
@@ -249,6 +251,7 @@ impl Browser {
         // Style sheets and pictures from the network, within limits.
         let mut sheets: Vec<String> = Vec::new();
         self.fonts.images.clear();
+        self.fonts.svgs.clear();
         if base.starts_with("http") {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
@@ -264,15 +267,18 @@ impl Browser {
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
                 if let Ok((_, body)) = self.fetch(&abs) {
-                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), alloc::rc::Rc::new(img))); }
+                    let bytes = core::mem::take(&mut self.buf);
+                    self.fonts.add_picture(src, &bytes[body], (W - 16) as usize, 2000);
+                    self.buf = bytes;
                 }
             }
             self.buf = Vec::new();
         }
         let scripts = self.scripts(&dom, &base);
-        // Inline handlers (`onclick="..."`) and `javascript:` links need the engine too.
+        // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
         let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
-            sex_html::dom::Kind::Element { attrs, .. } => attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
+            sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
+                || attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
             _ => false,
         });
         self.sheets = sheets;
@@ -399,8 +405,12 @@ impl Browser {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
         let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
-        self.page = sex_html::layout::layout(&doc.dom, &styles, W, &self.fonts);
+        self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
+            || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
+        self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
+        sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
+        doc.set_layers(&self.page.layers);
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
         // Ask for the next tick soon: the change may have started timers.
@@ -560,6 +570,10 @@ impl Browser {
             Kind::Leave => { self.press_link = None; None }
             _ => None,
         };
+        // :hover follows the pointer.
+        let hovered = if self.hover_css && y >= 0 && !matches!(p.kind, Kind::Leave) { self.doc.get().node_at(px, py) } else { None };
+        let hover_changed = self.hover_css && self.doc.get().dom.hover != hovered;
+        self.doc.get().dom.hover = hovered;
         let mut kept = false;
         if let Doc::Scripted(_) = self.doc {
             self.sync_scroll();
@@ -577,6 +591,7 @@ impl Browser {
             self.after_script(true);
             self.timers_changed();
         }
+        if hover_changed { self.relayout(); self.draw(); }
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
             Kind::Up { button: 0 } if !kept && y >= 0 => {
@@ -672,7 +687,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0 };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

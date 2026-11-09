@@ -19,7 +19,9 @@ pub struct Declaration {
 pub enum AttrOp { Exists, Equals(String), Word(String), Prefix(String), Suffix(String), Contains(String), Dash(String) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Compound>) }
+pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Compound>),
+    /// Under the pointer (or an ancestor of what is).
+    Hover, Focus, FocusWithin, Checked, Disabled, Enabled }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Compound {
@@ -242,7 +244,7 @@ pub fn parse_selector_list(text: &str) -> Vec<Selector> {
     split_top(text, ',').into_iter().filter_map(|s| parse_selector(s.trim())).collect()
 }
 
-fn split_top(text: &str, sep: char) -> Vec<&str> {
+pub(crate) fn split_top(text: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut start = 0;
@@ -374,9 +376,15 @@ fn parse_compound(text: &str, mut i: usize) -> Option<(Compound, usize)> {
                         let (comp, _) = alts.next()?;
                         merge(&mut c, comp);
                     }
-                    "visited" | "hover" | "active" | "focus" | "focus-within" | "focus-visible" | "checked" | "disabled" | "target"
+                    "hover" => c.pseudo.push(Pseudo::Hover),
+                    "focus" | "focus-visible" => c.pseudo.push(Pseudo::Focus),
+                    "focus-within" => c.pseudo.push(Pseudo::FocusWithin),
+                    "checked" => c.pseudo.push(Pseudo::Checked),
+                    "disabled" => c.pseudo.push(Pseudo::Disabled),
+                    "enabled" => c.pseudo.push(Pseudo::Enabled),
+                    "visited" | "active" | "target"
                     | "before" | "after" | "first-line" | "first-letter" | "placeholder" | "selection" | "marker" => c.never = true,
-                    "enabled" | "lang" | "dir" => {}
+                    "lang" | "dir" => {}
                     _ => return None,
                 }
             }
@@ -500,6 +508,12 @@ pub fn matches_compound(dom: &Dom, node: NodeId, c: &Compound) -> bool {
                 if *a == 0 { index == *b } else { let d = index - b; d % a == 0 && d / a >= 0 }
             }
             Pseudo::Not(inner) => !inner.iter().any(|c| matches_compound(dom, node, c)),
+            Pseudo::Hover => dom.hover.is_some_and(|h| dom.is_inclusive_ancestor(node, h)),
+            Pseudo::Focus => dom.caret.is_some_and(|(f, _)| f == node),
+            Pseudo::FocusWithin => dom.caret.is_some_and(|(f, _)| dom.is_inclusive_ancestor(node, f)),
+            Pseudo::Checked => dom.attr(node, "checked").is_some() || (tag == "option" && dom.attr(node, "selected").is_some()),
+            Pseudo::Disabled => matches!(tag.as_str(), "input" | "button" | "select" | "textarea" | "option" | "fieldset") && dom.attr(node, "disabled").is_some(),
+            Pseudo::Enabled => matches!(tag.as_str(), "input" | "button" | "select" | "textarea" | "option" | "fieldset") && dom.attr(node, "disabled").is_none(),
         };
         if !ok { return false; }
     }

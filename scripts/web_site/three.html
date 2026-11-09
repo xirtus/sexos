@@ -61,16 +61,31 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 const light = new THREE.DirectionalLight(0xffffff, 2.2);
 light.position.set(2, 3, 4);
 scene.add(light);
+// Render to texture: a second camera's view of the cube shows on a panel.
+const target = new THREE.WebGLRenderTarget(48, 32);
+const eye = new THREE.PerspectiveCamera(50, 1.5, 0.1, 100);
+eye.position.set(0, 0, 3.2);
+const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), new THREE.MeshBasicMaterial({ map: target.texture }));
+panel.position.set(2.0, 1.0, 0);
+scene.add(panel);
+function draw() {
+  panel.visible = false;
+  renderer.setRenderTarget(target);
+  renderer.render(scene, eye);
+  renderer.setRenderTarget(null);
+  panel.visible = true;
+  renderer.render(scene, camera);
+}
 let frames = 0;
 function step() {
   cube.rotation.x += 0.12; cube.rotation.y += 0.17; ball.rotation.y += 0.2;
-  renderer.render(scene, camera);
+  draw();
   frames++;
   document.getElementById('state').textContent = 'frames: ' + frames;
   if (frames % 6) requestAnimationFrame(step); else console.log('three frames', frames);
 }
 document.getElementById('spin').addEventListener('click', () => requestAnimationFrame(step));
-renderer.render(scene, camera);
+draw();
 requestAnimationFrame(step);
 </script>
 </body></html>

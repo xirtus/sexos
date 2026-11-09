@@ -18,6 +18,8 @@ pub struct Document {
     pub navigate: Option<String>,
     /// Element boxes from the last layout, by node: (x, y, w, h).
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
+    /// Each node's paint layer (higher paints on top), from `Page::layers`.
+    pub layers: Vec<u32>,
     /// Supplies the monotonic clock.
     pub clock: fn() -> u64,
     /// Canvas 2D command batches not yet drawn, by canvas element.
@@ -86,7 +88,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -95,10 +97,14 @@ impl Document {
         self.rects.clear();
         self.rects.extend(boxes.iter().map(|b| b.map(|r| (r[0], r[1], r[2], r[3]))));
     }
-    /// The deepest element whose laid-out box holds the page point (`x`, `y`): what a
-    /// click there lands on. Later elements win ties, as they paint on top.
+    pub fn set_layers(&mut self, layers: &[u32]) {
+        self.layers.clear();
+        self.layers.extend_from_slice(layers);
+    }
+    /// The topmost, then deepest, element whose laid-out box holds the page point
+    /// (`x`, `y`): what a click there lands on. Later elements win ties, as they paint on top.
     pub fn node_at(&self, x: i32, y: i32) -> Option<NodeId> {
-        let mut best: Option<(usize, NodeId)> = None;
+        let mut best: Option<((u32, usize), NodeId)> = None;
         for (n, rect) in self.rects.iter().enumerate() {
             let Some((rx, ry, rw, rh)) = *rect else { continue };
             if x < rx || y < ry || x >= rx + rw || y >= ry + rh { continue; }
@@ -106,7 +112,8 @@ impl Document {
             let mut depth = 0;
             let mut p = self.dom.nodes[n].parent;
             while let Some(q) = p { depth += 1; p = self.dom.nodes[q].parent; }
-            if best.map_or(true, |(d, _)| depth >= d) { best = Some((depth, n)); }
+            let key = (self.layers.get(n).copied().unwrap_or(0), depth);
+            if best.map_or(true, |(d, _)| key >= d) { best = Some((key, n)); }
         }
         best.map(|(_, n)| n)
     }
@@ -194,6 +201,8 @@ impl Page for Document {
             op::LOG => {
                 let level = a.first().and_then(|l| l.parse().ok()).unwrap_or(0u8).min(2);
                 let text = a.get(1).copied().unwrap_or("");
+                // QuickJS throws null when it has no memory left even for the error.
+                let text = if level == 2 && text == "null" { "InternalError: out of memory (the page filled its script heap)" } else { text };
                 // Keep the log bounded: a page that logs in a loop must not fill memory.
                 if self.log.len() < 256 { self.log.push((level, String::from(&text[..floor(text, 1024)]))); }
                 None
@@ -299,6 +308,21 @@ impl Page for Document {
                 let x = a.first()?.parse().ok()?;
                 let y = a.get(1)?.parse().ok()?;
                 self.node_at(x, y).map(|n| format!("{n}"))
+            }
+            op::VALUE => {
+                let n = self.element(a.first())?;
+                match a.get(1) {
+                    Some(v) => { self.dom.values.insert(n, String::from(*v)); self.dirty = true; None }
+                    None => Some(self.dom.control_value(n)),
+                }
+            }
+            op::CARET => {
+                let caret = match a.first().filter(|s| !s.is_empty()) {
+                    Some(_) => Some((self.element(a.first())?, a.get(1).and_then(|p| p.parse().ok()).unwrap_or(0))),
+                    None => None,
+                };
+                if caret != self.dom.caret { self.dom.caret = caret; self.dirty = true; }
+                None
             }
             op::LOCATION => Some(self.url.clone()),
             op::CANVAS => {

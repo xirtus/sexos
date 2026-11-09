@@ -444,3 +444,54 @@ fn array_and_3d_textures_sample_their_layers() {
     assert_eq!(ctx.get_error(), NO_ERROR);
     assert_eq!(px(&ctx, 1, 1), [0, 255, 0, 128]);
 }
+
+#[test]
+fn render_to_texture_then_sample_it() {
+    let mut ctx = Context::new(16, 16);
+    // A colour from a uniform, or a texture's texel when `t` is 1.
+    program(&mut ctx, "attribute vec2 p; varying vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }",
+        "precision mediump float; uniform sampler2D tex; uniform vec4 col; uniform float t; varying vec2 uv;\n\
+         void main(){ gl_FragColor = t > 0.5 ? texture2D(tex, uv) : col; }");
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    let (lc, lt) = (ctx.uniform_location(3, "col").unwrap(), ctx.uniform_location(3, "t").unwrap());
+    // An 8x4 texture to draw into.
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 8, 4, RGBA, UNSIGNED_BYTE, None);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+    ctx.bind_texture(TEXTURE_2D, 0);
+    ctx.clear_color([0.0, 0.0, 1.0, 1.0]);
+    ctx.clear(COLOR_BUFFER_BIT);
+    ctx.bind_framebuffer(30);
+    ctx.framebuffer_texture(COLOR_ATTACHMENT0, TEXTURE_2D, 20);
+    assert_eq!((ctx.width, ctx.height), (8, 4));
+    ctx.viewport(0, 0, 8, 4);
+    ctx.clear_color([0.0, 0.0, 0.0, 1.0]);
+    ctx.clear(COLOR_BUFFER_BIT);
+    // Only the left half of the texture turns red.
+    ctx.enable(SCISSOR_TEST, true);
+    ctx.scissor(0, 0, 4, 4);
+    ctx.uniform(lc, Some(&[1.0, 0.0, 0.0, 1.0]), None);
+    ctx.uniform(lt, Some(&[0.0]), None);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    ctx.enable(SCISSOR_TEST, false);
+    // Back on the canvas, which kept its blue; then draw it with the texture.
+    ctx.bind_framebuffer(0);
+    assert_eq!((ctx.width, ctx.height), (16, 16));
+    assert_eq!(px(&ctx, 3, 3), [0, 0, 255, 255]);
+    ctx.viewport(0, 0, 16, 16);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.uniform(lt, Some(&[1.0]), None);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 2, 8), [255, 0, 0, 255]);
+    assert_eq!(px(&ctx, 13, 8), [0, 0, 0, 255]);
+    // A blit copies the texture's framebuffer back over the canvas's top-right corner.
+    ctx.blit_framebuffer(30, 0, [0, 0, 8, 4], [8, 12, 16, 16]);
+    assert_eq!(px(&ctx, 9, 13), [255, 0, 0, 255]);
+    assert_eq!(px(&ctx, 15, 15), [0, 0, 0, 255]);
+    assert_eq!(ctx.fb, 0);
+}

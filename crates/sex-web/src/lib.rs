@@ -19,6 +19,7 @@ use sex_html::layout::{Bullet, FontKey, Host, Item, Page};
 pub use sex_html;
 
 pub mod canvas;
+pub mod svg;
 pub use sex_image::Image;
 
 /// Glyph bitmaps kept between paints.
@@ -36,6 +37,8 @@ pub struct Fonts {
     /// Decoded pictures by address, for layout sizes and painting.
     /// Decoded pictures by `src` (`canvas:<node>` for canvases), shared with scripts.
     pub images: Vec<(String, alloc::rc::Rc<Image>)>,
+    /// SVG pictures by `src`: their text and own size, redrawn at the size laid out.
+    pub svgs: Vec<(String, alloc::rc::Rc<str>, (i32, i32))>,
 }
 
 impl Fonts {
@@ -49,7 +52,7 @@ impl Fonts {
             if ptr.is_null() { return None; }
             Box::from_raw(ptr)
         };
-        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new() })
+        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new(), svgs: Vec::new() })
     }
 
     fn face(&self, mono: bool) -> &Font<'static> { if mono { &self.mono } else { &self.sans } }
@@ -133,6 +136,7 @@ impl Host for Fonts {
         (up(face.ascender(size)), up(-face.descender(size)))
     }
     fn image_size(&self, src: &str) -> Option<(i32, i32)> {
+        if let Some((_, _, size)) = self.svgs.iter().find(|(s, _, _)| s == src) { return Some(*size); }
         self.images.iter().find(|(s, _)| s == src).map(|(_, i)| (i.width as i32, i.height as i32))
     }
 }
@@ -148,6 +152,8 @@ pub struct Target<'a> {
     pub premul: bool,
     /// Target row where the page starts (room for a toolbar above).
     pub top: i32,
+    /// Page rectangle (x, y, width, height) drawing is limited to, if any.
+    pub clip: Option<[i32; 4]>,
 }
 
 /// Source-over onto a premultiplied word, alpha included (canvas surfaces).
@@ -166,13 +172,24 @@ fn blend(dst: u32, src: u32, alpha: u32) -> u32 {
 }
 
 impl Target<'_> {
+    /// Screen pixels drawing may touch: x0, y0, x1, y1.
+    fn bounds(&self) -> (i32, i32, i32, i32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (0, self.top, self.width, self.height);
+        if let Some([cx, cy, cw, ch]) = self.clip {
+            let cy = cy - self.scroll + self.top;
+            x0 = x0.max(cx); y0 = y0.max(cy); x1 = x1.min(cx + cw); y1 = y1.min(cy + ch);
+        }
+        (x0, y0, x1, y1)
+    }
+
     /// Fills a page rectangle, rounding its corners by `radius`, at `color`'s alpha.
     pub fn fill(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32, radius: i32) {
         let a = color >> 24;
         if a == 0 || w <= 0 || h <= 0 { return; }
         let y = y - self.scroll + self.top;
-        let (x0, y0) = (x.max(0), y.max(self.top));
-        let (x1, y1) = ((x + w).min(self.width), (y + h).min(self.height));
+        let (bx0, by0, bx1, by1) = self.bounds();
+        let (x0, y0) = (x.max(bx0), y.max(by0));
+        let (x1, y1) = ((x + w).min(bx1), (y + h).min(by1));
         if x0 >= x1 || y0 >= y1 { return; }
         let r = radius.min(w / 2).min(h / 2).max(0);
         for py in y0..y1 {
@@ -192,14 +209,15 @@ impl Target<'_> {
     /// is the bitmap row of the baseline when rows above it lean right (synthetic italic).
     fn coverage(&mut self, x: i32, y: i32, w: usize, h: usize, bits: &[u8], color: u32, smear: i32, slant: Option<i32>) {
         let a = color >> 24;
+        let (bx0, by0, bx1, by1) = self.bounds();
         for gy in 0..h as i32 {
             let py = y + gy;
             let x = x + slant.map_or(0, |base| (((base - gy) * 13) >> 6) - ((base * 13) >> 7));
-            if py < self.top || py >= self.height { continue; }
+            if py < by0 || py >= by1 { continue; }
             let row = (py * self.width) as usize;
             for gx in 0..w as i32 + smear {
                 let px = x + gx;
-                if px < 0 || px >= self.width { continue; }
+                if px < bx0 || px >= bx1 { continue; }
                 let mut c = 0u32;
                 for s in 0..=smear {
                     let sx = gx - s;
@@ -238,7 +256,11 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
     }
     let top = target.scroll;
     let bottom = target.scroll + target.height - target.top;
-    for item in sex_html::layout::visible(page, top, bottom) {
+    let outer = target.clip;
+    for (i, item) in page.items.iter().enumerate() {
+        let (a, b) = item.vertical_span();
+        if b <= top || a >= bottom { continue; }
+        target.clip = page.clip_of(i).or(outer);
         match item {
             Item::Rect { x, y, w, h, color, radius } => target.fill(*x, *y, *w, *h, *color, *radius),
             Item::Bullet { x, y, size, color, kind } => match kind {
@@ -260,6 +282,7 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
             }
         }
     }
+    target.clip = outer;
     if let Some(l) = focus.and_then(|f| page.links.get(f)) {
         let ring = 0xFF0B_57D0;
         target.fill(l.x - 2, l.y - 1, l.w + 4, 2, ring, 0);
@@ -273,9 +296,9 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
 /// when each is opaque and so covers what was under it. False when that can't stand in
 /// for a full `frame`.
 pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, changed: &[String]) -> bool {
-    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false };
+    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     let (top, bottom) = (scroll, scroll + height - BAR);
-    let mut items: Vec<(i32, i32, i32, i32, &str)> = Vec::new();
+    let mut items: Vec<(i32, i32, i32, i32, &str, Option<[i32; 4]>)> = Vec::new();
     for (i, item) in page.items.iter().enumerate() {
         let Item::Image { x, y, w, h, src, .. } = item else { continue };
         if !changed.iter().any(|c| c == src) || y + h <= top || *y >= bottom { continue; }
@@ -293,11 +316,11 @@ pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], widt
             }
         });
         if over { return false; }
-        items.push((*x, *y, *w, *h, src.as_str()));
+        items.push((*x, *y, *w, *h, src.as_str(), page.clip_of(i)));
     }
     let opaque = |src: &str| fonts.images.iter().find(|(s, _)| s == src).is_some_and(|(_, img)| img.pixels.iter().all(|p| p >> 24 == 255));
     if !items.iter().all(|i| opaque(i.4)) { return false; }
-    for (x, y, w, h, src) in items { image(&mut t, fonts, x, y, w, h, src, ""); }
+    for (x, y, w, h, src, clip) in items { t.clip = clip; image(&mut t, fonts, x, y, w, h, src, ""); }
     true
 }
 
@@ -318,10 +341,11 @@ fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32,
     let (iw, ih) = (img.width as i64, img.height as i64);
     if iw == 0 || ih == 0 || w <= 0 || h <= 0 { return; }
     let sy0 = y - target.scroll + target.top;
-    for ty in sy0.max(target.top)..(sy0 + h).min(target.height) {
+    let (bx0, by0, bx1, by1) = target.bounds();
+    for ty in sy0.max(by0)..(sy0 + h).min(by1) {
         let srow = ((ty - sy0) as i64 * ih / h as i64) as usize * img.width;
         let row = (ty * target.width) as usize;
-        for tx in x.max(0)..(x + w).min(target.width) {
+        for tx in x.max(bx0)..(x + w).min(bx1) {
             let s = img.pixels[srow + ((tx - x) as i64 * iw / w as i64) as usize];
             let p = &mut target.pixels[row + tx as usize];
             *p = blend(*p, s, s >> 24);
@@ -359,8 +383,23 @@ pub fn text_run(target: &mut Target, fonts: &mut Fonts, x: i32, baseline: i32, f
     }
 }
 
+impl Fonts {
+    /// Decodes the picture `src` from `bytes` (fitted within `max_w` x `max_h`) and keeps it
+    /// for layout and painting.
+    pub fn add_picture(&mut self, src: &str, bytes: &[u8], max_w: usize, max_h: usize) {
+        let Some(img) = decode_image(bytes, max_w, max_h) else { return };
+        if svg::is_svg(bytes) {
+            if let Ok(text) = core::str::from_utf8(bytes) { self.svgs.push((String::from(src), alloc::rc::Rc::from(text), (img.width as i32, img.height as i32))); }
+        }
+        self.images.push((String::from(src), alloc::rc::Rc::new(img)));
+    }
+}
+
 /// Decodes a picture for a page, shrunk to at most `max_w` x `max_h`.
 pub fn decode_image(bytes: &[u8], max_w: usize, max_h: usize) -> Option<Image> {
+    if svg::is_svg(bytes) {
+        return svg::decode(core::str::from_utf8(bytes).ok()?, max_w, max_h);
+    }
     let limits = sex_image::Limits { max_width: 4096, max_height: 4096, max_pixels: 2_000_000, max_input_bytes: 4 << 20 };
     sex_image::decode(bytes, &limits).ok()?.fit_within(max_w, max_h).ok()
 }
@@ -371,9 +410,9 @@ pub const BAR: i32 = 30;
 /// The whole window: a bar showing `bar_text` (the address, or what is being typed,
 /// with a caret when `editing`), then `page` scrolled by `scroll`.
 pub fn frame(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, bar_text: &str, editing: bool) {
-    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false };
+    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     paint(page, fonts, &mut t, focus);
-    let mut bar = Target { pixels: t.pixels, width, height: BAR, scroll: 0, top: 0, premul: false };
+    let mut bar = Target { pixels: t.pixels, width, height: BAR, scroll: 0, top: 0, premul: false, clip: None };
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
     bar.fill(6, 4, width - 12, BAR - 8, if editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false };
