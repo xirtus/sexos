@@ -58,7 +58,8 @@ crates = [
   "apps/threads/Cargo.toml",
   "apps/web/Cargo.toml",
   "apps/play/Cargo.toml",
-  "apps/cpp/Cargo.toml"
+  "apps/cpp/Cargo.toml",
+  "apps/stdhello/Cargo.toml"
 ]
 
 [[stage]]
@@ -306,6 +307,16 @@ target = "x86_64-sex-app.json"
 manifest = "apps/cpp/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/cpp"
 dest_artifact = "iso_root/programs/cpp"
+
+# Ordinary Rust programs: the real standard library over sex-std (crates/sex-std).
+[[stage]]
+id = "build_stdhello"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/stdhello/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/stdhello"
+dest_artifact = "iso_root/programs/stdhello"
 
 [[stage]]
 id = "build_play"

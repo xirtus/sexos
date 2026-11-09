@@ -10,6 +10,7 @@ pub mod code;
 pub mod thread;
 pub mod tls;
 pub mod sound;
+pub mod mailbox;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
 /// than the 64 KiB a run starts with (deep layout, script engines, decoders).
@@ -28,6 +29,12 @@ use sex_pdx::{app_lifecycle as lifecycle, pdx_call_checked, SLOT_DISPLAY, SLOT_S
 const TITLE_ID: u64 = 300;
 const SHELL: u32 = 3;
 const FILES: u32 = 11;
+const NET: u32 = 13;
+
+/// An answer from Files or the network service: it belongs to whichever task asked.
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) }
+/// A message from Shell: keys, pointer, resizes and closes for the main task's window.
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL }
 
 pub enum Event {
     Key(Key),
@@ -115,6 +122,8 @@ impl Window {
         }
     }
     fn event(&mut self, m: &sex_pdx::PdxMessage) -> Option<Event> {
+        // Another task's answer, taken while this one waited: it looks in the mailbox.
+        if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
         if m.type_id == 0x202 {
             if let Some((w, h)) = sex_pdx::pixel_region::resize_decode(m.arg0, m.arg1, m.arg2) {
@@ -132,6 +141,9 @@ impl Window {
     /// The next key or close, waiting for one.
     pub fn next(&mut self) -> Event {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take().unwrap(); }
+        while let Some(m) = mailbox::take(is_shell) {
+            if let Some(event) = self.event(&m) { return event; }
+        }
         loop {
             let m = sex_pdx::pdx_listen_raw(0);
             if let Some(event) = self.event(&m) { return event; }
@@ -140,6 +152,9 @@ impl Window {
     /// The next key or close if one is already waiting, otherwise `None` at once.
     pub fn poll(&mut self) -> Option<Event> {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
+        while let Some(m) = mailbox::take(is_shell) {
+            if let Some(event) = self.event(&m) { return Some(event); }
+        }
         while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
             if let Some(event) = self.event(&m) { return Some(event); }
         }
@@ -160,8 +175,14 @@ impl Window {
 }
 
 /// Files in the program's own folder. Paths are relative to it; `..` is refused.
+///
+/// The functions that take a `Window` keep the keys and closes that arrive while they
+/// wait for it. Those in [`files::direct`] need no window: any task of the program may
+/// call them, and what arrives meanwhile waits in the [`mailbox`] for its owner. One
+/// request is in flight at a time per program; others wait their turn.
 pub mod files {
-    use super::{Window, FILES};
+    use super::{is_answer, is_shell, mailbox, Window, FILES};
+    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use sex_pdx::fs as w;
     use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 
@@ -172,25 +193,47 @@ pub mod files {
         let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
     }
-    static mut SEQ: u32 = 0;
+    /// Held while a request owns the shared region, from writing the path to reading the
+    /// answer.
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    struct Turn;
+    impl Turn {
+        fn take() -> Turn {
+            while BUSY.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { sex_pdx::sys_yield(); }
+            Turn
+        }
+    }
+    impl Drop for Turn { fn drop(&mut self) { BUSY.store(false, Ordering::Release); } }
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    /// Where keys and closes that arrive during a request go.
+    type Hold<'a> = Option<&'a mut Window>;
+
     /// Shell tells Files where a new run lives just as the run starts, so a first request
     /// can beat it there. A refusal is retried briefly; a program never bound stays refused.
-    fn request(window: &mut Window, kind: u8, path: &[u8], offset: u64, length: u64) -> Result<u32, Error> {
+    /// `fill` writes the data area before the request goes; `take` reads it after the answer.
+    fn exchange<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+                   fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
+        if path.len() > w::PATH_BYTES { return Err(w::NAME); }
+        let _turn = Turn::take();
         let mut tries = 0;
         loop {
-            match once(window, kind, path, offset, length) {
+            let region = region()?;
+            region[..path.len()].copy_from_slice(path);
+            fill(&mut region[w::PATH_BYTES..]);
+            match once(&mut hold, kind, path.len(), offset, length) {
                 Err(w::DENIED) if tries < 50 => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
-                other => return other,
+                Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
+                Err(e) => return Err(e),
             }
         }
     }
-    /// One request, answered before it returns. Keys and closes that arrive meanwhile wait.
-    fn once(window: &mut Window, kind: u8, path: &[u8], offset: u64, length: u64) -> Result<u32, Error> {
-        let region = region()?;
-        if path.len() > w::PATH_BYTES { return Err(w::NAME); }
-        region[..path.len()].copy_from_slice(path);
-        let seq = unsafe { SEQ = (SEQ + 1) & 0xFF_FFFF; SEQ };
-        let r = w::Request { seq, kind, path_len: path.len() as u16, offset, length };
+    fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
+        m.type_id == 1 && m.caller_pd == FILES && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
+    }
+    /// One request, answered before it returns.
+    fn once(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<u32, Error> {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
+        let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
         let a = r.args();
         loop {
             match sex_pdx::pdx_call_checked(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
@@ -199,25 +242,35 @@ pub mod files {
                 Err(_) => return Err(w::UNAVAILABLE),
             }
         }
+        // The main task sleeps until its inbox has something; a worker cannot, so it
+        // looks, and lets others run between looks.
+        let worker = crate::thread::is_worker();
+        let mut idle = 0u32;
         loop {
-            let m = sex_pdx::pdx_listen_raw(0);
-            if m.type_id == 1 && m.caller_pd == FILES {
-                if let Some((got, status, value)) = w::decode_reply(m.arg0) {
-                    if got == seq { return if status == w::OK { Ok(value) } else { Err(status) }; }
-                }
-                continue;
+            let m = match mailbox::take(|m| mine(m, seq)) {
+                Some(m) => m,
+                None if !worker => sex_pdx::pdx_listen_raw(0),
+                None => match sex_pdx::pdx_try_listen_raw(0) {
+                    Some(m) => { idle = 0; m }
+                    None => { idle += 1; crate::thread::pause(idle); continue; }
+                },
+            };
+            if mine(&m, seq) {
+                let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
+                return if status == w::OK { Ok(value) } else { Err(status) };
             }
-            if let Some(event) = window.event(&m) {
-                if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+            if is_answer(&m) { mailbox::put(m); continue; }
+            match hold {
+                Some(window) => if let Some(event) = window.event(&m) {
+                    if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+                },
+                None => if is_shell(&m) { mailbox::put(m) },
             }
         }
     }
     /// The words typed after the program's name, if it was started with any.
     pub fn args<'a>(window: &mut Window, out: &'a mut [u8; w::ARGS_MAX]) -> &'a [u8] {
-        let Ok(n) = request(window, w::ARGS, b"", 0, 0) else { return &out[..0] };
-        let n = (n as usize).min(w::ARGS_MAX);
-        let Ok(region) = region() else { return &out[..0] };
-        out[..n].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + n]);
+        let n = direct::args_into(Some(window), out);
         &out[..n]
     }
     /// Reads up to `out.len()` bytes of the file from its start.
@@ -226,44 +279,131 @@ pub mod files {
     }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
-        let mut done = 0;
-        while done < out.len() {
-            let want = (out.len() - done).min(w::IO_MAX);
-            let got = request(window, w::READ, path, offset + done as u64, want as u64)? as usize;
-            out[done..done + got].copy_from_slice(&region()?[w::PATH_BYTES..w::PATH_BYTES + got]);
-            done += got;
-            if got < want { break; }
-        }
-        Ok(done)
+        direct::read_at_held(Some(window), path, offset, out)
     }
-    /// Replaces the file with `data`, creating it if needed.
     /// Replaces the file with `data`, of any size: it goes over in pieces as big as the
-    /// shared region holds.
+    /// shared region holds. Creates it if needed.
     pub fn write(window: &mut Window, path: &[u8], data: &[u8]) -> Result<(), Error> {
-        match request(window, w::STAT, path, 0, 0) {
-            Ok(_) => { request(window, w::TRUNCATE, path, 0, 0)?; }
-            Err(w::NOT_FOUND) => { request(window, w::CREATE, path, 0, 0)?; }
+        match exchange(Some(&mut *window), w::STAT, path, 0, 0, |_| {}, |_, _| ()) {
+            Ok(_) => { exchange(Some(&mut *window), w::TRUNCATE, path, 0, 0, |_| {}, |_, _| ())?; }
+            Err(w::NOT_FOUND) => { exchange(Some(&mut *window), w::CREATE, path, 0, 0, |_| {}, |_, _| ())?; }
             Err(e) => return Err(e),
         }
-        let mut done = 0;
-        while done < data.len() {
-            let n = (data.len() - done).min(w::IO_MAX);
-            region()?[w::PATH_BYTES..w::PATH_BYTES + n].copy_from_slice(&data[done..done + n]);
-            let wrote = request(window, w::WRITE, path, done as u64, n as u64)? as usize;
-            if wrote < n { return Err(w::NO_SPACE); }
-            done += n;
-        }
+        let wrote = direct::write_at_held(Some(&mut *window), path, 0, data)?;
+        if wrote < data.len() { return Err(w::NO_SPACE); }
         Ok(())
     }
     /// The file's size, or why there is none.
     pub fn size(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
-        request(window, w::STAT, path, 0, 0)?;
-        let r = region()?;
-        Ok(u64::from_le_bytes(r[w::PATH_BYTES + 8..w::PATH_BYTES + 16].try_into().unwrap_or([0; 8])))
+        exchange(Some(&mut *window), w::STAT, path, 0, 0, |_| {}, |_, d| direct::Stat::decode(d).size)
     }
     /// Makes everything written so far durable.
     pub fn sync(window: &mut Window) -> Result<(), Error> {
-        request(window, w::SYNC, b"", 0, 0).map(|_| ())
+        exchange(Some(&mut *window), w::SYNC, b"", 0, 0, |_| {}, |_, _| ())
+    }
+
+    /// The same files with no window: for any task, and for libraries (Rust `std`, the
+    /// C library) that have none to hand. Keys and closes that arrive meanwhile wait in
+    /// the mailbox, where `Window::next` finds them.
+    pub mod direct {
+        use super::{exchange, w, Error, Hold};
+
+        /// What Files knows of a file or folder.
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+        pub struct Stat { pub dir: bool, pub size: u64, pub modified: u64, pub id: u64 }
+        impl Stat {
+            pub(crate) fn decode(d: &[u8]) -> Stat {
+                let word = |i: usize| u64::from_le_bytes(d[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+                Stat { dir: word(0) != 0, size: word(1), modified: word(2), id: word(3) }
+            }
+        }
+        /// One entry of a folder.
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Entry { pub dir: bool, pub size: u64, pub name: alloc::vec::Vec<u8> }
+
+        pub(super) fn args_into(hold: Hold, out: &mut [u8; w::ARGS_MAX]) -> usize {
+            exchange(hold, w::ARGS, b"", 0, 0, |_| {}, |n, d| {
+                let n = (n as usize).min(w::ARGS_MAX);
+                out[..n].copy_from_slice(&d[..n]);
+                n
+            }).unwrap_or(0)
+        }
+        pub(super) fn read_at_held(mut hold: Hold, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
+            let mut done = 0;
+            while done < out.len() {
+                let want = (out.len() - done).min(w::IO_MAX);
+                let piece = &mut out[done..done + want];
+                let got = exchange(hold.as_deref_mut(), w::READ, path, offset + done as u64, want as u64, |_| {}, |n, d| {
+                    let n = (n as usize).min(want);
+                    piece[..n].copy_from_slice(&d[..n]);
+                    n
+                })?;
+                done += got;
+                if got < want { break; }
+            }
+            Ok(done)
+        }
+        pub(super) fn write_at_held(mut hold: Hold, path: &[u8], offset: u64, data: &[u8]) -> Result<usize, Error> {
+            let mut done = 0;
+            while done < data.len() {
+                let n = (data.len() - done).min(w::IO_MAX);
+                let piece = &data[done..done + n];
+                let wrote = exchange(hold.as_deref_mut(), w::WRITE, path, offset + done as u64, n as u64,
+                    |d| d[..n].copy_from_slice(piece), |n, _| n as usize)?;
+                done += wrote;
+                if wrote < n { break; }
+            }
+            Ok(done)
+        }
+        fn simple(kind: u8, path: &[u8], offset: u64) -> Result<(), Error> {
+            exchange(None, kind, path, offset, 0, |_| {}, |_, _| ())
+        }
+
+        /// The words typed after the program's name, if it was started with any.
+        pub fn args(out: &mut [u8; w::ARGS_MAX]) -> usize { args_into(None, out) }
+        /// Reads up to `out.len()` bytes from byte `offset`; fewer at the file's end.
+        pub fn read_at(path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> { read_at_held(None, path, offset, out) }
+        /// Writes `data` at byte `offset`, growing the file as needed. Returns how much
+        /// was written: less than all only when the disk is full.
+        pub fn write_at(path: &[u8], offset: u64, data: &[u8]) -> Result<usize, Error> { write_at_held(None, path, offset, data) }
+        pub fn stat(path: &[u8]) -> Result<Stat, Error> { exchange(None, w::STAT, path, 0, 0, |_| {}, |_, d| Stat::decode(d)) }
+        /// Makes an empty file; `EXISTS` if there is one.
+        pub fn create(path: &[u8]) -> Result<(), Error> { simple(w::CREATE, path, 0) }
+        /// Cuts or extends the file to `size` bytes.
+        pub fn truncate(path: &[u8], size: u64) -> Result<(), Error> { simple(w::TRUNCATE, path, size) }
+        pub fn mkdir(path: &[u8]) -> Result<(), Error> { simple(w::MKDIR, path, 0) }
+        /// Removes a file or an empty folder.
+        pub fn remove(path: &[u8]) -> Result<(), Error> { simple(w::REMOVE, path, 0) }
+        pub fn rename(from: &[u8], to: &[u8]) -> Result<(), Error> {
+            let mut both = alloc::vec::Vec::with_capacity(from.len() + 1 + to.len());
+            both.extend_from_slice(from);
+            both.push(0);
+            both.extend_from_slice(to);
+            simple(w::RENAME, &both, 0)
+        }
+        /// Makes everything written so far durable.
+        pub fn sync() -> Result<(), Error> { simple(w::SYNC, b"", 0) }
+        /// Everything in the folder `path` (`b""` for the program's own folder).
+        pub fn list(path: &[u8]) -> Result<alloc::vec::Vec<Entry>, Error> {
+            let mut all = alloc::vec::Vec::new();
+            let mut cursor = 0u64;
+            loop {
+                let next = exchange(None, w::LIST, path, cursor, 0, |_| {}, |used, d| {
+                    let used = (used as usize).min(d.len());
+                    let mut at = w::LIST_HEAD;
+                    while at + w::ENTRY_HEAD <= used {
+                        let len = d[at + 1] as usize;
+                        if at + w::ENTRY_HEAD + len > used { break; }
+                        let size = u64::from_le_bytes(d[at + 2..at + 10].try_into().unwrap_or([0; 8]));
+                        all.push(Entry { dir: d[at] == 1, size, name: d[at + w::ENTRY_HEAD..at + w::ENTRY_HEAD + len].to_vec() });
+                        at += w::ENTRY_HEAD + len;
+                    }
+                    u64::from_le_bytes(d[..8].try_into().unwrap_or([0; 8]))
+                })?;
+                if next == 0 { return Ok(all); }
+                cursor = next;
+            }
+        }
     }
 }
 

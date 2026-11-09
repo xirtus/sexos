@@ -59,6 +59,8 @@ members = [
     "crates/sex-time",
     "crates/sex-wasm",
     "apps/spindle",
+    "crates/sex-std",
+    "apps/stdhello",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
