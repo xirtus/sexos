@@ -3,7 +3,6 @@ name = "play"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-build = "build.rs"
 
 [[bin]]
 name = "play"
@@ -12,4 +11,4 @@ path = "src/main.rs"
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-app = { path = "../../crates/sex-app" }
-sex-libc = { path = "../../crates/sex-libc" }
+sex-media = { path = "../../crates/sex-media" }

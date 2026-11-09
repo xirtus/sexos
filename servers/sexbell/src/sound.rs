@@ -228,7 +228,8 @@ fn sine(phase: u32) -> f32 {
 }
 
 impl Player {
-    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active) }
+    /// A paused stream doesn't count: Bell rests until the program kicks it again.
+    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active && st.ring.load(ring::PAUSED) == 0) }
 
     /// Mixes the next period of notes and streams into `period`, noting how many
     /// frames each stream gave in `took[slot]`. False when there is nothing to play.
@@ -256,9 +257,17 @@ impl Player {
             let Some(st) = entry.as_mut() else { continue };
             if !st.active { continue; }
             let r = st.ring;
-            let (written, taken) = (r.load(ring::WRITTEN), r.load(ring::TAKEN));
+            let (written, mut taken) = (r.load(ring::WRITTEN), r.load(ring::TAKEN));
+            // The program dropped what it queued (it seeked): skip it, counted as played.
+            let skip = r.load(ring::SKIP_TO);
+            if skip > taken && skip <= written {
+                r.store(ring::PLAYED, r.load(ring::PLAYED) + (skip - taken));
+                taken = skip;
+                r.store(ring::TAKEN, taken);
+            }
+            if r.load(ring::PAUSED) != 0 { continue; }
             // A program owns only its own ring: a counter it bent is clamped, not trusted.
-            let have = written.wrapping_sub(taken).min(ring::FRAMES) as usize;
+            let have = written.saturating_sub(taken).min(ring::FRAMES) as usize;
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.

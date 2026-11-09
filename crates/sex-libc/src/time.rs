@@ -11,6 +11,11 @@ pub fn set_clock(clock: fn() -> (i64, u64)) {
     unsafe { WALL = Some(clock) };
 }
 
+/// Sets the clock only if the program set none.
+pub fn set_clock_default(clock: fn() -> (i64, u64)) {
+    unsafe { if (*core::ptr::addr_of!(WALL)).is_none() { WALL = Some(clock) } };
+}
+
 fn now() -> (i64, u64) {
     unsafe { WALL }.map_or((0, 0), |f| f())
 }

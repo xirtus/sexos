@@ -874,7 +874,7 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
- "sex-libc",
+ "sex-media",
  "sex-pdx",
 ]
 
@@ -1245,6 +1245,15 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
+name = "sex-media"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-libc",
  "sex-pdx",
 ]
 

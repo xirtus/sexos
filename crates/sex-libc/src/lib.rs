@@ -61,6 +61,11 @@ pub fn set_log(sink: fn(&[u8])) {
     unsafe { LOG = Some(sink) };
 }
 
+/// Sets the log only if the program set none: for a library that links C code.
+pub fn set_log_default(sink: fn(&[u8])) {
+    unsafe { if (*core::ptr::addr_of!(LOG)).is_none() { LOG = Some(sink) } };
+}
+
 pub(crate) fn log(bytes: &[u8]) {
     if let Some(sink) = unsafe { LOG } {
         sink(bytes);
@@ -72,6 +77,11 @@ static mut EXIT: Option<fn(c_int) -> !> = None;
 
 pub fn set_exit(exit: fn(c_int) -> !) {
     unsafe { EXIT = Some(exit) };
+}
+
+/// Sets the exit only if the program set none.
+pub fn set_exit_default(exit: fn(c_int) -> !) {
+    unsafe { if (*core::ptr::addr_of!(EXIT)).is_none() { EXIT = Some(exit) } };
 }
 
 #[cfg_attr(target_os = "none", no_mangle)]

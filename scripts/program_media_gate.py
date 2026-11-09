@@ -2,7 +2,8 @@
 """Play plays sound with its pictures: an MP4 with H.264 and AAC, a WebM with VP9 and
 Opus, and an MP3 with no pictures. QEMU records the virtio sound card to a WAV file;
 each clip's tone must be there at its pitch and for about its length, and every
-picture must be shown.
+picture must be shown. A longer clip then checks that Space pauses and plays and that
+L seeks forward 5 s.
 
 Build Play first: scripts/build_play.sh."""
 import argparse,os,re,shutil,sys,threading,time,http.server
@@ -15,7 +16,8 @@ PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/pl
 CLIPS=[('clip-av.mp4','mov,mp4,m4a,3gp,3g2,mj2','h264','aac',50,440),
        ('clip.webm','matroska,webm','vp9','opus',50,660),
        ('tone.mp3','mp3','','mp3float',0,880)]
-FILES={'/play':Path(PLAY).read_bytes(),**{'/'+c[0]:(TESTS/c[0]).read_bytes() for c in CLIPS}}
+LONG='clip-long.mp4'  # 8 s, 160x120, 550 Hz
+FILES={'/play':Path(PLAY).read_bytes(),**{'/'+c[0]:(TESTS/c[0]).read_bytes() for c in CLIPS},'/'+LONG:(TESTS/LONG).read_bytes()}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -69,6 +71,24 @@ def main():
    assert late<500,f'{name}: a picture was {late} ms late'
    results.append({'clip':name,'pictures':frames,'ms':ms,'sound_frames':heard,'late_ms':late})
    close(m)
+  # Pause, play and seek.
+  fetched('/'+LONG,LONG)
+  s=len(t())
+  expect(f'run play @{LONG}',r'\[play.opened\] format=\S+ codec=h264 w=160 h=120',300)
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['wait'](r'\[play.frame\] n=10 ',s,120)
+  g['focus'](int(m[3]));time.sleep(.3);q.key('spc')
+  g['wait'](r'\[play.paused\] 1',s,30);s2=len(t());time.sleep(1.5)
+  assert '[play.frame]' not in t()[s2:],'pictures went on while paused'
+  q.key('spc');g['wait'](r'\[play.paused\] 0',s2,30)
+  q.key('l');to=int(g['wait'](r'\[play.seek\] to_ms=(\d+)',s2,30)[1])
+  assert 5000<=to<=7900,f'seek went to {to} ms'
+  first=int(g['wait'](r'\[play.frame\] n=\d+ at_ms=(\d+)',len(t()),60)[1])
+  assert first>=to-40,f'first picture after the seek is at {first} ms, seek was to {to} ms'
+  done=g['wait'](r'\[play.done\] frames=(\d+) ms=(\d+) ',s,120)
+  assert int(done[1])<200,f'{done[1]} pictures: the seek skipped none'
+  results.append({'clip':LONG,'seek_to':to,'first_after':first,'pictures':int(done[1]),'ms':int(done[2])})
+  close(m)
   time.sleep(1)
   found=segments(wav)
   for name,_,_,_,_,hz in CLIPS:

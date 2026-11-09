@@ -11,6 +11,11 @@
 //! - `OPEN` (program writes): 1 while the program means to keep playing. Bell drops
 //!   a stream that is closed and drained.
 //! - `VOLUME` (program writes): 0..=100, the stream's loudness in percent.
+//! - `PAUSED` (program writes): nonzero holds the stream where it is; Bell takes
+//!   nothing until it is zero again.
+//! - `SKIP_TO` (program writes): a WRITTEN count. Bell drops what lies before it
+//!   unplayed and counts it as played, so a program that seeks loses its queued sound
+//!   at once.
 use crate::app_catalog::{App, INCARNATIONS};
 
 pub const RATE: u32 = 48_000;
@@ -25,6 +30,8 @@ pub const TAKEN: usize = 8;
 pub const PLAYED: usize = 16;
 pub const OPEN: usize = 24;
 pub const VOLUME: usize = 32;
+pub const PAUSED: usize = 40;
+pub const SKIP_TO: usize = 48;
 
 /// The program's own view, writable.
 pub const CLIENT_SLOT: u64 = 260;
