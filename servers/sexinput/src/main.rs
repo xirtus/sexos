@@ -13,7 +13,7 @@ fn panic(_info: &PanicInfo) -> ! {
 // ── Pointer state for HID report normalizer ──
 static mut LAST_BUTTONS: u8 = 0;
 // Tracks the USB HID keycode from the previous keyboard report for press/release detection.
-static mut LAST_USB_KEY: u8 = 0;
+static mut LAST_USB_KEY: u64 = 0;
 static mut LAST_USB_MODIFIERS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
@@ -287,25 +287,33 @@ impl KeyboardOutbox {
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
         self.push(&[KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
     }
-    fn usb(&mut self,key:u8,modifiers:u8,last_key:&mut u8,last_modifiers:&mut u8)->bool {
-        let mut edges=[KeyEdge::empty();10];let mut count=0;
+    /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per
+    /// byte of `keys` (byte 0 first). Edges: releases of usages no longer held (under the
+    /// old modifiers), modifier changes, then presses of new usages, all retained whole.
+    fn usb(&mut self,keys:u64,modifiers:u8,last_keys:&mut u64,last_modifiers:&mut u8)->bool {
+        let mut edges=[KeyEdge::empty();20];let mut count=0;
         let mut add=|code:u8,down:u8,mods:u8|{
             edges[count]=KeyEdge{code,down,source:2,modifiers:mods};count+=1;
         };
-        // Release the previous key under its old modifier state, then change
-        // modifier edges, then press the new key under the received snapshot.
-        if key!=*last_key && *last_key!=0 {
-            if let Some(code)=hid_to_ps2(*last_key) {add(code,0,*last_modifiers);}
+        let held=|set:u64,usage:u8|usage!=0 && (0..6).any(|i|(set>>(i*8)) as u8==usage);
+        for i in 0..6 {
+            let old=(*last_keys>>(i*8)) as u8;
+            if old!=0 && !held(keys,old) {
+                if let Some(code)=hid_to_ps2(old) {add(code,0,*last_modifiers);}
+            }
         }
         let codes=[0x1d,0x2a,0x38,0x5b,0x61,0x36,0x64,0x5c];
         let changed=modifiers^*last_modifiers;
         for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)==0 {add(codes[bit],0,modifiers);}}
         for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)!=0 {add(codes[bit],1,modifiers);}}
-        if key!=*last_key && key!=0 {
-            if let Some(code)=hid_to_ps2(key) {add(code,1,modifiers);}
+        for i in 0..6 {
+            let new=(keys>>(i*8)) as u8;
+            if new!=0 && !held(*last_keys,new) {
+                if let Some(code)=hid_to_ps2(new) {add(code,1,modifiers);}
+            }
         }
         if !self.push(&edges[..count]) {return false;}
-        *last_key=key;*last_modifiers=modifiers;true
+        *last_keys=keys&0xffff_ffff_ffff;*last_modifiers=modifiers;true
     }
     fn reject_all(&mut self,error:u64) {
         sex_pdx::serial_record!("[sexinput.key.uncertain] pending={} error={} modifier_recovery=unconfirmed",self.len,error);
@@ -354,10 +362,10 @@ impl InputArrival {
         if !outbox.ps2(raw) {return false;}
         outbox.orders[slot]=order;self.last=order;true
     }
-    fn usb(&mut self,outbox:&mut KeyboardOutbox,key:u8,modifiers:u8,last_key:&mut u8,last_modifiers:&mut u8)->bool {
+    fn usb(&mut self,outbox:&mut KeyboardOutbox,keys:u64,modifiers:u8,last_keys:&mut u64,last_modifiers:&mut u8)->bool {
         let Some(order)=self.last.checked_add(1) else{return false;};
         let before=outbox.len;
-        if !outbox.usb(key,modifiers,last_key,last_modifiers) {return false;}
+        if !outbox.usb(keys,modifiers,last_keys,last_modifiers) {return false;}
         for i in before..outbox.len {outbox.orders[(outbox.head+i)%outbox.edges.len()]=order;}
         self.last=order;true
     }
@@ -422,49 +430,64 @@ fn send_shell_hid_event(arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
 /// Translate USB HID keyboard usage to the shell key code.
 /// Ordinary keys use set1 values; navigation uses the existing normalized codes.
 /// Returns None for unmapped keys.
+/// USB HID keyboard usage (page 7) to the PS/2 set-1 code every service reads. Keys
+/// that PS/2 sends with an E0 prefix (arrows, Home/End, Page Up/Down, Insert/Delete,
+/// keypad Enter and /) get the code of their keypad twin, exactly as the PS/2 path
+/// gives them, so Shell sees one code per key whichever keyboard it came from.
 fn hid_to_ps2(hid: u8) -> Option<u8> {
-    match hid {
-        0x47 => Some(0x46), // Scroll Lock
-        0x4A => Some(0x66), // Home
-        0x4B => Some(0x68), // Page Up
-        0x4D => Some(0x6B), // End
-        0x4E => Some(0x6D), // Page Down
-        0x51 => Some(0x6C), // Down
-        0x52 => Some(0x67), // Up
-        0x28 => Some(0x1C), // Enter
-        0x44 => Some(0x57), // F11
-        0x45 => Some(0x58), // F12
-        0x2C => Some(0x39), // Space
-        0x2A => Some(0x0E), // Backspace
-        0x29 => Some(0x01), // Esc
-        0x04 => Some(0x1E), // a
-        0x05 => Some(0x30), // b
-        0x06 => Some(0x2E), // c
-        0x07 => Some(0x20), // d
-        0x08 => Some(0x12), // e
-        0x09 => Some(0x21), // f
-        0x0A => Some(0x22), // g
-        0x0B => Some(0x23), // h
-        0x0C => Some(0x17), // i
-        0x0D => Some(0x24), // j
-        0x0E => Some(0x25), // k
-        0x0F => Some(0x26), // l
-        0x10 => Some(0x32), // m
-        0x11 => Some(0x31), // n
-        0x12 => Some(0x18), // o
-        0x13 => Some(0x19), // p
-        0x14 => Some(0x10), // q
-        0x15 => Some(0x13), // r
-        0x16 => Some(0x1F), // s
-        0x17 => Some(0x14), // t
-        0x18 => Some(0x16), // u
-        0x19 => Some(0x2F), // v
-        0x1A => Some(0x11), // w
-        0x1B => Some(0x2D), // x
-        0x1C => Some(0x15), // y
-        0x1D => Some(0x2C), // z
-        _ => None,
-    }
+    const LETTERS: [u8; 26] = [0x1E,0x30,0x2E,0x20,0x12,0x21,0x22,0x23,0x17,0x24,0x25,0x26,0x32,
+        0x31,0x18,0x19,0x10,0x13,0x1F,0x14,0x16,0x2F,0x11,0x2D,0x15,0x2C];
+    Some(match hid {
+        0x04..=0x1D => LETTERS[(hid - 0x04) as usize],
+        0x1E..=0x26 => hid - 0x1E + 0x02, // 1..9
+        0x27 => 0x0B,                     // 0
+        0x28 => 0x1C, // Enter
+        0x29 => 0x01, // Esc
+        0x2A => 0x0E, // Backspace
+        0x2B => 0x0F, // Tab
+        0x2C => 0x39, // Space
+        0x2D => 0x0C, // - _
+        0x2E => 0x0D, // = +
+        0x2F => 0x1A, // [ {
+        0x30 => 0x1B, // ] }
+        0x31 => 0x2B, // \ |
+        0x32 => 0x2B, // non-US # ~
+        0x33 => 0x27, // ; :
+        0x34 => 0x28, // ' "
+        0x35 => 0x29, // ` ~
+        0x36 => 0x33, // , <
+        0x37 => 0x34, // . >
+        0x38 => 0x35, // / ?
+        0x39 => 0x3A, // Caps Lock
+        0x3A..=0x43 => hid - 0x3A + 0x3B, // F1..F10
+        0x44 => 0x57, // F11
+        0x45 => 0x58, // F12
+        0x46 => 0x37, // Print Screen (E0 37)
+        0x47 => 0x46, // Scroll Lock
+        0x49 => 0x52, // Insert
+        0x4A => 0x47, // Home
+        0x4B => 0x49, // Page Up
+        0x4C => 0x53, // Delete
+        0x4D => 0x4F, // End
+        0x4E => 0x51, // Page Down
+        0x4F => 0x4D, // Right
+        0x50 => 0x4B, // Left
+        0x51 => 0x50, // Down
+        0x52 => 0x48, // Up
+        0x53 => 0x45, // Num Lock
+        0x54 => 0x35, // keypad /
+        0x55 => 0x37, // keypad *
+        0x56 => 0x4A, // keypad -
+        0x57 => 0x4E, // keypad +
+        0x58 => 0x1C, // keypad Enter
+        0x59 => 0x4F, 0x5A => 0x50, 0x5B => 0x51, 0x5C => 0x4B, 0x5D => 0x4C,
+        0x5E => 0x4D, 0x5F => 0x47, 0x60 => 0x48, 0x61 => 0x49, 0x62 => 0x52, // keypad 1..9, 0
+        0x63 => 0x53, // keypad .
+        0x64 => 0x56, // non-US \ |
+        0x65 => 0x5D, // Menu (E0 5D)
+        0x67 => 0x0D, // keypad =
+        _ => return None,
+    })
 }
 
 #[no_mangle]
@@ -563,7 +586,7 @@ pub extern "C" fn _start() -> ! {
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
         // Reserve enough key slots before consuming a possible USB snapshot.
         // A final modifier-up must remain in the actual input ring on backpressure.
-        if let Some(req) = (if keyboard_outbox.available()>=10 {
+        if let Some(req) = (if keyboard_outbox.available()>=20 {
             pop_startup_message().or_else(|| pdx_try_listen_raw(0))
         }else{None}) {
             'input_message: {
@@ -818,9 +841,11 @@ pub extern "C" fn _start() -> ! {
                 }
             } else if req.type_id == OP_USB_KEYBOARD_REPORT {
                 // USB HID boot keyboard report via sexusb.
-                // arg0 = reserved, arg1 = modifiers, arg2 = first keycode (USB HID usage ID)
+                // arg0 = reserved, arg1 = modifiers, arg2 = up to six pressed USB HID
+                // usage IDs, one per byte, first in the low byte.
                 let modifiers = req.arg1 as u8;
-                let keycode = req.arg2 as u8;
+                let pressed = req.arg2 & 0xffff_ffff_ffff;
+                let keycode = pressed as u8;
                 unsafe {
                     static mut KBD_RECV_BUDGET: u32 = 16;
                     let rem = &mut KBD_RECV_BUDGET;
@@ -862,7 +887,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 // Retain a whole physical report before advancing key/modifier state.
-                let retained=unsafe {input_arrival.usb(&mut keyboard_outbox,keycode,modifiers,
+                let retained=unsafe {input_arrival.usb(&mut keyboard_outbox,pressed,modifiers,
                     &mut *core::ptr::addr_of_mut!(LAST_USB_KEY),
                     &mut *core::ptr::addr_of_mut!(LAST_USB_MODIFIERS))};
                 if !retained {

@@ -472,6 +472,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "files"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1398,6 +1406,10 @@ name = "sex-trust-config"
 version = "0.1.0"
 
 [[package]]
+name = "sex-volumes"
+version = "0.1.0"
+
+[[package]]
 name = "sex-wasm"
 version = "0.1.0"
 dependencies = [
@@ -1456,6 +1468,7 @@ dependencies = [
  "sex-object-model",
  "sex-pdx",
  "sex-rt",
+ "sex-volumes",
  "sexfs",
  "spin",
 ]

@@ -207,9 +207,9 @@ def _wheel_shell_contract(source,root):
 
 def load_wheel_contract(root):
  root=Path(root);contract=load_pixel_contract(root)
- files=('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/app_input.rs','crates/sex-pdx/src/app_scroll.rs','crates/sex-pdx/src/lib.rs')
+ files=('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/app_input.rs','crates/sex-pdx/src/app_scroll.rs','crates/sex-pdx/src/lib.rs','servers/sexusb/src/usb.rs')
  source={name:(root/name).read_text()for name in files}
- requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)','record_device_wheel(en_slot_id, intr_actual, true, td.wheel, packed_axes)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
+ requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)'),files[6]:('record_device_wheel(slot, r.len() as u32, true, wheel, packed)','((wheel as u8 as u64) << 40)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
  for name,tokens in requirements.items():
   for token in tokens:
    if token not in source[name]:raise ValueError('wheel source contract changed: '+token)
