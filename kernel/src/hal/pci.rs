@@ -25,7 +25,7 @@ static mut NET_DIAG_HTTP_BODY: [u8; 64] = [0u8; 64];
 // discovers devices only; the BOOT-assigned SexNet domain owns activation.
 // Never apply Intel register offsets to an arbitrary network controller.
 fn legacy_nic_diagnostics(vendor:u16,device:u16,setting:Option<&str>)->bool{
-    setting==Some("1") && crate::nic_boot::supported(vendor,device)
+    setting==Some("1") && crate::nic_boot::legacy(vendor,device)
 }
 
 pub fn get_net_diag() -> (u32, u32, u8) {

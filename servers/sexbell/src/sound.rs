@@ -193,9 +193,40 @@ struct Stream { ring: ring::Ring, active: bool, pd: u32 }
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
 
+/// The sound chip BOOT leased Bell: a virtio sound card (virtual machines) or an
+/// Intel HD Audio controller (real PCs, and QEMU's intel-hda).
+enum Card {
+    Virtio { card: VirtIOSound<PoolHal, LeaseTransport>, stream: u32 },
+    Hda(crate::hda::Hda),
+}
+impl Card {
+    fn done(&mut self, token: u16) -> bool {
+        match self {
+            Card::Virtio { card, .. } => card.pcm_xfer_ok(token).is_ok(),
+            Card::Hda(h) => h.done(token),
+        }
+    }
+    fn submit(&mut self, period: &[u8; PERIOD_BYTES]) -> Result<u16, &'static str> {
+        match self {
+            Card::Virtio { card, stream } => card.pcm_xfer_nb(*stream, period).map_err(|e| {
+                sex_pdx::serial_record!("[bell.sound.xfer.error] {:?}", e); "xfer" }),
+            Card::Hda(h) => h.submit(period).ok_or("ring_full"),
+        }
+    }
+    /// Whether a period can go to the chip now, checked before mixing one.
+    fn room(&mut self) -> bool { match self { Card::Virtio { .. } => true, Card::Hda(h) => h.room() } }
+    /// The HD Audio stream runs from the start; a virtio stream starts once fed.
+    fn start(&mut self) -> bool {
+        match self {
+            Card::Virtio { card, stream } => card.pcm_start(*stream).is_ok(),
+            Card::Hda(_) => true,
+        }
+    }
+    fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, Card::Hda(_) => 0 } }
+}
+
 struct Player {
-    card: VirtIOSound<PoolHal, LeaseTransport>,
-    stream: u32,
+    card: Card,
     started: bool,
     notes: [Note; NOTES],
     head: usize,
@@ -298,23 +329,23 @@ impl Player {
     fn pump(&mut self) {
         // Reap finished periods in order; the device returns them as it plays.
         while self.flying > 0 {
-            if self.card.pcm_xfer_ok(self.tokens[self.first]).is_err() { break; }
+            if !self.card.done(self.tokens[self.first]) { break; }
             for (i, st) in self.streams.iter().enumerate() {
                 let n = self.took[self.first][i];
                 if let (Some(st), true) = (st, n > 0) { st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
             }
             self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1; self.played += 1;
         }
-        while self.flying < IN_FLIGHT && self.render((self.first + self.flying) % IN_FLIGHT) {
+        while self.flying < IN_FLIGHT && self.card.room() && self.render((self.first + self.flying) % IN_FLIGHT) {
             let period = self.period;
-            match self.card.pcm_xfer_nb(self.stream, &period) {
+            match self.card.submit(&period) {
                 Ok(token) => { self.tokens[(self.first + self.flying) % IN_FLIGHT] = token; self.flying += 1; }
-                Err(e) => { sex_pdx::serial_record!("[bell.sound.xfer.error] {:?}", e); self.len = 0; break; }
+                Err(_) => { self.len = 0; break; }
             }
         }
         if !self.started && self.flying > 0 {
-            self.started = self.card.pcm_start(self.stream).is_ok();
-            sex_pdx::serial_record!("[bell.sound.started] stream={} ok={}", self.stream, self.started as u8);
+            self.started = self.card.start();
+            sex_pdx::serial_record!("[bell.sound.started] stream={} ok={}", self.card.stream(), self.started as u8);
         }
     }
 }
@@ -323,11 +354,18 @@ impl Player {
 pub fn init() {
     match open() {
         Ok(p) => {
-            sex_pdx::serial_record!("[bell.sound.ready] stream={} rate={} channels={} period_bytes={}", p.stream, RATE, CHANNELS, PERIOD_BYTES);
+            sex_pdx::serial_record!("[bell.sound.ready] card={} stream={} rate={} channels={} period_bytes={}",
+                match p.card { Card::Virtio { .. } => "virtio", Card::Hda(_) => "hda" }, p.card.stream(), RATE, CHANNELS, PERIOD_BYTES);
             unsafe { *core::ptr::addr_of_mut!(PLAYER) = Some(p) };
         }
         Err(reason) => sex_pdx::serial_record!("[bell.sound.absent] reason={}", reason),
     }
+}
+
+fn player_with(card: Card) -> Player {
+    Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
+        head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT] }
 }
 
 fn open() -> Result<Player, &'static str> {
@@ -335,7 +373,8 @@ fn open() -> Result<Player, &'static str> {
     if info.rights != m::QUERY_VIEW | m::READ | m::WRITE || info.peer_pd.is_some() { return Err("lease_rights"); }
     let view = sex_pdx::memory_region_full_view(v::SLOT_SOUND, m::QUERY_VIEW | m::READ | m::WRITE).map_err(|_| "no_view")?;
     let identity = sex_pdx::device_identity(v::SLOT_SOUND).map_err(|_| "no_identity")?;
-    if (identity.vendor, identity.product) != (v::VENDOR, v::SOUND) { return Err("not_sound"); }
+    if identity.vendor != v::VENDOR { return open_hda(view); }
+    if identity.product != v::SOUND { return Err("not_sound"); }
     let layout = v::layout(v::SLOT_SOUND).map_err(|_| "no_layout")?;
     if !layout.valid(view.length) || view.dma_address.is_some() { return Err("layout"); }
 
@@ -355,9 +394,21 @@ fn open() -> Result<Player, &'static str> {
     card.pcm_set_params(stream, (PERIOD_BYTES * IN_FLIGHT) as u32, PERIOD_BYTES as u32,
         PcmFeatures::empty(), CHANNELS, PcmFormat::S16, PcmRate::Rate48000).map_err(|_| "params")?;
     card.pcm_prepare(stream).map_err(|_| "prepare")?;
-    Ok(Player { card, stream, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
-        head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT] })
+    Ok(player_with(Card::Virtio { card, stream }))
+}
+
+/// An Intel HD Audio controller: its own DMA pool, then the codec bring-up.
+fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
+    if view.dma_address.is_some() { return Err("lease_dma"); }
+    let dma_info = sex_pdx::memory_region_info(sex_pdx::SLOT_DMA_REGION).map_err(|_| "no_dma")?;
+    if dma_info.region_id != c::HDA_DMA_REGION_ID || dma_info.length != c::HDA_DMA_BYTES { return Err("dma_region"); }
+    let dma = sex_pdx::memory_region_full_view(sex_pdx::SLOT_DMA_REGION, dma_info.rights).map_err(|_| "no_dma_view")?;
+    let reply = sex_pdx::device_command(v::SLOT_SOUND, c::NIC_BITS as u64, 0).map_err(|_| "command")?;
+    if reply.after & c::NIC_BITS != c::NIC_BITS { return Err("command_bits"); }
+    let h = crate::hda::Hda::open(view, dma)?;
+    sex_pdx::serial_record!("[bell.hda.ready] vendor={:#010x} dac={} pins={} periods={} period_bytes={}",
+        h.vendor, h.dac, h.pins, crate::hda::PERIODS, crate::hda::PERIOD_BYTES);
+    Ok(player_with(Card::Hda(h)))
 }
 
 pub fn present() -> bool { player().is_some() }
