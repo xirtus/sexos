@@ -2616,13 +2616,42 @@ row no longer waits for the row before it to end.
   Shapes, runs it, and compares the window's pixels with the same scene rendered on the
   host by `cargo run -p sex-canvas --example desktop`: exact (0 of 3712 sampled pixels
   differ) before and after an arrow key, at 1 and 4 cores, then F11 retires the run.
-- **Limits.** Programs are built soft-float (`x86_64-sex.json`: `-sse,+soft-float`), so
-  tiny-skia's float maths is emulated: a full 400x320 scene takes about 0.7 to 1 s under
-  QEMU TCG (about 5 ms natively with SSE on the host). Letting programs use SSE needs the
-  kernel to save and restore FPU/SSE state per task. Shapes draws at a fixed 400x320
+- **Limits.** (Programs were soft-float here; see "Programs use hardware floating
+  point" below.) Shapes draws at a fixed 400x320
   because a program can't yet learn its window's size. sexdisplay's own chrome is not
   drawn with sex-canvas yet (it has no heap).
 
+## Programs use hardware floating point (2026-11-08)
+
+- **What runs now.** SDK programs are built with SSE2 instead of soft-float. Shapes
+  draws its 400x320 scene in about 0.2 s at 1 core and 0.11 s at 4 cores under QEMU
+  TCG, against 1.3 s and 0.7 s before, and the result is still pixel-exact against
+  the host rendering. Float-heavy code (tiny-skia, decoders, Wasm, future codecs)
+  runs at hardware speed.
+- **Design.** New `kernel/src/fpu.rs`. The kernel stays soft-float and never touches
+  x87/SSE state, so a task's registers stay in the core across kernel entries. Each
+  `Task` has a 512-byte FXSAVE area. `scheduler_finish_switch` saves the outgoing task
+  before `release_after_stack_switch`, so no other core can resume it first. It then
+  restores `current_task` unless that task's state is already loaded on this core
+  (per-core `FPU_LOADED`). `rearm` resets the area, so a new run never sees the last
+  run's registers. Boot sets CR0.MP, clears EM and TS, sets CR4.OSFXSR and
+  OSXMMEXCPT, and limits XCR0 to x87+SSE, so AVX register files stay off and can't
+  carry state between tasks.
+- **Build.** New target `x86_64-sex-app.json` (the same as `x86_64-sex.json` but with
+  `+sse,+sse2` and the default float ABI). A build-spec stage may now name its own
+  `target`, and every `iso_root/programs/*` stage uses the app target. The kernel,
+  servers and BOOT apps are unchanged.
+- **ABI.** A program run now starts with RSP = 8 mod 16 (as if called), which SSE code
+  needs. `rearm` aligns the top idempotently. No syscall change.
+- **Evidence.** New `fputest` program and `scripts/program_fpu_gate.py`. Three copies
+  run at once for 15 s each. Each fills XMM0-15 and MXCSR with values only it uses,
+  yields and spins thousands of times, and checks every register and an exact float
+  series. A reused row starts with the reset MXCSR. The gate checks that the program
+  has SSE instructions and the kernel has none. It passes at 1 and 4 cores. With save
+  and restore removed, it fails ("a run started with another run's MXCSR"). The
+  shapes, heap, view and launch gates also pass.
+- **Limits.** Only x87+SSE: no AVX or XSAVE yet. Eager save/restore on every switch
+  costs about 2x512 bytes of copying per switch, even for soft-float tasks.
 ## Geist at any size (2026-11-08)
 
 - **What runs now.** Display draws Geist from the TrueType files at run time instead of
