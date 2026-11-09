@@ -465,6 +465,30 @@ pub unsafe extern "C" fn sys_rmdir(name: *const c_char) -> i32 {
     match files::stat(&p) { Ok(st) if !st.dir => -errno::ENOTDIR, Ok(_) => files::remove(&p).map_or_else(errno_of, |_| 0), Err(e) => errno_of(e) }
 }
 
+// SexOS additions, for the C library (sex-libc's POSIX layer): std has no use for them.
+
+#[no_mangle]
+pub unsafe extern "C" fn sys_rename(from: *const c_char, to: *const c_char) -> i32 {
+    let (a, b) = match unsafe { (resolve(from), resolve(to)) } { (Ok(a), Ok(b)) => (a, b), (Err(e), _) | (_, Err(e)) => return e };
+    files::rename(&a, &b).map_or_else(errno_of, |_| 0)
+}
+/// Makes everything the program wrote durable (Files commits all of it at once).
+#[no_mangle]
+pub extern "C" fn sys_fsync(fd: i32) -> i32 {
+    if !matches!(table().get(fd as usize), Some(Some(_))) { return -errno::EBADF; }
+    files::sync().map_or_else(errno_of, |_| 0)
+}
+#[no_mangle]
+pub extern "C" fn sys_ftruncate(fd: i32, size: i64) -> i32 {
+    if size < 0 { return -errno::EINVAL; }
+    let path = match table().get(fd as usize) {
+        Some(Some(Open::File { path, write: true, .. })) => path.clone(),
+        Some(Some(_)) => return -errno::EINVAL,
+        _ => return -errno::EBADF,
+    };
+    files::truncate(&path, size as u64).map_or_else(errno_of, |_| 0)
+}
+
 #[no_mangle]
 pub extern "C" fn sys_isatty(fd: i32) -> i32 { matches!(table().get(fd as usize), Some(Some(Open::Console(_)))) as i32 }
 

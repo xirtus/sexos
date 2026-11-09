@@ -59,7 +59,8 @@ crates = [
   "apps/web/Cargo.toml",
   "apps/play/Cargo.toml",
   "apps/cpp/Cargo.toml",
-  "apps/stdhello/Cargo.toml"
+  "apps/stdhello/Cargo.toml",
+  "apps/chello/Cargo.toml"
 ]
 
 [[stage]]
@@ -317,6 +318,16 @@ build_std = "std,panic_abort"
 manifest = "apps/stdhello/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/stdhello"
 dest_artifact = "iso_root/programs/stdhello"
+
+# Ordinary C programs: main(argc, argv) on sex-libc's POSIX guest layer over sex-std.
+[[stage]]
+id = "build_chello"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/chello/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/chello"
+dest_artifact = "iso_root/programs/chello"
 
 [[stage]]
 id = "build_play"
