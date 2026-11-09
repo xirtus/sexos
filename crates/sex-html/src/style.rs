@@ -54,6 +54,26 @@ pub enum Justify { Start, Center, End, SpaceBetween, SpaceAround, SpaceEvenly }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Float { None, Left, Right }
 
+/// A CSS animation: `@keyframes` name and timing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Animation {
+    pub name: String,
+    pub duration_ms: u32,
+    pub delay_ms: i32,
+    /// Iterations in hundredths; `u32::MAX` is infinite.
+    pub iterations: u32,
+    pub alternate: bool,
+    pub reverse: bool,
+    /// 0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 100+n steps(n).
+    pub timing: u32,
+    pub fill_forwards: bool,
+    pub fill_backwards: bool,
+}
+
+impl Default for Animation {
+    fn default() -> Self { Animation { name: String::new(), duration_ms: 0, delay_ms: 0, iterations: 100, alternate: false, reverse: false, timing: 1, fill_forwards: false, fill_backwards: false } }
+}
+
 /// Colours are 0xAARRGGBB (straight alpha).
 #[derive(Clone, Debug)]
 pub struct Style {
@@ -116,6 +136,8 @@ pub struct Style {
     pub translate: Option<(Len, Len)>,
     /// The first outer `box-shadow`: x, y, blur, spread and colour.
     pub shadow: Option<(i32, i32, i32, i32, u32)>,
+    /// The first of `animation`.
+    pub animation: Option<Animation>,
     /// `opacity`, 0 to 255.
     pub opacity: u8,
     /// Custom properties (`--name: value`), inherited; shared until an element sets one.
@@ -178,6 +200,7 @@ impl Style {
             letter_spacing: 0,
             vars: Default::default(),
             opacity: 255,
+            animation: None,
             shadow: None,
             translate: None,
             vertical_super: 0,
@@ -279,12 +302,16 @@ pub struct Cascade<'a> {
     by_class: BTreeMap<&'a str, Vec<(u16, u32, u16)>>,
     by_tag: BTreeMap<&'a str, Vec<(u16, u32, u16)>>,
     universal: Vec<(u16, u32, u16)>,
+    /// Milliseconds since the page loaded, for animations.
+    pub now_ms: u64,
+    /// Set when some element is animating (the page should be styled again soon).
+    pub animating: core::cell::Cell<bool>,
 }
 
 impl<'a> Cascade<'a> {
     /// `sheets[0]` is the user-agent sheet; the rest are the page's, in document order.
     pub fn new(sheets: Vec<&'a Sheet>) -> Self {
-        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new() };
+        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, animating: core::cell::Cell::new(false) };
         for (si, sheet) in c.sheets.iter().enumerate() {
             for (ri, rule) in sheet.rules.iter().enumerate() {
                 for (xi, sel) in rule.selectors.iter().enumerate() {
@@ -373,6 +400,14 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
     // font-size first: other `em` lengths depend on it.
     for d in &ordered { if d.name == "font-size" || d.name == "font" { apply(&mut style, d, &ctx, true); } }
     for d in &ordered { apply(&mut style, d, &ctx, false); }
+    if let Some(a) = style.animation.clone() {
+        if let Some(frames) = cascade.sheets.iter().rev().find_map(|sh| sh.keyframes.iter().rev().find(|(n, _)| *n == a.name)).map(|(_, f)| f) {
+            if let Some(decls) = animate(&a, frames, cascade.now_ms, &cascade.animating) {
+                for d in &decls { if d.name == "font-size" { apply(&mut style, d, &ctx, true); } }
+                for d in &decls { apply(&mut style, d, &ctx, false); }
+            }
+        }
+    }
     if style.position == Position::Absolute || style.position == Position::Fixed {
         if style.display == Display::Inline { style.display = Display::Block; }
     }
@@ -615,6 +650,116 @@ fn substitute_with(v: &str, lookup: &mut dyn FnMut(&str) -> Option<String>, dept
     out.push_str(rest);
     Some(out)
 }
+
+/// A CSS time in milliseconds.
+fn parse_time(v: &str) -> Option<i32> {
+    if let Some(ms) = v.strip_suffix("ms") { return css::parse_number(ms).map(|n| n / 100); }
+    v.strip_suffix('s').and_then(css::parse_number).map(|n| n * 10)
+}
+
+/// A timing function's code (see [`Animation::timing`]).
+fn timing(v: &str) -> Option<u32> {
+    Some(match v {
+        "linear" => 0, "ease" => 1, "ease-in" => 2, "ease-out" => 3, "ease-in-out" => 4, "step-start" => 101, "step-end" => 101,
+        _ if v.starts_with("cubic-bezier(") => 1,
+        _ if v.starts_with("steps(") => 100 + v[6..].split(|c: char| c == ',' || c == ')').next()?.trim().parse::<u32>().ok()?.clamp(1, 1000),
+        _ => return None,
+    })
+}
+
+/// The declarations animation `a` contributes at `now_ms`, or None when it is not
+/// in effect. Sets `animating` while it is still running.
+fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, animating: &core::cell::Cell<bool>) -> Option<Vec<Declaration>> {
+    if frames.is_empty() || a.duration_ms == 0 { return None; }
+    let t = now_ms as i64 - a.delay_ms as i64;
+    let dur = a.duration_ms as i64;
+    let total = if a.iterations == u32::MAX { i64::MAX } else { dur * a.iterations as i64 / 100 };
+    let (iter, frac) = if t < 0 {
+        animating.set(true);
+        if !a.fill_backwards { return None; }
+        (0, 0)
+    } else if t >= total {
+        if !a.fill_forwards { return None; }
+        // The end of the last iteration.
+        let n = (a.iterations as i64 + 99) / 100;
+        let part = (a.iterations as i64 % 100) * 10;
+        (n.max(1) - 1, if part == 0 { 1000 } else { part })
+    } else {
+        animating.set(true);
+        (t / dur, (t % dur) * 1000 / dur)
+    };
+    let mut p = frac as i32;
+    if (a.alternate && iter % 2 == 1) != a.reverse { p = 1000 - p; }
+    let x = p as f32 / 1000.0;
+    let eased = match a.timing {
+        0 => x,
+        2 => x * x,
+        3 => 1.0 - (1.0 - x) * (1.0 - x),
+        1 | 4 => x * x * (3.0 - 2.0 * x),
+        n if n > 100 => { let k = (n - 100) as f32; ((x * k) as i32) as f32 / k }
+        _ => x,
+    };
+    let p = (eased * 1000.0) as i32;
+    // Each property between the frames around p that set it.
+    let mut names: Vec<&str> = Vec::new();
+    for (_, ds) in frames { for d in ds { if !names.contains(&d.name.as_str()) { names.push(&d.name); } } }
+    let mut out = Vec::new();
+    for name in names {
+        fn at<'a>(f: &'a (i32, Vec<Declaration>), name: &str) -> Option<(i32, &'a Declaration)> {
+            f.1.iter().rev().find(|d| d.name == name).map(|d| (f.0, d))
+        }
+        let before = frames.iter().rev().filter(|f| f.0 <= p).find_map(|f| at(f, name));
+        let after = frames.iter().filter(|f| f.0 >= p).find_map(|f| at(f, name));
+        let value = match (before, after) {
+            (Some((a0, d0)), Some((a1, d1))) if a1 > a0 => interpolate(&d0.value, &d1.value, (p - a0) as f32 / (a1 - a0) as f32),
+            (Some((_, d)), _) | (None, Some((_, d))) => d.value.clone(),
+            (None, None) => continue,
+        };
+        out.push(Declaration { name: String::from(name), value, important: false });
+    }
+    Some(out)
+}
+
+/// `a` to `b` at `t` (0..1): colours channel by channel, otherwise every number in two
+/// values of the same shape (`translateX(0px)` .. `translateX(40px)`); else a step.
+fn interpolate(a: &str, b: &str, t: f32) -> String {
+    let mix = |x: f32, y: f32| x + (y - x) * t;
+    if let (Some(ca), Some(cb)) = (parse_color(a), parse_color(b)) {
+        let ch = |c: u32, s: u32| ((c >> s) & 0xFF) as f32;
+        let m = |s: u32| (mix(ch(ca, s), ch(cb, s)) + 0.5) as u32;
+        return alloc::format!("rgba({}, {}, {}, {})", m(16), m(8), m(0), mix(ch(ca, 24), ch(cb, 24)) / 255.0);
+    }
+    fn split(v: &str) -> (Vec<&str>, Vec<f32>) {
+        let (mut text, mut nums) = (Vec::new(), Vec::new());
+        let b = v.as_bytes();
+        let (mut i, mut start) = (0, 0);
+        while i < b.len() {
+            let num_start = (b[i].is_ascii_digit() || (b[i] == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) || (b[i] == b'-' && b.get(i + 1).is_some_and(|c| c.is_ascii_digit() || *c == b'.')))
+                && (i == 0 || !(b[i - 1].is_ascii_alphabetic() || b[i - 1] == b'#'));
+            if num_start {
+                let mut j = i + 1;
+                while j < b.len() && (b[j].is_ascii_digit() || b[j] == b'.') { j += 1; }
+                if let Ok(n) = v[i..j].parse::<f32>() { text.push(&v[start..i]); nums.push(n); start = j; i = j; continue; }
+            }
+            i += 1;
+        }
+        text.push(&v[start..]);
+        (text, nums)
+    }
+    let (ta, na) = split(a);
+    let (tb, nb) = split(b);
+    if ta == tb && na.len() == nb.len() {
+        let mut out = String::new();
+        for (k, s) in ta.iter().enumerate() {
+            out.push_str(s);
+            if k < na.len() { let v = mix(na[k], nb[k]); out.push_str(&alloc::format!("{}", round(v * 1000.0) / 1000.0)); }
+        }
+        return out;
+    }
+    String::from(if t < 0.5 { a } else { b })
+}
+
+fn round(x: f32) -> f32 { if x >= 0.0 { (x + 0.5) as i64 as f32 } else { (x - 0.5) as i64 as f32 } }
 
 fn words(v: &str) -> Vec<&str> {
     let mut out = Vec::new();
@@ -867,6 +1012,45 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
                     s.shadow = Some((lens[0], lens[1], lens.get(2).copied().unwrap_or(0).clamp(0, 200), lens.get(3).copied().unwrap_or(0).clamp(-200, 200), color));
                 }
             }
+        }
+        "animation" => {
+            let first = css::split_top(v, ',').into_iter().next().unwrap_or("");
+            let mut a = Animation::default();
+            let mut times = 0;
+            for w in words(first) {
+                let lw = w.to_ascii_lowercase();
+                if let Some(ms) = parse_time(&lw) { if times == 0 { a.duration_ms = ms.max(0) as u32 } else { a.delay_ms = ms } times += 1; continue; }
+                if lw == "infinite" { a.iterations = u32::MAX; continue; }
+                if let Some(n) = css::parse_number(&lw) { a.iterations = n.max(0) as u32; continue; }
+                match lw.as_str() {
+                    "alternate" => a.alternate = true,
+                    "reverse" => a.reverse = true,
+                    "alternate-reverse" => { a.alternate = true; a.reverse = true; }
+                    "normal" | "running" | "paused" | "none" => {}
+                    "forwards" => a.fill_forwards = true,
+                    "backwards" => a.fill_backwards = true,
+                    "both" => { a.fill_forwards = true; a.fill_backwards = true; }
+                    t if timing(t).is_some() => a.timing = timing(t).unwrap(),
+                    _ => a.name = String::from(w.trim_matches(|c| c == '"' || c == '\'')),
+                }
+            }
+            s.animation = (!a.name.is_empty() && a.duration_ms > 0).then_some(a);
+        }
+        "animation-name" | "animation-duration" | "animation-delay" | "animation-iteration-count" | "animation-direction" | "animation-timing-function" | "animation-fill-mode" => {
+            let first = css::split_top(v, ',').into_iter().next().unwrap_or("").trim();
+            let lf = first.to_ascii_lowercase();
+            let mut a = s.animation.take().unwrap_or_default();
+            match d.name.as_str() {
+                "animation-name" => a.name = if lf == "none" { String::new() } else { String::from(first) },
+                "animation-duration" => a.duration_ms = parse_time(&lf).unwrap_or(0).max(0) as u32,
+                "animation-delay" => a.delay_ms = parse_time(&lf).unwrap_or(0),
+                "animation-iteration-count" => a.iterations = if lf == "infinite" { u32::MAX } else { css::parse_number(&lf).unwrap_or(100).max(0) as u32 },
+                "animation-direction" => { a.alternate = lf.starts_with("alternate"); a.reverse = lf.ends_with("reverse"); }
+                "animation-timing-function" => a.timing = timing(&lf).unwrap_or(1),
+                _ => { a.fill_forwards = lf == "forwards" || lf == "both"; a.fill_backwards = lf == "backwards" || lf == "both"; }
+            }
+            // Kept while incomplete: a later longhand may finish it.
+            s.animation = Some(a);
         }
         "opacity" => {
             let n = match lv.strip_suffix('%') { Some(p) => css::parse_number(p).map(|p| p / 100), None => css::parse_number(&lv) };

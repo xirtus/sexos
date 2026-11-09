@@ -25,6 +25,12 @@ use style::Style;
 /// Computed style for every element (text nodes and the document get `None`).
 /// `extra_css` are external sheets fetched for the page, applied before its `<style>`s.
 pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Option<Style>> {
+    styles_at(dom, extra_css, width, height, 0).0
+}
+
+/// [`styles`] `now_ms` after the page loaded, with CSS animations at that moment.
+/// The flag is true while an animation is still running (style again soon).
+pub fn styles_at(dom: &Dom, extra_css: &[&str], width: i32, height: i32, now_ms: u64) -> (Vec<Option<Style>>, bool) {
     let ua = css::parse_sheet(style::USER_AGENT_CSS, width);
     let mut author: Vec<css::Sheet> = extra_css.iter().map(|c| css::parse_sheet(c, width)).collect();
     for (text, media) in page_styles(dom) {
@@ -33,7 +39,8 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
     let mut sheets: Vec<&css::Sheet> = Vec::with_capacity(author.len() + 1);
     sheets.push(&ua);
     sheets.extend(author.iter());
-    let cascade = style::Cascade::new(sheets);
+    let mut cascade = style::Cascade::new(sheets);
+    cascade.now_ms = now_ms;
     let mut out: Vec<Option<Style>> = alloc::vec![None; dom.nodes.len()];
     let root = Style::initial();
     let mut root_font = 16;
@@ -54,7 +61,7 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
             }
         }
     }
-    out
+    (out, cascade.animating.get())
 }
 
 /// `<style>` contents with their `media` attribute.

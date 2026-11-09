@@ -382,3 +382,43 @@ fn css_variables_resolve_in_any_order_and_drop_cycles() {
     assert_eq!(by_id("a").color, 0xFFFF_0000);
     assert_eq!(by_id("b").color, 0xFF00_FF00);
 }
+
+#[test]
+fn keyframe_animations_interpolate_over_time() {
+    let html = "<style>@keyframes slide { from { margin-left: 0px; background: #000000 } 50% { opacity: 0 } to { margin-left: 100px; background: #ff0000 } }
+        @-webkit-keyframes blink { 0% { color: red } 100% { color: blue } }
+        #a { animation: slide 1s linear 200ms forwards }
+        #b { animation-name: blink; animation-duration: 400ms; animation-iteration-count: infinite; animation-direction: alternate; animation-timing-function: steps(2) }
+        #c { animation: slide 1s linear 300ms 2 backwards; margin-left: 7px }</style>
+        <div id=a>a</div><div id=b>b</div><div id=c>c</div>";
+    let dom = parse::parse(html);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    let at = |ms: u64| sex_html::styles_at(&dom, &[], 400, 300, ms);
+    // Before the delay: a has no backwards fill; c does (its first frame).
+    let (s, running) = at(100);
+    assert!(running);
+    assert_eq!(s[by_id("a")].as_ref().unwrap().margin[3], style::Len::Px(0));
+    assert_eq!(s[by_id("c")].as_ref().unwrap().margin[3], style::Len::Px(0));
+    let (s, _) = at(700);
+    let a = s[by_id("a")].as_ref().unwrap();
+    assert_eq!(a.margin[3], style::Len::Px(50));
+    assert_eq!(a.background & 0xFFFFFF, 0x800000);
+    assert_eq!(a.opacity, 0);
+    // steps(2) holds 0 then 0.5 (purple), alternating.
+    let red = |ms| at(ms).0[by_id("b")].as_ref().unwrap().color & 0xFFFFFF;
+    assert_eq!(red(50), 0xFF0000);
+    assert_eq!(red(250), 0x800080);
+    // The second run goes back: half-way first, red at its end.
+    assert_eq!(red(450), 0x800080);
+    assert_eq!(red(750), 0xFF0000);
+    // After: a stays at its last frame (forwards); c is back to its own margin.
+    let (s, running) = at(5000);
+    assert!(running, "b is infinite");
+    assert_eq!(s[by_id("a")].as_ref().unwrap().margin[3], style::Len::Px(100));
+    assert_eq!(s[by_id("c")].as_ref().unwrap().margin[3], style::Len::Px(7));
+    // No animation, or a finished one: not running.
+    assert!(!sex_html::styles_at(&parse::parse("<p>x</p>"), &[], 400, 300, 10).1);
+    let done = parse::parse("<style>@keyframes k { to { opacity: 0 } } p { animation: k 1s }</style><p>x</p>");
+    assert!(sex_html::styles_at(&done, &[], 400, 300, 500).1);
+    assert!(!sex_html::styles_at(&done, &[], 400, 300, 1500).1);
+}
