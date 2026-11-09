@@ -7,6 +7,7 @@ pub use sex_net_config as network_config;
 #[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
 #[path="../servers/sexnet/src/nic.rs"]mod nic;
 #[path="../servers/sexnet/src/ethernet.rs"]mod ethernet;
+#[path="../servers/sexnet/src/realtek.rs"]mod realtek;
 #[path="../servers/sexnet/src/arp.rs"]mod arp;
 use memory_region as m;use pci_command as c;
 const SLOT_NIC:u64=19;const SLOT_DMA_REGION:u64=32;
@@ -19,9 +20,10 @@ fn device_identity(_:u64)->Result<c::Identity,u64>{Ok(c::Identity{vendor:0x8086,
 fn device_command(_:u64,_:u64,_:u64)->Result<c::Reply,u64>{panic!("Live command not mocked")}
 #[derive(Clone,Debug,PartialEq,Eq)]enum Op{Command(u16,u16),Read(u32),Write(u32,u32),Load(u32),Store(u32),CopyIn(u32,usize),CopyOut(u32,usize),Publish,Acquire,Resolve}
 #[derive(Clone)]struct Mock(Rc<RefCell<State>>);
-struct State{model:c::Model,mmio:u64,view:m::RegionView,command:u16,regs:BTreeMap<u32,u32>,dma:Vec<u8>,ops:Vec<Op>,refuse:bool,uncertain:bool,timing:Option<u32>}
+/// queue_lag: reads of RXDCTL/TXDCTL that still show the queue disabled (None: never).
+struct State{model:c::Model,mmio:u64,view:m::RegionView,command:u16,regs:BTreeMap<u32,u32>,dma:Vec<u8>,ops:Vec<Op>,refuse:bool,uncertain:bool,timing:Option<u32>,queue_lag:Option<u32>}
 impl Mock{
- fn new(model:c::Model)->Self{Self(Rc::new(RefCell::new(State{model,mmio:65536,view:*DMA_VIEW.lock().unwrap(),command:0x103,regs:BTreeMap::from([(nic::CTRL,0x40),(nic::STATUS,2),(0x5b00,0x1000)]),dma:vec![0xa5;c::DMA_BYTES as usize],ops:vec![],refuse:false,uncertain:false,timing:None})))}
+ fn new(model:c::Model)->Self{Self(Rc::new(RefCell::new(State{model,mmio:65536,view:*DMA_VIEW.lock().unwrap(),command:0x103,regs:BTreeMap::from([(nic::CTRL,0x40),(nic::STATUS,2),(0x5b00,0x1000)]),dma:vec![0xa5;c::DMA_BYTES as usize],ops:vec![],refuse:false,uncertain:false,timing:None,queue_lag:Some(0)})))}
  fn word(&self,n:u32)->u64{u64::from_le_bytes(self.0.borrow().dma[n as usize..n as usize+8].try_into().unwrap())}
  fn set(&self,n:u32,v:u64){self.0.borrow_mut().dma[n as usize..n as usize+8].copy_from_slice(&v.to_le_bytes());}
  fn rx(&self,index:u32,bytes:&[u8],status:u8,errors:u8,length:usize){let mut s=self.0.borrow_mut();let start=8192+index as usize*2048;s.dma[start..start+bytes.len()].copy_from_slice(bytes);drop(s);self.set(index*16+8,length as u64|((status as u64)<<32)|((errors as u64)<<40));}
@@ -31,18 +33,24 @@ impl Mock{
 impl nic::Hardware for Mock{
  fn command(&mut self,set:u16,clear:u16)->Result<c::Reply,u64>{let mut s=self.0.borrow_mut();s.ops.push(Op::Command(set,clear));let before=s.command;
   if set&4!=0{
-   assert_eq!(s.regs.get(&0x2808),Some(&(ethernet::RX_COUNT*16)));assert_eq!(s.regs.get(&0x3808),Some(&128));
+   let (rdlen,tdlen)=if s.model.advanced(){(0xc008,0xe008)}else{(0x2808,0x3808)};
+   assert_eq!(s.regs.get(&rdlen),Some(&(ethernet::RX_COUNT*16)));assert_eq!(s.regs.get(&tdlen),Some(&128));
    let word=|n:usize|u64::from_le_bytes(s.dma[n..n+8].try_into().unwrap());
    for i in 0..ethernet::RX_COUNT as usize{assert_eq!(word(i*16),0x100000+8192+i as u64*2048);assert_eq!(word(i*16+8),0);}
    for i in 0..ethernet::TX_COUNT as usize{assert_eq!(word(4096+i*16),0x100000+TX_DATA as u64+i as u64*2048);assert_eq!(word(4096+i*16+8),1<<32);}
    assert!(s.dma[8192..ethernet::USED as usize].iter().all(|&x|x==0));
   }
   s.command=(before|set)&!clear;if s.uncertain&&set&4!=0{return Err(c::IO)}Ok(c::Reply{before,after:s.command,changed:before!=s.command})}
- fn read(&mut self,n:u32)->u32{let mut s=self.0.borrow_mut();s.ops.push(Op::Read(n));*s.regs.get(&n).unwrap_or(&0)}
+ fn read(&mut self,n:u32)->u32{let mut s=self.0.borrow_mut();s.ops.push(Op::Read(n));let v=*s.regs.get(&n).unwrap_or(&0);
+  // An advanced queue reports enabled only after the hardware has started it.
+  if matches!(n,0xc028|0xe028)&&v&(1<<25)!=0{match s.queue_lag{Some(0)=>{},Some(k)=>{s.queue_lag=Some(k-1);return v&!(1<<25);},None=>return v&!(1<<25)}}v}
  fn write(&mut self,n:u32,v:u32){let mut s=self.0.borrow_mut();s.ops.push(Op::Write(n,v));if n==0x410&&s.timing.is_some(){let timing=s.timing.unwrap();s.regs.insert(n,timing);}else if !(s.refuse&&n==0x2808){s.regs.insert(n,v);}}
+ fn model(&self)->c::Model{self.0.borrow().model}
+ fn read8(&mut self,n:u32)->u8{panic!("Intel register {:#x} has no byte access",n)}fn write8(&mut self,n:u32,_:u8){panic!("Intel register {:#x} has no byte access",n)}
+ fn read16(&mut self,n:u32)->u16{panic!("Intel register {:#x} has no word access",n)}fn write16(&mut self,n:u32,_:u16){panic!("Intel register {:#x} has no word access",n)}
 }
 impl ethernet::Hardware for Mock{
- fn model(&self)->c::Model{self.0.borrow().model}fn mmio_length(&self)->u64{self.0.borrow().mmio}
+ fn mmio_length(&self)->u64{self.0.borrow().mmio}
  fn dma_region(&mut self)->Result<m::RegionView,u64>{let mut s=self.0.borrow_mut();s.ops.push(Op::Resolve);Ok(s.view)}
  fn load64(&mut self,n:u32)->u64{self.0.borrow_mut().ops.push(Op::Load(n));self.word(n)}
  fn store64(&mut self,n:u32,v:u64){self.0.borrow_mut().ops.push(Op::Store(n));self.set(n,v)}
@@ -125,4 +133,66 @@ fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 
  let reply=arp::reply_configured(&incoming,MAC,&cfg).unwrap();assert_eq!(&reply[28..32],&cfg.local);assert_eq!(&reply[38..42],&cfg.gateway);
  assert!(arp::reply_configured(&incoming,MAC,&network_config::Config::CONTROLLED).is_none());cfg.profile=0;
  assert!(arp::request_configured(MAC,&cfg).is_none());assert!(arp::reply_configured(&incoming,MAC,&cfg).is_none());
+}
+
+const ADVANCED:[c::Model;4]=[c::Model::I82576,c::Model::I210,c::Model::I350,c::Model::I225];
+fn writes(ops:&[Op],n:u32)->Vec<u32>{ops.iter().filter_map(|op|match op{Op::Write(a,v)if *a==n=>Some(*v),_=>None}).collect()}
+#[test]fn advanced_models_use_queue_zero_srrctl_and_enable_queues_before_moving_the_tail(){
+ for model in ADVANCED{let m=Mock::new(model);m.0.borrow_mut().queue_lag=Some(3);let mut d=Driver::new(m.clone(),MAC,0);
+  for n in 0..120{let start=m.ops().len();d.advance(n);assert!(m.ops().len()-start<=512);if d.phase()==Phase::Running{break;}}
+  assert_eq!(d.phase(),Phase::Running,"{:?} {:?}",model,d.failure());let ops=m.ops();let s=m.0.borrow();
+  assert_eq!(s.regs[&0xc000],0x100000);assert_eq!(s.regs[&0xc004],0);assert_eq!(s.regs[&0xc008],ethernet::RX_COUNT*16);assert_eq!(s.regs[&0xc00c],0x0200_0002);
+  assert_eq!(s.regs[&0xe000],0x101000);assert_eq!(s.regs[&0xe008],128);assert_eq!(s.regs[&0xc018],ethernet::RX_COUNT-1);assert_eq!(s.regs[&0xe018],0);
+  assert_eq!(s.regs[&0xc028],1<<25);assert_eq!(s.regs[&0xe028],1<<25);assert_eq!(s.regs[&0x18]&(1<<28),1<<28);assert_eq!(s.regs[&0x1528],u32::MAX);
+  assert_eq!(writes(&ops,0x20),[0x1340|(1<<21)|(1<<26)]);
+  // No legacy queue, TIPG or 82574 bus-control write on these layouts.
+  for legacy in [0x2800,0x2808,0x2818,0x3800,0x3818,0x3828,0x410,0x5b00]{assert!(writes(&ops,legacy).is_empty(),"{:?} {:#x}",model,legacy);}
+  assert!(!d.timing_verified);
+  let pos=|f:&dyn Fn(&Op)->bool|ops.iter().position(|op|f(op)).unwrap();
+  let disable=pos(&|op|*op==Op::Write(0xc028,0));let base=pos(&|op|matches!(op,Op::Write(0xc000,_)));let master=pos(&|op|*op==Op::Command(4,0));
+  let rctl=pos(&|op|matches!(op,Op::Write(0x100,_)));let enable=pos(&|op|*op==Op::Write(0xc028,1<<25));let tail=pos(&|op|*op==Op::Write(0xc018,ethernet::RX_COUNT-1));
+  assert!(disable<base&&base<master&&master<rctl&&rctl<enable&&enable<tail);
+  // The tail moved only after both queues read back enabled (three lagging
+  // reads, shared by RXDCTL and TXDCTL, take three Queues turns).
+  assert_eq!(ops[enable..tail].iter().filter(|op|**op==Op::Read(0xc028)).count(),3);}
+}
+#[test]fn advanced_queue_that_never_enables_reaches_the_deadline_with_the_tail_still_zero(){
+ let m=Mock::new(c::Model::I210);m.0.borrow_mut().queue_lag=None;let mut d=Driver::new(m.clone(),MAC,0);for n in 0..5001{d.advance(n);}
+ assert_eq!(d.failure(),Some(Failure::Deadline));assert_eq!(m.0.borrow().regs[&0xc018],0);assert!(writes(&m.ops(),0xc018).iter().all(|&v|v==0));
+}
+#[test]fn advanced_receive_reads_writeback_status_and_length_without_the_overwritten_address(){
+ let m=Mock::new(c::Model::I82576);let mut d=ready(&m);
+ let wb=|index:u32,payload:&[u8],staterr:u32|{let start=8192+index as usize*2048;m.0.borrow_mut().dma[start..start+payload.len()].copy_from_slice(payload);
+  m.set(index*16,0x1234_5678_9abc_def0);m.set(index*16+8,staterr as u64|((payload.len() as u64)<<32));};
+ for sequence in 1..=2*ethernet::RX_COUNT as u64{let index=((sequence-1)%ethernet::RX_COUNT as u64)as u32;let payload=vec![sequence as u8;if sequence%2==0{1514}else{60}];
+  wb(index,&payload,3);let start=m.ops().len();
+  match d.advance(100+sequence){Some(Event::Received{sequence:s,index:i,frame})=>{assert_eq!((s,i),(sequence,index));assert_eq!(&frame.bytes[..frame.length],&payload[..]);},_=>panic!("missing {}",sequence)}
+  let ops=&m.ops()[start..];let copied=ops.iter().position(|op|matches!(op,Op::CopyOut(..))).unwrap();let tail=ops.iter().position(|op|*op==Op::Write(0xc018,index)).unwrap();
+  assert!(copied<tail&&ops[copied..tail].contains(&Op::Publish));assert_eq!(m.word(index*16),0x100000+8192+index as u64*2048);assert_eq!(m.word(index*16+8),0);
+  assert!(!ops.iter().any(|op|matches!(op,Op::Write(0x2818,_))));}
+ // Frame error (RXE), a fragment chain without EOP, oversize: dropped unread.
+ wb(0,&[1;60],3|(1<<29));wb(1,&[2;60],1);wb(2,&[3;60],3);wb(3,&[4;1515],3);
+ for _ in 0..4{let start=m.ops().len();assert!(matches!(d.advance(1000),Some(Event::Dropped{..})));assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::CopyOut(..))));}
+ wb(4,&[5;60],3);assert!(matches!(d.advance(1000),Some(Event::Received{index:4,..})));assert_eq!(d.dropped,4);
+}
+#[test]fn advanced_transmit_uses_data_descriptors_the_queue_tail_and_dd_only_completion(){
+ for model in [c::Model::I82576,c::Model::I225]{let m=Mock::new(model);let mut d=ready(&m);
+  for sequence in 1..=12u64{let payload=vec![sequence as u8;if sequence%2==0{1514}else{14}];let (_,index,length,_)=d.send(&payload,100+sequence).unwrap();
+   assert_eq!(m.word(4096+index*16),0x100000+TX_DATA as u64+index as u64*2048);
+   assert_eq!(m.word(4096+index*16+8),length as u64|(3<<20)|(0x2b<<24)|((length as u64)<<46));
+   assert_eq!(m.0.borrow().regs[&0xe018],(index+1)%8);assert!(writes(&m.ops(),0x3818).is_empty());
+   // Write-back replaces both words: only DD remains meaningful.
+   m.set(4096+index*16,0);m.set(4096+index*16+8,1<<32);
+   assert!(matches!(d.advance(100+sequence),Some(Event::Transmitted{sequence:s,index:i,..})if s==sequence&&i==index));}
+  d.send(&[0;60],200).unwrap();d.advance(2200);assert_eq!(d.failure(),Some(Failure::Deadline));}
+}
+#[test]fn legacy_e1000e_parts_claim_the_port_and_i219_sets_its_ich8lan_bits(){
+ for model in [c::Model::I82540,c::Model::I82574,c::Model::I219]{let m=Mock::new(model);if model==c::Model::I219{m.0.borrow_mut().mmio=0x5408;}let d=ready(&m);let ops=m.ops();let s=m.0.borrow();
+  match model{
+   c::Model::I82540=>{assert!(writes(&ops,0x18).is_empty());assert!(writes(&ops,0x3840).is_empty());},
+   c::Model::I82574=>{assert_eq!(writes(&ops,0x18),[1<<28]);assert!(writes(&ops,0x3840).is_empty());assert_eq!(s.regs[&0x5b00],0x1000|(1<<22));},
+   _=>{assert_eq!(writes(&ops,0x18),[(1<<28)|(1<<22)]);assert_eq!(s.regs[&0x3840],0x3d80_0000);assert_eq!(s.regs[&0x5008],0xc0);
+    assert!(writes(&ops,0x5b00).is_empty());assert_eq!(s.regs[&0x410],0x602008);assert_eq!(s.regs[&0x3828],1<<22);assert!(d.timing_verified);},
+  }
+  for advanced in [0xc000,0xc028,0xe000,0xe028,0x1528,0x20]{assert!(writes(&ops,advanced).is_empty());}}
 }
