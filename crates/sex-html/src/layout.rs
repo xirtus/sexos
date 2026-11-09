@@ -94,7 +94,7 @@ pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) 
 pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_height: i32, host: &dyn Host) -> Page {
     let html = dom.find("html");
     let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new(),
-        abs: Vec::new(), positioned: Vec::new(), force_height: None, root: html, viewport: (width, viewport_height) };
+        abs: Vec::new(), positioned: Vec::new(), force_height: None, root: html, viewport: (width, viewport_height), floats: Vec::new(), float_base: 0 };
     let body = dom.find("body");
     let mut height = 0;
     if let Some(html) = html {
@@ -167,7 +167,14 @@ struct Layout<'a> {
     force_height: Option<i32>,
     root: Option<NodeId>,
     viewport: (i32, i32),
+    /// Floats placed so far (margin boxes); those from `float_base` on belong to the
+    /// block formatting context being laid out.
+    floats: Vec<FloatBox>,
+    float_base: usize,
 }
+
+#[derive(Clone, Copy)]
+struct FloatBox { left: bool, x: i32, y: i32, w: i32, h: i32 }
 
 /// Layer markers: positioned boxes paint in their own layer, ordered by `z-index`.
 /// A marker is a zero-size rectangle with `w` set to one of these; `h` holds the
@@ -322,6 +329,43 @@ impl<'a> Layout<'a> {
         for (_, y) in &mut self.anchors[a0..] { *y += dy; }
     }
 
+    /// The free span [left, right) of the line from `x` to `x + w` between `y` and `y + h`,
+    /// beside this formatting context's floats.
+    fn band(&self, x: i32, w: i32, y: i32, h: i32) -> (i32, i32) {
+        let (mut l, mut r) = (x, x + w);
+        for f in &self.floats[self.float_base..] {
+            if f.y >= y + h.max(1) || f.y + f.h <= y { continue; }
+            if f.left { l = l.max(f.x + f.w); } else { r = r.min(f.x); }
+        }
+        (l, r)
+    }
+
+    /// Lays a float out and puts it against the left or right side as high as it fits,
+    /// at `y` or below.
+    fn place_float(&mut self, n: NodeId, cx: i32, cw: i32, y: i32) {
+        let s = self.style(n).unwrap();
+        let left = s.float == style::Float::Left;
+        let (i0, l0, b0, a0) = (self.items.len(), self.links.len(), self.boxes.len(), self.anchors.len());
+        let r = self.block(n, 0, 0, cw, None);
+        let (fw, fh) = (r.width, r.margin_top + r.height + r.margin_bottom);
+        // A float is no higher than the floats before it.
+        let mut fy = self.floats[self.float_base..].iter().map(|f| f.y).fold(y, i32::max);
+        if s.clear != 0 {
+            if let Some(b) = self.floats[self.float_base..].iter().filter(|f| s.clear & if f.left { 1 } else { 2 } != 0).map(|f| f.y + f.h).max() { fy = fy.max(b); }
+        }
+        loop {
+            let (l, rr) = self.band(cx, cw, fy, fh);
+            if rr - l >= fw || (l == cx && rr == cx + cw) { break; }
+            // Move below the first float in the way.
+            let next = self.floats[self.float_base..].iter().filter(|f| f.y < fy + fh.max(1) && f.y + f.h > fy).map(|f| f.y + f.h).min();
+            match next { Some(b) if b > fy => fy = b, _ => break }
+        }
+        let (l, rr) = self.band(cx, cw, fy, fh);
+        let fx = if left { l } else { rr - fw };
+        self.shift(i0, l0, b0, a0, fx, fy + r.margin_top);
+        self.floats.push(FloatBox { left, x: fx, y: fy, w: fw, h: fh });
+    }
+
     /// Places an absolutely positioned box in containing block `cb` (x, y, w, h) by its
     /// offsets, or at its static position (`sx`, `sy`) along an axis that has none.
     fn place_abs(&mut self, n: NodeId, sx: i32, sy: i32, cb: [i32; 4]) {
@@ -348,6 +392,19 @@ impl<'a> Layout<'a> {
 
     fn block_inner(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
         let forced_height = self.force_height.take();
+        let s = self.style(n).unwrap();
+        // A new block formatting context keeps its floats to itself and grows to hold them.
+        let bfc = self.root == Some(n) || force_width.is_some() || s.float != style::Float::None || s.overflow_clip
+            || matches!(s.position, style::Position::Absolute | style::Position::Fixed)
+            || matches!(s.display, Display::InlineBlock | Display::Flex | Display::Table | Display::TableCell);
+        let saved_base = self.float_base;
+        if bfc { self.float_base = self.floats.len(); }
+        let r = self.block_box(n, x, y, cw, force_width, forced_height, bfc);
+        if bfc { self.floats.truncate(self.float_base); self.float_base = saved_base; }
+        r
+    }
+
+    fn block_box(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>, forced_height: Option<i32>, bfc: bool) -> BlockResult {
         let s = self.style(n).unwrap();
         if let Some(tag) = self.dom.tag(n).filter(|t| REPLACED.contains(t)) {
             // Pictures and controls keep their own size in block flow too.
@@ -393,7 +450,6 @@ impl<'a> Layout<'a> {
                 (true, false) => ml = free.max(0),
                 _ => {}
             }
-            if s.float == style::Float::Right && s.margin[LEFT] != Len::Auto { ml = (cw - used - mr).max(ml); }
         }
         let _ = mr;
         let bx = x + ml;
@@ -412,6 +468,7 @@ impl<'a> Layout<'a> {
             Display::Flex if !s.flex_column => self.flex_row(n, cx, cy, content_w),
             _ => self.flow(n, cx, cy, content_w),
         };
+        let content_h = if bfc { self.floats[self.float_base..].iter().map(|f| f.y + f.h - cy).fold(content_h, i32::max) } else { content_h };
         if pushed_link { self.link_stack.pop(); }
         let vertical_bp = s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw);
         let mut inner_h = match (forced_height, s.height.resolve(0)) {
@@ -537,9 +594,17 @@ impl<'a> Layout<'a> {
             }
             if c == usize::MAX { break; }
             let cs = self.style(c).unwrap();
+            if cs.float != style::Float::None {
+                self.place_float(c, cx, cw, y + pending_margin.max(0));
+                continue;
+            }
             let mt = cs.margin[TOP].or_zero(cw);
             let collapsed = if first_block && pending_margin == 0 { mt } else if mt >= 0 && pending_margin >= 0 { mt.max(pending_margin) } else { mt + pending_margin };
-            let top = y + collapsed + if first_block { 0 } else { gap };
+            let mut top = y + collapsed + if first_block { 0 } else { gap };
+            if cs.clear != 0 {
+                let below = self.floats[self.float_base..].iter().filter(|f| cs.clear & if f.left { 1 } else { 2 } != 0).map(|f| f.y + f.h).max();
+                if let Some(b) = below { if b > top { top = b; } }
+            }
             let r = self.block(c, cx, top, cw, None);
             if first_baseline.is_none() { first_baseline = r.first_baseline; }
             y = top + r.height;
@@ -828,6 +893,8 @@ impl<'a> Layout<'a> {
             // Skip breakable spaces at the start of a line.
             while start < pieces.len() && matches!(pieces[start], Some(Piece::Space { breakable: true, .. })) { start += 1; }
             if start >= pieces.len() { break; }
+            // Floats beside this line narrow it.
+            let (x0, width) = { let (l, r) = self.band(x0, width, y, strut_lh); (l, (r - l).max(0)) };
             let mut end = start;
             let mut used = 0;
             let mut last_break: Option<usize> = None;

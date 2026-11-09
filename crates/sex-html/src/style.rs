@@ -78,6 +78,10 @@ pub struct Style {
     /// `z-index`; `None` is `auto`.
     pub z_index: Option<i32>,
     pub float: Float,
+    /// `clear`: bit 0 left, bit 1 right.
+    pub clear: u8,
+    /// `overflow` other than `visible`: the box contains its floats.
+    pub overflow_clip: bool,
     pub flex_column: bool,
     pub flex_wrap: bool,
     pub flex_grow: i32,
@@ -131,6 +135,8 @@ impl Style {
             inset: [Len::Auto; 4],
             z_index: None,
             float: Float::None,
+            clear: 0,
+            overflow_clip: false,
             flex_column: false,
             flex_wrap: false,
             flex_grow: 0,
@@ -523,6 +529,8 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
     match d.name.as_str() {
         "display" => {
             let first = lv.split_ascii_whitespace().next().unwrap_or("");
+            // flow-root contains its floats, as overflow other than visible does.
+            if first == "flow-root" { s.overflow_clip = true; }
             s.display = match first {
                 "none" => Display::None,
                 "block" | "flow-root" | "table-caption" | "table-header-group" | "table-row-group" | "table-footer-group" | "grid" | "-webkit-box" => Display::Block,
@@ -647,6 +655,8 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             }
         }
         "z-index" => s.z_index = lv.trim().parse().ok(),
+        "clear" => s.clear = match lv.as_str() { "left" | "inline-start" => 1, "right" | "inline-end" => 2, "both" => 3, _ => 0 },
+        "overflow" | "overflow-x" | "overflow-y" => s.overflow_clip = lv.split_ascii_whitespace().any(|w| matches!(w, "hidden" | "auto" | "scroll" | "clip")),
         "float" => s.float = match lv.as_str() { "left" => Float::Left, "right" => Float::Right, _ => Float::None },
         "flex-direction" => s.flex_column = lv.starts_with("column"),
         "flex-wrap" => s.flex_wrap = lv == "wrap" || lv == "wrap-reverse",

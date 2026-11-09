@@ -247,3 +247,23 @@ fn positioned_boxes_place_and_layer() {
     assert!(blue < reds[0]);
     assert!(!page.items.iter().any(|i| matches!(i, sex_html::layout::Item::Rect { w, .. } if *w < -1_000_000)));
 }
+
+#[test]
+fn text_wraps_around_floats_and_clear_goes_below() {
+    let dom = parse::parse("<body style='margin:0'><div id=f style='float:right;width:100px;height:60px'></div>\
+        <div id=g style='float:left;width:50px;height:30px'></div><p id=p style='margin:0'>words words words words words words words words words words words words</p>\
+        <div id=c style='clear:both'>x</div><div id=o style='overflow:hidden'><div style='float:left;width:10px;height:90px'></div></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    assert_eq!(page.boxes[by_id("f")], Some([300, 0, 100, 60]));
+    assert_eq!(page.boxes[by_id("g")], Some([0, 0, 50, 30]));
+    // The first line starts after the left float and stops before the right one.
+    let first = page.items.iter().find_map(|i| match i { sex_html::layout::Item::Text { x, baseline, text, .. } if text.starts_with("words") => Some((*x, *baseline, text.len())), _ => None }).unwrap();
+    assert_eq!(first.0, 50);
+    assert!(first.1 < 30);
+    let c = page.boxes[by_id("c")].unwrap();
+    assert!(c[1] >= 60, "{c:?}");
+    // overflow:hidden holds its float.
+    assert_eq!(page.boxes[by_id("o")].unwrap()[3], 90);
+}
