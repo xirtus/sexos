@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! More memory for a running program. The pages come from its own row's window,
 //! reserved at BOOT and mapped on the row's hardware key, so asking mints nothing:
 //! no frames, no capability, no new key. A program gets pages only for itself, they

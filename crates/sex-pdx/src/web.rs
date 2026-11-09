@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! The open-internet streams: TCP flows made as programs ask for them, reached by name through whatever
 //! the network's DHCP and DNS say. Holding the BOOT route to the network service and
 //! the region shared with it is the right. An address is data, not authority.

@@ -2,7 +2,7 @@
 name = "sex-hwdb"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0-only"
+license = "GPL-2.0-or-later OR MIT"
 
 [lib]
 path = "src/lib.rs"

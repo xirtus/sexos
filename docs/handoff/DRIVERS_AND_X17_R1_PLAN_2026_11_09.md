@@ -113,11 +113,14 @@ GSP boot and modesetting for the HDMI/mDP ports, then Vulkan through NVK's users
 
 ## 5. Where drivers come from
 
-SexOS is GPL-3.0-only. That decides what we may copy.
+SexOS is GPL-3.0-only, except the crates driver services link (sex-pdx, sex-rt, libsys,
+sex-hwdb and their config crates), which are `GPL-2.0-or-later OR MIT` since 2026-11-09
+(`docs/LICENSING.md`). A driver service that links only those may contain Linux
+GPL-2.0-only driver code and is then shipped as a GPL-2.0 program.
 
 | Source | Licence | What we take | Notes |
 |---|---|---|---|
-| Linux core drivers (nvme, r8169, iwlwifi, snd-hda, i2c-hid, vmd) | GPL-2.0-only | **read only** inside SexOS code: register maps, init order, quirk tables as facts | GPL-2.0-only code cannot be combined with GPL-3.0-only code. It can still run unmodified inside a tuxedo guest: a separate GPL-2.0-only program that talks to SexOS only over PDX (section 7) |
+| Linux core drivers (nvme, r8169, iwlwifi, snd-hda, i2c-hid, vmd) | GPL-2.0-only | **usable in driver services** that link only the dual-licensed crates (`docs/LICENSING.md`), and in tuxedo guests | GPL-2.0-only code cannot go into GPL-3.0-only services, so keep it to driver services and guests |
 | Linux DRM: **i915, amdgpu, nouveau** | **MIT** | can be ported directly, with notices | the big GPU drivers are permissive; a real advantage for the display thread |
 | nova-core / nova-drm (Rust, NVIDIA GSP) | GPL-2.0 | read only; design reference for a Rust GSP driver | supports Turing (RTX 20) and later, so Ampere is in scope |
 | Mesa NVK (Vulkan for NVIDIA) | MIT | userspace Vulkan once a GSP kernel side exists | conformant Vulkan 1.4 Kepler to Blackwell |

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Read-only certificate-time query ABI on an existing held route. A replay is
 //! the same historical query snapshot, never a fresh observation of UTC.
 pub const OP:u64=0x20F;

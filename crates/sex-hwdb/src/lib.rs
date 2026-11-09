@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! What a PCI device is, which SexOS service drives it, and how far that support goes.
 //!
 //! BOOT reads this table once while it enumerates PCI, and prints one census line per
