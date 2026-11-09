@@ -337,6 +337,19 @@ impl<'a> Layout<'a> {
     /// boxes positioned inside them are placed once their size is known.
     fn block(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
         let s = self.style(n).unwrap();
+        if let Some((tx, ty)) = s.translate {
+            let (i0, l0, b0, a0) = (self.items.len(), self.links.len(), self.boxes.len(), self.anchors.len());
+            let r = self.block_faded(n, x, y, cw, force_width);
+            let own_w = r.width - s.margin[LEFT].or_zero(cw) - s.margin[RIGHT].or_zero(cw);
+            let (dx, dy) = (tx.or_zero(own_w), ty.or_zero(r.height));
+            self.shift(i0, l0, b0, a0, dx, dy);
+            return r;
+        }
+        self.block_faded(n, x, y, cw, force_width)
+    }
+
+    fn block_faded(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
+        let s = self.style(n).unwrap();
         if s.opacity < 255 {
             // Everything the box paints fades with it (nested opacities multiply).
             let i0 = self.items.len();

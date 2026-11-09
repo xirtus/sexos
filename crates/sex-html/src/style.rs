@@ -112,6 +112,8 @@ pub struct Style {
     pub box_sizing_border: bool,
     pub letter_spacing: i32,
     pub vertical_super: i8,
+    /// `transform: translate(..)` (percentages are of the box's own size).
+    pub translate: Option<(Len, Len)>,
     /// `opacity`, 0 to 255.
     pub opacity: u8,
     /// Custom properties (`--name: value`), inherited; shared until an element sets one.
@@ -174,6 +176,7 @@ impl Style {
             letter_spacing: 0,
             vars: Default::default(),
             opacity: 255,
+            translate: None,
             vertical_super: 0,
         }
     }
@@ -806,6 +809,28 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             let w = words(v);
             if let Some(Len::Px(p)) = w.last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p }
             if matches!(d.name.as_str(), "gap" | "grid-gap") { if let Some(Len::Px(p)) = w.first().and_then(|w| parse_len(w, s, ctx)) { s.row_gap = p } }
+        }
+        "transform" | "translate" => {
+            // Translations add up; other transforms are not drawn.
+            let (mut x, mut y) = (Len::Px(0), Len::Px(0));
+            let add = |a: Len, b: Option<Len>| match (a, b) { (Len::Px(p), Some(Len::Px(q))) => Len::Px(p + q), (a, Some(Len::Px(0))) => a, (Len::Px(0), Some(b)) => b, (Len::Pct(p), Some(Len::Pct(q))) => Len::Pct(p + q), (a, _) => a };
+            if d.name == "translate" {
+                let w = words(v);
+                x = w.first().and_then(|w| parse_len(w, s, ctx)).unwrap_or(Len::Px(0));
+                y = w.get(1).and_then(|w| parse_len(w, s, ctx)).unwrap_or(Len::Px(0));
+            } else {
+                for f in words(&lv) {
+                    let Some((name, args)) = f.strip_suffix(')').and_then(|f| f.split_once('(')) else { continue };
+                    let a: Vec<Option<Len>> = args.split(',').map(|a| parse_len(a.trim(), s, ctx)).collect();
+                    match name {
+                        "translate" | "translate3d" => { x = add(x, a.first().copied().flatten()); y = add(y, a.get(1).copied().flatten()); }
+                        "translatex" => x = add(x, a.first().copied().flatten()),
+                        "translatey" => y = add(y, a.first().copied().flatten()),
+                        _ => {}
+                    }
+                }
+            }
+            s.translate = (x != Len::Px(0) || y != Len::Px(0)).then_some((x, y));
         }
         "opacity" => {
             let n = match lv.strip_suffix('%') { Some(p) => css::parse_number(p).map(|p| p / 100), None => css::parse_number(&lv) };

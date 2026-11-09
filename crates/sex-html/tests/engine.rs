@@ -343,3 +343,14 @@ fn opacity_fades_everything_a_box_paints() {
     let alphas: Vec<u32> = page.items.iter().filter_map(|i| match i { sex_html::layout::Item::Rect { color, .. } | sex_html::layout::Item::Text { color, .. } => Some(color >> 24), _ => None }).collect();
     assert_eq!(alphas, [127, 127, 63, 63]);
 }
+
+#[test]
+fn translate_moves_a_box_by_its_own_size() {
+    let dom = parse::parse("<body style='margin:0'><div style='position:fixed;top:50%;left:50%;transform:translate(-50%, -50%) scale(1.1);width:100px;height:40px;background:#ff0000'></div>\
+<p style='margin:0;transform:translateY(5px);background:#00ff00'>x</p></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout_in(&dom, &styles, 400, 300, &Fixed);
+    let rect = |c: u32| page.items.iter().find_map(|i| match i { sex_html::layout::Item::Rect { x, y, w, h, color, .. } if *color == c => Some((*x, *y, *w, *h)), _ => None }).unwrap();
+    assert_eq!(rect(0xFFFF_0000), (150, 130, 100, 40));
+    assert_eq!(rect(0xFF00_FF00).1, 5);
+}
