@@ -491,7 +491,9 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             // A BOOT service with an arena grows there; a program row in its window.
             let reply=crate::service_memory::grow(pd.id,rdi).unwrap_or_else(||crate::app_resources::grow(pd,rdi));
-            regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+            regs.rsi=reply[1];regs.rdx=reply[2];
+            // Every caller learns the machine's memory pressure, whatever the status.
+            regs.r10=crate::program_frames::pressure();reply[0]
         },
 
         83 => { // SYS_PROGRAM_THREAD: workers of the caller's own run.

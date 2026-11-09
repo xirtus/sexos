@@ -363,3 +363,22 @@ fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be
 copied; and PKU switches are tens of cycles on hardware against a Linux
 process switch's page-table change.
+
+### Memory pressure signal (2026-11-09)
+
+The kernel now tells programs and services how short the machine is on memory before an
+allocation fails. `program_frames::pressure()` compares free pages (above the 16 MiB
+floor) with the most that were ever free: LOW below an eighth (at least 32 MiB),
+CRITICAL below a thirty-second (at least 8 MiB). A level rises at once and falls only
+when free memory is a quarter above the mark, so nothing flaps. Transitions log
+`[memory.pressure] level= free_pages= base_pages=`. It is advisory: nothing is killed.
+
+- ABI addition: syscall 81 (`SYS_PROGRAM_MEMORY`) now returns the level in r10 for
+  every caller, whatever the status (r10 was clobbered before, so old callers are
+  unaffected). `sex_pdx::program_memory::{pressure, PRESSURE_NORMAL, PRESSURE_LOW,
+  PRESSURE_CRITICAL}`.
+- Gate: program_heap. Heaptest reports the highest level seen while filling memory; at
+  512 MiB it reaches critical (level 1 at 10283 free pages, 2 at 2570 of 82272), and after
+  Close the kernel logs level 0 and the next run starts at normal. Green at 1 and 4 cores.
+- Next: consumers. The browser drops decoded images and caches on LOW, Play shrinks
+  buffers, and Desk shows a warning on CRITICAL.
