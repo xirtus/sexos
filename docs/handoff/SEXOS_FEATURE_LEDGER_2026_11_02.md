@@ -3227,3 +3227,30 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
 - **ABI** (hash recomputed): `fs::MOUNT` 15, `UNMOUNT` 16, `PICK` 17, `PICKED` 18, `PICKS` 19, `ANSWER` 20, `PICK_OPEN/SAVE/FOLDER`, `PICK_HINT_MAX`, `MEDIA`; statuses `OTHER_DISK` 13, `READ_ONLY` 14, `UNSUPPORTED` 15, `PENDING` 16. `@` grants now cover what is inside a granted folder. `sex_app::files` gains `stat`, `list`, `mkdir`, `create`, `remove`, `rename`, `truncate`, `write_at`, `space`, `pick`, `questions`, `answer`.
 - **Gate** `scripts/program_files_gate.py` (QEMU): a FAT12 stick image and an ext2 Linux disk are fetched and mounted; the stick is listed, read and written from Spindle; writing to the Linux disk is refused as read only; the Files app copies HELLO.TXT from the stick to `/`, trashes it and undoes; Jot asks for a file, the person picks one on the stick in Files, Jot edits and saves it there and is still refused outside it; the stick unmounts. Also `program_jot` and `filesystem` again.
 - **Limits**: no clock reaches Files, so new FAT/exFAT entries are dated 1980-01-01. Sticks arrive as images until USB mass storage exists. ext4 and NTFS don't write yet. Programs can't run from `/media`. The trash never empties itself, and the undo history lasts as long as the Files window. The picker needs the Files app open (the program waits until it is). Files is text, keyboard only; no icons or mouse yet.
+## USB: keyboard, mouse and tablet together, hubs and hot-plug (2026-11-09)
+
+- **What runs now.** SexUSB drives any number of devices at once (up to 32), on root ports
+  and behind hubs: two keyboards, a mouse and a tablet behind a hub all work together, and
+  unplugging or plugging in a device (or a whole hub) while running works. Keyboards send
+  all six keys a USB keyboard reports, so overlapping keys while typing fast are no longer
+  lost, and every key has a code: digits, punctuation, arrows, F1 to F12, keypad, Insert,
+  Delete, Home, End, Page Up and Down (arrows and the rest arrive as the same codes the
+  PS/2 keyboard gives). Mice are read through their HID report descriptor, so wheels,
+  report IDs and 16-bit motion work, not only the 3-byte boot report.
+- **Design.** The single-device, proof-only driver (one 4,800-line function) is replaced by
+  three parts: `xhci.rs` (controller, rings, commands, control transfers; events for other
+  endpoints that arrive while waiting are kept for the main loop), `usb.rs` (enumeration,
+  hubs with route strings and transaction translators, hot-plug, HID) and `hid.rs` (report
+  descriptor parser, host-tested). For real PCs: the firmware handoff (USB Legacy Support),
+  scratchpad pages, 64-byte contexts and USB 2/3 port detection from the Supported Protocol
+  capabilities. Keys from every keyboard merge into one snapshot for Input, and a device
+  that leaves releases what it held. The USB DMA region is now 2 MiB (was 256 KiB).
+- **ABI.** `OP_USB_KEYBOARD_REPORT` arg2 now carries up to six pressed usages, one per byte
+  (byte 0 is the old single key, so the first key reads as before).
+- **Limits.** Polled, no MSI yet. USB 3 hubs are written but QEMU has none to test with.
+  No mass storage, audio or video class yet. Keyboard LEDs (Caps Lock) are not set.
+  Only the first pointer collection of a device is read (no touch screens, no pens).
+- **Gates.** `usb_path_gate` lanes 1 to 4 unchanged and a new lane 5 (hub, two keyboards,
+  mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
+  a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
+  architectural truth.
