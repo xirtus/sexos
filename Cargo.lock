@@ -1273,6 +1273,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-imsm"
+version = "0.1.0"
+
+[[package]]
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
@@ -1302,6 +1306,7 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-pdx",
+ "sex-vmd",
  "spin",
  "spinning_top 0.3.0",
  "tap",
@@ -1398,6 +1403,10 @@ name = "sex-trust-config"
 version = "0.1.0"
 
 [[package]]
+name = "sex-vmd"
+version = "0.1.0"
+
+[[package]]
 name = "sex-volumes"
 version = "0.1.0"
 
@@ -1450,6 +1459,7 @@ name = "sexdrive"
 version = "0.1.0"
 dependencies = [
  "sex-graphics",
+ "sex-imsm",
  "sex-pdx",
 ]
 

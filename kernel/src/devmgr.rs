@@ -3,40 +3,47 @@ use crate::serial_println;
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::{CapabilityData, PciCapData, InterruptCapData};
 
-// SLOT_NVME_HOST = 16 — slotted BAR lease for sexdrive NVMe probe.
-// Not added to sex-pdx to avoid ABI hash churn; canonical slot number only here.
-const SLOT_NVME_HOST: u64 = 16;
+// First NVMe at 16, second (the other half of an Intel RAID 0) at 160.
+use sex_pdx::{SLOT_NVME_HOST, SLOT_NVME_HOST_2};
 
 pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
-    let devices = HAL.enumerate_pci();
+    let mut devices = HAL.enumerate_pci();
+    // Drives behind Intel VMD (RST "RAID On") join the list as ordinary devices.
+    crate::vmd::expand(&mut devices);
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
 
     let mut nvme_found = false;
+    let mut nvme_count = 0u32;
     for dev in devices {
         match (dev.class_id, dev.subclass_id) {
             (0x01, 0x08) => { // NVMe
-                serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
+                serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x} behind_vmd={}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, (dev.ecam != 0) as u8);
+                let slot = match nvme_count { 0 => SLOT_NVME_HOST, 1 => SLOT_NVME_HOST_2, _ => {
+                    serial_println!("[kernel.pci.nvme.extra] {:02x}:{:02x}.{} leased=0", dev.bus, dev.dev, dev.func);
+                    continue;
+                } };
+                nvme_count += 1;
                 let bar0_pa = dev.get_bar(0);
                 serial_println!("[kernel.pci.nvme.bar0] pa={:#x}", bar0_pa);
                 // Firmware may leave the controller cold, with DMA off. BOOT turns it on
                 // here; the status half of this register is write-one-to-clear.
-                let command = unsafe { crate::hal::pci::pci_config_read(dev.bus, dev.dev, dev.func, 0x04) } & 0xFFFF;
-                unsafe { crate::hal::pci::pci_config_write(dev.bus, dev.dev, dev.func, 0x04, command | 0x0006); }
+                let command = dev.read_u32(0x04) & 0xFFFF;
+                dev.write_u32(0x04, command | 0x0006);
                 if let Some(pd) = DOMAIN_REGISTRY.get(sexdrive_pd_id) {
-                    // Grant at SLOT_NVME_HOST (16) so sexdrive can call MAP_PCI_BAR(16, ...).
-                    pd.grant_capability(SLOT_NVME_HOST, CapabilityData::Pci(PciCapData {
+                    // Granted at its slot so sexdrive can call MAP_PCI_BAR(slot, ...).
+                    pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
                         bus: dev.bus,
                         dev: dev.dev,
                         func: dev.func,
                         vendor_id: dev.vendor_id,
                         device_id: dev.device_id,
-                        bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, SLOT_NVME_HOST)),
+                        bar0_view: Some(crate::boot_memory::pci_bar0(pd, &dev, slot)),
                         command: None,
                         virtio: None,
                     }));
-                    serial_println!("[kernel.cap.nvme_bar.grant] pd={} slot={}", sexdrive_pd_id, SLOT_NVME_HOST);
+                    serial_println!("[kernel.cap.nvme_bar.grant] pd={} slot={}", sexdrive_pd_id, slot);
                     // Route IRQ (Simplified vector mapping)
                     crate::interrupts::register_irq_route(0x22, sexdrive_pd_id);
                 }

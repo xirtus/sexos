@@ -3254,3 +3254,47 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+## Disks behind Intel RAID: VMD bus driver and Intel RST (IMSM) volumes, read only (2026-11-09)
+
+- **Why.** Many 2020+ laptops (Dell, HP, Lenovo; likely the Alienware x17 R1) ship with the
+  BIOS set to "RAID On": the NVMe drives sit behind Intel VMD and are invisible on PCI, and
+  two drives are often one Intel RST RAID 0 volume (Windows on it). SexOS saw no disk.
+- **VMD bus driver.** `crates/sex-vmd` (host-tested logic) + `kernel/src/vmd.rs` (BOOT only):
+  for every VMD controller (8086:9a0b Tiger Lake, 467f, 4c3d, 7d0b, a77f, ad0b, b60b, b06f,
+  201d, 28c0) map its CFGBAR, find the first bus (VMCAP/VMCONFIG), number the buses behind
+  each root port, place every memory BAR in MEMBAR1/MEMBAR2 (past VMD's own 8 KiB MSI-X
+  table; 64-bit BARs go to MEMBAR2 if MEMBAR1 is above 4 GiB), open bridge windows, enable
+  memory + bus master, INTx off. The devices are added to devmgr's list as ordinary
+  `PciDevice`s with the new `ecam` field (kernel address of their config page; 0 = legacy
+  ports), so the normal NVMe lease applies. Drivers behind VMD poll (MSI-X there is remapped
+  through VMD and not set up).
+- **Second NVMe.** The second NVMe controller is leased to sexdrive at `SLOT_NVME_HOST_2`
+  (160, the first per-service extra slot of the driver-manifest design); the first stays at 16
+  and is the first one found.
+- **IMSM.** `crates/sex-imsm`: assembles the Matrix Partition Block from the disk's last 17
+  sectors (anchor at the second-to-last sector, extra sectors before it), checks signature,
+  size and checksum, lists disks (serials) and volumes, maps volume sectors to member sectors
+  for RAID 0 (any strip size, any member count) and RAID 1 (either mirror; members marked for
+  rebuild are skipped). Migrating/initialising volumes, RAID 5 and RAID 10 are reported, not read.
+- **sexdrive.** After the first drive is ready it reads the drive's tail. A RAID member is
+  never written: the write guard, the single-block write path and the boot write self-tests are
+  off for it. The second drive comes up with a small polled controller (`raid.rs`), drives are
+  matched to members by serial number (mdadm's normalisation: no spaces, ':' -> ';', last 16),
+  and if every member of a RAID 0/1 volume is present, the block service serves the volume:
+  BLOCK_CAPACITY is its size, BLOCK_READ reads it strip by strip from both drives. The boot log
+  lists metadata, members, volumes and the volume's GPT partitions
+  (`[sexdrive.raid.*]`, `[sexdrive.nvme2.*]`, `[kernel.vmd.*]`).
+- **ABI** (hash recomputed): `sex_pdx::SLOT_NVME_HOST` (16, was a local constant) and
+  `SLOT_NVME_HOST_2` (160). `PciDevice` (kernel-internal) gains `ecam`.
+- **Gates.** `scripts/raid_host_gate.sh` (CI): 7 IMSM tests on fixtures that `mdadm --examine`
+  reads as valid (RAID 0, RAID 1, two-volume Matrix RAID with a 2-sector MPB) and an end-to-end
+  read of generated 2- and 3-member sets; 4 VMD tests against a simulated Tiger Lake VMD domain
+  (two root ports, NVMe behind each, MEMBAR1 above/below 4 GiB, running out of buses/memory).
+  `scripts/raid_gate.py` (QEMU): two NVMe drives as an IMSM RAID 0 with 4 KiB strips, attached
+  in reverse member order; sexdrive serves the volume, lists both GPT partitions (one entry
+  lies on the second drive), finds the backup GPT in the volume's last sector, and both drive
+  images are byte-identical afterwards.
+- **Limits.** Read only: Files does not yet mount partitions of the served volume (next: hand
+  the volume's partitions to sex-volumes, where NTFS/FAT readers exist). No VMD in QEMU, so the
+  VMD path is proven only against the simulation until the x17 R1 test. A third NVMe is logged
+  and not leased. 4 KiB-sector (4Kn) drives are not sized yet.

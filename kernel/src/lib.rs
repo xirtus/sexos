@@ -108,6 +108,7 @@ pub mod init;
 pub mod graphics;
 #[cfg(target_arch = "x86_64")]
 pub mod devmgr;
+pub mod vmd;
 #[cfg(target_arch = "x86_64")]
 pub mod hw;
 #[cfg(target_arch = "x86_64")]

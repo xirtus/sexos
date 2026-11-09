@@ -51,6 +51,8 @@ jobs:
       run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
     - name: Other systems' filesystems (FAT, exFAT, ext4, NTFS) on the host
       run: bash scripts/volumes_host_gate.sh
+    - name: Intel RAID (IMSM metadata, VMD bus) on the host
+      run: bash scripts/raid_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
     - name: Host kernel-model regressions
@@ -72,6 +74,8 @@ jobs:
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Intel RAID 0 on two NVMe drives, read only
+      run: sudo apt-get install -y gdisk && python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: Reboot persistence and rendering
       run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
     - name: Task finish and quota cleanup with surviving client

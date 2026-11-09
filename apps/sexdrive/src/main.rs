@@ -15,6 +15,7 @@ use sex_pdx::{
 
 mod dma_transfer;
 mod completion_wait;
+mod raid;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -82,8 +83,10 @@ pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mu
 // Local Opcode
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 
-// SLOT_NVME_HOST = 16 — matches devmgr.rs grant. Not in sex-pdx to avoid ABI hash churn.
-const SLOT_NVME_HOST: u64 = 16;
+use sex_pdx::SLOT_NVME_HOST;
+/// The first drive's serial number (Identify Controller bytes 4..24), to find
+/// it in an Intel RAID set's disk table.
+static mut NVME0_SERIAL: [u8; 20] = [0; 20];
 const PAGE_SIZE: u64 = 4096;
 const NVME_SQ0TDBL: u64 = 0x1000;
 const NVME_CQ0HDBL: u64 = 0x1004;
@@ -457,7 +460,14 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
     nvme_read_into_mapped_va(offset,size,view.virtual_address)
 }
 
+/// Block reads: the Intel RAID volume when one is served, else the first drive.
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
+    if raid::serving() { return raid::read(offset, size, dst_va); }
+    nvme0_read_into_mapped_va(offset, size, dst_va)
+}
+
+/// Raw sectors of the first drive.
+fn nvme0_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     if size == 0
         || size > BLOCK_MAX_RUN
         || (offset % NVME_LBA_BYTES) != 0
@@ -658,10 +668,13 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
 
 /// What the namespace says, or just the original fixed area if it could not say.
 fn device_sectors() -> u64 {
+    if raid::serving() { return raid::sectors(); }
     match unsafe { NVME_IO_STATE.sectors } { 0 => WRITE_PROOF_LBA + 1, sectors => sectors }
 }
 
 fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
+    // An Intel RAID member's sectors belong to its volume (often Windows).
+    if raid::writes_refused() { return false; }
     // Everything past the fixed DiskFS area belongs to Files' filesystem and program store.
     if offset >= (WRITE_PROOF_LBA + 1) * NVME_LBA_BYTES && buf_cap == SLOT_BLOCK_BUFFER {
         return offset.checked_add(size).is_some_and(|end| end <= device_sectors() * NVME_LBA_BYTES);
@@ -758,6 +771,7 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 }
 
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
+    if raid::writes_refused() { return BLOCK_ERR_NO_DEVICE; }
     // Success chatter shares the existing finite hot-log budget. Device errors,
     // timeout/quarantine and actual FLUSH receipts remain unconditional.
     if size == 0 || size > BLOCK_MAX_RUN
@@ -949,6 +963,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
 }
 
 fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
+    if raid::writes_refused() { return BLOCK_ERR_NO_DEVICE; }
     if size != WRITE_PROOF_LEN || src_va == 0 || src_va == u64::MAX {
         serial_println!("[sexdrive.storage100.rw.fail] reason=bad_args");
         serial_println!(
@@ -2399,6 +2414,9 @@ fn nvme_probe_bar() {
     }
 
     let sn0 = unsafe { core::ptr::read_volatile((id_va + 4) as *const u64) };
+    for i in 0..20u64 {
+        unsafe { NVME0_SERIAL[i as usize] = core::ptr::read_volatile((id_va + 4 + i) as *const u8); }
+    }
     let mn0 = unsafe { core::ptr::read_volatile((id_va + 24) as *const u64) };
     let nn = unsafe { core::ptr::read_volatile((id_va + 516) as *const u32) };
     serial_println!(
@@ -2692,6 +2710,12 @@ fn nvme_probe_bar() {
         NVME_IO_STATE.cq_phase = 1;
     }
 
+    // Intel RST RAID: a member drive is read only, and when every member of a
+    // RAID 0/1 volume is here the volume is what the block service serves.
+    let raid_member = raid::probe(device_size, unsafe { &*core::ptr::addr_of!(NVME0_SERIAL) });
+    if raid_member {
+        serial_println!("[sexdrive.storage100.skip] reason=raid_member writes=0");
+    } else {
     // AP3: deterministic single-block write/read/match self-test on real NVMe IOQ.
     // This only executes when NVMe BAR resolve + IOQ creation succeeded.
     let ap3_buf_phys = reserve_dma_phys(PAGE_SIZE);
@@ -2737,6 +2761,8 @@ fn nvme_probe_bar() {
             }
         }
     }
+
+    } // not a RAID member
 
     // === SEXOS_STORAGE_100_IO_READ_PROBE gate ===
     // Legacy real IO READ proof. Vestigial; runs only when explicitly requested.
