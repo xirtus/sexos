@@ -8,6 +8,8 @@ mod boot_network{pub fn query(caller:u32)->Option<[u64;4]>{super::boot_network_s
 #[macro_export]macro_rules! serial_println{($($a:tt)*)=>{}}
 pub const SLOT_DMA_REGION:u64=32;
 #[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
+/// NICs are leased by product id, never by class; no class lease applies here.
+mod device_lease{pub struct Kind;impl Kind{pub fn of_class(_:u32)->Option<Kind>{None}pub fn registers_end(&self)->u64{u64::MAX}pub fn dma(&self)->(u32,u64){(0,0)}}}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;
@@ -20,7 +22,7 @@ use memory_region as m;
 use std::{cell::Cell,collections::BTreeMap,sync::{Mutex,atomic::{AtomicUsize,Ordering}}};
 mod capability{
  use super::*;
- #[derive(Clone,Copy)]pub struct PciCapData{pub bus:u8,pub dev:u8,pub func:u8,pub vendor_id:u16,pub device_id:u16,pub bar0_view:Option<m::RegionGrant>,pub command:Option<w::Grant>,pub virtio:Option<crate::virtio::Layout>}
+ #[derive(Clone,Copy)]pub struct PciCapData{pub bus:u8,pub dev:u8,pub func:u8,pub vendor_id:u16,pub device_id:u16,pub bar0_view:Option<m::RegionGrant>,pub command:Option<w::Grant>,pub virtio:Option<crate::virtio::Layout>,pub class:u32,pub window:(u32,u32)}
  #[derive(Clone,Copy)]pub enum CapabilityData{Pci(PciCapData),Region(m::RegionGrant),Domain(u32)}
  pub struct Capability{pub data:CapabilityData}
  pub struct ProtectionDomain{pub id:u32,pub entries:Vec<(u32,CapabilityData)>,pub lookups:Cell<usize>}
@@ -63,7 +65,7 @@ fn address(offset:u32)->u32{0x8000_1000|offset}
 fn pd()->ProtectionDomain{
  let view=m::RegionGrant{region_id:0x10000+13*1024+19,virtual_base:0x40000000,length:65536,rights:7,dma_base:None,peer_pd:None};
  let dma=m::RegionGrant{region_id:2,virtual_base:0x50000000,length:256*1024,rights:15,dma_base:Some(0x100000),peer_pd:None};
- ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:0x8086,device_id:0x10d3,bar0_view:Some(view),command:Some(grant()),virtio:None})),(32,CapabilityData::Region(dma)),(6,CapabilityData::Domain(3))]}
+ ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:0x8086,device_id:0x10d3,bar0_view:Some(view),command:Some(grant()),virtio:None,class:0x020000,window:(0,0)})),(32,CapabilityData::Region(dma)),(6,CapabilityData::Domain(3))]}
 }
 fn setup(command:u16){*MODEL.lock().unwrap()=Some(Model{selected:0,config:BTreeMap::from([(address(0),0x10d3_8086),(address(4),0xa5a5_0000|command as u32)]),events:vec![],refuse:false,accept_mask:u16::MAX});assert_eq!(CRITICAL.load(Ordering::SeqCst),0);}
 fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->[u64;5]{mechanism::invoke(pd,slot,set,clear,0,0)}
@@ -120,14 +122,17 @@ fn mutate_pci(pd:&mut ProtectionDomain,f:impl FnOnce(&mut PciCapData)){let Capab
 
 #[test]fn boot_identity_uses_exact_held_authority_without_any_port_access(){
  setup(0);let p=pd();assert_eq!(mechanism::identity(&p,19,0,0,0,0),[0,0x8086,0x10d3,0,0]);untouched();
- for (slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(6,0,0,0,0),(32,0,0,0,0),(19,1,0,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{assert_eq!(mechanism::identity(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();}
+ let view_length={let CapabilityData::Pci(d)=&p.entries[0].1 else{panic!()};d.bar0_view.unwrap().length};
+ assert_eq!(mechanism::identity(&p,19,1,0,0,0),[0,0,view_length,0,0]);untouched();
+ let mut q=pd();mutate_pci(&mut q,|d|d.window=(0x800,0x800));assert_eq!(mechanism::identity(&q,19,1,0,0,0),[0,0x800,0x800,0,0]);
+ for (slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(6,0,0,0,0),(32,0,0,0,0),(19,2,0,0,0),(19,1,1,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{assert_eq!(mechanism::identity(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();}
  for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::identity(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
 }
 
 #[test]fn boot_network_data_requires_exact_held_lease_without_port_effects(){
  setup(0);let p=pd();let words=network_config::Config::CONTROLLED.to_words();
  assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[0,words[0],words[1],words[2],words[3]]);untouched();
- for(slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(18,0,0,0,0),(19,1,0,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{
+ for(slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(18,0,0,0,0),(19,2,0,0,0),(19,1,1,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{
   assert_eq!(mechanism::network_config(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();
  }
  for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
@@ -147,7 +152,7 @@ fn sound()->ProtectionDomain{
  let view=m::RegionGrant{region_id:0x10000+13*1024+19,virtual_base:0x40000000,length:0x4000,rights:7,dma_base:None,peer_pd:None};
  let dma=m::RegionGrant{region_id:virtio::DMA_REGION_ID,virtual_base:0x50000000,length:virtio::DMA_BYTES,rights:15,dma_base:Some(0x100000),peer_pd:None};
  let g=w::Grant{vendor_id:virtio::VENDOR,device_id:virtio::SOUND,..grant()};
- ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:virtio::VENDOR,device_id:virtio::SOUND,bar0_view:Some(view),command:Some(g),virtio:Some(layout)})),(32,CapabilityData::Region(dma))]}
+ ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(19,CapabilityData::Pci(PciCapData{bus:0,dev:2,func:0,vendor_id:virtio::VENDOR,device_id:virtio::SOUND,bar0_view:Some(view),command:Some(g),virtio:Some(layout),class:0,window:(0,0)})),(32,CapabilityData::Region(dma))]}
 }
 #[test]fn virtio_lease_is_sized_by_its_layout_and_uses_its_own_dma_pool(){
  // A 16 KiB virtio view is complete; the layout reads back page by page.
