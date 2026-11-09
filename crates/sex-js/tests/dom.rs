@@ -427,3 +427,11 @@ console.log($('c').checked, $('a').checked, $('b').checked, $('c').defaultChecke
 console.log($('c').checked, $('a').checked, $('b').checked)", "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:false false true true", "0:true true false"]);
 }
+
+#[test]
+fn clicking_inside_a_button_submits() {
+    let mut s = page("<form id=f action=go><input name=q value=x><button><span id=s>Go</span></button></form>");
+    s.eval("let t; document.getElementById('f').addEventListener('submit', e => { t = e.submitter.localName; e.preventDefault(); }); \
+document.getElementById('s').click(); console.log(t)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:button"]);
+}

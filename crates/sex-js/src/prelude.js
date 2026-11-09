@@ -524,7 +524,11 @@
   }
   // A click on `el`: checkboxes and radios change before the click and change back if
   // it is cancelled; submit and reset buttons, selects and labels act after it.
-  function activate(el, ev) {
+  function activate(target, ev) {
+    // A click inside a button (on its text, say) activates the button; the event still
+    // goes to what was clicked.
+    const inner = target.localName;
+    const el = (inner !== 'input' && inner !== 'button' && inner !== 'select' && inner !== 'textarea' && target.closest('button')) || target;
     const t = el.localName, type = t === 'input' ? el.type : '';
     if (el.hasAttribute('disabled') && (t === 'input' || t === 'button' || t === 'select' || t === 'textarea')) return true;
     let undo = null, changed = true;
@@ -536,7 +540,7 @@
       el.checked = true;
       undo = () => { el.checked = false; if (was) was.checked = true; };
     } else if (type === 'radio') { undo = () => {}; changed = false; }
-    const ok = el._dispatch(ev);
+    const ok = target._dispatch(ev);
     if (undo) {
       if (!ok) { undo(); return ok; }
       if (changed) { fire(el, 'input', InputEvent); fire(el, 'change'); }
