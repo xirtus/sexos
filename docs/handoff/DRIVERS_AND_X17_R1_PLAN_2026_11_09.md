@@ -7,8 +7,9 @@ Ledger entry: "Hardware census, VMD warning, NVMe waits for real SSDs" in
 ## 1. In short
 
 - The x17 R1 was only ever sold with a **laptop RTX 3060, 3070 or 3080 (16 GB)**. There
-  was no RTX 3090 in any x17 (the 3080 Ti arrived in the x17 R2). We plan for the
-  **RTX 3080 Laptop (GA104)** until `lspci -nn` from the machine says otherwise.
+  was no RTX 3090 in any x17 (the 3080 Ti arrived in the x17 R2). Andreas's machine is
+  most likely the **RTX 3070 Laptop (GA104, 8 GB)**; `lspci -nn` should show 10de:249d or
+  10de:24dd. The 3070 and 3080 are the same GA104 chip, so the plan is the same.
 - The biggest risk for next week is not the GPU. It is **storage mode**. Many x17 R1s
   shipped with two NVMe drives in Intel RAID 0 ("RAID On", Intel RST). In that mode the
   drives sit behind Intel VMD and no NVMe controller shows up on PCI, so SexOS has no
@@ -39,7 +40,7 @@ for these parts; confirm them with `lspci -nn` on the real machine.
 | CPU | Core i7-11800H or i9-11980HK, Tiger Lake-H, 8 cores, **has PKU** | n/a | runs (PKU required) | kernel |
 | Chipset | Intel HM570 (Tiger Lake-H PCH), PCIe Gen4 from the CPU | 8086:43xx | platform | kernel |
 | iGPU | Intel UHD Graphics (Xe, 32 EU) | 8086:9a60 | firmware framebuffer | Native resolution and HiDPI scale (i915-class modesetting) |
-| dGPU | RTX 3060 6 GB (GA106) / 3070 8 GB (GA104) / **3080 16 GB (GA104)**, 130–165 W | 10de:2520/2560, 249d/24dd, 249c/24dc | firmware framebuffer only | new thread (section 4, P3) |
+| dGPU | RTX 3060 6 GB (GA106) / **3070 8 GB (GA104), Andreas's machine** / 3080 16 GB (GA104), 130–165 W | 10de:2520/2560, 249d/24dd, 249c/24dc | firmware framebuffer only | new thread (section 4, P3) |
 | Graphics switching | Optimus. Dell lists Advanced Optimus only for the 360 Hz panel; the review notes a dGPU-only option in BIOS | n/a | either works with the firmware framebuffer | |
 | Panel | 1080p 165 Hz, 1080p 360 Hz, or 4K 120 Hz | eDP | GOP mode; native via EDID in PR #77 | display thread |
 | Storage | **Two M.2 2230/2280 slots**, PCIe Gen3/Gen4 x4; RAID 0 options (review unit: 2x WD SN730 1 TB in RAID 0) | NVMe 01:08, or VMD 8086:9a0b | NVMe driven (one controller); **VMD not driven** | this thread (sexdrive) |
