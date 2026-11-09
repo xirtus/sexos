@@ -270,9 +270,10 @@ impl Browser {
             self.buf = Vec::new();
         }
         let scripts = self.scripts(&dom, &base);
-        // Inline handlers (`onclick="..."`) and `javascript:` links need the engine too.
+        // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
         let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
-            sex_html::dom::Kind::Element { attrs, .. } => attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
+            sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
+                || attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
             _ => false,
         });
         self.sheets = sheets;

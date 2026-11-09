@@ -66,6 +66,11 @@ pub mod op {
     pub const MEASURE: u32 = 25;
     /// (x, y in page pixels): the deepest laid-out element there, or nothing.
     pub const HIT: u32 = 26;
+    /// (control): its current value; (control, text): sets it.
+    pub const VALUE: u32 = 27;
+    /// (control, caret in characters): focuses a text control and places its caret;
+    /// (): no text control has focus.
+    pub const CARET: u32 = 28;
     /// WebGL batch for canvas NODE: commands, then the batch's bytes (an ArrayBuffer).
     pub const GL: u32 = 64;
     /// WebGL query for canvas NODE: what, then its arguments; answers text or bytes.

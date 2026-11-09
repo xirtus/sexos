@@ -300,6 +300,21 @@ impl Page for Document {
                 let y = a.get(1)?.parse().ok()?;
                 self.node_at(x, y).map(|n| format!("{n}"))
             }
+            op::VALUE => {
+                let n = self.element(a.first())?;
+                match a.get(1) {
+                    Some(v) => { self.dom.values.insert(n, String::from(*v)); self.dirty = true; None }
+                    None => Some(self.dom.control_value(n)),
+                }
+            }
+            op::CARET => {
+                let caret = match a.first().filter(|s| !s.is_empty()) {
+                    Some(_) => Some((self.element(a.first())?, a.get(1).and_then(|p| p.parse().ok()).unwrap_or(0))),
+                    None => None,
+                };
+                if caret != self.dom.caret { self.dom.caret = caret; self.dirty = true; }
+                None
+            }
             op::LOCATION => Some(self.url.clone()),
             op::CANVAS => {
                 let n = self.element(a.first())?;

@@ -360,3 +360,49 @@ fn fetch_init_xhr_and_cookies() {
     s.dispatch("flush").unwrap();
     assert_eq!(logs(&mut s), ["0:fetch 200 application/json http://example.test/youtubei/v1/player true", "0:xhr 206 bytes 0-3/10 1,2,3,4 234"]);
 }
+
+#[test]
+fn forms_take_typing_clicks_and_submit() {
+    let mut s = page("<body><form id=f action=search><label id=l>Find <input id=q name=q value=old></label>\
+        <input type=checkbox id=c name=c><input type=radio name=r value=a id=ra checked><input type=radio name=r value=b id=rb>\
+        <select id=s name=s><option>x</option><option value=yy>y</option></select><textarea id=t name=t>hi</textarea>\
+        <button id=b>Go</button></form></body>");
+    s.eval(r#"
+        const $ = id => document.getElementById(id), log = [];
+        $('q').addEventListener('input', e => log.push('input:' + e.data));
+        $('q').addEventListener('change', () => log.push('change'));
+        $('c').addEventListener('change', () => log.push('c:' + $('c').checked));
+        $('f').addEventListener('submit', e => log.push('submit:' + (e.submitter ? e.submitter.id : '-')));
+        window.id = el => el._id;
+    "#, "t.js").unwrap();
+    let id = |s: &mut Script<Document>, q: &str| { s.eval(&format!("console.log(id(document.getElementById('{q}')))"), "id.js").unwrap(); logs(s).pop().unwrap()[2..].to_string() };
+    let q = id(&mut s, "q");
+    // Pressing the field focuses it with the caret at the end; typing edits the value.
+    s.dispatch(&format!("mouse\tdown\t{q}\t5\t5\t0\t1\t0")).unwrap();
+    s.dispatch(&format!("mouse\tup\t{q}\t5\t5\t0\t0\t0")).unwrap();
+    let qn: usize = q.parse().unwrap();
+    assert_eq!(s.page_mut().dom.caret, Some((qn, 3)));
+    for k in ["Backspace", "ArrowLeft", "X", "End", "!"] {
+        assert_eq!(s.dispatch(&format!("key\tkeydown\t{k}\t\t0")).unwrap(), 1, "{k}");
+    }
+    assert_eq!(s.page_mut().dom.control_value(qn), "oXl!");
+    assert_eq!(s.page_mut().dom.caret, Some((qn, 4)));
+    // The value attribute stays the default.
+    s.eval("console.log($('q').value, $('q').defaultValue, $('q').getAttribute('value'))", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:oXl! old old"]);
+    // Checkbox, radio, select and label clicks.
+    s.eval("$('c').click(); $('rb').click(); $('s').click(); console.log($('c').checked, $('ra').checked, $('rb').checked, $('s').value)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true false true yy"]);
+    // Enter in a text field submits the form as a GET to its action.
+    s.eval("$('q').focus()", "t.js").unwrap();
+    assert_eq!(s.dispatch("key\tkeydown\tEnter\t\t0").unwrap(), 1);
+    assert_eq!(s.page_mut().navigate.take().as_deref(), Some("http://example.test/dir/search?q=oXl%21&c=on&r=b&s=yy&t=hi"));
+    // So does the submit button, which is sent too when it has a name; FormData sees the same.
+    s.eval("$('b').setAttribute('name', 'go'); $('b').click(); console.log([...new FormData($('f'))].length, log.join(' '))", "t.js").unwrap();
+    assert_eq!(s.page_mut().navigate.take().as_deref(), Some("http://example.test/dir/search?q=oXl%21&c=on&r=b&s=yy&t=hi&go="));
+    assert_eq!(logs(&mut s), ["0:5 input:null input:X input:! c:true change submit:- submit:b"]);
+    // Blurring clears the caret; reset restores defaults.
+    s.eval("$('q').blur(); $('f').reset(); console.log($('q').value, $('t').value)", "t.js").unwrap();
+    assert_eq!(s.page_mut().dom.caret, None);
+    assert_eq!(logs(&mut s), ["0:old hi"]);
+}

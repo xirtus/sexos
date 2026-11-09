@@ -580,16 +580,16 @@ impl<'a> Layout<'a> {
                 let opt = self.dom.element_children(n).find(|&o| self.dom.attr(o, "selected").is_some()).or_else(|| self.dom.element_children(n).next());
                 (opt.map(|o| collapse(&self.dom.text_content(o))).unwrap_or_default() + " ▾", false)
             }
-            "textarea" => (self.dom.text_content(n), false),
             _ => match kind.as_str() {
                 "submit" | "button" | "reset" => (String::from(self.dom.attr(n, "value").unwrap_or(if kind == "reset" { "Reset" } else { "Submit" })), false),
-                "password" => (self.dom.attr(n, "value").map(|v| v.chars().map(|_| '•').collect()).unwrap_or_default(), false),
-                _ => match self.dom.attr(n, "value").filter(|v| !v.is_empty()) {
-                    Some(v) => (String::from(v), false),
-                    None => (String::from(self.dom.attr(n, "placeholder").unwrap_or("")), true),
+                _ => match self.dom.control_value(n) {
+                    v if v.is_empty() => (String::from(self.dom.attr(n, "placeholder").unwrap_or("")), true),
+                    v if kind == "password" => (v.chars().map(|_| '•').collect(), false),
+                    v => (v, false),
                 },
             },
         };
+        let caret = self.dom.caret.filter(|c| c.0 == n).map(|c| if faint { 0 } else { c.1 });
         let (asc, desc) = self.host.metrics(font);
         let pad = s.padding[LEFT].or_zero(0).max(2);
         let button = matches!(kind.as_str(), "submit" | "button" | "reset") || tag == "select";
@@ -599,12 +599,46 @@ impl<'a> Layout<'a> {
         let rows = if tag == "textarea" { self.dom.attr(n, "rows").and_then(|v| v.trim().parse().ok()).unwrap_or(2) } else { 1 };
         let inner_h = match s.height.resolve(0) { Some(h) => h, None => (asc + desc + 2) * rows };
         let (w, h) = (inner_w + 2 * pad + 2, inner_h + 6);
-        self.items.push(Item::Rect { x: 0, y: 0, w, h, color: s.border_color[TOP] | 0xFF00_0000, radius: s.radius });
+        // A focused text control shows a blue ring.
+        let border = if caret.is_some() { 0xFF0B_57D0 } else { s.border_color[TOP] | 0xFF00_0000 };
+        self.items.push(Item::Rect { x: 0, y: 0, w, h, color: border, radius: s.radius });
         self.items.push(Item::Rect { x: 1, y: 1, w: w - 2, h: h - 2, color: if s.background >> 24 != 0 { s.background } else if button { 0xFFF1_F3F4 } else { 0xFFFF_FFFF }, radius: (s.radius - 1).max(0) });
-        if !label.is_empty() {
-            let color = if faint { 0xFF80_8080 } else { s.color };
-            let first = label.lines().next().unwrap_or("");
-            self.items.push(Item::Text { x: 1 + pad, baseline: 3 + asc + 1, font, color, text: String::from(first), underline: false, strike: false });
+        let color = if faint { 0xFF80_8080 } else { s.color };
+        let line_h = asc + desc + 2;
+        // Text controls show the lines around the caret, scrolled sideways to keep it in view.
+        let (caret_line, caret_col) = match caret {
+            Some(c) => {
+                let before: String = label.chars().take(c).collect();
+                (before.matches('\n').count(), before.rsplit('\n').next().map_or(0, |l| l.chars().count()))
+            }
+            None => (0, 0),
+        };
+        let shown = if tag == "textarea" { rows.max(1) as usize } else { 1 };
+        let first_line = (caret_line + 1).saturating_sub(shown);
+        for (i, line) in label.split('\n').enumerate().skip(first_line).take(shown) {
+            let row = (i - first_line) as i32;
+            let mut skip = 0;
+            if caret.is_some() && i == caret_line {
+                let upto: String = line.chars().take(caret_col).collect();
+                let over = self.host.text_width(&upto, font) - (inner_w - 2);
+                if over > 0 {
+                    let mut cut = 0;
+                    while cut < upto.len() && self.host.text_width(&upto[..cut], font) < over { cut += upto[cut..].chars().next().map_or(1, |c| c.len_utf8()); }
+                    skip = cut;
+                }
+            }
+            let text = &line[skip.min(line.len())..];
+            let text: String = if self.host.text_width(text, font) <= inner_w { String::from(text) } else {
+                let mut t = String::new();
+                for ch in text.chars() { t.push(ch); if self.host.text_width(&t, font) > inner_w { t.pop(); break; } }
+                t
+            };
+            if !text.is_empty() { self.items.push(Item::Text { x: 1 + pad, baseline: 3 + asc + 1 + row * line_h, font, color, text, underline: false, strike: false }); }
+            if caret.is_some() && i == caret_line {
+                let upto: String = line.chars().take(caret_col).collect();
+                let cx = 1 + pad + self.host.text_width(&upto[skip.min(upto.len())..], font);
+                self.items.push(Item::Rect { x: cx.min(w - 2), y: 3 + row * line_h, w: 1, h: asc + desc + 1, color: s.color | 0xFF00_0000, radius: 0 });
+            }
         }
         (w, h)
     }
