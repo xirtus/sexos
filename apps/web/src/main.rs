@@ -104,6 +104,8 @@ struct Browser {
     press_link: Option<usize>,
     /// The page's style sheets use `:hover`: pointer moves restyle it.
     hover_css: bool,
+    /// A form's POST body for the next page `open` loads.
+    post: Option<String>,
     /// The scroll offset the page script last heard (`window.scrollY`).
     script_scroll: i32,
 }
@@ -214,6 +216,7 @@ impl Browser {
     }
 
     fn open(&mut self, url: &str, remember: bool) {
+        let post = self.post.take();
         if remember && !self.url.is_empty() { self.history.push(self.url.clone()); }
         // Same page, other fragment: just scroll.
         let (here, _) = sex_html::url::fragment(&self.url);
@@ -236,7 +239,13 @@ impl Browser {
                 Err(e) => (message_page("Can't open that file", core::str::from_utf8(files::message(e)).unwrap_or(""), url), String::from(url)),
             }
         } else if url.starts_with("http://") || url.starts_with("https://") {
-            match self.fetch(url) {
+            let got = match &post {
+                // A form's POST: the answer is the next page.
+                Some(body) => self.http("POST", url, &[("Content-Type", "application/x-www-form-urlencoded")], body.as_bytes(), SOURCE_MAX, None)
+                    .and_then(|r| if r.status >= 400 { Err(&b"The site answered with an error."[..]) } else { self.buf = r.body; Ok((r.url, 0..self.buf.len())) }),
+                None => self.fetch(url),
+            };
+            match got {
                 Ok((final_url, body)) => { let t = text_of(&self.buf[body]); (t, final_url) }
                 Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), url), String::from(url)),
             }
@@ -370,6 +379,7 @@ impl Browser {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
         }
         if let Some(url) = doc.navigate.take() {
+            self.post = doc.navigate_post.take();
             self.open(&url, true);
             return true;
         }
@@ -687,7 +697,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

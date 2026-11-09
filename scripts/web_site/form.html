@@ -12,9 +12,10 @@ input { display: block; margin: 0; }
 <textarea name="t" rows="2">two
 lines</textarea>
 </form>
+<form id="p" method="post" action="posted"><input type="hidden" name="a" value="1 2"><input type="hidden" name="b" value="x&amp;y"></form>
 <script>
 const q = document.getElementById('q');
-if (location.search) console.log('form got ' + location.search);
+if (location.search) { console.log('form got ' + location.search); document.getElementById('p').submit(); }
 let typed = false;
 q.addEventListener('input', () => { if (!typed) { typed = true; console.log('form typing'); } });
 q.addEventListener('focus', () => console.log('form focus'));
