@@ -256,9 +256,11 @@ struct KeyEdge { code:u8, down:u8, source:u8, modifiers:u8 }
 impl KeyEdge {
     const fn empty()->Self {Self{code:0,down:0,source:0,modifiers:0}}
 }
-struct KeyboardOutbox { edges:[KeyEdge;128], orders:[u64;128], head:usize, len:usize }
+/// `extended`: the last PS/2 byte was the E0 prefix. `skip`: bytes left of a Pause
+/// (E1) sequence, which has no key code.
+struct KeyboardOutbox { edges:[KeyEdge;128], orders:[u64;128], head:usize, len:usize, extended:bool, skip:u8 }
 impl KeyboardOutbox {
-    const fn new()->Self {Self{edges:[KeyEdge::empty();128],orders:[0;128],head:0,len:0}}
+    const fn new()->Self {Self{edges:[KeyEdge::empty();128],orders:[0;128],head:0,len:0,extended:false,skip:0}}
     fn available(&self)->usize {self.edges.len()-self.len}
     fn push(&mut self,edges:&[KeyEdge])->bool {
         if edges.len()>self.available() {return false;}
@@ -267,8 +269,22 @@ impl KeyboardOutbox {
         }
         true
     }
+    /// One PS/2 set-1 byte. Extended keys arrive as E0 then the key's byte: the arrows,
+    /// Home/End, Page Up/Down, Insert/Delete, right Ctrl/Alt and keypad Enter and /
+    /// keep the codes their keypad and left-hand twins have, which is what every
+    /// service reads. The prefix itself, the fake Shift edges some keyboards wrap
+    /// around those keys, and the Pause sequence produce no edge.
     fn ps2(&mut self,raw:u64)->bool {
         if raw>255 {return false;}
+        if self.skip>0 {self.skip-=1;return true;}
+        match raw {
+            0xE0=>{self.extended=true;return true;}
+            0xE1=>{self.extended=false;self.skip=5;return true;}
+            _=>{}
+        }
+        let extended=core::mem::replace(&mut self.extended,false);
+        // E0 2A / E0 36 are fake shifts around extended keys: no key of their own.
+        if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
         self.push(&[KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
     }
     fn usb(&mut self,key:u8,modifiers:u8,last_key:&mut u8,last_modifiers:&mut u8)->bool {

@@ -278,6 +278,46 @@ fn webgl_page_picture_is_in_the_texture_before_the_next_draw() {
 }
 
 #[test]
+fn mouse_events_reach_the_element_under_the_pointer() {
+    let mut s = page("<body><div id=a><canvas id=c></canvas></div><p id=p>x</p></body>");
+    s.eval(r#"
+        const c = document.getElementById('c'), log = [];
+        for (const t of ['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick', 'mouseover', 'mouseenter', 'mousemove', 'wheel', 'contextmenu', 'mouseleave'])
+          c.addEventListener(t, e => log.push(t + ':' + e.clientX + ',' + e.clientY + ',' + e.button + ',' + e.buttons + (t === 'wheel' ? ',' + e.deltaY : '') + (t === 'click' ? ',' + e.offsetX + ',' + e.offsetY : '')));
+        document.getElementById('a').addEventListener('click', e => log.push('bubbled'));
+        document.getElementById('p').addEventListener('click', e => e.preventDefault());
+        window.done = () => console.log(log.join(' '));
+    "#, "t.js").unwrap();
+    let id = |s: &mut Script<Document>, q: &str| { s.eval(&format!("console.log(document.getElementById('{q}')._id)"), "id.js").unwrap(); logs(s).pop().unwrap()[2..].to_string() };
+    let (c, p) = (id(&mut s, "c"), id(&mut s, "p"));
+    // The canvas is laid out at (10, 20) 100 by 50: hit testing finds it, not its parent.
+    let (cn, pn): (usize, usize) = (c.parse().unwrap(), p.parse().unwrap());
+    let doc = s.page_mut();
+    doc.rects = vec![None; doc.dom.nodes.len()];
+    let parent = doc.dom.nodes[cn].parent.unwrap();
+    doc.rects[parent] = Some((0, 0, 410, 80));
+    doc.rects[cn] = Some((10, 20, 100, 50));
+    doc.rects[pn] = Some((0, 80, 410, 20));
+    assert_eq!(doc.node_at(15, 25), Some(cn));
+    assert_eq!(doc.node_at(5, 5), Some(parent));
+    assert_eq!(doc.node_at(5, 90), Some(pn));
+    assert_eq!(doc.node_at(500, 500), None);
+    for m in ["move\t{c}\t15\t25\t0\t0\t0", "down\t{c}\t15\t25\t0\t1\t0", "up\t{c}\t15\t25\t0\t0\t0", "down\t{c}\t15\t25\t0\t1\t0", "up\t{c}\t16\t25\t0\t0\t0",
+              "wheel\t{c}\t15\t25\t0\t0\t-2", "down\t{c}\t15\t25\t2\t2\t0", "up\t{c}\t15\t25\t2\t0\t0", "leave\t\t-1\t-1\t0\t0\t0"] {
+        assert_eq!(s.dispatch(&format!("mouse\t{}", m.replace("{c}", &c))).unwrap(), 0, "{m}");
+    }
+    // A cancelled click answers 1, so the browser won't follow a link there.
+    assert_eq!(s.dispatch(&format!("mouse\tdown\t{p}\t5\t90\t0\t1\t0")).unwrap(), 0);
+    assert_eq!(s.dispatch(&format!("mouse\tup\t{p}\t5\t90\t0\t0\t0")).unwrap(), 1);
+    s.eval("done(); console.log(document.elementFromPoint(15, 25) === document.getElementById('c'))", "t.js").unwrap();
+    let l = logs(&mut s);
+    assert_eq!(l[0], "0:mouseover:15,25,-1,0 mouseenter:15,25,-1,0 mousemove:15,25,-1,0 pointerdown:15,25,0,1 mousedown:15,25,0,1 mouseup:15,25,0,0 click:15,25,0,0,5,5 bubbled \
+pointerdown:15,25,0,1 mousedown:15,25,0,1 mouseup:16,25,0,0 click:16,25,0,0,6,5 bubbled dblclick:16,25,0,0 wheel:15,25,0,0,200 \
+pointerdown:15,25,2,2 mousedown:15,25,2,2 mouseup:15,25,2,0 contextmenu:15,25,2,0 mouseleave:-1,-1,0,0");
+    assert_eq!(l[1], "0:true");
+}
+
+#[test]
 fn fetch_init_xhr_and_cookies() {
     let mut s = page("<p>x</p>");
     // The page is http://example.test/dir/page.html; cookies are shared with the browser.

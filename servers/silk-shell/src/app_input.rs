@@ -6,7 +6,9 @@ pub const CAPACITY:usize=32;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Input { Key(Key), Clipboard(Action), Scroll(sex_pdx::app_scroll::Scroll),
     /// A program window's pixel area changed: `pixel_region::resize_wire(width, height)`.
-    Resize(u64) }
+    Resize(u64),
+    /// Mouse input over a program window: `app_pointer::Pointer::wire`.
+    Pointer(u64) }
 /// `pixel_region::RESIZE_CLASS`, checked equal where Shell is built.
 pub const RESIZE_CLASS:u64=6;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -20,6 +22,19 @@ impl Queue {
         self.items[(self.head+self.len)%CAPACITY]=Some(item);self.len+=1;true
     }
     pub fn front(&self)->Option<Item>{self.items[self.head]}
+    /// A pointer move replaces a move still queued last for the same window, so a
+    /// fast mouse never fills the queue ahead of keys and clicks.
+    pub fn push_move(&mut self,item:Item,is_move:fn(u64)->bool)->bool {
+        if let Input::Pointer(word)=item.input {
+            if self.len>0 && is_move(word) {
+                let last=(self.head+self.len-1)%CAPACITY;
+                if let Some(Item{destination,input:Input::Pointer(old)})=self.items[last] {
+                    if destination==item.destination && is_move(old) { self.items[last]=Some(item); return true; }
+                }
+            }
+        }
+        self.push(item)
+    }
     pub fn pop(&mut self){
         if self.len==0{return;}
         unsafe{core::ptr::write_volatile(&mut self.items[self.head],None)};

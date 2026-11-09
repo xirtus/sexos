@@ -89,6 +89,27 @@ impl Document {
         Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
     }
 
+    /// Takes each element's laid-out box from the browser's layout, for
+    /// `getBoundingClientRect` and hit testing.
+    pub fn set_boxes(&mut self, boxes: &[Option<[i32; 4]>]) {
+        self.rects.clear();
+        self.rects.extend(boxes.iter().map(|b| b.map(|r| (r[0], r[1], r[2], r[3]))));
+    }
+    /// The deepest element whose laid-out box holds the page point (`x`, `y`): what a
+    /// click there lands on. Later elements win ties, as they paint on top.
+    pub fn node_at(&self, x: i32, y: i32) -> Option<NodeId> {
+        let mut best: Option<(usize, NodeId)> = None;
+        for (n, rect) in self.rects.iter().enumerate() {
+            let Some((rx, ry, rw, rh)) = *rect else { continue };
+            if x < rx || y < ry || x >= rx + rw || y >= ry + rh { continue; }
+            if self.dom.tag(n).is_none() { continue; }
+            let mut depth = 0;
+            let mut p = self.dom.nodes[n].parent;
+            while let Some(q) = p { depth += 1; p = self.dom.nodes[q].parent; }
+            if best.map_or(true, |(d, _)| depth >= d) { best = Some((depth, n)); }
+        }
+        best.map(|(_, n)| n)
+    }
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
         let id: NodeId = s?.parse().ok()?;
         (id < self.dom.nodes.len()).then_some(id)
@@ -273,6 +294,11 @@ impl Page for Document {
                 let n = self.node(a.first())?;
                 let (x, y, w, h) = self.rects.get(n).copied().flatten().unwrap_or((0, 0, 0, 0));
                 Some(format!("{x},{y},{w},{h}"))
+            }
+            op::HIT => {
+                let x = a.first()?.parse().ok()?;
+                let y = a.get(1)?.parse().ok()?;
+                self.node_at(x, y).map(|n| format!("{n}"))
             }
             op::LOCATION => Some(self.url.clone()),
             op::CANVAS => {
