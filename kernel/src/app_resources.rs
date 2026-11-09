@@ -349,16 +349,6 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
     let elf:&[u8]=&copy;
     let parsed=image::parse(elf,(app.arena_pages*4096) as u64).map_err(|reason|{
         crate::serial_println!("[app.program.rejected] target={} bytes={} reason={:?}",app.target,len,reason);DENIED})?;
-    // A program's own code may not hold an instruction that rewrites its protection
-    // keys, or it could reach every other program's memory. Code it makes later is
-    // checked the same way when sealed (`code`).
-    for segment in parsed.segments[..parsed.count].iter().filter(|s|s.executable){
-        let from=segment.offset as usize;
-        if let Err(at)=sex_pdx::program_code::check(&elf[from..from+segment.file as usize]){
-            crate::serial_println!("[app.program.rejected] target={} bytes={} reason=key_instruction offset={:#x}",app.target,len,from+at);
-            return Err(DENIED);
-        }
-    }
     let stack_low=app.stack_top.checked_sub(65536).ok_or(DENIED)?;
     // The retired run's leaves are clear and its frames returned, so nothing reads the
     // manifest meanwhile. Frames come zeroed, so nothing of another run survives.
@@ -404,6 +394,25 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
     for index in 0..parsed.rela_count{
         let Some((at,value))=image::relocation(elf,&parsed,index,arena)else{fail(app,count,"relocation");return Err(DENIED)};
         if !write(at,&value.to_le_bytes()){fail(app,count,"relocation");return Err(DENIED)}
+    }
+    // A program's own code may not hold an instruction that rewrites its protection
+    // keys, or it could reach every other program's memory. Checked on the final
+    // bytes, after relocations, across every run of executable pages in address order,
+    // so neither a relocation nor a page boundary can assemble one. Code the program
+    // makes later is checked the same way when sealed (`code`).
+    let mut executable=alloc::vec![false;image_pages];
+    for segment in parsed.segments[..parsed.count].iter().filter(|s|s.executable){
+        for index in segment.window/4096..=(segment.window+segment.memory-1)/4096{executable[index as usize]=true;}
+    }
+    let mut scan=sex_pdx::program_code::Scan::new();
+    for index in 0..image_pages{
+        if !executable[index]||frames[index]==0{scan=sex_pdx::program_code::Scan::new();continue}
+        let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
+        let page=unsafe{core::slice::from_raw_parts((frames[index]+hhdm) as *const u8,4096)};
+        if let Some(at)=scan.feed(page,false){
+            crate::serial_println!("[app.program.rejected] target={} bytes={} reason=key_instruction page={} offset={:#x}",app.target,len,index,at);
+            fail(app,count,"key_instruction");return Err(DENIED);
+        }
     }
     // The stack: at the arena's top, sized by the file (`-z stack-size`) or 1 MiB, with
     // an unmapped guard page below it, so an overflow faults instead of reaching the heap.
@@ -500,18 +509,22 @@ pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
         if pages.iter().enumerate().any(|(i,p)|p.va!=va+(i*4096) as u64){return Err((c::DENIED,0))}
         let leaf=|p:&PrivatePage|unsafe{&*(p.leaf as *const core::sync::atomic::AtomicU64)};
         if op==c::SEAL{
-            let executable=|i:usize|app.pages.get(i).is_some_and(|p|p.expected&NX==0&&i>=app.count-app.grown&&i<app.count);
             let hhdm=crate::HHDM_REQUEST.response().ok_or((c::DENIED,0))?.offset;
             let bytes=|p:&PrivatePage|unsafe{core::slice::from_raw_parts(((p.expected&PHYSICAL_MASK)+hhdm) as *const u8,4096)};
-            // A code neighbour on either side joins the check, so an instruction that
-            // starts in one sealed range and ends in this one is still found.
-            let mut scan=match at.checked_sub(1).filter(|&i|executable(i)){
-                Some(i)=>{let b=bytes(&app.pages[i]);c::Scan::primed([b[4094],b[4095]])}
-                None=>c::Scan::new()};
-            let primed=at>0&&executable(at-1);
+            // A code neighbour on either side, by address, joins the check, so an
+            // instruction that starts in other code and ends in this range (or the other
+            // way) is still found. Below the heap's first page is the image's last page;
+            // above its last is nothing mapped. Other neighbours are heap pages.
+            let heap_from=app.count-app.grown;
+            let code=|p:&PrivatePage|p.expected&NX==0;
+            let below=if first==0{app.pages[..heap_from].iter().find(|p|p.va==va-4096)}else{app.pages.get(at-1)};
+            let below=below.filter(|p|code(p));
+            let above=app.pages[..app.count].get(at+want).filter(|p|code(p)&&p.va==va+(want*4096) as u64);
+            let primed=below.is_some();
+            let mut scan=match below{Some(p)=>{let b=bytes(p);c::Scan::primed([b[4094],b[4095]])}None=>c::Scan::new()};
             for p in pages{if let Some(o)=scan.feed(bytes(p),primed){return Err((c::BLOCKED,o as u64))}}
-            if executable(at+want){
-                let b=bytes(&app.pages[at+want]);
+            if let Some(p)=above{
+                let b=bytes(p);
                 if let Some(o)=scan.feed(&b[..2],primed){return Err((c::BLOCKED,o as u64))}
             }
         }

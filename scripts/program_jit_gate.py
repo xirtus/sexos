@@ -47,7 +47,7 @@ def main():
   fault(first,'w','write_code')
   second=started();fault(second,'e','run_data')
   s=len(t());run('run jitbad')
-  g['wait'](r'\[app\.program\.rejected\] target=\d+ bytes=\d+ reason=key_instruction offset=0x[0-9a-f]+\n',s,120)
+  g['wait'](r'\[app\.program\.rejected\] target=\d+ bytes=\d+ reason=key_instruction page=\d+ offset=0x[0-9a-f]+\n',s,120)
   third=started()
   s=len(t());g['focus'](SURFACE[third['target']]);time.sleep(.5);q.key('f11')
   g['wait'](rf'\[jit\.closed\] target={third["target"]} task={third["task"]}\n',s,60)
