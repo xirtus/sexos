@@ -170,3 +170,27 @@ fn bindings_cover_the_hyprland_and_kde_basics() {
     assert_eq!(binding(code::DIGIT_9, m), Some(WmAction::Workspace(8)));
     assert_eq!(binding(code::DOWN_USB, m), Some(WmAction::Focus(Dir::Down)));
 }
+
+#[test]
+fn overlapping_chords_and_ps2_repeats_stay_with_the_desktop() {
+    let mut c = Chords::new();
+    assert_eq!(c.event(code::SUPER_LEFT, 1), Chord::Consume);
+    assert_eq!(c.event(code::L, 1), Chord::Act(WmAction::Focus(Dir::Right)));
+    // PS/2 typematic repeat: another make byte, value 1.
+    assert_eq!(c.event(code::L, 1), Chord::Act(WmAction::Focus(Dir::Right)));
+    assert_eq!(c.event(code::H, 1), Chord::Act(WmAction::Focus(Dir::Left)));
+    assert_eq!(c.event(code::H, 0), Chord::Consume);
+    assert_eq!(c.event(code::SUPER_LEFT, 0), Chord::Consume);
+    // L still held after Super went up: its repeats and release never reach a program.
+    assert_eq!(c.event(code::L, 1), Chord::Consume);
+    assert_eq!(c.event(code::L, 2), Chord::Consume);
+    assert_eq!(c.event(code::L, 0), Chord::Consume);
+    assert_eq!(c.event(code::L, 1), Chord::Pass);
+    // A held non-repeating chord does its action once.
+    assert_eq!(c.event(code::L, 0), Chord::Pass);
+    assert_eq!(c.event(code::SUPER_LEFT, 1), Chord::Consume);
+    assert_eq!(c.event(code::Q, 1), Chord::Act(WmAction::Close));
+    assert_eq!(c.event(code::Q, 1), Chord::Consume);
+    assert_eq!(c.event(code::Q, 0), Chord::Consume);
+    assert_eq!(c.event(code::SUPER_LEFT, 0), Chord::Consume);
+}

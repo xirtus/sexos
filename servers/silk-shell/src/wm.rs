@@ -363,14 +363,16 @@ pub struct Chords {
     ctrl: u8,
     /// A key went with this Super press, so releasing Super is not a tap.
     used: bool,
-    captured: Option<(u8, Option<WmAction>)>,
+    /// Every key pressed with Super that is still held, with its action, so
+    /// overlapping chords never let a held key's repeats or release leak.
+    captured: [Option<(u8, Option<WmAction>)>; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chord { Pass, Consume, Act(WmAction) }
 
 impl Chords {
-    pub const fn new() -> Self { Self { super_down: 0, shift: 0, ctrl: 0, used: false, captured: None } }
+    pub const fn new() -> Self { Self { super_down: 0, shift: 0, ctrl: 0, used: false, captured: [None; 4] } }
     pub fn super_held(&self) -> bool { self.super_down != 0 }
     pub fn event(&mut self, key: u8, value: u64) -> Chord {
         let bit = |k: u8| -> u8 { if k == code::SUPER_LEFT || k == code::SHIFT_LEFT || k == code::CTRL_LEFT { 1 } else { 2 } };
@@ -382,7 +384,7 @@ impl Chords {
                     1 => { if self.super_down == 0 { self.used = false; } self.super_down |= bit(key); }
                     0 => {
                         self.super_down &= !bit(key);
-                        if self.super_down == 0 && !core::mem::replace(&mut self.used, true) && self.captured.is_none() {
+                        if self.super_down == 0 && !core::mem::replace(&mut self.used, true) && self.captured.iter().all(|c| c.is_none()) {
                             return Chord::Act(WmAction::Launcher);
                         }
                     }
@@ -392,19 +394,21 @@ impl Chords {
             }
             _ => {}
         }
-        if let Some((held, action)) = self.captured {
-            if held == key {
-                return match value {
-                    0 => { self.captured = None; Chord::Consume }
-                    2 => match action { Some(a) if repeats(a) && self.super_down != 0 => Chord::Act(a), _ => Chord::Consume },
-                    _ => Chord::Consume,
-                };
-            }
+        // PS/2 typematic repeats arrive as further presses (value 1), USB ones
+        // may arrive as value 2: both are repeats of a captured key.
+        if let Some(i) = self.captured.iter().position(|c| matches!(c, Some((k, _)) if *k == key)) {
+            let action = self.captured[i].and_then(|c| c.1);
+            return match value {
+                0 => { self.captured[i] = None; Chord::Consume }
+                _ => match action { Some(a) if repeats(a) && self.super_down != 0 => Chord::Act(a), _ => Chord::Consume },
+            };
         }
         if self.super_down == 0 || value != 1 { return Chord::Pass; }
         self.used = true;
         let action = binding(key, Mods { shift: self.shift != 0, ctrl: self.ctrl != 0 });
-        self.captured = Some((key, action));
+        // Four held chord keys at once is plenty; a fifth replaces the oldest slot.
+        let slot = self.captured.iter().position(|c| c.is_none()).unwrap_or(0);
+        self.captured[slot] = Some((key, action));
         match action { Some(a) => Chord::Act(a), None => Chord::Consume }
     }
 }
