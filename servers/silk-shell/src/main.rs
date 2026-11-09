@@ -147,6 +147,28 @@ unsafe fn clipboard_poll(){
         if status==0{clipboard::Admission::Accepted}else if status==sex_pdx::ERR_SERVICE_NOT_READY{clipboard::Admission::Full}else{clipboard::Admission::Rejected(status)}
     });
 }
+/// The newest size each program window has not yet been told, until the input queue
+/// takes it: a full queue delays a resize but never loses it.
+static mut RESIZE_PENDING: [Option<(u64, u32, u32)>; 16] = [None; 16];
+unsafe fn program_resize_note(sid: u64, w: u32, h: u32) {
+    if program_participant(sid).is_none() { return; }
+    let pending = &mut *core::ptr::addr_of_mut!(RESIZE_PENDING);
+    let slot = pending.iter().position(|p| matches!(p, Some((s, _, _)) if *s == sid))
+        .or_else(|| pending.iter().position(|p| p.is_none()));
+    match slot {
+        Some(i) => pending[i] = Some((sid, w, h)),
+        None => sex_pdx::serial_record!("[shell.program.resize.full] sid={} pending=16", sid),
+    }
+}
+unsafe fn program_resize_flush() {
+    let pending = &mut *core::ptr::addr_of_mut!(RESIZE_PENDING);
+    for entry in pending.iter_mut() {
+        let Some((sid, w, h)) = *entry else { continue };
+        let Some(destination) = program_participant(sid) else { *entry = None; continue };
+        let (aw, ah) = sex_pdx::pixel_region::area(w, h);
+        if APP_INPUT.push(app_input::Item { destination, input: app_input::Input::Resize(aw, ah) }) { *entry = None; }
+    }
+}
 unsafe fn app_input_poll(){
     // Admission of an earlier Intent precedes later key events. The payload
     // transaction itself never blocks ordinary typing or Close.
@@ -8458,17 +8480,7 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
 /// One window's place on screen: Shell's own record, then Display, then the
 /// placeholder fills some built-in frames carry.
 unsafe fn apply_window_geometry(sid: u64, rx: i32, ry: i32, rw: u32, rh: u32) {
-    let before = get_surface_bounds(sid).map(|(_, _, w, h)| (w, h));
     update_local_geometry(sid, rx, ry, rw, rh);
-    // A program learns its new pixel area as an input event, after the keys before it.
-    if before != Some((rw, rh)) {
-        if let Some(destination) = program_participant(sid) {
-            let (w, h) = sex_pdx::pixel_region::area(rw, rh);
-            if !APP_INPUT.push(app_input::Item { destination, input: app_input::Input::Resize(w, h) }) {
-                sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0", destination.subject.pd, destination.subject.task);
-            }
-        }
-    }
     match sid {
         SURFACE_ID_APP => {
             if let Some(w) = WINDOWS.get_mut(1) {
@@ -20487,6 +20499,9 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
 /// updated after resize operations).
 unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32) {
     if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(surface_id)) {return;}
+    // Every move, tile, maximize and resize passes here: a program window that
+    // changed size owes its program a resize event.
+    if get_surface_bounds(surface_id).map(|(_,_,bw,bh)|(bw,bh)) != Some((w,h)) { program_resize_note(surface_id, w, h); }
     if let Some(e) = APP_CUSTODY.iter_mut().flatten().find(|e| (e.surface == surface_id || e.is_successor_frame(surface_id)) && !e.dead) { e.bounds = Some((x,y,w,h)); }
     native_child_geometry(surface_id,x,y,w,h);
 
@@ -24491,7 +24506,7 @@ pub extern "C" fn _start() -> ! {
         }
         unsafe { program_rebirth_poll(); }
         unsafe { record_spawn_poll(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); program_resize_flush(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
