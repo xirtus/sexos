@@ -88,8 +88,8 @@ struct Browser {
     sheets: Vec<String>,
     /// When the page's next timer or animation frame is due, in ticks.
     timer: Option<u64>,
-    /// When the page was opened, in ticks: CSS animations run from here.
-    loaded_at: u64,
+    /// When each CSS animation on the page started.
+    timeline: sex_html::Timeline,
     /// A CSS animation is running: style and draw the page again soon.
     animating: bool,
     /// The page's Canvas 2D surfaces.
@@ -298,7 +298,7 @@ impl Browser {
         });
         self.sheets = sheets;
         self.timer = None;
-        self.loaded_at = sex_pdx::get_ticks();
+        self.timeline = sex_html::Timeline::default();
         let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
         doc.measure = sex_web::canvas::measure_css;
         doc.cookies = Some(self.jar.clone());
@@ -421,7 +421,7 @@ impl Browser {
     fn relayout(&mut self) {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let (styles, animating) = sex_html::styles_at(&doc.dom, &sheet_refs, W, H - BAR, sex_pdx::get_ticks().saturating_sub(self.loaded_at));
+        let (styles, animating) = sex_html::styles_at(&doc.dom, &sheet_refs, W, H - BAR, sex_pdx::get_ticks(), &mut self.timeline);
         self.animating = animating;
         self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
             || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
@@ -720,7 +720,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, loaded_at: 0, animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

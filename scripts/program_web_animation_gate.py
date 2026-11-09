@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CSS animations run on their own: a page with a `@keyframes` animation and no script
-is drawn again and again while it runs, ends on its last frame (fill-mode forwards),
+is drawn again and again while it runs (passing through in-between colours and
+positions), ends on its last frame (fill-mode forwards),
 and then stops drawing."""
 import argparse,http.server,os,re,shutil,threading,time
 from PIL import Image
@@ -42,12 +43,19 @@ def main():
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
-  # Two seconds of animation, then some slack for a slow guest.
-  time.sleep(8)
-  ran=frames(s,target);assert ran>=10,f'only {ran} frames drawn while animating'
-  s2=len(t());time.sleep(3);after=frames(s2,target);assert after==0,f'{after} frames drawn after the animation ended'
+  g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} ',s,60);time.sleep(.5)
   x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
   ox,oy=x+8,y+36+BAR  # the page's top-left on screen
+  # Four seconds of animation: on the way the box is part red, part blue, and moving.
+  mixed=0;deadline=time.time()+7
+  while time.time()<deadline:
+   shot=a.out/'during.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.3)
+   r,_,b=Image.open(shot).convert('RGB').getpixel((ox+150,oy+40))
+   mixed+=r>40 and b>40
+  assert mixed>=1,'never saw the box between its first and last frame'
+  time.sleep(2)
+  ran=frames(s,target);assert ran>=30,f'only {ran} frames drawn while animating'
+  s2=len(t());time.sleep(3);after=frames(s2,target);assert after==0,f'{after} frames drawn after the animation ended'
   shot=a.out/'animate.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   img=Image.open(shot).convert('RGB')
   img.crop((x+8,y+36,x+8+410,y+36+330)).save(a.out/'animate.png')
@@ -56,6 +64,6 @@ def main():
   assert min(left)>200,('nothing left behind',left)
   s3=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s3,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'frames':ran})
+  print({'ok':True,'frames':ran,'between':mixed})
  finally:g['stop']()
 if __name__=='__main__':main()

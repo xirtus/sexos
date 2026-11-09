@@ -302,8 +302,14 @@ pub struct Cascade<'a> {
     by_class: BTreeMap<&'a str, Vec<(u16, u32, u16)>>,
     by_tag: BTreeMap<&'a str, Vec<(u16, u32, u16)>>,
     universal: Vec<(u16, u32, u16)>,
-    /// Milliseconds since the page loaded, for animations.
+    /// The time now in milliseconds, for animations.
     pub now_ms: u64,
+    /// When each element's animation started (by element and animation name); an
+    /// animation not in the map starts at `start_default`.
+    pub starts: core::cell::RefCell<BTreeMap<(NodeId, String), u64>>,
+    pub start_default: u64,
+    /// The animations styled in this pass, with their starts.
+    pub seen: core::cell::RefCell<BTreeMap<(NodeId, String), u64>>,
     /// Set when some element is animating (the page should be styled again soon).
     pub animating: core::cell::Cell<bool>,
 }
@@ -311,7 +317,7 @@ pub struct Cascade<'a> {
 impl<'a> Cascade<'a> {
     /// `sheets[0]` is the user-agent sheet; the rest are the page's, in document order.
     pub fn new(sheets: Vec<&'a Sheet>) -> Self {
-        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, animating: core::cell::Cell::new(false) };
+        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, starts: Default::default(), start_default: 0, seen: Default::default(), animating: core::cell::Cell::new(false) };
         for (si, sheet) in c.sheets.iter().enumerate() {
             for (ri, rule) in sheet.rules.iter().enumerate() {
                 for (xi, sel) in rule.selectors.iter().enumerate() {
@@ -402,9 +408,30 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
     for d in &ordered { apply(&mut style, d, &ctx, false); }
     if let Some(a) = style.animation.clone() {
         if let Some(frames) = cascade.sheets.iter().rev().find_map(|sh| sh.keyframes.iter().rev().find(|(n, _)| *n == a.name)).map(|(_, f)| f) {
-            if let Some(decls) = animate(&a, frames, cascade.now_ms, &cascade.animating) {
+            let key = (node, a.name.clone());
+            let start = cascade.starts.borrow().get(&key).copied().unwrap_or(cascade.start_default);
+            cascade.seen.borrow_mut().insert(key, start);
+            // A frame that leaves a property out takes it from the element's own style.
+            let underlying = |name: &str, other: &str| -> String {
+                if let Some(d) = ordered.iter().rev().find(|d| d.name == name) { return d.value.clone(); }
+                match name {
+                    "color" => hex(style.color),
+                    "background" | "background-color" => hex(style.background),
+                    "opacity" => alloc::format!("{}", style.opacity as f32 / 255.0),
+                    _ if name.starts_with("margin-") || name.starts_with("padding-") => {
+                        let side = ["top", "right", "bottom", "left"].iter().position(|s| name.ends_with(s));
+                        let lens = if name.starts_with("margin-") { &style.margin } else { &style.padding };
+                        match side.map(|i| lens[i]) { Some(Len::Px(px)) => alloc::format!("{px}px"), _ => zeroed(other) }
+                    }
+                    // Lengths and transforms start from zero.
+                    _ => zeroed(other),
+                }
+            };
+            if let Some(decls) = animate(&a, frames, cascade.now_ms.saturating_sub(start), &cascade.animating, &underlying) {
                 for d in &decls { if d.name == "font-size" { apply(&mut style, d, &ctx, true); } }
                 for d in &decls { apply(&mut style, d, &ctx, false); }
+                // Animations sit below !important declarations.
+                for d in ordered.iter().filter(|d| d.important) { apply(&mut style, d, &ctx, false); }
             }
         }
     }
@@ -669,7 +696,7 @@ fn timing(v: &str) -> Option<u32> {
 
 /// The declarations animation `a` contributes at `now_ms`, or None when it is not
 /// in effect. Sets `animating` while it is still running.
-fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, animating: &core::cell::Cell<bool>) -> Option<Vec<Declaration>> {
+fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, animating: &core::cell::Cell<bool>, underlying: &dyn Fn(&str, &str) -> String) -> Option<Vec<Declaration>> {
     if frames.is_empty() || a.duration_ms == 0 { return None; }
     let t = now_ms as i64 - a.delay_ms as i64;
     let dur = a.duration_ms as i64;
@@ -690,8 +717,8 @@ fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, anima
     };
     let mut p = frac as i32;
     if (a.alternate && iter % 2 == 1) != a.reverse { p = 1000 - p; }
-    let x = p as f32 / 1000.0;
-    let eased = match a.timing {
+    // Timing applies within each pair of keyframes.
+    let ease = |x: f32| match a.timing {
         0 => x,
         2 => x * x,
         3 => 1.0 - (1.0 - x) * (1.0 - x),
@@ -699,8 +726,8 @@ fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, anima
         n if n > 100 => { let k = (n - 100) as f32; ((x * k) as i32) as f32 / k }
         _ => x,
     };
-    let p = (eased * 1000.0) as i32;
-    // Each property between the frames around p that set it.
+    // Each property between the frames around p that set it; 0% and 100% default to
+    // the element's own value.
     let mut names: Vec<&str> = Vec::new();
     for (_, ds) in frames { for d in ds { if !names.contains(&d.name.as_str()) { names.push(&d.name); } } }
     let mut out = Vec::new();
@@ -710,11 +737,13 @@ fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, anima
         }
         let before = frames.iter().rev().filter(|f| f.0 <= p).find_map(|f| at(f, name));
         let after = frames.iter().filter(|f| f.0 >= p).find_map(|f| at(f, name));
-        let value = match (before, after) {
-            (Some((a0, d0)), Some((a1, d1))) if a1 > a0 => interpolate(&d0.value, &d1.value, (p - a0) as f32 / (a1 - a0) as f32),
-            (Some((_, d)), _) | (None, Some((_, d))) => d.value.clone(),
+        let (a0, v0, a1, v1) = match (before, after) {
+            (Some((a0, d0)), Some((a1, d1))) => (a0, d0.value.clone(), a1, d1.value.clone()),
+            (None, Some((a1, d1))) => (0, underlying(name, &d1.value), a1, d1.value.clone()),
+            (Some((a0, d0)), None) => (a0, d0.value.clone(), 1000, underlying(name, &d0.value)),
             (None, None) => continue,
         };
+        let value = if a1 > a0 { interpolate(&v0, &v1, ease((p - a0) as f32 / (a1 - a0) as f32)) } else { v0 };
         out.push(Declaration { name: String::from(name), value, important: false });
     }
     Some(out)
@@ -757,6 +786,23 @@ fn interpolate(a: &str, b: &str, t: f32) -> String {
         return out;
     }
     String::from(if t < 0.5 { a } else { b })
+}
+
+/// `#rrggbbaa` for a 0xAARRGGBB colour.
+fn hex(c: u32) -> String { alloc::format!("#{:06x}{:02x}", c & 0xFFFFFF, c >> 24) }
+
+/// `v` with every number zero: the start of `translateX(40px)` is `translateX(0px)`.
+fn zeroed(v: &str) -> String {
+    if parse_color(v).is_some() { return String::from("transparent"); }
+    let mut out = String::new();
+    let mut digits = false;
+    let b = v.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        let num = c.is_ascii_digit() || c == b'.' || (c == b'-' && b.get(i + 1).is_some_and(|n| n.is_ascii_digit() || *n == b'.'));
+        let in_word = i > 0 && !digits && (b[i - 1].is_ascii_alphabetic() || b[i - 1] == b'#');
+        if num && !in_word { if !digits { out.push('0'); } digits = true; } else { digits = false; out.push(c as char); }
+    }
+    out
 }
 
 fn round(x: f32) -> f32 { if x >= 0.0 { (x + 0.5) as i64 as f32 } else { (x - 0.5) as i64 as f32 } }

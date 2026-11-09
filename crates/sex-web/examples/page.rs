@@ -67,7 +67,7 @@ fn main() {
     let mut canvases = sex_web::canvas::Canvases::new();
     let lay = |doc: &sex_js::Document, fonts: &mut Fonts| {
         let at_ms = std::env::var("PAGE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-        let styles = sex_html::styles_at(&doc.dom, &sheet_refs, w, h - bar_h, at_ms).0;
+        let styles = sex_html::styles_at(&doc.dom, &sheet_refs, w, h - bar_h, at_ms, &mut sex_html::Timeline::starting_at(0)).0;
         let page = sex_html::layout::layout_in(&doc.dom, &styles, w, h - bar_h, fonts);
         sex_web::svg::draw_inline(&page, &doc.dom, &styles, fonts);
         page

@@ -393,7 +393,7 @@ fn keyframe_animations_interpolate_over_time() {
         <div id=a>a</div><div id=b>b</div><div id=c>c</div>";
     let dom = parse::parse(html);
     let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
-    let at = |ms: u64| sex_html::styles_at(&dom, &[], 400, 300, ms);
+    let at = |ms: u64| sex_html::styles_at(&dom, &[], 400, 300, ms, &mut sex_html::Timeline::starting_at(0));
     // Before the delay: a has no backwards fill; c does (its first frame).
     let (s, running) = at(100);
     assert!(running);
@@ -417,8 +417,48 @@ fn keyframe_animations_interpolate_over_time() {
     assert_eq!(s[by_id("a")].as_ref().unwrap().margin[3], style::Len::Px(100));
     assert_eq!(s[by_id("c")].as_ref().unwrap().margin[3], style::Len::Px(7));
     // No animation, or a finished one: not running.
-    assert!(!sex_html::styles_at(&parse::parse("<p>x</p>"), &[], 400, 300, 10).1);
+    let at0 = |dom: &sex_html::dom::Dom, ms| sex_html::styles_at(dom, &[], 400, 300, ms, &mut sex_html::Timeline::starting_at(0));
+    assert!(!at0(&parse::parse("<p>x</p>"), 10).1);
     let done = parse::parse("<style>@keyframes k { to { opacity: 0 } } p { animation: k 1s }</style><p>x</p>");
-    assert!(sex_html::styles_at(&done, &[], 400, 300, 500).1);
-    assert!(!sex_html::styles_at(&done, &[], 400, 300, 1500).1);
+    assert!(at0(&done, 500).1);
+    assert!(!at0(&done, 1500).1);
+}
+
+#[test]
+fn keyframes_fill_in_from_the_element_ease_per_interval_and_yield_to_important() {
+    let by_id = |dom: &sex_html::dom::Dom, id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    let html = "<style>@keyframes go { to { margin-left: 100px; color: #0000ff; transform: translateX(40px) } }
+        @keyframes mid { 0% { margin-left: 0px } 50% { margin-left: 100px } 100% { margin-left: 200px } }
+        #a { margin: 20px; color: #ff0000; animation: go 1s linear }
+        #b { animation: mid 1s ease-in }
+        #c { color: #00ff00 !important; animation: go 1s linear }</style>
+        <div id=a>a</div><div id=b>b</div><div id=c>c</div>";
+    let dom = parse::parse(html);
+    let (s, _) = sex_html::styles_at(&dom, &[], 400, 300, 500, &mut sex_html::Timeline::starting_at(0));
+    let a = s[by_id(&dom, "a")].as_ref().unwrap();
+    // Half-way from the element's own 20px, red and no translation.
+    assert_eq!(a.margin[3], style::Len::Px(60));
+    assert_eq!(a.color & 0xFFFFFF, 0x800080);
+    assert_eq!(a.translate, Some((style::Len::Px(20), style::Len::Px(0))));
+    // Each keyframe is reached on time whatever the easing.
+    assert_eq!(s[by_id(&dom, "b")].as_ref().unwrap().margin[3], style::Len::Px(100));
+    assert_eq!(s[by_id(&dom, "c")].as_ref().unwrap().color & 0xFFFFFF, 0x00FF00);
+}
+
+#[test]
+fn animations_start_when_they_first_apply() {
+    let sheet = "@keyframes go { from { margin-left: 0px } to { margin-left: 100px } } .on { animation: go 1s linear }";
+    let plain = parse::parse(&format!("<style>{sheet}</style><div id=a>a</div>"));
+    let on = parse::parse(&format!("<style>{sheet}</style><div id=a class=on>a</div>"));
+    let a = plain.descendants(0).into_iter().find(|&n| plain.attr(n, "id") == Some("a")).unwrap();
+    let mut timeline = sex_html::Timeline::default();
+    assert!(!sex_html::styles_at(&plain, &[], 400, 300, 1000, &mut timeline).1);
+    // The class arrives at 5 s: the animation runs from then.
+    let (s, running) = sex_html::styles_at(&on, &[], 400, 300, 5000, &mut timeline);
+    assert!(running);
+    assert_eq!(s[a].as_ref().unwrap().margin[3], style::Len::Px(0));
+    assert_eq!(sex_html::styles_at(&on, &[], 400, 300, 5500, &mut timeline).0[a].as_ref().unwrap().margin[3], style::Len::Px(50));
+    // Removed, then back: it starts over.
+    sex_html::styles_at(&plain, &[], 400, 300, 6000, &mut timeline);
+    assert_eq!(sex_html::styles_at(&on, &[], 400, 300, 9000, &mut timeline).0[a].as_ref().unwrap().margin[3], style::Len::Px(0));
 }
