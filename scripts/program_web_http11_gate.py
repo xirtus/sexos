@@ -100,9 +100,11 @@ def main():
   # Twelve 1.5 s replies one after another take 18 s; side by side they overlap. The
   # network service makes flows as they are asked for, so all twelve travel at once.
   assert LIVE[1]==12,('requests at once',LIVE[1])
+  beside=g['wait'](r'\[web.console\] level=0 tube beside stuck ([^\n]*)\n',s,300)
+  assert beside[1].startswith('slow0 ms=') and int(beside[1].split('ms=')[1])<5000,beside[1]
   made=re.findall(r'\[net.open.flows\] made=(\d+)',t());assert made and int(made[-1])>=12,made
   assert 'gzip' in SEEN.get('accept-encoding',''),SEEN
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1]})
+  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1],'beside_stuck':beside[1]})
  finally:g['stop']()
 if __name__=='__main__':main()

@@ -373,73 +373,6 @@ pub mod net {
             })
         }
     }
-    /// Calls `kind` until the service stops answering `BUSY` (its flows or its resolver
-    /// are someone else's for now), for up to 30 seconds.
-    fn call_patiently(window: &mut Window, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
-        let began = sex_pdx::get_ticks();
-        loop {
-            let r = call_on(window, flow, kind, value)?;
-            if r.0 != w::BUSY || sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Ok(r); }
-            pause();
-        }
-    }
-    /// Opens a flow to `host:port`, encrypted when `tls`, and gives back the region the
-    /// flow's bytes pass through.
-    fn open(window: &mut Window, host: &[u8], port: u16, tls: bool, patient: bool) -> Result<(Flow, &'static mut [u8]), Error> {
-        if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
-        let region = region()?;
-        loop { let r = call(window, w::UP, 0)?; ok(r)?; if r.0 == w::OK { break; } pause(); }
-        let numeric = {
-            let mut a = [0u8; 4]; let mut parts = host.split(|b| *b == b'.'); let mut good = true;
-            for slot in a.iter_mut() { match parts.next().and_then(|p| core::str::from_utf8(p).ok()?.parse::<u8>().ok()) { Some(v) => *slot = v, None => good = false } }
-            (good && parts.next().is_none()).then_some(a)
-        };
-        let address = match numeric {
-            Some(a) => a,
-            None => {
-                region[..host.len()].copy_from_slice(host);
-                ok(call_patiently(window, Flow(0), w::RESOLVE, host.len() as u64)?)?;
-                loop { let r = call(window, w::RESOLVE, 0)?; ok(r)?; if r.0 == w::OK { break; } pause(); }
-                [region[0], region[1], region[2], region[3]]
-            }
-        };
-        let flow = take_flow()?;
-        let fail = |window: &mut Window, e: Error| { close(window, flow); Err(e) };
-        match (if patient { call_patiently(window, flow, w::CONNECT, w::address_port(address, port)) } else { call_on(window, flow, w::CONNECT, w::address_port(address, port)) }).and_then(ok) { Ok(_) => {}, Err(e) => return fail(window, e) }
-        loop {
-            let state = match call_on(window, flow, w::STATE, 0).and_then(ok) { Ok(s) => s, Err(e) => return fail(window, e) };
-            if state == w::STATE_OPEN { break; }
-            if state != w::STATE_OPENING { return fail(window, Error::Connect); }
-            pause();
-        }
-        if tls {
-            region[..host.len()].copy_from_slice(host);
-            if let Err(e) = call_on(window, flow, w::TLS_START, host.len() as u64).and_then(ok) { return fail(window, e); }
-            loop {
-                match call_on(window, flow, w::TLS_STAGE, 0).and_then(ok) {
-                    Ok(w::TLS_READY) => break,
-                    Ok(w::TLS_HANDSHAKE) => pause(),
-                    Ok(w::TLS_FAILED_CERTIFICATE) => return fail(window, Error::Certificate),
-                    Ok(_) => return fail(window, Error::Secure),
-                    Err(e) => return fail(window, e),
-                }
-            }
-        }
-        Ok((flow, region))
-    }
-    /// Sends all of `bytes` on the open flow, then says the request is whole.
-    fn send_all(window: &mut Window, flow: Flow, region: &mut [u8], bytes: &[u8], tls: bool) -> Result<(), Error> {
-        let mut sent = 0;
-        while sent < bytes.len() {
-            let n = (bytes.len() - sent).min(region.len());
-            region[..n].copy_from_slice(&bytes[sent..sent + n]);
-            let took = ok(call_on(window, flow, w::SEND, n as u64)?)? as usize;
-            sent += took;
-            if took < n { pause(); }
-        }
-        if tls { ok(call_on(window, flow, w::FINISH_REQUEST, 0)?)?; }
-        Ok(())
-    }
     /// A decoded HTTP/1.1 reply: its head, and the body unframed and decompressed.
     pub struct Response { pub head: sex_fetch::Head, pub body: alloc::vec::Vec<u8> }
 
@@ -452,28 +385,128 @@ pub mod net {
         flow: Flow, get_head: bool, raw: alloc::vec::Vec<u8>, cap: usize, max: usize,
         head_end: Option<usize>, framing: Option<sex_fetch::Framing>, chunks: sex_fetch::ChunkScan,
         began: u64, start: u64, idle: u32, calls: u32, empty: u32, peer_done: bool, whole: bool,
+        setup: Setup, host: alloc::string::String, port: u16, tls: bool, address: [u8; 4], out: alloc::vec::Vec<u8>,
+    }
+    /// Where an exchange is on its way to sending: each `poll` makes one call, so a slow
+    /// name, connection or handshake never holds up the others.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Setup { Up, Resolve { asked: bool }, Connect { asked: bool }, Tls { asked: bool }, Send { at: usize }, Done }
+    /// The exchange of this program whose question the resolver is answering: it answers
+    /// one question per caller at a time.
+    static mut RESOLVING: Option<Flow> = None;
+    /// Names this program has looked up lately: name, address, when.
+    static mut NAMES: alloc::vec::Vec<(alloc::string::String, [u8; 4], u64)> = alloc::vec::Vec::new();
+    const NAME_KEEP_TICKS: u64 = 300_000;
+    fn remembered(host: &str) -> Option<[u8; 4]> {
+        let now = sex_pdx::get_ticks();
+        let names = unsafe { &mut *core::ptr::addr_of_mut!(NAMES) };
+        names.retain(|(_, _, at)| now.saturating_sub(*at) < NAME_KEEP_TICKS);
+        names.iter().find(|(n, _, _)| n == host).map(|(_, a, _)| *a)
+    }
+    fn remember(host: &str, address: [u8; 4]) {
+        let names = unsafe { &mut *core::ptr::addr_of_mut!(NAMES) };
+        names.retain(|(n, _, _)| n != host);
+        if names.len() >= 256 { names.remove(0); }
+        names.push((alloc::string::String::from(host), address, sex_pdx::get_ticks()));
+    }
+    fn numeric(host: &[u8]) -> Option<[u8; 4]> {
+        let mut a = [0u8; 4]; let mut parts = host.split(|b| *b == b'.');
+        for slot in a.iter_mut() { *slot = parts.next().and_then(|p| core::str::from_utf8(p).ok()?.parse::<u8>().ok())?; }
+        parts.next().is_none().then_some(a)
     }
     impl Exchange {
-        /// Opens a flow, sends `req` (with `cookie`, the jar's value for its address) and
-        /// returns once it is sent. Bodies larger than `max` after decoding fail. While
-        /// every flow of the service is held, this fails at once with `Busy`, so the
-        /// caller can finish what it has going and try again.
-        pub fn start(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Exchange, Error> { Self::begin(window, req, cookie, max, false) }
-        /// `start`, but waiting up to 30 seconds for a flow while others hold them all.
-        pub fn start_patiently(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Exchange, Error> { Self::begin(window, req, cookie, max, true) }
-        fn begin(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize, patient: bool) -> Result<Exchange, Error> {
+        /// Takes a flow number for `req` (with `cookie`, the jar's value for its address)
+        /// and returns at once: `poll` resolves, connects, encrypts, sends and then reads,
+        /// one call per step. Bodies larger than `max` after decoding fail.
+        pub fn start(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Exchange, Error> {
+            let _ = window;
             let url = sex_fetch::Url::parse(req.url).map_err(|_| Error::Address)?;
             let bytes = sex_fetch::encode(req, &url, cookie).map_err(|_| Error::Address)?;
-            let (flow, region) = open(window, url.host.as_bytes(), url.port, url.secure, patient)?;
-            if let Err(e) = send_all(window, flow, region, &bytes, url.secure) { close(window, flow); return Err(e); }
             // Room for the head, the framing and the body; decoding checks `max` again.
             let cap = max.saturating_add(sex_fetch::HEAD_MAX).saturating_add(max / 8 + 4096);
-            Ok(Self::sent(flow, req.method.eq_ignore_ascii_case("HEAD"), cap, max))
+            Self::raw(&url.host, url.port, url.secure, bytes, req.method.eq_ignore_ascii_case("HEAD"), cap, max)
         }
-        fn sent(flow: Flow, get_head: bool, cap: usize, max: usize) -> Exchange {
+        /// Kept for callers written before setup became stepwise; the same as `start`.
+        pub fn start_patiently(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Exchange, Error> { Self::start(window, req, cookie, max) }
+        fn raw(host: &str, port: u16, tls: bool, out: alloc::vec::Vec<u8>, get_head: bool, cap: usize, max: usize) -> Result<Exchange, Error> {
+            if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
+            let flow = take_flow()?;
             let now = sex_pdx::get_ticks();
-            Exchange { flow, get_head, raw: alloc::vec::Vec::new(), cap, max,
-                head_end: None, framing: None, chunks: sex_fetch::ChunkScan::new(), began: now, start: now, idle: 0, calls: 0, empty: 0, peer_done: false, whole: false }
+            Ok(Exchange { flow, get_head, raw: alloc::vec::Vec::new(), cap, max,
+                head_end: None, framing: None, chunks: sex_fetch::ChunkScan::new(), began: now, start: now, idle: 0, calls: 0, empty: 0, peer_done: false, whole: false,
+                setup: Setup::Up, host: alloc::string::String::from(host), port, tls, address: [0; 4], out })
+        }
+        /// One step of setting up: a single call to the network service.
+        fn set_up(&mut self, window: &mut Window) -> Result<(), Error> {
+            let flow = self.flow;
+            let mut moved = true;
+            match self.setup {
+                Setup::Up => {
+                    let r = call(window, w::UP, 0)?; ok(r)?;
+                    if r.0 == w::OK {
+                        let known = numeric(self.host.as_bytes()).or_else(|| remembered(&self.host));
+                        self.setup = match known { Some(a) => { self.address = a; Setup::Connect { asked: false } } None => Setup::Resolve { asked: false } };
+                    } else { moved = false; }
+                }
+                Setup::Resolve { asked: false } => {
+                    let held = unsafe { *core::ptr::addr_of!(RESOLVING) };
+                    if held.is_some_and(|f| f != flow) { moved = false; }
+                    else {
+                        region()?[..self.host.len()].copy_from_slice(self.host.as_bytes());
+                        let r = call(window, w::RESOLVE, self.host.len() as u64)?;
+                        if r.0 == w::BUSY { moved = false; } else { ok(r)?; unsafe { RESOLVING = Some(flow); } self.setup = Setup::Resolve { asked: true }; }
+                    }
+                }
+                Setup::Resolve { asked: true } => {
+                    let r = call(window, w::RESOLVE, 0)?;
+                    if r.0 == w::WAIT { moved = false; }
+                    else {
+                        unsafe { RESOLVING = None; }
+                        ok(r)?;
+                        let region = region()?;
+                        self.address = [region[0], region[1], region[2], region[3]];
+                        remember(&self.host, self.address);
+                        self.setup = Setup::Connect { asked: false };
+                    }
+                }
+                Setup::Connect { asked: false } => {
+                    let r = call_on(window, flow, w::CONNECT, w::address_port(self.address, self.port))?;
+                    if r.0 == w::BUSY { moved = false; } else { ok(r)?; self.setup = Setup::Connect { asked: true }; }
+                }
+                Setup::Connect { asked: true } => match ok(call_on(window, flow, w::STATE, 0)?)? {
+                    w::STATE_OPEN => self.setup = if self.tls { Setup::Tls { asked: false } } else { Setup::Send { at: 0 } },
+                    w::STATE_OPENING => moved = false,
+                    _ => return Err(Error::Connect),
+                },
+                Setup::Tls { asked: false } => {
+                    region()?[..self.host.len()].copy_from_slice(self.host.as_bytes());
+                    ok(call_on(window, flow, w::TLS_START, self.host.len() as u64)?)?;
+                    self.setup = Setup::Tls { asked: true };
+                }
+                Setup::Tls { asked: true } => match ok(call_on(window, flow, w::TLS_STAGE, 0)?)? {
+                    w::TLS_READY => self.setup = Setup::Send { at: 0 },
+                    w::TLS_HANDSHAKE => moved = false,
+                    w::TLS_FAILED_CERTIFICATE => return Err(Error::Certificate),
+                    _ => return Err(Error::Secure),
+                },
+                Setup::Send { at } => {
+                    if at < self.out.len() {
+                        let region = region()?;
+                        let n = (self.out.len() - at).min(region.len());
+                        region[..n].copy_from_slice(&self.out[at..at + n]);
+                        let took = ok(call_on(window, flow, w::SEND, n as u64)?)? as usize;
+                        if took == 0 { moved = false; }
+                        self.setup = Setup::Send { at: at + took };
+                    } else {
+                        if self.tls { ok(call_on(window, flow, w::FINISH_REQUEST, 0)?)?; }
+                        self.out = alloc::vec::Vec::new();
+                        self.setup = Setup::Done;
+                    }
+                }
+                Setup::Done => {}
+            }
+            if moved { self.idle = 0; self.began = sex_pdx::get_ticks(); } else { self.idle += 1; }
+            Ok(())
         }
         /// Polls in a row that found nothing new; a caller with nothing else to do
         /// yields while this is small and sleeps once it grows.
@@ -502,6 +535,10 @@ pub mod net {
             if self.whole { return Ok(true); }
             // Sixty seconds without a byte is too slow; a long download that keeps moving is not.
             if sex_pdx::get_ticks().saturating_sub(self.began) > 60_000 { self.cancel(window); return Err(Error::TooSlow); }
+            if self.setup != Setup::Done {
+                if let Err(e) = self.set_up(window) { self.cancel(window); return Err(e); }
+                return Ok(false);
+            }
             let room = (self.cap - self.raw.len()).min(32 * 1024).max(1) as u64;
             let k = match call_on(window, self.flow, w::RECEIVE, room).and_then(ok) { Ok(k) => k as usize, Err(e) => { self.cancel(window); return Err(e); } };
             self.calls += 1;
@@ -528,7 +565,10 @@ pub mod net {
             sex_pdx::serial_record!("[net.receive.stats] bytes={} calls={} empty={} ticks={} flow={}", self.raw.len(), self.calls, self.empty, sex_pdx::get_ticks() - self.start, self.flow.0);
         }
         /// Gives the exchange up and lets its flow go.
-        pub fn cancel(&mut self, window: &mut Window) { if !self.whole { self.whole = true; close(window, self.flow); } }
+        pub fn cancel(&mut self, window: &mut Window) {
+            if unsafe { *core::ptr::addr_of!(RESOLVING) } == Some(self.flow) { unsafe { RESOLVING = None; } }
+            if !self.whole { self.whole = true; close(window, self.flow); }
+        }
         /// The reply, unframed and decompressed. Call once `poll` said true.
         pub fn finish(self) -> Result<Response, Error> {
             let (head, at) = match sex_fetch::parse_head(&self.raw) { Ok(Some(h)) => h, _ => return Err(Error::Failed) };
@@ -553,7 +593,7 @@ pub mod net {
     /// for this address. Redirects are the caller's to follow (each hop may set
     /// cookies). Bodies larger than `max` after decoding fail.
     pub fn request(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Response, Error> {
-        let mut ex = Exchange::begin(window, req, cookie, max, true)?;
+        let mut ex = Exchange::start(window, req, cookie, max)?;
         wait(window, &mut ex)?;
         ex.finish()
     }
@@ -573,9 +613,8 @@ pub mod net {
         let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
         let mut n = 0;
         for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
-        let (flow, region) = open(window, host, port, tls, true)?;
-        if let Err(e) = send_all(window, flow, region, &request[..n], tls) { close(window, flow); return Err(e); }
-        let mut ex = Exchange::sent(flow, false, out.len().max(1), out.len());
+        let host = core::str::from_utf8(host).map_err(|_| Error::Address)?;
+        let mut ex = Exchange::raw(host, port, tls, request[..n].to_vec(), false, out.len().max(1), out.len())?;
         wait(window, &mut ex)?;
         let got = ex.raw.len().min(out.len());
         out[..got].copy_from_slice(&ex.raw[..got]);
