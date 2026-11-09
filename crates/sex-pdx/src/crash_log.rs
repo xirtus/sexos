@@ -31,6 +31,8 @@ pub const OK: u64 = 0;
 pub const DENIED: u64 = 1;
 pub const NOT_FOUND: u64 = 2;
 pub const INVALID: u64 = 3;
+/// `OP_ADOPT`: the kernel keeps room for this start's records and takes no more history.
+pub const FULL: u64 = 4;
 
 pub const RECORD_BYTES: usize = 512;
 pub const MAGIC: [u8; 8] = *b"SEXCRSH1";

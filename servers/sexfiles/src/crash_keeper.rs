@@ -29,14 +29,19 @@ impl Keeper {
             self.slots[i] = Record::decode(&sector).map(|r| (r.boot, r.seq, r.store_index));
         }
         self.ready = true;
-        // Oldest first, so the kernel's list keeps the order they happened in.
+        // Newest first: the kernel puts each in front of the last, so its list keeps the
+        // order they happened in, and when it has no more room the oldest are the ones left out.
         let mut order: [usize; SLOTS] = core::array::from_fn(|i| i);
-        order.sort_unstable_by_key(|&i| self.slots[i].map_or(0, |s| s.2));
+        order.sort_unstable_by_key(|&i| core::cmp::Reverse(self.slots[i].map_or(0, |s| s.2)));
         let mut adopted = 0;
         for i in order {
             if self.slots[i].is_none() { continue; }
             if io.read(crash::DISK_BASE_LBA + i as u64, &mut sector).is_err() { continue; }
-            if crash::call(crash::OP_ADOPT, 0, sector.as_ptr() as u64).0 == crash::OK { adopted += 1; }
+            match crash::call(crash::OP_ADOPT, 0, sector.as_ptr() as u64).0 {
+                crash::OK => adopted += 1,
+                crash::FULL => break,
+                _ => {}
+            }
         }
         sex_pdx::serial_record!("[files.crash.ring] readable=1 kept={}", adopted);
     }

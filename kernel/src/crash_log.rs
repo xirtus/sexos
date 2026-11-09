@@ -41,7 +41,9 @@ pub fn pstore_usable(memmap: &limine::request::MemmapResponse) -> bool {
 pub fn init(hhdm: u64, pstore: bool) {
     let mut id = unsafe { core::arch::x86_64::_rdtsc() };
     let mut r = 0u64;
-    if unsafe { core::arch::x86_64::_rdrand64_step(&mut r) } == 1 { id ^= r; }
+    // RDRAND only where CPUID says it exists (leaf 1, ECX bit 30); otherwise the TSC alone.
+    let rdrand = unsafe { core::arch::x86_64::__cpuid(1) }.ecx & (1 << 30) != 0;
+    if rdrand && unsafe { core::arch::x86_64::_rdrand64_step(&mut r) } == 1 { id ^= r; }
     BOOT_ID.store(id | 1, Ordering::Relaxed);
     if !pstore { crate::serial_println!("[crash.pstore] available=0"); return; }
     let virt = hhdm + PSTORE_PHYS;
@@ -216,6 +218,8 @@ pub fn poll() {
 // ── SYS_CRASH_LOG ──────────────────────────────────────────────────────────────
 
 const FILES_PD: u32 = 11;
+/// Ring places adopted history may never take: room for this start's own records.
+const ADOPT_RESERVE: usize = 16;
 const SHELL_PD: u32 = 3;
 fn is_spindle(pd: u32) -> bool { sex_pdx::app_catalog::SPINDLE_TARGETS.contains(&pd) }
 fn may_read(pd: u32) -> bool { pd == FILES_PD || pd == SHELL_PD || is_spindle(pd) }
@@ -262,8 +266,17 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             // This start's records come from the kernel alone.
             if record.boot == boot_id() { return wire::INVALID; }
             record.flags |= wire::FLAG_EARLIER;
-            let known = { let ring = RING.lock(); ring.records[..ring.count].iter().any(|b| Record::decode(b).is_some_and(|r| r.same_event(&record))) };
-            if !known { push(&record); }
+            // Earlier history goes in front of this start's records, and only while room is
+            // left for new ones: adopting never pushes out a record not yet on disk.
+            let mut ring = RING.lock();
+            if ring.records[..ring.count].iter().any(|b| Record::decode(b).is_some_and(|r| r.same_event(&record))) { return wire::OK; }
+            if ring.count >= wire::KERNEL_CAPACITY - ADOPT_RESERVE { return wire::FULL; }
+            let mut bytes = [0u8; RECORD_BYTES];
+            record.encode(&mut bytes);
+            let n = ring.count;
+            ring.records.copy_within(0..n, 1);
+            ring.records[0] = bytes;
+            ring.count += 1;
             wire::OK
         }
         wire::OP_RESTARTS => {
