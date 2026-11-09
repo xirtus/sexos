@@ -100,6 +100,8 @@ pub enum CapabilityData {
     EntropySource(sex_pdx::entropy_source::Grant),
     ClockSource(sex_pdx::clock_source::Grant),
     TrustPolicy(sex_pdx::trust_source::Grant),
+    /// Shutting down, restarting, flushing before either, reading power sensors.
+    Power(sex_pdx::power::Grant),
     /// Shell's right to start and stop program records. Held once, from BOOT.
     RecordPool,
     InputRing, MessageQueue,

@@ -285,6 +285,13 @@ pub extern "C" fn trampoline_main() {
             msg.type_id, caller, msg.arg0, msg.arg1
         ); }
 
+        // The kernel is about to shut down or restart: put every write on the disk first.
+        if msg.type_id==sex_pdx::power::OP_PREPARE&&caller==0{
+            let flushed=crate::fs_service::flush_for_power();
+            sex_pdx::serial_record!("[files.power.flush] op={} flushed={}",msg.arg0,flushed as u8);
+            sex_pdx::power::ready(flushed);
+            continue;
+        }
         if msg.type_id==sex_pdx::fs::OP{
             crate::fs_service::reply_later(caller,crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2));
             continue;

@@ -3209,3 +3209,18 @@ YouTube stage Y3d.
 - `run cpp` checks static constructors, vector/sort, unordered_map<string>, map, virtual calls, std::function, ostringstream, snprintf, std::thread + std::mutex and thread_local: 10/10 at 1 and 4 cores (`scripts/program_cpp_gate.py`).
 - Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
 
+
+## Power off and restart through ACPI (2026-11-09)
+
+Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **Kernel** `kernel/src/hal/acpi.rs` replaces the stub. Fixed hardware comes straight from the FADT and never needs AML: PM1 event/control blocks, the reset register, the SCI, ACPI mode (SMI_CMD), HW-reduced sleep registers. `\_S5` is read from the DSDT bytes by a bounds-checked reader (`sex_pdx::power::s5_from_dsdt`) and, when AML runs, from the interpreter.
+- **AML in quarantine.** The `acpi` crate's interpreter runs on its own 256 KiB stack. If firmware AML makes it panic, the panic handler returns to the ACPI code (`sex_aml_enter`/`sex_aml_escape`), AML is set aside for that boot and shut down/restart keep working from the tables. A boot self-test proves the escape before any firmware AML runs (`[acpi.aml.quarantine] self_test=1`). `\_PIC(1)`, `_INI`/`_STA`, `\_PTS(5)` run there.
+- **Shut down**: `\_PTS(5)`, SLP_TYPa/b then SLP_EN on PM1a/PM1b (or the HW-reduced sleep control register). **Restart**: FADT reset register, then port 0xCF9, the keyboard controller, a triple fault.
+- **Power button**: fixed event via the SCI (vector 0x29, level/active-low unless the MADT overrides). GPEs are masked until there is code for them, so an unhandled GPE cannot hold the SCI asserted.
+- **ABI change: `SYS_POWER` (84)** and capability `CapabilityData::Power(sex_pdx::power::Grant)` at slot 62. BOOT grants Shell `REQUEST|SENSE`, Files `FLUSH`, the status bar `SENSE`. Ops `INFO`, `OFF`, `RESTART`, `READY`, `SENSORS`. ABI hash recomputed.
+- **Files first.** A shut down or restart (from Shell or the power button) sends Files `power::OP_PREPARE` (kernel message, pd 0); Files commits waiting writes, flushes the disk cache and answers `READY`. The kernel goes ahead after `FLUSH_TICKS` (about 5 s) if Files never answers.
+- **Desktop**: launcher rows "Shut Down" and "Restart" (`Command::ShutDown`, `Command::Restart`), shown unavailable where the kernel cannot do them; the palette batch proof skips them.
+- **Sensors and devices**: batteries (PNP0C0A `_BST`/`_BIX`/`_BIF`), AC (ACPI0003 `_PSR`), lid (PNP0C0D `_LID`), thermal zones (`_TMP`), read through `SENSORS`. I2C HID devices (PNP0C50/ACPI0C50) are listed at boot for a later driver (`[acpi.i2c_hid]`). Known limit: the `acpi` crate 6.1.1 has no custom region handlers, so laptop batteries behind an Embedded Controller read as absent until we add an EC handler (patch or vendor the crate).
+- **CPU power**: Intel HWP (IA32_HWP_REQUEST, balanced EPP) or AMD CPPC on every core, so the CPU picks its own frequency. Idle uses MWAIT into the deepest `_CST` FFH state with exit latency at most 200 us, only where the APIC timer keeps running in deep idle (ARAT); otherwise HLT (C1).
+- **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
+- **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
