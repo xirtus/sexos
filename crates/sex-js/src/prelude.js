@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, MEDIA: 27, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67 };
   const nodes = new Map();
 
   function fmt(v) {
@@ -544,7 +544,84 @@
     createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
     putImageData() {}
   }
-  const ELEMENT_CLASSES = { A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
+  // Video and sound. The browser decodes and plays them (sex-media); scripts send it
+  // requests and it answers with 'media' dispatches carrying each element's state.
+  const MEDIA_TYPES = /^(video|audio)\/(mp4|webm|ogg|mpeg|mp3|aac|flac|wav|x-wav|x-m4a|quicktime|x-matroska)\b/i;
+  class HTMLMediaElement extends HTMLElement {
+    _s() {
+      return this._st || (this._st = { t: 0, d: NaN, paused: true, ended: false, w: 0, h: 0, ready: 0,
+        volume: 1, muted: this.hasAttribute('muted'), seeking: false, error: null });
+    }
+    _ask(verb, arg) { H(OP.MEDIA, this._id, verb, arg === undefined ? '' : String(arg)); }
+    play() {
+      const s = this._s();
+      if (s.paused) { s.paused = false; this._ask('play'); }
+      return Promise.resolve();
+    }
+    pause() { const s = this._s(); if (!s.paused) { s.paused = true; this._ask('pause'); } }
+    load() { const s = this._s(); s.t = 0; s.ended = false; s.ready = 0; this._ask('load'); }
+    canPlayType(type) { return MEDIA_TYPES.test(String(type)) ? 'maybe' : ''; }
+    get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
+    set src(v) { this.setAttribute('src', v); this.load(); }
+    get currentSrc() { return this.src; }
+    get currentTime() { return this._s().t; }
+    set currentTime(v) { const s = this._s(); s.t = Math.max(0, +v || 0); s.seeking = true; this._ask('seek', s.t); }
+    get duration() { return this._s().d; }
+    get paused() { return this._s().paused; }
+    get ended() { return this._s().ended; }
+    get seeking() { return this._s().seeking; }
+    get readyState() { return this._s().ready; }
+    get networkState() { return this._s().ready ? 1 : 2; }
+    get error() { return this._s().error; }
+    get volume() { return this._s().volume; }
+    set volume(v) { const s = this._s(); s.volume = Math.min(1, Math.max(0, +v || 0)); this._ask('volume', s.volume); }
+    get muted() { return this._s().muted; }
+    set muted(v) { const s = this._s(); s.muted = !!v; this._ask('muted', s.muted ? 1 : 0); }
+    get autoplay() { return this.hasAttribute('autoplay'); }
+    set autoplay(v) { this.toggleAttribute('autoplay', !!v); }
+    get loop() { return this.hasAttribute('loop'); }
+    set loop(v) { this.toggleAttribute('loop', !!v); this._ask('loop', v ? 1 : 0); }
+    get controls() { return this.hasAttribute('controls'); }
+    set controls(v) { this.toggleAttribute('controls', !!v); }
+    get playbackRate() { return 1; }
+    set playbackRate(v) {}
+    get buffered() { const d = this._s().d; return { length: d > 0 ? 1 : 0, start: () => 0, end: () => d }; }
+    get played() { return this.buffered; }
+    get seekable() { return this.buffered; }
+  }
+  HTMLMediaElement.HAVE_NOTHING = 0; HTMLMediaElement.HAVE_METADATA = 1; HTMLMediaElement.HAVE_CURRENT_DATA = 2;
+  HTMLMediaElement.HAVE_FUTURE_DATA = 3; HTMLMediaElement.HAVE_ENOUGH_DATA = 4;
+  class HTMLVideoElement extends HTMLMediaElement {
+    get videoWidth() { return this._s().w; }
+    get videoHeight() { return this._s().h; }
+    get poster() { const h = this.getAttribute('poster'); return h === null ? '' : resolveUrl(h); }
+    set poster(v) { this.setAttribute('poster', v); }
+  }
+  reflect(HTMLVideoElement, ['width', 'height']);
+  class HTMLAudioElement extends HTMLMediaElement {}
+  function Audio(src) {
+    const a = document.createElement('audio');
+    if (src !== undefined) a.src = src;
+    return a;
+  }
+  // 'media\tNODE\tEVENTS\tTIME\tDURATION\tPAUSED\tENDED\tWIDTH\tHEIGHT\tREADY'
+  function mediaState(f) {
+    const el = wrap(f[1]);
+    if (!(el instanceof HTMLMediaElement)) return;
+    const s = el._s();
+    s.t = +f[3] || 0; s.d = f[4] === '' ? NaN : +f[4]; s.paused = f[5] === '1'; s.ended = f[6] === '1';
+    s.w = +f[7] || 0; s.h = +f[8] || 0; s.ready = +f[9] || 0;
+    for (const name of f[2] ? f[2].split(',') : []) {
+      if (name === 'seeked') s.seeking = false;
+      if (name === 'error') s.error = { code: 4, message: 'The file could not be played' };
+      const ev = new Event(name);
+      el.dispatchEvent(ev);
+      const h = el['on' + name];
+      if (typeof h === 'function') { try { h.call(el, ev); } catch (e) { log(2, [e]); } }
+    }
+  }
+
+  const ELEMENT_CLASSES = { VIDEO: HTMLVideoElement, AUDIO: HTMLAudioElement, A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
     TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLInputElement, SELECT: HTMLInputElement };
 
   // A fragment is a detached holder element; inserting it moves its children.
@@ -1745,6 +1822,7 @@
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
     Event, UIEvent, MouseEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
+    HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
     WebGLRenderbuffer, WebGLVertexArrayObject, WebGLUniformLocation, WebGLActiveInfo, WebGLShaderPrecisionFormat,
@@ -1775,6 +1853,7 @@
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
+      case 'media': mediaState(f); return 0;
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
         const el = wrap(f[1]);

@@ -12,8 +12,9 @@ ROOT=Path(__file__).resolve().parents[1]
 NOTES=[(440,400),(1000,300)]
 KEYS={' ':'spc'}
 
-def segments(path,rate=48000):
- """Loud stretches of the left channel: (start s, length s, Hz by zero crossings)."""
+def segments(path,rate=48000,split=False):
+ """Loud stretches of the left channel: (start s, length s, Hz by zero crossings).
+ With split, a stretch is also cut where its pitch changes (two sounds back to back)."""
  data=path.read_bytes();at=data.find(b'data')
  assert data[:4]==b'RIFF' and at>0,'not a WAV file'
  pcm=data[at+8:];samples=struct.unpack(f'<{len(pcm)//2}h',pcm[:len(pcm)//2*2])[::2]
@@ -23,6 +24,13 @@ def segments(path,rate=48000):
   if not loud[i]:i+=1;continue
   j=i
   while j<len(loud) and loud[j]:j+=1
+  if split:
+   # Zero crossings per 50 ms block; cut at the first block far from the stretch's start.
+   def ups_in(k):
+    b=samples[k*window:(k+5)*window];return sum(1 for x,y in zip(b,b[1:]) if x<0<=y)
+   first=ups_in(i) if j-i>=5 else 0
+   for k in range(i+5,j-4,5):
+    if first and abs(ups_in(k)-first)>first*0.3:j=k;break
   part=samples[i*window:j*window];ups=[k for k,(a,b) in enumerate(zip(part,part[1:])) if a<0<=b]
   hz=(len(ups)-1)*rate/(ups[-1]-ups[0]) if len(ups)>1 else 0
   found.append((i/100,(j-i)/100,hz));i=j

@@ -109,7 +109,7 @@ fn collapse(s: &str) -> String {
 }
 
 /// Elements whose content is not their children: drawn at their own (or intrinsic) size.
-const REPLACED: &[&str] = &["img", "svg", "canvas", "video", "iframe", "object", "embed", "input", "select", "textarea"];
+const REPLACED: &[&str] = &["img", "svg", "canvas", "video", "audio", "iframe", "object", "embed", "input", "select", "textarea"];
 
 struct BlockResult { height: i32, margin_top: i32, margin_bottom: i32, first_baseline: Option<i32>, width: i32 }
 
@@ -399,7 +399,9 @@ impl<'a> Layout<'a> {
                 if s.display == Display::None { return; }
                 let tag = tag.as_str();
                 if tag == "br" { out.push(Piece::Break); *space_before = true; return; }
-                let atomic = matches!(tag, "img" | "input" | "select" | "textarea" | "button" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed" | "meter" | "progress")
+                // Sound without controls takes no room; its children are fallback text.
+                if tag == "audio" && self.dom.attr(n, "controls").is_none() { return; }
+                let atomic = matches!(tag, "img" | "input" | "select" | "textarea" | "button" | "svg" | "canvas" | "video" | "audio" | "iframe" | "object" | "embed" | "meter" | "progress")
                     || s.display == Display::InlineBlock || s.is_block_level();
                 if atomic {
                     if tag == "img" && s.width == Len::Auto && s.height == Len::Auto {
@@ -502,9 +504,9 @@ impl<'a> Layout<'a> {
         let saved_items = core::mem::take(&mut self.items);
         let saved_links = core::mem::take(&mut self.links);
         let (w, h) = match tag {
-            "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed" => {
-                let src = if tag == "canvas" { alloc::format!("canvas:{n}") } else { String::from(self.dom.attr(n, "src").unwrap_or("")) };
-                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else { self.host.image_size(&src) };
+            "img" | "svg" | "canvas" | "video" | "audio" | "iframe" | "object" | "embed" => {
+                let src = self.picture_src(n, tag);
+                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src) };
                 let (w, h) = match (s.width.resolve(0), s.height.resolve(0), natural) {
                     (Some(w), Some(h), _) => (w, h),
                     (Some(w), None, Some((nw, nh))) if nw > 0 => (w, w * nh / nw),
@@ -534,6 +536,15 @@ impl<'a> Layout<'a> {
         for l in &mut links { l.x += m_l; l.y += m_t; }
         if s.hidden { items.clear(); }
         Some(Piece::Atomic { items, links, width: w + m_l + m_r, height: h + m_t + m_b, link })
+    }
+
+    /// The picture a replaced element shows: canvases, videos and sound controls are
+    /// drawn by the browser under `canvas:N`, `video:N` and `audio:N`.
+    fn picture_src(&self, n: NodeId, tag: &str) -> String {
+        match tag {
+            "canvas" | "video" | "audio" => alloc::format!("{tag}:{n}"),
+            _ => String::from(self.dom.attr(n, "src").unwrap_or("")),
+        }
     }
 
     fn control(&mut self, n: NodeId, s: &Style, tag: &str) -> (i32, i32) {
@@ -1008,9 +1019,9 @@ impl<'a> Layout<'a> {
                     return (w, w);
                 }
                 let tag = tag.as_str();
-                if matches!(tag, "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed") {
-                    let src = self.dom.attr(n, "src").unwrap_or("");
-                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else { self.host.image_size(src) };
+                if matches!(tag, "img" | "svg" | "canvas" | "video" | "audio" | "iframe" | "object" | "embed") {
+                    let src = self.picture_src(n, tag);
+                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src) };
                     let w = match (s.height.resolve(0), natural) {
                         (Some(h), Some((nw, nh))) if nh > 0 => h * nw / nh,
                         (_, Some((nw, _))) => nw,

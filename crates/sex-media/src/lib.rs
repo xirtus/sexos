@@ -431,9 +431,10 @@ pub enum Step {
 }
 
 const PCM_CAP: usize = 16384;
-/// Pictures decoded ahead: about half a second, within a memory budget.
+/// Pictures decoded ahead: up to about two seconds, within a memory budget, so sound
+/// keeps flowing while the program is busy with other work.
 const QUEUE_BYTES: usize = 32 * 1024 * 1024;
-const QUEUE_MAX: usize = 16;
+const QUEUE_MAX: usize = 48;
 /// Silence that goes before sound starting later than the pictures; at most this long.
 const PAD_MAX_MS: i64 = 30_000;
 static SILENCE: [[i16; 2]; 1024] = [[0; 2]; 1024];
@@ -469,7 +470,15 @@ pub struct Player {
     pub late_ms: i64,
     volume: u8,
     muted: bool,
+    /// Sound is held back, and the clock with it, until this much is queued, so a
+    /// slow start (FFmpeg warming up, a busy page) doesn't open with a gap.
+    priming: bool,
+    /// The ring's WRITTEN count when priming began: sound before it was skipped.
+    prime_from: u64,
 }
+
+/// Sound queued before it starts: half a second.
+const PRIME_FRAMES: u64 = RATE as u64 / 2;
 
 impl Player {
     /// Play `dec` with pictures scaled to `w` x `h` (see [`fit`]). With `sound` false
@@ -482,10 +491,11 @@ impl Player {
         let mut p = Player {
             dec, w, h, sound: None, clock: Clock::new(), queue: VecDeque::new(), free: Vec::new(), cap,
             current: Vec::new(), pcm: Vec::new(), left: (0, 0), pad: 0, decoded: 0, eof: false, ended: false,
-            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false,
+            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, priming: false, prime_from: 0,
         };
         if wants_sound {
             p.sound = Sound::open();
+            p.prime();
         }
         if paused {
             p.pause();
@@ -533,7 +543,42 @@ impl Player {
         let t = sex_pdx::get_ticks();
         self.clock.last_tick = t;
         self.clock.moved = t;
+        if self.priming { return; }
         if let Some(s) = self.sound.as_mut() { s.pause(false); }
+    }
+
+    /// Hold the sound ring until PRIME_FRAMES are queued (see `step`).
+    fn prime(&mut self) {
+        if let Some(s) = self.sound.as_mut() {
+            s.pause(true);
+            self.prime_from = s.written_total();
+            self.priming = true;
+        }
+    }
+
+    /// Whether priming is still under way; ends it once enough sound is queued.
+    fn priming(&mut self) -> bool {
+        if !self.priming { return false; }
+        let lead = self.sound.as_ref().map_or(u64::MAX, |s| s.written_total().saturating_sub(s.played_total().max(self.prime_from)));
+        // A ring with no room ends it too: Bell applies a seek's skip only while
+        // the ring plays, so a held ring can stay full of the skipped sound.
+        let blocked = self.left.0 < self.left.1 || self.pad > 0;
+        let full = self.queue.len() >= self.cap;
+        if lead < PRIME_FRAMES && !self.eof && !full && !blocked && self.error.is_none() {
+            // Time stands still meanwhile, as when paused.
+            let t = sex_pdx::get_ticks();
+            self.clock.last_tick = t;
+            self.clock.moved = t;
+            return true;
+        }
+        self.priming = false;
+        let t = sex_pdx::get_ticks();
+        self.clock.last_tick = t;
+        self.clock.moved = t;
+        if !self.clock.paused {
+            if let Some(s) = self.sound.as_mut() { s.pause(false); }
+        }
+        false
     }
 
     /// 0..=100.
@@ -567,6 +612,7 @@ impl Player {
         // drops the stream the moment the skip empties it.
         if let Some(s) = self.sound.as_mut() { s.reopen(); s.skip(); }
         self.clock.set(ms as i64);
+        self.prime();
     }
 
     /// Do the work there is now without waiting: decode ahead, keep the sound ring
@@ -581,6 +627,7 @@ impl Player {
         let begun = sex_pdx::get_ticks();
         loop {
             self.feed();
+            self.priming();
             let now = self.time_ms();
             // The oldest picture whose time has come becomes current. A caller that
             // only draws now and then calls again until it gets no picture, then

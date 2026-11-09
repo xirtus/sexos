@@ -14,6 +14,8 @@
 
 extern crate alloc;
 
+mod media;
+
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use sex_app::{files, nav, net, Event, Nav, Window};
@@ -82,6 +84,8 @@ struct Browser {
     timer: Option<u64>,
     /// The page's Canvas 2D surfaces.
     canvases: sex_web::canvas::Canvases,
+    /// The page's video and audio elements, each with its player once loaded.
+    media: Vec<media::Media>,
     url: String,
     history: Vec<String>,
     scroll: i32,
@@ -173,6 +177,8 @@ impl Browser {
         }
         self.status = Some("Loading…");
         self.url = String::from(url);
+        // Leaving the page stops its sound and pictures.
+        self.media.clear();
         self.draw();
         let begun = sex_pdx::get_ticks();
         let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
@@ -235,6 +241,7 @@ impl Browser {
         let script_begun = sex_pdx::get_ticks();
         if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
+        self.media_scan();
         self.relayout();
         sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={} script_ticks={} scripted={}",
             self.page.items.len(), self.page.links.len(), self.page.height, self.sheets.len(), self.fonts.images.len(), script_begun - begun,
@@ -306,6 +313,7 @@ impl Browser {
     /// when it changed the page. Returns true if it drew.
     #[inline(never)]
     fn after_script(&mut self, draw: bool) -> bool {
+        self.media_requests();
         let doc = self.doc.get();
         for (level, text) in doc.log.drain(..) {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
@@ -357,11 +365,122 @@ impl Browser {
     #[inline(never)]
     fn tick(&mut self) {
         self.serve_fetches();
-        let Some(script) = self.doc.script() else { self.timer = None; return };
-        let next = script.dispatch("tick");
-        self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
-        if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
-        self.after_script(true);
+        let media_next = self.media_tick();
+        if let Some(script) = self.doc.script() {
+            let next = script.dispatch("tick");
+            self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
+            if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
+            self.after_script(true);
+        } else {
+            self.timer = None;
+        }
+        // A script may have asked for media just now (an `ended` handler starting the
+        // next sound, say): load it on the next pass.
+        let waiting = self.media.iter().any(|m| m.state == media::State::Waiting);
+        if let Some(ms) = if waiting { Some(0) } else { media_next } {
+            let due = sex_pdx::get_ticks() + ms;
+            self.timer = Some(self.timer.map_or(due, |t| t.min(due)));
+        }
+    }
+
+    /// Finds the page's video and audio elements and shows their posters.
+    #[inline(never)]
+    fn media_scan(&mut self) {
+        let nodes = media::elements(&self.doc.get().dom);
+        for node in nodes {
+            if self.media.iter().any(|m| m.node == node) { continue; }
+            let m = media::Media::new(&self.doc.get().dom, node);
+            let poster = if m.audio { None } else { self.doc.get().dom.attr(node, "poster").map(String::from) };
+            if let Some(poster) = poster.filter(|p| !p.trim().is_empty()) {
+                let (status, body) = self.load(poster.trim());
+                if (200..300).contains(&status) {
+                    if let Some(img) = sex_web::decode_image(&body, media::MAX_W, media::MAX_H) { media::Media::poster(&mut self.fonts, &m.picture_name(), img); }
+                }
+            }
+            self.media.push(m);
+        }
+        if self.media.iter().any(|m| m.state == media::State::Waiting) { self.timer = Some(sex_pdx::get_ticks()); }
+    }
+
+    /// Takes the page's requests to its video and audio elements.
+    fn media_requests(&mut self) {
+        let asked = core::mem::take(&mut self.doc.get().media);
+        if asked.is_empty() { return; }
+        for (node, verb, arg) in asked {
+            let dom = &self.doc.get().dom;
+            let i = match self.media.iter().position(|m| m.node == node) {
+                Some(i) => i,
+                None => { self.media.push(media::Media::new(dom, node)); self.media.len() - 1 }
+            };
+            self.media[i].request(dom, &verb, &arg);
+        }
+        self.timer = Some(sex_pdx::get_ticks());
+    }
+
+    /// Loads, plays and shows the page's media; tells the page what happened. Returns
+    /// how soon to come back.
+    #[inline(never)]
+    fn media_tick(&mut self) -> Option<u64> {
+        if self.media.is_empty() { return None; }
+        let mut relayout = false;
+        for i in 0..self.media.len() {
+            if self.media[i].state != media::State::Waiting { continue; }
+            let src = self.media[i].src.clone();
+            let begun = sex_pdx::get_ticks();
+            let (status, body) = self.load(&src);
+            sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} src={}", self.media[i].node, status, body.len(), sex_pdx::get_ticks() - begun, src);
+            if (200..300).contains(&status) && !body.is_empty() {
+                relayout |= self.media[i].open(body);
+            } else {
+                self.media[i].state = media::State::Failed;
+                self.media[i].events.push("error");
+            }
+        }
+        let mut next: Option<u64> = None;
+        let mut changed: Vec<String> = Vec::new();
+        for m in self.media.iter_mut() {
+            let (drew, wait) = m.step(&mut self.fonts);
+            if drew { changed.push(m.picture_name()); }
+            if let Some(w) = wait { next = Some(next.map_or(w, |n| n.min(w))); }
+        }
+        if relayout {
+            self.relayout();
+            self.draw();
+        } else if !changed.is_empty() {
+            let pixels = &mut self.window.pixels()[..(W * H) as usize];
+            if !self.full_redraw && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &changed) {
+                self.window.show_pixels(W as usize, H as usize);
+            } else {
+                self.draw();
+            }
+        }
+        // Tell the page, which may answer by changing it.
+        let reports: Vec<String> = self.media.iter_mut().filter_map(|m| m.report()).collect();
+        if !reports.is_empty() {
+            if let Some(script) = self.doc.script() {
+                for r in &reports {
+                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(r) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+                }
+                self.after_script(true);
+            }
+        }
+        next
+    }
+
+    /// K plays or pauses the page's first video or audio, J and L go back and forward
+    /// 5 s. True if there was one.
+    fn media_key(&mut self, code: u8) -> bool {
+        let Some(m) = self.media.iter_mut().find(|m| m.state == media::State::Ready) else { return false };
+        let dom = &self.doc.get().dom;
+        match code {
+            0x25 => m.toggle(dom),
+            0x24 => m.seek_by(dom, -5000),
+            0x26 => m.seek_by(dom, 5000),
+            _ => return false,
+        }
+        sex_pdx::serial_record!("[web.media.key] code={} node={}", code, m.node);
+        self.timer = Some(sex_pdx::get_ticks());
+        true
     }
 
     /// Loads what the page's scripts asked `fetch` for, and tells each script.
@@ -525,6 +644,7 @@ impl Browser {
             0x51 => return self.scroll_by(view - 40),
             0x35 if !key.shift => { self.editing = Some(String::new()); self.draw(); return; }
             0x13 if key.control => { let u = self.url.clone(); self.open(&u, false); return; }
+            0x24..=0x26 if !key.control && self.media_key(key.code) => return,
             _ => {}
         }
         match nav(key) {
@@ -550,7 +670,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

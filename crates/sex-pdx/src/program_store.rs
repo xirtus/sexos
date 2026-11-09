@@ -24,7 +24,7 @@ pub fn directory_sectors(first: &[u8]) -> Option<usize> {
 }
 pub const NAME_BYTES: usize = 16;
 /// One program's largest file.
-pub const IMAGE_BYTES: usize = 16 * 1024 * 1024;
+pub const IMAGE_BYTES: usize = 32 * 1024 * 1024;
 /// The most address space a program row's arena spans: one run's image first, then the
 /// memory it asks for while it runs (`program_memory`). Frames are lent per page as the
 /// run asks, from memory every program shares, and page tables are made as pages are first

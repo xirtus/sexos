@@ -33,6 +33,8 @@ pub struct Document {
     pub fetches: Vec<(u32, String)>,
     /// Loaded bodies the script has not taken yet, by request id.
     pub bodies: Vec<(u32, Vec<u8>)>,
+    /// Video and audio requests not yet taken by the browser: (element, verb, argument).
+    pub media: Vec<(NodeId, String, String)>,
     next_fetch: u32,
 }
 
@@ -55,7 +57,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), next_fetch: 0 }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), next_fetch: 0 }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -245,6 +247,14 @@ impl Page for Document {
                 None
             }
             op::MEASURE => Some(format!("{}", (self.measure)(a.first()?, a.get(1)?))),
+            op::MEDIA => {
+                let n = self.element(a.first())?;
+                if !matches!(self.dom.tag(n), Some("video" | "audio")) { return None; }
+                // A page calling in a loop must not fill memory before the browser looks.
+                if self.media.len() >= 256 { return None; }
+                self.media.push((n, String::from(*a.get(1)?), String::from(a.get(2).copied().unwrap_or(""))));
+                None
+            }
             _ => None,
         }
     }

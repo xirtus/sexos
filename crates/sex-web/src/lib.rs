@@ -304,6 +304,8 @@ pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], widt
 fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32, src: &str, alt: &str) {
     let Some((_, img)) = fonts.images.iter().find(|(s, _)| s == src) else {
         if src.starts_with("canvas:") { return; }
+        // A video with no picture yet is black, as in other browsers.
+        if src.starts_with("video:") { target.fill(x, y, w, h, 0xFF00_0000, 0); return; }
         target.fill(x, y, w, h, 0xFFF1_F3F4, 0);
         target.fill(x, y, w, 1, 0xFFC4_C7C5, 0);
         target.fill(x, y + h - 1, w, 1, 0xFFC4_C7C5, 0);

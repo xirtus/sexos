@@ -180,6 +180,8 @@ const FRAME_BYTES: usize = 4; // S16 stereo
 /// 8 KiB = 2048 frames ≈ 43 ms. Two descriptors each, so 16 fit the 32-entry ring.
 const PERIOD_BYTES: usize = 8192;
 const IN_FLIGHT: usize = 12;
+/// Periods kept queued while open streams have nothing to give.
+const MIN_AHEAD: usize = 3;
 const NOTES: usize = 16;
 pub const MAX_MS: u64 = 5000;
 const PERIOD_FRAMES: usize = PERIOD_BYTES / FRAME_BYTES;
@@ -233,7 +235,10 @@ impl Player {
 
     /// Mixes the next period of notes and streams into `period`, noting how many
     /// frames each stream gave in `took[slot]`. False when there is nothing to play.
-    fn render(&mut self, slot: usize) -> bool {
+    /// With `hold`, an open stream with less than a period queued gives nothing yet,
+    /// so a stream that is behind waits for a whole period instead of playing in
+    /// crumbs between silences.
+    fn render(&mut self, slot: usize, hold: bool) -> bool {
         if self.len == 0 && !self.streaming() { return false; }
         let mix = mix();
         *mix = [[0; 2]; PERIOD_FRAMES];
@@ -268,6 +273,7 @@ impl Player {
             if r.load(ring::PAUSED) != 0 { continue; }
             // A program owns only its own ring: a counter it bent is clamped, not trusted.
             let have = written.saturating_sub(taken).min(ring::FRAMES) as usize;
+            if hold && have < PERIOD_FRAMES && r.load(ring::OPEN) != 0 { continue; }
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.
@@ -305,7 +311,15 @@ impl Player {
             }
             self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1; self.played += 1;
         }
-        while self.flying < IN_FLIGHT && self.render((self.first + self.flying) % IN_FLIGHT) {
+        while self.flying < IN_FLIGHT {
+            let slot = (self.first + self.flying) % IN_FLIGHT;
+            let notes = self.len > 0;
+            if !self.render(slot, self.flying >= MIN_AHEAD) { break; }
+            // A stream that is open but has nothing queued yet (it is starting, or
+            // its program is busy) gets a few periods of silence, not the whole
+            // window: what it writes next then plays within ~130 ms instead of
+            // after half a second of silence already handed to the card.
+            if !notes && self.took[slot].iter().all(|&n| n == 0) && self.flying >= MIN_AHEAD { break; }
             let period = self.period;
             match self.card.pcm_xfer_nb(self.stream, &period) {
                 Ok(token) => { self.tokens[(self.first + self.flying) % IN_FLIGHT] = token; self.flying += 1; }

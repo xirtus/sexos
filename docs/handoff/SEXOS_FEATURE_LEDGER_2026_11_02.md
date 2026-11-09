@@ -3155,3 +3155,24 @@ row no longer waits for the row before it to end.
   - Space plays again.
   - L seeks from about 1.4 s to 6.4 s, and the next picture is at 6.6 s.
 - **Known issue** (reported, not media): PS/2 extended keys (arrows, E0 prefix) don't reach apps, which is why Play also takes J/K/L.
+
+## Web: `<video>` and `<audio>` (2026-11-09)
+
+- **Pages can play video and sound.** Web plays `<video>` and `<audio>` through sex-media, so the browser uses the same FFmpeg and sound rings as Play.
+  - Sources come from `src` or the first `<source>` child, fetched whole like any other resource (streaming while it arrives is the YouTube thread's next step; `Source::available` is ready for it).
+  - Pictures are drawn as `video:N`, which the painter fills black until the first picture. `<audio controls>` gets a 300x32 box; without `controls` it takes no space.
+  - Controls draw a bar with a play mark and a progress line. K plays and pauses the first ready media element, and J/L seek 5 s.
+- **Scripts** get `HTMLMediaElement`, `HTMLVideoElement`, `HTMLAudioElement` and `new Audio(url)`: `play()` (returns a promise), `pause()`, `load()`, `canPlayType()`, `src`, `currentTime` (seeks), `duration`, `paused`, `ended`, `volume`, `muted`, `loop`, `autoplay`, `controls`, `readyState`, `videoWidth`/`videoHeight`.
+  - Events: `durationchange`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`, `playing`, `pause`, `seeking`, `seeked`, `timeupdate`, `volumechange`, `emptied`, `ended`, `error`.
+  - Host op `MEDIA = 27` carries requests (load, play, pause, seek, volume, muted, loop) to Web. Web reports state back with a `media` dispatch.
+- **ABI:** `program_store::IMAGE_BYTES` 4 MiB -> 32 MiB, since Web with FFmpeg is 15 MB.
+- **sex-media:** pictures are BGRA (opaque), and the picture queue holds 48 (about two seconds), so a busy page doesn't starve the sound.
+  - The player primes: it holds the sound ring, and the clock with it, until half a second of sound is queued (or the picture queue is full, the ring is full, or the stream ends). This applies at the start and after a seek, so playback no longer opens with a gap while FFmpeg warms up.
+- **Bell no longer hands the card half a second of silence** when an open stream has nothing queued. It keeps at most 3 periods (~130 ms) ahead in that case.
+  - While 3 or more periods are in flight, an open stream with less than a whole period waits for one, instead of playing in crumbs between silences.
+  - `program_media_gate` now hears each tone as one unbroken stretch (440, 660, 880 Hz: 2.0 s each).
+- `sound_gate.segments(split=True)` cuts a loud stretch where the pitch changes, for sounds played back to back.
+- **Gate.** `scripts/program_web_media_gate.py` serves `scripts/web_site/media.html`.
+  - It plays a 2 s H.264/AAC clip with `autoplay controls`. The script pauses it at 0.6 s for 0.8 s and plays it again.
+  - On `ended`, the script plays `new Audio('tone.mp3')`.
+  - The gate checks the console events, all 50 pictures, a picture on screen, and the WAV: 440 Hz for about 2 s, then 880 Hz.
