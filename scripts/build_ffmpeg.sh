@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Builds FFmpeg's libraries for SexOS programs: libavformat (MP4/MOV), libavcodec
-# (H.264), libswscale and libavutil, as static archives for x86_64-sex.json's
-# soft-float, no-SSE, no-red-zone code. C calls go to crates/sex-libc.
+# Builds FFmpeg's libraries for SexOS programs as static archives for
+# x86_64-sex-app.json (x87 and SSE, whose registers the kernel saves per task; no AVX,
+# whose state it does not), with FFmpeg's hand-written SSE2/SSSE3/SSE4 assembly.
+# Formats: MP4/MOV, Matroska/WebM, Ogg, MP3, ADTS AAC, FLAC and WAV; video H.264,
+# HEVC, VP8, VP9, MPEG-4 Part 2; audio AAC, MP3, Opus, Vorbis, FLAC and PCM; plus
+# libswscale and libswresample. C calls go to crates/sex-libc.
 #
 # Output: target/ffmpeg/lib/*.a and target/ffmpeg/include. Programs that link FFmpeg
 # (apps/play) find them through SEXOS_FFMPEG (default: that directory).
 #
-# Needs clang, llvm-ar/ranlib/nm, make, and musl's headers. FFmpeg is LGPL-2.1+
+# Needs clang, nasm, llvm-ar/ranlib/nm, make, and musl's headers. FFmpeg is LGPL-2.1+
 # here (no GPL parts enabled); musl's headers are MIT.
 #
 #   MUSL_INCLUDE   musl's include directory (default: found below)
@@ -35,20 +38,14 @@ if [[ -z "${FFMPEG_SRC:-}" ]]; then
   [[ -d $FFMPEG_SRC ]] || git clone -q --depth=1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_SRC"
 fi
 
-# musl's headers with `long double` as `double`: the soft-float target has no x87,
-# so clang refuses a real long double.
+# musl's headers, copied so the build never depends on where they came from.
 INC=$OUT/include-c
 rm -rf "$INC" && mkdir -p "$INC"
 cp -rL "$MUSL_INCLUDE"/. "$INC"/ && chmod -R u+w "$INC"
-grep -rl "long double" "$INC" | xargs -r sed -i 's/long double/double/g'
-
-# The one `long double` literal FFmpeg compiles here.
-sed -i 's/1000000000\.0L \* y/1000000000.0 * y/' "$FFMPEG_SRC/libavutil/avsscanf.c"
 
 RES=$(clang -print-resource-dir)/include
 CFLAGS="--target=x86_64-unknown-none-elf -nostdinc -isystem $RES -isystem $INC \
- -mno-sse -mno-sse2 -mno-mmx -mno-80387 -msoft-float -mno-red-zone \
- -U__FLT_EVAL_METHOD__ -D__FLT_EVAL_METHOD__=0 -Wno-builtin-macro-redefined \
+ -msse2 -mno-avx -mno-red-zone \
  -fPIC -ffunction-sections -fdata-sections -fno-stack-protector -D_GNU_SOURCE"
 
 BUILD=$WORK/build
@@ -58,11 +55,16 @@ rm -rf "$BUILD" && mkdir -p "$BUILD" && cd "$BUILD"
   --cc=clang --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --pkg-config=false \
   --extra-cflags="$CFLAGS" \
   --extra-ldflags="--target=x86_64-unknown-none-elf -nostdlib -fuse-ld=lld -Wl,--unresolved-symbols=ignore-all" \
-  --disable-everything --disable-autodetect --disable-asm --disable-debug --enable-small \
-  --disable-runtime-cpudetect --disable-pthreads --disable-w32threads --disable-os2threads \
+  --x86asmexe=nasm --enable-pic \
+  --disable-avx --disable-avx2 --disable-avx512 --disable-avx512icl --disable-fma3 --disable-fma4 --disable-xop \
+  --disable-everything --disable-autodetect --disable-debug \
+  --disable-pthreads --disable-w32threads --disable-os2threads \
   --disable-network --disable-programs --disable-doc --disable-avdevice --disable-avfilter \
-  --disable-swresample --enable-static --disable-shared \
-  --enable-decoder=h264 --enable-parser=h264 --enable-demuxer=mov --enable-swscale \
+  --enable-static --disable-shared --enable-swscale --enable-swresample \
+  --enable-demuxer=mov,matroska,ogg,mp3,aac,flac,wav \
+  --enable-decoder=h264,hevc,vp8,vp9,mpeg4,aac,aac_fixed,mp3,mp3float,opus,vorbis,flac,pcm_s16le,pcm_f32le \
+  --enable-parser=h264,hevc,vp8,vp9,mpeg4video,aac,mpegaudio,opus,vorbis,flac \
+  --enable-bsf=vp9_superframe_split \
   >configure.log
 
 # Link tests always pass with no C library at configure time, so configure believes

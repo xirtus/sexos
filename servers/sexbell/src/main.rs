@@ -321,6 +321,9 @@ fn find_policy(target_pd: u32) -> Option<&'static PolicyEntry> {
 }
 
 /// Find mutable policy slot for a target PD. Returns index or None.
+/// Whether a program's sound stream is muted, by the sender list or by policy.
+pub(crate) fn sound_muted(pd: u32) -> bool { is_muted(pd) || is_policy_muted(pd) }
+
 /// Check if a target PD has an active mute policy.
 fn is_policy_muted(target_pd: u32) -> bool {
     if let Some(entry) = find_policy(target_pd) {
@@ -597,6 +600,7 @@ pub extern "C" fn _start() -> ! {
             if let Some((n,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|n| {
                     let removed=unsafe{retire_app_resources(n.target_pd)};
+                    sound::retire(n.target_pd);
                     sex_pdx::serial_record!("[bell.app.cleanup] target={} task={} events={} callbacks=0 policies=0 mute=0 spam=0",n.target_pd,n.task_id,removed);
                 }) {
                 sex_pdx::serial_record!("[bell.app.cleanup.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);
@@ -1388,6 +1392,12 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[bell.subscribe.reply] gen={}", gen);
                     }
                 }
+            }
+
+            sex_pdx::sound_ring::OP_PLAY => {
+                // A program's own sound, from its own ring; muting silences it too.
+                let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd);
+                if allowed { sound::stream(msg.caller_pd as u32); }
             }
 
             sex_pdx::OP_BELL_TONE => {

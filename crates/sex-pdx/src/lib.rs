@@ -786,6 +786,25 @@ pub fn pixel_region_client() -> Result<(u64, u64), u64> {
     if length < pixel_region::BYTES { return Err(ERR_CAP_INVALID); }
     Ok((memory_region_view(pixel_region::CLIENT_SLOT, 0, length, QUERY_VIEW | READ | WRITE)?.virtual_address, length))
 }
+/// Bell's writable view of program row `k`'s sound ring, checked against that row.
+pub fn sound_ring_bell(k: usize) -> Result<sound_ring::Ring, u64> {
+    use memory_region::{QUERY_VIEW, READ, WRITE};
+    let row = app_catalog::INCARNATIONS.iter().filter(|r| r.app == app_catalog::App::Program).nth(k).ok_or(ERR_CAP_INVALID)?;
+    let slot = sound_ring::bell_slot(k);
+    let info = memory_region_info(slot)?;
+    if info.region_id != sound_ring::region_id(k) || info.peer_pd != Some(row.target)
+        || info.length != sound_ring::BYTES || info.rights != QUERY_VIEW | READ | WRITE { return Err(ERR_CAP_INVALID); }
+    let va = memory_region_view(slot, 0, sound_ring::BYTES, QUERY_VIEW | READ | WRITE)?.virtual_address;
+    Ok(unsafe { sound_ring::Ring::at(va as *mut u8) })
+}
+/// A program's own sound ring.
+pub fn sound_ring_client() -> Result<sound_ring::Ring, u64> {
+    use memory_region::{QUERY_VIEW, READ, WRITE};
+    let info = memory_region_info(sound_ring::CLIENT_SLOT)?;
+    if info.length != sound_ring::BYTES { return Err(ERR_CAP_INVALID); }
+    let va = memory_region_view(sound_ring::CLIENT_SLOT, 0, sound_ring::BYTES, QUERY_VIEW | READ | WRITE)?.virtual_address;
+    Ok(unsafe { sound_ring::Ring::at(va as *mut u8) })
+}
 pub fn text_region_display(index: usize) -> Result<u64, u64> {
     use memory_region::{QUERY_VIEW, READ};
     let slot = text_region::display_slot(index);
@@ -1140,6 +1159,7 @@ pub mod network_config;
 
 pub mod desktop_style;
 pub mod pixel_region;
+pub mod sound_ring;
 pub mod document_view;
 
 pub mod display_boot;
