@@ -99,9 +99,71 @@ impl Drop for JoinHandle {
 }
 
 /// Runs `f(i)` for every `i` in `0..count` at once and returns when all are done.
-/// If a worker cannot start, its share runs on the caller instead.
+/// `f(0)` runs on the caller and each other index on its own worker. The workers stay
+/// after the call and wait for the next one, so a call costs a wake, not a start;
+/// their thread-locals carry over from call to call. A call made while another is
+/// running (from a worker, or from two tasks at once) starts fresh workers instead.
+/// If a worker cannot start, its share runs on the caller.
 pub fn parallel(count: usize, f: &(dyn Fn(usize) + Sync)) {
     if count == 0 { return; }
+    if count == 1 { return f(0); }
+    if POOL_BUSY.swap(true, Ordering::Acquire) { return parallel_fresh(count, f); }
+    // Only the holder of POOL_BUSY touches the pool's list.
+    let slots = unsafe { &mut *core::ptr::addr_of_mut!(POOL) };
+    while slots.len() < count - 1 {
+        let slot: &'static Slot = Box::leak(Box::new(Slot { go: AtomicU32::new(0), index: slots.len() + 1 }));
+        match spawn(move || pool_worker(slot)) {
+            // The pool lasts as long as the program; its workers end with it.
+            Ok(h) => { core::mem::forget(h); slots.push(slot); }
+            Err(_) => { drop(unsafe { Box::from_raw(slot as *const Slot as *mut Slot) }); break; }
+        }
+    }
+    let pooled = slots.len().min(count - 1);
+    // The job outlives every worker's use of it: this call waits for them below.
+    unsafe { *core::ptr::addr_of_mut!(POOL_JOB) = Some(core::mem::transmute::<&(dyn Fn(usize) + Sync), &'static (dyn Fn(usize) + Sync)>(f)); }
+    POOL_LEFT.store(pooled as u32, Ordering::Release);
+    for slot in &slots[..pooled] {
+        slot.go.fetch_add(1, Ordering::Release);
+        t::wake(slot.go.as_ptr(), 1);
+    }
+    f(0);
+    for i in pooled + 1..count { f(i); }
+    let mut spins = 0;
+    loop {
+        let left = POOL_LEFT.load(Ordering::Acquire);
+        if left == 0 { break; }
+        if spins < 2000 { core::hint::spin_loop(); spins += 1; } else { t::wait(POOL_LEFT.as_ptr(), left); }
+    }
+    unsafe { *core::ptr::addr_of_mut!(POOL_JOB) = None; }
+    POOL_BUSY.store(false, Ordering::Release);
+}
+
+/// One pool worker's doorbell: `go` counts the calls it has been handed.
+struct Slot { go: AtomicU32, index: usize }
+
+static POOL_BUSY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static POOL_LEFT: AtomicU32 = AtomicU32::new(0);
+static mut POOL: Vec<&'static Slot> = Vec::new();
+static mut POOL_JOB: Option<&'static (dyn Fn(usize) + Sync)> = None;
+
+fn pool_worker(slot: &'static Slot) {
+    let mut seen = 0;
+    loop {
+        let mut go = slot.go.load(Ordering::Acquire);
+        // A short spin first: back-to-back calls (frames, draws) rarely need a sleep.
+        let mut spins = 0;
+        while go == seen {
+            if spins < 2000 { core::hint::spin_loop(); spins += 1; } else { t::wait(slot.go.as_ptr(), seen); }
+            go = slot.go.load(Ordering::Acquire);
+        }
+        seen = go;
+        if let Some(f) = unsafe { *core::ptr::addr_of!(POOL_JOB) } { f(slot.index); }
+        if POOL_LEFT.fetch_sub(1, Ordering::AcqRel) == 1 { t::wake(POOL_LEFT.as_ptr(), 1); }
+    }
+}
+
+/// `parallel` with workers started for this call alone.
+fn parallel_fresh(count: usize, f: &(dyn Fn(usize) + Sync)) {
     let mut handles = Vec::with_capacity(count - 1);
     let mut inline = Vec::new();
     for i in 1..count {

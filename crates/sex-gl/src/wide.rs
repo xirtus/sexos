@@ -159,6 +159,14 @@ impl StageCode {
                         }
                     }
                 }
+                &Step::StoreAt { off, val, n } => if full && mask == ALL {
+                    m.mem[off as usize..(off + n) as usize].copy_from_slice(&r[val as usize..(val + n) as usize]);
+                } else {
+                    for l in 0..W {
+                        if (mask >> l) & 1 == 0 { continue; }
+                        for k in 0..n { m.mem[(off + k) as usize][l] = r[(val + k) as usize][l]; }
+                    }
+                },
                 &Step::ToMem { off, src, n } => for l in 0..W {
                     if (mask >> l) & 1 == 0 { continue; }
                     for k in 0..n { m.mem[(off + k) as usize][l] = r[(src + k) as usize][l]; }
@@ -370,6 +378,47 @@ impl StageCode {
                 for l in 0..W { o[l] = (x[l] * (1.0 - w[l]) + y[l] * w[l]).to_bits(); }
                 wr::<FULL>(r, dst + j, o, m);
             },
+            &Op::LoadAt { dst, space, off, n } => {
+                if space == SPACE_UNIFORM {
+                    let ok = (off + n) as usize <= u.len();
+                    for k in 0..n { wr::<FULL>(r, dst + k, [if ok { u[(off + k) as usize] } else { 0 }; W], m); }
+                } else {
+                    for k in 0..n { let v = mem[(off + k) as usize]; wr::<FULL>(r, dst + k, v, m); }
+                }
+            }
+            &Op::Bin { op, k, dst, a, b, n, sa, sb } => for j in 0..n {
+                let (x, y) = (r[(if sa { a } else { a + j }) as usize], r[(if sb { b } else { b + j }) as usize]);
+                let mut o = [0u32; W];
+                for l in 0..W { o[l] = bin_lane(k, op, x[l], y[l]); }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::Un { op, k, dst, a, n } => for j in 0..n {
+                let x = r[(a + j) as usize];
+                let mut o = [0u32; W];
+                for l in 0..W { o[l] = un_lane(op, k, x[l]); }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::Conv { from, to, convert, dst, a, n } => for j in 0..n {
+                let x = r[(a + j) as usize];
+                let mut o = [0u32; W];
+                for l in 0..W { o[l] = as_lane(from, to, convert, x[l]); }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::FMath { fun, dst, a, b, c, n, sa, sb, sc } => for j in 0..n {
+                let (x, y, z) = (fv(r, if sa { a } else { a + j }), fv(r, if sb { b } else { b + j }), fv(r, if sc { c } else { c + j }));
+                let mut o = [0u32; W];
+                // Only the masked lanes: a dead lane's value may be anything.
+                for l in 0..W { if (mask >> l) & 1 != 0 { o[l] = fmath_lane(fun, x[l], y[l], z[l]).to_bits(); } }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::Select { dst, cond, a, r: rj, n, sc } => {
+                let mut tmp = [[0u32; W]; 16];
+                for j in 0..n.min(16) {
+                    let (cv, av, rv) = (r[(if sc { cond } else { cond + j }) as usize], r[(a + j) as usize], r[(rj + j) as usize]);
+                    for l in 0..W { tmp[j as usize][l] = if cv[l] != 0 { av[l] } else { rv[l] }; }
+                }
+                for j in 0..n.min(16) { wr::<FULL>(r, dst + j, tmp[j as usize], m); }
+            }
         }
     }
 }

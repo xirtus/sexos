@@ -560,3 +560,41 @@ fn constant_coordinates_stay_on_level_zero_whatever_the_bias() {
     ctx.draw_arrays(gl::TRIANGLES, 0, 3);
     assert_eq!(px(&ctx, 4, 4), [0, 0, 255, 255]);
 }
+
+fn threads(n: usize, f: &(dyn Fn(usize) + Sync)) { std::thread::scope(|s| for i in 0..n { s.spawn(move || f(i)); }) }
+
+#[test]
+fn draws_split_across_cores_match_one_core() {
+    let frame = |cores: usize| {
+        sex_gl::set_parallel(threads, cores);
+        let mut ctx = Context::new(300, 250);
+        program(&mut ctx, "#version 300 es\nin vec3 p; out vec2 uv; void main(){ uv = p.xy * 2.0 + 0.5; gl_Position = vec4(p.xy, p.z, 1.0 + p.z); }",
+            "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c;\n\
+             void main(){ c = vec4(texture(t, uv).rgb + vec3(fwidth(uv.x) * 8.0, 0.0, 0.0), 0.7); }");
+        let board: Vec<u8> = (0..64 * 64).flat_map(|i| { let v = if (i % 64 / 4 + i / 256) % 2 == 0 { 230 } else { 20 }; [v, 255 - v, v / 2, 255] }).collect();
+        ctx.bind_texture(TEXTURE_2D, 20);
+        ctx.tex_image(TEXTURE_2D, 0, 64, 64, RGBA, UNSIGNED_BYTE, Some(&board));
+        ctx.generate_mipmap(TEXTURE_2D);
+        ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, LINEAR_MIPMAP_LINEAR);
+        ctx.enable(DEPTH_TEST, true);
+        ctx.enable(BLEND, true);
+        ctx.blend_func(0x0302, 0x0303, 0x0302, 0x0303); // SRC_ALPHA, ONE_MINUS_SRC_ALPHA
+        ctx.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+        // A floor going away from the eye, and a tilted quad through it.
+        let v = [-1., -1., 0., 1., -1., 0., -1., 1., 3., 1., -1., 0., 1., 1., 3., -1., 1., 3.,
+                 -0.8, -0.9, 1., 0.7, -0.6, 0.2, -0.2, 0.9, 0.5];
+        ctx.bind_buffer(ARRAY_BUFFER, 10);
+        ctx.buffer_data(ARRAY_BUFFER, &bytes(&v));
+        ctx.enable_attrib(0, true);
+        ctx.attrib_pointer(0, 3, FLOAT, false, 12, 0);
+        ctx.draw_arrays(gl::TRIANGLES, 0, 9);
+        assert_eq!(ctx.get_error(), NO_ERROR);
+        ctx.color.clone()
+    };
+    let one = frame(1);
+    let four = frame(4);
+    let three = frame(3);
+    sex_gl::set_parallel(threads, 1);
+    assert!(one.iter().any(|&p| p != one[0]), "something drawn");
+    assert!(one == four && one == three, "banded frames differ");
+}

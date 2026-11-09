@@ -94,6 +94,28 @@ pub const MAX_ATTRIBS: usize = 16;
 pub const MAX_UNITS: usize = 16;
 /// Largest texture or drawing-buffer side.
 pub const MAX_SIZE: u32 = 4096;
+
+/// Runs `f(i)` for every `i` in `0..n`, on several cores at once if it can.
+pub type Parallel = fn(usize, &(dyn Fn(usize) + Sync));
+
+static PARALLEL_FN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static PARALLEL_CORES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(1);
+
+/// Draws covering at least this many pixels are split across cores.
+const PARALLEL_PIXELS: u64 = 24_000;
+
+/// Lets draws run on `cores` cores through `run` (the program's thread pool).
+pub fn set_parallel(run: Parallel, cores: usize) {
+    PARALLEL_FN.store(run as usize, core::sync::atomic::Ordering::Relaxed);
+    PARALLEL_CORES.store(cores.max(1), core::sync::atomic::Ordering::Relaxed);
+}
+
+fn parallel() -> (Option<Parallel>, usize) {
+    let f = PARALLEL_FN.load(core::sync::atomic::Ordering::Relaxed);
+    // SAFETY: only `set_parallel` stores here, and it stores a `Parallel`.
+    let run = (f != 0).then(|| unsafe { core::mem::transmute::<usize, Parallel>(f) });
+    (run, PARALLEL_CORES.load(core::sync::atomic::Ordering::Relaxed))
+}
 /// Mip levels a texture keeps (4096 down to 1).
 pub const MAX_LEVELS: usize = 13;
 
@@ -1150,8 +1172,34 @@ impl Context {
         fixed.polygon_offset = if self.polygon_offset_fill { Some(self.polygon_offset) } else { None };
         fixed.zero_one = prog.zero_one;
         fixed.flat = prog.flat;
-        let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin, quads: prog.fs.wants_quads() };
-        let mut target = Target { width: self.width as i32, height: self.height as i32, color, depth };
+        let quads = prog.fs.wants_quads();
+        let (w, h) = (self.width as i32, self.height as i32);
+        let (run, cores) = parallel();
+        if let Some(run) = run.filter(|_| cores > 1 && h >= 2 * cores as i32 && raster::coverage(w, h, &fixed, mode, &local, &verts, PARALLEL_PIXELS) >= PARALLEL_PIXELS) {
+            // Bands of rows, one per core, each drawing every primitive into its own
+            // rows: pixels see the primitives in the same order, so the frame is the same.
+            // Bands start on even rows so 2x2 quads never straddle two.
+            let rows = ((h as usize).div_ceil(cores) + 1) & !1;
+            let bands: Vec<core::cell::UnsafeCell<(i32, &mut [u32], &mut [f32])>> = color.chunks_mut(rows * w as usize).zip(depth.chunks_mut(rows * w as usize))
+                .enumerate().map(|(i, (c, d))| core::cell::UnsafeCell::new(((i * rows) as i32, c, d))).collect();
+            struct Shared<T>(T);
+            // Each band is touched by exactly one call of the job below.
+            unsafe impl<T> Sync for Shared<T> {}
+            impl<T> Shared<T> { fn get(&self) -> &T { &self.0 } }
+            let shared = Shared(&bands);
+            let job = |i: usize| {
+                let Some(cell) = shared.get().get(i) else { return };
+                let (y0, c, d) = unsafe { &mut *cell.get() };
+                let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin: fin.clone(), quads };
+                let mut target = Target { width: w, height: h, y0: *y0, color: c, depth: d };
+                raster::assemble(&mut target, &fixed, mode, &local, &verts, &mut shader);
+            };
+            let job = Shared(&job);
+            run(bands.len(), &|i| (job.get())(i));
+            return Ok(());
+        }
+        let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin, quads };
+        let mut target = Target { width: w, height: h, y0: 0, color, depth };
         raster::assemble(&mut target, &fixed, mode, &local, &verts, &mut shader);
         Ok(())
     }
