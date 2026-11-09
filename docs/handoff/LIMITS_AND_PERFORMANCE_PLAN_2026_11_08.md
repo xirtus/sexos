@@ -290,6 +290,22 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - Web still draws at the 410x330 its gates compare against the host render; it can
     now follow `Event::Resize`, which needs the gates to render at the reported size.
 
+- Stage 4, second part (the program store):
+  - Programs in the disk program store took no arguments: `run NAME ARGS` looked only
+    for `/bin/NAME`. Now Files prepares a `/bin/NAME` run even when no such file
+    exists, and the load falls back to the store's NAME with the same arguments.
+    `run jot @todo.txt` runs a store Jot on that file.
+  - The store's directory was one sector (15 programs). Its head now says how many
+    sectors it spans, up to 64 (960 programs); old one-sector stores read as before.
+    `scripts/install_program.py` writes as many sectors as it needs.
+  - ABI changes: program store directory head bytes 8..12 are the sector count;
+    `program_store::MAX_DIRECTORY_SECTORS`, `MAX_PROGRAMS`, `directory_sectors`;
+    `fs::PREPARE` accepts a missing `/bin/NAME`.
+  - Gate: `scripts/program_store_gate.py` (19 programs, Jot in the second sector, run
+    bare and with an `@file` argument, a missing name still refused).
+  - Files in `/bin` already had no count limit; the store is for programs installed
+    with the system.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

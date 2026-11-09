@@ -9,8 +9,19 @@ pub const DIRECTORY_LBA: u64 = 2048;
 pub const MAGIC: [u8; 8] = *b"SEXPROG1";
 pub const SECTOR: usize = 512;
 pub const ENTRY_BYTES: usize = 32;
-/// Directory: 8 byte magic, 8 reserved, then entries of name[16], lba u32, len u32, hash u64.
+/// Directory: 8 byte magic, a u32 count of directory sectors (0 means 1), 4 reserved,
+/// then entries of name[16], lba u32, len u32, hash u64. Every further directory sector
+/// keeps the same 16-byte head and entry places, so each holds `MAX_ENTRIES`.
 pub const MAX_ENTRIES: usize = (SECTOR - 16) / ENTRY_BYTES;
+/// Up to 64 directory sectors: 960 programs in the store.
+pub const MAX_DIRECTORY_SECTORS: usize = 64;
+pub const MAX_PROGRAMS: usize = MAX_ENTRIES * MAX_DIRECTORY_SECTORS;
+/// How many sectors the directory spans, from its first sector.
+pub fn directory_sectors(first: &[u8]) -> Option<usize> {
+    if first.len() < SECTOR || first[..8] != MAGIC { return None; }
+    let count = u32::from_le_bytes(first[8..12].try_into().ok()?) as usize;
+    match count { 0 => Some(1), n if n <= MAX_DIRECTORY_SECTORS => Some(n), _ => None }
+}
 pub const NAME_BYTES: usize = 16;
 /// One program's largest file.
 pub const IMAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -81,13 +92,16 @@ pub fn fnv(bytes: &[u8]) -> u64 {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry { pub lba: u64, pub len: u32, pub hash: u64 }
-/// The named entry of a directory sector, if the sector is one.
+/// The named entry of a directory (all its sectors), if it is one.
 pub fn find(directory: &[u8], name: [u64; 2]) -> Option<Entry> {
-    if directory.len() < SECTOR || directory[..8] != MAGIC { return None; }
+    let sectors = directory_sectors(directory)?;
+    if directory.len() < sectors * SECTOR { return None; }
     let mut want = [0u8; 16];
     want[..8].copy_from_slice(&name[0].to_le_bytes());
     want[8..].copy_from_slice(&name[1].to_le_bytes());
-    for raw in directory[16..16 + MAX_ENTRIES * ENTRY_BYTES].chunks_exact(ENTRY_BYTES) {
+    let entries = directory[..sectors * SECTOR].chunks_exact(SECTOR)
+        .flat_map(|sector| sector[16..16 + MAX_ENTRIES * ENTRY_BYTES].chunks_exact(ENTRY_BYTES));
+    for raw in entries {
         if raw[..16] != want { continue; }
         let word = |at: usize| u32::from_le_bytes([raw[at], raw[at + 1], raw[at + 2], raw[at + 3]]);
         let hash = u64::from_le_bytes(raw[24..32].try_into().ok()?);
