@@ -3270,8 +3270,8 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   vendor, model, owning service and support level (driven, firmware, platform,
   in_progress, planned, none), `[hw.warning]` lines for things a person must act on
   (Intel VMD/RST RAID hiding the NVMe drives, an NVIDIA GPU with no native driver, Wi-Fi
-  with no driver) and a `[hw.census]` summary. On the QEMU gate machine: 8 devices, 7
-  working, AHCI in progress.
+  with no driver) and a `[hw.census]` summary. On the QEMU gate machine: 8 devices, all 8
+  working.
 - **NVMe on real SSDs.** Controller disable/enable now waits up to CAP.TO (500 ms units)
   in timer ticks instead of a fixed poll count (a few ms on bare metal), gives up at once
   on a fatal status while enabling, and the admin completion doorbell honours the
