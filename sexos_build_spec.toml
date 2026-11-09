@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "760fbb19c9d15509acfebc67c40138d5fb32b10bc506638aad08d143ea151bb2"
+abi_version_hash = "60bcb754442be41ee08fd4f54c3b893e4895009bf4ec91d64f6c5927f1e6d255"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -55,6 +55,7 @@ crates = [
   "apps/shapes/Cargo.toml",
   "apps/fputest/Cargo.toml",
   "apps/jit/Cargo.toml",
+  "apps/threads/Cargo.toml",
   "apps/web/Cargo.toml"
 ]
 
@@ -277,6 +278,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/jit/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/jit"
 dest_artifact = "iso_root/programs/jit"
+
+[[stage]]
+id = "build_threads"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/threads/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/threads"
+dest_artifact = "iso_root/programs/threads"
 
 [[stage]]
 id = "build_web"

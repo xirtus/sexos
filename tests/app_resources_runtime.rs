@@ -75,6 +75,7 @@ mod ipc{
 /// The direct map: on the host, frame addresses are host pointers already.
 pub struct Hhdm;pub struct HhdmResponse{pub offset:u64}impl Hhdm{pub fn response(&self)->Option<HhdmResponse>{Some(HhdmResponse{offset:0})}}
 pub static HHDM_REQUEST:Hhdm=Hhdm;
+mod program_workers{pub fn all_dead(_:u32)->bool{true}pub fn end(_:u32){}pub fn spawn(_:&crate::capability::ProtectionDomain,_:u32,_:u32,_:u64,_:u64,_:u64)->Result<u64,u64>{Err(1)}}
 pub fn sys_yield(){}
 #[path="../kernel/src/program_image.rs"]mod program_image;
 mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,value:u64)->u64{value}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}

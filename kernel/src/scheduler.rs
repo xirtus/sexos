@@ -78,6 +78,9 @@ pub struct Task {
     wait_deadline:self_wait::Deadline,
     /// x87/SSE registers while the task is off-core (see crate::fpu).
     fpu: crate::fpu::FpuState,
+    /// The core this task runs on, when not its domain's (a program's workers);
+    /// u32::MAX means `smp::home_core` of its domain.
+    pub home: AtomicU32,
 }
 
 impl Task {
@@ -140,6 +143,7 @@ impl Task {
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
             fpu: crate::fpu::FpuState::INIT,
+            home: AtomicU32::new(u32::MAX),
         }
     }
 }
@@ -413,7 +417,10 @@ impl Scheduler {
     pub fn admit_task(&self, task: *mut Task) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
         // A task's queue is decided by the task, not by the core that woke it.
-        let home_core = crate::smp::home_core(unsafe { (*task).context.pd_id });
+        let home_core = match unsafe { (*task).home.load(Ordering::Acquire) } {
+            u32::MAX => crate::smp::home_core(unsafe { (*task).context.pd_id }),
+            core => core,
+        };
         let home = &SCHEDULERS[home_core as usize];
         let admitted = unsafe { (*task).state.try_admit(|| home.runqueue.try_push(task)) };
         // That core may be halted, and its next tick is up to a millisecond away.
@@ -965,6 +972,8 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
     (*task).wait_deadline.cancel();
     (*task).state.exit();
+    // A worker that ends with an error (a panic) ends its program's run.
+    if (*regs_ptr).rdi != 0 { crate::program_workers::faulted(task); }
     if !crate::program_records::is_record((*task).context.pd_id){serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);}
     poll_paging_exit_notifications();
     yield_and_switch(regs_ptr)

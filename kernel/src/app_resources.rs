@@ -249,6 +249,8 @@ fn dead(app:&App)->Result<(),u64>{
     let tramp=pd.trampoline_task.load(Ordering::Acquire);
     if tramp as usize!=app.trampoline{return Err(DENIED)}
     if !tramp.is_null(){let s=unsafe{(*tramp).state.snapshot()};if !matches!(s.phase,Phase::Constructed|Phase::Dead)||s.owner_core.is_some(){return Err(RETRY)}}
+    // A worker still on a core could touch the run's memory after it is reused.
+    if !crate::program_workers::all_dead(app.target){crate::program_workers::end(app.target);return Err(RETRY)}
     Ok(())
 }
 pub fn accepts_ipc(target:u32)->bool{
@@ -481,6 +483,31 @@ pub fn grow(pd:&ProtectionDomain,want:u64)->[u64;3]{
         Ok([0,base,app.grown as u64])
     })();result.unwrap_or_else(|e|[e,0,0])
 }
+/// The caller's row's current run, if it is live: the run's task id. Checks the same
+/// identity as `grow`, and mutates nothing.
+fn live(app:&App,pd:&ProtectionDomain)->Result<u32,u64>{
+    if !app.reusable||!app.activated||app.arena==0||app.retired||app.rebirthing||app.forced{return Err(DENIED)}
+    let main=pd.main_task.load(Ordering::Acquire);
+    if main.is_null()||main as usize!=app.main{return Err(DENIED)}
+    let task=unsafe{&*main};
+    if task.id!=app.task||task.state.snapshot().exited{return Err(DENIED)}
+    Ok(app.task)
+}
+pub fn live_run(pd:&ProtectionDomain)->Result<u32,u64>{
+    let apps=apps_lock!().ok_or(RETRY)?;
+    let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
+    live(app,pd)
+}
+/// Starts a worker for the caller's live run. The program table stays held, so the
+/// run cannot end between the check and the worker's start.
+pub fn spawn_worker(pd:&ProtectionDomain,entry:u64,stack:u64,arg:u64)->Result<u64,u64>{
+    let apps=apps_lock!().ok_or(RETRY)?;
+    let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
+    let run=live(app,pd)?;
+    let id=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
+    if id==u32::MAX{return Err(DENIED)}
+    crate::program_workers::spawn(pd,run,id,entry,stack,arg)
+}
 /// Turns heap pages of the caller's current run into code (SEAL) or back into data
 /// (OPEN). A page is never writable and executable at once, and sealed bytes may not
 /// hold an instruction that rewrites the protection-key register (see
@@ -599,6 +626,7 @@ pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
         for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
         crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
         app.forced=true;
+        crate::program_workers::end(id);
         crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
         Ok(())})();result.map_or_else(|e|e,|()|0)
 }
@@ -690,6 +718,7 @@ pub fn poll_exit_notifications(){
         if !app.ready || app.retired{continue}
         let main=app.main as *mut crate::scheduler::Task;
         if !unsafe{(*main).state.snapshot().exited}{continue}
+        if app.reusable{crate::program_workers::end(app.target);}
         if !app.kicked{for holder in app.services.into_iter().chain(core::iter::once(app.pager)){
             if let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
         }app.kicked=true;}

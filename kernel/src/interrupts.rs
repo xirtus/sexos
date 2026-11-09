@@ -456,8 +456,22 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
 
     let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
         crate::scheduler::ScheduleDecision::NoRunnable => {
-            unsafe { send_eoi(); }
-            return;
+            // A task told to end from another core (a program's worker when its run
+            // ends) must not keep running user code just because nothing else is
+            // ready: save its frame and leave it, as the page-fault path does.
+            let current = sched.current_task.load(Ordering::Acquire);
+            if current.is_null() || !unsafe { (*current).state.snapshot().exited } {
+                unsafe { send_eoi(); }
+                return;
+            }
+            unsafe {
+                let ctx = &mut (*current).context;
+                save_user_frame(ctx, stack_frame);
+                send_eoi();
+                let next = crate::scheduler::wait_for_local_resume_or_switch(sched);
+                crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new((*next).kstack_top + 168));
+                crate::scheduler::Scheduler::switch_to(ctx as *mut _, next);
+            }
         }
         crate::scheduler::ScheduleDecision::Switch { old, next } => (old, next),
     };
@@ -466,8 +480,28 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         // Save old context from interrupt stub's GPR push level on the stack.
         // stack_frame points to RIP.  Stub pushed [rax..r15][dummy=0] above RIP.
         // Layout from RIP downward: [dummy][r15][r14]..[rbx][rax]
-        if !old_ctx_ptr.is_null() {
-            let old_ctx = &mut *old_ctx_ptr;
+        if !old_ctx_ptr.is_null() { save_user_frame(&mut *old_ctx_ptr, stack_frame); }
+
+        let kstack_top = (*next_ctx_ptr).kstack_top;
+        if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
+            serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",
+                (*next_ctx_ptr).pd_id, kstack_top, (*next_ctx_ptr).rip);
+        }
+
+        // RSP0 must be empty kernel-stack top, not saved-context base.
+        // kstack_top is where the context (GPRs+IRET) is saved. 
+        // kstack_top + 168 (15 regs + dummy + 5 iret qwords) = kstack_alloc_top.
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
+
+        send_eoi();
+        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
+    }
+}
+
+
+/// Saves a user frame the timer stub pushed into `old_ctx`: the IRET frame, the
+/// registers above it, and the domain's PKRU.
+unsafe fn save_user_frame(old_ctx: &mut crate::scheduler::TaskContext, stack_frame: &InterruptStackFrame) {
             let base = stack_frame as *const _ as *const u64;
             old_ctx.rip = stack_frame.instruction_pointer.as_u64();
             old_ctx.cs = stack_frame.code_segment.0 as u64;
@@ -503,23 +537,6 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
                 (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64
             };
         }
-
-        let kstack_top = (*next_ctx_ptr).kstack_top;
-        if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
-            serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",
-                (*next_ctx_ptr).pd_id, kstack_top, (*next_ctx_ptr).rip);
-        }
-
-        // RSP0 must be empty kernel-stack top, not saved-context base.
-        // kstack_top is where the context (GPRs+IRET) is saved. 
-        // kstack_top + 168 (15 regs + dummy + 5 iret qwords) = kstack_alloc_top.
-        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
-
-        send_eoi();
-        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
-    }
-}
-
 
 /// Kernel-mode halt loop. Redirect faulted user tasks here so IRETQ
 /// never returns to the faulting RIP (which causes immediate re-fault).
@@ -604,6 +621,7 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
                 }
             } else {
                 (*current_ptr).state.exit();
+                crate::program_workers::faulted(current_ptr);
                 serial_println!("fault.kill [paging.fault.terminal] pd={} reason=ineligible error={:#x}", cur_pd, error_code);
             }
         } else {
