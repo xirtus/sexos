@@ -61,7 +61,7 @@ service has to say so on its own screen, and the next start has to say what happ
 
 ## ABI changes (abi_version_hash recomputed)
 
-- New syscall **84 `SYS_CRASH_LOG`** (`sex_pdx::crash_log`): `OP_READ` and `OP_STATUS`
+- New syscall **85 `SYS_CRASH_LOG`** (`sex_pdx::crash_log`): `OP_READ` and `OP_STATUS`
   (Files, Shell, any Spindle), `OP_ADOPT` (Files only; refuses this start's own records, puts history in front of them and returns `FULL` rather than push out a record not yet on disk),
   `OP_RESTARTS` (any service, about itself), `OP_PROBE_FAULT` (test builds only, Spindle
   only).

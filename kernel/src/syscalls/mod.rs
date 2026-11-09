@@ -209,7 +209,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
     }
 
     let result = match rax {
-        84 => crate::crash_log::syscall(regs),
+        85 => crate::crash_log::syscall(regs),
         0 => { // SYSCALL_PDX_CALL
             let slot = rdi as u32;
             let num = rsi;

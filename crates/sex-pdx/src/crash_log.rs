@@ -8,7 +8,7 @@
 //! (`SYS_CRASH_LOG`) and on disk.
 
 /// Syscall number. `rdi` selects the operation.
-pub const SYSCALL: u64 = 84;
+pub const SYSCALL: u64 = 85;
 /// rsi: index from 0; rdx: buffer of `RECORD_BYTES`. Copies the record kept at that
 /// index (oldest first). Files and Spindle only.
 pub const OP_READ: u64 = 0;
