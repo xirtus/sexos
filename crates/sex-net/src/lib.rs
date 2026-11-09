@@ -131,6 +131,8 @@ impl<'a> Engine<'a>{
         if self.open.is_some(){return Ok(());}
         let mut flow=tcp::Socket::new(tcp::SocketBuffer::new(b.rx),tcp::SocketBuffer::new(b.tx));
         flow.set_timeout(Some(Duration::from_secs(30)));flow.set_nagle_enabled(false);
+        // Acknowledge at once: a delayed ACK holds the sender to one window per delay.
+        flow.set_ack_delay(None);
         let dns=udp::Socket::new(udp::PacketBuffer::new(b.dns_rx_meta,b.dns_rx),udp::PacketBuffer::new(b.dns_tx_meta,b.dns_tx));
         let tcp=self.flows.add(flow);let dns=self.flows.add(dns);let dhcp=self.flows.add(dhcpv4::Socket::new());
         self.open=Some(Open{tcp,dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,query_id:1,query_name:[0;255],query_len:0,resolver:[0;4]});

@@ -4,16 +4,19 @@
 use sex_pdx::{dma_pool::DmaRegionPool, memory_region as m, pci_command as c};
 use crate::nic;
 use core::sync::atomic::{fence,Ordering};
-pub const COUNT:u32=8;
+/// Receive descriptors: enough to hold a 64 KiB TCP window (about 45 frames) twice
+/// over while the service waits its turn, so a download doesn't overrun the ring.
+pub const RX_COUNT:u32=96;
+pub const TX_COUNT:u32=8;
 pub const BUFFER:u32=2048;
 pub const MAX_FRAME:usize=1514;
-pub const USED:u32=40960;
+pub const USED:u32=221184;
 const RDBAL:u32=0x2800;const RDBAH:u32=0x2804;const RDLEN:u32=0x2808;
 const RDH:u32=0x2810;const RDT:u32=0x2818;const RXDCTL:u32=0x2828;
 const TDBAL:u32=0x3800;const TDBAH:u32=0x3804;const TDLEN:u32=0x3808;
 const TDH:u32=0x3810;const TDT:u32=0x3818;const TXDCTL:u32=0x3828;
 const TIPG:u32=0x410;const GCR:u32=0x5b00;
-const RX_DATA:u32=8192;const TX_DATA:u32=24576;
+const RX_DATA:u32=8192;const TX_DATA:u32=RX_DATA+RX_COUNT*BUFFER;
 const RCTL_VALUE:u32=2|(1<<15)|(1<<26);
 const TCTL_VALUE:u32=2|8|(15<<4)|(64<<12);
 const WAIT_TICKS:u64=5000;const WAIT_TURNS:u32=32768;
@@ -41,7 +44,7 @@ impl Layout{
         // Use the actual common subdivision arithmetic, without extending it.
         let mut pool=DmaRegionPool::new(view).ok()?;
         let rx=pool.reserve(4096).ok()?;let tx=pool.reserve(4096).ok()?;
-        let rxb=pool.reserve(16384).ok()?;let txb=pool.reserve(16384).ok()?;
+        let rxb=pool.reserve((RX_COUNT*BUFFER) as u64).ok()?;let txb=pool.reserve((TX_COUNT*BUFFER) as u64).ok()?;
         let p=rx.physical_address;let v=rx.virtual_address;
         if tx.physical_address!=p+4096||rxb.physical_address!=p+RX_DATA as u64||txb.physical_address!=p+TX_DATA as u64
             ||tx.virtual_address!=v+4096||rxb.virtual_address!=v+RX_DATA as u64||txb.virtual_address!=v+TX_DATA as u64||pool.used()!=USED as u64{return None;}
@@ -65,8 +68,8 @@ impl<H:Hardware> Driver<H>{
     pub fn busy(&self)->bool{self.pending.is_some()}
     fn fail(&mut self,reason:Failure){self.failure=Some(reason);self.phase=Phase::Quarantined;}
     fn registers(&self)->[(u32,u32);13]{let p=self.layout.unwrap().physical;
-        [(RDBAL,p as u32),(RDBAH,(p>>32)as u32),(RDLEN,COUNT*16),(RDH,0),(RDT,COUNT-1),
-         (TDBAL,(p+4096)as u32),(TDBAH,((p+4096)>>32)as u32),(TDLEN,COUNT*16),(TDH,0),(TDT,0),
+        [(RDBAL,p as u32),(RDBAH,(p>>32)as u32),(RDLEN,RX_COUNT*16),(RDH,0),(RDT,RX_COUNT-1),
+         (TDBAL,(p+4096)as u32),(TDBAH,((p+4096)>>32)as u32),(TDLEN,TX_COUNT*16),(TDH,0),(TDT,0),
          (RXDCTL,0),(TXDCTL,if self.model()==c::Model::I82574{1<<22}else{0}),
          (TIPG,if self.model()==c::Model::I82574{0x00602006}else{0x0060200a})]}
     /// One bounded initialization phase, or at most one TX/RX completion.
@@ -94,15 +97,14 @@ impl<H:Hardware> Driver<H>{
                 self.layout=Some(layout);self.phase=Phase::Zero;
             },
             Phase::Zero=>{
-                // At most one existing4KiB page per turn, ten turns total.
+                // At most one existing 4 KiB page per turn (USED/4096 turns).
                 for offset in (self.zero..self.zero+4096).step_by(8){self.hardware.store64(offset,0);}
                 self.zero+=4096;if self.zero==USED{self.phase=Phase::Descriptors;}
             },
             Phase::Descriptors=>{
-                let l=self.layout.unwrap();for i in 0..COUNT{
-                    self.hardware.store64(i*16,l.rx(i));self.hardware.store64(i*16+8,0);
-                    self.hardware.store64(4096+i*16,l.tx(i));self.hardware.store64(4096+i*16+8,1<<32);
-                }self.hardware.publish();self.phase=Phase::Registers;
+                let l=self.layout.unwrap();
+                for i in 0..RX_COUNT{self.hardware.store64(i*16,l.rx(i));self.hardware.store64(i*16+8,0);}
+                for i in 0..TX_COUNT{self.hardware.store64(4096+i*16,l.tx(i));self.hardware.store64(4096+i*16+8,1<<32);}self.hardware.publish();self.phase=Phase::Registers;
             },
             Phase::Registers=>{
                 for (offset,value)in self.registers(){self.hardware.write(offset,value);}
@@ -158,7 +160,7 @@ impl<H:Hardware> Driver<H>{
                 let mut frame=Frame{length:0,bytes:[0;MAX_FRAME]};
                 if accept{frame.length=length;self.hardware.load_bytes(RX_DATA+index*BUFFER,&mut frame.bytes[..length]);}
                 self.hardware.store64(index*16,self.layout.unwrap().rx(index));self.hardware.store64(index*16+8,0);
-                self.hardware.publish();self.hardware.write(RDT,index);self.rx=(index+1)%COUNT;
+                self.hardware.publish();self.hardware.write(RDT,index);self.rx=(index+1)%RX_COUNT;
                 return if accept{let Some(sequence)=self.received.checked_add(1)else{self.fail(Failure::Sequence);return None;};self.received=sequence;Some(Event::Received{sequence,index,frame})}
                 else{self.dropped=self.dropped.saturating_add(1);Some(Event::Dropped{index,length,status,errors})}
             },
@@ -181,7 +183,7 @@ impl<H:Hardware> Driver<H>{
         self.hardware.store64(4096+index*16,self.layout.unwrap().tx(index));
         self.hardware.store64(4096+index*16+8,length as u64|(0x0b<<24));
         self.pending=Some(Pending{sequence,index,length,hash,since:now,turns:0});self.sent=sequence;
-        self.hardware.publish();self.tx=(index+1)%COUNT;self.hardware.write(TDT,self.tx);
+        self.hardware.publish();self.tx=(index+1)%TX_COUNT;self.hardware.write(TDT,self.tx);
         Ok((sequence,index,length,hash))
     }
 }

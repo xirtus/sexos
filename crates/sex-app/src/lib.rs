@@ -409,14 +409,17 @@ pub mod net {
     fn receive(window: &mut Window, region: &mut [u8], out: &mut alloc::vec::Vec<u8>, cap: usize, mut enough: impl FnMut(&[u8]) -> bool) -> Result<(), Error> {
         let mut done = false;
         let mut began = sex_pdx::get_ticks();
+        let (start, mut calls, mut empty, mut idle) = (began, 0u32, 0u32, 0u32);
         loop {
             // Sixty seconds without a byte is too slow; a long download that keeps moving is not.
             if sex_pdx::get_ticks().saturating_sub(began) > 60_000 { let _ = call(window, w::CLOSE, 0); return Err(Error::TooSlow); }
             let k = ok(call(window, w::RECEIVE, (cap - out.len()).min(32 * 1024).max(1) as u64)?)? as usize;
+            calls += 1; if k == 0 { empty += 1; }
             if k > 0 {
                 let take = k.min(cap - out.len());
                 out.extend_from_slice(&region[..take]);
                 began = sex_pdx::get_ticks();
+                idle = 0;
                 if out.len() == cap || enough(out) { break; }
                 continue;
             }
@@ -424,9 +427,12 @@ pub mod net {
             // Bytes can land between the two calls, so a closed peer gets one last read.
             let state = ok(call(window, w::STATE, 0)?)?;
             done = matches!(state, w::STATE_PEER_CLOSED | w::STATE_CLOSED);
-            if !done { pause(); }
+            // While bytes are flowing the next frame is usually a scheduler turn away:
+            // yield first, and sleep a tick only once the flow has gone quiet.
+            if !done { idle += 1; if idle > 64 { pause(); } else { sex_pdx::sys_yield(); } }
         }
         let _ = call(window, w::CLOSE, 0);
+        sex_pdx::serial_record!("[net.receive.stats] bytes={} calls={} empty={} ticks={}", out.len(), calls, empty, sex_pdx::get_ticks() - start);
         Ok(())
     }
 
