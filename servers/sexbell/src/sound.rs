@@ -182,6 +182,13 @@ const PERIOD_BYTES: usize = 8192;
 const IN_FLIGHT: usize = 12;
 const NOTES: usize = 16;
 pub const MAX_MS: u64 = 5000;
+const PERIOD_FRAMES: usize = PERIOD_BYTES / FRAME_BYTES;
+/// One stream per program row: the sound ring BOOT shares with that row.
+const STREAMS: usize = 16;
+use sex_pdx::sound_ring as ring;
+
+#[derive(Clone, Copy)]
+struct Stream { ring: ring::Ring, active: bool }
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
@@ -200,7 +207,14 @@ struct Player {
     flying: usize,
     period: [u8; PERIOD_BYTES],
     played: u64,
+    streams: [Option<Stream>; STREAMS],
+    /// Frames each stream gave each in-flight period, credited to PLAYED when the
+    /// card hands that period back.
+    took: [[u16; STREAMS]; IN_FLIGHT],
 }
+/// The period being mixed, kept off the service's small stack.
+static mut MIX: [[i32; 2]; PERIOD_FRAMES] = [[0; 2]; PERIOD_FRAMES];
+fn mix() -> &'static mut [[i32; 2]; PERIOD_FRAMES] { unsafe { &mut *core::ptr::addr_of_mut!(MIX) } }
 static mut PLAYER: Option<Player> = None;
 fn player() -> Option<&'static mut Player> { unsafe { (*core::ptr::addr_of_mut!(PLAYER)).as_mut() } }
 
@@ -214,27 +228,58 @@ fn sine(phase: u32) -> f32 {
 }
 
 impl Player {
-    fn render(&mut self) -> bool {
-        if self.len == 0 { return false; }
-        let mut at = 0;
-        while at < PERIOD_BYTES {
-            let sample = if self.len > 0 {
-                let note = self.notes[self.head];
-                // 5 ms ramps at both ends keep notes from clicking.
-                let ramp = (RATE / 200).min(note.frames / 2).max(1);
-                let edge = self.done.min(note.frames - 1 - self.done.min(note.frames - 1)).min(ramp);
-                let gain = note.volume as f32 / 100.0 * 0.5 * 32767.0 * edge as f32 / ramp as f32;
-                let s = if note.hz == 0 { 0.0 } else { sine(self.phase) * gain };
-                self.phase = self.phase.wrapping_add(((note.hz as u64) << 32).wrapping_div(RATE as u64) as u32);
-                self.done += 1;
-                if self.done >= note.frames {
-                    self.head = (self.head + 1) % NOTES; self.len -= 1; self.done = 0; self.phase = 0;
-                }
-                s as i16
-            } else { 0 };
-            let bytes = sample.to_le_bytes();
-            self.period[at..at + 4].copy_from_slice(&[bytes[0], bytes[1], bytes[0], bytes[1]]);
-            at += FRAME_BYTES;
+    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active) }
+
+    /// Mixes the next period of notes and streams into `period`, noting how many
+    /// frames each stream gave in `took[slot]`. False when there is nothing to play.
+    fn render(&mut self, slot: usize) -> bool {
+        if self.len == 0 && !self.streaming() { return false; }
+        let mix = mix();
+        *mix = [[0; 2]; PERIOD_FRAMES];
+        for frame in 0..PERIOD_FRAMES {
+            if self.len == 0 { break; }
+            let note = self.notes[self.head];
+            // 5 ms ramps at both ends keep notes from clicking.
+            let ramp = (RATE / 200).min(note.frames / 2).max(1);
+            let edge = self.done.min(note.frames - 1 - self.done.min(note.frames - 1)).min(ramp);
+            let gain = note.volume as f32 / 100.0 * 0.5 * 32767.0 * edge as f32 / ramp as f32;
+            let s = if note.hz == 0 { 0.0 } else { sine(self.phase) * gain };
+            self.phase = self.phase.wrapping_add(((note.hz as u64) << 32).wrapping_div(RATE as u64) as u32);
+            self.done += 1;
+            if self.done >= note.frames {
+                self.head = (self.head + 1) % NOTES; self.len -= 1; self.done = 0; self.phase = 0;
+            }
+            mix[frame] = [s as i32, s as i32];
+        }
+        for (i, entry) in self.streams.iter_mut().enumerate() {
+            self.took[slot][i] = 0;
+            let Some(st) = entry.as_mut() else { continue };
+            if !st.active { continue; }
+            let r = st.ring;
+            let (written, taken) = (r.load(ring::WRITTEN), r.load(ring::TAKEN));
+            // A program owns only its own ring: a counter it bent is clamped, not trusted.
+            let have = written.wrapping_sub(taken).min(ring::FRAMES) as usize;
+            let n = have.min(PERIOD_FRAMES);
+            let volume = r.load(ring::VOLUME).min(100) as i32;
+            let frames = r.frames();
+            for f in 0..n {
+                let at = ((taken + f as u64) % ring::FRAMES) as usize;
+                let [l, rr] = unsafe { core::ptr::read_volatile(frames.add(at)) };
+                mix[f][0] += l as i32 * volume / 100;
+                mix[f][1] += rr as i32 * volume / 100;
+            }
+            r.store(ring::TAKEN, taken + n as u64);
+            self.took[slot][i] = n as u16;
+            if n == 0 && r.load(ring::OPEN) == 0 {
+                st.active = false;
+                sex_pdx::serial_record!("[bell.sound.stream.closed] row={} taken={}", i, taken);
+            }
+        }
+        for (frame, [l, r]) in mix.iter().enumerate() {
+            let (l, r) = ((*l).clamp(-32768, 32767) as i16, (*r).clamp(-32768, 32767) as i16);
+            let at = frame * FRAME_BYTES;
+            self.period[at..at + 2].copy_from_slice(&l.to_le_bytes());
+            self.period[at + 2..at + 4].copy_from_slice(&r.to_le_bytes());
         }
         true
     }
@@ -243,9 +288,13 @@ impl Player {
         // Reap finished periods in order; the device returns them as it plays.
         while self.flying > 0 {
             if self.card.pcm_xfer_ok(self.tokens[self.first]).is_err() { break; }
+            for (i, st) in self.streams.iter().enumerate() {
+                let n = self.took[self.first][i];
+                if let (Some(st), true) = (st, n > 0) { st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
+            }
             self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1; self.played += 1;
         }
-        while self.flying < IN_FLIGHT && self.render() {
+        while self.flying < IN_FLIGHT && self.render((self.first + self.flying) % IN_FLIGHT) {
             let period = self.period;
             match self.card.pcm_xfer_nb(self.stream, &period) {
                 Ok(token) => { self.tokens[(self.first + self.flying) % IN_FLIGHT] = token; self.flying += 1; }
@@ -297,7 +346,7 @@ fn open() -> Result<Player, &'static str> {
     card.pcm_prepare(stream).map_err(|_| "prepare")?;
     Ok(Player { card, stream, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
         head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0 })
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT] })
 }
 
 pub fn present() -> bool { player().is_some() }
@@ -316,8 +365,29 @@ pub fn tone(hz: u64, ms: u64, volume: u64) -> bool {
 /// Two rising notes: something needs the person now.
 pub fn chime() -> bool { tone(1319, 90, 30) && tone(1760, 140, 30) }
 
-/// Notes still to play or periods still with the device.
-pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0) }
+/// Notes still to play, streams playing, or periods still with the device.
+pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0 || p.streaming()) }
+
+/// A program row says its ring has sound: play it from where Bell last took.
+/// False when there's no card or the caller has no ring.
+pub fn stream(caller: u32) -> bool {
+    let Some(p) = player() else { return false };
+    let Some(k) = ring::index_of(caller).filter(|k| *k < STREAMS) else { return false };
+    if p.streams[k].is_none() {
+        match sex_pdx::sound_ring_bell(k) {
+            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false }),
+            Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return false; }
+        }
+    }
+    let st = p.streams[k].as_mut().unwrap();
+    if !st.active {
+        st.active = true;
+        sex_pdx::serial_record!("[bell.sound.stream.open] row={} caller={} written={} taken={}",
+            k, caller, st.ring.load(ring::WRITTEN), st.ring.load(ring::TAKEN));
+    }
+    p.pump();
+    true
+}
 
 pub fn pump() {
     if let Some(p) = player() {

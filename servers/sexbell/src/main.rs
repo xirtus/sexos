@@ -1390,6 +1390,12 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
+            sex_pdx::sound_ring::OP_PLAY => {
+                // A program's own sound, from its own ring; muting silences it too.
+                let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd);
+                if allowed { sound::stream(msg.caller_pd as u32); }
+            }
+
             sex_pdx::OP_BELL_TONE => {
                 // Fire and forget, like a notification: arg0 Hz (0 rests), arg1 ms, arg2 volume %.
                 let volume = if msg.arg2 == 0 { 30 } else { msg.arg2 };
