@@ -3,7 +3,7 @@
 compiles an expression into its heap, seals it as code and runs it, matching an
 interpreter. Code hiding WRPKRU is refused and re-encoded; code is opened, patched and
 sealed again. Writing to sealed code and running open data each end only that run,
-through a page fault, and the row runs again afterwards. A program file whose own code
+through a page fault, as do a bad instruction, a privileged one and a divide by zero, and the row runs again afterwards. A program file whose own code
 holds WRPKRU is refused at load."""
 import argparse,re,shutil,struct,time
 from pathlib import Path
@@ -35,10 +35,10 @@ def main():
   blocked=re.search(r'\[jit\.blocked\] offset=(\d+)\n',t()[s:]);assert blocked,'WRPKRU was not refused'
   speed=dict(kv.split('=')for kv in re.search(r'\[jit\.speed\] ([^\n]*)\n',t()[s:])[1].split())
   return dict(target=target,task=task,speedup=int(speed['speedup']),seals=len(seals),blocked=int(blocked[1]))
- def fault(r,key,mark):
+ def fault(r,key,mark,kill=r'paging\.fault\.terminal',detail=''):
   s=len(t());g['focus'](SURFACE[r['target']]);time.sleep(.5);q.key(key)
   g['wait'](rf'\[jit\.{mark}\] target={r["target"]} task={r["task"]}\n',s,60)
-  g['wait'](rf'fault\.kill \[paging\.fault\.terminal\] pd={r["target"]} ',s,120)
+  g['wait'](rf'fault\.kill \[{kill}\] pd={r["target"]} {detail}',s,120)
   g['wait'](rf'\[app\.private\.retired\] target={r["target"]} task={r["task"]} ',s,120)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
@@ -46,6 +46,9 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'jit.ppm')})
   fault(first,'w','write_code')
   second=started();fault(second,'e','run_data')
+  # CPU faults a program causes end only that run, not the machine.
+  for key,mark,kind in(('u','bad_instruction','invalid_opcode'),('g','privileged','general_protection'),('d','divide_by_zero','divide_error')):
+   fault(started(),key,mark,r'cpu\.fault\.terminal',rf'kind={kind} rip=0x[0-9a-f]+ ')
   s=len(t());run('run jitbad')
   g['wait'](r'\[app\.program\.rejected\] target=\d+ bytes=\d+ reason=key_instruction page=\d+ offset=0x[0-9a-f]+\n',s,120)
   third=started()

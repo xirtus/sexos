@@ -200,6 +200,23 @@ pub extern "C" fn _start() -> ! {
                 core::hint::black_box(f)(0);
                 sex_pdx::serial_record!("[jit.fail] target={} task={} why=ran data", target, task);
             }
+            // U, G, D: a bad instruction, a privileged one and a divide by zero. Each
+            // ends only this run; the machine keeps going.
+            Event::Key(key) if key.code == 0x16 => {
+                sex_pdx::serial_record!("[jit.bad_instruction] target={} task={}", target, task);
+                unsafe { core::arch::asm!("ud2") };
+            }
+            Event::Key(key) if key.code == 0x22 => {
+                sex_pdx::serial_record!("[jit.privileged] target={} task={}", target, task);
+                unsafe { core::arch::asm!("hlt") };
+            }
+            Event::Key(key) if key.code == 0x20 => {
+                sex_pdx::serial_record!("[jit.divide_by_zero] target={} task={}", target, task);
+                let zero = core::hint::black_box(0u64);
+                let q: u64;
+                unsafe { core::arch::asm!("div {z}", z = in(reg) zero, inout("rax") 1u64 => q, inout("rdx") 0u64 => _) };
+                core::hint::black_box(q);
+            }
             _ => {}
         }
     }
