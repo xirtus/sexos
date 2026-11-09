@@ -3103,3 +3103,34 @@ row no longer waits for the row before it to end.
   - The cloud container has no `/dev/kvm`, so QEMU runs as TCG: every instruction is emulated, and programs are soft-float until SSE (#18).
   - Most of pinball's QEMU slowdown is therefore emulation, not SexOS.
   - Heavier pages (three.js) are bound by QuickJS running inside wasmi even on the host. The browser thread owns that work.
+
+## Media: Play with sound, an SSE FFmpeg, more formats (2026-11-09)
+
+- **FFmpeg built for SSE.** `scripts/build_ffmpeg.sh` now builds FFmpeg n7.1.2 for the program target (x87 + SSE2, no AVX). It uses FFmpeg's nasm assembly and runtime CPU detection. AVX, AVX2, AVX-512, FMA and XOP are turned off, since the kernel saves state with FXSAVE.
+  - Formats: MP4/MOV, Matroska/WebM, Ogg, MP3, AAC, FLAC and WAV.
+  - Video codecs: H.264, HEVC, VP8, VP9 and MPEG-4.
+  - Sound codecs: AAC, MP3, Opus, Vorbis, FLAC and PCM.
+  - swresample turns any sound into 48 kHz stereo.
+- **Sound for programs.** Each program row gets a 256 KiB sound ring, shared only with Bell. `sex_app::sound::Sound` is the API: open, write, played, pending, volume, close.
+  - Bell mixes up to 16 rings with its own notes into the virtio sound card.
+  - Bell counts what the card has played per ring, so a program has a real sound clock.
+  - ABI changes:
+    - client slot 260 (`sound_ring::CLIENT_SLOT`);
+    - Bell slots 900+k;
+    - regions 0x4800+k;
+    - `OP_PLAY` 0xC9;
+    - program rows now hold `SLOT_BELL`;
+    - program-row fixed pages go from 1200 to 1400.
+  - Bell's mix buffer is a static, because Bell's stack is small.
+- **Play.**
+  - Streams the file through `files::read_at`, with a 256 KiB cache, so file size is not limited by memory.
+  - Plays sound through the ring and paces pictures by the sound clock, or by ticks when there is no sound.
+  - Pictures are decoded ahead into a short queue, so sound never starves while a picture waits.
+  - Sound-only files show "Playing sound".
+  - Play is built for the SSE target with `scripts/build_play.sh`.
+- **Gate.** `scripts/program_media_gate.py` records QEMU's virtio sound card to a WAV file and plays three clips:
+  - an MP4 with H.264 and AAC (440 Hz);
+  - a WebM with VP9 and Opus (660 Hz);
+  - an MP3 (880 Hz).
+
+  Each clip must show all its pictures, no picture may be more than 500 ms late, and each clip's tone must appear in the WAV at its pitch for about 2 s. Each clip takes about 2.6 s.

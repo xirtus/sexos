@@ -11,7 +11,7 @@ CLIP=(ROOT/'apps/play/tests/clip.mp4').read_bytes()
 # solid 0xC82828 for one second, then 0x28C828. Values as FFmpeg 9 on the host
 # decodes them at (3w/4, h/2), 0x00RRGGBB.
 FIRST,SECOND=0xC62726,0x26C626
-PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex/release/play'))
+PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
 FILES={'/play':Path(PLAY).read_bytes(),'/clip.mp4':CLIP,'/note.txt':b'not a video\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
@@ -46,11 +46,11 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   fetched('/play','/bin/play');fetched('/clip.mp4','clip.mp4');fetched('/note.txt','note.txt')
-  s=len(t());expect('run play @clip.mp4',r'\[play.opened\] codec=h264 w=320 h=240 fps=25/1 ms=\d+ shown=320x240',300)
+  s=len(t());expect('run play @clip.mp4',r'\[play.opened\] format=\S+ codec=h264 w=320 h=240 fps=25/1 ms=\d+ shown=320x240',300)
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
-  done=g['wait'](r'\[play.done\] frames=(\d+) ms=(\d+) w=320 h=240',s,900)
+  done=g['wait'](r'\[play.done\] frames=(\d+) ms=(\d+) w=320 h=240 ',s,900)
   frames,ms=int(done[1]),int(done[2]);assert frames==50,f'{frames} frames'
-  probes={int(n):int(v,16) for n,v in re.findall(r'\[play.frame\] n=(\d+) hash=[0-9a-f]+ probe=([0-9a-f]+)',t()[s:])}
+  probes={int(n):int(v,16) for n,v in re.findall(r'\[play.frame\] n=(\d+) at_ms=-?\d+ hash=[0-9a-f]+ probe=([0-9a-f]+)',t()[s:])}
   for n in(0,10,20):assert near(probes[n],FIRST),f'frame {n}: {probes[n]:06x}'
   for n in(30,40):assert near(probes[n],SECOND),f'frame {n}: {probes[n]:06x}'
   time.sleep(2);shot=a.out/'play.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
@@ -62,7 +62,7 @@ def main():
     r,gr,b=img.getpixel((bx+px,by+py));checked+=1;bad+=not near((r<<16)|(gr<<8)|b,SECOND,10)
   assert checked>50 and bad==0,f'{bad} of {checked} pixels of the last frame differ'
   close(m)
-  expect('run play @note.txt',r'\[play.failed\] Cannot play that video',120)
+  expect('run play @note.txt',r'\[play.failed\] Cannot play that file',120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'frames':frames,'play_ms':ms,'fps':round(frames*1000/max(ms,1),1),'pixels_checked':checked})
  finally:g['stop']()

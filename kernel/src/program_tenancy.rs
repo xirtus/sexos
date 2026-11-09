@@ -22,7 +22,7 @@ const fn shared_rows() -> usize {
 }
 /// Regions the row shares with services are mapped on its key too, so they take turns
 /// with its own pages. They stay for every run; `pages` is one run's.
-const FIXED: usize = 1200;
+const FIXED: usize = 1400;
 struct Row { target: u32, pages: Vec<PrivatePage>, count: usize, fixed: [PrivatePage; FIXED], fixed_count: usize }
 struct Pool { rows: [Row; ROWS], tenant: u32 }
 static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: Vec::new(), count: 0, fixed: [PrivatePage::EMPTY; FIXED], fixed_count: 0 } }; ROWS], tenant: 0 });
