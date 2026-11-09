@@ -15,6 +15,7 @@ use sex_pdx::{
 
 mod dma_transfer;
 mod completion_wait;
+mod ahci;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -237,6 +238,7 @@ const ADMIN_POLLS: u32 = 64_000_000;
 fn stop_uncertain_io() {
     unsafe { NVME_IO_STATE.ready = false; }
     end_block_loan();
+    ahci::stop_io();
     serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
 }
 
@@ -512,6 +514,7 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
 /// `loan` != 0: `dst_va` is the start of memory lent to the controller at that
 /// device address, and the data goes there directly.
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
+    if serving_ahci() { return ahci_read_into_mapped_va(offset, size, dst_va); }
     if size == 0
         || size > BLOCK_MAX_RUN
         || (offset % NVME_LBA_BYTES) != 0
@@ -720,6 +723,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
 
 /// What the namespace says, or just the original fixed area if it could not say.
 fn device_sectors() -> u64 {
+    if serving_ahci() { return ahci::sectors(); }
     match unsafe { NVME_IO_STATE.sectors } { 0 => WRITE_PROOF_LBA + 1, sectors => sectors }
 }
 
@@ -820,6 +824,7 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 }
 
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
+    if serving_ahci() { return ahci_write(offset, size, src_va); }
     // Success chatter shares the existing finite hot-log budget. Device errors,
     // timeout/quarantine and actual FLUSH receipts remain unconditional.
     if size == 0 || size > BLOCK_MAX_RUN
@@ -1011,6 +1016,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
 }
 
 fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
+    if serving_ahci() { return ahci_write_readback_proof(offset, size, src_va); }
     if size != WRITE_PROOF_LEN || src_va == 0 || src_va == u64::MAX {
         serial_println!("[sexdrive.storage100.rw.fail] reason=bad_args");
         serial_println!(
@@ -1618,6 +1624,7 @@ fn nvme_persist_read_proof() -> u64 {
 /// data is committed to non-volatile media (or CQE returns success in QEMU).
 /// Returns 0 on success, BLOCK_ERR_NO_DEVICE on failure.
 fn nvme_flush() -> u64 {
+    if serving_ahci() { return ahci_flush(); }
     let io_sq_va: u64;
     let io_cq_va: u64;
     let map_va: u64;
@@ -1800,6 +1807,160 @@ fn nvme_storage100_negative_mismatch() -> u64 {
 
     serial_println!("[sexdrive.storage100.neg.mismatch.fail] reason=unexpected_match");
     BLOCK_ERR_BAD_LEN
+}
+
+// ── AHCI backend ───────────────────────────────────────────────────────────
+// The block interface (BLOCK_READ/WRITE/SYNC/CAPACITY), LBA layout, bounce
+// leases and write guard are the same for both disks; only the command that
+// moves a bounce buffer differs. The NVMe entry points above dispatch here
+// when the AHCI disk serves, which happens only if no NVMe controller is ready.
+static mut AHCI_TAG: u16 = 0x0A00;
+
+fn serving_ahci() -> bool { ahci::ready() && !unsafe { NVME_IO_STATE.ready } }
+
+fn ahci_probe() -> bool {
+    ahci::probe(|| {
+        let phys = reserve_dma_phys(PAGE_SIZE);
+        let va = own_dma_virtual(phys, PAGE_SIZE);
+        if phys == 0 || va == 0 { None } else { Some((va, phys)) }
+    })
+}
+
+fn next_ahci_tag() -> u16 {
+    unsafe { let tag = AHCI_TAG; AHCI_TAG = AHCI_TAG.wrapping_add(1); tag }
+}
+
+/// Move `size` bytes between the disk and the reusable bounce lease. `fill`
+/// runs on the bounce before the command (write), `drain` after it (read).
+fn ahci_bounce(write: bool, offset: u64, size: u64, fill: impl FnOnce(u64), drain: impl FnOnce(u64)) -> u64 {
+    if size == 0 || size > BLOCK_MAX_RUN || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
+        || offset.checked_add(size).map_or(true, |end| end > device_sectors() * NVME_LBA_BYTES) {
+        serial_println!("[sexdrive.ahci.io.err] reason=bad_args write={} offset={:#x} size={}", write as u8, offset, size);
+        return BLOCK_ERR_BAD_LEN;
+    }
+    if !ahci::ready() {
+        serial_println!("[sexdrive.ahci.io.err] reason=not_ready write={}", write as u8);
+        return BLOCK_ERR_NO_DEVICE;
+    }
+    let tag = next_ahci_tag();
+    let Some(mut transfer) = prepare_bounce(write, tag) else { return BLOCK_ERR_NO_DEVICE };
+    let (phys, va) = (transfer.buffer.physical_address, transfer.buffer.virtual_address);
+    if transfer.buffer.length < size || phys == 0 || phys % PAGE_SIZE != 0 || va == 0 || va == u64::MAX {
+        serial_println!("[sexdrive.ahci.io.err] reason=bounce_invalid phys={:#x} va={:#x}", phys, va);
+        return BLOCK_ERR_NO_DEVICE;
+    }
+    if write { fill(va); } else { unsafe { core::ptr::write_bytes(va as *mut u8, 0, size as usize); } }
+    let lba = offset / NVME_LBA_BYTES;
+    let result = ahci::transfer(write, lba, size, phys, || transfer.submit().is_ok());
+    match result {
+        Ok(()) => {
+            // Command slot 0 completed (CI clear) with a clean task file.
+            if transfer.complete(tag, 1, 1).is_err() { return BLOCK_ERR_NO_DEVICE; }
+            if !write { drain(va); }
+            if hot_log() { serial_println!("[sexdrive.ahci.io.ok] write={} lba={} bytes={} tag={}", write as u8, lba, size, tag); }
+            0
+        }
+        // The engine stopped: the command is over and the bounce is reusable.
+        Err(ahci::Failure::TaskFile(..)) => { let _ = transfer.complete(tag, 1, 1); BLOCK_ERR_NO_DEVICE }
+        // Not issued: the guard aborts. Issued but unresolved: it quarantines.
+        Err(_) => BLOCK_ERR_NO_DEVICE,
+    }
+}
+
+fn ahci_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
+    if dst_va == 0 || dst_va == u64::MAX { return BLOCK_ERR_BAD_LEN; }
+    ahci_bounce(false, offset, size, |_| {}, |va| unsafe {
+        core::ptr::copy_nonoverlapping(va as *const u8, dst_va as *mut u8, size as usize);
+    })
+}
+
+fn ahci_write(offset: u64, size: u64, src_va: u64) -> u64 {
+    if src_va == 0 || src_va == u64::MAX { return BLOCK_ERR_BAD_LEN; }
+    // A private copy: the client cannot change the bytes after we hand them to the device.
+    ahci_bounce(true, offset, size, |va| unsafe {
+        core::ptr::copy_nonoverlapping(src_va as *const u8, va as *mut u8, size as usize);
+    }, |_| {})
+}
+
+/// The AP3 proof sector on AHCI: same fixed pattern, write, read back, compare.
+fn ahci_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
+    if size != WRITE_PROOF_LEN || src_va == 0 || src_va == u64::MAX || offset != WRITE_PROOF_LBA * NVME_LBA_BYTES {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=bad_args");
+        return BLOCK_ERR_BAD_LEN;
+    }
+    let lba = offset / NVME_LBA_BYTES;
+    serial_println!("[sexdrive.storage100.rw.begin] lba={} bytes={} disk=ahci", lba, size);
+    let mut pattern = [0u8; WRITE_PROOF_LEN as usize];
+    for (i, b) in pattern.iter_mut().enumerate() { *b = 0xA5u8 ^ (i as u8) ^ 0x3Cu8; }
+    let mut back = [0u8; WRITE_PROOF_LEN as usize];
+    let status = ahci_write(offset, size, pattern.as_ptr() as u64);
+    if status != 0 { serial_println!("[sexdrive.storage100.rw.fail] reason=write_status status={}", status); return status; }
+    let status = ahci_read_into_mapped_va(offset, size, back.as_mut_ptr() as u64);
+    if status != 0 { serial_println!("[sexdrive.storage100.rw.fail] reason=readback_status status={}", status); return status; }
+    if back != pattern {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=byte_mismatch");
+        serial_println!("[sexdrive.storage100.read.match] lba={} bytes={} ok=0", lba, size);
+        return BLOCK_ERR_NO_DEVICE;
+    }
+    serial_println!("[sexdrive.storage100.read.match] lba={} bytes={} ok=1", lba, size);
+    serial_println!("[sexdrive.storage100.rw.done] ok=1");
+    0
+}
+
+fn ahci_flush() -> u64 {
+    match ahci::flush() {
+        Ok(()) => { serial_println!("[sexdrive.ahci.flush.ok] port={}", ahci::port()); 0 }
+        Err(failure) => { serial_println!("[sexdrive.ahci.flush.err] {:?}", failure); BLOCK_ERR_NO_DEVICE }
+    }
+}
+
+/// The boot-time write/read/match proofs (AP3, AP4, and the opt-in AP5/AP6
+/// profiles). They go through the dispatched block entry points, so they run
+/// on whichever disk serves; only after that disk is ready.
+fn storage_selftests() {
+    let ap3_buf_phys = reserve_dma_phys(PAGE_SIZE);
+    let ap3_buf_va = own_dma_virtual(ap3_buf_phys, PAGE_SIZE);
+    if ap3_buf_phys == 0 || ap3_buf_phys == u64::MAX || (ap3_buf_phys % PAGE_SIZE) != 0
+        || ap3_buf_va == 0 || ap3_buf_va == u64::MAX
+    {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_buf_alloc_invalid");
+    } else {
+        let ap3_status = nvme_write_readback_proof(WRITE_PROOF_LBA * NVME_LBA_BYTES, WRITE_PROOF_LEN, ap3_buf_va);
+        if ap3_status != 0 {
+            serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_selftest_status status={}", ap3_status);
+        } else {
+            let ap4_status = nvme_multiblock_write_readback_proof();
+            if ap4_status != 0 {
+                serial_println!("[sexdrive.storage100.multi.fail] reason=ap4_selftest_status status={}", ap4_status);
+            } else if STORAGE_100_PERSIST_WRITE_ENABLED {
+                let persist_write_status = nvme_persist_write_proof();
+                if persist_write_status != 0 {
+                    serial_println!(
+                        "[sexdrive.storage100.persist.fail] phase=write reason=ap5a_selftest_status status={}",
+                        persist_write_status
+                    );
+                }
+            } else if STORAGE_100_PERSIST_READ_ENABLED {
+                let persist_read_status = nvme_persist_read_proof();
+                if persist_read_status != 0 {
+                    serial_println!(
+                        "[sexdrive.storage100.persist.fail] phase=read reason=ap5a_selftest_status status={}",
+                        persist_read_status
+                    );
+                }
+            } else if STORAGE_100_FLUSH_AUDIT_ENABLED {
+                let _ = nvme_storage100_flush_audit();
+            } else if STORAGE_100_NEGATIVE_ENABLED && STORAGE_100_NEG_MISMATCH_ENABLED {
+                let neg_status = nvme_storage100_negative_mismatch();
+                if neg_status != 0 {
+                    serial_println!(
+                        "[sexdrive.storage100.neg.mismatch.fail] reason=ap6_negative_status status={}",
+                        neg_status
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn nvme_probe_bar() {
@@ -2756,49 +2917,7 @@ fn nvme_probe_bar() {
 
     // AP3: deterministic single-block write/read/match self-test on real NVMe IOQ.
     // This only executes when NVMe BAR resolve + IOQ creation succeeded.
-    let ap3_buf_phys = reserve_dma_phys(PAGE_SIZE);
-    let ap3_buf_va = own_dma_virtual(ap3_buf_phys, PAGE_SIZE);
-    if ap3_buf_phys == 0 || ap3_buf_phys == u64::MAX || (ap3_buf_phys % PAGE_SIZE) != 0
-        || ap3_buf_va == 0 || ap3_buf_va == u64::MAX
-    {
-        serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_buf_alloc_invalid");
-    } else {
-        let ap3_status = nvme_write_readback_proof(WRITE_PROOF_LBA * NVME_LBA_BYTES, WRITE_PROOF_LEN, ap3_buf_va);
-        if ap3_status != 0 {
-            serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_selftest_status status={}", ap3_status);
-        } else {
-            let ap4_status = nvme_multiblock_write_readback_proof();
-            if ap4_status != 0 {
-                serial_println!("[sexdrive.storage100.multi.fail] reason=ap4_selftest_status status={}", ap4_status);
-            } else if STORAGE_100_PERSIST_WRITE_ENABLED {
-                let persist_write_status = nvme_persist_write_proof();
-                if persist_write_status != 0 {
-                    serial_println!(
-                        "[sexdrive.storage100.persist.fail] phase=write reason=ap5a_selftest_status status={}",
-                        persist_write_status
-                    );
-                }
-            } else if STORAGE_100_PERSIST_READ_ENABLED {
-                let persist_read_status = nvme_persist_read_proof();
-                if persist_read_status != 0 {
-                    serial_println!(
-                        "[sexdrive.storage100.persist.fail] phase=read reason=ap5a_selftest_status status={}",
-                        persist_read_status
-                    );
-                }
-            } else if STORAGE_100_FLUSH_AUDIT_ENABLED {
-                let _ = nvme_storage100_flush_audit();
-            } else if STORAGE_100_NEGATIVE_ENABLED && STORAGE_100_NEG_MISMATCH_ENABLED {
-                let neg_status = nvme_storage100_negative_mismatch();
-                if neg_status != 0 {
-                    serial_println!(
-                        "[sexdrive.storage100.neg.mismatch.fail] reason=ap6_negative_status status={}",
-                        neg_status
-                    );
-                }
-            }
-        }
-    }
+    storage_selftests();
 
     // === SEXOS_STORAGE_100_IO_READ_PROBE gate ===
     // Legacy real IO READ proof. Vestigial; runs only when explicitly requested.
@@ -3107,7 +3226,8 @@ fn service_next_request(){
         BLOCK_CAPACITY => device_sectors(),
         BLOCK_SYNC => {
             let status=nvme_flush();
-            sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_nvme_flush=1",status);
+            if serving_ahci(){sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_ahci_flush=1",status);}
+            else{sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_nvme_flush=1",status);}
             status
         }
         _ => {
@@ -3173,7 +3293,13 @@ fn fill_initial_frame(shared_addr:u64){
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdrive.init.start]");
-    if init_dma_region() { lend_block_buffer(); nvme_probe_bar(); }
+    if init_dma_region() {
+        lend_block_buffer();
+        nvme_probe_bar();
+        // NVMe is preferred: AHCI is only probed (and its ports only touched)
+        // when no NVMe controller came up. A machine with both serves NVMe.
+        if !unsafe { NVME_IO_STATE.ready } && ahci_probe() { storage_selftests(); }
+    }
     else { serial_println!("[sexdrive.dma.region.err] ready=0"); }
     xhci_probe_mmio();
 

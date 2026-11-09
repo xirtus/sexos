@@ -84,7 +84,7 @@ fn dmar_units_and_reserved_memory() {
     assert_eq!(rmrrs[0].span(), Some((0x3e2e_0000, 0x3e30_0000)));
     assert_eq!(d.structures().filter(|s| matches!(s, Structure::Other(2))).count(), 1);
 
-    let no_bridges = |_: Bdf| None;
+    let no_bridges = |_: Bdf| None::<(u8, u8)>;
     let usb = rmrrs[0].scopes().next().unwrap().resolve(&no_bridges);
     assert_eq!(usb, Some(Bdf::new(0, 0x14, 0)));
     // Graphics goes to its own unit, NVMe and everything else to the catch-all.
@@ -96,7 +96,9 @@ fn dmar_units_and_reserved_memory() {
 #[test]
 fn dmar_bridge_paths() {
     // An endpoint behind root port 00:1d.0 whose secondary bus is 4.
-    let bridges = |b: Bdf| (b == Bdf::new(0, 0x1d, 0)).then_some(4u8);
+    // 00:1c.0's switch spans buses 6..=8.
+    let bridges = |b: Bdf| if b == Bdf::new(0, 0x1d, 0) { Some((4u8, 4u8)) }
+        else if b == Bdf::new(0, 0x1c, 0) { Some((6, 8)) } else { None };
     let mut body = vec![38, 0];
     body.extend_from_slice(&[0; 10]);
     body.extend(drhd(0, 0x1000, &[scope(SCOPE_ENDPOINT, 0, &[(0x1d, 0), (0, 0)])]));
@@ -104,8 +106,12 @@ fn dmar_bridge_paths() {
     let t = header(b"DMAR", &body);
     let d = Dmar::parse(&t).unwrap();
     assert_eq!(d.unit_for(0, Bdf::new(4, 0, 0), &bridges).unwrap().register_base, 0x1000);
-    // Unresolvable bridge: no unit, and no include-all fallback either.
+    // Behind 00:1c.0, two switch levels down, still that bridge's unit.
+    assert_eq!(d.unit_for(0, Bdf::new(6, 0, 0), &bridges).unwrap().register_base, 0x2000);
+    assert_eq!(d.unit_for(0, Bdf::new(8, 0, 0), &bridges).unwrap().register_base, 0x2000);
+    // Outside every scope, and no include-all unit: none.
     assert!(d.unit_for(0, Bdf::new(5, 0, 0), &bridges).is_none());
+    assert!(d.unit_for(0, Bdf::new(9, 0, 0), &bridges).is_none());
 }
 
 #[test]

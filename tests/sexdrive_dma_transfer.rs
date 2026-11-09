@@ -187,6 +187,12 @@ mod driver_read {
         if DELAY!=0&&WAITS==DELAY{core::ptr::write_volatile(CQ_PTR.add(3),COMPLETION);}
         Ok(())
     }}
+    // The NVMe path under test: no AHCI disk ever serves in this harness.
+    mod ahci { pub fn stop_io() {} pub fn sectors() -> u64 { 0 } }
+    fn serving_ahci() -> bool { false }
+    fn ahci_read_into_mapped_va(_: u64, _: u64, _: u64) -> u64 { unreachable!() }
+    fn ahci_write(_: u64, _: u64, _: u64) -> u64 { unreachable!() }
+    fn ahci_flush() -> u64 { unreachable!() }
     include!(env!("SEXDRIVE_READ_PATH_SOURCE"));
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

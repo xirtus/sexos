@@ -84,8 +84,9 @@ impl<'a> Dmar<'a> {
     }
 
     /// The unit translating `device`: one that lists it, else the segment's
-    /// INCLUDE_PCI_ALL unit. `secondary` resolves bridge paths (see `Scope`).
-    pub fn unit_for(&self, segment: u16, device: Bdf, secondary: &impl Fn(Bdf) -> Option<u8>) -> Option<Drhd<'a>> {
+    /// INCLUDE_PCI_ALL unit. `buses` reads a bridge's (secondary, subordinate)
+    /// bus numbers from config space (see `Scope`).
+    pub fn unit_for(&self, segment: u16, device: Bdf, secondary: &impl Fn(Bdf) -> Option<(u8, u8)>) -> Option<Drhd<'a>> {
         self.units().filter(|u| u.segment == segment && !u.include_all)
             .find(|u| u.scopes().any(|s| s.covers(device, secondary)))
             .or_else(|| self.units().find(|u| u.segment == segment && u.include_all))
@@ -154,26 +155,27 @@ impl<'a> Scope<'a> {
     }
 
     /// Walk the path to the device it names. Each hop but the last is a bridge
-    /// whose secondary bus number `secondary` reads from config space.
-    pub fn resolve(&self, secondary: &impl Fn(Bdf) -> Option<u8>) -> Option<Bdf> {
+    /// whose (secondary, subordinate) bus numbers `secondary` reads from config space.
+    pub fn resolve(&self, secondary: &impl Fn(Bdf) -> Option<(u8, u8)>) -> Option<Bdf> {
         let mut bus = self.start_bus;
         let mut hops = self.path().peekable();
         while let Some((dev, func)) = hops.next() {
             let here = Bdf::new(bus, dev, func);
             if hops.peek().is_none() { return Some(here); }
-            bus = secondary(here)?;
+            bus = secondary(here)?.0;
         }
         None
     }
 
     /// An endpoint scope names exactly that device; a bridge scope also covers
-    /// everything below the bridge (buses secondary..=subordinate are not in
-    /// the table, so this checks the bridge's own secondary bus only).
-    pub fn covers(&self, device: Bdf, secondary: &impl Fn(Bdf) -> Option<u8>) -> bool {
+    /// every bus below the bridge, secondary..=subordinate, so devices behind
+    /// further switches belong to it too.
+    pub fn covers(&self, device: Bdf, secondary: &impl Fn(Bdf) -> Option<(u8, u8)>) -> bool {
         let Some(target) = self.resolve(secondary) else { return false };
         match self.kind {
             SCOPE_ENDPOINT => target == device,
-            SCOPE_BRIDGE => target == device || secondary(target).is_some_and(|b| b == device.bus),
+            SCOPE_BRIDGE => target == device
+                || secondary(target).is_some_and(|(first, last)| first <= device.bus && device.bus <= last),
             _ => false,
         }
     }

@@ -35,6 +35,9 @@ pub const DENIED: u64 = u64::MAX;
 pub const NO_IOMMU: u64 = u64::MAX - 1;
 /// The service's device-address window or loan table is full.
 pub const EXHAUSTED: u64 = u64::MAX - 2;
+/// RETURN: the IOMMU did not confirm its flush. The device may still reach
+/// the memory; treat it as still lent (the device address is never reused).
+pub const UNCERTAIN: u64 = u64::MAX - 3;
 
 /// Most loans a service may hold at once.
 pub const MAX_LOANS: usize = 64;

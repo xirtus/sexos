@@ -16,7 +16,7 @@ With VT-d present (every Intel CPU with PKU we target has it; QEMU has it with
 |---|---|
 | A leased device (NVMe, xHCI, NIC, virtio sound, and AHCI/HDA once #79 lands) | its service's BOOT DMA pool at the pool's physical address, its own firmware-reserved memory (RMRR), and memory the service lends it |
 | A device nobody leased, on a translated unit (dGPU, Thunderbolt, Wi-Fi, edu, ...) | nothing. Its DMA faults |
-| An unleased device with firmware-reserved memory (RMRR) | only that reserved memory |
+| An unleased device with firmware-reserved memory (RMRR) | only its own reserved memory (one small domain per such device) |
 | A device on a unit with no leased devices (the Intel graphics unit) | unchanged: that unit stays off, so the firmware framebuffer keeps scanning out |
 
 Drivers did not change to get this: pools are mapped at their physical address, so
@@ -63,7 +63,10 @@ every page mapped writable for that service; every page must be mapped for it no
 under its own PKU key). Pages need not
 be physically contiguous; the device sees them as one run. Returning unmaps the pages
 and flushes the IOTLB before the call returns, after which the device faults instead
-of reaching the memory. At most 64 loans per service. Without an IOMMU every LEND
+of reaching the memory. If the IOMMU does not confirm that flush, RETURN answers
+`UNCERTAIN`, the device addresses are never reused, and the service must treat the
+memory as still lent. LEND is refused (`NO_IOMMU`) unless every unit translating the
+service's devices really came on. At most 64 loans per service. Without an IOMMU every LEND
 answers `NO_IOMMU` and drivers keep their pools. When the kernel restarts a service,
 its devices are quiesced and then every loan of the old run is returned.
 
@@ -114,7 +117,7 @@ DMAR table and SexOS runs exactly as before (`[iommu.absent]`).
 ## ABI changes (hash recomputed)
 
 - Syscall **90** `SYS_DMA` with `OP_INFO`/`OP_LEND`/`OP_RETURN`, `DEVICE_READ`,
-  `DEVICE_WRITE`, statuses `DENIED`, `NO_IOMMU`, `EXHAUSTED`, `MAX_LOANS` 64,
+  `DEVICE_WRITE`, statuses `DENIED`, `NO_IOMMU`, `EXHAUSTED`, `UNCERTAIN`, `MAX_LOANS` 64,
   `WINDOW_BYTES` 128 MiB: `crates/sex-pdx/src/dma_lend.rs`, added to `ABI_INPUTS`.
 - No slot, message or shared struct changed.
 

@@ -14,11 +14,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
-os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
+# --nic picks QEMU's controller model; read before quil_autosave_gate builds the command.
+import sys
+NIC=next((sys.argv[i+1]for i,x in enumerate(sys.argv[:-1])if x=='--nic'),'e1000e')
+os.environ['SEXOS_GATE_NIC']=f'-netdev user,id=n0 -device {NIC},netdev=n0'
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--public',default='');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--public',default='');p.add_argument('--nic',choices=['e1000','e1000e','igb'],default='e1000e');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  g=boot(a.iso,disk,a.out,'net',a.resolution);t=g['text'];q=g['q']

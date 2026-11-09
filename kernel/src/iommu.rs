@@ -52,6 +52,11 @@ struct Domain {
     window: Window<WINDOW_WORDS>,
     loans: Vec<Loan>,
     faults: u64,
+    /// Every unit translating this service's devices is on. Only then do
+    /// device addresses from loans mean anything; otherwise LEND is refused.
+    active: bool,
+    /// Pages whose IOTLB flush did not complete: never handed out again.
+    stuck: u64,
 }
 
 struct Device { bdf: Bdf, pd: u32, unit: usize }
@@ -62,6 +67,8 @@ struct State {
     devices: Vec<Device>,
     levels: u8,
     frames: KernelFrames,
+    /// Next free domain id (services, firmware-reserved devices, self-test).
+    next_did: u16,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -204,10 +211,12 @@ fn map_registers(phys: u64, bytes: u64) -> u64 {
     va
 }
 
-fn secondary_bus(b: Bdf) -> Option<u8> {
+/// A bridge's (secondary, subordinate) bus numbers.
+fn secondary_bus(b: Bdf) -> Option<(u8, u8)> {
     let header = unsafe { crate::hal::pci::pci_config_read(b.bus, b.dev, b.func, 0x0c) } >> 16 & 0x7f;
     if header != 1 { return None; }
-    Some((unsafe { crate::hal::pci::pci_config_read(b.bus, b.dev, b.func, 0x18) } >> 8) as u8)
+    let buses = unsafe { crate::hal::pci::pci_config_read(b.bus, b.dev, b.func, 0x18) };
+    Some(((buses >> 8) as u8, (buses >> 16) as u8))
 }
 
 fn fmt(b: Bdf) -> (u8, u8, u8) { (b.bus, b.dev, b.func) }
@@ -281,7 +290,7 @@ pub fn init_boot() {
     let mut frames = KernelFrames { hhdm, coherent: units.iter().all(|u| u.ecap.coherent()), base, next: 0, count };
     for u in units.iter_mut() { u.root = frames.alloc().expect("IOMMU_ROOT"); }
     let max_did = units.iter().map(|u| u.cap.domains()).min().unwrap_or(16);
-    let mut state = State { units, domains: Vec::new(), devices: Vec::new(), levels, frames };
+    let mut state = State { units, domains: Vec::new(), devices: Vec::new(), levels, frames, next_did: 1 };
     let aw = if levels == 4 { 2 } else { 1 };
     let unit_of = |b: Bdf, units: &[Unit]| dmar.unit_for(0, b, &secondary_bus)
         .and_then(|d| units.iter().position(|u| u.phys == d.register_base));
@@ -294,7 +303,7 @@ pub fn init_boot() {
             continue;
         };
         if state.domains.iter().all(|x| x.pd != pd) {
-            let did = state.domains.len() as u16 + 1;
+            let did = state.next_did;
             if did as u32 >= max_did { serial_println!("[iommu.domain.skip] pd={} reason=domain_ids", pd); continue; }
             let table = Table::new(&mut state.frames, levels, Format::Vtd).expect("IOMMU_DOMAIN_TABLE");
             let mut busy: Vec<(u64, u64)> = Vec::new();
@@ -319,7 +328,8 @@ pub fn init_boot() {
                 .expect("IOMMU_WINDOW_PLACE");
             table.prepare(&mut state.frames, base, abi::WINDOW_BYTES).expect("IOMMU_WINDOW_TABLES");
             serial_println!("[iommu.domain] pd={} did={} levels={} lend_window={:#x} lend_bytes={}", pd, did, levels, base, abi::WINDOW_BYTES);
-            state.domains.push(Domain { pd, did, table, window: Window::new(base), loans: Vec::new(), faults: 0 });
+            state.next_did += 1;
+            state.domains.push(Domain { pd, did, table, window: Window::new(base), loans: Vec::new(), faults: 0, active: false, stuck: 0 });
         }
         let Some(dom) = state.domains.iter().find(|x| x.pd == pd) else { continue };
         let entry = vtd::context_entry(dom.table.root, aw, dom.did);
@@ -329,18 +339,21 @@ pub fn init_boot() {
         serial_println!("[iommu.device] {:02x}:{:02x}.{} pd={} did={} unit={} translation=domain", b, d, f, pd, did, unit);
     }
 
-    // Reserved memory of devices nobody leased stays reachable by them alone.
-    let mut firmware: Option<(u16, Table)> = None;
+    // Reserved memory of devices nobody leased stays reachable by them alone:
+    // each such device gets its own domain holding only its own RMRRs.
+    let mut firmware: Vec<(Bdf, u16, Table)> = Vec::new();
     for r in dmar.reserved() {
         let Some((start, end)) = r.span() else { continue };
         for target in r.scopes().filter_map(|s| s.resolve(&secondary_bus)) {
             if leased.iter().any(|&(b, _)| b == target) { continue; }
             let Some(unit) = unit_of(target, &state.units) else { continue };
-            if firmware.is_none() {
-                let did = state.domains.len() as u16 + 1;
-                firmware = Some((did, Table::new(&mut state.frames, levels, Format::Vtd).expect("IOMMU_FIRMWARE_TABLE")));
+            if !firmware.iter().any(|f| f.0 == target) {
+                let did = state.next_did;
+                if did as u32 >= max_did { serial_println!("[iommu.domain.skip] firmware_device reason=domain_ids"); continue; }
+                state.next_did += 1;
+                firmware.push((target, did, Table::new(&mut state.frames, levels, Format::Vtd).expect("IOMMU_FIRMWARE_TABLE")));
             }
-            let (did, table) = firmware.as_ref().unwrap();
+            let (_, did, table) = firmware.iter().find(|f| f.0 == target).unwrap();
             let _ = table.map_range(&mut state.frames, start, start, end - start, READ | WRITE);
             let entry = vtd::context_entry(table.root, aw, *did);
             state.units[unit].set_context(&mut state.frames, target, Some(entry));
@@ -371,6 +384,11 @@ pub fn init_boot() {
         u.enabled = ok;
         if ok { enabled += 1; }
         serial_println!("[iommu.unit.enable] index={} base={:#x} root={:#x} translation={} stale_faults={}", i, u.phys, u.root, if ok { "on" } else { "failed" }, stale.len());
+    }
+    for dom in state.domains.iter_mut() {
+        let pd = dom.pd;
+        dom.active = state.devices.iter().filter(|d| d.pd == pd).all(|d| state.units[d.unit].enabled);
+        if !dom.active { serial_println!("[iommu.domain.inactive] pd={} did={} lending=refused reason=unit_not_enabled", pd, dom.did); }
     }
     serial_println!("[iommu.enabled] vendor=intel units={} enabled={} domains={} devices={} levels={} coherent={} table_frames={}/{} unleased=blocked lend_syscall={}",
         state.units.len(), enabled, state.domains.len(), state.devices.len(), state.levels, state.frames.coherent as u8,
@@ -412,7 +430,7 @@ pub fn call(pd: &crate::capability::ProtectionDomain, op: u64, a: u64, b: u64, c
         abi::OP_INFO => {
             if a | b | c | d != 0 { return deny; }
             match (state, domain) {
-                (Some(s), Some(i)) => {
+                (Some(s), Some(i)) if s.domains[i].active => {
                     let x = &s.domains[i];
                     [0, 1, x.did as u64, x.faults, x.window.pages_used()]
                 }
@@ -421,12 +439,13 @@ pub fn call(pd: &crate::capability::ProtectionDomain, op: u64, a: u64, b: u64, c
         }
         abi::OP_LEND => {
             let (Some(s), Some(i)) = (state, domain) else { return [abi::NO_IOMMU, 0, 0, 0, 0] };
+            if !s.domains[i].active { return [abi::NO_IOMMU, 0, 0, 0, 0]; }
             lend(s, i, pd, a, b, c, d)
         }
         abi::OP_RETURN => {
             let (Some(s), Some(i)) = (state, domain) else { return [abi::NO_IOMMU, 0, 0, 0, 0] };
             if b | c | d != 0 { return deny; }
-            match end_loan(s, i, a) { Some(pages) => [0, pages, 0, 0, 0], None => deny }
+            match end_loan(s, i, a) { Some(Ok(pages)) => [0, pages, 0, 0, 0], Some(Err(_)) => [abi::UNCERTAIN, 0, 0, 0, 0], None => deny }
         }
         _ => deny,
     }
@@ -470,16 +489,25 @@ fn lend(s: &mut State, i: usize, pd: &crate::capability::ProtectionDomain, slot:
     [0, address, pages, 0, 0]
 }
 
-fn end_loan(s: &mut State, i: usize, address: u64) -> Option<u64> {
+/// Ok(pages) once no unit can still use the loan; Err(pages) when an IOTLB
+/// flush did not complete: the device may still hold the old translation, so
+/// its device addresses are never reused and the caller must not trust the memory.
+fn end_loan(s: &mut State, i: usize, address: u64) -> Option<Result<u64, u64>> {
     let dom = &mut s.domains[i];
     let at = dom.loans.iter().position(|l| l.address == address)?;
     let loan = dom.loans.swap_remove(at);
     for n in 0..loan.pages { dom.table.unmap(&mut s.frames, loan.address + n * PAGE); }
     let did = dom.did;
-    // The memory is the service's again only after no unit can still use the old entries.
-    for u in s.units.iter().filter(|u| u.enabled) { u.invalidate_iotlb(Some(did)); }
+    let mut flushed = true;
+    for u in s.units.iter().filter(|u| u.enabled) { flushed &= u.invalidate_iotlb(Some(did)); }
+    if !flushed {
+        s.domains[i].stuck += loan.pages;
+        serial_println!("[iommu.loan.uncertain] pd={} did={} device_address={:#x} pages={} reason=iotlb_flush_timeout window_kept=1",
+            s.domains[i].pd, did, loan.address, loan.pages);
+        return Some(Err(loan.pages));
+    }
     s.domains[i].window.give(loan.address, loan.pages);
-    Some(loan.pages)
+    Some(Ok(loan.pages))
 }
 
 /// A restarted service's old loans end with its old run (after its devices are quiesced).
@@ -489,7 +517,7 @@ pub fn revoke(pd_id: u32) {
     let Some(i) = s.domains.iter().position(|d| d.pd == pd_id) else { return };
     let mut ended = 0;
     while let Some(address) = s.domains[i].loans.first().map(|l| l.address) {
-        ended += end_loan(s, i, address).unwrap_or(0);
+        ended += match end_loan(s, i, address) { Some(Ok(p)) | Some(Err(p)) => p, None => 0 };
     }
     serial_println!("[iommu.loans.revoked] pd={} pages={}", pd_id, ended);
 }
@@ -501,7 +529,7 @@ pub(crate) fn with_unit<R>(bdf: Bdf, f: impl FnOnce(&mut TestAccess) -> R) -> Op
     let dmar = Dmar::parse(find_table(sex_iommu::dmar::SIGNATURE)?).ok()?;
     let base = dmar.unit_for(0, bdf, &secondary_bus)?.register_base;
     let unit = s.units.iter().position(|u| u.phys == base && u.enabled)?;
-    let did = s.domains.len() as u16 + 2;
+    let did = s.next_did;
     let mut access = TestAccess { state: s, unit, did };
     Some(f(&mut access))
 }
