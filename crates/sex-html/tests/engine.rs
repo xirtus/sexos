@@ -205,3 +205,21 @@ fn every_laid_out_element_has_its_box() {
     assert!(a[0] > c[0] + c[2] && a[2] > 0);
     assert_eq!(page.boxes[by_id("h")], None);
 }
+
+#[test]
+fn inline_elements_have_boxes_on_every_line() {
+    let dom = parse::parse("<body style='margin:0'><p id=p style='margin:0'>a <span id=s>hover me please across lines</span> <em id=e></em>b</p></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let narrow = sex_html::layout::layout(&dom, &styles, 60, &Fixed);
+    let wide = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    let s = wide.boxes[by_id("s")].unwrap();
+    let p = wide.boxes[by_id("p")].unwrap();
+    assert!(s[0] > 0 && s[2] > 0 && s[1] >= p[1] && s[1] + s[3] <= p[1] + p[3]);
+    // Wrapped, the span covers several lines.
+    let sn = narrow.boxes[by_id("s")].unwrap();
+    assert!(sn[3] > s[3]);
+    // An empty inline element has no area to hit.
+    assert_eq!(wide.boxes[by_id("e")], None);
+    assert_eq!(narrow.height, sex_html::layout::layout(&dom, &styles, 60, &Fixed).height);
+}

@@ -146,11 +146,15 @@ enum Piece {
     Gap(i32),
     /// An `id` (or `<a name>`) inside the line: where a `#fragment` link scrolls to.
     Anchor(String),
+    /// Where an inline element (a `span`, `em`...) starts and ends: its fragments
+    /// on each line become its box, for hit testing.
+    Open(NodeId),
+    Close(NodeId),
 }
 
 impl Piece {
     fn width(&self) -> i32 {
-        match self { Piece::Word { width, .. } | Piece::Space { width, .. } | Piece::Atomic { width, .. } | Piece::Gap(width) => *width, Piece::Break | Piece::Anchor(_) => 0 }
+        match self { Piece::Word { width, .. } | Piece::Space { width, .. } | Piece::Atomic { width, .. } | Piece::Gap(width) => *width, Piece::Break | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_) => 0 }
     }
 }
 
@@ -398,7 +402,7 @@ impl<'a> Layout<'a> {
         let mut space_before = true;
         for &n in run { self.collect(n, cs, &mut pieces, &mut space_before); }
         while matches!(pieces.last(), Some(Piece::Space { breakable: true, .. })) { pieces.pop(); }
-        if pieces.iter().all(|p| matches!(p, Piece::Space { .. } | Piece::Anchor(_))) {
+        if pieces.iter().all(|p| matches!(p, Piece::Space { .. } | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_))) {
             for p in pieces { if let Piece::Anchor(id) = p { self.anchors.push((id, y)); } }
             return None;
         }
@@ -436,11 +440,14 @@ impl<'a> Layout<'a> {
                     if let Some(id) = self.dom.attr(n, name) { out.push(Piece::Anchor(String::from(id))); }
                 }
                 let pushed = self.push_link(n);
+                let boxed = !s.hidden;
+                if boxed { out.push(Piece::Open(n)); }
                 let left = s.margin[LEFT].or_zero(0) + s.padding[LEFT].or_zero(0) + s.border[LEFT];
                 if left > 0 { out.push(Piece::Gap(left)); }
                 for &c in &self.dom.nodes[n].children { self.collect(c, s, out, space_before); }
                 let right = s.margin[RIGHT].or_zero(0) + s.padding[RIGHT].or_zero(0) + s.border[RIGHT];
                 if right > 0 { out.push(Piece::Gap(right)); }
+                if boxed { out.push(Piece::Close(n)); }
                 if pushed { self.link_stack.pop(); }
             }
         }
@@ -612,6 +619,8 @@ impl<'a> Layout<'a> {
         let mut first_baseline = None;
         let mut start = 0;
         let mut pieces: Vec<Option<Piece>> = pieces.into_iter().map(Some).collect();
+        // Inline elements open on this line, and the x where their fragment starts.
+        let mut open: Vec<(NodeId, i32)> = Vec::new();
         while start < pieces.len() {
             // Skip breakable spaces at the start of a line.
             while start < pieces.len() && matches!(pieces[start], Some(Piece::Space { breakable: true, .. })) { start += 1; }
@@ -624,7 +633,7 @@ impl<'a> Layout<'a> {
                 if matches!(p, Piece::Break) { break; }
                 let pw = p.width();
                 if let Piece::Space { breakable: true, .. } = p { last_break = Some(end); }
-                if wraps && used + pw > width && end > start && !matches!(p, Piece::Space { .. }) {
+                if wraps && used + pw > width && end > start && !matches!(p, Piece::Space { .. } | Piece::Open(_) | Piece::Close(_)) {
                     if let Some(b) = last_break { end = b; }
                     break;
                 }
@@ -639,7 +648,8 @@ impl<'a> Layout<'a> {
             // Vertical metrics: half-leading around each piece.
             let mut above = (strut_lh - (sa + sd)) / 2 + sa;
             let mut below = strut_lh - above;
-            if start == trim { above = 0; below = 0; if forced { above = (strut_lh - (sa + sd)) / 2 + sa; below = strut_lh - above; } }
+            let markers_only = pieces[start..trim].iter().flatten().all(|p| matches!(p, Piece::Open(_) | Piece::Close(_)));
+            if start == trim || (markers_only && !forced) { above = 0; below = 0; if forced { above = (strut_lh - (sa + sd)) / 2 + sa; below = strut_lh - above; } }
             for p in pieces[start..trim].iter().flatten() {
                 match p {
                     Piece::Word { font, shift, .. } => {
@@ -664,6 +674,7 @@ impl<'a> Layout<'a> {
             if cs.align != Align::Left && line_w > width { x = x0; }
             let line_top = y;
             let line_h = above + below;
+            for o in &mut open { o.1 = x; }
             let mut run: Option<(i32, String, FontKey, u32, bool, bool, Option<NodeId>, u32, i32, i32)> = None;
             let flush = |this: &mut Self, run: &mut Option<(i32, String, FontKey, u32, bool, bool, Option<NodeId>, u32, i32, i32)>| {
                 if let Some((rx, text, font, color, ul, st, link, bg, w, shift)) = run.take() {
@@ -701,6 +712,11 @@ impl<'a> Layout<'a> {
                     }
                     Piece::Gap(g) => { flush(self, &mut run); x += g; }
                     Piece::Anchor(id) => self.anchors.push((id, line_top)),
+                    Piece::Open(n) => open.push((n, x)),
+                    Piece::Close(n) => if let Some(i) = open.iter().rposition(|o| o.0 == n) {
+                        let (_, sx) = open.remove(i);
+                        if x > sx && line_h > 0 { self.boxes.push((n, [sx, line_top, x - sx, line_h])); }
+                    },
                     Piece::Atomic { mut items, links, boxes, width: aw, height: ah, link } => {
                         flush(self, &mut run);
                         let top = baseline - ah;
@@ -715,6 +731,8 @@ impl<'a> Layout<'a> {
                 }
             }
             flush(self, &mut run);
+            // Elements still open continue on the next line: this line holds a fragment.
+            for &(n, sx) in &open { if x > sx && line_h > 0 { self.boxes.push((n, [sx, line_top, x - sx, line_h])); } }
             y += line_h;
             start = if forced { end + 1 } else { end.max(start + 1) };
         }
