@@ -538,7 +538,7 @@ impl<'a> Layout<'a> {
         if let Some(id) = self.dom.attr(n, "id") { self.anchors.push((String::from(id), by)); }
         if let Some(name) = self.dom.attr(n, "name").filter(|_| self.dom.tag(n) == Some("a")) { self.anchors.push((String::from(name), by)); }
         let bg_index = self.items.len();
-        let paints = s.background >> 24 != 0 || s.border.iter().any(|b| *b > 0);
+        let paints = s.background >> 24 != 0 || s.border.iter().any(|b| *b > 0) || s.shadow.is_some();
         if paints { self.items.push(Item::Rect { x: 0, y: 0, w: 0, h: 0, color: 0, radius: 0 }); }
         let clip_at = (s.overflow_clip && self.root != Some(n)).then(|| { self.items.push(Item::Rect { x: 0, y: 0, w: CLIP_BEGIN, h: 0, color: 0, radius: 0 }); self.items.len() - 1 });
         let cx = bx + s.border[LEFT] + s.padding[LEFT].or_zero(cw);
@@ -583,6 +583,18 @@ impl<'a> Layout<'a> {
 
     /// Fills the placeholder at `index` with the background and pushes borders after it.
     fn box_paint(&mut self, index: usize, s: &Style, x: i32, y: i32, w: i32, h: i32) {
+        let mut index = index;
+        if let Some((dx, dy, blur, spread, color)) = s.shadow {
+            // A blurred shadow as a few nested translucent layers, widest first.
+            let layers = if blur > 0 { (blur / 3).clamp(2, 5) } else { 1 };
+            let alpha = (color >> 24) / layers as u32;
+            for k in 0..layers {
+                let grow = spread + blur * (layers - k) / layers - blur / 2;
+                let r = Item::Rect { x: x + dx - grow, y: y + dy - grow, w: w + 2 * grow, h: h + 2 * grow, color: (color & 0x00FF_FFFF) | (alpha.max(1) << 24), radius: (s.radius + grow.max(0)).max(0) };
+                self.items.insert(index, r);
+                index += 1;
+            }
+        }
         self.items[index] = Item::Rect { x, y, w, h, color: s.background, radius: s.radius };
         let b = s.border;
         let c = s.border_color;

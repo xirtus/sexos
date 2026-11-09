@@ -354,3 +354,13 @@ fn translate_moves_a_box_by_its_own_size() {
     assert_eq!(rect(0xFFFF_0000), (150, 130, 100, 40));
     assert_eq!(rect(0xFF00_FF00).1, 5);
 }
+
+#[test]
+fn box_shadow_paints_under_the_box() {
+    let dom = parse::parse("<body style='margin:0'><div style='width:50px;height:20px;background:#ffffff;box-shadow:2px 3px 0 rgba(0,0,0,.5), inset 0 0 4px red'></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let rects: Vec<(i32, i32, i32, i32, u32)> = page.items.iter().filter_map(|i| match i { sex_html::layout::Item::Rect { x, y, w, h, color, .. } => Some((*x, *y, *w, *h, *color)), _ => None }).collect();
+    assert_eq!(rects[0], (2, 3, 50, 20, 0x7F00_0000));
+    assert_eq!(rects[1], (0, 0, 50, 20, 0xFFFF_FFFF));
+}

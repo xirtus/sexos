@@ -114,6 +114,8 @@ pub struct Style {
     pub vertical_super: i8,
     /// `transform: translate(..)` (percentages are of the box's own size).
     pub translate: Option<(Len, Len)>,
+    /// The first outer `box-shadow`: x, y, blur, spread and colour.
+    pub shadow: Option<(i32, i32, i32, i32, u32)>,
     /// `opacity`, 0 to 255.
     pub opacity: u8,
     /// Custom properties (`--name: value`), inherited; shared until an element sets one.
@@ -176,6 +178,7 @@ impl Style {
             letter_spacing: 0,
             vars: Default::default(),
             opacity: 255,
+            shadow: None,
             translate: None,
             vertical_super: 0,
         }
@@ -831,6 +834,19 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
                 }
             }
             s.translate = (x != Len::Px(0) || y != Len::Px(0)).then_some((x, y));
+        }
+        "box-shadow" => {
+            s.shadow = None;
+            if let Some(first) = css::split_top(&lv, ',').into_iter().find(|p| !p.contains("inset")) {
+                let mut lens = Vec::new();
+                let mut color = s.color;
+                for w in words(first) {
+                    match parse_len(w, s, ctx) { Some(Len::Px(p)) => lens.push(p), _ => if let Some(c) = parse_color_with(w, s.color) { color = c } }
+                }
+                if lens.len() >= 2 && color >> 24 != 0 {
+                    s.shadow = Some((lens[0], lens[1], lens.get(2).copied().unwrap_or(0).clamp(0, 200), lens.get(3).copied().unwrap_or(0).clamp(-200, 200), color));
+                }
+            }
         }
         "opacity" => {
             let n = match lv.strip_suffix('%') { Some(p) => css::parse_number(p).map(|p| p / 100), None => css::parse_number(&lv) };

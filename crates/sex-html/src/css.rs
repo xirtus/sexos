@@ -244,7 +244,7 @@ pub fn parse_selector_list(text: &str) -> Vec<Selector> {
     split_top(text, ',').into_iter().filter_map(|s| parse_selector(s.trim())).collect()
 }
 
-fn split_top(text: &str, sep: char) -> Vec<&str> {
+pub(crate) fn split_top(text: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut start = 0;
