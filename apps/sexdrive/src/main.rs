@@ -15,6 +15,8 @@ use sex_pdx::{
 
 
 mod dma_transfer;
+mod lens;
+use lens::{Lens, LENS, RAW};
 mod completion_wait;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
@@ -678,25 +680,6 @@ fn device_sectors() -> u64 {
     }
 }
 
-/// What this system may do with the disk, decided once at start by [`sex_disk::probe`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Lens {
-    /// Not probed yet: only the probe's own raw reads run.
-    Unknown,
-    /// Blank, or SexOS's legacy whole-disk install.
-    Whole,
-    /// A GPT disk shared with other systems: SexOS reads and writes only its store.
-    Store { base: u64, sectors: u64 },
-    /// Another system's disk. Nothing but the installer's raw requests reach it.
-    Foreign(sex_disk::probe::Foreign),
-    /// The installer rewrote the layout under the running system: its old view may still
-    /// be read, never written, until the next start.
-    Locked { base: u64 },
-}
-static mut LENS: Lens = Lens::Unknown;
-/// Set for the length of one installer request (BLOCK_RAW_READ / BLOCK_RAW_WRITE).
-static mut RAW: bool = false;
-
 /// Maps a request's sector to the device's, or refuses it.
 fn place(slba: u64, blocks: u64, write: bool) -> Option<u64> {
     let end = slba.checked_add(blocks)?;
@@ -706,6 +689,35 @@ fn place(slba: u64, blocks: u64, write: bool) -> Option<u64> {
         Lens::Store { base, sectors } => (end <= sectors).then_some(base + slba),
         Lens::Locked { base } if !write => Some(base + slba),
         _ => None,
+    }
+}
+
+fn probe_layout() {
+    use sex_disk::probe::{classify, Layout};
+    let found = classify(&mut RawDisk);
+    let lens = match found {
+        Ok(Layout::Blank) | Ok(Layout::LegacySexos) => Lens::Whole,
+        Ok(Layout::Sexos { first, sectors }) => Lens::Store { base: first, sectors },
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Gpt)) => Lens::Foreign(lens::FOREIGN_GPT),
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Mbr)) => Lens::Foreign(lens::FOREIGN_MBR),
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Filesystem)) => Lens::Foreign(lens::FOREIGN_FS),
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Damaged)) | Err(_) => Lens::Foreign(lens::FOREIGN_DAMAGED),
+    };
+    unsafe { LENS = lens; }
+    let (kind, base, sectors) = layout_parts(lens);
+    sex_pdx::serial_record!("[sexdrive.disk.layout] kind={} base={} sectors={} disk={}", kind, base, sectors, disk_sectors());
+}
+
+fn layout_parts(lens: Lens) -> (&'static str, u64, u64) {
+    match lens {
+        Lens::Unknown => ("unknown", 0, 0),
+        Lens::Whole => ("whole", 0, disk_sectors()),
+        Lens::Store { base, sectors } => ("store", base, sectors),
+        Lens::Foreign(lens::FOREIGN_GPT) => ("foreign-gpt", 0, 0),
+        Lens::Foreign(lens::FOREIGN_MBR) => ("foreign-mbr", 0, 0),
+        Lens::Foreign(lens::FOREIGN_FS) => ("foreign-fs", 0, 0),
+        Lens::Foreign(_) => ("foreign-damaged", 0, 0),
+        Lens::Locked { base } => ("locked", base, 0),
     }
 }
 
@@ -720,33 +732,6 @@ impl sex_disk::BlockDev for RawDisk {
         if status == 0 { Ok(()) } else { Err(sex_disk::Error::Io) }
     }
     fn write(&mut self, _: u64, _: &[u8]) -> Result<(), sex_disk::Error> { Err(sex_disk::Error::Io) }
-}
-
-fn probe_layout() {
-    use sex_disk::probe::{classify, Layout};
-    let found = classify(&mut RawDisk);
-    let lens = match found {
-        Ok(Layout::Blank) | Ok(Layout::LegacySexos) => Lens::Whole,
-        Ok(Layout::Sexos { first, sectors }) => Lens::Store { base: first, sectors },
-        Ok(Layout::Foreign(why)) => Lens::Foreign(why),
-        Err(_) => Lens::Foreign(sex_disk::probe::Foreign::Damaged),
-    };
-    unsafe { LENS = lens; }
-    let (kind, base, sectors) = layout_parts(lens);
-    sex_pdx::serial_record!("[sexdrive.disk.layout] kind={} base={} sectors={} disk={}", kind, base, sectors, disk_sectors());
-}
-
-fn layout_parts(lens: Lens) -> (&'static str, u64, u64) {
-    match lens {
-        Lens::Unknown => ("unknown", 0, 0),
-        Lens::Whole => ("whole", 0, disk_sectors()),
-        Lens::Store { base, sectors } => ("store", base, sectors),
-        Lens::Foreign(sex_disk::probe::Foreign::Gpt) => ("foreign-gpt", 0, 0),
-        Lens::Foreign(sex_disk::probe::Foreign::Mbr) => ("foreign-mbr", 0, 0),
-        Lens::Foreign(sex_disk::probe::Foreign::Filesystem) => ("foreign-fs", 0, 0),
-        Lens::Foreign(sex_disk::probe::Foreign::Damaged) => ("foreign-damaged", 0, 0),
-        Lens::Locked { base } => ("locked", base, 0),
-    }
 }
 
 /// BLOCK_LAYOUT's reply: kind in the low byte, the whole disk's sectors above it.
