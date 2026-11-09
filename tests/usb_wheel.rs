@@ -209,3 +209,13 @@ fn batch(report:HidPointerRawReport,last:&mut u8)->Vec<(u64,u64,u64)> {
  TRANSPORT.with(|t|t.borrow_mut().replies.push_back(Err(9)));assert_eq!(send_report_to_sexinput(OP_USB_MOUSE_REPORT,0,0,0),Err(9));
  unsafe{assert_eq!((*core::ptr::addr_of!(KEYBOARD_OUTBOX)).len,0);assert_eq!((*core::ptr::addr_of!(POINTER_OUTBOX)).len,0);assert_eq!(*core::ptr::addr_of!(INPUT_ARRIVAL),u64::MAX);}
 }
+#[test]fn usb_rollover_presses_and_releases_every_held_key_once(){
+ let mut keys=KeyboardOutbox::new();let(mut last,mut mods)=(0u64,0u8);
+ // a held, then s pressed while a is still down, then a released, then s released.
+ assert!(keys.usb(0x04,0,&mut last,&mut mods));assert!(keys.usb(0x16_04,0,&mut last,&mut mods));
+ assert!(keys.usb(0x16,0,&mut last,&mut mods));assert!(keys.usb(0,0,&mut last,&mut mods));
+ let mut sent=Vec::new();while keys.len>0 {let mut budget=8;keys.poll(&mut budget,|a,b,c|{sent.push((a,b,c));Ok(true)});}
+ assert_eq!(sent,vec![(0x1e,1,EV_KEY),(0x1f,1,EV_KEY),(0x1e,0,EV_KEY),(0x1f,0,EV_KEY)]);
+ // Digits and arrows reach their PS/2 set-1 codes (arrows as their keypad twins).
+ assert_eq!([0x1e,0x27,0x52,0x51,0x50,0x4f].map(hid_to_ps2),[Some(0x02),Some(0x0b),Some(0x48),Some(0x50),Some(0x4b),Some(0x4d)]);
+}
