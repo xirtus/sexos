@@ -73,6 +73,10 @@ pub struct Style {
     pub max_width: Len,
     pub min_height: Len,
     pub position: Position,
+    /// `top`, `right`, `bottom`, `left` for positioned boxes.
+    pub inset: [Len; 4],
+    /// `z-index`; `None` is `auto`.
+    pub z_index: Option<i32>,
     pub float: Float,
     pub flex_column: bool,
     pub flex_wrap: bool,
@@ -124,6 +128,8 @@ impl Style {
             max_width: Len::Auto,
             min_height: Len::Auto,
             position: Position::Static,
+            inset: [Len::Auto; 4],
+            z_index: None,
             float: Float::None,
             flex_column: false,
             flex_wrap: false,
@@ -631,6 +637,16 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
         "max-width" => if let Some(l) = len(s) { s.max_width = l },
         "min-height" => if let Some(l) = len(s) { s.min_height = l },
         "position" => s.position = match lv.as_str() { "relative" => Position::Relative, "absolute" => Position::Absolute, "fixed" => Position::Fixed, "sticky" | "-webkit-sticky" => Position::Sticky, _ => Position::Static },
+        "top" | "right" | "bottom" | "left" => if let Some(l) = len(s) { s.inset[side_index(&d.name)] = l },
+        "inset" => {
+            let ls: Vec<Len> = words(v).iter().filter_map(|w| if w.eq_ignore_ascii_case("auto") { Some(Len::Auto) } else { parse_len(w, s, ctx) }).collect();
+            let get = |i: usize| ls.get(i).copied();
+            if let Some(t) = get(0) {
+                let r = get(1).unwrap_or(t);
+                s.inset = [t, r, get(2).unwrap_or(t), get(3).unwrap_or(r)];
+            }
+        }
+        "z-index" => s.z_index = lv.trim().parse().ok(),
         "float" => s.float = match lv.as_str() { "left" => Float::Left, "right" => Float::Right, _ => Float::None },
         "flex-direction" => s.flex_column = lv.starts_with("column"),
         "flex-wrap" => s.flex_wrap = lv == "wrap" || lv == "wrap-reverse",

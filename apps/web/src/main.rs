@@ -400,8 +400,9 @@ impl Browser {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
         let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
-        self.page = sex_html::layout::layout(&doc.dom, &styles, W, &self.fonts);
+        self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
         doc.set_boxes(&self.page.boxes);
+        doc.set_layers(&self.page.layers);
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
         // Ask for the next tick soon: the change may have started timers.

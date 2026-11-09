@@ -223,3 +223,27 @@ fn inline_elements_have_boxes_on_every_line() {
     assert_eq!(wide.boxes[by_id("e")], None);
     assert_eq!(narrow.height, sex_html::layout::layout(&dom, &styles, 60, &Fixed).height);
 }
+
+#[test]
+fn positioned_boxes_place_and_layer() {
+    let dom = parse::parse("<body style='margin:0'><div id=s style='position:relative;width:300px;height:100px'>\
+        <div id=a style='position:absolute;right:10px;bottom:5px;width:50px;height:20px;background:red'></div>\
+        <div id=f style='position:absolute;left:0;right:0;top:30px;height:10px'></div></div>\
+        <p id=r style='position:relative;left:20px;top:5px;margin:0'>x</p><div id=z style='position:absolute;top:0;left:0;width:10px;height:10px;z-index:-1;background:blue'></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout_in(&dom, &styles, 400, 300, &Fixed);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    assert_eq!(page.boxes[by_id("a")], Some([240, 75, 50, 20]));
+    assert_eq!(page.boxes[by_id("f")], Some([0, 30, 300, 10]));
+    // Out of flow: the paragraph follows the 100 px box directly, then moves by its offsets.
+    let r = page.boxes[by_id("r")].unwrap();
+    assert_eq!((r[0], r[1]), (20, 105));
+    // Positioned boxes paint above normal flow; a negative z-index paints under it.
+    let body = page.layers[dom.find("body").unwrap()];
+    assert!(page.layers[by_id("s")] > body && page.layers[by_id("a")] > page.layers[by_id("s")]);
+    assert!(page.layers[by_id("z")] < body);
+    let reds: Vec<usize> = page.items.iter().enumerate().filter(|(_, i)| matches!(i, sex_html::layout::Item::Rect { color: 0xFFFF_0000, .. })).map(|(i, _)| i).collect();
+    let blue = page.items.iter().position(|i| matches!(i, sex_html::layout::Item::Rect { color: 0xFF00_00FF, .. })).unwrap();
+    assert!(blue < reds[0]);
+    assert!(!page.items.iter().any(|i| matches!(i, sex_html::layout::Item::Rect { w, .. } if *w < -1_000_000)));
+}

@@ -71,6 +71,9 @@ pub struct Page {
     /// Each laid-out element's border box (x, y, width, height), by node; an element
     /// split over lines (a link) has the box around all its parts.
     pub boxes: Vec<Option<[i32; 4]>>,
+    /// Each node's paint layer: 0 for normal flow, higher for positioned boxes painted
+    /// later (on top), so hit testing can prefer what is drawn on top.
+    pub layers: Vec<u32>,
 }
 
 impl Page {
@@ -82,14 +85,34 @@ impl Page {
 
 /// Lays out `dom` (already styled by `styles`) for a viewport `width` pixels wide.
 pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) -> Page {
-    let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new() };
+    layout_in(dom, styles, width, 0, host)
+}
+
+/// Lays out for a viewport `width` by `viewport_height` pixels: the box that
+/// absolutely positioned and fixed elements without a positioned ancestor place
+/// themselves in (0 takes the page's own height).
+pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_height: i32, host: &dyn Host) -> Page {
     let html = dom.find("html");
+    let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new(),
+        abs: Vec::new(), positioned: Vec::new(), force_height: None, root: html, viewport: (width, viewport_height) };
     let body = dom.find("body");
     let mut height = 0;
     if let Some(html) = html {
         let r = l.block(html, 0, 0, width, None);
         height = r.margin_top + r.height + r.margin_bottom;
     }
+    let (order, below) = layer_order(&mut l.items);
+    // Ranks in paint order: layers under normal flow, normal flow itself, then the rest.
+    let flow_rank = below as u32;
+    let mut rank: Vec<Option<u32>> = alloc::vec![None; dom.nodes.len()];
+    for &(n, seq) in &l.positioned {
+        if let Some(i) = order.iter().position(|&q| q == seq) { rank[n] = Some(if i < below { i as u32 } else { i as u32 + 1 }); }
+    }
+    let layers: Vec<u32> = (0..dom.nodes.len()).map(|n| {
+        let mut p = Some(n);
+        while let Some(q) = p { if let Some(r) = rank[q] { return r; } p = dom.nodes[q].parent; }
+        flow_rank
+    }).collect();
     let bg = |n: Option<NodeId>| n.and_then(|n| styles[n].as_ref()).map_or(0, |s| s.background);
     let background = match (bg(html), bg(body)) { (h, _) if h >> 24 != 0 => h, (_, b) if b >> 24 != 0 => b, _ => 0xFFFF_FFFF };
     // The root's background paints the whole canvas, not just its box.
@@ -104,7 +127,7 @@ pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) 
     };
     for (n, r) in l.boxes { put(n, r); }
     for k in &l.links { put(k.node, [k.x, k.y, k.w, k.h]); }
-    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes }
+    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers }
 }
 
 /// Parses, styles and lays out a whole page.
@@ -135,6 +158,67 @@ struct Layout<'a> {
     intrinsic: Vec<Option<(i32, i32)>>,
     link_stack: Vec<usize>,
     boxes: Vec<(NodeId, [i32; 4])>,
+    /// Absolutely positioned and fixed boxes waiting for their containing block, with
+    /// their static position.
+    abs: Vec<(NodeId, i32, i32)>,
+    /// Positioned elements and their layer sequence numbers.
+    positioned: Vec<(NodeId, u32)>,
+    /// The border-box height the next block takes (an absolute box between top and bottom).
+    force_height: Option<i32>,
+    root: Option<NodeId>,
+    viewport: (i32, i32),
+}
+
+/// Layer markers: positioned boxes paint in their own layer, ordered by `z-index`.
+/// A marker is a zero-size rectangle with `w` set to one of these; `h` holds the
+/// z-index and `color` the sequence number. Markers move with the items between them
+/// (into inline blocks, flex and table shifts) and are removed before painting.
+const LAYER_BEGIN: i32 = i32::MIN;
+const LAYER_BEGIN_AUTO: i32 = i32::MIN + 1;
+const LAYER_END: i32 = i32::MIN + 2;
+
+fn marker(item: &Item) -> Option<(i32, i32, u32)> {
+    match *item { Item::Rect { w, h, color, .. } if w <= LAYER_END => Some((w, h, color)), _ => None }
+}
+
+/// Moves each layer's items after normal flow, ordered by stacking context and
+/// z-index (negative z-indexes under normal flow), and drops the markers. Returns
+/// the layers' sequence numbers in paint order and how many paint under normal flow.
+fn layer_order(items: &mut Vec<Item>) -> (Vec<u32>, usize) {
+    if !items.iter().any(|i| marker(i).is_some()) { return (Vec::new(), 0); }
+    // Each layer: its sort key (the path of (z, seq) through enclosing stacking
+    // contexts) and its items.
+    let mut layers: Vec<(Vec<(i32, u32)>, Vec<Item>)> = Vec::new();
+    let mut flow: Vec<Item> = Vec::new();
+    // Open layers: index into `layers`, and whether it starts a stacking context.
+    let mut open: Vec<(usize, bool)> = Vec::new();
+    for item in core::mem::take(items) {
+        match marker(&item) {
+            Some((kind, z, seq)) if kind != LAYER_END => {
+                let context = open.iter().rev().find(|o| o.1).map(|o| layers[o.0].0.clone()).unwrap_or_default();
+                let mut key = context;
+                key.push((if kind == LAYER_BEGIN { z } else { 0 }, seq));
+                layers.push((key, Vec::new()));
+                open.push((layers.len() - 1, kind == LAYER_BEGIN));
+            }
+            Some(_) => { open.pop(); }
+            None => match open.last() { Some(&(i, _)) => layers[i].1.push(item), None => flow.push(item) },
+        }
+    }
+    let mut order: Vec<usize> = (0..layers.len()).collect();
+    order.sort_by(|&a, &b| layers[a].0.cmp(&layers[b].0));
+    let seqs: Vec<u32> = order.iter().map(|&i| layers[i].0.last().unwrap().1).collect();
+    let (below, above): (Vec<usize>, Vec<usize>) = order.into_iter().partition(|&i| layers[i].0[0].0 < 0);
+    let below_count = below.len();
+    let mut out = Vec::new();
+    // The root's background stays first.
+    let mut flow = flow.into_iter();
+    if let Some(first) = flow.next() { out.push(first); }
+    for i in below { out.append(&mut layers[i].1); }
+    out.extend(flow);
+    for i in above { out.append(&mut layers[i].1); }
+    *items = out;
+    (seqs, below_count)
 }
 
 /// One unbreakable thing on a line.
@@ -150,11 +234,14 @@ enum Piece {
     /// on each line become its box, for hit testing.
     Open(NodeId),
     Close(NodeId),
+    /// An absolutely positioned or fixed element: out of the line, but placed from here
+    /// when it gives no offsets.
+    Abs(NodeId),
 }
 
 impl Piece {
     fn width(&self) -> i32 {
-        match self { Piece::Word { width, .. } | Piece::Space { width, .. } | Piece::Atomic { width, .. } | Piece::Gap(width) => *width, Piece::Break | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_) => 0 }
+        match self { Piece::Word { width, .. } | Piece::Space { width, .. } | Piece::Atomic { width, .. } | Piece::Gap(width) => *width, Piece::Break | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_) | Piece::Abs(_) => 0 }
     }
 }
 
@@ -184,9 +271,83 @@ impl<'a> Layout<'a> {
         self.style(n).map_or(false, |s| s.is_block_level())
     }
 
+    /// Absolutely positioned or fixed: out of normal flow.
+    fn out_of_flow(&self, n: NodeId) -> bool {
+        matches!(self.dom.nodes[n].kind, Kind::Element { .. }) && self.style(n).map_or(false, |s| s.display != Display::None && matches!(s.position, style::Position::Absolute | style::Position::Fixed))
+    }
+
     /// Lays out a block-level box whose margin box starts at (`x`, `y`) inside a
     /// containing block `cw` wide. `force_width` sets the border-box width (flex items, cells).
+    /// Positioned boxes get their own paint layer, relative ones are offset, and
+    /// boxes positioned inside them are placed once their size is known.
     fn block(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
+        let s = self.style(n).unwrap();
+        let positioned = s.position != style::Position::Static;
+        let is_root = self.root == Some(n);
+        if !positioned && !is_root { return self.block_inner(n, x, y, cw, force_width); }
+        let (i0, l0, b0, a0) = (self.items.len(), self.links.len(), self.boxes.len(), self.anchors.len());
+        let abs_mark = self.abs.len();
+        let seq = self.positioned.len() as u32;
+        if positioned {
+            self.positioned.push((n, seq));
+            let (kind, z) = match s.z_index { Some(z) => (LAYER_BEGIN, z), None => (LAYER_BEGIN_AUTO, 0) };
+            self.items.push(Item::Rect { x: 0, y: 0, w: kind, h: z, color: seq, radius: 0 });
+        }
+        let r = self.block_inner(n, x, y, cw, force_width);
+        // Boxes positioned inside: this box's padding box holds them (the viewport, for
+        // the root and for fixed boxes).
+        let pending: Vec<(NodeId, i32, i32)> = self.abs.drain(abs_mark..).collect();
+        let pad = self.boxes.iter().rev().find(|(b, _)| *b == n).map(|(_, b)| [b[0] + s.border[LEFT], b[1] + s.border[TOP], b[2] - s.border[LEFT] - s.border[RIGHT], b[3] - s.border[TOP] - s.border[BOTTOM]]);
+        let view = [0, 0, self.viewport.0, if self.viewport.1 > 0 { self.viewport.1 } else { r.height }];
+        for (c, sx, sy) in pending {
+            let fixed = self.style(c).map_or(false, |cs| cs.position == style::Position::Fixed);
+            if is_root { self.place_abs(c, sx, sy, view); }
+            else if fixed { self.abs.push((c, sx, sy)); }
+            else { self.place_abs(c, sx, sy, pad.unwrap_or(view)); }
+        }
+        if matches!(s.position, style::Position::Relative | style::Position::Sticky) {
+            let dx = s.inset[LEFT].resolve(cw).or_else(|| s.inset[RIGHT].resolve(cw).map(|v| -v)).unwrap_or(0);
+            let dy = s.inset[TOP].resolve(0).or_else(|| s.inset[BOTTOM].resolve(0).map(|v| -v)).unwrap_or(0);
+            if s.position == style::Position::Relative && (dx != 0 || dy != 0) { self.shift(i0, l0, b0, a0, dx, dy); }
+        }
+        if positioned { self.items.push(Item::Rect { x: 0, y: 0, w: LAYER_END, h: 0, color: seq, radius: 0 }); }
+        r
+    }
+
+    /// Moves everything laid out since the given list lengths.
+    fn shift(&mut self, i0: usize, l0: usize, b0: usize, a0: usize, dx: i32, dy: i32) {
+        for it in &mut self.items[i0..] { it.offset(dx, dy); }
+        for l in &mut self.links[l0..] { l.x += dx; l.y += dy; }
+        for (_, b) in &mut self.boxes[b0..] { b[0] += dx; b[1] += dy; }
+        for (_, y) in &mut self.anchors[a0..] { *y += dy; }
+    }
+
+    /// Places an absolutely positioned box in containing block `cb` (x, y, w, h) by its
+    /// offsets, or at its static position (`sx`, `sy`) along an axis that has none.
+    fn place_abs(&mut self, n: NodeId, sx: i32, sy: i32, cb: [i32; 4]) {
+        let s = self.style(n).unwrap();
+        let [cx, cy, cw, ch] = cb;
+        let (ml, mr) = (s.margin[LEFT].or_zero(cw), s.margin[RIGHT].or_zero(cw));
+        let (mt, mb) = (s.margin[TOP].or_zero(cw), s.margin[BOTTOM].or_zero(cw));
+        let (l, r) = (s.inset[LEFT].resolve(cw), s.inset[RIGHT].resolve(cw));
+        let (t, b) = (s.inset[TOP].resolve(ch), s.inset[BOTTOM].resolve(ch));
+        let width = match (s.width, l, r) { (Len::Auto, Some(l), Some(r)) => Some((cw - l - r - ml - mr).max(0)), _ => None };
+        if let (Len::Auto, Some(t), Some(b)) = (s.height, t, b) { self.force_height = Some((ch - t - b - mt - mb).max(0)); }
+        let (i0, l0, b0, a0) = (self.items.len(), self.links.len(), self.boxes.len(), self.anchors.len());
+        let x0 = l.map_or(sx, |l| cx + l);
+        let res = self.block(n, x0, 0, cw, width);
+        self.force_height = None;
+        let dx = match (l, r) { (None, Some(r)) => cx + cw - r - res.width - x0, _ => 0 };
+        let dy = match (t, b) {
+            (Some(t), _) => cy + t + mt,
+            (None, Some(b)) => cy + ch - b - mb - res.height,
+            _ => sy + mt,
+        };
+        self.shift(i0, l0, b0, a0, dx, dy);
+    }
+
+    fn block_inner(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
+        let forced_height = self.force_height.take();
         let s = self.style(n).unwrap();
         if let Some(tag) = self.dom.tag(n).filter(|t| REPLACED.contains(t)) {
             // Pictures and controls keep their own size in block flow too.
@@ -252,8 +413,10 @@ impl<'a> Layout<'a> {
             _ => self.flow(n, cx, cy, content_w),
         };
         if pushed_link { self.link_stack.pop(); }
-        let mut inner_h = match s.height.resolve(0) {
-            Some(h) if !matches!(s.height, Len::Pct(_)) => if s.box_sizing_border { h - (s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw)) } else { h },
+        let vertical_bp = s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw);
+        let mut inner_h = match (forced_height, s.height.resolve(0)) {
+            (Some(h), _) => h - vertical_bp,
+            (None, Some(h)) if !matches!(s.height, Len::Pct(_)) => if s.box_sizing_border { h - vertical_bp } else { h },
             _ => content_h,
         };
         if let Some(min) = s.min_height.resolve(0) { inner_h = inner_h.max(min); }
@@ -352,6 +515,11 @@ impl<'a> Layout<'a> {
         let children = self.flat_children(n);
         let mut first_block = true;
         for c in children.iter().copied().chain(core::iter::once(usize::MAX)) {
+            if c != usize::MAX && self.out_of_flow(c) {
+                // Placed by its containing block; without offsets it sits where it would have.
+                self.abs.push((c, cx, y + pending_margin.max(0)));
+                continue;
+            }
             let block = c != usize::MAX && self.is_block(c);
             if c != usize::MAX && !block {
                 if self.display(c) != Display::None { inline_run.push(c); }
@@ -402,8 +570,8 @@ impl<'a> Layout<'a> {
         let mut space_before = true;
         for &n in run { self.collect(n, cs, &mut pieces, &mut space_before); }
         while matches!(pieces.last(), Some(Piece::Space { breakable: true, .. })) { pieces.pop(); }
-        if pieces.iter().all(|p| matches!(p, Piece::Space { .. } | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_))) {
-            for p in pieces { if let Piece::Anchor(id) = p { self.anchors.push((id, y)); } }
+        if pieces.iter().all(|p| matches!(p, Piece::Space { .. } | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_) | Piece::Abs(_))) {
+            for p in pieces { match p { Piece::Anchor(id) => self.anchors.push((id, y)), Piece::Abs(n) => self.abs.push((n, x, y)), _ => {} } }
             return None;
         }
         Some(self.lines(cs, pieces, x, y, w))
@@ -418,6 +586,7 @@ impl<'a> Layout<'a> {
                 if s.display == Display::None { return; }
                 let tag = tag.as_str();
                 if tag == "br" { out.push(Piece::Break); *space_before = true; return; }
+                if self.out_of_flow(n) { out.push(Piece::Abs(n)); return; }
                 let atomic = matches!(tag, "img" | "input" | "select" | "textarea" | "button" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed" | "meter" | "progress")
                     || s.display == Display::InlineBlock || s.is_block_level();
                 if atomic {
@@ -667,7 +836,7 @@ impl<'a> Layout<'a> {
                 if matches!(p, Piece::Break) { break; }
                 let pw = p.width();
                 if let Piece::Space { breakable: true, .. } = p { last_break = Some(end); }
-                if wraps && used + pw > width && end > start && !matches!(p, Piece::Space { .. } | Piece::Open(_) | Piece::Close(_)) {
+                if wraps && used + pw > width && end > start && !matches!(p, Piece::Space { .. } | Piece::Open(_) | Piece::Close(_) | Piece::Abs(_)) {
                     if let Some(b) = last_break { end = b; }
                     break;
                 }
@@ -682,7 +851,7 @@ impl<'a> Layout<'a> {
             // Vertical metrics: half-leading around each piece.
             let mut above = (strut_lh - (sa + sd)) / 2 + sa;
             let mut below = strut_lh - above;
-            let markers_only = pieces[start..trim].iter().flatten().all(|p| matches!(p, Piece::Open(_) | Piece::Close(_)));
+            let markers_only = pieces[start..trim].iter().flatten().all(|p| matches!(p, Piece::Open(_) | Piece::Close(_) | Piece::Abs(_)));
             if start == trim || (markers_only && !forced) { above = 0; below = 0; if forced { above = (strut_lh - (sa + sd)) / 2 + sa; below = strut_lh - above; } }
             for p in pieces[start..trim].iter().flatten() {
                 match p {
@@ -747,6 +916,7 @@ impl<'a> Layout<'a> {
                     Piece::Gap(g) => { flush(self, &mut run); x += g; }
                     Piece::Anchor(id) => self.anchors.push((id, line_top)),
                     Piece::Open(n) => open.push((n, x)),
+                    Piece::Abs(n) => self.abs.push((n, x, line_top)),
                     Piece::Close(n) => if let Some(i) = open.iter().rposition(|o| o.0 == n) {
                         let (_, sx) = open.remove(i);
                         if x > sx && line_h > 0 { self.boxes.push((n, [sx, line_top, x - sx, line_h])); }
@@ -953,6 +1123,7 @@ impl<'a> Layout<'a> {
             match &self.dom.nodes[c].kind {
                 Kind::Text(t) if t.trim().is_empty() => continue,
                 Kind::Element { .. } if self.display(c) == Display::None => continue,
+                Kind::Element { .. } if self.out_of_flow(c) => { self.abs.push((c, cx, cy)); continue; }
                 _ => {}
             }
             let (min, max) = self.intrinsic(c);
@@ -1116,6 +1287,7 @@ impl<'a> Layout<'a> {
                 }
                 let mut count = 0;
                 for c in children {
+                    if self.out_of_flow(c) { continue; }
                     let (cmin, cmax) = self.intrinsic(c);
                     if row_like {
                         if matches!(&self.dom.nodes[c].kind, Kind::Text(t) if t.trim().is_empty()) { continue; }
