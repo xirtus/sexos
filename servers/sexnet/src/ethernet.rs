@@ -22,6 +22,12 @@ const TCTL_VALUE:u32=2|8|(15<<4)|(64<<12);
 const WAIT_TICKS:u64=5000;const WAIT_TURNS:u32=32768;
 const TX_TICKS:u64=2000;const TX_TURNS:u32=8192;
 
+/// The multicast table words and bits that pass IPv6's all-nodes group and the
+/// solicited-node group of addresses made from `mac` (RCTL.MO=0: the table index is
+/// bits 47:36 of the destination address).
+pub fn multicast_bits(mac:[u8;6])->[(u32,u32);2]{
+    [[0x33,0x33,0,0,0,1],[0x33,0x33,0xff,mac[3],mac[4],mac[5]]].map(|a:[u8;6]|{let h=((a[5] as u32)<<4|(a[4] as u32)>>4)&0xfff;(h>>5,1<<(h&31))})
+}
 pub trait Hardware:nic::Hardware {
     fn model(&self)->c::Model;
     fn mmio_length(&self)->u64;
@@ -108,8 +114,11 @@ impl<H:Hardware> Driver<H>{
             },
             Phase::Registers=>{
                 for (offset,value)in self.registers(){self.hardware.write(offset,value);}
-                // No multicast acceptance, checksum offload or second queue.
-                for n in 0..128{self.hardware.write(0x5200+4*n,0);}
+                // No checksum offload or second queue. Multicast: only the two groups
+                // IPv6 needs, all-nodes (router advertisements) and this MAC's
+                // solicited-node group (neighbor solicitations for its addresses).
+                let groups=multicast_bits(self.mac);
+                for n in 0..128{self.hardware.write(0x5200+4*n,groups.iter().filter(|g|g.0==n).fold(0,|w,g|w|g.1));}
                 self.hardware.write(0x5000,0);
                 let ctrl=self.hardware.read(nic::CTRL);if ctrl==u32::MAX||ctrl&(1<<26)!=0{self.fail(Failure::Registers);return None;}
                 self.hardware.write(nic::CTRL,ctrl|(1<<6));

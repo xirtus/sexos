@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The open-internet streams: TCP flows made as programs ask for them, reached by name through whatever
+//! The open-internet streams: TCP flows and UDP sockets made as programs ask for them, over
+//! IPv4 or IPv6, reached by name through whatever
 //! the network's DHCP and DNS say. Holding the BOOT route to the network service and
 //! the region shared with it is the right. An address is data, not authority.
 
@@ -63,3 +64,67 @@ pub const fn address_port(address: [u8; 4], port: u16) -> u64 { (u32::from_be_by
 pub const SHELL_SLOT: u64 = 262;
 /// Program rows follow the Spindles and Browsers in the provider slots and regions.
 pub const PROGRAM_INDEX_BASE: usize = crate::app_catalog::SPINDLE_TARGETS.len() + crate::browser_sources::PLANS.len();
+
+// Kinds that name addresses of either family. An endpoint in the region is
+// `ENDPOINT_BYTES`: the family (`FAMILY_V4` or `FAMILY_V6`), sixteen address bytes
+// (an IPv4 address in the first four) and the port, big-endian.
+/// Look a name up in both families. value: the name's length to ask, 0 for the answer.
+/// The answer's value is how many addresses (1 or 2) the region holds, `ADDRESS_BYTES`
+/// each, the one to try first first: IPv6 when the machine has a global IPv6 address
+/// and the name has one, then IPv4.
+pub const RESOLVE_ALL: u8 = 11;
+/// Connect the flow to the address in the region (`ADDRESS_BYTES`); value: the port.
+pub const CONNECT_TO: u8 = 12;
+/// Make the flow a UDP socket on a local port (value; 0 takes any). Answers the port.
+pub const UDP_BIND: u8 = 13;
+/// Send one datagram: the region holds the endpoint, then the payload; value: the
+/// payload's length. `WAIT` when the send queue has no room for it yet.
+pub const UDP_SEND: u8 = 14;
+/// Take one datagram, if one came: the region gets its sender's endpoint, then the
+/// payload; the value is the payload's length. `WAIT` when none has. value: room.
+pub const UDP_RECEIVE: u8 = 15;
+/// Make the flow a TCP listener on a local port (value). `STATE` says opening until a
+/// peer connects.
+pub const LISTEN: u8 = 16;
+/// On a listener a peer connected to: the connection becomes the caller's flow
+/// numbered by value, and the listener listens again. The region gets the peer's
+/// endpoint. `WAIT` while no peer has connected.
+pub const ACCEPT: u8 = 17;
+/// The machine's addresses: the value is how many, each `ADDRESS_BYTES` and a prefix
+/// length byte in the region.
+pub const ADDRESSES: u8 = 18;
+/// Send the flow's FIN after the bytes already queued; the flow can still read. A
+/// `CLOSE` after this lets the connection finish on its own instead of resetting it.
+pub const SHUTDOWN: u8 = 19;
+
+/// The port is held by another flow, or is one the service keeps for itself.
+pub const IN_USE: u8 = 8;
+
+pub const FAMILY_V4: u8 = 4;
+pub const FAMILY_V6: u8 = 6;
+pub const ADDRESS_BYTES: usize = 17;
+pub const ENDPOINT_BYTES: usize = 19;
+/// Programs may bind and listen on ports 1 to this, except 68 (the DHCP client's).
+/// The ports above it are the service's own.
+pub const PROGRAM_PORT_MAX: u16 = 39_998;
+pub fn put_address(out: &mut [u8], family: u8, address: &[u8]) {
+    out[0] = family;
+    out[1..17].fill(0);
+    out[1..1 + address.len()].copy_from_slice(address);
+}
+/// The family and its address bytes (4 or 16), or None for an unknown family.
+pub fn address_of(bytes: &[u8]) -> Option<(u8, &[u8])> {
+    match *bytes.first()? {
+        FAMILY_V4 => Some((FAMILY_V4, bytes.get(1..5)?)),
+        FAMILY_V6 => Some((FAMILY_V6, bytes.get(1..17)?)),
+        _ => None,
+    }
+}
+pub fn put_endpoint(out: &mut [u8], family: u8, address: &[u8], port: u16) {
+    put_address(out, family, address);
+    out[17..19].copy_from_slice(&port.to_be_bytes());
+}
+pub fn endpoint_of(bytes: &[u8]) -> Option<(u8, &[u8], u16)> {
+    let (family, address) = address_of(bytes)?;
+    Some((family, address, u16::from_be_bytes([*bytes.get(17)?, *bytes.get(18)?])))
+}
