@@ -43,6 +43,15 @@ pub struct Fixed {
     pub polygon_offset: Option<[f32; 2]>,
     /// Clip-space depth runs 0..w (WebGPU) instead of -w..w (GL).
     pub zero_one: bool,
+    /// Varying lanes that are not interpolated (one bit each).
+    pub flat: [u64; 4],
+}
+
+impl Fixed {
+    fn flat_lanes(&self, n: usize) -> impl Iterator<Item = usize> + '_ {
+        (0..n.min(256)).filter(move |k| self.flat[k / 64] >> (k % 64) & 1 != 0)
+    }
+    fn any_flat(&self) -> bool { self.flat.iter().any(|w| *w != 0) }
 }
 
 pub mod gl {
@@ -256,7 +265,7 @@ fn window(fx: &Fixed, p: [f32; 4]) -> [f32; 4] {
 fn lerp_vert(a: &Vert, b: &Vert, t: f32) -> Vert {
     let mut pos = [0f32; 4];
     for i in 0..4 { pos[i] = a.pos[i] + (b.pos[i] - a.pos[i]) * t; }
-    Vert { pos, point_size: a.point_size, vary: a.vary.iter().zip(&b.vary).map(|(x, y)| x + (y - x) * t).collect() }
+    Vert { pos, point_size: a.point_size, vary: a.vary.iter().zip(&b.vary).map(|(x, y)| if x.to_bits() == y.to_bits() { *x } else { x + (y - x) * t }).collect() }
 }
 
 /// Clips a triangle against the near (z >= -w) and far (z <= w) planes.
@@ -279,6 +288,15 @@ fn clip(tri: [&Vert; 3], zero_one: bool) -> Vec<Vert> {
 }
 
 pub fn triangle(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut dyn Shade, scratch: &mut Vec<f32>) {
+    // Flat varyings come from the provoking (last) vertex: give it to all three, so that
+    // clipping keeps it and the rasterizer copies it.
+    let (fa, fb);
+    let (a, b) = if fx.any_flat() {
+        let (mut x, mut y) = (a.clone(), b.clone());
+        for k in fx.flat_lanes(c.vary.len()) { x.vary[k] = c.vary[k]; y.vary[k] = c.vary[k]; }
+        (fa, fb) = (x, y);
+        (&fa, &fb)
+    } else { (a, b) };
     // Trivial reject: all outside one side plane.
     for axis in 0..2 {
         if [a, b, c].iter().all(|v| v.pos[axis] > v.pos[3]) || [a, b, c].iter().all(|v| v.pos[axis] < -v.pos[3]) { return; }
@@ -336,6 +354,7 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
     };
     let mut batch = Batch::default();
     let wide = sh.batch() > 1;
+    let flat = fx.any_flat();
     for y in miny..=maxy {
         let py = y as f32 + 0.5;
         for x in minx..=maxx {
@@ -350,6 +369,7 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
             let iw = l0 * p0[3] + l1 * p1[3] + l2 * p2[3];
             let (q0, q1, q2) = (l0 * p0[3] / iw, l1 * p1[3] / iw, l2 * p2[3] / iw);
             for k in 0..n { scratch[k] = q0 * v0.vary[k] + q1 * v1.vary[k] + q2 * v2.vary[k]; }
+            if flat { for k in fx.flat_lanes(n) { scratch[k] = v0.vary[k]; } }
             let frag = Frag { x: px, y: py, z, inv_w: iw, front, point: [0.0, 0.0] };
             if wide {
                 batch.push(t, fx, (y * t.width + x) as usize, z.clamp(0.0, 1.0), sh, frag, scratch);
@@ -377,6 +397,7 @@ pub fn line(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, sh: &mut dyn Shade, 
         let iw = wa[3] + (wb[3] - wa[3]) * k;
         let (qa, qb) = ((1.0 - k) * wa[3] / iw, k * wb[3] / iw);
         for j in 0..n { scratch[j] = qa * a.vary[j] + qb * b.vary[j]; }
+        for j in fx.flat_lanes(n) { scratch[j] = b.vary[j]; }
         let z = wa[2] + (wb[2] - wa[2]) * k;
         let frag = Frag { x: x as f32 + 0.5, y: y as f32 + 0.5, z, inv_w: iw, front: true, point: [0.0, 0.0] };
         write(t, fx, x, y, z.clamp(0.0, 1.0), sh, &frag, scratch);

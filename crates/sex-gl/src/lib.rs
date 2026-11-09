@@ -49,6 +49,8 @@ pub mod enums {
     pub const CCW: u32 = 0x0901;
     pub const TEXTURE_2D: u32 = 0x0DE1;
     pub const TEXTURE_CUBE_MAP: u32 = 0x8513;
+    pub const TEXTURE_3D: u32 = 0x806F;
+    pub const TEXTURE_2D_ARRAY: u32 = 0x8C1A;
     pub const TEXTURE_CUBE_MAP_POSITIVE_X: u32 = 0x8515;
     pub const TEXTURE0: u32 = 0x84C0;
     pub const TEXTURE_MAG_FILTER: u32 = 0x2800;
@@ -67,6 +69,10 @@ pub mod enums {
     pub const LUMINANCE_ALPHA: u32 = 0x190A;
     pub const RED: u32 = 0x1903;
     pub const RG: u32 = 0x8227;
+    pub const RED_INTEGER: u32 = 0x8D94;
+    pub const RG_INTEGER: u32 = 0x8228;
+    pub const RGB_INTEGER: u32 = 0x8D98;
+    pub const RGBA_INTEGER: u32 = 0x8D99;
     pub const UNPACK_ALIGNMENT: u32 = 0x0CF5;
     pub const UNPACK_FLIP_Y_WEBGL: u32 = 0x9240;
     pub const UNPACK_PREMULTIPLY_ALPHA_WEBGL: u32 = 0x9241;
@@ -109,12 +115,52 @@ pub struct Vao {
     pub attribs: [Attrib; MAX_ATTRIBS],
 }
 
-/// One texture image (RGBA8, `r | g << 8 | b << 16 | a << 24`; row 0 is t = 0).
+/// One texture image; row 0 is t = 0. Normalized textures keep RGBA8 in `px`
+/// (`r | g << 8 | b << 16 | a << 24`); float and integer ones keep four 32-bit lanes per
+/// texel in `raw` (f32, u32 or i32 bits).
 #[derive(Clone, Default)]
 pub struct Level {
     pub width: u32,
     pub height: u32,
     pub px: Vec<u32>,
+    pub class: Class,
+    pub raw: Vec<u32>,
+}
+
+/// What a texture's texels hold.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Class {
+    #[default]
+    Norm,
+    Float,
+    Uint,
+    Int,
+}
+
+impl Class {
+    /// The class texImage2D's format and type give.
+    pub fn of(format: u32, ty: u32) -> Class {
+        let integer = matches!(format, RED_INTEGER | RG_INTEGER | RGB_INTEGER | RGBA_INTEGER);
+        match ty {
+            _ if integer => if matches!(ty, BYTE | SHORT | INT) { Class::Int } else { Class::Uint },
+            FLOAT | HALF_FLOAT | HALF_FLOAT_OES => Class::Float,
+            _ => Class::Norm,
+        }
+    }
+}
+
+impl Level {
+    /// The texel's four lanes as a shader reads them.
+    fn bits(&self, x: i32, y: i32) -> [u32; 4] {
+        let i = (y as u32 * self.width + x as u32) as usize;
+        match self.class {
+            Class::Norm => {
+                let p = self.px[i];
+                [0, 8, 16, 24].map(|s| (((p >> s) & 0xFF) as f32 / 255.0).to_bits())
+            }
+            _ => [self.raw[4 * i], self.raw[4 * i + 1], self.raw[4 * i + 2], self.raw[4 * i + 3]],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -130,14 +176,33 @@ pub struct Texture {
 
 impl Texture {
     fn new(target: u32) -> Self {
-        Texture { target, faces: vec![Level::default(); if target == TEXTURE_CUBE_MAP { 6 } else { 1 }], min_filter: 0x2702, mag_filter: LINEAR, wrap_s: REPEAT, wrap_t: REPEAT }
+        Texture { target, faces: vec![Level::default(); match target { TEXTURE_CUBE_MAP => 6, TEXTURE_3D | TEXTURE_2D_ARRAY => 0, _ => 1 }], min_filter: 0x2702, mag_filter: LINEAR, wrap_s: REPEAT, wrap_t: REPEAT }
     }
 
-    fn complete(&self) -> bool { self.faces.iter().all(|f| f.width > 0 && f.height > 0) }
+    fn complete(&self) -> bool { !self.faces.is_empty() && self.faces.iter().all(|f| f.width > 0 && f.height > 0) }
+
+    /// Layers (2D arrays) or slices (3D): one level each.
+    fn layered(&self) -> bool { matches!(self.target, TEXTURE_3D | TEXTURE_2D_ARRAY) }
 
     fn fetch(l: &Level, x: i32, y: i32) -> [f32; 4] {
-        let p = l.px[(y as u32 * l.width + x as u32) as usize];
-        [(p & 0xFF) as f32 / 255.0, ((p >> 8) & 0xFF) as f32 / 255.0, ((p >> 16) & 0xFF) as f32 / 255.0, (p >> 24) as f32 / 255.0]
+        let i = (y as u32 * l.width + x as u32) as usize;
+        match l.class {
+            Class::Norm => {
+                let p = l.px[i];
+                [(p & 0xFF) as f32 / 255.0, ((p >> 8) & 0xFF) as f32 / 255.0, ((p >> 16) & 0xFF) as f32 / 255.0, (p >> 24) as f32 / 255.0]
+            }
+            Class::Float => [0, 1, 2, 3].map(|k| f32::from_bits(l.raw[4 * i + k])),
+            Class::Uint => [0, 1, 2, 3].map(|k| l.raw[4 * i + k] as f32),
+            Class::Int => [0, 1, 2, 3].map(|k| l.raw[4 * i + k] as i32 as f32),
+        }
+    }
+
+    /// texelFetch at (x, y) of 2D textures, and of cube face `z`; out of range reads zero.
+    pub fn load(&self, c: [i32; 3]) -> [u32; 4] {
+        let face = if self.target == TEXTURE_CUBE_MAP || self.layered() { c[2].max(0) as usize } else { 0 };
+        let Some(l) = self.faces.get(face) else { return [0; 4] };
+        if c[0] < 0 || c[1] < 0 || c[0] >= l.width as i32 || c[1] >= l.height as i32 { return [0; 4]; }
+        l.bits(c[0], c[1])
     }
 
     fn wrap(mode: u32, i: i32, n: i32) -> i32 {
@@ -189,6 +254,22 @@ impl Texture {
             t.wrap_s = CLAMP_TO_EDGE;
             t.wrap_t = CLAMP_TO_EDGE;
             t.sample_level(&self.faces[face], (sc / ma + 1.0) * 0.5, (tc / ma + 1.0) * 0.5)
+        } else if self.target == TEXTURE_2D_ARRAY {
+            let layer = (libm::floorf(c[2] + 0.5).max(0.0) as usize).min(self.faces.len() - 1);
+            self.sample_level(&self.faces[layer], c[0], c[1])
+        } else if self.target == TEXTURE_3D {
+            // Between the two nearest slices.
+            let n = self.faces.len();
+            let r = c[2] * n as f32 - 0.5;
+            let z0 = libm::floorf(r);
+            let f = if self.mag_filter == NEAREST { 0.0 } else { r - z0 };
+            let wrap = |z: i32| Self::wrap(self.wrap_s, z, n as i32) as usize;
+            let z0 = if self.mag_filter == NEAREST { libm::floorf(c[2] * n as f32) as i32 } else { z0 as i32 };
+            let a = self.sample_level(&self.faces[wrap(z0)], c[0], c[1]);
+            if f == 0.0 { a } else {
+                let b = self.sample_level(&self.faces[wrap(z0 + 1)], c[0], c[1]);
+                [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * f)
+            }
         } else {
             self.sample_level(&self.faces[0], c[0], c[1])
         };
@@ -236,7 +317,8 @@ pub struct Context {
     pub current: u32,
     pub array_buffer: u32,
     pub generic: [[f32; 4]; MAX_ATTRIBS],
-    pub units: [[u32; 2]; MAX_UNITS],
+    /// Each unit's bindings: 2D, cube map, 3D, 2D array.
+    pub units: [[u32; 4]; MAX_UNITS],
     pub active_unit: usize,
     pub fixed: Fixed,
     pub scissor_box: [i32; 4],
@@ -260,11 +342,11 @@ impl Context {
             width: w, height: h, color: vec![0; (w * h) as usize], depth: vec![1.0; (w * h) as usize],
             buffers: BTreeMap::new(), textures: BTreeMap::new(), shaders: BTreeMap::new(), programs: BTreeMap::new(),
             vaos: BTreeMap::new(), default_vao: Vao::default(), vao: 0, current: 0, array_buffer: 0,
-            generic: [[0.0, 0.0, 0.0, 1.0]; MAX_ATTRIBS], units: [[0; 2]; MAX_UNITS], active_unit: 0,
+            generic: [[0.0, 0.0, 0.0, 1.0]; MAX_ATTRIBS], units: [[0; 4]; MAX_UNITS], active_unit: 0,
             fixed: Fixed {
                 viewport: [0, 0, w as i32, h as i32], scissor: None, depth_test: false, depth_func: rg::LESS, depth_mask: true,
                 depth_range: [0.0, 1.0], blend: false, blend_src: [rg::ONE; 2], blend_dst: [rg::ZERO; 2], blend_eq: [rg::FUNC_ADD; 2],
-                blend_color: [0.0; 4], color_mask: [true; 4], cull: false, cull_face: rg::BACK, front_ccw: true, polygon_offset: None, zero_one: false,
+                blend_color: [0.0; 4], color_mask: [true; 4], cull: false, cull_face: rg::BACK, front_ccw: true, polygon_offset: None, zero_one: false, flat: [0; 4],
             },
             scissor_box: [0, 0, w as i32, h as i32], scissor_test: false, polygon_offset: [0.0; 2], polygon_offset_fill: false,
             clear_color: [0.0; 4], clear_depth: 1.0, unpack_alignment: 4, flip_y: false, premultiply: false, error: NO_ERROR, frame: 0,
@@ -415,7 +497,7 @@ impl Context {
         if u < MAX_UNITS { self.active_unit = u; } else { self.err(INVALID_ENUM); }
     }
     pub fn bind_texture(&mut self, target: u32, id: u32) {
-        let slot = if target == TEXTURE_CUBE_MAP { 1 } else { 0 };
+        let Some(slot) = unit_slot(target) else { return self.err(INVALID_ENUM) };
         if id != 0 {
             let t = self.textures.entry(id).or_insert_with(|| Texture::new(target));
             if t.target != target { return self.err(INVALID_OPERATION); }
@@ -427,10 +509,10 @@ impl Context {
         for u in self.units.iter_mut() { for s in u.iter_mut() { if *s == id { *s = 0; } } }
     }
     fn bound_texture(&mut self, target: u32) -> Option<(&mut Texture, usize)> {
-        let (slot, face) = if target == TEXTURE_2D { (0, 0) } else if target == TEXTURE_CUBE_MAP { (1, 0) } else {
+        let (slot, face) = match unit_slot(target) { Some(s) => (s, 0), None => {
             let f = target.wrapping_sub(TEXTURE_CUBE_MAP_POSITIVE_X);
             if f < 6 { (1, f as usize) } else { return None }
-        };
+        } };
         let id = self.units[self.active_unit][slot];
         self.textures.get_mut(&id).map(|t| (t, face))
     }
@@ -447,8 +529,9 @@ impl Context {
 
     /// Converts client pixels in `format`/`ty` to RGBA8 rows, honouring the unpack state.
     pub fn convert(&self, width: u32, height: u32, format: u32, ty: u32, data: &[u8]) -> Option<Vec<u32>> {
-        let comps = match format { RGBA => 4, RGB => 3, LUMINANCE_ALPHA | RG => 2, _ => 1 };
-        let bpp = match ty { FLOAT => 4 * comps, HALF_FLOAT | HALF_FLOAT_OES => 2 * comps, UNSIGNED_SHORT_5_6_5 | UNSIGNED_SHORT_4_4_4_4 | UNSIGNED_SHORT_5_5_5_1 => 2, _ => comps };
+        let comps = match format { RGBA | RGBA_INTEGER => 4, RGB | RGB_INTEGER => 3, LUMINANCE_ALPHA | RG | RG_INTEGER => 2, _ => 1 };
+        let size = match ty { FLOAT | INT | UNSIGNED_INT => 4, HALF_FLOAT | HALF_FLOAT_OES | SHORT | UNSIGNED_SHORT => 2, _ => 1 };
+        let bpp = match ty { UNSIGNED_SHORT_5_6_5 | UNSIGNED_SHORT_4_4_4_4 | UNSIGNED_SHORT_5_5_5_1 => 2, _ => size * comps };
         let row = width as usize * bpp;
         let align = self.unpack_alignment as usize;
         let stride = row.div_ceil(align) * align;
@@ -463,7 +546,7 @@ impl Context {
                     match ty {
                         FLOAT => f32::from_le_bytes([r[x * bpp + i * 4], r[x * bpp + i * 4 + 1], r[x * bpp + i * 4 + 2], r[x * bpp + i * 4 + 3]]),
                         HALF_FLOAT | HALF_FLOAT_OES => half(u16::from_le_bytes([r[x * bpp + i * 2], r[x * bpp + i * 2 + 1]])),
-                        _ => r[x * bpp + i] as f32 / 255.0,
+                        _ => r[x * bpp + i * size] as f32 / 255.0,
                     }
                 };
                 match ty {
@@ -476,14 +559,13 @@ impl Context {
                         };
                     }
                     _ => match format {
-                        RGBA => c = [comp(0), comp(1), comp(2), comp(3)],
-                        RGB => c = [comp(0), comp(1), comp(2), 1.0],
+                        RGBA | RGBA_INTEGER => c = [comp(0), comp(1), comp(2), comp(3)],
+                        RGB | RGB_INTEGER => c = [comp(0), comp(1), comp(2), 1.0],
                         LUMINANCE => { let l = comp(0); c = [l, l, l, 1.0]; }
                         LUMINANCE_ALPHA => { let l = comp(0); c = [l, l, l, comp(1)]; }
                         ALPHA => c = [0.0, 0.0, 0.0, comp(0)],
-                        RED => c = [comp(0), 0.0, 0.0, 1.0],
-                        RG => c = [comp(0), comp(1), 0.0, 1.0],
-                        _ => c = [comp(0), comp(1), comp(2), comp(3)],
+                        RG | RG_INTEGER => c = [comp(0), comp(1), 0.0, 1.0],
+                        _ => c = [comp(0), 0.0, 0.0, 1.0],
                     },
                 }
                 if self.premultiply { for i in 0..3 { c[i] *= c[3]; } }
@@ -498,6 +580,17 @@ impl Context {
     pub fn tex_image(&mut self, target: u32, level: i32, width: u32, height: u32, format: u32, ty: u32, data: Option<&[u8]>) {
         if level != 0 { return; }
         if width > MAX_SIZE || height > MAX_SIZE { return self.err(INVALID_VALUE); }
+        let class = Class::of(format, ty);
+        if class != Class::Norm {
+            let raw = match data {
+                Some(d) => match self.convert_raw(width, height, format, ty, class, d) { Some(r) => r, None => return self.err(INVALID_OPERATION) },
+                None => vec![0; 4 * (width * height) as usize],
+            };
+            let Some((t, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
+            let Some(l) = t.faces.get_mut(face) else { return self.err(INVALID_ENUM) };
+            *l = Level { width, height, px: Vec::new(), class, raw };
+            return;
+        }
         let px = match data {
             Some(d) => match self.convert(width, height, format, ty, d) { Some(p) => p, None => return self.err(INVALID_OPERATION) },
             None => vec![0; (width * height) as usize],
@@ -505,11 +598,48 @@ impl Context {
         self.tex_image_rgba(target, width, height, px);
     }
 
+    /// Client texels of a float or integer texture, four lanes each (missing ones 0, alpha 1).
+    #[allow(clippy::too_many_arguments)]
+    fn convert_raw(&self, width: u32, height: u32, format: u32, ty: u32, class: Class, data: &[u8]) -> Option<Vec<u32>> {
+        let comps = match format { RGBA | RGBA_INTEGER => 4, RGB | RGB_INTEGER => 3, RG | RG_INTEGER | LUMINANCE_ALPHA => 2, _ => 1 };
+        let size = match ty { FLOAT | INT | UNSIGNED_INT => 4, HALF_FLOAT | HALF_FLOAT_OES | SHORT | UNSIGNED_SHORT => 2, _ => 1 };
+        let bpp = comps * size;
+        let row = width as usize * bpp;
+        let align = self.unpack_alignment as usize;
+        let stride = row.div_ceil(align) * align;
+        if height > 0 && data.len() < stride * (height as usize - 1) + row { return None; }
+        let one = if class == Class::Float { 1.0f32.to_bits() } else { 1 };
+        let mut out = vec![0u32; 4 * (width * height) as usize];
+        for y in 0..height as usize {
+            let src_y = if self.flip_y { height as usize - 1 - y } else { y };
+            let r = &data[src_y * stride..src_y * stride + row];
+            for x in 0..width as usize {
+                let o = 4 * (y * width as usize + x);
+                out[o + 3] = one;
+                for k in 0..comps {
+                    let b = &r[x * bpp + k * size..];
+                    out[o + k] = match ty {
+                        FLOAT | INT | UNSIGNED_INT => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                        HALF_FLOAT | HALF_FLOAT_OES => half(u16::from_le_bytes([b[0], b[1]])).to_bits(),
+                        SHORT => i16::from_le_bytes([b[0], b[1]]) as i32 as u32,
+                        UNSIGNED_SHORT => u16::from_le_bytes([b[0], b[1]]) as u32,
+                        BYTE => b[0] as i8 as i32 as u32,
+                        _ => b[0] as u32,
+                    };
+                }
+                if format == LUMINANCE_ALPHA { out[o + 3] = out[o + 1]; out[o + 1] = out[o]; out[o + 2] = out[o]; }
+                if format == LUMINANCE { out[o + 1] = out[o]; out[o + 2] = out[o]; }
+            }
+        }
+        Some(out)
+    }
+
     /// texImage2D from RGBA8 pixels already decoded (pictures, other canvases), top row
     /// first as images are; flip-y and premultiply apply.
     pub fn tex_image_rgba(&mut self, target: u32, width: u32, height: u32, px: Vec<u32>) {
         let Some((t, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
-        t.faces[face] = Level { width, height, px };
+        let Some(l) = t.faces.get_mut(face) else { return self.err(INVALID_ENUM) };
+        *l = Level { width, height, px, ..Level::default() };
     }
 
     /// Uploads a decoded picture (0xAARRGGBB, top row first, not premultiplied).
@@ -547,13 +677,78 @@ impl Context {
     #[allow(clippy::too_many_arguments)]
     pub fn tex_sub_image(&mut self, target: u32, level: i32, x: u32, y: u32, width: u32, height: u32, format: u32, ty: u32, data: &[u8]) {
         if level != 0 { return; }
-        let Some(px) = self.convert(width, height, format, ty, data) else { return self.err(INVALID_OPERATION) };
-        let Some((t, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
+        let Some((_, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
+        self.sub_image(target, face, x, y, width, height, format, ty, data);
+    }
+
+    /// Writes client texels into level `face` (cube face or layer) of the bound texture.
+    #[allow(clippy::too_many_arguments)]
+    fn sub_image(&mut self, target: u32, face: usize, x: u32, y: u32, width: u32, height: u32, format: u32, ty: u32, data: &[u8]) {
+        let class = match self.bound_texture(target).and_then(|(t, _)| t.faces.get(face)) { Some(l) => l.class, None => return self.err(INVALID_OPERATION) };
+        let (raw, px) = if class != Class::Norm {
+            match self.convert_raw(width, height, format, ty, class, data) { Some(r) => (r, Vec::new()), None => return self.err(INVALID_OPERATION) }
+        } else {
+            match self.convert(width, height, format, ty, data) { Some(p) => (Vec::new(), p), None => return self.err(INVALID_OPERATION) }
+        };
+        let Some((t, _)) = self.bound_texture(target) else { return };
         let l = &mut t.faces[face];
         if x + width > l.width || y + height > l.height { return self.err(INVALID_VALUE); }
         for row in 0..height {
-            for col in 0..width { l.px[((y + row) * l.width + x + col) as usize] = px[(row * width + col) as usize]; }
+            if class != Class::Norm {
+                let d = (4 * ((y + row) * l.width + x)) as usize;
+                let s = (4 * row * width) as usize;
+                l.raw[d..d + 4 * width as usize].copy_from_slice(&raw[s..s + 4 * width as usize]);
+            } else {
+                let d = ((y + row) * l.width + x) as usize;
+                let s = (row * width) as usize;
+                l.px[d..d + width as usize].copy_from_slice(&px[s..s + width as usize]);
+            }
         }
+    }
+
+    /// texImage3D / texStorage3D: `depth` layers (2D arrays) or slices (3D), each a level.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tex_image_3d(&mut self, target: u32, level: i32, width: u32, height: u32, depth: u32, format: u32, ty: u32, data: Option<&[u8]>) {
+        if level != 0 { return; }
+        if !matches!(target, TEXTURE_3D | TEXTURE_2D_ARRAY) { return self.err(INVALID_ENUM); }
+        if width > MAX_SIZE || height > MAX_SIZE || depth > MAX_SIZE || (width as u64 * height as u64 * depth as u64) > 1 << 26 { return self.err(INVALID_VALUE); }
+        let class = Class::of(format, ty);
+        let layer = self.image_bytes(width, height, format, ty);
+        let mut faces = Vec::with_capacity(depth as usize);
+        for z in 0..depth as usize {
+            let part = data.map(|d| d.get(z * layer..(z + 1) * layer).unwrap_or(&[]));
+            let l = match (class, part) {
+                (Class::Norm, Some(p)) => match self.convert(width, height, format, ty, p) { Some(px) => Level { width, height, px, ..Level::default() }, None => return self.err(INVALID_OPERATION) },
+                (Class::Norm, None) => Level { width, height, px: vec![0; (width * height) as usize], ..Level::default() },
+                (_, Some(p)) => match self.convert_raw(width, height, format, ty, class, p) { Some(raw) => Level { width, height, class, raw, px: Vec::new() }, None => return self.err(INVALID_OPERATION) },
+                (_, None) => Level { width, height, class, raw: vec![0; 4 * (width * height) as usize], px: Vec::new() },
+            };
+            faces.push(l);
+        }
+        let Some((t, _)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
+        t.faces = faces;
+    }
+
+    /// texSubImage3D: a box of texels, `depth` layers from layer `z`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tex_sub_image_3d(&mut self, target: u32, level: i32, x: u32, y: u32, z: u32, width: u32, height: u32, depth: u32, format: u32, ty: u32, data: &[u8]) {
+        if level != 0 { return; }
+        if !matches!(target, TEXTURE_3D | TEXTURE_2D_ARRAY) { return self.err(INVALID_ENUM); }
+        let layer = self.image_bytes(width, height, format, ty);
+        for i in 0..depth as usize {
+            let Some(part) = data.get(i * layer..(i + 1) * layer) else { return self.err(INVALID_OPERATION) };
+            self.sub_image(target, z as usize + i, x, y, width, height, format, ty, part);
+        }
+    }
+
+    /// Bytes of one client image, rows padded to the unpack alignment.
+    fn image_bytes(&self, width: u32, height: u32, format: u32, ty: u32) -> usize {
+        let comps = match format { RGBA | RGBA_INTEGER => 4, RGB | RGB_INTEGER => 3, LUMINANCE_ALPHA | RG | RG_INTEGER => 2, _ => 1 };
+        let size = match ty { FLOAT | INT | UNSIGNED_INT => 4, HALF_FLOAT | HALF_FLOAT_OES | SHORT | UNSIGNED_SHORT => 2, _ => 1 };
+        let bpp = match ty { UNSIGNED_SHORT_5_6_5 | UNSIGNED_SHORT_4_4_4_4 | UNSIGNED_SHORT_5_5_5_1 => 2, _ => size * comps };
+        let row = width as usize * bpp;
+        let align = self.unpack_alignment as usize;
+        row.div_ceil(align) * align * height as usize
     }
 
     // ---- Shaders and programs ----
@@ -637,7 +832,7 @@ impl Context {
         for &i in texs {
             let s = &p.samplers[i];
             let unit = s.units.first().copied().unwrap_or(0).clamp(0, MAX_UNITS as i32 - 1) as usize;
-            ids.push(self.units[unit][if s.kind == SamplerKind::Cube { 1 } else { 0 }]);
+            ids.push(self.units[unit][kind_slot(s.kind)]);
         }
         for id in ids {
             if let Some(t) = self.textures.get_mut(&id) {
@@ -719,14 +914,19 @@ impl Context {
         for (j, o) in out.iter_mut().enumerate().take(lanes.min(4)) { *o = v[j].to_bits(); }
     }
 
-    pub fn draw_arrays(&mut self, mode: u32, first: i32, count: i32) {
-        if first < 0 || count < 0 { return self.err(INVALID_VALUE); }
+    pub fn draw_arrays(&mut self, mode: u32, first: i32, count: i32) { self.draw_arrays_instanced(mode, first, count, 1) }
+
+    /// `instances` copies, each with its own `gl_InstanceID` and per-instance attributes.
+    pub fn draw_arrays_instanced(&mut self, mode: u32, first: i32, count: i32, instances: i32) {
+        if first < 0 || count < 0 || instances < 0 { return self.err(INVALID_VALUE); }
         let idx: Vec<u32> = (first as u32..(first + count) as u32).collect();
-        self.draw(mode, &idx);
+        self.draw(mode, &idx, instances as u32);
     }
 
-    pub fn draw_elements(&mut self, mode: u32, count: i32, ty: u32, offset: u32) {
-        if count < 0 { return self.err(INVALID_VALUE); }
+    pub fn draw_elements(&mut self, mode: u32, count: i32, ty: u32, offset: u32) { self.draw_elements_instanced(mode, count, ty, offset, 1) }
+
+    pub fn draw_elements_instanced(&mut self, mode: u32, count: i32, ty: u32, offset: u32, instances: i32) {
+        if count < 0 || instances < 0 { return self.err(INVALID_VALUE); }
         let Some(buf) = self.buffers.get(&self.vao_ref().element) else { return self.err(INVALID_OPERATION) };
         let size = match ty { UNSIGNED_BYTE => 1, UNSIGNED_SHORT => 2, UNSIGNED_INT => 4, _ => return self.err(INVALID_ENUM) };
         let mut idx = Vec::with_capacity(count as usize);
@@ -735,19 +935,23 @@ impl Context {
             if o + size > buf.len() { return self.err(INVALID_OPERATION); }
             idx.push(match size { 1 => buf[o] as u32, 2 => u16::from_le_bytes([buf[o], buf[o + 1]]) as u32, _ => u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]) });
         }
-        self.draw(mode, &idx);
+        self.draw(mode, &idx, instances as u32);
     }
 
-    fn draw(&mut self, mode: u32, idx: &[u32]) {
-        if idx.is_empty() { return; }
+    fn draw(&mut self, mode: u32, idx: &[u32], instances: u32) {
+        if idx.is_empty() || instances == 0 { return; }
         let (mut color, mut depth) = (core::mem::take(&mut self.color), core::mem::take(&mut self.depth));
-        let res = self.draw_into(mode, idx, &mut color, &mut depth);
+        let mut res = Ok(());
+        for inst in 0..instances {
+            res = self.draw_into(mode, idx, inst, &mut color, &mut depth);
+            if res.is_err() { break; }
+        }
         self.color = color;
         self.depth = depth;
         match res { Ok(()) => self.frame += 1, Err(e) => self.err(e) }
     }
 
-    fn draw_into(&self, mode: u32, idx: &[u32], color: &mut [u32], depth: &mut [f32]) -> Result<(), u32> {
+    fn draw_into(&self, mode: u32, idx: &[u32], inst: u32, color: &mut [u32], depth: &mut [f32]) -> Result<(), u32> {
         let Some(prog) = self.programs.get(&self.current).and_then(|p| p.linked.as_ref()) else { return Err(INVALID_OPERATION) };
         // Shade each distinct vertex once.
         let (lo, hi) = (*idx.iter().min().unwrap(), *idx.iter().max().unwrap());
@@ -773,12 +977,13 @@ impl Context {
                                 let loc = (l as usize + c).min(MAX_ATTRIBS - 1);
                                 let a = &vao.attribs[loc];
                                 let part = &mut lanes[c * per..(c + 1) * per];
-                                if a.enabled { self.fetch(a, if a.divisor > 0 { 0 } else { i }, part, per) } else {
+                                if a.enabled { self.fetch(a, if a.divisor > 0 { inst / a.divisor } else { i }, part, per) } else {
                                     for (j, p) in part.iter_mut().enumerate() { *p = self.generic[loc][j.min(3)].to_bits(); }
                                 }
                             }
                         }
                         Io::VertexIndex => lanes[0] = i,
+                        Io::InstanceIndex => lanes[0] = inst,
                         _ => {}
                     });
                     let out = &vm.out;
@@ -803,6 +1008,7 @@ impl Context {
         fixed.scissor = if self.scissor_test { Some(self.scissor_box) } else { None };
         fixed.polygon_offset = if self.polygon_offset_fill { Some(self.polygon_offset) } else { None };
         fixed.zero_one = prog.zero_one;
+        fixed.flat = prog.flat;
         let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin };
         let mut target = Target { width: self.width as i32, height: self.height as i32, color, depth };
         raster::assemble(&mut target, &fixed, mode, &local, &verts, &mut shader);
@@ -857,6 +1063,16 @@ fn half(h: u16) -> f32 {
 }
 
 /// Texture lookups for one stage of one draw: texture global -> bound texture.
+/// A unit's binding slot for a texture target.
+fn unit_slot(target: u32) -> Option<usize> {
+    match target { TEXTURE_2D => Some(0), TEXTURE_CUBE_MAP => Some(1), TEXTURE_3D => Some(2), TEXTURE_2D_ARRAY => Some(3), _ => None }
+}
+
+/// The unit slot a sampler of `kind` reads.
+fn kind_slot(kind: SamplerKind) -> usize {
+    match kind { SamplerKind::Cube => 1, SamplerKind::D3 => 2, SamplerKind::D2Array => 3, _ => 0 }
+}
+
 struct DrawTextures<'a> {
     by_global: Vec<Option<&'a Texture>>,
 }
@@ -866,7 +1082,7 @@ impl<'a> DrawTextures<'a> {
         let mut by_global: Vec<Option<&Texture>> = Vec::new();
         for s in &prog.samplers {
             let globals = if vs { &s.vs_globals } else { &s.fs_globals };
-            let slot = if s.kind == SamplerKind::Cube { 1 } else { 0 };
+            let slot = kind_slot(s.kind);
             for (i, g) in globals.iter().enumerate() {
                 let unit = s.units.get(i).copied().unwrap_or(0).clamp(0, MAX_UNITS as i32 - 1) as usize;
                 let id = ctx.units[unit][slot];
@@ -885,6 +1101,12 @@ impl Textures for DrawTextures<'_> {
             Some(t) => t.sample(coord, depth_ref),
             None => [0.0, 0.0, 0.0, 1.0],
         }
+    }
+    fn load(&self, global: u32, coord: [i32; 3]) -> [u32; 4] {
+        self.by_global.get(global as usize).copied().flatten().map_or([0; 4], |t| t.load(coord))
+    }
+    fn size(&self, global: u32) -> [u32; 3] {
+        self.by_global.get(global as usize).copied().flatten().map_or([0; 3], |t| match t.faces.first() { Some(l) => [l.width, l.height, if t.layered() { t.faces.len() as u32 } else { 1 }], None => [0; 3] })
     }
 }
 

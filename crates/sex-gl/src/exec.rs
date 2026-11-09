@@ -279,6 +279,11 @@ pub trait Textures {
     /// Samples texture `unit_of_global` at `coord` (s, t, r/layer); `lod` is an explicit
     /// level or bias; `depth_ref` compares for shadow samplers.
     fn sample(&self, global: u32, coord: [f32; 4], lod: f32, depth_ref: Option<f32>) -> [f32; 4];
+    /// `texelFetch`: the texel at (x, y, layer) as the shader sees its bits (floats for
+    /// normalized and float textures, integers for integer ones).
+    fn load(&self, _global: u32, _coord: [i32; 3]) -> [u32; 4] { [0; 4] }
+    /// `textureSize`: width, height and depth or layers.
+    fn size(&self, _global: u32) -> [u32; 3] { [0; 3] }
 }
 
 /// Stage inputs and outputs, by binding.
@@ -337,6 +342,8 @@ pub struct StageCode {
     pub uniform_len: u32,
     /// Inputs: binding, lane offset in the entry's argument area, lanes.
     pub inputs: Vec<(Io, u32, u32)>,
+    /// Locations of inputs that are not interpolated (`flat`).
+    pub flat: Vec<u32>,
     /// Outputs: binding, lane offset in the result, lanes.
     pub outputs: Vec<(Io, u32, u32)>,
     pub out_lanes: u32,
@@ -393,13 +400,15 @@ impl StageCode {
         let tys = Self::expr_types(&module, &layout, &ep.function, fi);
         let entry = Self::code_for(Src::Entry, &layout, &ep.function.expressions, Some(&ep.function), &tys, &mut regs_len, &mut private_len);
         let mut inputs = Vec::new();
+        let mut flat = Vec::new();
+        let mut note_flat = |b: &Binding| if let Binding::Location { location, interpolation: Some(naga::Interpolation::Flat), .. } = b { flat.push(*location); };
         for (i, a) in ep.function.arguments.iter().enumerate() {
             match &a.binding {
-                Some(b) => inputs.push((io(b), entry.arg_off[i], layout.of(a.ty))),
+                Some(b) => { note_flat(b); inputs.push((io(b), entry.arg_off[i], layout.of(a.ty))) }
                 None => {
                     if let TypeInner::Struct { members, .. } = &module.types[a.ty].inner {
                         for (j, m) in members.iter().enumerate() {
-                            if let Some(b) = &m.binding { inputs.push((io(b), entry.arg_off[i] + layout.member(a.ty, j as u32), layout.of(m.ty))); }
+                            if let Some(b) = &m.binding { note_flat(b); inputs.push((io(b), entry.arg_off[i] + layout.member(a.ty, j as u32), layout.of(m.ty))); }
                         }
                     }
                 }
@@ -422,7 +431,7 @@ impl StageCode {
         }
         let mut st = Self {
             module: Box::new(module), info: Box::new(info), layout, funcs, entry, globals, regs_len, private_len, private_init,
-            global_off, uniform_len, inputs, outputs, out_lanes, textures, consts: Vec::new(), steps: Vec::new(), loop_count: 0, fhandles: Vec::new(),
+            global_off, uniform_len, inputs, flat, outputs, out_lanes, textures, consts: Vec::new(), steps: Vec::new(), loop_count: 0, fhandles: Vec::new(),
         };
         st.globals.acc = st.access_shapes(&st.globals, &st.module.global_expressions);
         for i in 0..st.funcs.len() {
@@ -1028,7 +1037,26 @@ impl StageCode {
             }
             E::Derivative { .. } => m.regs[dst..dst + n].fill(0),
             E::CallResult(_) | E::AtomicResult { .. } => {}
-            E::ImageQuery { .. } | E::ImageLoad { .. } | E::ArrayLength(_) => m.regs[dst..dst + n].fill(0),
+            E::ImageLoad { image, coordinate, array_index, .. } => {
+                let g = m.regs[c.slot[image.index()] as usize];
+                let cs = c.slot[coordinate.index()] as usize;
+                let cn = (c.ty[coordinate.index()].lanes as usize).min(3);
+                let mut at = [0i32; 3];
+                for j in 0..cn { at[j] = m.regs[cs + j] as i32; }
+                if let Some(ai) = array_index { at[cn.min(2)] = m.regs[c.slot[ai.index()] as usize] as i32; }
+                let px = tex.load(g, at);
+                for j in 0..n.min(4) { m.regs[dst + j] = px[j]; }
+            }
+            E::ImageQuery { image, query } => {
+                let g = m.regs[c.slot[image.index()] as usize];
+                let size = tex.size(g);
+                match query {
+                    naga::ImageQuery::Size { .. } => for j in 0..n.min(3) { m.regs[dst + j] = size[j]; },
+                    naga::ImageQuery::NumLayers => m.regs[dst] = size[2].max(1),
+                    _ => m.regs[dst] = 1,
+                }
+            }
+            E::ArrayLength(_) => m.regs[dst..dst + n].fill(0),
             _ => m.regs[dst..dst + n].fill(0),
         }
     }
@@ -1424,6 +1452,16 @@ fn uses_of(c: &Code, exprs: &naga::Arena<naga::Expression>) -> Vec<Box<[(u32, u3
                 let mut v = vec![*image, *coordinate];
                 v.extend([*array_index, *depth_ref].into_iter().flatten());
                 if let SampleLevel::Exact(x) | SampleLevel::Bias(x) = level { v.push(*x); }
+                v
+            }
+            E::ImageLoad { image, coordinate, array_index, sample, level } => {
+                let mut v = vec![*image, *coordinate];
+                v.extend([*array_index, *sample, *level].into_iter().flatten());
+                v
+            }
+            E::ImageQuery { image, query } => {
+                let mut v = vec![*image];
+                if let naga::ImageQuery::Size { level: Some(l) } = query { v.push(*l); }
                 v
             }
             e => operands(e).unwrap_or_default(),

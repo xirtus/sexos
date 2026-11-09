@@ -78,6 +78,12 @@ impl GlCanvas {
                     let d = blob(data, a, 6);
                     c.tex_image(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), d);
                 }
+                // ti3 target level w h depth format type [data]; ts3 target level x y z w h d format type data
+                "ti3" => {
+                    let d = blob(data, a, 7);
+                    c.tex_image_3d(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), n(a, 6), d);
+                }
+                "ts3" => if let Some(d) = blob(data, a, 10) { c.tex_sub_image_3d(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), n(a, 6), n(a, 7), n(a, 8), n(a, 9), d) },
                 "tP" => picture(&mut self.pictures, c, a, pictures),
                 "ts" => if let Some(d) = blob(data, a, 8) { c.tex_sub_image(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), n(a, 6), n(a, 7), d) },
                 "cs" => c.create_shader(n(a, 0), n(a, 1)),
@@ -94,6 +100,8 @@ impl GlCanvas {
                 "ui" => if let Some(d) = blob(data, a, 1) { c.uniform(n(a, 0), None, Some(&i32s(d))) },
                 "da" => c.draw_arrays(n(a, 0), n(a, 1), n(a, 2)),
                 "de" => c.draw_elements(n(a, 0), n(a, 1), n(a, 2), n(a, 3)),
+                "dai" => c.draw_arrays_instanced(n(a, 0), n(a, 1), n(a, 2), n(a, 3)),
+                "dei" => c.draw_elements_instanced(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4)),
                 "aip" => c.attrib_ipointer(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4)),
                 // WebGPU: gp id vs-code(off len) vs-entry fs-code(off len) fs-entry;
                 // gb/gx/gs program group binding ...

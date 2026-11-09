@@ -367,3 +367,80 @@ struct U { colors: array<vec4f> };
     assert_eq!(ctx.get_error(), NO_ERROR);
     assert_eq!(px(&ctx, 4, 4), [0, 255, 0, 255]);
 }
+
+#[test]
+fn texel_fetch_reads_float_and_integer_textures() {
+    let mut ctx = Context::new(8, 4);
+    program(&mut ctx, "#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }",
+        "#version 300 es\nprecision highp float; precision highp usampler2D;\nuniform highp sampler2D f; uniform highp usampler2D u; out vec4 c;\n\
+         void main(){ int x = gl_FragCoord.x < 4.0 ? 0 : 1; vec4 a = texelFetch(f, ivec2(x, 0), 0); uint b = texelFetch(u, ivec2(x, 0), 0).r;\n\
+         ivec2 sz = textureSize(u, 0); c = vec4(a.g, float(b) / 8.0, float(sz.x) / 4.0, a.b / 4.0); }");
+    ctx.active_texture(TEXTURE0);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    // Storage first, then the texels (as texStorage2D + texSubImage2D).
+    ctx.tex_image(TEXTURE_2D, 0, 2, 1, RGBA, FLOAT, None);
+    ctx.tex_sub_image(TEXTURE_2D, 0, 0, 0, 2, 1, RGBA, FLOAT, &bytes(&[0.25, 0.5, 3.0, 1.0, 0.0, 1.0, 1.0, 1.0]));
+    ctx.active_texture(TEXTURE0 + 1);
+    ctx.bind_texture(TEXTURE_2D, 21);
+    let ids: Vec<u8> = [7u32, 2].iter().flat_map(|v| v.to_le_bytes()).collect();
+    ctx.tex_image(TEXTURE_2D, 0, 2, 1, RED_INTEGER, UNSIGNED_INT, Some(&ids));
+    let lu = ctx.uniform_location(3, "u").unwrap();
+    ctx.uniform(lu, None, Some(&[1]));
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    // Float texels keep values past 1.0 (3.0 / 4.0), integers keep theirs (7 / 8).
+    assert_eq!(px(&ctx, 1, 1), [128, 223, 128, 191]);
+    assert_eq!(px(&ctx, 6, 1), [255, 64, 128, 64]);
+}
+
+#[test]
+fn instanced_draws_with_matrix_attributes_and_instance_id() {
+    let mut ctx = Context::new(8, 4);
+    // Each instance's mat4 attribute moves the quad into its half; gl_InstanceID colors it.
+    program(&mut ctx, "#version 300 es\nin vec2 p; in mat4 m; flat out int id; void main(){ id = gl_InstanceID; gl_Position = m * vec4(p, 0.0, 1.0); }",
+        "#version 300 es\nprecision highp float; flat in int id; out vec4 c; void main(){ c = id == 0 ? vec4(1, 0, 0, 1) : vec4(0, 0, 1, 1); }");
+    let attrs = ctx.program(3).unwrap().attributes.clone();
+    let (p, m) = (attrs.iter().find(|a| a.0 == "p").unwrap(), attrs.iter().find(|a| a.0 == "m").unwrap());
+    assert_eq!(m.2, sex_gl::program::types::FLOAT_MAT4);
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 1., -1., -1., 1., 1., 1.]));
+    ctx.enable_attrib(p.1, true);
+    ctx.attrib_pointer(p.1, 2, FLOAT, false, 8, 0);
+    // Two column-major matrices: scale x by 0.5 and move to x = -0.5 or +0.5.
+    let mut mats = Vec::new();
+    for tx in [-0.5f32, 0.5] { mats.extend_from_slice(&[0.5, 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., tx, 0., 0., 1.]); }
+    ctx.bind_buffer(ARRAY_BUFFER, 11);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&mats));
+    for c in 0..4 {
+        ctx.enable_attrib(m.1 + c, true);
+        ctx.attrib_pointer(m.1 + c, 4, FLOAT, false, 64, 16 * c);
+        ctx.attrib_divisor(m.1 + c, 1);
+    }
+    ctx.draw_arrays_instanced(gl::TRIANGLE_STRIP, 0, 4, 2);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 1, 1), [255, 0, 0, 255]);
+    assert_eq!(px(&ctx, 6, 2), [0, 0, 255, 255]);
+}
+
+#[test]
+fn array_and_3d_textures_sample_their_layers() {
+    let mut ctx = Context::new(4, 4);
+    program(&mut ctx, "#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }",
+        "#version 300 es\nprecision highp float; precision highp sampler2DArray;\nuniform sampler2DArray a; out vec4 c;\n\
+         void main(){ c = vec4(texture(a, vec3(0.5, 0.5, 1.0)).rgb, float(textureSize(a, 0).z) / 4.0); }");
+    ctx.bind_texture(TEXTURE_2D_ARRAY, 20);
+    ctx.tex_parameter(TEXTURE_2D_ARRAY, TEXTURE_MAG_FILTER, NEAREST);
+    // Two 1x1 layers: red, then green.
+    ctx.tex_image_3d(TEXTURE_2D_ARRAY, 0, 1, 1, 2, RGBA, UNSIGNED_BYTE, Some(&[255, 0, 0, 255, 0, 255, 0, 255]));
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 1, 1), [0, 255, 0, 128]);
+}
