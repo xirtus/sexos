@@ -10,6 +10,7 @@
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
     ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
   const nodes = new Map();
+  const defaultChecked = new WeakMap();
 
   function fmt(v) {
     if (typeof v === 'string') return v;
@@ -574,7 +575,10 @@
     get valueAsNumber() { const n = parseFloat(this.value); return isNaN(n) ? NaN : n; }
     set valueAsNumber(n) { this.value = String(n); }
     get form() { return formOf(this); }
-    get defaultChecked() { return this.hasAttribute('checked'); }
+    // The page shows (and CSS matches) the live state through the checked attribute, so
+    // the default is kept here once the state first changes.
+    get defaultChecked() { return defaultChecked.has(this) ? defaultChecked.get(this) : this.hasAttribute('checked'); }
+    set defaultChecked(v) { if (defaultChecked.has(this)) defaultChecked.set(this, !!v); else this.toggleAttribute('checked', !!v); }
     get selectionStart() { return edit.el === this ? edit.caret : this.value.length; }
     get selectionEnd() { return this.selectionStart; }
     setSelectionRange(a) { if (edit.el === this) { edit.caret = Math.max(0, Math.min(+a || 0, Array.from(this.value).length)); showCaret(); } }
@@ -585,7 +589,7 @@
     setCustomValidity() {}
     get labels() { return this.id ? document.querySelectorAll('label').filter(l => l.control === this) : []; }
     get checked() { return this.hasAttribute('checked'); }
-    set checked(v) { this.toggleAttribute('checked', !!v); }
+    set checked(v) { if (!defaultChecked.has(this)) defaultChecked.set(this, this.hasAttribute('checked')); this.toggleAttribute('checked', !!v); }
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'text').toLowerCase(); }
@@ -651,7 +655,8 @@
       if (fire(this, 'reset', Event, { cancelable: true }).defaultPrevented) return;
       for (const el of this.elements) {
         if (el.localName === 'select') { const o = el.options; const i = o.findIndex(x => x.defaultSelected); el.selectedIndex = i; }
-        else if (el.localName === 'textarea' || (el.localName === 'input' && el.type !== 'checkbox' && el.type !== 'radio')) el.value = el.defaultValue;
+        else if (el.localName === 'input' && (el.type === 'checkbox' || el.type === 'radio')) el.checked = el.defaultChecked;
+        else if (el.localName === 'textarea' || el.localName === 'input') el.value = el.defaultValue;
       }
     }
     checkValidity() { return this.elements.every(el => !el.checkValidity || el.checkValidity()); }

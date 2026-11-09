@@ -351,12 +351,15 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
         .collect();
     // Custom properties first, then var() references in every other value.
     if ordered.iter().any(|d| d.name.starts_with("--")) {
+        // The cascade's winners first, then each resolved against the others (and what
+        // the parent passed down), so order does not matter and cycles drop out.
+        let mut own: BTreeMap<String, String> = BTreeMap::new();
+        for d in &ordered { if let Some(name) = d.name.strip_prefix("--") { own.insert(String::from(name), d.value.clone()); } }
+        let mut done: BTreeMap<String, Option<String>> = BTreeMap::new();
+        let names: Vec<String> = own.keys().cloned().collect();
+        for name in &names { resolve_var(name, &own, &style.vars, &mut done, &mut Vec::new()); }
         let mut vars = (*style.vars).clone();
-        for d in &ordered {
-            if let Some(name) = d.name.strip_prefix("--") {
-                match substitute_vars(&d.value, &vars, 0) { Some(v) => { vars.insert(String::from(name), v); } None => { vars.remove(name); } }
-            }
-        }
+        for (name, v) in done { match v { Some(v) => { vars.insert(name, v); } None => { vars.remove(&name); } } }
         style.vars = alloc::rc::Rc::new(vars);
     }
     let substituted: Vec<Declaration>;
@@ -567,9 +570,26 @@ fn grid_tracks(v: &str, s: &Style, ctx: &Ctx) -> (Vec<Track>, Option<(Track, boo
     (tracks, auto)
 }
 
+/// One of an element's own custom properties, with its references resolved; None when
+/// it is invalid (a cycle, or a reference with no value and no fallback).
+fn resolve_var(name: &str, own: &BTreeMap<String, String>, inherited: &BTreeMap<String, String>, done: &mut BTreeMap<String, Option<String>>, stack: &mut Vec<String>) -> Option<String> {
+    if let Some(v) = done.get(name) { return v.clone(); }
+    if stack.iter().any(|s| s == name) || stack.len() > 32 { return None; }
+    let raw = own.get(name)?.clone();
+    stack.push(String::from(name));
+    let v = substitute_with(&raw, &mut |n: &str| if own.contains_key(n) { resolve_var(n, own, inherited, done, stack) } else { inherited.get(n).cloned() }, 0);
+    stack.pop();
+    done.insert(String::from(name), v.clone());
+    v
+}
+
 /// Replaces each `var(--name, fallback)` in `v`; None when one has no value and no
 /// fallback (the declaration then does not apply).
 fn substitute_vars(v: &str, vars: &BTreeMap<String, String>, depth: u32) -> Option<String> {
+    substitute_with(v, &mut |n: &str| vars.get(n).cloned(), depth)
+}
+
+fn substitute_with(v: &str, lookup: &mut dyn FnMut(&str) -> Option<String>, depth: u32) -> Option<String> {
     if !v.contains("var(") { return Some(String::from(v)); }
     if depth > 16 { return None; }
     let mut out = String::new();
@@ -585,11 +605,11 @@ fn substitute_vars(v: &str, vars: &BTreeMap<String, String>, depth: u32) -> Opti
         let end = end?;
         let inner = &body[..end];
         let (name, fallback) = match inner.split_once(',') { Some((n, f)) => (n.trim(), Some(f.trim())), None => (inner.trim(), None) };
-        let value = match vars.get(name.strip_prefix("--").unwrap_or(name).to_ascii_lowercase().as_str()) {
-            Some(v) => Some(v.clone()),
-            None => fallback.map(String::from),
-        }?;
-        out.push_str(&substitute_vars(&value, vars, depth + 1)?);
+        let value = match lookup(name.strip_prefix("--").unwrap_or(name).to_ascii_lowercase().as_str()) {
+            Some(v) => v,
+            None => substitute_with(fallback?, lookup, depth + 1)?,
+        };
+        out.push_str(&substitute_with(&value, lookup, depth + 1)?);
         rest = &body[end + 1..];
     }
     out.push_str(rest);

@@ -387,12 +387,23 @@ impl<'a> Layout<'a> {
         let pending: Vec<(NodeId, i32, i32)> = self.abs.drain(abs_mark..).collect();
         let pad = self.boxes.iter().rev().find(|(b, _)| *b == n).map(|(_, b)| [b[0] + s.border[LEFT], b[1] + s.border[TOP], b[2] - s.border[LEFT] - s.border[RIGHT], b[3] - s.border[TOP] - s.border[BOTTOM]]);
         let view = [0, 0, self.viewport.0, if self.viewport.1 > 0 { self.viewport.1 } else { r.height }];
+        // This box's overflow clip closed with its content; its absolute boxes (not fixed
+        // ones) are clipped to the same padding box.
+        let clip = (s.overflow_clip && !is_root).then_some(pad).flatten();
+        let mut clipping = false;
         for (c, sx, sy) in pending {
             let fixed = self.style(c).map_or(false, |cs| cs.position == style::Position::Fixed);
             if is_root { self.place_abs(c, sx, sy, view); }
             else if fixed { self.abs.push((c, sx, sy)); }
-            else { self.place_abs(c, sx, sy, pad.unwrap_or(view)); }
+            else {
+                if let (Some([px, py, pw, ph]), false) = (clip, clipping) {
+                    self.items.push(Item::Rect { x: px, y: py, w: CLIP_BEGIN, h: ph, color: 0, radius: pw });
+                    clipping = true;
+                }
+                self.place_abs(c, sx, sy, pad.unwrap_or(view));
+            }
         }
+        if clipping { self.items.push(Item::Rect { x: 0, y: 0, w: CLIP_END, h: 0, color: 0, radius: 0 }); }
         if matches!(s.position, style::Position::Relative | style::Position::Sticky) {
             let dx = s.inset[LEFT].resolve(cw).or_else(|| s.inset[RIGHT].resolve(cw).map(|v| -v)).unwrap_or(0);
             let dy = s.inset[TOP].resolve(0).or_else(|| s.inset[BOTTOM].resolve(0).map(|v| -v)).unwrap_or(0);

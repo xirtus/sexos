@@ -576,8 +576,9 @@ pub fn present_gl_nodes(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -
         }
         if canvas.ctx.frame == canvas.shown { continue; }
         canvas.shown = canvas.ctx.frame;
-        let (width, height) = (canvas.ctx.width as usize, canvas.ctx.height as usize);
-        let image = Image { width, height, pixels: canvas.ctx.present(canvas.alpha) };
+        // The canvas's size, not that of a framebuffer the script left bound.
+        let (width, height) = canvas.ctx.canvas_size();
+        let image = Image { width: width as usize, height: height as usize, pixels: canvas.ctx.present(canvas.alpha) };
         let name = alloc::format!("canvas:{node}");
         match fonts.images.iter_mut().find(|(s, _)| *s == name) {
             Some(slot) => slot.1 = alloc::rc::Rc::new(image),

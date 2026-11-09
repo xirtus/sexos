@@ -364,3 +364,21 @@ fn box_shadow_paints_under_the_box() {
     assert_eq!(rects[0], (2, 3, 50, 20, 0x7F00_0000));
     assert_eq!(rects[1], (0, 0, 50, 20, 0xFFFF_FFFF));
 }
+
+#[test]
+fn overflow_hidden_clips_its_absolute_boxes() {
+    let dom = parse::parse("<body style='margin:0'><div style='position:relative;width:20px;height:20px;overflow:hidden'><div style='position:absolute;left:0;top:0;width:100px;height:100px;background:#0000ff'></div></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let blue = page.items.iter().position(|i| matches!(i, sex_html::layout::Item::Rect { color: 0xFF00_00FF, .. })).unwrap();
+    assert_eq!(page.clip_of(blue), Some([0, 0, 20, 20]));
+}
+
+#[test]
+fn css_variables_resolve_in_any_order_and_drop_cycles() {
+    let dom = parse::parse("<body><div id=a style='--a:var(--b);--b:#ff0000;color:var(--a)'></div><div id=b style='--x:var(--y);--y:var(--x);color:var(--x, #00ff00)'></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let by_id = |id: &str| styles[dom.descendants(sex_html::dom::Dom::ROOT).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap()].as_ref().unwrap();
+    assert_eq!(by_id("a").color, 0xFFFF_0000);
+    assert_eq!(by_id("b").color, 0xFF00_FF00);
+}

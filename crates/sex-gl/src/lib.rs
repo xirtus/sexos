@@ -1186,6 +1186,11 @@ impl Context {
 
     /// The drawing buffer as a picture: 0xAARRGGBB, top row first, un-premultiplied.
     /// `alpha: false` contexts are shown opaque.
+    /// The canvas's own size (a bound framebuffer may differ).
+    pub fn canvas_size(&self) -> (u32, u32) {
+        match &self.canvas { Some((w, h, _, _)) => (*w as u32, *h as u32), None => (self.width as u32, self.height as u32) }
+    }
+
     pub fn present(&self, alpha: bool) -> Vec<u32> {
         let (w, h, color) = match &self.canvas { Some((w, h, c, _)) => (*w as usize, *h as usize, c), None => (self.width as usize, self.height as usize, &self.color) };
         let mut out = vec![0u32; w * h];

@@ -418,3 +418,12 @@ fn running_out_of_script_heap_says_so() {
     // The engine still works afterwards.
     s.eval("keep.length = 0; console.log('ok')", "t.js").unwrap();
 }
+
+#[test]
+fn form_reset_restores_checkboxes_and_radios() {
+    let mut s = page("<form id=f><input type=checkbox id=c checked><input type=radio name=r id=a checked><input type=radio name=r id=b></form>");
+    s.eval("const $ = id => document.getElementById(id); $('c').click(); $('b').click(); \
+console.log($('c').checked, $('a').checked, $('b').checked, $('c').defaultChecked); $('f').reset(); \
+console.log($('c').checked, $('a').checked, $('b').checked)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:false false true true", "0:true true false"]);
+}
