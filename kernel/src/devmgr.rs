@@ -56,6 +56,12 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::Nvme => nvme_lease(&dev, pd, slot),
             Lease::Xhci => xhci_lease(&dev, pd, slot),
             Lease::Nic => nic_lease(&dev, pd, slot),
+            // HDMI/DisplayPort-only audio on a graphics card plays nothing from the
+            // speakers; it must not take the sound slot.
+            Lease::Hda if crate::device_lease::display_audio(&dev) => {
+                serial_println!("[kernel.cap.class.skip] kind=Hda reason=display_audio vendor={:04x} device={:04x}", dev.vendor_id, dev.device_id);
+                false
+            }
             Lease::Hda => class_lease(&dev, crate::device_lease::Kind::Hda, pd, slot, first),
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
@@ -106,7 +112,7 @@ fn nvme_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
         bar0_view: Some(crate::boot_memory::pci_bar0(pd, dev, slot)),
         command: None,
-        virtio: None, class: 0,
+        virtio: None, class: 0, window: (0, 0),
     }));
     serial_println!("[kernel.cap.nvme_bar.grant] pd={} slot={}", pd.id, slot);
     true
@@ -121,7 +127,7 @@ fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
         bar0_view: Some(crate::boot_memory::pci_bar0(pd, dev, slot)),
         command: None,
-        virtio: None, class: 0,
+        virtio: None, class: 0, window: (0, 0),
     }));
     pd.grant(CapabilityData::Interrupt(InterruptCapData { irq: irq_line }));
     serial_println!("DevMgr: Leased XHCI to pd={} slot={}", pd.id, slot);
@@ -131,7 +137,7 @@ fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
 /// Wired Ethernet: only parts whose register layout the driver ABI knows.
 fn nic_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
     serial_println!("[kernel.pci.nic.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
-    let Some(view) = crate::boot_memory::nic_bar0(pd, dev, slot) else {
+    let Some((view, window)) = crate::boot_memory::nic_lease(pd, dev, slot) else {
         serial_println!("[kernel.cap.nic.skip] reason=unsupported_or_invalid_bar vendor={:04x} device={:04x}", dev.vendor_id, dev.device_id);
         return false;
     };
@@ -139,7 +145,7 @@ fn nic_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64)
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
         bar0_view: Some(view),
         command: Some(crate::boot_memory::nic_command(pd, dev, slot, view)),
-        virtio: None, class: 0,
+        virtio: None, class: 0, window,
     }));
     serial_println!("[kernel.cap.nic.grant] pd={} slot={} vendor={:04x} device={:04x} model={:?}", pd.id, slot,
         dev.vendor_id, dev.device_id, crate::nic_boot::model(dev.vendor_id, dev.device_id));
@@ -153,7 +159,7 @@ fn display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain) -> boo
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
         bar0_view: None,
         command: None,
-        virtio: None, class: 0,
+        virtio: None, class: 0, window: (0, 0),
     }));
     true
 }
@@ -185,7 +191,7 @@ fn virtio(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, fi
     let command = crate::boot_memory::virtio_command(pd, dev, slot, view, &layout);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
-        bar0_view: Some(view), command: Some(command), virtio: Some(layout), class: 0,
+        bar0_view: Some(view), command: Some(command), virtio: Some(layout), class: 0, window: (0, 0),
     }));
     // One DMA pool per service: a second device shares the first one's.
     if first { crate::boot_memory::virtio_dma(pd.id); }
@@ -199,13 +205,13 @@ fn virtio(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, fi
 fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind, pd: &ProtectionDomain, slot: u64, first: bool) -> bool {
     serial_println!("[kernel.pci.class.found] {:02x}:{:02x}.{} kind={:?} vendor={:04x} device={:04x}",
         dev.bus, dev.dev, dev.func, kind, dev.vendor_id, dev.device_id);
-    let Some(view) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
+    let Some((view, window)) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
         serial_println!("[kernel.cap.class.skip] kind={:?} reason=invalid_bar bar={}", kind, kind.bar()); return false;
     };
     let command = crate::boot_memory::class_command(pd, dev, slot, view, kind);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
-        bar0_view: Some(view), command: Some(command), virtio: None, class: kind.class(dev),
+        bar0_view: Some(view), command: Some(command), virtio: None, class: kind.class(dev), window,
     }));
     if first { crate::boot_memory::class_dma(pd.id, kind); }
     serial_println!("[kernel.cap.class.grant] pd={} slot={} kind={:?} bytes={}", pd.id, slot, kind, view.length);

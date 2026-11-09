@@ -3,6 +3,8 @@
 //! a BDF, register offset, mapping, DMA address or capability to create.
 pub const SYS_COMMAND: u64 = 68;
 pub const SYS_IDENTITY: u64 = 69;
+/// SYS_IDENTITY with this first argument asks where the registers sit in the view.
+pub const QUERY_WINDOW: u64 = 1;
 pub const MEMORY: u16 = 1 << 1;
 pub const BUS_MASTER: u16 = 1 << 2;
 pub const NIC_BITS: u16 = MEMORY | BUS_MASTER;

@@ -43,3 +43,13 @@ impl Kind {
         }
     }
 }
+
+/// HD Audio that only feeds a monitor: function 1+ of a graphics card (AMD and
+/// NVIDIA put it beside the GPU) or Intel's Haswell/Broadwell HDMI controller.
+/// Analog sound lives on the chipset's own controller.
+pub fn display_audio(dev: &PciDevice) -> bool {
+    if dev.vendor_id == 0x8086 && matches!(dev.device_id, 0x0a0c | 0x0c0c | 0x0d0c | 0x160c) { return true; }
+    if dev.func == 0 { return false; }
+    let class = unsafe { crate::hal::pci::pci_config_read(dev.bus, dev.dev, 0, 0x08) } >> 24;
+    class == 0x03
+}

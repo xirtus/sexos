@@ -8,6 +8,7 @@ extern crate self as sex_pdx;
 #[path="../servers/sexnet/src/realtek.rs"] mod realtek;
 const SLOT_NIC:u64=19;
 const SLOT_DMA_REGION:u64=32;
+fn device_window(slot:u64)->Result<(u64,u64),u64>{memory_region_full_view(slot,0).map(|v|(0,v.length))}
 fn device_identity(_:u64)->Result<pci_command::Identity,u64>{Ok(pci_command::Identity{vendor:0x8086,product:0x10d3})}
 use std::sync::Mutex;
 use memory_region::{MemoryRegionInfo,RegionView};

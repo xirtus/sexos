@@ -16,6 +16,7 @@ static DMA_INFO:Mutex<m::MemoryRegionInfo>=Mutex::new(m::MemoryRegionInfo{region
 static DMA_VIEW:Mutex<m::RegionView>=Mutex::new(m::RegionView{region_id:2,length:c::DMA_BYTES,virtual_address:0x50000000,dma_address:Some(0x100000)});
 fn memory_region_info(slot:u64)->Result<m::MemoryRegionInfo,u64>{Ok(if slot==19{m::MemoryRegionInfo{region_id:78867,length:65536,rights:7,peer_pd:None}}else{*DMA_INFO.lock().unwrap()})}
 fn memory_region_full_view(slot:u64,_:u8)->Result<m::RegionView,u64>{Ok(if slot==19{m::RegionView{region_id:78867,length:65536,virtual_address:0x200000,dma_address:None}}else{*DMA_VIEW.lock().unwrap()})}
+fn device_window(slot:u64)->Result<(u64,u64),u64>{memory_region_full_view(slot,0).map(|v|(0,v.length))}
 fn device_identity(_:u64)->Result<c::Identity,u64>{Ok(c::Identity{vendor:0x8086,product:0x10d3})}
 fn device_command(_:u64,_:u64,_:u64)->Result<c::Reply,u64>{panic!("Live command not mocked")}
 #[derive(Clone,Debug,PartialEq,Eq)]enum Op{Command(u16,u16),Read(u32),Write(u32,u32),Load(u32),Store(u32),CopyIn(u32,usize),CopyOut(u32,usize),Publish,Acquire,Resolve}

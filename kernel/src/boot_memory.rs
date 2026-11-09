@@ -587,13 +587,38 @@ pub fn pci_bar0(pd: &ProtectionDomain, dev: &crate::hal::pci::PciDevice, slot: u
 /// Only a supported BOOT-selected controller with a complete register prefix.
 /// Reject before aliasing; probing itself remains guarded by BOOT RegistryBuild.
 pub fn nic_bar0(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+    nic_lease(pd,dev,slot).map(|(view,_)|view)
+}
+
+/// The NIC's register view and where its registers sit inside it.
+pub fn nic_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<(RegionGrant,(u32,u32))>{
     require_boot();
     if !crate::nic_boot::supported(dev.vendor_id,dev.device_id){return None}
     // The first memory BAR this controller keeps its registers in.
-    let(physical,actual_length)=crate::nic_boot::bars(dev.vendor_id,dev.device_id).iter()
-        .find_map(|&bar|dev.probe_boot_bar(bar))?;
-    let length=crate::nic_boot::model_view_length(dev.vendor_id,dev.device_id,actual_length)?;
-    Some(pci_view(pd,slot,physical,actual_length,length))
+    let(bar,physical,actual_length)=crate::nic_boot::bars(dev.vendor_id,dev.device_id).iter()
+        .find_map(|&bar|dev.probe_boot_bar_any(bar).map(|(p,l)|(bar,p,l)))?;
+    let end=crate::nic_boot::registers_end(dev.vendor_id,dev.device_id);
+    bar_lease(pd,dev,slot,bar,physical,actual_length,end)
+}
+
+/// One BAR as a page-granular view. A BAR of a page or more is leased from its
+/// start (at most 64 KiB). A smaller BAR is leased as its whole page only when no
+/// other BAR anywhere decodes in that page; the window says where it sits.
+fn bar_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,physical:u64,actual_length:u64,end:u64)
+    ->Option<(RegionGrant,(u32,u32))>
+{
+    require_boot();
+    if actual_length<end{return None}
+    if actual_length>=4096 {
+        let length=actual_length.min(64*1024);
+        return Some((pci_view(pd,slot,physical,actual_length,length),(0,length as u32)));
+    }
+    let page=physical&!0xfff;
+    if !crate::hal::pci::page_exclusive(page,dev.bus,dev.dev,dev.func,bar){
+        crate::serial_println!("[boot.memory.mmio.shared_page] pd={} slot={} bar={} bytes={}",pd.id,slot,bar,actual_length);
+        return None;
+    }
+    Some((pci_view(pd,slot,page,actual_length,4096),((physical-page) as u32,actual_length as u32)))
 }
 
 pub fn nic_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,view:RegionGrant)
@@ -649,11 +674,10 @@ pub fn virtio_dma(pd_id:u32){
 
 /// The register BAR of a controller leased by class (HD Audio, AHCI), if its
 /// whole register prefix fits.
-pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<RegionGrant>{
+pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{
     require_boot();
-    let(physical,actual_length)=dev.probe_boot_bar(kind.bar())?;
-    let length=kind.view_length(actual_length)?;
-    Some(pci_view(pd,slot,physical,actual_length,length))
+    let(physical,actual_length)=dev.probe_boot_bar_any(kind.bar())?;
+    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end())
 }
 
 /// Memory-space and bus-master bits for a class-leased controller, like the NIC's.
