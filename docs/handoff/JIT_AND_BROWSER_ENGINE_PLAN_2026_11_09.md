@@ -105,6 +105,26 @@ bare metal next week.
 Rough sizes: J2 one week, J3 one to two weeks, J4 one week, J5 two to three weeks,
 J6 three to four weeks, J7 two weeks, J8 months.
 
+## 5a. Rust first (Andreas, 2026-11-09)
+
+SexOS is Rust: the kernel, servers, SDK, our browser (HTML, CSS, layout, network,
+media glue) and our own JS engine stay Rust. C++ enters only where no Rust engine can
+do the job yet, and only inside the ported engine's own organ (its own key domain),
+so a bug in it cannot reach the rest of the system. Today that means V8 alone: no Rust
+JavaScript engine has a JIT (Boa and Nova are interpreters, about QuickJS's speed).
+
+Rust alternatives to track, so C++ can shrink over time:
+
+| Need | Rust option | Status to watch |
+|---|---|---|
+| Fast WebAssembly | wasmtime + Cranelift | Cranelift has a `core` (no_std) feature; wasmtime's compiler needs std. A SexOS std port or a compile organ unlocks it. |
+| JS with a JIT | Nova, Boa | Both interpreters today; switch if either grows a baseline JIT. |
+| CSS style engine | Servo's Stylo | Large but pure Rust; candidate if our cascade falls behind. |
+| GPU rendering | WebRender | Pure Rust; fits once WebGPU-backed sex-gl is mature. |
+
+The C++ runtime (J5c) is libc++/libc++abi built by `scripts/build_libcxx.sh` over
+musl's headers, with every C function it needs written in Rust in `crates/sex-libc`.
+
 ## 6. Risks
 
 - **Byte check false positives.** A JIT may emit WRPKRU bytes by chance inside a

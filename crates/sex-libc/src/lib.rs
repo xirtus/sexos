@@ -31,6 +31,8 @@ pub mod string;
 pub mod math;
 pub mod time;
 pub mod pthread;
+pub mod cxx;
+pub mod locale;
 
 pub use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 
@@ -95,6 +97,7 @@ pub unsafe extern "C" fn abort() -> ! {
 
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
+    cxx::run_at_exit();
     match unsafe { EXIT } {
         Some(exit) => exit(code),
         None => panic!("exit"),
