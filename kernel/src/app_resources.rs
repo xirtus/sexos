@@ -349,6 +349,16 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
     let elf:&[u8]=&copy;
     let parsed=image::parse(elf,(app.arena_pages*4096) as u64).map_err(|reason|{
         crate::serial_println!("[app.program.rejected] target={} bytes={} reason={:?}",app.target,len,reason);DENIED})?;
+    // A program's own code may not hold an instruction that rewrites its protection
+    // keys, or it could reach every other program's memory. Code it makes later is
+    // checked the same way when sealed (`code`).
+    for segment in parsed.segments[..parsed.count].iter().filter(|s|s.executable){
+        let from=segment.offset as usize;
+        if let Err(at)=sex_pdx::program_code::check(&elf[from..from+segment.file as usize]){
+            crate::serial_println!("[app.program.rejected] target={} bytes={} reason=key_instruction offset={:#x}",app.target,len,from+at);
+            return Err(DENIED);
+        }
+    }
     let stack_low=app.stack_top.checked_sub(65536).ok_or(DENIED)?;
     // The retired run's leaves are clear and its frames returned, so nothing reads the
     // manifest meanwhile. Frames come zeroed, so nothing of another run survives.
@@ -461,6 +471,63 @@ pub fn grow(pd:&ProtectionDomain,want:u64)->[u64;3]{
         crate::serial_println!("[app.program.memory] target={} task={} granted={} held={} base={:#x} window_pages={} free_pages={} kernel_heap_used={}",app.target,app.task,want,app.grown,base,app.arena_pages,crate::program_frames::available(),crate::ALLOCATOR.lock().used());
         Ok([0,base,app.grown as u64])
     })();result.unwrap_or_else(|e|[e,0,0])
+}
+/// Turns heap pages of the caller's current run into code (SEAL) or back into data
+/// (OPEN). A page is never writable and executable at once, and sealed bytes may not
+/// hold an instruction that rewrites the protection-key register (see
+/// `sex_pdx::program_code`). Like `grow`, this mints nothing: the pages are the run's
+/// own, on the row's key, and code the run writes can do only what the run already may.
+pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
+    use sex_pdx::program_code as c;
+    const WRITABLE:u64=1<<1;const NX:u64=1<<63;
+    let result=(||{
+        if (op!=c::SEAL&&op!=c::OPEN)||want==0||want>c::MAX_PAGES_PER_CALL||va&0xFFF!=0{return Err((c::INVALID,0))}
+        let mut apps=apps_lock!().ok_or((c::RETRY,0))?;
+        let app=apps.iter_mut().find(|a|a.ready&&a.target==pd.id).ok_or((c::DENIED,0))?;
+        if !app.reusable||!app.activated||app.arena==0||app.retired||app.rebirthing||app.forced{return Err((c::DENIED,0))}
+        let main=pd.main_task.load(Ordering::Acquire);
+        if main.is_null()||main as usize!=app.main{return Err((c::DENIED,0))}
+        let task=unsafe{&*main};
+        if task.id!=app.task||task.state.snapshot().exited{return Err((c::DENIED,0))}
+        // Only the heap: pages `grow` gave this run, which are the manifest's last
+        // `grown` entries, in address order from just past the image.
+        let heap=app.arena+(app.image_pages*4096) as u64;
+        let first=va.checked_sub(heap).ok_or((c::DENIED,0))?/4096;
+        let want=want as usize;
+        if first as usize+want>app.grown{return Err((c::DENIED,0))}
+        let at=app.count-app.grown+first as usize;
+        let pages=&app.pages[at..at+want];
+        if pages.iter().enumerate().any(|(i,p)|p.va!=va+(i*4096) as u64){return Err((c::DENIED,0))}
+        let leaf=|p:&PrivatePage|unsafe{&*(p.leaf as *const core::sync::atomic::AtomicU64)};
+        if op==c::SEAL{
+            let executable=|i:usize|app.pages.get(i).is_some_and(|p|p.expected&NX==0&&i>=app.count-app.grown&&i<app.count);
+            let hhdm=crate::HHDM_REQUEST.response().ok_or((c::DENIED,0))?.offset;
+            let bytes=|p:&PrivatePage|unsafe{core::slice::from_raw_parts(((p.expected&PHYSICAL_MASK)+hhdm) as *const u8,4096)};
+            // A code neighbour on either side joins the check, so an instruction that
+            // starts in one sealed range and ends in this one is still found.
+            let mut scan=match at.checked_sub(1).filter(|&i|executable(i)){
+                Some(i)=>{let b=bytes(&app.pages[i]);c::Scan::primed([b[4094],b[4095]])}
+                None=>c::Scan::new()};
+            let primed=at>0&&executable(at-1);
+            for p in pages{if let Some(o)=scan.feed(bytes(p),primed){return Err((c::BLOCKED,o as u64))}}
+            if executable(at+want){
+                let b=bytes(&app.pages[at+want]);
+                if let Some(o)=scan.feed(&b[..2],primed){return Err((c::BLOCKED,o as u64))}
+            }
+        }
+        for i in at..at+want{
+            let page=&mut app.pages[i];
+            let set=|v:u64|if op==c::SEAL{(v&!WRITABLE)&!NX}else{v|WRITABLE|NX};
+            page.expected=set(page.expected);
+            // Keep the present bit as it is: a shared row's page may be waiting its turn.
+            let _=leaf(page).fetch_update(Ordering::AcqRel,Ordering::Acquire,|v|(v!=0).then_some(set(v)));
+        }
+        // Another core may still hold the writable translation; none may once this returns.
+        crate::smp::tlb::flush_pages(want,app.pages[at..at+want].iter().map(|p|p.va));
+        crate::serial_println!("[app.program.code] target={} task={} op={} va={:#x} pages={}",
+            app.target,app.task,if op==c::SEAL{"seal"}else{"open"},va,want);
+        Ok([0,0,want as u64])
+    })();result.unwrap_or_else(|(e,o)|[e,o,0])
 }
 fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64,u64>{
     let app=&mut apps[index];

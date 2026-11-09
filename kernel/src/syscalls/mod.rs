@@ -478,6 +478,12 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
         },
 
+        82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::app_resources::code(pd,rdi,rsi,rdx);
+            regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+        },
+
         79 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             let reply=crate::program_records::call(pd,rdi,rsi,rdx);

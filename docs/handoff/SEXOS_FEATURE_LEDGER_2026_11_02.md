@@ -3103,3 +3103,12 @@ row no longer waits for the row before it to end.
   - The cloud container has no `/dev/kvm`, so QEMU runs as TCG: every instruction is emulated, and programs are soft-float until SSE (#18).
   - Most of pinball's QEMU slowdown is therefore emulation, not SexOS.
   - Heavier pages (three.js) are bound by QuickJS running inside wasmi even on the host. The browser thread owns that work.
+
+## Programs make their own machine code: the base for a JIT engine (2026-11-09)
+
+- **Why.** Andreas approved porting a JIT engine (V8 recommended) and aiming the browser at Chromium-class speed. Report and plan: `docs/handoff/JIT_AND_BROWSER_ENGINE_PLAN_2026_11_09.md` (stages J1-J8).
+- **ABI change: `SYS_PROGRAM_CODE` (82).** A program run seals pages of its own heap as code (executable, read-only) or opens them back to data (writable, not executable). Self-only, current run only, at most 256 pages a call. Every core's TLB entry is shot down and the run's page manifest is updated, so retire still checks every leaf. `sex_pdx::program_code`, `kernel/src/app_resources.rs::code`.
+- **Code that cannot unlock keys.** Sealed bytes, and the executable segments of every program file at load, may not hold WRPKRU, XRSTOR or XRSTORS at any byte offset. Before this, any native program could rewrite its PKRU and reach every other domain's memory. None of the 20 programs in the image contain the patterns.
+- **SDK.** `sex_app::code::CodeBuf`: page-aligned heap pages with `load`, `seal`, `open`, `entry`.
+- **Program.** `run jit` compiles an expression to x86-64 and runs it against an interpreter (3 to 9 times faster under QEMU). It shows a constant hiding WRPKRU being refused and re-encoded, and code patched in place. W writes to sealed code and E runs open data; each ends only that run.
+- **Gates.** `scripts/program_jit_gate.py` at 1 and 4 cores (also refuses a copy of the program with WRPKRU patched into its code); `scripts/program_code_host_gate.sh` for the byte check.

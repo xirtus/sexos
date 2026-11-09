@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "f4e64c829b8adfb103ab2025e04b7ef074a1699a94dd7d85a91775dae30c0157"
+abi_version_hash = "b8e9244d4e07ecc89e226dddb719456dfb02b05b88668e100f562220cb4b35cf"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -54,6 +54,7 @@ crates = [
   "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml",
   "apps/fputest/Cargo.toml",
+  "apps/jit/Cargo.toml",
   "apps/web/Cargo.toml"
 ]
 
@@ -268,6 +269,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fputest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fputest"
 dest_artifact = "iso_root/programs/fputest"
+
+[[stage]]
+id = "build_jit"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/jit/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/jit"
+dest_artifact = "iso_root/programs/jit"
 
 [[stage]]
 id = "build_web"

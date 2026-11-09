@@ -590,6 +590,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jit"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "jot"
 version = "0.1.0"
 dependencies = [
