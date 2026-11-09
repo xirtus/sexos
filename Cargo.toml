@@ -57,6 +57,7 @@ members = [
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
+    "crates/sex-disk",
     "crates/sex-wasm",
     "apps/spindle",
 ]

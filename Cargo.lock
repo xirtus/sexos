@@ -1214,6 +1214,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-disk"
+version = "0.1.0"
+
+[[package]]
 name = "sex-fetch"
 version = "0.1.0"
 dependencies = [
@@ -1437,6 +1441,7 @@ dependencies = [
 name = "sexdrive"
 version = "0.1.0"
 dependencies = [
+ "sex-disk",
  "sex-graphics",
  "sex-pdx",
 ]
@@ -1445,6 +1450,7 @@ dependencies = [
 name = "sexfiles"
 version = "0.1.0"
 dependencies = [
+ "sex-disk",
  "sex-object-model",
  "sex-pdx",
  "sex-rt",

@@ -36,9 +36,14 @@ pub const PREPARE: u8 = 12;
 /// A program's own arguments, as typed after its name. Programs only.
 pub const ARGS: u8 = 13;
 pub const ARGS_MAX: usize = 256;
-/// Writes a boot partition image, a file, to the disk's boot slot and marks it bootable.
-/// Spindle only: it replaces how the machine starts.
+/// Installs SexOS beside whatever the disk holds (GPT, shared EFI System partition,
+/// slots A and B and a store in free space). The path names a boot image file, or is
+/// empty for the running system's. `offset` is the store size in MiB (0: all the free
+/// space), `length` carries INSTALL_GO; without it Files only plans. Either way the
+/// reply's value is the length of a report, lines of text in the data area.
+/// Spindle only: it changes how the machine starts.
 pub const INSTALL: u8 = 14;
+pub const INSTALL_GO: u64 = 1;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;

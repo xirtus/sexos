@@ -76,14 +76,32 @@ impl Client {
             return true;
         }
         if cmd == b"df" { self.start(Cmd::Df, w::STATFS, 0, 0, 0); return true; }
-        if first.is_empty() && !matches!(cmd, b"ls" | b"cd" | b"install") { say!(sb, "Usage: {} PATH", shown(cmd)); return true; }
+        if cmd == b"install" {
+            // install [go] [GIB] [IMAGE]: plans, and with `go` installs. GIB sizes the
+            // SexOS store (default: all the free space); IMAGE is a boot image file
+            // (default: the running system).
+            let (mut go, mut gib, mut image): (bool, u64, &[u8]) = (false, 0, b"");
+            let mut rest = args;
+            while !rest.is_empty() {
+                let (word, more) = split(rest);
+                if word == b"go" { go = true; }
+                else if !word.is_empty() && word.iter().all(u8::is_ascii_digit) { gib = word.iter().fold(0u64, |n, d| n.saturating_mul(10).saturating_add((d - b'0') as u64)); }
+                else if !word.is_empty() { image = word; }
+                rest = more;
+            }
+            let mut path = [0u8; w::PATH_BYTES];
+            let n = if image.is_empty() { 0 } else { let Some(n) = self.join(image, &mut path) else { sb.push(b"Path too long."); return true }; n };
+            region[..n].copy_from_slice(&path[..n]);
+            if go { say!(sb, "Installing. Don't turn the machine off."); } else { say!(sb, "Looking at the disk..."); }
+            self.start(Cmd::Install, w::INSTALL, n, gib.saturating_mul(1024), if go { w::INSTALL_GO } else { 0 });
+            return true;
+        }
+        if first.is_empty() && !matches!(cmd, b"ls" | b"cd") { say!(sb, "Usage: {} PATH", shown(cmd)); return true; }
         let mut path = [0u8; w::PATH_BYTES];
         let Some(mut n) = self.join(first, &mut path) else { sb.push(b"Path too long."); return true };
-        // `install` alone writes the system this machine booted with.
-        if cmd == b"install" && first.is_empty() { n = 0; }
         if cmd == b"cd" && first.is_empty() { self.cwd_len = 0; return true; }
         match cmd {
-            b"ls" | b"cd" | b"cat" | b"install" => {}
+            b"ls" | b"cd" | b"cat" => {}
             b"mkdir" | b"rm" | b"touch" | b"write" | b"append" => {}
             b"mv" => {
                 if rest.is_empty() { sb.push(b"Usage: mv FROM TO"); return true; }
@@ -104,7 +122,6 @@ impl Client {
             b"rm" => self.start(Cmd::Rm, w::REMOVE, n, 0, 0),
             b"mv" => self.start(Cmd::Mv, w::RENAME, n, 0, 0),
             b"cat" => self.start(Cmd::Cat, w::READ, n, 0, 4096),
-            b"install" => { say!(sb, "Installing. Don't turn the machine off."); self.start(Cmd::Install, w::INSTALL, n, 0, 0) }
             b"touch" => self.start(Cmd::Create, w::CREATE, n, 0, 0),
             _ => {
                 // Text after the path, with a line ending. Create it if needed.
@@ -278,7 +295,14 @@ impl Client {
                 say!(sb, "{} MiB free of {} MiB", free * 4096 / (1024 * 1024), total * 4096 / (1024 * 1024));
             }
             Cmd::Mkdir | Cmd::Rm | Cmd::Mv | Cmd::Create => { say!(sb, "ok"); }
-            Cmd::Install => { say!(sb, "Installed {} KiB. This disk now starts SexOS.", value / 2); }
+            Cmd::Install => {
+                // Files' report: lines of text, wrapped to the scrollback's width.
+                let bytes = &region[data_at..data_at + (value as usize).min(w::DATA_MAX)];
+                for line in bytes.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                    sex_pdx::serial_record!("[spindle.install.line] {}", shown(line));
+                    for part in line.chunks(96) { sb.push(part); }
+                }
+            }
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };
