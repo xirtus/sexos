@@ -23,6 +23,9 @@ pub struct WideMachine {
     one: Machine,
     ret: u32,
     scratch: Vec<u32>,
+    /// The invocations are 2x2 quads of pixels (lanes 4q.. are (x, y), (x+1, y),
+    /// (x, y+1), (x+1, y+1)), so derivatives and mip levels come from neighbours.
+    pub quads: bool,
 }
 
 impl WideMachine {
@@ -79,6 +82,7 @@ impl StageCode {
             one: self.machine(),
             ret: self.entry.ret_off,
             scratch: Vec::new(),
+            quads: false,
         }
     }
 
@@ -133,7 +137,7 @@ impl StageCode {
             let mut next = pc + 1;
             let r = &mut m.regs;
             match &steps[pc as usize] {
-                Step::Op(op) => if full { self.op_w::<true>(r, &m.mem, op, u, tex, mask) } else { self.op_w::<false>(r, &m.mem, op, u, tex, mask) },
+                Step::Op(op) => if full { self.op_w::<true>(r, &m.mem, op, u, tex, mask, m.quads) } else { self.op_w::<false>(r, &m.mem, op, u, tex, mask, m.quads) },
                 &Step::Eval { code, h } => {
                     let (c, f) = self.code(code as usize);
                     let one = &mut m.one;
@@ -220,19 +224,38 @@ impl StageCode {
 
     /// A prepared operation for the masked invocations (`FULL`: all of them).
     #[inline(always)]
-    fn op_w<const FULL: bool>(&self, r: &mut [Row], mem: &[Row], op: &Op, u: &[u32], tex: &dyn Textures, mask: u32) {
+    #[allow(clippy::too_many_arguments)]
+    fn op_w<const FULL: bool>(&self, r: &mut [Row], mem: &[Row], op: &Op, u: &[u32], tex: &dyn Textures, mask: u32, quads: bool) {
         let lm = if FULL { [0; W] } else { lane_mask(mask) };
         let m = &lm;
         match op {
-            &Op::Sample { dst, n, .. } => {
+            &Op::Sample { dst, n, coord, cn, .. } => {
                 let mut out = [[0u32; W]; 4];
                 for l in 0..W {
                     if (mask >> l) & 1 == 0 { continue; }
-                    let px = sample_op(op, |x| r[x as usize][l], tex);
+                    // Coarse derivatives: across the top row and down the left column.
+                    let grad = (quads && cn >= 2).then(|| {
+                        let q = l & !3;
+                        let c = |lane: usize, j: u32| f32::from_bits(r[(coord + j) as usize][lane]);
+                        [c(q + 1, 0) - c(q, 0), c(q + 1, 1) - c(q, 1), c(q + 2, 0) - c(q, 0), c(q + 2, 1) - c(q, 1)]
+                    });
+                    let px = sample_op(op, |x| r[x as usize][l], tex, grad);
                     for j in 0..4 { out[j][l] = px[j].to_bits(); }
                 }
                 for j in 0..n.min(4) { wr::<FULL>(r, dst + j, out[j as usize], m); }
             }
+            &Op::Deriv { dst, src, n, axis } => for j in 0..n {
+                let v = fv(r, src + j);
+                let mut o = [0u32; W];
+                if quads {
+                    for l in 0..W {
+                        let q = l & !3;
+                        let (dx, dy) = (v[q + 1] - v[q], v[q + 2] - v[q]);
+                        o[l] = match axis { 0 => dx, 1 => dy, _ => libm::fabsf(dx) + libm::fabsf(dy) }.to_bits();
+                    }
+                }
+                wr::<FULL>(r, dst + j, o, m);
+            },
             Op::Generic => {}
             &Op::Copy { dst, src, n } => {
                 if FULL {

@@ -82,6 +82,7 @@ impl GlCanvas {
                 "bt" => c.bind_texture(n(a, 0), n(a, 1)),
                 "dt" => c.delete_texture(n(a, 0)),
                 "tp" => c.tex_parameter(n(a, 0), n(a, 1), n(a, 2)),
+                "gm" => c.generate_mipmap(n(a, 0)),
                 "ti" => {
                     let d = blob(data, a, 6);
                     c.tex_image(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), d);

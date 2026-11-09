@@ -60,6 +60,10 @@ pub mod enums {
     pub const TEXTURE_WRAP_T: u32 = 0x2803;
     pub const NEAREST: u32 = 0x2600;
     pub const LINEAR: u32 = 0x2601;
+    pub const NEAREST_MIPMAP_NEAREST: u32 = 0x2700;
+    pub const LINEAR_MIPMAP_NEAREST: u32 = 0x2701;
+    pub const NEAREST_MIPMAP_LINEAR: u32 = 0x2702;
+    pub const LINEAR_MIPMAP_LINEAR: u32 = 0x2703;
     pub const REPEAT: u32 = 0x2901;
     pub const CLAMP_TO_EDGE: u32 = 0x812F;
     pub const MIRRORED_REPEAT: u32 = 0x8370;
@@ -90,6 +94,8 @@ pub const MAX_ATTRIBS: usize = 16;
 pub const MAX_UNITS: usize = 16;
 /// Largest texture or drawing-buffer side.
 pub const MAX_SIZE: u32 = 4096;
+/// Mip levels a texture keeps (4096 down to 1).
+pub const MAX_LEVELS: usize = 13;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Attrib {
@@ -151,6 +157,34 @@ impl Class {
 }
 
 impl Level {
+    /// The next mip level: half the size (at least 1), each texel the mean of the 2x2
+    /// texels it covers.
+    fn halved(&self) -> Level {
+        let (w, h) = ((self.width / 2).max(1), (self.height / 2).max(1));
+        let (sw, sh) = (self.width as usize, self.height as usize);
+        let at = |x: usize, y: usize| y.min(sh - 1) * sw + x.min(sw - 1);
+        let mut out = Level { width: w, height: h, class: self.class, ..Level::default() };
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let four = [at(2 * x, 2 * y), at(2 * x + 1, 2 * y), at(2 * x, 2 * y + 1), at(2 * x + 1, 2 * y + 1)];
+                if self.class == Class::Norm {
+                    let mut p = 0u32;
+                    for s in [0, 8, 16, 24] {
+                        let sum: u32 = four.iter().map(|&i| (self.px[i] >> s) & 0xFF).sum();
+                        p |= ((sum + 2) / 4) << s;
+                    }
+                    out.px.push(p);
+                } else {
+                    for k in 0..4 {
+                        let sum: f32 = four.iter().map(|&i| f32::from_bits(self.raw[4 * i + k])).sum();
+                        out.raw.push((sum * 0.25).to_bits());
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The texel's four lanes as a shader reads them.
     fn bits(&self, x: i32, y: i32) -> [u32; 4] {
         let i = (y as u32 * self.width + x as u32) as usize;
@@ -169,6 +203,8 @@ pub struct Texture {
     pub target: u32,
     /// Level 0 of each face (one for 2D, six for cube maps).
     pub faces: Vec<Level>,
+    /// Levels 1.. of each face (2D and cube maps), from generateMipmap or uploads.
+    pub mips: Vec<Vec<Level>>,
     pub min_filter: u32,
     pub mag_filter: u32,
     pub wrap_s: u32,
@@ -177,7 +213,7 @@ pub struct Texture {
 
 impl Texture {
     fn new(target: u32) -> Self {
-        Texture { target, faces: vec![Level::default(); match target { TEXTURE_CUBE_MAP => 6, TEXTURE_3D | TEXTURE_2D_ARRAY => 0, _ => 1 }], min_filter: 0x2702, mag_filter: LINEAR, wrap_s: REPEAT, wrap_t: REPEAT }
+        Texture { target, faces: vec![Level::default(); match target { TEXTURE_CUBE_MAP => 6, TEXTURE_3D | TEXTURE_2D_ARRAY => 0, _ => 1 }], mips: Vec::new(), min_filter: 0x2702, mag_filter: LINEAR, wrap_s: REPEAT, wrap_t: REPEAT }
     }
 
     fn complete(&self) -> bool { !self.faces.is_empty() && self.faces.iter().all(|f| f.width > 0 && f.height > 0) }
@@ -217,19 +253,21 @@ impl Texture {
         }
     }
 
-    fn sample_level(&self, l: &Level, s: f32, t: f32) -> [f32; 4] {
+    /// Level `l` at (s, t) with `filter`; `clamp` overrides the wrap modes (cube faces).
+    fn sample_level(&self, l: &Level, s: f32, t: f32, filter: u32, clamp: bool) -> [f32; 4] {
         let (w, h) = (l.width as i32, l.height as i32);
-        if self.mag_filter == NEAREST {
-            let x = Self::wrap(self.wrap_s, libm::floorf(s * w as f32) as i32, w);
-            let y = Self::wrap(self.wrap_t, libm::floorf(t * h as f32) as i32, h);
+        let (wrap_s, wrap_t) = if clamp { (CLAMP_TO_EDGE, CLAMP_TO_EDGE) } else { (self.wrap_s, self.wrap_t) };
+        if filter == NEAREST {
+            let x = Self::wrap(wrap_s, libm::floorf(s * w as f32) as i32, w);
+            let y = Self::wrap(wrap_t, libm::floorf(t * h as f32) as i32, h);
             return Self::fetch(l, x, y);
         }
         let (u, v) = (s * w as f32 - 0.5, t * h as f32 - 0.5);
         let (x0, y0) = (libm::floorf(u), libm::floorf(v));
         let (fx, fy) = (u - x0, v - y0);
         let (x0, y0) = (x0 as i32, y0 as i32);
-        let (xa, xb) = (Self::wrap(self.wrap_s, x0, w), Self::wrap(self.wrap_s, x0 + 1, w));
-        let (ya, yb) = (Self::wrap(self.wrap_t, y0, h), Self::wrap(self.wrap_t, y0 + 1, h));
+        let (xa, xb) = (Self::wrap(wrap_s, x0, w), Self::wrap(wrap_s, x0 + 1, w));
+        let (ya, yb) = (Self::wrap(wrap_t, y0, h), Self::wrap(wrap_t, y0 + 1, h));
         let (a, b, c, d) = (Self::fetch(l, xa, ya), Self::fetch(l, xb, ya), Self::fetch(l, xa, yb), Self::fetch(l, xb, yb));
         let mut o = [0f32; 4];
         for i in 0..4 {
@@ -240,8 +278,59 @@ impl Texture {
         o
     }
 
-    pub fn sample(&self, c: [f32; 4], depth_ref: Option<f32>) -> [f32; 4] {
+    /// The level of detail: log2 of texels per pixel at level 0 (minified above 0).
+    fn lambda(&self, lod: &exec::Lod) -> f32 {
+        if let Some(e) = lod.exact { return e; }
+        let base = match (lod.grad, self.faces.first()) {
+            (Some([a, b, c, d]), Some(l)) => {
+                let (w, h) = (l.width as f32, l.height as f32);
+                let rho2 = ((a * w) * (a * w) + (b * h) * (b * h)).max((c * w) * (c * w) + (d * h) * (d * h));
+                if rho2.is_finite() && rho2 > 0.0 { 0.5 * libm::log2f(rho2) } else { 0.0 }
+            }
+            _ => 0.0,
+        };
+        base + lod.bias
+    }
+
+    /// The filter within a level at `lambda`, and how levels are chosen: None (level 0
+    /// only), Some(false) the nearest level, Some(true) between the two nearest.
+    fn filters(&self, lambda: f32) -> (u32, Option<bool>) {
+        if lambda <= 0.0 { return (self.mag_filter, None); }
+        match self.min_filter {
+            NEAREST => (NEAREST, None),
+            NEAREST_MIPMAP_NEAREST => (NEAREST, Some(false)),
+            LINEAR_MIPMAP_NEAREST => (LINEAR, Some(false)),
+            NEAREST_MIPMAP_LINEAR => (NEAREST, Some(true)),
+            LINEAR_MIPMAP_LINEAR => (LINEAR, Some(true)),
+            _ => (LINEAR, None),
+        }
+    }
+
+    /// Face `face` filtered at `lambda` through its mip levels.
+    fn sample_face(&self, face: usize, s: f32, t: f32, lambda: f32, clamp: bool) -> [f32; 4] {
+        let l0 = &self.faces[face];
+        let (filter, mip) = self.filters(lambda);
+        let levels: &[Level] = self.mips.get(face).map_or(&[], |m| m);
+        let max = levels.iter().take_while(|l| l.width > 0 && l.height > 0 && l.class == l0.class).count();
+        let level = |i: usize| if i == 0 { l0 } else { &levels[i - 1] };
+        match mip {
+            Some(_) if max == 0 => self.sample_level(l0, s, t, filter, clamp),
+            Some(false) => self.sample_level(level((libm::floorf(lambda + 0.5) as usize).min(max)), s, t, filter, clamp),
+            Some(true) => {
+                let lo = libm::floorf(lambda);
+                let i = lo as usize;
+                if i >= max { return self.sample_level(level(max), s, t, filter, clamp); }
+                let f = lambda - lo;
+                let (a, b) = (self.sample_level(level(i), s, t, filter, clamp), self.sample_level(level(i + 1), s, t, filter, clamp));
+                [0, 1, 2, 3].map(|k| a[k] + (b[k] - a[k]) * f)
+            }
+            None => self.sample_level(l0, s, t, filter, clamp),
+        }
+    }
+
+    pub fn sample(&self, c: [f32; 4], depth_ref: Option<f32>, lod: &exec::Lod) -> [f32; 4] {
         if !self.complete() { return [0.0, 0.0, 0.0, 1.0]; }
+        let lambda = self.lambda(lod);
         let px = if self.target == TEXTURE_CUBE_MAP {
             let (x, y, z) = (c[0], c[1], c[2]);
             let (ax, ay, az) = (libm::fabsf(x), libm::fabsf(y), libm::fabsf(z));
@@ -251,13 +340,11 @@ impl Texture {
                 if y > 0.0 { (2, x, z, ay) } else { (3, x, -z, ay) }
             } else if z > 0.0 { (4, x, -y, az) } else { (5, -x, -y, az) };
             let ma = if ma == 0.0 { 1.0 } else { ma };
-            let mut t = self.clone_params();
-            t.wrap_s = CLAMP_TO_EDGE;
-            t.wrap_t = CLAMP_TO_EDGE;
-            t.sample_level(&self.faces[face], (sc / ma + 1.0) * 0.5, (tc / ma + 1.0) * 0.5)
+            // Cube lookups take no screen derivatives: a level only when asked for.
+            self.sample_face(face, (sc / ma + 1.0) * 0.5, (tc / ma + 1.0) * 0.5, lod.exact.unwrap_or(lod.bias), true)
         } else if self.target == TEXTURE_2D_ARRAY {
             let layer = (libm::floorf(c[2] + 0.5).max(0.0) as usize).min(self.faces.len() - 1);
-            self.sample_level(&self.faces[layer], c[0], c[1])
+            self.sample_level(&self.faces[layer], c[0], c[1], self.filters(lambda).0, false)
         } else if self.target == TEXTURE_3D {
             // Between the two nearest slices.
             let n = self.faces.len();
@@ -266,22 +353,19 @@ impl Texture {
             let f = if self.mag_filter == NEAREST { 0.0 } else { r - z0 };
             let wrap = |z: i32| Self::wrap(self.wrap_s, z, n as i32) as usize;
             let z0 = if self.mag_filter == NEAREST { libm::floorf(c[2] * n as f32) as i32 } else { z0 as i32 };
-            let a = self.sample_level(&self.faces[wrap(z0)], c[0], c[1]);
+            let filter = self.filters(lambda).0;
+            let a = self.sample_level(&self.faces[wrap(z0)], c[0], c[1], filter, false);
             if f == 0.0 { a } else {
-                let b = self.sample_level(&self.faces[wrap(z0 + 1)], c[0], c[1]);
+                let b = self.sample_level(&self.faces[wrap(z0 + 1)], c[0], c[1], filter, false);
                 [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * f)
             }
         } else {
-            self.sample_level(&self.faces[0], c[0], c[1])
+            self.sample_face(0, c[0], c[1], lambda, false)
         };
         match depth_ref {
             Some(r) => { let v = if r <= px[0] { 1.0 } else { 0.0 }; [v, v, v, 1.0] }
             None => px,
         }
-    }
-
-    fn clone_params(&self) -> Texture {
-        Texture { target: self.target, faces: Vec::new(), min_filter: self.min_filter, mag_filter: self.mag_filter, wrap_s: self.wrap_s, wrap_t: self.wrap_t }
     }
 }
 
@@ -603,10 +687,10 @@ impl Context {
         Some(out)
     }
 
-    /// texImage2D with client data (`None` allocates zeroed storage). Only level 0 is kept.
+    /// texImage2D with client data (`None` allocates zeroed storage), at any mip level.
     #[allow(clippy::too_many_arguments)]
     pub fn tex_image(&mut self, target: u32, level: i32, width: u32, height: u32, format: u32, ty: u32, data: Option<&[u8]>) {
-        if level != 0 { return; }
+        if !(0..MAX_LEVELS as i32).contains(&level) { return self.err(INVALID_VALUE); }
         if width > MAX_SIZE || height > MAX_SIZE { return self.err(INVALID_VALUE); }
         let class = Class::of(format, ty);
         if class != Class::Norm {
@@ -614,16 +698,45 @@ impl Context {
                 Some(d) => match self.convert_raw(width, height, format, ty, class, d) { Some(r) => r, None => return self.err(INVALID_OPERATION) },
                 None => vec![0; 4 * (width * height) as usize],
             };
-            let Some((t, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
-            let Some(l) = t.faces.get_mut(face) else { return self.err(INVALID_ENUM) };
-            *l = Level { width, height, px: Vec::new(), class, raw };
-            return;
+            return self.store_level(target, level as usize, Level { width, height, px: Vec::new(), class, raw });
         }
         let px = match data {
             Some(d) => match self.convert(width, height, format, ty, d) { Some(p) => p, None => return self.err(INVALID_OPERATION) },
             None => vec![0; (width * height) as usize],
         };
-        self.tex_image_rgba(target, width, height, px);
+        self.store_level(target, level as usize, Level { width, height, px, ..Level::default() });
+    }
+
+    /// Puts `l` at mip `level` of the bound texture's face. A new level 0 drops the
+    /// levels made from the old one.
+    fn store_level(&mut self, target: u32, level: usize, l: Level) {
+        let Some((t, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
+        if face >= t.faces.len() { return self.err(INVALID_ENUM); }
+        if level == 0 {
+            t.faces[face] = l;
+            if let Some(m) = t.mips.get_mut(face) { m.clear(); }
+            return;
+        }
+        if t.mips.len() < t.faces.len() { t.mips.resize(t.faces.len(), Vec::new()); }
+        let m = &mut t.mips[face];
+        if m.len() < level { m.resize(level, Level::default()); }
+        m[level - 1] = l;
+    }
+
+    /// generateMipmap: every level down to 1x1, each texel the mean of four above it.
+    pub fn generate_mipmap(&mut self, target: u32) {
+        let Some((t, _)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
+        if t.layered() || !t.complete() { return self.err(INVALID_OPERATION); }
+        t.mips = t.faces.iter().map(|base| {
+            let mut chain: Vec<Level> = Vec::new();
+            if !matches!(base.class, Class::Norm | Class::Float) { return chain; }
+            while chain.len() + 1 < MAX_LEVELS {
+                let src = chain.last().unwrap_or(base);
+                if src.width <= 1 && src.height <= 1 { break; }
+                chain.push(src.halved());
+            }
+            chain
+        }).collect();
     }
 
     /// Client texels of a float or integer texture, four lanes each (missing ones 0, alpha 1).
@@ -665,9 +778,7 @@ impl Context {
     /// texImage2D from RGBA8 pixels already decoded (pictures, other canvases), top row
     /// first as images are; flip-y and premultiply apply.
     pub fn tex_image_rgba(&mut self, target: u32, width: u32, height: u32, px: Vec<u32>) {
-        let Some((t, face)) = self.bound_texture(target) else { return self.err(INVALID_OPERATION) };
-        let Some(l) = t.faces.get_mut(face) else { return self.err(INVALID_ENUM) };
-        *l = Level { width, height, px, ..Level::default() };
+        self.store_level(target, 0, Level { width, height, px, ..Level::default() });
     }
 
     /// Uploads a decoded picture (0xAARRGGBB, top row first, not premultiplied).
@@ -1037,7 +1148,7 @@ impl Context {
         fixed.polygon_offset = if self.polygon_offset_fill { Some(self.polygon_offset) } else { None };
         fixed.zero_one = prog.zero_one;
         fixed.flat = prog.flat;
-        let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin };
+        let mut shader = FragShader { prog, m: prog.fs.machine(), wide: None, tex: &tex_fs, fin, quads: prog.fs.wants_quads() };
         let mut target = Target { width: self.width as i32, height: self.height as i32, color, depth };
         raster::assemble(&mut target, &fixed, mode, &local, &verts, &mut shader);
         Ok(())
@@ -1255,9 +1366,9 @@ impl<'a> DrawTextures<'a> {
 }
 
 impl Textures for DrawTextures<'_> {
-    fn sample(&self, global: u32, coord: [f32; 4], _lod: f32, depth_ref: Option<f32>) -> [f32; 4] {
+    fn sample(&self, global: u32, coord: [f32; 4], lod: exec::Lod, depth_ref: Option<f32>) -> [f32; 4] {
         match self.by_global.get(global as usize).copied().flatten() {
-            Some(t) => t.sample(coord, depth_ref),
+            Some(t) => t.sample(coord, depth_ref, &lod),
             None => [0.0, 0.0, 0.0, 1.0],
         }
     }
@@ -1275,6 +1386,7 @@ struct FragShader<'a> {
     wide: Option<exec::WideMachine>,
     tex: &'a DrawTextures<'a>,
     fin: Vec<(Io, u32, Option<u32>)>,
+    quads: bool,
 }
 
 impl FragShader<'_> {
@@ -1312,6 +1424,7 @@ impl FragShader<'_> {
 impl Shade for FragShader<'_> {
     fn writes_depth(&self) -> bool { self.prog.frag_depth.is_some() }
     fn batch(&self) -> usize { exec::WIDE }
+    fn quads(&self) -> bool { self.quads }
     fn shade(&mut self, frag: &Frag, vary: &[f32]) -> Option<([f32; 4], Option<f32>)> {
         let fin = &self.fin;
         let ok = self.prog.fs.run(&mut self.m, &self.prog.fs_uniforms, self.tex, &mut |io, lanes| Self::fill(fin, frag, vary, io, lanes));
@@ -1321,6 +1434,7 @@ impl Shade for FragShader<'_> {
     }
     fn shade_many(&mut self, frags: &[Frag], vary: &[f32], stride: usize, out: &mut [Option<([f32; 4], Option<f32>)>]) {
         let mut wm = self.wide.take().unwrap_or_else(|| self.prog.fs.wide_machine());
+        wm.quads = self.quads;
         let fs = &self.prog.fs;
         for (b, (fr, o)) in frags.chunks(exec::WIDE).zip(out.chunks_mut(exec::WIDE)).enumerate() {
             let base = b * exec::WIDE;
