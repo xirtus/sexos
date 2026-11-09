@@ -112,6 +112,8 @@ pub struct Style {
     pub box_sizing_border: bool,
     pub letter_spacing: i32,
     pub vertical_super: i8,
+    /// `opacity`, 0 to 255.
+    pub opacity: u8,
     /// Custom properties (`--name: value`), inherited; shared until an element sets one.
     pub vars: alloc::rc::Rc<BTreeMap<String, String>>,
 }
@@ -171,6 +173,7 @@ impl Style {
             box_sizing_border: false,
             letter_spacing: 0,
             vars: Default::default(),
+            opacity: 255,
             vertical_super: 0,
         }
     }
@@ -803,6 +806,10 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             let w = words(v);
             if let Some(Len::Px(p)) = w.last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p }
             if matches!(d.name.as_str(), "gap" | "grid-gap") { if let Some(Len::Px(p)) = w.first().and_then(|w| parse_len(w, s, ctx)) { s.row_gap = p } }
+        }
+        "opacity" => {
+            let n = match lv.strip_suffix('%') { Some(p) => css::parse_number(p).map(|p| p / 100), None => css::parse_number(&lv) };
+            if let Some(n) = n { s.opacity = (n.clamp(0, 100) * 255 / 100) as u8; }
         }
         "row-gap" | "grid-row-gap" => if let Some(Len::Px(p)) = parse_len(v, s, ctx) { s.row_gap = p },
         "grid-template-columns" => { let (t, a) = grid_tracks(v, s, ctx); s.grid_columns = t; s.grid_auto = a; }

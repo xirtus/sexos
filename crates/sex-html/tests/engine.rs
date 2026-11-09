@@ -334,3 +334,12 @@ fn hover_focus_and_checked_match() {
     let styles = sex_html::styles(&dom, &[], 400, 300);
     assert_eq!(styles[id(&dom, "a")].as_ref().unwrap().color, 0xFFFF_0000);
 }
+
+#[test]
+fn opacity_fades_everything_a_box_paints() {
+    let dom = parse::parse("<body style='margin:0'><div style='opacity:.5;background:#000;color:#fff;padding:10px'>half<div style='opacity:50%;background:#ff0000'>q</div></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let alphas: Vec<u32> = page.items.iter().filter_map(|i| match i { sex_html::layout::Item::Rect { color, .. } | sex_html::layout::Item::Text { color, .. } => Some(color >> 24), _ => None }).collect();
+    assert_eq!(alphas, [127, 127, 63, 63]);
+}

@@ -337,6 +337,26 @@ impl<'a> Layout<'a> {
     /// boxes positioned inside them are placed once their size is known.
     fn block(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
         let s = self.style(n).unwrap();
+        if s.opacity < 255 {
+            // Everything the box paints fades with it (nested opacities multiply).
+            let i0 = self.items.len();
+            let r = self.block_positioned(n, x, y, cw, force_width);
+            let a = s.opacity as u32;
+            for it in &mut self.items[i0..] {
+                match it {
+                    Item::Rect { w, color, .. } if *w > CLIP_END => *color = (*color & 0x00FF_FFFF) | (((*color >> 24) * a / 255) << 24),
+                    Item::Text { color, .. } | Item::Bullet { color, .. } => *color = (*color & 0x00FF_FFFF) | (((*color >> 24) * a / 255) << 24),
+                    Item::Image { w, h, .. } if a < 128 => { *w = 0; *h = 0; }
+                    _ => {}
+                }
+            }
+            return r;
+        }
+        self.block_positioned(n, x, y, cw, force_width)
+    }
+
+    fn block_positioned(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {
+        let s = self.style(n).unwrap();
         let positioned = s.position != style::Position::Static;
         let is_root = self.root == Some(n);
         if !positioned && !is_root { return self.block_inner(n, x, y, cw, force_width); }
@@ -749,7 +769,8 @@ impl<'a> Layout<'a> {
         if s.display == Display::None { return; }
         let font = font_of(s);
         let link = self.link_stack.last().copied();
-        let bg = s.background;
+        // Only inline boxes paint behind their text; a block's background is its box.
+        let bg = if matches!(s.display, Display::Inline) { s.background } else { 0 };
         let color = if s.hidden { 0 } else { s.color };
         let shift = match s.vertical_super { 1 => -(s.font_size / 2), -1 => s.font_size / 4, _ => 0 };
         let space = |this: &Self, breakable: bool| Piece::Space { width: this.host.text_width(" ", font), breakable, font, color, underline: s.underline, link, bg };
