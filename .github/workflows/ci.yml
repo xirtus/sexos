@@ -17,7 +17,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools
+      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools clang lld llvm nasm musl-dev
+    - name: Cache FFmpeg
+      uses: actions/cache@v4
+      with:
+        path: |
+          target/ffmpeg/lib
+          target/ffmpeg/include
+          target/ffmpeg/include-c
+        key: ffmpeg-${{ hashFiles('scripts/build_ffmpeg.sh') }}
+    - name: Build FFmpeg for programs
+      run: test -f target/ffmpeg/lib/libavcodec.a || bash scripts/build_ffmpeg.sh
     - name: Prepare Limine
       run: |
         git init limine

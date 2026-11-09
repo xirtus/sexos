@@ -13,10 +13,11 @@ fn clock() -> u64 {
 /// Answers the page's `fetch` requests from files beside it.
 fn serve(script: &mut sex_js::Script<sex_js::Document>, base: &std::path::Path) -> bool {
     let asked = std::mem::take(&mut script.page_mut().fetches);
-    for (id, url) in &asked {
+    for ask in &asked {
+        let (id, url) = (ask.id, &ask.url);
         let (status, body) = match std::fs::read(base.join(url.trim_start_matches("./"))) { Ok(b) => (200, b), Err(_) => (404, Vec::new()) };
         let n = body.len();
-        script.page_mut().keep_body(*id, status, body);
+        script.page_mut().keep_body(id, status, body);
         script.dispatch(&format!("fetched\t{id}\t{status}\t{n}")).unwrap();
     }
     !asked.is_empty()

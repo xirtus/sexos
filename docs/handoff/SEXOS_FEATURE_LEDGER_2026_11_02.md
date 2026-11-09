@@ -3134,3 +3134,33 @@ row no longer waits for the row before it to end.
   - an MP3 (880 Hz).
 
   Each clip must show all its pictures, no picture may be more than 500 ms late, and each clip's tone must appear in the WAV at its pitch for about 2 s. Each clip takes about 2.6 s.
+
+## sex-media: one player for Play and the browser; pause and seek (2026-11-09)
+
+- **`crates/sex-media`** holds the FFmpeg bridge and the player, so Play and Web share them.
+  - `Decoder` reads only through a `Source` trait (`len`, `read_at`, `available`), which can be a file, a fetched body, or bytes still arriving. A growing source is decoded only while 512 KiB lies ahead of the read position (`AHEAD`), or once the whole stream is there.
+  - `Player::step()` never waits, so it suits a program's own loop or a browser's event loop. It decodes ahead, feeds the sound ring, and makes each picture current at its time.
+  - The player has `play`, `pause`, `seek`, `time_ms`, `set_volume` and `set_muted`.
+  - Without a built FFmpeg the crate still builds and refuses every file (`cfg(ffmpeg)`).
+- **Sound rings gain `PAUSED` and `SKIP_TO`** (header offsets 40 and 48).
+  - `PAUSED`: Bell takes nothing from a paused ring and rests while only paused streams are open.
+  - `SKIP_TO`: Bell drops the queued sound, which counts as played, so a seek is heard at once.
+  - Bell no longer trusts a WRITTEN count below TAKEN.
+- **Play** now uses sex-media.
+  - Keys: Space or K pauses and plays; Left/J and Right/L seek 5 s; Home goes to the start.
+  - Play is in the boot image as `programs/play`.
+- **CI builds FFmpeg**: clang, nasm and musl-dev are installed, and target/ffmpeg is cached, keyed on `scripts/build_ffmpeg.sh`.
+- **Gate.** `program_media_gate` adds an 8 s clip:
+  - Space pauses, and no pictures are shown for 1.5 s.
+  - Space plays again.
+  - L seeks from about 1.4 s to 6.4 s, and the next picture is at 6.6 s.
+- **Known issue** (reported, not media): PS/2 extended keys (arrows, E0 prefix) don't reach apps, which is why Play also takes J/K/L.
+
+## Web speaks HTTP/1.1: POST, chunked, gzip, cookies, XHR (2026-11-09)
+
+First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
+- **New crate `sex-fetch`** (no_std + alloc, no I/O, host-tested): addresses, HTTP/1.1 requests with any method, headers and body (header injection refused, browser-owned headers like Host and Cookie can't be set by pages), reply heads, Content-Length / chunked / until-close framing (conflicting lengths refused), gzip and deflate (zune-inflate, capped so a gzip bomb stops at the limit), redirects joined per RFC 3986, and an RFC 6265 cookie jar (Domain/Path/Secure/HttpOnly/Max-Age/Expires, `__Host-`/`__Secure-`, per-domain and total caps).
+- **`sex_app::net::request`**: sends a `sex_fetch::Request` over the existing flow and returns the decoded reply. The download timeout is now sixty seconds without a byte rather than sixty seconds in all, so long downloads that keep moving finish.
+- **Browser**: pages, style sheets, pictures and script loads go through it with the window's cookie jar; `fetch(url, {method, headers, body})`, real `Response.headers`/`url`, `Request`, `Headers` iteration, `XMLHttpRequest` (text, json, arraybuffer, blob; Range works), and `document.cookie` (HttpOnly cookies stay hidden from scripts). New host ops FETCH_HEAD 68 and COOKIE 69; FETCH 66 takes method, headers and body.
+- **Gate** `scripts/program_web_http11_gate.py`: a local server sends a chunked + gzip page with Set-Cookie, the page POSTs JSON with its own headers (the server sees all three cookies), then reads 16 bytes by XHR Range (206). Passes in QEMU, along with the web net, fetch and JS gates.
+- Seen while testing: a 1.3 MB body takes about 11.7 s in QEMU (about 110 KB/s). That is roughly 360p video speed, so bigger windows and several flows (stage Y3) come next.
