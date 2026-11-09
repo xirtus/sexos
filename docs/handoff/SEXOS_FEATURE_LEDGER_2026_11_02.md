@@ -3209,3 +3209,12 @@ YouTube stage Y3d.
 - `run cpp` checks static constructors, vector/sort, unordered_map<string>, map, virtual calls, std::function, ostringstream, snprintf, std::thread + std::mutex and thread_local: 10/10 at 1 and 4 cores (`scripts/program_cpp_gate.py`).
 - Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
 
+
+## Net: TLS 1.2 and 1.3 with every common suite and curve (2026-11-09)
+
+Parity report workstream G, part 1.
+- **Why.** The open-web session spoke only TLS 1.3 with AES-128-GCM over P-256 (embedded-tls). Sites that offer only TLS 1.2, prefer ChaCha20 or AES-256, or ask for X25519 or P-384 failed.
+- **sex-tls `open`** now runs rustls 0.23's unbuffered client (no_std) on a provider of our own in `crates/sex-tls/src/open/provider.rs`: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 for TLS 1.3 and TLS 1.2 (ECDHE-ECDSA and ECDHE-RSA), SHA-256/384, key exchange on X25519, P-256 and P-384, ALPN `http/1.1`. X25519 is ours (`open/x25519.rs`) on fiat-crypto's verified field code, checked against RFC 7748 and OpenSSL. Certificates still go through rustls-webpki with the same RSA/ECDSA algorithms and the public roots. `Session`'s API is unchanged; sexnet logs `[net.tls.agreed] version= suite= group=` per session.
+- **No vector registers in the service.** sexnet builds with `chacha20_force_soft` and `poly1305_force_soft` beside the AES/POLYVAL cfgs; `scripts/check_tls_platform.py` checks them for the sexnet stage and pins the new crates (rustls 0.23.46, aes-gcm 0.10.3, chacha20poly1305 0.10.1, hmac 0.12.1, fiat-crypto 0.2.9, optional under `open-web` so the Browser's graph is unchanged).
+- **Tests.** `cargo test -p sex-tls --features open-web`: ten OpenSSL servers each held to one version, suite and group (all nine suites, all three groups, RSA/P-256/P-384 certificates); a server no trusted root signed is refused as a certificate failure; keep-alive. QEMU gate `scripts/program_web_tls_gate.py`: the browser loads a page from a TLS 1.3-only server (agreed TLS13_AES_256_GCM_SHA384 on X25519) and fetches from TLS 1.2-only servers held to ECDHE-RSA-AES256-GCM-SHA384 on P-384 and ECDHE-ECDSA-CHACHA20-POLY1305 on P-256. Its image is built with `SEXOS_TLS_GATE_ROOT` (one extra root, gate builds only).
+- **No ABI change.** Live top-site checks need a real network (the cloud proxy re-terminates TLS): try `run +net web https://...` for google.com, wikipedia.org, github.com, cloudflare.com, amazon.com, youtube.com on Andreas's machine or bare metal.
