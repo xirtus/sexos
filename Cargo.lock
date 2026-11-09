@@ -1954,6 +1954,7 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-fetch",
+ "sex-gl",
  "sex-js",
  "sex-pdx",
  "sex-web",

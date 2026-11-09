@@ -18,8 +18,18 @@ pub struct Vert {
 pub struct Target<'a> {
     pub width: i32,
     pub height: i32,
+    /// The first row `color` and `depth` hold: a band of the frame starts below row 0.
+    pub y0: i32,
     pub color: &'a mut [u32],
     pub depth: &'a mut [f32],
+}
+
+impl Target<'_> {
+    /// Where pixel (x, y) is in `color` and `depth`.
+    #[inline(always)]
+    fn at(&self, x: i32, y: i32) -> usize { ((y - self.y0) * self.width + x) as usize }
+    /// Rows held.
+    fn rows(&self) -> i32 { if self.width == 0 { 0 } else { self.color.len() as i32 / self.width } }
 }
 
 /// Fixed-function state for one draw.
@@ -226,7 +236,7 @@ fn blend(fx: &Fixed, s: [f32; 4], d: [f32; 4]) -> [f32; 4] {
 
 /// The drawable rectangle: viewport-independent framebuffer bounds and scissor.
 fn bounds(t: &Target, fx: &Fixed) -> (i32, i32, i32, i32) {
-    let (mut x0, mut y0, mut x1, mut y1) = (0, 0, t.width, t.height);
+    let (mut x0, mut y0, mut x1, mut y1) = (0, t.y0, t.width, t.height.min(t.y0 + t.rows()));
     if let Some(s) = fx.scissor {
         x0 = x0.max(s[0]);
         y0 = y0.max(s[1]);
@@ -238,7 +248,7 @@ fn bounds(t: &Target, fx: &Fixed) -> (i32, i32, i32, i32) {
 
 /// Writes one shaded fragment, after the depth test.
 fn write(t: &mut Target, fx: &Fixed, x: i32, y: i32, z: f32, sh: &mut dyn Shade, frag: &Frag, vary: &[f32]) {
-    let i = (y * t.width + x) as usize;
+    let i = t.at(x, y);
     if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
     let Some(r) = sh.shade(frag, vary) else { return };
     finish(t, fx, i, z, r);
@@ -394,7 +404,7 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
                     if (e0 == 0.0 && !o0) || (e1 == 0.0 && !o1) || (e2 == 0.0 && !o2) { continue; }
                     let (l0, l1, l2) = (e0 * inv_total, e1 * inv_total, e2 * inv_total);
                     let z = (l0 * p0[2] + l1 * p1[2] + l2 * p2[2] + offset).clamp(0.0, 1.0);
-                    let i = (qy * t.width + qx) as usize;
+                    let i = t.at(qx, qy);
                     if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { continue; }
                     live[k] = Some((i, z));
                 }
@@ -430,7 +440,7 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
             if flat { for k in fx.flat_lanes(n) { scratch[k] = v0.vary[k]; } }
             let frag = Frag { x: px, y: py, z, inv_w: iw, front, point: [0.0, 0.0] };
             if wide {
-                batch.push(t, fx, (y * t.width + x) as usize, z.clamp(0.0, 1.0), sh, frag, scratch);
+                batch.push(t, fx, t.at(x, y), z.clamp(0.0, 1.0), sh, frag, scratch);
             } else {
                 write(t, fx, x, y, z.clamp(0.0, 1.0), sh, &frag, scratch);
             }
@@ -477,6 +487,27 @@ pub fn point(t: &mut Target, fx: &Fixed, a: &Vert, sh: &mut dyn Shade) {
             write(t, fx, x, y, w[2].clamp(0.0, 1.0), sh, &frag, &a.vary);
         }
     }
+}
+
+/// About how many pixels the primitives' bounding boxes cover in a `width` x `height`
+/// frame, counting up to `limit` (enough to decide whether to split the work).
+pub fn coverage(width: i32, height: i32, fx: &Fixed, mode: u32, idx: &[u32], verts: &[Vert], limit: u64) -> u64 {
+    if !matches!(mode, gl::TRIANGLES | gl::TRIANGLE_STRIP | gl::TRIANGLE_FAN) { return 0; }
+    let mut total = 0u64;
+    for i in 0..idx.len().saturating_sub(2) {
+        if mode == gl::TRIANGLES && i % 3 != 0 { continue; }
+        let tri = if mode == gl::TRIANGLE_FAN { [idx[0], idx[i + 1], idx[i + 2]] } else { [idx[i], idx[i + 1], idx[i + 2]] };
+        let w = tri.map(|k| verts[k as usize].pos);
+        // Behind the eye: clipping may make it anything, so count the whole frame.
+        if w.iter().any(|p| p[3] <= 0.0) { total += (width * height) as u64; } else {
+            let p = w.map(|p| window(fx, p));
+            let (x0, x1) = (p[0][0].min(p[1][0]).min(p[2][0]).max(0.0), p[0][0].max(p[1][0]).max(p[2][0]).min(width as f32));
+            let (y0, y1) = (p[0][1].min(p[1][1]).min(p[2][1]).max(0.0), p[0][1].max(p[1][1]).max(p[2][1]).min(height as f32));
+            if x1 > x0 && y1 > y0 { total += ((x1 - x0) * (y1 - y0)) as u64; }
+        }
+        if total >= limit { break; }
+    }
+    total
 }
 
 /// Assembles `mode` primitives from `idx` (indices into `verts`).

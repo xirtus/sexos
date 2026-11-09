@@ -809,6 +809,10 @@ pub extern "C" fn _start() -> ! {
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
     let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
+    // Big WebGL draws spread over the cores, a band of rows each.
+    let cores = sex_app::thread::cores();
+    sex_gl::set_parallel(sex_app::thread::parallel, cores);
+    sex_pdx::serial_record!("[web.cores] cores={}", cores);
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
