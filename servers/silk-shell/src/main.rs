@@ -10276,9 +10276,11 @@ static mut WM_ORDER: wm::Order<MAX_FRAMES> = wm::Order::new();
 static mut WM_SCENE_FOCUS: [u64; ATLAS_MAX_SCENES] = [0; ATLAS_MAX_SCENES];
 /// After a workspace switch: the window last focused there, else the first one.
 unsafe fn wm_restore_scene_focus() {
-    if FOCUSED_SURFACE_ID != 0 && surface_in_active_scene(FOCUSED_SURFACE_ID) { return; }
+    // The remembered window wins over the fallback the scene switch picked.
     let saved = WM_SCENE_FOCUS[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)];
+    if saved != 0 && saved == FOCUSED_SURFACE_ID { return; }
     if saved != 0 && surface_is_alive(saved) && surface_in_active_scene(saved) && try_set_focus(saved) { return; }
+    if FOCUSED_SURFACE_ID != 0 && surface_in_active_scene(FOCUSED_SURFACE_ID) { return; }
     let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
     let n = wm_visible_frames(&mut frames, false);
     for f in &frames[..n] { if try_set_focus(f.1) { return; } }

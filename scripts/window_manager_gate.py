@@ -58,7 +58,8 @@ def main():
   # Super+2 and back; Super+Shift+3 sends the focused window away.
   r=chord(['meta_l','2'],'Workspace(1)');assert r['done'] and r['scene']==(0,1),r
   shot('05-workspace-2')
-  r=chord(['meta_l','1'],'Workspace(0)');assert r['scene']==(1,0),r
+  before=r['focus'][0]
+  r=chord(['meta_l','1'],'Workspace(0)');assert r['scene']==(1,0) and r['focus'][1]==before,('workspace forgot its focus',before,r)
   r=chord(['meta_l','shift','3'],'MoveToWorkspace(2)');assert r['done'],r;results['moved_from_focus']=r['focus'][0]
   shot('06-after-move')
   r=chord(['meta_l','3'],'Workspace(2)');assert r['scene']==(0,2),r
