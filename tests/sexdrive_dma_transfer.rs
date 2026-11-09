@@ -180,6 +180,10 @@ mod driver_read {
         if DELAY!=0&&WAITS==DELAY{core::ptr::write_volatile(CQ_PTR.add(3),COMPLETION);}
         Ok(())
     }}
+    // The plain NVMe path under test: no Intel RAID volume is served here.
+    mod raid { pub fn serving() -> bool { false } pub fn raw() -> bool { false }
+        pub fn writes_refused() -> bool { false } pub fn sectors() -> u64 { 0 }
+        pub fn read(_: u64, _: u64, _: u64) -> u64 { unreachable!() } }
     include!(env!("SEXDRIVE_READ_PATH_SOURCE"));
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

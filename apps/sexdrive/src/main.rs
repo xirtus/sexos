@@ -460,14 +460,10 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
     nvme_read_into_mapped_va(offset,size,view.virtual_address)
 }
 
-/// Block reads: the Intel RAID volume when one is served, else the first drive.
+/// Block reads: the Intel RAID volume when one is served, else the first
+/// drive's raw sectors (always those when the RAID layer itself asks).
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
-    if raid::serving() { return raid::read(offset, size, dst_va); }
-    nvme0_read_into_mapped_va(offset, size, dst_va)
-}
-
-/// Raw sectors of the first drive.
-fn nvme0_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
+    if raid::serving() && !raid::raw() { return raid::read(offset, size, dst_va); }
     if size == 0
         || size > BLOCK_MAX_RUN
         || (offset % NVME_LBA_BYTES) != 0

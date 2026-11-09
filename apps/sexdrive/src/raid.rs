@@ -40,6 +40,16 @@ pub fn writes_refused() -> bool {
     refused
 }
 pub fn serving() -> bool { unsafe { STATE == State::Serving } }
+
+static mut RAW: bool = false;
+/// True while this layer reads the first drive's own sectors.
+pub fn raw() -> bool { unsafe { RAW } }
+fn first_read(offset: u64, size: u64, dst_va: u64) -> u64 {
+    unsafe { RAW = true; }
+    let status = super::nvme_read_into_mapped_va(offset, size, dst_va);
+    unsafe { RAW = false; }
+    status
+}
 pub fn sectors() -> u64 { unsafe { VOLUME.sectors } }
 
 fn read_tail(sectors: u64, read: impl Fn(u64, u64, u64) -> u64) -> Option<Metadata> {
@@ -69,7 +79,7 @@ fn text(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?") }
 /// whole volume be read? Returns true when it is a member (raw writes and the
 /// write self-tests must not run).
 pub fn probe(first_sectors: u64, first_serial: &[u8; 20]) -> bool {
-    let Some(meta) = read_tail(first_sectors, |o, s, d| super::nvme0_read_into_mapped_va(o, s, d)) else {
+    let Some(meta) = read_tail(first_sectors, |o, s, d| first_read(o, s, d)) else {
         if unsafe { STATE } == State::Member { return true; }
         serial_println!("[sexdrive.raid.none] imsm=0");
         return false;
@@ -145,7 +155,7 @@ pub fn read(offset: u64, size: u64, dst_va: u64) -> u64 {
         let Some(e) = volume.map(lba, left, present) else { return BLOCK_ERR_BAD_LEN; };
         let bytes = e.sectors * sector;
         let status = match slot_drive[e.member as usize] {
-            0 => super::nvme0_read_into_mapped_va(e.lba * sector, bytes, at),
+            0 => first_read(e.lba * sector, bytes, at),
             1 => second_read(e.lba * sector, bytes, at),
             _ => BLOCK_ERR_NO_DEVICE,
         };
