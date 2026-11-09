@@ -26,3 +26,10 @@ impl Modifiers {
     }
     pub const fn key(&self, code:u8) -> Key { Key { code, shift:self.left_shift || self.right_shift, control:self.left_control || self.right_control } }
 }
+
+/// Media keys. On PS/2 they are E0 20 / E0 2E / E0 30, the same byte as D, C and B, and
+/// on USB keyboards usages 0x7F..0x81; Input gives them these codes of their own. Shell
+/// takes them for the master volume; programs never see them.
+pub const KEY_MUTE: u8 = 0x75;
+pub const KEY_VOLUME_DOWN: u8 = 0x76;
+pub const KEY_VOLUME_UP: u8 = 0x77;

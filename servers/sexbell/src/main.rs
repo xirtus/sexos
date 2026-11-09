@@ -1394,6 +1394,19 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
+            sex_pdx::sound_mixer::OP_MIXER => {
+                // The desktop only: Shell and Spindle set, SilkBar reads.
+                let caller = msg.caller_pd as u32;
+                let spindle = sex_pdx::app_catalog::SPINDLE_TARGETS.contains(&caller);
+                let reply = if caller == 3 || spindle || caller == 6 {
+                    sound::mixer_request(msg.arg0, msg.arg1, msg.arg2, caller != 6)
+                } else {
+                    sex_pdx::serial_record!("[bell.mixer.denied] caller_pd={}", caller);
+                    sex_pdx::sound_mixer::REFUSED
+                };
+                pdx_reply(msg.caller_pd, reply);
+            }
+
             sex_pdx::sound_ring::OP_PLAY => {
                 // A program's own sound, from its own ring; muting silences it too.
                 let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd);

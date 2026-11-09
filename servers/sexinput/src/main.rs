@@ -285,7 +285,14 @@ impl KeyboardOutbox {
         let extended=core::mem::replace(&mut self.extended,false);
         // E0 2A / E0 36 are fake shifts around extended keys: no key of their own.
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
-        self.push(&[KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
+        // Media keys share their byte with D, C and B: give them their own codes.
+        let code=match (extended,raw&0x7f) {
+            (true,0x20)=>sex_pdx::app_key::KEY_MUTE,
+            (true,0x2E)=>sex_pdx::app_key::KEY_VOLUME_DOWN,
+            (true,0x30)=>sex_pdx::app_key::KEY_VOLUME_UP,
+            (_,c)=>c as u8,
+        };
+        self.push(&[KeyEdge{code,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per
     /// byte of `keys` (byte 0 first). Edges: releases of usages no longer held (under the
@@ -486,6 +493,9 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         0x64 => 0x56, // non-US \ |
         0x65 => 0x5D, // Menu (E0 5D)
         0x67 => 0x0D, // keypad =
+        0x7F => sex_pdx::app_key::KEY_MUTE,
+        0x80 => sex_pdx::app_key::KEY_VOLUME_UP,
+        0x81 => sex_pdx::app_key::KEY_VOLUME_DOWN,
         _ => return None,
     })
 }
