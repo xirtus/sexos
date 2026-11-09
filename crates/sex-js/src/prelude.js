@@ -655,6 +655,15 @@
     QUERY_RESULT: 0x8866, QUERY_RESULT_AVAILABLE: 0x8867, INVALID_INDEX: 0xFFFFFFFF, VERTEX_ATTRIB_ARRAY_DIVISOR: 0x88FE,
     VERTEX_ATTRIB_ARRAY_INTEGER: 0x88FD, UNIFORM_BLOCK_INDEX: 0x8A3A, UNIFORM_OFFSET: 0x8A3B, ACTIVE_UNIFORM_BLOCKS: 0x8A36,
     UNIFORM_BLOCK_DATA_SIZE: 0x8A40, MAX_SERVER_WAIT_TIMEOUT: 0x9111, MAX_TEXTURE_LOD_BIAS: 0x84FD,
+    R8UI: 0x8232, R16UI: 0x8234, R32UI: 0x8236, RG8UI: 0x8238, RG16UI: 0x823A, RG32UI: 0x823C, RGB8UI: 0x8D7D,
+    RGB16UI: 0x8D77, RGB32UI: 0x8D71, RGBA8UI: 0x8D7C, RGBA16UI: 0x8D76, RGBA32UI: 0x8D70, R8I: 0x8231, R16I: 0x8233,
+    R32I: 0x8235, RG8I: 0x8237, RG16I: 0x8239, RG32I: 0x823B, RGB8I: 0x8D8F, RGB16I: 0x8D89, RGB32I: 0x8D83,
+    RGBA8I: 0x8D8E, RGBA16I: 0x8D88, RGBA32I: 0x8D82, RGB10_A2: 0x8059, RGB10_A2UI: 0x906F, R11F_G11F_B10F: 0x8C3A,
+    RGB9_E5: 0x8C3D, RGBA4: 0x8056, RGB5_A1: 0x8057, R8_SNORM: 0x8F94, RG8_SNORM: 0x8F95, RGB8_SNORM: 0x8F96, RGBA8_SNORM: 0x8F97,
+    INT_SAMPLER_2D: 0x8DCA, INT_SAMPLER_3D: 0x8DCB, INT_SAMPLER_CUBE: 0x8DCC, INT_SAMPLER_2D_ARRAY: 0x8DCF,
+    UNSIGNED_INT_SAMPLER_2D: 0x8DD2, UNSIGNED_INT_SAMPLER_3D: 0x8DD3, UNSIGNED_INT_SAMPLER_CUBE: 0x8DD4,
+    UNSIGNED_INT_SAMPLER_2D_ARRAY: 0x8DD7, SAMPLER_CUBE_SHADOW: 0x8DC5, SAMPLER_2D_ARRAY_SHADOW: 0x8DC4,
+    FLOAT_MAT2x3: 0x8B65, FLOAT_MAT2x4: 0x8B66, FLOAT_MAT3x2: 0x8B67, FLOAT_MAT3x4: 0x8B68, FLOAT_MAT4x2: 0x8B69, FLOAT_MAT4x3: 0x8B6A,
   };
   const bytesOf = v => v instanceof ArrayBuffer ? new Uint8Array(v) : ArrayBuffer.isView(v) ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : null;
   let glNextId = 1;
@@ -715,7 +724,7 @@
     _resize(w, h) { this._c('rz', w, h); this._s.viewport = [0, 0, w, h]; }
     getContextAttributes() { return Object.assign({}, this._attrs); }
     isContextLost() { return false; }
-    getSupportedExtensions() { return ['OES_element_index_uint', 'OES_standard_derivatives', 'OES_vertex_array_object', 'OES_texture_float',
+    getSupportedExtensions() { return ['OES_element_index_uint', 'OES_standard_derivatives', 'OES_vertex_array_object', 'ANGLE_instanced_arrays', 'OES_texture_float',
       'OES_texture_half_float', 'EXT_blend_minmax', 'WEBGL_lose_context', 'EXT_color_buffer_float', 'EXT_color_buffer_half_float']; }
     getExtension(name) {
       const gl = this;
@@ -726,6 +735,10 @@
         case 'OES_texture_half_float': return { HALF_FLOAT_OES: 0x8D61 };
         case 'EXT_blend_minmax': return { MIN_EXT: 0x8007, MAX_EXT: 0x8008 };
         case 'WEBGL_lose_context': return { loseContext() {}, restoreContext() {} };
+        case 'ANGLE_instanced_arrays': return { VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE: 0x88FE,
+          drawArraysInstancedANGLE: (m, f, c, n) => gl.drawArraysInstanced(m, f, c, n),
+          drawElementsInstancedANGLE: (m, c, t, o, n) => gl.drawElementsInstanced(m, c, t, o, n),
+          vertexAttribDivisorANGLE: (i, d) => gl.vertexAttribDivisor(i, d) };
         case 'OES_vertex_array_object': return { VERTEX_ARRAY_BINDING_OES: 0x85B5,
           createVertexArrayOES: () => gl.createVertexArray(), deleteVertexArrayOES: v => gl.deleteVertexArray(v),
           bindVertexArrayOES: v => gl.bindVertexArray(v), isVertexArrayOES: v => v instanceof WebGLVertexArrayObject };
@@ -826,6 +839,9 @@
       if (p === 0x9240) this._s.flipY = !!v;
       if (p === 0x9241) this._s.premul = !!v;
       if (p === 0xCF5) this._s.align = v;
+      if (p === 0xCF2) this._s.rowLength = v | 0;
+      if (p === 0xCF3) this._s.skipRows = v | 0;
+      if (p === 0xCF4) this._s.skipPixels = v | 0;
       this._c('ps', p, typeof v === 'boolean' ? +v : v | 0);
     }
     lineWidth(w) { this._s.lineWidth = +w; }
@@ -916,15 +932,64 @@
       if (arguments.length === 7) return; // pictures into part of a texture: not yet
       const [w, h, fmt, type, pixels] = [a, b, c, d, e];
       if (!pixels || !(ArrayBuffer.isView(pixels) || pixels instanceof ArrayBuffer)) return;
+      const st = this._s;
+      if (st.rowLength || st.skipRows || st.skipPixels) {
+        // A window into a larger image: copy its rows out tightly packed.
+        const comps = { 0x1908: 4, 0x8D99: 4, 0x1907: 3, 0x8D98: 3, 0x8227: 2, 0x8228: 2, 0x190A: 2 }[fmt] || 1;
+        const size = { 0x1406: 4, 0x1404: 4, 0x1405: 4, 0x140B: 2, 0x8D61: 2, 0x1402: 2, 0x1403: 2 }[type] || 1;
+        const bpp = [0x8363, 0x8033, 0x8034].includes(type) ? 2 : comps * size;
+        const src = new Uint8Array(pixels.buffer || pixels, pixels.byteOffset || 0, pixels.byteLength);
+        const al = st.align || 4, rowBytes = (st.rowLength || w) * bpp, stride = Math.ceil(rowBytes / al) * al;
+        const out = new Uint8Array(w * h * bpp);
+        for (let r = 0; r < h; r++) {
+          const from = (st.skipRows + r) * stride + st.skipPixels * bpp;
+          out.set(src.subarray(from, from + w * bpp), r * w * bpp);
+        }
+        const saved = st.align;
+        if (saved !== 1) this._c('ps', 0xCF5, 1);
+        const [o, l] = this._data(out);
+        this._c('ts', target, level, x, y, w, h, fmt, type, o, l);
+        if (saved !== 1) this._c('ps', 0xCF5, saved);
+        return;
+      }
       const [o, l] = this._data(pixels);
       this._c('ts', target, level, x, y, w, h, fmt, type, o, l);
     }
     texStorage2D(target, levels, ifmt, w, h) {
-      if (target === 0x8513) { for (let f = 0; f < 6; f++) this._c('ti', 0x8515 + f, 0, w, h, 0x1908, 0x1401); }
-      else this._c('ti', target, 0, w, h, 0x1908, 0x1401);
+      const sized = this._sized(ifmt);
+      if (target === 0x8513) { for (let f = 0; f < 6; f++) this._c('ti', 0x8515 + f, 0, w, h, sized[0], sized[1]); }
+      else this._c('ti', target, 0, w, h, sized[0], sized[1]);
+    }
+    texImage3D(target, level, ifmt, w, h, depth, border, fmt, type, pixels) {
+      if (pixels && !(ArrayBuffer.isView(pixels) || pixels instanceof ArrayBuffer)) return; // pictures: not yet
+      const sized = fmt === 0x1908 && type === 0x1401 ? this._sized(ifmt) : [fmt, type];
+      if (pixels) { const [o, l] = this._data(pixels); this._c('ti3', target, level, w, h, depth, sized[0], sized[1], o, l); }
+      else this._c('ti3', target, level, w, h, depth, sized[0], sized[1]);
+    }
+    texStorage3D(target, levels, ifmt, w, h, depth) {
+      const sized = this._sized(ifmt);
+      this._c('ti3', target, 0, w, h, depth, sized[0], sized[1]);
+    }
+    texSubImage3D(target, level, x, y, z, w, h, d, fmt, type, pixels) {
+      if (!pixels || !(ArrayBuffer.isView(pixels) || pixels instanceof ArrayBuffer)) return;
+      const [o, l] = this._data(pixels);
+      this._c('ts3', target, level, x, y, z, w, h, d, fmt, type, o, l);
+    }
+    // The client format and type that keep a sized internal format's texels: float and
+    // integer formats keep theirs, the rest are RGBA8.
+    _sized(ifmt) {
+      return {
+        0x822E: [0x1903, 0x1406], 0x8230: [0x8227, 0x1406], 0x8815: [0x1907, 0x1406], 0x8814: [0x1908, 0x1406],
+        0x822D: [0x1903, 0x140B], 0x822F: [0x8227, 0x140B], 0x881B: [0x1907, 0x140B], 0x881A: [0x1908, 0x140B],
+        0x8232: [0x8D94, 0x1401], 0x8234: [0x8D94, 0x1403], 0x8236: [0x8D94, 0x1405], 0x8238: [0x8228, 0x1401],
+        0x823A: [0x8228, 0x1403], 0x823C: [0x8228, 0x1405], 0x8D7C: [0x8D99, 0x1401], 0x8D76: [0x8D99, 0x1403],
+        0x8D70: [0x8D99, 0x1405], 0x8D71: [0x8D98, 0x1405], 0x8D7D: [0x8D98, 0x1401], 0x8D77: [0x8D98, 0x1403],
+        0x8231: [0x8D94, 0x1400], 0x8233: [0x8D94, 0x1402], 0x8235: [0x8D94, 0x1404], 0x8237: [0x8228, 0x1400],
+        0x8239: [0x8228, 0x1402], 0x823B: [0x8228, 0x1404], 0x8D8E: [0x8D99, 0x1400], 0x8D88: [0x8D99, 0x1402],
+        0x8D82: [0x8D99, 0x1404], 0x8D83: [0x8D98, 0x1404], 0x8D8F: [0x8D98, 0x1400], 0x8D89: [0x8D98, 0x1402],
+      }[ifmt] || [0x1908, 0x1401];
     }
     copyTexImage2D() {} copyTexSubImage2D() {} compressedTexImage2D() {} compressedTexSubImage2D() {}
-    texImage3D() {} texSubImage3D() {} texStorage3D() {}
     // Shaders and programs
     createShader(type) { const s = new WebGLShader(); s._type = type; s._src = ''; this._c('cs', s._id, type); return s; }
     shaderSource(s, src) { s._src = String(src); this._ask('source', s._id, s._src); }
@@ -1026,8 +1091,8 @@
     // Drawing
     drawArrays(mode, first, count) { this._c('da', mode, first | 0, count | 0); }
     drawElements(mode, count, type, offset) { this._c('de', mode, count | 0, type, offset | 0); }
-    drawArraysInstanced(mode, first, count, n) { if (n > 0) this.drawArrays(mode, first, count); }
-    drawElementsInstanced(mode, count, type, offset, n) { if (n > 0) this.drawElements(mode, count, type, offset); }
+    drawArraysInstanced(mode, first, count, n) { this._c('dai', mode, first | 0, count | 0, n | 0); }
+    drawElementsInstanced(mode, count, type, offset, n) { this._c('dei', mode, count | 0, type, offset | 0, n | 0); }
     drawRangeElements(mode, start, end, count, type, offset) { this.drawElements(mode, count, type, offset); }
     drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} blitFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
     clearBufferuiv() {} clearBufferfi() {}
@@ -1062,6 +1127,7 @@
     vertexAttribI4i(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); } vertexAttribI4ui(i, x, y, z, w) { this.vertexAttrib4f(i, x, y, z, w); }
     getBufferSubData() {} copyBufferSubData() {} getIndexedParameter() { return null; } getInternalformatParameter() { return new Int32Array(0); }
   }
+  for (let i = 0; i < 32; i++) GL_CONSTANTS['TEXTURE' + i] = 0x84C0 + i;
   for (const k in GL_CONSTANTS) { WebGLRenderingContext.prototype[k] = GL_CONSTANTS[k]; WebGLRenderingContext[k] = GL_CONSTANTS[k]; }
   class WebGL2RenderingContext extends WebGLRenderingContext {
     constructor(canvas, attrs) { super(canvas, attrs, true); }

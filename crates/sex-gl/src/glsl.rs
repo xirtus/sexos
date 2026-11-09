@@ -43,8 +43,9 @@ pub struct SamplerDecl {
 #[derive(Clone, Debug, Default)]
 pub struct Translated {
     pub source: String,
-    /// Vertex attributes: name and location.
-    pub attributes: Vec<(String, u32)>,
+    /// Vertex attributes: name, location and the locations it takes (a matrix one per
+    /// column, each column its own `vecR` input).
+    pub attributes: Vec<(String, u32, u32)>,
     pub samplers: Vec<SamplerDecl>,
     /// Fragment outputs: name and location.
     pub outputs: Vec<(String, u32)>,
@@ -101,25 +102,34 @@ const ES1_BUILTINS: &[(&str, &str)] = &[
     ("shadow2D", "texture"), ("shadow2DEXT", "texture"),
 ];
 
-fn sampler_kind(t: &str) -> Option<SamplerKind> {
-    Some(match t {
+/// A sampler type's shape and its scalar prefix ("", "i" or "u").
+fn sampler_kind(t: &str) -> Option<(SamplerKind, &'static str)> {
+    let (pre, rest) = match t.as_bytes().first() {
+        Some(b'i') => ("i", &t[1..]),
+        Some(b'u') => ("u", &t[1..]),
+        _ => ("", t),
+    };
+    let kind = match rest {
         "sampler2D" => SamplerKind::D2,
         "samplerCube" => SamplerKind::Cube,
         "sampler3D" => SamplerKind::D3,
         "sampler2DArray" => SamplerKind::D2Array,
-        "sampler2DShadow" => SamplerKind::D2Shadow,
+        "sampler2DShadow" if pre.is_empty() => SamplerKind::D2Shadow,
         _ => return None,
-    })
+    };
+    Some((kind, pre))
 }
 
-fn sampler_glsl(kind: SamplerKind) -> (&'static str, &'static str, &'static str) {
-    match kind {
+/// The texture, sampler and combined type names naga's GLSL takes for a sampler.
+fn sampler_glsl(kind: SamplerKind, pre: &str) -> (String, &'static str, String) {
+    let (tex, smp, comb) = match kind {
         SamplerKind::D2 => ("texture2D", "sampler", "sampler2D"),
         SamplerKind::Cube => ("textureCube", "sampler", "samplerCube"),
         SamplerKind::D3 => ("texture3D", "sampler", "sampler3D"),
         SamplerKind::D2Array => ("texture2DArray", "sampler", "sampler2DArray"),
         SamplerKind::D2Shadow => ("texture2D", "samplerShadow", "sampler2DShadow"),
-    }
+    };
+    (format!("{pre}{tex}"), smp, format!("{pre}{comb}"))
 }
 
 fn tokens(src: &str, es3: &mut bool) -> Result<Vec<Tok>, String> {
@@ -285,8 +295,11 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
     let mut head = String::from("#version 450\n");
     let mut body: Vec<Tok> = Vec::new();
     let mut binding = 0u32;
-    let mut samplers: BTreeMap<String, SamplerKind> = BTreeMap::new();
+    let mut samplers: BTreeMap<String, (SamplerKind, &'static str)> = BTreeMap::new();
     let mut bools: BTreeMap<String, &'static str> = BTreeMap::new();
+    // Matrix attributes: naga takes no matrix inputs, so each column is one, and each use
+    // rebuilds the matrix.
+    let mut mats: BTreeMap<String, String> = BTreeMap::new();
     let mut attr_loc = 0u32;
     let mut out_loc = 0u32;
     let mut uses_frag_color = false;
@@ -332,15 +345,15 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
                 body.push(Tok::Id(t));
                 continue;
             }
-            if let Some(kind) = d.ty.first().and_then(|t| if let Tok::Id(s) = t { sampler_kind(s) } else { None }) {
-                let (tex, smp, _) = sampler_glsl(kind);
+            if let Some((kind, pre)) = ty_toks.first().and_then(|t| if let Tok::Id(s) = t { sampler_kind(s) } else { None }) {
+                let (tex, smp, _) = sampler_glsl(kind, pre);
                 for dc in &d.decls {
                     let count = array_len(dc.rest).unwrap_or(1);
                     let suffix = if array_len(dc.rest).is_some() { format!("[{count}]") } else { String::new() };
                     body.push(Tok::Id(format!("layout(set=0, binding={binding}) uniform {tex} {}_sxt{suffix};\n", dc.name)));
                     body.push(Tok::Id(format!("layout(set=0, binding={}) uniform {smp} {}_sxs{suffix};\n", binding + 1, dc.name)));
                     binding += 2;
-                    samplers.insert(dc.name.clone(), kind);
+                    samplers.insert(dc.name.clone(), (kind, pre));
                     out.samplers.push(SamplerDecl { name: dc.name.clone(), kind, count });
                 }
                 continue;
@@ -368,11 +381,25 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
             for dc in &d.decls {
                 let explicit = explicit_location(d.layout);
                 let loc = explicit.unwrap_or(attr_loc);
-                attr_loc = attr_loc.max(loc + 1);
+                let shape = matrix_shape(ty_text.trim());
+                let slots = shape.map_or(1, |(c, _)| c);
+                attr_loc = attr_loc.max(loc + slots);
                 if explicit.is_some() { out.explicit.push(dc.name.clone()); }
-                // The linker puts the final location in place of `sxaN`.
-                body.push(Tok::Id(format!("layout(location=sxa{}) in {ty_text} {};\n", out.attributes.len(), dc.name)));
-                out.attributes.push((dc.name.clone(), loc));
+                // The linker puts the final location in place of `sxaN` (`sxaN+c` for
+                // column c of a matrix).
+                let i = out.attributes.len();
+                match shape {
+                    Some((cols, rows)) => {
+                        let mut parts = Vec::new();
+                        for c in 0..cols {
+                            body.push(Tok::Id(format!("layout(location=sxa{i}+{c}) in vec{rows} {}_sxm{c};\n", dc.name)));
+                            parts.push(format!("{}_sxm{c}", dc.name));
+                        }
+                        mats.insert(dc.name.clone(), format!("{}({})", ty_text.trim(), parts.join(", ")));
+                    }
+                    None => body.push(Tok::Id(format!("layout(location=sxa{i}) in {ty_text} {};\n", dc.name))),
+                }
+                out.attributes.push((dc.name.clone(), loc, slots));
             }
             continue;
         }
@@ -408,8 +435,8 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
     while i < body.len() {
         match &body[i] {
             Tok::Id(s) if samplers.contains_key(s) && !matches!(fixed.last(), Some(Tok::P(Punct::Dot))) => {
-                let kind = samplers[s];
-                let (_, _, combined) = sampler_glsl(kind);
+                let (kind, pre) = samplers[s];
+                let (_, _, combined) = sampler_glsl(kind, pre);
                 // `name[i]` indexes both halves.
                 let mut index: Vec<Tok> = Vec::new();
                 let mut j = i + 1;
@@ -423,7 +450,7 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
                         if depth == 0 { break; }
                     }
                 }
-                fixed.push(Tok::Id(combined.into()));
+                fixed.push(Tok::Id(combined));
                 fixed.push(Tok::P(Punct::LeftParen));
                 fixed.push(Tok::Id(format!("{s}_sxt")));
                 fixed.extend(index.iter().cloned());
@@ -455,8 +482,11 @@ pub fn translate(src: &str, stage: Stage, varyings: &mut Vec<String>) -> Result<
                 i = j;
                 continue;
             }
+            Tok::Id(s) if mats.contains_key(s) && !matches!(fixed.last(), Some(Tok::P(Punct::Dot))) => fixed.push(Tok::Id(mats[s].clone())),
             // `const` on a parameter (`f(const in float x)`): naga takes none.
             Tok::Id(s) if s == "const" && matches!(fixed.last(), Some(Tok::P(Punct::LeftParen)) | Some(Tok::P(Punct::Comma))) => {}
+            Tok::Id(s) if s == "gl_VertexID" => fixed.push(Tok::Id("int(gl_VertexIndex)".into())),
+            Tok::Id(s) if s == "gl_InstanceID" => fixed.push(Tok::Id("int(gl_InstanceIndex)".into())),
             Tok::Id(s) if s == "modf" => { uses_modf = true; fixed.push(Tok::Id("sx_modf".into())); }
             Tok::Id(s) if s == "gl_FragColor" => { uses_frag_color = true; fixed.push(Tok::Id("sx_FragColor".into())); }
             Tok::Id(s) if s == "gl_FragData" => { uses_frag_data = true; fixed.push(Tok::Id("sx_FragData".into())); }
@@ -504,10 +534,27 @@ impl Translated {
     /// The source with each attribute at the location the translation chose.
     pub fn placed(&self) -> String {
         let mut src = self.source.clone();
-        for (i, (_, l)) in self.attributes.iter().enumerate().rev() {
-            src = src.replace(&format!("location=sxa{i})"), &format!("location={l})"));
+        for (i, (_, l, n)) in self.attributes.iter().enumerate().rev() {
+            src = place(&src, i, *l, *n);
         }
         src
+    }
+}
+
+/// Puts location `l` in place of attribute `i`'s placeholder (`l + c` for column c).
+pub(crate) fn place(src: &str, i: usize, l: u32, slots: u32) -> String {
+    let mut src = src.replace(&format!("location=sxa{i})"), &format!("location={l})"));
+    for c in 0..slots { src = src.replace(&format!("location=sxa{i}+{c})"), &format!("location={})", l + c)); }
+    src
+}
+
+/// Columns and rows of a matrix type name (`mat4`, `mat2x3`).
+fn matrix_shape(t: &str) -> Option<(u32, u32)> {
+    let d = t.strip_prefix("mat")?;
+    let n = |x: &str| x.parse::<u32>().ok().filter(|v| (2..=4).contains(v));
+    match d.split_once('x') {
+        Some((c, r)) => Some((n(c)?, n(r)?)),
+        None => { let v = n(d)?; Some((v, v)) }
     }
 }
 

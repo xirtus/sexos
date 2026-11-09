@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Web runs three.js r170 (MIT, unmodified three.cjs served beside the page): a PBR cube
-and a Phong sphere under ambient and directional light, animated with
-requestAnimationFrame, then again after a button click. Each state must match, pixel for
+and a Phong sphere under ambient and directional light, with instanced, batched, skinned
+and morphed meshes below them, animated with requestAnimationFrame, then again after a
+button click. Each state must match, pixel for
 pixel, what the host renders (sex-web's page example)."""
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path

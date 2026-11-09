@@ -139,6 +139,8 @@ pub struct Program {
     pub frag_depth: Option<u32>,
     /// Lanes of interpolated data per vertex (the varyings, packed).
     pub varying_lanes: u32,
+    /// Packed varying lanes that are `flat`: one bit each, taken from the provoking vertex.
+    pub flat: [u64; 4],
     /// WebGPU: clip depth 0..w, and the resources by group and binding.
     pub zero_one: bool,
     pub gpu: Vec<crate::gpu::GpuBind>,
@@ -153,26 +155,29 @@ impl Program {
         // Locations bound by the program, and those the shader declares itself
         // (`layout(location=N)` in ES 3.00), are kept; the rest take free ones.
         let fixed_loc = |name: &String, loc: u32| bindings.get(name).copied().or(if tv.explicit.contains(name) { Some(loc) } else { None });
-        let used: Vec<u32> = tv.attributes.iter().filter_map(|(n, l)| fixed_loc(n, *l)).collect();
-        let mut attrs: Vec<(String, u32)> = Vec::new();
+        let mut used: Vec<u32> = Vec::new();
+        for (n, l, k) in &tv.attributes { if let Some(l) = fixed_loc(n, *l) { used.extend(l..l + k); } }
+        // (name, location, locations taken)
+        let mut attrs: Vec<(String, u32, u32)> = Vec::new();
         let mut vsrc = tv.source.clone();
         let mut next = 0;
         // Highest index first, so `sxa1` doesn't match inside `sxa10`.
-        let mut placed: Vec<(usize, u32)> = Vec::new();
-        for (i, (name, loc)) in tv.attributes.iter().enumerate() {
+        let mut placed: Vec<(usize, u32, u32)> = Vec::new();
+        for (i, (name, loc, k)) in tv.attributes.iter().enumerate() {
             let l = match fixed_loc(name, *loc) {
                 Some(l) => l,
                 None => {
-                    while used.contains(&next) || attrs.iter().any(|(_, l)| *l == next) { next += 1; }
-                    next += 1;
-                    next - 1
+                    let taken = |x: u32| used.contains(&x) || attrs.iter().any(|(_, l, n)| (*l..l + n).contains(&x));
+                    while (next..next + k).any(|x| taken(x)) { next += 1; }
+                    next += k;
+                    next - k
                 }
             };
-            placed.push((i, l));
-            attrs.push((name.clone(), l));
+            placed.push((i, l, *k));
+            attrs.push((name.clone(), l, *k));
         }
-        for (i, l) in placed.into_iter().rev() {
-            vsrc = vsrc.replace(&format!("location=sxa{i})"), &format!("location={l})"));
+        for (i, l, k) in placed.into_iter().rev() {
+            vsrc = glsl::place(&vsrc, i, l, k);
         }
 
         let (vm, vi) = parse(Stage::Vertex, &vsrc)?;
@@ -212,8 +217,12 @@ impl Program {
         for (io, off, lanes) in &vs_code.inputs {
             let _ = off;
             if let Io::Location(l) = io {
-                if let Some((name, _)) = attrs.iter().find(|(_, al)| al == l) {
-                    let t = match lanes { 1 => types::FLOAT, 2 => types::FLOAT_VEC2, 3 => types::FLOAT_VEC3, 4 => types::FLOAT_VEC4, 9 => types::FLOAT_MAT3, 16 => types::FLOAT_MAT4, _ => types::FLOAT_VEC4 };
+                // A matrix is one attribute at its first column's location.
+                if let Some((name, _, k)) = attrs.iter().find(|(_, al, _)| al == l) {
+                    let t = match (k, lanes) {
+                        (2, _) => types::FLOAT_MAT2, (3, _) => types::FLOAT_MAT3, (4, _) => types::FLOAT_MAT4,
+                        (_, 1) => types::FLOAT, (_, 2) => types::FLOAT_VEC2, (_, 3) => types::FLOAT_VEC3, _ => types::FLOAT_VEC4,
+                    };
                     attributes.push((name.clone(), *l, t, 1));
                 }
             }
@@ -227,11 +236,15 @@ impl Program {
         // Varyings: pack the vertex outputs that the fragment stage reads.
         let mut links = Vec::new();
         let mut varying_lanes = 0;
+        let mut flat = [0u64; 4];
         for (io, off, lanes) in &fs_code.inputs {
             if let Io::Location(l) = io {
                 if let Some((_, vo, vl)) = vs_code.outputs.iter().find(|(o, _, _)| *o == Io::Location(*l)) {
                     let n = (*lanes).min(*vl);
                     links.push((*vo, *off, n));
+                    if fs_code.flat.contains(l) {
+                        for k in varying_lanes..varying_lanes + n { if k < 256 { flat[k as usize / 64] |= 1 << (k % 64); } }
+                    }
                     varying_lanes += n;
                 }
             }
@@ -243,7 +256,7 @@ impl Program {
         Ok(Program {
             vs_uniforms: alloc::vec![0; vs_code.uniform_len as usize],
             fs_uniforms: alloc::vec![0; fs_code.uniform_len as usize],
-            vs: vs_code, fs: fs_code, uniforms, samplers, attributes, links, position, point_size, color, frag_depth, varying_lanes,
+            vs: vs_code, fs: fs_code, uniforms, samplers, attributes, links, position, point_size, color, frag_depth, varying_lanes, flat,
             zero_one: false, gpu: Vec::new(),
         })
     }
