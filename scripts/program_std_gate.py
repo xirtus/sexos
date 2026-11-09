@@ -7,13 +7,17 @@
 * `run chello one two`: C `main(argc, argv)` on sex-libc's POSIX layer: stdio streams,
   fopen/fgets/fseek/ftell, open/lseek/read, stat, rename, opendir/readdir, remove,
   errno, qsort, malloc, atexit.
+* `run pdf`: the PDF viewer (hayro) writes welcome.pdf into its folder, reads it back
+  through std::fs, renders page 1 with ink on it, turns to page 2 on Right, and closes.
 
 Every check must pass, output must reach the window and the serial record, the program
 must wait for its window to close after main returns, and each must run twice."""
-import argparse,re,shutil,time
+import argparse,os,re,shutil,time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
+# Several programs, a PDF page rendered twice under emulation.
+os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 PROGRAMS=[
@@ -23,7 +27,7 @@ PROGRAMS=[
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- elfs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n,*_ in PROGRAMS]
+ elfs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in [p[0] for p in PROGRAMS]+['pdf']]
  assert all(e[:4]==b'\x7fELF' for _,e in elfs)
  install(disk,elfs)
  g=boot(a.iso,disk,a.out,'std',a.resolution);t=g['text'];q=g['q']
@@ -50,6 +54,21 @@ def main():
    first=started(*prog);g['wait'](rf'\[display.text.committed\] target={first["target"]} ',0,60)
    time.sleep(1);q.cmd('screendump',{'filename':str(a.out/f'{prog[0]}.ppm')})
    close(first);second=started(*prog);close(second);runs+=[first,second]
+  for n in range(2):
+   s=len(t());run('run pdf')
+   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=welcome\.pdf pages=2\n',s,600)
+   m=g['wait'](r'\[pdf\.page\] page=1 pages=2 width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
+   assert int(m[1])>=300 and int(m[3])>2000,f'page 1 looks empty: {m[0]}'
+   time.sleep(1)
+   if n==0:q.cmd('screendump',{'filename':str(a.out/'pdf-page1.ppm')})
+   g['focus'](SURFACE[int(o[1])]);time.sleep(.5)
+   s2=len(t());q.key('right')
+   m=g['wait'](r'\[pdf\.page\] page=2 pages=2 width=\d+ height=\d+ ink=(\d+) ms=\d+\n',s2,900)
+   assert int(m[1])>1000
+   if n==0:time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-page2.ppm')})
+   q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s2,60)
+   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s2,180)
+   runs.append({'name':'pdf','ink':int(m[1])})
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'runs':runs})
  finally:g['stop']()

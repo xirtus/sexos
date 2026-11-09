@@ -43,6 +43,12 @@ pub use sex_pdx;
 #[cfg(target_os = "hermit")]
 pub fn window() -> &'static mut sex_app::Window { console::take_window() }
 
+/// This run's program row (target) and task, as the serial record names them.
+#[cfg(target_os = "hermit")]
+pub fn identity() -> (u32, u32) {
+    sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).map_or((0, 0), |i| (i.target_pd, i.task_id))
+}
+
 /// Records a line in the serial record (the system log gates and crash reports read).
 #[cfg(target_os = "hermit")]
 pub fn record(line: &str) { sex_pdx::serial_record!("{}", line); }
