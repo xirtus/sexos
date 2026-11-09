@@ -149,6 +149,7 @@ unsafe fn clipboard_poll(){
 }
 /// The newest size each program window has not yet been told, until the input queue
 /// takes it: a full queue delays a resize but never loses it.
+const _: () = assert!(app_input::RESIZE_CLASS == sex_pdx::pixel_region::RESIZE_CLASS);
 static mut RESIZE_PENDING: [Option<(u64, u32, u32)>; 16] = [None; 16];
 unsafe fn program_resize_note(sid: u64, w: u32, h: u32) {
     if program_participant(sid).is_none() { return; }
@@ -166,7 +167,8 @@ unsafe fn program_resize_flush() {
         let Some((sid, w, h)) = *entry else { continue };
         let Some(destination) = program_participant(sid) else { *entry = None; continue };
         let (aw, ah) = sex_pdx::pixel_region::area(w, h);
-        if APP_INPUT.push(app_input::Item { destination, input: app_input::Input::Resize(aw, ah) }) { *entry = None; }
+        let input = app_input::Input::Resize(sex_pdx::pixel_region::resize_wire(aw, ah));
+        if APP_INPUT.push(app_input::Item { destination, input }) { *entry = None; }
     }
 }
 unsafe fn app_input_poll(){
@@ -191,11 +193,11 @@ unsafe fn app_input_poll(){
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
         },
-        app_input::Input::Resize(width,height)=>{
-            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,sex_pdx::pixel_region::resize_wire(width,height),0,sex_pdx::pixel_region::RESIZE_CLASS);
+        app_input::Input::Resize(wire)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,wire,0,app_input::RESIZE_CLASS);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
-            sex_pdx::serial_record!("[shell.program.resize] pd={} task={} w={} h={} status={}",item.destination.subject.pd,item.destination.subject.task,width,height,status);
+            sex_pdx::serial_record!("[shell.program.resize] pd={} task={} w={} h={} status={}",item.destination.subject.pd,item.destination.subject.task,wire>>32,wire&0xFFFF_FFFF,status);
         },
         app_input::Input::Scroll(scroll)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL);
@@ -24506,7 +24508,8 @@ pub extern "C" fn _start() -> ! {
         }
         unsafe { program_rebirth_poll(); }
         unsafe { record_spawn_poll(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); program_resize_flush(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { program_resize_flush(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
