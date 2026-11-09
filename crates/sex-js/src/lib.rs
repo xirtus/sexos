@@ -68,6 +68,12 @@ pub mod op {
     pub const GL: u32 = 64;
     /// WebGL query for canvas NODE: what, then its arguments; answers text or bytes.
     pub const GL_QUERY: u32 = 65;
+    /// (url): asks the browser to load it; answers the request's id. The browser loads it
+    /// once the script returns and dispatches `fetched\tID\tSTATUS\tLENGTH` (status 0:
+    /// it could not be loaded).
+    pub const FETCH: u32 = 66;
+    /// (id): the loaded bytes, once (text or, with bit 16, an ArrayBuffer).
+    pub const FETCH_BODY: u32 = 67;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.
@@ -95,7 +101,7 @@ pub struct Limits {
 impl Default for Limits {
     // Libraries like three.js take about a second to load on a fast host and need room
     // for their scenes; browsers let a script run for about ten seconds before they ask.
-    fn default() -> Self { Self { memory_bytes: 64 << 20, heap_bytes: 48 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
+    fn default() -> Self { Self { memory_bytes: 160 << 20, heap_bytes: 128 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
 }
 
 /// The first op whose arguments are bytes rather than text.
