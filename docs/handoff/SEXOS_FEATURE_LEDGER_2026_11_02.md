@@ -3201,3 +3201,11 @@ YouTube stage Y3d.
 - **SDK.** `sex_app::code::CodeBuf`: page-aligned heap pages with `load`, `seal`, `open`, `entry`.
 - **Program.** `run jit` compiles an expression to x86-64 and runs it against an interpreter (3 to 9 times faster under QEMU). It shows a constant hiding WRPKRU being refused and re-encoded, and code patched in place. W writes to sealed code and E runs open data; each ends only that run.
 - **Gates.** `scripts/program_jit_gate.py` at 1 and 4 cores (also refuses a copy of the program with WRPKRU patched into its code); `scripts/program_code_host_gate.sh` for the byte check.
+
+## C++ programs (JIT stage J5c, 2026-11-09)
+
+- `scripts/build_libcxx.sh` builds libc++ and libc++abi (LLVM 18, no exceptions) for `x86_64-sex-app.json`; CI caches it like FFmpeg.
+- `crates/sex-libc` gains what libc++ calls, all in Rust: one "C" UTF-8 locale (`newlocale`, `uselocale`, `*_l` ctype, `strtod_l`/`strtold_l`, `strftime_l`), UTF-8 multibyte and wide-character conversion, `wcslen`, `wmemchr`, `vasprintf`, `__assert_fail`, `__cxa_atexit`/`atexit` (run by `exit`), `.init_array` constructors (`cxx::run_constructors`), and `syscall(SYS_futex)` mapped to program-thread wait/wake.
+- `run cpp` checks static constructors, vector/sort, unordered_map<string>, map, virtual calls, std::function, ostringstream, snprintf, std::thread + std::mutex and thread_local: 10/10 at 1 and 4 cores (`scripts/program_cpp_gate.py`).
+- Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
+

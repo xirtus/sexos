@@ -55,6 +55,20 @@ pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, cap: usize, fmt: *const c_c
     n.min(c_int::MAX as usize) as c_int
 }
 
+/// Formats into a fresh `malloc` buffer, which the caller frees.
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn vasprintf(out: *mut *mut c_char, fmt: *const c_char, mut ap: VaList) -> c_int {
+    struct Grow(alloc::vec::Vec<u8>);
+    impl format::Sink for Grow { fn put(&mut self, b: &[u8]) { self.0.extend_from_slice(b) } }
+    let mut text = Grow(alloc::vec::Vec::new());
+    format::format(unsafe { c_str(fmt) }, &mut Va(&mut ap), &mut text);
+    let n = text.0.len();
+    let buf = unsafe { crate::mem::malloc(n + 1) } as *mut u8;
+    if buf.is_null() { return -1; }
+    unsafe { core::ptr::copy_nonoverlapping(text.0.as_ptr(), buf, n); *buf.add(n) = 0; *out = buf.cast(); }
+    n.min(c_int::MAX as usize) as c_int
+}
+
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn snprintf(buf: *mut c_char, cap: usize, fmt: *const c_char, ap: ...) -> c_int {
     unsafe { vsnprintf(buf, cap, fmt, ap) }

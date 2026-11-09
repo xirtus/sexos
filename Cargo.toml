@@ -31,6 +31,7 @@ members = [
     "apps/shapes",
     "apps/fputest",
     "apps/play",
+    "apps/cpp",
     "apps/web",
     "crates/sex-app",
     "crates/sex-html",
