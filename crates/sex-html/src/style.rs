@@ -112,6 +112,8 @@ pub struct Style {
     pub box_sizing_border: bool,
     pub letter_spacing: i32,
     pub vertical_super: i8,
+    /// Custom properties (`--name: value`), inherited; shared until an element sets one.
+    pub vars: alloc::rc::Rc<BTreeMap<String, String>>,
 }
 
 pub const TOP: usize = 0;
@@ -168,6 +170,7 @@ impl Style {
             grid_column: GridPlace::default(),
             box_sizing_border: false,
             letter_spacing: 0,
+            vars: Default::default(),
             vertical_super: 0,
         }
     }
@@ -191,6 +194,7 @@ impl Style {
         s.letter_spacing = parent.letter_spacing;
         s.border_collapse = parent.border_collapse;
         s.border_spacing = parent.border_spacing;
+        s.vars = parent.vars.clone();
         s
     }
 
@@ -336,6 +340,24 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
         .chain(important.iter().copied())
         .chain(inline.iter().filter(|d| d.important))
         .collect();
+    // Custom properties first, then var() references in every other value.
+    if ordered.iter().any(|d| d.name.starts_with("--")) {
+        let mut vars = (*style.vars).clone();
+        for d in &ordered {
+            if let Some(name) = d.name.strip_prefix("--") {
+                match substitute_vars(&d.value, &vars, 0) { Some(v) => { vars.insert(String::from(name), v); } None => { vars.remove(name); } }
+            }
+        }
+        style.vars = alloc::rc::Rc::new(vars);
+    }
+    let substituted: Vec<Declaration>;
+    let ordered: Vec<&Declaration> = if ordered.iter().any(|d| d.value.contains("var(")) {
+        substituted = ordered.iter().filter(|d| !d.name.starts_with("--")).filter_map(|d| {
+            if !d.value.contains("var(") { return Some((*d).clone()); }
+            substitute_vars(&d.value, &style.vars, 0).map(|value| Declaration { name: d.name.clone(), value, important: d.important })
+        }).collect();
+        substituted.iter().collect()
+    } else { ordered };
     // font-size first: other `em` lengths depend on it.
     for d in &ordered { if d.name == "font-size" || d.name == "font" { apply(&mut style, d, &ctx, true); } }
     for d in &ordered { apply(&mut style, d, &ctx, false); }
@@ -534,6 +556,35 @@ fn grid_tracks(v: &str, s: &Style, ctx: &Ctx) -> (Vec<Track>, Option<(Track, boo
         if let Some(t) = one(w, s, ctx) { tracks.push(t); }
     }
     (tracks, auto)
+}
+
+/// Replaces each `var(--name, fallback)` in `v`; None when one has no value and no
+/// fallback (the declaration then does not apply).
+fn substitute_vars(v: &str, vars: &BTreeMap<String, String>, depth: u32) -> Option<String> {
+    if !v.contains("var(") { return Some(String::from(v)); }
+    if depth > 16 { return None; }
+    let mut out = String::new();
+    let mut rest = v;
+    while let Some(at) = rest.find("var(") {
+        out.push_str(&rest[..at]);
+        let body = &rest[at + 4..];
+        let mut level = 1;
+        let mut end = None;
+        for (i, c) in body.char_indices() {
+            match c { '(' => level += 1, ')' => { level -= 1; if level == 0 { end = Some(i); break; } } _ => {} }
+        }
+        let end = end?;
+        let inner = &body[..end];
+        let (name, fallback) = match inner.split_once(',') { Some((n, f)) => (n.trim(), Some(f.trim())), None => (inner.trim(), None) };
+        let value = match vars.get(name.strip_prefix("--").unwrap_or(name).to_ascii_lowercase().as_str()) {
+            Some(v) => Some(v.clone()),
+            None => fallback.map(String::from),
+        }?;
+        out.push_str(&substitute_vars(&value, vars, depth + 1)?);
+        rest = &body[end + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 fn words(v: &str) -> Vec<&str> {

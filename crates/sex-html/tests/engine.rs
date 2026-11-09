@@ -301,3 +301,16 @@ fn grid_places_items_in_tracks() {
     assert_eq!(rect(&page, 0xFF00_00FF), (266, 0, 134, 10));
     assert_eq!(rect(&page, 0xFFFF_FF00), (0, 10, 133, 10));
 }
+
+#[test]
+fn css_variables_inherit_and_substitute() {
+    let dom = parse::parse("<style>:root{--accent:#ff0000;--pad:7px} .card{--accent:#00ff00} div{background:var(--accent);padding:var(--pad);margin:var(--missing, 3px)} p{color:var(--nope)}</style>\
+<body><div id=a></div><section class=card><div id=b></div></section><p id=p>x</p></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let by_id = |id: &str| styles[dom.descendants(sex_html::dom::Dom::ROOT).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap()].as_ref().unwrap();
+    assert_eq!(by_id("a").background, 0xFFFF_0000);
+    assert_eq!(by_id("b").background, 0xFF00_FF00);
+    assert_eq!(by_id("a").padding[0], sex_html::style::Len::Px(7));
+    assert_eq!(by_id("a").margin[0], sex_html::style::Len::Px(3));
+    assert_eq!(by_id("p").color, sex_html::style::Style::initial().color);
+}
