@@ -3254,3 +3254,29 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+## IOMMU: a DMA domain for every driver, and the first zero-copy loan (2026-11-09)
+
+- **What runs now.** On machines with Intel VT-d (and in QEMU with `-device intel-iommu`),
+  each driver service's devices can reach only that service's DMA pool, their own
+  firmware-reserved memory, and memory the service lends them. Devices nobody leased
+  (dGPU, Wi-Fi, Thunderbolt, ...) reach nothing. Stray DMA is blocked and logged as
+  `[iommu.fault]` with the device and its owner. sexdrive lends Files' block buffer to
+  the NVMe controller, so disk reads land in Files' memory with no copy; a read that
+  times out ends the loan first, so a late completion faults instead of corrupting it.
+- **Design.** `crates/sex-iommu` (DMAR/IVRS parsing, VT-d fields, I/O page tables,
+  lending window; host-tested) and `kernel/src/iommu.rs`, which runs at BOOT after all
+  leases exist and before the seal, walking capabilities rather than devmgr, so new
+  leasing code gets domains for free. Pools are identity-mapped, so no driver had to
+  change. All tables, including each service's 128 MiB lending window, are built at
+  BOOT; lending only fills prepared leaves. The graphics-only unit stays off so the
+  firmware framebuffer keeps working; firmware DMA protection (PMR/TE) is replaced.
+- **ABI** (hash recomputed): syscall **90** `SYS_DMA` (`sex_pdx::dma_lend`): `OP_INFO`,
+  `OP_LEND` (region slot, offset, bytes, DEVICE_READ/DEVICE_WRITE -> device address),
+  `OP_RETURN`; statuses `DENIED`, `NO_IOMMU`, `EXHAUSTED`; 64 loans, 128 MiB window.
+- **Limits.** AMD-Vi is detected and reported but not yet programmed (next step).
+  Interrupt remapping is off. Register-based invalidation (no queued invalidation yet).
+  Only sexdrive's reads use a loan so far; network and sound still bounce.
+- **Gates.** `scripts/iommu_host_gate.sh` (CI), `scripts/sexdrive_dma_host_gate.sh` (now
+  in CI, two zero-copy tests), `scripts/iommu_gate.py` (QEMU with VT-d: BOOT self-test
+  with QEMU's edu DMA device, then `filesystem_gate` and `sound_gate` behind VT-d with no
+  driver faults). Report: `docs/handoff/IOMMU_DMA_DOMAINS_2026_11_09.md`.

@@ -42,6 +42,7 @@ members = [
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",
+    "crates/sex-iommu",
     "crates/sex-font",
     "crates/sexfs",
     "crates/sex-volumes",

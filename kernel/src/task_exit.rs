@@ -59,6 +59,7 @@ pub fn acknowledge_dead_cleanup(target:u32,pager:u32,task_id:u32)->bool{
 pub fn poll_paging_exit_notifications(){
     crate::app_resources::poll_exit_notifications();
     crate::service_restart::poll();
+    crate::iommu::poll();
     for watch in &WATCHES{
         let target=watch.target.load(Ordering::Acquire);
         if target==0 || target==u32::MAX || watch.notice.load(Ordering::Acquire)>=2{continue;}
