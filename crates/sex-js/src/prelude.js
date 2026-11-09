@@ -614,10 +614,8 @@
     for (const name of f[2] ? f[2].split(',') : []) {
       if (name === 'seeked') s.seeking = false;
       if (name === 'error') s.error = { code: 4, message: 'The file could not be played' };
-      const ev = new Event(name);
-      el.dispatchEvent(ev);
-      const h = el['on' + name];
-      if (typeof h === 'function') { try { h.call(el, ev); } catch (e) { log(2, [e]); } }
+      // dispatchEvent also runs the on<name> handler property.
+      el.dispatchEvent(new Event(name));
     }
   }
 
