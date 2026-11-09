@@ -73,6 +73,22 @@ Gates (2026-11-09, all passed):
 - `bash scripts/sexnet_service_host_gate.sh`, including `tests/sexnet_realtek.rs` (12 tests,
   both Realtek chip types against a width-checked register mock). QEMU has no 8169 or I225.
 
+## SATA: AHCI in the drive service
+
+`apps/sexdrive/src/ahci.rs`. Used only when no NVMe controller is leased (NVMe stays
+preferred). BIOS handoff through BOHC when offered, GHC.AE on, interrupts off. Each
+implemented port inside the leased view is stopped; the first with link up (DET 3) and a
+disk signature (not ATAPI, SEMB or port multiplier) is started with one COMRESET retry.
+IDENTIFY needs LBA48 and 512-byte sectors. READ/WRITE DMA EXT go through the existing
+read/write bounce buffers with one PRDT entry; BLOCK_SYNC sends FLUSH CACHE EXT. Waits
+have tick deadlines; a timeout or task-file error quarantines the buffer and stops I/O.
+The disk self-tests run on whichever disk is serving.
+
+Gates (2026-11-09, all passed): `SEXOS_GATE_DISK_BUS=ahci python3 scripts/filesystem_gate.py`
+(format, reboot and mount, power cut after 30 committed writes) and
+`SEXOS_GATE_DISK_BUS=ahci ./scripts/disk_persistence_gate.sh` (14 rows), each also on NVMe;
+q35 with both NVMe and a SATA disk picks NVMe and leaves the SATA image untouched.
+
 ## Bare-metal checklist (next week)
 
 Capture the serial or on-screen log lines named here.
@@ -101,3 +117,14 @@ Capture the serial or on-screen log lines named here.
 - Realtek: nothing powers up a PHY firmware left off (Linux uses PHYAR on r8169, OCP on
   r8125); Linux's per-revision ePHY/ERI/MCU writes are skipped (most 8111E-H and 8125B
   parts work without them); RTL8126 may need RX_PAUSE_SLOT_ON; check Cfg9346 locking.
+
+**SATA**
+- `[sexdrive.ahci.handoff] released=1` on boards with CAP2.BOH; `[sexdrive.ahci.ready] port= sig=0x101 sectors=`.
+- Slow-spinning drives: a port whose link is not up at probe time is skipped (no
+  staggered spin-up wait yet). Check `[sexdrive.ahci.comreset] ok=` and that the 500 ms
+  engine-stop timeout is enough on real HBAs.
+- Refused, not guessed: 4Kn disks, disks without LBA48, port multipliers, ATAPI, second
+  disks (only the first working port is served), Intel RST/RAID mode (class 01:04: set
+  the firmware to AHCI). No NCQ, hot plug or interrupts yet; any error stops I/O until reboot.
+- FLUSH CACHE EXT is sent even when IDENTIFY word 83 bit 13 is clear.
+- Try AMD and ASMedia controllers as well as Intel.
