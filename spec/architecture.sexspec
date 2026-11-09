@@ -719,15 +719,11 @@
         {
           "path": "ARCHITECTURE.md",
           "anchor": "## 0. System Model"
-        },
-        {
-          "path": "kernel/src/desktop/replay.rs",
-          "anchor": "pub fn replay"
         }
       ],
       "checks": [],
       "gaps": [
-        "Active code lacks full epoch/input recorder and system replay; desktop replay assigns only workspace identity."
+        "Active code lacks full epoch/input recorder and system replay. The uncompiled kernel/src/desktop sketch (workspace identity only) was removed on 2026-11-09; replay belongs in a server, not the kernel."
       ],
       "depends_on": []
     },
