@@ -513,6 +513,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "files"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1495,6 +1503,10 @@ name = "sex-trust-config"
 version = "0.1.0"
 
 [[package]]
+name = "sex-volumes"
+version = "0.1.0"
+
+[[package]]
 name = "sex-wasm"
 version = "0.1.0"
 dependencies = [
@@ -1553,6 +1565,7 @@ dependencies = [
  "sex-object-model",
  "sex-pdx",
  "sex-rt",
+ "sex-volumes",
  "sexfs",
  "spin",
 ]

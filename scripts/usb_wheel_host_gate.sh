@@ -33,10 +33,10 @@ assert 'let domain_id = (i + 1) as u8;' in boot
 assert re.search(r'Task::new\(\s*pd_id, entry',creation)
 # Verify both actual tablet call sites retain the original received buffer.
 usb=(root/'servers/sexusb/src/main.rs').read_text()
-assert 'let report_bytes = [rb0, rb1, rb2, rb3, rb4];' not in usb
-assert usb.count('pack_tablet_axes(&td)')==2
-assert usb.count('record_device_wheel(slot, s2_actual,')==2
-assert usb.count('record_device_wheel(en_slot_id, intr_actual,')==2
+devices=(root/'servers/sexusb/src/usb.rs').read_text()
+# Every pointer report, absolute or relative, records its wheel before it is sent.
+assert devices.count('record_device_wheel(slot, r.len() as u32,')==2
+assert 'let wheel = wheel.clamp(-127, 127) as i8;' in devices
 input_source=(root/'servers/sexinput/src/main.rs').read_text()
 assert 'let mut normalized_events: [(u64, u64, u64); 5]' in input_source
 assert input_source.index('!usb_report_sender(&req)')<input_source.index('REAL_USB_POINTER_SEEN = true')
@@ -44,11 +44,12 @@ loop=input_source[input_source.index('serial_println!("[sexinput.shell.ready.acc
 assert loop.index('input_arrival.ps2(&mut keyboard_outbox,scancode)')<loop.index('poll_input_delivery(')
 assert 'pointer_outbox.poll(send_shell_hid_event)' not in loop
 assert 'pdx_call(SLOT_SHELL, OP_HID_EVENT, code, value, EV_KEY)' not in loop
-assert 'input_arrival.usb(&mut keyboard_outbox,keycode,modifiers,' in loop
-assert 'if keyboard_outbox.available()>=10' in loop
+assert 'input_arrival.usb(&mut keyboard_outbox,pressed,modifiers,' in loop
+assert 'if keyboard_outbox.available()>=20' in loop
 assert '[sexinput.ps2.scancode] raw={:#x}' in loop
 Path(sys.argv[2]).write_text('\n'.join(parts)+'\n')
 PY
 USB_WHEEL_PRODUCTION="$WHEEL_TEMP/production.rs" rustc --edition=2021 --test "$WHEEL_ROOT/tests/usb_wheel.rs" -o "$WHEEL_TEMP/tests"
 "$WHEEL_TEMP/tests"
+rustc --edition=2021 --test "$WHEEL_ROOT/servers/sexusb/src/hid.rs" -o "$WHEEL_TEMP/hid" 2>/dev/null && "$WHEEL_TEMP/hid" -q
 echo '[wheel.host] PASS scope=actual_decoders_normalizers_and_bounded_arrival_order_host_callbacks_not_native_authority_or_pixels'

@@ -8,14 +8,14 @@ spec.loader.exec_module(checker)
 
 
 def good():
-    rows = [(7, 32, 1, 262144, 15, 0), (9, 32, 2, 262144, 15, 0), (2, 32, 3, 524288, 15, 0),
+    rows = [(7, 32, 1, 2097152, 15, 0), (9, 32, 2, 262144, 15, 0), (2, 32, 3, 524288, 15, 0),
             (5, 17, 4, 131072, 7, 2), (2, 17, 4, 131072, 7, 5),
             (2, 33, 5, 3145728, 7, 1), (1, 33, 5, 3145728, 3, 2)]
     return "\n".join([f"[boot.memory.region] pd={p} slot={s} region={r} bytes={b} rights={q} peer={x}"
                       for p, s, r, b, q, x in rows] + [
         "[memory.authority.negative.selftest] denied=15 idempotent=1024 output_zero=1 ok=1",
         "[boot.memory.authority.sealed] runtime_alloc=0 runtime_map=capability_leaf runtime_mint=0",
-        "task.running id=1", "[sexusb.memory.dma.ready] region_id=1 length=262144",
+        "task.running id=1", "[sexusb.memory.dma.ready] region_id=1 length=2097152",
         "[sexdrive.dma.region] slot=32 bytes=524288 reusable_buffers=2",
         "[sexfiles.bridge.diskfs.buf.ready] buf_va=0x1000 region_id=4 length=131072 peer_pd=2",
         "[sexfiles.memory.authority.negative] empty=1 wrong_kind=1 dma_right=1 ok=1",
