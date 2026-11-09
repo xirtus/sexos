@@ -11,7 +11,7 @@
 //!   waits: call [`Player::step`] often, from a program's own loop or a browser's.
 //!
 //! Formats: MP4/MOV, Matroska/WebM, Ogg, MP3, AAC, FLAC and WAV, with H.264, HEVC,
-//! VP8, VP9 and MPEG-4 video and AAC, MP3, Opus, Vorbis, FLAC and PCM sound. A build
+//! VP8, VP9, MPEG-4 and AV1 (dav1d) video and AAC, MP3, Opus, Vorbis, FLAC and PCM sound. A build
 //! without FFmpeg (see build.rs) refuses every file as unsupported.
 #![no_std]
 
@@ -326,6 +326,37 @@ fn init_libc() {
     sex_libc::set_log_default(log);
     sex_libc::set_exit_default(exit);
     sex_libc::time::set_clock_default(clock);
+}
+
+/// The most pixels [`decode_picture`] takes in a source picture.
+pub const MAX_PICTURE_PIXELS: usize = 16 << 20;
+
+/// Decodes one still picture, such as an AVIF image, or the first picture of any video
+/// FFmpeg reads: `(width, height, pixels)` fitted within `max_w` x `max_h`, as opaque
+/// 0xFFRRGGBB. An AVIF's alpha plane (a separate item) is not read.
+pub fn decode_picture(bytes: &[u8], max_w: usize, max_h: usize) -> Result<(usize, usize, Vec<u32>), Error> {
+    let mut owned = Vec::new();
+    owned.try_reserve_exact(bytes.len()).map_err(|_| Error::NO_MEMORY)?;
+    owned.extend_from_slice(bytes);
+    let mut d = Decoder::open(Box::new(owned))?;
+    let (sw, sh) = (d.info.width as usize, d.info.height as usize);
+    if sw == 0 || sh == 0 || sw.saturating_mul(sh) > MAX_PICTURE_PIXELS {
+        return Err(Error::UNSUPPORTED);
+    }
+    let (w, h) = fit(sw, sh, max_w.max(1), max_h.max(1));
+    let mut out = Vec::new();
+    out.try_reserve_exact(w * h).map_err(|_| Error::NO_MEMORY)?;
+    out.resize(w * h, 0);
+    let mut pcm = [[0i16; 2]; 1024];
+    loop {
+        match d.next(&mut out, w, h, &mut pcm)? {
+            Next::Picture { .. } => break,
+            Next::Sound { .. } => continue,
+            Next::End => return Err(Error::UNSUPPORTED),
+        }
+    }
+    for p in out.iter_mut() { *p |= 0xFF00_0000; }
+    Ok((w, h, out))
 }
 
 /// The largest size with the stream's aspect ratio that fits in `max_w` x `max_h`.

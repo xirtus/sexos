@@ -961,6 +961,7 @@ impl Browser {
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Web");
+    sex_web::set_avif_decoder(media::decode_avif);
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = String::from(core::str::from_utf8(files::args(&mut window, &mut args)).unwrap_or("").trim());
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };

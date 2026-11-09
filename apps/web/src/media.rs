@@ -331,3 +331,19 @@ fn bar(px: &mut [u32], w: usize, h: usize, top: usize, rows: usize, playing: boo
         for x in x0..x1 { px[y * w + x] = if x < done { 0xFF1A_73E8 } else if over { 0xFF80_8080 } else { 0xFF9A_A0A6 }; }
     }
 }
+
+/// AVIF pictures for `<img>`: sex-image reads no AV1, so they go through FFmpeg's dav1d.
+pub fn decode_avif(bytes: &[u8], max_w: usize, max_h: usize) -> Option<Image> {
+    match sex_media::decode_picture(bytes, max_w, max_h) {
+        Ok((width, height, pixels)) => {
+            let centre = pixels[(height / 2) * width + width / 2];
+            sex_pdx::serial_record!("[web.avif] w={} h={} bytes={} centre={:06x}", width, height, bytes.len(), centre & 0xFF_FFFF);
+            Some(Image { width, height, pixels })
+        }
+        Err(e) => {
+            let mut buf = [0u8; 64];
+            sex_pdx::serial_record!("[web.avif] failed: {}", e.text(&mut buf));
+            None
+        }
+    }
+}

@@ -453,7 +453,31 @@ pub fn decode_image(bytes: &[u8], max_w: usize, max_h: usize) -> Option<Image> {
     if svg::is_svg(bytes) {
         return svg::decode(core::str::from_utf8(bytes).ok()?, max_w, max_h);
     }
+    if sex_image::sniff(bytes).is_none() && is_avif(bytes) {
+        // Safety: set once at start, before any page loads; programs are single-threaded here.
+        let decode = unsafe { AVIF_DECODER }?;
+        return decode(bytes, max_w, max_h);
+    }
     sex_image::decode(bytes, &PICTURE_LIMITS).ok()?.fit_within(max_w, max_h).ok()
+}
+
+/// Decodes an AVIF picture fitted within a box. sex-image does not read AV1, so a
+/// program that links a video decoder (Web, through sex-media) hands one in.
+pub type AvifDecoder = fn(&[u8], usize, usize) -> Option<Image>;
+static mut AVIF_DECODER: Option<AvifDecoder> = None;
+
+/// Sets the decoder [`decode_image`] uses for AVIF pictures.
+pub fn set_avif_decoder(decode: AvifDecoder) {
+    unsafe { AVIF_DECODER = Some(decode) };
+}
+
+/// Whether `bytes` start like an AVIF file: an ISO `ftyp` box whose major or a
+/// compatible brand is `avif` (a still picture) or `avis` (a picture sequence).
+pub fn is_avif(bytes: &[u8]) -> bool {
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" { return false; }
+    let size = (u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize).clamp(16, bytes.len().min(256));
+    let brand = |b: &[u8]| b == b"avif" || b == b"avis";
+    brand(&bytes[8..12]) || bytes[16..size].chunks_exact(4).any(brand)
 }
 
 /// What a page's picture may be.

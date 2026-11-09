@@ -4,7 +4,8 @@ controls> (MP4, H.264 and AAC, 440 Hz). Its script pauses it for 0.8 s through
 HTMLMediaElement, plays it on, and when it ends plays an MP3 (880 Hz) through
 `new Audio()`. QEMU records the virtio sound card to a WAV file: both tones must be in
 it at their pitch, the video must show its 50 pictures, and the screen must show a
-picture while it plays. The page's animated GIF must move and its WebP must decode.
+picture while it plays. The page's animated GIF must move, its WebP must decode, and
+its AVIF (AV1 through dav1d) must decode to its colour.
 
 Build FFmpeg first (scripts/build_ffmpeg.sh), then the ISO."""
 import argparse,http.server,os,re,shutil,sys,threading,time
@@ -67,7 +68,11 @@ def main():
   bright=sum(1 for px in range(0,320,8) for py in range(0,220,8) if sum(region.getpixel((px,py)))>150)
   assert len(colours)>20 and bright>200,f'no picture on screen: {len(colours)} colours, {bright} bright samples'
   pics=g['wait'](r'\[web.pictures\] count=(\d+) moving=(\d+)',s,60)
-  assert int(pics[1])>=2 and pics[2]=='1',pics[0]
+  assert int(pics[1])>=3 and pics[2]=='1',pics[0]
+  avif=g['wait'](r'\[web.avif\] (w=(\d+) h=(\d+) bytes=\d+ centre=([0-9a-f]{6})|failed[^\n]*)',s,60)
+  assert avif.group(2,3)==('96','48'),avif[0]
+  rgb=[int(avif[4][i:i+2],16) for i in (0,2,4)]
+  assert all(abs(c-e)<=12 for c,e in zip(rgb,(0xE0,0x70,0x20))),f'AVIF colour {avif[4]}, not e07020'
   g['wait'](r'\[web.picture.frames\] n=5',s,60)
   ended=g['wait'](r'\[web.media.ended\] node=\d+ frames=(\d+) sound_frames=(\d+) played=(\d+)',s,300)
   frames,heard,played=map(int,ended.groups())
@@ -83,6 +88,6 @@ def main():
   long440=sum(f[1] for f in found if abs(f[2]-440)<9)
   assert 1.6<=long440<=2.4,f'440 Hz played {long440:.2f} s in all, not about 2 s'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'frames':frames,'sound_frames':heard,'colours':len(colours),'tones':[(round(s,2),round(l,2),round(h)) for s,l,h in found]})
+  print({'ok':True,'avif':avif[0],'frames':frames,'sound_frames':heard,'colours':len(colours),'tones':[(round(s,2),round(l,2),round(h)) for s,l,h in found]})
  finally:g['stop']()
 if __name__=='__main__':main()

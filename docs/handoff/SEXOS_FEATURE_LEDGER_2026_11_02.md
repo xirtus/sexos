@@ -3282,3 +3282,32 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+
+## AV1 video and AVIF pictures, through dav1d (2026-11-09)
+
+- **What runs now.** Play and Web's `<video>` play AV1 in MP4 and in WebM/Matroska
+  (8-bit and 10-bit), the codec YouTube serves most. Web's `<img>` shows AVIF pictures.
+- **How.** `scripts/build_dav1d.sh` builds dav1d 1.5.1 (BSD-2-Clause, from GitHub) with
+  meson as a static archive for x86_64-sex-app (same flags as FFmpeg; bit depths 8 and
+  10/12; its SSSE3/SSE4.1 assembly included; AVX2/AVX-512 code is present but never
+  chosen, since the kernel keeps XCR0 to x87 and SSE). It runs the same refused-bytes
+  scan as FFmpeg (C files recompiled with other flags; any hit in assembly rebuilds
+  dav1d as plain C). Today nothing is hit. `build_ffmpeg.sh` runs it first, then
+  configures FFmpeg with `--enable-libdav1d`, decoder `libdav1d` and parser `av1` (found
+  through dav1d's pkg-config file) and copies `libdav1d.a` beside FFmpeg's archives;
+  sex-media's build.rs links it when present. FFmpeg gives dav1d one thread.
+  sex-libc gains `sysconf` (page size and core count), the only call dav1d lacked.
+- **AVIF.** `sex_media::decode_picture(bytes, max_w, max_h)` opens bytes, decodes the
+  first picture and scales it to fit (opaque 0xFFRRGGBB). sex-image stays pure Rust:
+  `sex_web::decode_image` hands bytes that sex-image does not know and whose `ftyp`
+  brand is `avif`/`avis` (`sex_web::is_avif`) to a decoder the program sets with
+  `sex_web::set_avif_decoder`; Web sets one that calls sex-media and logs `[web.avif]`.
+- **Size.** Code (text) grows about 1.95 MB in Play and in Web.
+- **Gates.** `program_media_gate` adds `clip-av1.mp4` (AV1 + AAC, 770 Hz) and
+  `clip-av1.webm` (10-bit AV1 + Opus, 990 Hz): 50 pictures each, tones heard.
+  `program_web_media_gate`'s page adds `still.avif` (96x48, #E07020), which must decode
+  at its size and colour. `program_play_gate` unchanged. Host test `sex-web/tests/avif.rs`.
+- **Limits.** AVIF alpha (a separate item) is ignored, so transparent AVIFs show opaque.
+  Grid (tiled) AVIFs show only their first tile, and animated AVIF (`avis`) shows its
+  first frame. dav1d runs on one thread; 320x240 keeps up on one core, larger sizes
+  are not measured yet.

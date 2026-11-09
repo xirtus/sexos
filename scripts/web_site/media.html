@@ -4,8 +4,8 @@
 <video id="v" src="clip-av.mp4" controls autoplay></video>
 <!-- Loads but waits: it must not take the video's sound. -->
 <audio id="later" src="tone.mp3"></audio>
-<!-- An animated GIF plays; a WebP shows. -->
-<img src="spin.gif" width="64" height="32"> <img src="still.webp" width="64" height="32">
+<!-- An animated GIF plays; a WebP and an AVIF (AV1, through dav1d) show. -->
+<img src="spin.gif" width="64" height="32"> <img src="still.webp" width="64" height="32"> <img src="still.avif" width="96" height="48">
 <script>
 const v = document.getElementById('v');
 const log = m => console.log(m);
