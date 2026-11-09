@@ -279,3 +279,25 @@ fn overflow_hidden_clips_its_content() {
     assert_eq!(page.clip_of(green), None);
     assert!(!page.items.iter().any(|i| matches!(i, sex_html::layout::Item::Rect { w, .. } if *w < -1_000_000)));
 }
+
+#[test]
+fn grid_places_items_in_tracks() {
+    let rect = |page: &sex_html::layout::Page, c: u32| page.items.iter().find_map(|i| match i { sex_html::layout::Item::Rect { x, y, w, h, color, .. } if *color == c => Some((*x, *y, *w, *h)), _ => None }).unwrap();
+    // Fixed + fr tracks, a gap, a full-width item and stretch to the tallest in the row.
+    let dom = parse::parse("<body style='margin:0'><div style='display:grid;grid-template-columns:100px 1fr 2fr;gap:10px 20px;width:400px'>\
+<div style='background:#ff0000;height:30px'></div><div style='background:#00ff00'>x</div><div style='background:#0000ff;height:50px'></div>\
+<div style='grid-column:1 / -1;background:#ffff00;height:5px'></div></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    assert_eq!(rect(&page, 0xFFFF_0000), (0, 0, 100, 30));
+    assert_eq!(rect(&page, 0xFF00_FF00), (120, 0, 86, 50));
+    assert_eq!(rect(&page, 0xFF00_00FF), (226, 0, 174, 50));
+    assert_eq!(rect(&page, 0xFFFF_FF00), (0, 60, 400, 5));
+    // repeat(auto-fill, minmax(120px, 1fr)) fits three columns into 400px.
+    let dom = parse::parse("<body style='margin:0'><div style='display:grid;grid-template-columns:repeat(auto-fill, minmax(120px, 1fr));width:400px'>\
+<div style='background:#ff0000;height:10px'></div><div style='background:#00ff00;height:10px'></div><div style='background:#0000ff;height:10px'></div><div style='background:#ffff00;height:10px'></div></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    assert_eq!(rect(&page, 0xFF00_00FF), (266, 0, 134, 10));
+    assert_eq!(rect(&page, 0xFFFF_FF00), (0, 10, 133, 10));
+}

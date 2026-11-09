@@ -9,7 +9,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Display { None, Block, Inline, InlineBlock, ListItem, Table, TableRow, TableCell, Flex, Contents }
+pub enum Display { None, Block, Inline, InlineBlock, ListItem, Table, TableRow, TableCell, Flex, Grid, Contents }
+
+/// One `grid-template-columns` track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Track { Len(Len), /// hundredths of an `fr`
+    Fr(i32), Auto, /// `minmax(min, max)` whose max is a flexible (`fr`, hundredths) or, with 0, `auto` size
+    MinMax(Len, i32) }
+
+/// Where a grid item goes along the columns: lines are 1-based, negative ones count from
+/// the end, 0 is `auto`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct GridPlace { pub start: i32, pub end: i32, pub span: i32 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Len { Auto, Px(i32), /// hundredths of a percent
@@ -93,6 +104,11 @@ pub struct Style {
     pub justify: Justify,
     pub align_center: bool,
     pub gap: i32,
+    pub row_gap: i32,
+    pub grid_columns: Vec<Track>,
+    /// `repeat(auto-fill | auto-fit, track)`: the track, and whether empty tracks collapse.
+    pub grid_auto: Option<(Track, bool)>,
+    pub grid_column: GridPlace,
     pub box_sizing_border: bool,
     pub letter_spacing: i32,
     pub vertical_super: i8,
@@ -146,6 +162,10 @@ impl Style {
             justify: Justify::Start,
             align_center: false,
             gap: 0,
+            row_gap: 0,
+            grid_columns: Vec::new(),
+            grid_auto: None,
+            grid_column: GridPlace::default(),
             box_sizing_border: false,
             letter_spacing: 0,
             vertical_super: 0,
@@ -179,7 +199,7 @@ impl Style {
     }
 
     pub fn is_block_level(&self) -> bool {
-        matches!(self.display, Display::Block | Display::ListItem | Display::Table | Display::TableRow | Display::TableCell | Display::Flex)
+        matches!(self.display, Display::Block | Display::ListItem | Display::Table | Display::TableRow | Display::TableCell | Display::Flex | Display::Grid)
     }
 }
 
@@ -474,6 +494,48 @@ fn sides<T: Copy>(values: &[T]) -> Option<[T; 4]> {
 }
 
 /// Splits a value on top-level whitespace (keeping `rgb(1, 2, 3)` whole).
+/// `grid-column-start`/`-end` value: a line number or `span N`.
+fn grid_line(v: &str, g: &mut GridPlace, start: bool) {
+    let v = v.trim();
+    if let Some(n) = v.strip_prefix("span").and_then(|n| n.trim().parse::<i32>().ok()) { g.span = n.clamp(1, 1000); return; }
+    if let Ok(n) = v.parse::<i32>() { if n != 0 { if start { g.start = n } else { g.end = n } } }
+}
+
+/// `grid-template-columns`: explicit tracks, and an auto-repeated one.
+fn grid_tracks(v: &str, s: &Style, ctx: &Ctx) -> (Vec<Track>, Option<(Track, bool)>) {
+    fn one(w: &str, s: &Style, ctx: &Ctx) -> Option<Track> {
+        let w = w.trim();
+        if let Some(f) = w.strip_suffix("fr") { return css::parse_number(f).map(|f| Track::Fr(f.max(0))); }
+        if let Some(inner) = w.strip_prefix("minmax(").and_then(|r| r.strip_suffix(')')) {
+            let (a, b) = inner.split_once(',')?;
+            let min = parse_len(a, s, ctx).unwrap_or(Len::Auto);
+            let b = b.trim();
+            return Some(match b.strip_suffix("fr").and_then(css::parse_number) {
+                Some(f) => Track::MinMax(min, f.max(1)),
+                None => match parse_len(b, s, ctx) { Some(Len::Auto) | None => Track::MinMax(min, 0), Some(l) => Track::Len(l) },
+            });
+        }
+        if w.starts_with("fit-content(") { return Some(Track::Auto); }
+        match parse_len(w, s, ctx)? { Len::Auto => Some(Track::Auto), l => Some(Track::Len(l)) }
+    }
+    let mut tracks = Vec::new();
+    let mut auto = None;
+    for w in words(v) {
+        if w.starts_with('[') { continue; }
+        if let Some(inner) = w.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')')) {
+            let Some((count, rest)) = inner.split_once(',') else { continue };
+            let inner: Vec<Track> = words(rest).into_iter().filter(|w| !w.starts_with('[')).filter_map(|w| one(w, s, ctx)).collect();
+            match count.trim() {
+                "auto-fill" | "auto-fit" => if let Some(t) = inner.first() { auto = Some((*t, count.trim() == "auto-fit")) },
+                n => if let Ok(n) = n.parse::<usize>() { for _ in 0..n.min(1000) { tracks.extend_from_slice(&inner); } },
+            }
+            continue;
+        }
+        if let Some(t) = one(w, s, ctx) { tracks.push(t); }
+    }
+    (tracks, auto)
+}
+
 fn words(v: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
@@ -533,7 +595,8 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             if first == "flow-root" { s.overflow_clip = true; }
             s.display = match first {
                 "none" => Display::None,
-                "block" | "flow-root" | "table-caption" | "table-header-group" | "table-row-group" | "table-footer-group" | "grid" | "-webkit-box" => Display::Block,
+                "block" | "flow-root" | "table-caption" | "table-header-group" | "table-row-group" | "table-footer-group" | "-webkit-box" => Display::Block,
+                "grid" => Display::Grid,
                 "inline" | "ruby" => Display::Inline,
                 "inline-block" | "inline-flex" | "inline-grid" | "inline-table" => Display::InlineBlock,
                 "list-item" => Display::ListItem,
@@ -685,7 +748,25 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             "space-around" => Justify::SpaceAround, "space-evenly" => Justify::SpaceEvenly, _ => Justify::Start,
         },
         "align-items" => s.align_center = lv == "center",
-        "gap" | "column-gap" | "grid-gap" | "grid-column-gap" => if let Some(Len::Px(p)) = words(v).last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p },
+        "gap" | "column-gap" | "grid-gap" | "grid-column-gap" => {
+            let w = words(v);
+            if let Some(Len::Px(p)) = w.last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p }
+            if matches!(d.name.as_str(), "gap" | "grid-gap") { if let Some(Len::Px(p)) = w.first().and_then(|w| parse_len(w, s, ctx)) { s.row_gap = p } }
+        }
+        "row-gap" | "grid-row-gap" => if let Some(Len::Px(p)) = parse_len(v, s, ctx) { s.row_gap = p },
+        "grid-template-columns" => { let (t, a) = grid_tracks(v, s, ctx); s.grid_columns = t; s.grid_auto = a; }
+        "grid-template" => if let Some((_, cols)) = v.split_once('/') { let (t, a) = grid_tracks(cols, s, ctx); s.grid_columns = t; s.grid_auto = a; },
+        "grid-column" | "grid-area" => {
+            // grid-area is row-start / column-start / row-end / column-end.
+            let parts: Vec<&str> = v.split('/').map(str::trim).collect();
+            let (a, b) = if d.name == "grid-area" { (parts.get(1).copied().unwrap_or(""), parts.get(3).copied().unwrap_or("")) } else { (parts[0], parts.get(1).copied().unwrap_or("")) };
+            let mut g = GridPlace::default();
+            grid_line(a, &mut g, true);
+            grid_line(b, &mut g, false);
+            s.grid_column = g;
+        }
+        "grid-column-start" => grid_line(&lv, &mut s.grid_column, true),
+        "grid-column-end" => grid_line(&lv, &mut s.grid_column, false),
         "box-sizing" => s.box_sizing_border = lv == "border-box",
         "letter-spacing" => s.letter_spacing = match len(s) { Some(Len::Px(p)) => p, _ => 0 },
         "vertical-align" => s.vertical_super = match lv.as_str() { "super" | "text-top" => 1, "sub" | "text-bottom" => -1, _ => 0 },

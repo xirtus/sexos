@@ -158,6 +158,12 @@ fn collapse(s: &str) -> String {
 /// Elements whose content is not their children: drawn at their own (or intrinsic) size.
 const REPLACED: &[&str] = &["img", "svg", "canvas", "video", "iframe", "object", "embed", "input", "select", "textarea"];
 
+/// A 1-based (negative: from the end) grid line as a 0-based column index.
+fn line_index(line: i32, n: usize) -> usize {
+    let n = n as i32;
+    (if line > 0 { line - 1 } else { n + 1 + line }).clamp(0, n) as usize
+}
+
 struct BlockResult { height: i32, margin_top: i32, margin_bottom: i32, first_baseline: Option<i32>, width: i32 }
 
 struct Layout<'a> {
@@ -438,7 +444,7 @@ impl<'a> Layout<'a> {
         // A new block formatting context keeps its floats to itself and grows to hold them.
         let bfc = self.root == Some(n) || force_width.is_some() || s.float != style::Float::None || s.overflow_clip
             || matches!(s.position, style::Position::Absolute | style::Position::Fixed)
-            || matches!(s.display, Display::InlineBlock | Display::Flex | Display::Table | Display::TableCell);
+            || matches!(s.display, Display::InlineBlock | Display::Flex | Display::Grid | Display::Table | Display::TableCell);
         let saved_base = self.float_base;
         if bfc { self.float_base = self.floats.len(); }
         let r = self.block_box(n, x, y, cw, force_width, forced_height, bfc);
@@ -509,6 +515,7 @@ impl<'a> Layout<'a> {
             Display::Table => self.table(n, cx, cy, content_w),
             Display::TableRow => self.row(n, cx, cy, content_w),
             Display::Flex if !s.flex_column => self.flex_row(n, cx, cy, content_w),
+            Display::Grid => self.grid(n, cx, cy, content_w),
             _ => self.flow(n, cx, cy, content_w),
         };
         let content_h = if bfc { self.floats[self.float_base..].iter().map(|f| f.y + f.h - cy).fold(content_h, i32::max) } else { content_h };
@@ -1324,6 +1331,169 @@ impl<'a> Layout<'a> {
             y += line_h + if s.flex_wrap { gap } else { 0 };
         }
         (y - cy, first)
+    }
+
+    /// Column widths of a grid `cw` wide holding `count` items.
+    fn grid_tracks(&mut self, s: &Style, cw: i32, items: &[(NodeId, style::GridPlace)]) -> Vec<i32> {
+        use style::Track;
+        let gap = s.gap;
+        let mut tracks: Vec<Track> = s.grid_columns.clone();
+        if let Some((t, fit)) = s.grid_auto {
+            let min = match t { Track::Len(l) | Track::MinMax(l, _) => l.resolve(cw).unwrap_or(0), _ => 0 }.max(1);
+            let fixed: i32 = tracks.iter().map(|t| match t { Track::Len(l) | Track::MinMax(l, _) => l.or_zero(cw) + gap, _ => gap }).sum();
+            let mut n = ((cw - fixed + gap) / (min + gap)).clamp(1, 1000) as usize;
+            if fit { n = n.min(items.len().saturating_sub(tracks.len()).max(1)); }
+            for _ in 0..n { tracks.push(t); }
+        }
+        if tracks.is_empty() { tracks.push(Track::Fr(100)); }
+        let n = tracks.len();
+        // Auto tracks (and minmax(.., auto)) take the widest single-column item in them.
+        let mut content = alloc::vec![(0i32, 0i32); n];
+        let mut col = 0;
+        for (c, g) in items {
+            let span = g.span.max(1) as usize;
+            let start = if g.start != 0 { line_index(g.start, n) } else { col };
+            if span == 1 && g.end == 0 && start < n {
+                let (min, max) = self.intrinsic(*c);
+                content[start].0 = content[start].0.max(min);
+                content[start].1 = content[start].1.max(max);
+            }
+            col = (start + span) % n.max(1);
+        }
+        let gaps = gap * (n as i32 - 1);
+        let mut w: Vec<i32> = tracks.iter().enumerate().map(|(i, t)| match t {
+            Track::Len(l) => l.or_zero(cw),
+            Track::Auto => content[i].1,
+            Track::MinMax(l, 0) => l.resolve(cw).unwrap_or(content[i].0).max(content[i].0),
+            Track::MinMax(l, _) => l.resolve(cw).unwrap_or(content[i].0),
+            Track::Fr(_) => 0,
+        }).collect();
+        let fr_total: i32 = tracks.iter().map(|t| match t { Track::Fr(f) | Track::MinMax(_, f) => *f, _ => 0 }).sum();
+        let fixed: i32 = tracks.iter().zip(&w).filter(|(t, _)| !matches!(t, Track::Fr(_) | Track::MinMax(_, 1..))).map(|(_, w)| *w).sum();
+        let auto: Vec<usize> = (0..n).filter(|&i| matches!(tracks[i], Track::Auto | Track::MinMax(_, 0))).collect();
+        let mut free = cw - gaps - fixed;
+        if fixed + gaps > cw && !auto.is_empty() {
+            // Too wide: auto tracks give back down to their min-content.
+            let over = fixed + gaps - cw;
+            let room: i32 = auto.iter().map(|&i| (w[i] - content[i].0).max(0)).sum();
+            if room > 0 { for &i in &auto { let r = (w[i] - content[i].0).max(0); w[i] -= (over.min(room) as i64 * r as i64 / room as i64) as i32; } }
+            free = cw - gaps - w.iter().enumerate().filter(|(i, _)| !matches!(tracks[*i], Track::Fr(_) | Track::MinMax(_, 1..))).map(|(_, w)| *w).sum::<i32>();
+        }
+        if fr_total > 0 {
+            // Flexible tracks share what is left, never below their minimum; a track held at
+            // its minimum leaves the rest to the others.
+            let mut flex: Vec<usize> = (0..n).filter(|&i| matches!(tracks[i], Track::Fr(_) | Track::MinMax(_, 1..))).collect();
+            let mut left = free.max(0);
+            loop {
+                let total: i32 = flex.iter().map(|&i| match tracks[i] { Track::Fr(f) | Track::MinMax(_, f) => f, _ => 0 }).sum::<i32>().max(1);
+                let share = |i: usize| (left as i64 * match tracks[i] { Track::Fr(f) | Track::MinMax(_, f) => f, _ => 0 } as i64 / total as i64) as i32;
+                let pinned: Vec<usize> = flex.iter().copied().filter(|&i| share(i) < w[i]).collect();
+                if pinned.is_empty() {
+                    for &i in &flex { w[i] = share(i); }
+                    // Rounding leftovers go to the last flexible track so the grid fills exactly.
+                    if let Some(&last) = flex.last() { w[last] += left - flex.iter().map(|&i| w[i]).sum::<i32>(); }
+                    break;
+                }
+                for i in pinned { left -= w[i]; flex.retain(|&j| j != i); }
+                left = left.max(0);
+                if flex.is_empty() { break; }
+            }
+        } else if free > 0 && !auto.is_empty() {
+            // Auto tracks stretch to fill the grid.
+            let each = free / auto.len() as i32;
+            for &i in &auto { w[i] += each; }
+        }
+        for v in &mut w { *v = (*v).max(0); }
+        w
+    }
+
+    /// `display: grid`: items placed in rows over the column tracks.
+    fn grid(&mut self, n: NodeId, cx: i32, cy: i32, cw: i32) -> (i32, Option<i32>) {
+        let s = self.style(n).unwrap();
+        let mut items: Vec<(NodeId, style::GridPlace)> = Vec::new();
+        for c in self.flat_children(n) {
+            match &self.dom.nodes[c].kind {
+                Kind::Text(t) if t.trim().is_empty() => continue,
+                Kind::Element { .. } if self.display(c) == Display::None => continue,
+                Kind::Element { .. } if self.out_of_flow(c) => { self.abs.push((c, cx, cy)); continue; }
+                Kind::Element { .. } => items.push((c, self.style(c).unwrap().grid_column)),
+                _ => items.push((c, style::GridPlace::default())),
+            }
+        }
+        let cols = self.grid_tracks(s, cw, &items);
+        let n_cols = cols.len();
+        let mut xs = Vec::with_capacity(n_cols + 1);
+        let mut x = cx;
+        for w in &cols { xs.push(x); x += w + s.gap; }
+        xs.push(x);
+        // Row-major placement: (node, column, span) per row.
+        let mut rows: Vec<Vec<(NodeId, usize, usize)>> = alloc::vec![Vec::new()];
+        let mut col = 0;
+        for (c, g) in items {
+            let (start, span) = match (g.start, g.end) {
+                (0, 0) => (None, g.span.max(1) as usize),
+                (a, 0) => (Some(line_index(a, n_cols)), g.span.max(1) as usize),
+                (0, b) => { let e = line_index(b, n_cols); let sp = g.span.max(1) as usize; (Some(e.saturating_sub(sp)), sp) }
+                (a, b) => { let (a, b) = (line_index(a, n_cols), line_index(b, n_cols)); (Some(a.min(b)), a.max(b).saturating_sub(a.min(b)).max(1)) }
+            };
+            let span = span.min(n_cols);
+            let start = start.map(|s| s.min(n_cols - span));
+            let at = match start {
+                Some(s0) => { if s0 < col { rows.push(Vec::new()); } s0 }
+                None => { if col + span > n_cols { rows.push(Vec::new()); 0 } else { col } }
+            };
+            rows.last_mut().unwrap().push((c, at, span));
+            col = at + span;
+            if col >= n_cols { rows.push(Vec::new()); col = 0; }
+        }
+        let mut y = cy;
+        let mut first = None;
+        let mut any = false;
+        for row in rows.into_iter().filter(|r| !r.is_empty()) {
+            if any { y += s.row_gap; }
+            any = true;
+            let marks = (self.items.len(), self.links.len(), self.boxes.len(), self.anchors.len(), self.abs.len(), self.positioned.len(), self.floats.len());
+            let heights = self.grid_row(n, &row, &xs, y, cw, None, &mut first);
+            let row_h = heights.iter().copied().max().unwrap_or(0);
+            // Items stretch to the row (or centre in it with align-items: center): lay the
+            // row out again when one came up short.
+            let short = heights.iter().any(|h| *h < row_h) && (s.align_center || row.iter().zip(&heights).any(|((c, _, _), h)| *h < row_h
+                && matches!(self.dom.nodes[*c].kind, Kind::Element { .. })
+                && self.style(*c).is_some_and(|cs| (cs.background >> 24 != 0 || cs.border.iter().any(|b| *b > 0)) && cs.height == Len::Auto)));
+            if short {
+                self.items.truncate(marks.0); self.links.truncate(marks.1); self.boxes.truncate(marks.2); self.anchors.truncate(marks.3);
+                self.abs.truncate(marks.4); self.positioned.truncate(marks.5); self.floats.truncate(marks.6);
+                self.grid_row(n, &row, &xs, y, cw, Some((&heights, row_h)), &mut first);
+            }
+            y += row_h;
+        }
+        (y - cy, first)
+    }
+
+    /// Lays out one grid row; returns each item's margin-box height.
+    fn grid_row(&mut self, n: NodeId, row: &[(NodeId, usize, usize)], xs: &[i32], y: i32, cw: i32, again: Option<(&[i32], i32)>, first: &mut Option<i32>) -> Vec<i32> {
+        let gap = self.style(n).unwrap().gap;
+        let center = self.style(n).unwrap().align_center;
+        let mut heights = Vec::with_capacity(row.len());
+        for (k, &(c, at, span)) in row.iter().enumerate() {
+            let x = xs[at];
+            let y = match again { Some((hs, rh)) if center => y + (rh - hs[k]) / 2, _ => y };
+            let w = xs[at + span] - x - gap;
+            let h = if matches!(self.dom.nodes[c].kind, Kind::Text(_)) {
+                self.inline_context(n, &[c], x, y, w).map_or(0, |(h, b)| { if first.is_none() { *first = b; } h })
+            } else {
+                let cs = self.style(c).unwrap();
+                let (m, _, _) = sum_h(cs, cw);
+                let (mt, mb) = (cs.margin[TOP].or_zero(cw), cs.margin[BOTTOM].or_zero(cw));
+                if let Some((_, rh)) = again.filter(|_| !center) { if cs.height == Len::Auto { self.force_height = Some((rh - mt - mb).max(0)); } }
+                let r = self.block(c, x, y + mt, w, Some(w - m));
+                self.force_height = None;
+                if first.is_none() { *first = r.first_baseline; }
+                r.height + mt + r.margin_bottom
+            };
+            heights.push(h);
+        }
+        heights
     }
 
     /// (min-content, max-content) border-box widths, margins included.
