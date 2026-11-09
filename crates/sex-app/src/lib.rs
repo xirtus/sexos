@@ -405,6 +405,141 @@ pub mod files {
             }
         }
     }
+    /// One request for the window's task, keeping keys and closes that arrive meanwhile.
+    /// The caller fills the data area before and reads it after; that is safe on the
+    /// window's own task, which is the only one that holds a window.
+    fn request(window: &mut Window, kind: u8, path: &[u8], offset: u64, length: u64) -> Result<u32, Error> {
+        exchange(Some(window), kind, path, offset, length, |_| {}, |value, _| value)
+    }
+    /// What a path is.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Stat { pub dir: bool, pub size: u64, pub mtime: u64 }
+    pub fn stat(window: &mut Window, path: &[u8]) -> Result<Stat, Error> {
+        request(window, w::STAT, path, 0, 0)?;
+        let r = &region()?[w::PATH_BYTES..];
+        let word = |i: usize| u64::from_le_bytes(r[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+        Ok(Stat { dir: word(0) != 0, size: word(1), mtime: word(2) })
+    }
+    /// One entry of a folder.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Entry { pub name: alloc::vec::Vec<u8>, pub dir: bool, pub size: u64 }
+    /// Everything in a folder, in the order the disk keeps it.
+    pub fn list(window: &mut Window, path: &[u8]) -> Result<alloc::vec::Vec<Entry>, Error> {
+        let mut out = alloc::vec::Vec::new();
+        let mut cursor = 0u64;
+        loop {
+            let used = request(window, w::LIST, path, cursor, 0)? as usize;
+            let r = &region()?[w::PATH_BYTES..];
+            let next = u64::from_le_bytes(r[..8].try_into().unwrap_or([0; 8]));
+            let mut at = w::LIST_HEAD;
+            while at + w::ENTRY_HEAD <= used {
+                let len = r[at + 1] as usize;
+                let size = u64::from_le_bytes(r[at + 2..at + 10].try_into().unwrap_or([0; 8]));
+                out.push(Entry { name: r[at + w::ENTRY_HEAD..at + w::ENTRY_HEAD + len].to_vec(), dir: r[at] == 1, size });
+                at += w::ENTRY_HEAD + len;
+            }
+            if next == 0 { return Ok(out); }
+            cursor = next;
+        }
+    }
+    pub fn mkdir(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::MKDIR, path, 0, 0).map(|_| ()) }
+    pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
+    /// A file, or an empty folder.
+    pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }
+    pub fn truncate(window: &mut Window, path: &[u8], len: u64) -> Result<(), Error> { request(window, w::TRUNCATE, path, len, 0).map(|_| ()) }
+    /// Moves or renames. Between two disks Files answers `OTHER_DISK`: copy, then remove.
+    pub fn rename(window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), Error> {
+        if from.len() + 1 + to.len() > w::PATH_BYTES { return Err(w::NAME); }
+        let mut both = [0u8; w::PATH_BYTES];
+        both[..from.len()].copy_from_slice(from);
+        both[from.len() + 1..from.len() + 1 + to.len()].copy_from_slice(to);
+        request(window, w::RENAME, &both[..from.len() + 1 + to.len()], 0, 0).map(|_| ())
+    }
+    /// Writes `data` at byte `offset`, growing the file if it must. Returns bytes written.
+    pub fn write_at(window: &mut Window, path: &[u8], offset: u64, data: &[u8]) -> Result<usize, Error> {
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::IO_MAX);
+            region()?[w::PATH_BYTES..w::PATH_BYTES + n].copy_from_slice(&data[done..done + n]);
+            let wrote = request(window, w::WRITE, path, offset + done as u64, n as u64)? as usize;
+            done += wrote;
+            if wrote < n { return Err(w::NO_SPACE); }
+        }
+        Ok(done)
+    }
+    /// (total, free) bytes of the disk holding `path`.
+    pub fn space(window: &mut Window, path: &[u8]) -> Result<(u64, u64), Error> {
+        request(window, w::STATFS, path, 0, 0)?;
+        let r = &region()?[w::PATH_BYTES..];
+        let word = |i: usize| u64::from_le_bytes(r[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+        Ok((word(0) * 4096, word(1) * 4096))
+    }
+
+    /// What the picker asks the person for.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Pick { Open, Save, Folder }
+    /// Asks the person to choose a file (or a folder, or where to save) in the Files
+    /// app, and waits. The answer is a path this run may now use, `@/...`, kept in `out`.
+    /// Closing the window meanwhile cancels. Errors: DENIED when the person cancelled.
+    pub fn pick<'a>(window: &mut Window, mode: Pick, suggestion: &[u8], out: &'a mut [u8; w::PATH_BYTES]) -> Result<&'a [u8], Error> {
+        let n = suggestion.len().min(w::PICK_HINT_MAX);
+        {
+            let r = &mut region()?[w::PATH_BYTES..];
+            r[0] = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
+            r[1..1 + n].copy_from_slice(&suggestion[..n]);
+        }
+        let ticket = request(window, w::PICK, b"", 0, n as u64)?;
+        loop {
+            match request(window, w::PICKED, b"", ticket as u64, 0) {
+                Ok(len) => {
+                    let len = (len as usize).min(w::PATH_BYTES);
+                    out[..len].copy_from_slice(&region()?[w::PATH_BYTES..w::PATH_BYTES + len]);
+                    return Ok(&out[..len]);
+                }
+                Err(w::PENDING) => {}
+                Err(e) => return Err(e),
+            }
+            // Wait a little. Keys wait for later; a close ends the wait.
+            let end = sex_pdx::get_ticks().saturating_add(100);
+            while sex_pdx::get_ticks() < end {
+                while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+                    if let Some(event) = window.event(&m) {
+                        let close = matches!(event, super::Event::Close);
+                        if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+                        if close { return Err(w::DENIED); }
+                    }
+                }
+                let _ = sex_pdx::sys_wait_self_ticks(10);
+            }
+        }
+    }
+    /// One waiting question, for the program that shows the picker.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Question { pub row: u8, pub mode: Pick, pub ticket: u32, pub program: alloc::vec::Vec<u8>, pub suggestion: alloc::vec::Vec<u8> }
+    /// Questions waiting for the person. Only a run given the whole filesystem may ask.
+    pub fn questions(window: &mut Window) -> Result<alloc::vec::Vec<Question>, Error> {
+        let used = request(window, w::PICKS, b"", 0, 0)? as usize;
+        let r = &region()?[w::PATH_BYTES..];
+        let mut out = alloc::vec::Vec::new();
+        let mut at = 0;
+        while at + 7 <= used {
+            let row = r[at];
+            let mode = match r[at + 1] { w::PICK_SAVE => Pick::Save, w::PICK_FOLDER => Pick::Folder, _ => Pick::Open };
+            let ticket = u32::from_le_bytes(r[at + 2..at + 6].try_into().unwrap_or([0; 4]));
+            let name_len = r[at + 6] as usize;
+            let program = r[at + 7..at + 7 + name_len].to_vec();
+            at += 7 + name_len;
+            let hint_len = r[at] as usize;
+            let suggestion = r[at + 1..at + 1 + hint_len].to_vec();
+            at += 1 + hint_len;
+            out.push(Question { row, mode, ticket, program, suggestion });
+        }
+        Ok(out)
+    }
+    /// Answers a question with `path` (`@/...`), or cancels it with `None`.
+    pub fn answer(window: &mut Window, q: &Question, path: Option<&[u8]>) -> Result<(), Error> {
+        request(window, w::ANSWER, path.unwrap_or(b""), q.row as u64, q.ticket as u64).map(|_| ())
+    }
 }
 
 /// Movement keys, whichever keyboard code Shell passed (PS/2 set 1 or the normalized one).
