@@ -1020,10 +1020,11 @@ mod tests {
         mtools("mformat", &args);
         mtools("mmd", &["-i", i, "::/EFI", "::/EFI/Microsoft", "::/EFI/Microsoft/Boot"]);
         let win = pattern(150_000, 9);
-        let src = scratch("bootmgfw.efi");
+        // Per-variant names: the FAT16 and FAT32 checks run in parallel threads.
+        let src = scratch(if fat32 { "bootmgfw32.efi" } else { "bootmgfw16.efi" });
         std::fs::write(&src, &win).unwrap();
         mtools("mcopy", &["-i", i, src.to_str().unwrap(), "::/EFI/Microsoft/Boot/bootmgfw.efi"]);
-        let bcd = scratch("BCD");
+        let bcd = scratch(if fat32 { "BCD32" } else { "BCD16" });
         std::fs::write(&bcd, pattern(20_000, 10)).unwrap();
         mtools("mcopy", &["-i", i, bcd.to_str().unwrap(), "::/EFI/Microsoft/Boot/BCD"]);
         let original = std::fs::read(&img).unwrap();
