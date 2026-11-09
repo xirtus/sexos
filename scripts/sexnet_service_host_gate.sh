@@ -39,8 +39,10 @@ for name in ['nic_bar0','pci_view']:
  while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
  parts.append(s[a:i])
 Path(sys.argv[2]).write_text('\n'.join(parts))
-s=(root/'kernel/src/devmgr.rs').read_text();a=s.index('(0x02, 0x00)');part=s[a:s.index('            _ => {}',a)]
-assert part.index('pd.find_capability(sex_pdx::SLOT_NIC as u32).is_some()')<part.index('crate::boot_memory::nic_bar0(')<part.index('pd.grant_capability(')
+s=(root/'kernel/src/devmgr.rs').read_text();a=s.index('fn nic_lease(');part=s[a:s.index('\n}\n',a)]
+# The slot is chosen free before any lease is built; the BAR view precedes the grant.
+assert s.index('pd.find_capability(entry.slot as u32).is_none()')<s.index('Lease::Nic => nic_lease(')
+assert part.index('crate::boot_memory::nic_bar0(')<part.index('pd.grant_capability(')
 assert 'bar0_view: Some(view)'in part
 PYMEM
 NIC_BOOT_MEMORY_SOURCE="$TEST_DIR/boot_memory.rs" rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/nic_boot_memory.rs" -o "$TEST_DIR/boot-memory"

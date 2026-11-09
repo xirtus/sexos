@@ -3,12 +3,14 @@
 //!
 //! BOOT reads this table once while it enumerates PCI, and prints one census line per
 //! device, so the first boot on a new machine says plainly what works and what does not.
-//! The table is data, not authority: it never leases a device. Leases stay in devmgr.
-//! Later a userland device manager will match drivers from the same table.
+//! The census table is description only. The driver manifests in `manifest` are what
+//! BOOT leases by: each service's match table; devmgr only knows how to build a lease.
 //!
 //! Exact ids come first; when an id is not listed the class decides. Support levels
 //! describe the state of master, not a promise; `InProgress` names work in an open branch.
 #![no_std]
+
+pub mod manifest;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Id { pub vendor: u16, pub device: u16, pub class: u8, pub subclass: u8, pub prog_if: u8 }

@@ -601,6 +601,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             }
         },
 
+        86 => crate::device_irq::syscall(regs), // SYS_DEVICE: own leases, own vectors, own bits.
+
         53 => { // PDX_WAIT_SELF: only this domain's own inbox/reply events.
             if rdi != 0 {
                 sex_pdx::ERR_CAP_INVALID

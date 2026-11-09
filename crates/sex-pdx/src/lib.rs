@@ -1155,6 +1155,7 @@ pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
 pub mod virtio;
+pub mod device;
 pub mod network_config;
 
 pub mod desktop_style;
