@@ -5,6 +5,8 @@ use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use spin::Mutex;
 use core::sync::atomic::{AtomicU8, Ordering};
 // One service-private protocol flow, backed by the existing BOOT-loaded image.
+/// Most frames moved between the NIC and the protocol engine in one service turn.
+const NET_BURST:u32=32;
 static mut TRANSPORT_RX:[u8;sex_net::FLOW_BYTES]=[0;sex_net::FLOW_BYTES];
 static mut TRANSPORT_TX:[u8;sex_net::FLOW_BYTES]=[0;sex_net::FLOW_BYTES];
 static mut CLIENT_RX:[u8;sex_net::FLOW_BYTES]=[0;sex_net::FLOW_BYTES];
@@ -5382,90 +5384,98 @@ pub extern "C" fn _start() -> ! {
         // live identities and nominal-tick expiry even on transport-offline turns.
         dns.maintain_records(sex_pdx::get_ticks(),|owner|network_owner(owner.pd)==Some(owner));
         if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
-        if let Some(driver)=ethernet.as_mut() {
-            let before=driver.phase();
-            let receive=transport.as_ref().is_none_or(|engine|engine.can_receive());
-            let event=driver.advance_with_receive(sex_pdx::get_ticks(),receive);
-            if driver.phase()!=before {
-                sex_pdx::serial_record!("[sexnet.ether.phase] from={:?} to={:?} failure={:?}",before,driver.phase(),driver.failure());
-                if driver.phase()==ethernet::Phase::Running {
-                    sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=40960 descriptors=8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified as u8);
-                    let mut packet=sex_net::Frame{length:60,bytes:[0;sex_net::MAX_FRAME]};
-                    packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac,&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
-                    transport=Some(unsafe{sex_net::Engine::new(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
-                        &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX,&mut TRANSPORT_STORAGE)}.expect("FIXED_TRANSPORT_CONFIG"));
-                    let gateway=network_config.expect("BOOT_NETWORK_CONFIG").gateway;
-                    sex_pdx::serial_record!("[sexnet.route.ready] gateway={}.{}.{}.{} default=1 routes=1 route_capacity={} neighbors={} discovery_ms=1000 expiry_ms=60000 heap=0 authority=held_boot_nic",gateway[0],gateway[1],gateway[2],gateway[3],sex_net::ROUTE_CAPACITY,sex_net::NEIGHBOR_CAPACITY);
-                    sex_pdx::serial_record!("[sexnet.transport.ready] implementation=smoltcp0.14.0 flows=1 rx=4096 tx=4096 turn=256 port=46076 no_std=1 heap=0 diagnostic_listener=1 predictable_seed=1 app_network=0 dns=0 http=0 tls=0");
-                    sex_pdx::serial_record!("[sexnet.dns.ready] jobs=1 host=probe.sexos.test peer_port=46079 datagram=512 retries=0 service_data=1");
-                    sex_pdx::serial_record!("[sexnet.jobs.ready] app_jobs=1 outbound_flows=1 rx=4096 tx=4096 client_port_base=48000 peer_port=46078 service_data=1");
-                }
-            }
-            match event {
-                Some(ethernet::Event::Received{sequence,index,frame})=>{
-                    if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx] sequence={} index={} length={} hash={:#x}",sequence,index,frame.length,ethernet::fingerprint(&frame.bytes[..frame.length]));}
-                    if let Some(engine)=transport.as_mut(){
-                        engine.submit_frame(&frame.bytes[..frame.length]).expect("PROTOCOL_RX_CUSTODY");
-                    }
-                },
-                Some(ethernet::Event::Transmitted{sequence,index,length,hash})=>{
-                    if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.tx.done] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
-                },
-                Some(ethernet::Event::Dropped{index,length,status,errors})=>{
-                    if driver.dropped<=64||driver.dropped.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx.drop] index={} length={} status={} errors={} total={}",index,length,status,errors,driver.dropped);}
-                },None=>{},
-            }
-            if let Some(engine)=transport.as_mut(){
-                let before=engine.state();let stats=engine.statistics();let failure=engine.failure();
-                engine.advance(sex_pdx::get_ticks());let after=engine.statistics();
-                if engine.state()!=before {
-                    transport_changes=transport_changes.saturating_add(1);
-                    if transport_changes<=64||transport_changes.is_power_of_two(){sex_pdx::serial_record!("[sexnet.transport.state] from={:?} to={:?} flow={} received={} queued={} receive_hash={:#x} queue_hash={:#x}",before,engine.state(),after.flow,after.flow_received,after.flow_queued,after.flow_receive_hash,after.flow_queue_hash);}
-                }
-                if after.received!=stats.received||after.queued!=stats.queued {
-                    transfer_changes=transfer_changes.saturating_add(1);
-                    if transfer_changes<=64||transfer_changes.is_power_of_two(){sex_pdx::serial_record!("[sexnet.transport.bytes] flow={} received={} queued={} receive_hash={:#x} queue_hash={:#x} scope=private_custody_not_delivery",after.flow,after.flow_received,after.flow_queued,after.flow_receive_hash,after.flow_queue_hash);}
-                }
-                web.pump(unsafe{&mut *(engine as *mut sex_net::Engine<'static>)});
-                if engine.failure()!=failure{sex_pdx::serial_record!("[sexnet.transport.failed] error={:?}",engine.failure());}
-                let previous=outbound.snapshot();
-                let duplex=outbound.is_duplex();
-                outbound.advance(sex_pdx::get_ticks(),&mut ClientWire(Some(&mut *engine),duplex));
-                let current=outbound.snapshot();
-                if previous.state!=current.state{
-                    outbound_changes=outbound_changes.saturating_add(1);
-                    if outbound_changes<=64||outbound_changes.is_power_of_two(){sex_pdx::serial_record!("[net.job.state] owner={:?} ticket={} from={:?} to={:?} staged={} queued={} received={} scope=private_job",outbound.owner(),current.ticket,previous.state,current.state,current.staged,current.sent,current.received);}
-                }
-                let before_dns=dns.state();dns.advance(sex_pdx::get_ticks(),&mut DnsWire(Some(&mut *engine)));
-                if before_dns!=dns.state(){dns_changes=dns_changes.saturating_add(1);if dns_changes<=64||dns_changes.is_power_of_two(){sex_pdx::serial_record!("[net.dns.state] owner={:?} ticket={} from={:?} to={:?} scope=controlled_query",dns.owner(),dns.ticket(),before_dns,dns.state());}}
-                // Transport stop also revokes private egress already collected
-                // here. Submitted DMA remains in the driver's custody.
-                if engine.failure().is_some(){pending_packet=None;}
-                else if pending_packet.is_none(){pending_packet=engine.take_frame();}
-            }
-            if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
-            let transport_healthy=transport.as_ref().is_some_and(|engine|engine.failure().is_none());
-            if transport_healthy&&driver.phase()==ethernet::Phase::Running&&!driver.busy(){
-                if let Some(packet)=pending_packet.take(){
-                    match driver.send(&packet.bytes[..packet.length],sex_pdx::get_ticks()){
-                        Ok((sequence,index,length,hash))=>{
-                            let sampled=sequence<=64||sequence.is_power_of_two();
-                            if sampled{sex_pdx::serial_record!("[sexnet.ether.tx.submit] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
-                            if let Some(ticket)=network_config.as_ref().and_then(|c|packet.dns_ticket(c)){
-                                if sampled||ticket>last_dns_egress{sex_pdx::serial_record!("[net.dns.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_response",ticket,sequence,length,hash);}
-                                last_dns_egress=last_dns_egress.max(ticket);
-                            }
-                            if let Some(ticket)=network_config.as_ref().and_then(|c|packet.client_ticket(c)){
-                                if sampled||ticket>last_job_egress{sex_pdx::serial_record!("[net.job.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_delivery",ticket,sequence,length,hash);}
-                                last_job_egress=last_job_egress.max(ticket);
-                            }
-                        },
-                        Err(error)=>sex_pdx::serial_record!("[sexnet.ether.send.failed] error={:?} retry=0",error),
+        // Several frames each turn, not one: a download needs a frame in and an ACK
+        // out for every 1.4 KB, and a turn costs a yield or a timer wait.
+        let mut burst=0u32;
+        loop {
+            let mut progressed=false;
+            if let Some(driver)=ethernet.as_mut() {
+                let before=driver.phase();
+                let receive=transport.as_ref().is_none_or(|engine|engine.can_receive());
+                let event=driver.advance_with_receive(sex_pdx::get_ticks(),receive);progressed|=event.is_some();
+                if driver.phase()!=before {
+                    sex_pdx::serial_record!("[sexnet.ether.phase] from={:?} to={:?} failure={:?}",before,driver.phase(),driver.failure());
+                    if driver.phase()==ethernet::Phase::Running {
+                        sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified as u8);
+                        let mut packet=sex_net::Frame{length:60,bytes:[0;sex_net::MAX_FRAME]};
+                        packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac,&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
+                        transport=Some(unsafe{sex_net::Engine::new(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
+                            &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX,&mut TRANSPORT_STORAGE)}.expect("FIXED_TRANSPORT_CONFIG"));
+                        let gateway=network_config.expect("BOOT_NETWORK_CONFIG").gateway;
+                        sex_pdx::serial_record!("[sexnet.route.ready] gateway={}.{}.{}.{} default=1 routes=1 route_capacity={} neighbors={} discovery_ms=1000 expiry_ms=60000 heap=0 authority=held_boot_nic",gateway[0],gateway[1],gateway[2],gateway[3],sex_net::ROUTE_CAPACITY,sex_net::NEIGHBOR_CAPACITY);
+                        sex_pdx::serial_record!("[sexnet.transport.ready] implementation=smoltcp0.14.0 flows=1 rx=4096 tx=4096 turn=256 port=46076 no_std=1 heap=0 diagnostic_listener=1 predictable_seed=1 app_network=0 dns=0 http=0 tls=0");
+                        sex_pdx::serial_record!("[sexnet.dns.ready] jobs=1 host=probe.sexos.test peer_port=46079 datagram=512 retries=0 service_data=1");
+                        sex_pdx::serial_record!("[sexnet.jobs.ready] app_jobs=1 outbound_flows=1 rx=4096 tx=4096 client_port_base=48000 peer_port=46078 service_data=1");
                     }
                 }
+                match event {
+                    Some(ethernet::Event::Received{sequence,index,frame})=>{
+                        if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx] sequence={} index={} length={} hash={:#x}",sequence,index,frame.length,ethernet::fingerprint(&frame.bytes[..frame.length]));}
+                        if let Some(engine)=transport.as_mut(){
+                            engine.submit_frame(&frame.bytes[..frame.length]).expect("PROTOCOL_RX_CUSTODY");
+                        }
+                    },
+                    Some(ethernet::Event::Transmitted{sequence,index,length,hash})=>{
+                        if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.tx.done] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
+                    },
+                    Some(ethernet::Event::Dropped{index,length,status,errors})=>{
+                        if driver.dropped<=64||driver.dropped.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx.drop] index={} length={} status={} errors={} total={}",index,length,status,errors,driver.dropped);}
+                    },None=>{},
+                }
+                if let Some(engine)=transport.as_mut(){
+                    let before=engine.state();let stats=engine.statistics();let failure=engine.failure();
+                    engine.advance(sex_pdx::get_ticks());let after=engine.statistics();
+                    if engine.state()!=before {
+                        transport_changes=transport_changes.saturating_add(1);
+                        if transport_changes<=64||transport_changes.is_power_of_two(){sex_pdx::serial_record!("[sexnet.transport.state] from={:?} to={:?} flow={} received={} queued={} receive_hash={:#x} queue_hash={:#x}",before,engine.state(),after.flow,after.flow_received,after.flow_queued,after.flow_receive_hash,after.flow_queue_hash);}
+                    }
+                    if after.received!=stats.received||after.queued!=stats.queued {
+                        transfer_changes=transfer_changes.saturating_add(1);
+                        if transfer_changes<=64||transfer_changes.is_power_of_two(){sex_pdx::serial_record!("[sexnet.transport.bytes] flow={} received={} queued={} receive_hash={:#x} queue_hash={:#x} scope=private_custody_not_delivery",after.flow,after.flow_received,after.flow_queued,after.flow_receive_hash,after.flow_queue_hash);}
+                    }
+                    web.pump(unsafe{&mut *(engine as *mut sex_net::Engine<'static>)});
+                    if engine.failure()!=failure{sex_pdx::serial_record!("[sexnet.transport.failed] error={:?}",engine.failure());}
+                    let previous=outbound.snapshot();
+                    let duplex=outbound.is_duplex();
+                    outbound.advance(sex_pdx::get_ticks(),&mut ClientWire(Some(&mut *engine),duplex));
+                    let current=outbound.snapshot();
+                    if previous.state!=current.state{
+                        outbound_changes=outbound_changes.saturating_add(1);
+                        if outbound_changes<=64||outbound_changes.is_power_of_two(){sex_pdx::serial_record!("[net.job.state] owner={:?} ticket={} from={:?} to={:?} staged={} queued={} received={} scope=private_job",outbound.owner(),current.ticket,previous.state,current.state,current.staged,current.sent,current.received);}
+                    }
+                    let before_dns=dns.state();dns.advance(sex_pdx::get_ticks(),&mut DnsWire(Some(&mut *engine)));
+                    if before_dns!=dns.state(){dns_changes=dns_changes.saturating_add(1);if dns_changes<=64||dns_changes.is_power_of_two(){sex_pdx::serial_record!("[net.dns.state] owner={:?} ticket={} from={:?} to={:?} scope=controlled_query",dns.owner(),dns.ticket(),before_dns,dns.state());}}
+                    // Transport stop also revokes private egress already collected
+                    // here. Submitted DMA remains in the driver's custody.
+                    if engine.failure().is_some(){pending_packet=None;}
+                    else if pending_packet.is_none(){pending_packet=engine.take_frame();}
+                }
+                if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
+                let transport_healthy=transport.as_ref().is_some_and(|engine|engine.failure().is_none());
+                if transport_healthy&&driver.phase()==ethernet::Phase::Running&&!driver.busy(){
+                    if let Some(packet)=pending_packet.take(){
+                        match driver.send(&packet.bytes[..packet.length],sex_pdx::get_ticks()){
+                            Ok((sequence,index,length,hash))=>{progressed=true;
+                                let sampled=sequence<=64||sequence.is_power_of_two();
+                                if sampled{sex_pdx::serial_record!("[sexnet.ether.tx.submit] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
+                                if let Some(ticket)=network_config.as_ref().and_then(|c|packet.dns_ticket(c)){
+                                    if sampled||ticket>last_dns_egress{sex_pdx::serial_record!("[net.dns.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_response",ticket,sequence,length,hash);}
+                                    last_dns_egress=last_dns_egress.max(ticket);
+                                }
+                                if let Some(ticket)=network_config.as_ref().and_then(|c|packet.client_ticket(c)){
+                                    if sampled||ticket>last_job_egress{sex_pdx::serial_record!("[net.job.egress.submit] ticket={} sequence={} length={} hash={:#x} scope=dma_admission_not_delivery",ticket,sequence,length,hash);}
+                                    last_job_egress=last_job_egress.max(ticket);
+                                }
+                            },
+                            Err(error)=>sex_pdx::serial_record!("[sexnet.ether.send.failed] error={:?} retry=0",error),
+                        }
+                    }
+                }
+                polling=driver.active();
+                if !polling{pending_packet=None;if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}}
             }
-            polling=driver.active();
-            if !polling{pending_packet=None;if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}}
+            burst+=1;
+            if !progressed||!polling||burst>=NET_BURST{break;}
         }
         if let Some((owner,word))=outbound.pending_reply(){
             if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}

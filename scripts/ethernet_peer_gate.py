@@ -25,7 +25,7 @@ def validate(text,exchanges,mac):
   actual=[tuple(int(x,16 if i==3 else 10)for i,x in enumerate(m.groups()))for m in re.finditer(r'\[sexnet.ether.tx\.'+kind+r'\] sequence=(\d+) index=(\d+) length=(\d+) hash=(0x[0-9a-f]+)',text)]
   wanted=[(i+1,i%8,len(bytes.fromhex(e['guest_tx'])),fingerprint(bytes.fromhex(e['guest_tx'])))for i,e in enumerate(exchanges)]
   if actual!=wanted:errors.append('actual TX '+kind+' differs from independently captured full frames/indices')
- wanted=[(i+1,i%8,len(bytes.fromhex(e['peer_fixture'])),fingerprint(bytes.fromhex(e['peer_fixture'])))for i,e in enumerate(exchanges)]
+ wanted=[(i+1,i%96,len(bytes.fromhex(e['peer_fixture'])),fingerprint(bytes.fromhex(e['peer_fixture'])))for i,e in enumerate(exchanges)]
  if rx!=wanted:errors.append('actual RX bytes/length/index differ from explicit peer fixture')
  if len(exchanges)!=25:errors.append('requires startup gateway exchange plus24 request/reply exchanges')
  for i,e in enumerate(exchanges):

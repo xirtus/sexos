@@ -15,7 +15,7 @@ def initialized():
 [pci.command.apply] pd=13 slot=19 before=3 after=7 set=4 clear=0 changed=1
 [sexnet.ether.phase] from=Enable to=Link failure=None
 [sexnet.ether.phase] from=Link to=Running failure=None
-[sexnet.ether.ready] model=I82574 region=2 budget=262144 used=40960 descriptors=8 buffer=2048 polling=cooperative timing_verified=1 network=0 dns=0 tcp=0 http=0 tls=0
+[sexnet.ether.ready] model=I82574 region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified=1 network=0 dns=0 tcp=0 http=0 tls=0
 [app.surface.presented] target=15 surface=300 sequence=1 ok=1
 '''
 
@@ -31,14 +31,14 @@ def trace(rows):
  for i,row in enumerate(rows):
   tx=bytes.fromhex(row['guest_tx']);rx=bytes.fromhex(row['peer_fixture'])
   for kind in ['submit','done']:t+=f'[sexnet.ether.tx.{kind}] sequence={i+1} index={i%8} length={len(tx)} hash={fingerprint(tx):#x}\n'
-  t+=f'[sexnet.ether.rx] sequence={i+1} index={i%8} length={len(rx)} hash={fingerprint(rx):#x}\n'
+  t+=f'[sexnet.ether.rx] sequence={i+1} index={i%96} length={len(rx)} hash={fingerprint(rx):#x}\n'
  return t
 
 class EthernetEvidence(unittest.TestCase):
  def test_exact_lease_initialization_bus_master_and_full_duplex_bytes(self):
   rows=exchanges();self.assertTrue(validate(trace(rows),rows,MAC)['ok']);self.assertFalse(inspect(initialized(),preparation=True)['ok'])
  def test_identity_or_bus_master_order_model_budget_and_online_claim_fail(self):
-  for old,new in [('product=4307 runtime','product=4110 runtime'),('model=I82574','model=I82540'),('used=40960','used=262144'),('set=4 clear=0','set=6 clear=0'),('changed=1','changed=0'),('from=Registers to=Enable','from=Enable to=Registers'),('failure=None','failure=Some(Deadline)'),('network=0 dns=0 tcp=0 http=0 tls=0','network=1 dns=1 tcp=1 http=1 tls=1')]:
+  for old,new in [('product=4307 runtime','product=4110 runtime'),('model=I82574','model=I82540'),('used=221184','used=262144'),('set=4 clear=0','set=6 clear=0'),('changed=1','changed=0'),('from=Registers to=Enable','from=Enable to=Registers'),('failure=None','failure=Some(Deadline)'),('network=0 dns=0 tcp=0 http=0 tls=0','network=1 dns=1 tcp=1 http=1 tls=1')]:
    self.assertFalse(inspect(initialized().replace(old,new),ethernet=True)['ok'],new)
  def test_missing_duplicate_wrong_sequence_index_hash_or_capture_fails(self):
   rows=exchanges();t=trace(rows)
