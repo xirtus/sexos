@@ -1507,9 +1507,11 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -
 /// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
 /// Exact Spindle panes share the terminal layout scale for their narrower tiles.
 fn surface_text_scale(surf: &Surface) -> usize {
-    let base = if sex_pdx::app_catalog::is_spindle(surf.owner_pd)
-        && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0
-    {
+    // Spindle lays out its own grid from spindle_view metrics, so its exact
+    // panes keep that scale until Spindle is told the screen's scale (F2).
+    let spindle = sex_pdx::app_catalog::is_spindle(surf.owner_pd)
+        && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0;
+    let base = if spindle {
         sex_pdx::spindle_view::scale(surf.w)
     } else {
         sex_pdx::desktop_style::scale(surf.w)
@@ -1517,7 +1519,7 @@ fn surface_text_scale(surf: &Surface) -> usize {
     // The window's own text size: whole steps from its width's default, Geist
     // drawn fresh for each.
     // HiDPI: the screen's scale multiplies the width's default and the range.
-    let ui=sex_pdx::desktop_style::ui_scale() as i32;
+    let ui=if spindle{1}else{sex_pdx::desktop_style::ui_scale() as i32};
     (base as i32 * ui + surf.text_zoom as i32).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * ui) as usize
 }
 /// A zoom step on a surface: +1 larger, -1 smaller, 0 the default. The stored step
@@ -1529,7 +1531,8 @@ fn apply_text_zoom(surf: &mut Surface, step: i64) -> bool {
     let base = surface_text_scale(surf) as i32;
     surf.text_zoom = zoom;
     let wanted = if step == 0 { 0 } else { surf.text_zoom as i32 + step.signum() as i32 };
-    let most = sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * sex_pdx::desktop_style::ui_scale() as i32;
+    let ui = if sex_pdx::app_catalog::is_spindle(surf.owner_pd) && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0 { 1 } else { sex_pdx::desktop_style::ui_scale() as i32 };
+    let most = sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * ui;
     surf.text_zoom = ((base + wanted).clamp(1, most) - base) as i8;
     let changed = surface_text_scale(surf) != before;
     if changed { recompute_text_lines(surf); }
