@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Bounded outbound-job data carried over BOOT's existing browser network route.
 //! Tickets and sequence numbers are data, never capabilities or authority.
 pub const OP: u64 = 0x20C;

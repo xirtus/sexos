@@ -51,6 +51,8 @@ jobs:
       run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
     - name: Other systems' filesystems (FAT, exFAT, ext4, NTFS) on the host
       run: bash scripts/volumes_host_gate.sh
+    - name: Hardware census table (names, owners, VMD warning) on the host
+      run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
     - name: Host kernel-model regressions

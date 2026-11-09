@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Read-only immutable BOOT policy query on the existing held route. A profile
 //! receipt is not a grant to connect, mutate roots, or select an arbitrary name.
 pub const OP:u64=0x210;
