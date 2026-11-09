@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Play's bridge to FFmpeg: open a stream through callbacks, decode its video and its
+// sex-media's bridge to FFmpeg: open a stream through callbacks, decode its video and its
 // sound, scale each picture into the caller's 0x00RRGGBB pixels and turn sound into
 // 48 kHz stereo i16 frames. Rust sees only these calls and plain structs, never
 // FFmpeg's own structures.
@@ -187,6 +187,24 @@ int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int
         // A damaged packet costs its own frame, not the whole film.
         if (r < 0 && r != AVERROR(EAGAIN) && r != AVERROR_INVALIDDATA) return r;
     }
+}
+
+// Go to `ms` from the file's start: the decoders restart at the key frame at or
+// before it. Returns 0 or an AVERROR.
+int sx_seek(struct sx *s, int64_t ms) {
+    int64_t ts = av_rescale(ms < 0 ? 0 : ms, AV_TIME_BASE, 1000);
+    if (s->format->start_time != AV_NOPTS_VALUE) ts += s->format->start_time;
+    int r = avformat_seek_file(s->format, -1, INT64_MIN, ts, ts, 0);
+    if (r < 0) return r;
+    struct decoder *ds[2] = { &s->video, &s->audio };
+    for (int i = 0; i < 2; i++) {
+        if (!ds[i]->codec) continue;
+        avcodec_flush_buffers(ds[i]->codec);
+        ds[i]->done = 0;
+    }
+    if (s->resample) swr_init(s->resample);
+    s->draining = 0;
+    return 0;
 }
 
 void sx_close(struct sx *s) {
