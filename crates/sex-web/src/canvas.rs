@@ -60,6 +60,8 @@ pub struct Surface {
     at: Option<(f32, f32)>,
     /// The subpath's start, for closePath.
     start: Option<(f32, f32)>,
+    /// Pixels changed since the canvas was last shown: x0, y0, x1, y1 (exclusive).
+    dirty: Option<[u32; 4]>,
 }
 
 /// Parses a CSS `font` shorthand as far as Geist can follow it.
@@ -106,9 +108,20 @@ impl Surface {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             width, height, pixels: alloc::vec![0; (width * height) as usize], state: State::new(), stack: Vec::new(),
-            path: PathBuilder::new(), at: None, start: None,
+            path: PathBuilder::new(), at: None, start: None, dirty: Some([0, 0, width, height]),
         }
     }
+
+    /// Notes that pixels in x0..x1, y0..y1 changed.
+    fn touch(&mut self, x0: u32, y0: u32, x1: u32, y1: u32) {
+        let (x1, y1) = (x1.min(self.width), y1.min(self.height));
+        if x0 >= x1 || y0 >= y1 { return; }
+        self.dirty = Some(match self.dirty {
+            Some([a, b, c, d]) => [a.min(x0), b.min(y0), c.max(x1), d.max(y1)],
+            None => [x0, y0, x1, y1],
+        });
+    }
+    fn touch_all(&mut self) { self.dirty = Some([0, 0, self.width, self.height]); }
 
     fn map(&self, x: f32, y: f32) -> (f32, f32) {
         let t = &self.state.ctm;
@@ -187,7 +200,10 @@ impl Surface {
         paint
     }
 
-    fn pixmap(&mut self) -> Option<PixmapMut<'_>> { PixmapMut::from_bytes(as_bytes(&mut self.pixels), self.width, self.height) }
+    fn pixmap(&mut self) -> Option<PixmapMut<'_>> {
+        self.touch_all();
+        PixmapMut::from_bytes(as_bytes(&mut self.pixels), self.width, self.height)
+    }
 
     fn fill(&mut self, rule: FillRule) {
         let Some(path) = self.path.clone().finish() else { return };
@@ -243,6 +259,7 @@ impl Surface {
         if plain {
             let (px, py) = self.map(x, y);
             let (w, h) = (self.width as i32, self.height as i32);
+            self.touch_all();
             let mut target = Target { pixels: &mut self.pixels, width: w, height: h, scroll: 0, top: 0, premul: true };
             text_run(&mut target, fonts, libm::roundf(px) as i32 + dx, libm::roundf(py) as i32 + dy, font, color, text);
             return;
@@ -262,7 +279,7 @@ impl Surface {
 
     /// Draws the part `sx, sy, sw, sh` of a picture into `dx, dy, dw, dh` (a negative source
     /// size means the whole picture, a zero target size the source size).
-    fn draw_image(&mut self, img: &Image, [sx, sy, sw, sh, dx, dy, dw, dh]: [f32; 8]) {
+    fn draw_image(&mut self, img: Src, [sx, sy, sw, sh, dx, dy, dw, dh]: [f32; 8]) {
         let (iw, ih) = (img.width as f32, img.height as f32);
         let (sw, sh) = if sw < 0.0 || sh < 0.0 { (iw, ih) } else { (sw, sh) };
         let (dw, dh) = if dw == 0.0 && dh == 0.0 { (sw, sh) } else { (dw, dh) };
@@ -282,6 +299,7 @@ impl Surface {
         if exact && self.state.blend == BlendMode::SourceOver && self.state.alpha >= 1.0 {
             let (tx, ty) = (libm::roundf(map.tx) as i32, libm::roundf(map.ty) as i32);
             let (w, h) = (self.width as i32, self.height as i32);
+            self.touch(tx.max(0) as u32, ty.max(0) as u32, (tx + cw as i32).max(0) as u32, (ty + ch as i32).max(0) as u32);
             for y in 0..ch as i32 {
                 let (py, sy) = (ty + y, y0 as usize + y as usize);
                 if py < 0 || py >= h { continue; }
@@ -294,6 +312,11 @@ impl Surface {
                     *d = match a {
                         0 => continue,
                         255 => p,
+                        _ if img.premul => {
+                            // Premultiplied: d = s + d * (1 - a).
+                            let mix = |s: u32| ((((p >> s) & 0xFF) * 255 + ((*d >> s) & 0xFF) * (255 - a) + 127) / 255).min(255) << s;
+                            mix(24) | mix(16) | mix(8) | mix(0)
+                        }
                         _ => {
                             // Source over, premultiplied: d = s * a + d * (1 - a).
                             let mix = |s: u32| { let sv = ((p >> s) & 0xFF) * a; let dv = ((*d >> s) & 0xFF) * (255 - a); ((sv + dv + 127) / 255).min(255) << s };
@@ -313,6 +336,7 @@ impl Surface {
                 *o = match a {
                     0 => 0,
                     255 => p,
+                    _ if img.premul => p,
                     _ => { let m = |s: u32| (((p >> s) & 0xFF) * a + 127) / 255; a << 24 | m(16) << 16 | m(8) << 8 | m(0) }
                 };
             }
@@ -335,13 +359,13 @@ impl Surface {
     }
 
     /// Runs one command.
-    fn command(&mut self, fonts: &mut Fonts, cmd: &str) -> Option<()> {
+    fn command(&mut self, fonts: &mut Fonts, cmd: &str, others: &[(usize, Surface)]) -> Option<()> {
         let fields: Vec<&str> = cmd.split('\u{1f}').collect();
         let (name, a) = (fields[0], &fields[1..]);
         match name {
             "sv" => { if self.stack.len() < 512 { self.stack.push(self.state.clone()); } }
             "rs" => { if let Some(s) = self.stack.pop() { self.state = s; } }
-            "re0" => { self.state = State::new(); self.stack.clear(); self.path = PathBuilder::new(); self.at = None; self.pixels.fill(0); }
+            "re0" => { self.state = State::new(); self.stack.clear(); self.path = PathBuilder::new(); self.at = None; self.pixels.fill(0); self.touch_all(); }
             // Setting the canvas's width or height (even to the same value) clears it and its state.
             "sz" => {
                 let (w, h) = ((f(a, 0)? as u32).clamp(1, MAX_SIDE), (f(a, 1)? as u32).clamp(1, MAX_SIDE));
@@ -422,8 +446,15 @@ impl Surface {
             "ft" => self.text(fonts, a.first()?, f(a, 1)?, f(a, 2)?),
             "di" => {
                 let name = *a.first()?;
-                let img = fonts.images.iter().find(|(s, _)| s == name).map(|(_, i)| i.clone())?;
-                self.draw_image(&img, [f(a, 1)?, f(a, 2)?, f(a, 3)?, f(a, 4)?, f(a, 5)?, f(a, 6)?, f(a, 7)?, f(a, 8)?]);
+                let rect = [f(a, 1)?, f(a, 2)?, f(a, 3)?, f(a, 4)?, f(a, 5)?, f(a, 6)?, f(a, 7)?, f(a, 8)?];
+                // Another canvas: straight from its premultiplied pixels.
+                let other = name.strip_prefix("canvas:").and_then(|n| n.parse::<usize>().ok()).and_then(|n| others.iter().find(|(o, _)| *o == n));
+                if let Some((_, src)) = other {
+                    self.draw_image(Src { pixels: &src.pixels, width: src.width as usize, height: src.height as usize, premul: true }, rect);
+                } else {
+                    let img = fonts.images.iter().find(|(s, _)| s == name).map(|(_, i)| i.clone())?;
+                    self.draw_image(Src { pixels: &img.pixels, width: img.width, height: img.height, premul: false }, rect);
+                }
             }
             _ => {}
         }
@@ -432,21 +463,45 @@ impl Surface {
 
     /// The surface as a straight-alpha picture for painting.
     pub fn image(&self) -> Image {
-        let pixels = self.pixels.iter().map(|&p| {
-            let a = p >> 24;
-            if a == 0 { return 0; }
-            if a == 255 { return p; }
-            let un = |s: u32| (((p >> s) & 0xFF) * 255 + a / 2) / a;
-            a << 24 | un(16).min(255) << 16 | un(8).min(255) << 8 | un(0).min(255)
-        }).collect();
-        Image { width: self.width as usize, height: self.height as usize, pixels }
+        let mut img = Image { width: self.width as usize, height: self.height as usize, pixels: alloc::vec![0; (self.width * self.height) as usize] };
+        self.unpremultiply(&mut img, [0, 0, self.width, self.height]);
+        img
     }
+
+    /// Writes the part `x0, y0, x1, y1` of the surface into `img` (the same size), straight alpha.
+    fn unpremultiply(&self, img: &mut Image, [x0, y0, x1, y1]: [u32; 4]) {
+        let w = self.width as usize;
+        for y in y0 as usize..y1 as usize {
+            let (src, dst) = (&self.pixels[y * w + x0 as usize..y * w + x1 as usize], &mut img.pixels[y * w + x0 as usize..y * w + x1 as usize]);
+            for (d, &p) in dst.iter_mut().zip(src) {
+                let a = p >> 24;
+                *d = match a {
+                    255 => p,
+                    0 => 0,
+                    _ => {
+                        let un = |s: u32| (((p >> s) & 0xFF) * 255 + a / 2) / a;
+                        a << 24 | un(16).min(255) << 16 | un(8).min(255) << 8 | un(0).min(255)
+                    }
+                };
+            }
+        }
+    }
+}
+
+/// A picture to draw: straight alpha (pictures) or premultiplied (another canvas).
+struct Src<'a> {
+    pixels: &'a [u32],
+    width: usize,
+    height: usize,
+    premul: bool,
 }
 
 /// All canvases of a page.
 #[derive(Default)]
 pub struct Canvases {
     pub surfaces: Vec<(usize, Surface)>,
+    /// Canvases shown anew by the last `run_queue`.
+    pub drew: Vec<usize>,
 }
 
 impl Canvases {
@@ -455,38 +510,65 @@ impl Canvases {
     /// Runs `commands` on canvas `node`, `width` by `height` (a new size clears it), and
     /// refreshes its picture in `fonts`.
     pub fn run(&mut self, fonts: &mut Fonts, node: usize, width: u32, height: u32, commands: &str) {
+        self.draw(fonts, node, width, height, commands);
+        self.publish(fonts, node);
+    }
+
+    /// Runs `commands` on canvas `node` without refreshing its picture.
+    fn draw(&mut self, fonts: &mut Fonts, node: usize, width: u32, height: u32, commands: &str) {
         let (width, height) = (width.clamp(1, MAX_SIDE), height.clamp(1, MAX_SIDE));
         if width * height > MAX_PIXELS { return; }
         let i = match self.surfaces.iter().position(|(n, _)| *n == node) {
             Some(i) => i,
             None => { self.surfaces.push((node, Surface::new(width, height))); self.surfaces.len() - 1 }
         };
-        let surface = &mut self.surfaces[i].1;
-        if surface.width != width || surface.height != height { *surface = Surface::new(width, height); }
-        for cmd in commands.split('\u{1e}') { let _ = surface.command(fonts, cmd); }
+        // Out of the list while it draws, so it can read the other canvases.
+        let (_, mut surface) = self.surfaces.swap_remove(i);
+        if surface.width != width || surface.height != height { surface = Surface::new(width, height); }
+        for cmd in commands.split('\u{1e}') { let _ = surface.command(fonts, cmd, &self.surfaces); }
+        self.surfaces.push((node, surface));
+    }
+
+    /// Shows canvas `node` as the picture `canvas:<node>`: only what changed since it was
+    /// last shown is converted, into the same picture when nothing else holds it.
+    fn publish(&mut self, fonts: &mut Fonts, node: usize) {
+        let Some((_, surface)) = self.surfaces.iter_mut().find(|(n, _)| *n == node) else { return };
         let name = alloc::format!("canvas:{node}");
-        let image = surface.image();
-        match fonts.images.iter_mut().find(|(s, _)| *s == name) {
-            Some(slot) => slot.1 = alloc::rc::Rc::new(image),
-            None => fonts.images.push((name, alloc::rc::Rc::new(image))),
+        let slot = fonts.images.iter_mut().find(|(s, _)| *s == name);
+        let Some(dirty) = surface.dirty.take() else { if slot.is_some() { return } else { surface.touch_all(); return self.publish(fonts, node) } };
+        match slot {
+            Some((_, img)) if img.width == surface.width as usize && img.height == surface.height as usize => match alloc::rc::Rc::get_mut(img) {
+                Some(img) => surface.unpremultiply(img, dirty),
+                None => *img = alloc::rc::Rc::new(surface.image()),
+            },
+            Some((_, img)) => *img = alloc::rc::Rc::new(surface.image()),
+            None => fonts.images.push((name, alloc::rc::Rc::new(surface.image()))),
         }
     }
 
-    /// Runs a page's queued batches; sizes come from each canvas's attributes.
+    /// Runs a page's queued batches; sizes come from each canvas's attributes. Each canvas
+    /// that drew is shown once, after all of them.
     pub fn run_queue(&mut self, fonts: &mut Fonts, dom: &sex_html::dom::Dom, queue: Vec<(usize, String)>) -> bool {
         let any = !queue.is_empty();
+        let mut drew: Vec<usize> = Vec::new();
         for (node, batch) in queue {
             let (w, h) = canvas_size(dom, node);
-            self.run(fonts, node, w, h, &batch);
+            self.draw(fonts, node, w, h, &batch);
+            if !drew.contains(&node) { drew.push(node); }
         }
+        for &node in &drew { self.publish(fonts, node); }
+        self.drew = drew;
         any
     }
 }
 
 /// Feeds WebGL canvases the pictures they wait for, and shows each canvas that drew a new
 /// frame. True if any changed.
-pub fn present_gl(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -> bool {
-    let mut any = false;
+pub fn present_gl(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -> bool { !present_gl_nodes(fonts, gl).is_empty() }
+
+/// Like `present_gl`, giving the canvases shown anew.
+pub fn present_gl_nodes(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -> Vec<usize> {
+    let mut shown = Vec::new();
     for (node, canvas) in gl.by_node.iter_mut() {
         for (target, tex, src, flip, premul) in core::mem::take(&mut canvas.pictures) {
             let Some((_, img)) = fonts.images.iter().find(|(s, _)| *s == src) else { continue };
@@ -501,9 +583,9 @@ pub fn present_gl(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -> bool
             Some(slot) => slot.1 = alloc::rc::Rc::new(image),
             None => fonts.images.push((name, alloc::rc::Rc::new(image))),
         }
-        any = true;
+        shown.push(*node);
     }
-    any
+    shown
 }
 
 /// A canvas element's drawing size: its `width` and `height` attributes, 300 by 150 by default.

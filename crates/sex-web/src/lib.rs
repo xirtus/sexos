@@ -269,6 +269,20 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
     }
 }
 
+/// Draws only the pictures named in `changed` (canvases that drew) over the last frame,
+/// when each is opaque and so covers what was under it. False when that can't stand in
+/// for a full `frame`.
+pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, changed: &[String]) -> bool {
+    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false };
+    let items: Vec<(i32, i32, i32, i32, &str)> = sex_html::layout::visible(page, scroll, scroll + height - BAR)
+        .filter_map(|item| match item { Item::Image { x, y, w, h, src, .. } if changed.iter().any(|c| c == src) => Some((*x, *y, *w, *h, src.as_str())), _ => None })
+        .collect();
+    let opaque = |src: &str| fonts.images.iter().find(|(s, _)| s == src).is_some_and(|(_, img)| img.pixels.iter().all(|p| p >> 24 == 255));
+    if !items.iter().all(|i| opaque(i.4)) { return false; }
+    for (x, y, w, h, src) in items { image(&mut t, fonts, x, y, w, h, src, ""); }
+    true
+}
+
 fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32, src: &str, alt: &str) {
     let Some((_, img)) = fonts.images.iter().find(|(s, _)| s == src) else {
         if src.starts_with("canvas:") { return; }
