@@ -1654,7 +1654,9 @@
   }
   // One request to the browser; `done(status, length)` runs when it is loaded.
   function ask(url, method, headers, body, done) {
-    const id = H(OP.FETCH, url, method, headers._lines(), bodyBytes(body, headers) || '');
+    // The body first: it may add a Content-Type the header lines must carry.
+    const bytes = bodyBytes(body, headers) || '';
+    const id = H(OP.FETCH, url, method, headers._lines(), bytes);
     if (id === null) return null;
     fetches.set(+id, done);
     return +id;

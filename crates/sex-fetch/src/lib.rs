@@ -99,9 +99,11 @@ pub struct Request<'a> {
     pub url: &'a str,
     pub headers: &'a [(&'a str, &'a str)],
     pub body: &'a [u8],
+    /// The `Origin` among `headers` is the browser's own, not a page's.
+    pub trusted_origin: bool,
 }
 impl<'a> Request<'a> {
-    pub const fn get(url: &'a str) -> Self { Request { method: "GET", url, headers: &[], body: &[] } }
+    pub const fn get(url: &'a str) -> Self { Request { method: "GET", url, headers: &[], body: &[], trusted_origin: false } }
 }
 
 fn token(s: &str) -> bool { !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)) }
@@ -109,7 +111,7 @@ fn value_ok(s: &str) -> bool { !s.bytes().any(|b| b == b'\r' || b == b'\n' || b 
 
 /// Headers a page's script may not set (the browser owns them).
 pub fn forbidden_header(name: &str) -> bool {
-    const NAMES: &[&str] = &["host", "connection", "content-length", "transfer-encoding", "te", "trailer", "upgrade", "keep-alive", "cookie", "cookie2", "accept-encoding", "expect", "date", "via", "proxy-authorization"];
+    const NAMES: &[&str] = &["host", "connection", "content-length", "transfer-encoding", "te", "trailer", "upgrade", "keep-alive", "cookie", "cookie2", "accept-encoding", "expect", "date", "via", "proxy-authorization", "origin", "referer"];
     let n = name.to_ascii_lowercase();
     NAMES.contains(&n.as_str()) || n.starts_with("proxy-") || n.starts_with("sec-")
 }
@@ -130,7 +132,8 @@ pub fn encode(req: &Request, url: &Url, cookie: Option<&str>) -> Result<Vec<u8>,
     put("Accept-Encoding: gzip, deflate\r\nConnection: close\r\n");
     for (k, v) in req.headers {
         if !token(k) || !value_ok(v) { return Err(Error::Header); }
-        if forbidden_header(k) { continue; }
+        // The browser's own Origin goes through; a page's Origin or Host never does.
+        if forbidden_header(k) && !(k.eq_ignore_ascii_case("origin") && req.trusted_origin) { continue; }
         put(k); put(": "); put(v.trim()); put("\r\n");
     }
     if let Some(c) = cookie.filter(|c| !c.is_empty()) {
@@ -293,7 +296,8 @@ pub fn complete(framing: Framing, raw: &[u8]) -> Result<bool, Error> {
 /// bytes. `closed` says the connection ended (so an until-close body is whole).
 pub fn decode(head: &Head, method: &str, raw: &[u8], max: usize) -> Result<Vec<u8>, Error> {
     let framed = match head.framing(method)? {
-        Framing::Empty => Vec::new(),
+        // HEAD and 304 replies may name the encoding of a body they don't carry.
+        Framing::Empty => return Ok(Vec::new()),
         Framing::Length(n) => {
             if (raw.len() as u64) < n { return Err(Error::Truncated); }
             if n > max as u64 && head.get("content-encoding").is_none() { return Err(Error::TooLarge); }

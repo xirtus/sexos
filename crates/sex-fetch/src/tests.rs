@@ -22,13 +22,15 @@ fn urls() {
 fn requests() {
     let u = Url::parse("https://www.youtube.com/youtubei/v1/next?prettyPrint=false").unwrap();
     let body = br#"{"videoId":"x"}"#;
-    let r = Request { method: "post", url: "", headers: &[("Content-Type", "application/json"), ("Host", "evil"), ("X-Goog-Visitor-Id", "v1")], body };
+    let r = Request { method: "post", url: "", headers: &[("Content-Type", "application/json"), ("Host", "evil"), ("X-Goog-Visitor-Id", "v1"), ("Origin", "https://evil")], body, trusted_origin: false };
     let bytes = encode(&r, &u, Some("YSC=a; PREF=b")).unwrap();
     let text = core::str::from_utf8(&bytes).unwrap();
     assert!(text.starts_with("POST /youtubei/v1/next?prettyPrint=false HTTP/1.1\r\nHost: www.youtube.com\r\n"), "{}", text);
     assert!(text.contains("\r\nContent-Type: application/json\r\n") && text.contains("\r\nX-Goog-Visitor-Id: v1\r\n"));
     assert!(text.contains("\r\nCookie: YSC=a; PREF=b\r\n") && text.contains("\r\nContent-Length: 15\r\n\r\n{\"videoId\""));
-    assert!(!text.contains("evil"), "scripts can't set Host");
+    assert!(!text.contains("evil"), "scripts can't set Host or Origin");
+    let o = encode(&Request { headers: &[("Origin", "https://page.example")], trusted_origin: true, ..Request::get("") }, &u, None).unwrap();
+    assert!(core::str::from_utf8(&o).unwrap().contains("\r\nOrigin: https://page.example\r\n"));
     assert_eq!(encode(&Request { headers: &[("X", "a\r\nInjected: 1")], ..Request::get("") }, &u, None), Err(Error::Header));
     assert_eq!(encode(&Request { method: "GET X", ..Request::get("") }, &u, None), Err(Error::Header));
     let g = encode(&Request { headers: &[("Range", "bytes=0-99")], ..Request::get("") }, &u, None).unwrap();
@@ -52,8 +54,11 @@ fn heads() {
     assert_eq!(h.framing("GET"), Err(Error::Malformed));
     let big = vec![b'a'; HEAD_MAX + 10];
     assert_eq!(parse_head(&big), Err(Error::HeadTooLarge));
-    let (h, _) = parse_head(b"HTTP/1.1 304 Not Modified\r\nContent-Length: 50\r\n\r\n").unwrap().unwrap();
+    let (h, _) = parse_head(b"HTTP/1.1 304 Not Modified\r\nContent-Length: 50\r\nContent-Encoding: gzip\r\n\r\n").unwrap().unwrap();
     assert_eq!(h.framing("GET"), Ok(Framing::Empty));
+    assert_eq!(decode(&h, "GET", b"", 10), Ok(Vec::new()));
+    let (h, _) = parse_head(b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\nContent-Encoding: gzip\r\n\r\n").unwrap().unwrap();
+    assert_eq!(decode(&h, "HEAD", b"", 10), Ok(Vec::new()));
 }
 
 #[test]
@@ -119,6 +124,13 @@ fn cookies() {
     jar.store(&yt, "PREF=f6=40; Expires=Wed, 21 Oct 2015 07:28:00 GMT", now); // already expired
     jar.store(&yt, "x=1; Domain=com", now); // a whole top-level domain
     jar.store(&yt, "y=1; Domain=google.com", now); // someone else
+    let uk = Url::parse("https://attacker.co.uk/").unwrap();
+    let mut other = Jar::new();
+    other.store(&uk, "z=1; Domain=co.uk", now); // a public suffix
+    other.store(&Url::parse("https://a.github.io/").unwrap(), "z=1; Domain=github.io", now);
+    assert!(other.is_empty());
+    other.store(&uk, "z=1; Domain=attacker.co.uk", now);
+    assert_eq!(other.header(&Url::parse("https://www.attacker.co.uk/").unwrap(), now).unwrap(), "z=1");
     assert_eq!(jar.len(), 2);
     let m = Url::parse("https://m.youtube.com/").unwrap();
     assert_eq!(jar.header(&m, now).unwrap(), "YSC=abc; VISITOR_INFO1_LIVE=v");

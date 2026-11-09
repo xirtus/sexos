@@ -78,8 +78,14 @@ impl Jar {
                 "domain" => {
                     let d = v.trim_start_matches('.').to_ascii_lowercase();
                     if d.is_empty() { continue; }
-                    // A cookie for a whole top-level domain (or for someone else) is refused.
-                    if !d.contains('.') || !domain_match(&url.host, &d) { return; }
+                    // A cookie for someone else is refused.
+                    if !domain_match(&url.host, &d) { return; }
+                    // So is one for a whole public suffix (com, co.uk, github.io), which
+                    // would reach every site under it; on that very host it stays host-only.
+                    if !d.contains('.') || psl::suffix_str(&d) == Some(d.as_str()) {
+                        if d == url.host { continue; }
+                        return;
+                    }
                     c.domain = d;
                     c.host_only = false;
                 }

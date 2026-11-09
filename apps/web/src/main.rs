@@ -154,23 +154,32 @@ impl Browser {
 
     /// Like `fetch`, also giving the status, and taking an error answer as an answer.
     fn fetch_status(&mut self, url: &str, max: usize) -> Result<(String, u16, core::ops::Range<usize>), &'static [u8]> {
-        let r = self.http("GET", url, &[], &[], max)?;
+        let r = self.http("GET", url, &[], &[], max, None)?;
         self.buf = r.body;
         Ok((r.url, r.status, 0..self.buf.len()))
     }
 
     /// One HTTP/1.1 exchange, following redirects, with the window's cookies.
-    fn http(&mut self, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize) -> Result<Loaded, &'static [u8]> {
+    ///
+    /// `script` is the requesting page's origin for a script's request. Then cookies
+    /// go only to (and come only from) that same origin, a request elsewhere says
+    /// where it comes from (`Origin`), and its reply reaches the script only if the
+    /// site allows that origin (`Access-Control-Allow-Origin`). So a page can't read
+    /// another site's private pages with the person's cookies.
+    fn http(&mut self, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Result<Loaded, &'static [u8]> {
         let mut url = String::from(sex_html::url::fragment(url).0);
         let mut method = String::from(if method.is_empty() { "GET" } else { method });
         let mut body = body;
         for _ in 0..MAX_REDIRECTS {
             let target = sex_fetch::Url::parse(&url).map_err(|_| net::message(net::Error::Address))?;
-            let cookie = self.jar.borrow().header(&target, wall());
-            let req = sex_fetch::Request { method: &method, url: &url, headers, body };
+            let cross = script.filter(|o| *o != target.origin());
+            let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
+            let mut sent: Vec<(&str, &str)> = headers.iter().filter(|(k, _)| !sex_fetch::forbidden_header(k)).copied().collect();
+            if let Some(o) = cross { sent.push(("Origin", o)); }
+            let req = sex_fetch::Request { method: &method, url: &url, headers: &sent, body, trusted_origin: cross.is_some() };
             let begun = sex_pdx::get_ticks();
             let r = net::request(&mut self.window, &req, cookie.as_deref(), max).map_err(net::message)?;
-            {
+            if cross.is_none() {
                 let mut jar = self.jar.borrow_mut();
                 for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
             }
@@ -182,6 +191,13 @@ impl Browser {
                     if r.head.status == 303 || (matches!(r.head.status, 301 | 302) && method == "POST") { method = String::from("GET"); body = &[]; }
                     url = String::from(sex_html::url::fragment(&next).0);
                     continue;
+                }
+            }
+            if let Some(o) = cross {
+                let allowed = r.head.get("access-control-allow-origin").map(str::trim);
+                if allowed != Some("*") && allowed != Some(o) {
+                    sex_pdx::serial_record!("[web.cors] blocked origin={} url={}", o, url);
+                    return Err(b"The site doesn't let this page read it.");
                 }
             }
             let lines = r.head.lines(true);
@@ -438,7 +454,8 @@ impl Browser {
         let Some(abs) = sex_html::url::resolve(&base, url) else { return done(0, Vec::new()) };
         if !abs.starts_with("http") { return done(0, Vec::new()); }
         let headers = ask.header_pairs();
-        match self.http(&ask.method, &abs, &headers, &ask.body, FETCH_MAX) { Ok(r) => r, Err(_) => done(0, Vec::new()) }
+        let origin = sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null"));
+        match self.http(&ask.method, &abs, &headers, &ask.body, FETCH_MAX, Some(&origin)) { Ok(r) => r, Err(_) => done(0, Vec::new()) }
     }
 
     /// Gives the page a key first. True if a handler kept it.

@@ -5,6 +5,7 @@
 <h2>Tube test</h2>
 <p>This page arrives chunked and gzip-compressed over HTTP/1.1, like youtube.com pages do.</p>
 <p id="out">waiting</p>
+<p id="other" data-base="{{OTHER}}"></p>
 <script>
 // What the YouTube player does, in miniature: cookies, a JSON POST to an API with its
 // own headers, then media bytes fetched by Range.
@@ -28,6 +29,15 @@ fetch('/tube/api/player?prettyPrint=false', {
     done('range ' + x.status + ' ' + x.getResponseHeader('Content-Range') + ' ' + b.length + ' first=' + b[0] + ' last=' + b[b.length - 1]);
   };
   x.onerror = () => done('range failed');
+  x.onloadend = () => {
+    // Another origin: it sees where the request came from, never this site's cookies,
+    // and its reply reaches the page only if it allows that.
+    const other = document.getElementById('other').getAttribute('data-base');
+    fetch(other + '/open').then(r => r.json()).then(j => {
+      done('cross open origin=' + j.origin + ' cookie=' + (j.cookie || 'none'));
+      return fetch(other + '/closed').then(() => done('cross closed read'), () => done('cross closed blocked'));
+    }, e => done('cross open failed ' + e));
+  };
   x.send();
 })).catch(e => done('post failed ' + e));
 </script>
