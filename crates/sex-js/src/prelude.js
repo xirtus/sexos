@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67 };
   const nodes = new Map();
 
   function fmt(v) {
@@ -1587,6 +1587,109 @@
     };
   };
 
+  // fetch(): the browser loads the address after the script returns (from the same places
+  // pages come from: built-in, @files, http) and answers with a 'fetched' message.
+  const fetches = new Map();
+  class Headers {
+    constructor(init) { this._m = new Map(); if (init) for (const [k, v] of (init instanceof Headers ? init._m : Object.entries(init))) this._m.set(String(k).toLowerCase(), String(v)); }
+    get(k) { const v = this._m.get(String(k).toLowerCase()); return v === undefined ? null : v; }
+    has(k) { return this._m.has(String(k).toLowerCase()); }
+    set(k, v) { this._m.set(String(k).toLowerCase(), String(v)); }
+    forEach(fn) { this._m.forEach((v, k) => fn(v, k, this)); }
+  }
+  class Response {
+    constructor(id, status, url, length) {
+      this._id = id; this.status = status; this.ok = status >= 200 && status < 300; this.url = url;
+      this.statusText = this.ok ? 'OK' : status === 404 ? 'Not Found' : 'Error'; this.redirected = false; this.type = 'basic';
+      this.headers = new Headers({ 'content-length': String(length) }); this.bodyUsed = false; this.body = null;
+    }
+    // The body comes over once, as bytes or as text.
+    _take(binary) {
+      if (this.bodyUsed) return Promise.reject(new TypeError('Body has already been used'));
+      this.bodyUsed = true;
+      const v = H(binary ? OP.FETCH_BODY | 0x10000 : OP.FETCH_BODY, '' + this._id);
+      return Promise.resolve(v === null ? (binary ? new ArrayBuffer(0) : '') : v);
+    }
+    arrayBuffer() { return this._take(true); }
+    text() { return this._take(false); }
+    json() { return this._take(false).then(JSON.parse); }
+    blob() { return this._take(true).then(b => ({ size: b.byteLength, type: '', arrayBuffer: () => Promise.resolve(b) })); }
+    clone() { return this; }
+  }
+  function fetch(input, init) {
+    const url = String(input && typeof input === 'object' && 'url' in input ? input.url : input);
+    return new Promise((resolve, reject) => {
+      const id = H(OP.FETCH, url);
+      if (id === null) { reject(new TypeError('Failed to fetch ' + url)); return; }
+      fetches.set(id, { resolve, reject, url });
+    });
+  }
+  function fetched(id, status, length) {
+    const f = fetches.get(id);
+    if (!f) return;
+    fetches.delete(id);
+    if (status === 0) f.reject(new TypeError('Failed to fetch ' + f.url));
+    else f.resolve(new Response(id, status, f.url, length));
+  }
+
+  // Query strings.
+  class URLSearchParams {
+    constructor(init) {
+      this._l = [];
+      if (init instanceof URLSearchParams) this._l = init._l.map(p => p.slice());
+      else if (init && typeof init === 'object') for (const k of Object.keys(init)) this._l.push([k, String(init[k])]);
+      else {
+        const dec = t => { try { return decodeURIComponent(t.replace(/\+/g, ' ')); } catch (e) { return t; } };
+        for (const part of String(init || '').replace(/^\?/, '').split('&')) {
+          if (!part) continue;
+          const i = part.indexOf('=');
+          this._l.push(i < 0 ? [dec(part), ''] : [dec(part.slice(0, i)), dec(part.slice(i + 1))]);
+        }
+      }
+    }
+    get(k) { const p = this._l.find(p => p[0] === String(k)); return p ? p[1] : null; }
+    getAll(k) { return this._l.filter(p => p[0] === String(k)).map(p => p[1]); }
+    has(k) { return this._l.some(p => p[0] === String(k)); }
+    set(k, v) { this.delete(k); this._l.push([String(k), String(v)]); }
+    append(k, v) { this._l.push([String(k), String(v)]); }
+    delete(k) { this._l = this._l.filter(p => p[0] !== String(k)); }
+    forEach(fn) { for (const [k, v] of this._l) fn(v, k, this); }
+    entries() { return this._l.map(p => p.slice())[Symbol.iterator](); }
+    keys() { return this._l.map(p => p[0])[Symbol.iterator](); }
+    values() { return this._l.map(p => p[1])[Symbol.iterator](); }
+    [Symbol.iterator]() { return this.entries(); }
+    toString() { return this._l.map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&'); }
+  }
+  // Addresses, split into their parts.
+  class URL {
+    constructor(u, base) {
+      let href = String(u);
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+        if (base === undefined) throw new TypeError('Invalid URL: ' + href);
+        const b = String(base instanceof URL ? base.href : base);
+        const origin = (/^[a-z]+:\/\/[^/?#]*/i.exec(b) || [''])[0];
+        href = href.startsWith('//') ? b.replace(/:.*/, ':') + href : href.startsWith('/') ? origin + href : b.replace(/[?#].*$/, '').replace(/[^/]*$/, '') + href;
+      }
+      const m = /^([a-z][a-z0-9+.-]*:)(?:\/\/([^/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(href) || [];
+      this.protocol = (m[1] || '').toLowerCase(); this.host = m[2] || ''; this.pathname = m[3] || (this.host ? '/' : '');
+      // Dot segments go away: /a/b/../c is /a/c.
+      if (this.pathname.startsWith('/')) {
+        const out = [];
+        const parts = this.pathname.split('/');
+        parts.forEach((p, i) => { if (p === '..') { if (out.length > 1) out.pop(); } else if (p !== '.' || i === parts.length - 1) out.push(p === '.' ? '' : p); });
+        this.pathname = out.join('/') || '/';
+      }
+      this.search = m[4] && m[4] !== '?' ? m[4] : ''; this.hash = m[5] && m[5] !== '#' ? m[5] : '';
+      this.searchParams = new URLSearchParams(this.search);
+    }
+    get hostname() { return this.host.replace(/:\d+$/, ''); }
+    get port() { const m = /:(\d+)$/.exec(this.host); return m ? m[1] : ''; }
+    get origin() { return this.host ? this.protocol + '//' + this.host : 'null'; }
+    get href() { return this.protocol + (this.host || this.protocol === 'file:' ? '//' + this.host : '') + this.pathname + this.search + this.hash; }
+    toString() { return this.href; }
+    toJSON() { return this.href; }
+  }
+
   const startNs = Date.now();
   const performance = { now: () => Date.now() - startNs, timeOrigin: startNs, mark() {}, measure() {} };
   const console = {
@@ -1627,6 +1730,7 @@
     GPUBindGroupLayout, GPUPipelineLayout, GPURenderPipeline, GPUCommandEncoder, GPUCommandBuffer, GPURenderPassEncoder,
     GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
     createImageBitmap: src => Promise.resolve(src),
+    fetch, Response, Headers, URL, URLSearchParams,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {
@@ -1647,6 +1751,7 @@
     switch (f[0]) {
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
+      case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
         const el = wrap(f[1]);

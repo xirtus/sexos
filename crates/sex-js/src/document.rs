@@ -29,6 +29,11 @@ pub struct Document {
     /// The page's decoded pictures by `src`, shared with the browser, so WebGL can
     /// upload one the moment a script asks.
     pub pictures: Vec<(String, alloc::rc::Rc<sex_image::Image>)>,
+    /// `fetch` requests the browser has not loaded yet: (id, url as the script gave it).
+    pub fetches: Vec<(u32, String)>,
+    /// Loaded bodies the script has not taken yet, by request id.
+    pub bodies: Vec<(u32, Vec<u8>)>,
+    next_fetch: u32,
 }
 
 /// A rough width when the browser gives no measure: 0.55 em per character.
@@ -39,7 +44,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new() }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), next_fetch: 0 }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -70,6 +75,21 @@ impl Page for Document {
 
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
+        match operation {
+            op::FETCH => {
+                // A page may not ask for more than it could hold.
+                if self.fetches.len() + self.bodies.len() >= 64 { return None; }
+                self.next_fetch += 1;
+                self.fetches.push((self.next_fetch, String::from(text(0))));
+                return Some(format!("{}", self.next_fetch).into_bytes());
+            }
+            op::FETCH_BODY => {
+                let id: u32 = text(0).parse().ok()?;
+                let i = self.bodies.iter().position(|(n, _)| *n == id)?;
+                return Some(self.bodies.swap_remove(i).1);
+            }
+            _ => {}
+        }
         let node: NodeId = text(0).parse().ok()?;
         if node >= self.dom.nodes.len() { return None; }
         match operation {
