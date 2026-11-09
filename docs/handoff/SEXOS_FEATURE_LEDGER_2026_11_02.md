@@ -3060,3 +3060,17 @@ row no longer waits for the row before it to end.
   r183's WebGL2 shader prefix (`precision highp usampler2D;`) isn't parsed yet; the
   browser thread has that. Under QEMU it would take hours per frame, so it waits for a
   much faster JS engine.
+
+## Games: Metaspace Pinball theme, and where the frame time goes (2026-11-09)
+
+- **Metaspace table.** Andreas asked for the pinball to use the Xirtus Arcade games and feel like part of the XIRTUS Metaspace. It's now XIRTUS Metaspace Pinball, using the Metaspace palette: ink, teal, mint, gold and ivory, with the four-pointed sigil.
+  - The six rollover lights are the arcade worlds ZENDRIVE, MANDELPOD, MACHINE ELF, RABBITVERSE, TSUNAMI and Rubber Duckie (Z M E R T D), each in its own colour. The display names a world when you find it.
+  - Finding all six opens the gate, and sinking the ball in the gate's star raises the multiplier.
+  - The background is the archipelago, with islands under the stars and waves rolling into the drain.
+  - Physics and layout are unchanged, and the page stays GPL-3.0-only. No assets are copied: everything is drawn in code.
+- **Speed measurement.** The same master pinball page was run two ways:
+  - In QEMU (the games gate): 7-9 fps, with physics 26 ms and drawing 22 ms per frame at 10 steps.
+  - On the host with the `page` example (release, self-playing copy): 52-54 fps (the example's frame pacing), with physics 0-1 ms and drawing 1-3 ms at 2 steps.
+  - The cloud container has no `/dev/kvm`, so QEMU runs as TCG: every instruction is emulated, and programs are soft-float until SSE (#18).
+  - Most of pinball's QEMU slowdown is therefore emulation, not SexOS.
+  - Heavier pages (three.js) are bound by QuickJS running inside wasmi even on the host. The browser thread owns that work.
