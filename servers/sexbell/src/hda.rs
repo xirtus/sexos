@@ -174,7 +174,9 @@ impl Hda {
         self.w16(RINTCNT, 1);
         self.w8(RIRBSTS, 0x05);
         self.w8(CORBCTL, 0x02);
-        self.w8(RIRBCTL, 0x02);
+        // DMA on, plus the response-count flag: some controllers (QEMU's among
+        // them) hold further commands until software clears that flag.
+        self.w8(RIRBCTL, 0x03);
         self.corb_wp = 0;
         self.rirb_rp = 0;
         Ok(())

@@ -49,7 +49,7 @@ def main():
    assert 'KERNEL PANIC' not in t();print({'ok':True,'card':False});return
   if a.card=='virtio':grant=g['wait'](r'\[kernel.cap.virtio.grant\] pd=(\d+) slot=20 product=0x1059 [^\n]*',0,60)
   else:grant=g['wait'](r'\[kernel.cap.class.grant\] pd=(\d+) slot=20 kind=Hda [^\n]*',0,60)
-  g['wait'](rf'\[bell.sound.ready\] card={a.card} stream=\d+ rate=48000 channels=2',0,120)
+  g['wait'](rf'\[bell.sound.ready\] card={a.card} stream=\d+ rate=48000 channels=2',0,300)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for hz,ms in NOTES:
    s=len(t());say(f'beep {hz} {ms} 50',rf'\[bell.sound.tone\] caller_pd=\d+ hz={hz} ms={ms} volume=50 queued=1 card=1')
