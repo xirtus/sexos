@@ -3311,3 +3311,41 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   Grid (tiled) AVIFs show only their first tile, and animated AVIF (`avis`) shows its
   first frame. dav1d runs on one thread; 320x240 keeps up on one core, larger sizes
   are not measured yet.
+
+## Real PCs: wired network, HD Audio and SATA (2026-11-09)
+
+Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
+- **Leases.** BOOT now leases Intel e1000e/I217-I219, igb (82576, I210/I211, I350), igc (I225/I226) and Realtek r8169/r8125 to SexNet (Realtek registers in BAR2/BAR1); Intel HD Audio (class 04:03, any vendor) to Bell at slot 20 with its own DMA pool; AHCI (class 01:06:01) to the drive service at slot 21. `kernel/src/device_lease.rs`, `kernel/src/nic_boot.rs`.
+- **ABI.** `sex_pdx::pci_command::Model` gains I219, I82576, I210, I350, I225, Rtl8168, Rtl8125 plus `Family`; new `HDA_DMA_*`, `AHCI_DMA_*`, `SLOT_AHCI_HOST`; kernel `PciCapData.class`. `abi_version_hash` recomputed. `[bell.sound.ready]` gains `card=`.
+- **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
+- **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
+- **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+
+## WebP and GIF pictures, animated (2026-11-09)
+
+- `sex-image` decodes WebP (lossy, lossless, alpha, animation) through image-webp 0.2.4,
+  vendored no_std in `vendor/image-webp-0.2.4` (an in-memory `io` shim; the encoder and
+  tests left out; an opaque pixel no longer blends to 254), and GIF with its own decoder
+  (`crates/sex-image/src/gif.rs`: LZW, interlacing, transparency, disposal, loop count).
+- `sex_image::Animation<B>` draws one frame at a time onto one canvas; it borrows or owns
+  the file (`&[u8]`, `Rc<[u8]>`).
+- View plays animated GIF and WebP with their own timing and loops, and reads files up to
+  4 MiB. Web shows WebP and GIF in `<img>` and plays up to 16 animated pictures a page.
+- Tests: `crates/sex-image/tests/formats.rs` (GIF against Pillow's decode, WebP against the
+  source, fuzzed damage); `program_view_gate.py` (WebP pixels, an animated GIF's three
+  colours on screen); `program_web_media_gate.py` (a moving GIF on its page).
+
+## Sound mixer: volume keys, master and per-program volume (2026-11-09)
+
+- Bell keeps the person's settings (`sex_pdx::sound_mixer`, op `OP_MIXER` 0xCA): master
+  volume and mute over everything Bell plays (a squared curve, so 50% is a quarter of the
+  amplitude), and a volume and mute per program row on top of what the program asks in its
+  ring. Shell and Spindle may set them, SilkBar may read them; replies carry `TAG` in their
+  top byte. The volume tick plays after the reply.
+- Input gives media keys their own codes (`app_key::KEY_MUTE` 0x75, `KEY_VOLUME_DOWN` 0x76,
+  `KEY_VOLUME_UP` 0x77; PS/2 E0 20/2E/30 used to arrive as D, C and B; USB usages
+  0x7F..0x81). Shell takes them: 5% steps with a tick at the new level, mute toggles.
+- Spindle `volume`: show, `N`, `+N`, `-N`, `mute`, `unmute`, `list`, `ROW N`, `ROW mute`.
+- ABI: `app_key` gains the three key codes. Gate: `scripts/sound_volume_gate.py`.
+- Not yet: an on-screen volume indicator (SilkBar/Display), remembering the volume across
+  boots, device choice, resampling, capture.

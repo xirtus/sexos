@@ -549,6 +549,20 @@ pub fn device_identity(slot:u64)->Result<pci_command::Identity,u64> {
     Ok(pci_command::Identity{vendor:vendor as u16,product:product as u16})
 }
 
+/// Offset and length of the held device's registers inside its leased view. A
+/// BAR smaller than a page is leased as its whole page; this says where in it.
+pub fn device_window(slot:u64)->Result<(u64,u64),u64> {
+    let(status,offset,length,reserved0,reserved1):(u64,u64,u64,u64,u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") pci_command::SYS_IDENTITY=>status,in("rdi")slot,
+        inlateout("rsi")pci_command::QUERY_WINDOW=>offset,inlateout("rdx")0u64=>length,
+        inlateout("r10")0u64=>reserved0,inlateout("r8")0u64=>reserved1,
+        out("rcx")_,out("r11")_,options(nostack)); }
+    if status!=0 { return Err(status) }
+    if reserved0|reserved1!=0 || length==0 || offset.checked_add(length).is_none_or(|end|end>65536) {return Err(pci_command::IO)}
+    Ok((offset,length))
+}
+
 /// Checked immutable BOOT data through this subject's held NIC lease.
 pub fn device_network_config(slot:u64)->Result<network_config::Config,u64>{
     let(status,a,b,c,d):(u64,u64,u64,u64,u64);

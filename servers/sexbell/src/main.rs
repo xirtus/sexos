@@ -3,6 +3,7 @@
 extern crate alloc;
 mod paging_probe;
 mod sound;
+mod hda;
 
 use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};
@@ -1405,6 +1406,7 @@ pub extern "C" fn _start() -> ! {
                     sex_pdx::sound_mixer::REFUSED
                 };
                 pdx_reply(msg.caller_pd, reply);
+                if msg.arg0 == sex_pdx::sound_mixer::STEP_MASTER && reply != sex_pdx::sound_mixer::REFUSED { sound::tick(); }
             }
 
             sex_pdx::sound_ring::OP_PLAY => {

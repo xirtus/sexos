@@ -41,9 +41,9 @@ def main():
  def press(key,pattern):
   s=len(t());q.key(key);return g['wait'](pattern,s,30)
  try:
-  g['wait'](r'\[bell.sound.ready\] stream=\d+ rate=48000 channels=2',0,120)
+  g['wait'](r'\[bell.sound.ready\] card=\S+ stream=\d+ rate=48000 channels=2',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
-  say('volume',r'\[spindle.volume\] reply=0x264')   # 100%, card present
+  say('volume',r'\[spindle.volume\] reply=0x4d00000000000264')   # 100%, card present
   beep(440)
   # Ten presses of the volume down key: 100% to 50%, a tick at each step.
   for n in range(10):
@@ -53,11 +53,11 @@ def main():
   beep(440)
   press('audiomute',r'\[bell.mixer\] action=2 master=50 muted=1')
   beep(660)
-  say('volume',r'\[spindle.volume\] reply=0x332')   # 50%, muted, card
-  say('volume unmute',r'\[spindle.volume\] reply=0x232')
+  say('volume',r'\[spindle.volume\] reply=0x4d00000000000332')   # 50%, muted, card
+  say('volume unmute',r'\[spindle.volume\] reply=0x4d00000000000232')
   press('volumeup',r'\[bell.mixer\] action=3 master=55 muted=0')
-  say('volume 100',r'\[spindle.volume\] reply=0x264')
-  say('volume -20',r'\[spindle.volume\] reply=0x250')
+  say('volume 100',r'\[spindle.volume\] reply=0x4d00000000000264')
+  say('volume -20',r'\[spindle.volume\] reply=0x4d00000000000250')
   # One program row: its volume and mute are kept, whatever it is playing.
   row=int(say('volume 3 30',r'\[spindle.volume\] reply=0x([0-9a-f]+)')[1],16)
   assert row&0x1ff==30,hex(row)

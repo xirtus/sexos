@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """SexOS plays sound: Spindle's `beep` reaches the Bell service, which drives a virtio
-sound card through its BOOT lease. QEMU records the card's output to a WAV file, and
+sound card (or, with --card hda, an Intel HD Audio controller) through its BOOT lease. QEMU records the card's output to a WAV file, and
 the notes must be there at the pitch and length asked for.
 
 Without --no-card the gate also boots once with no card, where Bell must say the
@@ -37,11 +37,12 @@ def segments(path,rate=48000,split=False):
  return found
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--no-card',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--no-card',action='store_true');p.add_argument('--card',choices=['virtio','hda'],default='virtio');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  wav=out/'sound.wav';wav.unlink(missing_ok=True)
  if not a.no_card:
-  os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0'
+  card='-device virtio-sound-pci,audiodev=snd0' if a.card=='virtio' else '-device intel-hda -device hda-duplex,audiodev=snd0'
+  os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 {card}'
  from quil_autosave_gate import boot
  g=boot(a.iso,disk,out,'sound',a.resolution);t=g['text'];q=g['q']
  def say(text,pattern,timeout=120):
@@ -54,8 +55,9 @@ def main():
    g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
    say('beep',r'\[bell.sound.tone\] caller_pd=\d+ hz=880 ms=200 volume=30 queued=0 card=0')
    assert 'KERNEL PANIC' not in t();print({'ok':True,'card':False});return
-  grant=g['wait'](r'\[kernel.cap.virtio.grant\] pd=(\d+) slot=20 product=0x1059 [^\n]*',0,60)
-  g['wait'](r'\[bell.sound.ready\] stream=\d+ rate=48000 channels=2',0,120)
+  if a.card=='virtio':grant=g['wait'](r'\[kernel.cap.virtio.grant\] pd=(\d+) slot=20 product=0x1059 [^\n]*',0,60)
+  else:grant=g['wait'](r'\[kernel.cap.class.grant\] pd=(\d+) slot=20 kind=Hda [^\n]*',0,60)
+  g['wait'](rf'\[bell.sound.ready\] card={a.card} stream=\d+ rate=48000 channels=2',0,300)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for hz,ms in NOTES:
    s=len(t());say(f'beep {hz} {ms} 50',rf'\[bell.sound.tone\] caller_pd=\d+ hz={hz} ms={ms} volume=50 queued=1 card=1')

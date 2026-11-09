@@ -91,9 +91,11 @@ boot() {
   local log="$1"
   rm -f "$QMP"
   : > "$log"   # kill stale content so wait_marker can't match a previous run
+  # SEXOS_GATE_DISK_BUS=ahci puts the same image on q35's built-in AHCI instead.
+  local disk=(-drive "if=none,id=nvm,file=$NVME,format=raw" -device "nvme,serial=sexos01,drive=nvm")
+  [[ "${SEXOS_GATE_DISK_BUS:-nvme}" == ahci ]] && disk=(-drive "if=none,id=sata,file=$NVME,format=raw" -device "ide-hd,drive=sata,bus=ide.0")
   qemu-system-x86_64 -M q35 -m 512M -cdrom "$ISO" \
-    -drive "if=none,id=nvm,file=$NVME,format=raw" \
-    -device "nvme,serial=sexos01,drive=nvm" \
+    "${disk[@]}" \
     -serial "file:$log" -qmp "unix:$QMP,server=on,wait=off" \
     -display none -no-reboot -no-shutdown &
   QEMU_PID=$!

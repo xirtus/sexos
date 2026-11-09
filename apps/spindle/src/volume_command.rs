@@ -80,7 +80,7 @@ impl Volume {
 
     /// A reply from Bell. False when it was not for a `volume` command.
     pub fn receive(&mut self, caller: u32, value: u64, sb: &mut crate::Scrollback) -> bool {
-        if caller != BELL_PD || self.waiting == Waiting::Nothing { return false; }
+        if caller != BELL_PD || self.waiting == Waiting::Nothing || !mixer::is_reply(value) { return false; }
         let waiting = core::mem::replace(&mut self.waiting, Waiting::Nothing);
         if value == mixer::REFUSED { sb.push(b"Volume: Bell refused that."); return true; }
         let mut line = [0u8; 96];
