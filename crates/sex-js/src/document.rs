@@ -16,6 +16,8 @@ pub struct Document {
     pub log: Vec<(u8, String)>,
     /// Where a script asked to go, once it returns.
     pub navigate: Option<String>,
+    /// The body of a form POST that `navigate` loads (form-urlencoded).
+    pub navigate_post: Option<String>,
     /// Element boxes from the last layout, by node: (x, y, w, h).
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
     /// Each node's paint layer (higher paints on top), from `Page::layers`.
@@ -88,7 +90,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -293,7 +295,7 @@ impl Page for Document {
                 Some(attrs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join("\n"))
             }
             op::VIEWPORT => Some(format!("{},{}", self.viewport.0, self.viewport.1)),
-            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); None }
+            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); self.navigate_post = a.get(1).filter(|m| m.eq_ignore_ascii_case("post")).map(|_| String::from(a.get(2).copied().unwrap_or(""))); None }
             op::CLICKABLE => {
                 let n = self.element(a.first())?;
                 if self.dom.clickable.insert(n) { self.dirty = true; }

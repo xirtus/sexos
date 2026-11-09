@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Web forms work: a click focuses a text field, typing (with Backspace) edits it, a
-click toggles a checkbox, and Enter submits the form as a GET with every field."""
-import argparse,http.server,os,re,shutil,threading,time
+click toggles a checkbox, and Enter submits the form as a GET with every field; that
+page then submits a POST form, whose answer is the next page."""
+import argparse,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
@@ -13,6 +14,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
   f=SITE/path.removeprefix('/site/') if path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.end_headers();return
   body=f.read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+ def do_POST(self):
+  n=int(self.headers.get('Content-Length','0'));sent=self.rfile.read(n).decode('latin-1')
+  kind=self.headers.get('Content-Type','')
+  body=f'<!doctype html><p>posted</p><script>console.log({json.dumps("form posted "+kind+" "+sent)})</script>'.encode()
+  self.send_response(200);self.send_header('Content-Type','text/html');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
@@ -60,6 +66,8 @@ def main():
   s=len(t());q.key('ret')
   m=g['wait'](r'\[web.console\] level=0 form got (\S+)',s,120)
   assert m[1]=='?q=sexos&c=on&t=two%0D%0Alines',m[1]
+  m=g['wait'](r'\[web.console\] level=0 form posted ([^\n]*)',s,120)
+  assert m[1].strip()=='application/x-www-form-urlencoded a=1+2&b=x%26y',m[1]
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'tile':(x,y,w,h)})
