@@ -381,6 +381,33 @@ pub fn init_pixel_regions(display: u32) {
     crate::serial_println!("[boot.pixel.regions] display={} bytes={} runtime_mint=0", display, length);
 }
 
+/// One sound ring per program row: the program writes sound, Bell mixes and plays it
+/// and writes back how far it got.
+pub fn init_sound_rings(bell: u32) {
+    use sex_pdx::sound_ring::{BYTES, CLIENT_SLOT, bell_slot, region_id};
+    require_boot();
+    if bell == 0 { return; }
+    let second = DOMAIN_REGISTRY.get(bell).expect("BOOT_SOUND_BELL_MISSING");
+    let programs = || sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program);
+    let rows = programs().count();
+    // One reservation per eight rows, as for pixel surfaces.
+    const GROUP: usize = 8;
+    let mut base = 0u64;
+    for (k, row) in programs().enumerate() {
+        if k % GROUP == 0 { base = backing(BYTES * GROUP.min(rows - k) as u64); }
+        if row.target == 0 { continue; }
+        let physical = base + (k % GROUP) as u64 * BYTES;
+        let first = DOMAIN_REGISTRY.get(row.target).expect("BOOT_SOUND_PROGRAM_MISSING");
+        let first_va = alias(first, physical, BYTES, true, false);
+        let second_va = alias(second, physical, BYTES, true, false);
+        grant(first, CLIENT_SLOT, RegionGrant { region_id: region_id(k), virtual_base: first_va, length: BYTES,
+            rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: Some(second.id) });
+        grant(second, bell_slot(k), RegionGrant { region_id: region_id(k), virtual_base: second_va, length: BYTES,
+            rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: Some(first.id) });
+    }
+    crate::serial_println!("[boot.sound.rings] bell={} rows={} bytes={} runtime_mint=0", bell, rows, BYTES);
+}
+
 /// Permanent BOOT budget, separate from reclaimable app-private pages. Each
 /// successor gets different backing and an immutable, exact provider peer.
 /// Runtime Load still uses scalar transport until snapshot publication exists.
