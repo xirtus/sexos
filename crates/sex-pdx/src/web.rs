@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The open-internet streams: a few TCP flows shared by every program, reached by name through whatever
+//! The open-internet streams: TCP flows made as programs ask for them, reached by name through whatever
 //! the network's DHCP and DNS say. Holding the BOOT route to the network service and
 //! the region shared with it is the right. An address is data, not authority.
 
@@ -55,9 +55,9 @@ pub const fn request(seq: u32, kind: u8) -> u64 { (seq as u64 & 0xFF_FFFF) | (ki
 /// request without one is on flow 0.
 pub const fn request_on(seq: u32, kind: u8, flow: u8) -> u64 { request(seq, kind) | (flow as u64) << 24 }
 pub const fn flow_of(a: u64) -> u8 { (a >> 24) as u8 }
-/// Flows one caller may number. The service holds `sex_net::OPEN_FLOWS` for everyone,
-/// so a `CONNECT` can answer `BUSY` while others hold them all.
-pub const CLIENT_FLOWS: u8 = 8;
+/// Flows one caller may number at once. The service makes flows as callers ask for
+/// them; a `CONNECT` answers `BUSY` only when memory is short.
+pub const CLIENT_FLOWS: u8 = 255;
 pub const fn address_port(address: [u8; 4], port: u16) -> u64 { (u32::from_be_bytes(address) as u64) << 16 | port as u64 }
 /// Shell's route to the network service, for binding program runs alone.
 pub const SHELL_SLOT: u64 = 262;

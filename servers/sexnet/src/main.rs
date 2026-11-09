@@ -15,7 +15,6 @@ static mut DNS_RX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_TX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_RX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 static mut DNS_TX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
-static mut TRANSPORT_STORAGE:[sex_net::Storage<'static>;sex_net::STORAGE]=[sex_net::Storage::EMPTY;sex_net::STORAGE];
 mod nic;
 mod ethernet;
 mod arp;
@@ -5400,7 +5399,7 @@ pub extern "C" fn _start() -> ! {
                         let mut packet=sex_net::Frame{length:60,bytes:[0;sex_net::MAX_FRAME]};
                         packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac,&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
                         transport=Some(unsafe{sex_net::Engine::new(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
-                            &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX,&mut TRANSPORT_STORAGE)}.expect("FIXED_TRANSPORT_CONFIG"));
+                            &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX)}.expect("FIXED_TRANSPORT_CONFIG"));
                         let gateway=network_config.expect("BOOT_NETWORK_CONFIG").gateway;
                         sex_pdx::serial_record!("[sexnet.route.ready] gateway={}.{}.{}.{} default=1 routes=1 route_capacity={} neighbors={} discovery_ms=1000 expiry_ms=60000 heap=0 authority=held_boot_nic",gateway[0],gateway[1],gateway[2],gateway[3],sex_net::ROUTE_CAPACITY,sex_net::NEIGHBOR_CAPACITY);
                         sex_pdx::serial_record!("[sexnet.transport.ready] implementation=smoltcp0.14.0 flows=1 rx=4096 tx=4096 turn=256 port=46076 no_std=1 heap=0 diagnostic_listener=1 predictable_seed=1 app_network=0 dns=0 http=0 tls=0");

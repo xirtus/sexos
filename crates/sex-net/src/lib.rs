@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Private bounded protocol state. No authority, host I/O, mappings or Unix ABI.
 #![no_std]
+extern crate alloc;
 
 #[cfg(test)] extern crate std;
 
@@ -92,22 +93,21 @@ pub struct Engine<'a>{network:sex_net_config::Config,iface:Interface,flows:Socke
     active_flow:bool,stats:Statistics,open:Option<Open>}
 /// The open-internet side: its own TCP flow, DNS socket and DHCP client, attached the
 /// first time something asks for them, so nothing else ever sees their traffic.
-struct Open{tcp:[SocketHandle;OPEN_FLOWS],dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,query_id:u16,query_name:[u8;255],query_len:usize,resolver:[u8;4]}
+struct Open{tcp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,query_id:u16,query_name:[u8;255],query_len:usize,resolver:[u8;4]}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Lease{pub address:[u8;4],pub prefix:u8,pub gateway:Option<[u8;4]>,pub dns:Option<[u8;4]>}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum OpenState{Opening,Open,PeerClosed,Closed}
 pub const OPEN_PORT_BASE:u16=40000;
-/// Open-internet TCP flows the service holds at once, shared by every program.
-pub const OPEN_FLOWS:usize=4;
-/// Socket slots: the listener, the client flow and its DNS socket, then the open side's
-/// DNS socket, DHCP client and flows.
-pub const STORAGE:usize=5+OPEN_FLOWS;
-pub struct OpenBuffers<'a>{pub rx:[&'a mut[u8];OPEN_FLOWS],pub tx:[&'a mut[u8];OPEN_FLOWS],pub dns_rx_meta:&'a mut[udp::PacketMetadata],pub dns_rx:&'a mut[u8],pub dns_tx_meta:&'a mut[udp::PacketMetadata],pub dns_tx:&'a mut[u8]}
+/// Each open-internet flow's receive window and send queue. Flows are made as they are
+/// asked for (`open_add_flow`), so their number is bounded by memory, not a table.
+pub const OPEN_RX_BYTES:usize=64*1024;
+pub const OPEN_TX_BYTES:usize=16*1024;
+pub struct OpenBuffers<'a>{pub dns_rx_meta:&'a mut[udp::PacketMetadata],pub dns_rx:&'a mut[u8],pub dns_tx_meta:&'a mut[udp::PacketMetadata],pub dns_tx:&'a mut[u8]}
 impl<'a> Engine<'a>{
     /// `seed` is explicit input. A predictable development seed does not provide
     /// hostile-peer sequence protection, entropy or TLS security. The immutable
     /// checked BOOT gateway supplies exactly one private default route. No app
     /// can change the route table or obtain authority by naming a destination.
-    pub fn new(network:sex_net_config::Config,mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES],storage:&'a mut[SocketStorage<'a>;STORAGE])->Result<Self,Error>{
+    pub fn new(network:sex_net_config::Config,mac:[u8;6],now:u64,seed:u64,rx:&'a mut[u8;FLOW_BYTES],tx:&'a mut[u8;FLOW_BYTES],client_rx:&'a mut[u8;FLOW_BYTES],client_tx:&'a mut[u8;FLOW_BYTES],dns_rxmeta:&'a mut[DnsMetadata;1],dns_rx:&'a mut[u8;DNS_BYTES],dns_txmeta:&'a mut[DnsMetadata;1],dns_tx:&'a mut[u8;DNS_BYTES])->Result<Self,Error>{
         // Configuration is copied data, not an authority source. Reject before
         // touching borrowed storage or constructing any interface/socket state.
         if !network.valid(){return Err(Error::Config);}
@@ -121,7 +121,7 @@ impl<'a> Engine<'a>{
         let mut connection=tcp::Socket::new(tcp::SocketBuffer::new(&mut rx[..]),tcp::SocketBuffer::new(&mut tx[..]));
         connection.set_timeout(Some(Duration::from_secs(5)));connection.set_ack_delay(None);connection.set_nagle_enabled(false);
         connection.listen((IpAddress::v4(network.local[0],network.local[1],network.local[2],network.local[3]),network.listen_port)).map_err(|_|Error::Protocol)?;
-        let mut flows=SocketSet::new(&mut storage[..]);let handle=flows.add(connection);
+        let mut flows=SocketSet::new(alloc::vec::Vec::new());let handle=flows.add(connection);
         let mut client=tcp::Socket::new(tcp::SocketBuffer::new(&mut client_rx[..]),tcp::SocketBuffer::new(&mut client_tx[..]));
         client.set_timeout(Some(Duration::from_secs(5)));client.set_ack_delay(None);client.set_nagle_enabled(false);
         let client_handle=flows.add(client);
@@ -134,21 +134,30 @@ impl<'a> Engine<'a>{
     /// Start the open-internet side. Asks for an address on the local network.
     pub fn open_attach(&mut self,b:OpenBuffers<'a>)->Result<(),Error>{
         if self.open.is_some(){return Ok(());}
-        let OpenBuffers{rx,tx,dns_rx_meta,dns_rx,dns_tx_meta,dns_tx}=b;
-        let mut tx=tx.into_iter();
-        let tcp=rx.map(|rx|{
-            let mut flow=tcp::Socket::new(tcp::SocketBuffer::new(rx),tcp::SocketBuffer::new(tx.next().expect("OPEN_FLOWS")));
-            flow.set_timeout(Some(Duration::from_secs(30)));flow.set_nagle_enabled(false);
-            // Acknowledge at once: a delayed ACK holds the sender to one window per delay.
-            flow.set_ack_delay(None);
-            self.flows.add(flow)
-        });
+        let OpenBuffers{dns_rx_meta,dns_rx,dns_tx_meta,dns_tx}=b;
+        let tcp=alloc::vec::Vec::new();
         let dns=udp::Socket::new(udp::PacketBuffer::new(dns_rx_meta,dns_rx),udp::PacketBuffer::new(dns_tx_meta,dns_tx));
         let dns=self.flows.add(dns);let dhcp=self.flows.add(dhcpv4::Socket::new());
         self.open=Some(Open{tcp,dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,query_id:1,query_name:[0;255],query_len:0,resolver:[0;4]});
         Ok(())
     }
     pub fn open_lease(&self)->Option<Lease>{self.open.as_ref()?.lease}
+    /// Open-internet flows made so far.
+    pub fn open_flows(&self)->usize{self.open.as_ref().map_or(0,|o|o.tcp.len())}
+    /// Makes one more open-internet flow, with its own window, and gives its number.
+    pub fn open_add_flow(&mut self)->Result<usize,Error>{
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        // Out of memory is an answer (the caller waits for a flow), never a fall.
+        let zeroed=|n:usize|->Result<alloc::vec::Vec<u8>,Error>{let mut v=alloc::vec::Vec::new();v.try_reserve_exact(n).map_err(|_|Error::Length)?;v.resize(n,0);Ok(v)};
+        let (rx,tx)=(zeroed(OPEN_RX_BYTES)?,zeroed(OPEN_TX_BYTES)?);
+        open.tcp.try_reserve(1).map_err(|_|Error::Length)?;
+        let mut flow=tcp::Socket::new(tcp::SocketBuffer::new(rx),tcp::SocketBuffer::new(tx));
+        flow.set_timeout(Some(Duration::from_secs(30)));flow.set_nagle_enabled(false);
+        // Acknowledge at once: a delayed ACK holds the sender to one window per delay.
+        flow.set_ack_delay(None);
+        open.tcp.push(self.flows.add(flow));
+        Ok(open.tcp.len()-1)
+    }
     fn open_poll_dhcp(&mut self){
         let Some(open)=self.open.as_mut() else{return};
         let event=self.flows.get_mut::<dhcpv4::Socket>(open.dhcp).poll();

@@ -8,25 +8,36 @@ use sex_pdx::web as w;
 use sex_tls::open::{Session, Stage};
 use sex_tls::Failure;
 
-const FLOWS: usize = sex_net::OPEN_FLOWS;
-static mut RX: [[u8; 64 * 1024]; FLOWS] = [[0; 64 * 1024]; FLOWS];
-static mut TX: [[u8; 16 * 1024]; FLOWS] = [[0; 16 * 1024]; FLOWS];
+extern crate alloc;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 static mut DNS_RX: [u8; 512] = [0; 512];
 static mut DNS_TX: [u8; 512] = [0; 512];
 static mut DNS_RX_META: [sex_net::DnsMetadata; 2] = [sex_net::DnsMetadata::EMPTY; 2];
 static mut DNS_TX_META: [sex_net::DnsMetadata; 2] = [sex_net::DnsMetadata::EMPTY; 2];
 
-static mut TLS_READ: [[u8; 16640]; FLOWS] = [[0; 16640]; FLOWS];
-static mut TLS_WRITE: [[u8; 4096]; FLOWS] = [[0; 4096]; FLOWS];
+const TLS_READ_BYTES: usize = 16640;
+const TLS_WRITE_BYTES: usize = 4096;
+/// Flows are made when a caller asks and none is free, and kept for the next caller.
+/// This many is a ceiling against one runaway program, not a working limit: about
+/// 100 KiB each, made only as needed.
+const MAX_FLOWS: usize = 4096;
 /// Program runs Shell has bound to the network, by row: the run's task.
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 /// A question to the resolver is one at a time; another caller waits this long at most.
 const RESOLVE_HOLD_TICKS: u64 = 5_000;
 /// One flow of the service: who holds it (and under which of their own numbers) and,
 /// when encrypted, its TLS session and the wire bytes still to send.
-struct Slot { owner: Option<(Identity, u8)>, tls: Option<Session>, out: [u8; 1400], out_at: usize, out_len: usize }
+struct Slot { owner: Option<(Identity, u8)>, tls: Option<Session>, out: [u8; 1400], out_at: usize, out_len: usize, read: &'static mut [u8], write: &'static mut [u8] }
+fn zeroed(n: usize) -> Option<&'static mut [u8]> {
+    let mut v: Vec<u8> = Vec::new();
+    v.try_reserve_exact(n).ok()?;
+    v.resize(n, 0);
+    Some(Box::leak(v.into_boxed_slice()))
+}
 impl Slot {
-    const EMPTY: Slot = Slot { owner: None, tls: None, out: [0; 1400], out_at: 0, out_len: 0 };
+    /// A slot for a new flow, with its own TLS buffers; `None` when memory is short.
+    fn new() -> Option<Slot> { Some(Slot { owner: None, tls: None, out: [0; 1400], out_at: 0, out_len: 0, read: zeroed(TLS_READ_BYTES)?, write: zeroed(TLS_WRITE_BYTES)? }) }
     /// Moves encrypted bytes between flow `i` and its session.
     fn pump(&mut self, i: usize, engine: &mut Engine<'static>) {
         let Some(tls) = self.tls.as_mut() else { return };
@@ -51,12 +62,24 @@ impl Slot {
         if let Some(e) = engine { e.open_close(i); }
     }
 }
-pub struct Service { bound: [u32; PROGRAM_ROWS], slots: [Slot; FLOWS], resolving: Option<(Identity, u64)>, attached: bool, announced: bool, tls_used: bool }
+pub struct Service { bound: [u32; PROGRAM_ROWS], slots: Vec<Slot>, resolving: Option<(Identity, u64)>, attached: bool, announced: bool, tls_used: bool }
 fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
 impl Service {
-    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: [Slot::EMPTY; FLOWS], resolving: None, attached: false, announced: false, tls_used: false } }
+    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), resolving: None, attached: false, announced: false, tls_used: false } }
+    /// One more flow, when every flow made so far is held.
+    fn grow(&mut self, engine: &mut Engine<'static>) -> Option<usize> {
+        if self.slots.len() >= MAX_FLOWS { return None; }
+        self.slots.try_reserve(1).ok()?;
+        let slot = Slot::new()?;
+        let i = engine.open_add_flow().ok()?;
+        // The engine's flows and these slots are made together, one for one.
+        debug_assert_eq!(i, self.slots.len());
+        self.slots.push(slot);
+        sex_pdx::serial_record!("[net.open.flows] made={}", self.slots.len());
+        Some(i)
+    }
     pub fn busy(&self) -> bool { self.slots.iter().any(|s| s.tls.is_some()) }
     /// Moves encrypted bytes between the flows and their sessions, each turn of the service.
     pub fn pump(&mut self, engine: &mut Engine<'static>) {
@@ -102,8 +125,6 @@ impl Service {
         if number >= w::CLIENT_FLOWS { return w::reply(seq, w::INVALID, 0); }
         if !self.attached {
             let b = unsafe { OpenBuffers {
-                rx: (&mut *core::ptr::addr_of_mut!(RX)).each_mut().map(|b| &mut b[..]),
-                tx: (&mut *core::ptr::addr_of_mut!(TX)).each_mut().map(|b| &mut b[..]),
                 dns_rx_meta: &mut *core::ptr::addr_of_mut!(DNS_RX_META), dns_rx: &mut *core::ptr::addr_of_mut!(DNS_RX),
                 dns_tx_meta: &mut *core::ptr::addr_of_mut!(DNS_TX_META), dns_tx: &mut *core::ptr::addr_of_mut!(DNS_TX) } };
             if engine.open_attach(b).is_err() { return w::reply(seq, w::FAILED, 0); }
@@ -112,7 +133,7 @@ impl Service {
         // The caller's flow by its own number. CONNECT takes a free one when it has none.
         let mine = self.slots.iter().position(|s| s.owner == Some((who, number)));
         let flow = match kind {
-            w::CONNECT => match mine.or_else(|| self.slots.iter().position(|s| s.owner.is_none())) {
+            w::CONNECT => match mine.or_else(|| self.slots.iter().position(|s| s.owner.is_none())).or_else(|| self.grow(engine)) {
                 Some(i) => { self.slots[i].owner = Some((who, number)); Some(i) }
                 None => return w::reply(seq, w::BUSY, 0),
             },
@@ -168,8 +189,11 @@ impl Service {
                 // The old session lets go of this flow's buffers before a new one takes them.
                 slot.tls = None;
                 slot.out_at = 0; slot.out_len = 0;
-                let (read, write) = unsafe { (&mut (*core::ptr::addr_of_mut!(TLS_READ))[i], &mut (*core::ptr::addr_of_mut!(TLS_WRITE))[i]) };
-                match Session::start(host, &mut seed, seconds, &mut read[..], &mut write[..]) {
+                // The session borrows the slot's buffers for as long as it lives; the
+                // slot is never freed, and a new session starts only after the old one
+                // is dropped above.
+                let (read, write) = unsafe { (&mut *(&mut *slot.read as *mut [u8]), &mut *(&mut *slot.write as *mut [u8])) };
+                match Session::start(host, &mut seed, seconds, read, write) {
                     Ok(session) => { slot.tls = Some(session); self.tls_used = true; w::reply(seq, w::OK, 0) }
                     Err(_) => w::reply(seq, w::FAILED, 0),
                 }

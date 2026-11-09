@@ -308,19 +308,19 @@ pub mod net {
     }
     static mut SEQ: u32 = 0;
     /// This program's flow numbers in use, one bit each.
-    static mut FLOWS_HELD: u8 = 0;
+    static mut FLOWS_HELD: [u64; 4] = [0; 4];
     /// One open flow of this program, by its own number for it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Flow(u8);
     fn take_flow() -> Result<Flow, Error> {
-        let held = unsafe { FLOWS_HELD };
-        let n = (0..w::CLIENT_FLOWS).find(|n| held & (1 << n) == 0).ok_or(Error::Busy)?;
-        unsafe { FLOWS_HELD = held | 1 << n; }
+        let held = unsafe { &mut *core::ptr::addr_of_mut!(FLOWS_HELD) };
+        let n = (0..w::CLIENT_FLOWS).find(|n| held[*n as usize / 64] & (1 << (n % 64)) == 0).ok_or(Error::Busy)?;
+        held[n as usize / 64] |= 1 << (n % 64);
         Ok(Flow(n))
     }
     fn close(window: &mut Window, flow: Flow) {
         let _ = call_on(window, flow, w::CLOSE, 0);
-        unsafe { FLOWS_HELD &= !(1 << flow.0); }
+        unsafe { (*core::ptr::addr_of_mut!(FLOWS_HELD))[flow.0 as usize / 64] &= !(1 << (flow.0 % 64)); }
     }
     fn call(window: &mut Window, kind: u8, value: u64) -> Result<(u8, u32), Error> { call_on(window, Flow(0), kind, value) }
     fn call_on(window: &mut Window, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
@@ -444,7 +444,7 @@ pub mod net {
     pub struct Response { pub head: sex_fetch::Head, pub body: alloc::vec::Vec<u8> }
 
     /// One HTTP/1.1 request on a flow of its own, read a step at a time, so a program can
-    /// keep several going at once (the service holds `sex_net::OPEN_FLOWS` for everyone)
+    /// keep several going at once (the service makes flows as they are asked for)
     /// and do other work between steps. `start` connects and sends; `poll` reads what
     /// has arrived; `finish` decodes the reply. One that is given up on is `cancel`led,
     /// or its flow stays held until the program ends.

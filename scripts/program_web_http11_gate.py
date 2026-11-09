@@ -5,8 +5,8 @@ document.cookie, POSTs JSON with its own headers to an API (the cookies go along
 HttpOnly one too, which the script itself can't see), then loads media bytes with an
 XMLHttpRequest Range request (206 Partial Content). Requests to another origin carry
 an Origin header and no cookies, and their replies reach the page only when that site
-allows it (Access-Control-Allow-Origin). Three slow requests made together are
-served side by side, on flows of their own."""
+allows it (Access-Control-Allow-Origin). Twelve slow requests made together are
+served side by side, on flows the network service makes as they are asked for."""
 import argparse,gzip,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -31,7 +31,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   if self.path=='/tube/':
    SEEN['accept-encoding']=self.headers.get('Accept-Encoding','');SEEN['ua']=self.headers.get('User-Agent','')
    return self.chunked((SITE/'index.html').read_bytes().replace(b'{{OTHER}}',f'http://10.0.2.2:{OTHER_PORT}'.encode()),'text/html; charset=utf-8',[('Set-Cookie','sid=s3cret; Path=/; HttpOnly'),('Set-Cookie','visitor=v1; Path=/; Max-Age=3600')])
-  m=re.fullmatch(r'/tube/slow/(\d)',self.path)
+  m=re.fullmatch(r'/tube/slow/(\d+)',self.path)
   if m:
    with LOCK:LIVE[0]+=1;LIVE[1]=max(LIVE)
    time.sleep(1.5)
@@ -96,9 +96,11 @@ def main():
   closed=g['wait'](r'\[web.console\] level=0 tube cross closed ([^\n]*)\n',s,300)
   assert closed[1]=='blocked',closed[1]
   par=g['wait'](r'\[web.console\] level=0 tube parallel ([^\n]*)\n',s,300)
-  assert par[1].startswith('slow1,slow2,slow3 ms='),par[1]
-  # Three 1.5 s replies one after another take 4.5 s; side by side they overlap.
-  assert LIVE[1]==3,('requests at once',LIVE[1])
+  assert par[1].startswith(','.join(f'slow{n}' for n in range(1,13))+' ms='),par[1]
+  # Twelve 1.5 s replies one after another take 18 s; side by side they overlap. The
+  # network service makes flows as they are asked for, so all twelve travel at once.
+  assert LIVE[1]==12,('requests at once',LIVE[1])
+  made=re.findall(r'\[net.open.flows\] made=(\d+)',t());assert made and int(made[-1])>=12,made
   assert 'gzip' in SEEN.get('accept-encoding',''),SEEN
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1]})

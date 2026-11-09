@@ -67,9 +67,9 @@ fn wall() -> u64 { 1_794_182_400 + sex_pdx::get_ticks() / 1000 }
 /// A loaded reply: final address, status, header lines for scripts, body.
 struct Loaded { url: String, status: u16, headers: String, body: Vec<u8> }
 
-/// Network requests a page's scripts may have going at once. The network service holds
-/// `sex_net::OPEN_FLOWS` flows for every program together.
-const PARALLEL: usize = 4;
+/// Network requests a page's scripts may have going at once. The network service makes
+/// flows as they are asked for; this keeps one page from asking for hundreds.
+const PARALLEL: usize = 16;
 /// `send`'s word that the service has no flow free right now.
 const BUSY: &[u8] = b"busy";
 fn pause() { let until = sex_pdx::get_ticks() + 5; while sex_pdx::get_ticks() < until { sex_pdx::sys_yield(); } }

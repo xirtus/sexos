@@ -3165,12 +3165,15 @@ First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
 - **Gate** `scripts/program_web_http11_gate.py`: a local server sends a chunked + gzip page with Set-Cookie, the page POSTs JSON with its own headers (the server sees all three cookies), then reads 16 bytes by XHR Range (206). Passes in QEMU, along with the web net, fetch and JS gates.
 - Seen while testing: a 1.3 MB body takes about 11.7 s in QEMU (about 110 KB/s). That is roughly 360p video speed, so bigger windows and several flows (stage Y3) come next.
 
-## Net: several flows at once; the browser fetches side by side (2026-11-09)
+## Net: flows made on demand; the browser fetches side by side (2026-11-09)
 
 YouTube stage Y3b (plan: `docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md`).
-- **sexnet** holds `sex_net::OPEN_FLOWS` (4) open-internet TCP flows instead of one, each with its own 64 KiB receive window and its own TLS session. A caller numbers its flows itself (0 to 7, in bits 24..31 of the request word, so callers that never name one use flow 0 as before). `CONNECT` takes a free flow, or answers `BUSY` while every flow is held; every other call reaches only the caller's own flow. A program that ends lets go of all of its flows.
+- **sexnet** used to have one open-internet TCP flow for the whole machine. It now makes flows as programs ask for them, each with its own 64 KiB receive window, 16 KiB send queue and TLS session (about 100 KiB), and keeps them for the next caller. The ceiling is 4096 flows, against one runaway program; running out of memory answers `BUSY`, never a fall (allocations use `try_reserve`).
+- **Kernel**: BOOT gives sexnet a growing memory arena (`service_memory::reserve(net)`), as Files already had, so its heap follows the flows.
+- **smoltcp** gets its `alloc` feature; `Engine::new` no longer takes a fixed socket table, and `open_add_flow` makes a flow.
+- A caller numbers its flows itself (0 to 254, in bits 24..31 of the request word, so callers that never name one use flow 0 as before). `CONNECT` takes a free flow or makes one; every other call reaches only the caller's own flow. A program that ends lets go of all of its flows.
 - **DNS** is still one question at a time; another caller's question gets `BUSY` until the first is answered (at most 5 s), and the client retries.
 - **`sex_app::net::Exchange`**: one request on a flow of its own, read a step at a time (`start`, `poll`, `finish`, `cancel`). `request` and the old `fetch` are built on it.
-- **Browser**: script `fetch`/XHR requests run side by side, up to 4 at once, each reported as it lands. Requests made by a script on hearing of one join in.
+- **Browser**: script `fetch`/XHR requests run side by side, up to 16 at once, each reported as it lands. Requests made by a script on hearing of one join in.
 - **ABI**: `sex_pdx::web` gains `request_on`, `flow_of` and `CLIENT_FLOWS`; the ABI hash is recomputed.
-- **Gate** `program_web_http11_gate`: three requests that each take 1.5 s finish together in about 1.6 s; the server saw all three at once.
+- **Gate** `program_web_http11_gate`: twelve requests that each take 1.5 s finish together in about 1.7 s; the server saw all twelve at once and sexnet made twelve flows.
