@@ -12,6 +12,9 @@
 //! which is `/` here, its window for the terminal, its workers for threads. So a C
 //! program holds exactly what its BOOT row holds, like a Rust one.
 //!
+//! There is no process model (no fork, exec or process ids): a program is a run of
+//! its row, not a Unix process.
+//!
 //! The C types are musl's (x86-64), the headers the program compiles against.
 use crate::format::{self, Sink};
 use crate::stdio::{c_str, Va};
@@ -44,7 +47,6 @@ extern "C" {
     fn sys_exit(status: i32) -> !;
     fn sys_abort() -> !;
     fn sys_usleep(usecs: u64);
-    fn sys_getpid() -> i32;
     // SexOS additions to the interface (crates/sex-std).
     fn sys_rename(from: *const c_char, to: *const c_char) -> i32;
     fn sys_fsync(fd: i32) -> i32;
@@ -136,8 +138,6 @@ pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
 pub unsafe extern "C" fn chdir(path: *const c_char) -> c_int {
     if unsafe { c_str(path) } == b"/" { 0 } else { set_errno(crate::ENOSYS); -1 }
 }
-#[no_mangle]
-pub unsafe extern "C" fn getpid() -> c_int { unsafe { sys_getpid() } }
 #[no_mangle]
 pub unsafe extern "C" fn sleep(seconds: u32) -> u32 { unsafe { sys_usleep(seconds as u64 * 1_000_000) }; 0 }
 #[no_mangle]
