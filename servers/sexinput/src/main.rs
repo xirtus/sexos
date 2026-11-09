@@ -287,9 +287,9 @@ impl KeyboardOutbox {
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
         // Media keys share their byte with D, C and B: give them their own codes.
         let code=match (extended,raw&0x7f) {
-            (true,0x20)=>sex_pdx::app_key::KEY_MUTE,
-            (true,0x2E)=>sex_pdx::app_key::KEY_VOLUME_DOWN,
-            (true,0x30)=>sex_pdx::app_key::KEY_VOLUME_UP,
+            (true,0x20)=>0x75, // sex_pdx::app_key::KEY_MUTE
+            (true,0x2E)=>0x76, // KEY_VOLUME_DOWN
+            (true,0x30)=>0x77, // KEY_VOLUME_UP
             (_,c)=>c as u8,
         };
         self.push(&[KeyEdge{code,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
@@ -493,9 +493,9 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         0x64 => 0x56, // non-US \ |
         0x65 => 0x5D, // Menu (E0 5D)
         0x67 => 0x0D, // keypad =
-        0x7F => sex_pdx::app_key::KEY_MUTE,
-        0x80 => sex_pdx::app_key::KEY_VOLUME_UP,
-        0x81 => sex_pdx::app_key::KEY_VOLUME_DOWN,
+        0x7F => 0x75, // Mute: sex_pdx::app_key::KEY_MUTE
+        0x80 => 0x77, // Volume Up: KEY_VOLUME_UP
+        0x81 => 0x76, // Volume Down: KEY_VOLUME_DOWN
         _ => return None,
     })
 }
