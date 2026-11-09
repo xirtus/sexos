@@ -48,6 +48,13 @@ class EthernetEvidence(unittest.TestCase):
   self.assertFalse(inspect(initialized().replace('timing_verified=1','timing_verified=0'),ethernet=True)['ok'])
   legacy=initialized().replace('product=4307','product=4110').replace('device=10d3','device=100e').replace('0x10D3','0x100E').replace('model=I82574','model=I82540').replace('timing_verified=1','timing_verified=0')
   self.assertTrue(inspect(legacy,ethernet=True)['ok'])
+ def test_qemu_igb_waits_in_queues_and_needs_no_timing_register(self):
+  igb=initialized().replace('product=4307','product=4297').replace('device=10d3','device=10c9').replace('0x10D3','0x10C9').replace('model=I82574','model=I82576').replace('timing_verified=1','timing_verified=0')
+  queues=igb.replace('[sexnet.ether.phase] from=Enable to=Link failure=None','[sexnet.ether.phase] from=Enable to=Queues failure=None\n[sexnet.ether.phase] from=Queues to=Link failure=None')
+  self.assertTrue(inspect(queues,ethernet=True)['ok'],inspect(queues,ethernet=True)['errors'])
+  # The advanced path never skips Queues, and the legacy path never enters it.
+  self.assertFalse(inspect(igb,ethernet=True)['ok'])
+  self.assertFalse(inspect(initialized().replace('[sexnet.ether.phase] from=Enable to=Link failure=None','[sexnet.ether.phase] from=Enable to=Queues failure=None\n[sexnet.ether.phase] from=Queues to=Link failure=None'),ethernet=True)['ok'])
  def test_wrong_arp_payload_padding_or_peer_fixture_cannot_match_by_counter_only(self):
   for field in ['guest_tx','peer_fixture']:
    rows=exchanges();bad=bytearray.fromhex(rows[5][field]);bad[-1]^=1;rows[5][field]=bad.hex()
