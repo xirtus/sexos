@@ -2,12 +2,14 @@
 //! Threads: one program on several cores. `run threads` draws a Mandelbrot set twice,
 //! once on one task and once split into bands across workers on other cores
 //! (`sex_app::thread::parallel`), checks both pictures match, and shows the picture
-//! and how much faster the split one was.
+//! and how much faster the split one was. Each task also checks it has its own
+//! `#[thread_local]` statics.
 //!
 //! Keys, each for its gate: S starts workers that spin forever (Close must still end
 //! the program and every worker); P makes a worker panic, which ends the whole program.
 #![no_std]
 #![no_main]
+#![feature(thread_local)]
 
 extern crate alloc;
 use alloc::vec;
@@ -76,6 +78,32 @@ fn split(out: &mut [u32], bands: usize) {
 
 static SPIN: AtomicBool = AtomicBool::new(true);
 
+/// Each task's own: one with a starting value (.tdata), one zeroed (.tbss).
+#[thread_local]
+static mut SEEDED: u64 = 7;
+#[thread_local]
+static mut ZEROED: [u64; 4] = [0; 4];
+
+/// Every task adds to its own thread-locals and must see only its own sums.
+fn tls_check(bands: usize) -> usize {
+    use core::sync::atomic::AtomicUsize;
+    let good = AtomicUsize::new(0);
+    thread::parallel(bands, &|i| {
+        for _ in 0..1000 {
+            unsafe {
+                let s = core::ptr::addr_of_mut!(SEEDED);
+                s.write_volatile(s.read_volatile() + i as u64);
+                let z = core::ptr::addr_of_mut!(ZEROED);
+                (*z)[i % 4] = (*z)[i % 4] + 1;
+            }
+            sex_pdx::sys_yield();
+        }
+        let (s, z) = unsafe { (core::ptr::addr_of!(SEEDED).read_volatile(), (*core::ptr::addr_of!(ZEROED))[i % 4]) };
+        if s == 7 + 1000 * i as u64 && z == 1000 { good.fetch_add(1, Ordering::Relaxed); }
+    });
+    good.load(Ordering::Relaxed)
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
@@ -98,6 +126,12 @@ pub extern "C" fn _start() -> ! {
             target, task, cores, bands, single, multi, speedup_x100, hash(&many));
     } else {
         sex_pdx::serial_record!("[threads.fail] target={} task={} why=pictures differ", target, task);
+    }
+    let good = tls_check(bands);
+    if good == bands {
+        sex_pdx::serial_record!("[threads.tls] target={} task={} tasks={} pointer={:#x}", target, task, bands, sex_app::tls::pointer());
+    } else {
+        sex_pdx::serial_record!("[threads.fail] target={} task={} why=thread-locals shared good={} of {}", target, task, good, bands);
     }
     let pixels = window.pixels();
     pixels[..W * H].copy_from_slice(&many);

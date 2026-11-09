@@ -195,6 +195,17 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
                 ParkResult::NotOwner => panic!("PROGRAM_WAIT_WITHOUT_OWNER"),
             }
         }
+        t::TLS => {
+            // A user address only: the kernel never reads through FS, but a kernel
+            // pointer here would be a value no user code should hold.
+            if current.is_null() || a >= 0x0000_8000_0000_0000 { return reply(regs, t::INVALID, 0); }
+            if crate::app_resources::live_run(pd).is_err() { return reply(regs, t::DENIED, 0); }
+            unsafe {
+                (*current).context.fs_base = a;
+                x86_64::registers::model_specific::FsBase::write(x86_64::VirtAddr::new(a));
+            }
+            reply(regs, t::OK, 0)
+        }
         t::WAKE => {
             if a % 4 != 0 { return reply(regs, t::INVALID, 0); }
             let mut table = table();

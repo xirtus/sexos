@@ -25,6 +25,8 @@ def main():
   m=g['wait'](r'\[threads\.(ok|fail)\] target=(\d+) task=(\d+)([^\n]*)\n',s,600)
   assert m[1]=='ok',f'threads failed: {m[0]}'
   target,task=int(m[2]),int(m[3]);g['wait'](rf'\[threads\.ready\] target={target} task={task}\n',s,60)
+  # Every task has its own thread-locals.
+  assert re.search(rf'\[threads\.tls\] target={target} task={task} tasks=\d+ pointer=0x[0-9a-f]+\n',t()[s:]),'thread-local check missing'
   f=dict(kv.split('=')for kv in m[4].split())
   placed={int(c)for c in re.findall(rf'\[program\.worker\.start\] target={target} run={task} worker=\d+ core=(\d+)\n',t()[s:])}
   assert placed,'no worker started'

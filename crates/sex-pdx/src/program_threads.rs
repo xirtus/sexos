@@ -24,6 +24,10 @@ pub const WAIT: u64 = 3;
 pub const WAKE: u64 = 4;
 /// → rsi = cores this run's workers are spread over (1 when all share one core).
 pub const CORES: u64 = 5;
+/// rsi = thread pointer. Sets the calling task's FS base, which every later switch
+/// to it restores: `fs:0` is then its thread control block, as x86-64 thread-local
+/// storage expects. Any task of a live run may set its own; it must be a user address.
+pub const TLS: u64 = 6;
 
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
@@ -88,6 +92,16 @@ pub fn wake(at: *const u32, count: u64) -> u64 {
             (OK, n) => return n,
             (RETRY, _) => crate::sys_yield(),
             _ => return 0,
+        }
+    }
+}
+/// Sets the calling task's thread pointer (FS base).
+pub fn set_tls(pointer: u64) -> bool {
+    loop {
+        match call(TLS, pointer, 0, 0) {
+            (OK, _) => return true,
+            (RETRY, _) => crate::sys_yield(),
+            _ => return false,
         }
     }
 }

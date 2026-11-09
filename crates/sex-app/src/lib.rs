@@ -8,6 +8,7 @@ extern crate alloc;
 pub mod heap;
 pub mod code;
 pub mod thread;
+pub mod tls;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
 /// than the 64 KiB a run starts with (deep layout, script engines, decoders).

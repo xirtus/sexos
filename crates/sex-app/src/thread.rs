@@ -8,7 +8,8 @@
 //! worker for a `'static` job and `join` waits for it.
 //!
 //! A worker that panics ends the whole program, as the main task does. When the
-//! program ends, its workers end with it.
+//! program ends, its workers end with it. Each worker has its own copy of the
+//! program's `#[thread_local]` statics (see `tls`).
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -20,7 +21,7 @@ pub const STACK_BYTES: usize = 256 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { NoMemory, Refused(u64) }
 
-struct Packet { done: AtomicU32, job: Option<Box<dyn FnOnce() + Send>> }
+struct Packet { done: AtomicU32, job: Option<Box<dyn FnOnce() + Send>>, tls: crate::tls::Block }
 
 /// A started worker. Dropping it without `join` waits too: the worker's stack must
 /// outlive it.
@@ -28,6 +29,8 @@ pub struct JoinHandle { packet: Box<Packet>, _stack: Vec<u128> }
 
 extern "C" fn worker_main(packet: *mut Packet) -> ! {
     let packet = unsafe { &mut *packet };
+    // Its own thread-locals first; a refusal ends the run as a fault would.
+    if !packet.tls.install() { sex_pdx::task_finish(3) }
     if let Some(job) = packet.job.take() { job(); }
     // The kernel stores 1 in `done` only once this worker can no longer run.
     t::exit(packet.done.as_ptr())
@@ -50,7 +53,10 @@ unsafe fn spawn_boxed(job: Box<dyn FnOnce() + Send + '_>) -> Result<JoinHandle, 
     stack.try_reserve_exact(STACK_BYTES / 16).map_err(|_| Error::NoMemory)?;
     stack.resize(STACK_BYTES / 16, 0);
     let top = stack.as_ptr() as u64 + STACK_BYTES as u64;
-    let mut packet = Box::new(Packet { done: AtomicU32::new(0), job: Some(job) });
+    // The caller needs its own block before any worker exists (see `tls::init`).
+    if !crate::tls::init() { return Err(Error::NoMemory); }
+    let tls = crate::tls::Block::new().ok_or(Error::NoMemory)?;
+    let mut packet = Box::new(Packet { done: AtomicU32::new(0), job: Some(job), tls });
     let arg = &mut *packet as *mut Packet as u64;
     match t::spawn(worker_main as extern "C" fn(*mut Packet) -> ! as usize as u64, top, arg) {
         Ok(_) => Ok(JoinHandle { packet, _stack: stack }),

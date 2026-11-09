@@ -17,9 +17,13 @@ pub struct TaskContext {
     pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
     pub pd_ptr: *const ProtectionDomain,
     pub kstack_top: u64,
+    /// The task's thread pointer (FS base), loaded on every switch to it. Programs
+    /// set it with `program_threads::TLS`; user code cannot change it otherwise.
+    pub fs_base: u64,
 }
 
 const _: () = assert!(core::mem::offset_of!(TaskContext, kstack_top) == 0xC0);
+const _: () = assert!(core::mem::offset_of!(TaskContext, fs_base) == 0xC8);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +133,7 @@ impl Task {
             ss,
             pd_ptr: pd as *const _,
             kstack_top: forged_ksp,  // active ksp; switch_to saves/loads here
+            fs_base: 0,
         };
 
         Self {
@@ -478,6 +483,11 @@ impl Scheduler {
             "call {finish_switch}",
             "mov rsi, r12",
             "mov rsp, [rsi + 0xC0]",
+            // The next task's thread pointer (TaskContext.fs_base at 0xC8).
+            "mov eax, [rsi + 0xC8]",
+            "mov edx, [rsi + 0xCC]",
+            "mov ecx, 0xC0000100",
+            "wrmsr",
             // Only now narrow PKRU; the Rust callback ran with kernel access.
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
