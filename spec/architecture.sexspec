@@ -3,7 +3,7 @@
   "subsystem": "architecture",
   "constitution": {
     "path": "ARCHITECTURE.md",
-    "sha256": "4085f8fa65234205c5fdab070fe36765d767a46edc001410bf2ed5bfb27a98d7"
+    "sha256": "7f99eefb1afb48ba73ed6079ac080e2a5aeea693a8ba364a19927c1b3e741679"
   },
   "state_model": {
     "equation": "S[n+1] = T(S[n], I[n], C)",
