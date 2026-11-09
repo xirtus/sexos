@@ -52,6 +52,7 @@ pub mod enums {
     pub const TEXTURE_3D: u32 = 0x806F;
     pub const TEXTURE_2D_ARRAY: u32 = 0x8C1A;
     pub const TEXTURE_CUBE_MAP_POSITIVE_X: u32 = 0x8515;
+    pub const COLOR_ATTACHMENT0: u32 = 0x8CE0;
     pub const TEXTURE0: u32 = 0x84C0;
     pub const TEXTURE_MAG_FILTER: u32 = 0x2800;
     pub const TEXTURE_MIN_FILTER: u32 = 0x2801;
@@ -333,6 +334,27 @@ pub struct Context {
     pub error: u32,
     /// Bumped by every draw or clear, so the page knows to show the new frame.
     pub frame: u64,
+    pub framebuffers: BTreeMap<u32, Framebuffer>,
+    /// Renderbuffers: their size (storage is allocated in the framebuffer using one).
+    pub renderbuffers: BTreeMap<u32, (u32, u32)>,
+    pub renderbuffer: u32,
+    /// The bound framebuffer; 0 is the canvas.
+    pub fb: u32,
+    /// The canvas's own size, colour and depth while a framebuffer is drawn into.
+    canvas: Option<(u32, u32, Vec<u32>, Vec<f32>)>,
+}
+
+/// A framebuffer object: draws land in its colour texture (level 0 of a 2D texture or
+/// cube face) and its own depth buffer.
+#[derive(Default, Clone)]
+pub struct Framebuffer {
+    /// Texture and face (0 for 2D, 0..6 for cube faces).
+    pub color: Option<(u32, usize)>,
+    /// A colour renderbuffer, used when there is no colour texture.
+    pub color_rb: Option<u32>,
+    pub depth: Vec<f32>,
+    /// Pixels of a colour renderbuffer.
+    pub rb_pixels: Vec<u32>,
 }
 
 impl Context {
@@ -350,6 +372,7 @@ impl Context {
             },
             scissor_box: [0, 0, w as i32, h as i32], scissor_test: false, polygon_offset: [0.0; 2], polygon_offset_fill: false,
             clear_color: [0.0; 4], clear_depth: 1.0, unpack_alignment: 4, flip_y: false, premultiply: false, error: NO_ERROR, frame: 0,
+            framebuffers: BTreeMap::new(), renderbuffers: BTreeMap::new(), renderbuffer: 0, fb: 0, canvas: None,
         }
     }
 
@@ -360,6 +383,11 @@ impl Context {
     /// Resizes (and clears) the drawing buffer, as setting canvas.width/height does.
     pub fn resize(&mut self, width: u32, height: u32) {
         let (w, h) = (width.clamp(1, MAX_SIZE), height.clamp(1, MAX_SIZE));
+        if let Some(c) = self.canvas.as_mut() {
+            *c = (w, h, vec![0; (w * h) as usize], vec![1.0; (w * h) as usize]);
+            self.frame += 1;
+            return;
+        }
         self.width = w;
         self.height = h;
         self.color = vec![0; (w * h) as usize];
@@ -1030,13 +1058,139 @@ impl Context {
         out
     }
 
+    // ---- Framebuffers ----
+    /// The size a framebuffer draws at: its colour attachment's.
+    fn fb_size(&self, f: &Framebuffer) -> Option<(u32, u32)> {
+        if let Some((t, face)) = f.color {
+            let l = self.textures.get(&t)?.faces.get(face)?;
+            return (l.width > 0 && l.height > 0).then_some((l.width, l.height));
+        }
+        f.color_rb.and_then(|r| self.renderbuffers.get(&r).copied()).filter(|s| s.0 > 0 && s.1 > 0)
+    }
+    /// Puts what was drawn into the bound framebuffer back into its attachments.
+    fn fb_store(&mut self) {
+        if self.fb == 0 { return; }
+        let id = self.fb;
+        let Some(mut f) = self.framebuffers.remove(&id) else { return };
+        let (w, h) = (self.width, self.height);
+        f.depth = core::mem::take(&mut self.depth);
+        let color = core::mem::take(&mut self.color);
+        match f.color {
+            Some((t, face)) => if let Some(l) = self.textures.get_mut(&t).and_then(|t| t.faces.get_mut(face)) {
+                if l.width == w && l.height == h {
+                    match l.class {
+                        Class::Norm => l.px = color,
+                        Class::Float => l.raw = color.iter().flat_map(|p| [0, 8, 16, 24].map(|s| (((p >> s) & 0xFF) as f32 / 255.0).to_bits())).collect(),
+                        _ => {}
+                    }
+                }
+            },
+            None => f.rb_pixels = color,
+        }
+        self.framebuffers.insert(id, f);
+    }
+    /// Draws into the framebuffer's attachments as they are now.
+    fn fb_load(&mut self) {
+        let Some(f) = self.framebuffers.get(&self.fb).cloned() else { return };
+        let (w, h) = self.fb_size(&f).unwrap_or((1, 1));
+        let n = (w * h) as usize;
+        let color = match f.color {
+            Some((t, face)) => match self.textures.get(&t).and_then(|t| t.faces.get(face)) {
+                Some(l) if l.class == Class::Norm && l.px.len() == n => l.px.clone(),
+                Some(l) if l.class == Class::Float && l.raw.len() == 4 * n => (0..n).map(|i| raster::pack([0, 1, 2, 3].map(|k| f32::from_bits(l.raw[4 * i + k])))).collect(),
+                _ => vec![0; n],
+            },
+            None => if f.rb_pixels.len() == n { f.rb_pixels.clone() } else { vec![0; n] },
+        };
+        self.width = w;
+        self.height = h;
+        self.color = color;
+        self.depth = if f.depth.len() == n { f.depth } else { vec![1.0; n] };
+    }
+    pub fn bind_framebuffer(&mut self, id: u32) {
+        if id == self.fb { return; }
+        self.fb_store();
+        if self.fb == 0 {
+            self.canvas = Some((self.width, self.height, core::mem::take(&mut self.color), core::mem::take(&mut self.depth)));
+        }
+        self.fb = id;
+        if id == 0 {
+            let (w, h, c, d) = self.canvas.take().unwrap();
+            self.width = w; self.height = h; self.color = c; self.depth = d;
+        } else {
+            self.framebuffers.entry(id).or_default();
+            self.fb_load();
+        }
+    }
+    /// Attaches a texture (or nothing, with 0) to the bound framebuffer's colour; depth
+    /// attachments keep the framebuffer's own depth buffer.
+    pub fn framebuffer_texture(&mut self, attachment: u32, target: u32, texture: u32) {
+        if self.fb == 0 { return self.err(INVALID_OPERATION); }
+        if attachment != COLOR_ATTACHMENT0 { return; }
+        let face = if (TEXTURE_CUBE_MAP_POSITIVE_X..TEXTURE_CUBE_MAP_POSITIVE_X + 6).contains(&target) { (target - TEXTURE_CUBE_MAP_POSITIVE_X) as usize } else { 0 };
+        self.fb_store();
+        let f = self.framebuffers.entry(self.fb).or_default();
+        f.color = (texture != 0).then_some((texture, face));
+        f.color_rb = None;
+        self.fb_load();
+    }
+    pub fn framebuffer_renderbuffer(&mut self, attachment: u32, rb: u32) {
+        if self.fb == 0 { return self.err(INVALID_OPERATION); }
+        if attachment != COLOR_ATTACHMENT0 { return; }
+        self.fb_store();
+        let f = self.framebuffers.entry(self.fb).or_default();
+        f.color = None;
+        f.color_rb = (rb != 0).then_some(rb);
+        self.fb_load();
+    }
+    pub fn bind_renderbuffer(&mut self, id: u32) { self.renderbuffer = id; if id != 0 { self.renderbuffers.entry(id).or_insert((0, 0)); } }
+    pub fn renderbuffer_storage(&mut self, w: u32, h: u32) {
+        if self.renderbuffer == 0 { return self.err(INVALID_OPERATION); }
+        self.renderbuffers.insert(self.renderbuffer, (w.min(MAX_SIZE), h.min(MAX_SIZE)));
+        // A framebuffer drawing into it now draws at the new size.
+        if self.fb != 0 && self.framebuffers.get(&self.fb).is_some_and(|f| f.color_rb == Some(self.renderbuffer)) { self.fb_store(); self.fb_load(); }
+    }
+    pub fn delete_framebuffer(&mut self, id: u32) {
+        if id == self.fb { self.bind_framebuffer(0); }
+        self.framebuffers.remove(&id);
+    }
+    pub fn delete_renderbuffer(&mut self, id: u32) { self.renderbuffers.remove(&id); if self.renderbuffer == id { self.renderbuffer = 0; } }
+    /// Brings the bound framebuffer's texture up to date, so a later draw can sample it
+    /// (render to texture, then draw with that texture).
+    pub fn sync_framebuffer(&mut self) { if self.fb != 0 { self.fb_store(); self.fb_load(); } }
+    /// Copies a rectangle of the read framebuffer's colour into the draw framebuffer
+    /// (nearest), as blitFramebuffer does. `read` and `draw` are framebuffer ids.
+    pub fn blit_framebuffer(&mut self, read: u32, draw: u32, src: [i32; 4], dst: [i32; 4]) {
+        let bound = self.fb;
+        self.bind_framebuffer(read);
+        let (sw, sh, pixels) = (self.width as i32, self.height as i32, self.color.clone());
+        self.bind_framebuffer(draw);
+        let (dw, dh) = (self.width as i32, self.height as i32);
+        let (sx0, sy0, sx1, sy1) = (src[0], src[1], src[2], src[3]);
+        let (dx0, dy0, dx1, dy1) = (dst[0], dst[1], dst[2], dst[3]);
+        if dx1 != dx0 && dy1 != dy0 {
+            for y in dy0.min(dy1).max(0)..dy0.max(dy1).min(dh) {
+                for x in dx0.min(dx1).max(0)..dx0.max(dx1).min(dw) {
+                    let fx = (x - dx0) as f32 + 0.5;
+                    let fy = (y - dy0) as f32 + 0.5;
+                    let u = sx0 + libm::floorf(fx * (sx1 - sx0) as f32 / (dx1 - dx0) as f32) as i32;
+                    let v = sy0 + libm::floorf(fy * (sy1 - sy0) as f32 / (dy1 - dy0) as f32) as i32;
+                    if u < 0 || v < 0 || u >= sw || v >= sh { continue; }
+                    self.color[(y * dw + x) as usize] = pixels[(v * sw + u) as usize];
+                }
+            }
+        }
+        self.frame += 1;
+        self.bind_framebuffer(bound);
+    }
+
     /// The drawing buffer as a picture: 0xAARRGGBB, top row first, un-premultiplied.
     /// `alpha: false` contexts are shown opaque.
     pub fn present(&self, alpha: bool) -> Vec<u32> {
-        let (w, h) = (self.width as usize, self.height as usize);
+        let (w, h, color) = match &self.canvas { Some((w, h, c, _)) => (*w as usize, *h as usize, c), None => (self.width as usize, self.height as usize, &self.color) };
         let mut out = vec![0u32; w * h];
         for y in 0..h {
-            let src = &self.color[(h - 1 - y) * w..(h - y) * w];
+            let src = &color[(h - 1 - y) * w..(h - y) * w];
             for (x, &p) in src.iter().enumerate() {
                 let (r, g, b, a) = (p & 0xFF, (p >> 8) & 0xFF, (p >> 16) & 0xFF, p >> 24);
                 out[y * w + x] = if !alpha || a == 255 { 0xFF00_0000 | r << 16 | g << 8 | b } else if a == 0 { 0 } else {

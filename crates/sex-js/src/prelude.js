@@ -752,7 +752,7 @@
       this._s = { program: null, array: null, vao: null, unit: 0, tex: [], clear: [0, 0, 0, 0], depthClear: 1, viewport: [0, 0, canvas.width, canvas.height],
         scissor: [0, 0, canvas.width, canvas.height], enabled: {}, depthFunc: 0x201, depthMask: true, colorMask: [true, true, true, true],
         blend: [1, 0, 1, 0], blendEq: [0x8006, 0x8006], cullFace: 0x405, frontFace: 0x901, flipY: false, premul: false, align: 4,
-        lineWidth: 1, elem: new Map(), fb: null, rb: null };
+        lineWidth: 1, elem: new Map(), fb: null, readFb: null, rb: null };
       this._progInfo = new Map();
       H(OP.GL_QUERY, canvas._id, 'init', canvas.width, canvas.height, this._attrs.alpha === false ? 0 : 1);
     }
@@ -845,7 +845,8 @@
         case 0x84E0: return 0x84C0 + s.unit;
         case 0x8069: return (s.tex[s.unit] || {})[0xDE1] || null;
         case 0x8514: return (s.tex[s.unit] || {})[0x8513] || null;
-        case 0x8CA6: case 0x8CAA: return s.fb;
+        case 0x8CA6: return s.fb;
+        case 0x8CAA: return s.readFb || null;
         case 0x8CA7: return s.rb;
         case 0xB45: return s.cullFace;
         case 0xB46: return s.frontFace;
@@ -1152,29 +1153,54 @@
     drawArraysInstanced(mode, first, count, n) { this._c('dai', mode, first | 0, count | 0, n | 0); }
     drawElementsInstanced(mode, count, type, offset, n) { this._c('dei', mode, count | 0, type, offset | 0, n | 0); }
     drawRangeElements(mode, start, end, count, type, offset) { this.drawElements(mode, count, type, offset); }
-    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} blitFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    blitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask) {
+      if (!(mask & 0x4000)) return;
+      const r = this._s.readFb, d = this._s.fb;
+      this._c('blt', r ? r._id : 0, d ? d._id : 0, sx0 | 0, sy0 | 0, sx1 | 0, sy1 | 0, dx0 | 0, dy0 | 0, dx1 | 0, dy1 | 0);
+    }
     clearBufferuiv() {} clearBufferfi() {}
     readPixels(x, y, w, h, format, type, out) {
       if (!out) return;
+      const r = this._s.readFb, d = this._s.fb, other = (r || null) !== (d || null);
+      if (other) this._c('fb', r ? r._id : 0);
       this._flush();
       const buf = H(OP.GL_QUERY | 0x10000, this.canvas._id, 'read', String(x | 0), String(y | 0), String(w | 0), String(h | 0));
+      if (other) this._c('fb', d ? d._id : 0);
       if (buf instanceof ArrayBuffer) {
         const src = new Uint8Array(buf);
         const dst = bytesOf(out);
         dst.set(src.subarray(0, Math.min(src.length, dst.length)));
       }
     }
-    // Framebuffers and renderbuffers: drawing goes to the canvas for now.
+    // Framebuffers: draws land in the attached texture (render to texture) or colour
+    // renderbuffer; each framebuffer has its own depth buffer.
     createFramebuffer() { return new WebGLFramebuffer(); }
-    bindFramebuffer(t, f) { this._s.fb = f || null; }
-    deleteFramebuffer() {} isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
-    framebufferTexture2D() {} framebufferRenderbuffer() {} framebufferTextureLayer() {}
+    bindFramebuffer(t, f) {
+      f = f || null;
+      if (t !== 0x8CA9) this._s.readFb = f;   // READ_FRAMEBUFFER or FRAMEBUFFER
+      if (t === 0x8CA8) return;
+      if (this._s.fb !== f) { this._s.fb = f; this._c('fb', f ? f._id : 0); }
+    }
+    deleteFramebuffer(f) {
+      if (!f) return;
+      if (this._s.fb === f) this._s.fb = null;
+      if (this._s.readFb === f) this._s.readFb = null;
+      this._c('dfb', f._id);
+    }
+    isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
+    framebufferTexture2D(t, attachment, textarget, tex) { if (t !== 0x8CA8) this._c('ft', attachment, textarget, tex ? tex._id : 0); }
+    framebufferTextureLayer() {}
+    framebufferRenderbuffer(t, attachment, rt, rb) { if (t !== 0x8CA8) this._c('fr', attachment, rb ? rb._id : 0); }
     checkFramebufferStatus() { return 0x8CD5; }
     getFramebufferAttachmentParameter() { return null; }
     createRenderbuffer() { return new WebGLRenderbuffer(); }
-    bindRenderbuffer(t, r) { this._s.rb = r || null; }
-    deleteRenderbuffer() {} isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
-    renderbufferStorage() {} renderbufferStorageMultisample() {} getRenderbufferParameter() { return 0; }
+    bindRenderbuffer(t, r) { this._s.rb = r || null; this._c('rb', r ? r._id : 0); }
+    deleteRenderbuffer(r) { if (r) this._c('drb', r._id); }
+    isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
+    renderbufferStorage(t, fmt, w, h) { if (this._s.rb) { this._s.rb._w = w; this._s.rb._h = h; } this._c('rs', w | 0, h | 0); }
+    renderbufferStorageMultisample(t, samples, fmt, w, h) { this.renderbufferStorage(t, fmt, w, h); }
+    getRenderbufferParameter(t, p) { const r = this._s.rb; return !r ? 0 : p === 0x8D42 ? r._w | 0 : p === 0x8D43 ? r._h | 0 : 0; }
     // WebGL 2 odds and ends
     createQuery() { return new WebGLQuery(); } deleteQuery() {} beginQuery() {} endQuery() {} getQueryParameter() { return 0; }
     createSampler() { return new WebGLSampler(); } deleteSampler() {} bindSampler() {} samplerParameteri() {} samplerParameterf() {}
