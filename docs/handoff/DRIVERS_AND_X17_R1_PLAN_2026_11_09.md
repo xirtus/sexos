@@ -15,9 +15,9 @@ Ledger entry: "Hardware census, VMD warning, NVMe waits for real SSDs" in
   drives sit behind Intel VMD and no NVMe controller shows up on PCI, so SexOS has no
   disk. Boot now says so in plain words (`[hw.warning] ... Intel VMD/RST RAID is on`).
 - On the first boot SexOS should get: picture (firmware framebuffer), USB keyboard and
-  mouse, the internal keyboard if it is PS/2, NVMe (if not behind VMD), power off. In
-  open branches: wired Ethernet (Killer E3100G is a Realtek RTL8125), headphone sound
-  (Intel HDA), touchpad (I2C HID, needs ACPI), native panel resolution. Not yet planned
+  mouse, the internal keyboard if it is PS/2, NVMe or SATA (if not behind VMD), wired
+  Ethernet (Killer E3100G is a Realtek RTL8125, merged in #79), sound through Intel HDA
+  (#79), power off. In open branches: touchpad (I2C HID, needs ACPI), native panel resolution. Not yet planned
   to work: Wi-Fi, Bluetooth, the NVIDIA GPU itself, webcam, card reader, RGB.
 - This PR adds a **hardware census** (one line per PCI device: name, owning service,
   support level, warnings), fixes **NVMe waits for real SSDs** (they were poll counts
@@ -45,8 +45,8 @@ for these parts; confirm them with `lspci -nn` on the real machine.
 | Panel | 1080p 165 Hz, 1080p 360 Hz, or 4K 120 Hz | eDP | GOP mode; native via EDID in PR #77 | display thread |
 | Storage | **Two M.2 2230/2280 slots**, PCIe Gen3/Gen4 x4; RAID 0 options (review unit: 2x WD SN730 1 TB in RAID 0) | NVMe 01:08, or VMD 8086:9a0b | NVMe driven (one controller); **VMD not driven** | this thread (sexdrive) |
 | Wi-Fi/BT | Killer Wi-Fi 6E AX1675 (an Intel AX210/AX211 module), BT 5.2, soldered | 8086:2725 (AX210) | none | new thread (P2) |
-| Ethernet | Killer E3100G 2.5 GbE (Realtek RTL8125 family) | 10ec:3000 or 10ec:8125 | in open branch | Drive real PC network, sound and SATA |
-| Audio | Intel Tiger Lake-H cAVS/HDA controller, Realtek ALC3281 codec, ALC1309 amp for woofers | 8086:43c8 | in open branch (HDA) | Drive real PC network, sound and SATA |
+| Ethernet | Killer E3100G 2.5 GbE (Realtek RTL8125 family) | 10ec:3000 or 10ec:8125 | driven (#79) | Drive real PC network, sound and SATA |
+| Audio | Intel Tiger Lake-H cAVS/HDA controller, Realtek ALC3281 codec, ALC1309 amp for woofers | 8086:43c8 | HDA driven (#79); speakers need the ALC1309 amp path | Drive real PC network, sound and SATA |
 | Touchpad | Precision clickpad (I2C HID on Intel Serial IO, by Dell's usual design) | 8086 class 0c:80 | none | Power off and restart through ACPI (I2C/GPIO) |
 | Keyboard | Per-key RGB (AlienFX), optional Cherry MX low profile | i8042 or USB, to confirm | PS/2 and USB keyboards work | Input (existing) |
 | USB | 2x USB-A 3.2 Gen 1, 1x USB-C 3.2 Gen 2 (DP, PD), 1x Thunderbolt 4 | xHCI 8086:43ed, TCSS 8086:9a13 | xHCI driven | Reach Linux and desktop parity (USB) |
@@ -90,8 +90,8 @@ P3 is the rest. "Owner" is an existing thread unless it says new.
 | P0 | PS/2 (i8042) keyboard | internal keyboard on many laptops | driven | existing |
 | P0 | Firmware framebuffer | picture | works | display thread |
 | P0 | ACPI power off/restart | clean shutdown | PR #70 | ACPI thread |
-| P1 | Realtek RTL8125 (Killer E3100G) | network | open branch | NIC/sound/SATA thread |
-| P1 | Intel HDA + Realtek codec | sound (headphones first; speakers need the ALC1309 amp path) | open branch | NIC/sound/SATA thread |
+| P1 | Realtek RTL8125 (Killer E3100G) | network | driven (#79) | NIC/sound/SATA thread |
+| P1 | Intel HDA + Realtek codec | sound (headphones first; speakers need the ALC1309 amp path) | driven (#79), amp path open | NIC/sound/SATA thread |
 | P1 | I2C HID touchpad (DesignWare I2C, Tiger Lake GPIO) | touchpad | planned | ACPI thread |
 | P1 | Intel VMD driver (bus driver that exposes the NVMe behind it) | keep RAID mode, or other Dell/HP/Lenovo laptops shipped in RST mode | planned | **new thread** |
 | P1 | NVMe: MSI-X, one queue per core, second controller, APST power states, shutdown notification (CC.SHN) on power off | speed, battery, both M.2 slots, clean unsafe-shutdown counters | planned | this thread's follow-up |
@@ -196,7 +196,7 @@ terms:
 | One PKU key per protection domain (1–15) | **organs**: each key groups many tasks (Core, Storage, Network, Desk, ...) | there are only 16 keys and we need hundreds of tasks | this is a faithful extension, documented in `PROGRAM_SLOTS_DESIGN_2026_11_07.md` |
 | Tiny kernel (5–8 kLOC) | about 20 kLOC of kernel Rust, including the ACPI interpreter | proofs, gates and BOOT policy were added in-kernel during bring-up | move ACPI AML evaluation, PCI policy and boot-time device policy into services as D2/D7 land |
 | Phase 5 "NVIDIA 3070 GPU PD (nouveau-lifted skeleton)", Phase 15 "Linux driver translation (DDE)", sexnode/tuxedo "load Linux drivers" — marked complete | these were placeholders. `servers/sexdrive/src/driver.rs` is a stub that is not even in the build (the real driver is `apps/sexdrive`); `servers/tuxedo` and `servers/sexnode` are about 160 lines of stubs; there is no NVIDIA code | early rounds wrote aspirational pages and skeletons | rewrite those manual pages to match the code. **Keep tuxedo, but as an arm's-length guest**: a Linux driver (GPL-2.0-only) cannot be linked into GPL-3.0-only SexOS code, so tuxedo's Linux-API glue is a separate program, licensed MIT or GPL-2.0-or-later, built together with the Linux driver into one GPL-2.0-only binary that runs as its own protection domain and talks to SexOS only over PDX (the way Genode runs Linux drivers through dde_linux). Use it for heavy stacks where a native port is months of work (Intel Wi-Fi with mac80211, perhaps GPU display); port small drivers (NVMe, NIC, HDA, I2C HID) natively from BSD/Redox/MIT sources |
-| sexdrive at `servers/sexdrive`, NVMe + AHCI | sexdrive at `apps/sexdrive`, NVMe now, AHCI in an open branch | the service was rebuilt from scratch as a proof-driven driver | update the manual path; AHCI lands with the NIC/sound/SATA branch |
+| sexdrive at `servers/sexdrive`, NVMe + AHCI | sexdrive at `apps/sexdrive`, NVMe and AHCI (#79) | the service was rebuilt from scratch as a proof-driven driver | update the manual path |
 | sexinput owns PS/2 and USB HID | sexusb owns xHCI and HID and feeds Input | USB is a bus with its own driver; Input stays the router | matches the multiserver idea; update the manual |
 | POSIX syscall server (sexc) | POSIX as a guest library inside programs (PR #68) | keeps POSIX out of the trusted path | this is more microkernel-like than the manual; update it |
 

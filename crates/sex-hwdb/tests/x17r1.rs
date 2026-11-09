@@ -16,7 +16,7 @@ fn alienware_x17_r1_parts_are_named_and_owned() {
     assert!(advice(wifi).unwrap().contains("Ethernet"));
 
     let killer = describe(id(0x10ec, 0x3000, 0x02, 0x00, 0));
-    assert_eq!((killer.service, killer.support), (Service::Net, Support::InProgress));
+    assert_eq!((killer.service, killer.support), (Service::Net, Support::Driven));
     assert_eq!(describe(id(0x8086, 0x43c8, 0x04, 0x03, 0)).service, Service::Bell);
     assert_eq!(describe(id(0x8086, 0x43ed, 0x0c, 0x03, 0x30)).support, Support::Driven);
 }
@@ -51,7 +51,7 @@ fn census_counts_the_qemu_gate_machine() {
         id(0x1033, 0x0194, 0x0c, 0x03, 0x30), id(0x8086, 0x2918, 0x06, 0x01, 0), id(0x8086, 0x2922, 0x01, 0x06, 0x01),
         id(0x8086, 0x2930, 0x0c, 0x05, 0), id(0x8086, 0x100e, 0x02, 0x00, 0),
     ] { census.add(d); }
-    assert_eq!(census, Census { devices: 8, working: 7, in_progress: 1, planned: 0, unsupported: 0, warnings: 0 });
+    assert_eq!(census, Census { devices: 8, working: 8, in_progress: 0, planned: 0, unsupported: 0, warnings: 0 });
 }
 
 #[test]

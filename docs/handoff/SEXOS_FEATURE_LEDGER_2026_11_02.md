@@ -3254,6 +3254,15 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+## Real PCs: wired network, HD Audio and SATA (2026-11-09)
+
+Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
+- **Leases.** BOOT now leases Intel e1000e/I217-I219, igb (82576, I210/I211, I350), igc (I225/I226) and Realtek r8169/r8125 to SexNet (Realtek registers in BAR2/BAR1); Intel HD Audio (class 04:03, any vendor) to Bell at slot 20 with its own DMA pool; AHCI (class 01:06:01) to the drive service at slot 21. `kernel/src/device_lease.rs`, `kernel/src/nic_boot.rs`.
+- **ABI.** `sex_pdx::pci_command::Model` gains I219, I82576, I210, I350, I225, Rtl8168, Rtl8125 plus `Family`; new `HDA_DMA_*`, `AHCI_DMA_*`, `SLOT_AHCI_HOST`; kernel `PciCapData.class`. `abi_version_hash` recomputed. `[bell.sound.ready]` gains `card=`.
+- **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
+- **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
+- **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+
 
 ## Hardware census, VMD warning, NVMe waits for real SSDs (2026-11-09)
 
@@ -3261,8 +3270,8 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   vendor, model, owning service and support level (driven, firmware, platform,
   in_progress, planned, none), `[hw.warning]` lines for things a person must act on
   (Intel VMD/RST RAID hiding the NVMe drives, an NVIDIA GPU with no native driver, Wi-Fi
-  with no driver) and a `[hw.census]` summary. On the QEMU gate machine: 8 devices, 7
-  working, AHCI in progress.
+  with no driver) and a `[hw.census]` summary. On the QEMU gate machine: 8 devices, all 8
+  working.
 - **NVMe on real SSDs.** Controller disable/enable now waits up to CAP.TO (500 ms units)
   in timer ticks instead of a fixed poll count (a few ms on bare metal), gives up at once
   on a fatal status while enabling, and the admin completion doorbell honours the
