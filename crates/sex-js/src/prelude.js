@@ -526,7 +526,9 @@
     drawImage(src, ...a) {
       let name, w, h;
       if (src && src.tagName === 'CANVAS') {
-        if (src._ctx) src._ctx._flush();
+        // The copy must see the source as it is now: what this canvas queued before goes
+        // first, then the source's own drawing, then the copy.
+        if (src._ctx && src._ctx._q.length) { this._flush(); src._ctx._flush(); }
         name = 'canvas:' + src._id; w = src.width; h = src.height;
       } else if (src && src.tagName === 'IMG') {
         name = src.getAttribute('src') || ''; w = src.naturalWidth || 0; h = src.naturalHeight || 0;

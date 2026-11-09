@@ -320,8 +320,9 @@ impl Surface {
         let quality = if exact { sk::FilterQuality::Nearest } else { sk::FilterQuality::Bilinear };
         let Some(src) = sk::PixmapRef::from_bytes(as_bytes(&mut part), cw, ch) else { return };
         let paint = sk::PixmapPaint { opacity: self.state.alpha.clamp(0.0, 1.0), blend_mode: self.state.blend, quality };
-        // Only the source rectangle shows, even when it starts inside a pixel.
-        let clip = self.rect_path(dx, dy, dw, dh);
+        // Only the part of the source rectangle that lies on the picture shows.
+        let (cx0, cy0, cx1, cy1) = (sx.max(0.0), sy.max(0.0), (sx + sw).min(iw), (sy + sh).min(ih));
+        let clip = self.rect_path(dx + (cx0 - sx) * kx, dy + (cy0 - sy) * ky, (cx1 - cx0) * kx, (cy1 - cy0) * ky);
         let Some(mut pm) = self.pixmap() else { return };
         if exact {
             pm.draw_pixmap(0, 0, src, &paint, map, None);
