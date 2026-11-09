@@ -40,6 +40,9 @@ def routing_receipts(text, expected):
     return dict(ok=not errors,errors=errors,routes=expected if not errors else None,scope='Normal-profile private default-route receipt after held BOOT metadata and device readiness. Actual next-hop bytes and neighbor recovery require independent wire evidence.')
 
 
+# QEMU's NIC models: e1000 (82540), e1000e (82574) and igb (82576).
+QEMU_MODELS={0x100e:'I82540',0x10d3:'I82574',0x10c9:'I82576'}
+
 def inspect(text, expected=1, preparation=False, ethernet=False, network_config=False, routing=False):
     preparation=preparation or ethernet
     network_config=network_config or routing
@@ -51,7 +54,7 @@ def inspect(text, expected=1, preparation=False, ethernet=False, network_config=
     for grant in grants:
         pd,slot,bus,dev,func,vendor,product,bits,dma=map(int,grant.groups())
         selected=next((g for position,g in reversed(found)if position<grant.start()),None)
-        if (pd,slot,bits,dma)!=(13,19,6,2)or(vendor,product)not in[(0x8086,0x100e),(0x8086,0x10d3)]:errors.append('wrong holder/slot/mask/DMA/supported-device binding')
+        if (pd,slot,bits,dma)!=(13,19,6,2)or(vendor!=0x8086 or product not in QEMU_MODELS):errors.append('wrong holder/slot/mask/DMA/supported-device binding')
         if (bus,dev,func,vendor,product)!=selected:errors.append('command grant differs from actual admitted controller')
         if seal<0 or grant.start()>seal:errors.append('command genesis after seal')
     if '[pci.command.negative.selftest] denied=9 output_zero=1 runtime_mint=0 ok=1'not in text:errors.append('actual denied/zero-output selftest missing')
@@ -97,17 +100,20 @@ def inspect(text, expected=1, preparation=False, ethernet=False, network_config=
         driver=list(re.finditer(r'\[sexnet.ether.phase\] from=(\w+) to=(\w+) failure=(\w+)',text))
         if text.count('[sexnet.ether.phase]')!=len(driver):errors.append('malformed or failed Ethernet transition')
         if expected:
-            if [m.groups()for m in driver]!=[(a,b,'None')for a,b in [('Check','Zero'),('Zero','Descriptors'),('Descriptors','Registers'),('Registers','Enable'),('Enable','Link'),('Link','Running')]]:errors.append('missing/failed/repeated Ethernet initialization')
+            # igb/igc wait in Queues for RXDCTL/TXDCTL to read back enabled.
+            advanced=any(int(m.group(7))==0x10c9 for m in grants)
+            steps=[('Check','Zero'),('Zero','Descriptors'),('Descriptors','Registers'),('Registers','Enable')]+([('Enable','Queues'),('Queues','Link')]if advanced else[('Enable','Link')])+[('Link','Running')]
+            if [m.groups()for m in driver]!=[(a,b,'None')for a,b in steps]:errors.append('missing/failed/repeated Ethernet initialization')
             if len(identities)==1 and len(grants)==1:
                 holder,slot,vendor,product=map(int,identities[0].groups());g=list(map(int,grants[0].groups()))
                 if (holder,slot,vendor,product)!=(g[0],g[1],g[5],g[6])or identities[0].start()<seal:errors.append('identity differs from held BOOT lease')
                 if phases and identities[0].start()>phases[0].start():errors.append('device model selected after preparation began')
-                model={0x100e:'I82540',0x10d3:'I82574'}.get(product,'INVALID')
+                model=QEMU_MODELS.get(product,'INVALID')
                 marker=rf'\[sexnet.ether.ready\] model={model} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified=([01]) network=0 dns=0 tcp=0 http=0 tls=0'
                 readiness=list(re.finditer(marker,text))
                 if len(readiness)!=1:errors.append('missing exact model/budget/offline runtime readiness')
                 elif model=='I82574'and readiness[0].group(1)!='1':errors.append('82574 timing register was not verified')
-            if len(applied)==6 and len(driver)==6 and len(phases)==4:
+            if len(applied)==6 and len(driver)in(6,7) and len(phases)==4:
                 before=tuple(map(int,applied[3].groups()));query=tuple(map(int,applied[4].groups()));enable=tuple(map(int,applied[5].groups()))
                 if query!=(13,19,before[3],before[3],0,0,0)or query[3]&6!=2:errors.append('DMA initialization did not start from memory-on/master-off')
                 if enable!=(13,19,query[3],query[3]|4,4,0,1):errors.append('wrong actual bus-master transition')

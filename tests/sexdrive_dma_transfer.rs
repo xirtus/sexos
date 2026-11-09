@@ -184,6 +184,12 @@ mod driver_read {
     mod raid { pub fn serving() -> bool { false } pub fn raw() -> bool { false }
         pub fn writes_refused() -> bool { false } pub fn sectors() -> u64 { 0 }
         pub fn read(_: u64, _: u64, _: u64) -> u64 { unreachable!() } }
+    // The NVMe path under test: no AHCI disk ever serves in this harness.
+    mod ahci { pub fn stop_io() {} pub fn sectors() -> u64 { 0 } }
+    fn serving_ahci() -> bool { false }
+    fn ahci_read_into_mapped_va(_: u64, _: u64, _: u64) -> u64 { unreachable!() }
+    fn ahci_write(_: u64, _: u64, _: u64) -> u64 { unreachable!() }
+    fn ahci_flush() -> u64 { unreachable!() }
     include!(env!("SEXDRIVE_READ_PATH_SOURCE"));
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

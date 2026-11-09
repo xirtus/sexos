@@ -141,7 +141,6 @@ static DEFER_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
 static EDGE_SEND_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
 static ROUTE_READY_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
 static ROUTE_MISSING_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
-static BOOTGRAPH_PROOF_SENT: AtomicBool = AtomicBool::new(false);
 static BOOTGRAPH_PROOF_MARKER_EMITTED: AtomicBool = AtomicBool::new(false);
 // Gate per-iteration ring-advance and idle-poll serial logs.
 // One main-task owner, separate reserved raw keyboard and pointer capacities.
@@ -324,22 +323,17 @@ pub extern "C" fn _start() -> ! {
     }
     serial_println!("[usb.host.controller.found] slot={} bar=0 map_va={:#x}", SLOT_USB_HOST, cap);
     serial_println!("[sexusb.xhci.map.ok]");
-    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
-    let pool = sex_pdx::memory_region_full_view(sex_pdx::SLOT_DMA_REGION, QUERY_VIEW | READ | WRITE | DMA_ADDRESS)
-        .ok().and_then(|view| {
-            serial_println!("[sexusb.memory.dma.ready] region_id={} length={}", view.region_id, view.length);
-            sex_pdx::dma_pool::DmaRegionPool::new(view).ok()
-        });
+    // A zero-byte reservation is refused, but it builds the pool from the DMA region.
+    let mut pool = None;
+    let _ = reserve_dma(&mut pool, 0);
     let Some(pool) = pool else { serial_println!("[sexusb.memory.dma.bad]"); park(); };
     let controller = match xhci::Xhci::start(cap, limit, pool) {
         Ok(x) => x,
         Err(e) => { serial_println!("[sexusb.xhci.start.fail] reason={:?}", e); park(); }
     };
     serial_println!("[sexusb.ready]");
-    if !BOOTGRAPH_PROOF_SENT.swap(true, Ordering::Relaxed) {
-        // Zero-motion, zero-button report: proves the route to Input without input action.
-        let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, 0, 0);
-    }
+    // The first report to Input is the first real one: a report sent here could reach
+    // Input before it is ready (the boot order check counts that as a failure).
     let mut usb = usb::Usb::new(controller);
     let ports = usb.x.ports;
     let (connected, first) = usb.scan();
@@ -366,6 +360,23 @@ pub extern "C" fn _start() -> ! {
         usb.service();
         poll_pointer_reports();
         if !busy { let _ = sex_pdx::sys_wait_self_ticks(1); }
+    }
+}
+
+fn reserve_dma(pool: &mut Option<sex_pdx::dma_pool::DmaRegionPool>, bytes: u64) -> (u64, u64) {
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
+    if pool.is_none() {
+        let Ok(view) = sex_pdx::memory_region_full_view(
+            sex_pdx::SLOT_DMA_REGION, QUERY_VIEW | READ | WRITE | DMA_ADDRESS,
+        ) else { return (u64::MAX, u64::MAX); };
+        let Ok(new_pool) = sex_pdx::dma_pool::DmaRegionPool::new(view)
+            else { return (u64::MAX, u64::MAX); };
+        sex_pdx::serial_record!("[sexusb.memory.dma.ready] region_id={} length={}", view.region_id, view.length);
+        *pool = Some(new_pool);
+    }
+    match pool.as_mut().unwrap().reserve(bytes) {
+        Ok(buffer) => (buffer.physical_address, buffer.virtual_address),
+        Err(_) => (u64::MAX, u64::MAX),
     }
 }
 
