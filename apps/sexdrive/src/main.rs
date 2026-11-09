@@ -709,8 +709,14 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
         && offset >= sex_pdx::DISKFS_V4_POOL_BASE_LBA * NVME_LBA_BYTES
         && offset.checked_add(size).map_or(false,|end|end <=
             (sex_pdx::DISKFS_V4_POOL_BASE_LBA+sex_pdx::DISKFS_V4_POOL_SECTORS)*NVME_LBA_BYTES);
+    // The crash record ring: one sector per record (sex_pdx::crash_log).
+    let crash_start = sex_pdx::crash_log::DISK_BASE_LBA * NVME_LBA_BYTES;
+    let crash_end = (sex_pdx::crash_log::DISK_BASE_LBA + sex_pdx::crash_log::DISK_SECTORS - 1) * NVME_LBA_BYTES;
+    let allow_crash_ring = proof_mode && size == WRITE_PROOF_LEN
+        && (offset % NVME_LBA_BYTES) == 0
+        && offset >= crash_start && offset <= crash_end;
     let allow = allow_proof || allow_manifest || allow_object || allow_linen || allow_quil
-        || allow_sexfs_meta || allow_sexfs_obj || allow_pool_bulk;
+        || allow_sexfs_meta || allow_sexfs_obj || allow_pool_bulk || allow_crash_ring;
     if !allow || hot_log() {
     serial_println!(
         "[sexdrive.write.guard.config] proof_lba={} proof_offset={:#x} manifest_lba={} object_lba_start={} object_lba_end={} proof_len={} magic={:#x} sexfs_meta={}-{} sexfs_obj={}-{}",

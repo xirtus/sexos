@@ -30,6 +30,7 @@ members = [
     "apps/threads",
     "apps/shapes",
     "apps/fputest",
+    "apps/fuzz",
     "apps/play",
     "apps/cpp",
     "apps/web",

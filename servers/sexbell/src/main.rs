@@ -548,7 +548,9 @@ unsafe fn retire_app_resources(target:u32)->usize {
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
-    paging_probe::run();
+    // The paging check runs on the first start only: its pages keep what it wrote.
+    let restarts = sex_pdx::crash_log::restarts();
+    if restarts == 0 { paging_probe::run(); } else { serial_println!("[sexbell.restarted] restarts={}", restarts); }
     sound::init();
 
     // ── Bell Bridge status stub (Phase 1): marker-only, no IPC ──

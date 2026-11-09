@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "a9408486a30290c5e87f47e41c4981d617cd155bccaa1ea9628e70d6e7c045b3"
+abi_version_hash = "4906524a569c958912d2c20467e692d0d470ad3d4774e8b0362a4800d20fce0a"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -54,6 +54,7 @@ crates = [
   "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml",
   "apps/fputest/Cargo.toml",
+  "apps/fuzz/Cargo.toml",
   "apps/jit/Cargo.toml",
   "apps/threads/Cargo.toml",
   "apps/web/Cargo.toml",
@@ -272,6 +273,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fputest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fputest"
 dest_artifact = "iso_root/programs/fputest"
+
+[[stage]]
+id = "build_fuzz"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/fuzz/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/fuzz"
+dest_artifact = "iso_root/programs/fuzz"
 
 [[stage]]
 id = "build_jit"

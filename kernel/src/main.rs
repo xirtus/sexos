@@ -13,9 +13,6 @@ extern "C" fn _start() -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    use sex_kernel::serial_println;
-    serial_println!("KERNEL PANIC: {}", info);
-    loop {
-        core::hint::spin_loop();
-    }
+    // The stop screen, a record for the next start, then a restart.
+    sex_kernel::console::stop(format_args!("{}", info))
 }
