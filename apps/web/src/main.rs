@@ -221,7 +221,7 @@ impl Browser {
         // Same page, other fragment: just scroll.
         let (here, _) = sex_html::url::fragment(&self.url);
         let (there, frag) = sex_html::url::fragment(url);
-        if !here.is_empty() && here == there && frag.is_some() {
+        if post.is_none() && !here.is_empty() && here == there && frag.is_some() {
             self.url = String::from(url);
             self.scroll_to(frag);
             return;

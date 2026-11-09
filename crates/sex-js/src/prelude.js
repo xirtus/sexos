@@ -519,7 +519,7 @@
     const action = resolveUrl(attr('action', 'formaction') || H(OP.LOCATION) || '');
     const enc = v => encodeURIComponent(String(v).replace(/\r?\n|\r/g, '\r\n')).replace(/[!'()~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, '+');
     const query = formEntries(form, submitter).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
-    if (method === 'post') { H(OP.NAVIGATE, action.replace(/#.*$/, ''), 'POST', query); return; }
+    if (method === 'post') { H(OP.NAVIGATE, action, 'POST', query); return; }
     H(OP.NAVIGATE, action.replace(/[?#].*$/, '') + '?' + query);
   }
   // A click on `el`: checkboxes and radios change before the click and change back if

@@ -438,9 +438,9 @@ document.getElementById('s').click(); console.log(t)", "t.js").unwrap();
 
 #[test]
 fn form_post_navigates_with_its_body() {
-    let mut s = page("<form id=f method=post action='/login'><input name=user value='a b'><input name=pw value='x&y'></form>");
+    let mut s = page("<form id=f method=post action='/login#done'><input name=user value='a b'><input name=pw value='x&y'></form>");
     s.eval("document.getElementById('f').submit()", "t.js").unwrap();
     let d = s.page_mut();
-    assert_eq!(d.navigate.as_deref(), Some("http://example.test/login"));
+    assert_eq!(d.navigate.as_deref(), Some("http://example.test/login#done"));
     assert_eq!(d.navigate_post.as_deref(), Some("user=a+b&pw=x%26y"));
 }
