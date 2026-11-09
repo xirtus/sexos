@@ -3184,3 +3184,11 @@ YouTube stage Y3b (plan: `docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md`).
 - A program asks the resolver one question at a time (the service answers one per caller); names it looked up are remembered for five minutes (up to 256).
 - The old blocking `open`/`send_all` path is gone; `request` and the HTTP/1.0 `fetch` run on `Exchange`.
 - Gate `program_web_http11_gate`: a request beside one to an unreachable address (10.0.2.123) lands in about 1.2 s; the unreachable one gives up after 30 s.
+
+## Net: keep-alive, connections reused across requests (2026-11-09)
+
+YouTube stage Y3d.
+- **sex-fetch**: requests no longer send `Connection: close`. `Head::keeps_connection(http10)` reads the reply's `Connection` header (HTTP/1.1 keeps unless `close`; HTTP/1.0 only on `keep-alive`).
+- **sex_app::net**: when a reply's framing (chunked, `Content-Length` or no body) ends exactly at the received bytes and the server keeps the connection, the flow goes into a per-program idle pool (host, port, TLS; up to 32, dropped after 30 s). The next request to the same site takes the newest kept flow and sends at once, with no connect or TLS handshake. A kept flow that turns out closed before the first reply byte is retried on a new flow. `[net.receive.stats]` shows `reused=` and `kept=`.
+- **sex-tls (open web)**: the session is full duplex (`split()` into reader and writer), so one TLS session carries any number of requests. A host test against an OpenSSL server with a test root sends 3 requests on 1 connection (`[sexnet.tls.open.host]`, in `sexnet_jobs_host_gate.sh`).
+- **Gate** `program_web_http11_gate`: the page's own server sees 17 requests over 13 connections, and the log shows a reused flow.

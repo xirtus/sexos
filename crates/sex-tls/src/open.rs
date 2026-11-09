@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! TLS 1.3 to any host, checked against the public root store. One request at a time:
-//! the caller queues plaintext, marks it finished, then reads the reply. Bytes on the
-//! wire and plaintext both pass through this type, and the caller moves them.
+//! TLS 1.3 to any host, checked against the public root store. The session stays open
+//! for as many requests as the site allows (HTTP keep-alive): the caller queues
+//! plaintext and marks each request finished, which sends it, and reads replies as
+//! they come. Bytes on the wire and plaintext both pass through this type, and the
+//! caller moves them.
 use alloc::{rc::Rc, vec::Vec};
-use core::{cell::RefCell, future::poll_fn, task::{Context, Poll, Waker}};
+use core::{cell::RefCell, future::{poll_fn, Future}, pin::pin, task::{Context, Poll, Waker}};
+use embedded_io_async::{Read as _, Write as _};
+#[cfg(test)] extern crate std;
 use embedded_tls::{Aes128GcmSha256, CertificateEntryRef, CertificateRef, CertificateVerifyRef, CryptoProvider, SignatureScheme, TlsConfig, TlsConnection, TlsContext, TlsError, TlsVerifier};
 use rand_core::SeedableRng;
 use rsa::{pkcs1::DecodeRsaPublicKey, signature::Verifier as _, RsaPublicKey};
@@ -91,6 +95,14 @@ impl SignatureVerificationAlgorithm for P256Sha384 {
 }
 static ALGORITHMS: &[&dyn SignatureVerificationAlgorithm] = &[&RsaPkcs1Sha256, &RsaPkcs1Sha384, &RsaPkcs1Sha512, &RsaPssSha256, &RsaPssSha384, &RsaPssSha512, &P256Sha256, &P256Sha384, &P384Sha384, &P384Sha256];
 
+#[cfg(not(test))]
+fn roots() -> &'static [rustls_pki_types::TrustAnchor<'static>] { webpki_roots::TLS_SERVER_ROOTS }
+/// Host tests check a peer against a root of their own; the program never can.
+#[cfg(test)]
+static TEST_ROOTS: std::sync::Mutex<Vec<rustls_pki_types::TrustAnchor<'static>>> = std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
+fn roots() -> &'static [rustls_pki_types::TrustAnchor<'static>] { std::boxed::Box::leak(TEST_ROOTS.lock().unwrap().clone().into_boxed_slice()) }
+
 struct Verifier { host: Vec<u8>, seconds: u32, leaf: Vec<u8>, transcript: [u8; 32], certificate_seen: bool, signature_seen: bool }
 impl Verifier {
     fn chain(&mut self, cert: CertificateRef) -> Result<(), TlsError> {
@@ -101,7 +113,7 @@ impl Verifier {
             ders.push(CertificateDer::from(*bytes));
         }
         let leaf = webpki::EndEntityCert::try_from(&ders[0]).map_err(|_| TlsError::InvalidCertificate)?;
-        leaf.verify_for_usage(ALGORITHMS, webpki_roots::TLS_SERVER_ROOTS, &ders[1..],
+        leaf.verify_for_usage(ALGORITHMS, roots(), &ders[1..],
             UnixTime::since_unix_epoch(core::time::Duration::from_secs(self.seconds as u64)),
             webpki::KeyUsage::required(SERVER_AUTH), None, None).map_err(|_| TlsError::InvalidCertificate)?;
         let host = core::str::from_utf8(&self.host).map_err(|_| TlsError::InvalidCertificate)?;
@@ -152,6 +164,7 @@ impl CryptoProvider for Provider {
 }
 
 struct Pipe { wire_in: Vec<u8>, wire_out: Vec<u8>, plain_out: Vec<u8>, plain_in: Vec<u8>, request_done: bool, peer_closed: bool, ready: bool }
+#[derive(Clone)]
 struct Wire(Rc<RefCell<Pipe>>);
 impl embedded_io::ErrorType for Wire { type Error = embedded_io::ErrorKind; }
 impl embedded_io_async::Read for Wire {
@@ -204,38 +217,56 @@ impl Session {
             // The library can accept Finished without its callbacks. Require both.
             if !provider.verifier.certificate_seen || !provider.verifier.signature_seen { return Err(TlsError::InvalidCertificate); }
             shared.borrow_mut().ready = true;
-            let mut chunk = [0u8; 1024];
-            loop {
-                let take = poll_fn(|_| {
-                    let mut pipe = shared.borrow_mut();
-                    if !pipe.plain_out.is_empty() {
-                        let n = pipe.plain_out.len().min(chunk.len());
-                        chunk[..n].copy_from_slice(&pipe.plain_out[..n]);
-                        pipe.plain_out.drain(..n);
-                        return Poll::Ready(n);
+            let (mut reader, mut writer) = tls.split();
+            let (to_send, to_read) = (shared.clone(), shared.clone());
+            // Requests go out while replies come in, for as long as the site keeps the
+            // connection: each finished request is flushed, then the writer waits again.
+            let send = async move {
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let (take, flush) = poll_fn(|_| {
+                        let mut pipe = to_send.borrow_mut();
+                        if !pipe.plain_out.is_empty() {
+                            let n = pipe.plain_out.len().min(chunk.len());
+                            chunk[..n].copy_from_slice(&pipe.plain_out[..n]);
+                            pipe.plain_out.drain(..n);
+                            return Poll::Ready((n, false));
+                        }
+                        if pipe.request_done { pipe.request_done = false; return Poll::Ready((0, true)); }
+                        Poll::Pending
+                    }).await;
+                    if flush { writer.flush().await?; continue; }
+                    let mut at = 0;
+                    while at < take {
+                        let n = writer.write(&chunk[at..take]).await?;
+                        if n == 0 { return Err(TlsError::InvalidApplicationData); }
+                        at += n;
                     }
-                    if pipe.request_done { Poll::Ready(0) } else { Poll::Pending }
-                }).await;
-                if take == 0 { break; }
-                let mut at = 0;
-                while at < take {
-                    let n = tls.write(&chunk[at..take]).await?;
-                    if n == 0 { return Err(TlsError::InvalidApplicationData); }
-                    at += n;
                 }
-            }
-            tls.flush().await?;
-            loop {
-                poll_fn(|_| if shared.borrow().plain_in.len() < QUEUE { Poll::Ready(()) } else { Poll::Pending }).await;
-                match tls.read(&mut chunk).await {
-                    Ok(0) | Err(TlsError::ConnectionClosed) => break,
-                    Ok(n) => shared.borrow_mut().plain_in.extend_from_slice(&chunk[..n]),
-                    // Plenty of servers drop TCP without a closing alert. The caller
-                    // checks lengths, so this ends the reply instead of failing it.
-                    Err(TlsError::Io(_)) if shared.borrow().peer_closed => break,
-                    Err(error) => return Err(error),
+                #[allow(unreachable_code)]
+                Ok::<(), TlsError>(())
+            };
+            let receive = async move {
+                let mut chunk = [0u8; 1024];
+                loop {
+                    poll_fn(|_| if to_read.borrow().plain_in.len() < QUEUE { Poll::Ready(()) } else { Poll::Pending }).await;
+                    match reader.read(&mut chunk).await {
+                        Ok(0) | Err(TlsError::ConnectionClosed) => break,
+                        Ok(n) => to_read.borrow_mut().plain_in.extend_from_slice(&chunk[..n]),
+                        // Plenty of servers drop TCP without a closing alert. The caller
+                        // checks lengths, so this ends the reply instead of failing it.
+                        Err(TlsError::Io(_)) if to_read.borrow().peer_closed => break,
+                        Err(error) => return Err(error),
+                    }
                 }
-            }
+                Ok(())
+            };
+            let (mut send, mut receive) = (pin!(send), pin!(receive));
+            // The session ends when the site closes it (or either side fails).
+            poll_fn(|cx| {
+                if let Poll::Ready(done) = receive.as_mut().poll(cx) { return Poll::Ready(done); }
+                match send.as_mut().poll(cx) { Poll::Ready(Err(e)) => Poll::Ready(Err(e)), _ => Poll::Pending }
+            }).await?;
             Ok(())
         })?;
         Ok(Self { task: Some(task), pipe, stage: Stage::Handshake })
@@ -276,4 +307,92 @@ impl Session {
         n
     }
     pub fn drained(&self) -> bool { self.pipe.borrow().plain_in.is_empty() && matches!(self.stage, Stage::Finished | Stage::Failed(_)) }
+}
+
+#[cfg(test)]
+mod tests {
+    //! A real TLS 1.3 peer (Python's ssl over OpenSSL) on the host, with a root made for
+    //! this test: one session must carry several HTTP requests (keep-alive).
+    use super::*;
+    use std::{boxed::Box, format, io::{BufRead, BufReader, Read, Write}, net::TcpStream, process::{Command, Stdio}, string::String, time::{Duration, Instant, SystemTime, UNIX_EPOCH}, vec};
+    const HOST: &str = "keepalive.sexos.test";
+    const PEER: &str = r#"
+import socket,ssl,sys
+c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);c.minimum_version=ssl.TLSVersion.TLSv1_3;c.set_ecdh_curve('prime256v1');c.num_tickets=0
+c.load_cert_chain(sys.argv[1],sys.argv[2])
+s=socket.socket();s.bind(('127.0.0.1',0));s.listen(4);print(s.getsockname()[1],flush=True)
+conns=0;reqs=0
+while reqs<3:
+ raw,_=s.accept();conns+=1
+ t=c.wrap_socket(raw,server_side=True);f=t.makefile('rb')
+ while True:
+  line=f.readline()
+  if not line:break
+  while f.readline() not in (b'\r\n',b''):pass
+  reqs+=1;body=('reply %d to %s'%(reqs,line.split()[1].decode())).encode()
+  t.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n'%len(body)+body)
+  if reqs==3:break
+ t.close()
+print('connections=%d requests=%d'%(conns,reqs),flush=True)
+"#;
+    fn openssl(dir: &std::path::Path, args: &[&str]) { assert!(Command::new("openssl").args(args).current_dir(dir).stderr(Stdio::null()).status().unwrap().success(), "{:?}", args); }
+
+    #[test]
+    fn one_session_carries_several_requests() {
+        let dir = std::env::temp_dir().join(format!("sexos-open-tls-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("leaf.ext"), format!("subjectAltName=DNS:{HOST}\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n")).unwrap();
+        openssl(&dir, &["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "30", "-subj", "/CN=SexOS keep-alive test root", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign"]);
+        openssl(&dir, &["req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", &format!("/CN={HOST}")]);
+        openssl(&dir, &["x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem", "-days", "30", "-extfile", "leaf.ext"]);
+        openssl(&dir, &["x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der"]);
+        let der: &'static CertificateDer<'static> = Box::leak(Box::new(CertificateDer::from(Box::leak(std::fs::read(dir.join("ca.der")).unwrap().into_boxed_slice()) as &'static [u8])));
+        TEST_ROOTS.lock().unwrap().push(webpki::anchor_from_trusted_cert(der).unwrap());
+
+        let mut peer = Command::new("python3").args(["-c", PEER, dir.join("leaf.pem").to_str().unwrap(), dir.join("leaf.key").to_str().unwrap()]).stdout(Stdio::piped()).spawn().unwrap();
+        let mut out = BufReader::new(peer.stdout.take().unwrap());
+        let mut port = String::new();
+        out.read_line(&mut port).unwrap();
+        let mut socket = TcpStream::connect(("127.0.0.1", port.trim().parse::<u16>().unwrap())).unwrap();
+        socket.set_nonblocking(true).unwrap();
+
+        let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+        let (read, write) = (Box::leak(vec![0u8; 16640].into_boxed_slice()), Box::leak(vec![0u8; 4096].into_boxed_slice()));
+        let mut session = Session::start(HOST, &mut [7u8; 32], seconds, read, write).unwrap();
+        // Moves bytes between the socket and the session until `done` says so.
+        let mut pump = |session: &mut Session, done: &mut dyn FnMut(&mut Session) -> bool| {
+            let began = Instant::now();
+            loop {
+                let mut chunk = [0u8; 4096];
+                match socket.read(&mut chunk[..session.wire_room().min(4096)]) { Ok(0) => session.peer_closed(), Ok(n) => session.offer_wire(&chunk[..n]), Err(_) => {} }
+                session.poll();
+                let n = session.take_wire(&mut chunk);
+                if n > 0 { socket.write_all(&chunk[..n]).unwrap(); }
+                if done(session) { return; }
+                assert!(!matches!(session.stage(), Stage::Failed(_)), "{:?}", session.stage());
+                assert!(began.elapsed() < Duration::from_secs(20), "stuck at {:?}", session.stage());
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        pump(&mut session, &mut |s| s.stage() == Stage::Ready);
+        for n in 1..=3 {
+            let request = format!("GET /item/{n} HTTP/1.1\r\nHost: {HOST}\r\n\r\n");
+            assert_eq!(session.send(request.as_bytes()), request.len());
+            session.finish_request();
+            let want = format!("reply {n} to /item/{n}");
+            let mut got = Vec::new();
+            pump(&mut session, &mut |s| {
+                let mut buf = [0u8; 512];
+                let k = s.receive(&mut buf);
+                got.extend_from_slice(&buf[..k]);
+                got.ends_with(want.as_bytes())
+            });
+            assert!(String::from_utf8_lossy(&got).starts_with("HTTP/1.1 200 OK"), "{}", String::from_utf8_lossy(&got));
+        }
+        let mut summary = String::new();
+        out.read_line(&mut summary).unwrap();
+        assert_eq!(summary.trim(), "connections=1 requests=3");
+        let _ = peer.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

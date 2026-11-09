@@ -116,7 +116,8 @@ pub fn forbidden_header(name: &str) -> bool {
     NAMES.contains(&n.as_str()) || n.starts_with("proxy-") || n.starts_with("sec-")
 }
 
-/// The request's bytes: HTTP/1.1, one request per connection (`Connection: close`).
+/// The request's bytes: HTTP/1.1, which keeps the connection for further requests
+/// unless the site says otherwise (see `Head::keeps_connection`).
 /// `cookie` is the jar's `Cookie` value for this address, if any.
 pub fn encode(req: &Request, url: &Url, cookie: Option<&str>) -> Result<Vec<u8>, Error> {
     let method = if req.method.is_empty() { "GET" } else { req.method };
@@ -129,7 +130,7 @@ pub fn encode(req: &Request, url: &Url, cookie: Option<&str>) -> Result<Vec<u8>,
     if !named("user-agent") { put("User-Agent: "); put(USER_AGENT); put("\r\n"); }
     if !named("accept") { put("Accept: */*\r\n"); }
     if !named("accept-language") { put("Accept-Language: en-US,en;q=0.8\r\n"); }
-    put("Accept-Encoding: gzip, deflate\r\nConnection: close\r\n");
+    put("Accept-Encoding: gzip, deflate\r\n");
     for (k, v) in req.headers {
         if !token(k) || !value_ok(v) { return Err(Error::Header); }
         // The browser's own Origin goes through; a page's Origin or Host never does.
@@ -195,6 +196,15 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).
 
 /// Reads the head at the start of `bytes`. `Ok(None)` while it is incomplete; on
 /// success, the head and where the body starts. Interim 1xx replies are skipped.
+impl Head {
+    /// The site keeps the connection open after this reply (HTTP/1.1 without
+    /// `Connection: close`). `http10` is whether the status line said HTTP/1.0.
+    pub fn keeps_connection(&self, http10: bool) -> bool {
+        let says = |word: &str| self.all("connection").any(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(word)));
+        if http10 { says("keep-alive") } else { !says("close") }
+    }
+}
+
 pub fn parse_head(bytes: &[u8]) -> Result<Option<(Head, usize)>, Error> {
     let mut at = 0;
     loop {

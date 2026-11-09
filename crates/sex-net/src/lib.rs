@@ -231,6 +231,8 @@ impl<'a> Engine<'a>{
     pub fn open_send(&mut self,flow:usize,bytes:&[u8])->Result<usize,Error>{
         let open=self.open.as_ref().ok_or(Error::Config)?;
         let flow=self.flows.get_mut::<tcp::Socket>(*open.tcp.get(flow).ok_or(Error::Length)?);
+        // A flow the peer or we closed takes nothing more: say so, rather than 0 forever.
+        if !flow.may_send(){return Err(Error::Protocol);}
         if !flow.can_send(){return Ok(0);}
         flow.send_slice(bytes).map_err(|_|Error::Protocol)
     }

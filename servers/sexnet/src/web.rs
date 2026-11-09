@@ -236,7 +236,12 @@ impl Service {
                 let mut own = [0u8; 1024];
                 let take = len.min(own.len());
                 own[..take].copy_from_slice(&region[..take]);
-                if let Some(tls) = self.slots[i].tls.as_mut() { return w::reply(seq, w::OK, tls.send(&own[..take]) as u32); }
+                if let Some(tls) = self.slots[i].tls.as_mut() {
+                    // A session whose task has ended takes nothing more (a kept connection
+                    // the site closed): fail, so the caller starts over on a new one.
+                    if !matches!(tls.stage(), Stage::Handshake | Stage::Ready) { return w::reply(seq, w::FAILED, 0); }
+                    return w::reply(seq, w::OK, tls.send(&own[..take]) as u32);
+                }
                 match engine.open_send(i, &own[..take]) { Ok(n) => w::reply(seq, w::OK, n as u32), Err(_) => w::reply(seq, w::FAILED, 0) }
             }
             w::RECEIVE => {

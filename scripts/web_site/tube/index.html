@@ -47,6 +47,10 @@ fetch('/tube/api/player?prettyPrint=false', {
       fetch('http://10.0.2.123:9/never').then(() => done('stuck answered'), () => done('stuck gave up'));
       const began = Date.now();
       return fetch('/tube/slow/0').then(r => r.text()).then(t => done('beside stuck ' + t + ' ms=' + (Date.now() - began)));
+    }).then(() => fetch('/tube/drop')).then(r => r.text()).then(() => new Promise(go => setTimeout(go, 300))).then(() => {
+      // The site closed the kept connection without saying so: the next request
+      // finds it closed and goes again on a new one.
+      return fetch('/tube/after').then(r => r.text()).then(t => done('after drop ' + t), e => done('after drop failed ' + e));
     });
   };
   x.send();
