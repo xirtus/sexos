@@ -3254,6 +3254,7 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+
 ## Native resolution, HiDPI scale, damage-only scanout (2026-11-09)
 
 Workstream F, stage F1 (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
