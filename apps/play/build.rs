@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Links FFmpeg (built by scripts/build_ffmpeg.sh) and compiles Play's C bridge with
-//! the same soft-float flags.
+//! the flags FFmpeg was built with (x86_64-sex-app: x87 and SSE, no AVX, no red zone).
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
@@ -18,8 +18,7 @@ fn main() {
     let obj = out.join("ffmpeg_bridge.o");
     let status = Command::new("clang")
         .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
-        .args(["-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387", "-msoft-float", "-mno-red-zone", "-fno-stack-protector"])
-        .args(["-U__FLT_EVAL_METHOD__", "-D__FLT_EVAL_METHOD__=0", "-Wno-builtin-macro-redefined"])
+        .args(["-msse2", "-mno-avx", "-mno-red-zone", "-fno-stack-protector"])
         .arg("-isystem").arg(format!("{}/include", resource.trim()))
         .arg("-isystem").arg(ff.join("include-c"))
         .arg("-I").arg(ff.join("include"))
@@ -31,7 +30,7 @@ fn main() {
     assert!(Command::new("llvm-ar").arg("crs").arg(&lib).arg(&obj).status().unwrap().success());
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-search=native={}", ff.join("lib").display());
-    for l in ["playbridge", "avformat", "avcodec", "swscale", "avutil"] {
+    for l in ["playbridge", "avformat", "avcodec", "swscale", "swresample", "avutil"] {
         println!("cargo:rustc-link-lib=static={l}");
     }
 }

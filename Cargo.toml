@@ -86,19 +86,22 @@ opt-level = "z"
 codegen-units = 1
 strip = true
 [profile.release.package.web]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 strip = true
 [profile.release.package.sex-html]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 [profile.release.package.sex-web]
-opt-level = "z"
+opt-level = 3
 codegen-units = 1
 
 # Scripts run on wasmi; unoptimized it is too slow for the time budget even in tests.
+# Without debug assertions, so its tail-call dispatch stays sibling calls (no stack growth).
 [profile.dev.package.wasmi]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.wasmi_core]
 opt-level = 3
 [profile.dev.package.wasmi_ir]

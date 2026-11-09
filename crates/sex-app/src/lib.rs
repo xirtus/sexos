@@ -6,6 +6,7 @@
 
 extern crate alloc;
 pub mod heap;
+pub mod sound;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
 /// than the 64 KiB a run starts with (deep layout, script engines, decoders).
@@ -212,10 +213,14 @@ pub mod files {
     }
     /// Reads up to `out.len()` bytes of the file from its start.
     pub fn read(window: &mut Window, path: &[u8], out: &mut [u8]) -> Result<usize, Error> {
+        read_at(window, path, 0, out)
+    }
+    /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
+    pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
         let mut done = 0;
         while done < out.len() {
             let want = (out.len() - done).min(w::IO_MAX);
-            let got = request(window, w::READ, path, done as u64, want as u64)? as usize;
+            let got = request(window, w::READ, path, offset + done as u64, want as u64)? as usize;
             out[done..done + got].copy_from_slice(&region()?[w::PATH_BYTES..w::PATH_BYTES + got]);
             done += got;
             if got < want { break; }

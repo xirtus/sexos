@@ -6,8 +6,10 @@ license = "GPL-3.0-only"
 description = "JavaScript for SexOS web pages: QuickJS-NG in Wasm on wasmi, with a DOM over sex-html"
 
 [dependencies]
-# MIT/Apache-2.0, as in sex-wasm: no_std + alloc, libm for float math, loop dispatch.
-wasmi = { version = "2.0.0", default-features = false, features = ["validate", "libm", "portable-dispatch"] }
+# MIT/Apache-2.0: no_std + alloc, libm for float math. auto-dispatch: tail-call dispatch
+# in optimized builds (about 1.6x fewer host instructions per script than the loop), the
+# loop interpreter in unoptimized ones, whose stack would grow per instruction otherwise.
+wasmi = { version = "2.0.0", default-features = false, features = ["validate", "libm", "auto-dispatch"] }
 sex-html = { path = "../sex-html" }
 sex-gl = { path = "../sex-gl" }
 sex-image = { path = "../sex-image" }

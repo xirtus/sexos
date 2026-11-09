@@ -824,6 +824,7 @@ pub fn init() {
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_pixel_regions(sexdisp_id);
+    crate::boot_memory::init_sound_rings(sexbell_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
     crate::boot_memory::init_boot_image(sexfiles_id);
@@ -961,6 +962,12 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_PROGRAM_NETWORK_SUBJECT");
         assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_PROGRAM_NETWORK_COLLISION");
         pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+        // Bell plays a program's sound from that program's own ring; the edge carries
+        // only "my ring has sound" and Bell's own tone and notice calls.
+        if sexbell_id!=0 {
+            assert!(pd.find_capability(sex_pdx::SLOT_BELL as u32).is_none(),"BOOT_PROGRAM_BELL_COLLISION");
+            pd.grant_capability(sex_pdx::SLOT_BELL,crate::capability::CapabilityData::Domain(sexbell_id));
+        }
     }
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_NETWORK");
