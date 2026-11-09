@@ -3,11 +3,13 @@
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_println{($($t:tt)*)=>{}}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
+#[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;
 use memory_region::{RegionGrant,QUERY_VIEW,READ,WRITE};
 use std::sync::Mutex;
-struct Model{boot:bool,probe:Option<(u64,u64)>,probes:usize,maps:Vec<(u32,u64,u64)>}
-static MODEL:Mutex<Model>=Mutex::new(Model{boot:true,probe:None,probes:0,maps:Vec::new()});
+/// probe answers BAR0 (Intel); bars answers other BAR indices (Realtek BAR2/BAR1).
+struct Model{boot:bool,probe:Option<(u64,u64)>,probes:usize,maps:Vec<(u32,u64,u64)>,bars:Vec<(u8,u64,u64)>,asked:Vec<u8>}
+static MODEL:Mutex<Model>=Mutex::new(Model{boot:true,probe:None,probes:0,maps:Vec::new(),bars:Vec::new(),asked:Vec::new()});
 struct ProtectionDomain{id:u32}
 fn require_boot(){let boot=MODEL.lock().unwrap().boot;assert!(boot,"after BOOT seal");}
 fn alias(pd:&ProtectionDomain,physical:u64,length:u64,writable:bool,mmio:bool)->u64{
@@ -15,12 +17,13 @@ fn alias(pd:&ProtectionDomain,physical:u64,length:u64,writable:bool,mmio:bool)->
 }
 mod hal{pub mod pci{
  pub struct PciDevice{pub vendor_id:u16,pub device_id:u16}
- impl PciDevice{pub fn probe_boot_bar0(&self)->Option<(u64,u64)>{crate::require_boot();let mut m=crate::MODEL.lock().unwrap();m.probes+=1;m.probe}}
+ impl PciDevice{pub fn probe_boot_bar(&self,index:u8)->Option<(u64,u64)>{crate::require_boot();let mut m=crate::MODEL.lock().unwrap();m.probes+=1;m.asked.push(index);
+  if index==0{m.probe}else{m.bars.iter().find(|b|b.0==index).map(|b|(b.1,b.2))}}}
 }}
 include!(env!("NIC_BOOT_MEMORY_SOURCE"));
-fn setup(probe:Option<(u64,u64)>){*MODEL.lock().unwrap()=Model{boot:true,probe,probes:0,maps:vec![]};}
+fn setup(probe:Option<(u64,u64)>){*MODEL.lock().unwrap()=Model{boot:true,probe,probes:0,maps:vec![],bars:vec![],asked:vec![]};}
 #[test]fn unsupported_controllers_never_probe_or_alias_a_bar(){
- for(vendor_id,device_id)in[(0x1af4,0x1000),(0x10ec,0x8168),(0x8086,0xffff)]{
+ for(vendor_id,device_id)in[(0x1af4,0x1000),(0x10ec,0x8139),(0x8086,0xffff)]{
   setup(Some((0x800000,131072)));assert_eq!(nic_bar0(&ProtectionDomain{id:13},&hal::pci::PciDevice{vendor_id,device_id},19),None);
   let m=MODEL.lock().unwrap();assert_eq!(m.probes,0);assert!(m.maps.is_empty());
  }
@@ -42,4 +45,17 @@ fn setup(probe:Option<(u64,u64)>){*MODEL.lock().unwrap()=Model{boot:true,probe,p
  setup(Some((0x800000,131072)));MODEL.lock().unwrap().boot=false;
  let error=std::panic::catch_unwind(||nic_bar0(&ProtectionDomain{id:13},&hal::pci::PciDevice{vendor_id:0x8086,device_id:0x10d3},19));assert!(error.is_err());
  let m=MODEL.lock().unwrap();assert_eq!(m.probes,0);assert!(m.maps.is_empty());
+}
+#[test]fn realtek_leases_its_register_window_from_bar2_then_bar1_never_the_io_bar0(){
+ for(bars,expect,asked)in[(vec![(2u8,0x900000u64,4096u64),(1,0xa00000,256)],Some((0x900000u64,4096u64)),vec![2u8]),(vec![(1,0xa00000,4096)],Some((0xa00000,4096)),vec![2,1]),(vec![(2,0x900000,0x80),(1,0xa00000,4096)],None,vec![2]),(vec![],None,vec![2,1])]{
+  setup(Some((0xc000,256)));MODEL.lock().unwrap().bars=bars;
+  let g=nic_bar0(&ProtectionDomain{id:13},&hal::pci::PciDevice{vendor_id:0x10ec,device_id:0x8168},19);
+  let m=MODEL.lock().unwrap();assert_eq!(m.asked,asked);
+  match expect{Some((physical,length))=>{let g=g.unwrap();assert_eq!(g.length,length);assert_eq!(m.maps,[(13,physical,length)]);},None=>{assert!(g.is_none());assert!(m.maps.is_empty());}}
+ }
+}
+#[test]fn advanced_intel_controllers_need_their_queue_registers_inside_the_view(){
+ for(device_id,length,ok)in[(0x10c9u16,0xe000u64,false),(0x10c9,65536,true),(0x1533,131072,true),(0x15f3,0x8000,false),(0x15f3,65536,true),(0x15b8,32768,true)]{
+  setup(Some((0x800000,length)));let g=nic_bar0(&ProtectionDomain{id:13},&hal::pci::PciDevice{vendor_id:0x8086,device_id},19);assert_eq!(g.is_some(),ok,"{:#x}",device_id);
+ }
 }
