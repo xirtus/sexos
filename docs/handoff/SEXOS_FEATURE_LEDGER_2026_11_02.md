@@ -3103,3 +3103,12 @@ row no longer waits for the row before it to end.
   - The cloud container has no `/dev/kvm`, so QEMU runs as TCG: every instruction is emulated, and programs are soft-float until SSE (#18).
   - Most of pinball's QEMU slowdown is therefore emulation, not SexOS.
   - Heavier pages (three.js) are bound by QuickJS running inside wasmi even on the host. The browser thread owns that work.
+
+## Web speaks HTTP/1.1: POST, chunked, gzip, cookies, XHR (2026-11-09)
+
+First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
+- **New crate `sex-fetch`** (no_std + alloc, no I/O, host-tested): addresses, HTTP/1.1 requests with any method, headers and body (header injection refused, browser-owned headers like Host and Cookie can't be set by pages), reply heads, Content-Length / chunked / until-close framing (conflicting lengths refused), gzip and deflate (zune-inflate, capped so a gzip bomb stops at the limit), redirects joined per RFC 3986, and an RFC 6265 cookie jar (Domain/Path/Secure/HttpOnly/Max-Age/Expires, `__Host-`/`__Secure-`, per-domain and total caps).
+- **`sex_app::net::request`**: sends a `sex_fetch::Request` over the existing flow and returns the decoded reply. The download timeout is now sixty seconds without a byte rather than sixty seconds in all, so long downloads that keep moving finish.
+- **Browser**: pages, style sheets, pictures and script loads go through it with the window's cookie jar; `fetch(url, {method, headers, body})`, real `Response.headers`/`url`, `Request`, `Headers` iteration, `XMLHttpRequest` (text, json, arraybuffer, blob; Range works), and `document.cookie` (HttpOnly cookies stay hidden from scripts). New host ops FETCH_HEAD 68 and COOKIE 69; FETCH 66 takes method, headers and body.
+- **Gate** `scripts/program_web_http11_gate.py`: a local server sends a chunked + gzip page with Set-Cookie, the page POSTs JSON with its own headers (the server sees all three cookies), then reads 16 bytes by XHR Range (206). Passes in QEMU, along with the web net, fetch and JS gates.
+- Seen while testing: a 1.3 MB body takes about 11.7 s in QEMU (about 110 KB/s). That is roughly 360p video speed, so bigger windows and several flows (stage Y3) come next.

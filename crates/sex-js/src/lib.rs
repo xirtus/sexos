@@ -14,7 +14,7 @@ extern crate alloc;
 
 pub mod document;
 pub mod webgl;
-pub use document::Document;
+pub use document::{Document, FetchAsk};
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -71,9 +71,16 @@ pub mod op {
     /// (url): asks the browser to load it; answers the request's id. The browser loads it
     /// once the script returns and dispatches `fetched\tID\tSTATUS\tLENGTH` (status 0:
     /// it could not be loaded).
+    /// Arguments after the url (all optional): method, request headers as
+    /// `name: value` lines, and the body's bytes.
     pub const FETCH: u32 = 66;
     /// (id): the loaded bytes, once (text or, with bit 16, an ArrayBuffer).
     pub const FETCH_BODY: u32 = 67;
+    /// (id): the reply's final address, a newline, then its headers as `name: value`
+    /// lines (Set-Cookie left out).
+    pub const FETCH_HEAD: u32 = 68;
+    /// (): what `document.cookie` reads; (text): a `document.cookie = text` assignment.
+    pub const COOKIE: u32 = 69;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

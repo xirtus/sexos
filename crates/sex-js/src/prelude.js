@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
   const nodes = new Map();
 
   function fmt(v) {
@@ -575,8 +575,8 @@
     get URL() { return location.href; }
     get location() { return location; }
     get defaultView() { return window; }
-    get cookie() { return ''; }
-    set cookie(v) {}
+    get cookie() { const v = H(OP.COOKIE); return v === null ? '' : v; }
+    set cookie(v) { H(OP.COOKIE, String(v)); }
     getElementById(id) { return wrap(H(OP.BY_ID, String(id))); }
     createElement(tag) {
       const id = +check(H(OP.CREATE_ELEMENT, String(tag)));
@@ -1591,17 +1591,44 @@
   // pages come from: built-in, @files, http) and answers with a 'fetched' message.
   const fetches = new Map();
   class Headers {
-    constructor(init) { this._m = new Map(); if (init) for (const [k, v] of (init instanceof Headers ? init._m : Object.entries(init))) this._m.set(String(k).toLowerCase(), String(v)); }
+    constructor(init) {
+      this._m = new Map();
+      if (!init) return;
+      if (init instanceof Headers) init._m.forEach((v, k) => this._m.set(k, v));
+      else if (Array.isArray(init) || typeof init[Symbol.iterator] === 'function') for (const [k, v] of init) this.append(k, v);
+      else for (const k of Object.keys(init)) this.append(k, init[k]);
+    }
     get(k) { const v = this._m.get(String(k).toLowerCase()); return v === undefined ? null : v; }
     has(k) { return this._m.has(String(k).toLowerCase()); }
     set(k, v) { this._m.set(String(k).toLowerCase(), String(v)); }
-    forEach(fn) { this._m.forEach((v, k) => fn(v, k, this)); }
+    append(k, v) { k = String(k).toLowerCase(); const o = this._m.get(k); this._m.set(k, o === undefined ? String(v) : o + ', ' + v); }
+    delete(k) { this._m.delete(String(k).toLowerCase()); }
+    forEach(fn, self) { this._m.forEach((v, k) => fn.call(self, v, k, this)); }
+    keys() { return this._m.keys(); }
+    values() { return this._m.values(); }
+    entries() { return this._m.entries(); }
+    [Symbol.iterator]() { return this._m.entries(); }
+    _lines() { let s = ''; this._m.forEach((v, k) => { s += k + ': ' + v + '\r\n'; }); return s; }
   }
+  // Header lines from the browser ("name: value\r\n"...) as Headers.
+  function parseHeaders(text) {
+    const h = new Headers();
+    for (const line of String(text || '').split(/\r?\n/)) { const i = line.indexOf(':'); if (i > 0) h.append(line.slice(0, i).trim(), line.slice(i + 1).trim()); }
+    return h;
+  }
+  // The reply's final address and headers, from the browser.
+  function replyHead(id, url) {
+    const v = H(OP.FETCH_HEAD, '' + id);
+    if (v === null) return { url, headers: new Headers() };
+    const nl = v.indexOf('\n');
+    return { url: v.slice(0, nl) || url, headers: parseHeaders(v.slice(nl + 1)) };
+  }
+  const STATUS_TEXT = { 200: 'OK', 201: 'Created', 204: 'No Content', 206: 'Partial Content', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 500: 'Internal Server Error', 503: 'Service Unavailable' };
   class Response {
-    constructor(id, status, url, length) {
+    constructor(id, status, url, length, headers) {
       this._id = id; this.status = status; this.ok = status >= 200 && status < 300; this.url = url;
-      this.statusText = this.ok ? 'OK' : status === 404 ? 'Not Found' : 'Error'; this.redirected = false; this.type = 'basic';
-      this.headers = new Headers({ 'content-length': String(length) }); this.bodyUsed = false; this.body = null;
+      this.statusText = STATUS_TEXT[status] || ''; this.redirected = false; this.type = 'basic';
+      this.headers = headers || new Headers({ 'content-length': String(length) }); this.bodyUsed = false; this.body = null;
     }
     // The body comes over once, as bytes or as text.
     _take(binary) {
@@ -1613,24 +1640,102 @@
     arrayBuffer() { return this._take(true); }
     text() { return this._take(false); }
     json() { return this._take(false).then(JSON.parse); }
-    blob() { return this._take(true).then(b => ({ size: b.byteLength, type: '', arrayBuffer: () => Promise.resolve(b) })); }
+    blob() { const type = this.headers.get('content-type') || ''; return this._take(true).then(b => ({ size: b.byteLength, type, arrayBuffer: () => Promise.resolve(b) })); }
     clone() { return this; }
   }
+  // A request body as the browser takes it: text, or bytes.
+  function bodyBytes(body, headers) {
+    if (body === undefined || body === null) return '';
+    if (typeof body === 'string') { if (!headers.has('content-type')) headers.set('content-type', 'text/plain;charset=UTF-8'); return body; }
+    if (body instanceof URLSearchParams) { if (!headers.has('content-type')) headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8'); return body.toString(); }
+    if (body instanceof ArrayBuffer) return body;
+    if (ArrayBuffer.isView(body)) return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+    return String(body);
+  }
+  // One request to the browser; `done(status, length)` runs when it is loaded.
+  function ask(url, method, headers, body, done) {
+    const id = H(OP.FETCH, url, method, headers._lines(), bodyBytes(body, headers) || '');
+    if (id === null) return null;
+    fetches.set(+id, done);
+    return +id;
+  }
   function fetch(input, init) {
-    const url = String(input && typeof input === 'object' && 'url' in input ? input.url : input);
+    init = init || {};
+    const isReq = input && typeof input === 'object' && 'url' in input;
+    const url = String(isReq ? input.url : input);
+    const method = String(init.method || (isReq && input.method) || 'GET').toUpperCase();
+    const headers = new Headers(init.headers || (isReq && input.headers) || undefined);
+    const body = init.body !== undefined ? init.body : (isReq ? input.body : undefined);
     return new Promise((resolve, reject) => {
-      const id = H(OP.FETCH, url);
-      if (id === null) { reject(new TypeError('Failed to fetch ' + url)); return; }
-      fetches.set(id, { resolve, reject, url });
+      const id = ask(url, method, headers, body, (id, status, length) => {
+        if (status === 0) { reject(new TypeError('Failed to fetch ' + url)); return; }
+        const head = replyHead(id, url);
+        const r = new Response(id, status, head.url, length, head.headers);
+        r.redirected = head.url !== url && !url.startsWith('/') && url.indexOf('://') > 0;
+        resolve(r);
+      });
+      if (id === null) reject(new TypeError('Failed to fetch ' + url));
     });
   }
-  function fetched(id, status, length) {
-    const f = fetches.get(id);
-    if (!f) return;
-    fetches.delete(id);
-    if (status === 0) f.reject(new TypeError('Failed to fetch ' + f.url));
-    else f.resolve(new Response(id, status, f.url, length));
+  class Request {
+    constructor(input, init) {
+      init = init || {};
+      this.url = String(input && input.url || input); this.method = String(init.method || 'GET').toUpperCase();
+      this.headers = new Headers(init.headers); this.body = init.body === undefined ? null : init.body;
+    }
   }
+  function fetched(id, status, length) {
+    const f = fetches.get(+id);
+    if (!f) return;
+    fetches.delete(+id);
+    f(+id, status, length);
+  }
+
+  // XMLHttpRequest on the same loads as fetch. `async=false` is treated as async: the
+  // browser loads between script turns, so a blocking load cannot be had.
+  class XMLHttpRequest extends EventTarget {
+    constructor() {
+      super();
+      this.readyState = 0; this.status = 0; this.statusText = ''; this.responseType = ''; this.response = null;
+      this.responseURL = ''; this.timeout = 0; this.withCredentials = false; this.upload = new EventTarget();
+      this._h = new Headers(); this._rh = new Headers(); this._id = null; this._text = '';
+      this.onreadystatechange = this.onload = this.onerror = this.onloadend = this.onabort = this.ontimeout = this.onprogress = this.onloadstart = null;
+    }
+    get responseText() { if (this.responseType !== '' && this.responseType !== 'text') throw domError('responseText needs responseType text'); return this._text; }
+    get responseXML() { return null; }
+    // dispatchEvent also runs the `on<type>` property.
+    _fire(type) { this.dispatchEvent(new Event(type)); }
+    _state(n) { this.readyState = n; this._fire('readystatechange'); }
+    open(method, url) { this._m = String(method || 'GET').toUpperCase(); this._u = String(url); this._h = new Headers(); this._id = null; this.status = 0; this._text = ''; this.response = null; this._state(1); }
+    setRequestHeader(k, v) { if (this.readyState !== 1) throw domError('InvalidStateError'); this._h.append(k, v); }
+    overrideMimeType() {}
+    getResponseHeader(k) { return this._rh.get(k); }
+    getAllResponseHeaders() { return this.readyState >= 2 ? this._rh._lines() : ''; }
+    abort() { if (this._id !== null) fetches.delete(this._id); this._id = null; this.readyState = 0; this._fire('abort'); this._fire('loadend'); }
+    send(body) {
+      if (this.readyState !== 1) throw domError('InvalidStateError');
+      this._fire('loadstart');
+      this._id = ask(this._u, this._m, this._h, this._m === 'GET' || this._m === 'HEAD' ? null : body, (id, status, length) => {
+        if (this._id !== id) return;
+        this._id = null;
+        if (status === 0) { this.readyState = 4; this._fire('readystatechange'); this._fire('error'); this._fire('loadend'); return; }
+        const head = replyHead(id, this._u);
+        this.status = status; this.statusText = STATUS_TEXT[status] || ''; this.responseURL = head.url; this._rh = head.headers;
+        this._state(2); this._state(3);
+        const t = this.responseType;
+        const v = H(t === 'arraybuffer' || t === 'blob' ? OP.FETCH_BODY | 0x10000 : OP.FETCH_BODY, '' + id);
+        if (t === 'arraybuffer') this.response = v || new ArrayBuffer(0);
+        else if (t === 'blob') { const b = v || new ArrayBuffer(0); this.response = { size: b.byteLength, type: head.headers.get('content-type') || '', arrayBuffer: () => Promise.resolve(b) }; }
+        else if (t === 'json') { try { this.response = JSON.parse(v || ''); } catch (e) { this.response = null; } }
+        else { this._text = v || ''; this.response = this._text; }
+        this._fire('progress');
+        this._state(4);
+        this._fire('load'); this._fire('loadend');
+      });
+      if (this._id === null) { const x = this; Promise.resolve().then(() => { x.readyState = 4; x._fire('readystatechange'); x._fire('error'); x._fire('loadend'); }); }
+    }
+  }
+  Object.assign(XMLHttpRequest, { UNSENT: 0, OPENED: 1, HEADERS_RECEIVED: 2, LOADING: 3, DONE: 4 });
 
   // Query strings.
   class URLSearchParams {
@@ -1753,7 +1858,7 @@
     GPUBindGroupLayout, GPUPipelineLayout, GPURenderPipeline, GPUCommandEncoder, GPUCommandBuffer, GPURenderPassEncoder,
     GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
     createImageBitmap: src => Promise.resolve(src),
-    fetch, Response, Headers, URL, URLSearchParams,
+    fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {

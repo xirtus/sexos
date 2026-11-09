@@ -1137,6 +1137,7 @@ dependencies = [
 name = "sex-app"
 version = "0.1.0"
 dependencies = [
+ "sex-fetch",
  "sex-pdx",
  "talc",
 ]
@@ -1147,6 +1148,13 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "tiny-skia",
+]
+
+[[package]]
+name = "sex-fetch"
+version = "0.1.0"
+dependencies = [
+ "zune-inflate",
 ]
 
 [[package]]
@@ -1196,6 +1204,7 @@ dependencies = [
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "sex-fetch",
  "sex-gl",
  "sex-html",
  "sex-image",
@@ -1868,6 +1877,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-fetch",
  "sex-js",
  "sex-pdx",
  "sex-web",

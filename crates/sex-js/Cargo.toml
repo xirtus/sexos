@@ -11,3 +11,4 @@ wasmi = { version = "2.0.0", default-features = false, features = ["validate", "
 sex-html = { path = "../sex-html" }
 sex-gl = { path = "../sex-gl" }
 sex-image = { path = "../sex-image" }
+sex-fetch = { path = "../sex-fetch" }
