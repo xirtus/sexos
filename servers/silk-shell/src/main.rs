@@ -199,6 +199,14 @@ unsafe fn app_input_poll(){
             APP_INPUT.pop();
             sex_pdx::serial_record!("[shell.program.resize] pd={} task={} w={} h={} status={}",item.destination.subject.pd,item.destination.subject.task,wire>>32,wire&0xFFFF_FFFF,status);
         },
+        app_input::Input::Pointer(word)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,word,0,sex_pdx::app_pointer::CLASS);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            if !is_pointer_move(word){
+                sex_pdx::serial_record!("[shell.program.pointer] pd={} task={} word={:#x} status={}",item.destination.subject.pd,item.destination.subject.task,word,status);
+            }
+        },
         app_input::Input::Scroll(scroll)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
@@ -10200,11 +10208,79 @@ unsafe fn browser_wheel_destination()->Option<sex_pdx::clipboard::Participant>{
     let p=app_input_participant(e,c)?;
     browser_input_participant(p).then_some(p)
 }
+// ── Mouse input for program windows ─────────────────────────────────────────
+// A program gets moves, presses, releases and wheel steps over its pixel area, in
+// pixels from that area's top-left. A press inside captures the pointer until every
+// button is up, so drags that leave the window still end in it.
+static mut POINTER_CAPTURE: u64 = 0;
+static mut POINTER_HOVER: u64 = 0;
+fn is_pointer_move(word:u64)->bool{
+    matches!(sex_pdx::app_pointer::Pointer::decode(word,0,sex_pdx::app_pointer::CLASS),Some(sex_pdx::app_pointer::Pointer{kind:sex_pdx::app_pointer::Kind::Move,..}))
+}
+/// The program window under the pointer (or holding its capture), with the pointer
+/// relative to its pixel area, and whether the pointer is inside that area.
+unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,i16,i16,bool)>{
+    if COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
+    let sid=if POINTER_CAPTURE!=0 {POINTER_CAPTURE} else {
+        if matches!(INTERACTION,InteractionState::Dragging{..}){return None}
+        match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None}
+    };
+    let p=program_participant(sid)?;
+    let fid=frame_for_surface(sid)?;
+    if !frame_accepts_input(fid){return None}
+    let(x,y,w,h)=get_surface_bounds(sid)?;
+    let(aw,ah)=sex_pdx::pixel_region::area(w,h);
+    let lx=POINTER_X-(x+sex_pdx::pixel_region::LEFT as i32);
+    let ly=POINTER_Y-(y+sex_pdx::pixel_region::TOP as i32);
+    let inside=lx>=0&&ly>=0&&lx<aw as i32&&ly<ah as i32;
+    Some((sid,p,lx.clamp(i16::MIN as i32,i16::MAX as i32) as i16,ly.clamp(i16::MIN as i32,i16::MAX as i32) as i16,inside))
+}
+unsafe fn program_pointer_send(p:sex_pdx::clipboard::Participant,x:i16,y:i16,kind:sex_pdx::app_pointer::Kind)->bool{
+    let word=sex_pdx::app_pointer::Pointer{x,y,buttons:POINTER_BUTTONS&7,kind}.wire();
+    let accepted=APP_INPUT.push_move(app_input::Item{destination:p,input:app_input::Input::Pointer(word)},is_pointer_move);
+    app_input_poll();
+    accepted
+}
+unsafe fn program_pointer_leave(){
+    if POINTER_HOVER==0 {return}
+    let sid=core::mem::replace(&mut POINTER_HOVER,0);
+    if let Some(p)=program_participant(sid){program_pointer_send(p,-1,-1,sex_pdx::app_pointer::Kind::Leave);}
+}
+/// After the pointer moved.
+unsafe fn program_pointer_motion(){
+    match program_pointer_target(){
+        Some((sid,p,x,y,inside)) if inside || POINTER_CAPTURE==sid => {
+            if POINTER_HOVER!=sid {program_pointer_leave();POINTER_HOVER=sid;}
+            program_pointer_send(p,x,y,sex_pdx::app_pointer::Kind::Move);
+        }
+        _ => program_pointer_leave(),
+    }
+}
+/// After a button changed; POINTER_BUTTONS already holds the new state.
+unsafe fn program_pointer_button(button:u8,pressed:bool){
+    if button==0 || button>3 {return}
+    let b=match button{1=>0,2=>2,_=>1};
+    let Some((sid,p,x,y,inside))=program_pointer_target() else {if POINTER_BUTTONS&7==0{POINTER_CAPTURE=0;} return};
+    if pressed && !inside && POINTER_CAPTURE!=sid {return}
+    if pressed {POINTER_CAPTURE=sid;POINTER_HOVER=sid;}
+    if !pressed && POINTER_CAPTURE!=sid {return}
+    let kind=if pressed{sex_pdx::app_pointer::Kind::Down{button:b}}else{sex_pdx::app_pointer::Kind::Up{button:b}};
+    program_pointer_send(p,x,y,kind);
+    if POINTER_BUTTONS&7==0 {POINTER_CAPTURE=0;}
+}
+/// Wheel steps over a program window that is not the built-in Browser.
+unsafe fn program_pointer_wheel(steps:i8)->bool{
+    match program_pointer_target(){
+        Some((_,p,x,y,true)) => program_pointer_send(p,x,y,sex_pdx::app_pointer::Kind::Wheel{steps}),
+        _ => false,
+    }
+}
 unsafe fn browser_wheel_input(word:u64,reserved:u64){
     let Some(scroll)=sex_pdx::app_scroll::Scroll::decode(word,reserved,EV_WHEEL)else{
         sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=malformed effects=0");return;
     };
     let Some(destination)=browser_wheel_destination()else{
+        if program_pointer_wheel(scroll.vertical()){return}
         sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
     };
     let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
@@ -10821,6 +10897,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     if event_class == EV_ABS {
         let old_focus = FOCUSED_SURFACE_ID;
         process_abs_tablet(arg0 as i32, arg1 as i32);
+        program_pointer_motion();
         if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
             let new_focus = FOCUSED_SURFACE_ID;
             let ok = (old_focus == new_focus) as u8;
@@ -10878,6 +10955,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         if mutated {
             emit_snapshot();
+        } else if dx != 0 || dy != 0 {
+            program_pointer_motion();
         }
         if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
             let new_focus = FOCUSED_SURFACE_ID;
@@ -10907,6 +10986,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
+        if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
         if button == 1 {
             serial_println!(
                 "[usb.hid.pointer.click.recv] left=1 value={} ok=1",
@@ -26703,6 +26783,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             process_abs_tablet(msg.arg0 as i32, msg.arg1 as i32);
+                            program_pointer_motion();
                             if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE {
                                 let dx = POINTER_X - DRAG_PENDING_START_X;
                                 let dy = POINTER_Y - DRAG_PENDING_START_Y;
@@ -26808,6 +26889,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             // Apply filter + clamp + cursor update via shared helper.
                             let (dx, dy) = apply_rel_pointer(dx_raw, dy_raw);
+                            if dx != 0 || dy != 0 { program_pointer_motion(); }
                             unsafe {
                                 static mut USB_POINTER_SHELL_APPLY_BUDGET: u32 = 64;
                                 let rem = &mut USB_POINTER_SHELL_APPLY_BUDGET;
@@ -26941,6 +27023,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Click/focus proof marker: pointer event received ──
                             sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
+                            if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
 

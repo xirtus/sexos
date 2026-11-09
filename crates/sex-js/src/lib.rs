@@ -64,10 +64,12 @@ pub mod op {
     pub const CANVAS: u32 = 24;
     /// (css font, text): width in pixels.
     pub const MEASURE: u32 = 25;
+    /// (x, y in page pixels): the deepest laid-out element there, or nothing.
+    pub const HIT: u32 = 26;
     /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
     /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
     /// with `media` dispatches carrying the element's state and its events.
-    pub const MEDIA: u32 = 27;
+    pub const MEDIA: u32 = 48;
     /// WebGL batch for canvas NODE: commands, then the batch's bytes (an ArrayBuffer).
     pub const GL: u32 = 64;
     /// WebGL query for canvas NODE: what, then its arguments; answers text or bytes.

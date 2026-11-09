@@ -55,7 +55,7 @@ pub extern "C" fn _start() -> ! {
         let status: &[u8] = match window.next() {
             Event::Close => { sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task); window.close() }
             // Ctrl+S saves.
-            Event::Resize { .. } => continue,
+            Event::Resize { .. } | Event::Pointer(_) => continue,
             Event::Key(key) if key.control && key.code == 0x1F => match files::write(&mut window, file, &note[..len]) {
                 Ok(()) => { sex_pdx::serial_record!("[jot.saved] bytes={}", len); b"Saved." }
                 Err(e) => { sex_pdx::serial_record!("[jot.save.failed] status={}", e); files::message(e) }

@@ -7,6 +7,7 @@ extern crate self as sex_pdx;
 #[path = "../crates/sex-pdx/src/text_encoding.rs"] pub mod text_encoding;
 #[path = "../crates/sex-pdx/src/app_key.rs"] pub mod app_key;
 #[path = "../crates/sex-pdx/src/app_scroll.rs"] pub mod app_scroll;
+#[path = "../crates/sex-pdx/src/app_pointer.rs"] pub mod app_pointer;
 pub const EV_WHEEL:u64=app_scroll::CLASS;
 #[path = "../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
 #[path = "../crates/sex-pdx/src/desktop_style.rs"] pub mod desktop_style;
@@ -136,6 +137,7 @@ mod shell {
     // No program row is focused in these cases; programs get keys by their own path.
     unsafe fn focused_program_participant()->Option<Participant>{None}
     unsafe fn surface_is_alive(sid:u64)->bool{matches!(sid,156|300|301|307)}
+    fn is_pointer_move(word:u64)->bool{matches!(app_pointer::Pointer::decode(word,0,app_pointer::CLASS),Some(app_pointer::Pointer{kind:app_pointer::Kind::Move,..}))}
     unsafe fn toggle_command_palette(){COMMAND_PALETTE_OPEN=!COMMAND_PALETTE_OPEN;PALETTE_TOGGLES+=1;}
     unsafe fn focus_next_frame(){FOCUSED_SURFACE_ID=if FOCUSED_SURFACE_ID==156{300}else{156};FOCUS_CHANGES+=1;}
     include!(env!("APP_INPUT_PRODUCTION"));

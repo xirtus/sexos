@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, MEDIA: 27, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
   const nodes = new Map();
 
   function fmt(v) {
@@ -58,8 +58,40 @@
   }
   class UIEvent extends Event {}
   class MouseEvent extends UIEvent {
-    constructor(type, init) { super(type, init); init = init || {}; this.button = init.button || 0; this.clientX = init.clientX || 0; this.clientY = init.clientY || 0; }
+    constructor(type, init) {
+      super(type, init); init = init || {};
+      this.button = init.button || 0; this.buttons = init.buttons || 0;
+      this.clientX = init.clientX || 0; this.clientY = init.clientY || 0;
+      this.screenX = this.clientX; this.screenY = this.clientY;
+      this.movementX = init.movementX || 0; this.movementY = init.movementY || 0;
+      this.ctrlKey = !!init.ctrlKey; this.shiftKey = !!init.shiftKey; this.altKey = !!init.altKey; this.metaKey = !!init.metaKey;
+      this.relatedTarget = init.relatedTarget || null;
+      this.detail = init.detail || 0;
+      this.view = window;
+    }
+    get x() { return this.clientX; }
+    get y() { return this.clientY; }
+    get pageX() { return this.clientX + window.scrollX; }
+    get pageY() { return this.clientY + window.scrollY; }
+    // Relative to the target's box, as games with a canvas use them.
+    get offsetX() { const t = this.target; return t && t.getBoundingClientRect ? this.clientX - t.getBoundingClientRect().left : this.clientX; }
+    get offsetY() { const t = this.target; return t && t.getBoundingClientRect ? this.clientY - t.getBoundingClientRect().top : this.clientY; }
+    getModifierState() { return false; }
   }
+  class PointerEvent extends MouseEvent {
+    constructor(type, init) {
+      super(type, init); init = init || {};
+      this.pointerId = init.pointerId || 1; this.pointerType = init.pointerType || 'mouse'; this.isPrimary = init.isPrimary !== false;
+      this.width = 1; this.height = 1; this.pressure = this.buttons ? 0.5 : 0; this.tiltX = 0; this.tiltY = 0;
+    }
+    getCoalescedEvents() { return [this]; }
+    getPredictedEvents() { return []; }
+  }
+  class WheelEvent extends MouseEvent {
+    constructor(type, init) { super(type, init); init = init || {}; this.deltaX = init.deltaX || 0; this.deltaY = init.deltaY || 0; this.deltaZ = 0; this.deltaMode = init.deltaMode || 0; }
+  }
+  WheelEvent.DOM_DELTA_PIXEL = 0; WheelEvent.DOM_DELTA_LINE = 1; WheelEvent.DOM_DELTA_PAGE = 2;
+  class FocusEvent extends UIEvent { constructor(type, init) { super(type, init); this.relatedTarget = (init && init.relatedTarget) || null; } }
   class KeyboardEvent extends UIEvent {
     constructor(type, init) {
       super(type, init); init = init || {};
@@ -327,7 +359,11 @@
     scrollIntoView() {}
     focus() { document._active = this; }
     blur() { if (document._active === this) document._active = null; }
-    click() { this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+    click() { this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })); }
+    setPointerCapture() { mouse.capture = this; }
+    releasePointerCapture() { if (mouse.capture === this) mouse.capture = null; }
+    hasPointerCapture() { return mouse.capture === this; }
+    requestPointerLock() { mouse.lock = this; document.pointerLockElement = this; document.dispatchEvent(new Event('pointerlockchange')); }
   }
   mix(Element, ParentMixin);
   // el.onclick = fn makes the element clickable, as addEventListener does.
@@ -634,8 +670,11 @@
   mix(DocumentFragment, ParentMixin);
 
   class Document extends Node {
-    constructor() { super(0); this._active = null; this.readyState = 'loading'; }
+    constructor() { super(0); this._active = null; this.readyState = 'loading'; this.pointerLockElement = null; }
     get nodeType() { return 9; }
+    elementFromPoint(x, y) { const id = H(OP.HIT, String(Math.floor(x)), String(Math.floor(y + window.scrollY))); return id ? wrap(id) : null; }
+    elementsFromPoint(x, y) { const e = this.elementFromPoint(x, y); return e ? chain(e) : []; }
+    exitPointerLock() { if (mouse.lock) { mouse.lock = null; this.pointerLockElement = null; this.dispatchEvent(new Event('pointerlockchange')); } }
     get nodeName() { return '#document'; }
     get documentElement() { return this.querySelector('html'); }
     get head() { return this.querySelector('head'); }
@@ -1925,7 +1964,7 @@
     getComputedStyle: el => el.style,
     matchMedia: q => ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }),
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
-    Event, UIEvent, MouseEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
+    Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
@@ -1952,9 +1991,79 @@
   Object.defineProperty(window, '__sx_dispatch', { value: function (msg) {
     try { return dispatch(msg); } finally { flushCanvases(); }
   }, configurable: false, writable: false, enumerable: false });
+  // Mouse input: `mouse\tKIND\tNODE\tX\tY\tBUTTON\tBUTTONS\tSTEPS`, X and Y in
+  // viewport pixels, NODE the element under the pointer (empty for none). Answers 1
+  // when the page cancelled the default action (a click's link, a wheel's scroll).
+  const mouse = { over: null, down: null, capture: null, lock: null, x: 0, y: 0, last: 0, lastAt: null, count: 0 };
+  function fireMouse(el, type, Kind, init, bubbles) {
+    const ev = new Kind(type, Object.assign({}, init, { bubbles: bubbles !== false, cancelable: bubbles !== false }));
+    el.dispatchEvent(ev);
+    return ev;
+  }
+  function chain(n) { const out = []; for (; n && n.nodeType === 1; n = n.parentNode) out.push(n); return out; }
+  function mouseInput(f) {
+    const kind = f[1], x = +f[3], y = +f[4], button = +f[5], buttons = +f[6], steps = +f[7];
+    const hit = (f[2] && wrap(f[2])) || document.body || document.documentElement;
+    if (!hit) return 0;
+    const el = mouse.capture || mouse.lock || hit;
+    const init = { clientX: x, clientY: y, button: kind === 'move' ? -1 : button, buttons, movementX: x - mouse.x, movementY: y - mouse.y, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    if (kind !== 'leave') { mouse.x = x; mouse.y = y; }
+    if (kind !== 'leave' && hit !== mouse.over) {
+      const old = mouse.over, before = chain(old), after = chain(hit);
+      if (old) { fireMouse(old, 'pointerout', PointerEvent, Object.assign({}, init, { relatedTarget: hit })); fireMouse(old, 'mouseout', MouseEvent, Object.assign({}, init, { relatedTarget: hit })); }
+      for (const n of before) if (!after.includes(n)) { fireMouse(n, 'pointerleave', PointerEvent, init, false); fireMouse(n, 'mouseleave', MouseEvent, init, false); }
+      mouse.over = hit;
+      fireMouse(hit, 'pointerover', PointerEvent, Object.assign({}, init, { relatedTarget: old })); fireMouse(hit, 'mouseover', MouseEvent, Object.assign({}, init, { relatedTarget: old }));
+      for (const n of after.reverse()) if (!before.includes(n)) { fireMouse(n, 'pointerenter', PointerEvent, init, false); fireMouse(n, 'mouseenter', MouseEvent, init, false); }
+    }
+    switch (kind) {
+      case 'move': {
+        const p = fireMouse(el, 'pointermove', PointerEvent, init);
+        if (!p.defaultPrevented) fireMouse(el, 'mousemove', MouseEvent, init);
+        return 0;
+      }
+      case 'down': {
+        mouse.down = el;
+        if (el !== document._active && el.nodeType === 1) { const prev = document._active; document._active = el; if (prev && prev.dispatchEvent) prev.dispatchEvent(new FocusEvent('blur')); }
+        const p = fireMouse(el, 'pointerdown', PointerEvent, init);
+        if (p.defaultPrevented) return 1;
+        return fireMouse(el, 'mousedown', MouseEvent, init).defaultPrevented ? 1 : 0;
+      }
+      case 'up': {
+        const p = fireMouse(el, 'pointerup', PointerEvent, init);
+        let kept = p.defaultPrevented;
+        if (!kept) kept = fireMouse(el, 'mouseup', MouseEvent, init).defaultPrevented;
+        const down = mouse.down; mouse.down = null;
+        if (!buttons) mouse.capture = null;
+        if (!down) return kept ? 1 : 0;
+        // A click goes to the nearest element both the press and release were in.
+        const target = chain(el).find(n => chain(down).includes(n));
+        if (!target) return kept ? 1 : 0;
+        if (button === 2) return fireMouse(target, 'contextmenu', MouseEvent, init).defaultPrevented ? 1 : 0;
+        if (button !== 0) return fireMouse(target, 'auxclick', MouseEvent, init).defaultPrevented ? 1 : 0;
+        const now = performance.now();
+        mouse.count = mouse.lastAt === target && now - mouse.last < 500 ? mouse.count + 1 : 1;
+        mouse.last = now; mouse.lastAt = target;
+        const click = fireMouse(target, 'click', MouseEvent, Object.assign({}, init, { detail: mouse.count }));
+        if (mouse.count === 2) fireMouse(target, 'dblclick', MouseEvent, Object.assign({}, init, { detail: 2 }));
+        return click.defaultPrevented || kept ? 1 : 0;
+      }
+      case 'wheel': {
+        const w = fireMouse(el, 'wheel', WheelEvent, Object.assign({}, init, { button: 0, deltaY: -steps * 100, deltaMode: 0 }));
+        return w.defaultPrevented ? 1 : 0;
+      }
+      case 'leave': {
+        const old = mouse.over; mouse.over = null;
+        if (old) { fireMouse(old, 'pointerout', PointerEvent, init); fireMouse(old, 'mouseout', MouseEvent, init); for (const n of chain(old)) { fireMouse(n, 'pointerleave', PointerEvent, init, false); fireMouse(n, 'mouseleave', MouseEvent, init, false); } }
+        return 0;
+      }
+    }
+    return 0;
+  }
   function dispatch(msg) {
     const f = String(msg).split('\t');
     switch (f[0]) {
+      case 'mouse': return mouseInput(f);
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
