@@ -286,7 +286,11 @@ pub extern "C" fn trampoline_main() {
         ); }
 
         if msg.type_id==sex_pdx::fs::OP{
-            crate::fs_service::reply_later(caller,crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2));
+            let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);
+            // Nothing else owed and nothing to commit: answer and wait in one entry, so
+            // the caller runs next. Otherwise the loop's top answers in order.
+            let idle=!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
+            if !(idle&&sex_pdx::pdx_reply_wait(caller,word)==0){crate::fs_service::reply_later(caller,word);}
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP_BIND{

@@ -358,6 +358,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
     };
+    if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };

@@ -328,6 +328,36 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - No ABI change. Gate: `scripts/program_pool_gate.py` (six programs side by
     side at 1920x1080, four on the shared key, all drawn, switches counted).
 
+- Stage 6, first part (IPC: call and wait, reply and wait, direct handoff):
+  - A round trip to a service took seven kernel entries: call, an empty listen,
+    a wait, the service's listen and reply, its empty listen and wait, then the
+    caller's listen; and each woken side waited its turn behind the whole queue.
+  - Two new system calls do a step and its wait in one entry: `PDX_CALL_WAIT` (100,
+    syscall 0 then 53) and `PDX_REPLY_WAIT` (101, syscall 29 then 53). The wake either
+    causes is a handoff: if the partner lives on this core it runs next, ahead of the
+    queue, so a round trip is two switches with no queue wait. Partners may take
+    turns ahead of the queue 8 times in a row, then everything queued runs first, so
+    a busy pair cannot starve the desktop.
+  - Used by `sex_app::files` (every file request) and by Files when it has nothing
+    else owed or uncommitted. New `fs::PING` request, answered at once.
+  - Bench (`ipc_roundtrip`, 1 core, TCG): SexOS 392,117 -> 255,906 cycles per round
+    trip (1.5x); `file_stat` 438,089 -> 335,941. Linux 6.8 pipe round trip between
+    two processes (`tools/bench/linux`, same machine): 226,366. So SexOS IPC is now
+    level with a Linux pipe under emulation, where each kernel entry costs ~30,000
+    cycles because QEMU emulates `wrpkru` slowly. On hardware a SexOS round trip is
+    four kernel entries and two switches without a page-table change, against two
+    page-table switches for Linux; the 10x target is measured there.
+  - Found and fixed at 4 cores: a task parked waiting for a message stays attached
+    to its core, and a wake from another core only marked it pending. If that core
+    was halted, it looked again only at its next timer interrupt, so every call to a
+    service on another core cost about one tick. Such a wake now sends the owning
+    core a wake interrupt. 4 cores: `ipc_roundtrip` 2,731,734 -> 396,167 cycles
+    (6.9x), `file_stat` 2,620,806 -> 494,010, `file_read` 24.6M -> 14.8M per MiB.
+  - Next: deliver the message in the waiting call's registers (no listen after the
+    wake, two entries per round trip).
+  - ABI changes: system calls 100 (`sex_pdx::pdx_call_wait`) and 101
+    (`sex_pdx::pdx_reply_wait`), `sex_pdx::fs::PING` (21), `sex_app::files::ping`.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

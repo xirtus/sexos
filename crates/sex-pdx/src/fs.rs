@@ -67,6 +67,8 @@ pub const PICKS: u8 = 19;
 /// Answers one question: `offset` the row, `length` the ticket, the path `@/...` the
 /// person chose (empty to cancel). The chosen path must be one the answering run holds.
 pub const ANSWER: u8 = 20;
+/// Answers OK at once and does nothing: what one call and its reply cost.
+pub const PING: u8 = 21;
 pub const PICK_OPEN: u8 = 0;
 pub const PICK_SAVE: u8 = 1;
 pub const PICK_FOLDER: u8 = 2;
