@@ -1253,7 +1253,7 @@
     texParameteri(t, p, v) { this._c('tp', t, p, v); }
     texParameterf(t, p, v) { this._c('tp', t, p, v | 0); }
     getTexParameter() { return null; }
-    generateMipmap() {}
+    generateMipmap(t) { this._c('gm', t); }
     _picture(target, src) {
       if (src && src.tagName === 'IMG') { this._c('tP', target, this._boundTex(target), src.getAttribute('src') || ''); return true; }
       if (src && src.tagName === 'CANVAS') { this._c('tP', target, this._boundTex(target), 'canvas:' + src._id); return true; }

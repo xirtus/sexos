@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 struct Tex;
 impl Textures for Tex {
-    fn sample(&self, _g: u32, c: [f32; 4], _: f32, _: Option<f32>) -> [f32; 4] { [c[0], c[1], 0.5, 1.0] }
+    fn sample(&self, _g: u32, c: [f32; 4], _: sex_gl::exec::Lod, _: Option<f32>) -> [f32; 4] { [c[0], c[1], 0.5, 1.0] }
 }
 
 fn f(v: &[f32]) -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() }

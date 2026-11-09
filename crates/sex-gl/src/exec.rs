@@ -251,20 +251,34 @@ enum Op {
     Mix { dst: u32, a: u32, b: u32, t: u32, n: u32, st: bool },
     /// A texture lookup: `coord` of `cn` lanes, then an optional array layer (`array_f`:
     /// a float), level or bias, and depth reference.
-    Sample { dst: u32, n: u32, image: u32, coord: u32, cn: u32, array: Option<u32>, array_f: bool, lod: Option<u32>, dref: Option<u32> },
+    Sample { dst: u32, n: u32, image: u32, coord: u32, cn: u32, array: Option<u32>, array_f: bool, lod: Option<u32>, lod_exact: bool, dref: Option<u32> },
+    /// `dFdx`/`dFdy`/`fwidth` of `src` across a 2x2 quad of invocations (zero outside one).
+    Deriv { dst: u32, src: u32, n: u32, axis: u8 },
+}
+
+/// How a texture lookup picks its mip level.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Lod {
+    /// `textureLod`: this level.
+    pub exact: Option<f32>,
+    /// Added to the level the derivatives give.
+    pub bias: f32,
+    /// Screen derivatives of (s, t): ds/dx, dt/dx, ds/dy, dt/dy, when known.
+    pub grad: Option<[f32; 4]>,
 }
 
 /// The lookup an `Op::Sample` makes, from lane reads `get(slot)`.
 #[inline(always)]
-fn sample_op(op: &Op, get: impl Fn(u32) -> u32, tex: &dyn Textures) -> [f32; 4] {
-    let &Op::Sample { image, coord, cn, array, array_f, lod, dref, .. } = op else { return [0.0; 4] };
+fn sample_op(op: &Op, get: impl Fn(u32) -> u32, tex: &dyn Textures, grad: Option<[f32; 4]>) -> [f32; 4] {
+    let &Op::Sample { image, coord, cn, array, array_f, lod, lod_exact, dref, .. } = op else { return [0.0; 4] };
     let mut c = [0f32; 4];
     for j in 0..cn.min(4) { c[j as usize] = f32::from_bits(get(coord + j)); }
     if let Some(a) = array {
         let v = get(a);
         c[cn.min(3) as usize] = if array_f { f32::from_bits(v) } else { v as i32 as f32 };
     }
-    let lod = lod.map_or(0.0, |s| f32::from_bits(get(s)));
+    let v = lod.map_or(0.0, |s| f32::from_bits(get(s)));
+    let lod = if lod_exact { Lod { exact: Some(v), ..Lod::default() } } else { Lod { exact: None, bias: v, grad } };
     tex.sample(get(image), c, lod, dref.map(|s| f32::from_bits(get(s))))
 }
 #[derive(Clone, Copy, Default)]
@@ -278,7 +292,7 @@ struct Acc {
 pub trait Textures {
     /// Samples texture `unit_of_global` at `coord` (s, t, r/layer); `lod` is an explicit
     /// level or bias; `depth_ref` compares for shadow samplers.
-    fn sample(&self, global: u32, coord: [f32; 4], lod: f32, depth_ref: Option<f32>) -> [f32; 4];
+    fn sample(&self, global: u32, coord: [f32; 4], lod: Lod, depth_ref: Option<f32>) -> [f32; 4];
     /// `texelFetch`: the texel at (x, y, layer) as the shader sees its bits (floats for
     /// normalized and float textures, integers for integer ones).
     fn load(&self, _global: u32, _coord: [i32; 3]) -> [u32; 4] { [0; 4] }
@@ -365,6 +379,14 @@ pub struct Machine {
     loops: Vec<u32>,
 }
 
+
+impl StageCode {
+    /// True if the program samples textures or takes derivatives: fragments then run in
+    /// 2x2 quads so neighbours give mip levels and `dFdx`/`dFdy`.
+    pub fn wants_quads(&self) -> bool {
+        self.steps.iter().any(|s| matches!(s, Step::Op(Op::Sample { .. } | Op::Deriv { .. })))
+    }
+}
 
 impl StageCode {
     pub fn new(module: Module, info: ModuleInfo) -> Result<Self, String> {
@@ -771,7 +793,12 @@ impl StageCode {
                     dst, n, image: sl(*image), coord: sl(*coordinate), cn: ty(*coordinate).lanes,
                     array: array_index.map(sl), array_f: array_index.is_some_and(|a| ty(a).kind == K::F),
                     lod: match level { SampleLevel::Exact(e) | SampleLevel::Bias(e) => Some(sl(*e)), _ => None },
+                    lod_exact: matches!(level, SampleLevel::Exact(_) | SampleLevel::Zero),
                     dref: depth_ref.map(sl),
+                },
+                E::Derivative { axis, expr, .. } if ty(*expr).kind == K::F && ty(*expr).cols == 1 => Op::Deriv {
+                    dst, src: sl(*expr), n: ty(*expr).lanes,
+                    axis: match axis { naga::DerivativeAxis::X => 0, naga::DerivativeAxis::Y => 1, naga::DerivativeAxis::Width => 2 },
                 },
                 E::Math { fun, arg, arg1, arg2, .. } if ty(*arg).kind == K::F && ty(*arg).cols == 1 => match (fun, arg1, arg2) {
                     (M::Dot, Some(b), _) => Op::Dot { dst, a: sl(*arg), b: sl(*b), n: ty(*arg).lanes },
@@ -798,9 +825,10 @@ impl StageCode {
         let f = |r: &[u32], i: u32| f32::from_bits(r[i as usize]);
         match op {
             &Op::Sample { dst, n, .. } => {
-                let px = sample_op(op, |x| r[x as usize], tex);
+                let px = sample_op(op, |x| r[x as usize], tex, None);
                 for j in 0..n.min(4) { r[(dst + j) as usize] = px[j as usize].to_bits(); }
             }
+            &Op::Deriv { dst, n, .. } => r[dst as usize..(dst + n) as usize].fill(0),
             Op::Generic => {}
             &Op::Copy { dst, src, n } => lanes(r, src as usize, dst as usize, n as usize),
             &Op::Splat { dst, src, n } => { let v = r[src as usize]; r[dst as usize..(dst + n) as usize].fill(v); }
@@ -1028,8 +1056,10 @@ impl StageCode {
                     coord[cn.min(3)] = if c.ty[ai.index()].kind == K::F { f32::from_bits(a) } else { a as i32 as f32 };
                 }
                 let lod = match level {
-                    SampleLevel::Exact(e) | SampleLevel::Bias(e) => f32::from_bits(m.regs[c.slot[e.index()] as usize]),
-                    _ => 0.0,
+                    SampleLevel::Exact(e) => Lod { exact: Some(f32::from_bits(m.regs[c.slot[e.index()] as usize])), ..Lod::default() },
+                    SampleLevel::Bias(e) => Lod { bias: f32::from_bits(m.regs[c.slot[e.index()] as usize]), ..Lod::default() },
+                    SampleLevel::Zero => Lod { exact: Some(0.0), ..Lod::default() },
+                    _ => Lod::default(),
                 };
                 let dref = depth_ref.map(|d| f32::from_bits(m.regs[c.slot[d.index()] as usize]));
                 let px = tex.sample(g, coord, lod, dref);
@@ -1385,7 +1415,7 @@ impl StageCode {
 
 struct NoTextures;
 impl Textures for NoTextures {
-    fn sample(&self, _: u32, _: [f32; 4], _: f32, _: Option<f32>) -> [f32; 4] { [0.0; 4] }
+    fn sample(&self, _: u32, _: [f32; 4], _: Lod, _: Option<f32>) -> [f32; 4] { [0.0; 4] }
 }
 
 fn det(x: &[f32], n: usize) -> f32 {

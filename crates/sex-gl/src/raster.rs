@@ -103,6 +103,9 @@ pub trait Shade {
     fn writes_depth(&self) -> bool { false }
     /// How many fragments `shade_many` takes at once (1: it isn't used).
     fn batch(&self) -> usize { 1 }
+    /// True if `shade_many` wants whole 2x2 quads (four fragments each, in the order
+    /// (x, y), (x+1, y), (x, y+1), (x+1, y+1)), uncovered ones included as helpers.
+    fn quads(&self) -> bool { false }
     /// Shades `frags` (at most `batch()`), fragment `i` with varyings `vary[i * stride..]`.
     fn shade_many(&mut self, frags: &[Frag], vary: &[f32], stride: usize, out: &mut [Option<([f32; 4], Option<f32>)>]) {
         for (i, f) in frags.iter().enumerate() { out[i] = self.shade(f, &vary[i * stride..(i + 1) * stride]); }
@@ -114,7 +117,9 @@ pub trait Shade {
 #[derive(Default)]
 pub struct Batch {
     frags: Vec<Frag>,
-    at: Vec<(usize, f32)>,
+    /// Where each fragment lands and its depth; None for quad helpers, which are shaded
+    /// only for their neighbours' derivatives.
+    at: Vec<Option<(usize, f32)>>,
     vary: Vec<f32>,
     out: Vec<Option<([f32; 4], Option<f32>)>>,
 }
@@ -123,9 +128,17 @@ impl Batch {
     fn push(&mut self, t: &mut Target, fx: &Fixed, i: usize, z: f32, sh: &mut dyn Shade, frag: Frag, vary: &[f32]) {
         if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { return; }
         self.frags.push(frag);
-        self.at.push((i, z));
+        self.at.push(Some((i, z)));
         self.vary.extend_from_slice(vary);
         if self.frags.len() >= sh.batch() { self.flush(t, fx, sh, vary.len()); }
+    }
+
+    /// Adds one fragment of a quad; `at` None for a helper. Flushes after whole quads.
+    fn push_quad_part(&mut self, t: &mut Target, fx: &Fixed, sh: &mut dyn Shade, frag: Frag, at: Option<(usize, f32)>, vary: &[f32]) {
+        self.frags.push(frag);
+        self.at.push(at);
+        self.vary.extend_from_slice(vary);
+        if self.frags.len() >= sh.batch() && self.frags.len() % 4 == 0 { self.flush(t, fx, sh, vary.len()); }
     }
 
     fn flush(&mut self, t: &mut Target, fx: &Fixed, sh: &mut dyn Shade, stride: usize) {
@@ -134,8 +147,7 @@ impl Batch {
         self.out.resize(self.frags.len(), None);
         sh.shade_many(&self.frags, &self.vary, stride, &mut self.out);
         for k in 0..self.frags.len() {
-            let (i, z) = self.at[k];
-            if let Some(r) = self.out[k] { finish(t, fx, i, z, r); }
+            if let (Some((i, z)), Some(r)) = (self.at[k], self.out[k]) { finish(t, fx, i, z, r); }
         }
         self.frags.clear();
         self.at.clear();
@@ -355,6 +367,52 @@ fn raster_tri(t: &mut Target, fx: &Fixed, a: &Vert, b: &Vert, c: &Vert, sh: &mut
     let mut batch = Batch::default();
     let wide = sh.batch() > 1;
     let flat = fx.any_flat();
+    if wide && sh.quads() {
+        // Varyings at a pixel centre, inside the triangle or not (helpers extrapolate).
+        let at = |px: f32, py: f32, out: &mut [f32]| -> (f32, f32) {
+            let (e0, e1, e2) = (edge(p1, p2, px, py), edge(p2, p0, px, py), edge(p0, p1, px, py));
+            let (l0, l1, l2) = (e0 * inv_total, e1 * inv_total, e2 * inv_total);
+            let z = l0 * p0[2] + l1 * p1[2] + l2 * p2[2] + offset;
+            let iw = l0 * p0[3] + l1 * p1[3] + l2 * p2[3];
+            let (q0, q1, q2) = (l0 * p0[3] / iw, l1 * p1[3] / iw, l2 * p2[3] / iw);
+            for k in 0..n { out[k] = q0 * v0.vary[k] + q1 * v1.vary[k] + q2 * v2.vary[k]; }
+            if flat { for k in fx.flat_lanes(n) { out[k] = v0.vary[k]; } }
+            (z, iw)
+        };
+        let mut y = miny & !1;
+        while y <= maxy {
+            let mut x = minx & !1;
+            while x <= maxx {
+                // Which of the four pixels the triangle covers (and pass early depth).
+                let mut live = [None; 4];
+                for (k, (dx, dy)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                    let (qx, qy) = (x + dx, y + dy);
+                    if qx < minx || qx > maxx || qy < miny || qy > maxy { continue; }
+                    let (px, py) = (qx as f32 + 0.5, qy as f32 + 0.5);
+                    let (e0, e1, e2) = (edge(p1, p2, px, py), edge(p2, p0, px, py), edge(p0, p1, px, py));
+                    if e0 < 0.0 || e1 < 0.0 || e2 < 0.0 { continue; }
+                    if (e0 == 0.0 && !o0) || (e1 == 0.0 && !o1) || (e2 == 0.0 && !o2) { continue; }
+                    let (l0, l1, l2) = (e0 * inv_total, e1 * inv_total, e2 * inv_total);
+                    let z = (l0 * p0[2] + l1 * p1[2] + l2 * p2[2] + offset).clamp(0.0, 1.0);
+                    let i = (qy * t.width + qx) as usize;
+                    if fx.depth_test && !sh.writes_depth() && !depth_pass(fx.depth_func, z, t.depth[i]) { continue; }
+                    live[k] = Some((i, z));
+                }
+                if live.iter().any(Option::is_some) {
+                    for (k, (dx, dy)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                        let (px, py) = ((x + dx) as f32 + 0.5, (y + dy) as f32 + 0.5);
+                        let (z, iw) = at(px, py, scratch);
+                        let frag = Frag { x: px, y: py, z, inv_w: iw, front, point: [0.0, 0.0] };
+                        batch.push_quad_part(t, fx, sh, frag, live[k], scratch);
+                    }
+                }
+                x += 2;
+            }
+            y += 2;
+        }
+        batch.flush(t, fx, sh, n);
+        return;
+    }
     for y in miny..=maxy {
         let py = y as f32 + 0.5;
         for x in minx..=maxx {

@@ -495,3 +495,68 @@ fn render_to_texture_then_sample_it() {
     assert_eq!(px(&ctx, 15, 15), [0, 0, 0, 255]);
     assert_eq!(ctx.fb, 0);
 }
+
+/// An 8x8 canvas covered by `fs`, with `uv` 0..1 across it.
+fn full_screen(fs: &str) -> Context {
+    let mut ctx = Context::new(8, 8);
+    program(&mut ctx, "#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }", fs);
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    ctx
+}
+
+#[test]
+fn minified_textures_use_their_mipmaps() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c; void main(){ c = texture(t, uv); }";
+    let mut ctx = full_screen(fs);
+    // A 64x64 checkerboard of single texels: 8 texels per pixel, so level 3.
+    let board: Vec<u8> = (0..64 * 64).flat_map(|i| { let v = if (i % 64 + i / 64) % 2 == 0 { 255 } else { 0 }; [v, v, v, 255] }).collect();
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 64, 64, RGBA, UNSIGNED_BYTE, Some(&board));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    // Without mipmaps each pixel lands on one texel: all the same, all white.
+    assert_eq!(px(&ctx, 3, 5), [255, 255, 255, 255]);
+    ctx.generate_mipmap(TEXTURE_2D);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_LINEAR);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    for (x, y) in [(0, 0), (3, 5), (7, 7)] {
+        let p = px(&ctx, x, y);
+        assert!((p[0] as i32 - 128).abs() <= 1 && p[0] == p[1], "{:?} at {x},{y}", p);
+    }
+    // A new level 0 drops the old mipmaps: level 0 alone, nearest, again.
+    ctx.tex_image(TEXTURE_2D, 0, 64, 64, RGBA, UNSIGNED_BYTE, Some(&board));
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(px(&ctx, 3, 5), [255, 255, 255, 255]);
+}
+
+#[test]
+fn texture_lod_reads_uploaded_levels_and_derivatives_span_quads() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c;\n\
+              void main(){ c = vec4(textureLod(t, uv, 1.0).r, dFdx(uv.x) * 8.0, dFdy(uv.y) * 8.0, fwidth(uv.x) * 4.0); }";
+    let mut ctx = full_screen(fs);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 2, 2, RGBA, UNSIGNED_BYTE, Some(&[0; 16]));
+    ctx.tex_image(TEXTURE_2D, 1, 1, 1, RGBA, UNSIGNED_BYTE, Some(&[255, 0, 0, 255]));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 0, 0), [255, 255, 255, 128]);
+    assert_eq!(px(&ctx, 5, 6), [255, 255, 255, 128]);
+}
+
+#[test]
+fn constant_coordinates_stay_on_level_zero_whatever_the_bias() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c; void main(){ c = texture(t, vec2(0.25), 2.0); }";
+    let mut ctx = full_screen(fs);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 2, 2, RGBA, UNSIGNED_BYTE, Some(&[0, 0, 255, 255].repeat(4)));
+    ctx.tex_image(TEXTURE_2D, 1, 1, 1, RGBA, UNSIGNED_BYTE, Some(&[255, 0, 0, 255]));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_NEAREST);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(px(&ctx, 4, 4), [0, 0, 255, 255]);
+}
