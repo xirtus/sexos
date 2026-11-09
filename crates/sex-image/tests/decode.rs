@@ -106,7 +106,7 @@ fn jpeg_grayscale() {
 fn sniff_and_dimensions() {
     assert_eq!(sniff(&fixture("gradient.png")), Some(Format::Png));
     assert_eq!(sniff(&fixture("gray.jpg")), Some(Format::Jpeg));
-    assert_eq!(sniff(b"GIF89a"), None);
+    assert_eq!(sniff(b"BM6\0\0\0"), None);
     assert_eq!(dimensions(&fixture("big.jpg")), Ok((Format::Jpeg, 1200, 900)));
     assert_eq!(dimensions(&fixture("big.png")), Ok((Format::Png, 1200, 900)));
     assert_eq!(decode(b"hello", &Limits::PHOTO), Err(Error::UnknownFormat));

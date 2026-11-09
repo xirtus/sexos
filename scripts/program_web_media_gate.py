@@ -4,7 +4,7 @@ controls> (MP4, H.264 and AAC, 440 Hz). Its script pauses it for 0.8 s through
 HTMLMediaElement, plays it on, and when it ends plays an MP3 (880 Hz) through
 `new Audio()`. QEMU records the virtio sound card to a WAV file: both tones must be in
 it at their pitch, the video must show its 50 pictures, and the screen must show a
-picture while it plays.
+picture while it plays. The page's animated GIF must move and its WebP must decode.
 
 Build FFmpeg first (scripts/build_ffmpeg.sh), then the ISO."""
 import argparse,http.server,os,re,shutil,sys,threading,time
@@ -66,6 +66,9 @@ def main():
   colours={region.getpixel((px,py)) for px in range(0,320,8) for py in range(0,220,8)}
   bright=sum(1 for px in range(0,320,8) for py in range(0,220,8) if sum(region.getpixel((px,py)))>150)
   assert len(colours)>20 and bright>200,f'no picture on screen: {len(colours)} colours, {bright} bright samples'
+  pics=g['wait'](r'\[web.pictures\] count=(\d+) moving=(\d+)',s,60)
+  assert int(pics[1])>=2 and pics[2]=='1',pics[0]
+  g['wait'](r'\[web.picture.frames\] n=5',s,60)
   ended=g['wait'](r'\[web.media.ended\] node=\d+ frames=(\d+) sound_frames=(\d+) played=(\d+)',s,300)
   frames,heard,played=map(int,ended.groups())
   assert frames==50,f'{frames} pictures'

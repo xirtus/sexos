@@ -39,6 +39,23 @@ pub struct Fonts {
     pub images: Vec<(String, alloc::rc::Rc<Image>)>,
     /// SVG pictures by `src`: their text and own size, redrawn at the size laid out.
     pub svgs: Vec<(String, alloc::rc::Rc<str>, (i32, i32))>,
+    /// Animated GIF and WebP pictures; each frame replaces its entry in `images`.
+    pub moving: Vec<Moving>,
+    /// Frames of animated pictures shown since the page loaded.
+    pub frames_shown: u64,
+}
+
+/// Most animated pictures a page plays at once; the rest show their first frame.
+const MAX_MOVING: usize = 16;
+
+/// An animated picture: its frames and the canvas they draw on.
+pub struct Moving {
+    src: String,
+    animation: sex_image::Animation<alloc::rc::Rc<[u8]>>,
+    canvas: Vec<u32>,
+    fit: (usize, usize),
+    due: u64,
+    shown: u64,
 }
 
 impl Fonts {
@@ -52,7 +69,7 @@ impl Fonts {
             if ptr.is_null() { return None; }
             Box::from_raw(ptr)
         };
-        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new(), svgs: Vec::new() })
+        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new(), svgs: Vec::new(), moving: Vec::new(), frames_shown: 0 })
     }
 
     fn face(&self, mono: bool) -> &Font<'static> { if mono { &self.mono } else { &self.sans } }
@@ -394,6 +411,40 @@ impl Fonts {
             if let Ok(text) = core::str::from_utf8(bytes) { self.svgs.push((String::from(src), alloc::rc::Rc::from(text), (img.width as i32, img.height as i32))); }
         }
         self.images.push((String::from(src), alloc::rc::Rc::new(img)));
+        if self.moving.len() < MAX_MOVING && !svg::is_svg(bytes) {
+            let Ok(animation) = sex_image::Animation::open(alloc::rc::Rc::from(bytes), &PICTURE_LIMITS) else { return };
+            if animation.frames() < 2 { return; }
+            let count = animation.width * animation.height;
+            let mut canvas = Vec::new();
+            if canvas.try_reserve_exact(count).is_err() { return; }
+            canvas.resize(count, 0);
+            self.moving.push(Moving { src: String::from(src), animation, canvas, fit: (max_w, max_h), due: 0, shown: 0 });
+        }
+    }
+
+    /// Shows each animated picture's next frame when it is due, at `now` (ms).
+    /// Returns whether any picture changed, and when the next frame is due.
+    pub fn step_pictures(&mut self, now: u64) -> (bool, Option<u64>) {
+        let (mut changed, mut next) = (false, None::<u64>);
+        let Fonts { moving, images, frames_shown, .. } = self;
+        moving.retain_mut(|m| {
+            if now >= m.due {
+                let frames = m.animation.frames() as u64;
+                if m.animation.loops().is_some_and(|loops| m.shown >= frames * (loops as u64 + 1)) { return false; }
+                let Ok(delay) = m.animation.next_into(&mut m.canvas) else { return false };
+                let frame = Image { width: m.animation.width, height: m.animation.height, pixels: m.canvas.clone() };
+                let Ok(frame) = frame.fit_within(m.fit.0, m.fit.1) else { return false };
+                if let Some(slot) = images.iter_mut().find(|(s, _)| *s == m.src) { slot.1 = alloc::rc::Rc::new(frame); }
+                m.shown += 1;
+                *frames_shown += 1;
+                // Browsers hold each frame at least 20 ms.
+                m.due = now + (delay as u64).max(20);
+                changed = true;
+            }
+            next = Some(next.map_or(m.due, |n| n.min(m.due)));
+            true
+        });
+        (changed, next)
     }
 }
 
@@ -402,9 +453,11 @@ pub fn decode_image(bytes: &[u8], max_w: usize, max_h: usize) -> Option<Image> {
     if svg::is_svg(bytes) {
         return svg::decode(core::str::from_utf8(bytes).ok()?, max_w, max_h);
     }
-    let limits = sex_image::Limits { max_width: 4096, max_height: 4096, max_pixels: 2_000_000, max_input_bytes: 4 << 20 };
-    sex_image::decode(bytes, &limits).ok()?.fit_within(max_w, max_h).ok()
+    sex_image::decode(bytes, &PICTURE_LIMITS).ok()?.fit_within(max_w, max_h).ok()
 }
+
+/// What a page's picture may be.
+const PICTURE_LIMITS: sex_image::Limits = sex_image::Limits { max_width: 4096, max_height: 4096, max_pixels: 2_000_000, max_input_bytes: 4 << 20 };
 
 /// Height of the bar above the page.
 pub const BAR: i32 = 30;

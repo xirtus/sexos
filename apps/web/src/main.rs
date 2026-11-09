@@ -313,6 +313,8 @@ impl Browser {
         let mut sheets: Vec<String> = Vec::new();
         self.fonts.images.clear();
         self.fonts.svgs.clear();
+        self.fonts.moving.clear();
+        self.fonts.frames_shown = 0;
         if base.starts_with("http") {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
@@ -356,6 +358,8 @@ impl Browser {
         if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
         self.media_scan();
+        if !self.fonts.moving.is_empty() { self.timer = Some(sex_pdx::get_ticks()); }
+        sex_pdx::serial_record!("[web.pictures] count={} moving={}", self.fonts.images.len(), self.fonts.moving.len());
         self.relayout();
         sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={} script_ticks={} scripted={}",
             self.page.items.len(), self.page.links.len(), self.page.height, self.sheets.len(), self.fonts.images.len(), script_begun - begun,
@@ -498,6 +502,9 @@ impl Browser {
         self.serve_fetches();
         self.sync_scroll();
         let media_next = self.media_tick();
+        let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
+        if moved && !self.animating { self.draw(); }
+        if moved && self.fonts.frames_shown <= 8 { sex_pdx::serial_record!("[web.picture.frames] n={}", self.fonts.frames_shown); }
         if self.animating {
             self.timer = None;
             self.relayout();
@@ -521,6 +528,8 @@ impl Browser {
             let due = sex_pdx::get_ticks() + ms;
             self.timer = Some(self.timer.map_or(due, |t| t.min(due)));
         }
+        // Animated GIF and WebP pictures.
+        if let Some(due) = pictures_next { self.timer = Some(self.timer.map_or(due, |t| t.min(due))); }
     }
 
     /// Finds the page's video and audio elements and shows their posters.
