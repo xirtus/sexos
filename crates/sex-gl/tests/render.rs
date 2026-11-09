@@ -547,3 +547,16 @@ fn texture_lod_reads_uploaded_levels_and_derivatives_span_quads() {
     assert_eq!(px(&ctx, 0, 0), [255, 255, 255, 128]);
     assert_eq!(px(&ctx, 5, 6), [255, 255, 255, 128]);
 }
+
+#[test]
+fn constant_coordinates_stay_on_level_zero_whatever_the_bias() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c; void main(){ c = texture(t, vec2(0.25), 2.0); }";
+    let mut ctx = full_screen(fs);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 2, 2, RGBA, UNSIGNED_BYTE, Some(&[0, 0, 255, 255].repeat(4)));
+    ctx.tex_image(TEXTURE_2D, 1, 1, 1, RGBA, UNSIGNED_BYTE, Some(&[255, 0, 0, 255]));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_NEAREST);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(px(&ctx, 4, 4), [0, 0, 255, 255]);
+}

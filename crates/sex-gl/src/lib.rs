@@ -285,7 +285,9 @@ impl Texture {
             (Some([a, b, c, d]), Some(l)) => {
                 let (w, h) = (l.width as f32, l.height as f32);
                 let rho2 = ((a * w) * (a * w) + (b * h) * (b * h)).max((c * w) * (c * w) + (d * h) * (d * h));
-                if rho2.is_finite() && rho2 > 0.0 { 0.5 * libm::log2f(rho2) } else { 0.0 }
+                // No footprint at all (constant coordinates) magnifies whatever the bias.
+                if rho2 == 0.0 { return f32::NEG_INFINITY; }
+                if rho2.is_finite() { 0.5 * libm::log2f(rho2) } else { 0.0 }
             }
             _ => 0.0,
         };
