@@ -593,7 +593,7 @@ pub fn init(rsdp: u64, hhdm: u64) {
 
 // ── Shutting down and restarting ───────────────────────────────────────────
 
-/// 0 idle, 1 waiting for Files, 2 going down.
+/// 0 idle, 3 setting up a request, 1 waiting for Files, 2 going down.
 static STATE: AtomicU8 = AtomicU8::new(0);
 static KIND: AtomicU64 = AtomicU64::new(0);
 static DEADLINE: AtomicU64 = AtomicU64::new(0);
@@ -605,10 +605,13 @@ pub fn set_flusher(pd: u32) { FLUSHER.store(pd, Ordering::Release); }
 
 /// Starts a shut down or restart. Files is told first; `poll` finishes it.
 pub fn begin(kind: u64, why: &str) -> bool {
-    if STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() { return false; }
+    // Claim first, publish "waiting" only once kind and deadline are set: another
+    // core's `poll` must never see a zero deadline or a stale kind.
+    if STATE.compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire).is_err() { return false; }
     KIND.store(kind, Ordering::Release);
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
     DEADLINE.store(now + w::FLUSH_TICKS, Ordering::Release);
+    STATE.store(1, Ordering::Release);
     let what = if kind == w::RESTART { "restart" } else { "off" };
     let files = FLUSHER.load(Ordering::Acquire);
     let told = files != 0 && crate::ipc::DOMAIN_REGISTRY.get(files).map_or(false, |pd| {

@@ -86,6 +86,7 @@ unsafe fn open_program_in_active_scene()->bool{false}
 fn program_launcher_status()->(bool,&'static str,&'static str){(false,"","")}
 fn power_launcher_status(_:Command)->(bool,&'static str,&'static str){(false,"","")}
 fn palette_power(_:Command)->bool{false}
+static mut PALETTE_FROM_KEY:bool=false;
 unsafe fn launcher_action_record(target:u32,frame:u64,_:launcher::LiveAction,_:u8,activated:bool,_:bool){if activated{EFFECTS.push(Effect::Activated(target,frame));}}
 unsafe fn first_minimized_frame_id()->Option<u32>{None}
 unsafe fn open_spindle_in_active_scene()->bool{false}unsafe fn open_quil_in_active_scene()->bool{false}unsafe fn open_linen_in_active_scene()->bool{false}
