@@ -285,6 +285,12 @@ src = "target/x86_64-sex/release/chess3d"
 dst = "iso_root/programs/chess3d"
 
 [[stage]]
+id = "stage_pinball"
+action = "copy_file"
+src = "target/x86_64-sex/release/pinball"
+dst = "iso_root/programs/pinball"
+
+[[stage]]
 id = "build_hum"
 action = "cargo_manifest"
 manifest = "apps/hum/Cargo.toml"

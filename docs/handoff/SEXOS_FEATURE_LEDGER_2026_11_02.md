@@ -2990,3 +2990,38 @@ row no longer waits for the row before it to end.
   script plus `fetch` would be the first step. The 3D-Chess-Game repo (MIT) needs a mouse,
   GLTF models and a Stockfish worker.
 - Screenshot: `assets/sexos-games-chess3d-2026-11-08.png`.
+
+## Games: XIRTUS Pinball, and Canvas drawImage (2026-11-09)
+
+- **What runs now.** `run pinball` (also `about:pinball`, listed at `about:games`): an
+  original pinball table played from the keyboard. Its theme follows Anderson Mancini's
+  Graveyard Pinball, used with his permission (Andreas asked him): coffin slingshots, skull
+  bumpers, a skull crypt, a dot-matrix display, a chrome ball and glowing flippers under a
+  purple moon. No code or art is taken from it. Rolling over the six X I R T U S letters
+  opens the portal, and sinking the ball in the crypt then raises the multiplier. Three
+  balls a game. Left or Z flips left, Right or / flips right, Space launches, N restarts.
+- **Physics.** Fixed steps of 1/120 s (1/240 s near the flippers), driven by elapsed time
+  so the speed doesn't depend on the frame rate. Walls are capsule segments and bumpers are
+  circles, both found through a 16-pixel grid, and flippers transfer their own surface
+  speed. A ball that stops on the table gets a nudge. Web sends keyup right after keydown,
+  so a key press gives the flipper a 0.22 s pulse. A Node simulation of 30 games
+  (`node`, stub canvas, a careless robot player) ended every game, with none stuck.
+- **Canvas `drawImage` (new in the browser).** `drawImage(img or canvas, ...)` in the 3-,
+  5- and 9-argument forms is a `di` command in `sex-web/src/canvas.rs`. It reads the
+  source from `fonts.images` (`canvas:<node>` or the image's `src`). A same-size copy onto
+  whole pixels with source-over runs in integer code, with no tiny-skia and no floats;
+  anything else goes through a tiny-skia pattern fill. Test: `draw_image_copies_another_canvas`.
+  Pinball draws the table once into offscreen canvases and each frame copies back only the
+  rectangles the ball and flippers left. The ball is a sprite copy, and the score digits
+  are dot-matrix glyphs drawn once and copied.
+- **`num()` in the canvas prelude** prints whole numbers without float rounding (slow
+  without a float unit). This affects every canvas page, and their gates are unchanged.
+- **Speed in QEMU (soft-float).** About 8 frames a second at close to real time (each frame
+  advances 12 to 15 physics steps). JS takes most of a frame: physics about 30 ms and
+  drawing about 25 ms. Canvas work in Rust dropped from 16 to 58 ms per frame to 2 to 6 ms
+  with the integer copy. SSE (#18) should speed up the JS part, which is all float math in
+  wasmi.
+- **Gate.** `scripts/program_games_gate.py` matches the set-up table against the host
+  render (0 of 9020 sampled pixels differ). It then launches a ball, flips every 1.5 s
+  until the ball drains, and reports score, frames and fps.
+- Screenshot: `assets/sexos-games-pinball-2026-11-09.png`.

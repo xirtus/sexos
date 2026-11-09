@@ -34,15 +34,16 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("about:chess", include_str!("games/chess.html")),
     ("about:maze", include_str!("games/maze.html")),
     ("about:chess3d", include_str!("games/chess3d.html")),
+    ("about:pinball", include_str!("games/pinball.html")),
     // Scripts the built-in pages load by relative `src`.
     ("about:chess-engine.js", include_str!("games/chess-engine.js")),
     ("about:three.cjs", include_str!("games/three.cjs")),
 ];
 fn built_in(url: &str) -> Option<&'static str> { BUILT_IN.iter().find(|(a, _)| *a == url).map(|(_, p)| *p) }
 /// The page a run without arguments opens: this program is also built as `solitaire`
-/// `chess`, `maze` and `chess3d`, which start on their game.
+/// `chess`, `maze`, `chess3d` and `pinball`, which start on their game.
 fn first_page() -> &'static str {
-    match env!("CARGO_BIN_NAME") { "solitaire" => "about:solitaire", "chess" => "about:chess", "maze" => "about:maze", "chess3d" => "about:chess3d", _ => "about:welcome" }
+    match env!("CARGO_BIN_NAME") { "solitaire" => "about:solitaire", "chess" => "about:chess", "maze" => "about:maze", "chess3d" => "about:chess3d", "pinball" => "about:pinball", _ => "about:welcome" }
 }
 const SOURCE_MAX: usize = 4 << 20;
 const MAX_SHEETS: usize = 8;

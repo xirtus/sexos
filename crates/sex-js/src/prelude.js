@@ -416,7 +416,8 @@
     for (const c of dirtyContexts) c._flush();
     dirtyContexts.clear();
   }
-  const num = v => { v = +v; return Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : null; };
+  // Whole numbers skip the float rounding and printing, which are slow without a float unit.
+  const num = v => { v = +v; return (v | 0) === v ? '' + v : Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : null; };
   class CanvasGradient {
     constructor(kind, args) { this._kind = kind; this._args = args; this._stops = []; this._v = 0; }
     addColorStop(offset, color) { this._stops.push([+offset, String(color)]); this._v++; }
@@ -520,7 +521,25 @@
     setLineDash(d) { this._dash = Array.isArray(d) ? d.slice() : []; }
     getLineDash() { return this._dash.slice(); }
     isPointInPath() { return false; }
-    drawImage() { /* pictures in canvases come later */ }
+    // Draws a picture (an <img> or another canvas) as drawImage(src, dx, dy[, dw, dh]) or
+    // drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh). A canvas source shows what it has drawn so far.
+    drawImage(src, ...a) {
+      let name, w, h;
+      if (src && src.tagName === 'CANVAS') {
+        // The copy must see the source as it is now: what this canvas queued before goes
+        // first, then the source's own drawing, then the copy.
+        if (src._ctx && src._ctx._q.length) { this._flush(); src._ctx._flush(); }
+        name = 'canvas:' + src._id; w = src.width; h = src.height;
+      } else if (src && src.tagName === 'IMG') {
+        name = src.getAttribute('src') || ''; w = src.naturalWidth || 0; h = src.naturalHeight || 0;
+      } else return;
+      let sx = 0, sy = 0, sw = w, sh = h, dx, dy, dw, dh;
+      if (a.length >= 8) [sx, sy, sw, sh, dx, dy, dw, dh] = a;
+      else if (a.length >= 4) { [dx, dy, dw, dh] = a; sw = w; sh = h; }
+      else { [dx, dy] = a; dw = w; dh = h; }
+      if (a.length < 8 && !(w > 0 && h > 0)) { sw = sh = -1; }
+      this._c('di', name.replace(/[\x1e\x1f]/g, ' '), num(sx), num(sy), num(sw), num(sh), num(dx), num(dy), num(dw === undefined ? sw : dw), num(dh === undefined ? sh : dh));
+    }
     getImageData(x, y, w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
     createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
     putImageData() {}
