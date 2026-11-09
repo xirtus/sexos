@@ -267,3 +267,15 @@ fn text_wraps_around_floats_and_clear_goes_below() {
     // overflow:hidden holds its float.
     assert_eq!(page.boxes[by_id("o")].unwrap()[3], 90);
 }
+
+#[test]
+fn overflow_hidden_clips_its_content() {
+    let dom = parse::parse("<body style='margin:0'><div style='width:100px;height:20px;overflow:hidden;border:1px solid red'><div style='width:300px;height:50px;background:blue'></div></div><p style='background:green'>x</p></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let blue = page.items.iter().position(|i| matches!(i, sex_html::layout::Item::Rect { color: 0xFF00_00FF, .. })).unwrap();
+    assert_eq!(page.clip_of(blue), Some([1, 1, 100, 20]));
+    let green = page.items.iter().position(|i| matches!(i, sex_html::layout::Item::Rect { color: 0xFF00_8000, .. })).unwrap();
+    assert_eq!(page.clip_of(green), None);
+    assert!(!page.items.iter().any(|i| matches!(i, sex_html::layout::Item::Rect { w, .. } if *w < -1_000_000)));
+}

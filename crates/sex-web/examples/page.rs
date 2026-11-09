@@ -98,7 +98,7 @@ fn main() {
     let focus = args.get(5).and_then(|v| v.parse::<i64>().ok()).filter(|f| *f >= 0).map(|f| f as usize);
     match args.get(6) {
         Some(bar) => sex_web::frame(&page, &mut fonts, &mut buf, w, h, scroll, focus, bar, false),
-        None => paint(&page, &mut fonts, &mut Target { pixels: &mut buf, width: w, height: h, scroll, top: 0, premul: false }, focus),
+        None => paint(&page, &mut fonts, &mut Target { pixels: &mut buf, width: w, height: h, scroll, top: 0, premul: false, clip: None }, focus),
     }
     let mut bytes = format!("P6 {w} {h} 255\n").into_bytes();
     for p in &buf { bytes.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }

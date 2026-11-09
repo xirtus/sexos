@@ -74,9 +74,18 @@ pub struct Page {
     /// Each node's paint layer: 0 for normal flow, higher for positioned boxes painted
     /// later (on top), so hit testing can prefer what is drawn on top.
     pub layers: Vec<u32>,
+    /// Clip rectangles (x, y, width, height) for `overflow` other than `visible`; entry 0
+    /// is unused.
+    pub clips: Vec<[i32; 4]>,
+    /// Each item's clip (an index into `clips`, 0 for none); empty when nothing clips.
+    pub item_clips: Vec<u16>,
 }
 
 impl Page {
+    /// The rectangle item `i` is clipped to, if any.
+    pub fn clip_of(&self, i: usize) -> Option<[i32; 4]> {
+        match self.item_clips.get(i) { Some(&c) if c > 0 => self.clips.get(c as usize).copied(), _ => None }
+    }
     /// The link under a point, if any.
     pub fn link_at(&self, x: i32, y: i32) -> Option<&Link> {
         self.links.iter().find(|l| x >= l.x && x < l.x + l.w && y >= l.y && y < l.y + l.h)
@@ -101,7 +110,10 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
         let r = l.block(html, 0, 0, width, None);
         height = r.margin_top + r.height + r.margin_bottom;
     }
-    let (order, below) = layer_order(&mut l.items);
+    let (mut tagged, clips) = resolve_clips(core::mem::take(&mut l.items));
+    let (order, below) = layer_order(&mut tagged);
+    let item_clips: Vec<u16> = if clips.len() > 1 { tagged.iter().map(|t| t.1).collect() } else { Vec::new() };
+    l.items = tagged.into_iter().map(|t| t.0).collect();
     // Ranks in paint order: layers under normal flow, normal flow itself, then the rest.
     let flow_rank = below as u32;
     let mut rank: Vec<Option<u32>> = alloc::vec![None; dom.nodes.len()];
@@ -127,7 +139,7 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
     };
     for (n, r) in l.boxes { put(n, r); }
     for k in &l.links { put(k.node, [k.x, k.y, k.w, k.h]); }
-    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers }
+    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers, clips, item_clips }
 }
 
 /// Parses, styles and lays out a whole page.
@@ -183,24 +195,54 @@ struct FloatBox { left: bool, x: i32, y: i32, w: i32, h: i32 }
 const LAYER_BEGIN: i32 = i32::MIN;
 const LAYER_BEGIN_AUTO: i32 = i32::MIN + 1;
 const LAYER_END: i32 = i32::MIN + 2;
+/// Clip markers, the same way: a box with `overflow` other than `visible` clips what is
+/// between them to its padding box (x, y, `radius` wide, `h` high).
+const CLIP_BEGIN: i32 = i32::MIN + 3;
+const CLIP_END: i32 = i32::MIN + 4;
 
 fn marker(item: &Item) -> Option<(i32, i32, u32)> {
     match *item { Item::Rect { w, h, color, .. } if w <= LAYER_END => Some((w, h, color)), _ => None }
 }
 
+/// Turns clip markers into a clip index on each item, and the clip rectangles (nested
+/// clips intersect).
+fn resolve_clips(items: Vec<Item>) -> (Vec<(Item, u16)>, Vec<[i32; 4]>) {
+    let mut clips = alloc::vec![[0; 4]];
+    let mut stack: Vec<u16> = Vec::new();
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            Item::Rect { x, y, w: CLIP_BEGIN, h, radius, .. } => {
+                let mut r = [x, y, radius.max(0), h.max(0)];
+                if let Some(&top) = stack.last() {
+                    let o = clips[top as usize];
+                    let (x0, y0) = (r[0].max(o[0]), r[1].max(o[1]));
+                    let (x1, y1) = ((r[0] + r[2]).min(o[0] + o[2]), (r[1] + r[3]).min(o[1] + o[3]));
+                    r = [x0, y0, (x1 - x0).max(0), (y1 - y0).max(0)];
+                }
+                if clips.len() < u16::MAX as usize { clips.push(r); }
+                stack.push((clips.len() - 1) as u16);
+            }
+            Item::Rect { w: CLIP_END, .. } => { stack.pop(); }
+            item => out.push((item, stack.last().copied().unwrap_or(0))),
+        }
+    }
+    (out, clips)
+}
+
 /// Moves each layer's items after normal flow, ordered by stacking context and
 /// z-index (negative z-indexes under normal flow), and drops the markers. Returns
 /// the layers' sequence numbers in paint order and how many paint under normal flow.
-fn layer_order(items: &mut Vec<Item>) -> (Vec<u32>, usize) {
-    if !items.iter().any(|i| marker(i).is_some()) { return (Vec::new(), 0); }
+fn layer_order(items: &mut Vec<(Item, u16)>) -> (Vec<u32>, usize) {
+    if !items.iter().any(|i| marker(&i.0).is_some()) { return (Vec::new(), 0); }
     // Each layer: its sort key (the path of (z, seq) through enclosing stacking
     // contexts) and its items.
-    let mut layers: Vec<(Vec<(i32, u32)>, Vec<Item>)> = Vec::new();
-    let mut flow: Vec<Item> = Vec::new();
+    let mut layers: Vec<(Vec<(i32, u32)>, Vec<(Item, u16)>)> = Vec::new();
+    let mut flow: Vec<(Item, u16)> = Vec::new();
     // Open layers: index into `layers`, and whether it starts a stacking context.
     let mut open: Vec<(usize, bool)> = Vec::new();
     for item in core::mem::take(items) {
-        match marker(&item) {
+        match marker(&item.0) {
             Some((kind, z, seq)) if kind != LAYER_END => {
                 let context = open.iter().rev().find(|o| o.1).map(|o| layers[o.0].0.clone()).unwrap_or_default();
                 let mut key = context;
@@ -459,6 +501,7 @@ impl<'a> Layout<'a> {
         let bg_index = self.items.len();
         let paints = s.background >> 24 != 0 || s.border.iter().any(|b| *b > 0);
         if paints { self.items.push(Item::Rect { x: 0, y: 0, w: 0, h: 0, color: 0, radius: 0 }); }
+        let clip_at = (s.overflow_clip && self.root != Some(n)).then(|| { self.items.push(Item::Rect { x: 0, y: 0, w: CLIP_BEGIN, h: 0, color: 0, radius: 0 }); self.items.len() - 1 });
         let cx = bx + s.border[LEFT] + s.padding[LEFT].or_zero(cw);
         let cy = by + s.border[TOP] + s.padding[TOP].or_zero(cw);
         let pushed_link = self.push_link(n);
@@ -479,8 +522,16 @@ impl<'a> Layout<'a> {
         if let Some(min) = s.min_height.resolve(0) { inner_h = inner_h.max(min); }
         inner_h = inner_h.max(0);
         let height = inner_h + s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw);
+        let before = self.items.len();
         if paints {
             self.box_paint(bg_index, s, bx, by, used, height);
+        }
+        if let Some(at) = clip_at {
+            // The background and borders went in before the marker.
+            let at = at + (self.items.len() - before);
+            let (bl, bt) = (s.border[LEFT], s.border[TOP]);
+            self.items[at] = Item::Rect { x: bx + bl, y: by + bt, w: CLIP_BEGIN, h: height - bt - s.border[BOTTOM], color: 0, radius: used - bl - s.border[RIGHT] };
+            self.items.push(Item::Rect { x: 0, y: 0, w: CLIP_END, h: 0, color: 0, radius: 0 });
         }
         if s.display == Display::ListItem {
             if let Some(base) = first_baseline { self.marker(n, s, cx, base); }
