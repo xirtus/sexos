@@ -52,6 +52,8 @@ const MAX_REDIRECTS: usize = 6;
 const MAX_SCRIPTS: usize = 32;
 /// Largest body a script's `fetch` may load (a game's data file, say).
 const FETCH_MAX: usize = 32 << 20;
+/// How often a running CSS animation is drawn (about 30 a second).
+const ANIMATION_FRAME_MS: u64 = 33;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -109,6 +111,10 @@ struct Browser {
     sheets: Vec<String>,
     /// When the page's next timer or animation frame is due, in ticks.
     timer: Option<u64>,
+    /// When each CSS animation on the page started.
+    timeline: sex_html::Timeline,
+    /// A CSS animation is running: style and draw the page again soon.
+    animating: bool,
     /// The page's Canvas 2D surfaces.
     canvases: sex_web::canvas::Canvases,
     url: String,
@@ -330,6 +336,7 @@ impl Browser {
         });
         self.sheets = sheets;
         self.timer = None;
+        self.timeline = sex_html::Timeline::default();
         let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
         doc.measure = sex_web::canvas::measure_css;
         doc.cookies = Some(self.jar.clone());
@@ -452,7 +459,8 @@ impl Browser {
     fn relayout(&mut self) {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
+        let (styles, animating) = sex_html::styles_at(&doc.dom, &sheet_refs, W, H - BAR, sex_pdx::get_ticks(), &mut self.timeline);
+        self.animating = animating;
         self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
             || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
         self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
@@ -463,6 +471,15 @@ impl Browser {
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
         // Ask for the next tick soon: the change may have started timers.
         if matches!(self.doc, Doc::Scripted(_)) && self.timer.is_none() { self.timer = Some(sex_pdx::get_ticks()); }
+        self.next_frame();
+    }
+
+    /// While a CSS animation runs, the next tick is at most a frame away.
+    fn next_frame(&mut self) {
+        if self.animating {
+            let frame = sex_pdx::get_ticks() + ANIMATION_FRAME_MS;
+            self.timer = Some(self.timer.map_or(frame, |t| t.min(frame)));
+        }
     }
 
     /// Runs due timers and animation frames.
@@ -470,9 +487,15 @@ impl Browser {
     fn tick(&mut self) {
         self.serve_fetches();
         self.sync_scroll();
-        let Some(script) = self.doc.script() else { self.timer = None; return };
+        if self.animating {
+            self.timer = None;
+            self.relayout();
+            self.draw();
+        }
+        let Some(script) = self.doc.script() else { self.timer = None; self.next_frame(); return };
         let next = script.dispatch("tick");
         self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
+        self.next_frame();
         if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
         self.after_script(true);
     }
@@ -785,7 +808,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

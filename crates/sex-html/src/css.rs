@@ -54,6 +54,8 @@ pub struct Rule {
 #[derive(Default, Debug)]
 pub struct Sheet {
     pub rules: Vec<Rule>,
+    /// `@keyframes`: each animation's frames, at offsets in thousandths.
+    pub keyframes: Vec<(String, Vec<(i32, Vec<Declaration>)>)>,
 }
 
 fn skip_comments_and_space(b: &[u8], mut i: usize) -> usize {
@@ -127,6 +129,10 @@ fn parse_rules(css: &str, vw: i32, sheet: &mut Sheet) {
             match name.as_str() {
                 "media" => if media_matches(&at[5..], vw) { parse_rules(inner, vw, sheet) },
                 "supports" | "layer" | "document" | "-moz-document" | "container" => parse_rules(inner, vw, sheet),
+                "keyframes" | "-webkit-keyframes" | "-moz-keyframes" => {
+                    let name = at[name.len()..].trim().trim_matches(|c| c == '"' || c == '\'');
+                    sheet.keyframes.push((String::from(name), parse_frames(inner)));
+                }
                 _ => {}
             }
         } else {
@@ -138,6 +144,32 @@ fn parse_rules(css: &str, vw: i32, sheet: &mut Sheet) {
         }
         i = close;
     }
+}
+
+/// The frames inside `@keyframes`: `from`, `to` and percentages, sorted by offset.
+fn parse_frames(css: &str) -> Vec<(i32, Vec<Declaration>)> {
+    let b = css.as_bytes();
+    let mut frames = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        i = skip_comments_and_space(b, i);
+        if i >= b.len() { break; }
+        let end = prelude_end(b, i);
+        if end >= b.len() || b[end] != b'{' { break; }
+        let close = block_end(b, end);
+        let decls = parse_declarations(&css[end + 1..close.saturating_sub(1).max(end + 1)]);
+        for sel in css[i..end].split(',') {
+            let at = match sel.trim().to_ascii_lowercase().as_str() {
+                "from" => Some(0),
+                "to" => Some(1000),
+                p => p.strip_suffix('%').and_then(parse_number).map(|v| (v / 10).clamp(0, 1000)),
+            };
+            if let Some(at) = at { frames.push((at, decls.clone())); }
+        }
+        i = close;
+    }
+    frames.sort_by_key(|f| f.0);
+    frames
 }
 
 /// A media query list against a screen `vw` pixels wide.
