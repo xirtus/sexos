@@ -266,6 +266,30 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
     write is now even, and read is 1.7x faster.
   - Next: queue depth (several commands in flight).
 
+- Stage 3 is done: on the bench, file writes match Linux and reads beat it, past the
+  "within 2x" target. Queue depth (several disk commands in flight) moves to stage 8,
+  where it can be measured on a real NVMe drive: under QEMU's software CPU, the
+  emulator's own cost per command hides what overlap would save.
+
+- Stage 4, first part (windows that fit the screen):
+  - Program pixel surfaces were a fixed 4 MiB (800x600). BOOT now sizes each to the
+    screen (4 bytes per screen pixel, rounded up to 1 MiB, never under 4 MiB), so a
+    full-screen window can be all pixels. Display accepts any shape the region holds
+    and clips pixels to the window's border instead of capping at 800x600.
+  - Programs learn their window size. Whenever Shell gives a program window a new
+    size (tiling, maximize, drag resize), it queues a resize input event with the
+    pixel area, in order with the program's keys. sex-app adds `Event::Resize`
+    and `Window::size()`, and `Window::pixels()` covers the whole region.
+  - View fits a picture to its window and fits it again on every resize (the gate
+    checks that the last picture fits the last size Shell reported).
+  - ABI changes: `pixel_region` region length is now at least `BYTES` (read it from
+    the grant); `pixel_region_display` and `pixel_region_client` return
+    `(address, length)`; new input class `pixel_region::RESIZE_CLASS` (6) on opcode
+    0x202 with `resize_wire`/`resize_decode`; `pixel_region::area`, `LEFT`, `TOP`;
+    `sex_app::Event::Resize`.
+  - Web still draws at the 410x330 its gates compare against the host render; it can
+    now follow `Event::Resize`, which needs the gates to render at the reported size.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

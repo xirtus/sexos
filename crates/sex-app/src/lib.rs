@@ -25,7 +25,12 @@ const TITLE_ID: u64 = 300;
 const SHELL: u32 = 3;
 const FILES: u32 = 11;
 
-pub enum Event { Key(Key), Close }
+pub enum Event {
+    Key(Key),
+    Close,
+    /// The window's pixel area is now this many pixels wide and high: redraw to fit.
+    Resize { width: usize, height: usize },
+}
 
 /// Retries only while the service queue is full; anything else ends the program.
 fn call(slot: u64, op: u64, a: u64, b: u64, c: u64) -> u64 {
@@ -44,6 +49,8 @@ pub struct Window {
     surface: u64,
     region: u64,
     sequence: u32,
+    /// The pixel area Shell last reported.
+    size: (usize, usize),
     /// Events that arrived while a file request waited for its answer.
     held: [Option<Event>; 16],
 }
@@ -57,18 +64,22 @@ impl Window {
         // The surface must be ours before Shell frames it and before text goes to it.
         call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
         call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
-        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, held: [const { None }; 16] };
+        let (w, h) = sex_pdx::pixel_region::area(640, 400);
+        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16] };
         window.show(b"");
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
     }
-    /// The window's pixel surface: up to `pixel_region::MAX_W` by `MAX_H` pixels of
-    /// 0x00RRGGBB, row-major at the width you show. The rest of the region is the
-    /// program's own scratch.
+    /// The window's pixel surface, 0x00RRGGBB, row-major at the width you show. It holds
+    /// at least 800 by 600 pixels and enough for the whole screen; what you don't show is
+    /// the program's own scratch.
     pub fn pixels(&self) -> &'static mut [u32] {
-        let base = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
-        unsafe { core::slice::from_raw_parts_mut(base as *mut u32, (sex_pdx::pixel_region::BYTES / 4) as usize) }
+        let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
+        unsafe { core::slice::from_raw_parts_mut(base as *mut u32, (bytes / 4) as usize) }
     }
+    /// The width and height of the window's pixel area, as Shell last reported it
+    /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
+    pub fn size(&self) -> (usize, usize) { self.size }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
         call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
@@ -96,8 +107,14 @@ impl Window {
             call(SLOT_DISPLAY, op, self.surface, a, b);
         }
     }
-    fn event(&self, m: &sex_pdx::PdxMessage) -> Option<Event> {
+    fn event(&mut self, m: &sex_pdx::PdxMessage) -> Option<Event> {
         if m.caller_pd != SHELL { return None; }
+        if m.type_id == 0x202 {
+            if let Some((w, h)) = sex_pdx::pixel_region::resize_decode(m.arg0, m.arg1, m.arg2) {
+                self.size = (w as usize, h as usize);
+                return Some(Event::Resize { width: w as usize, height: h as usize });
+            }
+        }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None

@@ -91,8 +91,9 @@ unsafe fn focused_clipboard_participant()->Option<sex_pdx::clipboard::Participan
 }
 /// A focused program gets typed keys on its close route. It takes no part in the
 /// clipboard, so this participant never reaches clipboard issue paths.
-unsafe fn focused_program_participant()->Option<sex_pdx::clipboard::Participant>{
-    let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(FOCUSED_SURFACE_ID)&&!e.dead&&!e.retired&&!e.close_pending)?;
+unsafe fn focused_program_participant()->Option<sex_pdx::clipboard::Participant>{program_participant(FOCUSED_SURFACE_ID)}
+unsafe fn program_participant(sid:u64)->Option<sex_pdx::clipboard::Participant>{
+    let e=APP_CUSTODY.iter().flatten().find(|e|e.owns_surface(sid)&&!e.dead&&!e.retired&&!e.close_pending)?;
     let row=app_catalog::by_surface(e.target,e.surface).filter(|r|r.app==app_catalog::App::Program&&r.lifecycle_slot==e.slot)?;
     let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
     if !c.is_sender(e.target,e.task)||!c.is_subject(e.target,e.surface,3){return None}
@@ -146,6 +147,30 @@ unsafe fn clipboard_poll(){
         if status==0{clipboard::Admission::Accepted}else if status==sex_pdx::ERR_SERVICE_NOT_READY{clipboard::Admission::Full}else{clipboard::Admission::Rejected(status)}
     });
 }
+/// The newest size each program window has not yet been told, until the input queue
+/// takes it: a full queue delays a resize but never loses it.
+const _: () = assert!(app_input::RESIZE_CLASS == sex_pdx::pixel_region::RESIZE_CLASS);
+static mut RESIZE_PENDING: [Option<(u64, u32, u32)>; 16] = [None; 16];
+unsafe fn program_resize_note(sid: u64, w: u32, h: u32) {
+    if program_participant(sid).is_none() { return; }
+    let pending = &mut *core::ptr::addr_of_mut!(RESIZE_PENDING);
+    let slot = pending.iter().position(|p| matches!(p, Some((s, _, _)) if *s == sid))
+        .or_else(|| pending.iter().position(|p| p.is_none()));
+    match slot {
+        Some(i) => pending[i] = Some((sid, w, h)),
+        None => sex_pdx::serial_record!("[shell.program.resize.full] sid={} pending=16", sid),
+    }
+}
+unsafe fn program_resize_flush() {
+    let pending = &mut *core::ptr::addr_of_mut!(RESIZE_PENDING);
+    for entry in pending.iter_mut() {
+        let Some((sid, w, h)) = *entry else { continue };
+        let Some(destination) = program_participant(sid) else { *entry = None; continue };
+        let (aw, ah) = sex_pdx::pixel_region::area(w, h);
+        let input = app_input::Input::Resize(sex_pdx::pixel_region::resize_wire(aw, ah));
+        if APP_INPUT.push(app_input::Item { destination, input }) { *entry = None; }
+    }
+}
 unsafe fn app_input_poll(){
     // Admission of an earlier Intent precedes later key events. The payload
     // transaction itself never blocks ordinary typing or Close.
@@ -167,6 +192,12 @@ unsafe fn app_input_poll(){
             if browser_input_participant(item.destination)&&status==0{
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
+        },
+        app_input::Input::Resize(wire)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,wire,0,app_input::RESIZE_CLASS);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            sex_pdx::serial_record!("[shell.program.resize] pd={} task={} w={} h={} status={}",item.destination.subject.pd,item.destination.subject.task,wire>>32,wire&0xFFFF_FFFF,status);
         },
         app_input::Input::Scroll(scroll)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL);
@@ -20470,6 +20501,9 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
 /// updated after resize operations).
 unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32) {
     if APP_CUSTODY.iter().flatten().any(|e|(e.dead || e.close_pending) && e.owns_surface(surface_id)) {return;}
+    // Every move, tile, maximize and resize passes here: a program window that
+    // changed size owes its program a resize event.
+    if get_surface_bounds(surface_id).map(|(_,_,bw,bh)|(bw,bh)) != Some((w,h)) { program_resize_note(surface_id, w, h); }
     if let Some(e) = APP_CUSTODY.iter_mut().flatten().find(|e| (e.surface == surface_id || e.is_successor_frame(surface_id)) && !e.dead) { e.bounds = Some((x,y,w,h)); }
     native_child_geometry(surface_id,x,y,w,h);
 
@@ -24474,6 +24508,7 @@ pub extern "C" fn _start() -> ! {
         }
         unsafe { program_rebirth_poll(); }
         unsafe { record_spawn_poll(); }
+        unsafe { program_resize_flush(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.

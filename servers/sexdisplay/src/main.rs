@@ -1670,6 +1670,7 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
 /// the row last asked to show (zero is text). Reset when the row presents a new run.
 const PROGRAM_ROWS:usize=sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 static mut PIXEL_REGIONS:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
+static mut PIXEL_BYTES:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_SIZE:[(usize,usize);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
 /// The program row's picture under this pixel, when the surface shows one.
 fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
@@ -1680,7 +1681,10 @@ fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
     let bx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
     let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
     let by=(surf.y.max(0) as usize).saturating_add(top);
-    if x<bx||y<by||x>=bx+w||y>=by+h{return Some(None);}
+    // Inside the frame's border, whatever size the program asked for.
+    let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize);
+    let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize);
+    if x<bx||y<by||x>=bx+w||y>=by+h||x>=right||y>=bottom{return Some(None);}
     Some(Some(unsafe{core::ptr::read_volatile((base as *const u32).add((y-by)*w+(x-bx)))}&0x00FF_FFFF))
 }
 /// Read-only views of each app's BOOT text region, resolved once at startup.
@@ -3571,7 +3575,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexdisplay.ready]");
     let mut ready_publisher = sex_pdx::display_ready::ReadyPublisher::new();
     unsafe{for index in 0..sex_pdx::app_catalog::COUNT{TEXT_REGIONS[index]=sex_pdx::text_region_display(index).unwrap_or(0);}}
-    unsafe{for k in 0..PROGRAM_ROWS{PIXEL_REGIONS[k]=sex_pdx::pixel_region_display(k).unwrap_or(0);}}
+    unsafe{for k in 0..PROGRAM_ROWS{let (base,bytes)=sex_pdx::pixel_region_display(k).unwrap_or((0,0));PIXEL_REGIONS[k]=base;PIXEL_BYTES[k]=bytes;}}
     sex_pdx::serial_record!("[display.text.regions] count={} ok={}",sex_pdx::app_catalog::COUNT,unsafe{TEXT_REGIONS.iter().filter(|v|**v!=0).count()});
     let mut uiir = match sex_pdx::uiir_consumer(sex_pdx::uiir::SHELL_PD) {
         Ok(c) => {sex_pdx::serial_record!("[uiir.display.attached] peer={} ok=1",sex_pdx::uiir::SHELL_PD);Some(c)},
@@ -3980,7 +3984,10 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::pixel_region::OP => {
                     // Only the program row that owns this surface shows pixels in it.
                     if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
-                        let (w, h) = (((msg.arg1 >> 32) as usize).min(sex_pdx::pixel_region::MAX_W), ((msg.arg1 & 0xFFFF_FFFF) as usize).min(sex_pdx::pixel_region::MAX_H));
+                        // Any shape the region holds: a full-screen window shows full-screen pixels.
+                        let pixels = unsafe { PIXEL_BYTES[k] } as usize / 4;
+                        let w = ((msg.arg1 >> 32) as usize).min(pixels);
+                        let h = if w == 0 { 0 } else { ((msg.arg1 & 0xFFFF_FFFF) as usize).min(pixels / w) };
                         unsafe { PIXEL_SIZE[k] = (w, h); }
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.app.pixels] target={} surface={} w={} h={}", msg.caller_pd, msg.arg0, w, h);
