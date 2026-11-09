@@ -283,9 +283,9 @@ impl KeyboardOutbox {
             _=>{}
         }
         let extended=core::mem::replace(&mut self.extended,false);
-        let code=(raw&0x7f)as u8;
-        if extended && matches!(code,0x2A|0x36) {return true;}
-        self.push(&[KeyEdge{code,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
+        // E0 2A / E0 36 are fake shifts around extended keys: no key of their own.
+        if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
+        self.push(&[KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
     }
     fn usb(&mut self,key:u8,modifiers:u8,last_key:&mut u8,last_modifiers:&mut u8)->bool {
         let mut edges=[KeyEdge::empty();10];let mut count=0;
