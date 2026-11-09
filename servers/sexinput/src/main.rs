@@ -285,14 +285,11 @@ impl KeyboardOutbox {
         let extended=core::mem::replace(&mut self.extended,false);
         // E0 2A / E0 36 are fake shifts around extended keys: no key of their own.
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
-        // Media keys share their byte with D, C and B: give them their own codes.
-        let code=match (extended,raw&0x7f) {
-            (true,0x20)=>0x75, // sex_pdx::app_key::KEY_MUTE
-            (true,0x2E)=>0x76, // KEY_VOLUME_DOWN
-            (true,0x30)=>0x77, // KEY_VOLUME_UP
-            (_,c)=>c as u8,
-        };
-        self.push(&[KeyEdge{code,down:(raw&0x80==0)as u8,source:1,modifiers:0}])
+        let mut edge=KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0};
+        // Media keys share their byte with D, C and B: give them their own codes
+        // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP).
+        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,c=>c};}
+        self.push(&[edge])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per
     /// byte of `keys` (byte 0 first). Edges: releases of usages no longer held (under the
