@@ -179,8 +179,8 @@ pub struct Session { conn: Option<UnbufferedClientConnection>, wire_in: Vec<u8>,
 impl Session {
     /// Starts the handshake with `host`. The kernel-seeded `seed` is mixed into the
     /// service's generator and wiped; `seconds` is the time certificates are checked
-    /// at. `read` and `write` are no longer used: the session sizes its own queues.
-    pub fn start(host: &str, seed: &mut [u8; 32], seconds: u32, _read: &'static mut [u8], _write: &'static mut [u8]) -> Result<Self, crate::Error> {
+    /// at. The session sizes its own queues.
+    pub fn start(host: &str, seed: &mut [u8; 32], seconds: u32) -> Result<Self, crate::Error> {
         provider::reseed(seed);
         crate::erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(crate::Error::Clock); }
@@ -380,7 +380,7 @@ print('connections=%d requests=%d'%(conns,reqs),flush=True)
                 match TcpStream::connect(("127.0.0.1", port)) { Ok(s) => break s, Err(_) if began.elapsed() < Duration::from_secs(10) => std::thread::sleep(Duration::from_millis(20)), Err(e) => panic!("{e}") }
             };
             socket.set_nonblocking(true).unwrap();
-            let mut session = Session::start(&host, &mut [n as u8 + 1; 32], seconds, Box::leak(vec![0u8; 0].into_boxed_slice()), Box::leak(vec![0u8; 0].into_boxed_slice())).unwrap();
+            let mut session = Session::start(&host, &mut [n as u8 + 1; 32], seconds).unwrap();
             let request = format!("GET / HTTP/1.0\r\nHost: {host}\r\n\r\n");
             let (mut sent, mut got) = (false, std::vec::Vec::new());
             loop {
@@ -428,7 +428,7 @@ print('connections=%d requests=%d'%(conns,reqs),flush=True)
         };
         socket.set_nonblocking(true).unwrap();
         let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-        let mut session = Session::start("stranger.sexos.test", &mut [9; 32], seconds, Box::leak(vec![0u8; 0].into_boxed_slice()), Box::leak(vec![0u8; 0].into_boxed_slice())).unwrap();
+        let mut session = Session::start("stranger.sexos.test", &mut [9; 32], seconds).unwrap();
         while !matches!(session.stage(), Stage::Failed(_)) {
             let mut chunk = [0u8; 8192];
             match socket.read(&mut chunk[..session.wire_room().min(8192)]) { Ok(0) => session.peer_closed(), Ok(k) => session.offer_wire(&chunk[..k]), Err(_) => {} }
@@ -462,7 +462,7 @@ print('connections=%d requests=%d'%(conns,reqs),flush=True)
         socket.set_nonblocking(true).unwrap();
         let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
         chain(&std::env::temp_dir().join(format!("sexos-tls-cut-{}", std::process::id())), "cut.sexos.test", "ec:P-256");
-        let mut session = Session::start("cut.sexos.test", &mut [5; 32], seconds, Box::leak(vec![0u8; 0].into_boxed_slice()), Box::leak(vec![0u8; 0].into_boxed_slice())).unwrap();
+        let mut session = Session::start("cut.sexos.test", &mut [5; 32], seconds).unwrap();
         let began = Instant::now();
         while !matches!(session.stage(), Stage::Failed(_)) {
             let mut chunk = [0u8; 4096];
@@ -497,8 +497,7 @@ print('connections=%d requests=%d'%(conns,reqs),flush=True)
         socket.set_nonblocking(true).unwrap();
 
         let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-        let (read, write) = (Box::leak(vec![0u8; 16640].into_boxed_slice()), Box::leak(vec![0u8; 4096].into_boxed_slice()));
-        let mut session = Session::start(HOST, &mut [7u8; 32], seconds, read, write).unwrap();
+        let mut session = Session::start(HOST, &mut [7u8; 32], seconds).unwrap();
         // Moves bytes between the socket and the session until `done` says so.
         let mut pump = |session: &mut Session, done: &mut dyn FnMut(&mut Session) -> bool| {
             let began = Instant::now();

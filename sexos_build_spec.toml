@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "a9408486a30290c5e87f47e41c4981d617cd155bccaa1ea9628e70d6e7c045b3"
+abi_version_hash = "77426760c3b46e59ebb257e8a229736c3d24b6be70e92de2569667fd947aafdf"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -48,6 +48,7 @@ crates = [
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/peek/Cargo.toml",
+  "apps/talk/Cargo.toml",
   "apps/view/Cargo.toml",
   "apps/heaptest/Cargo.toml",
   "apps/bench/Cargo.toml",
@@ -224,6 +225,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/peek/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/peek"
 dest_artifact = "iso_root/programs/peek"
+
+[[stage]]
+id = "build_talk"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/talk/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/talk"
+dest_artifact = "iso_root/programs/talk"
 
 [[stage]]
 id = "build_view"

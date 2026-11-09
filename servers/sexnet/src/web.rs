@@ -1,8 +1,9 @@
-//! Serves the open-internet flows: a few TCP flows, each held by one caller under the
-//! caller's own number for it. A client's bytes pass through its own BOOT region, and
+//! Serves the open-internet flows: TCP flows (outbound, or listening for a peer) and
+//! UDP sockets, over IPv4 or IPv6, each held by one caller under the caller's own
+//! number for it. A client's bytes pass through its own BOOT region, and
 //! each call is served in one turn.
 use crate::jobs::Identity;
-use sex_net::{Engine, OpenBuffers, OpenState};
+use sex_net::{Address, Engine, OpenBuffers, OpenState};
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 use sex_pdx::web as w;
 use sex_tls::open::{Session, Stage};
@@ -11,33 +12,30 @@ use sex_tls::Failure;
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-static mut DNS_RX: [u8; 512] = [0; 512];
-static mut DNS_TX: [u8; 512] = [0; 512];
-static mut DNS_RX_META: [sex_net::DnsMetadata; 2] = [sex_net::DnsMetadata::EMPTY; 2];
-static mut DNS_TX_META: [sex_net::DnsMetadata; 2] = [sex_net::DnsMetadata::EMPTY; 2];
+// Room for a name's A and AAAA questions and both their answers at once.
+static mut DNS_RX: [u8; 2048] = [0; 2048];
+static mut DNS_TX: [u8; 1024] = [0; 1024];
+static mut DNS_RX_META: [sex_net::DnsMetadata; 4] = [sex_net::DnsMetadata::EMPTY; 4];
+static mut DNS_TX_META: [sex_net::DnsMetadata; 4] = [sex_net::DnsMetadata::EMPTY; 4];
+const _: () = assert!(sex_net::PROGRAM_PORT_MAX == w::PROGRAM_PORT_MAX);
 
-const TLS_READ_BYTES: usize = 16640;
-const TLS_WRITE_BYTES: usize = 4096;
 /// Flows are made when a caller asks and none is free, and kept for the next caller.
 /// This many is a ceiling against one runaway program, not a working limit: about
 /// 100 KiB each, made only as needed.
 const MAX_FLOWS: usize = 4096;
+/// The same ceiling for UDP sockets (about 32 KiB each).
+const MAX_SOCKETS: usize = 4096;
 /// Program runs Shell has bound to the network, by row: the run's task.
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 /// A question to the resolver is one at a time; another caller waits this long at most.
 const RESOLVE_HOLD_TICKS: u64 = 5_000;
 /// One flow of the service: who holds it (and under which of their own numbers) and,
-/// when encrypted, its TLS session and the wire bytes still to send.
-struct Slot { owner: Option<(Identity, u8)>, tls: Option<Session>, told: bool, out: [u8; 1400], out_at: usize, out_len: usize, read: &'static mut [u8], write: &'static mut [u8] }
-fn zeroed(n: usize) -> Option<&'static mut [u8]> {
-    let mut v: Vec<u8> = Vec::new();
-    v.try_reserve_exact(n).ok()?;
-    v.resize(n, 0);
-    Some(Box::leak(v.into_boxed_slice()))
-}
+/// when encrypted, its TLS session and the wire bytes still to send. `listening` is the
+/// port a listening flow listens on.
+struct Slot { owner: Option<(Identity, u8)>, listening: u16, tls: Option<Session>, told: bool, out: [u8; 1400], out_at: usize, out_len: usize }
 impl Slot {
-    /// A slot for a new flow, with its own TLS buffers; `None` when memory is short.
-    fn new() -> Option<Slot> { Some(Slot { owner: None, tls: None, told: false, out: [0; 1400], out_at: 0, out_len: 0, read: zeroed(TLS_READ_BYTES)?, write: zeroed(TLS_WRITE_BYTES)? }) }
+    /// A slot for a new flow. Its TLS session, when it has one, sizes its own queues.
+    fn new() -> Option<Slot> { Some(Slot { owner: None, listening: 0, tls: None, told: false, out: [0; 1400], out_at: 0, out_len: 0 }) }
     /// Moves encrypted bytes between flow `i` and its session.
     fn pump(&mut self, i: usize, engine: &mut Engine<'static>) {
         let Some(tls) = self.tls.as_mut() else { return };
@@ -64,17 +62,46 @@ impl Slot {
     }
     fn free(&mut self, i: usize, engine: Option<&mut Engine<'static>>) {
         self.owner = None;
+        self.listening = 0;
         self.tls = None;
         self.out_at = 0; self.out_len = 0;
         if let Some(e) = engine { e.open_close(i); }
     }
 }
-pub struct Service { bound: [u32; PROGRAM_ROWS], slots: Vec<Slot>, resolving: Option<(Identity, u64)>, attached: bool, announced: bool, tls_used: bool }
+pub struct Service { bound: [u32; PROGRAM_ROWS], slots: Vec<Slot>, sockets: Vec<Option<(Identity, u8)>>, resolving: Option<(Identity, u64)>, attached: bool, announced: bool, announced6: bool, tls_used: bool }
+fn address(family: u8, bytes: &[u8]) -> Option<Address> {
+    match family {
+        w::FAMILY_V4 => Some(Address::V4(bytes.try_into().ok()?)),
+        w::FAMILY_V6 => Some(Address::V6(bytes.try_into().ok()?)),
+        _ => None,
+    }
+}
+fn put(out: &mut [u8], a: Address) {
+    match a { Address::V4(a) => w::put_address(out, w::FAMILY_V4, &a), Address::V6(a) => w::put_address(out, w::FAMILY_V6, &a) }
+}
+fn hex6(a: &[u8; 16]) -> [u16; 8] { core::array::from_fn(|i| u16::from_be_bytes([a[2 * i], a[2 * i + 1]])) }
 fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
 impl Service {
-    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), resolving: None, attached: false, announced: false, tls_used: false } }
+    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), sockets: Vec::new(), resolving: None, attached: false, announced: false, announced6: false, tls_used: false } }
+    /// A free flow for a new connection or listener (not `except`): one the stack is done
+    /// with first, so a connection still finishing is left to finish; then a new one.
+    fn free_slot(&mut self, engine: &mut Engine<'static>, except: Option<usize>) -> Option<usize> {
+        let free = |i: usize, s: &Slot| s.owner.is_none() && Some(i) != except;
+        self.slots.iter().enumerate().position(|(i, s)| free(i, s) && engine.open_idle(i))
+            .or_else(|| self.grow(engine))
+            .or_else(|| self.slots.iter().enumerate().position(|(i, s)| free(i, s)))
+    }
+    /// One more UDP socket.
+    fn grow_sockets(&mut self, engine: &mut Engine<'static>) -> Option<usize> {
+        if self.sockets.len() >= MAX_SOCKETS { return None; }
+        self.sockets.try_reserve(1).ok()?;
+        let i = engine.open_add_udp().ok()?;
+        debug_assert_eq!(i, self.sockets.len());
+        self.sockets.push(None);
+        Some(i)
+    }
     /// One more flow, when every flow made so far is held.
     fn grow(&mut self, engine: &mut Engine<'static>) -> Option<usize> {
         if self.slots.len() >= MAX_FLOWS { return None; }
@@ -112,6 +139,9 @@ impl Service {
         for (i, slot) in self.slots.iter_mut().enumerate() {
             if slot.owner.is_some_and(|(o, _)| o == who) { slot.free(i, engine.as_deref_mut()); }
         }
+        for (i, socket) in self.sockets.iter_mut().enumerate() {
+            if socket.is_some_and(|(o, _)| o == who) { *socket = None; if let Some(e) = engine.as_deref_mut() { e.open_udp_close(i); } }
+        }
         if self.resolving.is_some_and(|(o, _)| o == who) { self.resolving = None; }
     }
     pub fn handle(&mut self, who: Identity, a: u64, value: u64, engine: Option<&mut Engine<'static>>) -> u64 {
@@ -137,14 +167,53 @@ impl Service {
             if engine.open_attach(b).is_err() { return w::reply(seq, w::FAILED, 0); }
             self.attached = true;
         }
-        // The caller's flow by its own number. CONNECT takes a free one when it has none.
+        // The caller's flow by its own number. CONNECT and LISTEN take a free one when it
+        // has none. UDP sockets are numbered by the caller in the same way, apart.
         let mine = self.slots.iter().position(|s| s.owner == Some((who, number)));
+        let socket = self.sockets.iter().position(|s| *s == Some((who, number)));
+        match kind {
+            w::UDP_BIND => {
+                let Some(k) = socket.or_else(|| self.sockets.iter().position(|s| s.is_none())).or_else(|| self.grow_sockets(engine)) else { return w::reply(seq, w::BUSY, 0) };
+                if value > u16::MAX as u64 { return w::reply(seq, w::INVALID, 0); }
+                return match engine.open_udp_bind(k, value as u16) {
+                    Ok(port) => { self.sockets[k] = Some((who, number)); w::reply(seq, w::OK, port as u32) }
+                    Err(e) => { self.sockets[k] = None; engine.open_udp_close(k); w::reply(seq, if e == sex_net::Error::Busy { w::IN_USE } else { w::FAILED }, 0) }
+                };
+            }
+            w::UDP_SEND => {
+                let Some(k) = socket else { return w::reply(seq, w::FAILED, 0) };
+                let len = value as usize;
+                if len > w::REGION_BYTES - w::ENDPOINT_BYTES { return w::reply(seq, w::INVALID, 0); }
+                let Some((family, bytes, port)) = w::endpoint_of(&region[..w::ENDPOINT_BYTES]) else { return w::reply(seq, w::INVALID, 0) };
+                let Some(to) = address(family, bytes) else { return w::reply(seq, w::INVALID, 0) };
+                let payload = &region[w::ENDPOINT_BYTES..w::ENDPOINT_BYTES + len];
+                return match engine.open_udp_send(k, to, port, payload) {
+                    Ok(true) => w::reply(seq, w::OK, len as u32), Ok(false) => w::reply(seq, w::WAIT, 0),
+                    Err(sex_net::Error::Length) => w::reply(seq, w::INVALID, 0), Err(_) => w::reply(seq, w::FAILED, 0),
+                };
+            }
+            w::UDP_RECEIVE => {
+                let Some(k) = socket else { return w::reply(seq, w::FAILED, 0) };
+                let room = (value as usize).min(w::REGION_BYTES - w::ENDPOINT_BYTES);
+                let (head, body) = region.split_at_mut(w::ENDPOINT_BYTES);
+                return match engine.open_udp_receive(k, &mut body[..room]) {
+                    Ok(Some((from, port, n))) => { put(head, from); head[17..19].copy_from_slice(&port.to_be_bytes()); w::reply(seq, w::OK, n as u32) }
+                    Ok(None) => w::reply(seq, w::WAIT, 0),
+                    Err(_) => w::reply(seq, w::FAILED, 0),
+                };
+            }
+            w::CLOSE => if let Some(k) = socket {
+                self.sockets[k] = None; engine.open_udp_close(k);
+                if mine.is_none() { return w::reply(seq, w::OK, 0); }
+            },
+            _ => {}
+        }
         let flow = match kind {
-            w::CONNECT => match mine.or_else(|| self.slots.iter().position(|s| s.owner.is_none())).or_else(|| self.grow(engine)) {
-                Some(i) => { self.slots[i].owner = Some((who, number)); Some(i) }
+            w::CONNECT | w::CONNECT_TO | w::LISTEN => match mine.or_else(|| self.free_slot(engine, None)) {
+                Some(i) => { self.slots[i].owner = Some((who, number)); self.slots[i].listening = 0; Some(i) }
                 None => return w::reply(seq, w::BUSY, 0),
             },
-            w::UP | w::RESOLVE => None,
+            w::UP | w::RESOLVE | w::RESOLVE_ALL | w::ADDRESSES => None,
             // A flow that is not the caller's is closed, as far as the caller can tell.
             w::STATE if mine.is_none() => return w::reply(seq, w::OK, w::STATE_CLOSED),
             w::CLOSE if mine.is_none() => return w::reply(seq, w::OK, 0),
@@ -153,18 +222,31 @@ impl Service {
         let i = flow.unwrap_or(0);
         let now = sex_pdx::get_ticks();
         match kind {
-            w::UP => match engine.open_lease() {
-                Some(l) => {
-                    if !self.announced {
-                        self.announced = true;
-                        let (g, d) = (l.gateway.unwrap_or([0; 4]), l.dns.unwrap_or([0; 4]));
-                        sex_pdx::serial_record!("[net.dhcp.lease] address={}.{}.{}.{}/{} gateway={}.{}.{}.{} dns={}.{}.{}.{}", l.address[0], l.address[1], l.address[2], l.address[3], l.prefix, g[0], g[1], g[2], g[3], d[0], d[1], d[2], d[3]);
-                    }
-                    w::reply(seq, w::OK, 0)
+            w::UP => {
+                if let Some(l) = engine.open_lease().filter(|_| !self.announced) {
+                    self.announced = true;
+                    let (g, d) = (l.gateway.unwrap_or([0; 4]), l.dns.unwrap_or([0; 4]));
+                    sex_pdx::serial_record!("[net.dhcp.lease] address={}.{}.{}.{}/{} gateway={}.{}.{}.{} dns={}.{}.{}.{}", l.address[0], l.address[1], l.address[2], l.address[3], l.prefix, g[0], g[1], g[2], g[3], d[0], d[1], d[2], d[3]);
                 }
-                None => w::reply(seq, w::WAIT, 0),
-            },
-            w::RESOLVE => {
+                if let Some(a) = engine.open_global6().filter(|_| !self.announced6) {
+                    self.announced6 = true;
+                    let (a, r) = (hex6(&a), hex6(&engine.open_router6().unwrap_or([0; 16])));
+                    // Every group, in hex; programs show the short form.
+                    sex_pdx::serial_record!("[net.ipv6.slaac] address={:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x} router={:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+                }
+                // Either family is enough: a DHCP lease, or a global IPv6 address.
+                if engine.open_ready() { w::reply(seq, w::OK, 0) } else { w::reply(seq, w::WAIT, 0) }
+            }
+            w::ADDRESSES => {
+                let mut n = 0;
+                for (a, prefix) in engine.open_addresses() {
+                    if (n + 1) * (w::ADDRESS_BYTES + 1) > w::REGION_BYTES { break; }
+                    let at = n * (w::ADDRESS_BYTES + 1);
+                    put(&mut region[at..], a); region[at + w::ADDRESS_BYTES] = prefix; n += 1;
+                }
+                w::reply(seq, w::OK, n as u32)
+            }
+            w::RESOLVE | w::RESOLVE_ALL => {
                 // One question at a time: another caller's waits until it is answered.
                 if self.resolving.is_some_and(|(o, at)| o != who && now.saturating_sub(at) < RESOLVE_HOLD_TICKS) { return w::reply(seq, w::BUSY, 0); }
                 // value 0 asks for the next answer to the question already sent.
@@ -176,9 +258,23 @@ impl Service {
                     name[..len].copy_from_slice(&region[..len]);
                     // Test builds only: a name that makes the service fall over, to show it comes back.
                     if option_env!("SEXOS_NET_CRASH_PROBE").is_some() && &name[..len] == b"crash.invalid" { sex_pdx::serial_record!("[sexnet.crash.probe]"); unsafe { core::ptr::write_volatile(8 as *mut u8, 1) }; }
-                    return match engine.open_resolve(&name[..len]) { Ok(()) => w::reply(seq, w::WAIT, 0), Err(_) => { self.resolving = None; w::reply(seq, w::NO_NAME, 0) } };
+                    let asked = if kind == w::RESOLVE { engine.open_resolve(&name[..len]) } else { engine.open_resolve_all(&name[..len]) };
+                    return match asked { Ok(()) => w::reply(seq, w::WAIT, 0), Err(_) => { self.resolving = None; w::reply(seq, w::NO_NAME, 0) } };
                 }
                 if self.resolving.map(|(o, _)| o) != Some(who) { return w::reply(seq, w::NO_NAME, 0); }
+                if kind == w::RESOLVE_ALL {
+                    return match engine.open_resolved_all() {
+                        Ok(Some(found)) => {
+                            self.resolving = None;
+                            // IPv6 first: it was asked only when the machine can use it.
+                            let mut n = 0;
+                            for a in [found.v6.map(Address::V6), found.v4.map(Address::V4)].into_iter().flatten() { put(&mut region[n * w::ADDRESS_BYTES..], a); n += 1; }
+                            w::reply(seq, w::OK, n as u32)
+                        }
+                        Ok(None) => w::reply(seq, w::WAIT, 0),
+                        Err(_) => { self.resolving = None; w::reply(seq, w::NO_NAME, 0) }
+                    };
+                }
                 match engine.open_resolved() {
                     Ok(Some(address)) => { self.resolving = None; region[..4].copy_from_slice(&address); w::reply(seq, w::OK, 0) }
                     Ok(None) => w::reply(seq, w::WAIT, 0),
@@ -193,14 +289,9 @@ impl Service {
                 let Ok(host) = core::str::from_utf8(&name[..len]) else { return w::reply(seq, w::INVALID, 0) };
                 let Some((mut seed, seconds)) = Self::seed_and_time() else { return w::reply(seq, w::FAILED, 0) };
                 let slot = &mut self.slots[i];
-                // The old session lets go of this flow's buffers before a new one takes them.
                 slot.tls = None;
                 slot.out_at = 0; slot.out_len = 0;
-                // The session borrows the slot's buffers for as long as it lives; the
-                // slot is never freed, and a new session starts only after the old one
-                // is dropped above.
-                let (read, write) = unsafe { (&mut *(&mut *slot.read as *mut [u8]), &mut *(&mut *slot.write as *mut [u8])) };
-                match Session::start(host, &mut seed, seconds, read, write) {
+                match Session::start(host, &mut seed, seconds) {
                     Ok(session) => { slot.tls = Some(session); slot.told = false; self.tls_used = true; w::reply(seq, w::OK, 0) }
                     Err(_) => w::reply(seq, w::FAILED, 0),
                 }
@@ -220,13 +311,41 @@ impl Service {
                 if let Some(tls) = self.slots[i].tls.as_mut() { tls.finish_request(); }
                 w::reply(seq, w::OK, 0)
             }
-            w::CONNECT => {
-                let address = ((value >> 16) as u32).to_be_bytes();
+            w::CONNECT | w::CONNECT_TO => {
+                let to = if kind == w::CONNECT { Some(Address::V4(((value >> 16) as u32).to_be_bytes())) }
+                    else { w::address_of(&region[..w::ADDRESS_BYTES]).and_then(|(f, b)| address(f, b)) };
+                let port = if kind == w::CONNECT { value as u16 } else { u16::try_from(value).unwrap_or(0) };
                 let slot = &mut self.slots[i];
                 slot.tls = None;
                 slot.out_at = 0; slot.out_len = 0;
-                match engine.open_connect(i, address, value as u16) { Ok(()) => w::reply(seq, w::OK, 0), Err(_) => { slot.free(i, Some(engine)); w::reply(seq, w::FAILED, 0) } }
+                let Some(to) = to.filter(|_| port != 0) else { slot.free(i, Some(engine)); return w::reply(seq, w::INVALID, 0) };
+                match engine.open_connect(i, to, port) { Ok(()) => w::reply(seq, w::OK, 0), Err(_) => { slot.free(i, Some(engine)); w::reply(seq, w::FAILED, 0) } }
             }
+            w::LISTEN => {
+                let slot = &mut self.slots[i];
+                slot.tls = None;
+                slot.out_at = 0; slot.out_len = 0;
+                let port = u16::try_from(value).unwrap_or(0);
+                match engine.open_listen(i, port) {
+                    Ok(()) => { slot.listening = port; w::reply(seq, w::OK, 0) }
+                    Err(e) => { slot.free(i, Some(engine)); w::reply(seq, if e == sex_net::Error::Busy { w::IN_USE } else { w::FAILED }, 0) }
+                }
+            }
+            w::ACCEPT => {
+                let port = self.slots[i].listening;
+                let Ok(new) = u8::try_from(value) else { return w::reply(seq, w::INVALID, 0) };
+                if port == 0 || new >= w::CLIENT_FLOWS || self.slots.iter().any(|s| s.owner == Some((who, new))) { return w::reply(seq, w::INVALID, 0); }
+                if !engine.open_connected(i) { return w::reply(seq, w::WAIT, 0); }
+                // The connection keeps its flow under the new number; another flow takes
+                // over listening under the old one.
+                let Some(j) = self.free_slot(engine, Some(i)) else { return w::reply(seq, w::BUSY, 0) };
+                if engine.open_listen(j, port).is_err() { return w::reply(seq, w::FAILED, 0); }
+                self.slots[j].owner = Some((who, number)); self.slots[j].listening = port;
+                self.slots[i].owner = Some((who, new)); self.slots[i].listening = 0;
+                if let Some((a, p)) = engine.open_peer(i) { put(region, a); region[17..19].copy_from_slice(&p.to_be_bytes()); }
+                w::reply(seq, w::OK, 0)
+            }
+            w::SHUTDOWN => { engine.open_shutdown(i); w::reply(seq, w::OK, 0) }
             w::STATE if self.slots[i].tls.is_some() => {
                 let drained = self.slots[i].tls.as_ref().is_some_and(|t| t.drained());
                 w::reply(seq, w::OK, if drained { w::STATE_PEER_CLOSED } else { w::STATE_OPEN })
