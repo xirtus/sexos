@@ -76,6 +76,8 @@ pub struct Task {
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
     wait_deadline:self_wait::Deadline,
+    /// x87/SSE registers while the task is off-core (see crate::fpu).
+    fpu: crate::fpu::FpuState,
 }
 
 impl Task {
@@ -137,6 +139,7 @@ impl Task {
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
+            fpu: crate::fpu::FpuState::INIT,
         }
     }
 }
@@ -145,6 +148,10 @@ impl Task {
     /// A dead task's control block and kernel stack start one new run. Only for a
     /// task proven Dead with no owning core: nothing else can hold it running.
     pub fn rearm(&mut self, id: u32, entry: u64, stack_top: u64, pd: &ProtectionDomain) {
+        // Enter as if called: RSP = 8 mod 16, which code built with SSE assumes when it
+        // keeps 16-byte values on the stack. Idempotent, so a top read back from a
+        // context gives the same entry RSP.
+        let stack_top = ((stack_top - 8) & !0xF) + 8;
         let forged = unsafe {
             let mut ksp = self.kstack_top as *mut u64;
             ksp = ksp.sub(1); *ksp = 0x23;
@@ -166,8 +173,18 @@ impl Task {
         self.fault = fault_transaction::FaultSlot::new();
         self.resume_observation_pending = AtomicBool::new(false);
         self.wait_deadline = self_wait::Deadline::new();
+        // A new run starts with fresh registers, never the last run's.
+        self.fpu = crate::fpu::FpuState::INIT;
+        let me = self as *mut Task;
+        for loaded in FPU_LOADED.iter() {
+            let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
+        }
     }
 }
+
+/// Per core: the task whose x87/SSE registers are in the core right now, if any.
+/// Saving the outgoing task clears it; loading the incoming one sets it.
+static FPU_LOADED: [AtomicPtr<Task>; 128] = [const { AtomicPtr::new(ptr::null_mut()) }; 128];
 
 pub const QUEUE_SIZE: usize = 512;
 // Host-tested independently of the privileged context-switch assembly.
@@ -635,6 +652,20 @@ pub extern "C" fn scheduler_finish_switch() {
     let core = crate::core_local::CoreLocal::get().core_id;
     let sched = &SCHEDULERS[core as usize];
     let old = sched.pending_outgoing.swap(ptr::null_mut(), Ordering::AcqRel);
+    let loaded = &FPU_LOADED[core as usize];
+    unsafe {
+        // The outgoing task's registers are still in the core (the kernel never uses
+        // them): keep them in its own block before any other core may resume it.
+        if !old.is_null() {
+            crate::fpu::save(&mut (*old).fpu);
+            loaded.store(ptr::null_mut(), Ordering::Release);
+        }
+        let next = sched.current_task.load(Ordering::Acquire);
+        if !next.is_null() && loaded.load(Ordering::Acquire) != next {
+            crate::fpu::restore(&(*next).fpu);
+            loaded.store(next, Ordering::Release);
+        }
+    }
     if old.is_null() { return; }
     unsafe {
         let rsp: u64;

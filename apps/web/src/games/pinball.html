@@ -1,11 +1,13 @@
 <!doctype html>
-<title>XIRTUS Pinball</title>
-<body style="margin:0;background:#0a0710">
+<title>XIRTUS Metaspace Pinball</title>
+<body style="margin:0;background:#0b171d">
 <canvas id="table" width="410" height="300" style="display:block"></canvas>
-<!-- Pinball on a haunted night table, played from the keyboard. Original SexOS game,
-     GPL-3.0-only. Its theme follows Anderson Mancini's Graveyard Pinball (with his
-     permission): coffin slingshots, a skull crypt, a dot-matrix display, a chrome ball
-     and glowing flippers under a purple moon. No code or art is taken from it.
+<!-- Pinball across the XIRTUS Metaspace, played from the keyboard. Original SexOS game,
+     GPL-3.0-only. The table is a map of the Metaspace archipelago: six lights are the
+     Xirtus Arcade worlds (ZENDRIVE, MANDELPOD, MACHINE ELF, RABBITVERSE, TSUNAMI and
+     Rubber Duckie), and finding all six opens the gate at the top. Colours follow the
+     Metaspace (ink, teal, mint, gold, ivory). Its layout grew from Anderson Mancini's
+     Graveyard Pinball (with his permission); no code or art is taken from it.
      Left or Z flips left, Right or / flips right, Space launches, N starts again. -->
 <script>
 'use strict';
@@ -44,8 +46,9 @@ const PLUNGER_Y = 295, REST_Y = PLUNGER_Y - R;
 const GATE = segment([206, 92], [222, 80], 0.4);
 const BUMPERS = [{ x: 76, y: 104 }, { x: 138, y: 104 }, { x: 107, y: 140 }].map(b => Object.assign(b, { r: 12, until: 0 }));
 const CRYPT = { x: 107, y: 52 };
-const LETTERS = 'XIRTUS';
-const SPOTS = [[30, 122], [40, 94], [58, 72], [156, 72], [174, 94], [184, 122]].map(([x, y], i) => ({ x, y, ch: LETTERS[i], on: false, inside: false }));
+// The six Xirtus Arcade worlds, each a light with its initial and its own colour.
+const WORLDS = [['Z', 'ZENDRIVE', '#ff5fa2'], ['M', 'MANDELPOD', '#c99bff'], ['E', 'MACHINE ELF', '#7fe3ff'], ['R', 'RABBITVERSE', '#9be37a'], ['T', 'TSUNAMI', '#5fb4ff'], ['D', 'DUCKIE', '#ffd447']];
+const SPOTS = [[30, 122], [40, 94], [58, 72], [156, 72], [174, 94], [184, 122]].map(([x, y], i) => ({ x, y, ch: WORLDS[i][0], name: WORLDS[i][1], color: WORLDS[i][2], on: false, inside: false }));
 const FL = 32;
 const flippers = [
   { px: 68, py: 257, rest: 0.5, up: -0.45, box: [60, 234, 48, 48] },
@@ -134,7 +137,7 @@ function move(dt) {
       const s = cell.spots[i];
       const ex = ball.x - s.x, ey = ball.y - s.y, inside = ex * ex + ey * ey < 64;
       if (inside && !s.inside) {
-        if (!s.on) { s.on = true; award(500); if (SPOTS.every(p => p.on)) { portal = true; say('PORTAL OPEN', 3); } }
+        if (!s.on) { s.on = true; award(500); if (SPOTS.every(p => p.on)) { portal = true; say('GATE OPEN', 3); } else say(s.name, 1.5); }
         else award(50);
       }
       s.inside = inside;
@@ -155,8 +158,8 @@ function move(dt) {
     if (portal) {
       portal = false; mult = Math.min(mult + 1, 5); award(10000);
       for (const s of SPOTS) s.on = false;
-      say('PORTAL X' + mult, 2);
-    } else { award(2500); say('CRYPT', 1.5); }
+      say('CONNECTED X' + mult, 2);
+    } else { award(2500); say('METASPACE', 1.5); }
   }
   // A ball that comes to rest on the table gets a nudge.
   if (!ball.inLane && ball.vx * ball.vx + ball.vy * ball.vy < 9) {
@@ -214,48 +217,57 @@ document.addEventListener('keydown', e => { if (key(e)) e.preventDefault(); });
 // ---- drawing ----
 function circle(c, x, y, r) { c.beginPath(); c.arc(x, y, r, 0, 7); }
 function poly(c, pts) { c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); }
+// A four-pointed star, the Metaspace sigil.
+function sigil(c, x, y, r) {
+  c.beginPath();
+  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4 - Math.PI / 2, d = i % 2 ? r * 0.3 : r; c.lineTo(x + d * Math.cos(a), y + d * Math.sin(a)); }
+  c.closePath();
+}
 function drawBase(c) {
-  c.fillStyle = '#120c1e'; c.fillRect(0, 0, TW, H);
-  // The moon, and graves on the hill under it.
-  c.fillStyle = 'rgba(150,90,230,0.18)'; circle(c, 170, 40, 24); c.fill();
-  c.fillStyle = '#b892f2'; circle(c, 170, 40, 15); c.fill();
-  c.fillStyle = '#1c1430'; poly(c, [[8, 188], [40, 176], [80, 182], [107, 172], [140, 182], [176, 176], [206, 188], [206, 300], [8, 300]]); c.fill();
-  c.fillStyle = '#2b2142';
-  for (const [x, y] of [[70, 196], [100, 190], [140, 196]]) { c.beginPath(); c.moveTo(x - 6, y + 14); c.lineTo(x - 6, y + 4); c.arc(x, y + 4, 6, Math.PI, 0); c.lineTo(x + 6, y + 14); c.fill(); }
-  // A bony hand reaching up out of the drain.
-  c.strokeStyle = '#d9d2c2'; c.lineWidth = 2; c.lineCap = 'round';
-  c.beginPath(); c.moveTo(107, 300); c.lineTo(107, 288);
-  for (const [x, y] of [[100, 279], [104, 277], [108, 277], [112, 279]]) { c.moveTo(107, 288); c.lineTo(x, y); }
-  c.moveTo(107, 290); c.lineTo(115, 285); c.stroke();
-  c.strokeStyle = '#7a5fc0'; c.lineWidth = 3; c.lineJoin = 'round';
+  const sky = c.createRadialGradient(107, 230, 10, 107, 170, 200);
+  sky.addColorStop(0, '#244c48'); sky.addColorStop(1, '#0b171d');
+  c.fillStyle = sky; c.fillRect(0, 0, TW, H);
+  // Stars, and the archipelago's islands under them.
+  c.fillStyle = 'rgba(244,241,231,0.5)';
+  for (const [x, y] of [[30, 40], [62, 28], [150, 24], [186, 46], [96, 84], [126, 90], [20, 150], [190, 150], [70, 160], [150, 166]]) c.fillRect(x, y, 1, 1);
+  c.fillStyle = 'rgba(223,189,125,0.35)'; sigil(c, 172, 38, 9); c.fill();
+  c.fillStyle = '#163a37';
+  for (const [x, y, rx, ry] of [[60, 188, 30, 9], [150, 186, 32, 10], [107, 172, 20, 7]]) { c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, 7); c.fill(); }
+  c.fillStyle = '#1f4a45';
+  for (const [x, y, rx, ry] of [[58, 185, 18, 5], [152, 183, 20, 6], [107, 170, 11, 4]]) { c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, 7); c.fill(); }
+  // The coast at the bottom: waves rolling towards the drain.
+  c.strokeStyle = 'rgba(180,216,201,0.35)'; c.lineWidth = 1.5;
+  for (const y of [272, 284, 296]) { c.beginPath(); for (let x = 74; x <= 140; x += 2) c.lineTo(x, y + 2 * Math.sin((x + y) / 6)); c.stroke(); }
+  c.strokeStyle = '#dfbd7d'; c.lineWidth = 2.5; c.lineJoin = 'round';
   for (const pts of [OUTLINE, LANE, GUIDE_L, GUIDE_R]) { poly(c, pts); c.stroke(); }
-  // The crypt's doorway.
-  c.fillStyle = '#2a2236'; c.beginPath(); c.moveTo(93, 66); c.lineTo(93, 50); c.arc(107, 50, 14, Math.PI, 0); c.lineTo(121, 66); c.fill();
-  c.fillStyle = '#8a8a96'; c.fillRect(209, PLUNGER_Y, 10, H - PLUNGER_Y);
+  // The gate's frame: a diamond like the Metaspace's emblem.
+  c.strokeStyle = '#dfbd7d'; c.lineWidth = 1.5; poly(c, [[107, 36], [123, 52], [107, 68], [91, 52], [107, 36]]); c.stroke();
+  c.fillStyle = '#8a9a96'; c.fillRect(209, PLUNGER_Y, 10, H - PLUNGER_Y);
 }
 const box = pts => { const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]); return [Math.min(...xs) - 3, Math.min(...ys) - 3, Math.max(...xs) - Math.min(...xs) + 6, Math.max(...ys) - Math.min(...ys) + 6]; };
 // The lights: each has a box, a state, and draws itself into `lit` when its state changes.
 const LIGHTS = [
-  { box: [203, 77, 22, 19], state: () => gateOn, draw: (c, on) => { if (on) { c.strokeStyle = '#5a4890'; c.lineWidth = 2; c.beginPath(); c.moveTo(GATE.ax, GATE.ay); c.lineTo(GATE.bx, GATE.by); c.stroke(); } } },
-  { box: [97, 42, 20, 20], state: () => held > 0 || portal, draw: (c, on) => { c.fillStyle = on ? '#3cff9a' : '#06040a'; circle(c, CRYPT.x, CRYPT.y, 8); c.fill(); } },
+  { box: [203, 77, 22, 19], state: () => gateOn, draw: (c, on) => { if (on) { c.strokeStyle = '#b4d8c9'; c.lineWidth = 2; c.beginPath(); c.moveTo(GATE.ax, GATE.ay); c.lineTo(GATE.bx, GATE.by); c.stroke(); } } },
+  { box: [97, 42, 20, 20], state: () => held > 0 || portal, draw: (c, on) => { c.fillStyle = on ? 'rgba(180,216,201,0.35)' : '#0b171d'; circle(c, CRYPT.x, CRYPT.y, 9); c.fill(); c.fillStyle = on ? '#f4f1e7' : '#3d5a57'; sigil(c, CRYPT.x, CRYPT.y, 8); c.fill(); } },
   ...[[COFFIN_L, 'slingL'], [COFFIN_R, 'slingR']].map(([pts, tag]) => ({ box: box(pts), state: () => slings[tag] > time,
-    draw: (c, on) => { c.fillStyle = '#4a2f1c'; poly(c, pts); c.fill(); c.strokeStyle = on ? '#ffe08a' : '#c07a3a'; c.lineWidth = 2; c.stroke(); } })),
+    draw: (c, on) => { c.fillStyle = on ? '#2f6b63' : '#173a37'; poly(c, pts); c.fill(); c.strokeStyle = on ? '#f4f1e7' : '#b4d8c9'; c.lineWidth = 2; c.stroke(); } })),
   ...BUMPERS.map(b => ({ box: [b.x - 14, b.y - 14, 28, 28], state: () => b.until > time, draw: (c, on) => {
-    c.fillStyle = on ? '#fff6c0' : '#e2dccd'; circle(c, b.x, b.y, b.r); c.fill();
-    c.fillStyle = '#120c1e'; circle(c, b.x - 4, b.y - 1, 3); c.fill(); circle(c, b.x + 4, b.y - 1, 3); c.fill();
-    c.fillRect(b.x - 1, b.y + 4, 2, 4);
+    c.fillStyle = on ? '#f4f1e7' : '#dfbd7d'; circle(c, b.x, b.y, b.r); c.fill();
+    c.fillStyle = on ? '#dfbd7d' : '#0d171b'; circle(c, b.x, b.y, b.r - 3); c.fill();
+    c.fillStyle = on ? '#0d171b' : '#b4d8c9'; sigil(c, b.x, b.y, 6); c.fill();
   } })),
   ...SPOTS.map(s => ({ box: [s.x - 9, s.y - 9, 18, 18], state: () => s.on, draw: (c, on) => {
-    c.fillStyle = on ? '#ff9a2e' : '#3a2c50'; circle(c, s.x, s.y, 7); c.fill();
+    c.fillStyle = on ? s.color : '#173a37'; circle(c, s.x, s.y, 7); c.fill();
+    c.strokeStyle = s.color; c.lineWidth = 1; c.stroke();
     c.font = 'bold 9px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.fillStyle = on ? '#1a0e06' : '#9a88c0'; c.fillText(s.ch, s.x, s.y + 1);
+    c.fillStyle = on ? '#0d171b' : s.color; c.fillText(s.ch, s.x, s.y + 1);
   } })),
 ].map(l => Object.assign(l, { shown: null }));
 // The chrome ball, drawn once and copied.
 const ballCanvas = document.createElement('canvas');
 ballCanvas.width = ballCanvas.height = 12;
 (c => {
-  c.fillStyle = '#9aa0ac'; circle(c, 6, 6, R); c.fill();
+  c.fillStyle = '#c9d2cf'; circle(c, 6, 6, R); c.fill();
   c.fillStyle = '#ffffff'; circle(c, 4.5, 4.5, 1.8); c.fill();
 })(ballCanvas.getContext('2d'));
 const touch = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
@@ -279,7 +291,7 @@ function drawTable() {
   const redraw = flippers.filter(f => f.a !== f.drawn || dirty.some(d => touch(d, f.box)));
   for (const f of redraw) dirty.push(f.box);
   for (const [x, y, w, h] of dirty) g.drawImage(litCanvas, x, y, w, h, x, y, w, h);
-  g.strokeStyle = '#5ef0c4'; g.lineWidth = 8; g.lineCap = 'round';
+  g.strokeStyle = '#b4d8c9'; g.lineWidth = 8; g.lineCap = 'round';
   for (const f of redraw) { g.beginPath(); g.moveTo(f.px, f.py); g.lineTo(f.px + FL * Math.cos(f.a), f.py + FL * Math.sin(f.a)); g.stroke(); f.drawn = f.a; }
   if (ballBox) g.drawImage(ballCanvas, Math.round(ball.x) - 6, Math.round(ball.y) - 6);
   return dirty.length;
@@ -332,20 +344,23 @@ function display(now) {
   const at = performance.now();
   if (text === shown || (!now && at - shownAt < 250)) return;
   shown = text; shownAt = at;
-  g.fillStyle = '#1a0d05'; g.fillRect(PX, 8, PW, 98);
-  g.strokeStyle = '#5a3418'; g.lineWidth = 2; g.strokeRect(PX + 1, 9, PW - 2, 96);
-  dots('XIRTUS', 15, 2, '#ff8a1e');
-  dots(String(score), 34, 3, '#ffb040');
-  dots(status, 66, 2, '#ff8a1e');
-  dots(messageUntil > time ? message : idle(), 86, 2, '#ffd27a');
+  g.fillStyle = '#0d171b'; g.fillRect(PX, 8, PW, 98);
+  g.strokeStyle = '#2b4a47'; g.lineWidth = 2; g.strokeRect(PX + 1, 9, PW - 2, 96);
+  dots('METASPACE', 15, 2, '#dfbd7d');
+  dots(String(score), 34, 3, '#b4d8c9');
+  dots(status, 66, 2, '#dfbd7d');
+  dots(messageUntil > time ? message : idle(), 86, 2, '#f4f1e7');
 }
 function panel() {
-  g.fillStyle = '#0a0710'; g.fillRect(TW, 0, 410 - TW, H);
-  g.fillStyle = '#b892f2'; g.font = 'bold 14px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
-  g.fillText('XIRTUS Pinball', PX, 128);
-  g.font = '10px sans-serif'; g.fillStyle = '#a89fbe';
-  let y = 148;
-  for (const line of ['Left or Z: left flipper', 'Right or /: right flipper', 'Space: launch the ball', 'N: new game', '', 'Roll over X I R T U S to open', 'the portal, then sink the', 'ball in the skull crypt.']) { g.fillText(line, PX, y); y += 14; }
+  g.fillStyle = '#0b171d'; g.fillRect(TW, 0, 410 - TW, H);
+  g.fillStyle = '#dfbd7d'; sigil(g, PX + 6, 121, 6); g.fill();
+  g.font = '8px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillText('XIRTUS  A CONNECTED UNIVERSE', PX + 16, 124);
+  g.fillStyle = '#f4f1e7'; g.font = 'bold 14px sans-serif';
+  g.fillText('Metaspace Pinball', PX, 142);
+  g.font = '10px sans-serif'; g.fillStyle = '#adbbb6';
+  let y = 160;
+  for (const line of ['Left or Z: left flipper', 'Right or /: right flipper', 'Space: launch the ball', 'N: new game', '', 'Find the six arcade worlds', 'Z M E R T D to open the gate,', 'then sink the ball in its star.']) { g.fillText(line, PX, y); y += 13; }
 }
 
 newGame();

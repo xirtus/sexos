@@ -37,7 +37,7 @@ def main():
   'maze-walked':reference(a.out,GAMES/'maze.html','Maze — about:maze','maze-walked','keyArrowUp'),
   'chess3d':reference(a.out,GAMES/'chess3d.html','3D Chess — about:chess3d','chess3d'),
   'chess3d-picked':reference(a.out,GAMES/'chess3d.html','3D Chess — about:chess3d','chess3d-picked','keyEnter'),
-  'pinball':reference(a.out,GAMES/'pinball.html','XIRTUS Pinball — about:pinball','pinball')}
+  'pinball':reference(a.out,GAMES/'pinball.html','XIRTUS Metaspace Pinball — about:pinball','pinball')}
  g=boot(a.iso,disk,a.out,'games',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
