@@ -132,6 +132,23 @@ fn pthread_check() -> Result<u64, &'static str> {
             if pthread_join(*th, &mut out) != 0 || out as usize != (i + 1) * 10 { return Err("join"); }
         }
         if COUNT != 8000 { return Err("count"); }
+        // Nobody signals: a timed wait must give up on time, sleeping in the kernel.
+        sex_libc::time::set_clock(|| { let ns = sex_pdx::get_ticks() * 1_000_000; (ns as i64, ns) });
+        let mut attr: pthread_condattr_t = core::mem::zeroed();
+        pthread_condattr_init(&mut attr);
+        pthread_condattr_setclock(&mut attr, 1);
+        let mut quiet: pthread_cond_t = core::mem::zeroed();
+        pthread_cond_init(&mut quiet, &attr);
+        let mut now = sex_libc::time::timespec { tv_sec: 0, tv_nsec: 0 };
+        sex_libc::time::clock_gettime(1, &mut now);
+        let start = sex_pdx::get_ticks();
+        let mut until = sex_libc::time::timespec { tv_sec: now.tv_sec, tv_nsec: now.tv_nsec + 150_000_000 };
+        if until.tv_nsec >= 1_000_000_000 { until.tv_sec += 1; until.tv_nsec -= 1_000_000_000; }
+        pthread_mutex_lock(core::ptr::addr_of_mut!(LOCK));
+        let timed = pthread_cond_timedwait(&mut quiet, core::ptr::addr_of_mut!(LOCK), &until);
+        pthread_mutex_unlock(core::ptr::addr_of_mut!(LOCK));
+        let waited = sex_pdx::get_ticks() - start;
+        if timed != ETIMEDOUT || !(150..2000).contains(&waited) { return Err("timed wait"); }
         if ONCES.load(Ordering::Relaxed) != 1 { return Err("once"); }
         if DTORS.load(Ordering::Relaxed) != 4 { return Err("destructor"); }
         Ok(COUNT)

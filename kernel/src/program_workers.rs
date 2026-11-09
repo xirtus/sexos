@@ -135,11 +135,26 @@ fn wake_at(table: &mut Table, target: u32, at: u64, most: u64) -> u64 {
         let w = &table.waiters[i];
         if w.target == target && w.at == at {
             let task = table.waiters.swap_remove(i).task;
+            unsafe { (*task).wait_deadline.cancel(); }
             crate::scheduler::unpark_thread(task);
             woken += 1;
         } else { i += 1; }
     }
     woken
+}
+
+/// Core 0's timer, every tick: timed waits whose deadline has passed wake up. Skipped
+/// if the table is busy; the next tick looks again.
+pub fn poll(now: u64) {
+    let Some(mut table) = TABLE.try_lock() else { return };
+    let mut i = 0;
+    while i < table.waiters.len() {
+        let task = table.waiters[i].task;
+        if unsafe { (*task).wait_deadline.take_due(now) }.is_some() {
+            table.waiters.swap_remove(i);
+            crate::scheduler::unpark_thread(task);
+        } else { i += 1; }
+    }
 }
 
 /// Syscall 83. May not return (EXIT, or WAIT that sleeps).
@@ -181,10 +196,20 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
                 if unsafe { core::ptr::read_volatile(a as *const u32) } as u64 != b & 0xFFFF_FFFF { return reply(regs, t::AGAIN, 0); }
                 table.waiters.retain(|w| w.task != current);
                 table.waiters.push(Waiter { target: pd.id, task: current, at: a });
+                // A timed wait: `poll` wakes it once the deadline passes. Long waits wake
+                // early at the deadline cap; the caller checks its clock and waits again.
+                unsafe {
+                    (*current).wait_deadline.cancel();
+                    if c != 0 {
+                        let ticks = c.min(crate::scheduler::self_wait::MAX_TICKS);
+                        (*current).wait_deadline.arm(crate::interrupts::TICKS.load(Ordering::Relaxed), ticks);
+                    }
+                }
             }
             regs.rsi = 0;
             match unsafe { (*current).state.park(core.core_id) } {
                 ParkResult::WakeConsumed => {
+                    unsafe { (*current).wait_deadline.cancel(); }
                     table().waiters.retain(|w| w.task != current);
                     t::OK
                 }

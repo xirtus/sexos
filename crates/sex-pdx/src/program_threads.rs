@@ -17,8 +17,10 @@ pub const SPAWN: u64 = 1;
 /// the kernel stores 1 at the address and wakes every waiter there, so a joiner may
 /// free the worker's stack as soon as it sees the 1. Never returns.
 pub const EXIT: u64 = 2;
-/// rsi = address of a u32, rdx = expected value. Sleeps until a WAKE on the address,
-/// unless the value already differs (AGAIN). Wakes may be spurious: check again.
+/// rsi = address of a u32, rdx = expected value, r10 = most milliseconds to sleep (0:
+/// no limit). Sleeps until a WAKE on the address or the time is up, unless the value
+/// already differs (AGAIN). Wakes may be spurious, and a long limit may wake early:
+/// check the value and the clock again.
 pub const WAIT: u64 = 3;
 /// rsi = address, rdx = most waiters to wake → rsi = waiters woken.
 pub const WAKE: u64 = 4;
@@ -76,9 +78,11 @@ pub fn exit(done: *const u32) -> ! {
     crate::task_finish(1)
 }
 /// Sleeps while `*at == expected`. Returns false if it had already changed.
-pub fn wait(at: *const u32, expected: u32) -> bool {
+pub fn wait(at: *const u32, expected: u32) -> bool { wait_for(at, expected, 0) }
+/// Like `wait`, but sleeps at most `ms` milliseconds (0: no limit).
+pub fn wait_for(at: *const u32, expected: u32, ms: u64) -> bool {
     loop {
-        match call(WAIT, at as u64, expected as u64, 0) {
+        match call(WAIT, at as u64, expected as u64, ms) {
             (OK, _) => return true,
             (RETRY, _) => crate::sys_yield(),
             _ => return false,

@@ -297,8 +297,8 @@ pub unsafe extern "C" fn pthread_cond_wait(c: *mut pthread_cond_t, m: *mut pthre
     0
 }
 
-/// The kernel's wait has no deadline yet, so a timed wait checks the clock while it
-/// yields. Correct, but it spends its core's spare time; a timed WAIT will replace it.
+/// Sleeps in the kernel until signalled or until the deadline, on the condition's
+/// clock (CLOCK_REALTIME unless `pthread_condattr_setclock` chose another).
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn pthread_cond_timedwait(c: *mut pthread_cond_t, m: *mut pthread_mutex_t, at: *const crate::time::timespec) -> c_int {
     let seq = atom(unsafe { &(*c).words[0] });
@@ -310,8 +310,10 @@ pub unsafe extern "C" fn pthread_cond_timedwait(c: *mut pthread_cond_t, m: *mut 
     while seq.load(Ordering::Acquire) == seen {
         let mut now = crate::time::timespec { tv_sec: 0, tv_nsec: 0 };
         unsafe { crate::time::clock_gettime(clock, &mut now) };
-        if now.tv_sec as i128 * 1_000_000_000 + now.tv_nsec as i128 >= deadline { status = ETIMEDOUT; break; }
-        sex_pdx::sys_yield();
+        let left = deadline - (now.tv_sec as i128 * 1_000_000_000 + now.tv_nsec as i128);
+        if left <= 0 { status = ETIMEDOUT; break; }
+        let ms = (left as u128).div_ceil(1_000_000).min(u32::MAX as u128) as u64;
+        t::wait_for(seq.as_ptr(), seen, ms);
     }
     unsafe { reacquire(m, depth) };
     status

@@ -539,6 +539,7 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     if timekeeper {
         crate::scheduler::poll_paging_exit_notifications();
         crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
+        crate::program_workers::poll(TICKS.load(Ordering::Relaxed));
     }
     if core_id == crate::smp::guest_core() { crate::program_records::poll(TICKS.load(Ordering::Relaxed)); }
 

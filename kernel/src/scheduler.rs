@@ -79,7 +79,7 @@ pub struct Task {
     pub kstack_bytes: u64,
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
-    wait_deadline:self_wait::Deadline,
+    pub(crate) wait_deadline: self_wait::Deadline,
     /// x87/SSE registers while the task is off-core (see crate::fpu).
     fpu: crate::fpu::FpuState,
     /// The core this task runs on, when not its domain's (a program's workers);
