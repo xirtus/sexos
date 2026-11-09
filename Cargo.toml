@@ -26,6 +26,8 @@ members = [
     "apps/view",
     "apps/wasm",
     "apps/heaptest",
+    "apps/jit",
+    "apps/threads",
     "apps/shapes",
     "apps/fputest",
     "apps/play",

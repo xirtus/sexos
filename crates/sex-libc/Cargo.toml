@@ -8,3 +8,6 @@ description = "The C library a C program (FFmpeg first) links against inside a S
 [dependencies]
 # musl's maths, ported to pure Rust (MIT); works on the soft-float target.
 libm = "0.2.16"
+# Threads for C code run on the program's own workers.
+sex-pdx = { path = "../sex-pdx" }
+sex-app = { path = "../sex-app", default-features = false }
