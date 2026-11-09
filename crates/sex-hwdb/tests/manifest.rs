@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Driver manifests: the x17 R1 and QEMU parts reach the services and slots their drivers read.
 use sex_hwdb::{Id, Service};
 use sex_hwdb::manifest::*;

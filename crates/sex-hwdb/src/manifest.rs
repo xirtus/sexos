@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Driver manifests: which devices each driver service asks BOOT to lease to it.
 //!
 //! This is the lease authority's input, kept beside the census table so that adding

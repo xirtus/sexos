@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Device leases and their interrupts (syscall 86, `SYS_DEVICE`).
 //!
 //! BOOT leases each PCI device to the service whose driver manifest
