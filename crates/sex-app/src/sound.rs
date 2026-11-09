@@ -16,6 +16,8 @@ impl Sound {
         let taken = r.load(ring::TAKEN);
         r.store(ring::WRITTEN, taken);
         r.store(ring::VOLUME, 100);
+        r.store(ring::PAUSED, 0);
+        r.store(ring::SKIP_TO, taken);
         r.store(ring::OPEN, 1);
         Some(Sound { ring: r, written: taken, start: taken, told: false })
     }
@@ -51,6 +53,20 @@ impl Sound {
     pub fn played(&self) -> u64 { self.ring.load(ring::PLAYED).saturating_sub(self.start) }
     /// Frames written but not yet heard.
     pub fn pending(&self) -> u64 { self.written.saturating_sub(self.ring.load(ring::PLAYED)) }
+    /// Hold the sound where it is, or go on. Paused sound stays queued.
+    pub fn pause(&mut self, paused: bool) {
+        self.ring.store(ring::PAUSED, paused as u64);
+        if !paused { self.told = false; self.kick(); }
+    }
+    /// Drop everything queued and not yet played; it counts as played at once (up to
+    /// what Bell already handed the card, about half a second, which still plays).
+    pub fn skip(&mut self) { self.ring.store(ring::SKIP_TO, self.written); self.kick_now(); }
+    /// The ring's own count of frames written, which `played_total` reaches once all
+    /// of them have played.
+    pub fn written_total(&self) -> u64 { self.written }
+    /// The ring's own count of frames played, across runs of the program.
+    pub fn played_total(&self) -> u64 { self.ring.load(ring::PLAYED) }
+    fn kick_now(&mut self) { self.told = false; self.kick(); }
     pub fn set_volume(&mut self, percent: u8) { self.ring.store(ring::VOLUME, percent.min(100) as u64); }
     /// Stop: Bell drops the stream once it has played what is queued.
     pub fn close(&mut self) { self.ring.store(ring::OPEN, 0); }
