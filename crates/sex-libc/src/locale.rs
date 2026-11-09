@@ -95,12 +95,43 @@ fn encode(c: u32, out: &mut [u8; 4]) -> Option<usize> {
     Some(ch.encode_utf8(out).len())
 }
 
+/// `mbstate_t` (8 bytes in musl's headers): byte 0 holds how many bytes of an
+/// unfinished character were seen, bytes 1..4 hold them, so a character split across
+/// calls still decodes.
+type State = [u8; 8];
+static mut INTERNAL: State = [0; 8];
+unsafe fn state(st: *mut c_void) -> *mut State {
+    if st.is_null() { core::ptr::addr_of_mut!(INTERNAL) } else { st.cast() }
+}
+
 #[cfg_attr(target_os = "none", no_mangle)]
-pub unsafe extern "C" fn mbrtowc(wc: *mut wchar_t, s: *const c_char, n: usize, _st: *mut c_void) -> usize {
-    if s.is_null() { return 0; }
-    match unsafe { decode(s.cast(), n) } {
-        Ok((c, len)) => { if !wc.is_null() { unsafe { *wc = c as wchar_t }; } if c == 0 { 0 } else { len } }
-        Err(e) => { if e == ILSEQ { crate::set_errno(EILSEQ); } e }
+pub unsafe extern "C" fn mbrtowc(wc: *mut wchar_t, s: *const c_char, n: usize, st: *mut c_void) -> usize {
+    let st = unsafe { &mut *state(st) };
+    if s.is_null() { st[0] = 0; return 0; }
+    let have = (st[0] as usize).min(3);
+    let mut buf = [0u8; 4];
+    buf[..have].copy_from_slice(&st[1..1 + have]);
+    if n == 0 { return INCOMPLETE; }
+    // Read only the bytes this character needs: never past its end (a string's NUL
+    // may be the last readable byte).
+    let lead = if have > 0 { buf[0] } else { unsafe { *s.cast::<u8>() } };
+    let need = match lead { 0xC2..=0xDF => 2, 0xE0..=0xEF => 3, 0xF0..=0xF4 => 4, _ => 1 };
+    let take = n.min(need.max(have + 1) - have);
+    unsafe { core::ptr::copy_nonoverlapping(s.cast::<u8>(), buf.as_mut_ptr().add(have), take) };
+    match unsafe { decode(buf.as_ptr(), have + take) } {
+        Ok((c, len)) => {
+            st[0] = 0;
+            if !wc.is_null() { unsafe { *wc = c as wchar_t }; }
+            if c == 0 { 0 } else { len - have }
+        }
+        Err(INCOMPLETE) => {
+            // Every byte given was used (n < need) and the character is still unfinished.
+            let total = have + take;
+            st[0] = total as u8;
+            st[1..1 + total].copy_from_slice(&buf[..total]);
+            INCOMPLETE
+        }
+        Err(e) => { st[0] = 0; crate::set_errno(EILSEQ); e }
     }
 }
 #[cfg_attr(target_os = "none", no_mangle)]
@@ -108,7 +139,8 @@ pub unsafe extern "C" fn mbrlen(s: *const c_char, n: usize, st: *mut c_void) -> 
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn mbtowc(wc: *mut wchar_t, s: *const c_char, n: usize) -> c_int {
     if s.is_null() { return 0; }
-    match unsafe { mbrtowc(wc, s, n, core::ptr::null_mut()) } { r if r >= INCOMPLETE => -1, r => r as c_int }
+    let mut fresh: State = [0; 8];
+    match unsafe { mbrtowc(wc, s, n, fresh.as_mut_ptr().cast()) } { r if r >= INCOMPLETE => -1, r => r as c_int }
 }
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn wcrtomb(s: *mut c_char, wc: wchar_t, _st: *mut c_void) -> usize {
@@ -117,24 +149,32 @@ pub unsafe extern "C" fn wcrtomb(s: *mut c_char, wc: wchar_t, _st: *mut c_void) 
     if !s.is_null() { unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), s.cast(), n) }; }
     n
 }
-/// Converts up to `nms` bytes of `*src` into at most `len` wide characters.
+/// Converts up to `nms` bytes of `*src` into at most `len` wide characters, resuming
+/// any character `st` holds. With no destination it only counts, and leaves `*src`
+/// and the state as they were.
 #[cfg_attr(target_os = "none", no_mangle)]
-pub unsafe extern "C" fn mbsnrtowcs(dst: *mut wchar_t, src: *mut *const c_char, nms: usize, len: usize, _st: *mut c_void) -> usize {
-    let mut p = unsafe { *src } as *const u8;
+pub unsafe extern "C" fn mbsnrtowcs(dst: *mut wchar_t, src: *mut *const c_char, nms: usize, len: usize, st: *mut c_void) -> usize {
+    let mut copy: State = unsafe { *state(st) };
+    let st: *mut c_void = if dst.is_null() { copy.as_mut_ptr().cast() } else { unsafe { state(st) }.cast() };
+    let mut p = unsafe { *src };
     let mut left = nms;
     let mut count = 0;
     while dst.is_null() || count < len {
-        match unsafe { decode(p, left) } {
-            Ok((c, n)) => {
-                if !dst.is_null() { unsafe { *dst.add(count) = c as wchar_t }; }
-                if c == 0 { if !dst.is_null() { unsafe { *src = core::ptr::null() }; } return count; }
-                p = unsafe { p.add(n) }; left -= n; count += 1;
+        let mut c: wchar_t = 0;
+        match unsafe { mbrtowc(&mut c, p, left, st) } {
+            0 => {
+                if !dst.is_null() { unsafe { *dst.add(count) = 0; *src = core::ptr::null() }; }
+                return count;
             }
-            Err(INCOMPLETE) => break,
-            Err(_) => { if !dst.is_null() { unsafe { *src = p.cast() }; } crate::set_errno(EILSEQ); return ILSEQ; }
+            INCOMPLETE => { p = unsafe { p.add(left) }; break; }
+            ILSEQ => { if !dst.is_null() { unsafe { *src = p }; } return ILSEQ; }
+            used => {
+                if !dst.is_null() { unsafe { *dst.add(count) = c }; }
+                p = unsafe { p.add(used) }; left -= used; count += 1;
+            }
         }
     }
-    if !dst.is_null() { unsafe { *src = p.cast() }; }
+    if !dst.is_null() { unsafe { *src = p }; }
     count
 }
 #[cfg_attr(target_os = "none", no_mangle)]
@@ -154,7 +194,14 @@ pub unsafe extern "C" fn wcsnrtombs(dst: *mut c_char, src: *mut *const wchar_t, 
             crate::set_errno(EILSEQ);
             return ILSEQ;
         };
-        if c == 0 { if !dst.is_null() { unsafe { *dst.add(bytes) = 0; *src = core::ptr::null() }; } return bytes; }
+        if c == 0 {
+            if !dst.is_null() {
+                // The terminator needs room too; without it, stop before it.
+                if bytes >= len { break; }
+                unsafe { *dst.add(bytes) = 0; *src = core::ptr::null() };
+            }
+            return bytes;
+        }
         if !dst.is_null() {
             if bytes + n > len { break; }
             unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), dst.add(bytes).cast(), n) };
@@ -202,5 +249,42 @@ pub unsafe extern "C" fn syscall(n: c_long, mut args: ...) -> c_long {
         0 => { sex_pdx::program_threads::wait(addr, val); 0 }
         1 => sex_pdx::program_threads::wake(addr, val as u64) as c_long,
         _ => { crate::set_errno(crate::ENOSYS); -1 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn split_utf8_resumes() {
+        let mut st: State = [0; 8];
+        let mut wc: wchar_t = 0;
+        let (a, b) = ([0xC3u8], [0xA9u8]);
+        assert_eq!(unsafe { mbrtowc(&mut wc, a.as_ptr().cast(), 1, st.as_mut_ptr().cast()) }, INCOMPLETE);
+        assert_eq!(unsafe { mbrtowc(&mut wc, b.as_ptr().cast(), 1, st.as_mut_ptr().cast()) }, 1);
+        assert_eq!(wc, 0xE9);
+        assert_eq!(st[0], 0);
+    }
+    #[test]
+    fn wide_to_utf8_respects_capacity() {
+        let text: [wchar_t; 2] = [b'A' as wchar_t, 0];
+        let mut out = [0x55u8; 2];
+        let mut src = text.as_ptr();
+        assert_eq!(unsafe { wcsnrtombs(out.as_mut_ptr().cast(), &mut src, 2, 1, core::ptr::null_mut()) }, 1);
+        assert_eq!(out, [b'A', 0x55]);
+        assert_eq!(src, unsafe { text.as_ptr().add(1) });
+        let mut src = text.as_ptr();
+        assert_eq!(unsafe { wcsnrtombs(out.as_mut_ptr().cast(), &mut src, 2, 2, core::ptr::null_mut()) }, 1);
+        assert_eq!(out, [b'A', 0]);
+        assert!(src.is_null());
+    }
+    #[test]
+    fn multibyte_string_converts() {
+        let text = "héllo\0";
+        let mut out = [0 as wchar_t; 8];
+        let mut src = text.as_ptr() as *const c_char;
+        assert_eq!(unsafe { mbsrtowcs(out.as_mut_ptr(), &mut src, 8, core::ptr::null_mut()) }, 5);
+        assert_eq!(out[1], 0xE9);
+        assert!(src.is_null());
     }
 }
