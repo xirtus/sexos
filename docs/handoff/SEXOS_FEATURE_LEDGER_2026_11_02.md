@@ -3192,3 +3192,7 @@ YouTube stage Y3d.
 - **sex_app::net**: when a reply's framing (chunked, `Content-Length` or no body) ends exactly at the received bytes and the server keeps the connection, the flow goes into a per-program idle pool (host, port, TLS; up to 32, dropped after 30 s). The next request to the same site takes the newest kept flow and sends at once, with no connect or TLS handshake. A kept flow that turns out closed before the first reply byte is retried on a new flow. `[net.receive.stats]` shows `reused=` and `kept=`.
 - **sex-tls (open web)**: the session is full duplex (`split()` into reader and writer), so one TLS session carries any number of requests. A host test against an OpenSSL server with a test root sends 3 requests on 1 connection (`[sexnet.tls.open.host]`, in `sexnet_jobs_host_gate.sh`).
 - **Gate** `program_web_http11_gate`: the page's own server sees 17 requests over 13 connections, and the log shows a reused flow.
+
+## Net: ALPN http/1.1 (2026-11-09)
+
+- The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do. Host test `[sexnet.tls.open.host]`: an OpenSSL server offering `h2` and `http/1.1` picks `http/1.1` (without ALPN it saw none). YouTube stage Y3e.
