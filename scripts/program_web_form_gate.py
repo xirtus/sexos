@@ -9,7 +9,8 @@ BAR=30
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
-  f=SITE/self.path.removeprefix('/site/') if self.path.startswith('/site/') else None
+  path=self.path.split('?')[0]  # a submitted form's query names the same file
+  f=SITE/path.removeprefix('/site/') if path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.end_headers();return
   body=f.read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def log_message(self,*a):pass
