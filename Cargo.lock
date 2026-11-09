@@ -1244,6 +1244,8 @@ name = "sex-libc"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "sex-app",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -1657,6 +1659,7 @@ name = "threads"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-libc",
  "sex-pdx",
 ]
 

@@ -27,6 +27,8 @@ def main():
   target,task=int(m[2]),int(m[3]);g['wait'](rf'\[threads\.ready\] target={target} task={task}\n',s,60)
   # Every task has its own thread-locals.
   assert re.search(rf'\[threads\.tls\] target={target} task={task} tasks=\d+ pointer=0x[0-9a-f]+\n',t()[s:]),'thread-local check missing'
+  # C threads: mutex, condition variable, once, keys and join.
+  assert re.search(rf'\[threads\.pthread\] target={target} task={task} threads=4 count=8000\n',t()[s:]),'pthread check missing'
   f=dict(kv.split('=')for kv in m[4].split())
   placed={int(c)for c in re.findall(rf'\[program\.worker\.start\] target={target} run={task} worker=\d+ core=(\d+)\n',t()[s:])}
   assert placed,'no worker started'

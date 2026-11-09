@@ -84,6 +84,60 @@ static mut SEEDED: u64 = 7;
 #[thread_local]
 static mut ZEROED: [u64; 4] = [0; 4];
 
+/// C threads: four pthreads add to one counter under a mutex, a condition variable
+/// hands a value across, a key's destructor runs at each thread's end, `pthread_once`
+/// runs once, and `pthread_join` returns each result. Returns what went wrong, if anything.
+fn pthread_check() -> Result<u64, &'static str> {
+    use core::ffi::c_void;
+    use sex_libc::pthread::*;
+    static mut LOCK: pthread_mutex_t = unsafe { core::mem::zeroed() };
+    static mut COND: pthread_cond_t = unsafe { core::mem::zeroed() };
+    static mut ONCE: pthread_once_t = 0;
+    static mut KEY: pthread_key_t = 0;
+    static mut COUNT: u64 = 0;
+    static mut READY: u64 = 0;
+    static ONCES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    static DTORS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    unsafe extern "C" fn first() { ONCES.fetch_add(1, Ordering::Relaxed); }
+    unsafe extern "C" fn dtor(_: *mut c_void) { DTORS.fetch_add(1, Ordering::Relaxed); }
+    unsafe extern "C" fn work(arg: *mut c_void) -> *mut c_void {
+        unsafe {
+            pthread_once(core::ptr::addr_of_mut!(ONCE), first);
+            pthread_setspecific(KEY, 1 as *const c_void);
+            for _ in 0..2000 {
+                pthread_mutex_lock(core::ptr::addr_of_mut!(LOCK));
+                let c = core::ptr::addr_of_mut!(COUNT);
+                c.write_volatile(c.read_volatile() + 1);
+                pthread_mutex_unlock(core::ptr::addr_of_mut!(LOCK));
+            }
+            // The last one to finish counting tells the main task.
+            pthread_mutex_lock(core::ptr::addr_of_mut!(LOCK));
+            READY += 1;
+            pthread_cond_broadcast(core::ptr::addr_of_mut!(COND));
+            pthread_mutex_unlock(core::ptr::addr_of_mut!(LOCK));
+        }
+        (arg as usize * 10) as *mut c_void
+    }
+    unsafe {
+        if pthread_key_create(core::ptr::addr_of_mut!(KEY), Some(dtor)) != 0 { return Err("key"); }
+        let mut threads = [core::ptr::null_mut(); 4];
+        for (i, th) in threads.iter_mut().enumerate() {
+            if pthread_create(th, core::ptr::null(), work, (i + 1) as *mut c_void) != 0 { return Err("create"); }
+        }
+        pthread_mutex_lock(core::ptr::addr_of_mut!(LOCK));
+        while core::ptr::addr_of!(READY).read_volatile() < 4 { pthread_cond_wait(core::ptr::addr_of_mut!(COND), core::ptr::addr_of_mut!(LOCK)); }
+        pthread_mutex_unlock(core::ptr::addr_of_mut!(LOCK));
+        for (i, th) in threads.iter().enumerate() {
+            let mut out = core::ptr::null_mut();
+            if pthread_join(*th, &mut out) != 0 || out as usize != (i + 1) * 10 { return Err("join"); }
+        }
+        if COUNT != 8000 { return Err("count"); }
+        if ONCES.load(Ordering::Relaxed) != 1 { return Err("once"); }
+        if DTORS.load(Ordering::Relaxed) != 4 { return Err("destructor"); }
+        Ok(COUNT)
+    }
+}
+
 /// Every task adds to its own thread-locals and must see only its own sums.
 fn tls_check(bands: usize) -> usize {
     use core::sync::atomic::AtomicUsize;
@@ -132,6 +186,10 @@ pub extern "C" fn _start() -> ! {
         sex_pdx::serial_record!("[threads.tls] target={} task={} tasks={} pointer={:#x}", target, task, bands, sex_app::tls::pointer());
     } else {
         sex_pdx::serial_record!("[threads.fail] target={} task={} why=thread-locals shared good={} of {}", target, task, good, bands);
+    }
+    match pthread_check() {
+        Ok(count) => sex_pdx::serial_record!("[threads.pthread] target={} task={} threads=4 count={}", target, task, count),
+        Err(why) => sex_pdx::serial_record!("[threads.fail] target={} task={} why=pthread {}", target, task, why),
     }
     let pixels = window.pixels();
     pixels[..W * H].copy_from_slice(&many);
