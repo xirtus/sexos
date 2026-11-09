@@ -16483,6 +16483,13 @@ fn power_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
     let need = if cmd == Command::Restart { sex_pdx::power::CAN_RESTART } else { sex_pdx::power::CAN_OFF };
     if flags & need != 0 { (true, "ready", "acpi_power") } else { (false, "NOT ON THIS MACHINE", "acpi_power_unavailable") }
 }
+/// Asks the kernel to shut down or restart; Files flushes before power goes.
+fn palette_power(cmd: Command) -> bool {
+    let op=if cmd==Command::Restart {sex_pdx::power::RESTART} else {sex_pdx::power::OFF};
+    let result=sex_pdx::power::request(op);
+    sex_pdx::serial_record!("[shell.power.request] op={} ok={} status={:#x}",if op==sex_pdx::power::RESTART{"restart"}else{"off"},result.is_ok() as u8,result.err().unwrap_or(0));
+    result.is_ok()
+}
 fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
     match cmd {
         Command::FocusSpindle => spindle_launcher_status(),
@@ -16571,12 +16578,7 @@ unsafe fn palette_execute_selected() -> bool {
             sex_pdx::serial_record!("[shell.palette.focus.result] target=BROWSER sid={} ok={}",sid,open_ok as u8);
             open_ok
         }
-        Command::ShutDown | Command::Restart => {
-            let op=if cmd==Command::Restart {sex_pdx::power::RESTART} else {sex_pdx::power::OFF};
-            let result=sex_pdx::power::request(op);
-            sex_pdx::serial_record!("[shell.power.request] op={} ok={} status={:#x}",if op==sex_pdx::power::RESTART{"restart"}else{"off"},result.is_ok() as u8,result.err().unwrap_or(0));
-            result.is_ok()
-        }
+        Command::ShutDown | Command::Restart => palette_power(cmd),
         Command::FocusProgram => {
             let open_ok=open_program_in_active_scene();
             sex_pdx::serial_record!("[shell.palette.focus.result] target=PROGRAM ok={}",open_ok as u8);

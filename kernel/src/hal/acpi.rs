@@ -44,15 +44,13 @@ fn pci_ecam(address: PciAddress, offset: u16) -> Option<usize> {
     let r = regions.iter().find(|r| r.segment == address.segment() && (r.bus_start..=r.bus_end).contains(&address.bus()))?;
     Some(r.phys_addr + (((address.bus() - r.bus_start) as usize) << 20 | (address.device() as usize) << 15 | (address.function() as usize) << 12) + offset as usize)
 }
-fn pci_legacy(address: PciAddress, offset: u16) -> u32 {
-    0x8000_0000 | (address.bus() as u32) << 16 | (address.device() as u32) << 11 | (address.function() as u32) << 8 | (offset as u32 & 0xFC)
-}
 fn pci_read(address: PciAddress, offset: u16, bytes: u8) -> u32 {
     if let Some(at) = pci_ecam(address, offset) {
         return unsafe { match bytes { 1 => phys::<u8>(at).read_volatile() as u32, 2 => phys::<u16>(at).read_volatile() as u32, _ => phys::<u32>(at).read_volatile() } };
     }
     if address.segment() != 0 || offset >= 256 { return u32::MAX; }
-    let word = unsafe { Port::<u32>::new(0xCF8).write(pci_legacy(address, offset)); Port::<u32>::new(0xCFC).read() };
+    // Legacy config ports only through the HAL's locked accessor.
+    let word = unsafe { crate::hal::pci::pci_config_read(address.bus(), address.device(), address.function(), (offset & 0xFC) as u8) };
     let shift = (offset & 3) * 8;
     match bytes { 1 => (word >> shift) & 0xFF, 2 => (word >> shift) & 0xFFFF, _ => word }
 }
@@ -62,12 +60,12 @@ fn pci_write(address: PciAddress, offset: u16, bytes: u8, value: u32) {
         return;
     }
     if address.segment() != 0 || offset >= 256 { return; }
+    let (b, d, f, at) = (address.bus(), address.device(), address.function(), (offset & 0xFC) as u8);
+    let shift = (offset & 3) * 8;
+    let mask = match bytes { 1 => 0xFFu32, 2 => 0xFFFF, _ => u32::MAX };
     unsafe {
-        Port::<u32>::new(0xCF8).write(pci_legacy(address, offset));
-        let shift = (offset & 3) * 8;
-        let mask = match bytes { 1 => 0xFFu32, 2 => 0xFFFF, _ => u32::MAX };
-        let old = if bytes == 4 { 0 } else { Port::<u32>::new(0xCFC).read() };
-        Port::<u32>::new(0xCFC).write((old & !(mask << shift)) | ((value & mask) << shift));
+        let old = if bytes == 4 { 0 } else { crate::hal::pci::pci_config_read(b, d, f, at) };
+        crate::hal::pci::pci_config_write(b, d, f, at, (old & !(mask << shift)) | ((value & mask) << shift));
     }
 }
 /// About a microsecond: a write to the POST port is an ISA bus cycle.
