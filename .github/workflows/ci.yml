@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools clang lld llvm nasm musl-dev cmake ninja-build
+      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools clang lld llvm nasm musl-dev cmake ninja-build meson
     - name: Cache FFmpeg
       uses: actions/cache@v4
       with:
