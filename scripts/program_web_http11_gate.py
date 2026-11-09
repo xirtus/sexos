@@ -6,7 +6,8 @@ HttpOnly one too, which the script itself can't see), then loads media bytes wit
 XMLHttpRequest Range request (206 Partial Content). Requests to another origin carry
 an Origin header and no cookies, and their replies reach the page only when that site
 allows it (Access-Control-Allow-Origin). Twelve slow requests made together are
-served side by side, on flows the network service makes as they are asked for."""
+served side by side, on flows the network service makes as they are asked for, and
+finished connections stay open so later requests skip a new connection (keep-alive)."""
 import argparse,gzip,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -14,8 +15,16 @@ SITE=ROOT/'scripts/web_site/tube'
 MEDIA=bytes(i%251 for i in range(64*1024))
 SEEN={}
 LOCK=threading.Lock();LIVE=[0,0] # requests in /tube/slow now, and the most at once
+COUNT={'connections':0,'requests':0} # on the page's own server: kept connections carry many requests
 class Handler(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
+ def setup(self):
+  super().setup()
+  with LOCK:COUNT['connections']+=1
+ def parse_request(self):
+  ok=super().parse_request()
+  with LOCK:COUNT['requests']+=1
+  return ok
  def chunked(self,body,ctype,extra=()):
   self.send_response(200);self.send_header('Content-Type',ctype);self.send_header('Transfer-Encoding','chunked');self.send_header('Content-Encoding','gzip')
   for k,v in extra:self.send_header(k,v)
@@ -104,7 +113,9 @@ def main():
   assert beside[1].startswith('slow0 ms=') and int(beside[1].split('ms=')[1])<5000,beside[1]
   made=re.findall(r'\[net.open.flows\] made=(\d+)',t());assert made and int(made[-1])>=12,made
   assert 'gzip' in SEEN.get('accept-encoding',''),SEEN
+  assert re.search(r'\[net.receive.stats\] [^\n]*reused=1',t()),'no request went out on a kept connection'
+  assert COUNT['requests']>COUNT['connections'],('connections were not reused',COUNT)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1],'beside_stuck':beside[1]})
+  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1],'beside_stuck':beside[1],'reuse':COUNT})
  finally:g['stop']()
 if __name__=='__main__':main()

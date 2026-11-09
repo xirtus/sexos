@@ -386,6 +386,23 @@ pub mod net {
         head_end: Option<usize>, framing: Option<sex_fetch::Framing>, chunks: sex_fetch::ChunkScan,
         began: u64, start: u64, idle: u32, calls: u32, empty: u32, peer_done: bool, whole: bool,
         setup: Setup, host: alloc::string::String, port: u16, tls: bool, address: [u8; 4], out: alloc::vec::Vec<u8>,
+        /// On a connection an earlier exchange left open (keep-alive).
+        reused: bool,
+        /// Where the reply's body ended exactly, once its framing says so.
+        body_end: Option<usize>,
+    }
+    /// Connections whose last reply ended cleanly and that the site keeps open: host,
+    /// port, TLS, the flow, and since when it has been idle.
+    static mut IDLE: alloc::vec::Vec<(alloc::string::String, u16, bool, Flow, u64)> = alloc::vec::Vec::new();
+    /// Sites close idle connections after a while (often a minute); older ones are not tried.
+    const IDLE_KEEP_TICKS: u64 = 30_000;
+    const IDLE_MAX: usize = 32;
+    fn idle_flows() -> &'static mut alloc::vec::Vec<(alloc::string::String, u16, bool, Flow, u64)> { unsafe { &mut *core::ptr::addr_of_mut!(IDLE) } }
+    /// Closes idle connections that are too old to trust.
+    fn forget_stale(window: &mut Window) {
+        let now = sex_pdx::get_ticks();
+        let idle = idle_flows();
+        while let Some(i) = idle.iter().position(|e| now.saturating_sub(e.4) >= IDLE_KEEP_TICKS) { let e = idle.remove(i); close(window, e.3); }
     }
     /// Where an exchange is on its way to sending: each `poll` makes one call, so a slow
     /// name, connection or handshake never holds up the others.
@@ -419,22 +436,37 @@ pub mod net {
         /// and returns at once: `poll` resolves, connects, encrypts, sends and then reads,
         /// one call per step. Bodies larger than `max` after decoding fail.
         pub fn start(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Exchange, Error> {
-            let _ = window;
             let url = sex_fetch::Url::parse(req.url).map_err(|_| Error::Address)?;
             let bytes = sex_fetch::encode(req, &url, cookie).map_err(|_| Error::Address)?;
             // Room for the head, the framing and the body; decoding checks `max` again.
             let cap = max.saturating_add(sex_fetch::HEAD_MAX).saturating_add(max / 8 + 4096);
-            Self::raw(&url.host, url.port, url.secure, bytes, req.method.eq_ignore_ascii_case("HEAD"), cap, max)
+            Self::raw(window, &url.host, url.port, url.secure, bytes, req.method.eq_ignore_ascii_case("HEAD"), cap, max)
         }
         /// Kept for callers written before setup became stepwise; the same as `start`.
         pub fn start_patiently(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Exchange, Error> { Self::start(window, req, cookie, max) }
-        fn raw(host: &str, port: u16, tls: bool, out: alloc::vec::Vec<u8>, get_head: bool, cap: usize, max: usize) -> Result<Exchange, Error> {
+        fn raw(window: &mut Window, host: &str, port: u16, tls: bool, out: alloc::vec::Vec<u8>, get_head: bool, cap: usize, max: usize) -> Result<Exchange, Error> {
             if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
-            let flow = take_flow()?;
+            forget_stale(window);
+            let idle = idle_flows();
+            // The newest idle connection to the same place goes first.
+            let kept = idle.iter().rposition(|e| e.0 == host && e.1 == port && e.2 == tls).map(|i| idle.remove(i).3);
+            let flow = match kept { Some(f) => f, None => take_flow()? };
             let now = sex_pdx::get_ticks();
             Ok(Exchange { flow, get_head, raw: alloc::vec::Vec::new(), cap, max,
                 head_end: None, framing: None, chunks: sex_fetch::ChunkScan::new(), began: now, start: now, idle: 0, calls: 0, empty: 0, peer_done: false, whole: false,
-                setup: Setup::Up, host: alloc::string::String::from(host), port, tls, address: [0; 4], out })
+                setup: if kept.is_some() { Setup::Send { at: 0 } } else { Setup::Up }, host: alloc::string::String::from(host), port, tls, address: [0; 4], out,
+                reused: kept.is_some(), body_end: None })
+        }
+        /// A kept connection that failed before any reply byte: the site had closed it.
+        /// Start over on a new one (as browsers do), once.
+        fn fresh(&mut self, window: &mut Window) -> Result<(), Error> {
+            close(window, self.flow);
+            self.flow = take_flow()?;
+            self.reused = false;
+            self.setup = Setup::Up;
+            self.peer_done = false;
+            self.began = sex_pdx::get_ticks();
+            Ok(())
         }
         /// One step of setting up: a single call to the network service.
         fn set_up(&mut self, window: &mut Window) -> Result<(), Error> {
@@ -524,7 +556,9 @@ pub mod net {
             }
             let body = &seen[self.head_end.unwrap_or(0)..];
             match self.framing {
-                Some(sex_fetch::Framing::Chunked) => !matches!(self.chunks.advance(body), Ok(None)),
+                Some(sex_fetch::Framing::Chunked) => match self.chunks.advance(body) { Ok(None) => false, Ok(Some(end)) => { self.body_end = Some(end); true } Err(_) => true },
+                Some(sex_fetch::Framing::Length(n)) => { let done = body.len() as u64 >= n; if done { self.body_end = Some(n as usize); } done }
+                Some(sex_fetch::Framing::Empty) => { self.body_end = Some(0); true }
                 Some(f) => sex_fetch::complete(f, body).unwrap_or(true),
                 None => true,
             }
@@ -536,11 +570,18 @@ pub mod net {
             // Sixty seconds without a byte is too slow; a long download that keeps moving is not.
             if sex_pdx::get_ticks().saturating_sub(self.began) > 60_000 { self.cancel(window); return Err(Error::TooSlow); }
             if self.setup != Setup::Done {
-                if let Err(e) = self.set_up(window) { self.cancel(window); return Err(e); }
+                if let Err(e) = self.set_up(window) {
+                    if self.reused { self.fresh(window)?; return Ok(false); }
+                    self.cancel(window); return Err(e);
+                }
                 return Ok(false);
             }
             let room = (self.cap - self.raw.len()).min(32 * 1024).max(1) as u64;
-            let k = match call_on(window, self.flow, w::RECEIVE, room).and_then(ok) { Ok(k) => k as usize, Err(e) => { self.cancel(window); return Err(e); } };
+            let k = match call_on(window, self.flow, w::RECEIVE, room).and_then(ok) {
+                Ok(k) => k as usize,
+                Err(_) if self.reused && self.raw.is_empty() => { self.fresh(window)?; return Ok(false); }
+                Err(e) => { self.cancel(window); return Err(e); }
+            };
             self.calls += 1;
             if k > 0 {
                 let take = k.min(self.cap - self.raw.len());
@@ -553,7 +594,10 @@ pub mod net {
             }
             self.empty += 1;
             // Bytes can land between the two calls, so a closed peer gets one last read.
-            if self.peer_done { self.end(window); return Ok(true); }
+            if self.peer_done {
+                if self.reused && self.raw.is_empty() { self.fresh(window)?; return Ok(false); }
+                self.end(window); return Ok(true);
+            }
             let state = match call_on(window, self.flow, w::STATE, 0).and_then(ok) { Ok(s) => s, Err(e) => { self.cancel(window); return Err(e); } };
             self.peer_done = matches!(state, w::STATE_PEER_CLOSED | w::STATE_CLOSED);
             self.idle += 1;
@@ -561,8 +605,18 @@ pub mod net {
         }
         fn end(&mut self, window: &mut Window) {
             self.whole = true;
-            close(window, self.flow);
-            sex_pdx::serial_record!("[net.receive.stats] bytes={} calls={} empty={} ticks={} flow={}", self.raw.len(), self.calls, self.empty, sex_pdx::get_ticks() - self.start, self.flow.0);
+            // Keep the connection when the reply ended exactly where its framing said and
+            // the site keeps it open; otherwise let it go.
+            let keep = !self.peer_done && self.head_end.is_some_and(|h| self.body_end.is_some_and(|b| h + b == self.raw.len()))
+                && sex_fetch::parse_head(&self.raw).ok().flatten().is_some_and(|(head, _)| head.keeps_connection(self.raw.starts_with(b"HTTP/1.0")));
+            if keep {
+                let idle = idle_flows();
+                if idle.len() >= IDLE_MAX { let e = idle.remove(0); close(window, e.3); }
+                idle.push((core::mem::take(&mut self.host), self.port, self.tls, self.flow, sex_pdx::get_ticks()));
+            } else {
+                close(window, self.flow);
+            }
+            sex_pdx::serial_record!("[net.receive.stats] bytes={} calls={} empty={} ticks={} flow={} reused={} kept={}", self.raw.len(), self.calls, self.empty, sex_pdx::get_ticks() - self.start, self.flow.0, self.reused as u8, keep as u8);
         }
         /// Gives the exchange up and lets its flow go.
         pub fn cancel(&mut self, window: &mut Window) {
@@ -614,7 +668,7 @@ pub mod net {
         let mut n = 0;
         for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
         let host = core::str::from_utf8(host).map_err(|_| Error::Address)?;
-        let mut ex = Exchange::raw(host, port, tls, request[..n].to_vec(), false, out.len().max(1), out.len())?;
+        let mut ex = Exchange::raw(window, host, port, tls, request[..n].to_vec(), false, out.len().max(1), out.len())?;
         wait(window, &mut ex)?;
         let got = ex.raw.len().min(out.len());
         out[..got].copy_from_slice(&ex.raw[..got]);
