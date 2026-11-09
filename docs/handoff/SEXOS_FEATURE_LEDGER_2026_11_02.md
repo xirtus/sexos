@@ -3177,3 +3177,10 @@ YouTube stage Y3b (plan: `docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md`).
 - **Browser**: script `fetch`/XHR requests run side by side, up to 16 at once, each reported as it lands. Requests made by a script on hearing of one join in.
 - **ABI**: `sex_pdx::web` gains `request_on`, `flow_of` and `CLIENT_FLOWS`; the ABI hash is recomputed.
 - **Gate** `program_web_http11_gate`: twelve requests that each take 1.5 s finish together in about 1.7 s; the server saw all twelve at once and sexnet made twelve flows.
+
+## Net: connection setup a step at a time (2026-11-09)
+
+- `sex_app::net::Exchange::start` now returns at once with a flow number; each `poll` makes one call to the network service: look up the name, connect, start TLS, wait for the handshake, send, then read. A site whose name, connection or handshake is slow no longer holds up the other requests a program has going (Codex review on #56).
+- A program asks the resolver one question at a time (the service answers one per caller); names it looked up are remembered for five minutes (up to 256).
+- The old blocking `open`/`send_all` path is gone; `request` and the HTTP/1.0 `fetch` run on `Exchange`.
+- Gate `program_web_http11_gate`: a request beside one to an unreachable address (10.0.2.123) lands in about 1.2 s; the unreachable one gives up after 30 s.
