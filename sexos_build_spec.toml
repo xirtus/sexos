@@ -54,7 +54,8 @@ crates = [
   "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml",
   "apps/fputest/Cargo.toml",
-  "apps/web/Cargo.toml"
+  "apps/web/Cargo.toml",
+  "apps/play/Cargo.toml"
 ]
 
 [[stage]]
@@ -276,6 +277,16 @@ target = "x86_64-sex-app.json"
 manifest = "apps/web/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/web"
 dest_artifact = "iso_root/programs/web"
+
+# Video and sound (sex-media). Without a built FFmpeg (scripts/build_ffmpeg.sh) it
+# builds but refuses every file.
+[[stage]]
+id = "build_play"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/play/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/play"
+dest_artifact = "iso_root/programs/play"
 
 # The same program, starting on its game.
 [[stage]]

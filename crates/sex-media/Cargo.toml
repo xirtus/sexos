@@ -1,0 +1,12 @@
+[package]
+name = "sex-media"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+build = "build.rs"
+description = "Video and sound for SexOS programs: FFmpeg decoding, paced by the sound card's clock"
+
+[dependencies]
+sex-pdx = { path = "../sex-pdx" }
+sex-app = { path = "../sex-app" }
+sex-libc = { path = "../sex-libc" }

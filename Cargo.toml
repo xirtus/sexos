@@ -50,6 +50,7 @@ members = [
     "crates/sex-canvas",
     "crates/sex-image",
     "crates/sex-libc",
+    "crates/sex-media",
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
