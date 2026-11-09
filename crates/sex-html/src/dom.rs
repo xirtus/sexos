@@ -26,13 +26,23 @@ pub struct Dom {
     pub values: alloc::collections::BTreeMap<NodeId, String>,
     /// The focused text control and its caret, in characters.
     pub caret: Option<(NodeId, usize)>,
+    /// The element under the pointer, for `:hover`.
+    pub hover: Option<NodeId>,
 }
 
 impl Dom {
     pub const ROOT: NodeId = 0;
 
+    /// Whether `a` is `n` or one of its ancestors.
+    pub fn is_inclusive_ancestor(&self, a: NodeId, mut n: NodeId) -> bool {
+        loop {
+            if n == a { return true; }
+            match self.nodes.get(n).and_then(|x| x.parent) { Some(p) => n = p, None => return false }
+        }
+    }
+
     pub fn new() -> Self {
-        Self { nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None }
+        Self { nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None, hover: None }
     }
 
     pub fn add(&mut self, parent: NodeId, kind: Kind) -> NodeId {

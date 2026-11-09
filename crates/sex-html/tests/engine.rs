@@ -314,3 +314,23 @@ fn css_variables_inherit_and_substitute() {
     assert_eq!(by_id("a").margin[0], sex_html::style::Len::Px(3));
     assert_eq!(by_id("p").color, sex_html::style::Style::initial().color);
 }
+
+#[test]
+fn hover_focus_and_checked_match() {
+    let mut dom = parse::parse("<style>a:hover{color:#ff0000} li:hover b{color:#00ff00} input:checked{width:50px} input:focus{height:40px} form:focus-within{margin-top:9px}</style>\
+<body><a id=a href=x>l</a><ul><li id=li>q <b id=b>z</b></li></ul><form id=f><input id=c type=checkbox checked><input id=t></form></body>");
+    let id = |dom: &sex_html::dom::Dom, s: &str| dom.descendants(sex_html::dom::Dom::ROOT).into_iter().find(|&n| dom.attr(n, "id") == Some(s)).unwrap();
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    assert_ne!(styles[id(&dom, "a")].as_ref().unwrap().color, 0xFFFF_0000);
+    assert_eq!(styles[id(&dom, "c")].as_ref().unwrap().width, sex_html::style::Len::Px(50));
+    dom.hover = Some(id(&dom, "b"));
+    dom.caret = Some((id(&dom, "t"), 0));
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    assert_eq!(styles[id(&dom, "b")].as_ref().unwrap().color, 0xFF00_FF00);
+    assert_ne!(styles[id(&dom, "a")].as_ref().unwrap().color, 0xFFFF_0000);
+    assert_eq!(styles[id(&dom, "t")].as_ref().unwrap().height, sex_html::style::Len::Px(40));
+    assert_eq!(styles[id(&dom, "f")].as_ref().unwrap().margin[0], sex_html::style::Len::Px(9));
+    dom.hover = Some(id(&dom, "a"));
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    assert_eq!(styles[id(&dom, "a")].as_ref().unwrap().color, 0xFFFF_0000);
+}

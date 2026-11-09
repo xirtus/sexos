@@ -102,6 +102,8 @@ struct Browser {
     /// The link node a left press started on: a release follows a link only if it
     /// ends over that same link, as a click does.
     press_link: Option<usize>,
+    /// The page's style sheets use `:hover`: pointer moves restyle it.
+    hover_css: bool,
     /// The scroll offset the page script last heard (`window.scrollY`).
     script_scroll: i32,
 }
@@ -400,6 +402,8 @@ impl Browser {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
         let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
+        self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
+            || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
         self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
@@ -562,6 +566,10 @@ impl Browser {
             Kind::Leave => { self.press_link = None; None }
             _ => None,
         };
+        // :hover follows the pointer.
+        let hovered = if self.hover_css && y >= 0 && !matches!(p.kind, Kind::Leave) { self.doc.get().node_at(px, py) } else { None };
+        let hover_changed = self.hover_css && self.doc.get().dom.hover != hovered;
+        self.doc.get().dom.hover = hovered;
         let mut kept = false;
         if let Doc::Scripted(_) = self.doc {
             self.sync_scroll();
@@ -579,6 +587,7 @@ impl Browser {
             self.after_script(true);
             self.timers_changed();
         }
+        if hover_changed { self.relayout(); self.draw(); }
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
             Kind::Up { button: 0 } if !kept && y >= 0 => {
@@ -674,7 +683,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0 };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
