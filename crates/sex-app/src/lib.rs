@@ -30,6 +30,9 @@ pub enum Event {
     Close,
     /// The window's pixel area is now this many pixels wide and high: redraw to fit.
     Resize { width: usize, height: usize },
+    /// The mouse moved, clicked or scrolled over the window's pixel area (positions in
+    /// pixels from its top-left; see [`sex_pdx::app_pointer`]).
+    Pointer(sex_pdx::app_pointer::Pointer),
 }
 
 /// Retries only while the service queue is full; anything else ends the program.
@@ -114,6 +117,9 @@ impl Window {
                 self.size = (w as usize, h as usize);
                 return Some(Event::Resize { width: w as usize, height: h as usize });
             }
+        }
+        if m.type_id == 0x202 {
+            if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }

@@ -69,6 +69,7 @@ fn main() {
         sex_html::layout::layout(&doc.dom, &styles, w, fonts)
     };
     let mut page = lay(&doc, &fonts);
+    doc.set_boxes(&page.boxes);
     if !scripts.is_empty() {
         let mut limits = sex_js::Limits::default();
         if let Ok(ms) = std::env::var("SEX_WEB_BUDGET_MS") { limits.budget_ms = ms.parse().unwrap(); }
@@ -77,6 +78,7 @@ fn main() {
         script.dispatch("ready").unwrap();
         settle(&mut script, &mut canvases, &mut fonts, &base);
         page = lay(script.page(), &fonts);
+        script.page_mut().set_boxes(&page.boxes);
         for action in args.get(7).map(|a| a.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default() {
             if let Some(i) = action.strip_prefix("click") {
                 let node = page.links[i.parse::<usize>().unwrap()].node;
@@ -87,6 +89,7 @@ fn main() {
             }
             settle(&mut script, &mut canvases, &mut fonts, &base);
             page = lay(script.page(), &fonts);
+            script.page_mut().set_boxes(&page.boxes);
         }
         for (l, t) in script.page_mut().log.drain(..) { eprintln!("console {l}: {t}"); }
     }

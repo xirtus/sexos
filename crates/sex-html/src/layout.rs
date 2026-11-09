@@ -68,6 +68,9 @@ pub struct Page {
     pub links: Vec<Link>,
     /// `id` attributes and the y of their box, for `#fragment` links.
     pub anchors: Vec<(String, i32)>,
+    /// Each laid-out element's border box (x, y, width, height), by node; an element
+    /// split over lines (a link) has the box around all its parts.
+    pub boxes: Vec<Option<[i32; 4]>>,
 }
 
 impl Page {
@@ -79,7 +82,7 @@ impl Page {
 
 /// Lays out `dom` (already styled by `styles`) for a viewport `width` pixels wide.
 pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) -> Page {
-    let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new() };
+    let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new() };
     let html = dom.find("html");
     let body = dom.find("body");
     let mut height = 0;
@@ -92,7 +95,16 @@ pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) 
     // The root's background paints the whole canvas, not just its box.
     if let Some(Item::Rect { color, .. }) = l.items.iter_mut().find(|i| matches!(i, Item::Rect { .. })) { if *color == background { *color = 0; } }
     let title = dom.find("title").map(|t| collapse(&dom.text_content(t))).unwrap_or_default();
-    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors }
+    let mut boxes: Vec<Option<[i32; 4]>> = alloc::vec![None; dom.nodes.len()];
+    let mut put = |n: NodeId, r: [i32; 4]| if let Some(b) = boxes.get_mut(n) {
+        *b = Some(match *b {
+            None => r,
+            Some(o) => { let (x0, y0) = (o[0].min(r[0]), o[1].min(r[1])); [x0, y0, (o[0] + o[2]).max(r[0] + r[2]) - x0, (o[1] + o[3]).max(r[1] + r[3]) - y0] }
+        });
+    };
+    for (n, r) in l.boxes { put(n, r); }
+    for k in &l.links { put(k.node, [k.x, k.y, k.w, k.h]); }
+    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes }
 }
 
 /// Parses, styles and lays out a whole page.
@@ -122,6 +134,7 @@ struct Layout<'a> {
     anchors: Vec<(String, i32)>,
     intrinsic: Vec<Option<(i32, i32)>>,
     link_stack: Vec<usize>,
+    boxes: Vec<(NodeId, [i32; 4])>,
 }
 
 /// One unbreakable thing on a line.
@@ -129,7 +142,7 @@ enum Piece {
     Word { text: String, font: FontKey, color: u32, underline: bool, strike: bool, link: Option<NodeId>, bg: u32, width: i32, shift: i32 },
     Space { width: i32, breakable: bool, font: FontKey, color: u32, underline: bool, link: Option<NodeId>, bg: u32 },
     Break,
-    Atomic { items: Vec<Item>, links: Vec<Link>, width: i32, height: i32, link: Option<NodeId> },
+    Atomic { items: Vec<Item>, links: Vec<Link>, boxes: Vec<(NodeId, [i32; 4])>, width: i32, height: i32, link: Option<NodeId> },
     Gap(i32),
     /// An `id` (or `<a name>`) inside the line: where a `#fragment` link scrolls to.
     Anchor(String),
@@ -178,9 +191,10 @@ impl<'a> Layout<'a> {
             let pushed = self.push_link(n);
             let piece = self.atomic(n, s, tag);
             if pushed { self.link_stack.pop(); }
-            if let Some(Piece::Atomic { mut items, links, width, height, link }) = piece {
+            if let Some(Piece::Atomic { mut items, links, boxes, width, height, link }) = piece {
                 for it in &mut items { it.offset(x, y - mt); }
                 self.items.extend(items);
+                for (b, r) in boxes { self.boxes.push((b, [r[0] + x, r[1] + y - mt, r[2], r[3]])); }
                 for mut l in links { l.x += x; l.y += y - mt; self.links.push(l); }
                 if let Some(a) = link.or_else(|| self.link_stack.last().copied()) { self.add_link(a, x, y, width, height - mt - mb); }
                 return BlockResult { height: (height - mt - mb).max(0), margin_top: mt, margin_bottom: mb, first_baseline: None, width };
@@ -248,6 +262,7 @@ impl<'a> Layout<'a> {
             if let Some(base) = first_baseline { self.marker(n, s, cx, base); }
         }
         if s.hidden { self.items.truncate(bg_index); }
+        if !s.hidden { self.boxes.push((n, [bx, by, used, height])); }
         BlockResult { height, margin_top: mt, margin_bottom: mb, first_baseline, width: used + ml + mr }
     }
 
@@ -501,6 +516,7 @@ impl<'a> Layout<'a> {
         let (m_t, m_b) = (s.margin[TOP].or_zero(0), s.margin[BOTTOM].or_zero(0));
         let saved_items = core::mem::take(&mut self.items);
         let saved_links = core::mem::take(&mut self.links);
+        let saved_boxes = core::mem::take(&mut self.boxes);
         let (w, h) = match tag {
             "img" | "svg" | "canvas" | "video" | "iframe" | "object" | "embed" => {
                 let src = if tag == "canvas" { alloc::format!("canvas:{n}") } else { String::from(self.dom.attr(n, "src").unwrap_or("")) };
@@ -529,11 +545,15 @@ impl<'a> Layout<'a> {
         };
         let mut items = core::mem::replace(&mut self.items, saved_items);
         let links = core::mem::replace(&mut self.links, saved_links);
+        let mut boxes = core::mem::replace(&mut self.boxes, saved_boxes);
+        if !boxes.iter().any(|(b, _)| *b == n) { boxes.push((n, [0, 0, w, h])); }
+        for (_, r) in &mut boxes { r[0] += m_l; r[1] += m_t; }
+        if s.hidden { boxes.clear(); }
         for i in &mut items { i.offset(m_l, m_t); }
         let mut links = links;
         for l in &mut links { l.x += m_l; l.y += m_t; }
         if s.hidden { items.clear(); }
-        Some(Piece::Atomic { items, links, width: w + m_l + m_r, height: h + m_t + m_b, link })
+        Some(Piece::Atomic { items, links, boxes, width: w + m_l + m_r, height: h + m_t + m_b, link })
     }
 
     fn control(&mut self, n: NodeId, s: &Style, tag: &str) -> (i32, i32) {
@@ -681,11 +701,12 @@ impl<'a> Layout<'a> {
                     }
                     Piece::Gap(g) => { flush(self, &mut run); x += g; }
                     Piece::Anchor(id) => self.anchors.push((id, line_top)),
-                    Piece::Atomic { mut items, links, width: aw, height: ah, link } => {
+                    Piece::Atomic { mut items, links, boxes, width: aw, height: ah, link } => {
                         flush(self, &mut run);
                         let top = baseline - ah;
                         for it in &mut items { it.offset(x, top); }
                         self.items.extend(items);
+                        for (b, r) in boxes { self.boxes.push((b, [r[0] + x, r[1] + top, r[2], r[3]])); }
                         for mut l in links { l.x += x; l.y += top; self.links.push(l); }
                         if let Some(l) = link { self.add_link(l, x, top, aw, ah); }
                         x += aw;

@@ -189,3 +189,19 @@ fn block_images_inline_anchors_and_cell_alignment() {
     assert_eq!(short, t.iter().find(|x| x.2 == "b").unwrap().1);
     assert!(a < short && short < c);
 }
+
+#[test]
+fn every_laid_out_element_has_its_box() {
+    let dom = parse::parse("<body style='margin:0'><div id=d style='padding:4px'><canvas id=c width=100 height=50></canvas> <a href=x id=a>link</a></div><p id=h style='display:none'>x</p></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout(&dom, &styles, 400, &Fixed);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    let d = page.boxes[by_id("d")].unwrap();
+    assert_eq!((d[0], d[1], d[2]), (0, 0, 400));
+    let c = page.boxes[by_id("c")].unwrap();
+    assert_eq!((c[0], c[2], c[3]), (4, 100, 50));
+    assert!(c[1] >= 4 && c[1] + c[3] <= d[1] + d[3]);
+    let a = page.boxes[by_id("a")].unwrap();
+    assert!(a[0] > c[0] + c[2] && a[2] > 0);
+    assert_eq!(page.boxes[by_id("h")], None);
+}

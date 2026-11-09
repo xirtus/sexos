@@ -347,6 +347,7 @@ impl Browser {
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
         let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
         self.page = sex_html::layout::layout(&doc.dom, &styles, W, &self.fonts);
+        doc.set_boxes(&self.page.boxes);
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
         // Ask for the next tick soon: the change may have started timers.
@@ -479,8 +480,56 @@ impl Browser {
     fn follow(&mut self) {
         let Some(l) = self.focus.and_then(|f| self.page.links.get(f)) else { return };
         let (href, node) = (l.href.clone(), l.node);
+        self.follow_link(href, node, true);
+    }
+
+    /// Mouse input over the window: the address bar takes a click; the page gets DOM
+    /// mouse events, and a click it doesn't cancel follows the link under it.
+    #[inline(never)]
+    fn pointer(&mut self, p: sex_pdx::app_pointer::Pointer) {
+        use sex_pdx::app_pointer::Kind;
+        let (x, y) = (p.x as i32, p.y as i32 - BAR);
+        if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 }) {
+            self.editing = Some(String::new());
+            self.draw();
+            return;
+        }
+        let (px, py) = (x, y + self.scroll);
+        let link = self.page.links.iter().position(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h);
+        let mut kept = false;
+        if let Doc::Scripted(_) = self.doc {
+            let node = if y >= 0 { self.doc.get().node_at(px, py).map_or(String::new(), |n| alloc::format!("{n}")) } else { String::new() };
+            let (kind, button, steps) = match p.kind {
+                Kind::Move => ("move", 0, 0),
+                Kind::Down { button } => ("down", button, 0),
+                Kind::Up { button } => ("up", button, 0),
+                Kind::Wheel { steps } => ("wheel", 0, steps),
+                Kind::Leave => ("leave", 0, 0),
+            };
+            let script = self.doc.script().unwrap();
+            kept = script.dispatch(&alloc::format!("mouse\t{kind}\t{node}\t{x}\t{y}\t{button}\t{}\t{steps}", p.buttons)).map_or(false, |r| r == 1);
+            if self.doc.get().navigate.is_some() { self.after_script(true); return; }
+            self.after_script(true);
+            self.timers_changed();
+        }
+        match p.kind {
+            Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
+            Kind::Up { button: 0 } if !kept && y >= 0 => {
+                if let Some(i) = link {
+                    self.focus = Some(i);
+                    let l = &self.page.links[i];
+                    let (href, node) = (l.href.clone(), l.node);
+                    // The page already had its click.
+                    self.follow_link(href, node, false);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn follow_link(&mut self, href: String, node: usize, click: bool) {
         if let Some(script) = self.doc.script() {
-            let mut kept = script.dispatch(&alloc::format!("click\t{}", node)).map_or(false, |r| r == 1);
+            let mut kept = click && script.dispatch(&alloc::format!("click\t{}", node)).map_or(false, |r| r == 1);
             if let (false, Some(code)) = (kept, href.strip_prefix("javascript:")) {
                 let _ = script.eval(&sex_html::parse::decode(code), "javascript:");
                 kept = true;
@@ -554,8 +603,9 @@ pub extern "C" fn _start() -> ! {
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
+    let mut queued: Option<Event> = None;
     loop {
-        let event = match b.timer {
+        let event = if let Some(e) = queued.take() { e } else { match b.timer {
             Some(due) => {
                 let now = sex_pdx::get_ticks();
                 match if due > now { b.window.next_within(due - now) } else { b.window.poll() } {
@@ -564,11 +614,22 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             None => b.window.next(),
-        };
+        } };
         match event {
             Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
             Event::Key(key) => b.key(key),
             Event::Resize { .. } => {}
+            Event::Pointer(mut p) => {
+                // Only the newest of a run of moves matters: a slow page must not lag
+                // behind the mouse.
+                while matches!(p.kind, sex_pdx::app_pointer::Kind::Move) {
+                    match b.window.poll() {
+                        Some(Event::Pointer(q)) if matches!(q.kind, sex_pdx::app_pointer::Kind::Move) => p = q,
+                        other => { queued = other; break; }
+                    }
+                }
+                b.pointer(p);
+            }
         }
     }
 }
