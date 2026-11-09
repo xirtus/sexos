@@ -7,7 +7,8 @@
 //! signals or threads here: a C library gets its input and output from the Rust
 //! program that links it, through callbacks (FFmpeg's `AVIOContext`), never by
 //! reaching the system itself. So C code inside a program holds exactly the
-//! authority of that program's BOOT row, like the program's Rust code.
+//! authority of that program's BOOT row, like the program's Rust code. Threads
+//! (`pthread`) are the program's own workers, so they add cores, not authority.
 //!
 //! Headers are musl's (MIT), installed by `scripts/build_ffmpeg.sh`; `long double`
 //! is `double` there, because the soft-float target has no x87.
@@ -18,6 +19,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(c_variadic)]
 #![allow(clippy::missing_safety_doc)]
+#![allow(non_camel_case_types)]
 
 extern crate alloc;
 
@@ -28,6 +30,9 @@ pub mod stdlib;
 pub mod string;
 pub mod math;
 pub mod time;
+pub mod pthread;
+pub mod cxx;
+pub mod locale;
 
 pub use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 
@@ -92,6 +97,7 @@ pub unsafe extern "C" fn abort() -> ! {
 
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
+    cxx::run_at_exit();
     match unsafe { EXIT } {
         Some(exit) => exit(code),
         None => panic!("exit"),

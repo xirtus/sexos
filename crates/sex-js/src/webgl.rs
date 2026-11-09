@@ -58,6 +58,14 @@ impl GlCanvas {
                 "po" => c.polygon_offset(fl(a, 0), fl(a, 1)),
                 "ps" => c.pixel_store(n(a, 0), n(a, 1)),
                 "cl" => c.clear(n(a, 0)),
+                "fb" => c.bind_framebuffer(n(a, 0)),
+                "ft" => c.framebuffer_texture(n(a, 0), n(a, 1), n(a, 2)),
+                "fr" => c.framebuffer_renderbuffer(n(a, 0), n(a, 1)),
+                "rb" => c.bind_renderbuffer(n(a, 0)),
+                "rs" => c.renderbuffer_storage(n(a, 0), n(a, 1)),
+                "dfb" => c.delete_framebuffer(n(a, 0)),
+                "drb" => c.delete_renderbuffer(n(a, 0)),
+                "blt" => c.blit_framebuffer(n(a, 0), n(a, 1), [n(a, 2), n(a, 3), n(a, 4), n(a, 5)], [n(a, 6), n(a, 7), n(a, 8), n(a, 9)]),
                 "rz" => c.resize(n(a, 0), n(a, 1)),
                 "bb" => c.bind_buffer(n(a, 0), n(a, 1)),
                 "bd" => { let d = blob(data, a, 1).unwrap_or(&[]); c.buffer_data(n(a, 0), d) }
@@ -74,6 +82,7 @@ impl GlCanvas {
                 "bt" => c.bind_texture(n(a, 0), n(a, 1)),
                 "dt" => c.delete_texture(n(a, 0)),
                 "tp" => c.tex_parameter(n(a, 0), n(a, 1), n(a, 2)),
+                "gm" => c.generate_mipmap(n(a, 0)),
                 "ti" => {
                     let d = blob(data, a, 6);
                     c.tex_image(n(a, 0), n(a, 1), n(a, 2), n(a, 3), n(a, 4), n(a, 5), d);

@@ -29,9 +29,10 @@ for p in(root/'crates/sex-net-config').rglob('*'):
 meta=json.loads((out/'metadata.json').read_text());packages={p['id']:p for p in meta['packages']}
 stack=[n for n in meta['resolve']['nodes']if packages[n['id']]['name']=='smoltcp'];assert len(stack)==1
 assert packages[stack[0]['id']]['version']=='0.14.0'
-assert set(stack[0]['features'])=={'medium-ethernet','proto-dhcpv4','proto-ipv4','socket','socket-dhcpv4','socket-tcp','socket-udp'},stack[0]['features']
+# alloc: the open-internet flows are made as programs ask for them (sexnet's heap grows).
+assert set(stack[0]['features'])=={'alloc','medium-ethernet','proto-dhcpv4','proto-ipv4','socket','socket-dhcpv4','socket-tcp','socket-udp'},stack[0]['features']
 assert not any(p['name']=='libc'for p in meta['packages'])
-print('[sexnet.transport.dependencies] exact_production_lock_versions_checksums=1 smoltcp=0.14.0 std=0 alloc=0 host_adapters=0')
+print('[sexnet.transport.dependencies] exact_production_lock_versions_checksums=1 smoltcp=0.14.0 std=0 alloc=1 host_adapters=0')
 PY
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 CARGO_TARGET_DIR="$TEST_DIR/target" cargo test --manifest-path "$PACKAGE_DIR/Cargo.toml" --target "$HOST_TARGET" --locked --offline --lib

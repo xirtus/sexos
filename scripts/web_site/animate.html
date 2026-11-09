@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Animate</title>
+<style>
+body { margin: 0; background: #ffffff }
+#box { width: 120px; height: 80px; background: #ff0000; animation: paint 4s linear 500ms forwards }
+#hov { width: 120px; height: 60px; background: #00ff00; transition: background 2s linear }
+#hov:hover { background: #ff00ff }
+@keyframes paint { to { background: #0000ff; margin-left: 200px } }
+</style>
+<div id=box></div>
+<div id=hov></div>

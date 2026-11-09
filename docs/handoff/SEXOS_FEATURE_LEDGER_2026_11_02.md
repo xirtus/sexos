@@ -3173,6 +3173,12 @@ row no longer waits for the row before it to end.
   - While 3 or more periods are in flight, an open stream with less than a whole period waits for one, instead of playing in crumbs between silences.
   - `program_media_gate` now hears each tone as one unbroken stretch (440, 660, 880 Hz: 2.0 s each).
 - `sound_gate.segments(split=True)` cuts a loud stretch where the pitch changes, for sounds played back to back.
+- **Programs the loader would refuse are rebuilt.** The loader refuses code holding WRPKRU, XRSTOR or XRSTORS bytes at any offset (J1). Compiled code can make them by chance. In FFmpeg's sha.c, clang's `rol $0xf,%ebx; add %ebp,%edi` is c1 c3 0f 01 ef, and a VP9 function had a RIP-relative displacement holding 0f ae a9. This left Play refused.
+  - `scripts/key_bytes.py` finds such bytes in ELF programs and object files.
+  - `build_ffmpeg.sh` compiles an offending object again with other flags; a frame pointer fixed sha.c.
+  - The build trace (`cargo_manifest` stages for programs) and `build_play.sh` link a refused program again with `SEX_LAYOUT_SEED`. Play and Web turn it into lld `--shuffle-sections` for `.rodata`, which moves every displacement.
+  - The media gates now play the Play that the image ships (`iso_root/programs/play`).
+- When less than a quarter second of sound is queued, a player step may decode for 40 ms instead of 12, so a busy page doesn't make gaps.
 - **Gate.** `scripts/program_web_media_gate.py` serves `scripts/web_site/media.html`.
   - It plays a 2 s H.264/AAC clip with `autoplay controls`. The script pauses it at 0.6 s for 0.8 s and plays it again.
   - On `ended`, the script plays `new Audio('tone.mp3')`.
@@ -3186,3 +3192,48 @@ First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
 - **Browser**: pages, style sheets, pictures and script loads go through it with the window's cookie jar; `fetch(url, {method, headers, body})`, real `Response.headers`/`url`, `Request`, `Headers` iteration, `XMLHttpRequest` (text, json, arraybuffer, blob; Range works), and `document.cookie` (HttpOnly cookies stay hidden from scripts). New host ops FETCH_HEAD 68 and COOKIE 69; FETCH 66 takes method, headers and body.
 - **Gate** `scripts/program_web_http11_gate.py`: a local server sends a chunked + gzip page with Set-Cookie, the page POSTs JSON with its own headers (the server sees all three cookies), then reads 16 bytes by XHR Range (206). Passes in QEMU, along with the web net, fetch and JS gates.
 - Seen while testing: a 1.3 MB body takes about 11.7 s in QEMU (about 110 KB/s). That is roughly 360p video speed, so bigger windows and several flows (stage Y3) come next.
+
+## Net: flows made on demand; the browser fetches side by side (2026-11-09)
+
+YouTube stage Y3b (plan: `docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md`).
+- **sexnet** used to have one open-internet TCP flow for the whole machine. It now makes flows as programs ask for them, each with its own 64 KiB receive window, 16 KiB send queue and TLS session (about 100 KiB), and keeps them for the next caller. The ceiling is 4096 flows, against one runaway program; running out of memory answers `BUSY`, never a fall (allocations use `try_reserve`).
+- **Kernel**: BOOT gives sexnet a growing memory arena (`service_memory::reserve(net)`), as Files already had, so its heap follows the flows.
+- **smoltcp** gets its `alloc` feature; `Engine::new` no longer takes a fixed socket table, and `open_add_flow` makes a flow.
+- A caller numbers its flows itself (0 to 254, in bits 24..31 of the request word, so callers that never name one use flow 0 as before). `CONNECT` takes a free flow or makes one; every other call reaches only the caller's own flow. A program that ends lets go of all of its flows.
+- **DNS** is still one question at a time; another caller's question gets `BUSY` until the first is answered (at most 5 s), and the client retries.
+- **`sex_app::net::Exchange`**: one request on a flow of its own, read a step at a time (`start`, `poll`, `finish`, `cancel`). `request` and the old `fetch` are built on it.
+- **Browser**: script `fetch`/XHR requests run side by side, up to 16 at once, each reported as it lands. Requests made by a script on hearing of one join in.
+- **ABI**: `sex_pdx::web` gains `request_on`, `flow_of` and `CLIENT_FLOWS`; the ABI hash is recomputed.
+- **Gate** `program_web_http11_gate`: twelve requests that each take 1.5 s finish together in about 1.7 s; the server saw all twelve at once and sexnet made twelve flows.
+
+## Net: connection setup a step at a time (2026-11-09)
+
+- `sex_app::net::Exchange::start` now returns at once with a flow number; each `poll` makes one call to the network service: look up the name, connect, start TLS, wait for the handshake, send, then read. A site whose name, connection or handshake is slow no longer holds up the other requests a program has going (Codex review on #56).
+- A program asks the resolver one question at a time (the service answers one per caller); names it looked up are remembered for five minutes (up to 256).
+- The old blocking `open`/`send_all` path is gone; `request` and the HTTP/1.0 `fetch` run on `Exchange`.
+- Gate `program_web_http11_gate`: a request beside one to an unreachable address (10.0.2.123) lands in about 1.2 s; the unreachable one gives up after 30 s.
+
+## Net: keep-alive, connections reused across requests (2026-11-09)
+
+YouTube stage Y3d.
+- **sex-fetch**: requests no longer send `Connection: close`. `Head::keeps_connection(http10)` reads the reply's `Connection` header (HTTP/1.1 keeps unless `close`; HTTP/1.0 only on `keep-alive`).
+- **sex_app::net**: when a reply's framing (chunked, `Content-Length` or no body) ends exactly at the received bytes and the server keeps the connection, the flow goes into a per-program idle pool (host, port, TLS; up to 32, dropped after 30 s). The next request to the same site takes the newest kept flow and sends at once, with no connect or TLS handshake. A kept flow that turns out closed before the first reply byte is retried on a new flow. `[net.receive.stats]` shows `reused=` and `kept=`.
+- **sex-tls (open web)**: the session is full duplex (`split()` into reader and writer), so one TLS session carries any number of requests. A host test against an OpenSSL server with a test root sends 3 requests on 1 connection (`[sexnet.tls.open.host]`, in `sexnet_jobs_host_gate.sh`).
+- **Gate** `program_web_http11_gate`: the page's own server sees 17 requests over 13 connections, and the log shows a reused flow.
+
+## Programs make their own machine code: the base for a JIT engine (2026-11-09)
+
+- **Why.** Andreas approved porting a JIT engine (V8 recommended) and aiming the browser at Chromium-class speed. Report and plan: `docs/handoff/JIT_AND_BROWSER_ENGINE_PLAN_2026_11_09.md` (stages J1-J8).
+- **ABI change: `SYS_PROGRAM_CODE` (82).** A program run seals pages of its own heap as code (executable, read-only) or opens them back to data (writable, not executable). Self-only, current run only, at most 256 pages a call. Every core's TLB entry is shot down and the run's page manifest is updated, so retire still checks every leaf. `sex_pdx::program_code`, `kernel/src/app_resources.rs::code`.
+- **Code that cannot unlock keys.** Sealed bytes, and the executable segments of every program file at load, may not hold WRPKRU, XRSTOR or XRSTORS at any byte offset. Before this, any native program could rewrite its PKRU and reach every other domain's memory. None of the 20 programs in the image contain the patterns.
+- **SDK.** `sex_app::code::CodeBuf`: page-aligned heap pages with `load`, `seal`, `open`, `entry`.
+- **Program.** `run jit` compiles an expression to x86-64 and runs it against an interpreter (3 to 9 times faster under QEMU). It shows a constant hiding WRPKRU being refused and re-encoded, and code patched in place. W writes to sealed code and E runs open data; each ends only that run.
+- **Gates.** `scripts/program_jit_gate.py` at 1 and 4 cores (also refuses a copy of the program with WRPKRU patched into its code); `scripts/program_code_host_gate.sh` for the byte check.
+
+## C++ programs (JIT stage J5c, 2026-11-09)
+
+- `scripts/build_libcxx.sh` builds libc++ and libc++abi (LLVM 18, no exceptions) for `x86_64-sex-app.json`; CI caches it like FFmpeg.
+- `crates/sex-libc` gains what libc++ calls, all in Rust: one "C" UTF-8 locale (`newlocale`, `uselocale`, `*_l` ctype, `strtod_l`/`strtold_l`, `strftime_l`), UTF-8 multibyte and wide-character conversion, `wcslen`, `wmemchr`, `vasprintf`, `__assert_fail`, `__cxa_atexit`/`atexit` (run by `exit`), `.init_array` constructors (`cxx::run_constructors`), and `syscall(SYS_futex)` mapped to program-thread wait/wake.
+- `run cpp` checks static constructors, vector/sort, unordered_map<string>, map, virtual calls, std::function, ostringstream, snprintf, std::thread + std::mutex and thread_local: 10/10 at 1 and 4 cores (`scripts/program_cpp_gate.py`).
+- Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
+

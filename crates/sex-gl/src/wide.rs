@@ -23,6 +23,9 @@ pub struct WideMachine {
     one: Machine,
     ret: u32,
     scratch: Vec<u32>,
+    /// The invocations are 2x2 quads of pixels (lanes 4q.. are (x, y), (x+1, y),
+    /// (x, y+1), (x+1, y+1)), so derivatives and mip levels come from neighbours.
+    pub quads: bool,
 }
 
 impl WideMachine {
@@ -79,6 +82,7 @@ impl StageCode {
             one: self.machine(),
             ret: self.entry.ret_off,
             scratch: Vec::new(),
+            quads: false,
         }
     }
 
@@ -133,7 +137,7 @@ impl StageCode {
             let mut next = pc + 1;
             let r = &mut m.regs;
             match &steps[pc as usize] {
-                Step::Op(op) => if full { self.op_w::<true>(r, &m.mem, op, u, tex, mask) } else { self.op_w::<false>(r, &m.mem, op, u, tex, mask) },
+                Step::Op(op) => if full { self.op_w::<true>(r, &m.mem, op, u, tex, mask, m.quads) } else { self.op_w::<false>(r, &m.mem, op, u, tex, mask, m.quads) },
                 &Step::Eval { code, h } => {
                     let (c, f) = self.code(code as usize);
                     let one = &mut m.one;
@@ -155,6 +159,14 @@ impl StageCode {
                         }
                     }
                 }
+                &Step::StoreAt { off, val, n } => if full && mask == ALL {
+                    m.mem[off as usize..(off + n) as usize].copy_from_slice(&r[val as usize..(val + n) as usize]);
+                } else {
+                    for l in 0..W {
+                        if (mask >> l) & 1 == 0 { continue; }
+                        for k in 0..n { m.mem[(off + k) as usize][l] = r[(val + k) as usize][l]; }
+                    }
+                },
                 &Step::ToMem { off, src, n } => for l in 0..W {
                     if (mask >> l) & 1 == 0 { continue; }
                     for k in 0..n { m.mem[(off + k) as usize][l] = r[(src + k) as usize][l]; }
@@ -220,19 +232,38 @@ impl StageCode {
 
     /// A prepared operation for the masked invocations (`FULL`: all of them).
     #[inline(always)]
-    fn op_w<const FULL: bool>(&self, r: &mut [Row], mem: &[Row], op: &Op, u: &[u32], tex: &dyn Textures, mask: u32) {
+    #[allow(clippy::too_many_arguments)]
+    fn op_w<const FULL: bool>(&self, r: &mut [Row], mem: &[Row], op: &Op, u: &[u32], tex: &dyn Textures, mask: u32, quads: bool) {
         let lm = if FULL { [0; W] } else { lane_mask(mask) };
         let m = &lm;
         match op {
-            &Op::Sample { dst, n, .. } => {
+            &Op::Sample { dst, n, coord, cn, .. } => {
                 let mut out = [[0u32; W]; 4];
                 for l in 0..W {
                     if (mask >> l) & 1 == 0 { continue; }
-                    let px = sample_op(op, |x| r[x as usize][l], tex);
+                    // Coarse derivatives: across the top row and down the left column.
+                    let grad = (quads && cn >= 2).then(|| {
+                        let q = l & !3;
+                        let c = |lane: usize, j: u32| f32::from_bits(r[(coord + j) as usize][lane]);
+                        [c(q + 1, 0) - c(q, 0), c(q + 1, 1) - c(q, 1), c(q + 2, 0) - c(q, 0), c(q + 2, 1) - c(q, 1)]
+                    });
+                    let px = sample_op(op, |x| r[x as usize][l], tex, grad);
                     for j in 0..4 { out[j][l] = px[j].to_bits(); }
                 }
                 for j in 0..n.min(4) { wr::<FULL>(r, dst + j, out[j as usize], m); }
             }
+            &Op::Deriv { dst, src, n, axis } => for j in 0..n {
+                let v = fv(r, src + j);
+                let mut o = [0u32; W];
+                if quads {
+                    for l in 0..W {
+                        let q = l & !3;
+                        let (dx, dy) = (v[q + 1] - v[q], v[q + 2] - v[q]);
+                        o[l] = match axis { 0 => dx, 1 => dy, _ => libm::fabsf(dx) + libm::fabsf(dy) }.to_bits();
+                    }
+                }
+                wr::<FULL>(r, dst + j, o, m);
+            },
             Op::Generic => {}
             &Op::Copy { dst, src, n } => {
                 if FULL {
@@ -347,6 +378,47 @@ impl StageCode {
                 for l in 0..W { o[l] = (x[l] * (1.0 - w[l]) + y[l] * w[l]).to_bits(); }
                 wr::<FULL>(r, dst + j, o, m);
             },
+            &Op::LoadAt { dst, space, off, n } => {
+                if space == SPACE_UNIFORM {
+                    let ok = (off + n) as usize <= u.len();
+                    for k in 0..n { wr::<FULL>(r, dst + k, [if ok { u[(off + k) as usize] } else { 0 }; W], m); }
+                } else {
+                    for k in 0..n { let v = mem[(off + k) as usize]; wr::<FULL>(r, dst + k, v, m); }
+                }
+            }
+            &Op::Bin { op, k, dst, a, b, n, sa, sb } => for j in 0..n {
+                let (x, y) = (r[(if sa { a } else { a + j }) as usize], r[(if sb { b } else { b + j }) as usize]);
+                let mut o = [0u32; W];
+                for l in 0..W { o[l] = bin_lane(k, op, x[l], y[l]); }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::Un { op, k, dst, a, n } => for j in 0..n {
+                let x = r[(a + j) as usize];
+                let mut o = [0u32; W];
+                for l in 0..W { o[l] = un_lane(op, k, x[l]); }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::Conv { from, to, convert, dst, a, n } => for j in 0..n {
+                let x = r[(a + j) as usize];
+                let mut o = [0u32; W];
+                for l in 0..W { o[l] = as_lane(from, to, convert, x[l]); }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::FMath { fun, dst, a, b, c, n, sa, sb, sc } => for j in 0..n {
+                let (x, y, z) = (fv(r, if sa { a } else { a + j }), fv(r, if sb { b } else { b + j }), fv(r, if sc { c } else { c + j }));
+                let mut o = [0u32; W];
+                // Only the masked lanes: a dead lane's value may be anything.
+                for l in 0..W { if (mask >> l) & 1 != 0 { o[l] = fmath_lane(fun, x[l], y[l], z[l]).to_bits(); } }
+                wr::<FULL>(r, dst + j, o, m);
+            },
+            &Op::Select { dst, cond, a, r: rj, n, sc } => {
+                let mut tmp = [[0u32; W]; 16];
+                for j in 0..n.min(16) {
+                    let (cv, av, rv) = (r[(if sc { cond } else { cond + j }) as usize], r[(a + j) as usize], r[(rj + j) as usize]);
+                    for l in 0..W { tmp[j as usize][l] = if cv[l] != 0 { av[l] } else { rv[l] }; }
+                }
+                for j in 0..n.min(16) { wr::<FULL>(r, dst + j, tmp[j as usize], m); }
+            }
         }
     }
 }

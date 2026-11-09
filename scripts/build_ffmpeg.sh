@@ -84,5 +84,23 @@ for f in $ON; do
 done
 
 make -j"$(nproc)" >make.log
+
+# The program loader refuses code holding the bytes of WRPKRU, XRSTOR or XRSTORS at
+# any offset (scripts/key_bytes.py). A compiler makes them by chance, as clang does in
+# sha.c (`rol $0xf,%ebx; add %ebp,%edi` is c1 c3 0f 01 ef). Compile such a file
+# again with other flags until its code is clean; most often a frame pointer is
+# enough, since the register choice changes.
+for o in $(find . -name '*.o' | sort); do
+  python3 "$ROOT/scripts/key_bytes.py" "$o" >/dev/null && continue
+  cmd=$(make -B -n V=1 "${o#./}" 2>/dev/null | grep -m1 -E '^(clang|nasm) ')
+  [[ $cmd == clang* ]] || { echo "[ffmpeg] $o holds a refused instruction and is not C" >&2; python3 "$ROOT/scripts/key_bytes.py" "$o" >&2; exit 1; }
+  fixed=0
+  for extra in "-fno-omit-frame-pointer" "-O1 -fno-omit-frame-pointer" "-Os" "-O1"; do
+    eval "$cmd $extra"
+    if python3 "$ROOT/scripts/key_bytes.py" "$o" >/dev/null; then echo "[ffmpeg] $o: clean with $extra"; fixed=1; break; fi
+  done
+  [[ $fixed == 1 ]] || { echo "[ffmpeg] $o: no flags give clean code" >&2; exit 1; }
+done
+make -j"$(nproc)" >>make.log
 make install >install.log
 echo "[ffmpeg] $(ls "$OUT"/lib/*.a | xargs -n1 basename | tr '\n' ' ')-> $OUT"

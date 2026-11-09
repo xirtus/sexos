@@ -260,7 +260,7 @@ impl Surface {
             let (px, py) = self.map(x, y);
             let (w, h) = (self.width as i32, self.height as i32);
             self.touch_all();
-            let mut target = Target { pixels: &mut self.pixels, width: w, height: h, scroll: 0, top: 0, premul: true };
+            let mut target = Target { pixels: &mut self.pixels, width: w, height: h, scroll: 0, top: 0, premul: true, clip: None };
             text_run(&mut target, fonts, libm::roundf(px) as i32 + dx, libm::roundf(py) as i32 + dy, font, color, text);
             return;
         }
@@ -268,7 +268,7 @@ impl Surface {
         let pad = 2 + font.size / 4;
         let (tw, th) = ((width + 2 * pad).clamp(1, MAX_SIDE as i32) as u32, (asc + desc + 2 * pad).clamp(1, MAX_SIDE as i32) as u32);
         let mut scratch = alloc::vec![0u32; (tw * th) as usize];
-        let mut target = Target { pixels: &mut scratch, width: tw as i32, height: th as i32, scroll: 0, top: 0, premul: true };
+        let mut target = Target { pixels: &mut scratch, width: tw as i32, height: th as i32, scroll: 0, top: 0, premul: true, clip: None };
         text_run(&mut target, fonts, pad, pad + asc, font, color, text);
         // Scratch pixel (u, v) sits at user point (x, y) + ((u - pad + dx) / s, (v - pad - asc + dy) / s).
         let map = t.pre_translate(x, y).pre_scale(1.0 / s, 1.0 / s).pre_translate((dx - pad) as f32, (dy - pad - asc) as f32);
@@ -576,8 +576,9 @@ pub fn present_gl_nodes(fonts: &mut Fonts, gl: &mut sex_js::webgl::GlCanvases) -
         }
         if canvas.ctx.frame == canvas.shown { continue; }
         canvas.shown = canvas.ctx.frame;
-        let (width, height) = (canvas.ctx.width as usize, canvas.ctx.height as usize);
-        let image = Image { width, height, pixels: canvas.ctx.present(canvas.alpha) };
+        // The canvas's size, not that of a framebuffer the script left bound.
+        let (width, height) = canvas.ctx.canvas_size();
+        let image = Image { width: width as usize, height: height as usize, pixels: canvas.ctx.present(canvas.alpha) };
         let name = alloc::format!("canvas:{node}");
         match fonts.images.iter_mut().find(|(s, _)| *s == name) {
             Some(slot) => slot.1 = alloc::rc::Rc::new(image),

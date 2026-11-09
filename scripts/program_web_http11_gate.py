@@ -5,15 +5,26 @@ document.cookie, POSTs JSON with its own headers to an API (the cookies go along
 HttpOnly one too, which the script itself can't see), then loads media bytes with an
 XMLHttpRequest Range request (206 Partial Content). Requests to another origin carry
 an Origin header and no cookies, and their replies reach the page only when that site
-allows it (Access-Control-Allow-Origin)."""
+allows it (Access-Control-Allow-Origin). Twelve slow requests made together are
+served side by side, on flows the network service makes as they are asked for, and
+finished connections stay open so later requests skip a new connection (keep-alive)."""
 import argparse,gzip,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site/tube'
 MEDIA=bytes(i%251 for i in range(64*1024))
 SEEN={}
+LOCK=threading.Lock();LIVE=[0,0] # requests in /tube/slow now, and the most at once
+COUNT={'connections':0,'requests':0} # on the page's own server: kept connections carry many requests
 class Handler(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
+ def setup(self):
+  super().setup()
+  with LOCK:COUNT['connections']+=1
+ def parse_request(self):
+  ok=super().parse_request()
+  with LOCK:COUNT['requests']+=1
+  return ok
  def chunked(self,body,ctype,extra=()):
   self.send_response(200);self.send_header('Content-Type',ctype);self.send_header('Transfer-Encoding','chunked');self.send_header('Content-Encoding','gzip')
   for k,v in extra:self.send_header(k,v)
@@ -29,6 +40,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
   if self.path=='/tube/':
    SEEN['accept-encoding']=self.headers.get('Accept-Encoding','');SEEN['ua']=self.headers.get('User-Agent','')
    return self.chunked((SITE/'index.html').read_bytes().replace(b'{{OTHER}}',f'http://10.0.2.2:{OTHER_PORT}'.encode()),'text/html; charset=utf-8',[('Set-Cookie','sid=s3cret; Path=/; HttpOnly'),('Set-Cookie','visitor=v1; Path=/; Max-Age=3600')])
+  m=re.fullmatch(r'/tube/slow/(\d+)',self.path)
+  if m:
+   with LOCK:LIVE[0]+=1;LIVE[1]=max(LIVE)
+   time.sleep(1.5)
+   with LOCK:LIVE[0]-=1
+   return self.plain(200,b'slow'+m[1].encode(),'text/plain')
+  if self.path=='/tube/drop':
+   # Keep-alive by the headers, then close anyway, as servers do with idle connections.
+   self.plain(200,b'dropped','text/plain');self.close_connection=True;return
+  if self.path=='/tube/after':return self.plain(200,b'after','text/plain')
   if self.path=='/tube/media.bin':
    m=re.fullmatch(r'bytes=(\d+)-(\d+)',self.headers.get('Range',''))
    if not m:return self.plain(200,MEDIA,'application/octet-stream')
@@ -87,8 +108,21 @@ def main():
   assert cross[1]==f'origin={base} cookie=none',cross[1]
   closed=g['wait'](r'\[web.console\] level=0 tube cross closed ([^\n]*)\n',s,300)
   assert closed[1]=='blocked',closed[1]
+  par=g['wait'](r'\[web.console\] level=0 tube parallel ([^\n]*)\n',s,300)
+  assert par[1].startswith(','.join(f'slow{n}' for n in range(1,13))+' ms='),par[1]
+  # Twelve 1.5 s replies one after another take 18 s; side by side they overlap. The
+  # network service makes flows as they are asked for, so all twelve travel at once.
+  assert LIVE[1]==12,('requests at once',LIVE[1])
+  beside=g['wait'](r'\[web.console\] level=0 tube beside stuck ([^\n]*)\n',s,300)
+  assert beside[1].startswith('slow0 ms=') and int(beside[1].split('ms=')[1])<5000,beside[1]
+  after=g['wait'](r'\[web.console\] level=0 tube after drop ([^\n]*)\n',s,240)
+  assert after[1]=='after',after[1]
+  assert re.search(r'\[net.kept.retry\] flow=\d+ sent=1',t()),'the closed kept connection was not retried'
+  made=re.findall(r'\[net.open.flows\] made=(\d+)',t());assert made and int(made[-1])>=12,made
   assert 'gzip' in SEEN.get('accept-encoding',''),SEEN
+  assert re.search(r'\[net.receive.stats\] [^\n]*reused=1',t()),'no request went out on a kept connection'
+  assert COUNT['requests']>COUNT['connections'],('connections were not reused',COUNT)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1]})
+  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1],'beside_stuck':beside[1],'reuse':COUNT,'after_drop':after[1]})
  finally:g['stop']()
 if __name__=='__main__':main()

@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "f9f6379ea637bdb50d1c7965cc8d36fd34aee805b787c579187efc08ed55999d"
+abi_version_hash = "9302f2f5bc47c651d90df0902cb00eecab6816f3c06a538cf965c5129513692f"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -54,8 +54,11 @@ crates = [
   "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml",
   "apps/fputest/Cargo.toml",
+  "apps/jit/Cargo.toml",
+  "apps/threads/Cargo.toml",
   "apps/web/Cargo.toml",
-  "apps/play/Cargo.toml"
+  "apps/play/Cargo.toml",
+  "apps/cpp/Cargo.toml"
 ]
 
 [[stage]]
@@ -271,6 +274,22 @@ source_artifact = "target/x86_64-sex-app/release/fputest"
 dest_artifact = "iso_root/programs/fputest"
 
 [[stage]]
+id = "build_jit"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/jit/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/jit"
+dest_artifact = "iso_root/programs/jit"
+
+[[stage]]
+id = "build_threads"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/threads/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/threads"
+dest_artifact = "iso_root/programs/threads"
+
+[[stage]]
 id = "build_web"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
@@ -280,6 +299,14 @@ dest_artifact = "iso_root/programs/web"
 
 # Video and sound (sex-media). Without a built FFmpeg (scripts/build_ffmpeg.sh) it
 # builds but refuses every file.
+[[stage]]
+id = "build_cpp"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/cpp/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/cpp"
+dest_artifact = "iso_root/programs/cpp"
+
 [[stage]]
 id = "build_play"
 action = "cargo_manifest"

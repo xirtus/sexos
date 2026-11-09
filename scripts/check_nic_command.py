@@ -103,7 +103,7 @@ def inspect(text, expected=1, preparation=False, ethernet=False, network_config=
                 if (holder,slot,vendor,product)!=(g[0],g[1],g[5],g[6])or identities[0].start()<seal:errors.append('identity differs from held BOOT lease')
                 if phases and identities[0].start()>phases[0].start():errors.append('device model selected after preparation began')
                 model={0x100e:'I82540',0x10d3:'I82574'}.get(product,'INVALID')
-                marker=rf'\[sexnet.ether.ready\] model={model} region=2 budget=262144 used=40960 descriptors=8 buffer=2048 polling=cooperative timing_verified=([01]) network=0 dns=0 tcp=0 http=0 tls=0'
+                marker=rf'\[sexnet.ether.ready\] model={model} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified=([01]) network=0 dns=0 tcp=0 http=0 tls=0'
                 readiness=list(re.finditer(marker,text))
                 if len(readiness)!=1:errors.append('missing exact model/budget/offline runtime readiness')
                 elif model=='I82574'and readiness[0].group(1)!='1':errors.append('82574 timing register was not verified')

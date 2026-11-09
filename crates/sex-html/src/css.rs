@@ -19,7 +19,9 @@ pub struct Declaration {
 pub enum AttrOp { Exists, Equals(String), Word(String), Prefix(String), Suffix(String), Contains(String), Dash(String) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Compound>) }
+pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Compound>),
+    /// Under the pointer (or an ancestor of what is).
+    Hover, Focus, FocusWithin, Checked, Disabled, Enabled }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Compound {
@@ -52,6 +54,8 @@ pub struct Rule {
 #[derive(Default, Debug)]
 pub struct Sheet {
     pub rules: Vec<Rule>,
+    /// `@keyframes`: each animation's frames, at offsets in thousandths.
+    pub keyframes: Vec<(String, Vec<(i32, Vec<Declaration>)>)>,
 }
 
 fn skip_comments_and_space(b: &[u8], mut i: usize) -> usize {
@@ -125,6 +129,10 @@ fn parse_rules(css: &str, vw: i32, sheet: &mut Sheet) {
             match name.as_str() {
                 "media" => if media_matches(&at[5..], vw) { parse_rules(inner, vw, sheet) },
                 "supports" | "layer" | "document" | "-moz-document" | "container" => parse_rules(inner, vw, sheet),
+                "keyframes" | "-webkit-keyframes" | "-moz-keyframes" => {
+                    let name = at[name.len()..].trim().trim_matches(|c| c == '"' || c == '\'');
+                    sheet.keyframes.push((String::from(name), parse_frames(inner)));
+                }
                 _ => {}
             }
         } else {
@@ -136,6 +144,32 @@ fn parse_rules(css: &str, vw: i32, sheet: &mut Sheet) {
         }
         i = close;
     }
+}
+
+/// The frames inside `@keyframes`: `from`, `to` and percentages, sorted by offset.
+fn parse_frames(css: &str) -> Vec<(i32, Vec<Declaration>)> {
+    let b = css.as_bytes();
+    let mut frames = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        i = skip_comments_and_space(b, i);
+        if i >= b.len() { break; }
+        let end = prelude_end(b, i);
+        if end >= b.len() || b[end] != b'{' { break; }
+        let close = block_end(b, end);
+        let decls = parse_declarations(&css[end + 1..close.saturating_sub(1).max(end + 1)]);
+        for sel in css[i..end].split(',') {
+            let at = match sel.trim().to_ascii_lowercase().as_str() {
+                "from" => Some(0),
+                "to" => Some(1000),
+                p => p.strip_suffix('%').and_then(parse_number).map(|v| (v / 10).clamp(0, 1000)),
+            };
+            if let Some(at) = at { frames.push((at, decls.clone())); }
+        }
+        i = close;
+    }
+    frames.sort_by_key(|f| f.0);
+    frames
 }
 
 /// A media query list against a screen `vw` pixels wide.
@@ -242,7 +276,7 @@ pub fn parse_selector_list(text: &str) -> Vec<Selector> {
     split_top(text, ',').into_iter().filter_map(|s| parse_selector(s.trim())).collect()
 }
 
-fn split_top(text: &str, sep: char) -> Vec<&str> {
+pub(crate) fn split_top(text: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut start = 0;
@@ -374,9 +408,15 @@ fn parse_compound(text: &str, mut i: usize) -> Option<(Compound, usize)> {
                         let (comp, _) = alts.next()?;
                         merge(&mut c, comp);
                     }
-                    "visited" | "hover" | "active" | "focus" | "focus-within" | "focus-visible" | "checked" | "disabled" | "target"
+                    "hover" => c.pseudo.push(Pseudo::Hover),
+                    "focus" | "focus-visible" => c.pseudo.push(Pseudo::Focus),
+                    "focus-within" => c.pseudo.push(Pseudo::FocusWithin),
+                    "checked" => c.pseudo.push(Pseudo::Checked),
+                    "disabled" => c.pseudo.push(Pseudo::Disabled),
+                    "enabled" => c.pseudo.push(Pseudo::Enabled),
+                    "visited" | "active" | "target"
                     | "before" | "after" | "first-line" | "first-letter" | "placeholder" | "selection" | "marker" => c.never = true,
-                    "enabled" | "lang" | "dir" => {}
+                    "lang" | "dir" => {}
                     _ => return None,
                 }
             }
@@ -500,6 +540,12 @@ pub fn matches_compound(dom: &Dom, node: NodeId, c: &Compound) -> bool {
                 if *a == 0 { index == *b } else { let d = index - b; d % a == 0 && d / a >= 0 }
             }
             Pseudo::Not(inner) => !inner.iter().any(|c| matches_compound(dom, node, c)),
+            Pseudo::Hover => dom.hover.is_some_and(|h| dom.is_inclusive_ancestor(node, h)),
+            Pseudo::Focus => dom.caret.is_some_and(|(f, _)| f == node),
+            Pseudo::FocusWithin => dom.caret.is_some_and(|(f, _)| dom.is_inclusive_ancestor(node, f)),
+            Pseudo::Checked => dom.attr(node, "checked").is_some() || (tag == "option" && dom.attr(node, "selected").is_some()),
+            Pseudo::Disabled => matches!(tag.as_str(), "input" | "button" | "select" | "textarea" | "option" | "fieldset") && dom.attr(node, "disabled").is_some(),
+            Pseudo::Enabled => matches!(tag.as_str(), "input" | "button" | "select" | "textarea" | "option" | "fieldset") && dom.attr(node, "disabled").is_none(),
         };
         if !ok { return false; }
     }

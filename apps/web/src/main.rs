@@ -54,6 +54,8 @@ const MAX_REDIRECTS: usize = 6;
 const MAX_SCRIPTS: usize = 32;
 /// Largest body a script's `fetch` may load (a game's data file, say).
 const FETCH_MAX: usize = 32 << 20;
+/// How often a running CSS animation is drawn (about 30 a second).
+const ANIMATION_FRAME_MS: u64 = 33;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -68,6 +70,29 @@ fn wall() -> u64 { 1_794_182_400 + sex_pdx::get_ticks() / 1000 }
 
 /// A loaded reply: final address, status, header lines for scripts, body.
 struct Loaded { url: String, status: u16, headers: String, body: Vec<u8> }
+
+/// Network requests a page's scripts may have going at once. The network service makes
+/// flows as they are asked for; this keeps one page from asking for hundreds.
+const PARALLEL: usize = 16;
+/// `send`'s word that the service has no flow free right now.
+const BUSY: &[u8] = b"busy";
+fn pause() { let until = sex_pdx::get_ticks() + 5; while sex_pdx::get_ticks() < until { sex_pdx::sys_yield(); } }
+fn failed(url: &str) -> Loaded { Loaded { url: String::from(url), status: 0, headers: String::new(), body: Vec::new() } }
+
+/// A request on its way: where it is now (after any redirects) and what to send there.
+struct Pending {
+    id: u32, asked: String, since: u64, begun: u64, hops: usize,
+    method: String, url: String, headers: Vec<(String, String)>, body: Vec<u8>, max: usize, script: Option<String>,
+}
+impl Pending {
+    fn new(id: u32, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Pending {
+        Pending {
+            id, asked: String::from(url), since: sex_pdx::get_ticks(), begun: 0, hops: 0,
+            method: String::from(if method.is_empty() { "GET" } else { method }), url: String::from(sex_html::url::fragment(url).0),
+            headers: headers.iter().map(|(k, v)| (String::from(*k), String::from(*v))).collect(), body: Vec::from(body), max, script: script.map(String::from),
+        }
+    }
+}
 
 /// The page's tree, with the script engine that owns it when the page has scripts.
 enum Doc {
@@ -88,6 +113,10 @@ struct Browser {
     sheets: Vec<String>,
     /// When the page's next timer or animation frame is due, in ticks.
     timer: Option<u64>,
+    /// When each CSS animation on the page started.
+    timeline: sex_html::Timeline,
+    /// A CSS animation is running: style and draw the page again soon.
+    animating: bool,
     /// The page's Canvas 2D surfaces.
     canvases: sex_web::canvas::Canvases,
     /// The page's video and audio elements, each with its player once loaded.
@@ -108,6 +137,10 @@ struct Browser {
     /// The link node a left press started on: a release follows a link only if it
     /// ends over that same link, as a click does.
     press_link: Option<usize>,
+    /// The page's style sheets use `:hover`: pointer moves restyle it.
+    hover_css: bool,
+    /// A form's POST body for the next page `open` loads.
+    post: Option<String>,
     /// The scroll offset the page script last heard (`window.scrollY`).
     script_scroll: i32,
 }
@@ -178,51 +211,67 @@ impl Browser {
     /// site allows that origin (`Access-Control-Allow-Origin`). So a page can't read
     /// another site's private pages with the person's cookies.
     fn http(&mut self, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Result<Loaded, &'static [u8]> {
-        let mut url = String::from(sex_html::url::fragment(url).0);
-        let mut method = String::from(if method.is_empty() { "GET" } else { method });
-        let mut body = body;
-        for _ in 0..MAX_REDIRECTS {
-            let target = sex_fetch::Url::parse(&url).map_err(|_| net::message(net::Error::Address))?;
-            let cross = script.filter(|o| *o != target.origin());
-            let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
-            let mut sent: Vec<(&str, &str)> = headers.iter().filter(|(k, _)| !sex_fetch::forbidden_header(k)).copied().collect();
-            if let Some(o) = cross { sent.push(("Origin", o)); }
-            let req = sex_fetch::Request { method: &method, url: &url, headers: &sent, body, trusted_origin: cross.is_some() };
-            let begun = sex_pdx::get_ticks();
-            let r = net::request(&mut self.window, &req, cookie.as_deref(), max).map_err(net::message)?;
-            if cross.is_none() {
-                let mut jar = self.jar.borrow_mut();
-                for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
-            }
-            sex_pdx::serial_record!("[web.http] method={} status={} bytes={} encoding={} chunked={} cookies={} ticks={} url={}", method, r.head.status, r.body.len(),
-                r.head.get("content-encoding").unwrap_or("none"), r.head.get("transfer-encoding").is_some_and(|t| t.contains("chunked")) as u8, self.jar.borrow().len(), sex_pdx::get_ticks() - begun, url);
-            if r.head.is_redirect() {
-                if let Some(next) = r.head.get("location").and_then(|l| sex_fetch::join(&url, l)) {
-                    // 303, and 301/302 after a POST, continue as a GET without the body.
-                    if r.head.status == 303 || (matches!(r.head.status, 301 | 302) && method == "POST") { method = String::from("GET"); body = &[]; }
-                    url = String::from(sex_html::url::fragment(&next).0);
-                    continue;
-                }
-            }
-            if let Some(o) = cross {
-                let allowed = r.head.get("access-control-allow-origin").map(str::trim);
-                if allowed != Some("*") && allowed != Some(o) {
-                    sex_pdx::serial_record!("[web.cors] blocked origin={} url={}", o, url);
-                    return Err(b"The site doesn't let this page read it.");
-                }
-            }
-            let lines = r.head.lines(true);
-            return Ok(Loaded { url, status: r.head.status, headers: lines, body: r.body });
+        let mut p = Pending::new(0, method, url, headers, body, max, script);
+        loop {
+            let mut ex = self.send(&mut p, true)?;
+            while !ex.poll(&mut self.window).map_err(net::message)? { if ex.idle() > 64 { pause() } else if ex.idle() > 0 { sex_pdx::sys_yield() } }
+            let r = ex.finish().map_err(net::message)?;
+            if let Some(done) = self.landed(&mut p, r) { return done; }
         }
-        Err(b"Too many redirects.")
+    }
+
+    /// Starts `p`'s current hop. `patient` waits while every flow is someone else's.
+    fn send(&mut self, p: &mut Pending, patient: bool) -> Result<net::Exchange, &'static [u8]> {
+        if p.hops >= MAX_REDIRECTS { return Err(b"Too many redirects."); }
+        let target = sex_fetch::Url::parse(&p.url).map_err(|_| net::message(net::Error::Address))?;
+        let cross = p.script.as_deref().filter(|o| *o != target.origin());
+        let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
+        let mut sent: Vec<(&str, &str)> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !sex_fetch::forbidden_header(k)).collect();
+        if let Some(o) = cross { sent.push(("Origin", o)); }
+        let req = sex_fetch::Request { method: &p.method, url: &p.url, headers: &sent, body: &p.body, trusted_origin: cross.is_some() };
+        p.begun = sex_pdx::get_ticks();
+        let started = if patient { net::Exchange::start_patiently(&mut self.window, &req, cookie.as_deref(), p.max) } else { net::Exchange::start(&mut self.window, &req, cookie.as_deref(), p.max) };
+        started.map_err(|e| if e == net::Error::Busy { BUSY } else { net::message(e) })
+    }
+
+    /// Takes the reply to `p`'s current hop: its cookies, then either the final answer
+    /// or, for a redirect, `None` with `p` aimed at the next address.
+    fn landed(&mut self, p: &mut Pending, r: net::Response) -> Option<Result<Loaded, &'static [u8]>> {
+        let Ok(target) = sex_fetch::Url::parse(&p.url) else { return Some(Err(net::message(net::Error::Address))) };
+        let cross = p.script.as_deref().filter(|o| *o != target.origin()).map(String::from);
+        if cross.is_none() {
+            let mut jar = self.jar.borrow_mut();
+            for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
+        }
+        sex_pdx::serial_record!("[web.http] method={} status={} bytes={} encoding={} chunked={} cookies={} ticks={} url={}", p.method, r.head.status, r.body.len(),
+            r.head.get("content-encoding").unwrap_or("none"), r.head.get("transfer-encoding").is_some_and(|t| t.contains("chunked")) as u8, self.jar.borrow().len(), sex_pdx::get_ticks() - p.begun, p.url);
+        if r.head.is_redirect() {
+            if let Some(next) = r.head.get("location").and_then(|l| sex_fetch::join(&p.url, l)) {
+                // 303, and 301/302 after a POST, continue as a GET without the body.
+                if r.head.status == 303 || (matches!(r.head.status, 301 | 302) && p.method == "POST") { p.method = String::from("GET"); p.body.clear(); }
+                p.url = String::from(sex_html::url::fragment(&next).0);
+                p.hops += 1;
+                return None;
+            }
+        }
+        if let Some(o) = cross {
+            let allowed = r.head.get("access-control-allow-origin").map(str::trim);
+            if allowed != Some("*") && allowed != Some(o.as_str()) {
+                sex_pdx::serial_record!("[web.cors] blocked origin={} url={}", o, p.url);
+                return Some(Err(b"The site doesn't let this page read it."));
+            }
+        }
+        let lines = r.head.lines(true);
+        Some(Ok(Loaded { url: core::mem::take(&mut p.url), status: r.head.status, headers: lines, body: r.body }))
     }
 
     fn open(&mut self, url: &str, remember: bool) {
+        let post = self.post.take();
         if remember && !self.url.is_empty() { self.history.push(self.url.clone()); }
         // Same page, other fragment: just scroll.
         let (here, _) = sex_html::url::fragment(&self.url);
         let (there, frag) = sex_html::url::fragment(url);
-        if !here.is_empty() && here == there && frag.is_some() {
+        if post.is_none() && !here.is_empty() && here == there && frag.is_some() {
             self.url = String::from(url);
             self.scroll_to(frag);
             return;
@@ -242,7 +291,13 @@ impl Browser {
                 Err(e) => (message_page("Can't open that file", core::str::from_utf8(files::message(e)).unwrap_or(""), url), String::from(url)),
             }
         } else if url.starts_with("http://") || url.starts_with("https://") {
-            match self.fetch(url) {
+            let got = match &post {
+                // A form's POST: the answer is the next page.
+                Some(body) => self.http("POST", url, &[("Content-Type", "application/x-www-form-urlencoded")], body.as_bytes(), SOURCE_MAX, None)
+                    .and_then(|r| if r.status >= 400 { Err(&b"The site answered with an error."[..]) } else { self.buf = r.body; Ok((r.url, 0..self.buf.len())) }),
+                None => self.fetch(url),
+            };
+            match got {
                 Ok((final_url, body)) => { let t = text_of(&self.buf[body]); (t, final_url) }
                 Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), url), String::from(url)),
             }
@@ -257,6 +312,7 @@ impl Browser {
         // Style sheets and pictures from the network, within limits.
         let mut sheets: Vec<String> = Vec::new();
         self.fonts.images.clear();
+        self.fonts.svgs.clear();
         if base.starts_with("http") {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
@@ -272,19 +328,23 @@ impl Browser {
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
                 if let Ok((_, body)) = self.fetch(&abs) {
-                    if let Some(img) = sex_web::decode_image(&self.buf[body], (W - 16) as usize, 2000) { self.fonts.images.push((src.clone(), alloc::rc::Rc::new(img))); }
+                    let bytes = core::mem::take(&mut self.buf);
+                    self.fonts.add_picture(src, &bytes[body], (W - 16) as usize, 2000);
+                    self.buf = bytes;
                 }
             }
             self.buf = Vec::new();
         }
         let scripts = self.scripts(&dom, &base);
-        // Inline handlers (`onclick="..."`) and `javascript:` links need the engine too.
+        // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
         let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
-            sex_html::dom::Kind::Element { attrs, .. } => attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
+            sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
+                || attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
             _ => false,
         });
         self.sheets = sheets;
         self.timer = None;
+        self.timeline = sex_html::Timeline::default();
         let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
         doc.measure = sex_web::canvas::measure_css;
         doc.cookies = Some(self.jar.clone());
@@ -374,6 +434,7 @@ impl Browser {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
         }
         if let Some(url) = doc.navigate.take() {
+            self.post = doc.navigate_post.take();
             self.open(&url, true);
             return true;
         }
@@ -408,13 +469,27 @@ impl Browser {
     fn relayout(&mut self) {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let styles = sex_html::styles(&doc.dom, &sheet_refs, W, H - BAR);
-        self.page = sex_html::layout::layout(&doc.dom, &styles, W, &self.fonts);
+        let (styles, animating) = sex_html::styles_at(&doc.dom, &sheet_refs, W, H - BAR, sex_pdx::get_ticks(), &mut self.timeline);
+        self.animating = animating;
+        self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
+            || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
+        self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
+        sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
+        doc.set_layers(&self.page.layers);
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
         // Ask for the next tick soon: the change may have started timers.
         if matches!(self.doc, Doc::Scripted(_)) && self.timer.is_none() { self.timer = Some(sex_pdx::get_ticks()); }
+        self.next_frame();
+    }
+
+    /// While a CSS animation runs, the next tick is at most a frame away.
+    fn next_frame(&mut self) {
+        if self.animating {
+            let frame = sex_pdx::get_ticks() + ANIMATION_FRAME_MS;
+            self.timer = Some(self.timer.map_or(frame, |t| t.min(frame)));
+        }
     }
 
     /// Runs due timers and animation frames.
@@ -423,13 +498,20 @@ impl Browser {
         self.serve_fetches();
         self.sync_scroll();
         let media_next = self.media_tick();
+        if self.animating {
+            self.timer = None;
+            self.relayout();
+            self.draw();
+        }
         if let Some(script) = self.doc.script() {
             let next = script.dispatch("tick");
             self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
+            self.next_frame();
             if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
             self.after_script(true);
         } else {
             self.timer = None;
+            self.next_frame();
         }
         // A request carried out during this tick (from a media event handler, or the
         // tick's own script) is played from the next pass.
@@ -556,62 +638,111 @@ impl Browser {
     }
 
     /// Loads what the page's scripts asked `fetch` and XHR for, and tells each script.
+    /// Network requests run side by side, up to `PARALLEL` at once, each reported as it
+    /// lands; requests that a script makes on hearing of one join in.
     #[inline(never)]
     fn serve_fetches(&mut self) {
-        let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => return };
-        for ask in asked {
-            let begun = sex_pdx::get_ticks();
-            let r = self.load(&ask);
-            let n = r.body.len();
-            sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} method={} url={}", ask.id, r.status, n, sex_pdx::get_ticks() - begun, if ask.method.is_empty() { "GET" } else { &ask.method }, ask.url);
-            let Doc::Scripted(s) = &mut self.doc else { return };
-            s.page_mut().keep_head(ask.id, &r.url, &r.headers);
-            s.page_mut().keep_body(ask.id, r.status, r.body);
-            if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", ask.id, r.status, n)) {
-                sex_pdx::serial_record!("[web.script] trapped={}", why);
-                self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-                return;
+        let mut waiting: Vec<Pending> = Vec::new();
+        let mut going: Vec<(Pending, net::Exchange)> = Vec::new();
+        loop {
+            let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => { self.cancel_all(going); return } };
+            for ask in asked {
+                match self.local(&ask) {
+                    Ok(r) => { if !self.answer(&ask.id, &ask.method, &ask.url, sex_pdx::get_ticks(), r) { self.cancel_all(going); return; } }
+                    Err(p) => waiting.push(p),
+                }
             }
+            // Start what fits; one the service has no flow for waits its turn.
+            while going.len() < PARALLEL && !waiting.is_empty() {
+                let mut p = waiting.remove(0);
+                match self.send(&mut p, going.is_empty()) {
+                    Ok(ex) => going.push((p, ex)),
+                    Err(BUSY) => { waiting.insert(0, p); break; }
+                    Err(_) => { let (id, m, u, t) = (p.id, p.method.clone(), p.asked.clone(), p.since); if !self.answer(&id, &m, &u, t, failed(&p.url)) { self.cancel_all(going); return; } }
+                }
+            }
+            if going.is_empty() && waiting.is_empty() { return; }
+            let mut quiet = u32::MAX;
+            let mut i = 0;
+            while i < going.len() {
+                let step = going[i].1.poll(&mut self.window);
+                quiet = quiet.min(going[i].1.idle());
+                match step {
+                    Ok(false) => { i += 1; continue; }
+                    Ok(true) => {}
+                    Err(_) => {}
+                }
+                let (mut p, ex) = going.remove(i);
+                let landed = match step { Ok(_) => match ex.finish() { Ok(r) => self.landed(&mut p, r), Err(_) => Some(Err(&b""[..])) }, Err(_) => Some(Err(&b""[..])) };
+                match landed {
+                    None => waiting.insert(0, p),
+                    Some(r) => {
+                        let r = r.unwrap_or_else(|_| failed(&p.url));
+                        if !self.answer(&p.id, &p.method, &p.asked, p.since, r) { self.cancel_all(going); return; }
+                    }
+                }
+                quiet = 0;
+            }
+            if quiet > 64 { pause(); } else if quiet > 0 { sex_pdx::sys_yield(); }
         }
     }
 
-    /// A script's request: the reply (status 0 when it could not be loaded). Pages fetch
-    /// from where they came from: built in, a file (`@`), or the network.
     /// A plain GET of a page's resource (a video, a poster): status and body. Like
     /// an element's load, it may come from another site without CORS, since the
     /// page's scripts never read the bytes.
     fn load_get(&mut self, url: &str) -> (u16, Vec<u8>) {
         let ask = sex_js::FetchAsk { id: 0, url: String::from(url), method: String::new(), headers: String::new(), body: Vec::new() };
-        let r = self.load_as(&ask, false);
-        (r.status, r.body)
+        match self.local(&ask) {
+            Ok(r) => (r.status, r.body),
+            Err(p) => match self.http("GET", &p.url, &[], &[], FETCH_MAX, None) { Ok(r) => (r.status, r.body), Err(_) => (0, Vec::new()) },
+        }
     }
 
-    /// A script's request: another site must allow it (CORS).
-    fn load(&mut self, ask: &sex_js::FetchAsk) -> Loaded { self.load_as(ask, true) }
+    /// Lets go of every request still going, when the page that asked is gone.
+    fn cancel_all(&mut self, going: Vec<(Pending, net::Exchange)>) { for (_, mut ex) in going { ex.cancel(&mut self.window); } }
 
-    fn load_as(&mut self, ask: &sex_js::FetchAsk, cors: bool) -> Loaded {
+    /// Tells the page one request's answer. False when the page's script fell over.
+    fn answer(&mut self, id: &u32, method: &str, url: &str, since: u64, r: Loaded) -> bool {
+        let n = r.body.len();
+        sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} method={} url={}", id, r.status, n, sex_pdx::get_ticks() - since, if method.is_empty() { "GET" } else { method }, url);
+        let Doc::Scripted(s) = &mut self.doc else { return false };
+        s.page_mut().keep_head(*id, &r.url, &r.headers);
+        s.page_mut().keep_body(*id, r.status, r.body);
+        if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", id, r.status, n)) {
+            sex_pdx::serial_record!("[web.script] trapped={}", why);
+            self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
+            return false;
+        }
+        true
+    }
+
+    /// A script's request that needs no network, answered now (status 0 when it could
+    /// not be loaded), or the network request to make. Pages fetch from where they came
+    /// from: built in, a file (`@`), or the network.
+    fn local(&mut self, ask: &sex_js::FetchAsk) -> Result<Loaded, Pending> {
         let url = ask.url.as_str();
         let base = String::from(sex_html::url::fragment(&self.url).0);
         let done = |status: u16, body: Vec<u8>| Loaded { url: String::from(url), status, headers: String::new(), body };
         if url.starts_with("about:") || (base.starts_with("about:") && !url.contains(':')) {
             let name = if url.starts_with("about:") { String::from(url) } else { alloc::format!("about:{}", url.trim_start_matches("./")) };
-            return match built_in(&name) { Some(text) => done(200, Vec::from(text.as_bytes())), None => done(404, Vec::new()) };
+            return Ok(match built_in(&name) { Some(text) => done(200, Vec::from(text.as_bytes())), None => done(404, Vec::new()) });
         }
         if let Some(path) = local_path(&base, url) {
-            return match files::size(&mut self.window, path.as_bytes()) {
+            return Ok(match files::size(&mut self.window, path.as_bytes()) {
                 Ok(n) if n as usize <= FETCH_MAX => {
                     let mut body = alloc::vec![0u8; n as usize];
                     match files::read(&mut self.window, path.as_bytes(), &mut body) { Ok(got) => { body.truncate(got); done(200, body) } Err(_) => done(0, Vec::new()) }
                 }
                 Err(files::NOT_FOUND) => done(404, Vec::new()),
                 _ => done(0, Vec::new()),
-            };
+            });
         }
-        let Some(abs) = sex_html::url::resolve(&base, url) else { return done(0, Vec::new()) };
-        if !abs.starts_with("http") { return done(0, Vec::new()); }
-        let headers = ask.header_pairs();
+        let Some(abs) = sex_html::url::resolve(&base, url) else { return Ok(done(0, Vec::new())) };
+        if !abs.starts_with("http") { return Ok(done(0, Vec::new())); }
         let origin = sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null"));
-        match self.http(&ask.method, &abs, &headers, &ask.body, FETCH_MAX, if cors { Some(&origin) } else { None }) { Ok(r) => r, Err(_) => done(0, Vec::new()) }
+        let mut p = Pending::new(ask.id, &ask.method, &abs, &ask.header_pairs(), &ask.body, FETCH_MAX, Some(&origin));
+        p.asked = ask.url.clone();
+        Err(p)
     }
 
     /// Gives the page a key first. True if a handler kept it.
@@ -708,6 +839,10 @@ impl Browser {
             Kind::Leave => { self.press_link = None; None }
             _ => None,
         };
+        // :hover follows the pointer.
+        let hovered = if self.hover_css && y >= 0 && !matches!(p.kind, Kind::Leave) { self.doc.get().node_at(px, py) } else { None };
+        let hover_changed = self.hover_css && self.doc.get().dom.hover != hovered;
+        self.doc.get().dom.hover = hovered;
         let mut kept = false;
         if let Doc::Scripted(_) = self.doc {
             self.sync_scroll();
@@ -725,6 +860,7 @@ impl Browser {
             self.after_script(true);
             self.timers_changed();
         }
+        if hover_changed { self.relayout(); self.draw(); }
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
             Kind::Up { button: 0 } if !kept && y >= 0 => {
@@ -821,7 +957,11 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0 };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
+    // Big WebGL draws spread over the cores, a band of rows each.
+    let cores = sex_app::thread::cores();
+    sex_gl::set_parallel(sex_app::thread::parallel, cores);
+    sex_pdx::serial_record!("[web.cores] cores={}", cores);
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

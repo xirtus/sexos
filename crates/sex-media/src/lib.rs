@@ -440,6 +440,10 @@ const PAD_MAX_MS: i64 = 30_000;
 static SILENCE: [[i16; 2]; 1024] = [[0; 2]; 1024];
 /// How long one step may decode before it gives the caller its loop back.
 const STEP_BUDGET_MS: u64 = 12;
+/// With less than this much sound queued (a quarter second), a step may decode for
+/// up to LOW_BUDGET_MS.
+const LOW_FRAMES: u64 = RATE as u64 / 4;
+const LOW_BUDGET_MS: u64 = 40;
 
 /// Plays one stream. Sound goes to this program's sound ring; pictures are decoded
 /// ahead into a short queue and each becomes current at its time.
@@ -686,7 +690,10 @@ impl Player {
                 return Step::Wait { ms: 10 };
             }
             let starved = !self.dec.ready();
-            if self.eof || full || sound_waits || starved || sex_pdx::get_ticks() - begun >= STEP_BUDGET_MS {
+            // Sound running low gets a longer turn: a gap is worse than a late picture.
+            let low = self.sound.as_ref().is_some_and(|s| s.written_total().saturating_sub(s.played_total()) < LOW_FRAMES);
+            let budget = if low && !self.priming { LOW_BUDGET_MS } else { STEP_BUDGET_MS };
+            if self.eof || full || sound_waits || starved || sex_pdx::get_ticks() - begun >= budget {
                 let until = self.queue.front().map_or(10, |p| (p.due - now).clamp(1, 16) as u64);
                 return Step::Wait { ms: if sound_waits || starved { until.min(5) } else { until } };
             }

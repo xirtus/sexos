@@ -249,6 +249,8 @@ fn dead(app:&App)->Result<(),u64>{
     let tramp=pd.trampoline_task.load(Ordering::Acquire);
     if tramp as usize!=app.trampoline{return Err(DENIED)}
     if !tramp.is_null(){let s=unsafe{(*tramp).state.snapshot()};if !matches!(s.phase,Phase::Constructed|Phase::Dead)||s.owner_core.is_some(){return Err(RETRY)}}
+    // A worker still on a core could touch the run's memory after it is reused.
+    if !crate::program_workers::all_dead(app.target){crate::program_workers::end(app.target);return Err(RETRY)}
     Ok(())
 }
 pub fn accepts_ipc(target:u32)->bool{
@@ -395,6 +397,25 @@ fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
         let Some((at,value))=image::relocation(elf,&parsed,index,arena)else{fail(app,count,"relocation");return Err(DENIED)};
         if !write(at,&value.to_le_bytes()){fail(app,count,"relocation");return Err(DENIED)}
     }
+    // A program's own code may not hold an instruction that rewrites its protection
+    // keys, or it could reach every other program's memory. Checked on the final
+    // bytes, after relocations, across every run of executable pages in address order,
+    // so neither a relocation nor a page boundary can assemble one. Code the program
+    // makes later is checked the same way when sealed (`code`).
+    let mut executable=alloc::vec![false;image_pages];
+    for segment in parsed.segments[..parsed.count].iter().filter(|s|s.executable){
+        for index in segment.window/4096..=(segment.window+segment.memory-1)/4096{executable[index as usize]=true;}
+    }
+    let mut scan=sex_pdx::program_code::Scan::new();
+    for index in 0..image_pages{
+        if !executable[index]||frames[index]==0{scan=sex_pdx::program_code::Scan::new();continue}
+        let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
+        let page=unsafe{core::slice::from_raw_parts((frames[index]+hhdm) as *const u8,4096)};
+        if let Some(at)=scan.feed(page,false){
+            crate::serial_println!("[app.program.rejected] target={} bytes={} reason=key_instruction page={} offset={:#x}",app.target,len,index,at);
+            fail(app,count,"key_instruction");return Err(DENIED);
+        }
+    }
     // The stack: at the arena's top, sized by the file (`-z stack-size`) or 1 MiB, with
     // an unmapped guard page below it, so an overflow faults instead of reaching the heap.
     let stack_pages=(if parsed.stack==0{STACK_DEFAULT}else{parsed.stack.min(STACK_MAX)}).div_ceil(4096) as usize;
@@ -462,6 +483,92 @@ pub fn grow(pd:&ProtectionDomain,want:u64)->[u64;3]{
         Ok([0,base,app.grown as u64])
     })();result.unwrap_or_else(|e|[e,0,0])
 }
+/// The caller's row's current run, if it is live: the run's task id. Checks the same
+/// identity as `grow`, and mutates nothing.
+fn live(app:&App,pd:&ProtectionDomain)->Result<u32,u64>{
+    if !app.reusable||!app.activated||app.arena==0||app.retired||app.rebirthing||app.forced{return Err(DENIED)}
+    let main=pd.main_task.load(Ordering::Acquire);
+    if main.is_null()||main as usize!=app.main{return Err(DENIED)}
+    let task=unsafe{&*main};
+    if task.id!=app.task||task.state.snapshot().exited{return Err(DENIED)}
+    Ok(app.task)
+}
+pub fn live_run(pd:&ProtectionDomain)->Result<u32,u64>{
+    let apps=apps_lock!().ok_or(RETRY)?;
+    let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
+    live(app,pd)
+}
+/// Starts a worker for the caller's live run. The program table stays held, so the
+/// run cannot end between the check and the worker's start.
+pub fn spawn_worker(pd:&ProtectionDomain,entry:u64,stack:u64,arg:u64)->Result<u64,u64>{
+    let apps=apps_lock!().ok_or(RETRY)?;
+    let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
+    let run=live(app,pd)?;
+    let id=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
+    if id==u32::MAX{return Err(DENIED)}
+    crate::program_workers::spawn(pd,run,id,entry,stack,arg)
+}
+/// Turns heap pages of the caller's current run into code (SEAL) or back into data
+/// (OPEN). A page is never writable and executable at once, and sealed bytes may not
+/// hold an instruction that rewrites the protection-key register (see
+/// `sex_pdx::program_code`). Like `grow`, this mints nothing: the pages are the run's
+/// own, on the row's key, and code the run writes can do only what the run already may.
+pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
+    use sex_pdx::program_code as c;
+    const WRITABLE:u64=1<<1;const NX:u64=1<<63;
+    let result=(||{
+        if (op!=c::SEAL&&op!=c::OPEN)||want==0||want>c::MAX_PAGES_PER_CALL||va&0xFFF!=0{return Err((c::INVALID,0))}
+        let mut apps=apps_lock!().ok_or((c::RETRY,0))?;
+        let app=apps.iter_mut().find(|a|a.ready&&a.target==pd.id).ok_or((c::DENIED,0))?;
+        if !app.reusable||!app.activated||app.arena==0||app.retired||app.rebirthing||app.forced{return Err((c::DENIED,0))}
+        let main=pd.main_task.load(Ordering::Acquire);
+        if main.is_null()||main as usize!=app.main{return Err((c::DENIED,0))}
+        let task=unsafe{&*main};
+        if task.id!=app.task||task.state.snapshot().exited{return Err((c::DENIED,0))}
+        // Only the heap: pages `grow` gave this run, which are the manifest's last
+        // `grown` entries, in address order from just past the image.
+        let heap=app.arena+(app.image_pages*4096) as u64;
+        let first=va.checked_sub(heap).ok_or((c::DENIED,0))?/4096;
+        let want=want as usize;
+        if first as usize+want>app.grown{return Err((c::DENIED,0))}
+        let at=app.count-app.grown+first as usize;
+        let pages=&app.pages[at..at+want];
+        if pages.iter().enumerate().any(|(i,p)|p.va!=va+(i*4096) as u64){return Err((c::DENIED,0))}
+        let leaf=|p:&PrivatePage|unsafe{&*(p.leaf as *const core::sync::atomic::AtomicU64)};
+        if op==c::SEAL{
+            let hhdm=crate::HHDM_REQUEST.response().ok_or((c::DENIED,0))?.offset;
+            let bytes=|p:&PrivatePage|unsafe{core::slice::from_raw_parts(((p.expected&PHYSICAL_MASK)+hhdm) as *const u8,4096)};
+            // A code neighbour on either side, by address, joins the check, so an
+            // instruction that starts in other code and ends in this range (or the other
+            // way) is still found. Below the heap's first page is the image's last page;
+            // above its last is nothing mapped. Other neighbours are heap pages.
+            let heap_from=app.count-app.grown;
+            let code=|p:&PrivatePage|p.expected&NX==0;
+            let below=if first==0{app.pages[..heap_from].iter().find(|p|p.va==va-4096)}else{app.pages.get(at-1)};
+            let below=below.filter(|p|code(p));
+            let above=app.pages[..app.count].get(at+want).filter(|p|code(p)&&p.va==va+(want*4096) as u64);
+            let primed=below.is_some();
+            let mut scan=match below{Some(p)=>{let b=bytes(p);c::Scan::primed([b[4094],b[4095]])}None=>c::Scan::new()};
+            for p in pages{if let Some(o)=scan.feed(bytes(p),primed){return Err((c::BLOCKED,o as u64))}}
+            if let Some(p)=above{
+                let b=bytes(p);
+                if let Some(o)=scan.feed(&b[..2],primed){return Err((c::BLOCKED,o as u64))}
+            }
+        }
+        for i in at..at+want{
+            let page=&mut app.pages[i];
+            let set=|v:u64|if op==c::SEAL{(v&!WRITABLE)&!NX}else{v|WRITABLE|NX};
+            page.expected=set(page.expected);
+            // Keep the present bit as it is: a shared row's page may be waiting its turn.
+            let _=leaf(page).fetch_update(Ordering::AcqRel,Ordering::Acquire,|v|(v!=0).then_some(set(v)));
+        }
+        // Another core may still hold the writable translation; none may once this returns.
+        crate::smp::tlb::flush_pages(want,app.pages[at..at+want].iter().map(|p|p.va));
+        crate::serial_println!("[app.program.code] target={} task={} op={} va={:#x} pages={}",
+            app.target,app.task,if op==c::SEAL{"seal"}else{"open"},va,want);
+        Ok([0,0,want as u64])
+    })();result.unwrap_or_else(|(e,o)|[e,o,0])
+}
 fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64,u64>{
     let app=&mut apps[index];
     if !app.rebirthing {
@@ -519,6 +626,7 @@ pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
         for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
         crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
         app.forced=true;
+        crate::program_workers::end(id);
         crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
         Ok(())})();result.map_or_else(|e|e,|()|0)
 }
@@ -610,6 +718,7 @@ pub fn poll_exit_notifications(){
         if !app.ready || app.retired{continue}
         let main=app.main as *mut crate::scheduler::Task;
         if !unsafe{(*main).state.snapshot().exited}{continue}
+        if app.reusable{crate::program_workers::end(app.target);}
         if !app.kicked{for holder in app.services.into_iter().chain(core::iter::once(app.pager)){
             if let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
         }app.kicked=true;}

@@ -66,6 +66,11 @@ pub mod op {
     pub const MEASURE: u32 = 25;
     /// (x, y in page pixels): the deepest laid-out element there, or nothing.
     pub const HIT: u32 = 26;
+    /// (control): its current value; (control, text): sets it.
+    pub const VALUE: u32 = 27;
+    /// (control, caret in characters): focuses a text control and places its caret;
+    /// (): no text control has focus.
+    pub const CARET: u32 = 28;
     /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
     /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
     /// with `media` dispatches carrying the element's state and its events.
@@ -113,8 +118,10 @@ pub struct Limits {
 }
 impl Default for Limits {
     // Libraries like three.js take about a second to load on a fast host and need room
-    // for their scenes; browsers let a script run for about ten seconds before they ask.
-    fn default() -> Self { Self { memory_bytes: 160 << 20, heap_bytes: 128 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
+    // for their scenes (a whole game, such as a Quake port with its data, needs most of a
+    // gigabyte); memory grows only as it is used. Browsers let a script run for about
+    // ten seconds before they ask.
+    fn default() -> Self { Self { memory_bytes: 1 << 30, heap_bytes: 960 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
 }
 
 /// The first op whose arguments are bytes rather than text.

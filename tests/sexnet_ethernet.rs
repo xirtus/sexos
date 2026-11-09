@@ -31,9 +31,11 @@ impl Mock{
 impl nic::Hardware for Mock{
  fn command(&mut self,set:u16,clear:u16)->Result<c::Reply,u64>{let mut s=self.0.borrow_mut();s.ops.push(Op::Command(set,clear));let before=s.command;
   if set&4!=0{
-   assert_eq!(s.regs.get(&0x2808),Some(&128));assert_eq!(s.regs.get(&0x3808),Some(&128));
-   for i in 0..8usize{let word=|n:usize|u64::from_le_bytes(s.dma[n..n+8].try_into().unwrap());assert_eq!(word(i*16),0x100000+8192+i as u64*2048);assert_eq!(word(i*16+8),0);assert_eq!(word(4096+i*16),0x100000+24576+i as u64*2048);assert_eq!(word(4096+i*16+8),1<<32);}
-   assert!(s.dma[8192..40960].iter().all(|&x|x==0));
+   assert_eq!(s.regs.get(&0x2808),Some(&(ethernet::RX_COUNT*16)));assert_eq!(s.regs.get(&0x3808),Some(&128));
+   let word=|n:usize|u64::from_le_bytes(s.dma[n..n+8].try_into().unwrap());
+   for i in 0..ethernet::RX_COUNT as usize{assert_eq!(word(i*16),0x100000+8192+i as u64*2048);assert_eq!(word(i*16+8),0);}
+   for i in 0..ethernet::TX_COUNT as usize{assert_eq!(word(4096+i*16),0x100000+TX_DATA as u64+i as u64*2048);assert_eq!(word(4096+i*16+8),1<<32);}
+   assert!(s.dma[8192..ethernet::USED as usize].iter().all(|&x|x==0));
   }
   s.command=(before|set)&!clear;if s.uncertain&&set&4!=0{return Err(c::IO)}Ok(c::Reply{before,after:s.command,changed:before!=s.command})}
  fn read(&mut self,n:u32)->u32{let mut s=self.0.borrow_mut();s.ops.push(Op::Read(n));*s.regs.get(&n).unwrap_or(&0)}
@@ -49,13 +51,15 @@ impl ethernet::Hardware for Mock{
  fn publish(&mut self){self.0.borrow_mut().ops.push(Op::Publish)}fn acquire(&mut self){self.0.borrow_mut().ops.push(Op::Acquire)}
 }
 use ethernet::{Driver,Phase,Failure,Event,SendError};
+/// Where transmit buffers start: after the receive buffers.
+const TX_DATA:usize=8192+ethernet::RX_COUNT as usize*2048;
 const MAC:[u8;6]=[0x52,0x54,0,0x12,0x34,0x56];
-fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 0..40{d.advance(n);if d.phase()==Phase::Running{return d;}}panic!("not ready {:?} {:?}",d.phase(),d.failure());}
+fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 0..120{d.advance(n);if d.phase()==Phase::Running{return d;}}panic!("not ready {:?} {:?}",d.phase(),d.failure());}
 #[test]fn both_model_profiles_initialize_entire_fixed_layout_before_bus_master_without_reserved_queue_enable(){
  for model in [c::Model::I82540,c::Model::I82574]{let m=Mock::new(model);let mut d=Driver::new(m.clone(),MAC,0);
- for n in 0..40{let start=m.ops().len();d.advance(n);assert!(m.ops().len()-start<=512);if d.phase()==Phase::Running{break;}}
- assert_eq!(d.phase(),Phase::Running);let s=m.0.borrow();assert_eq!(s.command,0x107);assert_eq!(s.regs[&0x2818],7);assert_eq!(s.regs[&0x3818],0);assert_eq!(s.regs[&0x2828]&(1<<25),0);assert_eq!(s.regs[&0x3828]&(1<<25),0);
- assert_eq!(s.regs[&0x410],if model==c::Model::I82574{0x602006}else{0x60200a});assert_eq!(s.regs[&0x3828],if model==c::Model::I82574{1<<22}else{0});assert!(s.dma[40960..].iter().all(|&x|x==0xa5));}
+ for n in 0..120{let start=m.ops().len();d.advance(n);assert!(m.ops().len()-start<=512);if d.phase()==Phase::Running{break;}}
+ assert_eq!(d.phase(),Phase::Running);let s=m.0.borrow();assert_eq!(s.command,0x107);assert_eq!(s.regs[&0x2818],ethernet::RX_COUNT-1);assert_eq!(s.regs[&0x3818],0);assert_eq!(s.regs[&0x2828]&(1<<25),0);assert_eq!(s.regs[&0x3828]&(1<<25),0);
+ assert_eq!(s.regs[&0x410],if model==c::Model::I82574{0x602006}else{0x60200a});assert_eq!(s.regs[&0x3828],if model==c::Model::I82574{1<<22}else{0});assert!(s.dma[ethernet::USED as usize..].iter().all(|&x|x==0xa5));}
 }
 #[test]fn dma_metadata_unknown_master_short_bar_and_bad_station_fail_before_any_dma_store(){
  for which in 0..7{let m=Mock::new(c::Model::I82574);let mut mac=MAC;{let mut s=m.0.borrow_mut();match which{0=>s.view.region_id=3,1=>s.view.length=4096,2=>s.view.dma_address=None,3=>s.view.virtual_address+=1,4=>s.command|=4,5=>s.mmio=0x5408,_=>mac[0]|=1}}
@@ -68,21 +72,21 @@ fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 
  let mut live=nic::Live::open().unwrap();assert_eq!(live.dma_region(),Ok(view));assert_eq!(live.dma_region(),Err(c::DENIED));
 }
 #[test]fn register_failure_precedes_bus_master_and_uncertain_enable_never_retries_or_reuses_dma(){
- for uncertain in [false,true]{let m=Mock::new(c::Model::I82574);{let mut s=m.0.borrow_mut();s.refuse=!uncertain;s.uncertain=uncertain;}let mut d=Driver::new(m.clone(),MAC,0);for n in 0..30{d.advance(n);}assert_eq!(d.failure(),Some(if uncertain{Failure::Command}else{Failure::Registers}));let ops=m.ops();for n in 30..60{d.advance(n);}assert_eq!(d.send(&[0;60],100),Err(SendError::Quarantined));assert_eq!(m.ops(),ops);assert_eq!(m.0.borrow().command&4,if uncertain{4}else{0});}
+ for uncertain in [false,true]{let m=Mock::new(c::Model::I82574);{let mut s=m.0.borrow_mut();s.refuse=!uncertain;s.uncertain=uncertain;}let mut d=Driver::new(m.clone(),MAC,0);for n in 0..120{d.advance(n);}assert_eq!(d.failure(),Some(if uncertain{Failure::Command}else{Failure::Registers}));let ops=m.ops();for n in 120..150{d.advance(n);}assert_eq!(d.send(&[0;60],100),Err(SendError::Quarantined));assert_eq!(m.ops(),ops);assert_eq!(m.0.borrow().command&4,if uncertain{4}else{0});}
 }
 #[test]fn transmit_wrap_busy_length_padding_and_exact_completion_preserve_custody(){
  let m=Mock::new(c::Model::I82574);let mut d=ready(&m);let ops=m.ops();for n in [0,13,1515]{assert_eq!(d.send(&vec![1;n],100),Err(SendError::Length));assert_eq!(m.ops(),ops);}
  for sequence in 1..=24u64{let payload=vec![sequence as u8;if sequence%2==0{1514}else{14}];let (seq,index,len,hash)=d.send(&payload,100+sequence).unwrap();assert_eq!((seq,index),(sequence,((sequence-1)%8)as u32));let padded=payload.iter().copied().chain(std::iter::repeat(0)).take(payload.len().max(60)).collect::<Vec<_>>();assert_eq!((len,hash),(padded.len(),ethernet::fingerprint(&padded)));
- let start=24576+index as usize*2048;assert_eq!(&m.0.borrow().dma[start..start+len],&padded);assert!(m.0.borrow().dma[start+len..start+2048].iter().all(|&x|x==0));assert_eq!(m.word(4096+index*16+8),len as u64|(0x0b<<24));
+ let start=TX_DATA+index as usize*2048;assert_eq!(&m.0.borrow().dma[start..start+len],&padded);assert!(m.0.borrow().dma[start+len..start+2048].iter().all(|&x|x==0));assert_eq!(m.word(4096+index*16+8),len as u64|(0x0b<<24));
  let ops=m.ops();assert_eq!(d.send(&[0;60],100+sequence),Err(SendError::Busy));assert_eq!(m.ops(),ops);assert!(d.advance(100+sequence).is_none());assert!(d.busy());m.done(index,1);
  assert!(matches!(d.advance(100+sequence),Some(Event::Transmitted{sequence:s,index:i,..})if s==sequence&&i==index));assert!(!d.busy());}
 }
 #[test]fn receive_wrap_copies_actual_bytes_before_descriptor_return_and_never_uses_returned_address(){
  let m=Mock::new(c::Model::I82540);let mut d=ready(&m);
- for sequence in 1..=24u64{let index=((sequence-1)%8)as u32;let payload=vec![sequence as u8;if sequence%2==0{1514}else{60}];m.rx(index,&payload,3,0,payload.len());let start=m.ops().len();
+ for sequence in 1..=2*ethernet::RX_COUNT as u64{let index=((sequence-1)%ethernet::RX_COUNT as u64)as u32;let payload=vec![sequence as u8;if sequence%2==0{1514}else{60}];m.rx(index,&payload,3,0,payload.len());let start=m.ops().len();
  match d.advance(100+sequence){Some(Event::Received{sequence:s,index:i,frame})=>{assert_eq!((s,i),(sequence,index));assert_eq!(&frame.bytes[..frame.length],payload);assert!(frame.bytes[frame.length..].iter().all(|&x|x==0));},_=>panic!("missing packet")}
  let ops=&m.ops()[start..];let copied=ops.iter().position(|op|matches!(op,Op::CopyOut(..))).unwrap();let returned=ops.iter().position(|op|matches!(op,Op::Write(0x2818,_))).unwrap();assert!(copied<returned);assert!(ops[copied..returned].contains(&Op::Publish));assert_eq!(m.word(index*16+8),0);}
- m.set(0,u64::MAX);m.rx(0,&[0;60],3,0,60);let start=m.ops().len();assert!(d.advance(200).is_none());assert_eq!(d.failure(),Some(Failure::Descriptor));assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::CopyOut(..)|Op::Write(..))));
+ m.set(0,u64::MAX);m.rx(0,&[0;60],3,0,60);let start=m.ops().len();assert!(d.advance(1000).is_none());assert_eq!(d.failure(),Some(Failure::Descriptor));assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::CopyOut(..)|Op::Write(..))));
 }
 #[test]fn malformed_lengths_errors_and_entire_fragment_chain_are_dropped_without_payload_read(){
  let m=Mock::new(c::Model::I82574);let mut d=ready(&m);
@@ -106,7 +110,7 @@ fn ready(m:&Mock)->Driver<Mock>{let mut d=Driver::new(m.clone(),MAC,0);for n in 
 }
 
 #[test]fn legacy_unimplemented_timing_does_not_exempt_any_dma_register_or_unknown_nonzero_value(){
- for which in 0..4{let model=if which==2{c::Model::I82574}else{c::Model::I82540};let m=Mock::new(model);m.0.borrow_mut().timing=Some(if which==3{1}else{0});m.0.borrow_mut().refuse=which==1;let mut d=Driver::new(m.clone(),MAC,0);for n in 0..30{d.advance(n);}if which==0{assert_eq!(d.phase(),Phase::Running);assert!(!d.timing_verified);}else{assert_eq!(d.failure(),Some(Failure::Registers));assert_eq!(m.0.borrow().command&4,0);}}
+ for which in 0..4{let model=if which==2{c::Model::I82574}else{c::Model::I82540};let m=Mock::new(model);m.0.borrow_mut().timing=Some(if which==3{1}else{0});m.0.borrow_mut().refuse=which==1;let mut d=Driver::new(m.clone(),MAC,0);for n in 0..120{d.advance(n);}if which==0{assert_eq!(d.phase(),Phase::Running);assert!(!d.timing_verified);}else{assert_eq!(d.failure(),Some(Failure::Registers));assert_eq!(m.0.borrow().command&4,0);}}
 }
 
 #[test]fn protocol_backpressure_holds_rx_without_blocking_exact_tx_completion(){

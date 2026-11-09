@@ -36,7 +36,22 @@ fetch('/tube/api/player?prettyPrint=false', {
     fetch(other + '/open').then(r => r.json()).then(j => {
       done('cross open origin=' + j.origin + ' cookie=' + (j.cookie || 'none'));
       return fetch(other + '/closed').then(() => done('cross closed read'), () => done('cross closed blocked'));
-    }, e => done('cross open failed ' + e));
+    }, e => done('cross open failed ' + e)).then(() => {
+      // Several slow requests at once, as a player fetches segments and thumbnails:
+      // they travel side by side, not one after another.
+      const began = Date.now();
+      const many = Array.from({ length: 12 }, (_, i) => i + 1);
+      return Promise.all(many.map(n => fetch('/tube/slow/' + n).then(r => r.text()))).then(t => done('parallel ' + t.join(',') + ' ms=' + (Date.now() - began)));
+    }).catch(e => done('parallel failed ' + e)).then(() => {
+      // A request to a place that never answers must not hold up one that does.
+      fetch('http://10.0.2.123:9/never').then(() => done('stuck answered'), () => done('stuck gave up'));
+      const began = Date.now();
+      return fetch('/tube/slow/0').then(r => r.text()).then(t => done('beside stuck ' + t + ' ms=' + (Date.now() - began)));
+    }).then(() => fetch('/tube/drop')).then(r => r.text()).then(() => new Promise(go => setTimeout(go, 300))).then(() => {
+      // The site closed the kept connection without saying so: the next request
+      // finds it closed and goes again on a new one.
+      return fetch('/tube/after').then(r => r.text()).then(t => done('after drop ' + t), e => done('after drop failed ' + e));
+    });
   };
   x.send();
 })).catch(e => done('post failed ' + e));

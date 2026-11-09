@@ -444,3 +444,157 @@ fn array_and_3d_textures_sample_their_layers() {
     assert_eq!(ctx.get_error(), NO_ERROR);
     assert_eq!(px(&ctx, 1, 1), [0, 255, 0, 128]);
 }
+
+#[test]
+fn render_to_texture_then_sample_it() {
+    let mut ctx = Context::new(16, 16);
+    // A colour from a uniform, or a texture's texel when `t` is 1.
+    program(&mut ctx, "attribute vec2 p; varying vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }",
+        "precision mediump float; uniform sampler2D tex; uniform vec4 col; uniform float t; varying vec2 uv;\n\
+         void main(){ gl_FragColor = t > 0.5 ? texture2D(tex, uv) : col; }");
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    let (lc, lt) = (ctx.uniform_location(3, "col").unwrap(), ctx.uniform_location(3, "t").unwrap());
+    // An 8x4 texture to draw into.
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 8, 4, RGBA, UNSIGNED_BYTE, None);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+    ctx.bind_texture(TEXTURE_2D, 0);
+    ctx.clear_color([0.0, 0.0, 1.0, 1.0]);
+    ctx.clear(COLOR_BUFFER_BIT);
+    ctx.bind_framebuffer(30);
+    ctx.framebuffer_texture(COLOR_ATTACHMENT0, TEXTURE_2D, 20);
+    assert_eq!((ctx.width, ctx.height), (8, 4));
+    ctx.viewport(0, 0, 8, 4);
+    ctx.clear_color([0.0, 0.0, 0.0, 1.0]);
+    ctx.clear(COLOR_BUFFER_BIT);
+    // Only the left half of the texture turns red.
+    ctx.enable(SCISSOR_TEST, true);
+    ctx.scissor(0, 0, 4, 4);
+    ctx.uniform(lc, Some(&[1.0, 0.0, 0.0, 1.0]), None);
+    ctx.uniform(lt, Some(&[0.0]), None);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    ctx.enable(SCISSOR_TEST, false);
+    // Back on the canvas, which kept its blue; then draw it with the texture.
+    ctx.bind_framebuffer(0);
+    assert_eq!((ctx.width, ctx.height), (16, 16));
+    assert_eq!(px(&ctx, 3, 3), [0, 0, 255, 255]);
+    ctx.viewport(0, 0, 16, 16);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.uniform(lt, Some(&[1.0]), None);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 2, 8), [255, 0, 0, 255]);
+    assert_eq!(px(&ctx, 13, 8), [0, 0, 0, 255]);
+    // A blit copies the texture's framebuffer back over the canvas's top-right corner.
+    ctx.blit_framebuffer(30, 0, [0, 0, 8, 4], [8, 12, 16, 16]);
+    assert_eq!(px(&ctx, 9, 13), [255, 0, 0, 255]);
+    assert_eq!(px(&ctx, 15, 15), [0, 0, 0, 255]);
+    assert_eq!(ctx.fb, 0);
+}
+
+/// An 8x8 canvas covered by `fs`, with `uv` 0..1 across it.
+fn full_screen(fs: &str) -> Context {
+    let mut ctx = Context::new(8, 8);
+    program(&mut ctx, "#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }", fs);
+    ctx.bind_buffer(ARRAY_BUFFER, 10);
+    ctx.buffer_data(ARRAY_BUFFER, &bytes(&[-1., -1., 3., -1., -1., 3.]));
+    ctx.enable_attrib(0, true);
+    ctx.attrib_pointer(0, 2, FLOAT, false, 8, 0);
+    ctx
+}
+
+#[test]
+fn minified_textures_use_their_mipmaps() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c; void main(){ c = texture(t, uv); }";
+    let mut ctx = full_screen(fs);
+    // A 64x64 checkerboard of single texels: 8 texels per pixel, so level 3.
+    let board: Vec<u8> = (0..64 * 64).flat_map(|i| { let v = if (i % 64 + i / 64) % 2 == 0 { 255 } else { 0 }; [v, v, v, 255] }).collect();
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 64, 64, RGBA, UNSIGNED_BYTE, Some(&board));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    // Without mipmaps each pixel lands on one texel: all the same, all white.
+    assert_eq!(px(&ctx, 3, 5), [255, 255, 255, 255]);
+    ctx.generate_mipmap(TEXTURE_2D);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_LINEAR);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    for (x, y) in [(0, 0), (3, 5), (7, 7)] {
+        let p = px(&ctx, x, y);
+        assert!((p[0] as i32 - 128).abs() <= 1 && p[0] == p[1], "{:?} at {x},{y}", p);
+    }
+    // A new level 0 drops the old mipmaps: level 0 alone, nearest, again.
+    ctx.tex_image(TEXTURE_2D, 0, 64, 64, RGBA, UNSIGNED_BYTE, Some(&board));
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(px(&ctx, 3, 5), [255, 255, 255, 255]);
+}
+
+#[test]
+fn texture_lod_reads_uploaded_levels_and_derivatives_span_quads() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c;\n\
+              void main(){ c = vec4(textureLod(t, uv, 1.0).r, dFdx(uv.x) * 8.0, dFdy(uv.y) * 8.0, fwidth(uv.x) * 4.0); }";
+    let mut ctx = full_screen(fs);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 2, 2, RGBA, UNSIGNED_BYTE, Some(&[0; 16]));
+    ctx.tex_image(TEXTURE_2D, 1, 1, 1, RGBA, UNSIGNED_BYTE, Some(&[255, 0, 0, 255]));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(ctx.get_error(), NO_ERROR);
+    assert_eq!(px(&ctx, 0, 0), [255, 255, 255, 128]);
+    assert_eq!(px(&ctx, 5, 6), [255, 255, 255, 128]);
+}
+
+#[test]
+fn constant_coordinates_stay_on_level_zero_whatever_the_bias() {
+    let fs = "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c; void main(){ c = texture(t, vec2(0.25), 2.0); }";
+    let mut ctx = full_screen(fs);
+    ctx.bind_texture(TEXTURE_2D, 20);
+    ctx.tex_image(TEXTURE_2D, 0, 2, 2, RGBA, UNSIGNED_BYTE, Some(&[0, 0, 255, 255].repeat(4)));
+    ctx.tex_image(TEXTURE_2D, 1, 1, 1, RGBA, UNSIGNED_BYTE, Some(&[255, 0, 0, 255]));
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST_MIPMAP_NEAREST);
+    ctx.tex_parameter(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+    ctx.draw_arrays(gl::TRIANGLES, 0, 3);
+    assert_eq!(px(&ctx, 4, 4), [0, 0, 255, 255]);
+}
+
+fn threads(n: usize, f: &(dyn Fn(usize) + Sync)) { std::thread::scope(|s| for i in 0..n { s.spawn(move || f(i)); }) }
+
+#[test]
+fn draws_split_across_cores_match_one_core() {
+    let frame = |cores: usize| {
+        sex_gl::set_parallel(threads, cores);
+        let mut ctx = Context::new(300, 250);
+        program(&mut ctx, "#version 300 es\nin vec3 p; out vec2 uv; void main(){ uv = p.xy * 2.0 + 0.5; gl_Position = vec4(p.xy, p.z, 1.0 + p.z); }",
+            "#version 300 es\nprecision highp float; uniform sampler2D t; in vec2 uv; out vec4 c;\n\
+             void main(){ c = vec4(texture(t, uv).rgb + vec3(fwidth(uv.x) * 8.0, 0.0, 0.0), 0.7); }");
+        let board: Vec<u8> = (0..64 * 64).flat_map(|i| { let v = if (i % 64 / 4 + i / 256) % 2 == 0 { 230 } else { 20 }; [v, 255 - v, v / 2, 255] }).collect();
+        ctx.bind_texture(TEXTURE_2D, 20);
+        ctx.tex_image(TEXTURE_2D, 0, 64, 64, RGBA, UNSIGNED_BYTE, Some(&board));
+        ctx.generate_mipmap(TEXTURE_2D);
+        ctx.tex_parameter(TEXTURE_2D, TEXTURE_MIN_FILTER, LINEAR_MIPMAP_LINEAR);
+        ctx.enable(DEPTH_TEST, true);
+        ctx.enable(BLEND, true);
+        ctx.blend_func(0x0302, 0x0303, 0x0302, 0x0303); // SRC_ALPHA, ONE_MINUS_SRC_ALPHA
+        ctx.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+        // A floor going away from the eye, and a tilted quad through it.
+        let v = [-1., -1., 0., 1., -1., 0., -1., 1., 3., 1., -1., 0., 1., 1., 3., -1., 1., 3.,
+                 -0.8, -0.9, 1., 0.7, -0.6, 0.2, -0.2, 0.9, 0.5];
+        ctx.bind_buffer(ARRAY_BUFFER, 10);
+        ctx.buffer_data(ARRAY_BUFFER, &bytes(&v));
+        ctx.enable_attrib(0, true);
+        ctx.attrib_pointer(0, 3, FLOAT, false, 12, 0);
+        ctx.draw_arrays(gl::TRIANGLES, 0, 9);
+        assert_eq!(ctx.get_error(), NO_ERROR);
+        ctx.color.clone()
+    };
+    let one = frame(1);
+    let four = frame(4);
+    let three = frame(3);
+    sex_gl::set_parallel(threads, 1);
+    assert!(one.iter().any(|&p| p != one[0]), "something drawn");
+    assert!(one == four && one == three, "banded frames differ");
+}

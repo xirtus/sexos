@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 ROOT=Path(__file__).resolve().parents[1]
 TESTS=ROOT/'apps/play/tests'
-PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
+PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/play'))
 # name, format, video codec, audio codec, pictures, tone Hz
 CLIPS=[('clip-av.mp4','mov,mp4,m4a,3gp,3g2,mj2','h264','aac',50,440),
        ('clip.webm','matroska,webm','vp9','opus',50,660),

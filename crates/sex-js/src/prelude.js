@@ -8,8 +8,9 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
   const nodes = new Map();
+  const defaultChecked = new WeakMap();
 
   function fmt(v) {
     if (typeof v === 'string') return v;
@@ -91,6 +92,8 @@
     constructor(type, init) { super(type, init); init = init || {}; this.deltaX = init.deltaX || 0; this.deltaY = init.deltaY || 0; this.deltaZ = 0; this.deltaMode = init.deltaMode || 0; }
   }
   WheelEvent.DOM_DELTA_PIXEL = 0; WheelEvent.DOM_DELTA_LINE = 1; WheelEvent.DOM_DELTA_PAGE = 2;
+  class InputEvent extends UIEvent { constructor(type, init) { super(type, init); init = init || {}; this.data = init.data === undefined ? null : init.data; this.inputType = init.inputType || ''; this.isComposing = false; } }
+  class SubmitEvent extends Event { constructor(type, init) { super(type, init); this.submitter = (init && init.submitter) || null; } }
   class FocusEvent extends UIEvent { constructor(type, init) { super(type, init); this.relatedTarget = (init && init.relatedTarget) || null; } }
   class KeyboardEvent extends UIEvent {
     constructor(type, init) {
@@ -116,6 +119,11 @@
       if (arr) { const i = arr.findIndex(x => x.fn === fn); if (i >= 0) arr.splice(i, 1); }
     }
     dispatchEvent(ev) {
+      // A click runs its target's activation behaviour (checkboxes, submit buttons, labels).
+      if (ev.type === 'click' && this.nodeType === 1 && !ev._activating) { ev._activating = true; return activate(this, ev); }
+      return this._dispatch(ev);
+    }
+    _dispatch(ev) {
       ev.target = this;
       const path = [];
       for (let n = this; n; n = n === document ? window : n === window ? null : n.parentNode) path.push(n);
@@ -357,8 +365,8 @@
     get scrollTop() { return 0; }
     set scrollTop(v) {}
     scrollIntoView() {}
-    focus() { document._active = this; }
-    blur() { if (document._active === this) document._active = null; }
+    focus() { setFocus(this); }
+    blur() { if (document._active === this) setFocus(null); }
     click() { this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })); }
     setPointerCapture() { mouse.capture = this; }
     releasePointerCapture() { if (mouse.capture === this) mouse.capture = null; }
@@ -399,17 +407,293 @@
     get naturalHeight() { return this.offsetHeight; }
   }
   reflect(HTMLImageElement, ['alt', 'width', 'height']);
+  // ---- Forms ----
+  const TEXT_TYPES = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
+  function isText(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.localName === 'textarea') return true;
+    return el.localName === 'input' && TEXT_TYPES.has((el.getAttribute('type') || 'text').toLowerCase());
+  }
+  function focusable(el) {
+    for (let n = el; n && n.nodeType === 1; n = n.parentNode) {
+      const t = n.localName;
+      if (t === 'input' || t === 'textarea' || t === 'select' || t === 'button' || (t === 'a' && n.hasAttribute('href')) || n.hasAttribute('tabindex'))
+        return n.hasAttribute('disabled') ? null : n;
+    }
+    return null;
+  }
+  // The text control being edited: its caret (in code points) and its value at focus.
+  const edit = { el: null, caret: 0, start: '' };
+  function showCaret() { if (edit.el && document._active === edit.el) H(OP.CARET, edit.el._id, String(edit.caret)); else H(OP.CARET); }
+  function setFocus(el) {
+    const prev = document._active;
+    if (prev === el) return;
+    if (prev && edit.el === prev && prev.value !== edit.start) prev.dispatchEvent(new Event('change', { bubbles: true }));
+    document._active = el;
+    edit.el = null;
+    if (prev && prev.dispatchEvent) { prev.dispatchEvent(new FocusEvent('blur', { relatedTarget: el })); prev.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: el })); }
+    if (el && document._active === el) {
+      el.dispatchEvent(new FocusEvent('focus', { relatedTarget: prev })); el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, relatedTarget: prev }));
+    }
+    if (isText(document._active)) { edit.el = document._active; edit.start = edit.el.value; edit.caret = Array.from(edit.start).length; }
+    showCaret();
+  }
+  function fire(el, type, Kind, init) { const ev = new (Kind || Event)(type, Object.assign({ bubbles: true }, init)); el.dispatchEvent(ev); return ev; }
+  function formOf(el) {
+    const id = el.getAttribute('form');
+    if (id) { const f = document.getElementById(id); if (f && f.localName === 'form') return f; }
+    return el.closest('form');
+  }
+  // Typing into the focused text control. Answers true when the key was used.
+  function editKey(el, key, ctrl) {
+    const chars = Array.from(el.value);
+    let c = Math.min(edit.caret, chars.length), insert = null, removed = null, type = '';
+    const multi = el.localName === 'textarea';
+    const lineStart = i => { while (i > 0 && chars[i - 1] !== '\n') i--; return i; };
+    const lineEnd = i => { while (i < chars.length && chars[i] !== '\n') i++; return i; };
+    switch (key) {
+      case 'ArrowLeft': c = Math.max(0, c - 1); break;
+      case 'ArrowRight': c = Math.min(chars.length, c + 1); break;
+      case 'Home': c = multi ? lineStart(c) : 0; break;
+      case 'End': c = multi ? lineEnd(c) : chars.length; break;
+      case 'ArrowUp': case 'ArrowDown': {
+        if (!multi) { c = key === 'ArrowUp' ? 0 : chars.length; break; }
+        const s0 = lineStart(c), col = c - s0;
+        if (key === 'ArrowUp') { if (s0 === 0) { c = 0; break; } const p0 = lineStart(s0 - 1); c = Math.min(p0 + col, s0 - 1); }
+        else { const e0 = lineEnd(c); if (e0 >= chars.length) { c = chars.length; break; } const n0 = e0 + 1; c = Math.min(n0 + col, lineEnd(n0)); }
+        break;
+      }
+      case 'Backspace': if (c > 0) { removed = [c - 1, 1]; type = 'deleteContentBackward'; } break;
+      case 'Delete': if (c < chars.length) { removed = [c, 1]; type = 'deleteContentForward'; } break;
+      case 'Enter':
+        if (multi) { insert = '\n'; type = 'insertLineBreak'; break; }
+        // Enter commits the value (change), then submits the form.
+        if (el.value !== edit.start) { edit.start = el.value; fire(el, 'change'); }
+        { const f = formOf(el); if (f) submitForm(f, null, true); }
+        return true;
+      default:
+        if (ctrl || Array.from(key).length !== 1) return false;
+        insert = key; type = 'insertText';
+    }
+    if (insert !== null || removed) {
+      const max = el.hasAttribute('maxlength') ? +el.getAttribute('maxlength') : -1;
+      if (insert !== null && max >= 0 && chars.length >= max) { edit.caret = c; showCaret(); return true; }
+      if (el.hasAttribute('readonly')) return true;
+      if (!fire(el, 'beforeinput', InputEvent, { cancelable: true, data: insert, inputType: type }).defaultPrevented) {
+        if (removed) { chars.splice(removed[0], removed[1]); c = removed[0]; }
+        if (insert !== null) { chars.splice(c, 0, insert); c += 1; }
+        H(OP.VALUE, el._id, chars.join(''));
+        edit.caret = c;
+        fire(el, 'input', InputEvent, { data: insert, inputType: type });
+      }
+    }
+    edit.caret = c;
+    showCaret();
+    return true;
+  }
+  // What a successful submission of `form` sends: [name, value] pairs.
+  function formEntries(form, submitter) {
+    const out = [];
+    for (const el of form.elements) {
+      const name = el.getAttribute('name');
+      if (!name || disabledControl(el)) continue;
+      const t = el.localName === 'input' ? el.type : el.localName;
+      if ((t === 'checkbox' || t === 'radio') && !el.checked) continue;
+      if (t === 'submit' || t === 'image' || t === 'reset' || t === 'button' || (el.localName === 'button' && el !== submitter)) { if (el !== submitter) continue; }
+      if (t === 'file') continue;
+      if ((t === 'checkbox' || t === 'radio') && !el.hasAttribute('value')) { out.push([name, 'on']); continue; }
+      out.push([name, el.value]);
+    }
+    return out;
+  }
+  function submitForm(form, submitter, events) {
+    if (events) {
+      if (!form.checkValidity()) return;
+      const ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter });
+      form.dispatchEvent(ev);
+      if (ev.defaultPrevented) return;
+    }
+    const attr = (n, f) => (submitter && submitter.getAttribute(f)) || form.getAttribute(n);
+    const method = (attr('method', 'formmethod') || 'get').toLowerCase();
+    if (method === 'dialog') return;
+    const action = resolveUrl(attr('action', 'formaction') || H(OP.LOCATION) || '');
+    const enc = v => encodeURIComponent(String(v).replace(/\r?\n|\r/g, '\r\n')).replace(/[!'()~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, '+');
+    const query = formEntries(form, submitter).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
+    if (method === 'post') { H(OP.NAVIGATE, action, 'POST', query); return; }
+    H(OP.NAVIGATE, action.replace(/[?#].*$/, '') + '?' + query);
+  }
+  // A click on `el`: checkboxes and radios change before the click and change back if
+  // it is cancelled; submit and reset buttons, selects and labels act after it.
+  function activate(target, ev) {
+    // A click inside a button (on its text, say) activates the button; the event still
+    // goes to what was clicked.
+    const inner = target.localName;
+    const el = (inner !== 'input' && inner !== 'button' && inner !== 'select' && inner !== 'textarea' && target.closest('button')) || target;
+    const t = el.localName, type = t === 'input' ? el.type : '';
+    if (el.hasAttribute('disabled') && (t === 'input' || t === 'button' || t === 'select' || t === 'textarea')) return true;
+    let undo = null, changed = true;
+    if (type === 'checkbox') { const was = el.checked; el.checked = !was; undo = () => { el.checked = was; }; }
+    else if (type === 'radio' && !el.checked) {
+      const group = el.name ? radios(el) : [];
+      const was = group.find(r => r.checked);
+      for (const r of group) r.checked = false;
+      el.checked = true;
+      undo = () => { el.checked = false; if (was) was.checked = true; };
+    } else if (type === 'radio') { undo = () => {}; changed = false; }
+    const ok = target._dispatch(ev);
+    if (undo) {
+      if (!ok) { undo(); return ok; }
+      if (changed) { fire(el, 'input', InputEvent); fire(el, 'change'); }
+      return ok;
+    }
+    if (!ok) return ok;
+    const button = t === 'button' ? (el.getAttribute('type') || 'submit').toLowerCase() : type;
+    if (button === 'submit' || button === 'image') { const f = formOf(el); if (f) submitForm(f, el, true); }
+    else if (button === 'reset') { const f = formOf(el); if (f) f.reset(); }
+    else if (t === 'select') {
+      const opts = el.options;
+      if (opts.length) { el.selectedIndex = (el.selectedIndex + 1) % opts.length; fire(el, 'input', InputEvent); fire(el, 'change'); }
+    } else if (t !== 'input' && t !== 'textarea' && t !== 'a') {
+      const label = el.closest('label');
+      if (label) {
+        const control = label.control;
+        if (control && control !== el && !control.contains(el)) { if (isText(control) || control.localName === 'select') control.focus(); else control.click(); }
+      }
+    }
+    return ok;
+  }
+  function disabledControl(el) { for (let n = el; n && n.nodeType === 1; n = n.parentNode) if (n.hasAttribute('disabled') && (n === el || n.localName === 'fieldset')) return true; return false; }
+  function radios(el) { return (formOf(el) || document).querySelectorAll('input').filter(r => r.type === 'radio' && r.name === el.name && formOf(r) === formOf(el)); }
+  function controlValidity(el) {
+    if (el.hasAttribute('disabled') || !el.hasAttribute('required')) return true;
+    const t = el.localName === 'input' ? el.type : el.localName;
+    if (t === 'checkbox') return el.checked;
+    if (t === 'radio') return radios(el).some(r => r.checked);
+    return el.value !== '';
+  }
   class HTMLInputElement extends HTMLElement {
-    get value() { return this._value !== undefined ? this._value : this.getAttribute('value') || ''; }
-    set value(v) { this._value = String(v); this.setAttribute('value', v); }
+    get value() { return H(OP.VALUE, this._id) || ''; }
+    set value(v) { v = v === null || v === undefined ? '' : String(v); H(OP.VALUE, this._id, v); if (edit.el === this) { edit.caret = Array.from(v).length; showCaret(); } }
+    get defaultValue() { return this.getAttribute('value') || ''; }
+    set defaultValue(v) { this.setAttribute('value', v); }
+    get valueAsNumber() { const n = parseFloat(this.value); return isNaN(n) ? NaN : n; }
+    set valueAsNumber(n) { this.value = String(n); }
+    get form() { return formOf(this); }
+    // The page shows (and CSS matches) the live state through the checked attribute, so
+    // the default is kept here once the state first changes.
+    get defaultChecked() { return defaultChecked.has(this) ? defaultChecked.get(this) : this.hasAttribute('checked'); }
+    set defaultChecked(v) { if (defaultChecked.has(this)) defaultChecked.set(this, !!v); else this.toggleAttribute('checked', !!v); }
+    get selectionStart() { return edit.el === this ? edit.caret : this.value.length; }
+    get selectionEnd() { return this.selectionStart; }
+    setSelectionRange(a) { if (edit.el === this) { edit.caret = Math.max(0, Math.min(+a || 0, Array.from(this.value).length)); showCaret(); } }
+    select() {}
+    get validity() { const valid = controlValidity(this); return { valid, valueMissing: !valid }; }
+    checkValidity() { return controlValidity(this); }
+    reportValidity() { return controlValidity(this); }
+    setCustomValidity() {}
+    get labels() { return this.id ? document.querySelectorAll('label').filter(l => l.control === this) : []; }
     get checked() { return this.hasAttribute('checked'); }
-    set checked(v) { this.toggleAttribute('checked', !!v); }
+    set checked(v) { if (!defaultChecked.has(this)) defaultChecked.set(this, this.hasAttribute('checked')); this.toggleAttribute('checked', !!v); }
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'text').toLowerCase(); }
   }
-  reflect(HTMLInputElement, ['name', 'placeholder']);
+  reflect(HTMLInputElement, ['name', 'placeholder', 'min', 'max', 'step', 'pattern', 'autocomplete']);
+  for (const p of ['required', 'readOnly', 'multiple', 'autofocus']) Object.defineProperty(HTMLInputElement.prototype, p, { get() { return this.hasAttribute(p.toLowerCase()); }, set(v) { this.toggleAttribute(p.toLowerCase(), !!v); }, configurable: true });
+  Object.defineProperty(HTMLInputElement.prototype, 'maxLength', { get() { return this.hasAttribute('maxlength') ? +this.getAttribute('maxlength') : -1; }, set(v) { this.setAttribute('maxlength', v); }, configurable: true });
+  class HTMLTextAreaElement extends HTMLInputElement {
+    get type() { return 'textarea'; }
+    get defaultValue() { return this.textContent; }
+    set defaultValue(v) { this.textContent = v; }
+    get rows() { return +(this.getAttribute('rows') || 2); }
+    get cols() { return +(this.getAttribute('cols') || 20); }
+  }
+  class HTMLOptionElement extends HTMLElement {
+    get value() { const v = this.getAttribute('value'); return v === null ? this.text : v; }
+    set value(v) { this.setAttribute('value', v); }
+    get text() { return this.textContent.replace(/\s+/g, ' ').trim(); }
+    set text(v) { this.textContent = v; }
+    get label() { return this.getAttribute('label') || this.text; }
+    get selected() { const s = this.closest('select'); return s ? s.selectedIndex === s.options.indexOf(this) : this.hasAttribute('selected'); }
+    set selected(v) { const s = this.closest('select'); if (s && v) s.selectedIndex = s.options.indexOf(this); else this.toggleAttribute('selected', !!v); }
+    get defaultSelected() { return this.hasAttribute('selected'); }
+    get index() { const s = this.closest('select'); return s ? s.options.indexOf(this) : 0; }
+    get disabled() { return this.hasAttribute('disabled'); }
+    get form() { const s = this.closest('select'); return s ? s.form : null; }
+  }
+  class HTMLSelectElement extends HTMLElement {
+    get options() { const o = this.querySelectorAll('option'); o.item = i => o[i] || null; o.namedItem = n => o.find(x => x.id === n) || null; return o; }
+    get length() { return this.options.length; }
+    get selectedIndex() { const o = this.options; const i = o.findIndex(x => x.hasAttribute('selected')); return i >= 0 ? i : o.length ? 0 : -1; }
+    set selectedIndex(i) { const o = this.options; o.forEach((x, k) => x.toggleAttribute('selected', k === +i)); }
+    get selectedOptions() { const i = this.selectedIndex; return i >= 0 ? [this.options[i]] : []; }
+    get value() { const i = this.selectedIndex; return i >= 0 ? this.options[i].value : ''; }
+    set value(v) { this.selectedIndex = this.options.findIndex(x => x.value === String(v)); }
+    get type() { return this.hasAttribute('multiple') ? 'select-multiple' : 'select-one'; }
+    get form() { return formOf(this); }
+    get disabled() { return this.hasAttribute('disabled'); }
+    set disabled(v) { this.toggleAttribute('disabled', !!v); }
+    item(i) { return this.options[i] || null; }
+    add(opt, before) { this.insertBefore(opt, typeof before === 'number' ? this.options[before] || null : before || null); }
+    checkValidity() { return !this.hasAttribute('required') || this.value !== ''; }
+    reportValidity() { return this.checkValidity(); }
+    setCustomValidity() {}
+    get validity() { const valid = this.checkValidity(); return { valid, valueMissing: !valid }; }
+  }
+  reflect(HTMLSelectElement, ['name']);
+  class HTMLFormElement extends HTMLElement {
+    get elements() {
+      const out = document.querySelectorAll('input, select, textarea, button').filter(el => formOf(el) === this);
+      for (const el of out) { const n = el.getAttribute('name') || el.id; if (n && isNaN(n) && !(n in out)) out[n] = el; }
+      out.namedItem = n => out.find(el => el.getAttribute('name') === n || el.id === n) || null;
+      return out;
+    }
+    get length() { return this.elements.length; }
+    get action() { return resolveUrl(this.getAttribute('action') || H(OP.LOCATION) || ''); }
+    set action(v) { this.setAttribute('action', v); }
+    get method() { const m = (this.getAttribute('method') || 'get').toLowerCase(); return m === 'post' || m === 'dialog' ? m : 'get'; }
+    set method(v) { this.setAttribute('method', v); }
+    submit() { submitForm(this, null, false); }
+    requestSubmit(submitter) { submitForm(this, submitter || null, true); }
+    reset() {
+      if (fire(this, 'reset', Event, { cancelable: true }).defaultPrevented) return;
+      for (const el of this.elements) {
+        if (el.localName === 'select') { const o = el.options; const i = o.findIndex(x => x.defaultSelected); el.selectedIndex = i; }
+        else if (el.localName === 'input' && (el.type === 'checkbox' || el.type === 'radio')) el.checked = el.defaultChecked;
+        else if (el.localName === 'textarea' || el.localName === 'input') el.value = el.defaultValue;
+      }
+    }
+    checkValidity() { return this.elements.every(el => !el.checkValidity || el.checkValidity()); }
+    reportValidity() { return this.checkValidity(); }
+  }
+  reflect(HTMLFormElement, ['name', 'target', 'enctype']);
+  class HTMLLabelElement extends HTMLElement {
+    get htmlFor() { return this.getAttribute('for') || ''; }
+    set htmlFor(v) { this.setAttribute('for', v); }
+    get control() {
+      const f = this.getAttribute('for');
+      if (f) { const c = document.getElementById(f); return c && /^(input|select|textarea|button)$/.test(c.localName) ? c : null; }
+      return this.querySelector('input, select, textarea, button');
+    }
+    get form() { const c = this.control; return c ? c.form : null; }
+  }
+  class FormData {
+    constructor(form, submitter) { this._l = form ? formEntries(form, submitter || null) : []; }
+    append(k, v) { this._l.push([String(k), String(v)]); }
+    set(k, v) { this.delete(k); this.append(k, v); }
+    delete(k) { this._l = this._l.filter(p => p[0] !== String(k)); }
+    get(k) { const p = this._l.find(p => p[0] === String(k)); return p ? p[1] : null; }
+    getAll(k) { return this._l.filter(p => p[0] === String(k)).map(p => p[1]); }
+    has(k) { return this._l.some(p => p[0] === String(k)); }
+    entries() { return this._l.map(p => p.slice())[Symbol.iterator](); }
+    keys() { return this._l.map(p => p[0])[Symbol.iterator](); }
+    values() { return this._l.map(p => p[1])[Symbol.iterator](); }
+    forEach(fn, self) { for (const [k, v] of this._l) fn.call(self, v, k, this); }
+    [Symbol.iterator]() { return this.entries(); }
+  }
   class HTMLButtonElement extends HTMLElement {
+    get form() { return formOf(this); }
+    checkValidity() { return true; }
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'submit').toLowerCase(); }
@@ -656,7 +940,8 @@
   }
 
   const ELEMENT_CLASSES = { VIDEO: HTMLVideoElement, AUDIO: HTMLAudioElement, A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
-    TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLInputElement, SELECT: HTMLInputElement };
+    TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLTextAreaElement, SELECT: HTMLSelectElement,
+    OPTION: HTMLOptionElement, FORM: HTMLFormElement, LABEL: HTMLLabelElement };
 
   // A fragment is a detached holder element; inserting it moves its children.
   class DocumentFragment extends Node {
@@ -827,7 +1112,7 @@
       this._s = { program: null, array: null, vao: null, unit: 0, tex: [], clear: [0, 0, 0, 0], depthClear: 1, viewport: [0, 0, canvas.width, canvas.height],
         scissor: [0, 0, canvas.width, canvas.height], enabled: {}, depthFunc: 0x201, depthMask: true, colorMask: [true, true, true, true],
         blend: [1, 0, 1, 0], blendEq: [0x8006, 0x8006], cullFace: 0x405, frontFace: 0x901, flipY: false, premul: false, align: 4,
-        lineWidth: 1, elem: new Map(), fb: null, rb: null };
+        lineWidth: 1, elem: new Map(), fb: null, readFb: null, rb: null };
       this._progInfo = new Map();
       H(OP.GL_QUERY, canvas._id, 'init', canvas.width, canvas.height, this._attrs.alpha === false ? 0 : 1);
     }
@@ -920,7 +1205,8 @@
         case 0x84E0: return 0x84C0 + s.unit;
         case 0x8069: return (s.tex[s.unit] || {})[0xDE1] || null;
         case 0x8514: return (s.tex[s.unit] || {})[0x8513] || null;
-        case 0x8CA6: case 0x8CAA: return s.fb;
+        case 0x8CA6: return s.fb;
+        case 0x8CAA: return s.readFb || null;
         case 0x8CA7: return s.rb;
         case 0xB45: return s.cullFace;
         case 0xB46: return s.frontFace;
@@ -1042,7 +1328,7 @@
     texParameteri(t, p, v) { this._c('tp', t, p, v); }
     texParameterf(t, p, v) { this._c('tp', t, p, v | 0); }
     getTexParameter() { return null; }
-    generateMipmap() {}
+    generateMipmap(t) { this._c('gm', t); }
     _picture(target, src) {
       if (src && src.tagName === 'IMG') { this._c('tP', target, this._boundTex(target), src.getAttribute('src') || ''); return true; }
       if (src && src.tagName === 'CANVAS') { this._c('tP', target, this._boundTex(target), 'canvas:' + src._id); return true; }
@@ -1227,29 +1513,54 @@
     drawArraysInstanced(mode, first, count, n) { this._c('dai', mode, first | 0, count | 0, n | 0); }
     drawElementsInstanced(mode, count, type, offset, n) { this._c('dei', mode, count | 0, type, offset | 0, n | 0); }
     drawRangeElements(mode, start, end, count, type, offset) { this.drawElements(mode, count, type, offset); }
-    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} blitFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    blitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask) {
+      if (!(mask & 0x4000)) return;
+      const r = this._s.readFb, d = this._s.fb;
+      this._c('blt', r ? r._id : 0, d ? d._id : 0, sx0 | 0, sy0 | 0, sx1 | 0, sy1 | 0, dx0 | 0, dy0 | 0, dx1 | 0, dy1 | 0);
+    }
     clearBufferuiv() {} clearBufferfi() {}
     readPixels(x, y, w, h, format, type, out) {
       if (!out) return;
+      const r = this._s.readFb, d = this._s.fb, other = (r || null) !== (d || null);
+      if (other) this._c('fb', r ? r._id : 0);
       this._flush();
       const buf = H(OP.GL_QUERY | 0x10000, this.canvas._id, 'read', String(x | 0), String(y | 0), String(w | 0), String(h | 0));
+      if (other) this._c('fb', d ? d._id : 0);
       if (buf instanceof ArrayBuffer) {
         const src = new Uint8Array(buf);
         const dst = bytesOf(out);
         dst.set(src.subarray(0, Math.min(src.length, dst.length)));
       }
     }
-    // Framebuffers and renderbuffers: drawing goes to the canvas for now.
+    // Framebuffers: draws land in the attached texture (render to texture) or colour
+    // renderbuffer; each framebuffer has its own depth buffer.
     createFramebuffer() { return new WebGLFramebuffer(); }
-    bindFramebuffer(t, f) { this._s.fb = f || null; }
-    deleteFramebuffer() {} isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
-    framebufferTexture2D() {} framebufferRenderbuffer() {} framebufferTextureLayer() {}
+    bindFramebuffer(t, f) {
+      f = f || null;
+      if (t !== 0x8CA9) this._s.readFb = f;   // READ_FRAMEBUFFER or FRAMEBUFFER
+      if (t === 0x8CA8) return;
+      if (this._s.fb !== f) { this._s.fb = f; this._c('fb', f ? f._id : 0); }
+    }
+    deleteFramebuffer(f) {
+      if (!f) return;
+      if (this._s.fb === f) this._s.fb = null;
+      if (this._s.readFb === f) this._s.readFb = null;
+      this._c('dfb', f._id);
+    }
+    isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
+    framebufferTexture2D(t, attachment, textarget, tex) { if (t !== 0x8CA8) this._c('ft', attachment, textarget, tex ? tex._id : 0); }
+    framebufferTextureLayer() {}
+    framebufferRenderbuffer(t, attachment, rt, rb) { if (t !== 0x8CA8) this._c('fr', attachment, rb ? rb._id : 0); }
     checkFramebufferStatus() { return 0x8CD5; }
     getFramebufferAttachmentParameter() { return null; }
     createRenderbuffer() { return new WebGLRenderbuffer(); }
-    bindRenderbuffer(t, r) { this._s.rb = r || null; }
-    deleteRenderbuffer() {} isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
-    renderbufferStorage() {} renderbufferStorageMultisample() {} getRenderbufferParameter() { return 0; }
+    bindRenderbuffer(t, r) { this._s.rb = r || null; this._c('rb', r ? r._id : 0); }
+    deleteRenderbuffer(r) { if (r) this._c('drb', r._id); }
+    isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
+    renderbufferStorage(t, fmt, w, h) { if (this._s.rb) { this._s.rb._w = w; this._s.rb._h = h; } this._c('rs', w | 0, h | 0); }
+    renderbufferStorageMultisample(t, samples, fmt, w, h) { this.renderbufferStorage(t, fmt, w, h); }
+    getRenderbufferParameter(t, p) { const r = this._s.rb; return !r ? 0 : p === 0x8D42 ? r._w | 0 : p === 0x8D43 ? r._h | 0 : 0; }
     // WebGL 2 odds and ends
     createQuery() { return new WebGLQuery(); } deleteQuery() {} beginQuery() {} endQuery() {} getQueryParameter() { return 0; }
     createSampler() { return new WebGLSampler(); } deleteSampler() {} bindSampler() {} samplerParameteri() {} samplerParameterf() {}
@@ -1967,6 +2278,7 @@
     Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio,
+    HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
     WebGLRenderbuffer, WebGLVertexArrayObject, WebGLUniformLocation, WebGLActiveInfo, WebGLShaderPrecisionFormat,
@@ -2024,10 +2336,12 @@
       }
       case 'down': {
         mouse.down = el;
-        if (el !== document._active && el.nodeType === 1) { const prev = document._active; document._active = el; if (prev && prev.dispatchEvent) prev.dispatchEvent(new FocusEvent('blur')); }
         const p = fireMouse(el, 'pointerdown', PointerEvent, init);
         if (p.defaultPrevented) return 1;
-        return fireMouse(el, 'mousedown', MouseEvent, init).defaultPrevented ? 1 : 0;
+        if (fireMouse(el, 'mousedown', MouseEvent, init).defaultPrevented) return 1;
+        // Focus moves to the control (or link) pressed, and leaves when it is elsewhere.
+        if (button === 0) setFocus(focusable(el));
+        return 0;
       }
       case 'up': {
         const p = fireMouse(el, 'pointerup', PointerEvent, init);
@@ -2079,8 +2393,20 @@
       case 'key': {
         if (!KEY_TYPES.has(f[1])) return 0;
         const ev = new KeyboardEvent(f[1], { key: f[2] || '', code: f[3] || '', bubbles: true, cancelable: true, ctrlKey: f[4] === '1' });
-        (document._active || document.body || document).dispatchEvent(ev);
-        return ev.defaultPrevented ? 1 : 0;
+        const target = document._active || document.body || document;
+        target.dispatchEvent(ev);
+        if (ev.defaultPrevented) return 1;
+        if (f[1] !== 'keydown') return edit.el && edit.el === document._active ? 1 : 0;
+        if (edit.el && edit.el === document._active) return editKey(edit.el, ev.key, ev.ctrlKey) ? 1 : 0;
+        const a = document._active;
+        if (a && a.localName === 'select' && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) {
+          const n = a.options.length;
+          if (n) { a.selectedIndex = Math.max(0, Math.min(n - 1, a.selectedIndex + (ev.key === 'ArrowUp' ? -1 : 1))); fire(a, 'input', InputEvent); fire(a, 'change'); }
+          return 1;
+        }
+        if (a && (ev.key === ' ' || ev.key === 'Enter') && a.localName === 'input' && /^(checkbox|radio|submit|button|reset|image)$/.test(a.type)) { a.click(); return 1; }
+        if (a && (ev.key === ' ' || ev.key === 'Enter') && a.localName === 'button') { a.click(); return 1; }
+        return 0;
       }
       case 'ready': {
         document.readyState = 'interactive';

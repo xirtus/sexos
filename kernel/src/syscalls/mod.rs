@@ -28,6 +28,11 @@ fn is_canonical_addr(addr: u64) -> bool {
 ///
 /// Does NOT hold GLOBAL_VAS or any allocator lock; it only reads the existing
 /// page tables via `read_pte_flags`.
+/// The caller may read `[start, start + len)` (see `validate_user_bytes`).
+pub fn user_bytes_readable(start: u64, len: usize) -> bool { validate_user_bytes(start, len, false) }
+/// The caller may write `[start, start + len)`.
+pub fn user_bytes_writable(start: u64, len: usize) -> bool { validate_user_bytes(start, len, true) }
+
 fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
     if len == 0 {
         return true;
@@ -475,6 +480,16 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             // A BOOT service with an arena grows there; a program row in its window.
             let reply=crate::service_memory::grow(pd.id,rdi).unwrap_or_else(||crate::app_resources::grow(pd,rdi));
+            regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+        },
+
+        83 => { // SYS_PROGRAM_THREAD: workers of the caller's own run.
+            crate::program_workers::call(regs,rdi,rsi,rdx,r10)
+        },
+
+        82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::app_resources::code(pd,rdi,rsi,rdx);
             regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
         },
 

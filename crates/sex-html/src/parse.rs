@@ -61,7 +61,7 @@ pub fn parse(src: &str) -> Dom {
             if !name.is_empty() { b.end(&name); }
         } else {
             let (name, end) = tag_name(bytes, i + 1);
-            let (attrs, end, _self_closing) = attributes(src, end);
+            let (attrs, end, self_closing) = attributes(src, end);
             i = end;
             if RAW.contains(&name.as_str()) {
                 let close = find_close(bytes, i, &name);
@@ -74,7 +74,10 @@ pub fn parse(src: &str) -> Dom {
                 b.end(&name);
                 i = close.1;
             } else {
+                // `<path/>` closes itself in SVG and MathML (foreign content), not in HTML.
+                let foreign = self_closing && (matches!(name.as_str(), "svg" | "math") || b.stack.iter().any(|&n| matches!(b.dom.tag(n), Some("svg" | "math"))));
                 b.start(&name, attrs);
+                if foreign { b.end(&name); }
             }
         }
         text_start = i;
