@@ -563,7 +563,9 @@ impl Player {
         self.eof = false;
         self.ended = false;
         self.skip_until = ms as i64;
-        if let Some(s) = self.sound.as_mut() { s.skip(); }
+        // A stream that reached its end closed its ring: open it again first, or Bell
+        // drops the stream the moment the skip empties it.
+        if let Some(s) = self.sound.as_mut() { s.reopen(); s.skip(); }
         self.clock.set(ms as i64);
     }
 

@@ -68,6 +68,8 @@ impl Sound {
     pub fn played_total(&self) -> u64 { self.ring.load(ring::PLAYED) }
     fn kick_now(&mut self) { self.told = false; self.kick(); }
     pub fn set_volume(&mut self, percent: u8) { self.ring.store(ring::VOLUME, percent.min(100) as u64); }
+    /// Undo `close`: the program means to play more into this ring.
+    pub fn reopen(&mut self) { self.ring.store(ring::OPEN, 1); self.told = false; }
     /// Stop: Bell drops the stream once it has played what is queued.
     pub fn close(&mut self) { self.ring.store(ring::OPEN, 0); }
 }
