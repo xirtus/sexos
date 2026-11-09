@@ -286,13 +286,13 @@ pub mod net {
 
     const NET: u32 = 13;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Error { NotAllowed, Offline, NoName, Connect, Certificate, Secure, TooSlow, Address, Failed }
+    pub enum Error { NotAllowed, Offline, NoName, Connect, Certificate, Secure, TooSlow, Address, Failed, TooLarge }
     pub fn message(e: Error) -> &'static [u8] {
         match e {
             Error::NotAllowed => b"This program was not given the network. Start it with run +net.",
             Error::Offline => b"No network.", Error::NoName => b"That name was not found.", Error::Connect => b"Could not connect.",
             Error::Certificate => b"The site's certificate isn't trusted.", Error::Secure => b"The secure connection failed.",
-            Error::TooSlow => b"The site took too long.", Error::Address => b"That address can't be read.", Error::Failed => b"The request failed.",
+            Error::TooSlow => b"The site took too long.", Error::TooLarge => b"The reply is too large.", Error::Address => b"That address can't be read.", Error::Failed => b"The request failed.",
         }
     }
     fn region() -> Result<&'static mut [u8], Error> {
@@ -350,16 +350,9 @@ pub mod net {
             })
         }
     }
-    /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
-    /// and read the content type.
-    pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
-        let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
-        let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
-        let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
-        let (host, port) = match authority.iter().position(|b| *b == b':') {
-            Some(i) => (&authority[..i], authority[i + 1..].iter().try_fold(0u32, |v, b| b.is_ascii_digit().then(|| v * 10 + (*b - b'0') as u32)).filter(|p| (1..=65535).contains(p)).ok_or(Error::Address)? as u16),
-            None => (authority, if tls { 443 } else { 80 }),
-        };
+    /// Opens a flow to `host:port`, encrypted when `tls`, and gives back the region the
+    /// flow's bytes pass through.
+    fn open(window: &mut Window, host: &[u8], port: u16, tls: bool) -> Result<&'static mut [u8], Error> {
         if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
         let region = region()?;
         loop { let r = call(window, w::UP, 0)?; ok(r)?; if r.0 == w::OK { break; } pause(); }
@@ -396,20 +389,37 @@ pub mod net {
                 }
             }
         }
-        // HTTP/1.0, so the reply needs no chunk decoding and ends when the peer closes.
-        let mut request = [0u8; 900];
-        let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
-        let mut n = 0;
-        for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
+        Ok(region)
+    }
+    /// Sends all of `bytes` on the open flow, then says the request is whole.
+    fn send_all(window: &mut Window, region: &mut [u8], bytes: &[u8], tls: bool) -> Result<(), Error> {
         let mut sent = 0;
-        while sent < n { region[..n - sent].copy_from_slice(&request[sent..n]); sent += ok(call(window, w::SEND, (n - sent) as u64)?)? as usize; if sent < n { pause(); } }
+        while sent < bytes.len() {
+            let n = (bytes.len() - sent).min(region.len());
+            region[..n].copy_from_slice(&bytes[sent..sent + n]);
+            let took = ok(call(window, w::SEND, n as u64)?)? as usize;
+            sent += took;
+            if took < n { pause(); }
+        }
         if tls { ok(call(window, w::FINISH_REQUEST, 0)?)?; }
-        let (mut got, mut done) = (0usize, false);
-        let began = sex_pdx::get_ticks();
+        Ok(())
+    }
+    /// Receives into `out` (grown up to `cap` bytes) until the peer closes, `cap` is
+    /// reached, or `enough` says the reply is whole. Then closes the flow.
+    fn receive(window: &mut Window, region: &mut [u8], out: &mut alloc::vec::Vec<u8>, cap: usize, mut enough: impl FnMut(&[u8]) -> bool) -> Result<(), Error> {
+        let mut done = false;
+        let mut began = sex_pdx::get_ticks();
         loop {
+            // Sixty seconds without a byte is too slow; a long download that keeps moving is not.
             if sex_pdx::get_ticks().saturating_sub(began) > 60_000 { let _ = call(window, w::CLOSE, 0); return Err(Error::TooSlow); }
-            let k = ok(call(window, w::RECEIVE, (out.len() - got).min(32 * 1024).max(1) as u64)?)? as usize;
-            if k > 0 { let take = k.min(out.len() - got); out[got..got + take].copy_from_slice(&region[..take]); got += take; if got == out.len() { break; } continue; }
+            let k = ok(call(window, w::RECEIVE, (cap - out.len()).min(32 * 1024).max(1) as u64)?)? as usize;
+            if k > 0 {
+                let take = k.min(cap - out.len());
+                out.extend_from_slice(&region[..take]);
+                began = sex_pdx::get_ticks();
+                if out.len() == cap || enough(out) { break; }
+                continue;
+            }
             if done { break; }
             // Bytes can land between the two calls, so a closed peer gets one last read.
             let state = ok(call(window, w::STATE, 0)?)?;
@@ -417,6 +427,72 @@ pub mod net {
             if !done { pause(); }
         }
         let _ = call(window, w::CLOSE, 0);
+        Ok(())
+    }
+
+    /// A decoded HTTP/1.1 reply: its head, and the body unframed and decompressed.
+    pub struct Response { pub head: sex_fetch::Head, pub body: alloc::vec::Vec<u8> }
+
+    /// Sends one HTTP/1.1 request (any method, headers, body) and reads the reply,
+    /// undoing chunked framing and gzip/deflate. `cookie` is the jar's `Cookie` value
+    /// for this address. Redirects are the caller's to follow (each hop may set
+    /// cookies). Bodies larger than `max` after decoding fail.
+    pub fn request(window: &mut Window, req: &sex_fetch::Request, cookie: Option<&str>, max: usize) -> Result<Response, Error> {
+        let url = sex_fetch::Url::parse(req.url).map_err(|_| Error::Address)?;
+        let bytes = sex_fetch::encode(req, &url, cookie).map_err(|_| Error::Address)?;
+        let region = open(window, url.host.as_bytes(), url.port, url.secure)?;
+        if let Err(e) = send_all(window, region, &bytes, url.secure) { let _ = call(window, w::CLOSE, 0); return Err(e); }
+        // Room for the head, the framing and the body; decoding checks `max` again.
+        let cap = max.saturating_add(sex_fetch::HEAD_MAX).saturating_add(max / 8 + 4096);
+        let mut raw = alloc::vec::Vec::new();
+        let mut head_end = None;
+        let mut framing = None;
+        let mut chunks = sex_fetch::ChunkScan::new();
+        receive(window, region, &mut raw, cap, |seen| {
+            if head_end.is_none() {
+                match sex_fetch::parse_head(seen) {
+                    Ok(Some((h, at))) => { head_end = Some(at); framing = h.framing(req.method).ok(); }
+                    Ok(None) => return false,
+                    Err(_) => return true,
+                }
+            }
+            let body = &seen[head_end.unwrap_or(0)..];
+            match framing {
+                Some(sex_fetch::Framing::Chunked) => !matches!(chunks.advance(body), Ok(None)),
+                Some(f) => sex_fetch::complete(f, body).unwrap_or(true),
+                None => true,
+            }
+        })?;
+        let (head, at) = match sex_fetch::parse_head(&raw) { Ok(Some(h)) => h, _ => return Err(Error::Failed) };
+        let body = match sex_fetch::decode(&head, req.method, &raw[at..], max) {
+            Ok(b) => b,
+            Err(sex_fetch::Error::TooLarge) => return Err(Error::TooLarge),
+            Err(_) => return Err(Error::Failed),
+        };
+        Ok(Response { head, body })
+    }
+
+    /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
+    /// and read the content type.
+    pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
+        let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
+        let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
+        let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
+        let (host, port) = match authority.iter().position(|b| *b == b':') {
+            Some(i) => (&authority[..i], authority[i + 1..].iter().try_fold(0u32, |v, b| b.is_ascii_digit().then(|| v * 10 + (*b - b'0') as u32)).filter(|p| (1..=65535).contains(p)).ok_or(Error::Address)? as u16),
+            None => (authority, if tls { 443 } else { 80 }),
+        };
+        // HTTP/1.0, so the reply needs no chunk decoding and ends when the peer closes.
+        let mut request = [0u8; 900];
+        let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
+        let mut n = 0;
+        for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
+        let region = open(window, host, port, tls)?;
+        if let Err(e) = send_all(window, region, &request[..n], tls) { let _ = call(window, w::CLOSE, 0); return Err(e); }
+        let mut got_bytes = alloc::vec::Vec::new();
+        receive(window, region, &mut got_bytes, out.len(), |_| false)?;
+        let got = got_bytes.len();
+        out[..got].copy_from_slice(&got_bytes);
         let end = find(&out[..got], b"\r\n\r\n").ok_or(Error::Failed)?;
         let line = &out[..find(&out[..end + 2], b"\r\n").unwrap_or(end)];
         let status = line.split(|b| *b == b' ').nth(1).and_then(|c| core::str::from_utf8(c).ok()?.parse::<u32>().ok()).unwrap_or(0);
