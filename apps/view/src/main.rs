@@ -35,16 +35,44 @@ fn fail(window: &mut Window, why: &[u8]) {
 const SHRINKABLE: Limits = Limits { max_width: 4 * MAX_W, max_height: 4 * MAX_H, max_pixels: 16 * PIXELS, max_input_bytes: usize::MAX };
 
 /// Decodes `bytes` into the window's pixels: straight into them when the picture
-/// fits, otherwise on the heap and then shrunk. Returns width, height, shrunk.
-fn open(bytes: &[u8], out: &mut [u32]) -> Result<(usize, usize, bool), Error> {
-    let surface = Limits { max_input_bytes: usize::MAX, ..Limits::SURFACE };
+/// fits the window's pixel area, otherwise on the heap and then shrunk to fit it.
+/// Returns width, height, shrunk.
+fn open(bytes: &[u8], out: &mut [u32], (aw, ah): (usize, usize)) -> Result<(usize, usize, bool), Error> {
+    let (aw, ah) = (aw.max(1), ah.max(1));
+    let surface = Limits { max_width: aw, max_height: ah, max_pixels: aw * ah, max_input_bytes: usize::MAX };
     match sex_image::decode_into(bytes, &surface, out) {
         Err(Error::TooLarge) => {}
         other => return other.map(|(w, h)| (w, h, false)),
     }
-    let image = sex_image::decode(bytes, &SHRINKABLE)?.fit_within(MAX_W, MAX_H)?;
+    let image = sex_image::decode(bytes, &SHRINKABLE)?.fit_within(aw, ah)?;
     out[..image.pixels.len()].copy_from_slice(&image.pixels);
     Ok((image.width, image.height, true))
+}
+
+/// Shows the picture at the window's current size. False if it could not be.
+fn present(window: &mut Window, bytes: &[u8]) -> bool {
+    let area = window.size();
+    let out = window.pixels();
+    match open(bytes, out, area) {
+        Ok((w, h, scaled)) => {
+            // Transparent parts over the window's own colour.
+            for p in out[..w * h].iter_mut() {
+                let a = *p >> 24;
+                if a != 255 {
+                    let mix = |s: u32| ((((*p >> s) & 0xFF) * a + ((BACK >> s) & 0xFF) * (255 - a)) / 255) << s;
+                    *p = mix(16) | mix(8) | mix(0);
+                }
+                *p &= 0x00FF_FFFF;
+            }
+            window.show_pixels(w, h);
+            sex_pdx::serial_record!("[view.shown] w={} h={} bytes={} scaled={} fit={}x{}", w, h, bytes.len(), scaled as u8, area.0, area.1);
+            true
+        }
+        Err(Error::UnknownFormat) => { fail(window, b"That file is not a PNG or JPEG picture."); false }
+        Err(Error::TooLarge) => { fail(window, b"That picture is too large to open."); false }
+        Err(Error::OutOfMemory) => { fail(window, b"That picture needs more memory than View has."); false }
+        Err(_) => { fail(window, b"That picture is damaged or uses an unsupported feature."); false }
+    }
 }
 
 #[no_mangle]
@@ -55,37 +83,22 @@ pub extern "C" fn _start() -> ! {
     let given = files::args(&mut window, &mut args);
     let file = given.split(|b| *b == b' ').find(|w| !w.is_empty());
     let input = unsafe { &mut *core::ptr::addr_of_mut!(INPUT) };
+    let mut shown = 0;
     match file {
         None => fail(&mut window, b"Usage: run view @PICTURE.png or .jpg"),
         Some(file) => match files::read(&mut window, file, input) {
             Err(e) => fail(&mut window, files::message(e)),
             Ok(len) if len == input.len() => fail(&mut window, b"That file is larger than 600 KiB."),
-            Ok(len) => {
-                let out = &mut window.pixels()[..PIXELS];
-                match open(&input[..len], out) {
-                    Ok((w, h, scaled)) => {
-                        // Transparent parts over the window's own colour.
-                        for p in out[..w * h].iter_mut() {
-                            let a = *p >> 24;
-                            if a != 255 {
-                                let mix = |s: u32| ((((*p >> s) & 0xFF) * a + ((BACK >> s) & 0xFF) * (255 - a)) / 255) << s;
-                                *p = mix(16) | mix(8) | mix(0);
-                            }
-                            *p &= 0x00FF_FFFF;
-                        }
-                        window.show_pixels(w, h);
-                        sex_pdx::serial_record!("[view.shown] w={} h={} bytes={} scaled={}", w, h, len, scaled as u8);
-                    }
-                    Err(Error::UnknownFormat) => fail(&mut window, b"That file is not a PNG or JPEG picture."),
-                    Err(Error::TooLarge) => fail(&mut window, b"That picture is too large to open."),
-                    Err(Error::OutOfMemory) => fail(&mut window, b"That picture needs more memory than View has."),
-                    Err(_) => fail(&mut window, b"That picture is damaged or uses an unsupported feature."),
-                }
-            }
+            Ok(len) => if present(&mut window, &input[..len]) { shown = len },
         },
     }
     sex_pdx::serial_record!("[view.ready] target={} task={}", window.target, window.task);
     loop {
-        if let Event::Close = window.next() { sex_pdx::serial_record!("[view.closed] target={} task={}", window.target, window.task); window.close() }
+        match window.next() {
+            Event::Close => { sex_pdx::serial_record!("[view.closed] target={} task={}", window.target, window.task); window.close() }
+            // A new window size: fit the picture to it again.
+            Event::Resize { .. } if shown > 0 => { present(&mut window, &input[..shown]); }
+            _ => {}
+        }
     }
 }

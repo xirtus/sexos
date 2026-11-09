@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "97054a5f31ebec632a2c2e16f846c94dc97833e9e278ebe5b9d09c60bee71261"
+abi_version_hash = "f4e64c829b8adfb103ab2025e04b7ef074a1699a94dd7d85a91775dae30c0157"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -276,6 +276,37 @@ target = "x86_64-sex-app.json"
 manifest = "apps/web/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/web"
 dest_artifact = "iso_root/programs/web"
+
+# The same program, starting on its game.
+[[stage]]
+id = "stage_solitaire"
+action = "copy_file"
+src = "target/x86_64-sex-app/release/solitaire"
+dst = "iso_root/programs/solitaire"
+
+[[stage]]
+id = "stage_chess"
+action = "copy_file"
+src = "target/x86_64-sex-app/release/chess"
+dst = "iso_root/programs/chess"
+
+[[stage]]
+id = "stage_maze"
+action = "copy_file"
+src = "target/x86_64-sex-app/release/maze"
+dst = "iso_root/programs/maze"
+
+[[stage]]
+id = "stage_chess3d"
+action = "copy_file"
+src = "target/x86_64-sex-app/release/chess3d"
+dst = "iso_root/programs/chess3d"
+
+[[stage]]
+id = "stage_pinball"
+action = "copy_file"
+src = "target/x86_64-sex-app/release/pinball"
+dst = "iso_root/programs/pinball"
 
 [[stage]]
 id = "build_hum"

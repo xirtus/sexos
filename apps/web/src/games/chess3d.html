@@ -1,0 +1,159 @@
+<!doctype html>
+<title>3D Chess</title>
+<body style="margin:0;background:#1d1f24;color:#d8d2c4;font-family:Geist,sans-serif;font-size:12px">
+<!-- Chess against the computer on a three.js board, played from the keyboard. Original SexOS
+     game, GPL-3.0-only (three.js is MIT). Arrows move the cursor, Enter picks a piece and then
+     its square, Esc lets go, U takes back a move, N starts again, L changes the level. -->
+<canvas id="board" width="410" height="270" style="display:block"></canvas>
+<div id="status" style="padding:4px 8px;white-space:nowrap">Setting up the board…</div>
+<script>var exports = {}; var module = { exports: exports };</script>
+<script src="three.cjs"></script>
+<script src="chess-engine.js"></script>
+<script>
+'use strict';
+const THREE = exports;
+const canvas = document.getElementById('board'), status = document.getElementById('status');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1d1f24);
+const camera = new THREE.PerspectiveCamera(38, canvas.width / canvas.height, 0.5, 60);
+camera.position.set(0, 8.4, 7.2);
+camera.lookAt(0, -0.5, 0.45);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 1.9);
+sun.position.set(-3, 9, 5);
+scene.add(sun);
+
+// ---- the board ----
+const at = s => [fileOf(s) - 3.5, rankOf(s) - 3.5];
+const tile = new THREE.BoxGeometry(1, 0.2, 1);
+const LIGHT = new THREE.MeshLambertMaterial({ color: 0xe8d4b0 }), DARK = new THREE.MeshLambertMaterial({ color: 0x9a6b45 });
+for (let s = 0; s < 64; s++) {
+  const m = new THREE.Mesh(tile, (rankOf(s) + fileOf(s)) % 2 ? DARK : LIGHT);
+  const [x, z] = at(s);
+  m.position.set(x, -0.1, z);
+  scene.add(m);
+}
+const frame = new THREE.Mesh(new THREE.BoxGeometry(8.8, 0.18, 8.8), new THREE.MeshLambertMaterial({ color: 0x3a2a1e }));
+frame.position.y = -0.2;
+scene.add(frame);
+
+// ---- the pieces: turned on a lathe, the knight cut from a flat profile ----
+const lathe = pts => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), 14);
+const BASE = [[0, 0], [0.34, 0], [0.34, 0.08], [0.28, 0.12], [0.22, 0.16]];
+const GEOMETRY = {
+  [P]: lathe([...BASE, [0.14, 0.34], [0.17, 0.38], [0.12, 0.42], [0.15, 0.5], [0.15, 0.58], [0.1, 0.65], [0, 0.67]]),
+  [R]: lathe([...BASE, [0.2, 0.5], [0.25, 0.54], [0.25, 0.72], [0.17, 0.72], [0.17, 0.64], [0, 0.64]]),
+  [B]: lathe([...BASE, [0.13, 0.46], [0.19, 0.5], [0.12, 0.54], [0.17, 0.66], [0.15, 0.78], [0.06, 0.86], [0.07, 0.9], [0, 0.94]]),
+  [Q]: lathe([...BASE, [0.14, 0.56], [0.21, 0.6], [0.15, 0.64], [0.24, 0.86], [0.17, 0.9], [0.08, 0.96], [0.07, 1.02], [0, 1.04]]),
+  [K]: lathe([...BASE, [0.15, 0.58], [0.22, 0.62], [0.16, 0.66], [0.22, 0.88], [0.12, 0.92], [0.05, 0.94], [0.05, 1.04], [0, 1.04]]),
+};
+const crossBar = new THREE.BoxGeometry(0.2, 0.06, 0.06), crossPost = new THREE.BoxGeometry(0.06, 0.22, 0.06);
+const horse = (() => {
+  const sh = new THREE.Shape();
+  const pts = [[-0.22, 0], [0.24, 0], [0.22, 0.3], [0.2, 0.5], [0.12, 0.7], [0.0, 0.78], [-0.04, 0.88], [-0.1, 0.74], [-0.24, 0.6], [-0.3, 0.44], [-0.24, 0.4], [-0.1, 0.48], [-0.04, 0.42], [-0.16, 0.24]];
+  sh.moveTo(pts[0][0], pts[0][1]);
+  for (const [x, y] of pts.slice(1)) sh.lineTo(x, y);
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.2, bevelEnabled: false });
+  g.translate(0, 0.14, -0.1);
+  return g;
+})();
+const knightBase = lathe(BASE);
+const IVORY = new THREE.MeshPhongMaterial({ color: 0xf1e9d8, shininess: 40 });
+const EBONY = new THREE.MeshPhongMaterial({ color: 0x2c2723, shininess: 40 });
+function piece(kind, white) {
+  const mat = white ? IVORY : EBONY;
+  if (kind === N) {
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(knightBase, mat));
+    const head = new THREE.Mesh(horse, mat);
+    head.rotation.y = white ? -Math.PI / 2 : Math.PI / 2; // facing the other side
+    g.add(head);
+    return g;
+  }
+  const m = new THREE.Mesh(GEOMETRY[kind], mat);
+  if (kind === K) {
+    const g = new THREE.Group();
+    g.add(m);
+    const bar = new THREE.Mesh(crossBar, mat); bar.position.y = 1.14;
+    const post = new THREE.Mesh(crossPost, mat); post.position.y = 1.14;
+    g.add(bar, post);
+    return g;
+  }
+  return m;
+}
+
+// ---- marks on squares ----
+const flat = new THREE.PlaneGeometry(0.96, 0.96);
+flat.rotateX(-Math.PI / 2);
+const mark = color => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 });
+const MARKS = { last: mark(0xd8d040), picked: mark(0x3d8be0), check: mark(0xe03030) };
+const dot = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 12), DOT = new THREE.MeshBasicMaterial({ color: 0x1b5e20, transparent: true, opacity: 0.9 });
+const cursorRing = (() => {
+  const sh = new THREE.Shape();
+  sh.moveTo(-0.5, -0.5); sh.lineTo(0.5, -0.5); sh.lineTo(0.5, 0.5); sh.lineTo(-0.5, 0.5); sh.closePath();
+  const hole = new THREE.Path();
+  hole.moveTo(-0.42, -0.42); hole.lineTo(-0.42, 0.42); hole.lineTo(0.42, 0.42); hole.lineTo(0.42, -0.42); hole.closePath();
+  sh.holes.push(hole);
+  const g = new THREE.ShapeGeometry(sh);
+  g.rotateX(-Math.PI / 2);
+  return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 }));
+})();
+scene.add(cursorRing);
+
+let layer = new THREE.Group();
+scene.add(layer);
+function place(obj, s, y) { const [x, z] = at(s); obj.position.set(x, y, z); layer.add(obj); return obj; }
+function draw() {
+  scene.remove(layer);
+  layer = new THREE.Group();
+  scene.add(layer);
+  const check = !over || over.startsWith('Check') ? inCheck() : false;
+  if (lastMove) { place(new THREE.Mesh(flat, MARKS.last), lastMove & 63, 0.005); place(new THREE.Mesh(flat, MARKS.last), lastMove >> 6 & 63, 0.005); }
+  if (picked >= 0) place(new THREE.Mesh(flat, MARKS.picked), picked, 0.008);
+  if (check) place(new THREE.Mesh(flat, MARKS.check), kingOf(pos.side), 0.01);
+  if (picked >= 0) for (const m of legal()) if ((m & 63) === picked) place(new THREE.Mesh(dot, DOT), m >> 6 & 63, 0.02);
+  for (let s = 0; s < 64; s++) if (pos.b[s]) place(piece(Math.abs(pos.b[s]), pos.b[s] > 0), s, 0).scale.setScalar(1.18);
+  const [cx, cz] = at(cur);
+  cursorRing.position.set(cx, 0.015, cz);
+  cursorRing.material.color.set(picked >= 0 ? 0xffd54f : 0xffffff);
+  const t = performance.now();
+  renderer.render(scene, camera);
+  const last = history.length ? ' · last ' + history[history.length - 1].text : '';
+  status.textContent = (over ? over : busy ? 'Thinking…' : check ? 'Check! Your move' : 'Your move') + ' · ' + sqName(cur)
+    + (note ? ' ' + note : '') + last + ' · ' + LEVELS[level][0];
+  console.log('chess3d drawn ms ' + Math.round(performance.now() - t));
+}
+
+// three.js builds a shader program the first time it draws each kind of material, which is
+// slow here: build them one per timer tick, each in its own script time, then draw.
+function warmUp(materials) {
+  if (!materials.length) { setTimeout(uploadPieces, 0); return; }
+  const lit = new THREE.Scene();
+  lit.add(new THREE.AmbientLight(0xffffff, 0.75), sun.clone());
+  lit.add(new THREE.Mesh(tile, materials[0]));
+  const t = performance.now();
+  renderer.compile(lit, camera);
+  console.log('chess3d shader ms ' + Math.round(performance.now() - t));
+  status.textContent = 'Setting up the board… ' + materials.length;
+  setTimeout(() => warmUp(materials.slice(1)), 0);
+}
+// Then send each piece's shape to the renderer once, also on its own tick.
+function uploadPieces() {
+  const t = performance.now(), shelf = new THREE.Scene();
+  shelf.add(new THREE.AmbientLight(0xffffff, 0.75), sun.clone());
+  for (const k of [P, N, B, R, Q, K]) shelf.add(piece(k, true));
+  renderer.render(shelf, camera);
+  console.log('chess3d pieces ms ' + Math.round(performance.now() - t));
+  setTimeout(() => {
+    // And the board with no pieces yet, once, before the first real drawing.
+    const t = performance.now();
+    renderer.render(scene, camera);
+    console.log('chess3d board ms ' + Math.round(performance.now() - t));
+    setTimeout(draw, 0);
+  }, 0);
+}
+newGame();
+setTimeout(() => warmUp([LIGHT, IVORY, MARKS.last]), 0);
+</script>
+</body>

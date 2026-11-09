@@ -183,6 +183,129 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   it's 1 MiB, and the most is 256 MiB. An unmapped guard page sits below it.
   heaptest proves that an overflow ends only that run.
 
+- Stage 3, first part (storage):
+  - The NVMe self-test busy-polled a fixed 1,000,000 times, so a slow or busy host
+    sometimes saw `readback_timeout` and storage stayed off for that boot. It now uses the
+    time-bounded `completion_wait`, like every other I/O path.
+  - Each command used to sleep a whole tick after 64 polls. It now yields first (256
+    turns) and sleeps only after that, and the per-wait log line is written only for slow
+    waits.
+  - Bench, cycles per MiB: file write 1.89G -> 0.63G (3x), read 660M -> 205M (3.2x).
+  - Files write-back: a WRITE no longer commits. Commits happen on SYNC, before any other
+    change, at 8 MiB uncommitted, and after 20 idle ticks. A read error no longer rolls
+    back other writes. This removed 130 of 134 flushes for a 4 MiB write, but the bench
+    time didn't change.
+  - What remains is about 2.5M cycles per 4 KiB block command (IPC, DMA bounce and key
+    switches under TCG). Next: larger transfers per command (`BLOCK_MAX_XFER` past
+    4 KiB, PRP lists), sexfs extents, and queue depth.
+  - Also found: `fs_service` keeps its free-space bitmap in memory, sized for 16 GiB
+    (`MAP_WORDS`), and caches only 64 blocks. Both are fixed limits to remove.
+
+- Stage 3, second part (large disk commands):
+  - One NVMe command now moves up to 128 KiB (`BLOCK_MAX_RUN`). sexdrive's two bounce
+    leases are each 128 KiB plus a page holding the command's PRP list. Two pages use
+    PRP2 directly. `BLOCK_MAX_XFER` (4 KiB) is unchanged for its existing page-sized users.
+  - ABI changes: new `sex_pdx::BLOCK_MAX_RUN = 128 KiB`; BOOT's Files/drive block
+    buffer (SLOT_BLOCK_BUFFER, region 4) grows from 4 KiB to 128 KiB; the block
+    protocol accepts READ/WRITE up to 128 KiB.
+  - sexfs: `Device` gains `run_blocks`, `read_run` and `write_run` (defaults loop over
+    blocks). Whole-block file writes take side-by-side free blocks and write them with
+    one command; reads of side-by-side blocks use one command and check every block's
+    checksum. A partial write after progress now ends short inside sexfs itself.
+  - Files copies each READ and WRITE through its own buffer, so checksums cover bytes a
+    client can no longer change.
+  - Bench, cycles per MiB (1 core): file write 0.63G -> 107M (5.9x), read 205M -> 49M
+    (4.2x). Against Linux on raw NVMe: write 3.5x slower (was 63x), read 1.9x slower
+    (was 25x). A request is still at most 63 KiB (the client region), so a 1 MiB write
+    is 16 requests; a larger client region and queue depth are the next steps.
+
+- Stage 3, third part (service memory, filesystem size):
+  - BOOT services had only a fixed 128 KiB heap, so Files kept a 16 GiB free-space map
+    and a 64-block cache in its ELF. A BOOT service may now get an arena like a program
+    row's (`kernel/src/service_memory.rs`; BOOT gives one to Files). SYS_PROGRAM_MEMORY
+    grows it page by page, from the same frames programs borrow.
+  - sex-rt's allocator falls back to those pages once its fixed arena is full. A domain
+    without an arena keeps the old bound, which costs one denied call, once.
+  - Files sizes its free-space maps to the disk it finds (a bit per 4 KiB block in each
+    of two maps: 64 MiB for a 1 TiB disk) and caches 1024 tree blocks. When memory can't
+    grow, it falls back to the old fixed sizes.
+  - ABI change: SYS_PROGRAM_MEMORY (81) also serves BOOT services that have an arena.
+  - A commit now walks only the words of the pending map it touched, not the whole map.
+  - Tested: a 1 TiB disk (4 GB VM) formats, mounts, survives a power cut and reports
+    1,048,512 MiB; Files grew to 68 MiB.
+  - A disk command may now take 30 s before it counts as lost (was 1 s), as on Linux.
+    Under host load a flush took up to 1.4 s, which used to quarantine the drive.
+  - Long term, free space should live in the tree (extents), so memory stays flat
+    however big the disk is.
+
+- Stage 3, fourth part (request size):
+  - A request could end in the middle of a block, because `DATA_MAX` (the region less
+    its 1 KiB path area, so 63 KiB) is not a whole number of 4 KiB blocks. That cost
+    Files a read-modify-write of one block per request. New `fs::IO_MAX` is `DATA_MAX` rounded down to whole blocks, and sex-app
+    reads and writes in IO_MAX pieces.
+  - The file region a program shares with Files grows from 64 KiB to 256 KiB, so one
+    request carries up to 252 KiB.
+  - ABI changes: `fs::REGION_BYTES` 64 KiB -> 256 KiB (and with it `DATA_MAX`); new
+    `fs::IO_MAX`.
+  - Bench, cycles per MiB (1 core): file write 107M -> 67M, read 49M -> 26M. Against
+    Linux on raw NVMe: read is now even (26M), and write is 2.2x slower (30M).
+  - Next for writes: queue depth (several commands in flight), so a request's runs
+    don't wait on each other.
+
+- Stage 3, fifth part (fast memory copies):
+  - memcpy, memmove and memset were byte-by-byte loops in the kernel, sex-rt (Files and
+    every app), sexdrive and spindle. Each disk request is copied twice (program region
+    to Files, Files to the DMA bounce buffer), so the loops dominated write cost.
+  - New `sex_pdx::mem`: `rep movsq` + `rep movsb` copies, a backward `rep movsb` for
+    overlapping moves, `rep stosq` fills. On CPUs with ERMS/FSRM these are the fastest
+    general copy, as in Linux's `memcpy`. A host test checks them against std at many
+    sizes, offsets and overlaps (`tests/sex_pdx_mem.rs`).
+  - No ABI change.
+  - Bench, cycles per MiB: 1 core write 67M -> 31M, read 26M -> 15M; 4 cores write
+    41M -> 34M, read 29M -> 23M. Against Linux on raw NVMe (30M write, 26M read):
+    write is now even, and read is 1.7x faster.
+  - Next: queue depth (several commands in flight).
+
+- Stage 3 is done: on the bench, file writes match Linux and reads beat it, past the
+  "within 2x" target. Queue depth (several disk commands in flight) moves to stage 8,
+  where it can be measured on a real NVMe drive: under QEMU's software CPU, the
+  emulator's own cost per command hides what overlap would save.
+
+- Stage 4, first part (windows that fit the screen):
+  - Program pixel surfaces were a fixed 4 MiB (800x600). BOOT now sizes each to the
+    screen (4 bytes per screen pixel, rounded up to 1 MiB, never under 4 MiB), so a
+    full-screen window can be all pixels. Display accepts any shape the region holds
+    and clips pixels to the window's border instead of capping at 800x600.
+  - Programs learn their window size. Whenever Shell gives a program window a new
+    size (tiling, maximize, drag resize), it queues a resize input event with the
+    pixel area, in order with the program's keys. sex-app adds `Event::Resize`
+    and `Window::size()`, and `Window::pixels()` covers the whole region.
+  - View fits a picture to its window and fits it again on every resize (the gate
+    checks that the last picture fits the last size Shell reported).
+  - ABI changes: `pixel_region` region length is now at least `BYTES` (read it from
+    the grant); `pixel_region_display` and `pixel_region_client` return
+    `(address, length)`; new input class `pixel_region::RESIZE_CLASS` (6) on opcode
+    0x202 with `resize_wire`/`resize_decode`; `pixel_region::area`, `LEFT`, `TOP`;
+    `sex_app::Event::Resize`.
+  - Web still draws at the 410x330 its gates compare against the host render; it can
+    now follow `Event::Resize`, which needs the gates to render at the reported size.
+
+- Stage 4, second part (the program store):
+  - Programs in the disk program store took no arguments: `run NAME ARGS` looked only
+    for `/bin/NAME`. Now Files prepares a `/bin/NAME` run even when no such file
+    exists, and the load falls back to the store's NAME with the same arguments.
+    `run jot @todo.txt` runs a store Jot on that file.
+  - The store's directory was one sector (15 programs). Its head now says how many
+    sectors it spans, up to 64 (960 programs); old one-sector stores read as before.
+    `scripts/install_program.py` writes as many sectors as it needs.
+  - ABI changes: program store directory head bytes 8..12 are the sector count;
+    `program_store::MAX_DIRECTORY_SECTORS`, `MAX_PROGRAMS`, `directory_sectors`;
+    `fs::PREPARE` accepts a missing `/bin/NAME`.
+  - Gate: `scripts/program_store_gate.py` (19 programs, Jot in the second sector, run
+    bare and with an `@file` argument, a missing name still refused).
+  - Files in `/bin` already had no count limit; the store is for programs installed
+    with the system.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be

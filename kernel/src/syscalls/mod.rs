@@ -473,7 +473,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         },
         81 => { // SYS_PROGRAM_MEMORY: self-only, pages from the caller's own row window.
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
-            let reply=crate::app_resources::grow(pd,rdi);
+            // A BOOT service with an arena grows there; a program row in its window.
+            let reply=crate::service_memory::grow(pd.id,rdi).unwrap_or_else(||crate::app_resources::grow(pd,rdi));
             regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
         },
 

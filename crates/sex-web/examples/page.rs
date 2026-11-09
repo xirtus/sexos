@@ -10,18 +10,33 @@ fn clock() -> u64 {
     START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64
 }
 
-/// Runs timers and animation frames until the page has none left.
-fn settle(script: &mut sex_js::Script<sex_js::Document>, canvases: &mut sex_web::canvas::Canvases, fonts: &mut Fonts) {
+/// Answers the page's `fetch` requests from files beside it.
+fn serve(script: &mut sex_js::Script<sex_js::Document>, base: &std::path::Path) -> bool {
+    let asked = std::mem::take(&mut script.page_mut().fetches);
+    for (id, url) in &asked {
+        let (status, body) = match std::fs::read(base.join(url.trim_start_matches("./"))) { Ok(b) => (200, b), Err(_) => (404, Vec::new()) };
+        let n = body.len();
+        script.page_mut().keep_body(*id, status, body);
+        script.dispatch(&format!("fetched\t{id}\t{status}\t{n}")).unwrap();
+    }
+    !asked.is_empty()
+}
+
+/// Runs timers, animation frames and fetches until the page has none left.
+fn settle(script: &mut sex_js::Script<sex_js::Document>, canvases: &mut sex_web::canvas::Canvases, fonts: &mut Fonts, base: &std::path::Path) {
     for _ in 0..1000 {
+        while serve(script, base) {}
         let queue = std::mem::take(&mut script.page_mut().canvas_queue);
         canvases.run_queue(fonts, &script.page().dom, queue);
+        sex_web::canvas::present_gl(fonts, &mut script.page_mut().gl);
         let next = script.dispatch("tick").unwrap();
-        if next < 0 {
+        if next < 0 && script.page().fetches.is_empty() {
             let queue = std::mem::take(&mut script.page_mut().canvas_queue);
             canvases.run_queue(fonts, &script.page().dom, queue);
+            sex_web::canvas::present_gl(fonts, &mut script.page_mut().gl);
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(next as u64));
+        std::thread::sleep(std::time::Duration::from_millis(next.max(0) as u64));
     }
 }
 
@@ -36,7 +51,7 @@ fn main() {
     let dom = sex_html::parse::parse(&html);
     for src in sex_html::image_sources(&dom) {
         if let Ok(bytes) = std::fs::read(base.join(src)) {
-            if let Some(img) = sex_web::decode_image(&bytes, (w - 16) as usize, 2000) { fonts.images.push((src.to_string(), img)); }
+            if let Some(img) = sex_web::decode_image(&bytes, (w - 16) as usize, 2000) { fonts.images.push((src.to_string(), std::rc::Rc::new(img))); }
         }
     }
     // Style sheets and pictures come from files beside the page, as the program fetches them.
@@ -47,6 +62,7 @@ fn main() {
         .map(|n| match dom.attr(n, "src") { Some(s) => std::fs::read_to_string(base.join(s)).unwrap_or_default(), None => dom.text_content(n) }).collect();
     let mut doc = sex_js::Document::new(dom, "", (w, h - bar_h), clock);
     doc.measure = sex_web::canvas::measure_css;
+    doc.pictures = fonts.images.clone();
     let mut canvases = sex_web::canvas::Canvases::new();
     let lay = |doc: &sex_js::Document, fonts: &Fonts| {
         let styles = sex_html::styles(&doc.dom, &sheet_refs, w, h - bar_h);
@@ -54,10 +70,12 @@ fn main() {
     };
     let mut page = lay(&doc, &fonts);
     if !scripts.is_empty() {
-        let mut script = sex_js::Script::new(doc, sex_js::Limits::default()).unwrap();
+        let mut limits = sex_js::Limits::default();
+        if let Ok(ms) = std::env::var("SEX_WEB_BUDGET_MS") { limits.budget_ms = ms.parse().unwrap(); }
+        let mut script = sex_js::Script::new(doc, limits).unwrap();
         for (i, s) in scripts.iter().enumerate() { let _ = script.eval(s, &format!("script{i}")); }
         script.dispatch("ready").unwrap();
-        settle(&mut script, &mut canvases, &mut fonts);
+        settle(&mut script, &mut canvases, &mut fonts, &base);
         page = lay(script.page(), &fonts);
         for action in args.get(7).map(|a| a.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default() {
             if let Some(i) = action.strip_prefix("click") {
@@ -67,7 +85,7 @@ fn main() {
                 script.dispatch(&format!("key\tkeydown\t{k}\t\t0")).unwrap();
                 script.dispatch(&format!("key\tkeyup\t{k}\t\t0")).unwrap();
             }
-            settle(&mut script, &mut canvases, &mut fonts);
+            settle(&mut script, &mut canvases, &mut fonts, &base);
             page = lay(script.page(), &fonts);
         }
         for (l, t) in script.page_mut().log.drain(..) { eprintln!("console {l}: {t}"); }

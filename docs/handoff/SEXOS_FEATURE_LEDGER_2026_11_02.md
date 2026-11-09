@@ -2806,6 +2806,65 @@ row no longer waits for the row before it to end.
 - **Limits.** No `clip`, `drawImage`, `getImageData`/`putImageData` (zeros), patterns,
   shadows or line dashes yet; `arcTo` is a straight line; `strokeText` fills. WebGL next.
 
+## WebGL in Web pages (2026-11-08)
+
+- **What runs now.** `canvas.getContext('webgl')` (also `experimental-webgl`, and
+  `webgl2` with the same feature set for now) in `run web`: buffers, vertex arrays, element
+  draws (8/16/32-bit indices), GLSL ES 1.00 and 3.00 shaders, uniforms of every type
+  (arrays, matrices, samplers), 2D and cube textures from bytes or from a page picture
+  (`<img>` or another canvas) with flip-y and premultiply, depth test, culling, blending,
+  scissor, color mask, polygon offset, points and lines, `readPixels`, and the
+  `getParameter`/`getShaderParameter`/`getActiveUniform` queries libraries use.
+- **Design.** New crate `crates/sex-gl` (`no_std` + `alloc`): a WebGL 1-shaped `Context`
+  over a software rasterizer (near/far clipping, top-left fill rule, perspective-correct
+  varyings). Shaders: GLSL ES is preprocessed by pp-rs (MIT/Apache, vendored as
+  `vendor/pp-rs-0.2.1`, ported to `no_std`, its 35 tests pass), rewritten to GLSL 450
+  (loose uniforms to blocks, combined samplers split, explicit locations, ES built-ins
+  renamed), parsed and validated by naga 30 (MIT/Apache), and run by a small interpreter
+  over naga's IR. The prelude queues WebGL calls like Canvas 2D, with one ArrayBuffer of
+  bulk data per batch; queries flush the batch and ask synchronously. Web shows each canvas
+  that drew a new frame as the picture `canvas:<node>` (`sex_web::canvas::present_gl`).
+  The workspace now has one `[patch.crates-io]` entry (pp-rs), allowed by name in
+  `check_tls_platform.py`.
+- **ABI change (guest/host, sex-js only).** The QuickJS guest passes `ArrayBuffer`
+  arguments to `__host` as raw bytes, and an op with bit 16 set returns an `ArrayBuffer`;
+  ops 64 and up take byte arguments (`Page::call_bytes`). `quickjs.wasm` rebuilt (sha256 in
+  `build_quickjs_wasm.sh`). No kernel or system ABI change.
+- **Evidence.** sex-gl tests: shader translation, a colored triangle, a lit textured cube,
+  ES 3.00 with blending and scissor, and the ES 3.00 forms three.js uses (precision on
+  declarations, `const in` parameters, boolean uniforms, struct uniforms, `modf`).
+  sex-js test `webgl_draws_a_triangle_from_js`. On the host, three.js r170 (unmodified
+  `three.cjs`) renders a `MeshStandardMaterial` cube lit by ambient and directional light.
+  `scripts/program_web_webgl_gate.py` serves `scripts/web_site/webgl.html` (a lit cube
+  textured with the page's logo, six animation frames, six more after a button click): both
+  states match the host render exactly, 0 of 9020 sampled pixels differ, at 1 and 4 cores.
+  The page, net, JS and canvas gates still pass.
+- **Limits.** Framebuffers and renderbuffers are stubs (drawing goes to the canvas), no
+  mipmaps (level 0 only), derivatives are 0, no WebGL 2 instancing draws, uniform blocks,
+  3D textures or transform feedback yet: those are next, for three.js. Shader compiles take
+  a moment in software float until programs get SSE. three.js in `run web` still needs a
+  longer script time budget (loading its 1.3 MB takes about a second on the host).
+
+## three.js runs in Web (2026-11-08)
+
+- **What runs now.** three.js r170 (MIT), the unmodified `three.cjs` from npm, loads in
+  `run web` and renders with `WebGLRenderer`: `MeshStandardMaterial` (PBR) and
+  `MeshPhongMaterial` meshes under ambient and directional light, animated with
+  `requestAnimationFrame`.
+- **Changes.** Page scripts (`Script::eval`) get their own time budget,
+  `Limits::load_budget_ms` = 120 s, since fetching and loading three.js takes about 12 s
+  and 30 s in QEMU; event handlers and timers keep `budget_ms`, now 10 s (browsers ask
+  about a script after about that long). The engine may grow to 64 MiB with a 48 MiB
+  QuickJS heap. Web accepts pages and scripts up to 4 MiB (was 1.5 MiB). No ABI change.
+- **Evidence.** `scripts/program_web_three_gate.py` serves `scripts/web_site/three.html`
+  with `scripts/web_site/three/three.cjs` (and its MIT licence): a PBR cube and a Phong
+  sphere, six frames, then six more after a button click. Both states match the host
+  render exactly, 0 of 9020 sampled pixels differ, at 1 and 4 cores. The other web gates
+  still pass.
+- **Limits.** Slow: loading three.js takes about 30 s in QEMU (software float, wasmi
+  interpreting QuickJS), and a frame of shading costs thousands of instructions a pixel in
+  the shader interpreter. Next: compile shaders to a flat bytecode, then WebGPU.
+
 ## Master CI green again (2026-11-08)
 
 - GitHub CI on master passes every step for the first time in weeks (run 42502328687,
@@ -2835,3 +2894,198 @@ row no longer waits for the row before it to end.
   match the clip, the last frame is on screen, and a text file is refused.
 - **Next.** Sound (AAC/MP3 through Bell's virtio sound card), SSE in programs for larger video,
   and a presented/consumed handshake with Display so frames never overlap their presentation.
+
+## Games: Solitaire and Chess (2026-11-08)
+
+- **What runs now.** `run solitaire` (Klondike, draw one) and `run chess` (White against the
+  computer) open in their own windows. `run web` links to `about:games`, which lists both.
+  They are original pages in plain JavaScript on Canvas 2D (`apps/web/src/games/`), built into
+  Web as `about:solitaire` and `about:chess`, so every game is also a test of the browser.
+- **How.** `apps/web` builds the same `main.rs` three times, as `web`, `solitaire` and `chess`;
+  `first_page()` picks the start page from `CARGO_BIN_NAME`. Two `copy_file` stages put the
+  copies in `iso_root/programs`. Built-in pages are a table of `about:` addresses.
+- **Play.** Programs get keys only (no mouse yet), so both games are keyboard games. Solitaire:
+  arrows move, Enter picks up/puts down, Up takes more of a column, Space draws, A sends a
+  card home, U undoes, N deals. Chess: arrows, Enter picks a piece then its square, Esc lets
+  go, U takes back, N, L for Easy/Medium/Hard. Full rules (castling, en passant, promotion to
+  a queen, mate, stalemate); perft matches the standard counts except under-promotion.
+- **Engine.** Alpha-beta with quiescence, incremental piece-square score, moves in typed
+  arrays. It stops at a node budget (100/400/1500) or 1.5 s, whichever comes first, to stay
+  inside the page's 2 s script limit. QuickJS on wasmi under QEMU TCG manages about 160
+  positions a second, so the computer searches only 2 plies: a beginner's opponent.
+- **Gate.** `scripts/program_games_gate.py`: both games match the host render pixel for pixel
+  when started and after one move (0 of 9020 sampled pixels differ), and the computer answers
+  e2-e4 without hitting the script limit. `program_web_gate.py` still passes.
+- **Next.** Pointer input for programs (clicks and drags), splitting the chess search across
+  timer ticks so it can think longer, and the three.js games (3D chess, maze, pinball,
+  three-quake) once WebGL lands. The upstream cards repo has no licence, so it was not used.
+- Screenshot: `assets/sexos-games-solitaire-chess-2026-11-08.png`.
+
+## Games: Maze in WebGL (2026-11-08)
+
+- **What runs now.** `run maze` (also `about:maze`, listed at `about:games`): walk a 9x9 brick
+  maze in first person and find the turning gold diamond. Up walks a cell, Down steps back,
+  Left/Right turn, A walks by itself with a hand on the right wall, N makes a new maze.
+  Original page in plain WebGL 1 (`apps/web/src/games/maze.html`): a depth-first carved maze,
+  textures made in the page from bytes (brick, floor tiles, ceiling), one textured shader
+  with per-vertex distance light, depth test and culling. The maze95 site named in the
+  request publishes no source repository or licence, so it was not used.
+- **Games and the script limit.** Each game now draws its first frame on a timer tick, and
+  chess draws after the computer's move on its own tick, so setup, thinking and drawing
+  each get the page's 2 s script budget. The gate fails on any `InternalError: interrupted`.
+- **Speed.** The maze matches the host render pixel for pixel, but under QEMU TCG a 410x274
+  frame takes about 2 s with soft-float programs and about 1.1 s on the SSE branch (#18), so
+  a step or turn is 3 frames. Faster software GL (or a GPU) is what makes 3D games playable.
+- **Gate.** `scripts/program_games_gate.py` now also starts Maze, compares its first frame and
+  the frame after one step with the host render, and times the step.
+- Screenshot: `assets/sexos-games-maze-2026-11-08.png`.
+
+## Faster software shaders (2026-11-08)
+
+- **What changed.** `sex-gl` no longer walks the naga shader tree for every pixel. Each
+  shader is lowered once into a flat program (`Step`s with jumps; calls inlined, loops as
+  counted back-jumps), and common expressions become prepared operations (copy, swizzle,
+  compose, load, field, float binary ops, mat*vec, dot, normalize, min/max/clamp/mix) with
+  their operand shapes worked out ahead of time.
+- **Eight pixels at a time.** Fragment shaders then run 8 pixels per step (`wide.rs`):
+  every register is a row of 8 lanes, so each prepared operation (and texture lookups,
+  now prepared too) works on all 8 and the arithmetic vectorizes. Each pixel keeps its
+  own program counter; the lowest one runs next with only the pixels waiting there, so
+  branches, loops, early returns and `discard` that differ between pixels stay exact. The
+  rasterizer depth-tests a triangle's fragments, shades them in groups and then writes
+  them in order (they cover different pixels, so the result is the same).
+- **Effect.** The lit textured cube bench (`cargo run --release -p sex-gl --example bench`,
+  410x274) goes from 24 ms to about 8 ms per frame on the host (3x) with an identical
+  pixel hash; host renders of the maze, WebGL and three.js pages are byte-identical
+  before and after. New test `divergent_branches_loops_and_discard_per_pixel`. No ABI
+  change.
+- **Evidence.** `cargo test -p sex-gl -p sex-js -p sex-web`, and the WebGL, Canvas, JS,
+  Web, games and three.js gates at 1 and 4 cores.
+- **Next.** WebGPU (WGSL) on the same rasterizer and interpreter.
+
+## WebGPU in Web pages (2026-11-08)
+
+- **What runs now.** `navigator.gpu` with render pipelines: adapter and device, buffers
+  (`mappedAtCreation`, `queue.writeBuffer`, vertex, index, uniform, read-only storage),
+  textures (`writeTexture`, `copyExternalImageToTexture` from page pictures), samplers,
+  WGSL shader modules, bind groups (`layout: 'auto'`), render pipelines (vertex formats,
+  topology, culling, depth compare and write, blending, write masks), command encoders,
+  render passes (clear, viewport, scissor, `draw`, `drawIndexed`) and
+  `canvas.getContext('webgpu')`.
+- **How.** It runs on the same software renderer as WebGL. `sex_gl::Program::from_wgsl`
+  builds a program from a WGSL module's vertex and fragment entry points (naga
+  `wgsl-in`). Each uniform or storage binding maps WGSL's byte layout (member offsets,
+  array strides, matrix column padding) onto the interpreter's lanes. Textures and samplers
+  bind by group and binding, and a sampler sets the filters and wrapping of the textures
+  sampled with it. Clip depth runs 0..w. The page side (`prelude.js`) keeps buffers and
+  textures, records passes, and replays them on `queue.submit` as GL batches with four
+  new commands (`gp`, `gb`, `gx`, `gs`). Vertex and fragment modules are parsed
+  separately, so they may reuse names. Integer vertex formats (and WebGL 2
+  `vertexAttribIPointer`, new command `aip`) reach shaders as integers. Runtime-sized
+  storage arrays hold up to 1024 elements, filled from the bound buffer. No ABI change.
+- **Not yet.** Compute passes, render targets other than the canvas, instancing beyond
+  repeated draws, and `@builtin(instance_index)`.
+- **Evidence.** Tests `wgsl_pipeline_with_uniform_layout_texture_and_sampler` and
+  `wgsl_separate_modules_integer_attributes_and_storage_arrays`. The gate
+  `scripts/program_web_webgpu_gate.py` serves `scripts/web_site/webgpu.html` (a lit,
+  textured, depth-tested cube in WGSL) and matches the host render pixel for pixel at 1 and
+  4 cores, before and after a click turns it six frames. The WebGL, JS and Web gates still
+  pass.
+- Screenshot: `assets/sexos-web-webgpu-2026-11-08.png`.
+## Games: 3D Chess on three.js (2026-11-08)
+
+- **What runs now.** `run chess3d` (also `about:chess3d`, listed at `about:games`): the chess
+  game on a three.js board with lathe-turned pieces, an extruded knight, Phong lighting, a
+  cursor ring, move and check marks, and the same keys as 2D Chess. Original page
+  (`apps/web/src/games/chess3d.html`) on the unmodified three.js r170 already in the tree.
+- **Shared engine.** The rules, computer player and keys moved to
+  `apps/web/src/games/chess-engine.js`, used by both chess pages. Built-in pages now load
+  their relative `<script src>` from Web's built-in table (`about:chess-engine.js`,
+  `about:three.cjs`; `games/three.cjs` links to `scripts/web_site/three/three.cjs`). The
+  computer may think up to 4 s now that handlers get 10 s.
+- **Fitting the script limit.** three.js builds each material's shader program on first
+  use, about 6 s apiece here, so the page builds them one per timer tick
+  (`renderer.compile` on a small scene), then uploads the piece shapes and renders the
+  empty board on their own ticks, before the first real frame.
+- **Speed in QEMU (soft-float).** three.js loads in about 20 s; setup takes about 25 s
+  more; each redraw after a key takes about 12 s (2 s of three.js scene work in QuickJS,
+  the rest software shading). Playable, but slow.
+- **Gate.** `scripts/program_games_gate.py` starts 3D Chess, matches the host render after
+  setup and after picking a pawn (0 of 9020 sampled pixels differ), and plays e2-e4 to the
+  computer's reply. `SEXOS_GAMES=chess3d,maze` runs only some games.
+- **Not done, and why.** Graveyard Pinball publishes no source or licence and needs WebGPU
+  with TSL. three-quake (GPL-2 code, shareware data) needs ES modules (99 files), `fetch`
+  of an 18 MB pak, pointer lock and real-time drawing; a bundle of it into one classic
+  script plus `fetch` would be the first step. The 3D-Chess-Game repo (MIT) needs a mouse,
+  GLTF models and a Stockfish worker.
+- Screenshot: `assets/sexos-games-chess3d-2026-11-08.png`.
+
+## Games: XIRTUS Pinball, and Canvas drawImage (2026-11-09)
+
+- **What runs now.** `run pinball` (also `about:pinball`, listed at `about:games`): an
+  original pinball table played from the keyboard. Its theme follows Anderson Mancini's
+  Graveyard Pinball, used with his permission (Andreas asked him): coffin slingshots, skull
+  bumpers, a skull crypt, a dot-matrix display, a chrome ball and glowing flippers under a
+  purple moon. No code or art is taken from it. Rolling over the six X I R T U S letters
+  opens the portal, and sinking the ball in the crypt then raises the multiplier. Three
+  balls a game. Left or Z flips left, Right or / flips right, Space launches, N restarts.
+- **Physics.** Fixed steps of 1/120 s (1/240 s near the flippers), driven by elapsed time
+  so the speed doesn't depend on the frame rate. Walls are capsule segments and bumpers are
+  circles, both found through a 16-pixel grid, and flippers transfer their own surface
+  speed. A ball that stops on the table gets a nudge. Web sends keyup right after keydown,
+  so a key press gives the flipper a 0.22 s pulse. A Node simulation of 30 games
+  (`node`, stub canvas, a careless robot player) ended every game, with none stuck.
+- **Canvas `drawImage` (new in the browser).** `drawImage(img or canvas, ...)` in the 3-,
+  5- and 9-argument forms is a `di` command in `sex-web/src/canvas.rs`. It reads the
+  source from `fonts.images` (`canvas:<node>` or the image's `src`). A same-size copy onto
+  whole pixels with source-over runs in integer code, with no tiny-skia and no floats;
+  anything else goes through a tiny-skia pattern fill. Test: `draw_image_copies_another_canvas`.
+  Pinball draws the table once into offscreen canvases and each frame copies back only the
+  rectangles the ball and flippers left. The ball is a sprite copy, and the score digits
+  are dot-matrix glyphs drawn once and copied.
+- **`num()` in the canvas prelude** prints whole numbers without float rounding (slow
+  without a float unit). This affects every canvas page, and their gates are unchanged.
+- **Speed in QEMU (soft-float).** About 8 frames a second at close to real time (each frame
+  advances 12 to 15 physics steps). JS takes most of a frame: physics about 30 ms and
+  drawing about 25 ms. Canvas work in Rust dropped from 16 to 58 ms per frame to 2 to 6 ms
+  with the integer copy. SSE (#18) should speed up the JS part, which is all float math in
+  wasmi.
+- **Gate.** `scripts/program_games_gate.py` matches the set-up table against the host
+  render (0 of 9020 sampled pixels differ). It then launches a ball, flips every 1.5 s
+  until the ball drains, and reports score, frames and fps.
+- Screenshot: `assets/sexos-games-pinball-2026-11-09.png`.
+
+## Web: fetch(), URL and URLSearchParams (2026-11-09)
+
+- **fetch().** Scripts can now `fetch(url)`. The Promise resolves to a `Response` with
+  `ok`, `status`, `statusText`, `url`, `headers` (content-length) and `arrayBuffer()`,
+  `text()`, `json()` and `blob()`. Network errors reject with a TypeError, as browsers do.
+  - **How it works.** New ops 66 `FETCH` (url → request id) and 67 `FETCH_BODY` (id →
+    bytes once; with bit 16 an ArrayBuffer, otherwise text). Web serves requests on the
+    next tick after the script returns and dispatches `fetched\tID\tSTATUS\tLENGTH`.
+  - **Where it loads from.** The same places as the page: built-in `about:` files,
+    `@file` pages (relative to the page's folder), and http(s) (redirects followed, the
+    real status passed on).
+  - **Limits.** Bodies up to `FETCH_MAX` = 32 MiB (pages and scripts keep
+    `SOURCE_MAX` = 4 MiB). At most 64 requests and unread bodies at a time.
+  - Pages opened from a file (`@dir/page.html`) now also load their `<script src>` from
+    beside them.
+- **URL and URLSearchParams.** Parsing, relative resolution with dot segments, and
+  `searchParams`.
+- **ABI / limit changes.** `sex_js::Limits::default()` now gives a 160 MiB engine memory
+  and a 128 MiB QuickJS heap (was 64 and 48). three-quake needs about 100 MiB for its
+  18 MB pak and first map. The wasm memory still grows only as a page uses it.
+- **Host page example** answers fetches from files beside the page.
+  `SEX_WEB_BUDGET_MS` raises the handler time limit there, for heavy pages.
+- **Gate.** `scripts/program_web_fetch_gate.py` serves `scripts/web_site/fetch.html` over
+  the network. The page fetches a JSON file, a PNG's bytes, three.cjs (1.3 MB) and a
+  missing file, and parses a URL. The statuses must be 200, 200, 200, 404, and the page
+  matches the host render (0 of 9020 sampled pixels differ). In QEMU the 1.3 MB fetch
+  takes about 12 s.
+- **three-quake (mrdoob, GPL-2 code, shareware data), status.** Bundled with esbuild and
+  three r183 into one 2.1 MB classic script (not in the tree). On the host page example
+  it loads the pak and the first map, but only with the higher heap and a handler limit
+  well over 10 s. It reaches the renderer after about 11 minutes of host time. three
+  r183's WebGL2 shader prefix (`precision highp usampler2D;`) isn't parsed yet; the
+  browser thread has that. Under QEMU it would take hours per frame, so it waits for a
+  much faster JS engine.

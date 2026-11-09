@@ -1,0 +1,105 @@
+<!doctype html>
+<title>Chess</title>
+<body style="margin:0;background:#2e2b28">
+<canvas id="board" width="410" height="300" style="display:block"></canvas>
+<!-- Chess against the computer, played from the keyboard. Original SexOS game, GPL-3.0-only.
+     Arrows move the cursor, Enter picks a piece and then its square, Esc lets go,
+     U takes back a move, N starts again, L changes how hard the computer plays. -->
+<script src="chess-engine.js"></script>
+<script>
+'use strict';
+const cv = document.getElementById('board'), g = cv.getContext('2d');
+const W = 410, H = 300, S = 36, BX = 6, BY = 6, PX = 300;
+
+// ---- drawing ----
+function shape(kind, x, y, white) {
+  const u = v => x + v * S, w = v => y + v * S;
+  g.beginPath();
+  const poly = pts => { g.moveTo(u(pts[0]), w(pts[1])); for (let i = 2; i < pts.length; i += 2) g.lineTo(u(pts[i]), w(pts[i + 1])); g.closePath(); };
+  const base = () => g.rect(u(0.24), w(0.78), 0.52 * S, 0.09 * S);
+  switch (kind) {
+    case P:
+      g.arc(u(0.5), w(0.34), 0.12 * S, 0, 7);
+      poly([0.4, 0.46, 0.6, 0.46, 0.68, 0.78, 0.32, 0.78]);
+      base(); break;
+    case R:
+      poly([0.27, 0.2, 0.36, 0.2, 0.36, 0.27, 0.45, 0.27, 0.45, 0.2, 0.55, 0.2, 0.55, 0.27, 0.64, 0.27, 0.64, 0.2, 0.73, 0.2, 0.73, 0.38, 0.66, 0.42, 0.68, 0.78, 0.32, 0.78, 0.34, 0.42, 0.27, 0.38]);
+      base(); break;
+    case N:
+      poly([0.3, 0.78, 0.72, 0.78, 0.7, 0.56, 0.66, 0.38, 0.56, 0.22, 0.46, 0.17, 0.42, 0.1, 0.38, 0.2, 0.26, 0.34, 0.2, 0.5, 0.26, 0.55, 0.4, 0.46, 0.46, 0.5, 0.34, 0.66]);
+      base(); break;
+    case B:
+      g.arc(u(0.5), w(0.17), 0.055 * S, 0, 7);
+      g.moveTo(u(0.5), w(0.23)); g.bezierCurveTo(u(0.74), w(0.4), u(0.66), w(0.62), u(0.6), w(0.66));
+      g.lineTo(u(0.66), w(0.78)); g.lineTo(u(0.34), w(0.78)); g.lineTo(u(0.4), w(0.66));
+      g.bezierCurveTo(u(0.34), w(0.62), u(0.26), w(0.4), u(0.5), w(0.23)); g.closePath();
+      base(); break;
+    case Q:
+      poly([0.28, 0.78, 0.18, 0.3, 0.36, 0.54, 0.4, 0.22, 0.5, 0.52, 0.6, 0.22, 0.64, 0.54, 0.82, 0.3, 0.72, 0.78]);
+      for (const [a, c] of [[0.18, 0.27], [0.4, 0.19], [0.6, 0.19], [0.82, 0.27]]) { g.moveTo(u(a) + 0.05 * S, w(c)); g.arc(u(a), w(c), 0.05 * S, 0, 7); }
+      base(); break;
+    case K:
+      poly([0.46, 0.08, 0.54, 0.08, 0.54, 0.16, 0.62, 0.16, 0.62, 0.23, 0.54, 0.23, 0.54, 0.32, 0.46, 0.32, 0.46, 0.23, 0.38, 0.23, 0.38, 0.16, 0.46, 0.16]);
+      g.moveTo(u(0.5), w(0.34)); g.bezierCurveTo(u(0.86), w(0.3), u(0.8), w(0.56), u(0.68), w(0.78));
+      g.lineTo(u(0.32), w(0.78)); g.bezierCurveTo(u(0.2), w(0.56), u(0.14), w(0.3), u(0.5), w(0.34)); g.closePath();
+      base(); break;
+  }
+  g.fillStyle = white ? '#f7f3ea' : '#2a2725';
+  g.fill();
+  g.strokeStyle = white ? '#2a2725' : '#d8d2c4'; g.lineWidth = 1.4; g.lineJoin = 'round';
+  g.stroke();
+  if (kind === N) { g.fillStyle = white ? '#2a2725' : '#d8d2c4'; g.beginPath(); g.arc(u(0.46), w(0.3), 0.03 * S, 0, 7); g.fill(); }
+}
+const screenOf = s => { const r = flip ? 7 - rankOf(s) : rankOf(s), f = flip ? 7 - fileOf(s) : fileOf(s); return [BX + f * S, BY + r * S]; };
+function draw() {
+  g.fillStyle = '#2e2b28'; g.fillRect(0, 0, W, H);
+  const targetsOf = picked < 0 ? [] : legal().filter(m => (m & 63) === picked).map(m => m >> 6 & 63);
+  const check = !over || over.startsWith('Check') ? inCheck() : false;
+  for (let s = 0; s < 64; s++) {
+    const [x, y] = screenOf(s);
+    g.fillStyle = (rankOf(s) + fileOf(s)) % 2 ? '#b58863' : '#f0d9b5';
+    g.fillRect(x, y, S, S);
+    if (lastMove && (s === (lastMove & 63) || s === (lastMove >> 6 & 63))) { g.fillStyle = 'rgba(205,210,60,0.45)'; g.fillRect(x, y, S, S); }
+    if (s === picked) { g.fillStyle = 'rgba(70,140,230,0.55)'; g.fillRect(x, y, S, S); }
+    if (check && s === kingOf(pos.side)) { g.fillStyle = 'rgba(220,40,40,0.6)'; g.fillRect(x, y, S, S); }
+    const p = pos.b[s];
+    if (p) shape(Math.abs(p), x, y, p > 0);
+    if (targetsOf.includes(s)) {
+      g.fillStyle = 'rgba(30,30,30,0.35)'; g.beginPath();
+      if (p) { g.arc(x + S / 2, y + S / 2, S * 0.46, 0, 7); g.arc(x + S / 2, y + S / 2, S * 0.36, 0, 7, true); }
+      else g.arc(x + S / 2, y + S / 2, S * 0.13, 0, 7);
+      g.fill();
+    }
+  }
+  // Board edge letters and the cursor.
+  g.fillStyle = '#a89f91'; g.font = '9px sans-serif'; g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  const [cx, cy] = screenOf(cur);
+  g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.strokeRect(cx + 1.5, cy + 1.5, S - 3, S - 3);
+  g.strokeStyle = '#1565c0'; g.lineWidth = 1; g.strokeRect(cx + 3.5, cy + 3.5, S - 7, S - 7);
+  // Side panel.
+  let y = 20;
+  const line = (text, color, size, bold) => { g.fillStyle = color; g.font = (bold ? 'bold ' : '') + size + 'px sans-serif'; g.fillText(text, PX, y); y += size + 5; };
+  line('Chess', '#f0d9b5', 16, true);
+  line('Computer: ' + LEVELS[level][0], '#a89f91', 11);
+  y += 2;
+  if (over) {
+    for (const part of over.split('. ')) line(part.endsWith('!') || part.endsWith('.') ? part : part + '.', '#ffd54f', 12, true);
+  } else if (busy) line('Thinking…', '#ffd54f', 12, true);
+  else line(check ? 'Check! Your move' : 'Your move', check ? '#ff8a80' : '#ffffff', 12, true);
+  line(sqName(cur) + (note ? '  ' + note : ''), '#a89f91', 10);
+  y += 2;
+  const start = Math.max(0, history.length - 10 + (history.length % 2));
+  for (let i = start; i < history.length; i += 2) {
+    const n = (i >> 1) + 1;
+    line(n + '. ' + history[i].text + (history[i + 1] ? '  ' + history[i + 1].text : ''), '#e8e2d6', 10);
+  }
+  y = H - 30;
+  line('Enter move  Esc drop', '#857c70', 9);
+  line('U undo  N new  L level', '#857c70', 9);
+}
+
+newGame();
+// Drawn on the first timer tick, so setting up and drawing each get the page's full script time.
+setTimeout(draw, 0);
+</script>
+</body>

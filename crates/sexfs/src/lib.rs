@@ -41,7 +41,26 @@ pub trait Device {
     fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> core::result::Result<(), ()>;
     fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> core::result::Result<(), ()>;
     fn flush(&mut self) -> core::result::Result<(), ()>;
+    /// Most blocks one `read_run` or `write_run` should carry. A device whose commands
+    /// cost the same for one block or many says how many, and file data travels in runs.
+    fn run_blocks(&self) -> usize { 1 }
+    /// Whole blocks `first..`, as many as `out` holds.
+    fn read_run(&mut self, first: u64, out: &mut [u8]) -> core::result::Result<(), ()> {
+        for (i, chunk) in out.chunks_exact_mut(BLOCK).enumerate() {
+            self.read(first + i as u64, chunk.try_into().map_err(|_| ())?)?;
+        }
+        Ok(())
+    }
+    fn write_run(&mut self, first: u64, data: &[u8]) -> core::result::Result<(), ()> {
+        for (i, chunk) in data.chunks_exact(BLOCK).enumerate() {
+            self.write(first + i as u64, chunk.try_into().map_err(|_| ())?)?;
+        }
+        Ok(())
+    }
 }
+
+/// Longest run of file blocks moved together.
+const RUN_MAX: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { File, Dir }
@@ -184,6 +203,7 @@ fn split_into(left: &mut [u8; BLOCK], right: &mut [u8; BLOCK]) -> Key {
     key_at(right, 0)
 }
 
+#[derive(Clone, Copy)]
 pub struct Slot { block: u64, dirty: bool, stamp: u64, pins: u16 }
 impl Slot { pub const EMPTY: Slot = Slot { block: u64::MAX, dirty: false, stamp: 0, pins: 0 }; }
 
@@ -206,6 +226,8 @@ pub struct Fs<'a, D: Device> {
     tx: u64,
     free: u64,
     pending_count: u64,
+    /// Words of `pending` that may hold bits, so a commit never walks the whole map.
+    pending_span: (usize, usize),
     cursor: u64,
     clock: u64,
     changed: bool,
@@ -252,13 +274,14 @@ impl<'a, D: Device> Fs<'a, D> {
     }
 
     fn empty(dev: D, mem: Memory<'a>, total: u64) -> Self {
-        Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, cursor: SB_SLOTS, clock: 0,
+        Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, pending_span: (usize::MAX, 0), cursor: SB_SLOTS, clock: 0,
             changed: false, poisoned: false, value: [0; VALUE_MAX], value_len: 0 }
     }
 
     fn reset_maps(&mut self) {
         self.mem.used.fill(0);
         self.mem.pending.fill(0);
+        self.pending_span = (usize::MAX, 0);
         for s in 0..SB_SLOTS { set_bit(self.mem.used, s, true); }
         self.free = self.total - SB_SLOTS;
         self.pending_count = 0;
@@ -377,9 +400,22 @@ impl<'a, D: Device> Fs<'a, D> {
         }
         Err(Error::NoSpace)
     }
+    /// Takes exactly `block` if it is free, to grow a run of file data.
+    fn take(&mut self, block: u64) -> bool {
+        if block >= self.total || self.free <= RESERVED || bit(self.mem.used, block) { return false; }
+        set_bit(self.mem.used, block, true);
+        self.free -= 1;
+        self.cursor = block + 1;
+        true
+    }
     /// Free once the commit that stops using it is on disk.
     fn release(&mut self, block: u64) {
-        if !bit(self.mem.pending, block) { set_bit(self.mem.pending, block, true); self.pending_count += 1; }
+        if !bit(self.mem.pending, block) {
+            set_bit(self.mem.pending, block, true);
+            self.pending_count += 1;
+            let w = (block / 64) as usize;
+            self.pending_span = (self.pending_span.0.min(w), self.pending_span.1.max(w + 1));
+        }
     }
     fn new_node(&mut self, lvl: u8) -> Result<(u64, usize)> {
         let block = self.alloc()?;
@@ -646,31 +682,56 @@ impl<'a, D: Device> Fs<'a, D> {
         let (mut done, mut at) = (0usize, offset);
         while done < data.len() {
             if self.free <= RESERVED { break; }
-            let index = at / BLOCK as u64;
-            let inside = (at % BLOCK as u64) as usize;
-            let take = (BLOCK - inside).min(data.len() - done);
-            if take == BLOCK {
-                self.mem.scratch.copy_from_slice(&data[done..done + BLOCK]);
-            } else if !self.read_block(id, index)? {
-                self.mem.scratch.fill(0);
+            match self.write_step(id, at, &data[done..]) {
+                Ok(n) => { done += n; at += n as u64; }
+                // After progress, a full disk or tree ends the write short; the prefix counts.
+                Err(e) if done > 0 && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) => break,
+                Err(e) => return Err(e),
             }
-            self.mem.scratch[inside..inside + take].copy_from_slice(&data[done..done + take]);
-            let sum = checksum(&self.mem.scratch[..]);
-            let block = self.alloc()?;
-            self.dev.write(block, self.mem.scratch).map_err(|_| Error::Io)?;
-            let k = Key { id, kind: K_BLOCK, off: index };
-            if self.get(k)? { let old = get_u64(&self.value, 0); self.release(old); }
-            let mut v = [0u8; 16];
-            put_u64(&mut v, 0, block);
-            put_u64(&mut v, 8, sum);
-            self.insert(k, &v)?;
-            done += take;
-            at += take as u64;
         }
         if done == 0 && !data.is_empty() { return Err(Error::NoSpace); }
         let new_size = size.max(offset + done as u64);
         self.insert(Key { id, kind: K_INODE, off: 0 }, &encode_inode(Kind::File, new_size, now))?;
         Ok(done)
+    }
+    /// Writes the next block, or the next run of whole blocks, of `data` at file offset `at`.
+    fn write_step(&mut self, id: u64, at: u64, data: &[u8]) -> Result<usize> {
+        let index = at / BLOCK as u64;
+        let inside = (at % BLOCK as u64) as usize;
+        let whole = if inside == 0 { data.len() / BLOCK } else { 0 };
+        let want = whole.min(self.dev.run_blocks()).min(RUN_MAX);
+        if want >= 2 {
+            // New blocks side by side, so the device takes them in one command.
+            let first = self.alloc()?;
+            let mut n = 1;
+            while n < want && self.take(first + n as u64) { n += 1; }
+            self.dev.write_run(first, &data[..n * BLOCK]).map_err(|_| Error::Io)?;
+            for j in 0..n {
+                let sum = checksum(&data[j * BLOCK..(j + 1) * BLOCK]);
+                self.map_block(id, index + j as u64, first + j as u64, sum)?;
+            }
+            return Ok(n * BLOCK);
+        }
+        let take = (BLOCK - inside).min(data.len());
+        if take == BLOCK {
+            self.mem.scratch.copy_from_slice(&data[..BLOCK]);
+        } else if !self.read_block(id, index)? {
+            self.mem.scratch.fill(0);
+        }
+        self.mem.scratch[inside..inside + take].copy_from_slice(&data[..take]);
+        let sum = checksum(&self.mem.scratch[..]);
+        let block = self.alloc()?;
+        self.dev.write(block, self.mem.scratch).map_err(|_| Error::Io)?;
+        self.map_block(id, index, block, sum)?;
+        Ok(take)
+    }
+    fn map_block(&mut self, id: u64, index: u64, block: u64, sum: u64) -> Result<()> {
+        let k = Key { id, kind: K_BLOCK, off: index };
+        if self.get(k)? { let old = get_u64(&self.value, 0); self.release(old); }
+        let mut v = [0u8; 16];
+        put_u64(&mut v, 0, block);
+        put_u64(&mut v, 8, sum);
+        self.insert(k, &v)
     }
     /// Reads a file block into scratch. False if it is a hole.
     fn read_block(&mut self, id: u64, index: u64) -> Result<bool> {
@@ -689,6 +750,10 @@ impl<'a, D: Device> Fs<'a, D> {
             let (mut done, mut at) = (0usize, offset);
             while done < want {
                 let inside = (at % BLOCK as u64) as usize;
+                if inside == 0 {
+                    let n = f.read_run(id, at / BLOCK as u64, &mut out[done..want])?;
+                    if n > 0 { done += n * BLOCK; at += (n * BLOCK) as u64; continue; }
+                }
                 let take = (BLOCK - inside).min(want - done);
                 if f.read_block(id, at / BLOCK as u64)? {
                     out[done..done + take].copy_from_slice(&f.mem.scratch[inside..inside + take]);
@@ -700,6 +765,29 @@ impl<'a, D: Device> Fs<'a, D> {
             }
             Ok(done)
         })
+    }
+    /// Whole file blocks from `index` that sit side by side on disk, read with one device
+    /// run straight into `out`. Returns how many; 0 when fewer than two line up.
+    fn read_run(&mut self, id: u64, index: u64, out: &mut [u8]) -> Result<usize> {
+        let want = (out.len() / BLOCK).min(self.dev.run_blocks()).min(RUN_MAX);
+        if want < 2 { return Ok(0); }
+        let mut sums = [0u64; RUN_MAX];
+        let (mut first, mut n) = (0u64, 0usize);
+        while n < want {
+            if !self.get(Key { id, kind: K_BLOCK, off: index + n as u64 })? { break; }
+            let block = get_u64(&self.value, 0);
+            if n == 0 { first = block; } else if block != first + n as u64 { break; }
+            if block < SB_SLOTS || block >= self.total { return Err(Error::Corrupt); }
+            sums[n] = get_u64(&self.value, 8);
+            n += 1;
+        }
+        if n < 2 { return Ok(0); }
+        let run = &mut out[..n * BLOCK];
+        self.dev.read_run(first, run).map_err(|_| Error::Io)?;
+        for j in 0..n {
+            if checksum(&run[j * BLOCK..(j + 1) * BLOCK]) != sums[j] { return Err(Error::Corrupt); }
+        }
+        Ok(n)
     }
     pub fn truncate(&mut self, id: u64, size: u64, now: u64) -> Result<()> {
         self.guarded(|f| {
@@ -847,7 +935,8 @@ impl<'a, D: Device> Fs<'a, D> {
         self.tx = generation + 1;
         self.changed = false;
         // Only now can what the old commit used be reused.
-        for w in 0..self.mem.pending.len() {
+        let (lo, hi) = core::mem::replace(&mut self.pending_span, (usize::MAX, 0));
+        for w in lo..hi {
             let bits = self.mem.pending[w];
             if bits != 0 {
                 self.mem.used[w] &= !bits;

@@ -28,6 +28,8 @@ pub(crate) fn backing(length: u64) -> u64 {
     physical
 }
 
+/// The screen BOOT found, so program pixel surfaces can cover all of it.
+static SCREEN_PIXELS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PROGRAM_IMAGE_PHYSICAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// The one region Files reads program files into. Shell's load call decides when
 /// the kernel looks at it; Files gets no say over what the kernel does with it.
@@ -259,6 +261,7 @@ fn paired_at(first_id: u32, second_id: u32, first_slot: u64, second_slot: u64,
 pub fn init_display_frames(display: u32, layout: sex_pdx::display_frames::Layout) {
     use sex_pdx::display_frames::{SLOT, REGION_ID};
     require_boot();
+    SCREEN_PIXELS.store(((layout.width() as u64) << 32) | layout.height() as u64, core::sync::atomic::Ordering::Relaxed);
     let pd = DOMAIN_REGISTRY.get(display).expect("BOOT_DISPLAY_FRAME_DOMAIN");
     let main = pd.main_task.load(core::sync::atomic::Ordering::Acquire);
     assert!(!main.is_null(), "BOOT_DISPLAY_FRAME_MAIN");
@@ -351,7 +354,7 @@ pub fn init_text_regions(display: u32) {
 
 /// One pixel surface per program row: the program writes, Display reads.
 pub fn init_pixel_regions(display: u32) {
-    use sex_pdx::pixel_region::{BYTES, CLIENT_SLOT, display_slot, region_id};
+    use sex_pdx::pixel_region::{bytes_for_screen, CLIENT_SLOT, display_slot, region_id};
     require_boot();
     if display == 0 { return; }
     let second = DOMAIN_REGISTRY.get(display).expect("BOOT_PIXEL_DISPLAY_MISSING");
@@ -360,7 +363,8 @@ pub fn init_pixel_regions(display: u32) {
     // One buddy reservation per eight rows: per-row backing would spend a
     // boot frame reservation each and run the table out.
     const GROUP: usize = 8;
-    let length = BYTES;
+    let screen = SCREEN_PIXELS.load(core::sync::atomic::Ordering::Relaxed);
+    let length = bytes_for_screen(screen >> 32, screen & 0xFFFF_FFFF);
     let mut base = 0u64;
     for (k, row) in programs().enumerate() {
         if k % GROUP == 0 { base = backing(length * GROUP.min(rows - k) as u64); }
@@ -374,7 +378,7 @@ pub fn init_pixel_regions(display: u32) {
         grant(second, display_slot(k), RegionGrant { region_id: region_id(k), virtual_base: second_va, length,
             rights: QUERY_VIEW | READ, dma_base: None, peer_pd: Some(first.id) });
     }
-    crate::serial_println!("[boot.pixel.regions] display={} bytes={} runtime_mint=0", display, BYTES);
+    crate::serial_println!("[boot.pixel.regions] display={} bytes={} runtime_mint=0", display, length);
 }
 
 /// Permanent BOOT budget, separate from reclaimable app-private pages. Each
@@ -466,7 +470,9 @@ pub fn init(drive: u32, display: u32, usb: u32, net: u32, files: u32) {
     dma(usb, 1, 256 * 1024);
     dma(net, sex_pdx::pci_command::DMA_REGION_ID, sex_pdx::pci_command::DMA_BYTES);
     dma(drive, 3, 512 * 1024);
-    paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, 4096, true);
+    paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, sex_pdx::BLOCK_MAX_RUN, true);
+    // Files' caches and free-space maps are sized by the disk it finds.
+    crate::service_memory::reserve(files);
     paired(drive, display, sex_pdx::SLOT_FRAME_REGION, 5, 3 * 1024 * 1024, false);
     if drive != 0 && files != 0 {
         negative_selftest(DOMAIN_REGISTRY.get(drive).unwrap(), DOMAIN_REGISTRY.get(files).unwrap());

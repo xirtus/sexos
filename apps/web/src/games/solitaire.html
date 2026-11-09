@@ -1,0 +1,234 @@
+<!doctype html>
+<title>Solitaire</title>
+<body style="margin:0;background:#0b6b3a">
+<canvas id="table" width="410" height="300" style="display:block"></canvas>
+<script>
+// Klondike, draw one, played from the keyboard. Original SexOS game, GPL-3.0-only.
+// Arrows move, Enter picks up or puts down, Up takes more cards from a column,
+// Space draws, A sends a card home, U undoes, N deals again, Esc lets go.
+'use strict';
+const cv = document.getElementById('table'), g = cv.getContext('2d');
+const W = 410, H = 300, CW = 50, CH = 70, GAP = 7, TOP = 6, ROW2 = 86;
+const RED = '#c62828', INK = '#1d1d1f';
+let seed = 1, st, hand = null, cur = { row: 1, col: 0, depth: 1 }, undo = [], note = '', moves = 0;
+
+function rng() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed; }
+function deal() {
+  const deck = [];
+  for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) deck.push({ s, r, up: false });
+  for (let i = deck.length - 1; i > 0; i--) { const j = rng() % (i + 1); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+  st = { stock: [], waste: [], found: [[], [], [], []], tab: [[], [], [], [], [], [], []] };
+  for (let c = 0; c < 7; c++) for (let k = 0; k <= c; k++) { const card = deck.pop(); card.up = k === c; st.tab[c].push(card); }
+  st.stock = deck;
+  hand = null; undo = []; moves = 0; note = 'New deal';
+  cur = { row: 1, col: 0, depth: 1 };
+}
+const red = c => c.s === 1 || c.s === 2;
+const x0 = col => GAP + col * (CW + GAP) - 1;
+function snapshot() { undo.push(JSON.stringify(st)); if (undo.length > 200) undo.shift(); }
+
+// ---- drawing ----
+function suit(s, cx, cy, k) {
+  g.beginPath();
+  if (s === 0) { // spade
+    g.moveTo(cx, cy - k); g.bezierCurveTo(cx + k * 1.3, cy - k * 0.1, cx + k * 0.9, cy + k * 0.9, cx, cy + k * 0.35);
+    g.bezierCurveTo(cx - k * 0.9, cy + k * 0.9, cx - k * 1.3, cy - k * 0.1, cx, cy - k);
+    g.moveTo(cx, cy + k * 0.2); g.lineTo(cx + k * 0.35, cy + k); g.lineTo(cx - k * 0.35, cy + k); g.closePath();
+  } else if (s === 1) { // heart
+    g.moveTo(cx, cy + k); g.bezierCurveTo(cx - k * 1.5, cy - k * 0.1, cx - k * 0.6, cy - k * 1.2, cx, cy - k * 0.4);
+    g.bezierCurveTo(cx + k * 0.6, cy - k * 1.2, cx + k * 1.5, cy - k * 0.1, cx, cy + k);
+  } else if (s === 2) { // diamond
+    g.moveTo(cx, cy - k); g.lineTo(cx + k * 0.75, cy); g.lineTo(cx, cy + k); g.lineTo(cx - k * 0.75, cy); g.closePath();
+  } else { // club
+    g.arc(cx, cy - k * 0.45, k * 0.45, 0, 7); g.moveTo(cx + k * 0.95, cy + k * 0.15);
+    g.arc(cx + k * 0.5, cy + k * 0.15, k * 0.45, 0, 7); g.moveTo(cx - k * 0.05, cy + k * 0.15);
+    g.arc(cx - k * 0.5, cy + k * 0.15, k * 0.45, 0, 7);
+    g.moveTo(cx, cy); g.lineTo(cx + k * 0.3, cy + k); g.lineTo(cx - k * 0.3, cy + k); g.closePath();
+  }
+  g.fill();
+}
+const NAME = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+function card(c, x, y, lift) {
+  if (lift) { g.fillStyle = 'rgba(0,0,0,0.25)'; g.beginPath(); g.roundRect(x + 2, y + 3, CW, CH, 5); g.fill(); }
+  g.beginPath(); g.roundRect(x, y, CW, CH, 5);
+  if (!c.up) {
+    g.fillStyle = '#1e4fa3'; g.fill(); g.strokeStyle = '#ffffff'; g.lineWidth = 1; g.stroke();
+    g.strokeStyle = '#5b86d6'; g.beginPath(); g.roundRect(x + 4, y + 4, CW - 8, CH - 8, 3); g.stroke();
+    return;
+  }
+  g.fillStyle = '#fbfbf8'; g.fill(); g.strokeStyle = '#9a9a96'; g.lineWidth = 1; g.stroke();
+  g.fillStyle = red(c) ? RED : INK;
+  g.font = 'bold 13px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'top';
+  g.fillText(NAME[c.r], x + 4, y + 3);
+  suit(c.s, x + CW - 10, y + 10, 5);
+  if (c.r > 10) { g.font = 'bold 24px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(NAME[c.r], x + CW / 2, y + 45); }
+  else suit(c.s, x + CW / 2, y + 44, 13);
+}
+function slot(x, y, label) {
+  g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 1.5; g.beginPath(); g.roundRect(x + 1, y + 1, CW - 2, CH - 2, 5); g.stroke();
+  if (label !== undefined) { g.fillStyle = 'rgba(255,255,255,0.25)'; suit(label, x + CW / 2, y + CH / 2, 12); }
+}
+// Where each card of a column sits: face-down cards close, face-up ones further apart,
+// squeezed when a long column would run off the table.
+function offsets(col) {
+  const cards = st.tab[col], ys = [];
+  let down = 5, up = 16;
+  const need = () => cards.reduce((h, c, i) => h + (i === cards.length - 1 ? 0 : c.up ? up : down), 0);
+  while (ROW2 + need() + CH > H - 4 && up > 7) up--;
+  let y = ROW2;
+  for (let i = 0; i < cards.length; i++) { ys.push(y); y += cards[i].up ? up : down; }
+  return ys;
+}
+function cursorBox() {
+  if (cur.row === 0) return [x0(cur.col), TOP, CH];
+  const ys = offsets(cur.col), n = st.tab[cur.col].length;
+  if (!n) return [x0(cur.col), ROW2, CH];
+  const top = ys[n - cur.depth];
+  return [x0(cur.col), top, ys[n - 1] + CH - top];
+}
+function draw() {
+  g.fillStyle = '#0b6b3a'; g.fillRect(0, 0, W, H);
+  // Stock, waste, foundations.
+  if (st.stock.length) card({ up: false }, x0(0), TOP); else slot(x0(0), TOP);
+  if (st.stock.length === 0 && st.waste.length) { g.fillStyle = 'rgba(255,255,255,0.4)'; g.font = '11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('again', x0(0) + CW / 2, TOP + CH / 2); }
+  const wasteTop = st.waste[st.waste.length - 1];
+  const held = c => hand && hand.cards.includes(c);
+  if (wasteTop && !held(wasteTop)) card(wasteTop, x0(1), TOP);
+  else if (st.waste.length > 1) card(st.waste[st.waste.length - 2], x0(1), TOP);
+  else slot(x0(1), TOP);
+  for (let f = 0; f < 4; f++) {
+    const pile = st.found[f].filter(c => !held(c));
+    if (pile.length) card(pile[pile.length - 1], x0(3 + f), TOP); else slot(x0(3 + f), TOP, f);
+  }
+  for (let c = 0; c < 7; c++) {
+    const ys = offsets(c), cards = st.tab[c];
+    if (!cards.length) slot(x0(c), ROW2);
+    for (let i = 0; i < cards.length; i++) if (!held(cards[i])) card(cards[i], x0(c), ys[i]);
+  }
+  // The cursor, and the cards in hand floating just below it.
+  const [cx, cy, ch] = cursorBox();
+  g.strokeStyle = hand ? '#ffd54f' : '#ffffff'; g.lineWidth = 3;
+  g.beginPath(); g.roundRect(cx - 2, cy - 2, CW + 4, ch + 4, 7); g.stroke();
+  if (hand) {
+    let y = Math.min(cy + 22, H - CH - (hand.cards.length - 1) * 12);
+    for (const c of hand.cards) { card(c, cx + 8, y, true); y += 12; }
+  }
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.font = '11px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillText(note, x0(2) + 1, TOP + 12);
+  g.fillText(moves + ' moves', x0(2) + 1, TOP + 28);
+  g.fillStyle = 'rgba(255,255,255,0.55)';
+  g.fillText('Space draw', x0(2) + 1, TOP + 48);
+  g.fillText('A home  U undo', x0(2) + 1, TOP + 62);
+  if (st.found.every(f => f.length === 13)) {
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(0, 120, W, 60);
+    g.fillStyle = '#ffd54f'; g.font = 'bold 22px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('You win! ' + moves + ' moves. N deals again.', W / 2, 150);
+  }
+}
+
+// ---- rules ----
+function selection() {
+  if (cur.row === 0) {
+    if (cur.col === 1) return st.waste.length ? { from: st.waste, cards: st.waste.slice(-1) } : null;
+    if (cur.col >= 3) { const f = st.found[cur.col - 3]; return f.length ? { from: f, cards: f.slice(-1) } : null; }
+    return null;
+  }
+  const col = st.tab[cur.col];
+  const run = col.slice(col.length - cur.depth);
+  return run.length && run.every(c => c.up) ? { from: col, cards: run } : null;
+}
+function fits(cards, row, col) {
+  const c = cards[0];
+  if (row === 0) {
+    if (col < 3 || cards.length !== 1) return null;
+    const f = st.found[col - 3], top = f[f.length - 1];
+    return (!top ? c.r === 1 : top.s === c.s && top.r === c.r - 1) ? f : null;
+  }
+  const t = st.tab[col], top = t[t.length - 1];
+  return (!top ? c.r === 13 : top.up && red(top) !== red(c) && top.r === c.r + 1) ? t : null;
+}
+function move(from, to, n) {
+  snapshot();
+  const cards = from.splice(from.length - n, n);
+  to.push(...cards);
+  if (from.length && !from[from.length - 1].up && st.tab.includes(from)) from[from.length - 1].up = true;
+  moves++;
+}
+function draw1() {
+  hand = null;
+  snapshot();
+  if (st.stock.length) { const c = st.stock.pop(); c.up = true; st.waste.push(c); note = 'Drew a card'; }
+  else if (st.waste.length) { st.stock = st.waste.reverse().map(c => (c.up = false, c)); st.waste = []; note = 'Turned the pile'; }
+  else { undo.pop(); note = 'Nothing to draw'; return; }
+  moves++;
+}
+function home(cards, from) {
+  for (let f = 0; f < 4; f++) if (fits(cards, 0, 3 + f)) { move(from, st.found[f], 1); return true; }
+  return false;
+}
+function autoHome() {
+  const sel = selection();
+  if (sel && sel.cards.length === 1 && home(sel.cards, sel.from)) { note = 'Sent home'; return; }
+  // Otherwise the first card anywhere that can go home.
+  const piles = [st.waste, ...st.tab];
+  for (const p of piles) if (p.length && p[p.length - 1].up && home(p.slice(-1), p)) { note = 'Sent home'; return; }
+  note = 'No card can go home';
+}
+function clampDepth() {
+  if (cur.row !== 1) { cur.depth = 1; return; }
+  const col = st.tab[cur.col];
+  const ups = col.filter(c => c.up).length;
+  cur.depth = Math.max(1, Math.min(cur.depth, ups));
+}
+function enter() {
+  if (!hand) {
+    if (cur.row === 0 && cur.col === 0) { draw1(); return; }
+    const sel = selection();
+    if (!sel) { note = 'Nothing to pick up'; return; }
+    hand = sel; note = sel.cards.length > 1 ? 'Holding ' + sel.cards.length + ' cards' : 'Holding ' + NAME[sel.cards[0].r];
+    return;
+  }
+  const to = fits(hand.cards, cur.row, cur.col);
+  if (to && to !== hand.from) { move(hand.from, to, hand.cards.length); note = 'Moved'; }
+  else note = to === hand.from ? 'Put back' : 'That card does not go there';
+  hand = null;
+}
+function key(k) {
+  note = '';
+  switch (k) {
+    case 'ArrowLeft': case 'ArrowRight': {
+      const d = k === 'ArrowLeft' ? -1 : 1;
+      cur.col = (cur.col + d + 7) % 7;
+      if (cur.row === 0 && cur.col === 2) cur.col += d;
+      cur.col = (cur.col + 7) % 7; cur.depth = 1; break;
+    }
+    case 'ArrowUp':
+      if (cur.row === 1 && !hand && cur.depth < st.tab[cur.col].filter(c => c.up).length) cur.depth++;
+      else { cur.row = 0; if (cur.col === 2) cur.col = 1; cur.depth = 1; }
+      break;
+    case 'ArrowDown':
+      if (cur.row === 0) { cur.row = 1; cur.depth = 1; } else if (cur.depth > 1) cur.depth--;
+      break;
+    case 'Enter': enter(); break;
+    case ' ': case 'd': case 'D': draw1(); break;
+    case 'a': case 'A': hand = null; autoHome(); break;
+    case 'u': case 'U': case 'Backspace':
+      hand = null;
+      if (undo.length) { st = JSON.parse(undo.pop()); moves++; note = 'Undone'; } else note = 'Nothing to undo';
+      break;
+    case 'n': case 'N': seed = seed + 7919; deal(); break;
+    case 'Escape': hand = null; note = 'Let go'; break;
+    default:
+      if (k >= '1' && k <= '7') { cur = { row: 1, col: +k - 1, depth: 1 }; break; }
+      return false;
+  }
+  clampDepth();
+  draw();
+  return true;
+}
+document.addEventListener('keydown', e => { if (key(e.key)) e.preventDefault(); });
+deal();
+// Drawn on the first timer tick, so setting up and drawing each get the page's full script time.
+setTimeout(draw, 0);
+</script>
+</body>

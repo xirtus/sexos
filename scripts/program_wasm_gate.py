@@ -2,7 +2,7 @@
 """Wasm guests run inside the `wasm` program: the built-in guest on the native imports,
 and an unmodified Rust std program (wasm32-wasip1) downloaded as a file, which prints,
 reads typed lines, and exits. Close ends a guest waiting for input. Nothing panics."""
-import argparse,http.server,os,shutil,threading,time
+import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 from install_program import install
 ROOT=Path(__file__).resolve().parents[1]
@@ -25,7 +25,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- elf=(ROOT/'iso_root/programs/wasm').read_bytes();assert elf[:4]==b'\x7fELF' and len(elf)<=16*1024*1024,len(elf)  # program_store::IMAGE_BYTES
+ elf=(ROOT/'iso_root/programs/wasm').read_bytes();image_bytes=eval(re.search(r'pub const IMAGE_BYTES: usize = ([\d* ]+);',(ROOT/'crates/sex-pdx/src/program_store.rs').read_text())[1]);assert elf[:4]==b'\x7fELF' and len(elf)<=image_bytes,len(elf)
  install(disk,[('wasm',elf)])
  g=boot(a.iso,disk,a.out,'wasm',a.resolution);t=g['text'];q=g['q']
  def shifted(k):q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':k}],'hold-time':80})

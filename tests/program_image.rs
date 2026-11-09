@@ -137,3 +137,25 @@ fn the_directory_finds_names_and_nothing_else() {
     assert_eq!(program_store::decode_reply(9), None);
     assert_eq!(program_store::fnv(b"a"), 0xaf63dc4c8601ec8c);
 }
+#[test]
+fn the_directory_spans_the_sectors_its_head_names() {
+    use program_store::{ENTRY_BYTES, MAX_DIRECTORY_SECTORS, MAX_ENTRIES, SECTOR};
+    let mut d = vec![0u8; SECTOR * 3];
+    for k in 0..3 { d[k * SECTOR..k * SECTOR + 8].copy_from_slice(&program_store::MAGIC); }
+    // The last entry of the third sector.
+    let at = 2 * SECTOR + 16 + (MAX_ENTRIES - 1) * ENTRY_BYTES;
+    d[at..at + 4].copy_from_slice(b"last");
+    d[at + 16..at + 20].copy_from_slice(&3000u32.to_le_bytes());
+    d[at + 20..at + 24].copy_from_slice(&9u32.to_le_bytes());
+    let name = program_store::pack_name(b"last").unwrap();
+    // A head saying one sector (or zero, the old format) hides the later sectors.
+    assert_eq!(program_store::find(&d, name), None);
+    d[8..12].copy_from_slice(&3u32.to_le_bytes());
+    assert_eq!(program_store::directory_sectors(&d), Some(3));
+    assert_eq!(program_store::find(&d, name), Some(program_store::Entry { lba: 3000, len: 9, hash: 0 }));
+    // Fewer bytes than the head promises, or a count past the limit, is no directory.
+    assert_eq!(program_store::find(&d[..2 * SECTOR], name), None);
+    d[8..12].copy_from_slice(&(MAX_DIRECTORY_SECTORS as u32 + 1).to_le_bytes());
+    assert_eq!(program_store::directory_sectors(&d), None);
+    assert_eq!(program_store::find(&d, name), None);
+}

@@ -137,7 +137,7 @@ fn location_and_navigation() {
 
 #[test]
 fn runaway_script_is_stopped() {
-    let mut s = Script::new(Document::new(sex_html::parse::parse(""), "", (1, 1), clock), Limits { budget_ms: 200, ..Limits::default() }).unwrap();
+    let mut s = Script::new(Document::new(sex_html::parse::parse(""), "", (1, 1), clock), Limits { budget_ms: 200, load_budget_ms: 200, ..Limits::default() }).unwrap();
     assert_eq!(s.eval("for(;;){}", "loop.js"), Err(sex_js::Error::Thrown));
     s.eval("console.log('alive')", "t.js").unwrap();
     assert_eq!(logs(&mut s).last().unwrap(), "0:alive");
@@ -196,7 +196,7 @@ fn canvas_commands_are_queued() {
         ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 5, NaN); ctx.fillRect(1, 2, 3, 4);
         console.log(ctx.fillStyle, ctx.measureText('abcd').width > 0);
     "#, "t.js").unwrap();
-    assert_eq!(logs(&mut s), ["0:true null", "0:red true"]);
+    assert_eq!(logs(&mut s), ["0:true null", "0:red true"], "a 2d canvas has no webgl context");
     let q = &s.page().canvas_queue;
     assert_eq!(q.len(), 1);
     assert_eq!(q[0].1, "fs\u{1f}c\u{1f}red\u{1e}fr\u{1f}1\u{1f}2\u{1f}3\u{1f}4");
@@ -224,4 +224,55 @@ fn canvas_gradient_stops_and_resizes_reach_the_queue() {
         "lw\u{1f}3",
         "sz\u{1f}20\u{1f}10",
     ]);
+}
+
+#[test]
+fn webgl_draws_a_triangle_from_js() {
+    let mut s = page("<canvas id=c width=8 height=8></canvas>");
+    s.eval(r#"
+        const gl = document.getElementById('c').getContext('webgl');
+        const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x);
+            if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) console.log('shader', gl.getShaderInfoLog(x)); return x; };
+        const p = gl.createProgram();
+        gl.attachShader(p, sh(gl.VERTEX_SHADER, 'attribute vec2 pos; varying vec2 v; void main() { v = pos; gl_Position = vec4(pos, 0.0, 1.0); }'));
+        gl.attachShader(p, sh(gl.FRAGMENT_SHADER, 'precision mediump float; uniform vec4 tint; varying vec2 v; void main() { gl_FragColor = tint; }'));
+        gl.linkProgram(p);
+        console.log(gl.getProgramParameter(p, gl.LINK_STATUS), gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS), gl.getAttribLocation(p, 'pos'));
+        gl.useProgram(p);
+        gl.uniform4f(gl.getUniformLocation(p, 'tint'), 0, 1, 0, 1);
+        const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        gl.clearColor(1, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const px = new Uint8Array(4); gl.readPixels(3, 3, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        console.log(Array.from(px).join(','), gl.getError(), gl.getParameter(gl.VERSION));
+    "#, "t.js").unwrap();
+    let l = logs(&mut s);
+    assert_eq!(l[0], "0:true 1 0");
+    assert!(l[1].starts_with("0:0,255,0,255 0 WebGL 1.0"), "{l:?}");
+}
+
+#[test]
+fn webgl_page_picture_is_in_the_texture_before_the_next_draw() {
+    let mut s = page("<img id=p src=pic.png><canvas id=c width=4 height=4></canvas>");
+    s.page_mut().pictures.push(("pic.png".into(), std::rc::Rc::new(sex_image::Image { width: 1, height: 1, pixels: vec![0xFF20_4060] })));
+    s.eval(r#"
+        const gl = document.getElementById('c').getContext('webgl');
+        const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x); return x; };
+        const p = gl.createProgram();
+        gl.attachShader(p, sh(gl.VERTEX_SHADER, 'attribute vec2 pos; void main() { gl_Position = vec4(pos, 0.0, 1.0); }'));
+        gl.attachShader(p, sh(gl.FRAGMENT_SHADER, 'precision mediump float; uniform sampler2D t; void main() { gl_FragColor = texture2D(t, vec2(0.5)); }'));
+        gl.linkProgram(p); gl.useProgram(p);
+        gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, document.getElementById('p'));
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const px = new Uint8Array(4); gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        console.log(Array.from(px).join(','));
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:32,64,96,255"]);
 }

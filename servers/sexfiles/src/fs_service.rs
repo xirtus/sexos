@@ -7,45 +7,111 @@ use sex_pdx::SLOT_BUF_LEND;
 use sexfs::{Device, Error, Fs, Kind, Memory, Slot, BLOCK};
 
 const SECTORS: u64 = (BLOCK / 512) as u64;
-const CACHE: usize = 64;
-/// 16 GiB until free space stops needing a bitmap held in memory.
-const MAP_WORDS: usize = 65536;
-static mut CACHE_BLOCKS: [[u8; BLOCK]; CACHE] = [[0; BLOCK]; CACHE];
-static mut SLOTS: [Slot; CACHE] = [Slot::EMPTY; CACHE];
-static mut USED: [u64; MAP_WORDS] = [0; MAP_WORDS];
-static mut PENDING: [u64; MAP_WORDS] = [0; MAP_WORDS];
+/// Blocks of tree cached in memory, once Files' memory has grown to hold them.
+const CACHE: usize = 1024;
+/// What Files has when its memory cannot grow: 64 blocks and a map for 16 GiB.
+const SMALL_CACHE: usize = 64;
+const SMALL_MAP_WORDS: usize = 65536;
+static mut SMALL_BLOCKS: [[u8; BLOCK]; SMALL_CACHE] = [[0; BLOCK]; SMALL_CACHE];
+static mut SMALL_SLOTS: [Slot; SMALL_CACHE] = [Slot::EMPTY; SMALL_CACHE];
+static mut SMALL_USED: [u64; SMALL_MAP_WORDS] = [0; SMALL_MAP_WORDS];
+static mut SMALL_PENDING: [u64; SMALL_MAP_WORDS] = [0; SMALL_MAP_WORDS];
+/// Where the filesystem's memory lives: (cache, slots, words, used, pending).
+static mut PLACE: (*mut [u8; BLOCK], *mut Slot, usize, usize, *mut u64, *mut u64) =
+    (core::ptr::null_mut(), core::ptr::null_mut(), 0, 0, core::ptr::null_mut(), core::ptr::null_mut());
 static mut SCRATCH: [u8; BLOCK] = [0; BLOCK];
+/// Files' own copy of one request's data.
+static mut OWN: [u8; w::DATA_MAX] = [0; w::DATA_MAX];
 static mut STATE: State = State::Untried;
+/// Writes are not committed one request at a time (each commit costs two device
+/// flushes). They are committed on SYNC, before any other change, once this many bytes
+/// wait, and when no request has come for `COMMIT_DELAY` ticks.
+const COMMIT_BYTES: u64 = 8 * 1024 * 1024;
+const COMMIT_DELAY: u64 = 20;
+static mut UNCOMMITTED: u64 = 0;
+static mut LAST_WRITE: u64 = 0;
+/// Uncommitted writes are waiting: the server polls rather than blocks until they commit.
+pub fn writes_pending() -> bool { unsafe { UNCOMMITTED != 0 } }
+/// Called when no request is waiting. Commits once writes have rested `COMMIT_DELAY` ticks.
+pub fn commit_when_idle() {
+    if !writes_pending() || sex_pdx::get_ticks().saturating_sub(unsafe { LAST_WRITE }) < COMMIT_DELAY { return; }
+    if let State::Ready(fs) = unsafe { &mut *core::ptr::addr_of_mut!(STATE) } { commit_writes(fs); }
+}
+fn commit_writes(fs: &mut Fs<'static, Disk>) {
+    let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
+    if let Err(e) = fs.commit() { sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+}
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
 pub struct Disk { blocks: u64 }
+impl Disk {
+    /// The shared block buffer, as long as one command may move.
+    fn buffer() -> Result<&'static mut [u8], ()> {
+        let va = crate::vfs::diskfs_bridge_get_buf_va();
+        let len = crate::vfs::diskfs_bridge_buf_len() as usize;
+        if va == 0 || va == u64::MAX || len < BLOCK { return Err(()); }
+        Ok(unsafe { core::slice::from_raw_parts_mut(va as *mut u8, len) })
+    }
+    fn offset(block: u64) -> u64 { (w::BASE_LBA + block * SECTORS) * 512 }
+}
 impl Device for Disk {
     fn blocks(&self) -> u64 { self.blocks }
-    fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> {
-        let va = crate::vfs::diskfs_bridge_get_buf_va();
-        if va == 0 || va == u64::MAX { return Err(()); }
-        if DiskFs::diskfs_block_read((w::BASE_LBA + block * SECTORS) * 512, BLOCK as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
-        out.copy_from_slice(unsafe { core::slice::from_raw_parts(va as *const u8, BLOCK) });
+    fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> { self.read_run(block, out) }
+    fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> Result<(), ()> { self.write_run(block, data) }
+    fn run_blocks(&self) -> usize { crate::vfs::diskfs_bridge_buf_len() as usize / BLOCK }
+    // One command per run: per-command cost, not bytes, is what a disk charges for.
+    fn read_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
+        let buf = Self::buffer()?;
+        if out.is_empty() || out.len() % BLOCK != 0 || out.len() > buf.len() { return Err(()); }
+        if DiskFs::diskfs_block_read(Self::offset(first), out.len() as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
+        out.copy_from_slice(&buf[..out.len()]);
         Ok(())
     }
-    fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> Result<(), ()> {
-        let va = crate::vfs::diskfs_bridge_get_buf_va();
-        if va == 0 || va == u64::MAX { return Err(()); }
-        unsafe { core::slice::from_raw_parts_mut(va as *mut u8, BLOCK) }.copy_from_slice(data);
-        if DiskFs::diskfs_block_write((w::BASE_LBA + block * SECTORS) * 512, BLOCK as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
+    fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
+        let buf = Self::buffer()?;
+        if data.is_empty() || data.len() % BLOCK != 0 || data.len() > buf.len() { return Err(()); }
+        buf[..data.len()].copy_from_slice(data);
+        if DiskFs::diskfs_block_write(Self::offset(first), data.len() as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         Ok(())
     }
     fn flush(&mut self) -> Result<(), ()> {
         if DiskFs::diskfs_block_sync() == 0 { Ok(()) } else { Err(()) }
     }
 }
+/// Memory sized to the disk: a free-space bit per block, so any disk fits whole.
+/// Falls back to the fixed 16 GiB maps if Files' memory cannot grow that far.
+fn place(blocks: u64) {
+    use alloc::vec::Vec;
+    let words = (blocks as usize).div_ceil(64) + 1;
+    fn grab<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
+        let mut x: Vec<T> = Vec::new();
+        x.try_reserve_exact(n).ok()?;
+        x.resize(n, v);
+        Some(x)
+    }
+    // Kept owned until all four exist, so a failure frees what was already taken.
+    let big = (|| Some((grab(CACHE, [0u8; BLOCK])?, grab(CACHE, Slot::EMPTY)?, grab(words, 0u64)?, grab(words, 0u64)?)))()
+        .map(|(c, s, u, p)| (c.leak().as_mut_ptr(), s.leak().as_mut_ptr(), u.leak().as_mut_ptr(), p.leak().as_mut_ptr()));
+    unsafe {
+        PLACE = match big {
+            Some((cache, slots, used, pending)) => (cache, slots, CACHE, words, used, pending),
+            None => (core::ptr::addr_of_mut!(SMALL_BLOCKS).cast(), core::ptr::addr_of_mut!(SMALL_SLOTS).cast(), SMALL_CACHE,
+                SMALL_MAP_WORDS, core::ptr::addr_of_mut!(SMALL_USED).cast(), core::ptr::addr_of_mut!(SMALL_PENDING).cast()),
+        };
+    }
+    let (_, _, cache, words, _, _) = unsafe { PLACE };
+    sex_pdx::serial_record!("[files.fs.memory] blocks={} cache_blocks={} map_words={} grown={}", blocks, cache, words, big.is_some() as u8);
+}
 fn memory() -> Memory<'static> {
     unsafe {
+        let (cache, slots, n, words, used, pending) = PLACE;
+        // Every slot is reset by mount/format; only one Fs holds these at a time.
+        for i in 0..n { *slots.add(i) = Slot::EMPTY; }
         Memory {
-            cache: &mut *core::ptr::addr_of_mut!(CACHE_BLOCKS),
-            slots: &mut *core::ptr::addr_of_mut!(SLOTS),
-            used: &mut *core::ptr::addr_of_mut!(USED),
-            pending: &mut *core::ptr::addr_of_mut!(PENDING),
+            cache: core::slice::from_raw_parts_mut(cache, n),
+            slots: core::slice::from_raw_parts_mut(slots, n),
+            used: core::slice::from_raw_parts_mut(used, words),
+            pending: core::slice::from_raw_parts_mut(pending, words),
             scratch: &mut *core::ptr::addr_of_mut!(SCRATCH),
         }
     }
@@ -57,6 +123,7 @@ fn bring_up() -> State {
         return State::Absent;
     }
     let blocks = (sectors - w::BASE_LBA) / SECTORS;
+    place(blocks);
     match Fs::mount(Disk { blocks }, memory()) {
         Ok(fs) => {
             let s = fs.statfs();
@@ -136,7 +203,11 @@ pub fn bind(target: u32, task: u32) {
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
     if matches!(state, State::Untried) { *state = bring_up(); }
     if let State::Ready(fs) = state {
+        // The rollback below must only undo this mkdir: commit waiting writes first,
+        // and make no folder if they cannot be committed.
+        if writes_pending() { commit_writes(fs); }
         for end in [data.len() - 1, len] {
+            if fs.has_changes() { break; }
             if fs.open(&root[..end]).is_err() && fs.mkdir(&root[..end], 0).and_then(|_| fs.commit()).is_err() { let _ = fs.rollback(); }
         }
     }
@@ -216,12 +287,28 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         path = own; path_len = n;
     }
     let data = &mut region[w::PATH_BYTES..];
+    // Reads change nothing; a write fails before it changes anything (sexfs checks
+    // first, and a device error poisons the filesystem). Every other change commits
+    // waiting writes first, so its own rollback can only undo itself.
+    let read_only = matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS);
+    let batched = r.kind == w::WRITE;
+    if !read_only && !batched && writes_pending() {
+        commit_writes(fs);
+        if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
+    }
     let result = run(fs, r, &path[..path_len], data);
     match result {
-        Ok(value) => w::reply(r.seq, w::OK, value),
+        Ok(value) => {
+            if batched && value != 0 {
+                unsafe { UNCOMMITTED += value as u64; LAST_WRITE = sex_pdx::get_ticks(); }
+                if unsafe { UNCOMMITTED } >= COMMIT_BYTES { commit_writes(fs); }
+            }
+            if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
+            w::reply(r.seq, w::OK, value)
+        }
         Err(e) => {
             // Nothing half done becomes durable: back to the last commit.
-            if !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); }
+            if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); }
             w::reply(r.seq, status(e), 0)
         }
     }
@@ -268,14 +355,21 @@ pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
     path[at..at + name.len()].copy_from_slice(name);
     read_program(&path[..at + name.len()], image)
 }
-/// The prepared path, once. A stale ticket finds nothing.
-pub fn read_ticket(ticket: u64, image: &mut [u8]) -> Program {
+/// The prepared path, once. A stale ticket finds nothing. When the path is
+/// `/bin/NAME` and no such file exists, the packed NAME comes back too, so the disk
+/// program store can serve it with the same arguments.
+pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>) {
     unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
-    if prepared.1 == 0 || prepared.2 as u64 != ticket { return Program::Absent; }
+    if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
-    read_program(&prepared.0[..len], image)
+    let path = &prepared.0[..len];
+    let found = read_program(path, image);
+    let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
+        .filter(|name| !name.contains(&b'/'))
+        .and_then(sex_pdx::program_store::pack_name);
+    match found { Program::Absent => (Program::Absent, store_name), other => (other, None) }
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
     let now = 0;
@@ -319,31 +413,39 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             fs.commit()?;
             Ok(0)
         }
+        // Both go through private memory: the client can change its region at any time, and
+        // checksums must be over the bytes we keep, not bytes it might still be changing.
         w::READ => {
             let st = fs.open(path)?;
-            let want = (r.length as usize).min(data.len());
-            Ok(fs.read(st.id, r.offset, &mut data[..want])? as u32)
+            let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+            let want = (r.length as usize).min(data.len()).min(own.len());
+            let n = fs.read(st.id, r.offset, &mut own[..want])?;
+            data[..n].copy_from_slice(&own[..n]);
+            Ok(n as u32)
         }
         w::WRITE => {
-            if r.length as usize > data.len() { return Err(Error::TooBig); }
+            let total = r.length as usize;
+            let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+            if total > data.len() || total > own.len() { return Err(Error::TooBig); }
             let st = fs.open(path)?;
-            let mut own = [0u8; BLOCK];
-            let (mut done, total) = (0usize, r.length as usize);
-            while done < total {
-                let take = (total - done).min(BLOCK);
-                own[..take].copy_from_slice(&data[done..done + take]);
-                let wrote = fs.write(st.id, r.offset + done as u64, &own[..take], now)?;
-                done += wrote;
-                if wrote < take { break; }
-            }
-            fs.commit()?;
-            Ok(done as u32)
+            own[..total].copy_from_slice(&data[..total]);
+            // sexfs ends the write short after progress, as Linux does, so the counted
+            // prefix commits with the rest.
+            Ok(fs.write(st.id, r.offset, &own[..total], now)? as u32)
         }
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }
         w::SYNC => { fs.commit()?; Ok(0) }
         w::PREPARE => {
-            let st = fs.open(path)?;
-            if st.kind == Kind::Dir { return Err(Error::IsDir); }
+            // `/bin/NAME` with no such file may still be the disk program store's NAME:
+            // the load looks there, and refuses then if neither has it.
+            let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
+                .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
+            match fs.open(path) {
+                Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
+                Ok(_) => {}
+                Err(Error::NotFound) if store_name => {}
+                Err(e) => return Err(e),
+            }
             let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
             prepared.0[..path.len()].copy_from_slice(path);
             prepared.1 = path.len();

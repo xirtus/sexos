@@ -1,0 +1,32 @@
+<!doctype html>
+<title>fetch test</title>
+<body style="margin:12px;font-size:14px">
+<h2>fetch</h2>
+<p id="json">json: waiting</p>
+<p id="bytes">bytes: waiting</p>
+<p id="big">big: waiting</p>
+<p id="missing">missing: waiting</p>
+<p id="url">url: waiting</p>
+<p id="query">query: waiting</p>
+<script>
+// Loads a JSON file, a picture's bytes, a large script's bytes, and something that isn't there.
+const show = (id, text) => { document.getElementById(id).textContent = id + ': ' + text; console.log('fetch ' + id + ' ' + text); };
+(async () => {
+  const j = await (await fetch('data.json')).json();
+  show('json', j.name + ' ' + j.list.join('+') + ' ' + j.text);
+  const png = new Uint8Array(await (await fetch('./logo.png')).arrayBuffer());
+  show('bytes', png.length + ' ' + Array.from(png.slice(1, 4), c => String.fromCharCode(c)).join(''));
+  const big = new Uint8Array(await (await fetch('three/three.cjs')).arrayBuffer());
+  let sum = 0;
+  for (let i = 0; i < big.length; i += 4096) sum = (sum + big[i]) % 65536;
+  show('big', big.length + ' sampled ' + sum);
+  let missing;
+  try { const r = await fetch('nothing-here.json'); missing = 'ok=' + r.ok + ' status=' + r.status; } catch (e) { missing = 'rejected'; }
+  show('missing', missing);
+  const u = new URL('../a/b.html?x=1&y=two+words#top', 'http://example.org/one/two/page.html');
+  show('url', u.href + ' ' + u.searchParams.get('y'));
+  u.searchParams.set('x', '2');
+  show('query', new URL('?q=1', u).href + ' ' + u.search);
+  console.log('fetch done');
+})();
+</script>

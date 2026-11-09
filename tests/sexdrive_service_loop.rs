@@ -19,7 +19,7 @@ fn hot_log()->bool{false}
 fn pdx_listen_raw(slot:u64)->Message{assert_eq!(slot,0);INBOX.lock().unwrap().as_ref().unwrap().recv().unwrap()}
 fn pdx_reply(caller:u32,value:u64){EFFECTS.lock().unwrap().replies.push((caller,value));}
 fn block_buffer_view(caller:u32,slot:u64,size:u64,_rights:u8)->Option<RegionView>{
- if caller==27&&slot==17&&size>0&&size<=4096{Some(RegionView{virtual_address:0x400000})}else{None}
+ if caller==27&&slot==17&&size>0&&size<=BLOCK_MAX_RUN{Some(RegionView{virtual_address:0x400000})}else{None}
 }
 fn typed_read_handoff(offset:u64,size:u64,_slot:u64,_view:Option<RegionView>)->u64{
  if !unsafe{NVME_IO_STATE.ready}{return BLOCK_ERR_NO_DEVICE}
@@ -63,7 +63,7 @@ fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,ar
 }
 #[test]fn peer_slot_and_length_rejections_never_reach_device(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
- for m in [Message{caller_pd:9,..msg(BLOCK_READ)},Message{arg2:99,..msg(BLOCK_WRITE)},Message{arg1:4097,..msg(BLOCK_READ)},Message{arg0:1,..msg(BLOCK_READ)}]{tx.send(m).unwrap();service_next_request();}
+ for m in [Message{caller_pd:9,..msg(BLOCK_READ)},Message{arg2:99,..msg(BLOCK_WRITE)},Message{arg1:BLOCK_MAX_RUN+512,..msg(BLOCK_READ)},Message{arg0:1,..msg(BLOCK_READ)}]{tx.send(m).unwrap();service_next_request();}
  let e=EFFECTS.lock().unwrap();assert!(e.device.is_empty());assert_eq!(e.replies,[(9,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_BAD_LEN),(27,BLOCK_ERR_BAD_LEN)]);
 }
 #[test]fn initial_frame_fills_only_the_boot_buffer_before_publication(){

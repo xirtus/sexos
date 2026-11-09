@@ -24,6 +24,27 @@ pub struct Document {
     pub canvas_queue: Vec<(NodeId, String)>,
     /// Text width for `measureText`: (CSS font, text) to pixels.
     pub measure: fn(&str, &str) -> i32,
+    /// WebGL contexts, by canvas element.
+    pub gl: crate::webgl::GlCanvases,
+    /// The page's decoded pictures by `src`, shared with the browser, so WebGL can
+    /// upload one the moment a script asks.
+    pub pictures: Vec<(String, alloc::rc::Rc<sex_image::Image>)>,
+    /// `fetch` requests the browser has not loaded yet: (id, url as the script gave it).
+    pub fetches: Vec<(u32, String)>,
+    /// Loaded bodies the script has not taken yet, by request id.
+    pub bodies: Vec<(u32, Vec<u8>)>,
+    next_fetch: u32,
+}
+
+impl Document {
+    /// Keeps a loaded body until the script takes it. Bodies nobody reads (a failed
+    /// request, or a response whose body was never asked for) give way to newer ones
+    /// once 64 are waiting.
+    pub fn keep_body(&mut self, id: u32, status: u16, body: Vec<u8>) {
+        if status == 0 { return; }
+        if self.bodies.len() >= 64 { self.bodies.remove(0); }
+        self.bodies.push((id, body));
+    }
 }
 
 /// A rough width when the browser gives no measure: 0.55 em per character.
@@ -34,7 +55,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), next_fetch: 0 }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -62,6 +83,45 @@ fn valid_name(name: &str) -> bool {
 
 impl Page for Document {
     fn now_ns(&mut self) -> u64 { (self.clock)() }
+
+    fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
+        let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
+        match operation {
+            op::FETCH => {
+                // A page may not have more than 64 requests waiting at once.
+                if self.fetches.len() >= 64 { return None; }
+                self.next_fetch += 1;
+                self.fetches.push((self.next_fetch, String::from(text(0))));
+                return Some(format!("{}", self.next_fetch).into_bytes());
+            }
+            op::FETCH_BODY => {
+                let id: u32 = text(0).parse().ok()?;
+                let i = self.bodies.iter().position(|(n, _)| *n == id)?;
+                return Some(self.bodies.swap_remove(i).1);
+            }
+            _ => {}
+        }
+        let node: NodeId = text(0).parse().ok()?;
+        if node >= self.dom.nodes.len() { return None; }
+        match operation {
+            op::GL => {
+                let canvas = self.gl.by_node.get_mut(&node)?;
+                canvas.run(text(1), a.get(2).copied().unwrap_or(&[]), &self.pictures);
+                Some(Vec::new())
+            }
+            op::GL_QUERY => {
+                if text(1) == "init" {
+                    // init W H ALPHA: makes (or keeps) the canvas's context.
+                    let (w, h) = (text(2).parse().unwrap_or(300), text(3).parse().unwrap_or(150));
+                    let alpha = text(4) != "0";
+                    self.gl.by_node.entry(node).or_insert_with(|| crate::webgl::GlCanvas::new(w, h, alpha));
+                    return Some(Vec::from(&b"1"[..]));
+                }
+                self.gl.by_node.get_mut(&node)?.query(text(1), &a[2..])
+            }
+            _ => None,
+        }
+    }
 
     fn call(&mut self, operation: u32, a: &[&str]) -> Option<String> {
         let none = String::new;

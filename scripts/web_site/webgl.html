@@ -1,0 +1,83 @@
+<!doctype html>
+<html><head><title>WebGL test</title>
+<style>body { margin: 12px; } h1 { font-size: 18px; margin: 0 0 6px; } canvas { border: 1px solid #c4c7c5; } img { width: 24px; height: 24px; }</style></head>
+<body>
+<h1>WebGL <img id="logo" src="logo.png" alt="logo"></h1>
+<canvas id="c" width="380" height="200"></canvas>
+<p><button id="spin">Turn</button> <span id="state">frames: 0</span></p>
+<script>
+const c = document.getElementById('c');
+const gl = c.getContext('webgl');
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.log('shader', gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, `
+attribute vec3 aPos; attribute vec3 aNormal; attribute vec2 aUv;
+uniform mat4 uProj, uView; uniform float uAngle;
+varying vec3 vNormal; varying vec2 vUv;
+mat3 turn(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c) * mat3(1.0, 0.0, 0.0, 0.0, cos(0.5), sin(0.5), 0.0, -sin(0.5), cos(0.5)); }
+void main() {
+  mat3 r = turn(uAngle);
+  vNormal = r * aNormal; vUv = aUv;
+  gl_Position = uProj * uView * vec4(r * aPos, 1.0);
+}`));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, `
+precision mediump float;
+uniform sampler2D uTex; uniform vec3 uLight;
+varying vec3 vNormal; varying vec2 vUv;
+void main() {
+  vec4 t = texture2D(uTex, vUv);
+  vec3 base = mix(vec3(0.2, 0.45, 0.9), t.rgb, t.a);
+  float d = max(dot(normalize(vNormal), normalize(uLight)), 0.0);
+  gl_FragColor = vec4(base * (0.3 + 0.7 * d), 1.0);
+}`));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.log('link', gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const faces = [[0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]];
+const verts = [], idx = [];
+for (const n of faces) {
+  const u = n[1] ? [1, 0, 0] : [-n[2], 0, n[0]];
+  const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
+  const base = verts.length / 8;
+  for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    verts.push(n[0] + a * u[0] + b * v[0], n[1] + a * u[1] + b * v[1], n[2] + a * u[2] + b * v[2], n[0], n[1], n[2], (a + 1) / 2, (1 - b) / 2);
+  }
+  idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+}
+const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+const attr = (name, size, off) => { const l = gl.getAttribLocation(prog, name); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, 32, off); };
+attr('aPos', 3, 0); attr('aNormal', 3, 12); attr('aUv', 2, 24);
+const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, document.getElementById('logo'));
+const f = 1 / Math.tan(0.45), aspect = c.width / c.height, near = 0.1, far = 20;
+gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uProj'), false, [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0]);
+gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uView'), false, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -4.2, 1]);
+gl.uniform3f(gl.getUniformLocation(prog, 'uLight'), 0.4, 0.8, 1.0);
+gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
+const uAngle = gl.getUniformLocation(prog, 'uAngle');
+gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+let angle = 0, frames = 0;
+function draw() {
+  gl.clearColor(0.97, 0.97, 0.98, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniform1f(uAngle, angle);
+  gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+}
+function step() {
+  angle += Math.PI / 24; frames++;
+  draw();
+  document.getElementById('state').textContent = 'frames: ' + frames;
+  if (frames % 6) requestAnimationFrame(step); else console.log('webgl frames', frames);
+}
+document.getElementById('spin').addEventListener('click', () => requestAnimationFrame(step));
+draw();
+requestAnimationFrame(step);
+</script>
+</body></html>

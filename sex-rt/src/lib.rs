@@ -9,7 +9,11 @@ mod heap;
 // subdivides its own bytes; it has no frame allocation or mapping authority.
 static HEAP_ARENA: heap::Arena = heap::Arena::new();
 #[global_allocator]
-static ALLOCATOR: heap::BoundedAllocator = heap::BoundedAllocator::new(&HEAP_ARENA);
+static ALLOCATOR: heap::BoundedAllocator = heap::BoundedAllocator::growing(&HEAP_ARENA, grow_pages);
+/// Pages a service with a growable arena may add once the ELF arena is full.
+fn grow_pages(pages: u64) -> Result<(u64, u64), u64> {
+    sex_pdx::program_memory::grow(pages).map(|m| (m.base, m.pages))
+}
 static HEAP_INIT_REPORTED: AtomicBool = AtomicBool::new(false);
 
 pub fn sys_exit(status: usize) -> ! {
@@ -25,15 +29,13 @@ pub fn heap_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    let mut i = 0;
-    while i < n { *dest.add(i) = *src.add(i); i += 1; }
+    sex_pdx::mem::copy_forward(dest, src, n);
     dest
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
-    let mut i = 0;
-    while i < n { *s.add(i) = c as u8; i += 1; }
+    sex_pdx::mem::fill(s, c as u8, n);
     s
 }
 
@@ -51,11 +53,6 @@ pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    if dest < src as *mut u8 {
-        memcpy(dest, src, n)
-    } else {
-        let mut i = n;
-        while i > 0 { i -= 1; *dest.add(i) = *src.add(i); }
-        dest
-    }
+    sex_pdx::mem::move_bytes(dest, src, n);
+    dest
 }

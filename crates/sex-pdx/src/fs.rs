@@ -6,9 +6,12 @@ pub const OP: u64 = 0x54;
 pub const CLIENT_SLOT: u64 = 258;
 pub const PROVIDER_SLOT_BASE: u64 = 300;
 pub const REGION_ID_BASE: u32 = 0x5000;
-pub const REGION_BYTES: usize = 64 * 1024;
+pub const REGION_BYTES: usize = 256 * 1024;
 pub const PATH_BYTES: usize = 1024;
 pub const DATA_MAX: usize = REGION_BYTES - PATH_BYTES;
+/// The most a READ or WRITE should carry: whole 4 KiB blocks, so a long transfer never
+/// ends a request in the middle of a block (which would cost Files a read-modify-write).
+pub const IO_MAX: usize = DATA_MAX & !4095;
 /// Program rows follow the Spindles in the provider slots and regions.
 pub const PROGRAM_INDEX_BASE: usize = crate::app_catalog::SPINDLE_TARGETS.len();
 /// First filesystem sector: past the fixed DiskFS area and the program store.
