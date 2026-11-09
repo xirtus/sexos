@@ -268,7 +268,9 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         if go && writes_pending() { if let State::Ready(fs) = state { commit_writes(fs); } }
         let fs = match state { State::Ready(fs) => Some(fs), _ => None };
         let result = crate::installer::run(fs, &path[..path_len], r.offset, go, &mut region[w::PATH_BYTES..]);
-        if go { *state = State::Absent; }
+        // Once the installer has written raw, the driver stops this system's writes and the
+        // layout under the mounted filesystem may have changed: drop it until restart.
+        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; }
         return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(e) => w::reply(r.seq, status(e), 0) };
     }
     let State::Ready(fs) = state else { return w::reply(r.seq, w::UNAVAILABLE, 0) };

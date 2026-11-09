@@ -86,6 +86,9 @@ pub fn plan<D: BlockDev + ?Sized>(dev: &mut D, mode: Mode, seeds: &Seeds) -> Res
         (Mode::FreeSpace(_), Layout::Blank | Layout::LegacySexos) => (Gpt::new_empty(total, Guid::random(seeds.0[0]))?, true),
         (Mode::FreeSpace(_), _) => return Err(Error::Unsupported),
     };
+    // A table recovered from its backup would need repairing first; that is the other
+    // system's tools' job, and refusing here is before any write.
+    if gpt.from_backup { return Err(Error::Corrupt); }
     gpt.check()?;
     let existing_esp = if new_table { None } else { gpt.find_type(TYPE_ESP).next().map(|e| Extent { first: e.first(), sectors: e.sectors() }) };
     let mut free = gpt.free(ALIGN);

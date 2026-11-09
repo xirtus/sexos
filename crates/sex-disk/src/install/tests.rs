@@ -129,5 +129,10 @@ fn whole_disk_and_sizes() {
     let (win, _, _) = windows_disk(&dir);
     let mut w = MemDev(std::fs::read(&win).unwrap());
     assert_eq!(plan(&mut w, Mode::WholeDisk, &seeds(6)).unwrap_err(), Error::Exists);
+    // A damaged primary table (readable only from its backup) is refused before any write.
+    w.0[512 + 20] ^= 0xFF;
+    let copy = w.0.clone();
+    assert_eq!(plan(&mut w, Mode::FreeSpace(None), &seeds(7)).unwrap_err(), Error::Corrupt);
+    assert!(w.0 == copy);
     std::fs::remove_dir_all(&dir).ok();
 }

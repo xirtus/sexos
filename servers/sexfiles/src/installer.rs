@@ -119,7 +119,8 @@ pub fn run(fs: Option<&mut Fs<'static, crate::fs_service::Disk>>, image: &[u8], 
         if st.kind == Kind::Dir { return Err(sexfs::Error::IsDir); }
         install::apply(&mut disk, &mut plan, &mut FileDev { fs, id: st.id, sectors: st.size / SECTOR as u64 }, &mut progress)
     };
-    let _ = DiskFs::diskfs_block_sync();
+    // Only what reached the disk counts.
+    let done = done.and_then(|d| if DiskFs::diskfs_block_sync() == 0 { Ok(d) } else { Err(Error::Io) });
     match done {
         Ok(d) => {
             sex_pdx::serial_record!("[files.install.done] bytes={} slot_a={} store={} menu_lba={}", d.image_sectors * SECTOR as u64, plan.slot_a.first, plan.store.first, d.menu.first_lba);
@@ -131,7 +132,7 @@ pub fn run(fs: Option<&mut Fs<'static, crate::fs_service::Disk>>, image: &[u8], 
         Err(e) => {
             sex_pdx::serial_record!("[files.install.failed] error={:?}", e);
             text.push_str("Install stopped. "); text.push_str(why(e));
-            text.push_str(" The partition table was not changed, so every system starts as before.\n");
+            text.push_str(" Unless the disk could not confirm its last writes, the partition table was not changed, so every system starts as before.\n");
         }
     }
     text.push_str("The running system stops writing to this disk until it restarts.\n");
