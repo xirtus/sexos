@@ -1376,7 +1376,16 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"ls" if unsafe{fs_commands::FS.submit_line(cmd,args,sb)} => true,
         b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
-        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
+        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
+        // The Files app, given a folder (the whole filesystem by default) to look after.
+        b"files" => {
+            let mut given = [0u8; 256];
+            let dir: &[u8] = if args.is_empty() { b"/" } else { args };
+            let n = dir.len().min(255);
+            given[0] = b'@'; given[1..1 + n].copy_from_slice(&dir[..n]);
+            unsafe{fs_commands::FS.submit_program(b"files",&given[..1 + n],0,0,sb);}
+            true
+        }
         b"ls"=>{let accepted=unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::List)};sb.push(if accepted{b"Object listing queued."}else{b"Object listing unavailable."});true}
         b"probe-help"=>{sb.push(b"DISK/LS  DISK-STAT <ID>  MKDOC <NAME>");sb.push(b"FILLDOCX <ID> <BYTES>  CATDOCX <ID>");sb.push(b"TRUNCDOC <ID> <BYTES>  MVDOC <ID> <NAME>");sb.push(b"RMDOC <ID>  PROBE-STATUS/CANCEL/RETRY");sb.push(b"Mutations may be partial; retry reads only.");true},
         b"probe-status"=>{let state=unsafe{STORAGE_PROBE.status()};sb.push(state.as_bytes());sex_pdx::serial_record!("[spindle.probe.status] target={} state={}",instance_pd(),state);true},
