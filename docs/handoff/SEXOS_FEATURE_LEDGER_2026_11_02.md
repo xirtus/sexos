@@ -3025,3 +3025,38 @@ row no longer waits for the row before it to end.
   render (0 of 9020 sampled pixels differ). It then launches a ball, flips every 1.5 s
   until the ball drains, and reports score, frames and fps.
 - Screenshot: `assets/sexos-games-pinball-2026-11-09.png`.
+
+## Web: fetch(), URL and URLSearchParams (2026-11-09)
+
+- **fetch().** Scripts can now `fetch(url)`. The Promise resolves to a `Response` with
+  `ok`, `status`, `statusText`, `url`, `headers` (content-length) and `arrayBuffer()`,
+  `text()`, `json()` and `blob()`. Network errors reject with a TypeError, as browsers do.
+  - **How it works.** New ops 66 `FETCH` (url → request id) and 67 `FETCH_BODY` (id →
+    bytes once; with bit 16 an ArrayBuffer, otherwise text). Web serves requests on the
+    next tick after the script returns and dispatches `fetched\tID\tSTATUS\tLENGTH`.
+  - **Where it loads from.** The same places as the page: built-in `about:` files,
+    `@file` pages (relative to the page's folder), and http(s) (redirects followed, the
+    real status passed on).
+  - **Limits.** Bodies up to `FETCH_MAX` = 32 MiB (pages and scripts keep
+    `SOURCE_MAX` = 4 MiB). At most 64 requests and unread bodies at a time.
+  - Pages opened from a file (`@dir/page.html`) now also load their `<script src>` from
+    beside them.
+- **URL and URLSearchParams.** Parsing, relative resolution with dot segments, and
+  `searchParams`.
+- **ABI / limit changes.** `sex_js::Limits::default()` now gives a 160 MiB engine memory
+  and a 128 MiB QuickJS heap (was 64 and 48). three-quake needs about 100 MiB for its
+  18 MB pak and first map. The wasm memory still grows only as a page uses it.
+- **Host page example** answers fetches from files beside the page.
+  `SEX_WEB_BUDGET_MS` raises the handler time limit there, for heavy pages.
+- **Gate.** `scripts/program_web_fetch_gate.py` serves `scripts/web_site/fetch.html` over
+  the network. The page fetches a JSON file, a PNG's bytes, three.cjs (1.3 MB) and a
+  missing file, and parses a URL. The statuses must be 200, 200, 200, 404, and the page
+  matches the host render (0 of 9020 sampled pixels differ). In QEMU the 1.3 MB fetch
+  takes about 12 s.
+- **three-quake (mrdoob, GPL-2 code, shareware data), status.** Bundled with esbuild and
+  three r183 into one 2.1 MB classic script (not in the tree). On the host page example
+  it loads the pak and the first map, but only with the higher heap and a handler limit
+  well over 10 s. It reaches the renderer after about 11 minutes of host time. three
+  r183's WebGL2 shader prefix (`precision highp usampler2D;`) isn't parsed yet; the
+  browser thread has that. Under QEMU it would take hours per frame, so it waits for a
+  much faster JS engine.

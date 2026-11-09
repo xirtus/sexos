@@ -50,6 +50,8 @@ const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
 const MAX_REDIRECTS: usize = 6;
 const MAX_SCRIPTS: usize = 32;
+/// Largest body a script's `fetch` may load (a game's data file, say).
+const FETCH_MAX: usize = 32 << 20;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -98,6 +100,15 @@ fn text_of(bytes: &[u8]) -> String {
     }
 }
 
+/// The file a relative address names on a page opened from a file (`@dir/page.html`).
+fn local_path(base: &str, url: &str) -> Option<String> {
+    if let Some(p) = url.strip_prefix('@') { return Some(String::from(p)); }
+    let page = base.strip_prefix('@')?;
+    if url.contains("://") || url.starts_with("about:") || url.starts_with('/') { return None; }
+    let dir = &page[..page.rfind('/').map_or(0, |i| i + 1)];
+    Some(alloc::format!("{}{}", dir, url.trim_start_matches("./")))
+}
+
 fn message_page(title: &str, text: &str, url: &str) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
     alloc::format!(
@@ -122,10 +133,19 @@ impl Browser {
 
     /// Fetches `url` into `self.buf`, following redirects. Returns the final address
     /// and the body's range, or a message.
-    fn fetch(&mut self, url: &str) -> Result<(String, core::ops::Range<usize>), &'static [u8]> {
+    fn fetch(&mut self, url: &str) -> Result<(String, core::ops::Range<usize>), &'static [u8]> { self.fetch_up_to(url, SOURCE_MAX) }
+
+    fn fetch_up_to(&mut self, url: &str, max: usize) -> Result<(String, core::ops::Range<usize>), &'static [u8]> {
+        let (url, status, body) = self.fetch_status(url, max)?;
+        if status >= 400 { return Err(b"The site answered with an error."); }
+        Ok((url, body))
+    }
+
+    /// Like `fetch`, also giving the status, and taking an error answer as an answer.
+    fn fetch_status(&mut self, url: &str, max: usize) -> Result<(String, u16, core::ops::Range<usize>), &'static [u8]> {
         let mut url = String::from(sex_html::url::fragment(url).0);
         for _ in 0..MAX_REDIRECTS {
-            self.buf.resize(SOURCE_MAX, 0);
+            self.buf.resize(max, 0);
             let r = net::fetch(&mut self.window, url.as_bytes(), &mut self.buf).map_err(net::message)?;
             if (300..400).contains(&r.status) {
                 if let Some(next) = r.header(&self.buf, b"location").and_then(|l| core::str::from_utf8(l).ok()).and_then(|l| sex_html::url::resolve(&url, l)) {
@@ -133,8 +153,7 @@ impl Browser {
                     continue;
                 }
             }
-            if r.status >= 400 { return Err(b"The site answered with an error."); }
-            return Ok((url, r.body..r.end));
+            return Ok((url, r.status as u16, r.body..r.end));
         }
         Err(b"Too many redirects.")
     }
@@ -240,6 +259,12 @@ impl Browser {
                 Some(src) if base.starts_with("about:") => {
                     if let Some(code) = built_in(&alloc::format!("about:{}", src.trim_start_matches("./"))) { out.push((String::from(code), alloc::format!("about:{}", src))); }
                 }
+                Some(src) if base.starts_with('@') => {
+                    let Some(path) = local_path(base, src) else { continue };
+                    self.buf.resize(SOURCE_MAX, 0);
+                    if let Ok(n) = files::read(&mut self.window, path.as_bytes(), &mut self.buf) { out.push((text_of(&self.buf[..n]), alloc::format!("@{}", path))); }
+                    self.buf = Vec::new();
+                }
                 Some(src) => {
                     let Some(abs) = sex_html::url::resolve(base, src) else { continue };
                     if !abs.starts_with("http") { continue; }
@@ -286,6 +311,9 @@ impl Browser {
             self.open(&url, true);
             return true;
         }
+        // Fetches are served on the next tick, once this script has returned.
+        if !doc.fetches.is_empty() && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
+        let doc = self.doc.get();
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
@@ -311,11 +339,57 @@ impl Browser {
     /// Runs due timers and animation frames.
     #[inline(never)]
     fn tick(&mut self) {
+        self.serve_fetches();
         let Some(script) = self.doc.script() else { self.timer = None; return };
         let next = script.dispatch("tick");
         self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
         if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
         self.after_script(true);
+    }
+
+    /// Loads what the page's scripts asked `fetch` for, and tells each script.
+    #[inline(never)]
+    fn serve_fetches(&mut self) {
+        let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => return };
+        for (id, url) in asked {
+            let begun = sex_pdx::get_ticks();
+            let (status, body) = self.load(&url);
+            let n = body.len();
+            sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} url={}", id, status, n, sex_pdx::get_ticks() - begun, url);
+            let Doc::Scripted(s) = &mut self.doc else { return };
+            s.page_mut().keep_body(id, status, body);
+            if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", id, status, n)) {
+                sex_pdx::serial_record!("[web.script] trapped={}", why);
+                self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
+                return;
+            }
+        }
+    }
+
+    /// A script's `fetch`: the body and its status (0 when it could not be loaded). Pages
+    /// fetch from where they came from: built in, a file (`@`), or the network.
+    fn load(&mut self, url: &str) -> (u16, Vec<u8>) {
+        let base = String::from(sex_html::url::fragment(&self.url).0);
+        let none = (0, Vec::new());
+        if url.starts_with("about:") || (base.starts_with("about:") && !url.contains(':')) {
+            let name = if url.starts_with("about:") { String::from(url) } else { alloc::format!("about:{}", url.trim_start_matches("./")) };
+            return match built_in(&name) { Some(text) => (200, Vec::from(text.as_bytes())), None => (404, Vec::new()) };
+        }
+        if let Some(path) = local_path(&base, url) {
+            return match files::size(&mut self.window, path.as_bytes()) {
+                Ok(n) if n as usize <= FETCH_MAX => {
+                    let mut body = alloc::vec![0u8; n as usize];
+                    match files::read(&mut self.window, path.as_bytes(), &mut body) { Ok(got) => { body.truncate(got); (200, body) } Err(_) => none }
+                }
+                Err(files::NOT_FOUND) => (404, Vec::new()),
+                _ => none,
+            };
+        }
+        let Some(abs) = sex_html::url::resolve(&base, url) else { return none };
+        if !abs.starts_with("http") { return none; }
+        let r = match self.fetch_status(&abs, FETCH_MAX) { Ok((_, status, body)) => (status, Vec::from(&self.buf[body])), Err(_) => none };
+        self.buf = Vec::new();
+        r
     }
 
     /// Gives the page a key first. True if a handler kept it.
