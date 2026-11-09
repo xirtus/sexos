@@ -3254,3 +3254,13 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+
+## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
+
+- **New crate `sex-wifi`** (no_std, no allocation), the hardware-independent part of an Intel Wi-Fi 6/6E driver for AX200, AX201, AX210, AX211 and the Killer modules on them (the x17 R1's AX1675). Re-implemented in Rust from OpenBSD `iwx(4)` (ISC); no Linux code. Report and stages W1-W8: `docs/handoff/INTEL_WIFI_2026_11_09.md`.
+- **Driver side:** chip and firmware table, Intel TLV firmware parser, DMA layout and context info (22000 and AX210 layouts), the power-up sequence to "firmware ALIVE" as a step-at-a-time state machine, host command framing and RX packets.
+- **Network side:** scan results with security detection (open, WPA2, WPA3, transition, hash-to-element), open and SAE authentication, association, Ethernet II to and from 802.11 data frames, CCMP.
+- **Security:** WPA2-Personal and WPA3-Personal (SAE on P-256, hunting-and-pecking and hash-to-element), the station side of the 4-way and group-key handshakes, GTK and IGTK, replay/downgrade/tamper checks.
+- **Evidence:** `scripts/wifi_host_gate.sh` (CI): 24 tests incl. IEEE 802.11 annex vectors (PSK, PRF, CCMP, SAE J.10), RFC 3394/3610/4493, full WPA2 and WPA3 handshakes against a test access point, and the real linux-firmware AX210 image (fetched pinned and SHA-256 checked by `scripts/fetch_wifi_firmware.sh`).
+- **No ABI change.** New dependency `sha1` 0.10 (RustCrypto).
+- **Limits:** not wired into the running system yet; QEMU has no Intel Wi-Fi model, so the radio is proven only on hardware. Next (W2): lease the chip to sexnet, ship its firmware, and log `[wifi.alive]` on the x17.
