@@ -465,10 +465,10 @@ impl Browser {
         let mut waiting: Vec<Pending> = Vec::new();
         let mut going: Vec<(Pending, net::Exchange)> = Vec::new();
         loop {
-            let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => return };
+            let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => { self.cancel_all(going); return } };
             for ask in asked {
                 match self.local(&ask) {
-                    Ok(r) => { if !self.answer(&ask.id, &ask.method, &ask.url, sex_pdx::get_ticks(), r) { return; } }
+                    Ok(r) => { if !self.answer(&ask.id, &ask.method, &ask.url, sex_pdx::get_ticks(), r) { self.cancel_all(going); return; } }
                     Err(p) => waiting.push(p),
                 }
             }
@@ -478,7 +478,7 @@ impl Browser {
                 match self.send(&mut p, going.is_empty()) {
                     Ok(ex) => going.push((p, ex)),
                     Err(BUSY) => { waiting.insert(0, p); break; }
-                    Err(_) => { let (id, m, u, t) = (p.id, p.method.clone(), p.asked.clone(), p.since); if !self.answer(&id, &m, &u, t, failed(&p.url)) { return; } }
+                    Err(_) => { let (id, m, u, t) = (p.id, p.method.clone(), p.asked.clone(), p.since); if !self.answer(&id, &m, &u, t, failed(&p.url)) { self.cancel_all(going); return; } }
                 }
             }
             if going.is_empty() && waiting.is_empty() { return; }
@@ -498,7 +498,7 @@ impl Browser {
                     None => waiting.insert(0, p),
                     Some(r) => {
                         let r = r.unwrap_or_else(|_| failed(&p.url));
-                        if !self.answer(&p.id, &p.method, &p.asked, p.since, r) { for (_, mut ex) in going { ex.cancel(&mut self.window); } return; }
+                        if !self.answer(&p.id, &p.method, &p.asked, p.since, r) { self.cancel_all(going); return; }
                     }
                 }
                 quiet = 0;
@@ -506,6 +506,9 @@ impl Browser {
             if quiet > 64 { pause(); } else if quiet > 0 { sex_pdx::sys_yield(); }
         }
     }
+
+    /// Lets go of every request still going, when the page that asked is gone.
+    fn cancel_all(&mut self, going: Vec<(Pending, net::Exchange)>) { for (_, mut ex) in going { ex.cancel(&mut self.window); } }
 
     /// Tells the page one request's answer. False when the page's script fell over.
     fn answer(&mut self, id: &u32, method: &str, url: &str, since: u64, r: Loaded) -> bool {
